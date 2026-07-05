@@ -1,0 +1,76 @@
+<section class="page">
+  <mat-form-field appearance="outline" class="question">
+    <mat-label>Ask the archive</mat-label>
+    <mat-icon matPrefix>question_answer</mat-icon>
+    <input
+      matInput
+      autocomplete="off"
+      [value]="question()"
+      (input)="question.set($any($event.target).value)"
+      (keydown.enter)="submit()"
+      placeholder="e.g. when is the plumber coming?"
+      [disabled]="asking()"
+    />
+  </mat-form-field>
+  <button matButton="filled" (click)="submit()" [disabled]="asking() || !question().trim()">
+    <mat-icon>send</mat-icon>
+    Ask
+  </button>
+
+  @if (asking()) {
+    <mat-progress-bar mode="indeterminate" />
+    <p class="hint">Thinking locally — the first question also loads the model…</p>
+  }
+  @if (failed()) {
+    <p class="hint error">Could not get an answer — is the backend running?</p>
+  }
+  @if (result(); as r) {
+    @if (r.answer === null) {
+      <p class="hint">The recordings don't show anything about that.</p>
+    } @else {
+      <mat-card appearance="outlined" class="answer">
+        <mat-card-content>{{ r.answer }}</mat-card-content>
+      </mat-card>
+      <p class="hint">Drawn from these turns:</p>
+      @for (t of r.sources; track t.id) {
+        <app-transcript-card [transcript]="t" />
+      }
+    }
+  }
+
+  <h2 class="days">Today so far</h2>
+  @if (today.value(); as t) {
+    @if (t.text) {
+      <mat-card appearance="outlined" class="day">
+        <mat-card-content>{{ t.text }}</mat-card-content>
+        <div class="asof">
+          as of {{ t.generatedAt ? asOf(t.generatedAt) : '' }}
+          @if (t.pending) {
+            <span>— updating…</span>
+          }
+        </div>
+      </mat-card>
+    } @else if (t.pending) {
+      <p class="hint">Summarising today…</p>
+      <mat-progress-bar mode="indeterminate" />
+    } @else {
+      <p class="hint">Nothing recorded yet today.</p>
+    }
+  }
+
+  <h2 class="days">Recent days</h2>
+  @if (summaries.error()) {
+    <p class="hint error">Could not load summaries — is the backend running?</p>
+  } @else if ((summaries.value()?.items ?? []).length === 0) {
+    <p class="hint">No day summaries yet — the refine daemon writes one per finished day.</p>
+  } @else {
+    @for (s of summaries.value()?.items; track s.day) {
+      <mat-card appearance="outlined" class="day">
+        <mat-card-header>
+          <mat-card-title>{{ s.day }}</mat-card-title>
+        </mat-card-header>
+        <mat-card-content>{{ s.text }}</mat-card-content>
+      </mat-card>
+    }
+  }
+</section>

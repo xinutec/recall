@@ -1,0 +1,96 @@
+package org.recall.mic
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+
+/** The recall *household* capture state (the whole system, not just this phone). */
+data class CaptureState(
+    val running: Boolean,
+    val pausedUntil: String?,
+)
+
+/** One recorder's liveness for the fleet view (which mics are streaming now). */
+data class SourceStatus(
+    val id: String,
+    val name: String,
+    val kind: String,
+    val active: Boolean,
+    val lastActive: String?,
+)
+
+/** Parse `/api/capture`'s JSON. Pure (no I/O), so it's unit-tested. */
+fun parseCaptureState(body: String): CaptureState? =
+    runCatching {
+        val json = JSONObject(body)
+        CaptureState(
+            running = json.optBoolean("running", true),
+            pausedUntil = if (json.isNull("pausedUntil")) null else json.getString("pausedUntil"),
+        )
+    }.getOrNull()
+
+/** Parse `/api/sources`'s JSON into the per-recorder list. Pure, so it's unit-tested. */
+fun parseSources(body: String): List<SourceStatus> =
+    runCatching {
+        val items = JSONObject(body).getJSONArray("items")
+        (0 until items.length()).map { i ->
+            val o = items.getJSONObject(i)
+            SourceStatus(
+                id = o.getString("id"),
+                name = o.getString("name"),
+                kind = o.getString("kind"),
+                active = o.optBoolean("active", false),
+                lastActive = if (o.isNull("lastActive")) null else o.optString("lastActive"),
+            )
+        }
+    }.getOrDefault(emptyList())
+
+/**
+ * Talks to the recall web API — the same one the web app uses — to read the global
+ * capture pause (and control it), and the fleet's per-recorder liveness. The API
+ * lives on the configured host at a fixed port and stays up *during* a pause (it's
+ * control-plane), so the app shows the true state even when the stream port is closed.
+ *
+ * Only reachable on the home LAN (same as streaming); off it, calls just fail and the
+ * panels stay hidden — which is correct, you shouldn't control the system from away.
+ */
+object CaptureApi {
+    private const val API_PORT = 8000 // `recall api --port 8000`
+    private const val TIMEOUT_MS = 4000
+
+    private fun endpoint(host: String, path: String) = "http://$host:$API_PORT/api$path"
+
+    suspend fun state(host: String): CaptureState? =
+        get(endpoint(host, "/capture"), "GET")?.let { parseCaptureState(it) }
+
+    suspend fun pause(host: String): CaptureState? =
+        get(endpoint(host, "/capture/pause"), "POST")?.let { parseCaptureState(it) }
+
+    suspend fun resume(host: String): CaptureState? =
+        get(endpoint(host, "/capture/resume"), "POST")?.let { parseCaptureState(it) }
+
+    // null = the request failed (caller should keep its last list, not blank the
+    // panel); an empty list means the host genuinely has no sources.
+    suspend fun sources(host: String): List<SourceStatus>? =
+        get(endpoint(host, "/sources"), "GET")?.let { parseSources(it) }
+
+    /** One request; returns the response body, or null on any failure. */
+    private suspend fun get(url: String, method: String): String? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val conn = URL(url).openConnection() as HttpURLConnection
+                conn.requestMethod = method
+                conn.connectTimeout = TIMEOUT_MS
+                conn.readTimeout = TIMEOUT_MS
+                if (method == "POST") {
+                    conn.doOutput = true
+                    conn.outputStream.close() // empty body; the endpoints take none
+                }
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                body
+            }.getOrNull()
+        }
+}

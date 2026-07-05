@@ -1,0 +1,148 @@
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.head {
+  margin-bottom: 1rem;
+
+  h2 {
+    margin: 0;
+  }
+
+  .sub {
+    color: var(--mat-sys-on-surface-variant);
+    font: var(--mat-sys-body-medium);
+  }
+}
+
+.newrun {
+  margin-bottom: 1.25rem;
+
+  .row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+  }
+
+  .grow {
+    flex: 1;
+  }
+
+  .run {
+    margin-top: 0.25rem;
+    white-space: nowrap;
+  }
+
+  .defaults {
+    margin: 0.25rem 0 0.5rem;
+    color: var(--mat-sys-on-surface-variant);
+    font: var(--mat-sys-body-medium);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0 0.75rem;
+  }
+}
+
+.opt-id {
+  font-weight: 600;
+}
+
+.opt-title {
+  margin-left: 0.5rem;
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-body-medium);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.run-link {
+  text-decoration: none;
+  color: inherit;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+
+  .source {
+    font-weight: 600;
+  }
+}
+
+.wer {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  font-variant-numeric: tabular-nums;
+
+  mat-icon {
+    font-size: 1.1rem;
+    width: 1.1rem;
+    height: 1.1rem;
+  }
+
+  .n {
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  &.err {
+    color: var(--mat-sys-error);
+    font: var(--mat-sys-body-medium);
+  }
+}
+
+.models {
+  margin-top: 0.35rem;
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-body-small);
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  font: var(--mat-sys-body-small);
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+
+  &.tone-better {
+    background: color-mix(in srgb, green 18%, transparent);
+    color: green;
+  }
+
+  &.tone-worse {
+    background: color-mix(in srgb, var(--mat-sys-error) 18%, transparent);
+    color: var(--mat-sys-error);
+  }
+
+  &.tone-tie,
+  &.tone-unknown {
+    background: var(--mat-sys-surface-variant);
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  &.tone-pending {
+    background: color-mix(in srgb, var(--mat-sys-primary) 18%, transparent);
+    color: var(--mat-sys-primary);
+  }
+}
+
+.hint {
+  color: var(--mat-sys-on-surface-variant);
+
+  &.error {
+    color: var(--mat-sys-error);
+  }
+}

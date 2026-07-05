@@ -1,0 +1,81 @@
+<section class="page">
+  @if (picked()) {
+    <h2>Selected fragments</h2>
+    <p class="hint">
+      Play each clip, then fix the text and save. Your correction supersedes the machine guess (the
+      original is kept, never deleted).
+    </p>
+  } @else {
+    <h2>Review &amp; correct</h2>
+    <p class="hint">
+      Least-confident turns first. Editing files a correction that supersedes the machine guess.
+    </p>
+  }
+
+  @if (queue.isLoading()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+
+  @if (queue.error()) {
+    <p class="hint error">Could not load the review queue — is the backend running?</p>
+  } @else if (items().length === 0 && !queue.isLoading()) {
+    <p class="hint">
+      {{ picked() ? 'None of those fragments were found.' : 'Nothing waiting for review. 🎉' }}
+    </p>
+  }
+
+  @for (t of items(); track t.id) {
+    <mat-card appearance="outlined" class="turn">
+      <mat-card-content>
+        <div class="meta">
+          <span class="clock"><mat-icon inline>schedule</mat-icon> {{ clock(t) }}</span>
+          <mat-chip-set aria-label="turn details">
+            @if (t.speaker) {
+              <mat-chip highlighted
+                ><mat-icon matChipAvatar>person</mat-icon>{{ t.speaker }}</mat-chip
+              >
+            }
+            @if (t.language) {
+              <mat-chip>{{ t.language }}</mat-chip>
+            }
+            @if (duration(t)) {
+              <mat-chip>{{ duration(t) }}</mat-chip>
+            }
+            @if (confidence(t)) {
+              <mat-chip>conf {{ confidence(t) }}</mat-chip>
+            }
+          </mat-chip-set>
+        </div>
+
+        <audio controls preload="none" [src]="t.audioUrl"></audio>
+
+        <mat-form-field appearance="outline" class="edit">
+          <mat-label>Transcript</mat-label>
+          <textarea
+            matInput
+            rows="2"
+            [value]="draft(t)"
+            (input)="edit(t, $any($event.target).value)"
+          ></textarea>
+        </mat-form-field>
+
+        @if (t.hidden) {
+          <p class="hidden-note">
+            <mat-icon inline>visibility_off</mat-icon>
+            Hidden: {{ t.hidden }}
+          </p>
+        }
+
+        <div class="actions">
+          @if (t.hidden) {
+            <button matButton (click)="unhide(t)"><mat-icon>restore</mat-icon> Restore</button>
+          }
+          <button matButton="filled" [disabled]="!isDirty(t) || isSaving(t)" (click)="save(t)">
+            <mat-icon>check</mat-icon>
+            {{ isSaving(t) ? 'Saving…' : 'Save correction' }}
+          </button>
+        </div>
+      </mat-card-content>
+    </mat-card>
+  }
+</section>

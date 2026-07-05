@@ -1,0 +1,108 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "recall"
+version = "0.0.0"
+description = "Local household speech recall system (memory aid)"
+requires-python = ">=3.12"
+# The DIRECT dependencies (what src/recall imports + serving glue). The venv is
+# built from requirements.lock (the frozen, complete pin set); this list is the
+# human-readable intent behind it.
+dependencies = [
+    "datasets>=5.0",
+    "fastapi>=0.136",
+    "httpx>=0.28",
+    "mlx-lm>=0.31",
+    "mlx-whisper>=0.4",
+    "numpy>=2.4",
+    "peft>=0.19",
+    "pyannote-audio>=4.0",
+    "pydantic>=2.13",
+    "python-multipart>=0.0.32",
+    "silero-vad>=6.2",
+    "torch>=2.12",
+    "transformers>=5.12",
+    "uvicorn>=0.49",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/recall"]
+
+# --- strict static typing -------------------------------------------------
+# The bar: every line of our own code is fully typed and passes mypy --strict.
+# `Any` only enters via third-party ML libs without stubs, scoped per-module
+# below — never a blanket ignore. See docs/conventions.md.
+[tool.mypy]
+python_version = "3.12"
+# Resolve third-party imports from the venv so typed libraries (FastAPI, Pydantic,
+# numpy) are *really* checked; only genuinely-stubless ML libs are waived below.
+python_executable = ".venv/bin/python"
+strict = true
+warn_unreachable = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_any_unimported = true
+no_implicit_reexport = true
+enable_error_code = [
+  "redundant-expr",
+  "truthy-bool",
+  "truthy-iterable",
+  "ignore-without-code",
+  "possibly-undefined",
+  "redundant-self",
+  "explicit-override",
+  "unused-awaitable",
+]
+files = ["src", "tests", "scripts"]
+
+# ML libraries ship no type stubs. Scope the missing-imports waiver to exactly
+# those modules, with a code, so it never silently hides errors in our code.
+[[tool.mypy.overrides]]
+# Only the libraries that genuinely ship no types. Everything else (FastAPI,
+# Pydantic, numpy, pyannote, torch, transformers, peft) ships real
+# types and is checked for real (resolved from the venv above).
+module = [
+  "mlx_whisper.*",
+  "silero_vad.*",
+  "datasets.*",
+]
+ignore_missing_imports = true
+
+# --- linting --------------------------------------------------------------
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "F",      # pycodestyle / pyflakes
+  "I",           # import sorting
+  "UP",          # pyupgrade
+  "B",           # bugbear
+  "SIM",         # simplify
+  "ANN",         # require annotations (pairs with strict mypy)
+  "RUF",         # ruff-specific
+  "PL",          # pylint subset
+  "TID",         # tidy imports
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Asserting against literal expected values is the point of a test.
+"tests/**" = ["PLR2004"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI requires these as argument defaults (File/Form/Depends/Query).
+extend-immutable-calls = [
+  "fastapi.File",
+  "fastapi.Form",
+  "fastapi.Depends",
+  "fastapi.Query",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

@@ -1,0 +1,85 @@
+<section class="page">
+  <header class="head">
+    <div>
+      <h2>Sessions</h2>
+      <span class="sub">Discrete recordings — meetings and appointments</span>
+    </div>
+    <button mat-flat-button (click)="picker.click()" [disabled]="uploading()">
+      <mat-icon>upload</mat-icon>
+      Upload recording
+    </button>
+    <input #picker type="file" accept="audio/*,.m4a,.mp3,.wav" hidden (change)="onFile(picker)" />
+  </header>
+
+  @if (uploading() || data.isLoading()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+  @if (data.error()) {
+    <p class="hint error">Could not load sessions — is the backend running?</p>
+  } @else if (empty()) {
+    <p class="hint">No recorded sessions yet — upload a conversation to get started.</p>
+  }
+
+  <div class="list">
+    @for (s of items(); track s.id) {
+      <mat-card appearance="outlined" class="session">
+        @if (editingId() === s.id) {
+          <mat-card-content class="editing">
+            <mat-form-field appearance="outline" class="rename">
+              <mat-label>Title</mat-label>
+              <input
+                matInput
+                [value]="editTitle()"
+                (input)="editTitle.set($any($event.target).value)"
+                (keydown.enter)="saveEdit(s.id)"
+                (keydown.escape)="cancelEdit()"
+              />
+            </mat-form-field>
+            <button mat-button (click)="cancelEdit()">Cancel</button>
+            <button mat-flat-button (click)="saveEdit(s.id)">Save</button>
+          </mat-card-content>
+        } @else if (confirmingId() === s.id) {
+          <mat-card-content class="confirm">
+            <span class="warn">Delete “{{ s.title }}” and its transcript?</span>
+            <button mat-button (click)="cancelDelete()">Cancel</button>
+            <button mat-button class="danger" (click)="confirmDelete(s.id)">Delete</button>
+          </mat-card-content>
+        } @else {
+          <mat-card-content class="row">
+            <button class="body" (click)="open(s.id)">
+              <div class="when">
+                <mat-icon>event</mat-icon>
+                <span class="date">{{ day(s.start) }}</span>
+                <span class="time">{{ time(s.start) }}</span>
+              </div>
+              <div class="title">{{ s.title }}</div>
+              <div class="meta">
+                <span class="count">{{ s.turnCount }} turns</span>
+                @for (who of s.speakers; track who) {
+                  <mat-chip class="who">{{ who }}</mat-chip>
+                }
+              </div>
+            </button>
+            <button mat-icon-button [matMenuTriggerFor]="menu" aria-label="Session actions">
+              <mat-icon>more_vert</mat-icon>
+            </button>
+            <mat-menu #menu="matMenu">
+              <button mat-menu-item (click)="startEdit(s)">
+                <mat-icon>edit</mat-icon>
+                <span>Rename</span>
+              </button>
+              <button mat-menu-item (click)="rediarize(s.id)">
+                <mat-icon>groups</mat-icon>
+                <span>Re-diarize</span>
+              </button>
+              <button mat-menu-item (click)="askDelete(s.id)">
+                <mat-icon>delete</mat-icon>
+                <span>Delete</span>
+              </button>
+            </mat-menu>
+          </mat-card-content>
+        }
+      </mat-card>
+    }
+  </div>
+</section>

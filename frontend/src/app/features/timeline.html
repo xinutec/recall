@@ -1,0 +1,283 @@
+<section class="page">
+  <header class="head">
+    <h2>Timeline</h2>
+    <div class="head-actions">
+      @if (before()) {
+        <button matButton (click)="jumpToLatest()">
+          <mat-icon>vertical_align_bottom</mat-icon> Jump to latest
+        </button>
+      }
+      <button matIconButton aria-label="Refresh" [disabled]="loading()" (click)="refresh()">
+        <mat-icon>refresh</mat-icon>
+      </button>
+    </div>
+  </header>
+
+  @if (failed()) {
+    <p class="hint error">Could not load the timeline — is the backend running?</p>
+  } @else if (empty()) {
+    <p class="hint">Nothing recorded yet.</p>
+  }
+
+  @if (hasOlder()) {
+    <div class="older">
+      <button matButton [disabled]="loading()" (click)="loadEarlier()">
+        <mat-icon>history</mat-icon>
+        {{ loading() ? 'Loading…' : 'Load earlier' }}
+      </button>
+    </div>
+  }
+
+  @if (loading()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+
+  @for (day of days(); track day.key) {
+    <h3 class="day">
+      {{ day.label }}
+      @if (coverageLabel(day)) {
+        <span class="day-cov" [class.done]="coverageDone(day)">{{ coverageLabel(day) }}</span>
+      }
+    </h3>
+    @for (conv of day.conversations; track key(conv)) {
+      <section class="convo" [class.open]="isExpanded(conv)">
+        <button
+          class="convo-head"
+          type="button"
+          (click)="toggle(conv)"
+          [attr.aria-expanded]="isExpanded(conv)"
+        >
+          <mat-icon class="caret">{{
+            isExpanded(conv) ? 'expand_more' : 'chevron_right'
+          }}</mat-icon>
+          <span class="range">{{ range(conv) }}</span>
+          <span class="people">
+            @for (who of conv.speakers; track who) {
+              <mat-chip highlighted class="who"
+                ><mat-icon matChipAvatar>person</mat-icon>{{ who }}</mat-chip
+              >
+            } @empty {
+              <span class="who unknown">unknown</span>
+            }
+          </span>
+          <span class="count">{{ conv.turnCount }} turns</span>
+          @if (!isExpanded(conv)) {
+            <span class="preview">{{ conv.preview }}</span>
+          }
+        </button>
+
+        @if (isExpanded(conv)) {
+          <div class="convo-actions">
+            <button matButton (click)="refineConversation(conv)">
+              <mat-icon>auto_fix_high</mat-icon> Refine this section
+            </button>
+          </div>
+          <div class="turns" (mouseup)="onSelect()" (touchend)="onSelect()">
+            @for (m of conv.moments; track m.start) {
+              <div class="moment">
+                @for (t of m.primary; track t.id) {
+                  <ng-container *ngTemplateOutlet="turnTpl; context: { t: t }" />
+                }
+                @if (mics(m) > 1) {
+                  <button
+                    class="compare-btn"
+                    type="button"
+                    [class.open]="isComparing(m)"
+                    (click)="toggleCompare(m)"
+                    [matTooltip]="
+                      'Heard by ' +
+                      mics(m) +
+                      ' mics' +
+                      (m.alternates.length ? ' — tap to compare versions' : '')
+                    "
+                  >
+                    <mat-icon class="mic-badge">graphic_eq</mat-icon>
+                    <span>{{ mics(m) }} mics</span>
+                    @if (m.alternates.length) {
+                      <span class="compare-label">{{ isComparing(m) ? 'hide' : 'compare' }}</span>
+                    }
+                  </button>
+                }
+                @if (isComparing(m)) {
+                  <div class="alternates">
+                    @for (t of m.alternates; track t.id) {
+                      <ng-container *ngTemplateOutlet="turnTpl; context: { t: t }" />
+                    }
+                  </div>
+                }
+              </div>
+            }
+          </div>
+        }
+      </section>
+    }
+  }
+
+  @if (hasNewer()) {
+    <div class="later">
+      <button matButton [disabled]="loading()" (click)="loadLater()">
+        <mat-icon>update</mat-icon>
+        {{ loading() ? 'Loading…' : 'Load later' }}
+      </button>
+    </div>
+  }
+
+  @if (span()) {
+    <div class="assign-bar" role="toolbar">
+      <span class="hint">Assign “{{ spanText() }}” to</span>
+      @for (name of speakers(); track name) {
+        <button matButton="tonal" [disabled]="assigning()" (click)="assignSelectedSpan(name)">
+          {{ name }}
+        </button>
+      }
+      <input
+        #newName
+        class="new-name"
+        placeholder="new name…"
+        [disabled]="assigning()"
+        (keydown.enter)="assignSelectedSpan(newName.value); newName.value = ''"
+      />
+      <button matButton (click)="clearSpan()">Cancel</button>
+    </div>
+  }
+</section>
+
+<!-- One turn row, reused for a moment's primary spine and its compare alternates. -->
+<ng-template #turnTpl let-t="t">
+  <article class="turn" [class]="'tier-' + t.tier" [class.cont]="continues(t)">
+    <div class="line">
+      <!-- A turn that continues the previous confirmed same-speaker turn drops its
+           timestamp and shows the name dim (so the run reads as one block) — but keeps
+           it visible and tappable, so an assignment is confirmed and still re-taggable. -->
+      @if (continues(t)) {
+        <button
+          class="who-btn"
+          [matMenuTriggerFor]="whoMenu"
+          [matMenuTriggerData]="{ t: t }"
+          matTooltip="Same speaker, continued · tap to change"
+        >
+          <span class="who cont">{{ who(t) }}</span>
+        </button>
+      } @else {
+        <span class="time" [matTooltip]="tierLabel(t)">{{ time(t.start) }}</span>
+        @if (who(t)) {
+          @if (tagged(t)) {
+            <button
+              class="who-btn"
+              [matMenuTriggerFor]="whoMenu"
+              [matMenuTriggerData]="{ t: t }"
+              matTooltip="Tap to change who said this"
+            >
+              <mat-chip highlighted class="who"
+                ><mat-icon matChipAvatar>person</mat-icon>{{ who(t) }}</mat-chip
+              >
+            </button>
+          } @else {
+            <button
+              class="who-btn"
+              [matMenuTriggerFor]="whoMenu"
+              [matMenuTriggerData]="{ t: t }"
+              [matTooltip]="'Auto-guess — ' + pct(t) + ' likely · tap to confirm or fix'"
+            >
+              <mat-chip class="who guess"
+                ><mat-icon matChipAvatar>person_search</mat-icon>{{ who(t) }}
+                <span class="conf">{{ pct(t) }}</span></mat-chip
+              >
+            </button>
+          }
+        } @else {
+          <button
+            class="who-btn"
+            [matMenuTriggerFor]="whoMenu"
+            [matMenuTriggerData]="{ t: t }"
+            matTooltip="Tap to say who spoke"
+          >
+            <span class="who unknown">who?</span>
+          </button>
+        }
+      }
+      @if (t.language) {
+        <span class="lang">{{ t.language }}</span>
+      }
+      @if (t.source) {
+        <span class="src">{{ t.source }}</span>
+      }
+      <span class="spacer"></span>
+      @if (!isPlayed(t)) {
+        <button matIconButton class="play" aria-label="Play audio" (click)="play(t)">
+          <mat-icon>play_circle</mat-icon>
+        </button>
+      }
+      <button
+        matIconButton
+        class="more"
+        [matMenuTriggerFor]="actionsMenu"
+        [matMenuTriggerData]="{ t: t }"
+        aria-label="More actions"
+      >
+        <mat-icon>more_vert</mat-icon>
+      </button>
+    </div>
+    <p class="text">
+      <span class="t" [attr.data-id]="t.id" [attr.data-source]="t.source">{{ t.text }}</span>
+    </p>
+    @if (isPlayed(t) || isTrimming(t)) {
+      <audio controls autoplay preload="none" [src]="audioSrc(t)"></audio>
+    }
+    @if (isTrimming(t)) {
+      <div class="trim" role="toolbar">
+        <span class="hint">start</span>
+        <button matIconButton aria-label="start 0.5s earlier" (click)="nudgeTurn(t, 'start', -0.5)">
+          <mat-icon>keyboard_double_arrow_left</mat-icon>
+        </button>
+        <button matIconButton aria-label="start 0.1s earlier" (click)="nudgeTurn(t, 'start', -0.1)">
+          <mat-icon>chevron_left</mat-icon>
+        </button>
+        <button matIconButton aria-label="start 0.1s later" (click)="nudgeTurn(t, 'start', 0.1)">
+          <mat-icon>chevron_right</mat-icon>
+        </button>
+        <button matIconButton aria-label="start 0.5s later" (click)="nudgeTurn(t, 'start', 0.5)">
+          <mat-icon>keyboard_double_arrow_right</mat-icon>
+        </button>
+        <span class="hint">end</span>
+        <button matIconButton aria-label="end 0.5s earlier" (click)="nudgeTurn(t, 'end', -0.5)">
+          <mat-icon>keyboard_double_arrow_left</mat-icon>
+        </button>
+        <button matIconButton aria-label="end 0.1s earlier" (click)="nudgeTurn(t, 'end', -0.1)">
+          <mat-icon>chevron_left</mat-icon>
+        </button>
+        <button matIconButton aria-label="end 0.1s later" (click)="nudgeTurn(t, 'end', 0.1)">
+          <mat-icon>chevron_right</mat-icon>
+        </button>
+        <button matIconButton aria-label="end 0.5s later" (click)="nudgeTurn(t, 'end', 0.5)">
+          <mat-icon>keyboard_double_arrow_right</mat-icon>
+        </button>
+        <button matButton (click)="stopTrim()">Done</button>
+      </div>
+    }
+  </article>
+</ng-template>
+
+<mat-menu #whoMenu>
+  <ng-template matMenuContent let-t="t">
+    @for (name of speakers(); track name) {
+      <button mat-menu-item (click)="relabel(t, name)">
+        <mat-icon>person</mat-icon> {{ name }}
+      </button>
+    }
+  </ng-template>
+</mat-menu>
+
+<mat-menu #actionsMenu>
+  <ng-template matMenuContent let-t="t">
+    <button mat-menu-item (click)="startTrim(t)">
+      <mat-icon>content_cut</mat-icon> Trim audio
+    </button>
+    <a mat-menu-item [routerLink]="['/train']" [queryParams]="{ id: t.id }">
+      <mat-icon>tune</mat-icon> Label in Train
+    </a>
+    <a mat-menu-item [routerLink]="['/review']" [queryParams]="{ ids: t.id }">
+      <mat-icon>link</mat-icon> Open · copy link
+    </a>
+  </ng-template>
+</mat-menu>

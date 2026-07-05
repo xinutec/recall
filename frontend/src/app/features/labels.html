@@ -1,0 +1,157 @@
+<section class="page">
+  <header class="head">
+    <h2>Review labels</h2>
+  </header>
+  <p class="hint">
+    Check who each labelled clip was tagged as. Play it, fix the voice if it's wrong, or remove a
+    bad label from the training set.
+  </p>
+
+  <mat-card appearance="outlined" class="vocab">
+    <mat-card-header>
+      <mat-card-title>Vocabulary</mat-card-title>
+      <mat-card-subtitle>
+        Names, places and terms the transcriber should spell right — applied from
+        the next recording (speaker names are included automatically).
+      </mat-card-subtitle>
+    </mat-card-header>
+    <mat-card-content>
+      <mat-chip-set>
+        @for (t of vocabTerms(); track t.id) {
+          <mat-chip (removed)="removeTerm(t.id)">
+            {{ t.term }}
+            <button matChipRemove aria-label="remove {{ t.term }}">
+              <mat-icon>cancel</mat-icon>
+            </button>
+          </mat-chip>
+        }
+      </mat-chip-set>
+      <div class="add-term">
+        <mat-form-field appearance="outline" subscriptSizing="dynamic">
+          <mat-label>Add a term</mat-label>
+          <input
+            matInput
+            [value]="newTerm()"
+            (input)="newTerm.set($any($event.target).value)"
+            (keydown.enter)="addTerm()"
+            placeholder="e.g. a clinic, a street, a drug name"
+          />
+        </mat-form-field>
+        <button matButton="filled" (click)="addTerm()" [disabled]="!newTerm().trim()">
+          Add
+        </button>
+      </div>
+    </mat-card-content>
+  </mat-card>
+
+  <mat-card appearance="outlined" class="vocab">
+    <mat-card-header>
+      <mat-card-title>Model context</mat-card-title>
+      <mat-card-subtitle>
+        Background facts given to the model when it summarises or answers —
+        who lives here, pronouns, recurring places. Applies from the next
+        summary/answer.
+      </mat-card-subtitle>
+    </mat-card-header>
+    <mat-card-content>
+      <mat-form-field appearance="outline" class="context-field" subscriptSizing="dynamic">
+        <mat-label>Facts, one per line</mat-label>
+        <textarea
+          matInput
+          rows="4"
+          [value]="contextText()"
+          (input)="contextDraft.set($any($event.target).value)"
+        ></textarea>
+      </mat-form-field>
+      <button matButton="filled" (click)="saveContext()" [disabled]="!contextDirty()">
+        Save
+      </button>
+    </mat-card-content>
+  </mat-card>
+
+  <div class="filter">
+    <mat-chip-set>
+      @for (name of speakers(); track name) {
+        <mat-chip [highlighted]="speaker() === name" (click)="pick(name)" class="pick">
+          {{ name }} <b>{{ speakerCount(name) }}</b>
+        </mat-chip>
+      }
+    </mat-chip-set>
+    @if (speaker()) {
+      <button matButton (click)="pick('')">Show all</button>
+    }
+  </div>
+
+  <div class="playmode">
+    <span class="lbl">Play</span>
+    <mat-chip-set>
+      <mat-chip [highlighted]="!context()" (click)="setContext(false)" class="pick">
+        exact cut
+      </mat-chip>
+      <mat-chip [highlighted]="context()" (click)="setContext(true)" class="pick">
+        with context
+      </mat-chip>
+    </mat-chip-set>
+  </div>
+
+  @if (results.isLoading()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+
+  @if (results.error()) {
+    <p class="hint error">Could not load the labels — is the backend running?</p>
+  }
+
+  @for (label of items(); track label.id) {
+    <mat-card appearance="outlined" class="label">
+      <mat-card-content>
+        <div class="meta">
+          <span class="clock"><mat-icon inline>schedule</mat-icon> {{ clock(label.start) }}</span>
+          @if (label.speaker) {
+            <mat-chip class="who">{{ label.speaker }}</mat-chip>
+          }
+          @if (label.language) {
+            <mat-chip>{{ label.language }}</mat-chip>
+          }
+        </div>
+        <p class="text">{{ label.text }}</p>
+        <audio controls preload="none" [src]="audioSrc(label)"></audio>
+        <div class="trim">
+          <span class="lbl">Start</span>
+          <button matButton (click)="nudge(label.id, 'start', -0.1)" matTooltip="start earlier">
+            <mat-icon>chevron_left</mat-icon>
+          </button>
+          <button matButton (click)="nudge(label.id, 'start', 0.1)" matTooltip="start later">
+            <mat-icon>chevron_right</mat-icon>
+          </button>
+          <span class="lbl">End</span>
+          <button matButton (click)="nudge(label.id, 'end', -0.1)" matTooltip="end earlier">
+            <mat-icon>chevron_left</mat-icon>
+          </button>
+          <button matButton (click)="nudge(label.id, 'end', 0.1)" matTooltip="end later">
+            <mat-icon>chevron_right</mat-icon>
+          </button>
+        </div>
+        <div class="actions">
+          <span class="lbl">Re-tag:</span>
+          @for (name of speakers(); track name) {
+            <button
+              matButton
+              (click)="reassign(label.id, name)"
+              [disabled]="label.speaker === name"
+            >
+              {{ name }}
+            </button>
+          }
+          <button matButton class="remove" (click)="remove(label.id)">
+            <mat-icon>delete</mat-icon> Remove
+          </button>
+        </div>
+      </mat-card-content>
+    </mat-card>
+  } @empty {
+    @if (!results.isLoading() && !results.error()) {
+      <p class="hint done">No labels here yet.</p>
+    }
+  }
+</section>

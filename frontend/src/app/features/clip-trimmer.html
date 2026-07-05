@@ -1,0 +1,33 @@
+<div class="trimmer">
+  <canvas #canvas class="wave"></canvas>
+
+  @if (failed()) {
+    <p class="hint error">Couldn’t load this clip’s audio — try again.</p>
+  }
+
+  <div class="controls">
+    <div class="group">
+      <span class="lbl">Start</span>
+      <button matIconButton (click)="nudge('start', -1)" aria-label="start earlier">
+        <mat-icon>chevron_left</mat-icon>
+      </button>
+      <button matIconButton (click)="nudge('start', 1)" aria-label="start later">
+        <mat-icon>chevron_right</mat-icon>
+      </button>
+    </div>
+
+    <button matButton (click)="playSelection()" [disabled]="!ready()">
+      <mat-icon>play_arrow</mat-icon> {{ selDuration.toFixed(1) }}s
+    </button>
+
+    <div class="group">
+      <span class="lbl">End</span>
+      <button matIconButton (click)="nudge('end', -1)" aria-label="end earlier">
+        <mat-icon>chevron_left</mat-icon>
+      </button>
+      <button matIconButton (click)="nudge('end', 1)" aria-label="end later">
+        <mat-icon>chevron_right</mat-icon>
+      </button>
+    </div>
+  </div>
+</div>

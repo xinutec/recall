@@ -1,0 +1,233 @@
+<section class="page">
+  <header class="head">
+    <h2>Train</h2>
+    <span class="count" matTooltip="labelled (audio → text) pairs collected">
+      <mat-icon inline>school</mat-icon> {{ corrections() }} labelled
+    </span>
+  </header>
+  <p class="hint">
+    Play, tag who said it, fix the text, Save — each save teaches the model your voices &amp; words.
+    Can't make it out? Mark it (that's a job for better mics).
+  </p>
+
+  <div class="balance" matTooltip="Labelled fragments per voice — tap to review them">
+    @for (name of speakers(); track name) {
+      <a
+        class="voice"
+        [class.lean]="speakerCount(name) === 0"
+        routerLink="/labels"
+        [queryParams]="{ speaker: name }"
+      >
+        {{ name }} <b>{{ speakerCount(name) }}</b>
+      </a>
+    }
+  </div>
+
+  <div class="range">
+    <label
+      >From
+      <input
+        #fromInput
+        type="datetime-local"
+        [value]="from()"
+        (input)="from.set($any($event.target).value)"
+        (change)="from.set($any($event.target).value)"
+      />
+    </label>
+    <label
+      >To
+      <input
+        #toInput
+        type="datetime-local"
+        [value]="to()"
+        (input)="to.set($any($event.target).value)"
+        (change)="to.set($any($event.target).value)"
+      />
+    </label>
+    <div class="range-actions">
+      <button matButton="filled" (click)="applyRange()">
+        <mat-icon>filter_alt</mat-icon> Apply
+      </button>
+      @if (from() || to()) {
+        <button matButton (click)="clearRange()">Clear</button>
+      }
+    </div>
+  </div>
+
+  <div class="order" role="group" aria-label="Queue order">
+    <span class="lbl">Order</span>
+    <button
+      matButton
+      [class.on]="order() === 'loudness'"
+      (click)="setOrder('loudness')"
+      matTooltip="Highest training value first: clear, substantial, not-yet-labelled speech"
+    >
+      <mat-icon>auto_awesome</mat-icon> Best first
+    </button>
+    <button
+      matButton
+      [class.on]="order() === 'time'"
+      (click)="setOrder('time')"
+      matTooltip="Oldest first — read the conversation in sequence"
+    >
+      <mat-icon>schedule</mat-icon> In order
+    </button>
+  </div>
+
+  @if (loading()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+
+  @if (current(); as t) {
+    <p class="progress">{{ remaining() }} in this batch</p>
+
+    @if (before().length) {
+      <div class="context before">
+        @for (b of before(); track b.id) {
+          <p>{{ b.text }}</p>
+        }
+      </div>
+    }
+
+    <mat-card appearance="outlined" class="turn">
+      <mat-card-content>
+        <div class="meta">
+          <span class="clock"><mat-icon inline>schedule</mat-icon> {{ clock(t) }}</span>
+          <mat-chip
+            class="clarity"
+            [class.faint]="clarity(t) === 'faint'"
+            matTooltip="Audibility (from measured loudness). Faint clips are a mics problem — skip them."
+          >
+            <mat-icon inline>graphic_eq</mat-icon> {{ clarity(t) }}
+          </mat-chip>
+          @if (t.language) {
+            <mat-chip>{{ t.language }}</mat-chip>
+          }
+          @if (confidence(t)) {
+            <mat-chip>conf {{ confidence(t) }}</mat-chip>
+          }
+        </div>
+
+        <audio #player controls preload="none" [src]="t.audioUrl"></audio>
+        <div class="play-aids">
+          <button matButton (click)="replay(1)"><mat-icon>replay</mat-icon> Replay</button>
+          <button matButton (click)="replay(0.75)">
+            <mat-icon>slow_motion_video</mat-icon> Slower
+          </button>
+          @if (!splitting()) {
+            <button matButton (click)="toggleAdjust()" [class.on]="adjusting()">
+              <mat-icon>content_cut</mat-icon> {{ adjusting() ? 'Done trimming' : 'Trim' }}
+            </button>
+          }
+          <button matButton (click)="toggleSplit()" [class.on]="splitting()">
+            <mat-icon>group</mat-icon> {{ splitting() ? 'Cancel split' : 'Split speakers' }}
+          </button>
+        </div>
+
+        @if (adjusting() || splitting()) {
+          <app-clip-trimmer [turn]="t" (spanChange)="onSpan($event)" />
+        }
+
+        @if (splitting() && parts().length) {
+          <div class="parts">
+            @for (p of parts(); track $index) {
+              <span class="part">
+                <strong>{{ p.speaker || '—' }}:</strong> {{ p.text }}
+              </span>
+            }
+          </div>
+        }
+
+        <div class="speakers">
+          <span class="lbl">Who said it?</span>
+          <mat-chip-set>
+            @for (name of speakers(); track name; let i = $index) {
+              <mat-chip
+                [highlighted]="speaker() === name"
+                (click)="pickSpeaker(name)"
+                class="speaker"
+                [class.suggested]="suggested() === name"
+                ><span class="num">{{ i + 1 }}</span> {{ name }}</mat-chip
+              >
+            }
+          </mat-chip-set>
+          @if (suggested(); as s) {
+            <span class="hint-suggest"
+              ><mat-icon inline>auto_awesome</mat-icon> sounds like {{ s }} — confirm or
+              change</span
+            >
+          }
+        </div>
+
+        <div class="lang">
+          <span class="lbl">Language</span>
+          <mat-chip-set>
+            @for (lang of languages; track lang) {
+              <mat-chip
+                [highlighted]="language() === lang"
+                (click)="setLanguage(lang)"
+                class="pick"
+              >
+                {{ lang }}
+              </mat-chip>
+            }
+          </mat-chip-set>
+        </div>
+
+        <mat-form-field appearance="outline" class="edit">
+          <mat-label>What was said</mat-label>
+          <textarea
+            matInput
+            rows="2"
+            [value]="draft()"
+            (input)="edit($any($event.target).value)"
+          ></textarea>
+        </mat-form-field>
+
+        <div class="actions">
+          @if (splitting()) {
+            <button matButton (click)="addPart()" [disabled]="busy()">
+              <mat-icon>add</mat-icon> Add part
+            </button>
+            <button matButton="filled" (click)="saveSplit()" [disabled]="busy()">
+              <mat-icon>check</mat-icon> Save split ({{ parts().length }})
+            </button>
+          } @else {
+            <button matButton (click)="back()" [disabled]="busy() || !canGoBack()">
+              <mat-icon>skip_previous</mat-icon> Back
+            </button>
+            <button matButton (click)="cantMakeOut()" [disabled]="busy()">
+              <mat-icon>hearing_disabled</mat-icon> Can't make out
+            </button>
+            <button matButton (click)="skip()" [disabled]="busy()">
+              <mat-icon>skip_next</mat-icon> Skip
+            </button>
+            <button matButton="filled" (click)="save()" [disabled]="busy() || !draft().trim()">
+              <mat-icon>check</mat-icon>
+              {{ dirty() ? 'Save fix' : 'Confirm' }}
+            </button>
+          }
+        </div>
+
+        <p class="keys">
+          Keys: <b>1–{{ speakers().length }}</b> speaker · <b>R</b> replay · <b>Enter</b> save ·
+          <b>S</b> skip ·
+          <b>B</b> back · <b>X</b> can't make out
+        </p>
+      </mat-card-content>
+    </mat-card>
+
+    @if (after().length) {
+      <div class="context after">
+        @for (a of after(); track a.id) {
+          <p>{{ a.text }}</p>
+        }
+      </div>
+    }
+  } @else if (!loading()) {
+    <p class="hint done">
+      Nothing left to label right now. 🎉 New uncertain turns appear here as the house is recorded —
+      come back anytime.
+    </p>
+  }
+</section>

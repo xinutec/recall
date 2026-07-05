@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Adaptive-icon background: deep purple — distinct on the launcher from
+         Recall Mic (blue) and Lares Capture (teal). -->
+    <color name="ic_launcher_background">#4A148C</color>
+</resources>

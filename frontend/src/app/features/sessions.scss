@@ -1,0 +1,111 @@
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+
+  h2 {
+    margin: 0;
+  }
+
+  .sub {
+    color: var(--mat-sys-on-surface-variant);
+    font: var(--mat-sys-body-medium);
+  }
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.session {
+  transition: background 0.12s ease;
+
+  &:hover {
+    background: var(--mat-sys-surface-container-high);
+  }
+
+  // The clickable body fills the card; the action button sits beside it.
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .body {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .editing,
+  .confirm {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .rename {
+    flex: 1;
+    min-width: 12rem;
+  }
+
+  .confirm .warn {
+    flex: 1;
+    min-width: 12rem;
+    color: var(--mat-sys-error);
+    font-weight: 600;
+  }
+}
+
+.title {
+  margin-top: 0.2rem;
+  font-weight: 600;
+}
+
+.when {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+
+  mat-icon {
+    color: var(--mat-sys-primary);
+  }
+
+  .time {
+    color: var(--mat-sys-on-surface-variant);
+    font-weight: 400;
+  }
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+
+  .count {
+    color: var(--mat-sys-on-surface-variant);
+    font: var(--mat-sys-body-medium);
+  }
+}
+
+.hint {
+  color: var(--mat-sys-on-surface-variant);
+
+  &.error {
+    color: var(--mat-sys-error);
+  }
+}

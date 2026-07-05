@@ -1,0 +1,162 @@
+"""Live, low-latency transcription via voice-activity detection.
+
+Reads the mic (a second sox stream), detects utterances with Silero VAD, and
+transcribes each one the moment the speaker pauses — latency ~2-3 s. These are
+fast, *provisional* transcripts (asr_model = LIVE_MODEL, no archive file); the
+worker's higher-quality archive pass supersedes them once it catches up
+(recall.worker.reconcile_live).
+
+The run loop is heavy/integration (lazy-imports torch/silero-vad/mlx and reads
+the live device) so it is not exercised by tests; the WAV helper is tested.
+"""
+
+from __future__ import annotations
+
+import queue
+import subprocess
+import threading
+import wave
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from recall.asr import DEFAULT_MODEL, mlx_transcribe, scratch_wav
+from recall.loops import is_repetition_loop
+from recall.sources import AudioSource, SourceKind
+from recall.store import LIVE_MODEL, Store
+from recall.vocabulary import build_initial_prompt
+
+_SAMPLE_RATE = 16000
+_VAD_CHUNK = 512  # samples Silero expects per call at 16 kHz
+_MIN_UTTERANCE_MS = 300
+# Re-check the pause roughly once a second (in VAD chunks) so live stops promptly.
+_STOP_CHECK_CHUNKS = _SAMPLE_RATE // _VAD_CHUNK
+
+
+def mic_argv(device: str) -> list[str]:
+    """The sox command that streams the live mic (same source abstraction as
+    capture, so device pinning behaves identically — see AudioSource.spec)."""
+    source = AudioSource(id="live", name="live", kind=SourceKind.COREAUDIO, spec=device)
+    return source.producer_argv(_SAMPLE_RATE, 1)
+
+
+def write_wav(pcm: bytes, path: Path, *, sample_rate: int = _SAMPLE_RATE) -> None:
+    """Write mono 16-bit PCM as a WAV file (for the transcriber)."""
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
+
+
+def run_live(  # noqa: PLR0915 - cohesive streaming loop
+    db_path: Path,
+    *,
+    work_dir: Path,
+    model: str = DEFAULT_MODEL,
+    device: str = "",
+    should_stop: Callable[[], bool] | None = None,
+) -> None:
+    """Stream the mic, transcribe each utterance immediately, store it as live.
+
+    Transcription runs in a background thread so the read loop never blocks —
+    a blocked reader makes sox drop audio (buffer overrun). The thread owns its
+    own store connection (sqlite connections are single-thread). When `should_stop`
+    is supplied it's polled (~1 s) and the loop stops on a pause, releasing the mic.
+    """
+    import numpy as np  # noqa: PLC0415 - heavy, only for the live loop
+    import torch  # noqa: PLC0415
+    from silero_vad import VADIterator, load_silero_vad  # noqa: PLC0415
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    vad = VADIterator(load_silero_vad(), sampling_rate=_SAMPLE_RATE)
+
+    utterances: queue.Queue[tuple[bytes, datetime] | None] = queue.Queue()
+
+    def transcribe_loop() -> None:
+        store = Store.open(db_path)
+        try:
+            while True:
+                item = utterances.get()
+                if item is None:
+                    return
+                pcm, start = item
+                _emit(store, pcm, start, work_dir, model)
+        finally:
+            store.close()
+
+    thread = threading.Thread(target=transcribe_loop, daemon=True)
+    thread.start()
+
+    producer = subprocess.Popen(mic_argv(device), stdout=subprocess.PIPE)
+    if producer.stdout is None:  # pragma: no cover
+        msg = "sox produced no stdout"
+        raise RuntimeError(msg)
+
+    chunk_bytes = _VAD_CHUNK * 2
+    min_bytes = _MIN_UTTERANCE_MS * _SAMPLE_RATE * 2 // 1000
+    utterance = bytearray()
+    in_speech = False
+    samples_seen = 0
+    utterance_start = 0
+    anchor: datetime | None = None
+
+    try:
+        chunks = 0
+        while True:
+            chunks += 1
+            if (
+                should_stop is not None
+                and chunks % _STOP_CHECK_CHUNKS == 0
+                and should_stop()
+            ):
+                break  # a pause: stop reading and release the mic
+            data = producer.stdout.read(chunk_bytes)
+            if len(data) < chunk_bytes:
+                break
+            if anchor is None:
+                anchor = datetime.now(UTC)
+            frame = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+            event = vad(torch.from_numpy(frame))
+            if in_speech:
+                utterance += data
+            if event and "start" in event:
+                in_speech = True
+                utterance = bytearray(data)
+                utterance_start = samples_seen
+            elif event and "end" in event:
+                in_speech = False
+                if len(utterance) >= min_bytes:
+                    start = anchor + timedelta(seconds=utterance_start / _SAMPLE_RATE)
+                    utterances.put((bytes(utterance), start))
+                utterance = bytearray()
+            samples_seen += _VAD_CHUNK
+    finally:
+        producer.terminate()  # release the mic (no-op if it already ended)
+        producer.wait()
+        utterances.put(None)
+        thread.join(timeout=30)
+
+
+def _emit(
+    store: Store, pcm: bytes, start: datetime, work_dir: Path, model: str
+) -> None:
+    with scratch_wav(work_dir / f"live-{start:%Y%m%dT%H%M%S%f}.wav") as clip:
+        write_wav(pcm, clip)  # scratch — transcribed, then dropped on exit
+        # Rebuilt per utterance: a vocabulary term added in the UI biases the very
+        # next live transcription (short clips misspell names the most).
+        result = mlx_transcribe(
+            clip, model=model, initial_prompt=build_initial_prompt(store)
+        )
+    text = " ".join(s.text.strip() for s in result.segments if s.text.strip()).strip()
+    if not text or is_repetition_loop(text):
+        return  # empty or a degenerate loop (short live clips are loop-prone)
+    duration = len(pcm) / 2 / _SAMPLE_RATE
+    store.add_transcript_segment(
+        audio_segment_id=None,
+        start=start,
+        end=start + timedelta(seconds=duration),
+        text=text,
+        asr_model=LIVE_MODEL,
+        language=result.language,
+    )

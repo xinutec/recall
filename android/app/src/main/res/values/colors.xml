@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Adaptive-icon background: a deep blue — distinct on the launcher, and set
+         apart from the Lares Capture app, which uses the teal we started with. -->
+    <color name="ic_launcher_background">#0D47A1</color>
+</resources>

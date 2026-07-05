@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base theme for the window/system chrome; the UI itself is themed in Compose
+         (Material You). NoActionBar since the Compose Scaffold draws its own bar. -->
+    <style name="Theme.RecallMic" parent="Theme.Material3.DayNight.NoActionBar" />
+</resources>

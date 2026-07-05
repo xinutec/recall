@@ -1,0 +1,31 @@
+<section class="page">
+  <mat-form-field appearance="outline" class="search-field">
+    <mat-label>Search everything that was said</mat-label>
+    <mat-icon matPrefix>search</mat-icon>
+    <input
+      matInput
+      type="search"
+      autocomplete="off"
+      [value]="query()"
+      (input)="onInput($any($event.target).value)"
+      placeholder="e.g. hersencapaciteit, appointment, mum"
+    />
+  </mat-form-field>
+
+  @if (results.isLoading()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+
+  @if (results.error()) {
+    <p class="hint error">Search failed — is the backend running?</p>
+  } @else if (trimmedLength() < 2) {
+    <p class="hint">Type at least two characters to search.</p>
+  } @else if (items().length === 0 && !results.isLoading()) {
+    <p class="hint">No matches.</p>
+  } @else {
+    <p class="hint">{{ items().length }} result(s)</p>
+    @for (t of items(); track t.id) {
+      <app-transcript-card [transcript]="t" />
+    }
+  }
+</section>

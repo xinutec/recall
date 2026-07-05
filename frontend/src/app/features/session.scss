@@ -1,0 +1,240 @@
+// Cap the whole view at a readable measure so the dialogue doesn't stretch edge-to-edge
+// on a wide screen (long lines are hard to read and to scan as a conversation).
+.page {
+  max-width: 46rem;
+  margin: 0 auto;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+
+  h2 {
+    margin: 0;
+    font: var(--mat-sys-body-large);
+  }
+}
+
+.convo {
+  margin-bottom: 1.5rem;
+
+  .range {
+    position: sticky;
+    top: 0;
+    margin: 0 0 0.4rem;
+    padding: 0.2rem 0;
+    font: var(--mat-sys-body-small);
+    font-weight: 600;
+    color: var(--mat-sys-on-surface-variant);
+    background: var(--mat-sys-surface);
+  }
+
+  app-transcript-card {
+    display: block;
+    margin-bottom: 0.4rem;
+  }
+}
+
+.hint {
+  color: var(--mat-sys-on-surface-variant);
+
+  &.error {
+    color: var(--mat-sys-error);
+  }
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font: var(--mat-sys-body-medium);
+
+  &.finalizing {
+    background: var(--mat-sys-surface-container-high);
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  &.ready {
+    background: color-mix(in srgb, var(--mat-sys-primary) 14%, transparent);
+    color: var(--mat-sys-primary);
+  }
+}
+
+.cast {
+  margin-bottom: 1.25rem;
+
+  h3 {
+    margin: 0 0 0.5rem;
+    font: var(--mat-sys-body-medium);
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  // Hear-then-name, laid out inline. The controls are standard Material (icon buttons +
+  // an outlined input) — no custom chip.
+  .voices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.1rem 0.6rem;
+    align-items: center;
+  }
+
+  .voice {
+    display: flex;
+    align-items: center;
+
+    mat-form-field {
+      width: 9rem;
+    }
+  }
+}
+
+.howto {
+  font: var(--mat-sys-body-medium);
+  color: var(--mat-sys-on-surface-variant);
+  margin: 0 0 0.75rem;
+}
+
+.transcript {
+  // The chrome (speaker names, buttons) isn't selectable; only the turn text is — so a
+  // stray drag on a name doesn't start a selection, but drag-selecting a phrase does.
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.run {
+  margin-bottom: 0.85rem;
+  // A colour stripe per speaker so the dialogue alternates visibly instead of reading
+  // as one block (--c is set per run from the speaker's colour).
+  border-left: 2px solid color-mix(in srgb, var(--c, var(--mat-sys-outline-variant)) 65%, transparent);
+  padding-left: 0.65rem;
+
+  .who {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.15rem;
+
+    .play {
+      flex: 0 0 auto;
+      color: var(--mat-sys-on-surface-variant);
+
+      // Playing: light up in the speaker's own colour.
+      &.on {
+        color: var(--c, var(--mat-sys-primary));
+      }
+    }
+
+    .clock {
+      flex: 0 0 auto;
+      font: var(--mat-sys-label-small);
+      font-variant-numeric: tabular-nums;
+      color: var(--mat-sys-on-surface-variant);
+    }
+
+    .name {
+      font: var(--mat-sys-body-small);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--c, var(--mat-sys-primary));
+    }
+  }
+
+  // An un-named voice ("Voice 1") reads as provisional until you name it.
+  &:not(.named) .who .name {
+    font-weight: 600;
+    font-style: italic;
+  }
+
+  .body {
+    margin: 0;
+    line-height: 1.55;
+
+    // Each turn is a tappable unit (the tapped one highlights) and its text is
+    // selectable, so you can drag-select a phrase to reassign just that part.
+    .t {
+      cursor: text;
+      border-radius: 3px;
+      user-select: text;
+      -webkit-user-select: text;
+
+      &.sel {
+        background: color-mix(in srgb, var(--mat-sys-primary) 30%, transparent);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--mat-sys-primary) 30%, transparent);
+      }
+    }
+  }
+}
+
+.palette {
+  position: sticky;
+  bottom: 0;
+  // When the phone bottom-nav is present, pin the toolbar ABOVE it — at bottom: 0 the
+  // sticky toolbar lands where the fixed nav sits and is drawn behind it.
+  :host-context(.with-bottom-nav) & {
+    inset-block-end: var(--bottom-nav-reserve);
+  }
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  margin-top: 0.5rem;
+  background: var(--mat-sys-surface-container-high);
+  border-radius: 10px;
+  box-shadow: 0 -2px 8px color-mix(in srgb, var(--mat-sys-shadow) 25%, transparent);
+
+  .hint {
+    font: var(--mat-sys-body-medium);
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  // Trim controls (nudge a split boundary by ear), set off from the speaker actions.
+  .trim {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.1rem;
+    margin-inline-start: 0.4rem;
+    padding-inline-start: 0.4rem;
+    border-inline-start: 1px solid var(--mat-sys-outline-variant);
+  }
+
+  // Introduce a speaker not yet in this session (e.g. a third person) — type a new
+  // name (or pick a known one via the datalist) and Enter to assign.
+  .new-name {
+    flex: 1 1 7rem;
+    min-width: 6rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--mat-sys-outline-variant);
+    border-radius: 6px;
+    background: var(--mat-sys-surface);
+    color: var(--mat-sys-on-surface);
+    font: inherit;
+  }
+
+  // Fixing the words: the bar becomes a stacked editor (input + actions).
+  &.editor {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .edit {
+    width: 100%;
+
+    // Cap a long run-on so the field scrolls internally instead of pushing the actions
+    // off-screen.
+    textarea {
+      max-height: 30vh;
+    }
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.4rem;
+    justify-content: flex-end;
+  }
+}

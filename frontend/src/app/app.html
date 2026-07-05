@@ -1,0 +1,93 @@
+<mat-toolbar color="primary" class="bar">
+  <button matIconButton class="ham-btn" [matMenuTriggerFor]="moreMenu" aria-label="More pages">
+    <mat-icon>menu</mat-icon>
+  </button>
+  <mat-menu #moreMenu="matMenu">
+    @for (item of more; track item.path) {
+      <a mat-menu-item [routerLink]="item.path">
+        <mat-icon>{{ item.icon }}</mat-icon>
+        <span>{{ item.label }}</span>
+      </a>
+    }
+  </mat-menu>
+  <a routerLink="/" class="brand">
+    <mat-icon>graphic_eq</mat-icon>
+    <span>recall</span>
+  </a>
+  <span class="spacer"></span>
+  @if (!handset()) {
+    <nav class="links">
+      @for (item of nav; track item.path) {
+        <a
+          matButton
+          [routerLink]="item.path"
+          routerLinkActive="active"
+          [routerLinkActiveOptions]="{ exact: item.exact }"
+        >
+          <mat-icon>{{ item.icon }}</mat-icon>
+          {{ item.label }}
+        </a>
+      }
+    </nav>
+  }
+  <button
+    matIconButton
+    class="capture-toggle"
+    [class.paused]="paused()"
+    (click)="paused() ? resumeCapture() : pauseCapture()"
+    [matTooltip]="paused() ? 'Recording paused — tap to resume' : 'Pause recording'"
+    aria-label="Pause or resume recording"
+  >
+    <mat-icon>{{ paused() ? 'mic_off' : 'mic' }}</mat-icon>
+  </button>
+</mat-toolbar>
+
+@if (paused()) {
+  <div class="paused-banner" role="status">
+    <mat-icon class="rec-dot">fiber_manual_record</mat-icon>
+    <span>Recording paused — auto-resumes in {{ resumeIn() }} (by {{ resumeBy() }})</span>
+    <button
+      matIconButton
+      (click)="pauseCapture()"
+      matTooltip="Still away — reset the pause to a full 24h (no recording)"
+      aria-label="Reset pause to 24 hours"
+    >
+      <mat-icon>snooze</mat-icon>
+    </button>
+    <button
+      matIconButton
+      (click)="resumeCapture()"
+      matTooltip="Resume recording now"
+      aria-label="Resume recording"
+    >
+      <mat-icon>play_arrow</mat-icon>
+    </button>
+  </div>
+}
+
+<main class="content" [class.with-bottom-nav]="handset()">
+  <router-outlet />
+  <footer class="version" [title]="builtAt">
+    build {{ build.sha }}
+    @if (builtAt) {
+      · {{ builtAt }}
+    }
+  </footer>
+</main>
+
+@if (handset()) {
+  <nav class="bottom-nav">
+    @for (item of nav; track item.path) {
+      <a
+        class="item"
+        [routerLink]="item.path"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: item.exact }"
+        [attr.aria-label]="item.label"
+      >
+        <mat-icon>{{ item.icon }}</mat-icon>
+        <span class="label">{{ item.label }}</span>
+      </a>
+    }
+  </nav>
+}

@@ -1,0 +1,63 @@
+# XcodeGen project definition for the recall-mic iOS app.
+# Generate the .xcodeproj with:  nix-shell -p xcodegen --run 'xcodegen generate'
+# (run from this ios/ directory), then open RecallMic.xcodeproj in Xcode.
+name: RecallMic
+options:
+  bundleIdPrefix: org.recall
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: "83SSMZ4T7X"  # Pippijn's signing team (auto-provisioned org.recall.mic)
+    CODE_SIGN_STYLE: Automatic
+targets:
+  RecallMic:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Recall Mic
+        UILaunchScreen: {}
+        # Keep capturing with the screen off / app backgrounded.
+        UIBackgroundModes: [audio]
+        # iOS requires these to open the mic and to reach a LAN IP directly.
+        NSMicrophoneUsageDescription: >-
+          Recall Mic streams this device's microphone to your local recall
+          recorder. Audio never leaves your home network.
+        NSLocalNetworkUsageDescription: >-
+          Recall Mic connects to your recall recorder on the local network to
+          stream microphone audio.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.recall.mic
+        TARGETED_DEVICE_FAMILY: "1"   # iPhone
+  RecallMicTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: RecallMic
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.recall.mic.tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  RecallMic:
+    build:
+      targets:
+        RecallMic: all
+    run:
+      config: Debug
+    test:
+      targets:
+        - RecallMicTests

@@ -1,0 +1,213 @@
+<section class="page">
+  <header class="head">
+    <a matButton routerLink="/sessions"><mat-icon>arrow_back</mat-icon> Sessions</a>
+    @if (start(); as s) {
+      <h2>{{ day(s) }} · {{ time(s) }}</h2>
+    } @else {
+      <h2>Session</h2>
+    }
+  </header>
+
+  @if (data.isLoading()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+  @if (data.error()) {
+    <p class="hint error">Could not load this session.</p>
+  } @else if (empty()) {
+    <p class="hint">No turns transcribed for this session yet.</p>
+  }
+
+  @if (finalizing()) {
+    <div class="status finalizing" role="status">
+      <mat-icon>hourglass_top</mat-icon>
+      <span
+        >Still being finalized — diarizing into speaker-separated turns. Annotation opens once it's
+        settled, so your edits land on the final version.</span
+      >
+    </div>
+  } @else if (ready()) {
+    <div class="status ready" role="status">
+      <mat-icon>check_circle</mat-icon>
+      <span>Finalized — name the voices, then fix anything by ear.</span>
+    </div>
+
+    <!-- Who's in the meeting: a compact cast. Hear a voice (▶), name it (one tap to
+         accept the auto-id, or type), and it labels all of that voice's turns. -->
+    <section class="cast">
+      <h3>Who's speaking</h3>
+      <datalist id="known-speakers">
+        @for (name of knownNames(); track name) {
+          <option [value]="name"></option>
+        }
+      </datalist>
+      <div class="voices">
+        @for (v of voices(); track v.cluster) {
+          <div class="voice">
+            <button
+              matIconButton
+              (click)="toggleSample(v.cluster, v.sampleUrl)"
+              [attr.aria-label]="playing() === 'voice:' + v.cluster ? 'pause' : 'hear this voice'"
+            >
+              <mat-icon>{{ playing() === 'voice:' + v.cluster ? 'pause' : 'volume_up' }}</mat-icon>
+            </button>
+            <mat-form-field appearance="outline" subscriptSizing="dynamic">
+              <input
+                matInput
+                list="known-speakers"
+                [ngModel]="v.name ?? ''"
+                [placeholder]="v.suggested ? v.suggested + '?' : 'who?'"
+                (change)="nameVoice(v.cluster, $any($event.target).value)"
+              />
+            </mat-form-field>
+            @if (v.suggested && !v.name) {
+              <button
+                matIconButton
+                (click)="nameVoice(v.cluster, v.suggested)"
+                [attr.aria-label]="'use ' + v.suggested"
+              >
+                <mat-icon>check</mat-icon>
+              </button>
+            }
+          </div>
+        }
+      </div>
+    </section>
+  }
+
+  @if (ready()) {
+    <p class="howto">Tap a line, then a name to set who said it — or
+      <strong>Fix words</strong> to correct the text. Drag-select part of a line to move
+      just that phrase to another speaker.</p>
+    <div class="transcript" (mouseup)="onSelect()" (touchend)="onSelect()">
+      @for (run of runs(); track run.key) {
+        <div class="run" [class.named]="run.confirmed" [style.--c]="colourFor(run.speaker)">
+          <div class="who">
+            <button
+              matIconButton
+              class="play"
+              [class.on]="playing() === 'run:' + run.key"
+              (click)="togglePlay(run)"
+              [attr.aria-label]="playing() === 'run:' + run.key ? 'pause' : 'hear this speaker'"
+            >
+              <mat-icon>{{ playing() === 'run:' + run.key ? 'pause' : 'play_arrow' }}</mat-icon>
+            </button>
+            <span class="clock">{{ clock(run.start) }}</span>
+            <span class="name">{{ run.speaker }}</span>
+          </div>
+          <p class="body">
+            @for (t of run.turns; track t.id) {
+              <span
+                class="t"
+                role="button"
+                tabindex="0"
+                [attr.data-id]="t.id"
+                [class.sel]="selected() === t.id"
+                (click)="selectTurn(t.id)"
+                (keydown.enter)="selectTurn(t.id)"
+                >{{ t.text }} </span
+              >
+            }
+          </p>
+        </div>
+      }
+    </div>
+
+    @if (editing() !== null) {
+      <div class="palette editor">
+        <mat-form-field appearance="outline" subscriptSizing="dynamic" class="edit">
+          <textarea
+            matInput
+            #ed
+            rows="3"
+            [ngModel]="editingText()"
+            (keydown.escape)="cancelEdit()"
+          ></textarea>
+        </mat-form-field>
+        <div class="actions">
+          <button matButton (click)="cancelEdit()">Cancel</button>
+          <button matButton="tonal" (click)="saveEdit(ed.value)">Save text</button>
+        </div>
+      </div>
+    } @else if (span()) {
+      <div class="palette" role="toolbar">
+        <span class="hint">Assign “{{ spanText() }}” to</span>
+        @for (name of palette(); track name) {
+          <button
+            matButton="tonal"
+            [disabled]="assigning()"
+            (click)="assignSelectedSpan(name)"
+          >
+            {{ name }}
+          </button>
+        }
+        <input
+          #spanName
+          class="new-name"
+          list="known-speakers"
+          placeholder="or a new name…"
+          [disabled]="assigning()"
+          (keydown.enter)="assignSelectedSpan(spanName.value); spanName.value = ''"
+        />
+        <button matButton (click)="clearSpan()">Cancel</button>
+      </div>
+    } @else if (selected() !== null) {
+      <div class="palette" role="toolbar">
+        <button
+          matIconButton
+          (click)="playSelected()"
+          [attr.aria-label]="playing() === 'turn' ? 'pause' : 'hear this line'"
+        >
+          <mat-icon>{{ playing() === 'turn' ? 'pause' : 'play_arrow' }}</mat-icon>
+        </button>
+        <span class="hint">said by</span>
+        @for (name of palette(); track name) {
+          <button
+            matButton="tonal"
+            [disabled]="assigning()"
+            (click)="assignTurn(name)"
+          >
+            {{ name }}
+          </button>
+        }
+        <input
+          #turnName
+          class="new-name"
+          list="known-speakers"
+          placeholder="new name…"
+          [disabled]="assigning()"
+          (keydown.enter)="assignTurn(turnName.value); turnName.value = ''"
+        />
+        <button matButton (click)="editText()">
+          <mat-icon>edit</mat-icon> Fix words
+        </button>
+        <span class="trim">
+          <span class="hint">trim start</span>
+          <button matIconButton (click)="nudgeTurn('start', -0.1)" aria-label="start earlier">
+            <mat-icon>chevron_left</mat-icon>
+          </button>
+          <button matIconButton (click)="nudgeTurn('start', 0.1)" aria-label="start later">
+            <mat-icon>chevron_right</mat-icon>
+          </button>
+          <span class="hint">end</span>
+          <button matIconButton (click)="nudgeTurn('end', -0.1)" aria-label="end earlier">
+            <mat-icon>chevron_left</mat-icon>
+          </button>
+          <button matIconButton (click)="nudgeTurn('end', 0.1)" aria-label="end later">
+            <mat-icon>chevron_right</mat-icon>
+          </button>
+        </span>
+      </div>
+    }
+  } @else {
+    @for (conv of conversations(); track conv.start) {
+      <section class="convo">
+        <h3 class="range">{{ time(conv.start) }}</h3>
+        @for (m of conv.moments; track m.start) {
+          @for (t of m.primary; track t.id) {
+            <app-transcript-card [transcript]="t" />
+          }
+        }
+      </section>
+    }
+  }
+</section>

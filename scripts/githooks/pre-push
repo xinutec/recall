@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#
+# Refuse to push anything that doesn't pass the full verify gate.
+# Version-controlled hook — installed by scripts/setup-hooks.sh (sets
+# core.hooksPath to this dir), so it travels with the repo.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# The toolchain (mypy/dev-lint/node) lives in the devshell, never on PATH — always
+# enter it. (A previous fast path keyed on `command -v dev-lint`, which is never
+# installed globally; and had it ever been, verify would have run OUTSIDE the
+# devshell and failed on the rest of the toolchain.)
+exec nix develop -c scripts/verify.sh

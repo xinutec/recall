@@ -1,0 +1,65 @@
+// Include theming for Angular Material with `mat.theme()`.
+// This Sass mixin will define CSS variables that are used for styling Angular Material
+// components according to the Material 3 design spec.
+// Learn more about theming and how to use it for your application's
+// custom components at https://material.angular.dev/guide/theming
+@use '@angular/material' as mat;
+
+// Universal border-box: with the content-box default, `width: 100%` plus side
+// padding renders wider than the viewport and pages scroll sideways on a phone.
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+  @include mat.theme(
+    (
+      color: (
+        primary: mat.$azure-palette,
+        tertiary: mat.$blue-palette,
+      ),
+      typography: Roboto,
+      density: 0,
+    )
+  );
+}
+
+body {
+  // Default the application to a dark color theme. Use `light dark` instead to
+  // defer to the user's system settings.
+  color-scheme: dark;
+
+  // Set a default background, font and text colors for the application using
+  // Angular Material's system-level CSS variables. Learn more about these
+  // variables at https://material.angular.dev/guide/system-variables
+  background-color: var(--mat-sys-surface);
+  color: var(--mat-sys-on-surface);
+  font: var(--mat-sys-body-medium);
+
+  // Reset the user agent margin.
+  margin: 0;
+  height: 100%;
+
+  // Vertical space the fixed bottom nav occupies (content height + the phone's
+  // home-indicator inset + a little breathing room). Anything pinned to the bottom of
+  // a phone screen must clear this, or it's drawn behind the nav.
+  --bottom-nav-reserve: calc(64px + env(safe-area-inset-bottom, 0px) + 0.5rem);
+
+  // Status-bar / notch inset at the top (with viewport-fit=cover: edge-to-edge on
+  // Android, the notch on iOS). The top toolbar pads by this, and anything sticky
+  // below the toolbar adds it to its offset. 0 in a normal browser tab.
+  --safe-top: env(safe-area-inset-top, 0px);
+}
+/* You can add global styles to this file, and also import other style files */
+
+// Destructive-action buttons: M3 ignores `color="warn"`, so tint via the
+// component tokens instead (shared idiom, matches life/health).
+button.danger {
+  --mat-button-text-label-text-color: var(--mat-sys-error);
+  --mat-button-text-state-layer-color: var(--mat-sys-error);
+  --mat-button-text-ripple-color: color-mix(in srgb, var(--mat-sys-error) 10%, transparent);
+  color: var(--mat-sys-error);
+}

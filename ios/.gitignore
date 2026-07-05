@@ -1,0 +1,10 @@
+# Generated from project.yml by XcodeGen — not source.
+RecallMic.xcodeproj/
+
+# Build output / DerivedData
+build/
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+.DS_Store

@@ -1,0 +1,203 @@
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  text-decoration: none;
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-body-medium);
+  margin-bottom: 0.5rem;
+}
+
+.head {
+  margin-bottom: 1rem;
+
+  .title {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+
+    h2 {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+  }
+
+  .models {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    margin-top: 0.25rem;
+    color: var(--mat-sys-on-surface-variant);
+    font: var(--mat-sys-body-small);
+    overflow-wrap: anywhere;
+  }
+
+  .summary {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.6rem;
+    font-variant-numeric: tabular-nums;
+
+    .mean {
+      font: var(--mat-sys-body-large);
+      font-weight: 600;
+    }
+
+    .n {
+      color: var(--mat-sys-on-surface-variant);
+      font: var(--mat-sys-body-medium);
+    }
+  }
+}
+
+.section {
+  margin: 1.25rem 0 0.25rem;
+}
+
+.legend {
+  margin: 0 0 0.75rem;
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-body-medium);
+}
+
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.card {
+  border-left: 4px solid transparent;
+
+  &.win-B {
+    border-left-color: green;
+  }
+
+  &.win-A {
+    border-left-color: var(--mat-sys-error);
+  }
+
+  audio {
+    width: 100%;
+    margin: 0.5rem 0;
+  }
+}
+
+.cardhead {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+
+  .wins {
+    font-weight: 600;
+  }
+
+  .wercmp {
+    color: var(--mat-sys-on-surface-variant);
+    font-variant-numeric: tabular-nums;
+    font: var(--mat-sys-body-medium);
+  }
+
+  .ctx {
+    margin-left: auto;
+  }
+}
+
+.truth {
+  margin: 0.35rem 0;
+}
+
+.line {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}
+
+.lbl {
+  flex: 0 0 auto;
+  font: var(--mat-sys-body-small);
+  font-weight: 700;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  background: var(--mat-sys-surface-variant);
+  height: fit-content;
+
+  &.a {
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  &.b {
+    color: var(--mat-sys-primary);
+  }
+}
+
+.text .diff {
+  background: color-mix(in srgb, orange 35%, transparent);
+  border-radius: 3px;
+}
+
+.seg .text {
+  font: var(--mat-sys-body-medium);
+  line-height: 1.5;
+}
+
+.badge {
+  font: var(--mat-sys-body-small);
+  font-weight: 600;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+
+  &.tone-better {
+    background: color-mix(in srgb, green 18%, transparent);
+    color: green;
+  }
+
+  &.tone-worse {
+    background: color-mix(in srgb, var(--mat-sys-error) 18%, transparent);
+    color: var(--mat-sys-error);
+  }
+
+  &.tone-tie,
+  &.tone-unknown {
+    background: var(--mat-sys-surface-variant);
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  &.tone-pending {
+    background: color-mix(in srgb, var(--mat-sys-primary) 18%, transparent);
+    color: var(--mat-sys-primary);
+  }
+}
+
+.spin {
+  animation: spin 1.4s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hint {
+  color: var(--mat-sys-on-surface-variant);
+
+  &.error {
+    color: var(--mat-sys-error);
+  }
+
+  &.running {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+}

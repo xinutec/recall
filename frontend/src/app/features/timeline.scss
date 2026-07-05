@@ -1,0 +1,341 @@
+.page {
+  display: block;
+  max-inline-size: 760px;
+  margin-inline: auto;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.line .spacer {
+  flex: 1 1 auto;
+}
+
+h2 {
+  margin: 0;
+}
+
+.hint {
+  opacity: 0.7;
+
+  &.error {
+    color: var(--mat-sys-error);
+    opacity: 1;
+  }
+}
+
+.older,
+.later {
+  display: flex;
+  justify-content: center;
+  margin-block: 0.5rem 1rem;
+}
+
+.day {
+  position: sticky;
+  top: calc(var(--toolbar-h, 56px) + var(--safe-top, 0px));
+  z-index: 1;
+  margin: 1.5rem 0 0.5rem;
+  padding-block: 0.25rem;
+  font: var(--mat-sys-body-medium);
+  font-weight: 600;
+  opacity: 0.85;
+  background: var(--mat-sys-surface);
+  backdrop-filter: blur(4px);
+}
+
+// Per-day diarization coverage: teal "diarized" once the day is fully done, dim
+// "62% diarized" / "not yet diarized" while the overnight pass is still working back.
+.day-cov {
+  margin-inline-start: 0.6rem;
+  font: var(--mat-sys-label-small);
+  font-weight: 400;
+  opacity: 0.5;
+
+  &.done {
+    color: var(--mat-sys-primary);
+    opacity: 0.9;
+  }
+}
+
+.convo {
+  border: 1px solid var(--mat-sys-outline-variant);
+  border-radius: 0.6rem;
+  margin-block-end: 0.6rem;
+  overflow: hidden;
+
+  &.open {
+    background: color-mix(in srgb, var(--mat-sys-surface-variant) 22%, transparent);
+  }
+}
+
+.convo-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  inline-size: 100%;
+  padding: 0.55rem 0.75rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+
+  &:hover {
+    background: color-mix(in srgb, var(--mat-sys-surface-variant) 30%, transparent);
+  }
+
+  .caret {
+    flex: 0 0 auto;
+    opacity: 0.7;
+  }
+
+  .range {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.75;
+    font: var(--mat-sys-body-small);
+  }
+
+  .people {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .count {
+    flex: 0 0 auto;
+    font: var(--mat-sys-label-small);
+    opacity: 0.6;
+  }
+
+  .preview {
+    flex: 1 1 auto;
+    min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.75;
+  }
+}
+
+.turns {
+  padding: 0.25rem 0.5rem 0.5rem;
+}
+
+.turn {
+  padding: 0.5rem 0.75rem;
+  // Not-yet-diarized (and live) turns get a faint, thin bar so the finished ones
+  // clearly stand out against them.
+  border-inline-start: 2px solid var(--mat-sys-outline-variant);
+  margin-block-end: 0.6rem;
+}
+
+// A turn that continues the previous confirmed same-speaker turn: pulled up tight with no
+// top spacing, so a fragmented run reads as one block under a single speaker header.
+.turn.cont {
+  margin-block-start: -0.5rem;
+  padding-top: 0.1rem;
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font: var(--mat-sys-body-small);
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+// The speaker chip is wrapped in a button so it can trigger the "who said it"
+// menu; strip the button chrome so it still reads as a plain chip.
+.who-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.who.unknown {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+// The dim, small name on a continuation turn: confirms the assignment and stays
+// tappable, while reading as a quiet continuation of the speaker block above.
+.who.cont {
+  font: var(--mat-sys-label-small);
+  opacity: 0.5;
+}
+
+// An unconfirmed auto voice guess: present but visibly tentative, with the
+// match strength shown so the uncertainty is on the surface.
+.who.guess {
+  opacity: 0.8;
+
+  .conf {
+    margin-inline-start: 0.3rem;
+    font-variant-numeric: tabular-nums;
+    font: var(--mat-sys-label-small);
+    opacity: 0.7;
+  }
+}
+
+.lang {
+  text-transform: uppercase;
+  font: var(--mat-sys-label-small);
+  opacity: 0.6;
+}
+
+// Which mic a turn came from — a faint tag, useful most in the compare drawer.
+.src {
+  font: var(--mat-sys-label-small);
+  opacity: 0.5;
+}
+
+// A moment groups one utterance's per-mic versions; the spine shows, the rest fold.
+.moment {
+  margin-block-end: 0.3rem;
+}
+
+// "N mics" corroboration badge + compare toggle — subtle, under the spine turn(s).
+.compare-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0 0 0.5rem 0.75rem;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--mat-sys-outline-variant);
+  border-radius: 1rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font: var(--mat-sys-label-small);
+  opacity: 0.75;
+  cursor: pointer;
+
+  &:hover,
+  &.open {
+    opacity: 1;
+    background: color-mix(in srgb, var(--mat-sys-surface-variant) 30%, transparent);
+  }
+
+  .mic-badge {
+    font-size: 1rem;
+    width: 1rem;
+    height: 1rem;
+    color: var(--mat-sys-primary);
+  }
+
+  .compare-label {
+    opacity: 0.8;
+  }
+}
+
+// The other mics' versions: indented and dimmed so the spine stays the focus.
+.alternates {
+  margin-inline-start: 1rem;
+  padding-inline-start: 0.5rem;
+  border-inline-start: 2px dashed var(--mat-sys-outline-variant);
+  opacity: 0.7;
+}
+
+// Analysis tier shown on the turn's left edge — a bold, bright bar plus a faint
+// colour wash so it's unmistakable at a glance which turns the heavier passes have
+// finished (diarized / corrected) versus those still on the basic pass.
+.turn.tier-diarized {
+  border-inline-start: 4px solid var(--mat-sys-primary);
+  background: color-mix(in srgb, var(--mat-sys-primary) 7%, transparent);
+}
+.turn.tier-corrected {
+  border-inline-start: 4px solid var(--mat-sys-tertiary);
+  background: color-mix(in srgb, var(--mat-sys-tertiary) 7%, transparent);
+}
+
+.text {
+  margin: 0.25rem 0 0.4rem;
+  font: var(--mat-sys-body-large);
+  line-height: 1.5;
+
+  // Drag-select a phrase here → the assign bar opens to split it onto another speaker.
+  .t {
+    user-select: text;
+  }
+}
+
+audio {
+  inline-size: 100%;
+  block-size: 1.9rem;
+}
+
+// Action bar shown when a conversation is expanded (e.g. "Refine this section").
+.convo-actions {
+  padding: 0.1rem 0.25rem 0.3rem;
+}
+
+// Per-turn trim row (nudge the audio boundary by ear), under the player.
+.trim {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.1rem;
+  margin-top: 0.25rem;
+
+  .hint {
+    font: var(--mat-sys-body-small);
+    color: var(--mat-sys-on-surface-variant);
+    margin-inline: 0.2rem;
+  }
+}
+
+// Sticky bar that opens when a phrase is selected — split it onto another speaker.
+.assign-bar {
+  position: sticky;
+  bottom: 0;
+  // Pin above the phone bottom-nav so it isn't drawn behind it.
+  :host-context(.with-bottom-nav) & {
+    inset-block-end: var(--bottom-nav-reserve);
+  }
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  margin-top: 0.5rem;
+  background: var(--mat-sys-surface-container-high);
+  border-radius: 10px;
+  box-shadow: 0 -2px 8px color-mix(in srgb, var(--mat-sys-shadow) 25%, transparent);
+
+  .hint {
+    font: var(--mat-sys-body-medium);
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  .new-name {
+    flex: 1 1 7rem;
+    min-width: 6rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--mat-sys-outline-variant);
+    border-radius: 6px;
+    background: var(--mat-sys-surface);
+    color: var(--mat-sys-on-surface);
+    font: inherit;
+  }
+}

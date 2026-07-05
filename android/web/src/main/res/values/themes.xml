@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Full-bleed window, no action bar — the WebView is the whole UI. A framework
+         theme so this module needs no AppCompat/Material dependency. -->
+    <style name="Theme.RecallWeb" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <!-- Black behind the bars + on launch: the recall UI is dark, so this avoids a
+             white flash and matches the strip the WebView is padded away from. -->
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

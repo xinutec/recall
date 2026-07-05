@@ -1,0 +1,306 @@
+"""Typed response shapes for the JSON API.
+
+Each endpoint (and the helpers that build its rows) returns a ``TypedDict`` from
+here instead of a bare ``dict[str, object]``, so mypy checks the wire shape — the
+keys and value types the Angular front-end depends on — at build time. No runtime
+cost: these are plain dicts at runtime, the names exist purely for the type checker
+(and FastAPI's inferred schema). Reach for Pydantic only if we later want to
+auto-generate the front-end models from these.
+"""
+
+from __future__ import annotations
+
+from typing import Literal, TypedDict
+
+# The analysis tier that produced a turn — the exact vocabulary `_tier()` emits.
+# A Literal (not str) so mypy checks both ends and the generated TS carries the
+# real union instead of a loose `string`.
+Tier = Literal["live", "transcribed", "diarized", "corrected"]
+
+
+class TranscriptOut(TypedDict):
+    """One turn as the timeline/search/review lists render it."""
+
+    id: int
+    start: str
+    end: str
+    text: str
+    language: str | None
+    speaker: str | None
+    speakerConfirmed: bool
+    speakerConfidence: float | None
+    confidence: float | None
+    loudness: float | None
+    model: str
+    tier: Tier
+    hidden: str | None
+    audioUrl: str
+    source: str | None
+    # The diarization cluster (relative voice) — for grouping a session's turns by
+    # voice so a person can be named once per voice. Null until refined.
+    cluster: str | None
+
+
+class SourceStatusOut(TypedDict):
+    """One recorder's liveness for the fleet view: is it streaming, and when last."""
+
+    id: str
+    name: str
+    kind: str
+    active: bool
+    lastActive: str | None
+
+
+class SourcesOut(TypedDict):
+    items: list[SourceStatusOut]
+
+
+class SessionOut(TypedDict):
+    """One uploaded session — a discrete recording (e.g. a meeting) — for the list."""
+
+    id: str
+    title: str
+    start: str
+    end: str
+    turnCount: int
+    speakers: list[str]
+
+
+class SessionsOut(TypedDict):
+    items: list[SessionOut]
+
+
+class TranscriptBubbleOut(TypedDict):
+    """One coalesced speaker bubble in an exported transcript."""
+
+    start: str  # ISO 8601 with the local offset (e.g. 2026-01-15T10:41:51+01:00)
+    speaker: str  # a confirmed name, or 'SPEAKER_nn'/'unknown' if not yet confirmed
+    text: str
+
+
+class TranscriptExportOut(TypedDict):
+    """A session's clean, finalised transcript — for rendering into a doc/website.
+
+    Consecutive same-speaker turns are merged into one bubble; only the current,
+    human-corrected state is included (no superseded/hidden turns, no alternates).
+    Deterministic, so re-fetching unchanged data yields byte-identical output.
+    """
+
+    session: str
+    date: str | None  # ISO 8601 (local) of the first bubble; null if empty
+    speakers: list[str]  # confirmed names present, in first-seen order
+    turns: list[TranscriptBubbleOut]
+
+
+class MomentOut(TypedDict):
+    """One wall-clock moment: the best mic's turn(s) (`primary`, its speaker split
+    kept) plus the other mics' overlapping versions (`alternates`, for compare)."""
+
+    start: str
+    end: str
+    primary: list[TranscriptOut]
+    alternates: list[TranscriptOut]
+    sources: list[str]
+
+
+class ConversationOut(TypedDict):
+    """A gap-segmented run of turns, folded into per-moment cards."""
+
+    start: str
+    end: str
+    turnCount: int
+    speakers: list[str]
+    preview: str
+    moments: list[MomentOut]
+
+
+class LabelOut(TypedDict):
+    """A labelled correction fragment under review."""
+
+    id: int
+    text: str
+    speaker: str | None
+    language: str | None
+    start: str
+    audioUrl: str
+
+
+class CaptureOut(TypedDict):
+    running: bool
+    pausedUntil: str | None
+
+
+class StatusOut(TypedDict):
+    audioSegments: int
+    transcripts: int
+    pending: int
+    corrections: int
+    sources: list[str]
+
+
+class OkOut(TypedDict):
+    ok: bool
+
+
+class SpeakerNamesOut(TypedDict):
+    names: list[str]  # known speaker names, for autocompleting voice naming
+
+
+class AssignResultOut(TypedDict):
+    touched: int  # turns touched by a span assign (reassign / split / merge)
+
+
+class VoiceSuggestionsOut(TypedDict):
+    suggestions: dict[str, str]  # {cluster: suggested name} from voiceprints
+
+
+class VocabularyTermOut(TypedDict):
+    id: int
+    term: str
+
+
+class VocabularyOut(TypedDict):
+    items: list[VocabularyTermOut]
+
+
+class DaySummaryOut(TypedDict):
+    """One day's generated summary (the recall layer)."""
+
+    day: str  # yyyy-mm-dd (UTC grouping)
+    text: str
+    model: str  # which local LLM wrote it
+
+
+class DaySummariesOut(TypedDict):
+    items: list[DaySummaryOut]
+
+
+class ContextOut(TypedDict):
+    """The household context — background facts given to the LLM prompts."""
+
+    text: str  # empty when unset
+
+
+class TodaySummaryOut(TypedDict):
+    """The running day's so-far summary (stale-while-revalidate: text may lag
+    the newest turns; upToDate/pending say whether a refresh is under way)."""
+
+    day: str  # yyyy-mm-dd (UTC)
+    text: str | None  # null = nothing recorded yet / first generation in flight
+    generatedAt: str | None  # when the text was generated ("as of HH:MM")
+    upToDate: bool  # text reflects the day's newest turn
+    pending: bool  # a background regeneration is running
+
+
+class AskOut(TypedDict):
+    """A grounded answer over the archive; answer is null when retrieval found
+    no evidence (the UI says so instead of letting a model improvise)."""
+
+    answer: str | None
+    sources: list[TranscriptOut]  # the turns the answer drew on (deep links)
+
+
+class ItemsOut(TypedDict):
+    """A bare list of turns (search / review / transcripts / hidden)."""
+
+    items: list[TranscriptOut]
+
+
+class PageOut(TypedDict):
+    """A page of turns with a has-more cursor flag (timeline)."""
+
+    items: list[TranscriptOut]
+    hasMore: bool
+
+
+class ConversationsOut(TypedDict):
+    items: list[ConversationOut]
+    hasMore: bool
+
+
+class TrainOut(TypedDict):
+    items: list[TranscriptOut]
+    corrections: int
+    bySpeaker: dict[str, int]
+
+
+class CorrectionsOut(TypedDict):
+    items: list[LabelOut]
+    bySpeaker: dict[str, int]
+
+
+class NewIdOut(TypedDict):
+    newId: int
+
+
+class NewIdsOut(TypedDict):
+    newIds: list[int]
+
+
+class AroundOut(TypedDict):
+    before: list[TranscriptOut]
+    after: list[TranscriptOut]
+
+
+class SuggestOut(TypedDict):
+    speaker: str | None
+
+
+# A/B model comparison — its lifecycle status (queued -> running -> done|error).
+AbCompareStatus = Literal["queued", "running", "done", "error"]
+
+
+class AbCompareScoreOut(TypedDict):
+    """One human-corrected span: each model's text + WER against your ground truth,
+    and the audio of that span so you can listen and judge."""
+
+    correctionId: int
+    truth: str
+    textA: str
+    textB: str
+    werA: float
+    werB: float
+    audioUrl: str
+
+
+class AbCompareSegmentDiffOut(TypedDict):
+    """One whole-segment transcription as each model produced it (the wide text diff
+    — where a model truncates or drifts over a long span shows here)."""
+
+    audioId: int
+    start: str
+    changed: bool
+    textA: str
+    textB: str
+
+
+class AbCompareRunSummaryOut(TypedDict):
+    """One A/B run as the list renders it — params, status, and (once done) the
+    headline mean-WER numbers; no per-span detail."""
+
+    id: int
+    source: str
+    modelA: str
+    modelB: str
+    baseModel: str
+    status: AbCompareStatus
+    created: str
+    meanWerA: float | None
+    meanWerB: float | None
+    nCorrections: int | None
+    nSegments: int | None
+    nChanged: int | None
+    error: str | None
+
+
+class AbCompareRunsOut(TypedDict):
+    items: list[AbCompareRunSummaryOut]
+
+
+class AbCompareRunOut(TypedDict):
+    """A run's full detail: its summary plus the per-span WER evidence and the
+    whole-segment diffs (empty lists until the run finishes)."""
+
+    summary: AbCompareRunSummaryOut
+    scores: list[AbCompareScoreOut]
+    segmentDiffs: list[AbCompareSegmentDiffOut]

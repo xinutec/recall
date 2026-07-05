@@ -1,0 +1,255 @@
+"""The transcription worker: index + transcribe pending, idempotent, age-guarded."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import time
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from recall.asr import AsrResult, AsrSegment
+from recall.probe import scan_segments
+from recall.sources import AudioSource, SourceKind
+from recall.store import Store
+from recall.timeline import Segment
+from recall.worker import (
+    discover_source_ids,
+    process_all,
+    process_pending,
+    reconcile_live,
+)
+
+USB = AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+
+
+def _capture_two_segments(audio_dir: Path) -> None:
+    """Generate two 1s FLAC segments named for the source (the dir name)."""
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    source_id = audio_dir.name
+    for ts in ("20260613T120000", "20260613T120001"):
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-t",
+                "1",
+                "-ac",
+                "1",
+                "-c:a",
+                "flac",
+                str(audio_dir / f"{source_id}-{ts}.flac"),
+            ],
+            check=True,
+        )
+
+
+def _stub_transcriber(_audio: Path) -> AsrResult:
+    return AsrResult(
+        language="en",
+        language_confidence=0.9,
+        segments=(
+            AsrSegment(
+                start=0.0,
+                end=1.0,
+                text="hello world",
+                avg_logprob=-0.2,
+                no_speech_prob=0.0,
+            ),
+        ),
+    )
+
+
+def test_worker_transcribes_pending_then_is_idempotent(tmp_path: Path) -> None:
+    _capture_two_segments(tmp_path / "usb")
+    store = Store.memory()
+
+    # `now` far in the future so the min-age guard treats both files as complete
+    future = 9_999_999_999.0
+    written = process_pending(
+        store,
+        tmp_path,
+        USB,
+        _stub_transcriber,
+        model_name="stub",
+        now=future,
+    )
+    assert written == 2
+    assert len(store.search("hello")) == 2
+
+    # second pass: nothing new to do
+    again = process_pending(
+        store,
+        tmp_path,
+        USB,
+        _stub_transcriber,
+        model_name="stub",
+        now=future,
+    )
+    assert again == 0
+
+
+def test_discover_source_ids_needs_segment_files(tmp_path: Path) -> None:
+    # A real source dir holds `<id>-<timestamp>` segment files; dirs without them
+    # (the refine `work` dir, fine-tune pilot output) must not register as sources.
+    (tmp_path / "usb").mkdir()
+    (tmp_path / "usb" / "usb-20260619T120000.opus").write_bytes(b"x")
+    (tmp_path / "phone").mkdir()
+    (tmp_path / "phone" / "phone-20260619T120000.opus").write_bytes(b"x")
+    (tmp_path / "work").mkdir()  # refine work dir — no segments
+    # fine-tune pilot output — clips/ + manifest, no segment files
+    pilot = tmp_path / "pilot-finetune"
+    (pilot / "clips").mkdir(parents=True)
+    (pilot / "manifest.jsonl").write_bytes(b"{}")
+    assert discover_source_ids(tmp_path) == ["phone", "usb"]
+
+
+def test_process_all_handles_multiple_sources(tmp_path: Path) -> None:
+    _capture_two_segments(tmp_path / "usb")
+    _capture_two_segments(tmp_path / "phone")
+    store = Store.memory()
+    written = process_all(
+        store,
+        tmp_path,
+        _stub_transcriber,
+        model_name="stub",
+        now=9_999_999_999.0,
+    )
+    assert written == 4  # two segments from each of the two sources
+
+
+def test_worker_skips_in_progress_segment(tmp_path: Path) -> None:
+    audio_dir = tmp_path / "usb"
+    _capture_two_segments(audio_dir)
+    now = time.time()
+    # one segment finished a while ago; the other is being written right now
+    os.utime(audio_dir / "usb-20260613T120000.flac", (now - 1000, now - 1000))
+    os.utime(audio_dir / "usb-20260613T120001.flac", (now, now))
+    store = Store.memory()
+
+    written = process_pending(
+        store,
+        tmp_path,
+        USB,
+        _stub_transcriber,
+        model_name="stub",
+        min_age_seconds=120.0,
+        now=now,
+    )
+    # only the older segment is transcribed; the fresh one is skipped
+    assert written == 1
+
+
+def test_worker_does_not_index_an_in_progress_segment(tmp_path: Path) -> None:
+    # The in-progress file must be skipped at INDEX time, not just transcribe time:
+    # a partial Opus/FLAC probes fine and yields a truncated duration, and once the
+    # row exists its path is in `known`, so the short end_utc would stand forever.
+    audio_dir = tmp_path / "usb"
+    _capture_two_segments(audio_dir)
+    now = time.time()
+    os.utime(audio_dir / "usb-20260613T120000.flac", (now - 1000, now - 1000))
+    os.utime(audio_dir / "usb-20260613T120001.flac", (now, now))
+    store = Store.memory()
+
+    process_pending(
+        store,
+        tmp_path,
+        USB,
+        _stub_transcriber,
+        model_name="stub",
+        min_age_seconds=120.0,
+        now=now,
+    )
+    indexed = {path for _, path in store.audio_segment_paths()}
+    assert indexed == {str(audio_dir / "usb-20260613T120000.flac")}
+
+    # Once the file is old enough it gets indexed (at its final duration) and done.
+    written = process_pending(
+        store,
+        tmp_path,
+        USB,
+        _stub_transcriber,
+        model_name="stub",
+        min_age_seconds=120.0,
+        now=now + 1000,
+    )
+    assert written == 1
+    assert len(store.audio_segment_paths()) == 2
+
+
+def test_worker_survives_a_pending_segment_whose_file_is_gone(tmp_path: Path) -> None:
+    # A pending row whose file has vanished from disk must not crash the pass —
+    # the whole pipeline (and the pause auto-resume that rides on the worker loop)
+    # would wedge in a launchd crash-loop. The other segments still get done.
+    audio_dir = tmp_path / "usb"
+    _capture_two_segments(audio_dir)
+    store = Store.memory()
+    future = 9_999_999_999.0
+    process_pending(
+        store, tmp_path, USB, _stub_transcriber, model_name="stub", now=future
+    )
+
+    # A third file appears, gets indexed, then vanishes before transcription.
+    ghost = audio_dir / "usb-20260613T120002.flac"
+    (audio_dir / "usb-20260613T120000.flac").rename(ghost)
+    known = frozenset(path for _, path in store.audio_segment_paths())
+    for segment in scan_segments(audio_dir, "usb", known=known):
+        store.add_audio_segment(segment)
+    ghost.unlink()
+
+    written = process_pending(
+        store, tmp_path, USB, _stub_transcriber, model_name="stub", now=future
+    )
+    assert written == 0  # nothing crashed; the ghost row is simply skipped
+
+
+def test_reconcile_live_hides_rather_than_superseding(tmp_path: Path) -> None:
+    # Superseding a live turn by an UNRELATED archive turn corrupts deep links:
+    # current_version() would resolve the live turn to a different utterance's
+    # text. Reconciled live turns are hidden instead — gone from views, but still
+    # resolving to themselves.
+    base = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
+    store = Store.memory()
+    store.add_source(USB)
+    audio_id = store.add_audio_segment(
+        Segment(
+            source_id="usb",
+            sequence=0,
+            start=base,
+            end=base + timedelta(seconds=60),
+            path="x",
+            sample_rate=48000,
+            channels=1,
+        )
+    )
+    live_id = store.add_transcript_segment(
+        audio_segment_id=None,
+        start=base,
+        end=base + timedelta(seconds=1),
+        text="live words",
+        asr_model="live",
+    )
+    store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=base + timedelta(seconds=2),
+        end=base + timedelta(seconds=3),
+        text="different archive words",
+        asr_model="whisper",
+    )
+
+    assert reconcile_live(store) == 1
+
+    resolved = store.current_version(live_id)
+    assert resolved is not None
+    assert resolved.id == live_id  # still resolves to itself…
+    assert resolved.text == "live words"  # …never to an unrelated utterance
+    visible = {
+        s.text for s in store.segments_in_range(base, base + timedelta(seconds=10))
+    }
+    assert visible == {"different archive words"}

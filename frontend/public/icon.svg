@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Source icon for the Recall web UI (voice capture + transcription).
+     A microphone on the app's Material-3 azure primary.
+     Raster assets (favicon.ico, apple-touch-icon.png, icon-192/512.png,
+     icon-512-maskable.png) are generated from this file + icon-maskable.svg
+     by frontend/gen-icons.sh. Edit here, then re-run that script. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#0277bd"/>
+  <g fill="none" stroke="#ffffff" stroke-width="30"
+     stroke-linejoin="round" stroke-linecap="round">
+    <rect x="216" y="104" width="80" height="180" rx="40" fill="#ffffff"/>
+    <path d="M172 236 A84 84 0 0 0 340 236"/>
+    <line x1="256" y1="320" x2="256" y2="372"/>
+    <line x1="210" y1="372" x2="302" y2="372"/>
+  </g>
+</svg>

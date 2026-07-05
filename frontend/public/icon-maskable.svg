@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Maskable variant of icon.svg: full-bleed square (no rounded corners) so a
+     launcher's own mask applies cleanly; the mic sits inside the safe zone.
+     Generated PNG: icon-512-maskable.png (see frontend/gen-icons.sh). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0277bd"/>
+  <g fill="none" stroke="#ffffff" stroke-width="30"
+     stroke-linejoin="round" stroke-linecap="round">
+    <rect x="216" y="104" width="80" height="180" rx="40" fill="#ffffff"/>
+    <path d="M172 236 A84 84 0 0 0 340 236"/>
+    <line x1="256" y1="320" x2="256" y2="372"/>
+    <line x1="210" y1="372" x2="302" y2="372"/>
+  </g>
+</svg>

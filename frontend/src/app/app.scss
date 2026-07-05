@@ -1,0 +1,151 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 100dvh;
+}
+
+// Toolbar height differs by breakpoint; sticky day-headers key off this var.
+:host {
+  --toolbar-h: 56px;
+}
+@media (min-width: 600px) {
+  :host {
+    --toolbar-h: 64px;
+  }
+}
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  gap: 0.5rem;
+  // Edge-to-edge (viewport-fit=cover): drop the toolbar content below the status
+  // bar / notch; the toolbar's own background fills the inset strip above it. Let
+  // the bar grow by the inset rather than squeezing its fixed height.
+  padding-block-start: var(--safe-top, 0px);
+  block-size: auto;
+  // Include the inset so the bar's bottom lands exactly at the banner/day-header
+  // sticky offset (toolbar-h + safe-top). Without it the bar is only content+inset
+  // tall, shorter than that offset, and sticky shoves the banner down — a gap.
+  min-block-size: calc(var(--toolbar-h) + var(--safe-top, 0px));
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: inherit;
+  text-decoration: none;
+  font: var(--mat-sys-title-medium);
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.capture-toggle.paused {
+  color: var(--mat-sys-error);
+}
+
+.paused-banner {
+  position: sticky;
+  top: calc(var(--toolbar-h) + var(--safe-top, 0px));
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: var(--mat-sys-error-container);
+  color: var(--mat-sys-on-error-container);
+  font: var(--mat-sys-body-medium);
+  font-weight: 600;
+
+  // the recording dot only — kept circular (no shrink) and pulsing; the action
+  // buttons' icons must not inherit the red pulse.
+  .rec-dot {
+    flex-shrink: 0;
+    color: var(--mat-sys-error);
+    animation: rec-pulse 1.6s ease-in-out infinite;
+  }
+
+  span {
+    flex: 1 1 auto;
+  }
+}
+
+@keyframes rec-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.links {
+  display: flex;
+  gap: 0.25rem;
+
+  a.active {
+    font-weight: 700;
+    text-decoration: underline;
+  }
+}
+
+.content {
+  flex: 1 1 auto;
+  padding: 1rem;
+
+  // Leave room for the fixed bottom nav (plus the phone's home-indicator inset).
+  &.with-bottom-nav {
+    padding-block-end: var(--bottom-nav-reserve);
+  }
+}
+
+.version {
+  display: block;
+  margin-block-start: 2rem;
+  text-align: center;
+  font: var(--mat-sys-label-small);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.4;
+  user-select: text;
+}
+
+// Material 3 bottom navigation bar (no shipped component yet — minimal markup).
+.bottom-nav {
+  position: fixed;
+  inset-inline: 0;
+  inset-block-end: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: space-around;
+  align-items: stretch;
+  background: var(--mat-sys-surface-container, var(--mat-sys-surface));
+  border-block-start: 1px solid var(--mat-sys-outline-variant);
+  padding-block-end: env(safe-area-inset-bottom, 0px);
+
+  .item {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-block-size: 56px;
+    text-decoration: none;
+    color: var(--mat-sys-on-surface-variant, inherit);
+    font: var(--mat-sys-label-small);
+
+    mat-icon {
+      transition: color 0.15s ease;
+    }
+
+    &.active {
+      color: var(--mat-sys-primary);
+      font-weight: 600;
+    }
+  }
+}

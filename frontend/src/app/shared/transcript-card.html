@@ -1,0 +1,35 @@
+@let t = transcript();
+<mat-card appearance="outlined" class="turn">
+  <mat-card-content>
+    <div class="meta">
+      <span class="clock">
+        <mat-icon inline>schedule</mat-icon>
+        {{ clock(t) }}
+      </span>
+      <mat-chip-set aria-label="turn details">
+        @if (t.speaker) {
+          <mat-chip highlighted>
+            <mat-icon matChipAvatar>person</mat-icon>
+            {{ t.speaker }}
+          </mat-chip>
+        } @else {
+          <mat-chip><mat-icon matChipAvatar>help</mat-icon>unknown</mat-chip>
+        }
+        @if (t.language) {
+          <mat-chip>{{ t.language }}</mat-chip>
+        }
+        @if (duration(t)) {
+          <mat-chip>{{ duration(t) }}</mat-chip>
+        }
+        @if (confidence(t)) {
+          <mat-chip>conf {{ confidence(t) }}</mat-chip>
+        }
+        <mat-chip class="model">{{ t.model }}</mat-chip>
+      </mat-chip-set>
+    </div>
+
+    <p class="text">{{ t.text }}</p>
+
+    <audio controls preload="none" [src]="t.audioUrl"></audio>
+  </mat-card-content>
+</mat-card>

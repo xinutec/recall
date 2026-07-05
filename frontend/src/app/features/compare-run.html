@@ -1,0 +1,123 @@
+<section class="page">
+  <a class="back" routerLink="/compare"><mat-icon>arrow_back</mat-icon> All comparisons</a>
+
+  @if (data.isLoading() && !summary()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+  @if (data.error()) {
+    <p class="hint error">Could not load this run.</p>
+  }
+
+  @if (summary(); as s) {
+    <header class="head">
+      <div class="title">
+        <h2>{{ s.source }}</h2>
+        @if (verdict(); as v) {
+          <span class="badge" [class]="'tone-' + v.tone">{{ v.label }}</span>
+        }
+      </div>
+      <div class="models">
+        <span><b>A</b> {{ s.modelA }}</span>
+        <span><b>B</b> {{ s.modelB }}</span>
+      </div>
+
+      @if (s.status === 'queued' || s.status === 'running') {
+        <p class="hint running">
+          <mat-icon class="spin">autorenew</mat-icon>
+          {{ s.status === 'queued' ? 'Queued' : 'Running' }} — this updates automatically.
+        </p>
+        <mat-progress-bar mode="indeterminate" />
+      } @else if (s.status === 'error') {
+        <p class="hint error">Failed: {{ s.error }}</p>
+      } @else {
+        <div class="summary">
+          <span class="mean">A {{ pct(s.meanWerA) }}</span>
+          <mat-icon>arrow_forward</mat-icon>
+          <span class="mean">B {{ pct(s.meanWerB) }}</span>
+          <span class="n">mean WER over {{ s.nCorrections }} corrected span(s)</span>
+        </div>
+      }
+    </header>
+
+    @if (cards().length) {
+      <h3 class="section">Evidence — biggest disagreements first</h3>
+      <p class="legend">
+        Highlighted words are where each model <em>differs from your correction</em>. Play the
+        audio to judge which got it right.
+      </p>
+      <div class="cards">
+        @for (c of cards(); track c.score.correctionId) {
+          <mat-card appearance="outlined" class="card" [class]="'win-' + c.winner">
+            <mat-card-content>
+              <div class="cardhead">
+                <span class="wins">{{
+                  c.winner === 'tie' ? 'Tie' : c.winner + ' wins'
+                }}</span>
+                <span class="wercmp">A {{ pct(c.score.werA) }} · B {{ pct(c.score.werB) }}</span>
+                <button mat-button class="ctx" (click)="toggleContext(c.score)">
+                  <mat-icon>{{ inContext(c.score) ? 'unfold_less' : 'unfold_more' }}</mat-icon>
+                  {{ inContext(c.score) ? 'Tight' : 'Context' }}
+                </button>
+              </div>
+
+              <audio controls preload="none" [src]="audioSrc(c.score)"></audio>
+
+              <div class="truth"><span class="lbl">Truth</span> {{ c.score.truth }}</div>
+              <div class="line">
+                <span class="lbl a">A</span>
+                <span class="text">
+                  @for (t of c.aTokens; track $index) {
+                    <span [class.diff]="t.changed">{{ t.text }} </span>
+                  }
+                </span>
+              </div>
+              <div class="line">
+                <span class="lbl b">B</span>
+                <span class="text">
+                  @for (t of c.bTokens; track $index) {
+                    <span [class.diff]="t.changed">{{ t.text }} </span>
+                  }
+                </span>
+              </div>
+            </mat-card-content>
+          </mat-card>
+        }
+      </div>
+    } @else if (s.status === 'done') {
+      <p class="hint">
+        No corrected spans in range, so there's no WER. The whole-segment text below still
+        shows what each model produced.
+      </p>
+    }
+
+    @if (segments().length) {
+      <h3 class="section">Whole-segment differences</h3>
+      <p class="legend">
+        The full transcription of each segment — where a model truncates or drifts over a long
+        stretch shows here.
+      </p>
+      @for (seg of segments(); track seg.diff.audioId) {
+        <mat-card appearance="outlined" class="card seg">
+          <mat-card-content>
+            <div class="line">
+              <span class="lbl a">A</span>
+              <span class="text">
+                @for (t of seg.aTokens; track $index) {
+                  <span [class.diff]="t.changed">{{ t.text }} </span>
+                }
+              </span>
+            </div>
+            <div class="line">
+              <span class="lbl b">B</span>
+              <span class="text">
+                @for (t of seg.bTokens; track $index) {
+                  <span [class.diff]="t.changed">{{ t.text }} </span>
+                }
+              </span>
+            </div>
+          </mat-card-content>
+        </mat-card>
+      }
+    }
+  }
+</section>

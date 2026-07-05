@@ -1,0 +1,33 @@
+# python
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# nix
+result
+result-*
+
+# angular frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+
+# recall runtime data — NEVER commit audio or transcripts
+data/
+audio/
+logs/
+*.wav
+*.flac
+*.opus
+*.sqlite
+*.sqlite3
+*.db
+
+# local secrets (e.g. HuggingFace token) — never commit
+.env

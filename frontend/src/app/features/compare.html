@@ -1,0 +1,116 @@
+<section class="page">
+  <header class="head">
+    <h2>Compare models</h2>
+    <span class="sub">Run two ASR models over a recording and hear why one wins</span>
+  </header>
+
+  <mat-card appearance="outlined" class="newrun">
+    <mat-card-content>
+      <div class="row">
+        <mat-form-field appearance="outline" class="grow">
+          <mat-label>Recording (source id)</mat-label>
+          <input
+            matInput
+            [matAutocomplete]="auto"
+            [ngModel]="source()"
+            (ngModelChange)="source.set($event)"
+            placeholder="meeting-20260115-1200 or usb"
+          />
+          <mat-autocomplete #auto="matAutocomplete">
+            @for (s of filteredSources(); track s.id) {
+              <mat-option [value]="s.id">
+                <span class="opt-id">{{ s.id }}</span>
+                <span class="opt-title">{{ s.title }}</span>
+              </mat-option>
+            }
+          </mat-autocomplete>
+        </mat-form-field>
+        <button
+          mat-flat-button
+          class="run"
+          [disabled]="!canStart()"
+          (click)="start()"
+        >
+          @if (starting()) {
+            <ng-container>Starting…</ng-container>
+          } @else {
+            <ng-container>Run comparison</ng-container>
+          }
+        </button>
+      </div>
+      <p class="defaults">
+        Defaults to the deployed pairing — live stock model (A) vs the fine-tuned adapter
+        (B). Set a window or different models below to override.
+      </p>
+
+      <mat-expansion-panel class="advanced">
+        <mat-expansion-panel-header>
+          <mat-panel-title>Advanced</mat-panel-title>
+        </mat-expansion-panel-header>
+        <div class="grid">
+          <mat-form-field appearance="outline">
+            <mat-label>From (ISO, optional)</mat-label>
+            <input matInput [ngModel]="from()" (ngModelChange)="from.set($event)" />
+          </mat-form-field>
+          <mat-form-field appearance="outline">
+            <mat-label>To (ISO, optional)</mat-label>
+            <input matInput [ngModel]="to()" (ngModelChange)="to.set($event)" />
+          </mat-form-field>
+          <mat-form-field appearance="outline">
+            <mat-label>Model A (old)</mat-label>
+            <input matInput [ngModel]="modelA()" (ngModelChange)="modelA.set($event)" />
+          </mat-form-field>
+          <mat-form-field appearance="outline">
+            <mat-label>Model B (new)</mat-label>
+            <input matInput [ngModel]="modelB()" (ngModelChange)="modelB.set($event)" />
+          </mat-form-field>
+          <mat-form-field appearance="outline">
+            <mat-label>Base model (for a LoRA adapter)</mat-label>
+            <input matInput [ngModel]="baseModel()" (ngModelChange)="baseModel.set($event)" />
+          </mat-form-field>
+        </div>
+      </mat-expansion-panel>
+
+      @if (error()) {
+        <p class="hint error">{{ error() }}</p>
+      }
+    </mat-card-content>
+  </mat-card>
+
+  @if (data.isLoading()) {
+    <mat-progress-bar mode="indeterminate" />
+  }
+  @if (data.error()) {
+    <p class="hint error">Could not load runs — is the backend running?</p>
+  } @else if (empty()) {
+    <p class="hint">No comparisons yet — start one above.</p>
+  }
+
+  <div class="list">
+    @for (run of runs(); track run.id) {
+      <a class="run-link" [routerLink]="['/compare', run.id]">
+        <mat-card appearance="outlined">
+          <mat-card-content>
+            <div class="top">
+              <span class="source">{{ run.source }}</span>
+              <span class="badge" [class]="'tone-' + verdict(run).tone">{{
+                verdict(run).label
+              }}</span>
+            </div>
+            @if (run.status === 'done') {
+              <div class="wer">
+                <span>A {{ pct(run.meanWerA) }}</span>
+                <mat-icon>arrow_forward</mat-icon>
+                <span>B {{ pct(run.meanWerB) }}</span>
+                <span class="n">· {{ run.nCorrections }} spans</span>
+              </div>
+            } @else if (run.status === 'error') {
+              <div class="wer err">{{ run.error }}</div>
+            }
+            <div class="models">A: {{ run.modelA }} · B: {{ run.modelB }}</div>
+          </mat-card-content>
+        </mat-card>
+      </a>
+    }
+  </div>
+</section>
