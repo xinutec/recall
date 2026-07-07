@@ -4,7 +4,7 @@
 #
 # Run it three ways, identically — so local-green and CI-green can never diverge:
 #   - by hand:     nix develop -c scripts/verify.sh
-#   - pre-push:    scripts/githooks/pre-push calls it (see scripts/setup-hooks.sh)
+#   - pre-commit:    scripts/githooks/pre-commit calls it (see scripts/setup-hooks.sh)
 #   - CI:          run the same line once a remote exists
 #
 # Each step owns a distinct error class; they run cheapest-first so a fast failure
