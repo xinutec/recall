@@ -138,5 +138,26 @@ transition scores), so it aligns and scores like the mlx path; its first-word st
 be a touch coarser than mlx (a known Whisper word-timestamp quirk), which doesn't affect
 whole-segment speaker assignment.
 
+### The next retrain (recipe agreed 2026-07-03, not yet run)
+
+The 2026-06 adapter won its pilot but **regressed on real audio** (truncated long
+one-shots — it learned early EOS from a corpus that was ~74% short clips), so it
+was un-deployed. The corpus hygiene that fixes the cause has since shipped (the
+train queue and export skip <2 s / <4-word backchannels and dedupe overlapping
+re-corrections). The agreed parameters for the next `recall finetune` run:
+
+- **Stitch adjacent clips into ≤30 s training windows** — Whisper is trained on
+  ~30 s context; isolated 2–5 s clips are what taught the early EOS. Same rule
+  as inference (§ re-transcribe: whole segments, never tiny clips).
+- **Learning rate 1e-4** with **early stopping** on the held-out split, rather
+  than a fixed epoch count — the pilot history shows this corpus size sits near
+  the overfit boundary.
+- **Gate = whole-segment A/B on real recordings** (`recall ab-compare`), not the
+  pilot's held-out clip WER — the pilot already passed once while the adapter
+  regressed in production shape. Only an A/B win re-points
+  `scripts/recall-refine.sh` at `adapter-current`.
+- **Run in a capture-idle window only** — two Whispers starve capture (sox
+  buffer overrun = dropped samples), same constraint as refine.
+
 > **Still a follow-up:** per-person adapters (selected at transcription time by the
 > identified speaker), and an mlx conversion if the adapter ever needs the live path.

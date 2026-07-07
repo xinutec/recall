@@ -60,8 +60,10 @@ fix efficiently.
 | LoRA fine-tune on corrections | high | accent/acoustic residue | measurable (`finetune-pilot`), not deployed |
 
 "Training on the actual people" is delivered mainly by **enrolment** (lightweight
-voiceprints), not retraining. The two cheap proper-noun levers are the highest-
-yield un-built work. Details: [pipeline.md](pipeline.md).
+voiceprints), not retraining. Un-built: the post-correction dictionary is the
+cheap lever left; the LoRA retrain is the heavy one — its first deployment
+regressed on real audio and was rolled back, and the next run's recipe is agreed
+(see [pipeline.md §5](pipeline.md)).
 
 ## 5. Components
 
