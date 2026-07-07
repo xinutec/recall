@@ -198,6 +198,9 @@ export class Timeline {
   protected coverageDone = (day: Day): boolean => day.pending === 0 && day.diarized > 0;
 
   constructor() {
+    // dev-lint: allow-component-list — `speakers` is a small name lookup, cheap
+    // to refetch; a dedicated retained store isn't worth it. The main timeline
+    // content is already restored from the URL cursor (see the effect below).
     this.api.speakers().subscribe({
       next: (r) => this.speakers.set(r.names),
       error: () => undefined,

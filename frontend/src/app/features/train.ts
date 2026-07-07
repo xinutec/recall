@@ -129,6 +129,9 @@ export class Train {
   });
 
   constructor() {
+    // dev-lint: allow-component-list — `speakers` is a small name lookup, and the
+    // training `queue` is loaded fresh per session on purpose (a stale queue
+    // carried across navigation isn't wanted). Neither is a retained catalog.
     this.api.speakers().subscribe({
       next: (r) => this.speakers.set(r.names),
       error: () => undefined,
