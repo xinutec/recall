@@ -155,6 +155,14 @@ def finetune_lora(config: FinetuneConfig) -> Path:
         batch["input_features"] = processor.feature_extractor(
             array, sampling_rate=16000
         ).input_features[0]
+        # Stamp each label with THIS example's language + the transcribe task, so the
+        # decoder prefix (`<|sot|><|nl|><|transcribe|>...`) matches the speech. Without
+        # it the tokenizer emits a bare `<|sot|><|notimestamps|>` prefix - no language
+        # token at all - and a bilingual corpus corrupts Whisper's language head (the
+        # 2026-07-08 adapter decoded Dutch as Cyrillic/Hebrew; see pipeline.md §5).
+        processor.tokenizer.set_prefix_tokens(
+            language=batch.get("language") or "en", task="transcribe"
+        )
         batch["labels"] = processor.tokenizer(batch["text"]).input_ids
         return batch
 
@@ -213,6 +221,14 @@ def finetune_lora(config: FinetuneConfig) -> Path:
             [{"input_ids": f["labels"]} for f in features], return_tensors="pt"
         )
         label_ids = labels["input_ids"].masked_fill(labels.attention_mask.ne(1), -100)
+        # The model prepends the decoder-start token (`<|sot|>`) itself when it shifts
+        # labels right, so drop the leading `<|sot|>` the tokenizer added - otherwise
+        # it's duplicated and the trained prefix no longer lines up with the
+        # forced-language decoding used at inference (the canonical HF recipe's last
+        # step, needed now that labels carry the full language/task prefix).
+        sot = processor.tokenizer.convert_tokens_to_ids("<|startoftranscript|>")
+        if (label_ids[:, 0] == sot).all():
+            label_ids = label_ids[:, 1:]
         inputs["labels"] = label_ids
         return inputs
 
