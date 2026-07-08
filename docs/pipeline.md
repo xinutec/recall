@@ -138,26 +138,52 @@ transition scores), so it aligns and scores like the mlx path; its first-word st
 be a touch coarser than mlx (a known Whisper word-timestamp quirk), which doesn't affect
 whole-segment speaker assignment.
 
-### The next retrain (recipe agreed 2026-07-03, not yet run)
+### The next retrain (recipe built into `recall finetune`)
 
 The 2026-06 adapter won its pilot but **regressed on real audio** (truncated long
 one-shots — it learned early EOS from a corpus that was ~74% short clips), so it
-was un-deployed. The corpus hygiene that fixes the cause has since shipped (the
-train queue and export skip <2 s / <4-word backchannels and dedupe overlapping
-re-corrections). The agreed parameters for the next `recall finetune` run:
+was un-deployed. The fix is now wired into the export + train path
+(`recall.training` / `recall.finetune`); the parameters:
 
-- **Stitch adjacent clips into ≤30 s training windows** — Whisper is trained on
-  ~30 s context; isolated 2–5 s clips are what taught the early EOS. Same rule
-  as inference (§ re-transcribe: whole segments, never tiny clips).
-- **Learning rate 1e-4** with **early stopping** on the held-out split, rather
-  than a fixed epoch count — the pilot history shows this corpus size sits near
-  the overfit boundary.
+- **Stitch adjacent clips into ≤30 s training windows** — `export_corpus` merges
+  adjacent same-speaker corrections within one audio segment (gap ≤ 0.4 s, capped
+  at 30 s) into one window, so the label reads as continuous speech instead of the
+  isolated 2–5 s clips that taught the early EOS. Two guards keep the audio honest:
+  the small positive gap can't hide another voice or uncorrected speech, and both
+  sides must be the same named speaker; overlapping spans (re-corrections of the
+  same words) still fall through to dedup. A lone correction over 30 s is dropped —
+  it can't be one clean window (Whisper truncates the audio but keeps the label).
+- **Learning rate 1e-4** (the `finetune` default) with **early stopping** on a
+  held-out slice (`--eval-holdout`, default 0.15; patience 2), keeping the best
+  checkpoint — this corpus sits near the overfit boundary, so a gentler rate than
+  the old 1e-3 plus early stopping is what stops it memorising.
 - **Gate = whole-segment A/B on real recordings** (`recall ab-compare`), not the
   pilot's held-out clip WER — the pilot already passed once while the adapter
   regressed in production shape. Only an A/B win re-points
   `scripts/recall-refine.sh` at `adapter-current`.
 - **Run in a capture-idle window only** — two Whispers starve capture (sox
   buffer overrun = dropped samples), same constraint as refine.
+
+**What the 2026-07-08 run showed — the recipe works, but exposed a language bug.**
+The stitched corpus (275 windows, none over 30 s) trained cleanly with the recipe:
+eval loss fell 2.32 → 0.34 over 5 epochs and early stopping kept the best
+checkpoint — no OOM, no truncation, none of the early-EOS shape. But the adapter
+**failed the whole-segment A/B gate**: on the 06-14 usb window (74 corrections) it
+emitted **non-Latin script (Cyrillic/Hebrew) on 36 of 74**, e.g. Dutch *"En jij
+doet niks fout."* → *"И ти не правиш нищо…"*. The headline mean-WER "win"
+(stock 1.12 vs adapter 0.53) was an artefact of one stock loop-hallucination
+(WER 74); drop it and the stock model's real WER is ~0.11, far ahead of the
+adapter. So the adapter was **not deployed** — the A/B gate caught what the pilot's
+held-out loss (0.34) hid, again.
+
+Root cause (confirmed in code, `finetune.py`): training labels are built with
+`processor.tokenizer(text)` and **no per-example language prefix** — so a
+156-nl / 118-en / 1-de corpus is labelled with the tokenizer's default (English)
+`<|startoftranscript|>` conditioning, corrupting Whisper's language head. **The
+next fix** is to set the per-example prefix
+(`set_prefix_tokens(language=<record language>, task="transcribe")`) when
+tokenising each label, so Dutch audio is labelled as Dutch — then retrain and
+re-gate. This is orthogonal to the stitching recipe above (which stays).
 
 > **Still a follow-up:** per-person adapters (selected at transcription time by the
 > identified speaker), and an mlx conversion if the adapter ever needs the live path.
