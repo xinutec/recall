@@ -229,6 +229,12 @@ def finetune_lora(config: FinetuneConfig) -> Path:
         gradient_checkpointing_kwargs={"use_reentrant": False},
         remove_unused_columns=False,
         eval_strategy="epoch" if early_stop else "no",
+        # HF defaults eval batch to 8 regardless of the train batch — on fp32
+        # large-v3 that's 8x the forward memory and OOM-kills the eval pass, so
+        # match it to the (deliberately tiny) train batch and stream logits off
+        # the accelerator rather than piling a whole eval set into memory.
+        per_device_eval_batch_size=config.batch_size,
+        eval_accumulation_steps=1,
         save_strategy="epoch" if early_stop else "no",
         load_best_model_at_end=early_stop,
         metric_for_best_model="eval_loss",
