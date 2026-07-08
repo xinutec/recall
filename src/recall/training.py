@@ -161,6 +161,7 @@ def export_corpus(store: Store, dest: Path) -> int:
 
     examples: list[TrainingExample] = []
     skipped_short = 0
+    skipped_long = 0
     skipped_dupe = 0
     # (audio segment, normalized text) of everything exported so far — an
     # overlapping re-correction of the same words must not weight the corpus twice.
@@ -170,6 +171,12 @@ def export_corpus(store: Store, dest: Path) -> int:
         words = len(window.text.split())
         if duration < _MIN_CLIP_SECONDS or words < _MIN_CLIP_WORDS:
             skipped_short += 1
+            continue
+        # A lone correction longer than the window can't be one clean label —
+        # Whisper truncates the audio to 30s but keeps the whole text, teaching
+        # over-generation. (Stitched windows are already capped at 30s.)
+        if duration > _MAX_WINDOW_SECONDS:
+            skipped_long += 1
             continue
         key = (window.audio_segment_id, normalize_text(window.text))
         if key in seen:
@@ -187,10 +194,11 @@ def export_corpus(store: Store, dest: Path) -> int:
                 language=window.language,
             )
         )
-    if skipped_short or skipped_dupe:
+    if skipped_short or skipped_long or skipped_dupe:
         print(
             f"[export] {len(examples)} examples; skipped {skipped_short} "
-            f"backchannel/short clips and {skipped_dupe} overlapping duplicates"
+            f"backchannel/short clips, {skipped_long} over-30s clips, and "
+            f"{skipped_dupe} overlapping duplicates"
         )
 
     manifest = dest / "manifest.jsonl"

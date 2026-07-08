@@ -286,6 +286,31 @@ def test_export_stitch_rescues_a_backchannel_between_content(tmp_path: Path) -> 
     )
 
 
+def test_export_drops_single_correction_over_thirty_seconds(tmp_path: Path) -> None:
+    # A lone correction longer than Whisper's 30s window can't be one clean label:
+    # the feature extractor truncates the audio to 30s but the label keeps the full
+    # text, training the model to over-generate. Drop it (it's not a valid window).
+    store, audio_id = _corpus_store(tmp_path, seconds=60.0)
+    _corrected(
+        store,
+        audio_id,
+        start_s=1.0,
+        end_s=45.0,
+        text="this is a very long single correction spanning far more than the window",
+        speaker="Kat",
+    )
+    _corrected(
+        store,
+        audio_id,
+        start_s=46.0,
+        end_s=50.0,
+        text="but this one is a normal length turn",
+        speaker="Kat",
+    )
+    count = export_corpus(store, tmp_path / "corpus")
+    assert count == 1  # only the in-window turn survives
+
+
 def test_export_corpus_dedupes_overlapping_duplicates(tmp_path: Path) -> None:
     # Overlapping correction spans with the same text (double-labelled from two
     # views) must not weight the corpus twice.
