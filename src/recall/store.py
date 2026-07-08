@@ -1920,7 +1920,7 @@ class Store:
         """All recorded corrections — the labelled fine-tuning corpus."""
         rows = self._conn.execute(
             """SELECT id, audio_segment_id, start_utc, end_utc, corrected_text,
-                      language
+                      language, speaker
                FROM corrections WHERE hidden_reason IS NULL ORDER BY id"""
         ).fetchall()
         return [
@@ -1931,6 +1931,7 @@ class Store:
                 end=datetime.fromisoformat(row["end_utc"]),
                 corrected_text=str(row["corrected_text"]),
                 language=_opt_str(row["language"]),
+                speaker=_opt_str(row["speaker"]),
             )
             for row in rows
         ]

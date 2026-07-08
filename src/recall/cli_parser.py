@@ -279,6 +279,20 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
     fit.add_argument("--manifest", type=Path, required=True, help="manifest.jsonl")
     fit.add_argument("--dest", type=Path, required=True, help="adapter output dir")
     fit.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
+    fit.add_argument(
+        "--epochs", type=int, default=12, help="max epochs (early stop ends sooner)"
+    )
+    fit.add_argument(
+        "--lr", type=float, default=1e-4, help="learning rate (recipe: 1e-4)"
+    )
+    fit.add_argument("--lora-rank", type=int, default=16)
+    fit.add_argument(
+        "--eval-holdout",
+        type=float,
+        default=0.15,
+        help="fraction held out for early stopping (0 disables it)",
+    )
+    fit.add_argument("--early-stopping-patience", type=int, default=2)
 
     pil = sub.add_parser(
         "finetune-pilot",

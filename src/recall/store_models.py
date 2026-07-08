@@ -69,6 +69,10 @@ class Correction:
     end: datetime
     corrected_text: str
     language: str | None
+    # The labelled voice, when known. Used to stitch only same-speaker adjacent
+    # turns into one training window (recall.training); None on the overlap-query
+    # path that doesn't need it.
+    speaker: str | None = None
 
 
 @dataclass(frozen=True)

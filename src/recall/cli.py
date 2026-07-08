@@ -1135,7 +1135,14 @@ def _cmd_export_training(args: argparse.Namespace) -> int:
 def _cmd_finetune(args: argparse.Namespace) -> int:
     adapter = finetune_lora(
         FinetuneConfig(
-            manifest=args.manifest, output_dir=args.dest, base_model=args.base_model
+            manifest=args.manifest,
+            output_dir=args.dest,
+            base_model=args.base_model,
+            epochs=args.epochs,
+            learning_rate=args.lr,
+            lora_rank=args.lora_rank,
+            eval_holdout=args.eval_holdout,
+            early_stopping_patience=args.early_stopping_patience,
         )
     )
     print(f"saved LoRA adapter to {adapter}")

@@ -26,6 +26,9 @@ DEFAULT_BASE_MODEL = "openai/whisper-large-v3"
 # dropped from the corpus (and counted, never silently).
 _MAX_LABEL_TOKENS = 448
 
+# Below this, a train/eval split would leave a side empty — train on everything.
+_MIN_FOR_EVAL_SPLIT = 2
+
 
 @dataclass(frozen=True)
 class FinetuneConfig:
@@ -33,7 +36,10 @@ class FinetuneConfig:
     output_dir: Path
     base_model: str = DEFAULT_BASE_MODEL
     epochs: int = 3
-    learning_rate: float = 1e-3
+    # 1e-4 is the agreed recipe (pipeline.md §5): the corpus sits near the overfit
+    # boundary, so a gentler rate than the old 1e-3 plus early stopping on a
+    # held-out slice is what keeps the adapter from memorising.
+    learning_rate: float = 1e-4
     lora_rank: int = 16
     # Memory knobs, defaulted safe for unified memory (MPS). A full large-v3 forward at
     # batch 8 fp32 needs ~40 GB and OOMs a 42 GB machine, so keep the batch at 1 and
@@ -41,6 +47,12 @@ class FinetuneConfig:
     batch_size: int = 1
     grad_accum: int = 8
     gradient_checkpointing: bool = True
+    # Early stopping. With eval_holdout > 0 a deterministic slice is held out, eval
+    # loss is measured each epoch, and training stops after `early_stopping_patience`
+    # epochs without improvement — keeping the best checkpoint, not the last. 0
+    # disables it (train the full `epochs`), preserving the old behaviour.
+    eval_holdout: float = 0.0
+    early_stopping_patience: int = 2
 
 
 def _load_examples(manifest: Path) -> list[dict[str, Any]]:
@@ -121,8 +133,10 @@ def finetune_lora(config: FinetuneConfig) -> Path:
     from datasets import Dataset  # noqa: PLC0415
     from peft import LoraConfig, get_peft_model  # noqa: PLC0415
     from transformers import (  # noqa: PLC0415
+        EarlyStoppingCallback,
         Seq2SeqTrainer,
         Seq2SeqTrainingArguments,
+        TrainerCallback,
         WhisperForConditionalGeneration,
         WhisperProcessor,
     )
@@ -154,6 +168,17 @@ def finetune_lora(config: FinetuneConfig) -> Path:
         print(
             f"[finetune] dropped {dropped} of {before} clips whose label exceeds "
             f"{_MAX_LABEL_TOKENS} tokens (too long for one Whisper window)"
+        )
+
+    # Hold out a deterministic slice for early stopping when asked. Too few
+    # examples to split: train on everything (no eval, no early stop).
+    eval_dataset = None
+    if config.eval_holdout > 0.0 and len(dataset) >= _MIN_FOR_EVAL_SPLIT:
+        split = dataset.train_test_split(test_size=config.eval_holdout, seed=0)
+        dataset, eval_dataset = split["train"], split["test"]
+        print(
+            f"[finetune] {len(dataset)} train / {len(eval_dataset)} eval; early "
+            f"stopping after {config.early_stopping_patience} epochs without gain"
         )
 
     # fp32 weights: the checkpoint ships fp16, but features are fp32 and MPS fp16
@@ -191,20 +216,36 @@ def finetune_lora(config: FinetuneConfig) -> Path:
         inputs["labels"] = label_ids
         return inputs
 
+    # Evaluate + checkpoint per epoch only when there's a held-out slice; keep the
+    # best (lowest eval-loss) model and stop early once it plateaus.
+    early_stop = eval_dataset is not None
+    args = Seq2SeqTrainingArguments(
+        output_dir=str(config.output_dir),
+        num_train_epochs=config.epochs,
+        learning_rate=config.learning_rate,
+        per_device_train_batch_size=config.batch_size,
+        gradient_accumulation_steps=config.grad_accum,
+        gradient_checkpointing=config.gradient_checkpointing,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        remove_unused_columns=False,
+        eval_strategy="epoch" if early_stop else "no",
+        save_strategy="epoch" if early_stop else "no",
+        load_best_model_at_end=early_stop,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+    )
+    callbacks: list[TrainerCallback] = (
+        [EarlyStoppingCallback(early_stopping_patience=config.early_stopping_patience)]
+        if early_stop
+        else []
+    )
     trainer = Seq2SeqTrainer(
         model=model,
-        args=Seq2SeqTrainingArguments(
-            output_dir=str(config.output_dir),
-            num_train_epochs=config.epochs,
-            learning_rate=config.learning_rate,
-            per_device_train_batch_size=config.batch_size,
-            gradient_accumulation_steps=config.grad_accum,
-            gradient_checkpointing=config.gradient_checkpointing,
-            gradient_checkpointing_kwargs={"use_reentrant": False},
-            remove_unused_columns=False,
-        ),
+        args=args,
         train_dataset=dataset,
+        eval_dataset=eval_dataset,
         data_collator=collate,
+        callbacks=callbacks,
     )
     trainer.train()
 

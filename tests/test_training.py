@@ -88,13 +88,14 @@ def test_export_empty_corpus(tmp_path: Path) -> None:
     assert (tmp_path / "corpus" / "manifest.jsonl").read_text() == ""
 
 
-def _corrected(
+def _corrected(  # noqa: PLR0913 - one kwarg per labelled field
     store: Store,
     audio_id: int,
     *,
     start_s: float,
     end_s: float,
     text: str,
+    speaker: str | None = None,
 ) -> None:
     seg_id = store.add_transcript_segment(
         audio_segment_id=audio_id,
@@ -103,7 +104,7 @@ def _corrected(
         text="raw",
         asr_model="whisper",
     )
-    apply_correction(store, seg_id, text, now=NOW)
+    apply_correction(store, seg_id, text, now=NOW, speaker=speaker)
 
 
 def _corpus_store(tmp_path: Path, seconds: float = 30.0) -> tuple[Store, int]:
@@ -143,6 +144,146 @@ def test_export_corpus_skips_backchannels(tmp_path: Path) -> None:
     )
     count = export_corpus(store, tmp_path / "corpus")
     assert count == 1  # only the long, contentful clip survives
+
+
+def test_export_stitches_adjacent_same_speaker_turns(tmp_path: Path) -> None:
+    # Two short back-to-back turns by the same voice merge into ONE ~30s-max
+    # window, so Whisper sees real context instead of two bare early-EOS clips.
+    store, audio_id = _corpus_store(tmp_path)
+    _corrected(
+        store,
+        audio_id,
+        start_s=1.0,
+        end_s=4.0,
+        text="so I called the surgery",
+        speaker="Kat",
+    )
+    _corrected(
+        store,
+        audio_id,
+        start_s=4.2,  # 0.2s gap — a within-speaker micro-pause
+        end_s=7.0,
+        text="and they moved the appointment",
+        speaker="Kat",
+    )
+    dest = tmp_path / "corpus"
+    count = export_corpus(store, dest)
+
+    assert count == 1  # one stitched window, not two clips
+    record = json.loads((dest / "manifest.jsonl").read_text().splitlines()[0])
+    assert record["text"] == "so I called the surgery and they moved the appointment"
+
+
+def test_export_does_not_stitch_across_speakers(tmp_path: Path) -> None:
+    # A different voice in the gap must never be folded into one label — the audio
+    # would contain speech the text doesn't (a poison pair).
+    store, audio_id = _corpus_store(tmp_path)
+    _corrected(
+        store,
+        audio_id,
+        start_s=1.0,
+        end_s=4.0,
+        text="did you take the tablets",
+        speaker="Kat",
+    )
+    _corrected(
+        store,
+        audio_id,
+        start_s=4.2,
+        end_s=7.0,
+        text="yes this morning with breakfast",
+        speaker="Pippijn",
+    )
+    count = export_corpus(store, tmp_path / "corpus")
+    assert count == 2  # kept separate, one per speaker
+
+
+def test_export_does_not_stitch_across_a_long_gap(tmp_path: Path) -> None:
+    # A >0.4s gap can hold uncorrected speech; stitching would mislabel the clip.
+    store, audio_id = _corpus_store(tmp_path)
+    _corrected(
+        store,
+        audio_id,
+        start_s=1.0,
+        end_s=4.0,
+        text="the results came back clear",
+        speaker="Kat",
+    )
+    _corrected(
+        store,
+        audio_id,
+        start_s=6.0,
+        end_s=9.0,
+        text="which was a real relief",
+        speaker="Kat",
+    )
+    count = export_corpus(store, tmp_path / "corpus")
+    assert count == 2
+
+
+def test_export_stitch_window_capped_at_thirty_seconds(tmp_path: Path) -> None:
+    # Adjacent same-speaker turns keep merging only until 30s; the next starts a
+    # new window (Whisper's context length).
+    store, audio_id = _corpus_store(tmp_path, seconds=60.0)
+    # Three 12s turns, each 0.1s apart: 0-12, 12.1-24.1, 24.2-36.2. The third would
+    # push the window past 30s, so it opens a second window.
+    _corrected(
+        store,
+        audio_id,
+        start_s=0.0,
+        end_s=12.0,
+        text="one two three four five six",
+        speaker="Kat",
+    )
+    _corrected(
+        store,
+        audio_id,
+        start_s=12.1,
+        end_s=24.1,
+        text="seven eight nine ten eleven twelve",
+        speaker="Kat",
+    )
+    _corrected(
+        store,
+        audio_id,
+        start_s=24.2,
+        end_s=36.2,
+        text="thirteen fourteen fifteen sixteen",
+        speaker="Kat",
+    )
+    count = export_corpus(store, tmp_path / "corpus")
+    assert count == 2  # first two stitched (~24s), third in its own window
+
+
+def test_export_stitch_rescues_a_backchannel_between_content(tmp_path: Path) -> None:
+    # A lone "Yeah, okay" is dropped, but the same words between two contentful
+    # same-speaker turns are legitimate continuous speech — kept via the window.
+    store, audio_id = _corpus_store(tmp_path)
+    _corrected(
+        store,
+        audio_id,
+        start_s=1.0,
+        end_s=4.0,
+        text="the plumber is coming Thursday",
+        speaker="Kat",
+    )
+    _corrected(store, audio_id, start_s=4.1, end_s=5.0, text="yeah okay", speaker="Kat")
+    _corrected(
+        store,
+        audio_id,
+        start_s=5.1,
+        end_s=8.0,
+        text="so I will be at home for that",
+        speaker="Kat",
+    )
+    dest = tmp_path / "corpus"
+    count = export_corpus(store, dest)
+    assert count == 1
+    record = json.loads((dest / "manifest.jsonl").read_text().splitlines()[0])
+    assert (
+        record["text"]
+        == "the plumber is coming Thursday yeah okay so I will be at home for that"
+    )
 
 
 def test_export_corpus_dedupes_overlapping_duplicates(tmp_path: Path) -> None:
