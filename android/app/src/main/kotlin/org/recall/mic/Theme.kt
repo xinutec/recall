@@ -21,10 +21,17 @@ fun RecallMicTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
     val colors =
         when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
                 if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-            dark -> darkColorScheme()
-            else -> lightColorScheme()
+            }
+
+            dark -> {
+                darkColorScheme()
+            }
+
+            else -> {
+                lightColorScheme()
+            }
         }
     MaterialTheme(colorScheme = colors, content = content)
 }

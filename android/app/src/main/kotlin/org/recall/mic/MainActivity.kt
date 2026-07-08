@@ -260,21 +260,30 @@ private fun StatusCard(
 ) {
     val (label, detail, accent) =
         when {
-            connected -> Triple("Streaming", "to $host", MaterialTheme.colorScheme.primary)
+            connected -> {
+                Triple("Streaming", "to $host", MaterialTheme.colorScheme.primary)
+            }
+
             // A deliberate pause closes the host's listener, so don't read it as an error.
-            running && paused ->
+            running && paused -> {
                 Triple(
                     "Paused",
                     "household recording is off",
                     MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            running ->
+            }
+
+            running -> {
                 Triple(
                     "Waiting for recall host",
                     "trying $host…",
                     MaterialTheme.colorScheme.tertiary,
                 )
-            else -> Triple("Stopped", "not recording", MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+            else -> {
+                Triple("Stopped", "not recording", MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
 
     Card(Modifier.fillMaxWidth()) {

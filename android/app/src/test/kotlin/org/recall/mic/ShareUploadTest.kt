@@ -1,10 +1,10 @@
 package org.recall.mic
 
-import java.time.Instant
-import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import java.time.Instant
+import java.time.ZoneId
 
 class ShareUploadTest {
     private val london = ZoneId.of("Europe/London")

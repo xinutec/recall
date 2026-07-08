@@ -1,5 +1,8 @@
 package org.recall.mic
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -7,9 +10,6 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
 
 /**
  * Uploads a shared audio file to the recall host's `POST /api/sessions` — the same
@@ -28,7 +28,8 @@ object ShareUpload {
     fun parseRecorderStart(name: String, zone: ZoneId): Instant? =
         RECORDER_STAMP.find(name)?.destructured?.let { (y, mo, d, h, mi, s) ->
             runCatching {
-                LocalDateTime.of(y.toInt(), mo.toInt(), d.toInt(), h.toInt(), mi.toInt(), s.toInt())
+                LocalDateTime
+                    .of(y.toInt(), mo.toInt(), d.toInt(), h.toInt(), mi.toInt(), s.toInt())
                     .atZone(zone)
                     .toInstant()
             }.getOrNull()
@@ -47,16 +48,21 @@ object ShareUpload {
         withContext(Dispatchers.IO) {
             runCatching {
                 val boundary = "----recall${System.nanoTime()}"
-                val conn = (URL("http://$host:$API_PORT/api/sessions").openConnection()
-                    as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    doOutput = true
-                    connectTimeout = 8000
-                    readTimeout = 120_000
-                    setChunkedStreamingMode(0)
-                    setRequestProperty(
-                        "Content-Type", "multipart/form-data; boundary=$boundary")
-                }
+                val conn =
+                    (
+                        URL("http://$host:$API_PORT/api/sessions").openConnection()
+                            as HttpURLConnection
+                    ).apply {
+                        requestMethod = "POST"
+                        doOutput = true
+                        connectTimeout = 8000
+                        readTimeout = 120_000
+                        setChunkedStreamingMode(0)
+                        setRequestProperty(
+                            "Content-Type",
+                            "multipart/form-data; boundary=$boundary",
+                        )
+                    }
                 conn.outputStream.use { out ->
                     val header =
                         "--$boundary\r\n" +

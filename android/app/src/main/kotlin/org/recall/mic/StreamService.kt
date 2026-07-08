@@ -209,7 +209,9 @@ class StreamService : Service() {
     }
 
     /** Mic-init failure — distinct so the status can't blame the network for it. */
-    private class MicUnavailableException(message: String) : Exception(message)
+    private class MicUnavailableException(
+        message: String,
+    ) : Exception(message)
 
     /**
      * Enter the foreground with the microphone type. Returns false if the OS

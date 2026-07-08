@@ -1,9 +1,9 @@
 package org.recall.mic
 
-import java.time.Instant
-import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.time.Instant
+import java.time.ZoneId
 
 class BannerTest {
     // The reference: the website's banner reads

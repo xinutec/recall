@@ -16,8 +16,9 @@ object Banner {
     private val DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
     fun pausedText(pausedUntilIso: String?, now: Instant, zone: ZoneId): String {
-        val until = pausedUntilIso?.let { runCatching { OffsetDateTime.parse(it) }.getOrNull() }
-            ?: return "Recording paused"
+        val until =
+            pausedUntilIso?.let { runCatching { OffsetDateTime.parse(it) }.getOrNull() }
+                ?: return "Recording paused"
         val by = until.atZoneSameInstant(zone).format(DATE_TIME)
         return "Recording paused — auto-resumes in ${remaining(until.toInstant(), now)} (by $by)"
     }
@@ -25,7 +26,11 @@ object Banner {
     /** Time left as "5h 23m" / "23m" / "now" — whole minutes, never negative
      *  (matches format.ts durationUntil). */
     private fun remaining(until: Instant, now: Instant): String {
-        val mins = max(0L, (until.toEpochMilli() - now.toEpochMilli()).toDouble().div(60_000).roundToLong())
+        val mins =
+            max(
+                0L,
+                (until.toEpochMilli() - now.toEpochMilli()).toDouble().div(60_000).roundToLong(),
+            )
         if (mins == 0L) return "now"
         val h = mins / 60
         val m = mins % 60

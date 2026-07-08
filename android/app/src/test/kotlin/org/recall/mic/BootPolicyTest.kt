@@ -8,11 +8,21 @@ class BootPolicyTest {
     fun disabledOrUnconfiguredDoesNothing() {
         assertEquals(
             BootAction.NOTHING,
-            BootPolicy.decide(sdkInt = 29, enabled = false, hostSet = true, hasMicPermission = true),
+            BootPolicy.decide(
+                sdkInt = 29,
+                enabled = false,
+                hostSet = true,
+                hasMicPermission = true,
+            ),
         )
         assertEquals(
             BootAction.NOTHING,
-            BootPolicy.decide(sdkInt = 29, enabled = true, hostSet = false, hasMicPermission = true),
+            BootPolicy.decide(
+                sdkInt = 29,
+                enabled = true,
+                hostSet = false,
+                hasMicPermission = true,
+            ),
         )
     }
 
@@ -43,7 +53,12 @@ class BootPolicyTest {
     fun missingMicPermissionPromptsRatherThanCrashing() {
         assertEquals(
             BootAction.PROMPT,
-            BootPolicy.decide(sdkInt = 29, enabled = true, hostSet = true, hasMicPermission = false),
+            BootPolicy.decide(
+                sdkInt = 29,
+                enabled = true,
+                hostSet = true,
+                hasMicPermission = false,
+            ),
         )
     }
 }

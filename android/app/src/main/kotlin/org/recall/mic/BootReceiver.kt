@@ -35,13 +35,20 @@ class BootReceiver : BroadcastReceiver() {
                 hasMicPermission = hasMic,
             )
         when (action) {
-            BootAction.AUTO_START ->
+            BootAction.AUTO_START -> {
                 // Belt and braces: if the OS still refuses, fall back to the prompt
                 // rather than crashing the receiver.
                 runCatching { StreamService.start(context) }
                     .onFailure { promptToResume(context) }
-            BootAction.PROMPT -> promptToResume(context)
-            BootAction.NOTHING -> Unit
+            }
+
+            BootAction.PROMPT -> {
+                promptToResume(context)
+            }
+
+            BootAction.NOTHING -> {
+                Unit
+            }
         }
     }
 

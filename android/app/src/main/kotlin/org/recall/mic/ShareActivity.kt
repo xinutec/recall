@@ -24,13 +24,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
-import java.io.File
-import java.time.Instant
-import java.time.ZoneId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.time.Instant
+import java.time.ZoneId
 
 /**
  * Receives an audio file shared from another app (the mp3 recorder's Share sheet) and
@@ -42,9 +42,17 @@ import kotlinx.coroutines.withContext
  */
 class ShareActivity : ComponentActivity() {
     private sealed interface UiState {
-        data class Uploading(val name: String) : UiState
-        data class Done(val title: String) : UiState
-        data class Failed(val reason: String) : UiState
+        data class Uploading(
+            val name: String,
+        ) : UiState
+
+        data class Done(
+            val title: String,
+        ) : UiState
+
+        data class Failed(
+            val reason: String,
+        ) : UiState
     }
 
     private var state by mutableStateOf<UiState>(UiState.Uploading("…"))
@@ -56,10 +64,17 @@ class ShareActivity : ComponentActivity() {
         val uri = streamUri(intent)
         val host = Prefs.host(this)
         when {
-            uri == null -> state = UiState.Failed("No audio file was shared.")
-            host.isBlank() ->
+            uri == null -> {
+                state = UiState.Failed("No audio file was shared.")
+            }
+
+            host.isBlank() -> {
                 state = UiState.Failed("Open Recall Mic and set the recall host first.")
-            else -> lifecycleScope.launch { run(uri, host) }
+            }
+
+            else -> {
+                lifecycleScope.launch { run(uri, host) }
+            }
         }
     }
 
@@ -82,8 +97,7 @@ class ShareActivity : ComponentActivity() {
                 state = UiState.Done(title)
                 delay(1400)
                 finish()
-            }
-            .onFailure {
+            }.onFailure {
                 Log.w("recall.share", "upload failed", it)
                 state = UiState.Failed("Couldn't reach the recall host on your network.")
             }
@@ -132,6 +146,7 @@ class ShareActivity : ComponentActivity() {
                         Text("Sending to recall…", style = MaterialTheme.typography.titleMedium)
                         Text(s.name, style = MaterialTheme.typography.bodySmall)
                     }
+
                     is UiState.Done -> {
                         Text(
                             "✓",
@@ -141,6 +156,7 @@ class ShareActivity : ComponentActivity() {
                         Text("Saved to recall", style = MaterialTheme.typography.titleMedium)
                         Text(s.title, style = MaterialTheme.typography.bodySmall)
                     }
+
                     is UiState.Failed -> {
                         Text(
                             "Couldn't save to recall",
