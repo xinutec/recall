@@ -60,6 +60,17 @@ in
     script = "recall-ingest.sh";
   };
 
+  # Reverse SSH tunnel publishing the web app (recall-api) on Isis's WireGuard IP
+  # for VPN peers (phones/laptops), so it is reachable off-LAN with NO inbound
+  # port on the Mac. Push, not pull: the Mac is a one-way WG peer the servers
+  # cannot reach (same constraint as recall-backup). KeepAlive re-establishes a
+  # dropped tunnel. Needs `GatewayPorts clientspecified` on isis sshd.
+  launchd.agents."com.pippijn.recall-tunnel" = daemon {
+    label = "com.pippijn.recall-tunnel";
+    name = "tunnel";
+    script = "recall-tunnel.sh";
+  };
+
   launchd.agents."com.pippijn.recall-worker" = daemon {
     label = "com.pippijn.recall-worker";
     name = "worker";
