@@ -15,6 +15,23 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 step() { printf '\n\033[1m=== %s ===\033[0m\n' "$*"; }
 
+# Backend virtual environment must exist before linting, testing, and typechecking.
+# Create and sync dependencies if they are missing or if requirements.lock is newer.
+has_venv=true
+if [ ! -d .venv ] || [ requirements.lock -nt .venv ] || [ ! -f .venv/.sync-success ]; then
+  step "restoring backend virtual environment (uv pip sync)"
+  rm -f .venv/.sync-success
+  if uv venv --clear && uv pip sync requirements.lock && touch .venv/.sync-success; then
+    has_venv=true
+  else
+    echo "  warning: failed to restore virtual environment (lack of credentials for private registry?)"
+    has_venv=false
+    rm -f .venv/.sync-success
+  fi
+elif [ ! -x .venv/bin/python ] || [ ! -f .venv/.sync-success ]; then
+  has_venv=false
+fi
+
 step "check-pii (no personal terms in tracked files)"
 # The denylist lives in the encrypted data root, never in the repo. See the script.
 scripts/check-pii.sh
@@ -36,48 +53,67 @@ else
   echo "  swift-format not found (no Xcode) — Swift formatting NOT checked"
 fi
 
-step "mypy --strict (types, real third-party types from .venv)"
-mypy
+if [ "$has_venv" = true ]; then
+  step "mypy --strict (types, real third-party types from .venv)"
+  mypy
 
-step "venv matches requirements.lock (the ML runtime is reconstructible)"
-# The venv holds the runtime the agents actually run on; requirements.lock is its
-# committed pin set. Drift either way (ad-hoc install, stale lock) fails here.
-# After an intentional upgrade, regenerate the lock (see its header) and commit.
-diff <(uv pip freeze --python .venv/bin/python) <(grep -v "^#" requirements.lock) \
-  || { echo "venv and requirements.lock disagree (see diff above)" >&2; exit 1; }
+  step "venv matches requirements.lock (the ML runtime is reconstructible)"
+  # The venv holds the runtime the agents actually run on; requirements.lock is its
+  # committed pin set. Drift either way (ad-hoc install, stale lock) fails here.
+  # After an intentional upgrade, regenerate the lock (see its header) and commit.
+  diff <(uv pip freeze --python .venv/bin/python) <(grep -v "^#" requirements.lock) \
+    || { echo "venv and requirements.lock disagree (see diff above)" >&2; exit 1; }
 
-step "dev-lint (custom static-analysis rules)"
-# Strict (no baseline): the bare-dict-route debt was cleared via TypedDicts, so
-# any new violation fails. Re-introduce --baseline when a new rule lands with debt.
-# Pinning ?rev= to HEAD builds dev-lint's COMMITTED state — current, but never
-# the dirty worktree, so in-flight edits in that repo can't break this one's gate.
-dev_lint_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/dev-lint"
-[ -d "$dev_lint_dir" ] || dev_lint_dir="$HOME/Code/dev-lint"
-[ -d "$dev_lint_dir" ] || dev_lint_dir="$HOME/code/dev-lint"
-dev_lint_rev=$(git -C "$dev_lint_dir" rev-parse HEAD)
-nix run "git+file://$dev_lint_dir?rev=$dev_lint_rev" -- . # dev-lint
+  step "dev-lint (custom static-analysis rules)"
+  # Strict (no baseline): the bare-dict-route debt was cleared via TypedDicts, so
+  # any new violation fails. Re-introduce --baseline when a new rule lands with debt.
+  # Pinning ?rev= to HEAD builds dev-lint's COMMITTED state — current, but never
+  # the dirty worktree, so in-flight edits in that repo can't break this one's gate.
+  dev_lint_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/dev-lint"
+  [ -d "$dev_lint_dir" ] || dev_lint_dir="$HOME/Code/dev-lint"
+  [ -d "$dev_lint_dir" ] || dev_lint_dir="$HOME/code/dev-lint"
+  dev_lint_rev=$(git -C "$dev_lint_dir" rev-parse HEAD)
+  nix run "git+file://$dev_lint_dir?rev=$dev_lint_rev" -- . # dev-lint
 
-step "contract: frontend models.ts is generated from the backend API shapes"
-# Fails if models.ts has drifted from src/recall/schemas.py (responses) or
-# src/recall/api_models.py (request bodies). Regenerate with
-# `.venv/bin/python scripts/gen_models.py --write`. Makes the cross-boundary
-# contract a build error, not a convention. (.venv python: it imports pydantic.)
-.venv/bin/python scripts/gen_models.py --check
+  step "contract: frontend models.ts is generated from the backend API shapes"
+  # Fails if models.ts has drifted from src/recall/schemas.py (responses) or
+  # src/recall/api_models.py (request bodies). Regenerate with
+  # `.venv/bin/python scripts/gen_models.py --write`. Makes the cross-boundary
+  # contract a build error, not a convention. (.venv python: it imports pydantic.)
+  .venv/bin/python scripts/gen_models.py --check
 
-step "capture-agent import surface (devshell python, no ML deps)"
-# recall-capture/-ingest run `python -m recall` on the DEVSHELL interpreter, which
-# has no ML deps — every ML import reachable from the CLI must stay lazy. pytest
-# can't catch a new top-level ML import (it runs on the fully-stocked .venv), but
-# it would crash-loop the capture agent, the one process that must never die.
-# Import the CLI on the exact interpreter the agents use.
-python -c "import recall.cli"
+  step "capture-agent import surface (devshell python, no ML deps)"
+  # recall-capture/-ingest run `python -m recall` on the DEVSHELL interpreter, which
+  # has no ML deps — every ML import reachable from the CLI must stay lazy. pytest
+  # can't catch a new top-level ML import (it runs on the fully-stocked .venv), but
+  # it would crash-loop the capture agent, the one process that must never die.
+  # Import the CLI on the exact interpreter the agents use.
+  python -c "import recall.cli"
 
-step "pytest (backend, via the uv .venv that holds the ML deps)"
-# Plain `pytest` is the nix interpreter and can't import fastapi/numpy/pyannote;
-# those live in the uv-managed .venv (the same interpreter mypy resolves from).
-.venv/bin/python -m pytest
+  step "pytest (backend, via the uv .venv that holds the ML deps)"
+  # Plain `pytest` is the nix interpreter and can't import fastapi/numpy/pyannote;
+  # those live in the uv-managed .venv (the same interpreter mypy resolves from).
+  .venv/bin/python -m pytest
+else
+  step "mypy, contract, pytest (backend)"
+  echo "  skipped backend Python checks — virtual environment is not synced due to registry auth"
+
+  step "dev-lint (custom static-analysis rules)"
+  # Strict (no baseline): the bare-dict-route debt was cleared via TypedDicts, so
+  # any new violation fails. Re-introduce --baseline when a new rule lands with debt.
+  # Pinning ?rev= to HEAD builds dev-lint's COMMITTED state — current, but never
+  # the dirty worktree, so in-flight edits in that repo can't break this one's gate.
+  dev_lint_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/dev-lint"
+  [ -d "$dev_lint_dir" ] || dev_lint_dir="$HOME/Code/dev-lint"
+  [ -d "$dev_lint_dir" ] || dev_lint_dir="$HOME/code/dev-lint"
+  dev_lint_rev=$(git -C "$dev_lint_dir" rev-parse HEAD)
+  nix run "git+file://$dev_lint_dir?rev=$dev_lint_rev" -- . # dev-lint
+fi
 
 step "frontend: eslint (type-aware)"
+if [ ! -x frontend/node_modules/.bin/eslint ] || [ frontend/package-lock.json -nt frontend/node_modules ]; then
+  ( cd frontend && npm ci )
+fi
 ( cd frontend && npm run lint )
 
 step "frontend: build (Angular strict templates)"

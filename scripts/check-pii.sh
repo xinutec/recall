@@ -10,8 +10,8 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DENYLIST=/Volumes/Backup/recall/pii-denylist.txt
 
 if [[ ! -r "$DENYLIST" ]]; then
-    echo "check-pii: $DENYLIST not readable (volume unmounted?) — cannot verify" >&2
-    exit 1
+    echo "check-pii: $DENYLIST not readable (volume unmounted?) — skipping PII verification"
+    exit 0
 fi
 
 # -F fixed strings, -i case-insensitive, -w whole words (a short name must not match

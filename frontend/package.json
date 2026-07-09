@@ -11,6 +11,7 @@
     "watch": "ng build --watch --configuration development",
     "pretest": "node scripts/stamp-version.mjs",
     "test": "ng test",
+    "prelint": "node scripts/stamp-version.mjs",
     "e2e": "playwright test",
     "ui-check": "ng build && playwright test",
     "lint": "eslint src"
