@@ -20,7 +20,6 @@ agent is loaded).
 | `com.pippijn.recall-live` | VAD → transcribe each utterance (~2–3 s, provisional) | always on |
 | `com.pippijn.recall-worker` | index + transcribe new segments (whole-clip; diarization is the refine agent's job) | continuous |
 | `com.pippijn.recall-api` | Angular web app + JSON API on `:8000` | always on |
-| `com.pippijn.recall-tunnel` | reverse SSH tunnel publishing the web app on Isis's WG IP (`10.100.0.2:8000`) for off-LAN VPN access | always on |
 | `com.pippijn.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
 | `com.pippijn.recall-refine` | re-derive segments diarized + speaker-split; also drains queued A/B model comparisons | diarize: while capture paused · A/B: any time |
 | `com.pippijn.recall-backup` | mirror the archive to odin (snapshot DB + rsync audio) | nightly 23:30 |
@@ -39,17 +38,6 @@ SQLite snapshot + rsync of the audio, no `--delete` so deletions never propagate
 `http://<mac-ip>:8000` (LAN) — timeline, full-text search with playback,
 review/correct queue, phone-as-mic recording, and speaker labelling (which enrols
 voices as you confirm who spoke).
-
-**Off-LAN access.** The same app is reachable at `http://10.100.0.2:8000` from any
-device on the WireGuard VPN. The `recall-tunnel` agent (`scripts/recall-tunnel.sh`)
-holds a reverse SSH tunnel that publishes the Mac's `:8000` on Isis's WG address:
-the Mac is a one-way VPN peer nothing can dial into, so it dials out and forwards
-the app backwards. It rides WireGuard end to end — WG peer keys are the auth and WG
-encrypts the wire, so there is no TLS and a client only needs its own WG tunnel up.
-Plain http means no installable service-worker/PWA mode; everything else works.
-Isis serves it on its WG IP only (the public interface stays closed), enabled by
-`GatewayPorts clientspecified` on its sshd (in `nixos-config`); the Mac's own WG
-tunnel is kept connected by the `wg-ensure` agent (in `xinutec-infra`).
 
 ```sh
 ./scripts/recall-build-frontend.sh    # rebuild UI; the service serves it live, no restart
