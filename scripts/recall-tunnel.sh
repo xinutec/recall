@@ -12,33 +12,33 @@
 # Mac's app; instead the Mac dials Isis and forwards the app backwards over that
 # connection. Same constraint the nightly recall-backup push lives under.
 #
-# Transport vs publish — two different addresses, on purpose:
-#   * We CONNECT to Isis's PUBLIC sshd (isis.xinutec.org:22, an always-on
-#     lifeline). We deliberately do NOT ride the Mac's WireGuard for this leg —
-#     the Mac's WG is a one-way, not-always-connected peer, and SSH already
-#     encrypts this hop, so tunnelling inside WG would only add a fragile
-#     dependency, not security.
-#   * We PUBLISH on Isis's WireGuard IP 10.100.0.2 — so the app is reachable by
-#     VPN peers ONLY. The public NIC never serves it (isis allowedTCPPorts = []),
-#     and binding the WG address needs `GatewayPorts clientspecified` on isis
-#     sshd (nixos-config machines/isis/configuration.nix).
-# WireGuard's peer keys are the client-side authentication; there is no TLS
-# because the client<->Isis hop is already WG-encrypted.
+# The entire path stays INSIDE WireGuard: we connect to Isis over WG (10.100.0.2)
+# and publish on that same WG address, so nothing — not even this maintenance
+# connection — traverses the public internet. Binding the WG address needs
+# `GatewayPorts clientspecified` on isis sshd (nixos-config machines/isis), and
+# the app is reachable on the WireGuard interface ONLY (isis allowedTCPPorts = []
+# keeps the public NIC closed). WireGuard's peer keys are the authentication and
+# the transport is WG-encrypted, so there is no TLS.
 #
-# Run under launchd KeepAlive: if ssh exits (link drop, Isis reboot) launchd
-# relaunches it; ServerAlive* makes ssh notice a dead link and exit promptly so
-# the tunnel re-establishes. No autossh needed.
+# DEPENDENCY: this needs the Mac's own WireGuard tunnel ("xinutec") to be up.
+# It is a manually/on-demand peer, so if WG drops, the tunnel drops until WG is
+# back — launchd relaunches ssh, which retries until 10.100.0.2 is reachable
+# again. Keep the Mac WG persistent for uninterrupted remote access.
+#
+# Run under launchd KeepAlive: if ssh exits (link drop, Isis reboot, WG down)
+# launchd relaunches it; ServerAlive* makes ssh notice a dead link and exit
+# promptly so the tunnel re-establishes. No autossh needed.
 set -euo pipefail
 
-ISIS_SSH=isis.xinutec.org   # public sshd endpoint — transport for this leg
-ISIS_VPN=10.100.0.2         # WireGuard IP the app is published on (peers only)
+ISIS_VPN=10.100.0.2   # Isis over WireGuard — transport AND publish address
 PORT=8000
 
 exec /usr/bin/ssh -N \
   -o BatchMode=yes \
+  -o StrictHostKeyChecking=accept-new \
   -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=30 \
   -o ServerAliveCountMax=3 \
   -o ConnectTimeout=15 \
   -R "${ISIS_VPN}:${PORT}:127.0.0.1:${PORT}" \
-  "pippijn@${ISIS_SSH}"
+  "pippijn@${ISIS_VPN}"
