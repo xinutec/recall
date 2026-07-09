@@ -5,9 +5,13 @@
 # .env (HF_TOKEN — diarization is gated) plus the Nix tools + persistent venv.
 set -euo pipefail
 
-# Base model, NOT the household LoRA adapter: the A/B comparison on real audio
-# (ab-compare, 2026-06) showed the trained adapter REGRESSED against the base —
-# deploying it here was premature. Re-point at an adapter (--model
-# /Volumes/Backup/recall/adapter-current --base-model openai/whisper-large-v3)
-# only after an A/B run shows it winning.
-exec /Users/pippijn/Code/recall/scripts/recall.sh refine --out /Volumes/Backup/recall
+# Household LoRA adapter (adapter-current -> adapter-20260708b), deployed after it
+# WON the whole-segment A/B gate on real audio (ab-compare, 2026-07-08 usb window:
+# 0/74 garbling, mean WER 0.125 -> 0.064, wins 18 / trivial losses 6). Auto-detected
+# as an adapter dir (adapter_config.json) and loaded on top of --base-model. Runs on
+# the idle refine pass only, never live capture (turbo stays live). To roll back,
+# drop the --model/--base-model args; to advance, repoint the adapter-current symlink
+# after a fresh A/B win.
+exec /Users/pippijn/Code/recall/scripts/recall.sh refine --out /Volumes/Backup/recall \
+  --model /Volumes/Backup/recall/adapter-current \
+  --base-model openai/whisper-large-v3

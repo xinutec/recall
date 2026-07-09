@@ -57,13 +57,14 @@ fix efficiently.
 | Vocab biasing (`initial_prompt` + names) | trivial | proper nouns | **built** |
 | Diarization + speaker enrolment | low | attribution | **built** |
 | Post-correction dictionary | low | systematic errors | not built |
-| LoRA fine-tune on corrections | high | accent/acoustic residue | measurable (`finetune-pilot`), not deployed |
+| LoRA fine-tune on corrections | high | accent/acoustic residue | **deployed** (adapter-20260708b, on the idle refine pass) |
 
 "Training on the actual people" is delivered mainly by **enrolment** (lightweight
-voiceprints), not retraining. Un-built: the post-correction dictionary is the
-cheap lever left; the LoRA retrain is the heavy one — its first deployment
-regressed on real audio and was rolled back, and the next run's recipe is agreed
-(see [pipeline.md §5](pipeline.md)).
+voiceprints), not retraining. The LoRA retrain is the heavy lever: two earlier
+adapters were held back by the A/B gate (truncation, then a language-head bug), and
+the third won it and is **deployed on the idle refine pass** — non-turbo, never live
+capture (see [pipeline.md §5](pipeline.md)). The post-correction dictionary is the
+cheap lever still un-built.
 
 ## 5. Components
 

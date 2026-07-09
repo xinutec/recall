@@ -138,11 +138,11 @@ transition scores), so it aligns and scores like the mlx path; its first-word st
 be a touch coarser than mlx (a known Whisper word-timestamp quirk), which doesn't affect
 whole-segment speaker assignment.
 
-### The next retrain (recipe built into `recall finetune`)
+### The deployed adapter (recipe + language fix)
 
 The 2026-06 adapter won its pilot but **regressed on real audio** (truncated long
 one-shots — it learned early EOS from a corpus that was ~74% short clips), so it
-was un-deployed. The fix is now wired into the export + train path
+was un-deployed. The fix is wired into the export + train path
 (`recall.training` / `recall.finetune`); the parameters:
 
 - **Stitch adjacent clips into ≤30 s training windows** — `export_corpus` merges
@@ -164,26 +164,28 @@ was un-deployed. The fix is now wired into the export + train path
 - **Run in a capture-idle window only** — two Whispers starve capture (sox
   buffer overrun = dropped samples), same constraint as refine.
 
-**What the 2026-07-08 run showed — the recipe works, but exposed a language bug.**
-The stitched corpus (275 windows, none over 30 s) trained cleanly with the recipe:
-eval loss fell 2.32 → 0.34 over 5 epochs and early stopping kept the best
-checkpoint — no OOM, no truncation, none of the early-EOS shape. But the adapter
-**failed the whole-segment A/B gate**: on the 06-14 usb window (74 corrections) it
-emitted **non-Latin script (Cyrillic/Hebrew) on 36 of 74**, e.g. Dutch *"En jij
-doet niks fout."* → *"И ти не правиш нищо…"*. The headline mean-WER "win"
-(stock 1.12 vs adapter 0.53) was an artefact of one stock loop-hallucination
-(WER 74); drop it and the stock model's real WER is ~0.11, far ahead of the
-adapter. So the adapter was **not deployed** — the A/B gate caught what the pilot's
-held-out loss (0.34) hid, again.
+**How it got here — two runs.** The first 2026-07-08 run trained cleanly on the
+stitched corpus (275 windows, none over 30 s: eval loss 2.32 → 0.34, early-stopped,
+no OOM, no truncation) but **failed the A/B gate**: on the 06-14 usb window
+(74 corrections) it emitted **non-Latin script (Cyrillic/Hebrew) on 36 of 74**, e.g.
+Dutch *"En jij doet niks fout."* → *"И ти не правиш нищо…"*. Its headline mean-WER
+"win" (stock 1.12 vs adapter 0.53) was an artefact of one stock loop-hallucination
+(WER 74) — drop it and stock's real WER was ~0.11, far ahead. So the gate held the
+adapter back, catching what the pilot's held-out loss (0.34) hid — the same
+pilot-vs-reality gap, a second time.
 
-Root cause (confirmed in code, `finetune.py`): training labels are built with
-`processor.tokenizer(text)` and **no per-example language prefix** — so a
-156-nl / 118-en / 1-de corpus is labelled with the tokenizer's default (English)
-`<|startoftranscript|>` conditioning, corrupting Whisper's language head. **The
-next fix** is to set the per-example prefix
-(`set_prefix_tokens(language=<record language>, task="transcribe")`) when
-tokenising each label, so Dutch audio is labelled as Dutch — then retrain and
-re-gate. This is orthogonal to the stitching recipe above (which stays).
+Root cause (confirmed in `finetune.py`): the label tokeniser added **no per-example
+language prefix**, so a 156-nl / 118-en / 1-de corpus was labelled with a bare
+`<|sot|><|notimestamps|>` (no language, no task token), corrupting Whisper's language
+head. The fix stamps each label with its own language + the transcribe task
+(`set_prefix_tokens(language=…, task="transcribe")`) and strips the duplicate leading
+`<|sot|>` so training lines up with forced-language decoding. The **retrain
+(adapter-20260708b)** then trained even cleaner (eval loss 0.80 → 0.267) and **won
+the same A/B gate**: 0/74 garbling, mean WER 0.125 → 0.064, 18 per-correction wins to
+6 trivial (single-word article/dialect) losses. It is **deployed** —
+`scripts/recall-refine.sh` runs the idle refine pass through `adapter-current`
+(→ adapter-20260708b) on `--base-model openai/whisper-large-v3`, non-turbo, never live
+capture.
 
 > **Still a follow-up:** per-person adapters (selected at transcription time by the
 > identified speaker), and an mlx conversion if the adapter ever needs the live path.
