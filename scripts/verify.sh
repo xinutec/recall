@@ -51,8 +51,11 @@ step "dev-lint (custom static-analysis rules)"
 # any new violation fails. Re-introduce --baseline when a new rule lands with debt.
 # Pinning ?rev= to HEAD builds dev-lint's COMMITTED state — current, but never
 # the dirty worktree, so in-flight edits in that repo can't break this one's gate.
-dev_lint_rev=$(git -C "$HOME/Code/dev-lint" rev-parse HEAD)
-nix run "git+file://$HOME/Code/dev-lint?rev=$dev_lint_rev" -- .
+dev_lint_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/dev-lint"
+[ -d "$dev_lint_dir" ] || dev_lint_dir="$HOME/Code/dev-lint"
+[ -d "$dev_lint_dir" ] || dev_lint_dir="$HOME/code/dev-lint"
+dev_lint_rev=$(git -C "$dev_lint_dir" rev-parse HEAD)
+nix run "git+file://$dev_lint_dir?rev=$dev_lint_rev" -- . # dev-lint
 
 step "contract: frontend models.ts is generated from the backend API shapes"
 # Fails if models.ts has drifted from src/recall/schemas.py (responses) or
