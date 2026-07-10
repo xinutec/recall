@@ -7,13 +7,15 @@ idle-gated re-derivation passes, never the latency-critical live path.
 `words=True` adds per-word timings + probabilities (from token timestamps and
 transition scores), so the diarized whole-segment passes (refine/redrive) can align
 and score just like the mlx path. Heavy (torch/transformers/peft, lazily imported);
-the adapter-dir check and the token-to-word grouping are unit-tested.
+the adapter-dir check, the long-audio windowing, and the token-to-word grouping are
+unit-tested.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,71 @@ from recall.asr import AsrResult, AsrSegment, Transcriber, Word
 from recall.finetune import DEFAULT_BASE_MODEL  # the base the adapter was trained on
 
 _LANG_CODE_LEN = 2  # a Whisper language token is <|xx|>
+
+# A Whisper encoder consumes a fixed 30 s mel window, and the HF feature extractor pads
+# *or truncates* every input to it. So a clip longer than one window must be transcribed
+# window by window and stitched back with each window's offset — otherwise everything
+# past the first 30 s is silently dropped (a 34-min meeting came back as one 30-s turn).
+# The mlx worker path gets this windowing free from mlx-whisper; the HF adapter path
+# does it explicitly, below.
+_WINDOW_S = 30.0
+
+
+def plan_windows(
+    n_samples: int, sample_rate: int, window_s: float = _WINDOW_S
+) -> list[tuple[int, int]]:
+    """Contiguous, gap-free ``[start, end)`` sample ranges of at most `window_s`
+    covering all of `n_samples` — the fixed windows a Whisper encoder takes. Every
+    sample lands in exactly one window; an empty clip yields no windows."""
+    step = max(1, round(window_s * sample_rate))
+    return [(s, min(s + step, n_samples)) for s in range(0, max(0, n_samples), step)]
+
+
+def merge_windows(parts: Sequence[tuple[float, AsrResult]]) -> AsrResult:
+    """Stitch per-window results back into one clip-relative result. `parts` is
+    ``(offset_s, window_result)`` in clip order; each window is timed from its own
+    start, so every segment and word time is shifted by that window's offset. Language
+    is the first window's (it carries the most speech context)."""
+    if not parts:
+        return AsrResult(language="en", language_confidence=None, segments=())
+    segments: list[AsrSegment] = []
+    for offset, res in parts:
+        for seg in res.segments:
+            segments.append(
+                replace(
+                    seg,
+                    start=seg.start + offset,
+                    end=seg.end + offset,
+                    words=tuple(
+                        replace(w, start=w.start + offset, end=w.end + offset)
+                        for w in seg.words
+                    ),
+                )
+            )
+    first = parts[0][1]
+    return AsrResult(
+        language=first.language,
+        language_confidence=first.language_confidence,
+        segments=tuple(segments),
+    )
+
+
+def transcribe_windowed(
+    array: Any,  # noqa: ANN401 - np.ndarray, kept off the module import surface
+    sample_rate: int,
+    window: Callable[[Any], AsrResult],
+    *,
+    window_s: float = _WINDOW_S,
+) -> AsrResult:
+    """Transcribe a whole waveform by feeding each fixed `window_s` slice to `window`
+    and stitching the pieces back with their offsets. This is what stops a clip longer
+    than one Whisper window from being truncated to its first 30 s. Pure given `window`,
+    so the windowing is unit-tested without loading a model."""
+    parts = [
+        (start / sample_rate, window(array[start:end]))
+        for start, end in plan_windows(len(array), sample_rate, window_s)
+    ]
+    return merge_windows(parts)
 
 
 def is_adapter_dir(model: str) -> bool:
@@ -138,27 +205,29 @@ def make_hf_transcriber(
     model.eval()
     gen: Any = base  # compute_transition_scores: transformers' stub self-type is off
 
-    def transcribe(audio: Path) -> AsrResult:
-        array = decode_pcm_f32(audio, sample_rate=16000)
+    kwargs: dict[str, Any] = {
+        "task": "transcribe",
+        "return_dict_in_generate": True,
+        "output_scores": True,
+        # Anti-hallucination decoding, matching the mlx path: re-decode a window at a
+        # higher temperature when it trips the compression-ratio (repetition) or logprob
+        # (gibberish) guard, and forbid repeated 6-grams so a long clip can't spin into
+        # a loop (plain greedy generate did — seen on a 36s turn).
+        "temperature": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+        "compression_ratio_threshold": 2.4,
+        "logprob_threshold": -1.0,
+        "no_speech_threshold": 0.6,
+        "no_repeat_ngram_size": 6,
+    }
+    if words:
+        kwargs["return_token_timestamps"] = True
+
+    def transcribe_window(chunk: Any) -> AsrResult:  # noqa: ANN401 - np.ndarray slice
+        """Transcribe one ≤30 s window (clip-relative from 0). The whole-clip windowing
+        is `transcribe_windowed`; this is the single-window model call it drives."""
         feats = processor.feature_extractor(
-            array, sampling_rate=16000, return_tensors="pt"
+            chunk, sampling_rate=16000, return_tensors="pt"
         ).input_features.to(device)
-        kwargs: dict[str, Any] = {
-            "task": "transcribe",
-            "return_dict_in_generate": True,
-            "output_scores": True,
-            # Anti-hallucination decoding, matching the mlx path: re-decode a window at
-            # a higher temperature when it trips the compression-ratio (repetition) or
-            # logprob (gibberish) guard, and forbid repeated 6-grams so a long clip
-            # can't spin into a loop (plain greedy generate did — seen on a 36s turn).
-            "temperature": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
-            "compression_ratio_threshold": 2.4,
-            "logprob_threshold": -1.0,
-            "no_speech_threshold": 0.6,
-            "no_repeat_ngram_size": 6,
-        }
-        if words:
-            kwargs["return_token_timestamps"] = True
         with torch.no_grad():
             out = model.generate(feats, **kwargs)
         seq = _field(out, "sequences")[0]
@@ -169,7 +238,7 @@ def make_hf_transcriber(
         )[0]
         finite = scores[torch.isfinite(scores)]
         avg_logprob = float(finite.mean()) if finite.numel() else -1.0
-        clip_end = len(array) / 16000.0
+        clip_end = len(chunk) / 16000.0
         word_tuple = (
             _group_words(_content_tokens(out, scores, processor.tokenizer), clip_end)
             if words
@@ -188,5 +257,9 @@ def make_hf_transcriber(
             language_confidence=None,
             segments=(segment,),
         )
+
+    def transcribe(audio: Path) -> AsrResult:
+        array = decode_pcm_f32(audio, sample_rate=16000)
+        return transcribe_windowed(array, 16000, transcribe_window)
 
     return transcribe

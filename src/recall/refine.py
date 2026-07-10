@@ -15,6 +15,7 @@ idle (see `recall refine`). The collaborators are injected, so this is testable.
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -46,6 +47,16 @@ def _hits_human(start: datetime, end: datetime, human: list[Correction]) -> bool
     return any(c.start < end and c.end > start for c in human)
 
 
+# A refined pass that comes back with far less text than the segment already has is a
+# degenerate transcription (a truncated long-form decode, a whole-clip mis-detection),
+# not a real improvement — and swapping it in would hide the good transcript from every
+# view. Below this fraction of the existing visible text we keep what's there and skip
+# the swap. Only enforced once there's a substantial transcript to protect; tiny
+# segments swing too wildly in ratio for the bar to mean anything.
+_MIN_COVERAGE_RATIO = 0.5
+_COVERAGE_REF_MIN_CHARS = 200
+
+
 def _replace_turns(  # noqa: PLR0913 - the whole per-segment write context
     store: Store,
     *,
@@ -55,7 +66,7 @@ def _replace_turns(  # noqa: PLR0913 - the whole per-segment write context
     result: AsrResult,
     human: list[Correction],
     model_name: str,
-) -> list[tuple[int, int, AlignedTurn]]:
+) -> list[tuple[int, int, AlignedTurn]] | None:
     """Atomically swap a segment's old machine turns for the aligned replacements.
 
     Called only now — with the replacements computed and about to be written.
@@ -65,14 +76,26 @@ def _replace_turns(  # noqa: PLR0913 - the whole per-segment write context
     — which is also why the hide and the inserts are ONE transaction: a crash
     between them would otherwise leave the segment blank and never re-picked.
 
-    Returns (index, turn_id, turn) for each turn written, for the embed pass.
+    Returns (index, turn_id, turn) for each turn written, for the embed pass — or
+    `None` if the coverage guard refused the swap (the pass produced far less text
+    than the segment already had), leaving the existing transcript untouched.
     """
     # A non-household language for the whole segment is the model hallucinating on
     # unclear audio — keep the turns (with their audio) but flag them unreliable.
     reliable = result.language in HOUSEHOLD_LANGUAGES
     written: list[tuple[int, int, AlignedTurn]] = []
     with store.transaction():
-        for old in store.visible_machine_turns_for_audio(audio_id):
+        existing = list(store.visible_machine_turns_for_audio(audio_id))
+        # Guard: refuse to replace a substantial transcript with a far smaller one.
+        # That's a degenerate pass, and hiding the good turns would blank the recording.
+        existing_chars = sum(len(o.text) for o in existing)
+        new_chars = sum(len(t.text) for t in aligned)
+        if (
+            existing_chars >= _COVERAGE_REF_MIN_CHARS
+            and new_chars < _MIN_COVERAGE_RATIO * existing_chars
+        ):
+            return None
+        for old in existing:
             store.hide(old.id, f"{DIARIZED_MARKER} ({model_name})")
         for index, turn in enumerate(aligned):
             if is_repetition_loop(turn.text):
@@ -136,6 +159,7 @@ def refine_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
     work_dir.mkdir(parents=True, exist_ok=True)
     added = 0
     embedded = 0
+    skipped = 0
     if audio_ids is not None:
         pass  # caller chose the exact segments
     elif source is not None:
@@ -173,6 +197,11 @@ def refine_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
                 human=human,
                 model_name=model_name,
             )
+            if written is None:
+                # Coverage guard tripped: kept the existing transcript, wrote nothing.
+                # Left un-diarized on purpose, so a later (fixed) pass can re-derive it.
+                skipped += 1
+                continue
             added += len(written)
             # Embed each turn's audio + match to enrolled voiceprints (immediate
             # attribution) — after the atomic swap, so the slow per-clip work never
@@ -185,6 +214,12 @@ def refine_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
                         embedded += 1
                     except Exception:  # a bad clip never blocks the turn or the pass
                         continue
+    if skipped:
+        print(
+            f"refine: kept the existing transcript on {skipped} segment(s) — the "
+            "refined pass covered too little to trust (coverage guard)",
+            file=sys.stderr,
+        )
     if embedded:
         rematch_speaker_guesses(store)
     return added

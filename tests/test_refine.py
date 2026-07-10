@@ -450,6 +450,48 @@ def test_refine_crash_mid_write_leaves_the_old_turns_visible(
     assert [t.text for t in turns] == ["merged basic turn"]
 
 
+def test_refine_keeps_a_full_transcript_when_the_pass_covers_too_little(
+    tmp_path: Path,
+) -> None:
+    # A degenerate refined pass — e.g. a long-form decode truncated to its first window,
+    # returning a handful of words for a long recording — must NOT replace the full
+    # transcript. Swapping it in would hide the whole recording behind a couple of turns
+    # (exactly the 34-min meeting that showed 5 turns). The coverage guard keeps the
+    # existing turns and skips the swap.
+    flac = tmp_path / "usb-20260619T130000.flac"
+    make_flac(flac, 4.0)
+    store = Store.memory()
+    audio_id = _seg(store, flac)
+    # >200 chars of real transcript text — enough to be worth protecting
+    full = ("the quick brown fox jumps over the lazy dog " * 8).strip()
+    kept = store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=4),
+        text=full,
+        asr_model="mlx-community/whisper-large-v3-turbo",
+    )
+    # the refined pass comes back with almost nothing (the truncation bug's signature)
+    result = _result("en", (0.0, 0.5, " yes"))
+
+    def diarizer(_a: Path) -> list[SpeakerTurn]:
+        return [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0)]
+
+    added = refine_diarized(
+        store,
+        diarizer,
+        lambda _a: result,
+        _embed,
+        work_dir=tmp_path / "work",
+        model_name="adapter",
+    )
+    assert added == 0  # nothing swapped in
+    turns = store.visible_machine_turns_for_audio(audio_id)
+    assert [t.id for t in turns] == [kept]  # the full transcript is still visible…
+    got = store.get_transcript(kept)
+    assert got is not None and got.hidden_reason is None  # …and not hidden
+
+
 def test_refine_source_redrives_a_finished_segment(tmp_path: Path) -> None:
     # A clean, forced re-derive: targeting a source re-diarizes its segments through the
     # canonical pipeline even when they're already done (not picked by either normal
