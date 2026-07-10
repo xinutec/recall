@@ -492,6 +492,46 @@ def test_refine_keeps_a_full_transcript_when_the_pass_covers_too_little(
     assert got is not None and got.hidden_reason is None  # …and not hidden
 
 
+def test_refine_survives_a_clip_that_fails_to_slice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A corrupt-frame source (an mp3 with a missing header) makes ffmpeg fail when
+    # slicing some turns' audio for embedding. That must skip the turn's embedding, not
+    # crash the whole pass — otherwise a queued re-diarize request is re-picked forever
+    # (the daemon crash-loops, re-transcribing the meeting every restart).
+    flac = tmp_path / "usb-20260619T130000.flac"
+    make_flac(flac, 4.0)
+    store = Store.memory()
+    audio_id = _seg(store, flac)
+    store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=4),
+        text="basic",
+        asr_model="old",
+    )
+    result = _result("en", (0.0, 0.5, " can"), (0.5, 1.0, " you"), (2.0, 2.5, " sir"))
+
+    def exploding_slice(*_args: object, **_kwargs: object) -> None:
+        msg = "simulated ffmpeg slice failure on a corrupt frame"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr("recall.refine.slice_clip", exploding_slice)
+
+    added = refine_diarized(
+        store,
+        lambda _a: [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0)],
+        lambda _a: result,
+        _embed,
+        work_dir=tmp_path / "work",
+        model_name="diarized-v1",
+    )
+    # the turns are still written; only the (failed) embeddings are skipped
+    assert added == 1
+    texts = [s.text for s in store.segments_in_range(BASE, BASE + timedelta(seconds=5))]
+    assert "can you sir" in texts
+
+
 def test_refine_source_redrives_a_finished_segment(tmp_path: Path) -> None:
     # A clean, forced re-derive: targeting a source re-diarizes its segments through the
     # canonical pipeline even when they're already done (not picked by either normal

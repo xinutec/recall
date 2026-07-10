@@ -208,8 +208,12 @@ def refine_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
             # holds the write lock; a bad clip must never block the turn or the pass.
             for index, turn_id, turn in written:
                 with scratch_wav(work_dir / f"{stem}-turn{index:04d}.wav") as clip:
-                    slice_clip(working, clip, turn.start, turn.end)
                     try:
+                        # slice_clip is inside the guard too: a corrupt-frame source
+                        # makes ffmpeg fail on some turns (e.g. an mp3 with a missing
+                        # header), and that must skip the turn's embedding — never crash
+                        # the pass (which would leave the request re-picked forever).
+                        slice_clip(working, clip, turn.start, turn.end)
                         store.set_embedding(turn_id, embedder(clip))
                         embedded += 1
                     except Exception:  # a bad clip never blocks the turn or the pass
