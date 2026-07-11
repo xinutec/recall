@@ -367,9 +367,7 @@ class Store:
             for r in rows
         ]
 
-    def delete_audio_segments(
-        self, audio_ids: Sequence[AudioSegmentId]
-    ) -> list[str]:
+    def delete_audio_segments(self, audio_ids: Sequence[AudioSegmentId]) -> list[str]:
         """Hard-delete specific capture segments and all derived from them (turns and
         their lineage/embeddings/corrections/FTS), returning the audio file paths to
         unlink. For the quiet-cleanup: a human-confirmed span of total-quiet capture is
