@@ -7,36 +7,46 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from recall.ids import AudioSegmentId
-from recall.quiet import SegmentVolume, find_quiet_spans, quiet_spans, scan_volumes
+from recall.quiet import SWEEPABLE_KINDS, find_quiet_spans, quiet_spans, scan_volumes
 from recall.sources import AudioSource, SourceKind
-from recall.store import Store
+from recall.store import SegmentVolume, Store
 from recall.timeline import Segment
 
 BASE = datetime(2026, 7, 11, 9, 0, 0, tzinfo=UTC)
 
 
-def _store_with_capture(n: int) -> tuple[Store, list[AudioSegmentId]]:
-    store = Store.memory()
-    store.add_source(
-        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
-    )
+def _add_source(store: Store, source_id: str, kind: SourceKind) -> None:
+    store.add_source(AudioSource(id=source_id, name=source_id, kind=kind, spec=""))
+
+
+def _add_segments(
+    store: Store, source_id: str, n: int, *, first: int = 0
+) -> list[AudioSegmentId]:
+    """Captured *and* through ASR — the state a segment must reach before it can even be
+    considered for deletion."""
     ids = []
-    for i in range(n):
+    for i in range(first, first + n):
         start = BASE + timedelta(seconds=i * 59)
-        ids.append(
-            store.add_audio_segment(
-                Segment(
-                    source_id="usb",
-                    sequence=i,
-                    start=start,
-                    end=start + timedelta(seconds=59),
-                    path=f"/archive/usb/seg{i:03d}.opus",
-                    sample_rate=48000,
-                    channels=1,
-                )
+        audio_id = store.add_audio_segment(
+            Segment(
+                source_id=source_id,
+                sequence=i,
+                start=start,
+                end=start + timedelta(seconds=59),
+                path=f"/archive/{source_id}/seg{i:03d}.opus",
+                sample_rate=48000,
+                channels=1,
             )
         )
-    return store, ids
+        store.mark_transcribed(int(audio_id))
+        ids.append(audio_id)
+    return ids
+
+
+def _store_with_capture(n: int) -> tuple[Store, list[AudioSegmentId]]:
+    store = Store.memory()
+    _add_source(store, "usb", SourceKind.COREAUDIO)
+    return store, _add_segments(store, "usb", n)
 
 
 def test_scan_caches_volumes_and_quiet_spans_finds_the_run(
@@ -50,35 +60,70 @@ def test_scan_caches_volumes_and_quiet_spans_finds_the_run(
     monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda p: vols[str(p)])
 
     assert scan_volumes(store) == 8
-    assert store.audio_segments_without_volume() == []  # all cached now
+    assert (
+        store.audio_segments_without_volume(kinds=SWEEPABLE_KINDS) == []
+    )  # all cached
 
     spans = quiet_spans(store, threshold_db=-60.0, min_duration_s=300.0)
     assert len(spans) == 1  # 6 * 59 = 354s of quiet, over the 300s minimum
     assert len(spans[0].audio_ids) == 6
+    assert spans[0].source_id == "usb"
 
 
-def test_delete_audio_segments_removes_rows_and_returns_paths() -> None:
-    store, ids = _store_with_capture(1)
-    store.add_transcript_segment(
-        audio_segment_id=int(ids[0]),
-        start=BASE,
-        end=BASE + timedelta(seconds=5),
-        text="hi",
-        asr_model="m",
-    )
-    paths = store.delete_audio_segments(ids)
-    assert paths == ["/archive/usb/seg000.opus"]
-    assert store.audio_segment(ids[0]) is None
-    assert store.visible_machine_turns_for_audio(ids[0]) == []
+def test_uploaded_meetings_are_never_scanned_or_swept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An imported meeting is the archive's most valuable audio. Even if a recording is
+    # quiet enough to look like idle noise, it is never a delete candidate.
+    store = Store.memory()
+    _add_source(store, "meeting-1", SourceKind.UPLOAD)
+    _add_segments(store, "meeting-1", 10)
+    monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda _p: -62.0)
+
+    assert scan_volumes(store) == 0  # not even measured — it can't be acted on
+    assert quiet_spans(store, min_duration_s=300.0) == []
 
 
-def _seg(i: int, mean_db: float | None, *, seconds: float = 59.0) -> SegmentVolume:
-    start = BASE + timedelta(seconds=i * seconds)
+def test_two_mics_recording_at_once_do_not_share_a_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The USB mic and a phone record the same room, so their segments interleave in
+    # time. Runs group within a source: a span must never hold another mic's files.
+    store = Store.memory()
+    _add_source(store, "usb", SourceKind.COREAUDIO)
+    _add_source(store, "pixel9", SourceKind.TCP_PCM)
+    _add_segments(store, "usb", 10)
+    _add_segments(store, "pixel9", 10)
+    monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda _p: -62.0)
+    scan_volumes(store)
+
+    spans = quiet_spans(store, threshold_db=-60.0, min_duration_s=300.0)
+    assert len(spans) == 2
+    assert {s.source_id for s in spans} == {"usb", "pixel9"}
+    for span in spans:
+        paths = {store.audio_segment(a).path for a in span.audio_ids}  # type: ignore[union-attr]
+        assert all(f"/{span.source_id}/" in p for p in paths)
+
+
+def _seg(  # noqa: PLR0913 - one kwarg per veto, so each test states just its own
+    i: int,
+    mean_db: float | None,
+    *,
+    seconds: float = 59.0,
+    source_id: str = "usb",
+    at: float | None = None,
+    transcribed: bool = True,
+    has_speech: bool = False,
+) -> SegmentVolume:
+    start = BASE + timedelta(seconds=i * seconds if at is None else at)
     return SegmentVolume(
         audio_id=AudioSegmentId(i),
+        source_id=source_id,
         start=start,
         end=start + timedelta(seconds=seconds),
         mean_db=mean_db,
+        transcribed=transcribed,
+        has_speech=has_speech,
     )
 
 
@@ -120,9 +165,110 @@ def test_unmeasured_segment_breaks_a_run() -> None:
     assert len(spans) == 2
 
 
+def test_a_recording_gap_breaks_a_run() -> None:
+    # Capture stopped for an hour. That hour is *unknown*, not quiet: it must not carry
+    # two short quiet runs over the minimum as if they were one long one.
+    before = [_seg(i, -62.0, at=i * 59.0) for i in range(3)]  # 177s
+    after = [_seg(10 + i, -62.0, at=3600.0 + i * 59.0) for i in range(3)]  # 177s
+    assert find_quiet_spans(before + after, min_duration_s=300.0) == []
+
+
+def test_quiet_either_side_of_a_gap_is_two_spans() -> None:
+    long_run = [_seg(i, -62.0, at=i * 59.0) for i in range(6)]
+    after_gap = [_seg(10 + i, -62.0, at=3600.0 + i * 59.0) for i in range(6)]
+    spans = find_quiet_spans(long_run + after_gap, min_duration_s=300.0)
+    assert len(spans) == 2
+    assert spans[0].end < spans[1].start
+
+
+def test_a_segment_bearing_speech_is_never_quiet() -> None:
+    # The case from the real archive: a far-field Dutch sentence and a human-corrected
+    # turn both sit on segments whose 60-second mean is under the noise-floor bar — a
+    # few seconds of quiet speech barely move a minute's average. Deleting that audio
+    # would take the transcript with it, so the turn vetoes the volume.
+    segs = (
+        [_seg(i, -62.0) for i in range(6)]
+        + [_seg(6, -61.7, has_speech=True)]  # mean says quiet; a turn says otherwise
+        + [_seg(i, -62.0) for i in range(7, 13)]
+    )
+    spans = find_quiet_spans(segs, threshold_db=-60.0, min_duration_s=300.0)
+    assert len(spans) == 2  # it breaks the run...
+    assert (
+        AudioSegmentId(6) not in spans[0].audio_ids + spans[1].audio_ids
+    )  # ...and is out
+
+
+def test_an_untranscribed_segment_is_never_quiet() -> None:
+    # ASR hasn't examined it yet: unknown, not empty. Never sweep what nothing has read.
+    segs = [_seg(i, -62.0, transcribed=(i != 6)) for i in range(13)]
+    spans = find_quiet_spans(segs, threshold_db=-60.0, min_duration_s=300.0)
+    assert len(spans) == 2
+    assert AudioSegmentId(6) not in spans[0].audio_ids + spans[1].audio_ids
+
+
+def test_hidden_hallucinations_do_not_protect_a_segment() -> None:
+    # The mirror image: a turn already hidden as a silence-hallucination ("Thank you."
+    # on an empty room) is not speech, so it must not keep dead air alive forever.
+    segs = [_seg(i, -62.0, has_speech=False) for i in range(6)]
+    spans = find_quiet_spans(segs, threshold_db=-60.0, min_duration_s=300.0)
+    assert len(spans) == 1
+    assert len(spans[0].audio_ids) == 6
+
+
+def test_store_marks_segments_that_still_bear_a_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # End-to-end over the real store: the turn is what saves the audio, so the flag must
+    # come from the same "current and visible" definition the rest of the app uses.
+    store, ids = _store_with_capture(8)
+    store.add_transcript_segment(
+        audio_segment_id=int(ids[3]),
+        start=BASE,
+        end=BASE + timedelta(seconds=5),
+        text="Namelijk, dit zijn ook al vlakjes",
+        asr_model="whisper",
+    )
+    hidden = store.add_transcript_segment(
+        audio_segment_id=int(ids[5]),
+        start=BASE,
+        end=BASE + timedelta(seconds=5),
+        text="Thank you.",
+        asr_model="whisper",
+    )
+    store.hide(hidden, reason="no speech detected (VAD)")
+    monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda _p: -62.0)
+    scan_volumes(store)
+
+    volumes = {
+        v.audio_id: v for v in store.audio_segment_volumes(kinds=SWEEPABLE_KINDS)
+    }
+    assert volumes[ids[3]].has_speech  # a turn that stands
+    assert not volumes[ids[5]].has_speech  # hidden as a hallucination — not speech
+
+    spans = quiet_spans(store, threshold_db=-60.0, min_duration_s=100.0)
+    swept = {a for span in spans for a in span.audio_ids}
+    assert ids[3] not in swept
+    assert ids[5] in swept
+
+
 def test_threshold_is_a_clean_cut() -> None:
     # -60 threshold: -62 quiet in, -55 (quietest real sound) out.
     segs = [_seg(i, -62.0) for i in range(5)] + [_seg(i, -55.0) for i in range(5, 10)]
     spans = find_quiet_spans(segs, threshold_db=-60.0, min_duration_s=200.0)
     assert len(spans) == 1
     assert spans[0].audio_ids == tuple(AudioSegmentId(i) for i in range(5))
+
+
+def test_delete_audio_segments_removes_rows_and_returns_paths() -> None:
+    store, ids = _store_with_capture(1)
+    store.add_transcript_segment(
+        audio_segment_id=int(ids[0]),
+        start=BASE,
+        end=BASE + timedelta(seconds=5),
+        text="hi",
+        asr_model="m",
+    )
+    paths = store.delete_audio_segments(ids)
+    assert paths == ["/archive/usb/seg000.opus"]
+    assert store.audio_segment(ids[0]) is None
+    assert store.visible_machine_turns_for_audio(ids[0]) == []

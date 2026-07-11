@@ -1336,7 +1336,7 @@ def test_quiet_scan_spans_and_delete(
     for i in range(8):
         start = base + timedelta(seconds=i * 59)
         (tmp_path / f"seg{i}.opus").write_bytes(b"audio")
-        store.add_audio_segment(
+        audio_id = store.add_audio_segment(
             Segment(
                 source_id="usb",
                 sequence=i,
@@ -1347,6 +1347,7 @@ def test_quiet_scan_spans_and_delete(
                 channels=1,
             )
         )
+        store.mark_transcribed(int(audio_id))  # only what ASR has read can be swept
     store.close()
     vols = {
         str(tmp_path / f"seg{i}.opus"): (-62.0 if i < 6 else -50.0) for i in range(8)
@@ -1358,6 +1359,28 @@ def test_quiet_scan_spans_and_delete(
     items = client.get("/api/quiet/spans", params={"min_seconds": 300}).json()["items"]
     assert len(items) == 1
     assert len(items[0]["audioIds"]) == 6  # the 6 quiet segments (354s > 300s)
+    assert items[0]["source"] == "usb"
+
+    # The waveform behind the review: the quiet run, plus the sound that ended it.
+    monkeypatch.setattr(
+        "recall.envelope.segment_envelope",
+        lambda path: (-62.0,) * 590 if vols[path] < -60 else (-45.0,) * 590,
+    )
+    envelope = client.get(
+        "/api/quiet/envelope",
+        params={
+            "source": "usb",
+            "start": base.isoformat(),
+            "end": (base + timedelta(seconds=8 * 59)).isoformat(),
+        },
+    ).json()
+    assert envelope["thresholdDb"] == -60.0
+    assert len(envelope["segments"]) == 8
+    # The events are the loud segments (6 and 7), joined into one run of sound — the
+    # reviewer is shown what broke the quiet, not left to find it.
+    assert len(envelope["events"]) == 1
+    assert envelope["events"][0]["peakDb"] == -45.0
+    assert envelope["events"][0]["start"].startswith("2026-07-11T09:05:54")
 
     deleted = client.post(
         "/api/quiet/delete", json={"audioIds": items[0]["audioIds"]}
@@ -1367,3 +1390,52 @@ def test_quiet_scan_spans_and_delete(
     for i in range(6):
         assert not (tmp_path / f"seg{i}.opus").exists()  # files really gone
     assert client.get("/api/quiet/spans").json()["items"] == []  # nothing left to prune
+
+
+def test_quiet_never_offers_a_segment_that_still_bears_a_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The failure this guards against, seen on the real archive: quiet far-field speech
+    # keeps a minute's mean under the noise-floor bar, and deleting the audio would take
+    # the transcript with it. The turn wins over the volume, end to end.
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+    base = datetime(2026, 7, 11, 9, 0, 0, tzinfo=UTC)
+    audio_ids = []
+    for i in range(8):
+        start = base + timedelta(seconds=i * 59)
+        (tmp_path / f"seg{i}.opus").write_bytes(b"audio")
+        audio_id = store.add_audio_segment(
+            Segment(
+                source_id="usb",
+                sequence=i,
+                start=start,
+                end=start + timedelta(seconds=59),
+                path=str(tmp_path / f"seg{i}.opus"),
+                sample_rate=48000,
+                channels=1,
+            )
+        )
+        store.mark_transcribed(int(audio_id))
+        audio_ids.append(audio_id)
+    # Segment 3 transcribed a quiet Dutch sentence; the audio is still under the bar.
+    store.add_transcript_segment(
+        audio_segment_id=int(audio_ids[3]),
+        start=base + timedelta(seconds=3 * 59),
+        end=base + timedelta(seconds=3 * 59 + 4),
+        text="Namelijk, dit zijn ook al vlakjes",
+        asr_model="whisper",
+    )
+    store.close()
+    monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda _p: -62.0)
+
+    client = TestClient(api.app)
+    client.post("/api/quiet/scan")
+    items = client.get("/api/quiet/spans", params={"min_seconds": 100}).json()["items"]
+
+    swept = {a for span in items for a in span["audioIds"]}
+    assert int(audio_ids[3]) not in swept  # the audio under the words survives
+    assert (tmp_path / "seg3.opus").exists()

@@ -14,6 +14,7 @@ import {
   ConversationPage,
   CorrectRequest,
   CorrectResult,
+  Envelope,
   NudgeRequest,
   Ok,
   QuietDeleted,
@@ -63,6 +64,26 @@ export class RecallApi {
   /** Play URL for a capture segment's raw audio (to confirm a span is quiet). */
   quietAudioUrl(audioId: number): string {
     return `/api/quiet/audio/${audioId}`;
+  }
+
+  /**
+   * The waveform of one source over a window — what a span is judged from: is it dead
+   * air all the way through, and what broke the quiet at its edges. Ask for a window
+   * wider than the span to see the sounds that ended it.
+   */
+  quietEnvelope(
+    source: string,
+    start: Date,
+    end: Date,
+    maxPoints: number,
+  ): Observable<Envelope> {
+    const query = new URLSearchParams({
+      source,
+      start: start.toISOString(),
+      end: end.toISOString(),
+      max_points: String(maxPoints),
+    });
+    return this.http.get<Envelope>(`/api/quiet/envelope?${query}`);
   }
 
   /** Hard-delete a confirmed quiet span (its segments + the Opus files). */

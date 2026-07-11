@@ -87,6 +87,7 @@ from recall.schemas import (
     ConversationsOut,
     CorrectionsOut,
     DaySummariesOut,
+    EnvelopeOut,
     ItemsOut,
     LabelOut,
     MomentOut,
@@ -812,6 +813,7 @@ def quiet_spans_list(min_seconds: int = 300) -> QuietSpansOut:
         return {
             "items": [
                 {
+                    "source": s.source_id,
                     "start": s.start.isoformat(),
                     "end": s.end.isoformat(),
                     "durationS": s.duration_s,
@@ -822,6 +824,66 @@ def quiet_spans_list(min_seconds: int = 300) -> QuietSpansOut:
         }
     finally:
         store.close()
+
+
+@app.get("/api/quiet/envelope")
+def quiet_envelope(
+    source: str, start: str, end: str, max_points: int = 1500
+) -> EnvelopeOut:
+    """The waveform of one source over [start, end) — what the review draws to judge a
+    span: whether it really is dead air throughout, and what broke the quiet at its
+    edges. Ask for a window wider than the span to see the sounds that ended it."""
+    from recall.envelope import (  # noqa: PLC0415 - keeps ffmpeg/numpy use local
+        EnvelopeSegment,
+        build_envelope,
+    )
+    from recall.quiet import QUIET_MEAN_DB  # noqa: PLC0415
+
+    try:
+        window_start = _require_time(start)
+        window_end = _require_time(end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if window_end <= window_start:
+        raise HTTPException(status_code=400, detail="end must be after start")
+
+    store = _store()
+    try:
+        rows = store.audio_segments_between(source, window_start, window_end)
+    finally:
+        store.close()
+
+    envelope = build_envelope(
+        [EnvelopeSegment(*row) for row in rows],
+        start=window_start,
+        end=window_end,
+        threshold_db=QUIET_MEAN_DB,
+        max_points=max_points,
+    )
+    return {
+        "start": envelope.start.isoformat(),
+        "end": envelope.end.isoformat(),
+        "bucketS": envelope.bucket_s,
+        "thresholdDb": QUIET_MEAN_DB,
+        "points": list(envelope.points),
+        "segments": [
+            {
+                "audioId": int(s.audio_id),
+                "start": s.start.isoformat(),
+                "end": s.end.isoformat(),
+                "meanDb": s.mean_db,
+            }
+            for s in envelope.segments
+        ],
+        "events": [
+            {
+                "start": e.start.isoformat(),
+                "end": e.end.isoformat(),
+                "peakDb": e.peak_db,
+            }
+            for e in envelope.events
+        ],
+    }
 
 
 @app.get("/api/quiet/audio/{audio_id}")

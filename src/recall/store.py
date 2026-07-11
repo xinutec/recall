@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -34,6 +34,7 @@ from recall.store_models import (
     LiveSummary,
     PendingVoiceprint,
     RefineRequest,
+    SegmentVolume,
     SourceCoverage,
     TranscriptSegment,
     VocabularyTerm,
@@ -60,6 +61,7 @@ __all__ = [
     "LiveSummary",
     "PendingVoiceprint",
     "RefineRequest",
+    "SegmentVolume",
     "SourceCoverage",
     "Store",
     "TranscriptSegment",
@@ -338,28 +340,79 @@ class Store:
         self._commit()
 
     def audio_segments_without_volume(
-        self, *, limit: int = 2000
+        self, *, limit: int = 2000, kinds: Collection[SourceKind]
     ) -> list[tuple[AudioSegmentId, str]]:
-        """(id, path) of capture segments whose raw mean volume isn't measured yet."""
+        """(id, path) of segments from sources of `kinds` whose raw mean volume isn't
+        measured yet. Restricted by kind because only what the caller may act on is
+        worth the ffmpeg pass."""
+        placeholders = ",".join("?" * len(kinds))
         rows = self._conn.execute(
-            "SELECT id, path FROM audio_segments WHERE mean_volume IS NULL "
-            "ORDER BY start_utc LIMIT ?",
-            (limit,),
+            "SELECT a.id, a.path FROM audio_segments a "
+            "JOIN sources s ON s.id = a.source_id "
+            f"WHERE a.mean_volume IS NULL AND s.kind IN ({placeholders}) "
+            "ORDER BY a.start_utc LIMIT ?",
+            (*[k.value for k in kinds], limit),
         ).fetchall()
         return [(AudioSegmentId(int(r["id"])), str(r["path"])) for r in rows]
 
     def audio_segment_volumes(
-        self,
-    ) -> list[tuple[AudioSegmentId, datetime, datetime, float | None]]:
-        """(id, start, end, mean_volume) for every segment in time order — the input to
-        quiet-span detection (mean_volume is None until the scan measures it)."""
+        self, *, kinds: Collection[SourceKind]
+    ) -> list[SegmentVolume]:
+        """Every segment of a source in `kinds`, in time order — the input to quiet-span
+        detection.
+
+        Carries three things beyond the volume, because deleting a capture segment also
+        deletes everything derived from it: the source (several mics record the same
+        room at once, so runs must be grouped per source, never across them), whether
+        ASR has examined the segment yet, and whether it left any *current, visible*
+        turn behind — human or machine. A turn that stands is speech we chose to keep,
+        and the audio under it is not idle noise however quiet its 60-second mean looks.
+        """
+        placeholders = ",".join("?" * len(kinds))
         rows = self._conn.execute(
-            "SELECT id, start_utc, end_utc, mean_volume FROM audio_segments "
-            "ORDER BY start_utc"
+            f"""SELECT a.id, a.source_id, a.start_utc, a.end_utc, a.mean_volume,
+                      a.transcribed_utc,
+                      EXISTS (SELECT 1 FROM transcript_segments t
+                              WHERE t.audio_segment_id = a.id
+                                AND t.superseded_by IS NULL
+                                AND t.hidden_reason IS NULL) AS has_speech
+               FROM audio_segments a JOIN sources s ON s.id = a.source_id
+               WHERE s.kind IN ({placeholders})
+               ORDER BY a.start_utc""",
+            tuple(k.value for k in kinds),
+        ).fetchall()
+        return [
+            SegmentVolume(
+                audio_id=AudioSegmentId(int(r["id"])),
+                source_id=str(r["source_id"]),
+                start=datetime.fromisoformat(r["start_utc"]),
+                end=datetime.fromisoformat(r["end_utc"]),
+                mean_db=None if r["mean_volume"] is None else float(r["mean_volume"]),
+                transcribed=r["transcribed_utc"] is not None,
+                has_speech=bool(r["has_speech"]),
+            )
+            for r in rows
+        ]
+
+    def audio_segments_between(
+        self, source_id: str, start: datetime, end: datetime
+    ) -> list[tuple[AudioSegmentId, str, datetime, datetime, float | None]]:
+        """(id, path, start, end, mean_volume) of one source's capture segments
+        overlapping [start, end), in time order — the input to the envelope the cleanup
+        review draws. One source, because a waveform mixing two mics would show sound
+        the span under review does not contain. Overlapping, not contained, so the
+        segments at a span's edges (the ones that ended the quiet) are included."""
+        _require_aware(start, "start")
+        _require_aware(end, "end")
+        rows = self._conn.execute(
+            "SELECT id, path, start_utc, end_utc, mean_volume FROM audio_segments "
+            "WHERE source_id = ? AND start_utc < ? AND end_utc > ? ORDER BY start_utc",
+            (source_id, end.isoformat(), start.isoformat()),
         ).fetchall()
         return [
             (
                 AudioSegmentId(int(r["id"])),
+                str(r["path"]),
                 datetime.fromisoformat(r["start_utc"]),
                 datetime.fromisoformat(r["end_utc"]),
                 None if r["mean_volume"] is None else float(r["mean_volume"]),

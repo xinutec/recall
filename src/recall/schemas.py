@@ -143,8 +143,10 @@ class OkOut(TypedDict):
 
 
 class QuietSpanOut(TypedDict):
-    """A long total-quiet span proposed for deletion (the cleanup UI)."""
+    """A long total-quiet span proposed for deletion (the cleanup UI). Always one
+    source: several mics record the same room, and a span is one mic hearing nothing."""
 
+    source: str
     start: str  # ISO-8601
     end: str
     durationS: float
@@ -162,6 +164,40 @@ class QuietScanOut(TypedDict):
 class QuietDeletedOut(TypedDict):
     deleted: int
     freedBytes: int
+
+
+class EnvelopeSegmentOut(TypedDict):
+    """One capture segment inside an envelope window — the unit of play and delete."""
+
+    audioId: int
+    start: str  # ISO-8601
+    end: str
+    meanDb: float | None  # the cached per-minute volume; None until scanned
+
+
+class SoundEventOut(TypedDict):
+    """One audible thing inside the window — what the reviewer is asked to listen to."""
+
+    start: str  # ISO-8601
+    end: str
+    peakDb: float
+
+
+class EnvelopeOut(TypedDict):
+    """A window of capture as a waveform: one peak dB per bucket, None where no audio
+    exists (a gap, not silence). `points[i]` covers start + i * bucketS."""
+
+    start: str  # ISO-8601
+    end: str
+    bucketS: float
+    # The quiet threshold — drawn as the line a span is judged against, so what broke
+    # the silence is visible rather than asserted.
+    thresholdDb: float
+    points: list[float | None]
+    segments: list[EnvelopeSegmentOut]
+    # Every sound above the threshold, so a 0.7-second bump in a 15-minute span can be
+    # stepped through and heard rather than hunted for by eye.
+    events: list[SoundEventOut]
 
 
 class SpeakerNamesOut(TypedDict):

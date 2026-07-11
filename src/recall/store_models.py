@@ -114,6 +114,27 @@ class SourceCoverage:
 
 
 @dataclass(frozen=True)
+class SegmentVolume:
+    """A capture segment as quiet-detection sees it: how loud it was, and — decisively —
+    whether the pipeline has examined it and whether it left any speech behind.
+
+    `mean_db` is the raw mean volume (None until scanned). `transcribed` says ASR has
+    had its say; `has_speech` says it found words that still stand (current, not hidden
+    as a hallucination). A segment carrying speech is never quiet, whatever its volume:
+    a far-field sentence can sit under the noise-floor threshold on a 60-second mean,
+    and deleting its audio would take the transcript with it.
+    """
+
+    audio_id: AudioSegmentId
+    source_id: str
+    start: datetime
+    end: datetime
+    mean_db: float | None
+    transcribed: bool
+    has_speech: bool
+
+
+@dataclass(frozen=True)
 class RefineRequest:
     """A queued on-demand refine of [start, end) of one recording."""
 

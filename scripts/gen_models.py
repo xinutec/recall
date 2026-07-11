@@ -76,6 +76,9 @@ NAME_MAP = {
     "QuietSpansOut": "QuietSpanList",
     "QuietScanOut": "QuietScan",
     "QuietDeletedOut": "QuietDeleted",
+    "EnvelopeSegmentOut": "EnvelopeSegment",
+    "SoundEventOut": "SoundEvent",
+    "EnvelopeOut": "Envelope",
 }
 
 # Request bodies (pydantic models in api_models.py) -> frontend interface name.
@@ -139,6 +142,12 @@ _PRIMITIVE_TS: dict[object, str] = {
 }
 
 
+def _ts_element(rendered: str) -> str:
+    """Parenthesize a union used as an array element: `[]` binds tighter than `|`, so
+    `number | null[]` means something else entirely — `(number | null)[]` is meant."""
+    return f"({rendered})" if " | " in rendered else rendered
+
+
 def _ts_type(tp: object) -> str:
     origin = typing.get_origin(tp)
     if origin is None:
@@ -151,7 +160,7 @@ def _ts_type(tp: object) -> str:
         return " | ".join(f"'{arg}'" for arg in typing.get_args(tp))
     if origin is list:
         (arg,) = typing.get_args(tp)
-        return f"readonly {_ts_type(arg)}[]"
+        return f"readonly {_ts_element(_ts_type(arg))}[]"
     if origin is dict:
         _key, value = typing.get_args(tp)
         return f"Record<string, {_ts_type(value)}>"
@@ -193,7 +202,7 @@ def _ts_request_type(tp: object) -> str:
     origin = typing.get_origin(tp)
     if origin is list:
         (arg,) = typing.get_args(tp)
-        return f"readonly {_ts_request_type(arg)}[]"
+        return f"readonly {_ts_element(_ts_request_type(arg))}[]"
     if origin in (types.UnionType, typing.Union):
         return " | ".join(_ts_request_type(arg) for arg in typing.get_args(tp))
     return _ts_type(tp)

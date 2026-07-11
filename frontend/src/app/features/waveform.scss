@@ -1,0 +1,75 @@
+.waveform {
+  // The canvas can't read M3 tokens, so the palette is declared here (in CSS, where
+  // theming belongs) and sampled at draw time.
+  --wave-quiet: var(--mat-sys-outline-variant);
+  --wave-loud: var(--mat-sys-primary);
+  --wave-gap: color-mix(in srgb, var(--mat-sys-error) 12%, transparent);
+  --wave-threshold: var(--mat-sys-outline);
+  --wave-selection: color-mix(in srgb, var(--mat-sys-primary) 8%, transparent);
+  --wave-handle: var(--mat-sys-primary);
+  --wave-playhead: var(--mat-sys-on-surface);
+  --wave-event: color-mix(in srgb, var(--mat-sys-tertiary) 35%, transparent);
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  canvas {
+    width: 100%;
+    display: block;
+    border-radius: var(--mat-sys-corner-extra-small);
+    background: var(--mat-sys-surface-container-low);
+    touch-action: none; // the canvas owns pan/zoom
+    cursor: crosshair;
+  }
+
+  .readout {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    min-height: 1.25rem;
+    font: var(--mat-sys-body-small);
+    color: var(--mat-sys-on-surface-variant);
+
+    .at {
+      font-family: var(--mat-sys-body-small-font);
+      font-variant-numeric: tabular-nums;
+      color: var(--mat-sys-on-surface);
+    }
+
+    .loading {
+      margin-left: auto;
+    }
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+
+    .sounds {
+      display: flex;
+      align-items: center;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .silent {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      font: var(--mat-sys-body-small);
+      color: var(--mat-sys-on-surface-variant);
+    }
+
+    .trim {
+      margin-left: auto;
+      font: var(--mat-sys-body-small);
+      color: var(--mat-sys-primary);
+    }
+  }
+
+  audio {
+    display: none;
+  }
+}

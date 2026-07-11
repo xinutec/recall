@@ -1,0 +1,74 @@
+<div class="waveform">
+  <canvas
+    #canvas
+    [style.height.px]="height"
+    (wheel)="onWheel($event)"
+    (pointerdown)="onPointerDown($event)"
+    (pointermove)="onPointerMove($event)"
+    (pointerup)="onPointerUp($event)"
+    (pointerleave)="onPointerLeave()"
+  ></canvas>
+
+  <div class="readout">
+    @if (hover(); as at) {
+      <span class="at">{{ at.at | date: 'HH:mm:ss' }}</span>
+      <span>
+        @if (at.db === null) {
+          no recording here
+        } @else {
+          {{ at.db | number: '1.0-0' }} dB
+        }
+      </span>
+    } @else {
+      <span>
+        Drag to pan · scroll to zoom · click to play from there · drag the edges to trim
+      </span>
+    }
+    @if (loading()) {
+      <span class="loading">decoding…</span>
+    }
+  </div>
+
+  <div class="controls">
+    @if (playing()) {
+      <button mat-button (click)="stop()"><mat-icon>stop</mat-icon> Stop</button>
+    } @else {
+      <button mat-button (click)="playSpan()">
+        <mat-icon>play_arrow</mat-icon> Play span
+      </button>
+    }
+
+    <!-- The span is quiet only on a 60-second mean, so it can still hold real sounds.
+         Every one of them is listed here to be heard before anything is deleted. -->
+    @if (events().length; as count) {
+      <span class="sounds">
+        <button mat-icon-button (click)="step(-1)" aria-label="Previous sound">
+          <mat-icon>chevron_left</mat-icon>
+        </button>
+        <button mat-button (click)="playEvent()">
+          @if (current(); as event) {
+            sound {{ cursor() + 1 }}/{{ count }} · {{ event.start | date: 'HH:mm:ss' }} ·
+            {{ event.peakDb | number: '1.0-0' }} dB
+          }
+        </button>
+        <button mat-icon-button (click)="step(1)" aria-label="Next sound">
+          <mat-icon>chevron_right</mat-icon>
+        </button>
+      </span>
+    } @else if (!loading()) {
+      <span class="silent">
+        <mat-icon>check</mat-icon>
+        no sound at all in this span
+      </span>
+    }
+
+    @if (trimmed()) {
+      <span class="trim">
+        trimmed to {{ selectionLabel() }} · {{ selectedIds().length }} segments
+      </span>
+      <button mat-button (click)="resetTrim()">Reset</button>
+    }
+  </div>
+
+  <audio #player preload="none"></audio>
+</div>

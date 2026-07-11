@@ -95,6 +95,7 @@ export interface Ok {
 }
 
 export interface QuietSpan {
+  readonly source: string;
   readonly start: string;
   readonly end: string;
   readonly durationS: number;
@@ -112,6 +113,29 @@ export interface QuietScan {
 export interface QuietDeleted {
   readonly deleted: number;
   readonly freedBytes: number;
+}
+
+export interface EnvelopeSegment {
+  readonly audioId: number;
+  readonly start: string;
+  readonly end: string;
+  readonly meanDb: number | null;
+}
+
+export interface SoundEvent {
+  readonly start: string;
+  readonly end: string;
+  readonly peakDb: number;
+}
+
+export interface Envelope {
+  readonly start: string;
+  readonly end: string;
+  readonly bucketS: number;
+  readonly thresholdDb: number;
+  readonly points: readonly (number | null)[];
+  readonly segments: readonly EnvelopeSegment[];
+  readonly events: readonly SoundEvent[];
 }
 
 export interface SpeakerNames {
