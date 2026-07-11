@@ -53,11 +53,11 @@ def test_check_token_passes_on_the_right_token() -> None:
 
 
 def test_routes_are_absent_without_a_configured_token(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.delenv(SYNC_TOKEN_ENV, raising=False)
     app = FastAPI()
-    assert register_sync_routes(app, Store.memory) is False
+    assert register_sync_routes(app, Store.memory, tmp_path) is False
     assert TestClient(app).get("/sync/jobs").status_code == 404  # never registered
 
 
@@ -78,7 +78,7 @@ def test_poll_and_done_roundtrip(
     _seed(db)
 
     app = FastAPI()
-    assert register_sync_routes(app, lambda: Store.open(db)) is True
+    assert register_sync_routes(app, lambda: Store.open(db), tmp_path) is True
     client = TestClient(app)
 
     # the gate: no token, no jobs
@@ -106,7 +106,7 @@ def test_sync_client_polls_and_marks_done_over_the_transport(
     db = tmp_path / "recall.sqlite"
     _seed(db)
     app = FastAPI()
-    register_sync_routes(app, lambda: Store.open(db))
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
 
     with TestClient(app) as transport:
         client = SyncClient("http://fleet", "secret", client=transport)
@@ -114,3 +114,53 @@ def test_sync_client_polls_and_marks_done_over_the_transport(
         assert [j.type for j in jobs] == ["refine"]
         client.mark_done(jobs[0].id)
         assert client.poll_jobs() == []
+
+
+def test_audio_push_stores_once_and_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    archive = tmp_path / "archive"
+    app = FastAPI()
+    register_sync_routes(app, Store.memory, archive)
+
+    clip = tmp_path / "clip.opus"
+    clip.write_bytes(b"opus-bytes")
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        assert client.push_audio("usb", "seg-0001.opus", clip) is True  # newly stored
+        landed = archive / "usb" / "seg-0001.opus"
+        assert landed.read_bytes() == b"opus-bytes"
+        # re-push of the immutable archive is a no-op, not an overwrite
+        assert client.push_audio("usb", "seg-0001.opus", clip) is False
+
+
+def test_audio_push_requires_the_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    app = FastAPI()
+    register_sync_routes(app, Store.memory, tmp_path)
+    resp = TestClient(app).post(
+        "/sync/audio",
+        data={"source": "usb", "name": "x.opus"},
+        files={"file": ("x", b"z")},
+    )
+    assert resp.status_code == 401
+
+
+def test_audio_push_rejects_path_traversal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    app = FastAPI()
+    register_sync_routes(app, Store.memory, tmp_path)
+    auth = {"Authorization": "Bearer secret"}
+    resp = TestClient(app).post(
+        "/sync/audio",
+        data={"source": "../escape", "name": "x.opus"},
+        files={"file": ("x", b"z")},
+        headers=auth,
+    )
+    assert resp.status_code == 400

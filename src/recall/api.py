@@ -173,7 +173,7 @@ def _store() -> Store:
 # Mac→fleet sync endpoints for the proposed Isis split (recall.sync). Inert unless
 # RECALL_SYNC_TOKEN is set — register_sync_routes adds nothing and returns False — so a
 # stock LAN-only deployment is unchanged.
-register_sync_routes(app, _store)
+register_sync_routes(app, _store, DATA_ROOT)
 
 
 def _tier(segment: TranscriptSegment) -> Tier:

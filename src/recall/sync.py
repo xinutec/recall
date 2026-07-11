@@ -10,19 +10,21 @@ routes are only registered when a token is configured, so a stock LAN-only deplo
 is untouched. When enabled, the routes are meant to bind to the WireGuard interface only
 — never the shared public ingress, which answers on the public IP regardless of DNS.
 
-Only the job-poll direction is here so far; pushing results (audio + turns) is the next
-increment. The auth check and the bearer parsing are pure, so they're unit-tested; the
-routes and client are exercised against a FastAPI test transport.
+The job-poll direction and the audio-blob push are here; pushing the derived rows
+(turns, summaries) is next. The auth check and bearer parsing are pure, so they're
+unit-tested; the routes and client are exercised against a FastAPI test transport.
 """
 
 from __future__ import annotations
 
 import hmac
 import os
+import shutil
 from collections.abc import Callable
+from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from recall.schemas import OkOut
@@ -30,6 +32,23 @@ from recall.store import RefineRequest, Store
 
 SYNC_TOKEN_ENV = "RECALL_SYNC_TOKEN"
 _BEARER = "Bearer "
+
+
+def _safe_component(component: str) -> str:
+    """A single path component the fleet will trust as a directory/file name. Rejects
+    anything that could escape the archive root (separators, `..`, a hidden dot-file) —
+    the Mac is authenticated, but a compromised token must not become path traversal."""
+    if (
+        not component
+        or "/" in component
+        or "\\" in component
+        or ".." in component
+        or component.startswith(".")
+    ):
+        raise HTTPException(
+            status_code=400, detail=f"unsafe path component: {component!r}"
+        )
+    return component
 
 
 def sync_token() -> str | None:
@@ -64,6 +83,12 @@ class JobOut(BaseModel):
     end: str
 
 
+class AudioStoredOut(BaseModel):
+    """Whether the fleet newly stored the pushed segment. False = it already had it."""
+
+    stored: bool
+
+
 def _job_of(req: RefineRequest) -> JobOut:
     return JobOut(
         id=req.id,
@@ -74,12 +99,34 @@ def _job_of(req: RefineRequest) -> JobOut:
     )
 
 
-def register_sync_routes(app: FastAPI, store_factory: Callable[[], Store]) -> bool:
+def register_sync_routes(
+    app: FastAPI, store_factory: Callable[[], Store], data_root: Path
+) -> bool:
     """Register the token-gated sync endpoints on `app`, but only when a token is
-    configured — so a stock deployment is unchanged. Returns whether they were added."""
+    configured — so a stock deployment is unchanged. Returns whether they were added.
+    `data_root` is the archive root the Mac's audio blobs are streamed into."""
     expected = sync_token()
     if not expected:
         return False
+
+    @app.post("/sync/audio")
+    def sync_audio(
+        source: str = Form(...),
+        name: str = Form(...),
+        file: UploadFile = File(...),
+        authorization: str | None = Header(default=None),
+    ) -> AudioStoredOut:
+        check_token(bearer(authorization), expected)
+        dest_dir = data_root / _safe_component(source)
+        dest = dest_dir / _safe_component(name)
+        # The archive is immutable (append-only, same path = same content), so an
+        # existing file is never overwritten — the push is idempotent and safe to retry.
+        if dest.exists():
+            return AudioStoredOut(stored=False)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        with dest.open("wb") as fh:
+            shutil.copyfileobj(file.file, fh)
+        return AudioStoredOut(stored=True)
 
     @app.get("/sync/jobs")
     def sync_jobs(
@@ -138,3 +185,17 @@ class SyncClient:
             f"{self._base}/sync/jobs/{job_id}/done", headers=self._headers
         )
         resp.raise_for_status()
+
+    def push_audio(self, source: str, name: str, local_path: Path) -> bool:
+        """Upload one archive segment file to the fleet. Idempotent: returns True if the
+        fleet stored it, False if it already had it (the immutable archive is never
+        overwritten), so the outbox can safely re-push after a failure."""
+        with local_path.open("rb") as fh:
+            resp = self._client.post(
+                f"{self._base}/sync/audio",
+                data={"source": source, "name": name},
+                files={"file": (name, fh)},
+                headers=self._headers,
+            )
+        resp.raise_for_status()
+        return AudioStoredOut.model_validate(resp.json()).stored
