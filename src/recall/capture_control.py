@@ -115,10 +115,15 @@ def auto_resume_if_expired(root: Path, now: datetime) -> bool:
 
 
 def loaded_agents() -> set[str]:
-    """Recall agent labels currently loaded in launchd."""
-    out = subprocess.run(
-        ["launchctl", "list"], capture_output=True, text=True, check=False
-    )
+    """Recall agent labels currently loaded in launchd. Empty when launchctl isn't
+    there — e.g. the fleet's Linux container serving the api (the Isis split): capture
+    runs on the Mac, so "no agents loaded" is the right answer, not a crash."""
+    try:
+        out = subprocess.run(
+            ["launchctl", "list"], capture_output=True, text=True, check=False
+        )
+    except FileNotFoundError:
+        return set()
     return {
         parts[-1]
         for line in out.stdout.splitlines()

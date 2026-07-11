@@ -15,6 +15,18 @@ def test_not_paused_when_no_file(tmp_path: Path) -> None:
     assert cc.is_paused(tmp_path, NOW) is False
 
 
+def test_loaded_agents_empty_without_launchctl(monkeypatch: object) -> None:
+    # On the fleet's Linux container (the Isis split) there is no launchctl; the api
+    # must report "no agents loaded" rather than crash — capture runs on the Mac.
+    def no_launchctl(*_a: object, **_k: object) -> object:
+        raise FileNotFoundError(2, "No such file or directory", "launchctl")
+
+    run = "recall.capture_control.subprocess.run"
+    monkeypatch.setattr(run, no_launchctl)  # type: ignore[attr-defined]
+    assert cc.loaded_agents() == set()
+    assert cc.capture_running() is False
+
+
 def test_write_and_read_pause(tmp_path: Path) -> None:
     until = NOW + timedelta(minutes=20)
     cc.write_pause_until(tmp_path, until)
