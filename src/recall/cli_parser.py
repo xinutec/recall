@@ -391,4 +391,12 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         help="rsync destination, e.g. root@odin:/backup/recall-mirror",
     )
 
+    syn = sub.add_parser(
+        "sync", help="push the local archive to the fleet (Isis split; needs a token)"
+    )
+    syn.add_argument("--out", type=Path, default=Path("data"), help="data root")
+    syn.add_argument(
+        "--url", required=True, help="fleet base URL, e.g. http://10.100.0.2:8000"
+    )
+
     return parser

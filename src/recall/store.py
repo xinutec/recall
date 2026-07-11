@@ -243,6 +243,21 @@ class Store:
         ).fetchone()
         return SourceKind(str(row["kind"])) if row else None
 
+    def source(self, source_id: str) -> AudioSource | None:
+        """The full source record (id, name, kind), or None if unknown — the sync push
+        needs the name and kind to register the source on the fleet."""
+        row = self._conn.execute(
+            "SELECT id, name, kind FROM sources WHERE id = ?", (source_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return AudioSource(
+            id=str(row["id"]),
+            name=str(row["name"]),
+            kind=SourceKind(str(row["kind"])),
+            spec="",
+        )
+
     def source_span(self, source_id: str) -> tuple[datetime, datetime] | None:
         """The [first-start, last-end) covered by a source's audio, or None if it has
         no segments — for queuing a whole-session refine."""

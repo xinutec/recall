@@ -92,6 +92,13 @@ class AudioStoredOut(BaseModel):
     stored: bool
 
 
+class AudioPresentOut(BaseModel):
+    """Whether the fleet already holds this file — lets the Mac skip re-sending the
+    (immutable) blob's bytes on every sync pass."""
+
+    present: bool
+
+
 class TurnIn(BaseModel):
     """One transcript turn the Mac computed for a segment, for the fleet's store."""
 
@@ -241,6 +248,14 @@ def register_sync_routes(
             shutil.copyfileobj(file.file, fh)
         return AudioStoredOut(stored=True)
 
+    @app.get("/sync/audio")
+    def sync_audio_present(
+        source: str, name: str, authorization: str | None = Header(default=None)
+    ) -> AudioPresentOut:
+        check_token(bearer(authorization), expected)
+        dest = data_root / _safe_component(source) / _safe_component(name)
+        return AudioPresentOut(present=dest.exists())
+
     @app.post("/sync/segments")
     def sync_segments(
         body: SegmentIn, authorization: str | None = Header(default=None)
@@ -323,6 +338,16 @@ class SyncClient:
             f"{self._base}/sync/jobs/{job_id}/done", headers=self._headers
         )
         resp.raise_for_status()
+
+    def audio_present(self, source: str, name: str) -> bool:
+        """Whether the fleet already holds this file — check before uploading."""
+        resp = self._client.get(
+            f"{self._base}/sync/audio",
+            params={"source": source, "name": name},
+            headers=self._headers,
+        )
+        resp.raise_for_status()
+        return AudioPresentOut.model_validate(resp.json()).present
 
     def push_audio(self, source: str, name: str, local_path: Path) -> bool:
         """Upload one archive segment file to the fleet. Idempotent: returns True if the

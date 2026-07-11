@@ -1226,6 +1226,26 @@ def _cmd_finetune_pilot(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sync(args: argparse.Namespace) -> int:
+    """Push the local archive to the fleet's system of record (the Isis split). The
+    token is read from RECALL_SYNC_TOKEN. Imports are lazy so `recall.cli` stays ML- and
+    framework-free for the capture agents (recall.sync drags in the web framework)."""
+    token = os.environ.get("RECALL_SYNC_TOKEN")
+    if not token:
+        print("sync needs RECALL_SYNC_TOKEN")
+        return 1
+    from recall.sync import SyncClient  # noqa: PLC0415 - lazy: pulls the web framework
+    from recall.sync_push import sync_push  # noqa: PLC0415
+
+    store = Store.open(args.out / "recall.sqlite")
+    try:
+        pushed = sync_push(store, SyncClient(args.url, token))
+    finally:
+        store.close()
+    print(f"sync: pushed {pushed} segment(s) to {args.url}")
+    return 0
+
+
 def _cmd_backup(args: argparse.Namespace) -> int:
     """Mirror the archive off-machine (see recall.backup). Runs in the recall python
     context so it has the external volume's TCC grant — the reason this is a command
@@ -1239,6 +1259,7 @@ def _cmd_backup(args: argparse.Namespace) -> int:
 _COMMANDS = {
     "record": _cmd_record,
     "backup": _cmd_backup,
+    "sync": _cmd_sync,
     "verify": _cmd_verify,
     "index": _cmd_index,
     "transcribe": _cmd_transcribe,
