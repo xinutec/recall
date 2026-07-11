@@ -851,6 +851,29 @@ def test_counts_and_source_names() -> None:
     assert store.source_names() == ["usb"]
 
 
+def test_transcript_count_reads_an_index_not_the_table() -> None:
+    """Counting current transcripts must not walk every row.
+
+    Without an index matching both NULL predicates SQLite scans the whole table.
+    On the real archive (44k rows, most superseded) that took 8.7s, and over 25s
+    when the worker was competing for the disk — long enough to hang /api/status.
+    """
+    store = Store.memory()
+    plan = " ".join(
+        str(value)
+        for row in store._conn.execute(
+            "EXPLAIN QUERY PLAN SELECT count(*) AS n FROM transcript_segments "
+            "WHERE superseded_by IS NULL AND hidden_reason IS NULL"
+        ).fetchall()
+        for value in row
+    )
+    # The partial index holds only the current rows, so walking it *is* the fast
+    # path (SQLite still calls that a SCAN). What must not happen is falling back
+    # to idx_ts_start, which covers none of the predicates and so tests every row.
+    assert "USING INDEX idx_ts_current" in plan, plan
+    assert "idx_ts_start" not in plan, plan
+
+
 def test_enroll_and_speaker_profiles() -> None:
     store = Store.memory()
     ann = store.enroll_speaker("ann", [1.0, 0.0], now=BASE)

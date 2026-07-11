@@ -348,4 +348,13 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE audio_segments ADD COLUMN mean_volume REAL;
     """,
+    # v29 — index the *current* transcript segments. Counting them (the status
+    # endpoint) matched no index, so SQLite walked all 44k rows to test the two
+    # NULL predicates — 8.7s cold on the archive, and >25s while the worker was
+    # competing for the disk, which hung /api/status. A partial index holds only
+    # the current rows, so the count reads it instead of the table.
+    """
+    CREATE INDEX idx_ts_current ON transcript_segments(id)
+        WHERE superseded_by IS NULL AND hidden_reason IS NULL;
+    """,
 )
