@@ -39,15 +39,16 @@
     }
 
     <!-- The span is quiet only on a 60-second mean, so it can still hold real sounds.
-         Every one of them is listed here to be heard before anything is deleted. -->
+         They're listed loudest-first: speech, if any got in here, is the loud one. -->
     @if (events().length; as count) {
       <span class="sounds">
         <button mat-icon-button (click)="step(-1)" aria-label="Previous sound">
           <mat-icon>chevron_left</mat-icon>
         </button>
-        <button mat-button (click)="playEvent()">
+        <button mat-button (click)="playEvent()" matTooltip="Play this sound">
           @if (current(); as event) {
-            sound {{ cursor() + 1 }}/{{ count }} · {{ event.start | date: 'HH:mm:ss' }} ·
+            <mat-icon>volume_up</mat-icon>
+            {{ cursor() + 1 }}/{{ count }} · {{ event.start | date: 'HH:mm:ss' }} ·
             {{ event.peakDb | number: '1.0-0' }} dB
           }
         </button>

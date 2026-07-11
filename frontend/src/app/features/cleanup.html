@@ -2,10 +2,12 @@
   <header>
     <h1>Cleanup</h1>
     <p>
-      Long stretches where one mic heard nothing but its own noise floor. Open a span to
-      see its waveform: the shaded band is what a delete would take, and the bars rising
-      past the dashed line are the sounds that ended the quiet. Play it, trim the edges
-      if the detector reached too far, then delete. Deletion is permanent.
+      Long stretches where one mic heard nothing but its own noise floor. Segments that
+      still carry a transcript are never offered here, whatever their volume. Open a span
+      to see its waveform: the shaded band is what a delete would take, and the bars
+      rising past the dashed line are sounds — including the ones that ended the quiet.
+      Step through them loudest-first (speech, if any is in there, is the loud one), trim
+      the edges if the detector reached too far, then delete. Deletion is permanent.
     </p>
     <button mat-stroked-button (click)="scan()" [disabled]="scanning()">
       <mat-icon>graphic_eq</mat-icon>

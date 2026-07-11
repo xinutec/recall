@@ -14,6 +14,7 @@ import {
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { Subscription } from 'rxjs';
 
 import { Envelope, EnvelopeSegment, SoundEvent } from '../models';
@@ -57,7 +58,13 @@ type Drag =
  */
 @Component({
   selector: 'app-waveform',
-  imports: [DatePipe, DecimalPipe, MatButtonModule, MatIconModule],
+  imports: [
+    DatePipe,
+    DecimalPipe,
+    MatButtonModule,
+    MatIconModule,
+    MatTooltipModule,
+  ],
   templateUrl: './waveform.html',
   styleUrl: './waveform.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -96,13 +103,23 @@ export class Waveform {
   protected readonly height = HEIGHT_PX;
   protected readonly playing = signal(false);
 
-  /** Every audible thing inside the *selection* — what a delete would actually destroy.
+  /**
+   * Every audible thing inside the *selection* — what a delete would actually destroy.
    * Sounds in the padding either side are context (they're why the quiet ended), not
-   * things to account for, so they're excluded from the count. */
+   * things to account for, so they're left out of the count.
+   *
+   * Ordered loudest first, which is the order that answers the only question that
+   * matters here: is any of this speech? A span holds dozens of half-second crests of
+   * the noise floor itself; speech would be the loud one. So the first few steps cover
+   * the real risk, and the long quiet tail is there if you want it.
+   */
   protected readonly events = computed(() =>
-    (this.envelope()?.events ?? []).filter(
-      (e) => Date.parse(e.start) >= this.selFrom() && Date.parse(e.end) <= this.selTo(),
-    ),
+    [...(this.envelope()?.events ?? [])]
+      .filter(
+        (e) =>
+          Date.parse(e.start) >= this.selFrom() && Date.parse(e.end) <= this.selTo(),
+      )
+      .sort((a, b) => b.peakDb - a.peakDb),
   );
   protected readonly cursor = signal(0);
   protected readonly current = computed<SoundEvent | undefined>(
