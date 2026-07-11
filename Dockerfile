@@ -34,8 +34,9 @@ COPY --from=frontend /build/frontend/dist /app/frontend/dist
 # _REPO in recall.api is three parents up from src/recall/api.py, i.e. /app — so the
 # frontend resolves at /app/frontend/dist/recall-web/browser and PYTHONPATH is /app/src.
 RUN mkdir -p /app/logs && chown -R 1000:1000 /app
-ENV PYTHONPATH=/app/src \
-    RECALL_OUT=/data
+ENV PYTHONPATH=/app/src
 USER 1000
 EXPOSE 8000
-CMD ["python", "-m", "recall", "api", "--host", "0.0.0.0", "--port", "8000"]
+# --out binds the data root; `recall api` overwrites RECALL_OUT from it, so pass the flag
+# (a bare RECALL_OUT env would be ignored). The k8s Deployment mounts the PVC at /data.
+CMD ["python", "-m", "recall", "api", "--out", "/data", "--host", "0.0.0.0", "--port", "8000"]

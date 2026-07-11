@@ -24,9 +24,11 @@ probes, limits), `03-service` (ClusterIP).
    it locally. It runs as uid 1000 via `python -m recall api`; the non-ML dep set is
    validated (`recall.api`/`recall.sync` import with only fastapi/uvicorn/pydantic/httpx/
    python-multipart).
-2. **Encryption at rest** — Isis's disk is unencrypted today. Encrypt the k3s storage path
-   (`/var/lib/rancher/k3s/storage`, LUKS) or mount an encrypted volume there BEFORE the
-   audio PVC binds. Household/medical audio must not sit on plaintext disk. (nixos-config.)
+2. **Encryption at rest — DEFERRED (future action item, 2026-07-11).** Isis is a single
+   unencrypted ext4 disk (no spare partition), so encryption would be a LUKS file-container
+   mounted at recall's storage path (nixos-config + activation). Deferred by decision to
+   get the pipeline working first — so until this is done, recall's household/medical audio
+   sits on **plaintext disk** on Isis. Revisit before treating the split as production-grade.
 3. **Secret** — create `recall-secret` in the `recall` namespace with `SYNC_TOKEN` (the
    Mac presents it as a bearer token). Source it from agenix/Vaultwarden, never committed.
    Without it the sync routes don't register (the app stays a plain LAN web UI).

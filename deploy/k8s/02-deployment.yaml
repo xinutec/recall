@@ -31,7 +31,11 @@ spec:
         - name: recall
           image: xinutec/recall:latest
           imagePullPolicy: Always
-          command: ["python", "-m", "recall", "api", "--host", "0.0.0.0", "--port", "8000"]
+          # --out sets the data root; `recall api` overwrites RECALL_OUT from it, so the
+          # env below can't be relied on — the flag is what binds the archive to /data.
+          command:
+            ["python", "-m", "recall", "api", "--out", "/data",
+             "--host", "0.0.0.0", "--port", "8000"]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -50,8 +54,6 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 30
           env:
-            - name: RECALL_OUT
-              value: /data
             - name: RECALL_SYNC_TOKEN
               valueFrom:
                 secretKeyRef:
