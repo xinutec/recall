@@ -380,4 +380,15 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
     ide.add_argument("--model", default="pyannote/embedding")
     ide.add_argument("--threshold", type=float, default=0.5)
 
+    bak = sub.add_parser(
+        "backup",
+        help="mirror the archive off-machine (consistent DB snapshot + audio)",
+    )
+    bak.add_argument("--out", type=Path, default=Path("data"), help="data root")
+    bak.add_argument(
+        "--dest",
+        required=True,
+        help="rsync destination, e.g. root@odin:/backup/recall-mirror",
+    )
+
     return parser

@@ -19,6 +19,7 @@ from recall import capture_control, runlog
 from recall.abcompare import Report, compare_models, render_json, render_markdown
 from recall.asr import AsrResult, Transcriber, mlx_transcribe
 from recall.attribution import AttributionReport
+from recall.backup import run_backup
 from recall.capture import CaptureConfig
 from recall.cleanup import scan_hallucinations, scan_loops
 from recall.cli_parser import build_parser
@@ -1225,8 +1226,19 @@ def _cmd_finetune_pilot(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_backup(args: argparse.Namespace) -> int:
+    """Mirror the archive off-machine (see recall.backup). Runs in the recall python
+    context so it has the external volume's TCC grant — the reason this is a command
+    and not the old shell agent, whose bare rsync was denied the volume after a
+    remount reset TCC."""
+    run_backup(args.out, args.dest)
+    print(f"backup: mirrored {args.out} to {args.dest}")
+    return 0
+
+
 _COMMANDS = {
     "record": _cmd_record,
+    "backup": _cmd_backup,
     "verify": _cmd_verify,
     "index": _cmd_index,
     "transcribe": _cmd_transcribe,
