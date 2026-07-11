@@ -1246,6 +1246,30 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_scan_quiet(args: argparse.Namespace) -> int:
+    """Measure each capture segment's raw volume (cached, resumable) and list the long
+    total-quiet spans — candidates for the cleanup UI to review and delete."""
+    from recall.quiet import quiet_spans, scan_volumes  # noqa: PLC0415
+
+    store = Store.open(args.out / "recall.sqlite")
+    try:
+        measured = 0
+        while (n := scan_volumes(store)) > 0:
+            measured += n
+            print(f"scan-quiet: measured {measured} segments...", flush=True)
+        spans = quiet_spans(store, min_duration_s=float(args.min_seconds))
+        for span in spans:
+            print(
+                f"  {span.start:%Y-%m-%d %H:%M} .. {span.end:%H:%M}  "
+                f"{span.duration_s / 60:5.0f} min  ({len(span.audio_ids)} segments)"
+            )
+        total_h = sum(s.duration_s for s in spans) / 3600
+        print(f"scan-quiet: {len(spans)} quiet span(s), {total_h:.1f}h total")
+    finally:
+        store.close()
+    return 0
+
+
 def _cmd_backup(args: argparse.Namespace) -> int:
     """Mirror the archive off-machine (see recall.backup). Runs in the recall python
     context so it has the external volume's TCC grant — the reason this is a command
@@ -1260,6 +1284,7 @@ _COMMANDS = {
     "record": _cmd_record,
     "backup": _cmd_backup,
     "sync": _cmd_sync,
+    "scan-quiet": _cmd_scan_quiet,
     "verify": _cmd_verify,
     "index": _cmd_index,
     "transcribe": _cmd_transcribe,

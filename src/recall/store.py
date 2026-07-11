@@ -326,6 +326,96 @@ class Store:
             self._conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
         return paths
 
+    # --- quiet-cleanup: cached raw volume + hard-delete of confirmed quiet spans ---
+
+    def set_audio_mean_volume(self, audio_id: AudioSegmentId, mean_db: float) -> None:
+        """Cache a capture segment's raw mean volume (dBFS), so the quiet scan measures
+        each file with ffmpeg only once."""
+        self._conn.execute(
+            "UPDATE audio_segments SET mean_volume = ? WHERE id = ?",
+            (mean_db, int(audio_id)),
+        )
+        self._commit()
+
+    def audio_segments_without_volume(
+        self, *, limit: int = 2000
+    ) -> list[tuple[AudioSegmentId, str]]:
+        """(id, path) of capture segments whose raw mean volume isn't measured yet."""
+        rows = self._conn.execute(
+            "SELECT id, path FROM audio_segments WHERE mean_volume IS NULL "
+            "ORDER BY start_utc LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [(AudioSegmentId(int(r["id"])), str(r["path"])) for r in rows]
+
+    def audio_segment_volumes(
+        self,
+    ) -> list[tuple[AudioSegmentId, datetime, datetime, float | None]]:
+        """(id, start, end, mean_volume) for every segment in time order — the input to
+        quiet-span detection (mean_volume is None until the scan measures it)."""
+        rows = self._conn.execute(
+            "SELECT id, start_utc, end_utc, mean_volume FROM audio_segments "
+            "ORDER BY start_utc"
+        ).fetchall()
+        return [
+            (
+                AudioSegmentId(int(r["id"])),
+                datetime.fromisoformat(r["start_utc"]),
+                datetime.fromisoformat(r["end_utc"]),
+                None if r["mean_volume"] is None else float(r["mean_volume"]),
+            )
+            for r in rows
+        ]
+
+    def delete_audio_segments(
+        self, audio_ids: Sequence[AudioSegmentId]
+    ) -> list[str]:
+        """Hard-delete specific capture segments and all derived from them (turns and
+        their lineage/embeddings/corrections/FTS), returning the audio file paths to
+        unlink. For the quiet-cleanup: a human-confirmed span of total-quiet capture is
+        truly removed to reclaim disk. Atomic."""
+        paths: list[str] = []
+        with self.transaction():
+            for audio_id in audio_ids:
+                row = self._conn.execute(
+                    "SELECT path FROM audio_segments WHERE id = ?", (int(audio_id),)
+                ).fetchone()
+                if row is None:
+                    continue
+                paths.append(str(row["path"]))
+                turn_ids = [
+                    int(r["id"])
+                    for r in self._conn.execute(
+                        "SELECT id FROM transcript_segments WHERE audio_segment_id = ?",
+                        (int(audio_id),),
+                    ).fetchall()
+                ]
+                for turn_id in turn_ids:
+                    self._conn.execute(
+                        "DELETE FROM transcript_embeddings WHERE segment_id = ?",
+                        (turn_id,),
+                    )
+                    self._conn.execute(
+                        "DELETE FROM transcript_lineage WHERE derived_id = ? "
+                        "OR source_id = ?",
+                        (turn_id, turn_id),
+                    )
+                # transcript_fts is a contentless FTS5 table (no per-row DELETE); like
+                # delete_source, leave its entries — a search rowid with no segment row
+                # simply resolves to nothing.
+                self._conn.execute(
+                    "DELETE FROM corrections WHERE audio_segment_id = ?",
+                    (int(audio_id),),
+                )
+                self._conn.execute(
+                    "DELETE FROM transcript_segments WHERE audio_segment_id = ?",
+                    (int(audio_id),),
+                )
+                self._conn.execute(
+                    "DELETE FROM audio_segments WHERE id = ?", (int(audio_id),)
+                )
+        return paths
+
     def register_source(self, source: AudioSource) -> None:
         """Authoritative registration by the recording agent, which knows the source's
         true kind (the USB mic is coreaudio; a phone announces itself as tcp_pcm via

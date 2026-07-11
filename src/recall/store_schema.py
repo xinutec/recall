@@ -342,4 +342,10 @@ _MIGRATIONS: tuple[str, ...] = (
         generated_utc TEXT NOT NULL
     );
     """,
+    # v28 — cache each capture segment's RAW mean volume (dBFS) so the quiet-cleanup
+    # scan measures a file once (ffmpeg is slow over the whole archive), then finds long
+    # quiet spans from the cached values instantly. NULL = not yet measured.
+    """
+    ALTER TABLE audio_segments ADD COLUMN mean_volume REAL;
+    """,
 )

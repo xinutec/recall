@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from recall.ids import AudioSegmentId
+from recall.store import Store
 
 # Between the ~-62 dB noise floor and the ~-55 dB quietest real sound (measured). A
 # segment at/under this is the mic idling; above it, something happened.
@@ -113,3 +114,32 @@ def find_quiet_spans(
             run = []
     flush()
     return spans
+
+
+def scan_volumes(store: Store, *, batch: int = 2000) -> int:
+    """Measure and cache the raw mean volume of segments not measured yet. ffmpeg per
+    file is slow over the whole archive, so it's cached and resumable — this returns how
+    many were measured this pass; call again while that's non-zero."""
+    measured = 0
+    for audio_id, path in store.audio_segments_without_volume(limit=batch):
+        mean_db = measure_mean_volume(Path(path))
+        if mean_db is not None:
+            store.set_audio_mean_volume(audio_id, mean_db)
+            measured += 1
+    return measured
+
+
+def quiet_spans(
+    store: Store,
+    *,
+    threshold_db: float = QUIET_MEAN_DB,
+    min_duration_s: float = MIN_QUIET_SPAN_S,
+) -> list[QuietSpan]:
+    """The long total-quiet spans across the archive, from the cached volumes."""
+    segments = [
+        SegmentVolume(audio_id, start, end, mean_db)
+        for audio_id, start, end, mean_db in store.audio_segment_volumes()
+    ]
+    return find_quiet_spans(
+        segments, threshold_db=threshold_db, min_duration_s=min_duration_s
+    )

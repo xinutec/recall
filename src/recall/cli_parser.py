@@ -399,4 +399,12 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "--url", required=True, help="fleet base URL, e.g. http://10.100.0.2:8000"
     )
 
+    sq = sub.add_parser(
+        "scan-quiet", help="measure raw volume + list long total-quiet spans to review"
+    )
+    sq.add_argument("--out", type=Path, default=Path("data"), help="data root")
+    sq.add_argument(
+        "--min-seconds", type=int, default=300, help="shortest quiet span to report"
+    )
+
     return parser
