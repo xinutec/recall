@@ -19,6 +19,7 @@ from recall.store import Store
 from recall.sync import (
     SYNC_TOKEN_ENV,
     SegmentIn,
+    SummaryIn,
     SyncClient,
     TurnIn,
     bearer,
@@ -210,6 +211,28 @@ def test_segment_repush_supersedes_the_old_machine_turns(
     store.close()
     # only the refined turns are visible; the worker turns were superseded (hidden)
     assert sorted(t.text for t in visible) == ["diarized turn A", "diarized turn B"]
+
+
+def test_summary_push_upserts_by_day(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        client.push_summary(
+            SummaryIn(day="2026-07-11", text="a quiet day", model="qwen")
+        )
+        # re-push replaces (upsert by day) — not a duplicate
+        client.push_summary(SummaryIn(day="2026-07-11", text="revised", model="qwen"))
+
+    store = Store.open(db)
+    got = store.get_day_summary("2026-07-11")
+    store.close()
+    assert got == "revised"
 
 
 def test_segment_push_rejects_a_bad_source_kind(

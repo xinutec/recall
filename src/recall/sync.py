@@ -10,9 +10,9 @@ routes are only registered when a token is configured, so a stock LAN-only deplo
 is untouched. When enabled, the routes are meant to bind to the WireGuard interface only
 — never the shared public ingress, which answers on the public IP regardless of DNS.
 
-Poll, audio-blob push, and the segment/turns push are here; the day-summary push is
-next. The auth check and bearer parsing are pure, so they're unit-tested; the routes
-and client are exercised against a FastAPI test transport.
+The whole Mac→fleet flow is here: job poll, audio-blob push, segment/turns push
+(supersede-aware), and day-summary push. The auth check and bearer parsing are pure, so
+they're unit-tested; routes and client are exercised against a FastAPI test transport.
 """
 
 from __future__ import annotations
@@ -125,6 +125,14 @@ class SegmentStoredOut(BaseModel):
 
     audio_segment_id: int
     turns_written: int
+
+
+class SummaryIn(BaseModel):
+    """A settled day-summary the Mac's LLM generated, for the fleet's Ask page."""
+
+    day: str  # YYYY-MM-DD
+    text: str
+    model: str
 
 
 def _incoming_turn_keys(turns: list[TurnIn]) -> list[tuple[str, str, str, str]]:
@@ -244,6 +252,20 @@ def register_sync_routes(
         finally:
             store.close()
 
+    @app.post("/sync/summaries")
+    def sync_summaries(
+        body: SummaryIn, authorization: str | None = Header(default=None)
+    ) -> OkOut:
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            # Keyed on the day (PK) — an upsert, so re-pushing a regenerated summary
+            # just replaces it. The Mac owns the LLM; the fleet serves the result.
+            store.set_day_summary(body.day, body.text, model=body.model)
+        finally:
+            store.close()
+        return {"ok": True}
+
     @app.get("/sync/jobs")
     def sync_jobs(
         authorization: str | None = Header(default=None), limit: int = 50
@@ -326,3 +348,12 @@ class SyncClient:
         )
         resp.raise_for_status()
         return SegmentStoredOut.model_validate(resp.json())
+
+    def push_summary(self, summary: SummaryIn) -> None:
+        """Push a settled day-summary to the fleet (upsert by day, so idempotent)."""
+        resp = self._client.post(
+            f"{self._base}/sync/summaries",
+            json=summary.model_dump(),
+            headers=self._headers,
+        )
+        resp.raise_for_status()
