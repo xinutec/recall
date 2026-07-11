@@ -17,9 +17,11 @@ probes, limits), `03-service` (ClusterIP).
 
 ## Steps to actually deploy (each is the host-touching part)
 
-1. **Image** — add a Dockerfile to the recall repo that installs the non-ML deps + the
-   built frontend and entrypoints `recall`; build and push `xinutec/recall:latest` (same
-   registry convention as `xinutec/health-sync`). The image must run as uid 1000.
+1. **Image** — the Dockerfile exists at the repo root (staged, not built — no container
+   builder on the dev Mac). Its non-ML dep set is validated (`recall.api`/`recall.sync`
+   import with only fastapi/uvicorn/pydantic/httpx/python-multipart). Build and push
+   `xinutec/recall:latest` from a host with docker/podman (same registry convention as
+   `xinutec/health-sync`); it runs as uid 1000 via `python -m recall api`.
 2. **Encryption at rest** — Isis's disk is unencrypted today. Encrypt the k3s storage path
    (`/var/lib/rancher/k3s/storage`, LUKS) or mount an encrypted volume there BEFORE the
    audio PVC binds. Household/medical audio must not sit on plaintext disk. (nixos-config.)

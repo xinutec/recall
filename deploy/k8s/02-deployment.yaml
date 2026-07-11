@@ -31,7 +31,7 @@ spec:
         - name: recall
           image: xinutec/recall:latest
           imagePullPolicy: Always
-          command: ["recall", "api", "--host", "0.0.0.0", "--port", "8000"]
+          command: ["python", "-m", "recall", "api", "--host", "0.0.0.0", "--port", "8000"]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -69,9 +69,15 @@ spec:
               mountPath: /data
             - name: tmp
               mountPath: /tmp
+            - name: logs
+              mountPath: /app/logs
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: recall-data-pvc
+        # readOnlyRootFilesystem is on, so every path the app writes needs a mount:
+        # /tmp (ffmpeg scratch) and /app/logs (log rotation + client-error log).
         - name: tmp
-          emptyDir: {}  # readOnlyRootFilesystem is on; scratch goes here
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
