@@ -10,9 +10,9 @@ routes are only registered when a token is configured, so a stock LAN-only deplo
 is untouched. When enabled, the routes are meant to bind to the WireGuard interface only
 — never the shared public ingress, which answers on the public IP regardless of DNS.
 
-The job-poll direction and the audio-blob push are here; pushing the derived rows
-(turns, summaries) is next. The auth check and bearer parsing are pure, so they're
-unit-tested; the routes and client are exercised against a FastAPI test transport.
+Poll, audio-blob push, and the segment/turns push are here; the day-summary push is
+next. The auth check and bearer parsing are pure, so they're unit-tested; the routes
+and client are exercised against a FastAPI test transport.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import hmac
 import os
 import shutil
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -28,7 +29,9 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from recall.schemas import OkOut
+from recall.sources import AudioSource, SourceKind
 from recall.store import RefineRequest, Store
+from recall.timeline import Segment
 
 SYNC_TOKEN_ENV = "RECALL_SYNC_TOKEN"
 _BEARER = "Bearer "
@@ -89,6 +92,41 @@ class AudioStoredOut(BaseModel):
     stored: bool
 
 
+class TurnIn(BaseModel):
+    """One transcript turn the Mac computed for a segment, for the fleet's store."""
+
+    start: str  # ISO-8601
+    end: str
+    text: str
+    asr_model: str
+    language: str | None = None
+    asr_confidence: float | None = None
+    speaker_cluster: str | None = None
+    provenance: str | None = None
+
+
+class SegmentIn(BaseModel):
+    """A processed audio segment the Mac pushes to the fleet: the segment metadata (its
+    audio blob is pushed separately, by path) plus the turns transcribed from it."""
+
+    source_id: str
+    source_name: str
+    kind: str  # a SourceKind value
+    path: str
+    start: str  # ISO-8601
+    end: str
+    sample_rate: int
+    channels: int
+    turns: list[TurnIn]
+
+
+class SegmentStoredOut(BaseModel):
+    """The fleet's audio-segment id, and how many turns it wrote (0 = already had)."""
+
+    audio_segment_id: int
+    turns_written: int
+
+
 def _job_of(req: RefineRequest) -> JobOut:
     return JobOut(
         id=req.id,
@@ -127,6 +165,60 @@ def register_sync_routes(
         with dest.open("wb") as fh:
             shutil.copyfileobj(file.file, fh)
         return AudioStoredOut(stored=True)
+
+    @app.post("/sync/segments")
+    def sync_segments(
+        body: SegmentIn, authorization: str | None = Header(default=None)
+    ) -> SegmentStoredOut:
+        check_token(bearer(authorization), expected)
+        try:
+            kind = SourceKind(body.kind)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"bad kind {body.kind!r}"
+            ) from exc
+        store = store_factory()
+        try:
+            store.add_source(
+                AudioSource(
+                    id=body.source_id, name=body.source_name, kind=kind, spec=""
+                )
+            )
+            audio_id = store.add_audio_segment(
+                Segment(
+                    source_id=body.source_id,
+                    sequence=0,
+                    start=datetime.fromisoformat(body.start),
+                    end=datetime.fromisoformat(body.end),
+                    path=body.path,
+                    sample_rate=body.sample_rate,
+                    channels=body.channels,
+                )
+            )
+            # First-write-wins per segment: if the fleet already has this segment's
+            # machine turns, the push is a no-op — idempotent and never clobbering. (How
+            # a later re-derivation or a fleet-side human edit reconciles across the
+            # split is a deliberate open decision, not silently answered here.)
+            if store.visible_machine_turns_for_audio(audio_id):
+                return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=0)
+            with store.transaction():
+                for turn in body.turns:
+                    store.add_transcript_segment(
+                        audio_segment_id=int(audio_id),
+                        start=datetime.fromisoformat(turn.start),
+                        end=datetime.fromisoformat(turn.end),
+                        text=turn.text,
+                        asr_model=turn.asr_model,
+                        language=turn.language,
+                        asr_confidence=turn.asr_confidence,
+                        speaker_cluster=turn.speaker_cluster,
+                        provenance=turn.provenance,
+                    )
+            return SegmentStoredOut(
+                audio_segment_id=int(audio_id), turns_written=len(body.turns)
+            )
+        finally:
+            store.close()
 
     @app.get("/sync/jobs")
     def sync_jobs(
@@ -199,3 +291,14 @@ class SyncClient:
             )
         resp.raise_for_status()
         return AudioStoredOut.model_validate(resp.json()).stored
+
+    def push_segment(self, segment: SegmentIn) -> SegmentStoredOut:
+        """Push a processed segment (metadata + its turns) to the fleet's store.
+        First-write-wins, so re-pushing after a failure returns turns_written=0."""
+        resp = self._client.post(
+            f"{self._base}/sync/segments",
+            json=segment.model_dump(),
+            headers=self._headers,
+        )
+        resp.raise_for_status()
+        return SegmentStoredOut.model_validate(resp.json())

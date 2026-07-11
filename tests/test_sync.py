@@ -18,7 +18,9 @@ from recall.sources import AudioSource, SourceKind
 from recall.store import Store
 from recall.sync import (
     SYNC_TOKEN_ENV,
+    SegmentIn,
     SyncClient,
+    TurnIn,
     bearer,
     check_token,
     register_sync_routes,
@@ -134,6 +136,68 @@ def test_audio_push_stores_once_and_is_idempotent(
         assert landed.read_bytes() == b"opus-bytes"
         # re-push of the immutable archive is a no-op, not an overwrite
         assert client.push_audio("usb", "seg-0001.opus", clip) is False
+
+
+def _segment(source: str = "usb", n_turns: int = 2) -> SegmentIn:
+    return SegmentIn(
+        source_id=source,
+        source_name="usb",
+        kind="coreaudio",
+        path=f"/archive/{source}/seg.opus",
+        start=BASE.isoformat(),
+        end=(BASE + timedelta(seconds=30)).isoformat(),
+        sample_rate=48000,
+        channels=1,
+        turns=[
+            TurnIn(
+                start=(BASE + timedelta(seconds=i)).isoformat(),
+                end=(BASE + timedelta(seconds=i + 1)).isoformat(),
+                text=f"turn {i}",
+                asr_model="mlx-community/whisper-large-v3-turbo",
+            )
+            for i in range(n_turns)
+        ],
+    )
+
+
+def test_segment_push_writes_turns_then_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        first = client.push_segment(_segment(n_turns=2))
+        assert first.turns_written == 2
+        # re-push of the same segment is a no-op (first-write-wins), not a duplicate
+        again = client.push_segment(_segment(n_turns=2))
+        assert again.turns_written == 0
+        assert again.audio_segment_id == first.audio_segment_id
+
+    # the turns really landed in the fleet's store
+    store = Store.open(db)
+    turns = store.visible_machine_turns_for_audio(first.audio_segment_id)
+    store.close()
+    assert sorted(t.text for t in turns) == ["turn 0", "turn 1"]
+
+
+def test_segment_push_rejects_a_bad_source_kind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(tmp_path / "r.sqlite"), tmp_path)
+    seg = _segment()
+    seg.kind = "not-a-kind"
+    resp = TestClient(app).post(
+        "/sync/segments",
+        json=seg.model_dump(),
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert resp.status_code == 400
 
 
 def test_audio_push_requires_the_token(
