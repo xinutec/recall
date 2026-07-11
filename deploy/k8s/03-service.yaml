@@ -1,0 +1,17 @@
+# In-cluster address for recall. Deliberately ClusterIP and NOT an nginx Ingress: the
+# shared ingress answers on Isis's *public* IP regardless of DNS (obscurity, not a
+# firewall — confirmed 2026-07-09). External reach is the Mac over WireGuard only, exposed
+# by a MetalLB address from a wg0-only pool (or a NodePort firewalled to wg0) — the real
+# network gate. See README; that binding is the deliberate, host-touching step.
+apiVersion: v1
+kind: Service
+metadata:
+  name: recall
+  namespace: recall
+spec:
+  type: ClusterIP
+  selector:
+    app: recall
+  ports:
+    - port: 8000
+      targetPort: 8000

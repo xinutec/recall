@@ -1,0 +1,15 @@
+# The recall archive on Isis: the SQLite system-of-record and the audio segments live
+# together under /data. Local-path (k3s), so it sits on Isis's disk — which MUST be
+# encrypted at rest before recall's audio lands here (LUKS on the k3s storage path; see
+# README). odin's restic backs this PVC up (a consistent sqlite .backup + the audio).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: recall-data-pvc
+  namespace: recall
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi

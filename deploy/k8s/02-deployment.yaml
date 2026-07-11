@@ -1,0 +1,77 @@
+# recall's fleet tier: api + web + the sync ingest, one container. NO ML runs here (the
+# Mac keeps capture/ASR/diarize/LLM) — this is a light FastAPI + SQLite + static frontend.
+# The sync routes only exist when RECALL_SYNC_TOKEN is set (from the recall-secret), and
+# they are meant to be reached over WireGuard only (see 03-service.yaml + README), never
+# the shared public nginx ingress.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recall
+  namespace: recall
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # single RWO PVC — never two pods writing the archive at once
+  selector:
+    matchLabels:
+      app: recall
+  template:
+    metadata:
+      labels:
+        app: recall
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000  # so uid 1000 can write the archive PVC
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: recall
+          image: xinutec/recall:latest
+          imagePullPolicy: Always
+          command: ["recall", "api", "--host", "0.0.0.0", "--port", "8000"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          env:
+            - name: RECALL_OUT
+              value: /data
+            - name: RECALL_SYNC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: recall-secret
+                  key: SYNC_TOKEN
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: recall-data-pvc
+        - name: tmp
+          emptyDir: {}  # readOnlyRootFilesystem is on; scratch goes here

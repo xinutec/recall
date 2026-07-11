@@ -1,0 +1,26 @@
+# Default-deny egress for the namespace. The recall pod serves requests and reads/writes
+# its local SQLite — it makes no outbound calls — so denying egress (bar DNS) contains a
+# compromised pod from exfiltrating. Deliberately egress-only: kubelet liveness/readiness
+# probes are node-sourced *ingress*, which a default-deny-ingress policy drops under k3s'
+# kube-router (the trap that keeps the app-ingress policies held elsewhere in the fleet),
+# so restricting ingress here would take the pod NotReady. Ingress is gated at the network
+# layer instead (WireGuard-only Service, no public ingress — see 03-service.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: recall
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
