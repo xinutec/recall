@@ -1,0 +1,56 @@
+---
+name: build
+
+# recall's FLEET image (api + web + sync ingest, no ML) — build + push
+# xinutec/recall:latest to Docker Hub on push to main, the same way the other web apps
+# do (health/life/coach/fleetwatch each have this workflow). The k8s manifests live in
+# deploy/k8s (and, once deployed, the kubes monorepo); the image tag is the only contract.
+#
+# Unlike the pure-Node apps, recall's full `scripts/verify.sh` can't run here: it needs
+# nix + the mlx/pyannote venv, which is Apple-Silicon-only. So CI runs a light lint (ruff,
+# no project deps) and lets the Docker build — which does `npm ci && ng build` for the
+# frontend and installs the non-ML python deps — be the real build gate. The full gate
+# (mypy, pytest, dev-lint, frontend) stays local on the Mac before each push.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/flake.lock"
+  workflow_dispatch: {}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: check
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: format --check
+
+  image:
+    needs: lint
+    runs-on: ubuntu-latest
+    # Pushes to Docker Hub via the repo's DOCKERHUB_* secrets (set these on the recall
+    # GitHub repo, as on the other app repos). GITHUB_TOKEN only reads the repo.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: xinutec/recall:latest
+          cache-from: type=registry,ref=xinutec/recall:cache
+          cache-to: type=registry,ref=xinutec/recall:cache,mode=max
