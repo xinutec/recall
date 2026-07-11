@@ -184,6 +184,34 @@ def test_segment_push_writes_turns_then_is_idempotent(
     assert sorted(t.text for t in turns) == ["turn 0", "turn 1"]
 
 
+def test_segment_repush_supersedes_the_old_machine_turns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A later re-derivation (worker → refine) pushes a different turn set; it supersedes
+    # the old machine turns rather than duplicating or being ignored.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        client.push_segment(_segment(n_turns=2))  # worker turns
+        refined = _segment(n_turns=2)
+        refined.turns[0].text = "diarized turn A"
+        refined.turns[1].text = "diarized turn B"
+        refined.turns[0].asr_model = "adapter"
+        refined.turns[1].asr_model = "adapter"
+        result = client.push_segment(refined)
+        assert result.turns_written == 2
+
+    store = Store.open(db)
+    visible = store.visible_machine_turns_for_audio(result.audio_segment_id)
+    store.close()
+    # only the refined turns are visible; the worker turns were superseded (hidden)
+    assert sorted(t.text for t in visible) == ["diarized turn A", "diarized turn B"]
+
+
 def test_segment_push_rejects_a_bad_source_kind(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

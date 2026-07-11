@@ -30,7 +30,7 @@ from pydantic import BaseModel
 
 from recall.schemas import OkOut
 from recall.sources import AudioSource, SourceKind
-from recall.store import RefineRequest, Store
+from recall.store import RefineRequest, Store, TranscriptSegment
 from recall.timeline import Segment
 
 SYNC_TOKEN_ENV = "RECALL_SYNC_TOKEN"
@@ -127,6 +127,20 @@ class SegmentStoredOut(BaseModel):
     turns_written: int
 
 
+def _incoming_turn_keys(turns: list[TurnIn]) -> list[tuple[str, str, str, str]]:
+    """An order-independent identity for a pushed turn set — to skip a no-op re-push."""
+    return sorted((t.start, t.end, t.text, t.asr_model) for t in turns)
+
+
+def _machine_turn_keys(
+    turns: list[TranscriptSegment],
+) -> list[tuple[str, str, str, str]]:
+    """The same identity for the fleet's current machine turns, to compare against."""
+    return sorted(
+        (t.start.isoformat(), t.end.isoformat(), t.text, t.asr_model) for t in turns
+    )
+
+
 def _job_of(req: RefineRequest) -> JobOut:
     return JobOut(
         id=req.id,
@@ -135,6 +149,59 @@ def _job_of(req: RefineRequest) -> JobOut:
         start=req.start.isoformat(),
         end=req.end.isoformat(),
     )
+
+
+def _ingest_segment(store: Store, body: SegmentIn) -> SegmentStoredOut:
+    """Persist a pushed segment, reconciling across the split. The fleet is the system
+    of record: a newer machine pass (worker → refine) SUPERSEDES the old machine turns,
+    while human edits made on the fleet are authoritative and preserved — the same rule
+    refine._replace_turns uses. An identical re-push is a no-op, so it never churns."""
+    try:
+        kind = SourceKind(body.kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"bad kind {body.kind!r}") from exc
+    store.add_source(
+        AudioSource(id=body.source_id, name=body.source_name, kind=kind, spec="")
+    )
+    seg_start = datetime.fromisoformat(body.start)
+    seg_end = datetime.fromisoformat(body.end)
+    audio_id = store.add_audio_segment(
+        Segment(
+            source_id=body.source_id,
+            sequence=0,
+            start=seg_start,
+            end=seg_end,
+            path=body.path,
+            sample_rate=body.sample_rate,
+            channels=body.channels,
+        )
+    )
+    current = _machine_turn_keys(store.visible_machine_turns_for_audio(audio_id))
+    if current == _incoming_turn_keys(body.turns):
+        return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=0)
+    human = store.human_corrections_overlapping(int(audio_id), seg_start, seg_end)
+    written = 0
+    with store.transaction():
+        for old in store.visible_machine_turns_for_audio(audio_id):
+            store.hide(old.id, "superseded by sync push")
+        for turn in body.turns:
+            start = datetime.fromisoformat(turn.start)
+            end = datetime.fromisoformat(turn.end)
+            if any(c.start < end and c.end > start for c in human):
+                continue  # human ground truth already covers this span
+            store.add_transcript_segment(
+                audio_segment_id=int(audio_id),
+                start=start,
+                end=end,
+                text=turn.text,
+                asr_model=turn.asr_model,
+                language=turn.language,
+                asr_confidence=turn.asr_confidence,
+                speaker_cluster=turn.speaker_cluster,
+                provenance=turn.provenance,
+            )
+            written += 1
+    return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=written)
 
 
 def register_sync_routes(
@@ -171,52 +238,9 @@ def register_sync_routes(
         body: SegmentIn, authorization: str | None = Header(default=None)
     ) -> SegmentStoredOut:
         check_token(bearer(authorization), expected)
-        try:
-            kind = SourceKind(body.kind)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400, detail=f"bad kind {body.kind!r}"
-            ) from exc
         store = store_factory()
         try:
-            store.add_source(
-                AudioSource(
-                    id=body.source_id, name=body.source_name, kind=kind, spec=""
-                )
-            )
-            audio_id = store.add_audio_segment(
-                Segment(
-                    source_id=body.source_id,
-                    sequence=0,
-                    start=datetime.fromisoformat(body.start),
-                    end=datetime.fromisoformat(body.end),
-                    path=body.path,
-                    sample_rate=body.sample_rate,
-                    channels=body.channels,
-                )
-            )
-            # First-write-wins per segment: if the fleet already has this segment's
-            # machine turns, the push is a no-op — idempotent and never clobbering. (How
-            # a later re-derivation or a fleet-side human edit reconciles across the
-            # split is a deliberate open decision, not silently answered here.)
-            if store.visible_machine_turns_for_audio(audio_id):
-                return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=0)
-            with store.transaction():
-                for turn in body.turns:
-                    store.add_transcript_segment(
-                        audio_segment_id=int(audio_id),
-                        start=datetime.fromisoformat(turn.start),
-                        end=datetime.fromisoformat(turn.end),
-                        text=turn.text,
-                        asr_model=turn.asr_model,
-                        language=turn.language,
-                        asr_confidence=turn.asr_confidence,
-                        speaker_cluster=turn.speaker_cluster,
-                        provenance=turn.provenance,
-                    )
-            return SegmentStoredOut(
-                audio_segment_id=int(audio_id), turns_written=len(body.turns)
-            )
+            return _ingest_segment(store, body)
         finally:
             store.close()
 
