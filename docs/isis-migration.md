@@ -124,6 +124,34 @@ Today it is **broken**: the launchd agent's shell tools have no macOS TCC grant 
 external volume, so it has produced no off-site copy since 2026-07-02. Moving the data off
 the Mac makes that whole path — and its failure mode — disappear.
 
+## Deploying the Isis side (k3s)
+
+recall's Isis tier is a **k3s workload** on Isis — a `Deployment` (api + web + the sync
+ingest, one image) plus **PersistentVolumeClaims** for the SQLite DB and the audio
+archive (k3s local-path on Isis's disk; ~5 GB and growing, well within the 1.1 TB free).
+Running it in-cluster rather than as a bespoke systemd service is what makes it "as all
+other systems" — it's picked up by the same odin-restic backup and Mac restic-copy, no
+special path.
+
+- **Backup block** — recall's PVCs join `backup-prepare.sh` on odin as a new per-app
+  block. NOT the MariaDB-dump shape the other apps share: SQLite gets a consistent
+  `sqlite3 .backup` of the DB PVC (the Nextcloud-redis RDB dump is the precedent), plus
+  the audio PVC pulled as-is. Without the block recall is a silent backup gap — that file
+  has one hardcoded block per app and does not iterate namespaces.
+- **Network gate (critical)** — the sync ingest and the web UI must NOT sit on the shared
+  public k3s ingress. That ingress answers on Isis's *public* IP regardless of DNS —
+  obscurity, not a firewall (confirmed during the 2026-07-09 remote-access attempt). Bind
+  them to the **WireGuard interface only**: a `hostPort`/NodePort pinned to Isis's WG IP
+  `10.100.0.2`, or a dedicated ingress listening solely on `wg0`. That is the real
+  network-layer gate the Mac dials into.
+- **Encryption at rest** — local-path PVCs live under `/var/lib/rancher/k3s/storage` on
+  Isis's disk, which is unencrypted today. Encrypt that storage (LUKS) or mount an
+  encrypted volume there before recall's audio lands on it.
+
+`recall.sync` is deployment-agnostic — the same FastAPI app runs in a pod or a systemd
+unit — so this shapes the manifests (`~/Code/pippijn/code/kubes/`) and odin's
+nixos-config, not the Python. It is inert until `RECALL_SYNC_TOKEN` is set.
+
 ## Forks (decide before building)
 
 1. **At-rest encryption on Isis** — recommended: required precondition (LUKS/dm-crypt

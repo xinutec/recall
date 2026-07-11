@@ -118,6 +118,7 @@ from recall.store import (
 )
 from recall.stream_server import ALIVE_FILE
 from recall.summarize import refresh_live_summary
+from recall.sync import register_sync_routes
 from recall.timeline import Segment
 from recall.transcript_view import clean_transcript
 
@@ -167,6 +168,12 @@ app = FastAPI(title="recall")
 
 def _store() -> Store:
     return Store.open(DATA_ROOT / "recall.sqlite")
+
+
+# Mac→fleet sync endpoints for the proposed Isis split (recall.sync). Inert unless
+# RECALL_SYNC_TOKEN is set — register_sync_routes adds nothing and returns False — so a
+# stock LAN-only deployment is unchanged.
+register_sync_routes(app, _store)
 
 
 def _tier(segment: TranscriptSegment) -> Tier:
