@@ -72,6 +72,10 @@ NAME_MAP = {
     "SpeakerNamesOut": "SpeakerNames",
     "AssignResultOut": "AssignResult",
     "VoiceSuggestionsOut": "VoiceSuggestions",
+    "QuietSpanOut": "QuietSpan",
+    "QuietSpansOut": "QuietSpanList",
+    "QuietScanOut": "QuietScan",
+    "QuietDeletedOut": "QuietDeleted",
 }
 
 # Request bodies (pydantic models in api_models.py) -> frontend interface name.
@@ -95,6 +99,7 @@ REQUEST_NAME_MAP = {
     "VocabularyIn": "VocabularyRequest",
     "SessionRenameIn": "SessionRenameRequest",
     "ContextIn": "ContextRequest",
+    "QuietDeleteIn": "QuietDeleteRequest",
 }
 
 # Shapes not emitted to the generated web models: the web app never consumes them

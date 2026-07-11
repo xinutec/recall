@@ -16,6 +16,10 @@ import {
   CorrectResult,
   NudgeRequest,
   Ok,
+  QuietDeleted,
+  QuietDeleteRequest,
+  QuietScan,
+  QuietSpanList,
   RefineRequest,
   Session,
   SessionRenameRequest,
@@ -44,6 +48,26 @@ export class RecallApi {
   /** Whether the always-on capture is recording (or paused, with auto-resume time). */
   capture(): Observable<CaptureState> {
     return this.http.get<CaptureState>('/api/capture');
+  }
+
+  /** Measure one batch of segments' raw volume; call until `measured` is 0. */
+  quietScan(): Observable<QuietScan> {
+    return this.http.post<QuietScan>('/api/quiet/scan', {});
+  }
+
+  /** The long total-quiet spans proposed for deletion. */
+  quietSpans(minSeconds: number): Observable<QuietSpanList> {
+    return this.http.get<QuietSpanList>(`/api/quiet/spans?min_seconds=${minSeconds}`);
+  }
+
+  /** Play URL for a capture segment's raw audio (to confirm a span is quiet). */
+  quietAudioUrl(audioId: number): string {
+    return `/api/quiet/audio/${audioId}`;
+  }
+
+  /** Hard-delete a confirmed quiet span (its segments + the Opus files). */
+  quietDelete(body: QuietDeleteRequest): Observable<QuietDeleted> {
+    return this.http.post<QuietDeleted>('/api/quiet/delete', body);
   }
 
   pauseCapture(): Observable<CaptureState> {

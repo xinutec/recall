@@ -32,6 +32,7 @@ from recall.api_models import (
     ContextIn,
     CorrectIn,
     NudgeIn,
+    QuietDeleteIn,
     ReassignIn,
     RefineRequestIn,
     SessionRenameIn,
@@ -52,6 +53,7 @@ from recall.conversations import (
     segment_conversations,
 )
 from recall.finetune import DEFAULT_BASE_MODEL
+from recall.ids import AudioSegmentId
 from recall.liveness import source_statuses
 from recall.llm import DEFAULT_LLM, Generator, make_mlx_generator
 from recall.loudness import normalize_loudness
@@ -92,6 +94,9 @@ from recall.schemas import (
     NewIdsOut,
     OkOut,
     PageOut,
+    QuietDeletedOut,
+    QuietScanOut,
+    QuietSpansOut,
     SessionOut,
     SessionsOut,
     SourcesOut,
@@ -780,6 +785,77 @@ def unhide(body: UnhideIn) -> OkOut:
         return {"ok": True}
     finally:
         store.close()
+
+
+@app.post("/api/quiet/scan")
+def quiet_scan(batch: int = 200) -> QuietScanOut:
+    """Measure a batch of not-yet-measured capture segments (ffmpeg per file). The UI
+    calls this until `measured` is 0, then loads the spans — the scan is cached, so this
+    is a one-time cost."""
+    from recall.quiet import scan_volumes  # noqa: PLC0415 - keeps ffmpeg use local
+
+    store = _store()
+    try:
+        return {"measured": scan_volumes(store, batch=batch)}
+    finally:
+        store.close()
+
+
+@app.get("/api/quiet/spans")
+def quiet_spans_list(min_seconds: int = 300) -> QuietSpansOut:
+    """Long total-quiet spans (from the cached volumes) for the cleanup review."""
+    from recall.quiet import quiet_spans  # noqa: PLC0415
+
+    store = _store()
+    try:
+        spans = quiet_spans(store, min_duration_s=float(min_seconds))
+        return {
+            "items": [
+                {
+                    "start": s.start.isoformat(),
+                    "end": s.end.isoformat(),
+                    "durationS": s.duration_s,
+                    "audioIds": [int(a) for a in s.audio_ids],
+                }
+                for s in spans
+            ]
+        }
+    finally:
+        store.close()
+
+
+@app.get("/api/quiet/audio/{audio_id}")
+def quiet_audio(audio_id: int) -> Response:
+    """Stream one capture segment's raw audio, so a span can be played to confirm it's
+    quiet before deleting it."""
+    store = _store()
+    try:
+        segment = store.audio_segment(AudioSegmentId(audio_id))
+    finally:
+        store.close()
+    if segment is None or not Path(segment.path).exists():
+        raise HTTPException(status_code=404, detail="segment not found")
+    return FileResponse(segment.path, media_type="audio/ogg")
+
+
+@app.post("/api/quiet/delete")
+def quiet_delete(body: QuietDeleteIn) -> QuietDeletedOut:
+    """Hard-delete a confirmed quiet span: its capture segments and everything derived,
+    plus the Opus files on disk. Reports how many segments went and the bytes freed."""
+    store = _store()
+    try:
+        paths = store.delete_audio_segments([AudioSegmentId(i) for i in body.audioIds])
+    finally:
+        store.close()
+    freed = 0
+    for path in paths:
+        file = Path(path)
+        try:
+            freed += file.stat().st_size
+            file.unlink()
+        except OSError:
+            continue
+    return {"deleted": len(paths), "freedBytes": freed}
 
 
 @app.post("/api/correct")

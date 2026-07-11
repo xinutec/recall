@@ -95,6 +95,10 @@ class AskIn(BaseModel):
     question: str
 
 
+class QuietDeleteIn(BaseModel):
+    audioIds: list[int]  # the capture segments of a confirmed quiet span, to delete
+
+
 class VocabularyIn(BaseModel):
     term: str
 

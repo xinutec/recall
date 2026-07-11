@@ -94,6 +94,26 @@ export interface Ok {
   readonly ok: boolean;
 }
 
+export interface QuietSpan {
+  readonly start: string;
+  readonly end: string;
+  readonly durationS: number;
+  readonly audioIds: readonly number[];
+}
+
+export interface QuietSpanList {
+  readonly items: readonly QuietSpan[];
+}
+
+export interface QuietScan {
+  readonly measured: number;
+}
+
+export interface QuietDeleted {
+  readonly deleted: number;
+  readonly freedBytes: number;
+}
+
 export interface SpeakerNames {
   readonly names: readonly string[];
 }
@@ -309,6 +329,10 @@ export interface SplitRequest {
 
 export interface AskRequest {
   readonly question: string;
+}
+
+export interface QuietDeleteRequest {
+  readonly audioIds: readonly number[];
 }
 
 export interface VocabularyRequest {

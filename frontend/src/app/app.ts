@@ -61,6 +61,7 @@ export class App {
   protected readonly more: readonly NavItem[] = [
     { path: '/compare', label: 'Compare', icon: 'difference', exact: false },
     { path: '/labels', label: 'Labels', icon: 'label', exact: false },
+    { path: '/cleanup', label: 'Cleanup', icon: 'delete_sweep', exact: false },
   ];
 
   // Capture (whole-house recording) state, so it can be paused while working in

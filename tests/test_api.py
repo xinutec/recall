@@ -1320,3 +1320,50 @@ def test_context_roundtrip_over_http(
     r = client.put("/api/context", json={"text": "Alice is left-handed."})
     assert r.status_code == 200
     assert client.get("/api/context").json() == {"text": "Alice is left-handed."}
+
+
+def test_quiet_scan_spans_and_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # End-to-end cleanup: scan measures raw volume, spans surfaces the long quiet run,
+    # delete removes its rows AND unlinks the Opus files (the true deletion).
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+    base = datetime(2026, 7, 11, 9, 0, 0, tzinfo=UTC)
+    for i in range(8):
+        start = base + timedelta(seconds=i * 59)
+        (tmp_path / f"seg{i}.opus").write_bytes(b"audio")
+        store.add_audio_segment(
+            Segment(
+                source_id="usb",
+                sequence=i,
+                start=start,
+                end=start + timedelta(seconds=59),
+                path=str(tmp_path / f"seg{i}.opus"),
+                sample_rate=48000,
+                channels=1,
+            )
+        )
+    store.close()
+    vols = {
+        str(tmp_path / f"seg{i}.opus"): (-62.0 if i < 6 else -50.0) for i in range(8)
+    }
+    monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda p: vols[str(p)])
+
+    client = TestClient(api.app)
+    assert client.post("/api/quiet/scan").json()["measured"] == 8
+    items = client.get("/api/quiet/spans", params={"min_seconds": 300}).json()["items"]
+    assert len(items) == 1
+    assert len(items[0]["audioIds"]) == 6  # the 6 quiet segments (354s > 300s)
+
+    deleted = client.post(
+        "/api/quiet/delete", json={"audioIds": items[0]["audioIds"]}
+    ).json()
+    assert deleted["deleted"] == 6
+    assert deleted["freedBytes"] == 6 * len(b"audio")
+    for i in range(6):
+        assert not (tmp_path / f"seg{i}.opus").exists()  # files really gone
+    assert client.get("/api/quiet/spans").json()["items"] == []  # nothing left to prune

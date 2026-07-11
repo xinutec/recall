@@ -1,0 +1,38 @@
+<div class="cleanup">
+  <header>
+    <h1>Cleanup</h1>
+    <p>
+      Long stretches of total quiet — the mic's noise floor, no speech. Play each to
+      confirm, then delete to reclaim disk. Deletion is permanent.
+    </p>
+    <button mat-stroked-button (click)="scan()" [disabled]="scanning()">
+      <mat-icon>graphic_eq</mat-icon>
+      {{ scanning() ? 'Scanning… ' + measured() + ' measured' : 'Scan for quiet' }}
+    </button>
+  </header>
+
+  @if (loading()) {
+    <mat-progress-bar mode="indeterminate" />
+  } @else if (spans().length === 0) {
+    <p class="empty">
+      No long quiet spans. If you haven't scanned yet, run a scan — it measures each
+      segment once and caches it.
+    </p>
+  } @else {
+    @for (span of spans(); track span.audioIds[0]) {
+      <mat-card class="span" appearance="outlined">
+        <div class="meta">
+          <span class="dur">{{ minutes(span) }} min</span>
+          <span class="range">
+            {{ span.start | date: 'MMM d, HH:mm' }} – {{ span.end | date: 'HH:mm' }}
+          </span>
+          <span class="count">{{ span.audioIds.length }} segments</span>
+        </div>
+        <audio controls preload="none" [src]="audioUrl(span)"></audio>
+        <button mat-stroked-button class="delete" (click)="delete(span)">
+          <mat-icon>delete</mat-icon> Delete
+        </button>
+      </mat-card>
+    }
+  }
+</div>

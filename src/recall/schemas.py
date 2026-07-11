@@ -142,6 +142,28 @@ class OkOut(TypedDict):
     ok: bool
 
 
+class QuietSpanOut(TypedDict):
+    """A long total-quiet span proposed for deletion (the cleanup UI)."""
+
+    start: str  # ISO-8601
+    end: str
+    durationS: float
+    audioIds: list[int]
+
+
+class QuietSpansOut(TypedDict):
+    items: list[QuietSpanOut]
+
+
+class QuietScanOut(TypedDict):
+    measured: int  # segments measured this pass; 0 = the scan is complete
+
+
+class QuietDeletedOut(TypedDict):
+    deleted: int
+    freedBytes: int
+
+
 class SpeakerNamesOut(TypedDict):
     names: list[str]  # known speaker names, for autocompleting voice naming
 
