@@ -867,11 +867,32 @@ def test_transcript_count_reads_an_index_not_the_table() -> None:
         ).fetchall()
         for value in row
     )
-    # The partial index holds only the current rows, so walking it *is* the fast
-    # path (SQLite still calls that a SCAN). What must not happen is falling back
-    # to idx_ts_start, which covers none of the predicates and so tests every row.
-    assert "USING INDEX idx_ts_current" in plan, plan
+    # A partial index holds only the current rows, so walking one *is* the fast path
+    # (SQLite still calls that a SCAN). Either of the two qualifies — they cover the
+    # same rows, and SQLite picks whichever it likes. What must not happen is falling
+    # back to idx_ts_start, which covers none of the predicates and so tests every row.
+    assert "idx_ts_current" in plan or "idx_ts_audio_current" in plan, plan
     assert "idx_ts_start" not in plan, plan
+
+
+def test_speech_veto_searches_an_index_not_every_turn() -> None:
+    """Quiet detection asks, per capture segment, "does a turn that still stands hang
+    off this audio?" — the veto that stops a delete from destroying a transcript.
+
+    It runs once per segment, so it must be a SEARCH. Unindexed it full-scanned all 44k
+    turns for each of 9k segments (~410M row visits): /api/quiet/spans took 83 seconds.
+    """
+    store = Store.memory()
+    plan = " ".join(
+        str(value)
+        for row in store._conn.execute(
+            "EXPLAIN QUERY PLAN SELECT EXISTS (SELECT 1 FROM transcript_segments t "
+            "WHERE t.audio_segment_id = 1 AND t.superseded_by IS NULL "
+            "AND t.hidden_reason IS NULL)"
+        ).fetchall()
+        for value in row
+    )
+    assert "SEARCH t USING INDEX idx_ts_audio_current" in plan, plan
 
 
 def test_enroll_and_speaker_profiles() -> None:

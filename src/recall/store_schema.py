@@ -357,4 +357,14 @@ _MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_ts_current ON transcript_segments(id)
         WHERE superseded_by IS NULL AND hidden_reason IS NULL;
     """,
+    # v30 — index current transcript segments BY THEIR AUDIO. Quiet-span detection asks,
+    # per capture segment, "does a turn that still stands hang off this audio?" — the
+    # veto that stops a delete from destroying a transcript. Nothing indexed
+    # audio_segment_id, so each of the 9k segments full-scanned all 44k turns (~410M row
+    # visits): /api/quiet/spans took 83s. Partial, mirroring idx_ts_current, because the
+    # question is only ever about current, visible turns.
+    """
+    CREATE INDEX idx_ts_audio_current ON transcript_segments(audio_segment_id)
+        WHERE superseded_by IS NULL AND hidden_reason IS NULL;
+    """,
 )

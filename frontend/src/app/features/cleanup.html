@@ -38,20 +38,25 @@
             </mat-panel-description>
           </mat-expansion-panel-header>
 
-          <app-waveform
-            [source]="span.source"
-            [spanStart]="span.start"
-            [spanEnd]="span.end"
-            [selectedIds]="selectionOf(span)"
-            (selectedIdsChange)="onSelected(span, $event)"
-          />
+          <!-- Deferred: a panel's waveform decodes its whole span with ffmpeg the moment
+               it exists. Rendered eagerly, opening this page would kick off a decode of
+               every span at once — 135 of them, hours of audio. It builds when opened. -->
+          <ng-template matExpansionPanelContent>
+            <app-waveform
+              [source]="span.source"
+              [spanStart]="span.start"
+              [spanEnd]="span.end"
+              [selectedIds]="selectionOf(span)"
+              (selectedIdsChange)="onSelected(span, $event)"
+            />
 
-          <mat-action-row>
-            <button mat-stroked-button class="delete" (click)="delete(span)">
-              <mat-icon>delete</mat-icon>
-              Delete {{ selectionOf(span).length }} segments
-            </button>
-          </mat-action-row>
+            <mat-action-row>
+              <button mat-stroked-button class="delete" (click)="delete(span)">
+                <mat-icon>delete</mat-icon>
+                Delete {{ selectionOf(span).length }} segments
+              </button>
+            </mat-action-row>
+          </ng-template>
         </mat-expansion-panel>
       }
     </mat-accordion>
