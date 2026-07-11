@@ -5,13 +5,13 @@
 # .env (HF_TOKEN — diarization is gated) plus the Nix tools + persistent venv.
 set -euo pipefail
 
-# Household LoRA adapter (adapter-current -> adapter-20260708b), deployed after it
-# WON the whole-segment A/B gate on real audio (ab-compare, 2026-07-08 usb window:
-# 0/74 garbling, mean WER 0.125 -> 0.064, wins 18 / trivial losses 6). Auto-detected
-# as an adapter dir (adapter_config.json) and loaded on top of --base-model. Runs on
-# the idle refine pass only, never live capture (turbo stays live). To roll back,
-# drop the --model/--base-model args; to advance, repoint the adapter-current symlink
-# after a fresh A/B win.
-exec /Users/pippijn/Code/recall/scripts/recall.sh refine --out /Volumes/Backup/recall \
-  --model /Volumes/Backup/recall/adapter-current \
-  --base-model openai/whisper-large-v3
+# Refine transcribes with the same mlx large-v3-turbo as the live/worker path — its
+# precision comes from the diarization + word-level speaker alignment, not the ASR model.
+# The household LoRA adapter (adapter-current -> adapter-20260708b) was tried here for
+# extra word accuracy, but on long recordings it is ~8x slower (full fp32 large-v3, a
+# 32-layer decoder vs turbo's 4) for a WER win (2026-07-08 A/B: 0.125 -> 0.064) that was
+# only ever measured on short clips — so refine stays on turbo. To re-enable the adapter,
+# add back these args (it's auto-detected as an adapter dir via adapter_config.json and
+# loaded on top of --base-model):
+#   --model /Volumes/Backup/recall/adapter-current --base-model openai/whisper-large-v3
+exec /Users/pippijn/Code/recall/scripts/recall.sh refine --out /Volumes/Backup/recall
