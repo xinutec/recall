@@ -1,8 +1,10 @@
 # recall on Isis (k3s) — deployment (STAGED, not applied)
 
-Status: **proposal, 2026-07-11.** These manifests are staged here — NOT in the
-Flux-watched `kubes` repo — so nothing auto-applies. Applying them (and the host changes
-below) is the deliberate, fragile-host step. Rationale and topology: `docs/isis-migration.md`.
+Status: **proposal, 2026-07-11.** These manifests are staged here, not yet in the `kubes`
+monorepo where the fleet's deployed manifests live. Nothing auto-applies anywhere — the
+fleet does NOT run Flux; every app is deployed by running a per-app `sync.sh` that does
+`sudo kubectl apply` by hand. So applying these (and the host changes below) is always a
+deliberate, fragile-host step. Rationale and topology: `docs/isis-migration.md`.
 
 ## What runs here
 
@@ -17,11 +19,11 @@ probes, limits), `03-service` (ClusterIP).
 
 ## Steps to actually deploy (each is the host-touching part)
 
-1. **Image** — the Dockerfile exists at the repo root (staged, not built — no container
-   builder on the dev Mac). Its non-ML dep set is validated (`recall.api`/`recall.sync`
-   import with only fastapi/uvicorn/pydantic/httpx/python-multipart). Build and push
-   `xinutec/recall:latest` from a host with docker/podman (same registry convention as
-   `xinutec/health-sync`); it runs as uid 1000 via `python -m recall api`.
+1. **Image** — DONE. Built and pushed by CI (`.github/workflows/build.yml`, like every
+   other app) on push to `main`: `xinutec/recall:latest` is on Docker Hub. Nobody builds
+   it locally. It runs as uid 1000 via `python -m recall api`; the non-ML dep set is
+   validated (`recall.api`/`recall.sync` import with only fastapi/uvicorn/pydantic/httpx/
+   python-multipart).
 2. **Encryption at rest** — Isis's disk is unencrypted today. Encrypt the k3s storage path
    (`/var/lib/rancher/k3s/storage`, LUKS) or mount an encrypted volume there BEFORE the
    audio PVC binds. Household/medical audio must not sit on plaintext disk. (nixos-config.)
@@ -31,8 +33,9 @@ probes, limits), `03-service` (ClusterIP).
 4. **WireGuard exposure** — do NOT add an nginx Ingress. Expose the Service over WireGuard
    only: a MetalLB address from a `wg0`-only pool, or a NodePort firewalled to `wg0`. That
    is the real network gate; the public ingress is not one.
-5. **Move the manifests to `kubes/recall/k8s/`** so Flux applies them, and cut the Mac
-   worker over to push (`recall.sync.SyncClient`) at the Isis WG address.
+5. **Move the manifests to `kubes/recall/k8s/`** and add a `sync.sh` that `kubectl
+   apply`s them (the fleet's deploy convention — there is no Flux); run it by hand to
+   deploy. Then cut the Mac worker over to push (`recall sync`) at the Isis WG address.
 6. **Backup** — add a recall block to odin `backup-prepare.sh`: a consistent
    `sqlite3 .backup` of `/data/recall.sqlite` on the PVC host path + the audio dir (NOT
    the MariaDB-dump shape). Verify a restore before trusting it. Then recall rides the
