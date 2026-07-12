@@ -44,6 +44,22 @@ _DECODE_WORKERS = 8
 # Sounds closer together than this are one event — two syllables of a word, or a door
 # and its latch, should not arrive as separate things for a human to check.
 JOIN_GAP_S = 0.5
+# The level at which a bucket is a *sound*, not the mic idling. NOT the detector's
+# threshold (quiet.QUIET_MEAN_DB, -60 dB), which judges a 60-second *mean*: the noise
+# floor's 0.1s crests cross -60 constantly, so reusing it listed 1,126 "sounds" in one
+# 100-minute span of dead air — a number that hides the real ones instead of showing
+# them. Measured over the archive's own envelopes:
+#
+#   noise floor (spans offered for deletion): median -70 dB, p99 -59, p99.9 -52
+#   speech (segments carrying a transcript):  median -60 dB, p99 -37, faintest peak -48
+#
+# So -52 dB sits at the floor's 99.9th percentile and 4 dB below the quietest utterance
+# the archive holds. It flags every known real utterance — including the far-field Dutch
+# that slipped under the detector's mean — while the median span drops from 52 sounds to
+# 4. A *floor-relative* margin was tried and rejected: it raises the bar on noisy spans,
+# which is exactly where quiet speech most needs catching, and it missed a real "how are
+# you". Missing speech is the one unacceptable error here; extra clicks are not.
+EVENT_DB = -52.0
 
 EnvelopeOf = Callable[[str], Sequence[float]]
 

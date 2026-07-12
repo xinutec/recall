@@ -1442,7 +1442,10 @@ def test_quiet_scan_spans_and_delete(
             "end": (base + timedelta(seconds=8 * 59)).isoformat(),
         },
     ).json()
-    assert envelope["thresholdDb"] == -60.0
+    # A *sound* is judged at -52 dB, not at the detector's -60 dB mean: the noise
+    # floor's 0.1s crests cross -60 constantly (see recall.envelope.EVENT_DB). The line
+    # the UI draws is the one the list uses, so the picture and the list agree.
+    assert envelope["thresholdDb"] == -52.0
     assert len(envelope["segments"]) == 8
     # The events are the loud segments (6 and 7), joined into one run of sound — the
     # reviewer is shown what broke the quiet, not left to find it.

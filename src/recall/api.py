@@ -871,7 +871,6 @@ def quiet_envelope(
         EnvelopeSegment,
         build_envelope,
     )
-    from recall.quiet import QUIET_MEAN_DB  # noqa: PLC0415
 
     try:
         window_start = _require_time(start)
@@ -882,6 +881,7 @@ def quiet_envelope(
         raise HTTPException(status_code=400, detail="end must be after start")
 
     from recall.envelope import (  # noqa: PLC0415
+        EVENT_DB,
         decode_envelope,
         segment_envelope,
     )
@@ -905,7 +905,7 @@ def quiet_envelope(
         [EnvelopeSegment(*row) for row in rows],
         start=window_start,
         end=window_end,
-        threshold_db=QUIET_MEAN_DB,
+        threshold_db=EVENT_DB,
         max_points=max_points,
         envelope_of=lambda path: (
             by_path[path] if path in by_path else segment_envelope(path)
@@ -915,7 +915,7 @@ def quiet_envelope(
         "start": envelope.start.isoformat(),
         "end": envelope.end.isoformat(),
         "bucketS": envelope.bucket_s,
-        "thresholdDb": QUIET_MEAN_DB,
+        "thresholdDb": EVENT_DB,
         "points": list(envelope.points),
         "segments": [
             {
