@@ -47,6 +47,17 @@ const SOUND = {
   peakDb: -41,
 };
 
+/** Three sounds whose loudness order is deliberately NOT their time order. */
+function sound(atMinutes: number, peakDb: number) {
+  const start = Date.parse(SPAN_START) + atMinutes * 60_000;
+  return {
+    start: new Date(start).toISOString(),
+    end: new Date(start + 500).toISOString(),
+    peakDb,
+  };
+}
+const SCATTERED = [sound(1, -58), sound(4, -40), sound(7, -55)];
+
 /** The server reports only what overlaps the requested window — segments and sounds. */
 function envelopeFor(from: Date, to: Date): Envelope {
   const segments = Array.from({ length: 10 }, (_, i) => segment(i)).filter(
@@ -67,10 +78,11 @@ function envelopeFor(from: Date, to: Date): Envelope {
   };
 }
 
-function setup() {
-  const quietEnvelope = vi.fn((_source: string, from: Date, to: Date) =>
-    of(envelopeFor(from, to)),
-  );
+function setup(events?: typeof SCATTERED) {
+  const quietEnvelope = vi.fn((_source: string, from: Date, to: Date) => {
+    const envelope = envelopeFor(from, to);
+    return of(events ? { ...envelope, events } : envelope);
+  });
   TestBed.configureTestingModule({
     providers: [
       provideZonelessChangeDetection(),
@@ -228,6 +240,34 @@ describe('Waveform', () => {
     expect(c.viewTo()).toBe(to);
     expect(c.viewFrom()).toBeLessThan(Date.parse(SPAN_START));
     expect(c.viewTo()).toBeGreaterThan(Date.parse(SPAN_END));
+  });
+
+  it('steps through the sounds in time order, so next means later', () => {
+    // They were once ordered loudest-first, so the arrows jumped around the timeline and
+    // fought the picture they sit under. Forward must mean to the right.
+    const { c } = setup(SCATTERED);
+    vi.advanceTimersByTime(200);
+
+    const times = c.events().map((e: { start: string }) => Date.parse(e.start));
+    expect(times).toEqual([...times].sort((a, b) => a - b));
+
+    c.cursor.set(0);
+    c.step(1);
+    expect(c.cursor()).toBe(1);
+    expect(c.current().peakDb).toBe(-40); // the 4-minute one, not the loudest-by-rank
+  });
+
+  it('reaches the loudest sound in one press without reordering time', () => {
+    // The triage question — is any of this speech? — is the loudest sound, and it should
+    // cost one press rather than a walk through every crackle in the span.
+    const { c } = setup(SCATTERED);
+    vi.advanceTimersByTime(200);
+
+    expect(c.loudest()).toBe(1); // second in time, loudest in level
+    c.toLoudest();
+    expect(c.cursor()).toBe(1);
+    expect(c.onLoudest()).toBe(true);
+    expect(c.current().peakDb).toBe(-40);
   });
 
   it('narrows the selection only when an edge is trimmed', () => {

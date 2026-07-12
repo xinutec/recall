@@ -49,7 +49,9 @@
     </button>
 
     <!-- The span is quiet only on a 60-second mean, so it can still hold real sounds.
-         They're listed loudest-first: speech, if any got in here, is the loud one. -->
+         The arrows walk them in TIME order — forward means later, so the stepping agrees
+         with the picture above it. Loudness is a different question (is any of this
+         speech?), so it gets its own button rather than scrambling the order of these. -->
     @if (events().length; as count) {
       <span class="sounds">
         <button mat-icon-button (click)="step(-1)" aria-label="Previous sound">
@@ -66,6 +68,16 @@
         </button>
         <button mat-icon-button (click)="step(1)" aria-label="Next sound">
           <mat-icon>chevron_right</mat-icon>
+        </button>
+        <button
+          mat-icon-button
+          class="loudest"
+          [class.on]="onLoudest()"
+          (click)="toLoudest()"
+          matTooltip="Jump to the loudest sound — the one most likely to be speech"
+          aria-label="Loudest sound"
+        >
+          <mat-icon>priority_high</mat-icon>
         </button>
       </span>
     } @else if (!loading()) {

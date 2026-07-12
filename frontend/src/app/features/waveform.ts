@@ -136,10 +136,11 @@ export class Waveform {
    * a reassurance about audio it simply wasn't looking at, in a view whose whole job is
    * approving a deletion.
    *
-   * Ordered loudest first, which is the order that answers the only question that
-   * matters here: is any of this speech? A span holds dozens of half-second crests of
-   * the noise floor itself; speech would be the loud one. So the first few steps cover
-   * the real risk, and the long quiet tail is there if you want it.
+   * **In time order.** They were once ordered loudest-first, so that the one most likely
+   * to be speech came first — but that made the arrows jump around the timeline, fighting
+   * the picture they sit under: pressing "next" must move you to the right. Triage by
+   * loudness is a *different* question from stepping through, so it gets its own control
+   * (`toLoudest`) rather than corrupting the order of this one.
    */
   protected readonly events = computed(() =>
     [...this.spanEvents()]
@@ -147,12 +148,29 @@ export class Waveform {
         (e) =>
           Date.parse(e.start) >= this.selFrom() && Date.parse(e.end) <= this.selTo(),
       )
-      .sort((a, b) => b.peakDb - a.peakDb),
+      .sort((a, b) => Date.parse(a.start) - Date.parse(b.start)),
   );
   protected readonly cursor = signal(0);
   protected readonly current = computed<SoundEvent | undefined>(
     () => this.events()[this.cursor()],
   );
+
+  /** Where the loudest sound sits in time order — the one most likely to be speech, and
+   * so the first thing worth hearing. Reachable in one press, without reordering time. */
+  protected readonly loudest = computed(() => {
+    const events = this.events();
+    if (events.length === 0) {
+      return -1;
+    }
+    let best = 0;
+    events.forEach((event, i) => {
+      if (event.peakDb > events[best].peakDb) {
+        best = i;
+      }
+    });
+    return best;
+  });
+  protected readonly onLoudest = computed(() => this.cursor() === this.loudest());
 
   protected readonly trimmed = computed(
     () => this.selFrom() !== this.spanFrom() || this.selTo() !== this.spanTo(),
@@ -554,14 +572,26 @@ export class Waveform {
     this.playFrom(this.selFrom());
   }
 
-  /** Step to a sound and play it with a moment's lead-in, so it isn't clipped and you
-   * can tell a cough from a word. Stepping is the point: every sound gets heard. */
+  /** Step to the next sound *in time* and play it with a moment's lead-in, so it isn't
+   * clipped and you can tell a cough from a word. Forward means later, always. */
   protected step(delta: number): void {
     const count = this.events().length;
     if (count === 0) {
       return;
     }
     this.cursor.set((this.cursor() + delta + count) % count);
+    this.playEvent();
+  }
+
+  /** Jump straight to the loudest sound in the span — the one most likely to be speech,
+   * and so the one that decides whether this span is safe to delete at all. It is the
+   * triage question, and it should cost one press, not a walk through every crackle. */
+  protected toLoudest(): void {
+    const loudest = this.loudest();
+    if (loudest < 0) {
+      return;
+    }
+    this.cursor.set(loudest);
     this.playEvent();
   }
 

@@ -58,6 +58,16 @@
       display: flex;
       align-items: center;
       font-variant-numeric: tabular-nums;
+
+      // The triage button. Lit when you are standing on the loudest sound, so "have I
+      // checked the risky one?" is answerable at a glance.
+      .loudest {
+        --mat-icon-button-icon-color: var(--mat-sys-on-surface-variant);
+
+        &.on {
+          --mat-icon-button-icon-color: var(--mat-sys-tertiary);
+        }
+      }
     }
 
     .silent {
