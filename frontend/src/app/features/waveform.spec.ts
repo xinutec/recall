@@ -78,6 +78,13 @@ function setup() {
     ],
   });
   const fixture = TestBed.createComponent(Waveform);
+  // jsdom's canvas has no pointer-capture API; the gestures under test don't need it.
+  const canvas = (fixture.nativeElement as HTMLElement).querySelector('canvas');
+  Object.assign(canvas ?? {}, {
+    setPointerCapture: () => undefined,
+    releasePointerCapture: () => undefined,
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 132 }),
+  });
   fixture.componentRef.setInput('source', 'usb');
   fixture.componentRef.setInput('spanStart', SPAN_START);
   fixture.componentRef.setInput('spanEnd', SPAN_END);
@@ -166,6 +173,61 @@ describe('Waveform', () => {
 
     audio.dispatchEvent(new Event('pause'));
     expect(c.playing()).toBe(false);
+  });
+
+  function pointer(type: string, id: number, x: number): PointerEvent {
+    return {
+      pointerId: id,
+      clientX: x,
+      type,
+      preventDefault: () => undefined,
+    } as unknown as PointerEvent;
+  }
+
+  it('pinches to zoom, holding the time under the fingers still', () => {
+    // Zoom was bound to the mouse wheel, which a phone does not have — so on the device
+    // this review is actually used on, the waveform was stuck at one scale and a
+    // half-second sound was a few pixels wide.
+    const { c } = setup();
+    vi.advanceTimersByTime(200);
+    c.width.set(1000);
+    const before = c.viewTo() - c.viewFrom();
+
+    c.onPointerDown(pointer('pointerdown', 1, 400));
+    c.onPointerDown(pointer('pointerdown', 2, 600)); // two fingers, 200px apart
+    c.onPointerMove(pointer('pointermove', 1, 300));
+    c.onPointerMove(pointer('pointermove', 2, 700)); // spread to 400px = 2x zoom in
+
+    const after = c.viewTo() - c.viewFrom();
+    expect(after).toBeCloseTo(before / 2, -2);
+  });
+
+  it('does not start playback when a pinch ends', () => {
+    const { c } = setup();
+    vi.advanceTimersByTime(200);
+    const played = vi.spyOn(c, 'playFrom' as never);
+
+    c.onPointerDown(pointer('pointerdown', 1, 400));
+    c.onPointerDown(pointer('pointerdown', 2, 600));
+    c.onPointerUp(pointer('pointerup', 2, 600));
+    c.onPointerUp(pointer('pointerup', 1, 400)); // lifting out of a pinch is not a tap
+
+    expect(played).not.toHaveBeenCalled();
+  });
+
+  it('fits the span back into view after panning away', () => {
+    const { c } = setup();
+    vi.advanceTimersByTime(200);
+    const [from, to] = [c.viewFrom(), c.viewTo()];
+
+    c.viewFrom.set(Date.parse(SPAN_END) + 3_600_000); // panned an hour past the span
+    c.viewTo.set(Date.parse(SPAN_END) + 4_200_000);
+    c.fitSpan();
+
+    expect(c.viewFrom()).toBe(from);
+    expect(c.viewTo()).toBe(to);
+    expect(c.viewFrom()).toBeLessThan(Date.parse(SPAN_START));
+    expect(c.viewTo()).toBeGreaterThan(Date.parse(SPAN_END));
   });
 
   it('narrows the selection only when an edge is trimmed', () => {

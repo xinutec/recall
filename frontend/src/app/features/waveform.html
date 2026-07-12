@@ -1,4 +1,7 @@
 <div class="waveform">
+  <!-- pointercancel matters on touch: the system can steal a gesture (a system-edge
+       swipe, a call), and without it a finger stays "down" for ever and the canvas
+       ignores everything after. -->
   <canvas
     #canvas
     [style.height.px]="height"
@@ -6,6 +9,7 @@
     (pointerdown)="onPointerDown($event)"
     (pointermove)="onPointerMove($event)"
     (pointerup)="onPointerUp($event)"
+    (pointercancel)="onPointerUp($event)"
     (pointerleave)="onPointerLeave()"
   ></canvas>
 
@@ -21,7 +25,7 @@
       </span>
     } @else {
       <span>
-        Drag to pan · scroll to zoom · click to play from there · drag the edges to trim
+        Drag to pan · pinch to zoom · tap to play from there · drag the edges to trim
       </span>
     }
     @if (loading()) {
@@ -37,6 +41,12 @@
         <mat-icon>play_arrow</mat-icon> Play span
       </button>
     }
+
+    <!-- Pan far enough and the span you are judging is off-screen, with nothing to steer
+         by. This is the way back. -->
+    <button mat-button (click)="fitSpan()" matTooltip="Frame the whole span">
+      <mat-icon>fit_screen</mat-icon> Fit
+    </button>
 
     <!-- The span is quiet only on a 60-second mean, so it can still hold real sounds.
          They're listed loudest-first: speech, if any got in here, is the loud one. -->

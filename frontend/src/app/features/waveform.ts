@@ -47,6 +47,15 @@ type Drag =
   | { readonly kind: 'trim-start' | 'trim-end' }
   | null;
 
+/** A pinch in progress: the geometry it started from, so the zoom is absolute rather than
+ * accumulated frame by frame (which drifts). */
+type Pinch = {
+  readonly spread: number; // px between the fingers when it began
+  readonly midX: number;
+  readonly at: number; // the time under the midpoint, held still while zooming
+  readonly span: number; // the window's duration when it began
+} | null;
+
 /**
  * The waveform of one capture source, drawn so a quiet span can actually be judged:
  * every sound above the threshold stands out, the span under review is highlighted, and
@@ -155,6 +164,12 @@ export class Waveform {
   });
 
   private drag: Drag = null;
+  /** Fingers currently on the canvas, by pointer id → x. Two of them is a pinch. */
+  private readonly pointers = new Map<number, number>();
+  private pinch: Pinch = null;
+  /** Whether this gesture ever became a pinch — so lifting out of one is not read as a
+   * tap-to-play, even though the pinch itself ended with the first finger. */
+  private pinched = false;
   private pending?: ReturnType<typeof setTimeout>;
   private inflight?: Subscription;
   private frame = 0;
@@ -294,6 +309,13 @@ export class Waveform {
   protected onPointerDown(event: PointerEvent): void {
     const x = this.localX(event);
     this.canvasRef().nativeElement.setPointerCapture(event.pointerId);
+    this.pointers.set(event.pointerId, x);
+
+    // A second finger down turns the gesture into a pinch, whatever it started as.
+    if (this.pointers.size >= 2) {
+      this.beginPinch();
+      return;
+    }
     if (Math.abs(x - this.xOf(this.selFrom())) <= HANDLE_GRAB_PX) {
       this.drag = { kind: 'trim-start' };
     } else if (Math.abs(x - this.xOf(this.selTo())) <= HANDLE_GRAB_PX) {
@@ -305,8 +327,16 @@ export class Waveform {
 
   protected onPointerMove(event: PointerEvent): void {
     const x = this.localX(event);
+    if (this.pointers.has(event.pointerId)) {
+      this.pointers.set(event.pointerId, x);
+    }
     const at = this.timeAt(x);
     this.hover.set({ at, db: this.dbAt(at) });
+
+    if (this.pinch) {
+      this.updatePinch();
+      return;
+    }
 
     const drag = this.drag;
     if (!drag) {
@@ -332,11 +362,78 @@ export class Waveform {
     this.syncSelection();
   }
 
+  /**
+   * Pinch to zoom. Zoom was bound to the mouse wheel, which a phone does not have — so on
+   * the device this review is actually used on, the waveform was stuck at one fixed scale
+   * and a half-second sound was a few pixels wide, and unreachable.
+   *
+   * The time under the midpoint of the two fingers is held still, so spreading magnifies
+   * what is between them and sliding both fingers pans as well — one gesture, no modes.
+   */
+  private beginPinch(): void {
+    const [a, b] = [...this.pointers.values()];
+    this.drag = null; // whatever the first finger started, two fingers is a pinch
+    this.pinched = true;
+    this.pinch = {
+      spread: Math.abs(a - b),
+      midX: (a + b) / 2,
+      at: this.timeAt((a + b) / 2),
+      span: this.viewTo() - this.viewFrom(),
+    };
+  }
+
+  private updatePinch(): void {
+    const pinch = this.pinch;
+    const [a, b] = [...this.pointers.values()];
+    if (!pinch || a === undefined || b === undefined) {
+      return;
+    }
+    const spread = Math.abs(a - b);
+    if (spread < 1 || pinch.spread < 1) {
+      return;
+    }
+    const span = Math.min(
+      Math.max((pinch.span * pinch.spread) / spread, MIN_WINDOW_MS),
+      MAX_WINDOW_MS,
+    );
+    // Anchor the time that was under the midpoint to wherever the midpoint is now.
+    const midX = (a + b) / 2;
+    const ratio = midX / Math.max(this.width(), 1);
+    this.viewFrom.set(pinch.at - span * ratio);
+    this.viewTo.set(pinch.at + span * (1 - ratio));
+  }
+
+  /** Back to the whole span, framed. There was no way back: pan far enough and the span
+   * you were judging was simply gone, with nothing to steer by. */
+  protected fitSpan(): void {
+    const pad = Math.max((this.spanTo() - this.spanFrom()) * PAD_RATIO, MIN_PAD_MS);
+    this.viewFrom.set(this.spanFrom() - pad);
+    this.viewTo.set(this.spanTo() + pad);
+  }
+
   protected onPointerUp(event: PointerEvent): void {
-    const drag = this.drag;
-    this.drag = null;
+    this.pointers.delete(event.pointerId);
     this.canvasRef().nativeElement.releasePointerCapture(event.pointerId);
-    if (drag?.kind === 'pan' && Math.abs(this.localX(event) - drag.x) < CLICK_SLOP_PX) {
+
+    if (this.pointers.size < 2) {
+      this.pinch = null;
+    }
+    if (this.pointers.size > 0) {
+      return; // a finger is still down; the gesture isn't over
+    }
+
+    const drag = this.drag;
+    // `pinched` outlives the pinch itself: the first finger up already ended it, and the
+    // second must still not be read as a tap. It clears only when the hand is off.
+    const pinched = this.pinched;
+    this.drag = null;
+    this.pinched = false;
+
+    if (
+      !pinched &&
+      drag?.kind === 'pan' &&
+      Math.abs(this.localX(event) - drag.x) < CLICK_SLOP_PX
+    ) {
       this.playFrom(this.timeAt(this.localX(event)));
     }
   }
