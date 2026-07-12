@@ -84,15 +84,25 @@ class QuietSpan:
 def is_quiet(segment: SegmentVolume, threshold_db: float) -> bool:
     """Whether a segment is idle noise and nothing else — the whole test, in one place.
 
-    Every clause is a veto, and each has been seen to matter on the real archive: an
-    unmeasured or untranscribed segment is *unknown*, and a segment that produced a turn
-    that still stands contains speech, however far under the threshold its mean sits.
+    Every clause is a veto, and each has been seen to matter on the real archive:
+
+    * **The speech detector heard nothing** (`speech_s == 0`). This is the one that
+    counts.
+      A segment nobody has listened to yet is *unknown*, not empty, and is never swept.
+    * A segment that still bears a visible turn contains speech, however far under the
+      threshold its mean sits. Kept as a second line — but it cannot be the only one: a
+      reprocessing pass hides the turns it replaces, and a minute of real far-field
+      Dutch
+      was found carrying no visible turn at all. The VAD sees the audio; this sees only
+      the bookkeeping about it.
+    * Unmeasured or untranscribed is unknown, and unknown is never deleted.
     """
     return (
         segment.mean_db is not None
         and segment.mean_db <= threshold_db
         and segment.transcribed
         and not segment.has_speech
+        and segment.speech_s == 0.0
     )
 
 

@@ -20,6 +20,7 @@ from recall.ids import AudioSegmentId, TranscriptId
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store, TranscriptSegment
 from recall.timeline import Segment
+from recall.vad import SpeechRegion
 
 BASE = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
 
@@ -1324,8 +1325,20 @@ def test_context_roundtrip_over_http(
     assert client.get("/api/context").json() == {"text": "Alice is left-handed."}
 
 
+def _deaf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A speech detector that hears nothing — Silero is a real model, these are not real
+    files, and what is under test here is the plumbing, not the detector."""
+    monkeypatch.setattr(
+        "recall.analyse.silero_speech_regions", lambda _p: list[SpeechRegion]()
+    )
+
+
 def _await_scan(client: TestClient, timeout_s: float = 10.0) -> dict[str, object]:
-    """Start the background scan and wait for it to finish, as the page's poll does."""
+    """Start the background scan and wait for it to finish, as the page's poll does.
+
+    The scan also runs the speech detector over its candidates (recall.analyse); tests
+    stub that out with `_deaf` — Silero is a real model and these are not real files.
+    """
     scan: dict[str, object] = client.post("/api/quiet/scan").json()
     deadline = time.monotonic() + timeout_s
     while scan["running"] and time.monotonic() < deadline:
@@ -1342,6 +1355,7 @@ def test_a_second_scan_request_joins_the_running_one(
     twice and race each other's writes. The second request joins the first."""
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     monkeypatch.setattr(api, "_SCAN_JOB", None)
+    _deaf(monkeypatch)
     store = Store.open(tmp_path / "recall.sqlite")
     store.add_source(
         AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
@@ -1416,9 +1430,12 @@ def test_quiet_scan_spans_and_delete(
         lambda p: Measurement(mean_db=vols[str(p)], buckets=(vols[str(p)],) * 600),
     )
     monkeypatch.setattr(api, "_SCAN_JOB", None)  # a fresh job, bound to this data root
+    _deaf(monkeypatch)
 
     client = TestClient(api.app)
-    assert _await_scan(client) == {"running": False, "measured": 8, "total": 8}
+    scan = _await_scan(client)
+    assert (scan["measured"], scan["total"], scan["running"]) == (8, 8, False)
+    assert scan["analysed"] == scan["toAnalyse"]  # every candidate was listened to
     items = client.get("/api/quiet/spans", params={"min_seconds": 300}).json()["items"]
     assert len(items) == 1
     assert len(items[0]["audioIds"]) == 6  # the 6 quiet segments (354s > 300s)
@@ -1472,6 +1489,7 @@ def test_an_undecodable_segment_is_examined_once_and_drawn_as_a_gap(
     again; the review draws it as a gap; and it is never offered for deletion."""
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     monkeypatch.setattr(api, "_SCAN_JOB", None)
+    _deaf(monkeypatch)
     store = Store.open(tmp_path / "recall.sqlite")
     store.add_source(
         AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
@@ -1507,7 +1525,8 @@ def test_an_undecodable_segment_is_examined_once_and_drawn_as_a_gap(
 
     client = TestClient(api.app)
     # Every segment is examined, including the broken one — the archive reads as done.
-    assert _await_scan(client) == {"running": False, "measured": 3, "total": 3}
+    scan = _await_scan(client)
+    assert (scan["measured"], scan["total"], scan["running"]) == (3, 3, False)
 
     _await_scan(client)  # a second scan finds nothing left to do...
     assert sorted(decoded) == sorted(str(tmp_path / f"seg{i}.opus") for i in range(3))
@@ -1580,6 +1599,7 @@ def test_quiet_never_offers_a_segment_that_still_bears_a_turn(
         lambda _p: Measurement(mean_db=-62.0, buckets=(-62.0,) * 600),
     )
     monkeypatch.setattr(api, "_SCAN_JOB", None)
+    _deaf(monkeypatch)
 
     client = TestClient(api.app)
     _await_scan(client)

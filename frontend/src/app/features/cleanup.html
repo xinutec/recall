@@ -2,14 +2,15 @@
   <header>
     <h1>Cleanup</h1>
     <p>
-      Long stretches where one mic heard nothing but its own noise floor. Segments that
-      still carry a transcript are never offered here, whatever their volume.
-      <strong>Emptiest first:</strong> the spans where nothing ever rose above that mic's
-      floor — an empty house, a room asleep — come before the ones holding coughs and
-      someone shifting about, which are worth a listen. Open a span to see its waveform,
-      step through its sounds (the <mat-icon inline>priority_high</mat-icon> button jumps
-      to the loudest, which is the one that decides), trim the edges if the detector
-      reached too far, then delete. Deletion is permanent.
+      Long stretches where one mic heard nothing but its own noise floor. A speech
+      detector has listened to every one of them: a span where it hears anything at all
+      is never offered here, whatever the volume says.
+      <strong>Emptiest first</strong> — ranked not by loudness but by how far the audio
+      departs from that mic's own idle noise, so an empty house or a room asleep comes
+      before one where someone was coughing and shifting about. Open a span to see its
+      waveform, step through its sounds (the <mat-icon inline>priority_high</mat-icon>
+      button jumps to the loudest), trim the edges if the detector reached too far, then
+      delete. Deletion is permanent.
     </p>
     <!-- The scan runs on the server, so this page only starts it and watches. Closing
          the tab no longer stops it, and reopening picks the progress back up. -->
@@ -29,9 +30,14 @@
         <div class="progress">
           <mat-progress-bar mode="determinate" [value]="percent()" />
           <span class="count">
-            {{ measured() | number }} / {{ total() | number }} segments measured
+            @if (listening()) {
+              {{ analysed() | number }} / {{ toAnalyse() | number }} segments listened to
+              — spans appear as the speech detector clears them
+            } @else {
+              {{ measured() | number }} / {{ total() | number }} segments measured
+            }
             @if (scanning()) {
-              · scanning
+              · running
             }
           </span>
         </div>

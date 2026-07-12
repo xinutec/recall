@@ -132,6 +132,14 @@ class SegmentVolume:
     mean_db: float | None
     transcribed: bool
     has_speech: bool
+    # The speech detector's verdict: seconds of speech here, None if nobody has
+    # listened yet. This is the veto (recall.analyse). The transcript could not be: a
+    # reprocessing pass hides the turns it replaces, and a minute of real Dutch was
+    # left carrying no visible turn. None is *unknown*, and unknown is never swept.
+    speech_s: float | None
+    # How far its most unusual moment departs from this mic's own idle noise. Ranks the
+    # spans; decides nothing (recall.spectrum).
+    structure: float | None
 
 
 @dataclass(frozen=True)

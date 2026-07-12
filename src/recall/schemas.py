@@ -159,6 +159,10 @@ class QuietSpanOut(TypedDict):
     loudestDb: float | None
     marginDb: float | None
     silent: bool
+    # How far the span departs from its mic's idle noise — what the list is ranked by.
+    # Separates an empty room from one with somebody moving about in it, which loudness
+    # cannot: a creak and a word can be equally loud.
+    structure: float | None
 
 
 class QuietSpansOut(TypedDict):
@@ -167,11 +171,19 @@ class QuietSpansOut(TypedDict):
 
 class QuietScanOut(TypedDict):
     """The archive-measuring scan — a background job on the server, watched by the
-    page (it outlives the tab, so progress is reported, not accumulated client-side)."""
+    page (it outlives the tab, so progress is reported, not accumulated client-side).
+
+    Two passes. `measured` is the cheap sweep (volume + waveform, ffmpeg). `analysed` is
+    the speech detector listening to the candidates that turned up — slower, and the
+    veto
+    a deletion rests on: a span is only offered once its audio has actually been heard.
+    """
 
     running: bool
     measured: int  # segments measured so far — durable, so this only ever goes up
     total: int
+    analysed: int
+    toAnalyse: int
 
 
 class QuietDeletedOut(TypedDict):

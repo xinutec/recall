@@ -17,18 +17,27 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from recall.analyse import analyse_segments
 from recall.calibrate import calibrate
-from recall.quiet import SWEEPABLE_KINDS, scan_segments
+from recall.quiet import QUIET_MEAN_DB, SWEEPABLE_KINDS, scan_segments
 from recall.store import Store
 
 
 @dataclass(frozen=True)
 class ScanProgress:
-    """What the page shows: is a scan running, and how far has the archive got."""
+    """What the page shows. Two passes, and the second is the one that matters.
+
+    `measured` is the cheap sweep: every segment's volume and waveform (ffmpeg).
+    `analysed` is the speech detector listening to the candidates it turned up — slower,
+    and the veto a deletion rests on. A span is offered only once its segments have been
+    *heard*, so the list stays empty (rightly) until this has caught up.
+    """
 
     running: bool
     measured: int
     total: int
+    analysed: int
+    to_analyse: int
 
 
 class ScanJob:
@@ -67,8 +76,19 @@ class ScanJob:
                 pass
             # Then measure each mic from what was just read. A threshold is a property
             # of a microphone (recall.calibrate), a new mic starts unknown, and a floor
-            # drifts — so it is re-derived every time the archive grows.
+            # drifts — so it is re-derived every time the archive grows. This also
+            # learns
+            # each mic's noise fingerprint, which the analysis pass measures against.
             calibrate(store)
+
+            # And now listen. Volume found the candidates; only the speech detector can
+            # say whether they are safe to lose (recall.analyse). ~0.6s of model per
+            # minute of audio, cached per segment, and never paid twice.
+            while (
+                analyse_segments(store, should_stop=lambda: self._stopping) > 0
+                and not self._stopping
+            ):
+                pass
         finally:
             store.close()
 
@@ -76,7 +96,16 @@ class ScanJob:
         store = self._open_store()
         try:
             measured, total = store.measured_counts(kinds=SWEEPABLE_KINDS)
+            analysed, to_analyse = store.analysed_counts(
+                kinds=SWEEPABLE_KINDS, quiet_below_db=QUIET_MEAN_DB
+            )
         finally:
             store.close()
         running = self._thread is not None and self._thread.is_alive()
-        return ScanProgress(running=running, measured=measured, total=total)
+        return ScanProgress(
+            running=running,
+            measured=measured,
+            total=total,
+            analysed=analysed,
+            to_analyse=to_analyse,
+        )

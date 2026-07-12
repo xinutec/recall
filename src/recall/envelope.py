@@ -181,6 +181,12 @@ class SpanSound:
     loudest_db: float | None
     margin_db: float | None
     sound_seconds: float
+    # How far the span's most unusual moment departs from its mic's idle-noise
+    # fingerprint (recall.spectrum). This is what the list is ranked by: it separates an
+    # empty room from one with somebody moving in it, which loudness cannot — a creak
+    # and
+    # a word can be equally loud. None until the analysis pass has listened.
+    structure: float | None = None
 
     @property
     def silent(self) -> bool:
@@ -189,7 +195,12 @@ class SpanSound:
         return self.margin_db is not None and self.margin_db <= 0.0
 
 
-def summarize_sound(envelopes: Sequence[bytes], threshold_db: float) -> SpanSound:
+def summarize_sound(
+    envelopes: Sequence[bytes],
+    threshold_db: float,
+    *,
+    structure: float | None = None,
+) -> SpanSound:
     """Reduce a span's stored envelopes to how much sound is in it. Pure.
 
     Reads the buffers straight into numpy rather than through `decode_envelope`.
@@ -199,13 +210,16 @@ def summarize_sound(envelopes: Sequence[bytes], threshold_db: float) -> SpanSoun
     decoded = [np.frombuffer(e, dtype=np.float16) for e in envelopes if e]
     buckets = np.concatenate(decoded) if decoded else np.zeros(0, dtype=np.float16)
     if not buckets.size:
-        return SpanSound(loudest_db=None, margin_db=None, sound_seconds=0.0)
+        return SpanSound(
+            loudest_db=None, margin_db=None, sound_seconds=0.0, structure=structure
+        )
     loudest = float(buckets.max())
     over = int((buckets > threshold_db).sum())
     return SpanSound(
         loudest_db=loudest,
         margin_db=loudest - threshold_db,
         sound_seconds=over * BUCKET_S,
+        structure=structure,
     )
 
 

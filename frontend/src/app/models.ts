@@ -104,6 +104,7 @@ export interface QuietSpan {
   readonly loudestDb: number | null;
   readonly marginDb: number | null;
   readonly silent: boolean;
+  readonly structure: number | null;
 }
 
 export interface QuietSpanList {
@@ -114,6 +115,8 @@ export interface QuietScan {
   readonly running: boolean;
   readonly measured: number;
   readonly total: number;
+  readonly analysed: number;
+  readonly toAnalyse: number;
 }
 
 export interface QuietDeleted {

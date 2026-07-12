@@ -47,6 +47,8 @@ def _add_segments(
             )
         )
         store.mark_transcribed(int(audio_id))
+        # The speech detector heard nothing: an unheard segment is unknown, never swept.
+        store.set_audio_analysis(audio_id, speech_s=0.0, structure=0.4)
         ids.append(audio_id)
     return ids
 
@@ -196,6 +198,8 @@ def _seg(  # noqa: PLR0913 - one kwarg per veto, so each test states just its ow
     at: float | None = None,
     transcribed: bool = True,
     has_speech: bool = False,
+    speech_s: float | None = 0.0,
+    structure: float | None = None,
 ) -> SegmentVolume:
     start = BASE + timedelta(seconds=i * seconds if at is None else at)
     return SegmentVolume(
@@ -206,6 +210,8 @@ def _seg(  # noqa: PLR0913 - one kwarg per veto, so each test states just its ow
         mean_db=mean_db,
         transcribed=transcribed,
         has_speech=has_speech,
+        speech_s=speech_s,
+        structure=structure,
     )
 
 

@@ -833,6 +833,8 @@ def _scan_progress(job: ScanJob) -> QuietScanOut:
         "running": progress.running,
         "measured": progress.measured,
         "total": progress.total,
+        "analysed": progress.analysed,
+        "toAnalyse": progress.to_analyse,
     }
 
 
@@ -862,15 +864,23 @@ def quiet_spans_list(min_seconds: int = 300) -> QuietSpansOut:
             sound = summarize_sound(
                 [envelopes[a] for a in span.audio_ids if a in envelopes],
                 event_threshold(store, span.source_id),
+                structure=store.span_structure(list(span.audio_ids)),
             )
             measured.append((span, sound))
     finally:
         store.close()
 
-    # Emptiest first. A span with nothing measurable at all (no envelopes) sorts
-    # last: it is unknown, not empty, and unknown is never the safest thing to delete.
+    # Emptiest first — and *emptiness* is structure, not volume. How far a span departs
+    # from its own mic's idle-noise fingerprint separates a room where nothing happened
+    # from one where somebody coughed and shifted about, which loudness cannot do (a
+    # creak and a word can be equally loud). Loudness breaks the ties.
+    #
+    # A span with nothing measurable at all sorts last: unknown is not empty, and
+    # unknown
+    # is never the safest thing to delete.
     measured.sort(
         key=lambda pair: (
+            pair[1].structure if pair[1].structure is not None else float("inf"),
             pair[1].margin_db if pair[1].margin_db is not None else float("inf"),
             pair[1].sound_seconds,
         )
@@ -887,6 +897,7 @@ def quiet_spans_list(min_seconds: int = 300) -> QuietSpansOut:
                 "loudestDb": sound.loudest_db,
                 "marginDb": sound.margin_db,
                 "silent": sound.silent,
+                "structure": sound.structure,
             }
             for span, sound in measured
         ]

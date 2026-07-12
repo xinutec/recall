@@ -385,4 +385,31 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE sources ADD COLUMN event_db REAL;
     """,
+    # v33 — what a candidate segment actually *contains*, as opposed to how loud it is.
+    #
+    # `speech_s` is the VAD's verdict: seconds of detected speech (0.0 = none). It is
+    # the
+    # veto the cleanup now rests on, because the transcript could not carry that weight
+    # —
+    # a reprocessing pass hides its predecessor's turns, so a segment of real Dutch was
+    # left with *no visible turn at all* and the transcript veto did not see it. The VAD
+    # is a trained detector and answers the question directly. NULL = not yet analysed,
+    # and an unanalysed segment is unknown, so it is never swept.
+    #
+    # `structure` is how far its most unusual moment departs from that mic's own noise
+    # fingerprint (`sources.noise_shape`): the mic's self-noise is stationary, real
+    # sound
+    # is not. It ranks the spans — pure dead air above someone shifting on the sofa —
+    # but
+    # it never decides; the distributions overlap and only the VAD gets a vote on
+    # speech.
+    """
+    ALTER TABLE audio_segments ADD COLUMN speech_s REAL;
+    """,
+    """
+    ALTER TABLE audio_segments ADD COLUMN structure REAL;
+    """,
+    """
+    ALTER TABLE sources ADD COLUMN noise_shape BLOB;
+    """,
 )

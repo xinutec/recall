@@ -58,14 +58,34 @@ export class Cleanup {
   protected readonly scanning = computed(() => this.scan()?.running ?? false);
   protected readonly measured = computed(() => this.scan()?.measured ?? 0);
   protected readonly total = computed(() => this.scan()?.total ?? 0);
+  protected readonly analysed = computed(() => this.scan()?.analysed ?? 0);
+  protected readonly toAnalyse = computed(() => this.scan()?.toAnalyse ?? 0);
+  /** The speech detector is the slow pass and the one a deletion rests on, so it is what
+   * the bar tracks once the cheap sweep is done. Spans appear only as it catches up. */
+  protected readonly listening = computed(() => {
+    const scan = this.scan();
+    return !!scan && scan.measured >= scan.total && scan.analysed < scan.toAnalyse;
+  });
   protected readonly percent = computed(() => {
     const scan = this.scan();
-    return scan?.total ? (scan.measured / scan.total) * 100 : 0;
+    if (!scan) {
+      return 0;
+    }
+    return this.listening()
+      ? (scan.analysed / Math.max(scan.toAnalyse, 1)) * 100
+      : (scan.measured / Math.max(scan.total, 1)) * 100;
   });
-  /** True once every segment has been measured — there is nothing left to scan. */
+  /** True once every segment has been measured *and heard*. Until then the span list is
+   * incomplete, and it says so rather than looking finished. */
   protected readonly complete = computed(() => {
     const scan = this.scan();
-    return !!scan && !scan.running && scan.measured >= scan.total && scan.total > 0;
+    return (
+      !!scan &&
+      !scan.running &&
+      scan.measured >= scan.total &&
+      scan.analysed >= scan.toAnalyse &&
+      scan.total > 0
+    );
   });
 
   /** What each open span's waveform has selected — the segments a delete would take,

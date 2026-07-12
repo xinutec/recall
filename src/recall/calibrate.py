@@ -29,11 +29,13 @@ many sounds costs clicks, and one that lists too few costs words.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
 from recall.envelope import DEFAULT_EVENT_DB, decode_envelope
 from recall.quiet import QUIET_MEAN_DB
+from recall.spectrum import band_shapes, encode_shape, fingerprint
 from recall.store import Store
 
 # The floor's crest ceiling. Above its 99.9th percentile a bucket is not idle mic noise.
@@ -44,6 +46,10 @@ SPEECH_MARGIN_DB = 2.0
 # Too few segments and the percentiles are noise. Below this a source stays uncalibrated
 # and falls back to the default, rather than committing to a number it cannot support.
 MIN_QUIET_SEGMENTS = 20
+# Idle segments decoded to build the mic's noise fingerprint. A median over this many is
+# stable, and it is a one-off decode per source, not per segment.
+NOISE_SAMPLE_SEGMENTS = 24
+MIN_NOISE_SEGMENTS = 8
 
 
 @dataclass(frozen=True)
@@ -121,8 +127,23 @@ def calibrate(store: Store) -> list[Calibration]:
         if result is None:
             continue
         store.set_source_event_db(source_id, result.threshold_db)
+        _fingerprint_noise(store, source_id)
         done.append(result)
     return done
+
+
+def _fingerprint_noise(store: Store, source_id: str) -> None:
+    """Learn what this microphone sounds like when nothing is happening — the spectral
+    shape of its own self-noise, which is stationary where real sound is not. Structure
+    is measured as departure from this (recall.spectrum), and it is what sorts dead air
+    above a room with someone shifting about in it."""
+    paths = store.idle_segment_paths(
+        source_id, quiet_below_db=QUIET_MEAN_DB, limit=NOISE_SAMPLE_SEGMENTS
+    )
+    shapes = [s for s in (band_shapes(Path(p)) for p in paths) if s is not None]
+    if len(shapes) < MIN_NOISE_SEGMENTS:
+        return  # too little idle audio to say what idle sounds like
+    store.set_source_noise_shape(source_id, encode_shape(fingerprint(shapes)))
 
 
 def event_threshold(store: Store, source_id: str) -> float:

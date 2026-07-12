@@ -416,6 +416,109 @@ class Store:
         ).fetchall()
         return [bytes(r["envelope"]) for r in rows]
 
+    def audio_segments_to_analyse(
+        self,
+        *,
+        kinds: Collection[SourceKind],
+        quiet_below_db: float,
+        limit: int = 200,
+    ) -> list[tuple[AudioSegmentId, str, str]]:
+        """(id, path, source) of the segments a cleanup could act on but has not been
+        listened to: quiet by volume, read by ASR, and not analysed. Only these — a loud
+        segment can never enter a span, so running a speech detector over one would
+        spend
+        model time on a foregone conclusion."""
+        placeholders = ",".join("?" * len(kinds))
+        rows = self._conn.execute(
+            "SELECT a.id, a.path, a.source_id FROM audio_segments a "
+            "JOIN sources s ON s.id = a.source_id "
+            f"WHERE a.speech_s IS NULL AND s.kind IN ({placeholders}) "
+            "AND a.mean_volume IS NOT NULL AND a.mean_volume <= ? "
+            "AND a.transcribed_utc IS NOT NULL "
+            "ORDER BY a.start_utc LIMIT ?",
+            (*[k.value for k in kinds], quiet_below_db, limit),
+        ).fetchall()
+        return [
+            (AudioSegmentId(int(r["id"])), str(r["path"]), str(r["source_id"]))
+            for r in rows
+        ]
+
+    def set_audio_analysis(
+        self, audio_id: AudioSegmentId, speech_s: float, structure: float | None
+    ) -> None:
+        """Record what a segment holds: seconds of detected speech, and how far it
+        departs from its mic's idle noise. `speech_s` is the cleanup's veto — 0.0 means
+        the detector heard nothing, and only then may the audio be swept."""
+        self._conn.execute(
+            "UPDATE audio_segments SET speech_s = ?, structure = ? WHERE id = ?",
+            (speech_s, structure, int(audio_id)),
+        )
+        self._commit()
+
+    def analysed_counts(
+        self, *, kinds: Collection[SourceKind], quiet_below_db: float
+    ) -> tuple[int, int]:
+        """(analysed, total) of the segments a cleanup could act on — how far the speech
+        detector has got."""
+        placeholders = ",".join("?" * len(kinds))
+        row = self._conn.execute(
+            "SELECT count(a.speech_s) AS done, count(*) AS total FROM audio_segments a "
+            "JOIN sources s ON s.id = a.source_id "
+            f"WHERE s.kind IN ({placeholders}) "
+            "AND a.mean_volume IS NOT NULL AND a.mean_volume <= ? "
+            "AND a.transcribed_utc IS NOT NULL",
+            (*[k.value for k in kinds], quiet_below_db),
+        ).fetchone()
+        return int(row["done"]), int(row["total"])
+
+    def idle_segment_paths(
+        self, source_id: str, *, quiet_below_db: float, limit: int = 24
+    ) -> list[str]:
+        """Paths of one source's idle segments — quiet, with no turn standing on them.
+        The sample its noise fingerprint is learned from: this mic, hearing nothing."""
+        rows = self._conn.execute(
+            """SELECT a.path FROM audio_segments a
+               WHERE a.source_id = ? AND a.mean_volume <= ?
+                 AND NOT EXISTS (SELECT 1 FROM transcript_segments t
+                                 WHERE t.audio_segment_id = a.id
+                                   AND t.superseded_by IS NULL
+                                   AND t.hidden_reason IS NULL)
+               ORDER BY a.start_utc LIMIT ?""",
+            (source_id, quiet_below_db, limit),
+        ).fetchall()
+        return [str(r["path"]) for r in rows]
+
+    def span_structure(self, audio_ids: Sequence[AudioSegmentId]) -> float | None:
+        """The most unusual moment across a span: the highest `structure` any of its
+        segments reached. Max, not mean — a span with one cough in it is a span with a
+        cough in it, and averaging that over an hour of nothing would hide it."""
+        if not audio_ids:
+            return None
+        placeholders = ",".join("?" * len(audio_ids))
+        row = self._conn.execute(
+            "SELECT max(structure) AS peak FROM audio_segments "
+            f"WHERE id IN ({placeholders})",
+            tuple(int(a) for a in audio_ids),
+        ).fetchone()
+        if row is None or row["peak"] is None:
+            return None
+        return float(row["peak"])
+
+    def set_source_noise_shape(self, source_id: str, shape: bytes) -> None:
+        """Store a microphone's idle-noise fingerprint (see recall.spectrum)."""
+        self._conn.execute(
+            "UPDATE sources SET noise_shape = ? WHERE id = ?", (shape, source_id)
+        )
+        self._commit()
+
+    def source_noise_shape(self, source_id: str) -> bytes | None:
+        row = self._conn.execute(
+            "SELECT noise_shape FROM sources WHERE id = ?", (source_id,)
+        ).fetchone()
+        if row is None or row["noise_shape"] is None:
+            return None
+        return bytes(row["noise_shape"])
+
     def set_source_event_db(self, source_id: str, event_db: float) -> None:
         """Record a microphone's measured sound threshold (dBFS)."""
         self._conn.execute(
@@ -464,7 +567,7 @@ class Store:
         placeholders = ",".join("?" * len(kinds))
         rows = self._conn.execute(
             f"""SELECT a.id, a.source_id, a.start_utc, a.end_utc, a.mean_volume,
-                      a.transcribed_utc,
+                      a.transcribed_utc, a.speech_s, a.structure,
                       EXISTS (SELECT 1 FROM transcript_segments t
                               WHERE t.audio_segment_id = a.id
                                 AND t.superseded_by IS NULL
@@ -483,6 +586,8 @@ class Store:
                 mean_db=None if r["mean_volume"] is None else float(r["mean_volume"]),
                 transcribed=r["transcribed_utc"] is not None,
                 has_speech=bool(r["has_speech"]),
+                speech_s=None if r["speech_s"] is None else float(r["speech_s"]),
+                structure=None if r["structure"] is None else float(r["structure"]),
             )
             for r in rows
         ]
