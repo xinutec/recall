@@ -3,11 +3,13 @@
     <h1>Cleanup</h1>
     <p>
       Long stretches where one mic heard nothing but its own noise floor. Segments that
-      still carry a transcript are never offered here, whatever their volume. Open a span
-      to see its waveform: the shaded band is what a delete would take, and the bars
-      rising past the dashed line are sounds — including the ones that ended the quiet.
-      Step through them loudest-first (speech, if any is in there, is the loud one), trim
-      the edges if the detector reached too far, then delete. Deletion is permanent.
+      still carry a transcript are never offered here, whatever their volume.
+      <strong>Emptiest first:</strong> the spans where nothing ever rose above that mic's
+      floor — an empty house, a room asleep — come before the ones holding coughs and
+      someone shifting about, which are worth a listen. Open a span to see its waveform,
+      step through its sounds (the <mat-icon inline>priority_high</mat-icon> button jumps
+      to the loudest, which is the one that decides), trim the edges if the detector
+      reached too far, then delete. Deletion is permanent.
     </p>
     <!-- The scan runs on the server, so this page only starts it and watches. Closing
          the tab no longer stops it, and reopening picks the progress back up. -->
@@ -55,6 +57,19 @@
           <mat-expansion-panel-header>
             <mat-panel-title>
               <span class="duration">{{ minutes(span) }} min quiet</span>
+              <!-- The evidence the list is ordered by, shown so the order can be checked
+                   rather than taken on trust. "silent" = nothing in the whole span ever
+                   rose above this microphone's own floor. -->
+              @if (span.silent) {
+                <span class="verdict silent">
+                  <mat-icon>done_all</mat-icon> silent throughout
+                </span>
+              } @else {
+                <span class="verdict noisy">
+                  <mat-icon>graphic_eq</mat-icon>
+                  {{ span.soundSeconds | number: '1.0-1' }}s of sound
+                </span>
+              }
               <span class="when">
                 {{ span.start | date: 'd MMM, HH:mm' }}–{{ span.end | date: 'HH:mm' }}
               </span>

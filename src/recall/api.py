@@ -838,26 +838,59 @@ def _scan_progress(job: ScanJob) -> QuietScanOut:
 
 @app.get("/api/quiet/spans")
 def quiet_spans_list(min_seconds: int = 300) -> QuietSpansOut:
-    """Long total-quiet spans (from the cached volumes) for the cleanup review."""
+    """The long total-quiet spans, emptiest first.
+
+    Ranked by how far the loudest thing in a span rises above *that microphone's* own
+    threshold — so a span where nothing ever crossed the mic's floor (an empty house, a
+    room asleep) comes before one holding coughs and someone shifting on the sofa. Those
+    are the ones to delete without a second thought; the noisy ones deserve a listen and
+    now sort to the bottom, instead of hiding in a list of 138.
+
+    Absolute dB would be the wrong key: the phones' floors sit ~18 dB below the USB
+    mic's, so ranking on raw loudness would order the *microphones*, not the emptiness.
+    """
+    from recall.calibrate import event_threshold  # noqa: PLC0415
+    from recall.envelope import summarize_sound  # noqa: PLC0415
     from recall.quiet import quiet_spans  # noqa: PLC0415
 
     store = _store()
     try:
         spans = quiet_spans(store, min_duration_s=float(min_seconds))
-        return {
-            "items": [
-                {
-                    "source": s.source_id,
-                    "start": s.start.isoformat(),
-                    "end": s.end.isoformat(),
-                    "durationS": s.duration_s,
-                    "audioIds": [int(a) for a in s.audio_ids],
-                }
-                for s in spans
-            ]
-        }
+        measured = []
+        for span in spans:
+            envelopes = store.audio_envelopes(list(span.audio_ids))
+            sound = summarize_sound(
+                [envelopes[a] for a in span.audio_ids if a in envelopes],
+                event_threshold(store, span.source_id),
+            )
+            measured.append((span, sound))
     finally:
         store.close()
+
+    # Emptiest first. A span with nothing measurable at all (no envelopes) sorts
+    # last: it is unknown, not empty, and unknown is never the safest thing to delete.
+    measured.sort(
+        key=lambda pair: (
+            pair[1].margin_db if pair[1].margin_db is not None else float("inf"),
+            pair[1].sound_seconds,
+        )
+    )
+    return {
+        "items": [
+            {
+                "source": span.source_id,
+                "start": span.start.isoformat(),
+                "end": span.end.isoformat(),
+                "durationS": span.duration_s,
+                "audioIds": [int(a) for a in span.audio_ids],
+                "soundSeconds": sound.sound_seconds,
+                "loudestDb": sound.loudest_db,
+                "marginDb": sound.margin_db,
+                "silent": sound.silent,
+            }
+            for span, sound in measured
+        ]
+    }
 
 
 @app.get("/api/quiet/envelope")

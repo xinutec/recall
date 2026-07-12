@@ -100,6 +100,10 @@ export interface QuietSpan {
   readonly end: string;
   readonly durationS: number;
   readonly audioIds: readonly number[];
+  readonly soundSeconds: number;
+  readonly loudestDb: number | null;
+  readonly marginDb: number | null;
+  readonly silent: boolean;
 }
 
 export interface QuietSpanList {

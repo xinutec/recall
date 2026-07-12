@@ -167,6 +167,44 @@ def segment_envelope(path: str) -> tuple[float, ...]:
     return measured.buckets if measured else ()
 
 
+@dataclass(frozen=True)
+class SpanSound:
+    """How much of anything is in a span — what decides whether it is safe to delete.
+
+    `margin_db` is the loudest bucket measured *against that mic's own threshold*, and
+    it is the number to rank by. Absolute dB does not compare across recorders (the
+    phones' floors sit ~18 dB below the USB mic's), so a span is empty when nothing in
+    it rises above what *that* mic calls a sound, not by a global figure. Negative
+    means nothing ever did: an empty room.
+    """
+
+    loudest_db: float | None
+    margin_db: float | None
+    sound_seconds: float
+
+    @property
+    def silent(self) -> bool:
+        """Nothing above this mic's floor, anywhere in it — dead air, and the
+        safest thing there is to delete."""
+        return self.margin_db is not None and self.margin_db <= 0.0
+
+
+def summarize_sound(envelopes: Sequence[bytes], threshold_db: float) -> SpanSound:
+    """Reduce a span's stored envelopes to how much sound is in it. Pure, and cheap —
+    the shapes are decoded already, so ranking 138 spans costs half a second."""
+    decoded = [np.asarray(decode_envelope(e), dtype=np.float32) for e in envelopes if e]
+    buckets = np.concatenate(decoded) if decoded else np.zeros(0, dtype=np.float32)
+    if not buckets.size:
+        return SpanSound(loudest_db=None, margin_db=None, sound_seconds=0.0)
+    loudest = float(buckets.max())
+    over = int((buckets > threshold_db).sum())
+    return SpanSound(
+        loudest_db=loudest,
+        margin_db=loudest - threshold_db,
+        sound_seconds=over * BUCKET_S,
+    )
+
+
 def peak_pool(fine: Sequence[float | None], factor: int) -> list[float | None]:
     """Reduce a fine grid to one value per `factor` buckets, by peak (None = no audio).
     Peak, not mean, so zooming out can never hide a short sound."""

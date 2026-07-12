@@ -64,6 +64,30 @@
       white-space: nowrap;
     }
 
+    // The verdict the ordering rests on. Green = nothing happened in there at all;
+    // otherwise say how much sound, so "why is this one further down" answers itself.
+    .verdict {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.2rem;
+      white-space: nowrap;
+      font: var(--mat-sys-body-small);
+
+      mat-icon {
+        font-size: 1rem;
+        width: 1rem;
+        height: 1rem;
+      }
+
+      &.silent {
+        color: var(--mat-sys-tertiary);
+      }
+
+      &.noisy {
+        color: var(--mat-sys-on-surface-variant);
+      }
+    }
+
     .when {
       font-variant-numeric: tabular-nums;
       margin-left: auto; // pushed right when there's room; wraps below when there isn't

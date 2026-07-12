@@ -151,6 +151,14 @@ class QuietSpanOut(TypedDict):
     end: str
     durationS: float
     audioIds: list[int]
+    # How empty it actually is — the evidence the list is ranked by, shown so the
+    # ranking can be checked, not trusted. `silent` means nothing in the span rose
+    # above this microphone's own floor: an empty room, the safest thing to delete.
+    # `marginDb` is how far the loudest moment rose above that floor (negative = never).
+    soundSeconds: float
+    loudestDb: float | None
+    marginDb: float | None
+    silent: bool
 
 
 class QuietSpansOut(TypedDict):
