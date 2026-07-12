@@ -678,14 +678,30 @@ export class Waveform {
       ctx.stroke();
     }
 
+    // The playhead is the only pure *neutral* on this canvas — primary is the handles and
+    // the loud bars, tertiary the sound being auditioned, error a gap. Colour here would
+    // read as a *kind* of thing; it needs to read as *where you are*. So it earns its
+    // legibility from contrast, not hue: a halo in the background colour underneath it,
+    // so the line holds up over pale bars and the tinted selection band alike, and a cap
+    // at the top so the eye finds it while it moves.
     const head = this.playhead();
     if (head !== null) {
-      ctx.strokeStyle = this.style('--wave-playhead');
-      ctx.lineWidth = 1;
+      const x = Math.round(this.xOf(head)) + 0.5; // crisp on the pixel grid, not blurred
+      ctx.strokeStyle = this.style('--wave-playhead-halo');
+      ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.moveTo(this.xOf(head), 0);
-      ctx.lineTo(this.xOf(head), HEIGHT_PX);
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, HEIGHT_PX);
       ctx.stroke();
+
+      ctx.strokeStyle = this.style('--wave-playhead');
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, HEIGHT_PX);
+      ctx.stroke();
+      ctx.fillRect(x - 3.5, 0, 7, 4);
     }
   }
 }

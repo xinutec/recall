@@ -7,7 +7,13 @@
   --wave-threshold: var(--mat-sys-outline);
   --wave-selection: color-mix(in srgb, var(--mat-sys-primary) 8%, transparent);
   --wave-handle: var(--mat-sys-primary);
+  // Neutral on purpose: every hue on this canvas already means something (primary = the
+  // handles, tertiary = the sound being auditioned, error = a gap), so a coloured
+  // playhead would read as a *kind* of thing rather than as *where you are*. It is made
+  // legible by a halo in the canvas's own background, which holds it against both the
+  // pale bars and the tinted selection band — in either theme, without picking a side.
   --wave-playhead: var(--mat-sys-on-surface);
+  --wave-playhead-halo: var(--mat-sys-surface-container-low);
   --wave-event: color-mix(in srgb, var(--mat-sys-tertiary) 35%, transparent);
 
   display: flex;
