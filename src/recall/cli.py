@@ -1252,7 +1252,11 @@ def _cmd_repair_transcripts(args: argparse.Namespace) -> int:
     Reports by default and changes nothing; `--apply` performs the restore. A hide is
     soft, so this is recovery, not reconstruction: the turns were there all along.
     """
-    from recall.repair import find_blanked, restore  # noqa: PLC0415
+    from recall.repair import (  # noqa: PLC0415
+        find_blanked,
+        restore,
+        retract_into_silence,
+    )
 
     store = Store.open(args.out / "recall.sqlite")
     try:
@@ -1264,11 +1268,24 @@ def _cmd_repair_transcripts(args: argparse.Namespace) -> int:
                 f"{len(segment.restore):3d} turns  {segment.preview}"
             )
         print(f"\n{len(blanked)} blanked segment(s), {turns} turn(s) recoverable")
+
+        # The other half: a turn standing on audio the detector heard nothing in is a
+        # hallucination, and it blocks the cleanup by making an empty minute look
+        # transcribed.
+        junk = store.machine_turns_on_silent_audio()
+        for _turn_id, text in junk[:10]:
+            print(f"  hallucination on silence: {text[:56]!r}")
+        print(f"{len(junk)} turn(s) standing on audio the detector heard nothing in")
+
         if not args.apply:
-            print("(dry run — pass --apply to restore)")
+            print("\n(dry run — pass --apply to restore and retract)")
             return 0
         restored = restore(store, blanked)
-        print(f"restored {restored} turn(s)")
+        retracted = retract_into_silence(store)
+        print(
+            f"\nrestored {restored} turn(s); "
+            f"retracted {len(retracted)} hallucination(s)"
+        )
     finally:
         store.close()
     return 0

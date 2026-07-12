@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from recall.cleanup import HALLUCINATION_REASON, LOOP_REASON
-from recall.ids import TranscriptId
-from recall.repair import find_blanked, last_generation, restore
+from recall.ids import AudioSegmentId, TranscriptId
+from recall.repair import find_blanked, last_generation, restore, retract_into_silence
 from recall.sources import AudioSource, SourceKind
-from recall.store import Store
+from recall.store import HUMAN_MODEL, Store
 from recall.timeline import Segment
 
 BASE = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
@@ -123,3 +123,60 @@ def test_a_segment_that_still_shows_a_turn_is_never_touched() -> None:
     )
 
     assert find_blanked(store) == []
+
+
+def test_a_segment_the_detector_heard_nothing_in_gets_nothing_back() -> None:
+    """Not every provenance hide was a bug. Sometimes a later pass was correctly
+    dropping a hallucination, and restoring that resurrects garbage.
+
+    On the real archive 12 of 170 restorations did exactly that — "E aí", "т т т т" —
+    and
+    they then blocked the cleanup by making an empty minute look transcribed. The
+    detector
+    gates the restore, as it gates everything else here.
+    """
+    store, audio_id = _store_with_segment()
+    turn = store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=2),
+        text="E aí",
+        asr_model="whisper",
+    )
+    store.hide(turn, "reprocessed (turbo)")
+    store.set_audio_measurement(AudioSegmentId(audio_id), -64.0, b"\x00\x00")
+    store.set_audio_analysis(AudioSegmentId(audio_id), speech_s=0.0, structure=0.4)
+
+    assert find_blanked(store) == []  # nothing to save: there was never any speech
+
+
+def test_a_hallucination_standing_on_silence_is_retracted() -> None:
+    # It is not evidence of speech, it is evidence of an empty room — and it blocks the
+    # cleanup, keeping an hour of dead air on the disk to defend a phantom.
+    store, audio_id = _store_with_segment()
+    store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=2),
+        text="ご視聴ありがとうございました",
+        asr_model="whisper",
+    )
+    human = store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE + timedelta(seconds=3),
+        end=BASE + timedelta(seconds=4),
+        text="a human correction",
+        asr_model=HUMAN_MODEL,
+    )
+    store.set_audio_analysis(AudioSegmentId(audio_id), speech_s=0.0, structure=0.4)
+
+    retracted = retract_into_silence(store)
+    assert [text for _id, text in retracted] == ["ご視聴ありがとうございました"]
+
+    # A person's judgement outranks a model's, in both directions: the human turn
+    # stands.
+    still_there = store.machine_turns_on_silent_audio()
+    assert still_there == []  # the machine turn is gone...
+    assert human not in [
+        int(i) for i, _t in retracted
+    ]  # ...and the human one untouched

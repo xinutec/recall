@@ -67,9 +67,19 @@ def last_generation(
 
 
 def find_blanked(store: Store) -> list[Blanked]:
-    """Every segment a refine emptied: it once had turns, and now shows none."""
+    """Every segment a refine emptied *that actually held speech*.
+
+    The detector gates this. Not every provenance hide was a bug: sometimes a later
+    pass was correctly dropping a hallucination, and restoring that resurrects garbage.
+    On this archive 12 of 170 restorations did exactly that — "E aí", "т т т т",
+    repeated glyphs on -64 dB silence — and they then blocked the cleanup by making an
+    empty minute look transcribed. A segment the VAD heard nothing in gets nothing back.
+    """
+    silent = store.segments_with_no_detected_speech()
     blanked = []
     for audio_id, turns in store.segments_showing_no_turns().items():
+        if audio_id in silent:
+            continue  # the detector heard nothing here; there is no transcript to save
         restore = last_generation(turns)
         if not restore:
             continue
@@ -92,3 +102,24 @@ def restore(store: Store, blanked: list[Blanked]) -> int:
             store.unhide(int(turn_id))
             restored += 1
     return restored
+
+
+def retract_into_silence(store: Store) -> list[tuple[TranscriptId, str]]:
+    """Hide every machine turn standing on audio the detector heard nothing in.
+
+    Whisper hallucinates on silence — "Thank you.", "音楽", "E aí", a glyph repeated
+    forty times — and such a turn is not evidence of speech but of an empty room. It
+    also
+    *blocks the cleanup*: the transcript veto sees a turn and protects a minute that
+    holds nothing, so dead air stays on the disk to defend a hallucination.
+
+    The detector is the authority here as everywhere else: it listened to the audio, and
+    the audio is the fact. Human turns are never touched — a person's judgement outranks
+    a
+    model's, in both directions.
+    """
+    hidden = []
+    for turn_id, text in store.machine_turns_on_silent_audio():
+        store.hide(int(turn_id), HALLUCINATION_REASON)
+        hidden.append((turn_id, text))
+    return hidden

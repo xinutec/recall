@@ -537,6 +537,33 @@ class Store:
             )
         return blanked
 
+    def segments_with_no_detected_speech(self) -> set[AudioSegmentId]:
+        """Segments the speech detector listened to and heard nothing in."""
+        rows = self._conn.execute(
+            "SELECT id FROM audio_segments WHERE speech_s = 0.0"
+        ).fetchall()
+        return {AudioSegmentId(int(r["id"])) for r in rows}
+
+    def machine_turns_on_silent_audio(self) -> list[tuple[TranscriptId, str]]:
+        """Visible machine turns standing on audio the detector heard nothing in.
+
+        Whisper hallucinates on silence, and such a turn is not evidence of speech — it
+        is
+        evidence of an empty room. Human turns are excluded: a person's judgement
+        outranks
+        a model's.
+        """
+        rows = self._conn.execute(
+            """SELECT t.id, t.text FROM transcript_segments t
+               JOIN audio_segments a ON a.id = t.audio_segment_id
+               WHERE a.speech_s = 0.0
+                 AND t.hidden_reason IS NULL AND t.superseded_by IS NULL
+                 AND t.asr_model != ?
+               ORDER BY t.id""",
+            (HUMAN_MODEL,),
+        ).fetchall()
+        return [(TranscriptId(int(r["id"])), str(r["text"])) for r in rows]
+
     def set_source_noise_shape(self, source_id: str, shape: bytes) -> None:
         """Store a microphone's idle-noise fingerprint (see recall.spectrum)."""
         self._conn.execute(
