@@ -45,9 +45,11 @@
         <button mat-icon-button (click)="step(-1)" aria-label="Previous sound">
           <mat-icon>chevron_left</mat-icon>
         </button>
+        <!-- The icon stays outside the @if: inside it, Material cannot project it into
+             the button's icon slot (NG8011) and it renders as loose content. -->
         <button mat-button (click)="playEvent()" matTooltip="Play this sound">
+          <mat-icon>volume_up</mat-icon>
           @if (current(); as event) {
-            <mat-icon>volume_up</mat-icon>
             {{ cursor() + 1 }}/{{ count }} · {{ event.start | date: 'HH:mm:ss' }} ·
             {{ event.peakDb | number: '1.0-0' }} dB
           }

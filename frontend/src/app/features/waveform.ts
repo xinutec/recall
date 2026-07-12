@@ -139,6 +139,10 @@ export class Waveform {
   private pending?: ReturnType<typeof setTimeout>;
   private inflight?: Subscription;
   private frame = 0;
+  /** Every capture segment this waveform has ever loaded, by id. The span's own segments
+   * all arrive in the first fetch (it covers the span plus context), so the selection is
+   * complete from the outset and panning can only add to what is known, never remove. */
+  private readonly known = new Map<number, EnvelopeSegment>();
 
   constructor() {
     effect(() => {
@@ -182,6 +186,11 @@ export class Waveform {
       .quietEnvelope(source, new Date(from), new Date(to), MAX_POINTS)
       .subscribe({
         next: (envelope) => {
+          // Remember every segment ever seen. A fetch only *adds* knowledge: what the
+          // delete takes must not depend on where the view happens to be pointing.
+          for (const segment of envelope.segments) {
+            this.known.set(segment.audioId, segment);
+          }
           this.envelope.set(envelope);
           this.loading.set(false);
           this.syncSelection();
@@ -190,21 +199,28 @@ export class Waveform {
       });
   }
 
-  /** The delete takes whole segments, so the selection means "every segment that lies
-   * inside it" — a segment half-covered by a trimmed edge is kept, never guessed at. */
+  /**
+   * The delete takes whole segments, so the selection means "every segment that lies
+   * inside it" — a segment half-covered by a trimmed edge is kept, never guessed at.
+   *
+   * Derived from every segment seen, not from the ones currently on screen. Panning away
+   * from part of the span used to drop those segments out of the delete: the count fell
+   * from 100 to 85 just by dragging. Where you are looking is not what you are deleting.
+   */
   private syncSelection(): void {
-    const inside = this.segments()
+    const inside = [...this.known.values()]
       .filter(
         (s) =>
           Date.parse(s.start) >= this.selFrom() - 1 &&
           Date.parse(s.end) <= this.selTo() + 1,
       )
+      .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
       .map((s) => s.audioId);
     this.selectedIds.set(inside);
   }
 
   private segments(): readonly EnvelopeSegment[] {
-    return this.envelope()?.segments ?? [];
+    return [...this.known.values()];
   }
 
   // ---- geometry -----------------------------------------------------------------
