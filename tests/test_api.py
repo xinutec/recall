@@ -15,7 +15,7 @@ from recall.abcompare import CorrectionScore, Report, SegmentDiff, render_json
 from recall.api import _precise, _tier, clip_window
 from recall.api_models import VoiceNameIn
 from recall.asr import Word
-from recall.envelope import Measurement
+from recall.envelope import DEFAULT_EVENT_DB, Measurement
 from recall.ids import AudioSegmentId, TranscriptId
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store, TranscriptSegment
@@ -1442,10 +1442,11 @@ def test_quiet_scan_spans_and_delete(
             "end": (base + timedelta(seconds=8 * 59)).isoformat(),
         },
     ).json()
-    # A *sound* is judged at -52 dB, not at the detector's -60 dB mean: the noise
-    # floor's 0.1s crests cross -60 constantly (see recall.envelope.EVENT_DB). The line
-    # the UI draws is the one the list uses, so the picture and the list agree.
-    assert envelope["thresholdDb"] == -52.0
+    # A *sound* is judged at the level measured for THIS mic (recall.calibrate), not at
+    # the detector's -60 dB mean — the noise floor's 0.1s crests cross -60 constantly.
+    # This source is too new to have been measured, so it falls back to the default. The
+    # line the UI draws is the one the list uses, so picture and list agree.
+    assert envelope["thresholdDb"] == DEFAULT_EVENT_DB
     assert len(envelope["segments"]) == 8
     # The events are the loud segments (6 and 7), joined into one run of sound — the
     # reviewer is shown what broke the quiet, not left to find it.

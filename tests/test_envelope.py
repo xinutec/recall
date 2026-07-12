@@ -11,7 +11,7 @@ import numpy as np
 
 from recall.envelope import (
     BUCKET_S,
-    EVENT_DB,
+    DEFAULT_EVENT_DB,
     SILENCE_DB,
     UNDECODABLE,
     EnvelopeSegment,
@@ -208,26 +208,29 @@ def test_a_stored_envelope_survives_the_round_trip_at_drawing_precision() -> Non
 
 
 def test_the_sound_threshold_clears_the_noise_floor_but_catches_quiet_speech() -> None:
-    """Measured on the archive's own envelopes, and the reason EVENT_DB is not -60.
+    """Why the fallback is not -60 dB. (The real one is per mic — recall.calibrate.)
 
-    The mic's noise floor has a median of -70 dB but crests past -60 constantly, so
+    The USB mic's noise floor has a median of -70 dB but crests past -60 constantly, so
     judging sounds at the detector's -60 dB *mean* listed 1,126 of them in one 100-min
-    span of dead air — burying the real ones. The quietest utterance in the archive
+    span of dead air — burying the real ones. The quietest utterance that mic recorded
     peaks at -48.1 dB (far-field Dutch that slipped under the detector's mean).
 
-    EVENT_DB has to sit between: above the floor's crests, below the quietest speech.
+    The fallback sits between them: above the floor's crests, below the faintest
+    speech that mic has recorded.
     """
     floor_p999 = -52.1  # the noise floor's 99.9th-percentile bucket
     quietest_speech_peak = -48.1  # the faintest real turn on record
     # At or above the floor's crests, so the list is not drowned in crackle...
-    assert floor_p999 <= EVENT_DB
+    assert floor_p999 <= DEFAULT_EVENT_DB
     # ...and below the faintest speech on record, so nothing real goes unlisted.
-    assert quietest_speech_peak > EVENT_DB
+    assert quietest_speech_peak > DEFAULT_EVENT_DB
 
     # A minute of noise floor with one faint word in it: the word is the only event.
     minute: list[float | None] = [-70.0] * 600
     minute[300:310] = [quietest_speech_peak] * 10
-    events = find_events(minute, start=BASE, bucket_s=BUCKET_S, threshold_db=EVENT_DB)
+    events = find_events(
+        minute, start=BASE, bucket_s=BUCKET_S, threshold_db=DEFAULT_EVENT_DB
+    )
     assert len(events) == 1
     assert (events[0].start - BASE).total_seconds() == 30.0
 

@@ -880,8 +880,8 @@ def quiet_envelope(
     if window_end <= window_start:
         raise HTTPException(status_code=400, detail="end must be after start")
 
+    from recall.calibrate import event_threshold  # noqa: PLC0415
     from recall.envelope import (  # noqa: PLC0415
-        EVENT_DB,
         decode_envelope,
         segment_envelope,
     )
@@ -890,6 +890,8 @@ def quiet_envelope(
     try:
         rows = store.audio_segments_between(source, window_start, window_end)
         stored = store.audio_envelopes([row[0] for row in rows])
+        # What counts as a sound is a property of *this* microphone, measured from it.
+        threshold = event_threshold(store, source)
     finally:
         store.close()
 
@@ -905,7 +907,7 @@ def quiet_envelope(
         [EnvelopeSegment(*row) for row in rows],
         start=window_start,
         end=window_end,
-        threshold_db=EVENT_DB,
+        threshold_db=threshold,
         max_points=max_points,
         envelope_of=lambda path: (
             by_path[path] if path in by_path else segment_envelope(path)
@@ -915,7 +917,7 @@ def quiet_envelope(
         "start": envelope.start.isoformat(),
         "end": envelope.end.isoformat(),
         "bucketS": envelope.bucket_s,
-        "thresholdDb": EVENT_DB,
+        "thresholdDb": threshold,
         "points": list(envelope.points),
         "segments": [
             {

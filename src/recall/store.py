@@ -374,6 +374,64 @@ class Store:
         ).fetchone()
         return int(row["done"]), int(row["total"])
 
+    def sweepable_source_ids(self) -> list[str]:
+        """The continuously-recording sources — the ones a cleanup can act on, and so
+        the ones worth measuring a sound threshold for."""
+        rows = self._conn.execute(
+            "SELECT id FROM sources WHERE kind != ? ORDER BY id",
+            (SourceKind.UPLOAD.value,),
+        ).fetchall()
+        return [str(r["id"]) for r in rows]
+
+    def quiet_envelopes(
+        self, source_id: str, *, quiet_below_db: float, limit: int = 400
+    ) -> list[bytes]:
+        """Envelopes of one source's *idle* segments — quiet by volume, and with no
+        turn standing on them. This is the mic breathing and nothing else: the sample
+        its noise floor is measured from (recall.calibrate). The caller supplies the
+        volume that counts as idle: that is detection's policy, not the store's."""
+        rows = self._conn.execute(
+            """SELECT a.envelope FROM audio_segments a
+               WHERE a.source_id = ? AND a.mean_volume <= ? AND a.envelope IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM transcript_segments t
+                                 WHERE t.audio_segment_id = a.id
+                                   AND t.superseded_by IS NULL
+                                   AND t.hidden_reason IS NULL)
+               LIMIT ?""",
+            (source_id, quiet_below_db, limit),
+        ).fetchall()
+        return [bytes(r["envelope"]) for r in rows]
+
+    def speech_envelopes(self, source_id: str, *, limit: int = 400) -> list[bytes]:
+        """Envelopes of one source's segments that produced a turn that still stands —
+        audio known to contain words. Their quietest peak is the floor under which this
+        mic's threshold may never sit, or it would list none of them as sound."""
+        rows = self._conn.execute(
+            """SELECT DISTINCT a.envelope FROM audio_segments a
+               JOIN transcript_segments t ON t.audio_segment_id = a.id
+               WHERE a.source_id = ? AND a.envelope IS NOT NULL
+                 AND t.superseded_by IS NULL AND t.hidden_reason IS NULL
+               LIMIT ?""",
+            (source_id, limit),
+        ).fetchall()
+        return [bytes(r["envelope"]) for r in rows]
+
+    def set_source_event_db(self, source_id: str, event_db: float) -> None:
+        """Record a microphone's measured sound threshold (dBFS)."""
+        self._conn.execute(
+            "UPDATE sources SET event_db = ? WHERE id = ?", (event_db, source_id)
+        )
+        self._commit()
+
+    def source_event_db(self, source_id: str) -> float | None:
+        """A microphone's measured sound threshold, None if it has not been measured."""
+        row = self._conn.execute(
+            "SELECT event_db FROM sources WHERE id = ?", (source_id,)
+        ).fetchone()
+        if row is None or row["event_db"] is None:
+            return None
+        return float(row["event_db"])
+
     def audio_envelopes(
         self, audio_ids: Sequence[AudioSegmentId]
     ) -> dict[AudioSegmentId, bytes]:

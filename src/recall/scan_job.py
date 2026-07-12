@@ -17,6 +17,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from recall.calibrate import calibrate
 from recall.quiet import SWEEPABLE_KINDS, scan_segments
 from recall.store import Store
 
@@ -64,6 +65,10 @@ class ScanJob:
                 and not self._stopping
             ):
                 pass
+            # Then measure each mic from what was just read. A threshold is a property
+            # of a microphone (recall.calibrate), a new mic starts unknown, and a floor
+            # drifts — so it is re-derived every time the archive grows.
+            calibrate(store)
         finally:
             store.close()
 
