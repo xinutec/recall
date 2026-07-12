@@ -331,10 +331,16 @@ class Store:
     # --- quiet-cleanup: cached raw volume + hard-delete of confirmed quiet spans ---
 
     def set_audio_measurement(
-        self, audio_id: AudioSegmentId, mean_db: float, envelope: bytes
+        self, audio_id: AudioSegmentId, mean_db: float | None, envelope: bytes
     ) -> None:
         """Cache what one decode of a capture segment yielded — its raw mean volume
-        (dBFS) and its envelope — so no file is ever decoded for the cleanup twice."""
+        (dBFS) and its envelope — so no file is ever decoded for the cleanup twice.
+
+        `mean_db` is None for a file that would not decode: it has been *examined* (an
+        empty envelope is set), but it has no volume, and a segment without one is never
+        quiet. Recording the verdict is the point — otherwise a corrupt file would be
+        retried by every scan, for ever.
+        """
         self._conn.execute(
             "UPDATE audio_segments SET mean_volume = ?, envelope = ? WHERE id = ?",
             (mean_db, envelope, int(audio_id)),

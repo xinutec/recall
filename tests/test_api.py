@@ -1460,6 +1460,79 @@ def test_quiet_scan_spans_and_delete(
     assert client.get("/api/quiet/spans").json()["items"] == []  # nothing left to prune
 
 
+def test_an_undecodable_segment_is_examined_once_and_drawn_as_a_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The archive holds a truncated file (capture died mid-write). End to end: the scan
+    records the verdict, so the archive reads as fully measured and it is never decoded
+    again; the review draws it as a gap; and it is never offered for deletion."""
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(api, "_SCAN_JOB", None)
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+    base = datetime(2026, 7, 11, 9, 0, 0, tzinfo=UTC)
+    for i in range(3):
+        start = base + timedelta(seconds=i * 60)
+        (tmp_path / f"seg{i}.opus").write_bytes(b"audio")
+        audio_id = store.add_audio_segment(
+            Segment(
+                source_id="usb",
+                sequence=i,
+                start=start,
+                end=start + timedelta(seconds=60),
+                path=str(tmp_path / f"seg{i}.opus"),
+                sample_rate=48000,
+                channels=1,
+            )
+        )
+        store.mark_transcribed(int(audio_id))
+    store.close()
+
+    broken = str(tmp_path / "seg1.opus")  # the middle minute will not decode
+    decoded: list[str] = []
+
+    def measure_one(path: Path) -> Measurement | None:
+        decoded.append(str(path))
+        if str(path) == broken:
+            return None
+        return Measurement(mean_db=-62.0, buckets=(-62.0,) * 600)
+
+    monkeypatch.setattr("recall.quiet.measure", measure_one)
+
+    client = TestClient(api.app)
+    # Every segment is examined, including the broken one — the archive reads as done.
+    assert _await_scan(client) == {"running": False, "measured": 3, "total": 3}
+
+    _await_scan(client)  # a second scan finds nothing left to do...
+    assert sorted(decoded) == sorted(str(tmp_path / f"seg{i}.opus") for i in range(3))
+
+    # ...and the review reads the verdict rather than trying the file again.
+    def _must_not_decode(path: str) -> tuple[float, ...]:
+        raise AssertionError(f"the review decoded {path}")
+
+    monkeypatch.setattr("recall.envelope.segment_envelope", _must_not_decode)
+    envelope = client.get(
+        "/api/quiet/envelope",
+        params={
+            "source": "usb",
+            "start": base.isoformat(),
+            "end": (base + timedelta(seconds=180)).isoformat(),
+            "max_points": 1800,
+        },
+    ).json()
+    minutes = [envelope["points"][i * 600 : (i + 1) * 600] for i in range(3)]
+    assert all(v == -62.0 for v in minutes[0])
+    assert all(v is None for v in minutes[1])  # the broken minute: a gap, not silence
+    assert all(v == -62.0 for v in minutes[2])
+
+    # No volume, so it stays unknown — it splits the quiet rather than joining it.
+    spans = client.get("/api/quiet/spans", params={"min_seconds": 30}).json()["items"]
+    assert len(spans) == 2
+    assert all(len(s["audioIds"]) == 1 for s in spans)
+
+
 def test_quiet_never_offers_a_segment_that_still_bears_a_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

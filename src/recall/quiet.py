@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from recall.envelope import encode_envelope, measure
+from recall.envelope import UNDECODABLE, encode_envelope, measure
 from recall.ids import AudioSegmentId
 from recall.sources import SourceKind
 from recall.store import SegmentVolume, Store
@@ -165,13 +165,16 @@ def scan_segments(
     workers: int = SCAN_WORKERS,
     should_stop: Callable[[], bool] | None = None,
 ) -> int:
-    """Decode the sweepable segments not measured yet, caching each one's mean volume
-    and envelope. Returns how many were measured this pass; call again while that's
+    """Decode the sweepable segments not examined yet, caching each one's mean volume
+    and envelope. Returns how many were examined this pass; call again while that's
     non-zero.
 
     One decode per file, once, ever: the archive is ~9k minute-long files, so nothing
-    here may be recomputed on demand. A file that won't decode is left unmeasured —
-    unknown, and so never swept.
+    here may be recomputed on demand. A file that will not decode — truncated, corrupt,
+    a stub left by a dying recorder — is recorded as UNDECODABLE rather than skipped:
+    skipping it would leave it pending for ever, re-decoded by every scan, and the
+    archive would never read as fully measured. Its volume stays NULL, so `is_quiet`
+    vetoes it and it is never swept into a deletion; the review draws it as a gap.
 
     Decodes run several at a time. Measured: the work is ~99.5% ffmpeg (104 ms a file,
     against 0.5 ms of arithmetic), and ffmpeg is a subprocess, so the GIL is free while
@@ -181,7 +184,7 @@ def scan_segments(
     `should_stop` is checked between chunks so a long scan can be cancelled promptly.
     """
     pending = store.audio_segments_unmeasured(limit=batch, kinds=SWEEPABLE_KINDS)
-    measured = 0
+    examined = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for i in range(0, len(pending), workers):
             if should_stop is not None and should_stop():
@@ -190,12 +193,13 @@ def scan_segments(
             results = pool.map(lambda item: measure(Path(item[1])), chunk)
             for (audio_id, _path), result in zip(chunk, results, strict=True):
                 if result is None:
-                    continue
-                store.set_audio_measurement(
-                    audio_id, result.mean_db, encode_envelope(result.buckets)
-                )
-                measured += 1
-    return measured
+                    store.set_audio_measurement(audio_id, None, UNDECODABLE)
+                else:
+                    store.set_audio_measurement(
+                        audio_id, result.mean_db, encode_envelope(result.buckets)
+                    )
+                examined += 1
+    return examined
 
 
 def quiet_spans(

@@ -105,6 +105,53 @@ def test_the_scan_decodes_several_files_at_once(
     assert peak > 1, "the scan decoded one file at a time"
 
 
+def test_an_undecodable_file_is_recorded_as_examined_but_never_swept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A truncated file (capture died mid-write; the archive holds one) has no audio to
+    # measure. Skipping it would leave it pending for ever — retried by every scan, and
+    # the archive never reading as fully measured. So the verdict is recorded... but it
+    # stays *unknown*: no volume, so it can never be swept into a delete, and it breaks
+    # the quiet run it sits in rather than joining it.
+    store, ids = _store_with_capture(13)
+    broken = "/archive/usb/seg006.opus"
+    monkeypatch.setattr(
+        "recall.quiet.measure",
+        lambda p: None if str(p) == broken else _quiet_measurement(p),
+    )
+
+    assert (
+        scan_segments(store) == 13
+    )  # examined, including the one that would not decode
+    assert store.audio_segments_unmeasured(kinds=SWEEPABLE_KINDS) == []  # not retried
+
+    volumes = {
+        v.audio_id: v for v in store.audio_segment_volumes(kinds=SWEEPABLE_KINDS)
+    }
+    assert volumes[ids[6]].mean_db is None  # examined, but it has no volume
+
+    spans = quiet_spans(store, threshold_db=-60.0, min_duration_s=300.0)
+    swept = {a for span in spans for a in span.audio_ids}
+    assert ids[6] not in swept  # never deleted...
+    assert len(spans) == 2  # ...and it splits the quiet either side of it
+
+
+def test_a_rescan_does_not_retry_a_file_that_will_never_decode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _ = _store_with_capture(4)
+    calls: list[str] = []
+
+    def counting(path: object) -> Measurement | None:
+        calls.append(str(path))
+        return None  # every file is broken
+
+    monkeypatch.setattr("recall.quiet.measure", counting)
+    assert scan_segments(store) == 4
+    assert scan_segments(store) == 0  # nothing left to examine
+    assert len(calls) == 4  # decoded once each, ever
+
+
 def test_uploaded_meetings_are_never_scanned_or_swept(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

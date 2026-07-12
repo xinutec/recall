@@ -12,6 +12,7 @@ import numpy as np
 from recall.envelope import (
     BUCKET_S,
     SILENCE_DB,
+    UNDECODABLE,
     EnvelopeSegment,
     build_envelope,
     decode_envelope,
@@ -203,6 +204,13 @@ def test_a_stored_envelope_survives_the_round_trip_at_drawing_precision() -> Non
     restored = decode_envelope(encode_envelope(original))
     assert len(restored) == len(original)
     assert all(abs(a - b) < 0.05 for a, b in zip(original, restored, strict=True))
+
+
+def test_an_undecodable_verdict_reads_back_as_no_audio() -> None:
+    # UNDECODABLE is a third state, distinct from "never examined" and from a real
+    # shape. It must unpack to nothing at all, so the review draws a gap — an absence of
+    # audio, never silence, which is what would invite deleting it.
+    assert decode_envelope(UNDECODABLE) == ()
 
 
 def test_measure_takes_the_mean_and_the_shape_from_one_decode(tmp_path: Path) -> None:

@@ -893,9 +893,11 @@ def quiet_envelope(
     finally:
         store.close()
 
-    # Read the shape the scan already decoded. Only a segment measured before envelopes
-    # were stored (or not yet scanned) falls back to ffmpeg — otherwise opening a
-    # 100-minute span would decode its 130 files on the spot, every time.
+    # Read the shape the scan already decoded. Only a segment the scan has never
+    # examined falls back to ffmpeg — otherwise opening a 100-minute span would decode
+    # its 130 files on the spot, every time. Membership, not truthiness: a segment the
+    # scan found undecodable is stored as an *empty* envelope, and that is an answer
+    # (draw a gap), not a cache miss to retry against a file that will never decode.
     by_path = {
         row[1]: decode_envelope(stored[row[0]]) for row in rows if row[0] in stored
     }
@@ -905,7 +907,9 @@ def quiet_envelope(
         end=window_end,
         threshold_db=QUIET_MEAN_DB,
         max_points=max_points,
-        envelope_of=lambda path: by_path.get(path) or segment_envelope(path),
+        envelope_of=lambda path: (
+            by_path[path] if path in by_path else segment_envelope(path)
+        ),
     )
     return {
         "start": envelope.start.isoformat(),

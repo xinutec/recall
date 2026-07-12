@@ -123,6 +123,15 @@ def measure(path: Path) -> Measurement | None:
     )
 
 
+# A segment the scan looked at and could not decode: truncated, corrupt, or a stub left
+# behind by a dying recorder. Stored as an *empty* envelope — a third state, distinct
+# from NULL (never examined) and from a real shape. It matters that it is not NULL: an
+# undecodable file would otherwise be re-decoded by every scan, for ever, and the
+# archive would never read as fully measured. It stays unquiet all the same: its
+# `mean_volume` is left NULL, so `quiet.is_quiet` vetoes it and it is never swept.
+UNDECODABLE: bytes = b""
+
+
 def encode_envelope(buckets: Sequence[float]) -> bytes:
     """Pack an envelope for storage. float16 is ~0.01 dB precise over this range and
     halves the archive's cost to ~11 MB — the drawn shape cannot tell the difference."""
@@ -130,6 +139,8 @@ def encode_envelope(buckets: Sequence[float]) -> bytes:
 
 
 def decode_envelope(blob: bytes) -> tuple[float, ...]:
+    """Unpack a stored envelope. UNDECODABLE (empty) unpacks to no buckets at all, which
+    the review draws as a gap — an absence of audio, never silence."""
     return tuple(float(v) for v in np.frombuffer(blob, dtype=np.float16))
 
 
