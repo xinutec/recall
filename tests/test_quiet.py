@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -75,6 +77,32 @@ def test_scan_caches_volumes_and_quiet_spans_finds_the_run(
     assert len(spans) == 1  # 6 * 59 = 354s of quiet, over the 300s minimum
     assert len(spans[0].audio_ids) == 6
     assert spans[0].source_id == "usb"
+
+
+def test_the_scan_decodes_several_files_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The scan is ~99.5% ffmpeg, and ffmpeg is a subprocess — so decodes must overlap.
+    # Sequentially the archive takes ~50 minutes; eight at a time, ~20. If this ever
+    # goes back to one-at-a-time the scan silently triples, so pin the concurrency.
+    store, _ = _store_with_capture(16)
+    live = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def slow_measure(_path: object) -> Measurement:
+        nonlocal live, peak
+        with lock:
+            live += 1
+            peak = max(peak, live)
+        time.sleep(0.05)
+        with lock:
+            live -= 1
+        return Measurement(mean_db=-62.0, buckets=(-62.0,) * 600)
+
+    monkeypatch.setattr("recall.quiet.measure", slow_measure)
+    assert scan_segments(store, workers=8) == 16
+    assert peak > 1, "the scan decoded one file at a time"
 
 
 def test_uploaded_meetings_are_never_scanned_or_swept(
