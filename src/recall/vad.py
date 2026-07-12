@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
@@ -79,6 +80,20 @@ def _decode_mono_16k(audio_path: Path) -> bytes:
     return proc.stdout
 
 
+@lru_cache(maxsize=1)
+def _model() -> object:
+    """The Silero network, loaded once per process.
+
+    It was being loaded on *every call*: ~2s of model construction to run 0.5s of
+    detection, so the cleanup's listening pass ran at 2.5s a segment instead of 0.6s —
+    five hours instead of one. Every VAD user in the pipeline (worker, ingest, redrive)
+    was paying it too, once per clip.
+    """
+    from silero_vad import load_silero_vad  # noqa: PLC0415
+
+    return load_silero_vad()
+
+
 def silero_speech_regions(
     audio_path: Path,
     *,
@@ -94,7 +109,7 @@ def silero_speech_regions(
     """
     import numpy as np  # noqa: PLC0415 - heavy, only for the real detector
     import torch  # noqa: PLC0415
-    from silero_vad import get_speech_timestamps, load_silero_vad  # noqa: PLC0415
+    from silero_vad import get_speech_timestamps  # noqa: PLC0415
 
     pcm = _decode_mono_16k(audio_path)
     if not pcm:
@@ -105,7 +120,7 @@ def silero_speech_regions(
     audio = audio * _detection_gain(peak)
     stamps = get_speech_timestamps(
         torch.from_numpy(audio),
-        load_silero_vad(),
+        _model(),
         sampling_rate=_SAMPLE_RATE,
         threshold=threshold,
         min_speech_duration_ms=min_speech_ms,
