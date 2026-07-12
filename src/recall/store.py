@@ -330,30 +330,59 @@ class Store:
 
     # --- quiet-cleanup: cached raw volume + hard-delete of confirmed quiet spans ---
 
-    def set_audio_mean_volume(self, audio_id: AudioSegmentId, mean_db: float) -> None:
-        """Cache a capture segment's raw mean volume (dBFS), so the quiet scan measures
-        each file with ffmpeg only once."""
+    def set_audio_measurement(
+        self, audio_id: AudioSegmentId, mean_db: float, envelope: bytes
+    ) -> None:
+        """Cache what one decode of a capture segment yielded — its raw mean volume
+        (dBFS) and its envelope — so no file is ever decoded for the cleanup twice."""
         self._conn.execute(
-            "UPDATE audio_segments SET mean_volume = ? WHERE id = ?",
-            (mean_db, int(audio_id)),
+            "UPDATE audio_segments SET mean_volume = ?, envelope = ? WHERE id = ?",
+            (mean_db, envelope, int(audio_id)),
         )
         self._commit()
 
-    def audio_segments_without_volume(
+    def audio_segments_unmeasured(
         self, *, limit: int = 2000, kinds: Collection[SourceKind]
     ) -> list[tuple[AudioSegmentId, str]]:
-        """(id, path) of segments from sources of `kinds` whose raw mean volume isn't
-        measured yet. Restricted by kind because only what the caller may act on is
-        worth the ffmpeg pass."""
+        """(id, path) of segments from sources of `kinds` not yet measured. Keyed on the
+        envelope, not the volume: a segment measured before envelopes were stored still
+        owes us its shape, and the decode that gives us one gives us both."""
         placeholders = ",".join("?" * len(kinds))
         rows = self._conn.execute(
             "SELECT a.id, a.path FROM audio_segments a "
             "JOIN sources s ON s.id = a.source_id "
-            f"WHERE a.mean_volume IS NULL AND s.kind IN ({placeholders}) "
+            f"WHERE a.envelope IS NULL AND s.kind IN ({placeholders}) "
             "ORDER BY a.start_utc LIMIT ?",
             (*[k.value for k in kinds], limit),
         ).fetchall()
         return [(AudioSegmentId(int(r["id"])), str(r["path"])) for r in rows]
+
+    def measured_counts(self, *, kinds: Collection[SourceKind]) -> tuple[int, int]:
+        """(measured, total) sweepable segments — the cleanup scan's progress."""
+        placeholders = ",".join("?" * len(kinds))
+        row = self._conn.execute(
+            "SELECT count(a.envelope) AS done, count(*) AS total FROM audio_segments a "
+            "JOIN sources s ON s.id = a.source_id "
+            f"WHERE s.kind IN ({placeholders})",
+            tuple(k.value for k in kinds),
+        ).fetchone()
+        return int(row["done"]), int(row["total"])
+
+    def audio_envelopes(
+        self, audio_ids: Sequence[AudioSegmentId]
+    ) -> dict[AudioSegmentId, bytes]:
+        """The stored envelopes of `audio_ids` — the review reads these instead of
+        decoding. Segments measured before envelopes were kept are simply absent, and
+        the caller decodes those (see recall.envelope.segment_envelope)."""
+        if not audio_ids:
+            return {}
+        placeholders = ",".join("?" * len(audio_ids))
+        rows = self._conn.execute(
+            f"SELECT id, envelope FROM audio_segments WHERE id IN ({placeholders}) "
+            "AND envelope IS NOT NULL",
+            tuple(int(a) for a in audio_ids),
+        ).fetchall()
+        return {AudioSegmentId(int(r["id"])): bytes(r["envelope"]) for r in rows}
 
     def audio_segment_volumes(
         self, *, kinds: Collection[SourceKind]

@@ -367,4 +367,13 @@ _MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_ts_audio_current ON transcript_segments(audio_segment_id)
         WHERE superseded_by IS NULL AND hidden_reason IS NULL;
     """,
+    # v31 — store each segment's amplitude envelope (float16 dB per 0.1s, ~1.2 kB a
+    # minute) alongside its volume. The cleanup scan already decodes every file to
+    # measure it; keeping the shape it decoded costs one column and ~11 MB for the whole
+    # archive, and turns opening a span from a 30-second ffmpeg storm (a 100-minute span
+    # is 130 files) into a read. It also survives a restart, which an in-process cache
+    # does not. NULL = not measured since this landed.
+    """
+    ALTER TABLE audio_segments ADD COLUMN envelope BLOB;
+    """,
 )

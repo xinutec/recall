@@ -52,8 +52,18 @@ export class RecallApi {
   }
 
   /** Measure one batch of segments' raw volume; call until `measured` is 0. */
+  /** Start measuring the archive. The work runs on the server and outlives the page, so
+   * this returns immediately; watch it with `quietScanProgress`. */
   quietScan(): Observable<QuietScan> {
     return this.http.post<QuietScan>('/api/quiet/scan', {});
+  }
+
+  quietScanProgress(): Observable<QuietScan> {
+    return this.http.get<QuietScan>('/api/quiet/scan');
+  }
+
+  quietScanStop(): Observable<QuietScan> {
+    return this.http.post<QuietScan>('/api/quiet/scan/stop', {});
   }
 
   /** The long total-quiet spans proposed for deletion. */

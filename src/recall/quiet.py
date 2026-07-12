@@ -36,14 +36,13 @@ its boundaries corrected, by a person; nothing here is automatic.
 
 from __future__ import annotations
 
-import re
-import subprocess
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from recall.envelope import encode_envelope, measure
 from recall.ids import AudioSegmentId
 from recall.sources import SourceKind
 from recall.store import SegmentVolume, Store
@@ -61,8 +60,6 @@ MAX_GAP_S = 2.0
 # Continuous capture only. UPLOAD is an imported recording (a meeting) — the archive's
 # most valuable audio, never a stream of idle noise, so never a delete candidate.
 SWEEPABLE_KINDS = frozenset(SourceKind) - {SourceKind.UPLOAD}
-
-_MEAN_VOLUME = re.compile(r"mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB")
 
 
 @dataclass(frozen=True)
@@ -92,33 +89,6 @@ def is_quiet(segment: SegmentVolume, threshold_db: float) -> bool:
         and segment.transcribed
         and not segment.has_speech
     )
-
-
-def measure_mean_volume(path: Path) -> float | None:
-    """The raw mean volume (dBFS) of an audio file via ffmpeg volumedetect, or None if
-    it can't be read. Measured on the *untouched* file (no loudnorm) so the noise floor
-    stays distinguishable from speech."""
-    try:
-        out = subprocess.run(
-            [
-                "ffmpeg",
-                "-hide_banner",
-                "-i",
-                str(path),
-                "-af",
-                "volumedetect",
-                "-f",
-                "null",
-                "-",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return None
-    match = _MEAN_VOLUME.search(out.stderr)
-    return float(match.group(1)) if match else None
 
 
 def _source_spans(
@@ -183,18 +153,37 @@ def find_quiet_spans(
     return sorted(spans, key=lambda s: (s.start, s.source_id))
 
 
-def scan_volumes(store: Store, *, batch: int = 2000) -> int:
-    """Measure and cache the raw mean volume of sweepable segments not measured yet.
-    ffmpeg per file is slow over the whole archive, so it's cached and resumable — this
-    returns how many were measured this pass; call again while that's non-zero."""
+def scan_segments(
+    store: Store,
+    *,
+    batch: int = 2000,
+    on_progress: Callable[[], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> int:
+    """Decode the sweepable segments not measured yet, caching each one's mean
+    volume and envelope. Returns how many were measured this pass; call again while
+    that's non-zero.
+
+    One decode per file, once, ever: the archive is ~9k minute-long files and a full
+    pass is ~20 minutes of ffmpeg, so nothing here may be recomputed on demand. A file
+    that won't decode is left unmeasured — unknown, and so never swept.
+
+    `should_stop` is checked between files so a long scan can be cancelled promptly.
+    """
     measured = 0
-    for audio_id, path in store.audio_segments_without_volume(
+    for audio_id, path in store.audio_segments_unmeasured(
         limit=batch, kinds=SWEEPABLE_KINDS
     ):
-        mean_db = measure_mean_volume(Path(path))
-        if mean_db is not None:
-            store.set_audio_mean_volume(audio_id, mean_db)
+        if should_stop is not None and should_stop():
+            break
+        result = measure(Path(path))
+        if result is not None:
+            store.set_audio_measurement(
+                audio_id, result.mean_db, encode_envelope(result.buckets)
+            )
             measured += 1
+        if on_progress is not None:
+            on_progress()
     return measured
 
 

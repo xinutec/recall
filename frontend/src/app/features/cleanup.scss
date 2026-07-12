@@ -18,6 +18,27 @@
     color: var(--mat-sys-on-surface-variant);
   }
 
+  .scan {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+
+    .progress {
+      flex: 1;
+      min-width: 14rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+
+      .count {
+        font: var(--mat-sys-body-small);
+        color: var(--mat-sys-on-surface-variant);
+        font-variant-numeric: tabular-nums;
+      }
+    }
+  }
+
   mat-panel-description {
     justify-content: flex-end;
     gap: 1rem;

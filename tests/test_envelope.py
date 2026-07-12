@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -13,7 +14,10 @@ from recall.envelope import (
     SILENCE_DB,
     EnvelopeSegment,
     build_envelope,
+    decode_envelope,
+    encode_envelope,
     find_events,
+    measure,
     peak_pool,
     rms_db,
     segment_envelope,
@@ -189,6 +193,38 @@ def test_events_are_found_on_the_fine_grid_not_the_zoomed_one() -> None:
     assert (event.start - BASE).total_seconds() == 7 * 60 + 30.0
     assert round(event.end.timestamp() - event.start.timestamp(), 1) == 0.2
     assert event.peak_db == -38.0
+
+
+def test_a_stored_envelope_survives_the_round_trip_at_drawing_precision() -> None:
+    # float16 halves the archive's cost. Over the dB range we draw it is ~0.01 dB
+    # precise, which no waveform can show — but a *systematic* shift would move bars
+    # across the quiet threshold, so pin the error rather than trusting the format.
+    original = (-62.3, -61.9, -55.0, -41.4, SILENCE_DB, -20.0)
+    restored = decode_envelope(encode_envelope(original))
+    assert len(restored) == len(original)
+    assert all(abs(a - b) < 0.05 for a, b in zip(original, restored, strict=True))
+
+
+def test_measure_takes_the_mean_and_the_shape_from_one_decode(tmp_path: Path) -> None:
+    # The scan decodes ~9k files; it must never do it twice. One pass yields both the
+    # volume the detector judges on and the shape the review draws.
+    quiet = tmp_path / "quiet.opus"
+    subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+            "-filter:a", "volume=-40dB", str(quiet),
+        ],
+        check=True,
+    )  # fmt: skip
+    measured = measure(quiet)
+    assert measured is not None
+    assert len(measured.buckets) == 20  # 2s at 0.1s buckets
+    # A steady tone: every bucket reads the same level, and the whole-file mean agrees
+    # with them — the two numbers are two views of the same samples, not two decodes.
+    assert max(measured.buckets) - min(measured.buckets) < 0.5
+    assert abs(measured.mean_db - measured.buckets[10]) < 0.5
+    assert measured.mean_db < -20.0  # quiet by any reading; the detector's bar is -60
 
 
 def test_a_corrupt_file_decodes_to_nothing_rather_than_raising(tmp_path: Path) -> None:

@@ -1,5 +1,12 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
-import { DatePipe } from '@angular/common';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  DestroyRef,
+  computed,
+  inject,
+  signal,
+} from '@angular/core';
+import { DatePipe, DecimalPipe } from '@angular/common';
 import { MatCardModule } from '@angular/material/card';
 import { MatButtonModule } from '@angular/material/button';
 import { MatExpansionModule } from '@angular/material/expansion';
@@ -7,11 +14,13 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSnackBar } from '@angular/material/snack-bar';
 
-import { QuietSpan } from '../models';
+import { QuietScan, QuietSpan } from '../models';
 import { RecallApi } from '../recall-api';
 import { Waveform } from './waveform';
 
 const MIN_SECONDS = 300;
+/** The scan is ~20 minutes of ffmpeg; a couple of seconds is a live-enough progress bar. */
+const POLL_MS = 2000;
 
 /**
  * Prune long total-quiet capture — the mic's noise floor, no speech, most of the archive
@@ -24,6 +33,7 @@ const MIN_SECONDS = 300;
   selector: 'app-cleanup',
   imports: [
     DatePipe,
+    DecimalPipe,
     MatCardModule,
     MatButtonModule,
     MatExpansionModule,
@@ -43,15 +53,33 @@ export class Cleanup {
   // a cached list could offer already-deleted spans; freshness is the point here.
   readonly spans = signal<readonly QuietSpan[]>([]);
   readonly loading = signal(true);
-  readonly scanning = signal(false);
-  readonly measured = signal(0);
+  readonly scan = signal<QuietScan | null>(null);
+
+  protected readonly scanning = computed(() => this.scan()?.running ?? false);
+  protected readonly measured = computed(() => this.scan()?.measured ?? 0);
+  protected readonly total = computed(() => this.scan()?.total ?? 0);
+  protected readonly percent = computed(() => {
+    const scan = this.scan();
+    return scan?.total ? (scan.measured / scan.total) * 100 : 0;
+  });
+  /** True once every segment has been measured — there is nothing left to scan. */
+  protected readonly complete = computed(() => {
+    const scan = this.scan();
+    return !!scan && !scan.running && scan.measured >= scan.total && scan.total > 0;
+  });
 
   /** What each open span's waveform has selected — the segments a delete would take,
    * after any trimming. Keyed by span, so trimming one never touches another. */
   private readonly selected = new Map<QuietSpan, readonly number[]>();
 
+  private poll?: ReturnType<typeof setInterval>;
+
   constructor() {
     this.load();
+    // A scan may already be under way — started here, from another tab, or before this
+    // page was ever opened. Show it either way: the job is the server's, not the page's.
+    this.refreshScan();
+    inject(DestroyRef).onDestroy(() => clearInterval(this.poll));
   }
 
   private load(): void {
@@ -66,24 +94,40 @@ export class Cleanup {
     });
   }
 
-  /** Measure the archive one batch at a time (cached), then reload the spans. */
-  scan(): void {
-    this.scanning.set(true);
-    const step = (): void => {
-      this.api.quietScan().subscribe({
-        next: (result) => {
-          this.measured.update((n) => n + result.measured);
-          if (result.measured > 0) {
-            step();
-          } else {
-            this.scanning.set(false);
-            this.load();
-          }
-        },
-        error: () => this.scanning.set(false),
+  /** Ask the server to measure the archive. The work is the server's — it survives this
+   * page being closed — so all this does is start it and watch. */
+  protected startScan(): void {
+    this.api.quietScan().subscribe((scan) => {
+      this.scan.set(scan);
+      this.watch();
+    });
+  }
+
+  protected stopScan(): void {
+    this.api.quietScanStop().subscribe((scan) => this.scan.set(scan));
+  }
+
+  private refreshScan(): void {
+    this.api.quietScanProgress().subscribe((scan) => {
+      this.scan.set(scan);
+      if (scan.running) {
+        this.watch();
+      }
+    });
+  }
+
+  private watch(): void {
+    clearInterval(this.poll);
+    this.poll = setInterval(() => {
+      this.api.quietScanProgress().subscribe((scan) => {
+        const finished = this.scanning() && !scan.running;
+        this.scan.set(scan);
+        if (finished) {
+          clearInterval(this.poll);
+          this.load(); // new spans have appeared behind the scan
+        }
       });
-    };
-    step();
+    }, POLL_MS);
   }
 
   protected minutes(span: QuietSpan): number {

@@ -1249,12 +1249,12 @@ def _cmd_sync(args: argparse.Namespace) -> int:
 def _cmd_scan_quiet(args: argparse.Namespace) -> int:
     """Measure each capture segment's raw volume (cached, resumable) and list the long
     total-quiet spans — candidates for the cleanup UI to review and delete."""
-    from recall.quiet import quiet_spans, scan_volumes  # noqa: PLC0415
+    from recall.quiet import quiet_spans, scan_segments  # noqa: PLC0415
 
     store = Store.open(args.out / "recall.sqlite")
     try:
         measured = 0
-        while (n := scan_volumes(store)) > 0:
+        while (n := scan_segments(store)) > 0:
             measured += n
             print(f"scan-quiet: measured {measured} segments...", flush=True)
         spans = quiet_spans(store, min_duration_s=float(args.min_seconds))

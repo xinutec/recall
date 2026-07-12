@@ -71,6 +71,7 @@ from recall.review import (
     review_queue,
     split_correction,
 )
+from recall.scan_job import ScanJob
 from recall.schemas import (
     AbCompareRunOut,
     AbCompareRunsOut,
@@ -130,6 +131,8 @@ from recall.transcript_view import clean_transcript
 
 DATA_ROOT = Path(os.environ.get("RECALL_OUT", "/Volumes/Backup/recall"))
 _log = logging.getLogger("recall.api")
+# The one background archive-measuring scan (see recall.scan_job), created on first use.
+_SCAN_JOB: ScanJob | None = None
 # Train pre-fills "sounds like X" only when the leading candidate's likelihood
 # (softmax over the enrolled people) clears this — a confirmable hint, not a coin
 # flip. The timeline still shows every guess with its %.
@@ -788,18 +791,49 @@ def unhide(body: UnhideIn) -> OkOut:
         store.close()
 
 
-@app.post("/api/quiet/scan")
-def quiet_scan(batch: int = 200) -> QuietScanOut:
-    """Measure a batch of not-yet-measured capture segments (ffmpeg per file). The UI
-    calls this until `measured` is 0, then loads the spans — the scan is cached, so this
-    is a one-time cost."""
-    from recall.quiet import scan_volumes  # noqa: PLC0415 - keeps ffmpeg use local
+def _scan_job() -> ScanJob:
+    """The one scan job, made lazily so it binds to DATA_ROOT as the tests patch it."""
+    global _SCAN_JOB  # noqa: PLW0603 - one job per process, by design
+    if _SCAN_JOB is None:
+        _SCAN_JOB = ScanJob(_store)
+    return _SCAN_JOB
 
-    store = _store()
-    try:
-        return {"measured": scan_volumes(store, batch=batch)}
-    finally:
-        store.close()
+
+@app.post("/api/quiet/scan")
+def quiet_scan_start() -> QuietScanOut:
+    """Start measuring the archive in the background, and report where it's got to.
+
+    The work outlives the request (~20 minutes of ffmpeg), so this returns at once.
+    Calling it while a scan runs joins that one rather than starting a second. Poll GET
+    for progress; the scan is durable, so closing the page is harmless.
+    """
+    job = _scan_job()
+    job.start()
+    return _scan_progress(job)
+
+
+@app.get("/api/quiet/scan")
+def quiet_scan_progress() -> QuietScanOut:
+    """How far measuring the archive has got, and whether it is still running."""
+    return _scan_progress(_scan_job())
+
+
+@app.post("/api/quiet/scan/stop")
+def quiet_scan_stop() -> QuietScanOut:
+    """Stop the scan after the file it's on. Everything measured stays measured, so this
+    pauses rather than discards — starting again resumes."""
+    job = _scan_job()
+    job.stop()
+    return _scan_progress(job)
+
+
+def _scan_progress(job: ScanJob) -> QuietScanOut:
+    progress = job.progress()
+    return {
+        "running": progress.running,
+        "measured": progress.measured,
+        "total": progress.total,
+    }
 
 
 @app.get("/api/quiet/spans")
@@ -847,18 +881,31 @@ def quiet_envelope(
     if window_end <= window_start:
         raise HTTPException(status_code=400, detail="end must be after start")
 
+    from recall.envelope import (  # noqa: PLC0415
+        decode_envelope,
+        segment_envelope,
+    )
+
     store = _store()
     try:
         rows = store.audio_segments_between(source, window_start, window_end)
+        stored = store.audio_envelopes([row[0] for row in rows])
     finally:
         store.close()
 
+    # Read the shape the scan already decoded. Only a segment measured before envelopes
+    # were stored (or not yet scanned) falls back to ffmpeg — otherwise opening a
+    # 100-minute span would decode its 130 files on the spot, every time.
+    by_path = {
+        row[1]: decode_envelope(stored[row[0]]) for row in rows if row[0] in stored
+    }
     envelope = build_envelope(
         [EnvelopeSegment(*row) for row in rows],
         start=window_start,
         end=window_end,
         threshold_db=QUIET_MEAN_DB,
         max_points=max_points,
+        envelope_of=lambda path: by_path.get(path) or segment_envelope(path),
     )
     return {
         "start": envelope.start.isoformat(),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,7 @@ from recall.abcompare import CorrectionScore, Report, SegmentDiff, render_json
 from recall.api import _precise, _tier, clip_window
 from recall.api_models import VoiceNameIn
 from recall.asr import Word
+from recall.envelope import Measurement
 from recall.ids import AudioSegmentId, TranscriptId
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store, TranscriptSegment
@@ -1322,6 +1324,63 @@ def test_context_roundtrip_over_http(
     assert client.get("/api/context").json() == {"text": "Alice is left-handed."}
 
 
+def _await_scan(client: TestClient, timeout_s: float = 10.0) -> dict[str, object]:
+    """Start the background scan and wait for it to finish, as the page's poll does."""
+    scan: dict[str, object] = client.post("/api/quiet/scan").json()
+    deadline = time.monotonic() + timeout_s
+    while scan["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+        scan = client.get("/api/quiet/scan").json()
+    assert not scan["running"], f"scan did not finish in {timeout_s}s: {scan}"
+    return scan
+
+
+def test_a_second_scan_request_joins_the_running_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two tabs (or two clicks) must not run two scans: they'd decode the same files
+    twice and race each other's writes. The second request joins the first."""
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(api, "_SCAN_JOB", None)
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+    base = datetime(2026, 7, 11, 9, 0, 0, tzinfo=UTC)
+    for i in range(4):
+        start = base + timedelta(seconds=i * 59)
+        (tmp_path / f"seg{i}.opus").write_bytes(b"audio")
+        audio_id = store.add_audio_segment(
+            Segment(
+                source_id="usb",
+                sequence=i,
+                start=start,
+                end=start + timedelta(seconds=59),
+                path=str(tmp_path / f"seg{i}.opus"),
+                sample_rate=48000,
+                channels=1,
+            )
+        )
+        store.mark_transcribed(int(audio_id))
+    store.close()
+
+    decoded: list[str] = []
+
+    def measure_once(path: Path) -> Measurement:
+        decoded.append(str(path))
+        time.sleep(0.05)  # long enough that the second request lands mid-scan
+        return Measurement(mean_db=-62.0, buckets=(-62.0,) * 600)
+
+    monkeypatch.setattr("recall.quiet.measure", measure_once)
+
+    client = TestClient(api.app)
+    client.post("/api/quiet/scan")
+    client.post("/api/quiet/scan")  # a second tab, while the first is still going
+    _await_scan(client)
+
+    assert sorted(decoded) == sorted(str(tmp_path / f"seg{i}.opus") for i in range(4))
+
+
 def test_quiet_scan_spans_and_delete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1352,20 +1411,29 @@ def test_quiet_scan_spans_and_delete(
     vols = {
         str(tmp_path / f"seg{i}.opus"): (-62.0 if i < 6 else -50.0) for i in range(8)
     }
-    monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda p: vols[str(p)])
+    monkeypatch.setattr(
+        "recall.quiet.measure",
+        lambda p: Measurement(mean_db=vols[str(p)], buckets=(vols[str(p)],) * 600),
+    )
+    monkeypatch.setattr(api, "_SCAN_JOB", None)  # a fresh job, bound to this data root
 
     client = TestClient(api.app)
-    assert client.post("/api/quiet/scan").json()["measured"] == 8
+    assert _await_scan(client) == {"running": False, "measured": 8, "total": 8}
     items = client.get("/api/quiet/spans", params={"min_seconds": 300}).json()["items"]
     assert len(items) == 1
     assert len(items[0]["audioIds"]) == 6  # the 6 quiet segments (354s > 300s)
     assert items[0]["source"] == "usb"
 
-    # The waveform behind the review: the quiet run, plus the sound that ended it.
-    monkeypatch.setattr(
-        "recall.envelope.segment_envelope",
-        lambda path: (-62.0,) * 590 if vols[path] < -60 else (-45.0,) * 590,
-    )
+    # The waveform behind the review is READ, not decoded: the scan already decoded
+    # every file, and re-decoding a 100-minute span's 130 files each time it is opened
+    # is what made this page unusable. Any call to ffmpeg here is a bug.
+    def _must_not_decode(path: str) -> tuple[float, ...]:
+        raise AssertionError(
+            f"the review decoded {path}; it must read the stored shape"
+        )
+
+    monkeypatch.setattr("recall.envelope.segment_envelope", _must_not_decode)
+
     envelope = client.get(
         "/api/quiet/envelope",
         params={
@@ -1379,7 +1447,7 @@ def test_quiet_scan_spans_and_delete(
     # The events are the loud segments (6 and 7), joined into one run of sound — the
     # reviewer is shown what broke the quiet, not left to find it.
     assert len(envelope["events"]) == 1
-    assert envelope["events"][0]["peakDb"] == -45.0
+    assert envelope["events"][0]["peakDb"] == -50.0
     assert envelope["events"][0]["start"].startswith("2026-07-11T09:05:54")
 
     deleted = client.post(
@@ -1430,10 +1498,14 @@ def test_quiet_never_offers_a_segment_that_still_bears_a_turn(
         asr_model="whisper",
     )
     store.close()
-    monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda _p: -62.0)
+    monkeypatch.setattr(
+        "recall.quiet.measure",
+        lambda _p: Measurement(mean_db=-62.0, buckets=(-62.0,) * 600),
+    )
+    monkeypatch.setattr(api, "_SCAN_JOB", None)
 
     client = TestClient(api.app)
-    client.post("/api/quiet/scan")
+    _await_scan(client)
     items = client.get("/api/quiet/spans", params={"min_seconds": 100}).json()["items"]
 
     swept = {a for span in items for a in span["audioIds"]}

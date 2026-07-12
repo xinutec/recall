@@ -107,7 +107,9 @@ export interface QuietSpanList {
 }
 
 export interface QuietScan {
+  readonly running: boolean;
   readonly measured: number;
+  readonly total: number;
 }
 
 export interface QuietDeleted {

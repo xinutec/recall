@@ -6,13 +6,19 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from recall.envelope import Measurement
 from recall.ids import AudioSegmentId
-from recall.quiet import SWEEPABLE_KINDS, find_quiet_spans, quiet_spans, scan_volumes
+from recall.quiet import SWEEPABLE_KINDS, find_quiet_spans, quiet_spans, scan_segments
 from recall.sources import AudioSource, SourceKind
 from recall.store import SegmentVolume, Store
 from recall.timeline import Segment
 
 BASE = datetime(2026, 7, 11, 9, 0, 0, tzinfo=UTC)
+
+
+def _quiet_measurement(_path: object) -> Measurement:
+    """A minute of untouched noise floor, as the scan's single decode would see it."""
+    return Measurement(mean_db=-62.0, buckets=(-62.0,) * 600)
 
 
 def _add_source(store: Store, source_id: str, kind: SourceKind) -> None:
@@ -57,12 +63,13 @@ def test_scan_caches_volumes_and_quiet_spans_finds_the_run(
     vols = {
         f"/archive/usb/seg{i:03d}.opus": (-62.0 if i < 6 else -50.0) for i in range(8)
     }
-    monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda p: vols[str(p)])
+    monkeypatch.setattr(
+        "recall.quiet.measure",
+        lambda p: Measurement(mean_db=vols[str(p)], buckets=(vols[str(p)],) * 600),
+    )
 
-    assert scan_volumes(store) == 8
-    assert (
-        store.audio_segments_without_volume(kinds=SWEEPABLE_KINDS) == []
-    )  # all cached
+    assert scan_segments(store) == 8
+    assert store.audio_segments_unmeasured(kinds=SWEEPABLE_KINDS) == []  # all cached
 
     spans = quiet_spans(store, threshold_db=-60.0, min_duration_s=300.0)
     assert len(spans) == 1  # 6 * 59 = 354s of quiet, over the 300s minimum
@@ -78,9 +85,9 @@ def test_uploaded_meetings_are_never_scanned_or_swept(
     store = Store.memory()
     _add_source(store, "meeting-1", SourceKind.UPLOAD)
     _add_segments(store, "meeting-1", 10)
-    monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda _p: -62.0)
+    monkeypatch.setattr("recall.quiet.measure", _quiet_measurement)
 
-    assert scan_volumes(store) == 0  # not even measured — it can't be acted on
+    assert scan_segments(store) == 0  # not even measured — it can't be acted on
     assert quiet_spans(store, min_duration_s=300.0) == []
 
 
@@ -94,8 +101,8 @@ def test_two_mics_recording_at_once_do_not_share_a_span(
     _add_source(store, "pixel9", SourceKind.TCP_PCM)
     _add_segments(store, "usb", 10)
     _add_segments(store, "pixel9", 10)
-    monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda _p: -62.0)
-    scan_volumes(store)
+    monkeypatch.setattr("recall.quiet.measure", _quiet_measurement)
+    scan_segments(store)
 
     spans = quiet_spans(store, threshold_db=-60.0, min_duration_s=300.0)
     assert len(spans) == 2
@@ -236,8 +243,8 @@ def test_store_marks_segments_that_still_bear_a_turn(
         asr_model="whisper",
     )
     store.hide(hidden, reason="no speech detected (VAD)")
-    monkeypatch.setattr("recall.quiet.measure_mean_volume", lambda _p: -62.0)
-    scan_volumes(store)
+    monkeypatch.setattr("recall.quiet.measure", _quiet_measurement)
+    scan_segments(store)
 
     volumes = {
         v.audio_id: v for v in store.audio_segment_volumes(kinds=SWEEPABLE_KINDS)

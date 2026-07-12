@@ -9,10 +9,32 @@
       Step through them loudest-first (speech, if any is in there, is the loud one), trim
       the edges if the detector reached too far, then delete. Deletion is permanent.
     </p>
-    <button mat-stroked-button (click)="scan()" [disabled]="scanning()">
-      <mat-icon>graphic_eq</mat-icon>
-      {{ scanning() ? 'Scanning… ' + measured() + ' measured' : 'Scan for quiet' }}
-    </button>
+    <!-- The scan runs on the server, so this page only starts it and watches. Closing
+         the tab no longer stops it, and reopening picks the progress back up. -->
+    <div class="scan">
+      @if (scanning()) {
+        <button mat-stroked-button (click)="stopScan()">
+          <mat-icon>stop</mat-icon> Stop scanning
+        </button>
+      } @else {
+        <button mat-stroked-button (click)="startScan()" [disabled]="complete()">
+          <mat-icon>graphic_eq</mat-icon>
+          {{ complete() ? 'Whole archive measured' : 'Scan for quiet' }}
+        </button>
+      }
+
+      @if (total() && !complete()) {
+        <div class="progress">
+          <mat-progress-bar mode="determinate" [value]="percent()" />
+          <span class="count">
+            {{ measured() | number }} / {{ total() | number }} segments measured
+            @if (scanning()) {
+              · scanning
+            }
+          </span>
+        </div>
+      }
+    </div>
   </header>
 
   @if (loading()) {

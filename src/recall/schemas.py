@@ -158,7 +158,12 @@ class QuietSpansOut(TypedDict):
 
 
 class QuietScanOut(TypedDict):
-    measured: int  # segments measured this pass; 0 = the scan is complete
+    """The archive-measuring scan — a background job on the server, watched by the
+    page (it outlives the tab, so progress is reported, not accumulated client-side)."""
+
+    running: bool
+    measured: int  # segments measured so far — durable, so this only ever goes up
+    total: int
 
 
 class QuietDeletedOut(TypedDict):

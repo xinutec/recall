@@ -91,23 +91,56 @@ def rms_db(buckets: np.ndarray) -> np.ndarray:
     return floored
 
 
-@lru_cache(maxsize=1024)
-def segment_envelope(path: str) -> tuple[float, ...]:
-    """dBFS per BUCKET_S of one capture segment, empty if it can't be decoded.
+@dataclass(frozen=True)
+class Measurement:
+    """What one decode of a capture segment yields: how loud it was overall, and its
+    shape. Both come from the same pass — the scan pays for the decode either way."""
 
-    A corrupt or vanished file reads as a gap, never as silence — the archive holds a
-    few, and one of them must not take down the review of everything around it. Cached:
-    the files are immutable, and panning or zooming re-reads the same segments over.
+    mean_db: float
+    buckets: tuple[float, ...]
+
+
+def measure(path: Path) -> Measurement | None:
+    """Decode a capture segment once and take both its mean volume and its envelope.
+
+    None if it can't be read: a corrupt or vanished file is *unknown*, never silence —
+    the archive holds a few, and neither the detector nor the review may treat one as
+    empty. `mean_db` is RMS over the whole file (what ffmpeg's volumedetect reports), so
+    it stays comparable with volumes measured before envelopes were kept.
     """
     try:
-        pcm = decode_pcm_f32(Path(path), sample_rate=DECODE_RATE)
+        pcm = decode_pcm_f32(path, sample_rate=DECODE_RATE)
     except (OSError, ValueError, subprocess.CalledProcessError):
-        return ()
+        return None
     frames = int(BUCKET_S * DECODE_RATE)
     usable = len(pcm) // frames * frames
     if usable == 0:
-        return ()
-    return tuple(float(v) for v in rms_db(pcm[:usable].reshape(-1, frames)))
+        return None
+    whole = rms_db(pcm[:usable].reshape(1, -1))
+    buckets = rms_db(pcm[:usable].reshape(-1, frames))
+    return Measurement(
+        mean_db=float(whole[0]), buckets=tuple(float(v) for v in buckets)
+    )
+
+
+def encode_envelope(buckets: Sequence[float]) -> bytes:
+    """Pack an envelope for storage. float16 is ~0.01 dB precise over this range and
+    halves the archive's cost to ~11 MB — the drawn shape cannot tell the difference."""
+    return np.asarray(buckets, dtype=np.float16).tobytes()
+
+
+def decode_envelope(blob: bytes) -> tuple[float, ...]:
+    return tuple(float(v) for v in np.frombuffer(blob, dtype=np.float16))
+
+
+@lru_cache(maxsize=1024)
+def segment_envelope(path: str) -> tuple[float, ...]:
+    """dBFS per BUCKET_S of one capture segment by decoding it — the fallback for a
+    segment scanned before envelopes were stored, or never scanned at all. Empty if it
+    can't be decoded (a gap, never silence). Cached, since panning and zooming the
+    review re-read the same segments over and over."""
+    measured = measure(Path(path))
+    return measured.buckets if measured else ()
 
 
 def peak_pool(fine: Sequence[float | None], factor: int) -> list[float | None]:
