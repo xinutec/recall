@@ -86,24 +86,44 @@ def _replace_turns(  # noqa: PLR0913 - the whole per-segment write context
     written: list[tuple[int, int, AlignedTurn]] = []
     with store.transaction():
         existing = list(store.visible_machine_turns_for_audio(audio_id))
-        # Guard: refuse to replace a substantial transcript with a far smaller one.
-        # That's a degenerate pass, and hiding the good turns would blank the recording.
+
+        # Decide what will actually be written BEFORE anything is hidden. The filters
+        # below (repetition loops, spans a human has already corrected) can drop turns,
+        # and the old code applied them *after* hiding — so a pass whose every turn was
+        # filtered out, or which produced none at all, hid the transcript and wrote
+        # nothing in its place. It blanked 132 segments of real household conversation
+        # that way, including a minute of Dutch about writing things down to remember
+        # them. A refine replaces a transcript or it keeps it. It never empties one.
+        keep = [
+            turn
+            for turn in aligned
+            if not is_repetition_loop(turn.text)
+            and not _hits_human(
+                segment_start + timedelta(seconds=turn.start),
+                segment_start + timedelta(seconds=turn.end),
+                human,
+            )
+        ]
+        if existing and not keep:
+            return None
+
+        # Guard: refuse to replace a substantial transcript with a far smaller one — a
+        # degenerate pass, and hiding the good turns would gut the recording. Counted on
+        # what survives the filters, not on what the model emitted: a pass whose output
+        # is all repetition loops looks big here and writes nothing.
         existing_chars = sum(len(o.text) for o in existing)
-        new_chars = sum(len(t.text) for t in aligned)
+        new_chars = sum(len(t.text) for t in keep)
         if (
             existing_chars >= _COVERAGE_REF_MIN_CHARS
             and new_chars < _MIN_COVERAGE_RATIO * existing_chars
         ):
             return None
+
         for old in existing:
             store.hide(old.id, f"{DIARIZED_MARKER} ({model_name})")
-        for index, turn in enumerate(aligned):
-            if is_repetition_loop(turn.text):
-                continue
+        for index, turn in enumerate(keep):
             start = segment_start + timedelta(seconds=turn.start)
             end = segment_start + timedelta(seconds=turn.end)
-            if _hits_human(start, end, human):
-                continue  # ground truth already covers this span
             turn_id = store.add_transcript_segment(
                 audio_segment_id=audio_id,
                 start=start,

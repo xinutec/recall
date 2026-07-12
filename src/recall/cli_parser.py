@@ -407,4 +407,13 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "--min-seconds", type=int, default=300, help="shortest quiet span to report"
     )
 
+    rt = sub.add_parser(
+        "repair-transcripts",
+        help="restore transcripts a refine hid without replacing (dry run by default)",
+    )
+    rt.add_argument("--out", type=Path, default=Path("data"), help="data root")
+    rt.add_argument(
+        "--apply", action="store_true", help="actually restore (default: just report)"
+    )
+
     return parser

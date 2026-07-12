@@ -580,3 +580,46 @@ def test_refine_source_redrives_a_finished_segment(tmp_path: Path) -> None:
     assert "dit is nieuw" in by_text  # re-derived
     assert by_text["dit is nieuw"].speaker_cluster == "SPEAKER_00"
     assert "already aligned" not in by_text  # the prior version superseded
+
+
+def test_a_refine_that_produces_nothing_keeps_the_transcript(tmp_path: Path) -> None:
+    """A refine replaces a transcript or it keeps it. It never empties one.
+
+    The old code hid the existing turns and *then* applied the filters that drop a turn
+    (a repetition loop, a span a human already corrected). A pass whose every turn was
+    filtered out — or which produced none at all — therefore hid the transcript and
+    wrote
+    nothing in its place. It blanked 175 segments of real household conversation that
+    way,
+    among them a minute of Dutch about writing things down in order to remember them.
+    """
+    flac = tmp_path / "usb-20260619T130000.flac"
+    make_flac(flac, 4.0)
+    store = Store.memory()
+    audio_id = _seg(store, flac)
+    store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=4),
+        text="Schrijf dingen op, zoals die recepten",
+        asr_model="old",
+    )
+
+    # The diarizer finds no speaker at all, so the pass yields no turns to write.
+    result = _result("nl", (0.0, 0.5, " ja"), (0.5, 1.0, " ja"), (1.0, 1.5, " ja"))
+
+    def diarizer(_a: Path) -> list[SpeakerTurn]:
+        return []
+
+    added = refine_diarized(
+        store,
+        diarizer,
+        lambda _a: result,
+        _embed,
+        work_dir=tmp_path / "work",
+        model_name="diarized-v1",
+    )
+
+    assert added == 0
+    kept = store.visible_machine_turns_for_audio(audio_id)
+    assert [t.text for t in kept] == ["Schrijf dingen op, zoals die recepten"]

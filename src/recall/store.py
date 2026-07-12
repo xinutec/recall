@@ -504,6 +504,39 @@ class Store:
             return None
         return float(row["peak"])
 
+    def segments_showing_no_turns(
+        self,
+    ) -> dict[AudioSegmentId, list[tuple[TranscriptId, str, str]]]:
+        """Segments that once had turns and now show none — the ones a refine emptied.
+
+        Returns each one's hidden turns as (id, hidden_reason, text) in id order, so the
+        caller can pick the newest generation to bring back (recall.repair). Superseded
+        turns are excluded: those were properly replaced, and their replacement stands.
+        """
+        rows = self._conn.execute(
+            """SELECT t.audio_segment_id AS audio_id, t.id, t.hidden_reason, t.text
+               FROM transcript_segments t
+               WHERE t.audio_segment_id IS NOT NULL
+                 AND t.hidden_reason IS NOT NULL
+                 AND t.superseded_by IS NULL
+                 AND NOT EXISTS (
+                     SELECT 1 FROM transcript_segments v
+                     WHERE v.audio_segment_id = t.audio_segment_id
+                       AND v.superseded_by IS NULL AND v.hidden_reason IS NULL)
+               ORDER BY t.audio_segment_id, t.id"""
+        ).fetchall()
+        blanked: dict[AudioSegmentId, list[tuple[TranscriptId, str, str]]] = {}
+        for row in rows:
+            audio_id = AudioSegmentId(int(row["audio_id"]))
+            blanked.setdefault(audio_id, []).append(
+                (
+                    TranscriptId(int(row["id"])),
+                    str(row["hidden_reason"]),
+                    str(row["text"]),
+                )
+            )
+        return blanked
+
     def set_source_noise_shape(self, source_id: str, shape: bytes) -> None:
         """Store a microphone's idle-noise fingerprint (see recall.spectrum)."""
         self._conn.execute(

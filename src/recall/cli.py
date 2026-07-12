@@ -1246,6 +1246,34 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_repair_transcripts(args: argparse.Namespace) -> int:
+    """Restore transcripts a refine pass hid and never replaced (see recall.repair).
+
+    Reports by default and changes nothing; `--apply` performs the restore. A hide is
+    soft, so this is recovery, not reconstruction: the turns were there all along.
+    """
+    from recall.repair import find_blanked, restore  # noqa: PLC0415
+
+    store = Store.open(args.out / "recall.sqlite")
+    try:
+        blanked = find_blanked(store)
+        turns = sum(len(b.restore) for b in blanked)
+        for segment in blanked:
+            print(
+                f"  seg {int(segment.audio_id):<6} "
+                f"{len(segment.restore):3d} turns  {segment.preview}"
+            )
+        print(f"\n{len(blanked)} blanked segment(s), {turns} turn(s) recoverable")
+        if not args.apply:
+            print("(dry run — pass --apply to restore)")
+            return 0
+        restored = restore(store, blanked)
+        print(f"restored {restored} turn(s)")
+    finally:
+        store.close()
+    return 0
+
+
 def _cmd_scan_quiet(args: argparse.Namespace) -> int:
     """Measure each capture segment's raw volume (cached, resumable) and list the long
     total-quiet spans — candidates for the cleanup UI to review and delete."""
@@ -1285,6 +1313,7 @@ _COMMANDS = {
     "backup": _cmd_backup,
     "sync": _cmd_sync,
     "scan-quiet": _cmd_scan_quiet,
+    "repair-transcripts": _cmd_repair_transcripts,
     "verify": _cmd_verify,
     "index": _cmd_index,
     "transcribe": _cmd_transcribe,
