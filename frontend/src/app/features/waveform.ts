@@ -17,6 +17,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { Subscription } from 'rxjs';
 
+import { reportToServer } from '../logging';
 import { Envelope, EnvelopeSegment, SoundEvent } from '../models';
 import { RecallApi } from '../recall-api';
 
@@ -108,7 +109,13 @@ export class Waveform {
   protected readonly hover = signal<{ at: number; db: number | null } | null>(null);
 
   protected readonly height = HEIGHT_PX;
+  /** Whether sound is actually coming out — set from the element's own `playing` event,
+   * never from having asked it to play. */
   protected readonly playing = signal(false);
+  /** Why nothing is coming out, when nothing is. Shown, not swallowed. */
+  protected readonly problem = signal<string | null>(null);
+  /** The segment the playhead is currently running through. */
+  private origin: EnvelopeSegment | null = null;
 
   /**
    * Every audible thing inside the *selection* — what a delete would actually destroy.
@@ -177,6 +184,7 @@ export class Waveform {
     });
 
     effect(() => this.draw());
+    effect(() => this.listen(this.audioRef().nativeElement));
 
     const observer = new ResizeObserver(([entry]) =>
       this.width.set(Math.round(entry.contentRect.width)),
@@ -345,54 +353,102 @@ export class Waveform {
 
   // ---- playback -----------------------------------------------------------------
 
-  /** Play from an absolute time: seek into the segment covering it, then run on through
-   * the following segments — the point is to *hear* the edge, which straddles files. */
+  /**
+   * Play from an absolute time: seek into the segment covering it, then run on through
+   * the following segments — the point is to *hear* the edge, which straddles files.
+   *
+   * Nothing here declares itself to be playing. `playing` is driven by the audio element
+   * (see `listen`), because the previous version set it to true the moment it *asked* for
+   * playback and dropped the returned promise on the floor. On the phone, playback that
+   * was rejected still lit the Stop button: the UI claimed sound was coming out when none
+   * was. A control that lies about a deletion review is worse than one that fails.
+   */
   private playFrom(at: number): void {
     const segment = this.segments().find(
       (s) => Date.parse(s.start) <= at && at < Date.parse(s.end),
     );
     if (!segment) {
+      // No audio here (a gap, or beyond what's loaded). Say so; don't sit there mute.
       this.stop();
+      this.problem.set('nothing recorded at that point');
       return;
     }
     const audio = this.audioRef().nativeElement;
     const offset = (at - Date.parse(segment.start)) / 1000;
-    const url = this.api.quietAudioUrl(segment.audioId);
-    const seek = (): void => {
+    this.problem.set(null);
+    this.origin = segment;
+
+    const start = (): void => {
       audio.currentTime = offset;
-      void audio.play();
+      audio.play().catch((error: unknown) => this.failed(segment, error));
     };
-    if (audio.dataset['audioId'] === String(segment.audioId)) {
-      seek();
+    if (audio.dataset['audioId'] === String(segment.audioId) && audio.readyState > 0) {
+      start();
     } else {
       audio.dataset['audioId'] = String(segment.audioId);
-      audio.src = url;
-      audio.addEventListener('loadedmetadata', seek, { once: true });
+      audio.src = this.api.quietAudioUrl(segment.audioId);
+      audio.addEventListener('loadedmetadata', start, { once: true });
+      audio.load(); // the WebView will not always fetch on src alone
     }
-    this.playing.set(true);
-    this.track(segment);
   }
 
-  /** Follow the playhead in real time, and roll into the next segment when one ends. */
-  private track(segment: EnvelopeSegment): void {
+  /** Bind the UI to what the audio element is *actually* doing. The phone has no console,
+   * so a refusal to play is also reported to the server (logs/client.log) — otherwise a
+   * silent Play button leaves no trace anywhere. */
+  private listen(audio: HTMLAudioElement): void {
+    audio.addEventListener('playing', () => {
+      this.playing.set(true);
+      this.problem.set(null);
+      this.follow();
+    });
+    audio.addEventListener('pause', () => this.playing.set(false));
+    audio.addEventListener('ended', () => {
+      const from = this.origin;
+      if (from) {
+        this.playFrom(Date.parse(from.end) + 1); // roll into the next segment
+      }
+    });
+    audio.addEventListener('error', () =>
+      this.failed(this.origin, audio.error?.message ?? 'media error'),
+    );
+    audio.addEventListener('stalled', () =>
+      this.problem.set('audio stalled — the segment is not arriving'),
+    );
+  }
+
+  private failed(segment: EnvelopeSegment | null, error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error);
+    this.playing.set(false);
+    this.playhead.set(null);
+    this.problem.set(`could not play: ${detail}`);
+    reportToServer(
+      'audio',
+      `waveform play failed (segment ${segment?.audioId ?? '?'}): ${detail}`,
+    );
+  }
+
+  /** Follow the playhead while sound is actually coming out. Started from the `playing`
+   * event, not from the request to play: on a fresh segment the element is still loading
+   * then, so the old version's loop saw `paused` and exited before the first frame. */
+  private follow(): void {
     cancelAnimationFrame(this.frame);
     const audio = this.audioRef().nativeElement;
     const tick = (): void => {
-      if (audio.paused) {
+      const from = this.origin;
+      if (audio.paused || !from) {
         return;
       }
-      this.playhead.set(Date.parse(segment.start) + audio.currentTime * 1000);
+      this.playhead.set(Date.parse(from.start) + audio.currentTime * 1000);
       this.frame = requestAnimationFrame(tick);
     };
-    audio.onended = () => this.playFrom(Date.parse(segment.end) + 1);
     this.frame = requestAnimationFrame(tick);
   }
 
   protected stop(): void {
     const audio = this.audioRef().nativeElement;
     audio.pause();
-    audio.onended = null;
     cancelAnimationFrame(this.frame);
+    this.origin = null;
     this.playing.set(false);
     this.playhead.set(null);
   }

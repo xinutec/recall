@@ -130,6 +130,44 @@ describe('Waveform', () => {
     expect(c.events()).toHaveLength(1); // the sound is still in what would be deleted
   });
 
+  it('does not claim to be playing when the browser refuses to play', async () => {
+    // The phone showed a lit Stop button with no sound coming out: `playing` was set the
+    // moment playback was *asked for*, and the rejected promise was dropped. "I heard
+    // nothing" and "it never played" then look identical — in a view used to approve
+    // deleting audio, that is the worst possible failure.
+    const { fixture, c } = setup();
+    vi.advanceTimersByTime(200);
+
+    const audio = (fixture.nativeElement as HTMLElement).querySelector('audio')!;
+    const refused = new Error('NotAllowedError');
+    vi.spyOn(audio, 'play').mockRejectedValue(refused);
+    vi.spyOn(audio, 'load').mockImplementation(() => undefined);
+
+    c.playSpan();
+    audio.dispatchEvent(new Event('loadedmetadata')); // metadata arrives; play() is asked
+    await vi.waitFor(() => expect(c.playing()).toBe(false));
+
+    expect(c.playing()).toBe(false);
+    expect(c.problem()).toContain('could not play');
+  });
+
+  it('reports it is playing only once sound is actually coming out', () => {
+    const { fixture, c } = setup();
+    vi.advanceTimersByTime(200);
+    const audio = (fixture.nativeElement as HTMLElement).querySelector('audio')!;
+    vi.spyOn(audio, 'play').mockResolvedValue(undefined);
+    vi.spyOn(audio, 'load').mockImplementation(() => undefined);
+
+    c.playSpan();
+    expect(c.playing()).toBe(false); // asked, but nothing is out yet
+
+    audio.dispatchEvent(new Event('playing')); // the element says sound is flowing
+    expect(c.playing()).toBe(true);
+
+    audio.dispatchEvent(new Event('pause'));
+    expect(c.playing()).toBe(false);
+  });
+
   it('narrows the selection only when an edge is trimmed', () => {
     const { c } = setup();
     vi.advanceTimersByTime(200);

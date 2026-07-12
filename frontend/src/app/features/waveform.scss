@@ -69,6 +69,15 @@
     }
   }
 
+  .problem {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0;
+    color: var(--mat-sys-error);
+    font: var(--mat-sys-body-small);
+  }
+
   audio {
     display: none;
   }

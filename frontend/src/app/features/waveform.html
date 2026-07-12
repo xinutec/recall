@@ -73,5 +73,11 @@
     }
   </div>
 
+  <!-- A Play button that does nothing, silently, is the worst thing this view can do:
+       "I heard nothing" and "it never played" are indistinguishable to you. -->
+  @if (problem(); as why) {
+    <p class="problem"><mat-icon>error_outline</mat-icon> {{ why }}</p>
+  }
+
   <audio #player preload="none"></audio>
 </div>
