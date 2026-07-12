@@ -190,10 +190,14 @@ class SpanSound:
 
 
 def summarize_sound(envelopes: Sequence[bytes], threshold_db: float) -> SpanSound:
-    """Reduce a span's stored envelopes to how much sound is in it. Pure, and cheap —
-    the shapes are decoded already, so ranking 138 spans costs half a second."""
-    decoded = [np.asarray(decode_envelope(e), dtype=np.float32) for e in envelopes if e]
-    buckets = np.concatenate(decoded) if decoded else np.zeros(0, dtype=np.float32)
+    """Reduce a span's stored envelopes to how much sound is in it. Pure.
+
+    Reads the buffers straight into numpy rather than through `decode_envelope`.
+    Ranking the whole archive touches ~5 million buckets, and materialising each as a
+    Python float cost a second on every page load — for numbers only numpy ever sees.
+    """
+    decoded = [np.frombuffer(e, dtype=np.float16) for e in envelopes if e]
+    buckets = np.concatenate(decoded) if decoded else np.zeros(0, dtype=np.float16)
     if not buckets.size:
         return SpanSound(loudest_db=None, margin_db=None, sound_seconds=0.0)
     loudest = float(buckets.max())
