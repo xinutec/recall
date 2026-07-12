@@ -40,11 +40,22 @@ function segment(index: number): EnvelopeSegment {
   };
 }
 
-/** The server returns the segments overlapping the requested window — and only those. */
+/** A sound two minutes into the span — the kind a delete has to account for. */
+const SOUND = {
+  start: new Date(Date.parse(SPAN_START) + 120_000).toISOString(),
+  end: new Date(Date.parse(SPAN_START) + 121_000).toISOString(),
+  peakDb: -41,
+};
+
+/** The server reports only what overlaps the requested window — segments and sounds. */
 function envelopeFor(from: Date, to: Date): Envelope {
   const segments = Array.from({ length: 10 }, (_, i) => segment(i)).filter(
     (s) => Date.parse(s.start) < to.getTime() && Date.parse(s.end) > from.getTime(),
   );
+  const events =
+    Date.parse(SOUND.start) < to.getTime() && Date.parse(SOUND.end) > from.getTime()
+      ? [SOUND]
+      : [];
   return {
     start: from.toISOString(),
     end: to.toISOString(),
@@ -52,7 +63,7 @@ function envelopeFor(from: Date, to: Date): Envelope {
     thresholdDb: -60,
     points: [],
     segments,
-    events: [],
+    events,
   };
 }
 
@@ -102,6 +113,21 @@ describe('Waveform', () => {
     vi.advanceTimersByTime(200);
 
     expect(c.selectedIds()).toEqual(whole);
+  });
+
+  it('still reports the span\'s sounds when the view is panned off them', () => {
+    // The dangerous version of the same bug: panned away, the sound list emptied and the
+    // UI said "no sound at all in this span" — a reassurance about audio it was not even
+    // looking at, in a view whose whole job is approving a deletion.
+    const { c } = setup();
+    vi.advanceTimersByTime(200);
+    expect(c.events()).toHaveLength(1);
+
+    c.viewFrom.set(Date.parse(SPAN_END));
+    c.viewTo.set(Date.parse(SPAN_END) + 600_000);
+    vi.advanceTimersByTime(200);
+
+    expect(c.events()).toHaveLength(1); // the sound is still in what would be deleted
   });
 
   it('narrows the selection only when an edge is trimmed', () => {

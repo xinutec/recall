@@ -94,6 +94,13 @@ export class Waveform {
   private readonly selTo = signal(0);
 
   private readonly envelope = signal<Envelope | null>(null);
+  // dev-lint: allow-component-list the sounds belong to *this span*, not to the app —
+  // re-deriving them when the panel is reopened is the correct behaviour, and caching
+  // them in a store would risk showing one span's sounds against another's audio.
+  /** The sounds in the span itself, from a fetch that covered the whole of it. Zooming
+   * and panning never touch this: the events are found on the same fine grid whatever
+   * the zoom, so a window that covers the span is the definitive answer for it. */
+  private readonly spanEvents = signal<readonly SoundEvent[]>([]);
   private readonly width = signal(0);
   private readonly playhead = signal<number | null>(null);
   protected readonly loading = signal(true);
@@ -108,13 +115,18 @@ export class Waveform {
    * Sounds in the padding either side are context (they're why the quiet ended), not
    * things to account for, so they're left out of the count.
    *
+   * Taken from the span's own envelope, never the visible one. Panning away from the
+   * span used to empty this list and the UI then said "no sound at all in this span" —
+   * a reassurance about audio it simply wasn't looking at, in a view whose whole job is
+   * approving a deletion.
+   *
    * Ordered loudest first, which is the order that answers the only question that
    * matters here: is any of this speech? A span holds dozens of half-second crests of
    * the noise floor itself; speech would be the loud one. So the first few steps cover
    * the real risk, and the long quiet tail is there if you want it.
    */
   protected readonly events = computed(() =>
-    [...(this.envelope()?.events ?? [])]
+    [...this.spanEvents()]
       .filter(
         (e) =>
           Date.parse(e.start) >= this.selFrom() && Date.parse(e.end) <= this.selTo(),
@@ -190,6 +202,14 @@ export class Waveform {
           // delete takes must not depend on where the view happens to be pointing.
           for (const segment of envelope.segments) {
             this.known.set(segment.audioId, segment);
+          }
+          // Likewise the sounds: only a window that covers the whole span can speak for
+          // it. A narrower one knows less, and must not be allowed to say so.
+          if (
+            Date.parse(envelope.start) <= this.spanFrom() &&
+            Date.parse(envelope.end) >= this.spanTo()
+          ) {
+            this.spanEvents.set(envelope.events);
           }
           this.envelope.set(envelope);
           this.loading.set(false);
@@ -394,9 +414,23 @@ export class Waveform {
 
   protected playEvent(): void {
     const event = this.current();
-    if (event) {
-      this.playFrom(Date.parse(event.start) - EVENT_LEAD_IN_MS);
+    if (!event) {
+      return;
     }
+    this.bringIntoView(Date.parse(event.start), Date.parse(event.end));
+    this.playFrom(Date.parse(event.start) - EVENT_LEAD_IN_MS);
+  }
+
+  /** Scroll the view to a sound that isn't on screen. Hearing something you cannot see
+   * is no way to judge it — and after panning, the next sound is usually elsewhere. */
+  private bringIntoView(from: number, to: number): void {
+    if (from >= this.viewFrom() && to <= this.viewTo()) {
+      return;
+    }
+    const span = this.viewTo() - this.viewFrom();
+    const middle = (from + to) / 2;
+    this.viewFrom.set(middle - span / 2);
+    this.viewTo.set(middle + span / 2);
   }
 
   private localX(event: PointerEvent | WheelEvent): number {
