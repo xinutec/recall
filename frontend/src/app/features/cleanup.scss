@@ -39,16 +39,48 @@
     }
   }
 
-  mat-panel-description {
-    justify-content: flex-end;
-    gap: 1rem;
+  // Let the header row grow to fit its text. Material fixes it at 48px, which is why a
+  // wrapped line on a phone spilled out of the row and over the span below.
+  --mat-expansion-header-collapsed-state-height: auto;
+  --mat-expansion-header-expanded-state-height: auto;
 
-    .range {
-      font-variant-numeric: tabular-nums;
+  mat-panel-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.15rem 0.75rem;
+    padding: 0.6rem 0;
+    margin-right: 0.5rem;
+
+    .duration {
+      // Never split "15 min quiet" across lines — it is the thing being identified.
+      white-space: nowrap;
     }
 
-    .meta {
+    .when,
+    .what {
       color: var(--mat-sys-on-surface-variant);
+      font: var(--mat-sys-body-medium);
+      white-space: nowrap;
+    }
+
+    .when {
+      font-variant-numeric: tabular-nums;
+      margin-left: auto; // pushed right when there's room; wraps below when there isn't
+    }
+  }
+
+  // Narrow: the duration takes its own line and the two facts sit beneath it, rather
+  // than three items fighting over one row.
+  @media (width <= 34rem) {
+    mat-panel-title {
+      .duration {
+        flex-basis: 100%;
+      }
+
+      .when {
+        margin-left: 0;
+      }
     }
   }
 

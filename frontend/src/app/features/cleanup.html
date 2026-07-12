@@ -48,16 +48,20 @@
     <mat-accordion multi>
       @for (span of spans(); track span.audioIds[0]) {
         <mat-expansion-panel>
+          <!-- One wrapping line, not Material's title/description columns: on a phone
+               those columns are too narrow, so each wraps onto two lines inside a
+               fixed-height row and the text collides with the span below. Here the row
+               grows instead, and the duration keeps its own line once it is tight. -->
           <mat-expansion-panel-header>
-            <mat-panel-title>{{ minutes(span) }} min quiet</mat-panel-title>
-            <mat-panel-description>
-              <span class="range">
-                {{ span.start | date: 'MMM d, HH:mm' }} – {{ span.end | date: 'HH:mm' }}
+            <mat-panel-title>
+              <span class="duration">{{ minutes(span) }} min quiet</span>
+              <span class="when">
+                {{ span.start | date: 'd MMM, HH:mm' }}–{{ span.end | date: 'HH:mm' }}
               </span>
-              <span class="meta">
+              <span class="what">
                 {{ span.source }} · {{ span.audioIds.length }} segments
               </span>
-            </mat-panel-description>
+            </mat-panel-title>
           </mat-expansion-panel-header>
 
           <!-- Deferred: a panel's waveform decodes its whole span with ffmpeg the moment
