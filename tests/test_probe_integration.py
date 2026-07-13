@@ -12,7 +12,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from conftest import make_flac
-from recall.probe import scan_segments
+from recall.probe import scan_segments, scan_source
 from recall.timeline import find_gaps
 
 
@@ -53,3 +53,58 @@ def test_missing_segment_is_detected_as_gap(tmp_path: Path) -> None:
     gaps = find_gaps(segments, tolerance=timedelta(milliseconds=100))
     assert len(gaps) == 1
     assert gaps[0].duration == timedelta(seconds=1)
+
+
+def test_a_zero_byte_file_is_reported_as_a_tombstone_not_probed(tmp_path: Path) -> None:
+    """46 of these sat in the real archive from June, unindexed and unmentioned.
+
+    Capture opened the file and wrote nothing — it died on the spot. The scan used to
+    hand each one to ffprobe, watch it fail, and `continue` with the note "retried next
+    pass". They were: every worker pass, for three weeks, re-probed all 46 (an ffprobe
+    *and* a full decode each), and because they were never indexed, nothing in the
+    archive knew they existed.
+    """
+    source_dir = tmp_path / "usb"
+    source_dir.mkdir()
+    make_flac(source_dir / "usb-20260613T120000.flac", 1.0)
+    dead = source_dir / "usb-20260613T120001.flac"
+    dead.touch()  # zero bytes: capture opened it and died
+
+    scan = scan_source(source_dir, "usb")
+
+    kept = source_dir / "usb-20260613T120000.flac"
+    assert [s.path for s in scan.segments] == [str(kept)]
+    assert scan.empty == [dead]
+    assert scan.unreadable == []
+
+
+def test_a_file_still_being_written_is_never_called_dead(tmp_path: Path) -> None:
+    # The guard that makes removing an empty file safe. Capture writes the header a
+    # moment after opening the file, so a *live* segment is briefly zero bytes — and
+    # deleting the file capture is recording into would destroy audio as it arrives.
+    # The min-age bar keeps it out of the scan entirely, empty or not.
+    source_dir = tmp_path / "usb"
+    source_dir.mkdir()
+    live = source_dir / "usb-20260613T120000.flac"
+    live.touch()  # just opened by capture: zero bytes, this instant
+
+    scan = scan_source(source_dir, "usb", min_age_seconds=120.0)
+
+    assert scan.empty == []  # not dead — just young
+    assert scan.segments == []
+
+
+def test_a_corrupt_but_non_empty_file_is_reported_and_kept(tmp_path: Path) -> None:
+    # Truncated mid-write: ffprobe refuses it, but there may be real audio in those
+    # bytes. It is named in the log and left exactly where it is. Only a file with
+    # nothing in it at all is removed.
+    source_dir = tmp_path / "usb"
+    source_dir.mkdir()
+    corrupt = source_dir / "usb-20260613T120000.flac"
+    corrupt.write_bytes(b"fLaC\x00\x00 truncated")
+
+    scan = scan_source(source_dir, "usb")
+
+    assert scan.unreadable == [corrupt]
+    assert scan.empty == []
+    assert corrupt.exists()

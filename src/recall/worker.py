@@ -9,6 +9,7 @@ guard. Idempotent: a transcribed segment is never redone.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from pathlib import Path
@@ -16,10 +17,12 @@ from pathlib import Path
 from recall.asr import Transcriber
 from recall.diarize import Diarizer
 from recall.ingest import ingest_diarized, ingest_transcripts
-from recall.probe import scan_segments
+from recall.probe import Scan, scan_source
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
 from recall.vad import Vad
+
+_log = logging.getLogger("recall.worker")
 
 DEFAULT_MIN_AGE_S = 120.0
 
@@ -77,6 +80,33 @@ def discover_source_ids(root: Path) -> list[str]:
     return sorted(ids)
 
 
+def _clear_dead_stubs(scan: Scan) -> None:
+    """Remove the zero-byte files capture left behind, and *say* it — loudly.
+
+    A zero-byte capture file holds no audio and never will: a segment path carries its
+    own timestamp, so capture never reopens one. It is a tombstone marking the instant
+    capture died. Left in place it is not harmless — the indexer re-probed 46 of them on
+    every pass for three weeks, and, being unindexed, they were invisible to every check
+    the archive has.
+
+    So they go, and each one is logged with its time. That log line is the *only*
+    durable record that capture failed at that moment: the timeline gap says audio is
+    missing, but not that anything went wrong. A file that is unreadable but NOT empty
+    may still hold audio, so it is only reported, never removed.
+    """
+    for path in scan.unreadable:
+        _log.warning(
+            "unreadable capture file (kept — it may still hold audio): %s", path
+        )
+    for path in scan.empty:
+        try:
+            path.unlink()
+        except OSError as err:  # read-only volume, vanished file: report, don't crash
+            _log.warning("could not remove empty capture file %s: %s", path, err)
+            continue
+        _log.warning("capture died here — removed empty file: %s", path.name)
+
+
 def process_pending(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     store: Store,
     root: Path,
@@ -104,10 +134,12 @@ def process_pending(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     # guard applies here at INDEX time too: a partial file probes fine but yields
     # a truncated duration that would be recorded permanently.
     known = frozenset(path for _, path in store.audio_segment_paths())
-    for segment in scan_segments(
+    scan = scan_source(
         audio_dir, source.id, known=known, min_age_seconds=min_age_seconds, now=current
-    ):
+    )
+    for segment in scan.segments:
         store.add_audio_segment(segment)
+    _clear_dead_stubs(scan)
 
     pending = [
         segment

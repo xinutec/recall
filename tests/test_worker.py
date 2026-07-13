@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from recall.asr import AsrResult, AsrSegment
 from recall.probe import scan_segments
@@ -253,3 +256,46 @@ def test_reconcile_live_hides_rather_than_superseding(tmp_path: Path) -> None:
         s.text for s in store.segments_in_range(base, base + timedelta(seconds=10))
     }
     assert visible == {"different archive words"}
+
+
+def test_the_worker_clears_capture_tombstones_and_keeps_corrupt_audio(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The 46 empty files that sat in the real archive from June, unnoticed.
+
+    A zero-byte capture file holds no audio and never will — capture never reopens a
+    timestamped path. It marks the instant capture died. Left alone it was re-probed on
+    every pass for three weeks and, being unindexed, was invisible to every check the
+    archive has. So the worker removes it and logs it, and that line becomes the only
+    durable record that capture failed there.
+
+    A file unreadable but NOT empty is a different thing: there may be real audio in
+    those bytes. It is reported and kept.
+    """
+    audio_dir = tmp_path / "usb"
+    _capture_two_segments(audio_dir)
+    tombstone = audio_dir / "usb-20260613T120010.flac"
+    tombstone.touch()  # capture opened it and wrote nothing
+    corrupt = audio_dir / "usb-20260613T120020.flac"
+    corrupt.write_bytes(b"fLaC truncated mid-write")
+
+    store = Store.memory()
+    with caplog.at_level(logging.WARNING):
+        process_pending(
+            store,
+            tmp_path,
+            USB,
+            _stub_transcriber,
+            model_name="stub",
+            min_age_seconds=0.0,
+        )
+
+    assert not tombstone.exists()  # gone...
+    assert "capture died here" in caplog.text  # ...and it said so
+    assert tombstone.name in caplog.text
+
+    assert corrupt.exists()  # kept: it may hold audio
+    assert "unreadable capture file" in caplog.text
+
+    # Neither is in the archive; only the two real recordings are.
+    assert len(store.audio_segment_paths()) == 2

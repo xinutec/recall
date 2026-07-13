@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -72,14 +73,35 @@ def probe_media(path: Path) -> tuple[timedelta, int, int]:
     return _decode_duration(path, sample_rate, channels), sample_rate, channels
 
 
-def scan_segments(
+@dataclass(frozen=True)
+class Scan:
+    """What a pass over one source's directory found — including what it could not read.
+
+    The unreadable files used to be dropped on the floor with a `continue` and the note
+    "retried next pass". They were: 46 zero-byte files sat in this archive from June,
+    re-probed (an ffprobe *and* a full decode, each) on every worker pass since, and
+    nothing ever said so. A file the pipeline cannot read is a fact about the archive,
+    not a thing to silently skip forever.
+    """
+
+    segments: list[Segment]
+    # Zero bytes: capture opened the file and wrote nothing to it — it died or was
+    # killed on the spot. It holds no audio and never will (a segment path carries its
+    # own timestamp, so capture never reopens one). It is a tombstone, not a recording.
+    empty: list[Path]
+    # Non-empty, but ffprobe refuses it: truncated mid-write, or corrupt. This one may
+    # still hold audio, so it is only reported — never removed.
+    unreadable: list[Path]
+
+
+def scan_source(
     source_dir: Path,
     source_id: str,
     *,
     known: frozenset[str] = frozenset(),
     min_age_seconds: float = 0.0,
     now: float | None = None,
-) -> list[Segment]:
+) -> Scan:
     """Reconstruct the timeline of `source_id`'s segments under `source_dir`.
 
     Paths in `known` are skipped without probing — probing decodes the whole file,
@@ -90,25 +112,33 @@ def scan_segments(
     Opus/FLAC still being written by capture probes FINE and yields its truncated
     duration — indexing it would record a short end permanently (the path lands in
     `known` and is never re-probed). Skipped files are picked up on a later scan,
-    once finalised.
+    once finalised. That guard is also what makes an empty file safe to call dead: one
+    still being written is younger than the bar and never reaches this.
     """
     current = time.time() if now is None else now
     segments: list[Segment] = []
+    empty: list[Path] = []
+    unreadable: list[Path] = []
     for path in sorted(source_dir.glob(f"{source_id}-*")):
         if str(path) in known:
             continue
         try:
-            too_young = current - path.stat().st_mtime < min_age_seconds
+            stat = path.stat()
         except FileNotFoundError:
             continue  # vanished between glob and stat
-        if too_young:
+        if current - stat.st_mtime < min_age_seconds:
+            continue
+        if stat.st_size == 0:
+            # Not probed: there is nothing to probe. Two subprocesses saved per file
+            # per pass, and — more to the point — it gets *reported* instead of being
+            # skipped in silence.
+            empty.append(path)
             continue
         start = parse_segment_start(path.name)
         try:
             duration, sample_rate, channels = probe_media(path)
         except (subprocess.CalledProcessError, ValueError):
-            # Genuinely unreadable (e.g. zero-byte crash leftover) — skip rather
-            # than crash the scan; retried next pass.
+            unreadable.append(path)
             continue
         segments.append(
             Segment(
@@ -122,15 +152,38 @@ def scan_segments(
             )
         )
     segments.sort(key=lambda s: s.start)
-    return [
-        Segment(
-            source_id=s.source_id,
-            sequence=index,
-            start=s.start,
-            end=s.end,
-            path=s.path,
-            sample_rate=s.sample_rate,
-            channels=s.channels,
-        )
-        for index, s in enumerate(segments)
-    ]
+    return Scan(
+        segments=[
+            Segment(
+                source_id=s.source_id,
+                sequence=index,
+                start=s.start,
+                end=s.end,
+                path=s.path,
+                sample_rate=s.sample_rate,
+                channels=s.channels,
+            )
+            for index, s in enumerate(segments)
+        ],
+        empty=empty,
+        unreadable=unreadable,
+    )
+
+
+def scan_segments(
+    source_dir: Path,
+    source_id: str,
+    *,
+    known: frozenset[str] = frozenset(),
+    min_age_seconds: float = 0.0,
+    now: float | None = None,
+) -> list[Segment]:
+    """Just the readable segments (see `scan_source`) — for callers rebuilding a
+    timeline, who have nothing useful to do about a file that will not open."""
+    return scan_source(
+        source_dir,
+        source_id,
+        known=known,
+        min_age_seconds=min_age_seconds,
+        now=now,
+    ).segments
