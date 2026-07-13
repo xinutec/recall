@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
 import { MatDialog } from '@angular/material/dialog';
 import { MatSnackBar } from '@angular/material/snack-bar';
-import { EMPTY, of, throwError } from 'rxjs';
+import { EMPTY, Subject, of, throwError } from 'rxjs';
 import { HttpErrorResponse } from '@angular/common/http';
 import { expect, it, vi } from 'vitest';
 
@@ -92,4 +92,39 @@ it('says so when a delete fails, instead of looking like it worked', () => {
   const [message] = snack.open.mock.calls[0] as [string];
   expect(message).toContain('failed');
   expect(message).toContain('nothing was removed');
+});
+
+it('a second delete never clears the first one\'s in-flight state', () => {
+  // What happened on the real archive: two deletes were started in sequence, the second
+  // while the first was still running. `deleting` held a *single* span, so starting the
+  // second silently cleared the first — its button flipped back from "Deleting…" to
+  // "Delete" and re-enabled itself mid-request, inviting a second press on an
+  // irreversible action. Three delete requests reached the server for two presses.
+  const a = { ...SPAN, audioIds: [1, 2, 3] };
+  const b = { ...SPAN, audioIds: [7, 8, 9] };
+  const pending = new Subject<{ deleted: number; freedBytes: number }>();
+  const { page } = setup(true, pending);
+
+  page.delete(a);
+  page.delete(b);
+
+  expect(page.deleting(a)).toBe(true); // still going, and still says so
+  expect(page.deleting(b)).toBe(true);
+
+  pending.next({ deleted: 3, freedBytes: 3e6 });
+  pending.complete();
+  expect(page.deleting(a)).toBe(false);
+});
+
+it('a second press on a span already being deleted sends nothing', () => {
+  // The button is disabled, but a stray double-tap must not become a second delete: the
+  // rows would be gone and the retry would report "0 segments", which reads like a
+  // failure rather than the duplicate it is.
+  const pending = new Subject<{ deleted: number; freedBytes: number }>();
+  const { page, quietDelete } = setup(true, pending);
+
+  page.delete(SPAN);
+  page.delete(SPAN);
+
+  expect(quietDelete).toHaveBeenCalledOnce();
 });

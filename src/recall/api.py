@@ -981,9 +981,29 @@ def quiet_audio(audio_id: int) -> Response:
 @app.post("/api/quiet/delete")
 def quiet_delete(body: QuietDeleteIn) -> QuietDeletedOut:
     """Hard-delete a confirmed quiet span: its capture segments and everything derived,
-    plus the Opus files on disk. Reports how many segments went and the bytes freed."""
+    plus the Opus files on disk. Reports how many segments went and the bytes freed.
+
+    Logged, before and after. This is the one operation in the app that destroys data
+    the household cannot get back, and until now it left no record of itself: when two
+    deletes were fired at once, what they had actually taken could only be reconstructed
+    by diffing the database against an old snapshot. An irreversible act should say what
+    it did.
+
+    Deleting the same segments twice is not an error — a duplicate request simply finds
+    the rows gone and removes nothing. The count says so.
+    """
     store = _store()
     try:
+        span = store.audio_segment_bounds([AudioSegmentId(i) for i in body.audioIds])
+        if span is not None:
+            source, start, end = span
+            _log.info(
+                "DELETE requested: %d segments, %s, %s -> %s",
+                len(body.audioIds),
+                source,
+                start.isoformat(),
+                end.isoformat(),
+            )
         paths = store.delete_audio_segments([AudioSegmentId(i) for i in body.audioIds])
     finally:
         store.close()
@@ -995,6 +1015,12 @@ def quiet_delete(body: QuietDeleteIn) -> QuietDeletedOut:
             file.unlink()
         except OSError:
             continue
+    _log.info(
+        "DELETE done: %d segments removed, %.1f MB freed (%d requested)",
+        len(paths),
+        freed / 1e6,
+        len(body.audioIds),
+    )
     return {"deleted": len(paths), "freedBytes": freed}
 
 

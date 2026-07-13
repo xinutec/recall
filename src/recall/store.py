@@ -692,6 +692,28 @@ class Store:
             for r in rows
         ]
 
+    def audio_segment_bounds(
+        self, audio_ids: Sequence[AudioSegmentId]
+    ) -> tuple[str, datetime, datetime] | None:
+        """(source, first start, last end) of these segments — what a delete is about to
+        destroy, in the terms a person would recognise it by. None if none of them exist
+        (a duplicate request for a span that has already gone)."""
+        if not audio_ids:
+            return None
+        placeholders = ",".join("?" * len(audio_ids))
+        row = self._conn.execute(
+            f"""SELECT source_id, MIN(start_utc) AS first, MAX(end_utc) AS last
+                  FROM audio_segments WHERE id IN ({placeholders})""",
+            tuple(int(a) for a in audio_ids),
+        ).fetchone()
+        if row is None or row["first"] is None:
+            return None
+        return (
+            str(row["source_id"]),
+            datetime.fromisoformat(row["first"]),
+            datetime.fromisoformat(row["last"]),
+        )
+
     def delete_audio_segments(self, audio_ids: Sequence[AudioSegmentId]) -> list[str]:
         """Hard-delete specific capture segments and all derived from them (turns and
         their lineage/embeddings/corrections/FTS), returning the audio file paths to

@@ -53,8 +53,28 @@ export class Cleanup {
   private readonly snack = inject(MatSnackBar);
   private readonly dialog = inject(MatDialog);
 
-  /** The span a delete is in flight for — the button must show it is working. */
-  protected readonly deleting = signal<QuietSpan | null>(null);
+  /** Every span whose delete is in flight. A *set*, not one span: deletes can overlap
+   * (nothing stops a second one being started while the first runs), and holding a
+   * single value meant starting one silently cleared the other's state — its button
+   * flipped back to "Delete", re-enabled itself mid-request, and invited a second
+   * press on an irreversible action. */
+  private readonly inFlight = signal<ReadonlySet<QuietSpan>>(new Set());
+
+  protected deleting(span: QuietSpan): boolean {
+    return this.inFlight().has(span);
+  }
+
+  private setInFlight(span: QuietSpan, running: boolean): void {
+    this.inFlight.update((all) => {
+      const next = new Set(all);
+      if (running) {
+        next.add(span);
+      } else {
+        next.delete(span);
+      }
+      return next;
+    });
+  }
 
   // dev-lint: allow-component-list cleanup spans must be re-derived on each visit —
   // a cached list could offer already-deleted spans; freshness is the point here.
@@ -175,7 +195,10 @@ export class Cleanup {
 
   protected delete(span: QuietSpan): void {
     const audioIds = this.selectionOf(span);
-    if (audioIds.length === 0) {
+    // Already going: the button is disabled, but never let a stray second press turn
+    // into a second delete. The rows would be gone and the retry would report "0
+    // segments", which reads like a failure rather than the duplicate it is.
+    if (audioIds.length === 0 || this.deleting(span)) {
       return;
     }
     // Segments are a fixed length, so the count is the honest measure of what goes —
@@ -209,10 +232,10 @@ export class Cleanup {
   private reallyDelete(span: QuietSpan, audioIds: readonly number[]): void {
     // Unlinking 600 files takes the server a moment, and a page that looks inert while
     // it happens is what invites a second press on an irreversible button.
-    this.deleting.set(span);
+    this.setInFlight(span, true);
     this.api.quietDelete({ audioIds: [...audioIds] }).subscribe({
       next: (result) => {
-        this.deleting.set(null);
+        this.setInFlight(span, false);
         this.spans.update((all) => all.filter((s) => s !== span));
         this.selected.delete(span);
         const mb = (result.freedBytes / 1e6).toFixed(1);
@@ -221,7 +244,7 @@ export class Cleanup {
         });
       },
       error: (err: unknown) => {
-        this.deleting.set(null);
+        this.setInFlight(span, false);
         // Say what went wrong, and say it for long enough to read: a delete that fails
         // quietly is indistinguishable from one that worked, and the archive is at stake.
         const detail = err instanceof HttpErrorResponse ? ` (${err.status || 'no response'})` : '';

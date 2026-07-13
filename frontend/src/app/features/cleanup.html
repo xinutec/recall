@@ -108,11 +108,11 @@
               <button
                 mat-stroked-button
                 class="delete"
-                [disabled]="deleting() === span"
+                [disabled]="deleting(span)"
                 (click)="delete(span)"
               >
                 <mat-icon>delete</mat-icon>
-                @if (deleting() === span) {
+                @if (deleting(span)) {
                   Deleting {{ selectionOf(span).length }} segments…
                 } @else {
                   Delete {{ selectionOf(span).length }} segments
