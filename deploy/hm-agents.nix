@@ -109,4 +109,27 @@ in
       LowPriorityIO = true;
     };
   };
+
+  # Is recall actually working? Every 5 minutes, reported to fleetwatch.
+  #
+  # The check that was missing when it mattered: capture crash-looped on 22 June,
+  # recorded nothing for ninety minutes, and was found three weeks later by hand.
+  # launchd restarts capture when it dies, so a persistent fault becomes a loop —
+  # and a loop looks exactly like a quiet house.
+  #
+  # The interval MUST match recall.fleetwatch.INTERVAL_S (300): fleetwatch derives
+  # staleness from the cadence the report declares, and a producer that stops
+  # reporting renders as failed. That is the point — this agent dying, or the Mac
+  # dying, is itself the alarm. Nothing here has to detect it.
+  launchd.agents."com.pippijn.recall-doctor" = daemon {
+    label = "com.pippijn.recall-doctor";
+    name = "doctor";
+    script = "recall-doctor.sh";
+    extra = {
+      KeepAlive = false;
+      RunAtLoad = true;
+      StartInterval = 300;
+      LowPriorityIO = true;
+    };
+  };
 }

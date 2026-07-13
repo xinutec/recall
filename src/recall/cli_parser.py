@@ -262,9 +262,16 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
     )
 
     doc = sub.add_parser(
-        "doctor", help="check every recall launchd agent is loaded (health check)"
+        "doctor",
+        help="is recall working? (recording, agents, backup) — --post reports to "
+        "fleetwatch",
     )
     doc.add_argument("--out", type=Path, default=Path("data"), help="data root")
+    doc.add_argument(
+        "--post",
+        action="store_true",
+        help="send the verdicts to fleetwatch (needs ~/.config/fleetwatch/token)",
+    )
 
     api = sub.add_parser("api", help="serve the FastAPI JSON API + Angular app")
     api.add_argument("--out", type=Path, default=Path("data"), help="data root")

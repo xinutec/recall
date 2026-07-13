@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
+import urllib.error
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -31,6 +33,14 @@ from recall.finetune import (
     transcribe_clips,
 )
 from recall.finetune_pilot import PilotReport, run_pilot
+from recall.fleetwatch import build_report, post_report, read_token
+from recall.health import (
+    Check,
+    agent_checks,
+    backup_check,
+    capture_checks,
+    recorders_on_disk,
+)
 from recall.hf_asr import is_adapter_dir, make_hf_transcriber
 from recall.identify import identify_segments
 from recall.ingest import ingest_diarized, ingest_transcripts
@@ -1032,34 +1042,76 @@ _BACKUP_MAX_AGE_HOURS = 48.0
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
-    """Check every installed recall agent is loaded. Self-gating means agents stay
-    loaded even while paused (they park, they don't unload), so any installed-but-
-    missing agent is a real fault. Exits non-zero if any is missing."""
-    health = capture_control.agent_health()
-    if not health:
-        print("doctor: no recall agents installed")
+    """Is recall working? Agents loaded, archive mirrored — and, above all, is the
+    recording actually recording.
+
+    That last one was missing, and its absence cost real memory: capture crash-looped on
+    22 June, recorded nothing for ninety minutes, and was found three weeks later by
+    diffing the filesystem by hand. launchd restarts capture when it dies, so a
+    persistent fault becomes a loop, and a loop looks exactly like a quiet house.
+
+    `--post` sends the verdicts to fleetwatch, where they sit beside the rest of the
+    fleet's health. That is what makes this a monitor rather than a command nobody runs:
+    fleetwatch renders a producer that has *stopped reporting* as failed, so the case
+    "the Mac is dead" needs no detector here — not reporting is the report.
+    """
+    now = datetime.now(UTC)
+    store = Store.open(_db_path(args.out))
+    try:
+        # Registered recorders, not whatever directories exist: a mic the household
+        # actually uses is one the archive knows about.
+        sources = [
+            (source_id, SourceKind(kind))
+            for source_id, _name, kind in store.source_rows()
+        ]
+    finally:
+        store.close()
+
+    checks = [
+        *capture_checks(
+            recorders_on_disk(args.out, sources, now=now),
+            now=now,
+            paused_until=capture_control.paused_until(args.out),
+        ),
+        *agent_checks(capture_control.agent_health()),
+        backup_check(backup_age_hours(args.out), max_age_hours=_BACKUP_MAX_AGE_HOURS),
+    ]
+
+    for check in checks:
+        mark = {"pass": "ok", "warn": "WARN", "fail": "FAIL", "skip": "--"}[
+            check.verdict
+        ]
+        print(f"  [{mark:>4}] {check.section}/{check.label}: {check.observed}")
+
+    if args.post:
+        _report_to_fleetwatch(checks, now)
+
+    failed = [c for c in checks if c.verdict == "fail"]
+    if failed:
+        print(f"doctor: {len(failed)} check(s) FAILED")
         return 1
-    for label, loaded in health:
-        print(f"  [{'ok' if loaded else 'MISSING'}] {label}")
-    paused = capture_control.is_paused(args.out, datetime.now(UTC))
-    print(f"capture: {'paused' if paused else 'recording'}")
-    missing = [label for label, loaded in health if not loaded]
-    # The archive's only unrecoverable failure mode is losing the one local copy —
-    # a silently-dead off-machine mirror must fail the health check loudly.
-    age = backup_age_hours(args.out)
-    stale = age is None or age > _BACKUP_MAX_AGE_HOURS
-    if age is None:
-        print("backup: NEVER completed (no .last-backup-ok marker)")
-    else:
-        print(f"backup: last succeeded {age:.1f}h ago{' (STALE)' if stale else ''}")
-    if missing:
-        print(f"doctor: {len(missing)} agent(s) NOT loaded: {', '.join(missing)}")
-        return 1
-    if stale:
-        print("doctor: off-machine backup is stale — check logs/backup.err.log")
-        return 1
-    print("doctor: all agents loaded, backup fresh")
+    print("doctor: healthy")
     return 0
+
+
+def _report_to_fleetwatch(checks: list[Check], now: datetime) -> None:
+    """Send the verdicts on. An unreachable monitor is not a broken recording: say so
+    and carry on, because the missing report is already visible at the other end as
+    staleness. Failing the health check because the *health reporting* failed would
+    be the tail wagging the dog."""
+    token = read_token()
+    if token is None:
+        print(
+            "doctor: no fleetwatch token — put the ingest token in "
+            "~/.config/fleetwatch/token (see the fleetwatch README)",
+            file=sys.stderr,
+        )
+        return
+    try:
+        status = post_report(build_report(checks, now=now), token=token)
+        print(f"doctor: reported to fleetwatch ({status})")
+    except (urllib.error.URLError, TimeoutError, OSError) as err:
+        print(f"doctor: could not reach fleetwatch: {err}", file=sys.stderr)
 
 
 def _cmd_scan_loops(args: argparse.Namespace) -> int:
