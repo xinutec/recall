@@ -1,0 +1,15 @@
+// The message carries the numbers a delete turns on (how many minutes, how many
+// segments), so it must stay readable on a phone rather than being squeezed onto one
+// line: this dialog is the last thing seen before audio is destroyed.
+mat-dialog-content p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+// Tinted through M3 tokens, not `color="warn"` — that is an M2 input this app's theme
+// ignores, so the button would quietly render in the default colour and the one action
+// that cannot be undone would look like any other.
+.destructive {
+  --mat-filled-button-container-color: var(--mat-sys-error);
+  --mat-filled-button-label-text-color: var(--mat-sys-on-error);
+}

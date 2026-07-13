@@ -7,15 +7,18 @@ import {
   signal,
 } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
+import { HttpErrorResponse } from '@angular/common/http';
 import { MatCardModule } from '@angular/material/card';
 import { MatButtonModule } from '@angular/material/button';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatDialog } from '@angular/material/dialog';
 import { MatSnackBar } from '@angular/material/snack-bar';
 
 import { QuietScan, QuietSpan } from '../models';
 import { RecallApi } from '../recall-api';
+import { ConfirmData, ConfirmDialog } from '../shared/confirm-dialog';
 import { Waveform } from './waveform';
 
 const MIN_SECONDS = 300;
@@ -48,6 +51,10 @@ const POLL_MS = 2000;
 export class Cleanup {
   private readonly api = inject(RecallApi);
   private readonly snack = inject(MatSnackBar);
+  private readonly dialog = inject(MatDialog);
+
+  /** The span a delete is in flight for — the button must show it is working. */
+  protected readonly deleting = signal<QuietSpan | null>(null);
 
   // dev-lint: allow-component-list cleanup spans must be re-derived on each visit —
   // a cached list could offer already-deleted spans; freshness is the point here.
@@ -176,16 +183,36 @@ export class Cleanup {
     // longer describes the selection.
     const minutes = Math.round((audioIds.length * span.durationS) / span.audioIds.length / 60);
     const trimmed = this.trimmed(span) ? ' (trimmed)' : '';
-    if (
-      !confirm(
-        `Permanently delete ~${minutes} minutes of ${span.source} capture${trimmed} — ` +
-          `${audioIds.length} segments? This cannot be undone.`,
-      )
-    ) {
-      return;
-    }
+    // Never `window.confirm` here. This page runs inside an Android WebView, and a
+    // WebView with no WebChromeClient returns false from confirm() *without ever drawing
+    // a dialog* — so the delete silently did nothing, every time, and had no way to say
+    // so. A dialog the app draws itself cannot be silently absent. See ConfirmDialog.
+    this.dialog
+      .open<ConfirmDialog, ConfirmData, boolean>(ConfirmDialog, {
+        data: {
+          title: 'Delete this audio?',
+          message:
+            `Permanently delete ~${minutes} minutes of ${span.source} capture${trimmed} — ` +
+            `${audioIds.length} segments. This cannot be undone.`,
+          confirm: 'Delete',
+          destructive: true,
+        },
+      })
+      .afterClosed()
+      .subscribe((ok) => {
+        if (ok === true) {
+          this.reallyDelete(span, audioIds);
+        }
+      });
+  }
+
+  private reallyDelete(span: QuietSpan, audioIds: readonly number[]): void {
+    // Unlinking 600 files takes the server a moment, and a page that looks inert while
+    // it happens is what invites a second press on an irreversible button.
+    this.deleting.set(span);
     this.api.quietDelete({ audioIds: [...audioIds] }).subscribe({
       next: (result) => {
+        this.deleting.set(null);
         this.spans.update((all) => all.filter((s) => s !== span));
         this.selected.delete(span);
         const mb = (result.freedBytes / 1e6).toFixed(1);
@@ -193,7 +220,15 @@ export class Cleanup {
           duration: 4000,
         });
       },
-      error: () => this.snack.open('Delete failed', 'OK', { duration: 4000 }),
+      error: (err: unknown) => {
+        this.deleting.set(null);
+        // Say what went wrong, and say it for long enough to read: a delete that fails
+        // quietly is indistinguishable from one that worked, and the archive is at stake.
+        const detail = err instanceof HttpErrorResponse ? ` (${err.status || 'no response'})` : '';
+        this.snack.open(`Delete failed${detail} — nothing was removed`, 'OK', {
+          duration: 10000,
+        });
+      },
     });
   }
 }

@@ -1,0 +1,18 @@
+<h2 mat-dialog-title>{{ data.title }}</h2>
+
+<mat-dialog-content>
+  <p>{{ data.message }}</p>
+</mat-dialog-content>
+
+<!-- Cancel takes the initial focus, even though the other button is the one being asked
+     about: a stray Enter must never be what destroys audio. -->
+<mat-dialog-actions align="end">
+  <button mat-button (click)="cancel()" cdkFocusInitial>Cancel</button>
+  <button
+    mat-flat-button
+    [class.destructive]="data.destructive"
+    (click)="confirm()"
+  >
+    {{ data.confirm }}
+  </button>
+</mat-dialog-actions>

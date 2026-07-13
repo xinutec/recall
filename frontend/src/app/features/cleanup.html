@@ -101,10 +101,22 @@
               (selectedIdsChange)="onSelected(span, $event)"
             />
 
+            <!-- Disabled while its own delete is in flight: unlinking 600 files takes
+                 the server a moment, and a button that looks idle during an irreversible
+                 operation is an invitation to press it again. -->
             <mat-action-row>
-              <button mat-stroked-button class="delete" (click)="delete(span)">
+              <button
+                mat-stroked-button
+                class="delete"
+                [disabled]="deleting() === span"
+                (click)="delete(span)"
+              >
                 <mat-icon>delete</mat-icon>
-                Delete {{ selectionOf(span).length }} segments
+                @if (deleting() === span) {
+                  Deleting {{ selectionOf(span).length }} segments…
+                } @else {
+                  Delete {{ selectionOf(span).length }} segments
+                }
               </button>
             </mat-action-row>
           </ng-template>
