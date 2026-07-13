@@ -210,6 +210,7 @@ def _seg(  # noqa: PLR0913 - one kwarg per veto, so each test states just its ow
     has_speech: bool = False,
     speech_s: float | None = 0.0,
     structure: float | None = None,
+    loud_fraction: float | None = 0.0,
 ) -> SegmentVolume:
     start = BASE + timedelta(seconds=i * seconds if at is None else at)
     return SegmentVolume(
@@ -222,6 +223,7 @@ def _seg(  # noqa: PLR0913 - one kwarg per veto, so each test states just its ow
         has_speech=has_speech,
         speech_s=speech_s,
         structure=structure,
+        loud_fraction=loud_fraction,
     )
 
 
@@ -265,12 +267,35 @@ def test_a_louder_minute_with_no_speech_stays_in_the_span() -> None:
     """
     segs = (
         [_seg(i, -66.0) for i in range(6)]
-        + [_seg(6, -56.6)]  # loud for this mic, and silent: a bump, not a voice
+        + [_seg(6, -56.6, loud_fraction=0.174)]  # a door: loud 17% of the minute
         + [_seg(i, -66.0) for i in range(7, 13)]
     )
     spans = find_quiet_spans(segs, min_duration_s=300.0)
     assert len(spans) == 1  # one span, not two
     assert AudioSegmentId(6) in spans[0].audio_ids  # and the bump is *in* it
+
+
+def test_music_playing_to_an_empty_room_is_never_swept() -> None:
+    """The case that the speech detector cannot see, and nearly lost.
+
+    5 July, 17:27-17:44: ten minutes at -28 dB between two conversations about the
+    songs playing ("I love this one", "I know this song. It was on a CD"). The detector
+    hears no speech in music — correctly, there is none — so with volume removed as a
+    veto it cleared all ten minutes for deletion, and the list offered them as "quiet".
+
+    Music is not an empty room. The waveform says so and nothing else can: 88-100% of
+    each of those minutes sits above the mic's own floor, where dead air is 0.2% and a
+    door closing in an empty house is 31%.
+    """
+    segs = (
+        [_seg(i, -66.0) for i in range(6)]
+        + [_seg(6, -28.6, loud_fraction=1.0)]  # the room is full of music
+        + [_seg(i, -66.0) for i in range(7, 13)]
+    )
+    spans = find_quiet_spans(segs, min_duration_s=300.0)
+    assert len(spans) == 2  # it breaks the run...
+    swept = spans[0].audio_ids + spans[1].audio_ids
+    assert AudioSegmentId(6) not in swept  # ...and the music is out of both
 
 
 def test_a_quiet_minute_the_detector_never_heard_is_never_swept() -> None:

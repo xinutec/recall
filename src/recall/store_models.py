@@ -115,8 +115,14 @@ class SourceCoverage:
 
 @dataclass(frozen=True)
 class SegmentVolume:
-    """A capture segment as quiet-detection sees it: how loud it was, and — decisively —
-    whether the pipeline has examined it and whether it left any speech behind.
+    """A capture segment as quiet-detection sees it: whether the pipeline has examined
+    it, whether it left any speech behind, and whether the room was in fact empty.
+
+    Those last two are different questions, and conflating them has broken this twice.
+    *Speech* is the speech detector's business and no statistic on the waveform can
+    stand in for it. *Empty* is the waveform's business and the detector cannot see it:
+    a room with music playing and nobody talking holds no speech at all, and is plainly
+    not empty. A segment must clear both to be swept.
 
     `mean_db` is the raw mean volume (None until scanned). `transcribed` says ASR has
     had its say; `has_speech` says it found words that still stand (current, not hidden
@@ -140,6 +146,11 @@ class SegmentVolume:
     # How far its most unusual moment departs from this mic's own idle noise. Ranks the
     # spans; decides nothing (recall.spectrum).
     structure: float | None
+    # How much of the segment rose above *this microphone's own* sound threshold — the
+    # honest test of an empty room, and the one a 60-second mean cannot do. Measured on
+    # the real archive: dead air 0.0-0.2% of a minute, a door closing in an empty house
+    # 3-31%, music playing 88-100%. Nothing lives in between. None until scanned.
+    loud_fraction: float | None = None
 
 
 @dataclass(frozen=True)

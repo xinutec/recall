@@ -93,6 +93,7 @@ LIVE_MODEL = "live"
 # signal. Single source of truth so capture/eval agree.
 HOUSEHOLD_LANGUAGES = frozenset({"nl", "en"})
 
+
 # Hidden-reason / provenance prefixes marking a turn produced by a re-derive pass.
 # The resumable queries (_segments_without_marker), the writers (refine.py /
 # redrive.py) and the UI tier check (api._tier) all key off these prefixes, so
@@ -632,6 +633,10 @@ class Store:
         ASR has examined the segment yet, and whether it left any *current, visible*
         turn behind — human or machine. A turn that stands is speech we chose to keep,
         and the audio under it is not idle noise however quiet its 60-second mean looks.
+
+        `loud_fraction` is left None here and filled in by `recall.quiet`: measuring it
+        needs the mic's calibrated threshold and a decode of the stored envelope, and
+        the capture agent must be able to import this module without the ML stack.
         """
         placeholders = ",".join("?" * len(kinds))
         rows = self._conn.execute(

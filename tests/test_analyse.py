@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from recall.analyse import analyse_segments
+from recall.envelope import encode_envelope
 from recall.ids import AudioSegmentId
 from recall.quiet import SWEEPABLE_KINDS, quiet_spans
 from recall.sources import AudioSource, SourceKind
@@ -38,7 +39,10 @@ def _store(n: int) -> tuple[Store, list[int]]:
             )
         )
         store.mark_transcribed(int(audio_id))
-        store.set_audio_measurement(audio_id, -62.0, b"\x00\x00")  # quiet by volume
+        # An idle minute, envelope and all. The envelope is not decoration: it is
+        # what says the room was empty (b'\x00\x00' would decode to 0 dB — a minute
+        # of full-scale noise, which is not what 'quiet by volume' means).
+        store.set_audio_measurement(audio_id, -62.0, encode_envelope((-62.0,) * 590))
         ids.append(int(audio_id))
     return store, ids
 

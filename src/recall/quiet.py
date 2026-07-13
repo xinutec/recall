@@ -1,24 +1,36 @@
 """Find long total-quiet spans in the continuous capture — the mic heard nothing, for
 this long — so they can be reviewed and deleted (most of the archive is pure waste).
 
-**A minute's mean volume cannot tell speech from silence, and is not used to.** It was,
-once, against a -60 dB line, and the archive disproves that line on every microphone:
-the *quietest minute the speech detector actually heard speech in* averages -68.7 dB on
-the USB mic, -83.2 on the pixel9, -85.1 on the pixel5 — all of them well under it. Of
-course they do. A minute holding four seconds of far-field Dutch is fifty-six seconds of
-silence, and the mean is the silence. A statistic that speech does not move is not a
-speech detector, and no threshold on it can be made into one.
+Two questions decide a span, and they must not be confused for one another — doing so
+has broken this twice, in opposite directions.
 
-So the mean decides nothing here. It ranks and it draws; the vetoes are:
+**"Was anyone speaking?"** Only the speech detector can answer that. A minute's mean
+volume cannot, and was once made to try, against a -60 dB line. The archive disproves
+that line on every microphone: the *quietest minute the detector actually heard speech
+in* averages -68.7 dB on the USB mic, -83.2 on the pixel9, -85.1 on the pixel5 — all of
+them well under it. Of course they do. A minute holding four seconds of far-field Dutch
+is fifty-six seconds of silence, and the mean is the silence. A statistic that speech
+does not move is not a speech detector, and no threshold on it can be made into one.
 
-* **The speech detector is the authority.** A segment is sweepable only if the VAD
-  listened to it and heard nothing (`speech_s == 0`). A segment nobody has listened to
-  is *unknown*, not empty, and unknown is never swept.
+**"Was the room empty?"** Only the waveform can answer *that*, and the detector cannot:
+music playing to an empty sofa contains no speech whatever. Ten minutes of it sat in
+this archive, at -28 dB, between two conversations about the songs — and with the volume
+clause gone entirely, the detector cleared all ten for deletion. Volume was never the
+wrong evidence; a global threshold on the *mean* was the wrong test. The right one is
+how much of a minute rises above *that microphone's own* floor: 0.2% of a minute for
+dead air, 31% for a house with a door closing in it, 88-100% for music.
+
+So both must answer yes. The vetoes:
+
+* **The speech detector is the authority on speech.** A segment is sweepable only if the
+  VAD listened to it and heard nothing (`speech_s == 0`). A segment nobody has listened
+  to is *unknown*, not empty, and unknown is never swept.
 * **A visible turn outranks everything.** A segment still bearing a current turn —
   machine or human — holds speech, whatever its volume says. A second line, and it must
   be: a reprocessing pass hides the turns it replaces, and a minute of real far-field
   Dutch was once found carrying no visible turn at all. The VAD sees the audio; this
-  sees only the bookkeeping about it. Both must agree before anything is proposed.
+  sees only the bookkeeping about it.
+* **The waveform is the authority on emptiness** (`MAX_LOUD_FRACTION`), per microphone.
 * **Only what ASR has already examined.** An untranscribed segment is unknown too.
 * **Per source.** Several mics record the same room at once (the USB mic and the
   phones), so segments interleave in time. A run is grouped *within* a source; mixing
@@ -41,15 +53,34 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
-from recall.envelope import UNDECODABLE, SpanSound, encode_envelope, measure
+from recall.calibrate import event_threshold
+from recall.envelope import (
+    UNDECODABLE,
+    SpanSound,
+    decode_envelope,
+    encode_envelope,
+    measure,
+)
 from recall.ids import AudioSegmentId
 from recall.sources import SourceKind
 from recall.store import SegmentVolume, Store
 
+# How much of a minute may rise above its mic's own sound threshold and still be called
+# an empty room. Measured on this archive, against each mic's calibrated threshold:
+#
+#     dead air                          0.0 - 0.2%   of the minute
+#     a door, a cough, an empty house   3   -  31%
+#     music playing, nobody speaking    88  - 100%
+#
+# Nothing at all lives between 31% and 88%, so this bar is set in the middle of a canyon
+# rather than on a knife-edge — it is not a number that wants tuning. Its job is only to
+# tell "a room where something briefly happened" from "a room that is not empty at all",
+# and both extremes miss it by tens of points. Speech is not its business: the VAD's.
+MAX_LOUD_FRACTION = 0.5
 # Only long runs are worth surfacing — a few seconds of quiet between utterances is
 # normal speech rhythm, not waste. Default: 5 minutes.
 MIN_QUIET_SPAN_S = 300.0
@@ -80,31 +111,34 @@ class QuietSpan:
 
 
 def is_quiet(segment: SegmentVolume) -> bool:
-    """Whether a segment holds no speech at all — the whole test, in one place.
+    """Whether a segment is an empty room — the whole test, in one place.
+
+    Two questions, and they are not the same one. **Was anyone speaking?** — only the
+    speech detector can say, and no statistic on the waveform may stand in for it.
+    **Was the room empty?** — only the waveform can say, and the detector cannot see it:
+    music playing to an empty sofa holds no speech whatsoever. Both must answer yes.
 
     Every clause is a veto, and each has been seen to matter on the real archive:
 
-    * **The speech detector heard nothing** (`speech_s == 0`). This is the one that
-      counts. A segment nobody has listened to yet is *unknown*, not empty, and is
-      never swept.
+    * **The speech detector heard nothing** (`speech_s == 0`). A segment nobody has
+      listened to yet is *unknown*, not empty, and is never swept.
     * A segment that still bears a visible turn contains speech. Kept as a second line,
       but it cannot be the only one: a reprocessing pass hides the turns it replaces,
       and a minute of real far-field Dutch was found carrying no visible turn at all.
       The VAD sees the audio; this sees only the bookkeeping about it.
-    * Unmeasured or untranscribed is unknown, and unknown is never deleted. (An
-      unmeasured segment is also an unanalysed one, so the VAD clause would catch it
-      anyway — but a file that will not decode must be vetoed by name, not by luck.)
-
-    There is deliberately no volume clause. A threshold on a 60-second mean once lived
-    here, and it vetoed nothing a real minute of speech would trip (see the module
-    docstring) while shattering hour-long silences into unrankable shards wherever a
-    door closed. Volume ranks these spans; it does not judge them.
+    * **The room was quiet for most of the minute** (`loud_fraction`). Not a threshold
+      on the mean — that one could never work (see the module docstring) — but on how
+      much of the segment rose above *this mic's own* sound threshold. It is what keeps
+      an evening of music out of a list of empty rooms.
+    * Unmeasured or untranscribed is unknown, and unknown is never deleted.
     """
     return (
         segment.mean_db is not None
         and segment.transcribed
         and not segment.has_speech
         and segment.speech_s == 0.0
+        and segment.loud_fraction is not None
+        and segment.loud_fraction <= MAX_LOUD_FRACTION
     )
 
 
@@ -238,13 +272,44 @@ def scan_segments(
     return examined
 
 
+def loud_fraction(envelope: bytes | None, threshold_db: float) -> float | None:
+    """How much of a segment rose above its own microphone's sound threshold.
+
+    None if it was never scanned or would not decode — unknown, never swept.
+    """
+    if not envelope:
+        return None
+    buckets = decode_envelope(envelope)
+    if not buckets:
+        return None
+    return sum(1 for b in buckets if b > threshold_db) / len(buckets)
+
+
+def measured_volumes(store: Store) -> list[SegmentVolume]:
+    """Every sweepable segment, with its loud fraction measured against its own mic.
+
+    Measured here rather than cached in a column: a mic's threshold is re-derived
+    whenever its floor drifts, and a stored fraction would then answer a question no
+    longer being asked. It is a decode of ~11 MB of stored envelopes, not of the audio.
+    """
+    volumes = store.audio_segment_volumes(kinds=SWEEPABLE_KINDS)
+    envelopes = store.audio_envelopes([v.audio_id for v in volumes])
+    thresholds = {s: event_threshold(store, s) for s in store.sweepable_source_ids()}
+    return [
+        replace(
+            v,
+            loud_fraction=loud_fraction(
+                envelopes.get(v.audio_id), thresholds[v.source_id]
+            ),
+        )
+        for v in volumes
+    ]
+
+
 def quiet_spans(
     store: Store,
     *,
     min_duration_s: float = MIN_QUIET_SPAN_S,
 ) -> list[QuietSpan]:
     """The long total-quiet spans across the archive, from the cached volumes."""
-    return find_quiet_spans(
-        store.audio_segment_volumes(kinds=SWEEPABLE_KINDS),
-        min_duration_s=min_duration_s,
-    )
+    return find_quiet_spans(measured_volumes(store), min_duration_s=min_duration_s)
