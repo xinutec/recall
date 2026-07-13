@@ -1430,7 +1430,18 @@ def test_quiet_scan_spans_and_delete(
         lambda p: Measurement(mean_db=vols[str(p)], buckets=(vols[str(p)],) * 600),
     )
     monkeypatch.setattr(api, "_SCAN_JOB", None)  # a fresh job, bound to this data root
-    _deaf(monkeypatch)
+    # Speech in the last two segments — and *only* the detector says so. Their volume
+    # says nothing the detector doesn't: a minute of far-field speech and a minute with
+    # a door closing in it look the same on a 60-second mean, which is why the mean is
+    # not allowed to decide (recall.quiet).
+    monkeypatch.setattr(
+        "recall.analyse.silero_speech_regions",
+        lambda p: (
+            [SpeechRegion(start=3.0, end=9.0)]
+            if p.name in {"seg6.opus", "seg7.opus"}
+            else []
+        ),
+    )
 
     client = TestClient(api.app)
     scan = _await_scan(client)
@@ -1438,7 +1449,7 @@ def test_quiet_scan_spans_and_delete(
     assert scan["analysed"] == scan["toAnalyse"]  # every candidate was listened to
     items = client.get("/api/quiet/spans", params={"min_seconds": 300}).json()["items"]
     assert len(items) == 1
-    assert len(items[0]["audioIds"]) == 6  # the 6 quiet segments (354s > 300s)
+    assert len(items[0]["audioIds"]) == 6  # the 6 the detector cleared (354s > 300s)
     assert items[0]["source"] == "usb"
 
     # The waveform behind the review is READ, not decoded: the scan already decoded

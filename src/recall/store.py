@@ -417,26 +417,32 @@ class Store:
         return [bytes(r["envelope"]) for r in rows]
 
     def audio_segments_to_analyse(
-        self,
-        *,
-        kinds: Collection[SourceKind],
-        quiet_below_db: float,
-        limit: int = 200,
+        self, *, kinds: Collection[SourceKind], limit: int = 200
     ) -> list[tuple[AudioSegmentId, str, str]]:
         """(id, path, source) of the segments a cleanup could act on but has not been
-        listened to: quiet by volume, read by ASR, and not analysed. Only these — a loud
-        segment can never enter a span, so running a speech detector over one would
-        spend
-        model time on a foregone conclusion."""
+        listened to: measured, read by ASR, showing no turn — and not yet analysed.
+
+        A segment showing a turn is already vetoed by the transcript and needs no VAD
+        time; everything else is a candidate, *whatever its volume*. This once selected
+        on `mean_volume <= -60` instead, to save the detector a pass over "obviously
+        loud" audio. It saved nothing and cost the truth: a minute above that line was
+        never listened to, so it stayed unknown for ever — and an unknown minute breaks
+        a run. Twelve hours of the archive sat in that band, silently cutting hour-long
+        silences into shards. The cheap filter was buying a wrong answer.
+        """
         placeholders = ",".join("?" * len(kinds))
         rows = self._conn.execute(
             "SELECT a.id, a.path, a.source_id FROM audio_segments a "
             "JOIN sources s ON s.id = a.source_id "
             f"WHERE a.speech_s IS NULL AND s.kind IN ({placeholders}) "
-            "AND a.mean_volume IS NOT NULL AND a.mean_volume <= ? "
+            "AND a.mean_volume IS NOT NULL "
             "AND a.transcribed_utc IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM transcript_segments t "
+            "                WHERE t.audio_segment_id = a.id "
+            "                  AND t.superseded_by IS NULL "
+            "                  AND t.hidden_reason IS NULL) "
             "ORDER BY a.start_utc LIMIT ?",
-            (*[k.value for k in kinds], quiet_below_db, limit),
+            (*[k.value for k in kinds], limit),
         ).fetchall()
         return [
             (AudioSegmentId(int(r["id"])), str(r["path"]), str(r["source_id"]))
@@ -455,19 +461,22 @@ class Store:
         )
         self._commit()
 
-    def analysed_counts(
-        self, *, kinds: Collection[SourceKind], quiet_below_db: float
-    ) -> tuple[int, int]:
+    def analysed_counts(self, *, kinds: Collection[SourceKind]) -> tuple[int, int]:
         """(analysed, total) of the segments a cleanup could act on — how far the speech
-        detector has got."""
+        detector has got. The same population `audio_segments_to_analyse` draws from, so
+        the progress bar counts what is actually queued."""
         placeholders = ",".join("?" * len(kinds))
         row = self._conn.execute(
             "SELECT count(a.speech_s) AS done, count(*) AS total FROM audio_segments a "
             "JOIN sources s ON s.id = a.source_id "
             f"WHERE s.kind IN ({placeholders}) "
-            "AND a.mean_volume IS NOT NULL AND a.mean_volume <= ? "
-            "AND a.transcribed_utc IS NOT NULL",
-            (*[k.value for k in kinds], quiet_below_db),
+            "AND a.mean_volume IS NOT NULL "
+            "AND a.transcribed_utc IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM transcript_segments t "
+            "                WHERE t.audio_segment_id = a.id "
+            "                  AND t.superseded_by IS NULL "
+            "                  AND t.hidden_reason IS NULL)",
+            (*[k.value for k in kinds],),
         ).fetchone()
         return int(row["done"]), int(row["total"])
 

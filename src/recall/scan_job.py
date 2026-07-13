@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from recall.analyse import analyse_segments
 from recall.calibrate import calibrate
-from recall.quiet import QUIET_MEAN_DB, SWEEPABLE_KINDS, scan_segments
+from recall.quiet import SWEEPABLE_KINDS, scan_segments
 from recall.store import Store
 
 
@@ -96,9 +96,7 @@ class ScanJob:
         store = self._open_store()
         try:
             measured, total = store.measured_counts(kinds=SWEEPABLE_KINDS)
-            analysed, to_analyse = store.analysed_counts(
-                kinds=SWEEPABLE_KINDS, quiet_below_db=QUIET_MEAN_DB
-            )
+            analysed, to_analyse = store.analysed_counts(kinds=SWEEPABLE_KINDS)
         finally:
             store.close()
         running = self._thread is not None and self._thread.is_alive()

@@ -182,10 +182,10 @@ class SpanSound:
     margin_db: float | None
     sound_seconds: float
     # How far the span's most unusual moment departs from its mic's idle-noise
-    # fingerprint (recall.spectrum). This is what the list is ranked by: it separates an
-    # empty room from one with somebody moving in it, which loudness cannot — a creak
-    # and
-    # a word can be equally loud. None until the analysis pass has listened.
+    # fingerprint (recall.spectrum): it separates an empty room from one with somebody
+    # moving in it, which loudness cannot — a creak and a word can be equally loud.
+    # Shown, and breaks ties in the ranking; it does not order the list (`quiet.rank_
+    # spans` does, by size). None until the analysis pass has listened.
     structure: float | None = None
 
     @property

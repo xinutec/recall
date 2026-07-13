@@ -34,10 +34,14 @@ from pathlib import Path
 import numpy as np
 
 from recall.envelope import DEFAULT_EVENT_DB, decode_envelope
-from recall.quiet import QUIET_MEAN_DB
 from recall.spectrum import band_shapes, encode_shape, fingerprint
 from recall.store import Store
 
+# Which segments to *sample* when learning a mic's floor: a mean this quiet is very
+# probably the mic idling, and idling is what the floor is made of. A sampling rule, not
+# a verdict — nothing is judged empty by its mean (see `recall.quiet`), and a mic quiet
+# enough that few of its minutes clear this bar simply calibrates from fewer of them.
+IDLE_SAMPLE_MAX_DB = -60.0
 # The floor's crest ceiling. Above its 99.9th percentile a bucket is not idle mic noise.
 FLOOR_PERCENTILE = 99.9
 # Headroom under the faintest speech a mic has recorded — for the fainter word it has
@@ -121,7 +125,7 @@ def calibrate(store: Store) -> list[Calibration]:
     for source_id in store.sweepable_source_ids():
         result = calibrate_source(
             source_id,
-            store.quiet_envelopes(source_id, quiet_below_db=QUIET_MEAN_DB),
+            store.quiet_envelopes(source_id, quiet_below_db=IDLE_SAMPLE_MAX_DB),
             store.speech_envelopes(source_id),
         )
         if result is None:
@@ -138,7 +142,7 @@ def _fingerprint_noise(store: Store, source_id: str) -> None:
     is measured as departure from this (recall.spectrum), and it is what sorts dead air
     above a room with someone shifting about in it."""
     paths = store.idle_segment_paths(
-        source_id, quiet_below_db=QUIET_MEAN_DB, limit=NOISE_SAMPLE_SEGMENTS
+        source_id, quiet_below_db=IDLE_SAMPLE_MAX_DB, limit=NOISE_SAMPLE_SEGMENTS
     )
     shapes = [s for s in (band_shapes(Path(p)) for p in paths) if s is not None]
     if len(shapes) < MIN_NOISE_SEGMENTS:

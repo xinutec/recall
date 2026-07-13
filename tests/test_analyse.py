@@ -66,7 +66,7 @@ def test_a_segment_the_detector_hears_speech_in_is_never_swept() -> None:
 
     assert analyse_segments(store, vad=vad) == 13
 
-    spans = quiet_spans(store, threshold_db=-60.0, min_duration_s=300.0)
+    spans = quiet_spans(store, min_duration_s=300.0)
     swept = {int(a) for span in spans for a in span.audio_ids}
     assert ids[6] not in swept  # the speech survives...
     assert len(spans) == 2  # ...and it splits the quiet either side of it
@@ -76,10 +76,10 @@ def test_a_segment_nobody_has_listened_to_is_never_swept() -> None:
     # Unheard is unknown, and unknown is never the safest thing to delete. The span only
     # appears once the detector has cleared its audio.
     store, _ = _store(10)
-    assert quiet_spans(store, threshold_db=-60.0, min_duration_s=300.0) == []
+    assert quiet_spans(store, min_duration_s=300.0) == []
 
     analyse_segments(store, vad=_silent)
-    spans = quiet_spans(store, threshold_db=-60.0, min_duration_s=300.0)
+    spans = quiet_spans(store, min_duration_s=300.0)
     assert len(spans) == 1
     assert len(spans[0].audio_ids) == 10
 
@@ -98,13 +98,43 @@ def test_the_detector_is_not_run_twice_on_the_same_segment() -> None:
     assert len(heard) == 6
 
 
-def test_a_loud_segment_is_never_handed_to_the_detector() -> None:
-    # A loud segment cannot enter a span, so listening to it would spend model time on a
-    # foregone conclusion. Only the candidates are heard.
+def test_a_loud_segment_is_still_handed_to_the_detector() -> None:
+    """Volume is not a reason to skip a segment, and used to be.
+
+    The detector's queue was once filtered to `mean_volume <= -60` — "a loud segment
+    cannot enter a span, so listening to it would spend model time on a foregone
+    conclusion". The conclusion was not foregone. On this mic a *bump* averages -56 dB,
+    a door -54, and the minute holds no speech whatever; but nobody listened, so it
+    stayed unknown for ever, and an unknown minute breaks a run. Twelve hours of the
+    archive sat unheard in that band, quietly cutting hour-long silences into shards.
+    """
     store, ids = _store(4)
     store.set_audio_measurement(
         AudioSegmentId(ids[2]), -30.0, b"\x00\x00"
-    )  # someone was talking here
+    )  # a bump, a door, someone talking — the detector says which, not the meter
+    heard: list[str] = []
+
+    def counting(path: Path) -> list[SpeechRegion]:
+        heard.append(path.name)
+        return []
+
+    analyse_segments(store, vad=counting)
+    assert "seg002.opus" in heard
+    assert len(heard) == 4
+
+
+def test_a_segment_bearing_a_turn_is_never_handed_to_the_detector() -> None:
+    # The one filter left, and it is free of volume: a segment still showing a turn is
+    # already vetoed by the transcript, so the detector's verdict could not change
+    # anything. That is a foregone conclusion — this is what one actually looks like.
+    store, ids = _store(4)
+    store.add_transcript_segment(
+        audio_segment_id=int(ids[2]),
+        start=BASE,
+        end=BASE + timedelta(seconds=4),
+        text="dat is een goed idee",
+        asr_model="whisper",
+    )
     heard: list[str] = []
 
     def counting(path: Path) -> list[SpeechRegion]:

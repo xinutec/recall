@@ -1,24 +1,25 @@
-"""Find long total-quiet spans in the continuous capture — the mic's noise floor, no
-speech — so they can be reviewed and deleted (most of the archive is pure waste).
+"""Find long total-quiet spans in the continuous capture — the mic heard nothing, for
+this long — so they can be reviewed and deleted (most of the archive is pure waste).
 
-The USB mic emits a consistent noise floor with little variation, so quiet separates
-from speech cleanly by RAW mean volume: measured on real capture, quiet segments cluster
-near -62 dB (within 1 dB) while any sound sits above ~-55 dB. NB: the DB's `loudness`
-column is useless here — it's post-loudnorm, which flattens the gap; the signal is the
-raw mean volume of the untouched Opus.
+**A minute's mean volume cannot tell speech from silence, and is not used to.** It was,
+once, against a -60 dB line, and the archive disproves that line on every microphone:
+the *quietest minute the speech detector actually heard speech in* averages -68.7 dB on
+the USB mic, -83.2 on the pixel9, -85.1 on the pixel5 — all of them well under it. Of
+course they do. A minute holding four seconds of far-field Dutch is fifty-six seconds of
+silence, and the mean is the silence. A statistic that speech does not move is not a
+speech detector, and no threshold on it can be made into one.
 
-Volume alone is not enough to call a minute empty, and deleting a capture segment takes
-everything derived from it — its turns, their corrections, their lineage. So four rules
-keep a proposed span from ever meaning anything other than "this one mic heard nothing,
-continuously, for this long":
+So the mean decides nothing here. It ranks and it draws; the vetoes are:
 
-* **Speech outranks volume.** A segment with a current, visible turn — machine or
-  human — is never quiet, whatever its mean says. Measured on real capture, far-field
-  Dutch sentences and a *human-corrected* turn sit on segments whose 60-second mean is
-  under -60 dB: a few seconds of quiet speech barely move a minute's average. Volume is
-  a candidate generator; the transcript is the evidence, and it wins.
-* **Only what ASR has already examined.** An untranscribed segment is unknown, not
-  empty, and nothing unread is ever swept.
+* **The speech detector is the authority.** A segment is sweepable only if the VAD
+  listened to it and heard nothing (`speech_s == 0`). A segment nobody has listened to
+  is *unknown*, not empty, and unknown is never swept.
+* **A visible turn outranks everything.** A segment still bearing a current turn —
+  machine or human — holds speech, whatever its volume says. A second line, and it must
+  be: a reprocessing pass hides the turns it replaces, and a minute of real far-field
+  Dutch was once found carrying no visible turn at all. The VAD sees the audio; this
+  sees only the bookkeeping about it. Both must agree before anything is proposed.
+* **Only what ASR has already examined.** An untranscribed segment is unknown too.
 * **Per source.** Several mics record the same room at once (the USB mic and the
   phones), so segments interleave in time. A run is grouped *within* a source; mixing
   them would put one mic's files in another's span, and a span would then delete audio
@@ -28,10 +29,11 @@ continuously, for this long":
   missing time is unknown, not quiet — without that rule a 4-minute hole could carry a
   run past the 5-minute bar on its own.
 
-What survives all four is still only a *proposal*: the review UI draws the waveform (see
-`recall.envelope`), because a 60-second mean also hides brief sounds — a bump, a cough —
-that a human should hear before agreeing to lose them. Deletion is always confirmed, and
-its boundaries corrected, by a person; nothing here is automatic.
+What survives is still only a *proposal*: the review UI draws the waveform (see
+`recall.envelope`), because the VAD hears speech and not the bumps, coughs and shifting
+about that a person may still want to keep. Those are shown, counted, and never hidden —
+see `rank_spans` for what the list leads with. Deletion is always confirmed, and its
+boundaries corrected, by a person; nothing here is automatic.
 """
 
 from __future__ import annotations
@@ -43,15 +45,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from recall.envelope import UNDECODABLE, encode_envelope, measure
+from recall.envelope import UNDECODABLE, SpanSound, encode_envelope, measure
 from recall.ids import AudioSegmentId
 from recall.sources import SourceKind
 from recall.store import SegmentVolume, Store
 
-# Between the ~-62 dB noise floor and the ~-55 dB quietest real sound (measured). A
-# segment at/under this is the mic idling; above it, something happened. Necessary but
-# not sufficient — see `is_quiet`.
-QUIET_MEAN_DB = -60.0
 # Only long runs are worth surfacing — a few seconds of quiet between utterances is
 # normal speech rhythm, not waste. Default: 5 minutes.
 MIN_QUIET_SPAN_S = 300.0
@@ -81,25 +79,29 @@ class QuietSpan:
         return (self.end - self.start).total_seconds()
 
 
-def is_quiet(segment: SegmentVolume, threshold_db: float) -> bool:
-    """Whether a segment is idle noise and nothing else — the whole test, in one place.
+def is_quiet(segment: SegmentVolume) -> bool:
+    """Whether a segment holds no speech at all — the whole test, in one place.
 
     Every clause is a veto, and each has been seen to matter on the real archive:
 
     * **The speech detector heard nothing** (`speech_s == 0`). This is the one that
-    counts.
-      A segment nobody has listened to yet is *unknown*, not empty, and is never swept.
-    * A segment that still bears a visible turn contains speech, however far under the
-      threshold its mean sits. Kept as a second line — but it cannot be the only one: a
-      reprocessing pass hides the turns it replaces, and a minute of real far-field
-      Dutch
-      was found carrying no visible turn at all. The VAD sees the audio; this sees only
-      the bookkeeping about it.
-    * Unmeasured or untranscribed is unknown, and unknown is never deleted.
+      counts. A segment nobody has listened to yet is *unknown*, not empty, and is
+      never swept.
+    * A segment that still bears a visible turn contains speech. Kept as a second line,
+      but it cannot be the only one: a reprocessing pass hides the turns it replaces,
+      and a minute of real far-field Dutch was found carrying no visible turn at all.
+      The VAD sees the audio; this sees only the bookkeeping about it.
+    * Unmeasured or untranscribed is unknown, and unknown is never deleted. (An
+      unmeasured segment is also an unanalysed one, so the VAD clause would catch it
+      anyway — but a file that will not decode must be vetoed by name, not by luck.)
+
+    There is deliberately no volume clause. A threshold on a 60-second mean once lived
+    here, and it vetoed nothing a real minute of speech would trip (see the module
+    docstring) while shattering hour-long silences into unrankable shards wherever a
+    door closed. Volume ranks these spans; it does not judge them.
     """
     return (
         segment.mean_db is not None
-        and segment.mean_db <= threshold_db
         and segment.transcribed
         and not segment.has_speech
         and segment.speech_s == 0.0
@@ -109,7 +111,6 @@ def is_quiet(segment: SegmentVolume, threshold_db: float) -> bool:
 def _source_spans(
     segments: Sequence[SegmentVolume],
     *,
-    threshold_db: float,
     min_duration_s: float,
     max_gap_s: float,
 ) -> list[QuietSpan]:
@@ -129,7 +130,7 @@ def _source_spans(
             )
 
     for seg in segments:
-        quiet = is_quiet(seg, threshold_db)
+        quiet = is_quiet(seg)
         contiguous = not run or (seg.start - run[-1].end).total_seconds() <= max_gap_s
         if quiet and contiguous:
             run.append(seg)
@@ -144,15 +145,14 @@ def _source_spans(
 def find_quiet_spans(
     segments: Sequence[SegmentVolume],
     *,
-    threshold_db: float = QUIET_MEAN_DB,
     min_duration_s: float = MIN_QUIET_SPAN_S,
     max_gap_s: float = MAX_GAP_S,
 ) -> list[QuietSpan]:
     """Group each source's consecutive quiet segments (see `is_quiet`) into runs,
     keeping only spans at least `min_duration_s` long. Pure, so the grouping is
-    unit-tested. Anything not provably empty — a loud segment, an unmeasured or
-    untranscribed one, one bearing speech, or a hole in the recording — breaks the run
-    and stays out of it."""
+    unit-tested. Anything not provably empty — a segment the detector heard speech in,
+    an unmeasured or untranscribed one, one bearing a turn, or a hole in the recording —
+    breaks the run and stays out of it."""
     by_source: dict[str, list[SegmentVolume]] = defaultdict(list)
     for seg in segments:
         by_source[seg.source_id].append(seg)
@@ -161,11 +161,37 @@ def find_quiet_spans(
     for source_segments in by_source.values():
         spans += _source_spans(
             sorted(source_segments, key=lambda s: s.start),
-            threshold_db=threshold_db,
             min_duration_s=min_duration_s,
             max_gap_s=max_gap_s,
         )
     return sorted(spans, key=lambda s: (s.start, s.source_id))
+
+
+def rank_spans(
+    measured: Sequence[tuple[QuietSpan, SpanSound]],
+) -> list[tuple[QuietSpan, SpanSound]]:
+    """The review order: **the biggest first.** Pure, so the order is unit-tested.
+
+    The list exists to reclaim disk, so it leads with the spans that reclaim the most.
+    That sounds too obvious to state, and it is worth stating: this list was once ranked
+    by *structure* — how featureless the audio is — which knows nothing of how long a
+    span runs, so a spotless six-minute shard led a list containing a silent hour. It
+    ranked the audio and forgot the point.
+
+    Sound does not demote a span, it annotates one. A span's `sound_seconds` and its
+    loudest moment are carried alongside for the UI to show: the detector heard no
+    speech in any of this, but it does not hear a door closing or somebody turning over
+    on the sofa, and only a person can say whether an hour of empty room with two thumps
+    in it is worth keeping. Hiding it at the bottom of the list would not be caution, it
+    would just be a slower way of not showing it. Structure breaks ties between equals.
+    """
+    return sorted(
+        measured,
+        key=lambda pair: (
+            -pair[0].duration_s,
+            pair[1].structure if pair[1].structure is not None else float("inf"),
+        ),
+    )
 
 
 def scan_segments(
@@ -215,12 +241,10 @@ def scan_segments(
 def quiet_spans(
     store: Store,
     *,
-    threshold_db: float = QUIET_MEAN_DB,
     min_duration_s: float = MIN_QUIET_SPAN_S,
 ) -> list[QuietSpan]:
     """The long total-quiet spans across the archive, from the cached volumes."""
     return find_quiet_spans(
         store.audio_segment_volumes(kinds=SWEEPABLE_KINDS),
-        threshold_db=threshold_db,
         min_duration_s=min_duration_s,
     )

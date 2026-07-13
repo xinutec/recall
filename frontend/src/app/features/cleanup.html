@@ -2,15 +2,18 @@
   <header>
     <h1>Cleanup</h1>
     <p>
-      Long stretches where one mic heard nothing but its own noise floor. A speech
-      detector has listened to every one of them: a span where it hears anything at all
-      is never offered here, whatever the volume says.
-      <strong>Emptiest first</strong> — ranked not by loudness but by how far the audio
-      departs from that mic's own idle noise, so an empty house or a room asleep comes
-      before one where someone was coughing and shifting about. Open a span to see its
-      waveform, step through its sounds (the <mat-icon inline>priority_high</mat-icon>
-      button jumps to the loudest), trim the edges if the detector reached too far, then
-      delete. Deletion is permanent.
+      Long stretches where one mic heard no speech at all. A speech detector has listened
+      to every one of them: a span where it hears a single word is never offered here,
+      whatever the volume says.
+      <strong>Biggest first</strong> — this list exists to reclaim disk, so it leads with
+      what reclaims the most. A span is not demoted for containing a door closing or
+      someone shifting on the sofa; those are counted next to it
+      (<mat-icon inline>graphic_eq</mat-icon>) so you can hear them before deciding, and
+      a span where nothing at all rose above that mic's own floor says so
+      (<mat-icon inline>done_all</mat-icon>). Open one to see its waveform, step through
+      its sounds (the <mat-icon inline>priority_high</mat-icon> button jumps to the
+      loudest), trim the edges if the detector reached too far, then delete. Deletion is
+      permanent.
     </p>
     <!-- The scan runs on the server, so this page only starts it and watches. Closing
          the tab no longer stops it, and reopening picks the progress back up. -->
@@ -63,8 +66,9 @@
           <mat-expansion-panel-header>
             <mat-panel-title>
               <span class="duration">{{ minutes(span) }} min quiet</span>
-              <!-- The evidence the list is ordered by, shown so the order can be checked
-                   rather than taken on trust. "silent" = nothing in the whole span ever
+              <!-- The size is what the list is ordered by; this is what the detector
+                   heard that was *not* speech, shown next to it so a span is never
+                   deleted on its size alone. "silent" = nothing in the whole span ever
                    rose above this microphone's own floor. -->
               @if (span.silent) {
                 <span class="verdict silent">

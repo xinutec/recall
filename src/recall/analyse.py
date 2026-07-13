@@ -35,7 +35,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from recall.quiet import QUIET_MEAN_DB, SWEEPABLE_KINDS
+from recall.quiet import SWEEPABLE_KINDS
 from recall.spectrum import band_shapes, decode_shape, structure
 from recall.store import Store
 from recall.vad import Vad, silero_speech_regions
@@ -87,7 +87,7 @@ def analyse_segments(
     }
     analysed = 0
     for audio_id, path, source_id in store.audio_segments_to_analyse(
-        kinds=SWEEPABLE_KINDS, quiet_below_db=QUIET_MEAN_DB, limit=batch
+        kinds=SWEEPABLE_KINDS, limit=batch
     ):
         if should_stop is not None and should_stop():
             break

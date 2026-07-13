@@ -840,20 +840,15 @@ def _scan_progress(job: ScanJob) -> QuietScanOut:
 
 @app.get("/api/quiet/spans")
 def quiet_spans_list(min_seconds: int = 300) -> QuietSpansOut:
-    """The long total-quiet spans, emptiest first.
+    """The long total-quiet spans, biggest first — see `recall.quiet.rank_spans`.
 
-    Ranked by how far the loudest thing in a span rises above *that microphone's* own
-    threshold — so a span where nothing ever crossed the mic's floor (an empty house, a
-    room asleep) comes before one holding coughs and someone shifting on the sofa. Those
-    are the ones to delete without a second thought; the noisy ones deserve a listen and
-    now sort to the bottom, instead of hiding in a list of 138.
-
-    Absolute dB would be the wrong key: the phones' floors sit ~18 dB below the USB
-    mic's, so ranking on raw loudness would order the *microphones*, not the emptiness.
+    Each carries what the microphone heard that was *not* speech (`soundSeconds`, its
+    loudest moment, and how far that rose above this mic's own floor), so the review can
+    show a span's bumps and coughs rather than a bare number of minutes.
     """
     from recall.calibrate import event_threshold  # noqa: PLC0415
     from recall.envelope import summarize_sound  # noqa: PLC0415
-    from recall.quiet import quiet_spans  # noqa: PLC0415
+    from recall.quiet import quiet_spans, rank_spans  # noqa: PLC0415
 
     store = _store()
     try:
@@ -870,21 +865,7 @@ def quiet_spans_list(min_seconds: int = 300) -> QuietSpansOut:
     finally:
         store.close()
 
-    # Emptiest first — and *emptiness* is structure, not volume. How far a span departs
-    # from its own mic's idle-noise fingerprint separates a room where nothing happened
-    # from one where somebody coughed and shifted about, which loudness cannot do (a
-    # creak and a word can be equally loud). Loudness breaks the ties.
-    #
-    # A span with nothing measurable at all sorts last: unknown is not empty, and
-    # unknown
-    # is never the safest thing to delete.
-    measured.sort(
-        key=lambda pair: (
-            pair[1].structure if pair[1].structure is not None else float("inf"),
-            pair[1].margin_db if pair[1].margin_db is not None else float("inf"),
-            pair[1].sound_seconds,
-        )
-    )
+    measured = rank_spans(measured)
     return {
         "items": [
             {
