@@ -1492,6 +1492,72 @@ def test_quiet_scan_spans_and_delete(
     assert client.get("/api/quiet/spans").json()["items"] == []  # nothing left to prune
 
 
+def test_the_review_list_leads_with_the_biggest_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The endpoint must actually *use* the ranking, not merely have one available.
+
+    `rank_spans` is unit-tested, but the sort it replaced lived inline in this
+    endpoint — so the API could quietly stop calling it and every other test would still
+    pass, while the page went back to leading with a six-minute shard over a silent
+    hour. This is the only test that fails if that wiring is cut.
+    """
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(api, "_SCAN_JOB", None)
+    _deaf(monkeypatch)
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+    base = datetime(2026, 7, 11, 9, 0, 0, tzinfo=UTC)
+
+    # A short, spotless span, then a gap, then a long one holding a single bump. The
+    # short one wins on every measure of purity and must still come second.
+    def add(i: int, at: float) -> None:
+        start = base + timedelta(seconds=at)
+        (tmp_path / f"seg{i}.opus").write_bytes(b"audio")
+        audio_id = store.add_audio_segment(
+            Segment(
+                source_id="usb",
+                sequence=i,
+                start=start,
+                end=start + timedelta(seconds=59),
+                path=str(tmp_path / f"seg{i}.opus"),
+                sample_rate=48000,
+                channels=1,
+            )
+        )
+        store.mark_transcribed(int(audio_id))
+
+    for i in range(6):  # the shard: 6 minutes
+        add(i, i * 59)
+    for i in range(6, 20):  # the prize: 14 minutes, after an hour-long hole
+        add(i, 3600 + (i - 6) * 59)
+    store.close()
+
+    def measured(path: object) -> Measurement:
+        bump = str(path).endswith("seg10.opus")  # one door closing, in the long span
+        buckets = (-66.0,) * 600
+        if bump:
+            # 0.6s of door in a 60s minute. Brief on purpose: a bump long enough to sit
+            # above the mic's *own* 99.9th percentile would redefine that mic's floor as
+            # "doors", and then no door is ever a sound again.
+            buckets = (-40.0,) * 6 + (-66.0,) * 594
+        return Measurement(mean_db=-66.0, buckets=buckets)
+
+    monkeypatch.setattr("recall.quiet.measure", measured)
+
+    client = TestClient(api.app)
+    _await_scan(client)
+    items = client.get("/api/quiet/spans", params={"min_seconds": 300}).json()["items"]
+
+    assert len(items) == 2
+    assert items[0]["durationS"] > items[1]["durationS"]  # biggest first
+    assert len(items[0]["audioIds"]) == 14  # the long one, bump and all
+    assert not items[0]["silent"]  # it is honest about the bump...
+    assert items[1]["silent"]  # ...and the spotless shard still comes second
+
+
 def test_an_undecodable_segment_is_examined_once_and_drawn_as_a_gap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

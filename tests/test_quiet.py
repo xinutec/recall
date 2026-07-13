@@ -8,12 +8,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from recall.envelope import Measurement, SpanSound
+from recall.envelope import Measurement, SpanSound, encode_envelope
 from recall.ids import AudioSegmentId
 from recall.quiet import (
     SWEEPABLE_KINDS,
     QuietSpan,
     find_quiet_spans,
+    measured_volumes,
     quiet_spans,
     rank_spans,
     scan_segments,
@@ -370,6 +371,52 @@ def test_hidden_hallucinations_do_not_protect_a_segment() -> None:
     spans = find_quiet_spans(segs, min_duration_s=300.0)
     assert len(spans) == 1
     assert len(spans[0].audio_ids) == 6
+
+
+def test_the_loud_fraction_is_measured_from_the_stored_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The music bug, end to end — the layer the pure test cannot reach.
+
+    `test_music_playing_to_an_empty_room_is_never_swept` hands the rule a loud fraction
+    and checks it vetoes. It would keep passing if nothing ever *computed* one: the
+    fraction comes from the stored envelope measured against the mic's own calibrated
+    threshold, and if that wiring breaks, every segment reads as an empty room again and
+    ten minutes of music go back on the deletion list. That is the bug that shipped.
+    """
+    store, ids = _store_with_capture(12)
+    store.set_source_event_db("usb", -54.7)  # this mic's own measured threshold
+
+    # Seven idle minutes, then music (every bucket well above the threshold), then four
+    # more idle. The detector heard no speech in any of them — music is not speech.
+    def envelope_of(path: object) -> Measurement:
+        loud = str(path).endswith("seg007.opus")
+        level = -28.0 if loud else -66.0
+        return Measurement(mean_db=level, buckets=(level,) * 600)
+
+    monkeypatch.setattr("recall.quiet.measure", envelope_of)
+    scan_segments(store)
+
+    volumes = {v.audio_id: v for v in measured_volumes(store)}
+    assert volumes[ids[3]].loud_fraction == 0.0  # an empty room, measured
+    assert volumes[ids[7]].loud_fraction == 1.0  # music, measured
+
+    spans = quiet_spans(store, min_duration_s=300.0)
+    swept = {a for span in spans for a in span.audio_ids}
+    assert ids[7] not in swept  # the music is never offered for deletion
+    assert ids[3] in swept  # ...and the empty room still is
+
+
+def test_a_mic_with_no_calibration_yet_still_measures_a_loud_fraction() -> None:
+    # A brand-new recorder has no measured threshold. It falls back to the default
+    # rather than to None — None means "unknown", and an archive of unknowns offers no
+    # spans at all, which looks exactly like a working feature with nothing to say.
+    store, ids = _store_with_capture(6)
+    store.set_audio_measurement(ids[0], -66.0, encode_envelope((-66.0,) * 600))
+    assert store.source_event_db("usb") is None  # never calibrated
+
+    volumes = {v.audio_id: v for v in measured_volumes(store)}
+    assert volumes[ids[0]].loud_fraction == 0.0
 
 
 def test_store_marks_segments_that_still_bear_a_turn(
