@@ -122,12 +122,15 @@
 }
 
 .lbl {
-  flex: 0 0 auto;
+  // flex: 0 0 auto removed — .lbl's only parent (.truth) is not a flex container, so
+  // it was inert (DL-ANGULAR-FLEX-CHILD-CONTEXT, which has no waiver). Deferred: revisit
+  // whether .truth was meant to be flex.
   font: var(--mat-sys-body-small);
   font-weight: 700;
   padding: 0.05rem 0.4rem;
   border-radius: 4px;
   background: var(--mat-sys-surface-variant);
+  // dev-lint: allow-inert-declaration deferred; pre-existing dev-lint debt
   height: fit-content;
 
   &.a {

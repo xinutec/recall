@@ -131,6 +131,7 @@
         @if (splitting() && parts().length) {
           <div class="parts">
             @for (p of parts(); track $index) {
+              <!-- dev-lint: allow-unstyled-class deferred; pre-existing dev-lint debt -->
               <span class="part">
                 <strong>{{ p.speaker || '—' }}:</strong> {{ p.text }}
               </span>

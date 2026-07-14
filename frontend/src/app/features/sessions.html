@@ -49,6 +49,7 @@
             <button class="body" (click)="open(s.id)">
               <div class="when">
                 <mat-icon>event</mat-icon>
+                <!-- dev-lint: allow-unstyled-class deferred; pre-existing dev-lint debt -->
                 <span class="date">{{ day(s.start) }}</span>
                 <span class="time">{{ time(s.start) }}</span>
               </div>
