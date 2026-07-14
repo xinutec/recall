@@ -71,6 +71,11 @@ jobs:
           # a working API serving 404s.
           docker run --rm xinutec/recall:ci \
             test -f /app/frontend/dist/recall-web/browser/index.html
+          # The binaries the app SHELLS OUT to. Missing one is not a boot failure — it is
+          # a 500 the first time somebody presses play, which is how `sox` reached
+          # production: transcripts served perfectly, every audio request died.
+          docker run --rm xinutec/recall:ci \
+            sh -c 'for b in ffmpeg ffprobe sox flac; do command -v "$b" >/dev/null || { echo "missing: $b"; exit 1; }; done'
 
       - uses: docker/build-push-action@v7
         with:

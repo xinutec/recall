@@ -18,8 +18,12 @@ RUN npm run build
 
 # --- runtime ---
 FROM python:3.12-slim
+# The app shells out to these; a missing one is a 500 at request time, not a boot error,
+# so it hides until someone presses play. `sox` was: the image had ffmpeg only, and every
+# audio request on the fleet died with FileNotFoundError deep in loudness normalisation
+# while the transcripts served perfectly. `flac` decodes the older archive segments.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg sox flac \
     && rm -rf /var/lib/apt/lists/*
 # Non-ML runtime deps only (see deploy/k8s/README.md), pinned to the app's floors. A
 # dedicated fleet lockfile would make this reproducible — a follow-up.
