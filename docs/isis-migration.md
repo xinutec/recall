@@ -4,6 +4,11 @@ Status: **decided and being built, 2026-07-13.** The forks below are resolved (s
 "Decisions"). The archive was pruned first — it is now ~700 MB (389 MB audio in 2,252
 segments, a 303 MB SQLite DB), so this is a topology change, not a bulk-data move.
 
+> **Where the work is, 2026-07-14.** The one-time seed landed the archive on Isis. Then
+> capture control + live sync were built and **deployed through the fleet side only**.
+> The next action is the Mac cutover — see **"Capture control over the VPN + live sync"**
+> near the bottom for the exact status and the step-C runbook. Start there.
+
 ## Decisions (2026-07-13)
 
 1. **Host: Isis.** Not because Isis is the sturdier machine — it is not — but because
@@ -200,3 +205,83 @@ Keep each step behind a flag so any step can roll back to the Mac-only path.
 Capture (USB mic), ASR (mlx-whisper), diarization/embeddings (pyannote), the LLM
 (mlx Qwen), a local outbox for reliable delivery, and the off-site restic copy. Nothing
 stateful that another node depends on.
+
+## Capture control over the VPN + live sync (2026-07-14)
+
+The goal Pippijn asked for: **control the mic (pause/resume) from Isis's UI over the VPN,
+and keep Isis a live mirror** instead of the frozen one-time seed. Because the Mac is a
+one-way WireGuard peer, Isis cannot dial it, so control is **inverted**: Isis holds the
+desired state, the Mac polls and applies it.
+
+**What was built** (recall commits `6f53688` waivers, `e5b0f85` feature, `391be8d` agents;
+monorepo `06f226ce` sets `RECALL_ROLE=fleet`):
+
+- **Capture intent on the fleet.** `RECALL_ROLE=fleet` makes `/api/capture/pause|resume`
+  record *intent* in the store (`capture_control.intent_*`) instead of writing a local
+  pause file nothing reads. The role is explicit because the Mac also sets
+  `RECALL_SYNC_TOKEN`, so the token can't tell the roles apart.
+- **The Mac mirrors it** (`recall.capture_mirror`): a `POST /sync/capture` handshake
+  reports the Mac's applied state and pulls the intent in one round trip; the Mac writes
+  its local `capture_paused_until` to match. **Short-poll every ~5s** (matches the capture
+  agents' own 5s self-gate; SSE noted as a later upgrade if that gate is tightened).
+  **Edge-triggered** so it doesn't clobber a pause set on the Mac's own LAN UI. The
+  fleet's `/api/capture` status shows the Mac's *reported reality*, falling back to intent
+  when the Mac goes quiet (a pause you can't confirm is worthless).
+- **Live data sync** reuses the existing `sync_push` on a 2-minute timer.
+- Two launchd agents in `deploy/hm-agents.nix`: `recall-sync` (timer, data) and
+  `recall-capture-mirror` (resident 5s loop). Both read `RECALL_SYNC_TOKEN` from `.env`.
+
+**Deploy state:**
+
+- **A — image:** done. CI published `xinutec/recall:latest` with the code.
+- **B — Isis rolled out:** done and verified over VPN. `RECALL_ROLE=fleet` live;
+  `pause`→bounded intent, `resume`→clear, both correct from the Mac's WG IP; data serving
+  intact (2,252 segments). Intent left in the **running** state.
+- **C — the Mac cutover: NOT done. This is the next action.** Until C, the fleet is ready
+  but disconnected: pressing pause on Isis records intent that nothing applies, and Isis
+  is still the frozen seed (the Mac isn't pushing). The Mac's local LAN UI still controls
+  the mic directly, unaffected.
+
+### Step C — the Mac cutover (runbook)
+
+Do these on the **Mac** (this repo). The token must go from the cluster into a file
+without passing through logs/output.
+
+1. **Token into `.env`** (never echo it):
+   ```sh
+   TOKEN=$(ssh root@10.100.0.2 \
+     'kubectl -n recall get secret recall-secret -o jsonpath="{.data.SYNC_TOKEN}" | base64 -d')
+   grep -q '^RECALL_SYNC_TOKEN=' ~/Code/recall/.env \
+     || printf 'RECALL_SYNC_TOKEN=%s\n' "$TOKEN" >> ~/Code/recall/.env
+   unset TOKEN
+   grep -c '^RECALL_SYNC_TOKEN=' ~/Code/recall/.env   # expect 1; never print the value
+   ```
+2. **Dry-run both commands by hand** (recall.sh sources `.env`):
+   ```sh
+   cd ~/Code/recall
+   ./scripts/recall.sh sync --url http://10.100.0.2:8000 --out /Volumes/Backup/recall
+   #   expect: "sync: pushed N segment(s) to http://10.100.0.2:8000"
+   ./scripts/recall.sh capture-mirror --url http://10.100.0.2:8000 --out /Volumes/Backup/recall
+   #   expect: "capture-mirror: no change"   (fleet intent is running)
+   ```
+3. **Install the agents:**
+   ```sh
+   cd ~/.config/home-manager && nix flake update recall && home-manager switch --flake .#pippijn
+   ```
+4. **Post-switch checks (CRITICAL — this reloads the live mic agents):**
+   - Both new agents loaded: `launchctl list | grep -E 'recall-(sync|capture-mirror)'`.
+   - **Mic-TCC survived:** `recall-capture` and `recall-live` are loaded with **last exit
+     0**, not crash-looping (a TCC block crash-loops instead of running). Check their
+     `logs/{capture,live}.err.log` for mic-permission errors. If they crash-loop, the mic
+     grant was lost → **roll back** to the previous home-manager generation and stop; do
+     not leave capture down (this is the medical recorder).
+5. **End-to-end (step D):**
+   - Pause on Isis (`curl -X POST http://10.100.0.2:8000/api/capture/pause` or the UI):
+     within ~5–10s the Mac grows `/Volumes/Backup/recall/capture_paused_until` and capture
+     parks. **Resume** clears it and capture restarts. Then **resume** so the mic is on.
+   - Live sync: after ~2 min, Isis `/api/status` segment count tracks new Mac recordings.
+
+Then the migration's "mic control through Isis" goal is met. Remaining separately-tracked
+items: retire the Mac's local api/UI (migration path step 5), the deferred fleet-wide
+at-rest encryption (see "Open"), and the pre-existing frontend dev-lint debt waived in
+`6f53688` (Pippijn is improving those checks).
