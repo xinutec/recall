@@ -42,7 +42,23 @@ spec:
             capabilities:
               drop: ["ALL"]
           ports:
+            # THE network gate. `hostIP` is the whole point: a bare hostPort would DNAT
+            # on every address Isis has, including its public one — and a k8s hostPort
+            # rule bypasses the NixOS firewall entirely (it lands in the nat table ahead
+            # of it), so "the firewall will catch it" is false here. Pinned to Isis's
+            # WireGuard address, the DNAT rule can only match a packet that arrived on
+            # wg0. The public IP never answers on 8000; there is nothing to firewall.
+            #
+            # Not an nginx Ingress, deliberately: the shared ingress answers on Isis's
+            # public IP whatever DNS says — obscurity, not a gate (confirmed 2026-07-09).
+            # The hostPort IS the gate here, not a hole in one. The rule's advice ("use a
+            # Service") is the wrong move for recall: a Service still needs an Ingress to
+            # be reachable from the Mac, and the shared ingress answers on Isis's PUBLIC
+            # IP whatever DNS says. Bound to the WireGuard address, this port cannot be
+            # reached from the internet at all.
             - containerPort: 8000
+              hostPort: 8000 # dev-lint: allow-host-port — bound to wg0 only, see hostIP
+              hostIP: 10.100.0.2
           readinessProbe:
             tcpSocket:
               port: 8000

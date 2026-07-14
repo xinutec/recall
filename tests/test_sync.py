@@ -13,7 +13,9 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from httpx import HTTPStatusError
 
+from recall.ids import AudioSegmentId
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
 from recall.sync import (
@@ -139,12 +141,14 @@ def test_audio_push_stores_once_and_is_idempotent(
         assert client.push_audio("usb", "seg-0001.opus", clip) is False
 
 
-def _segment(source: str = "usb", n_turns: int = 2) -> SegmentIn:
+def _segment(
+    source: str = "usb", n_turns: int = 2, path: str | None = None
+) -> SegmentIn:
     return SegmentIn(
         source_id=source,
         source_name="usb",
         kind="coreaudio",
-        path=f"/archive/{source}/seg.opus",
+        path=path if path is not None else f"/archive/{source}/seg.opus",
         start=BASE.isoformat(),
         end=(BASE + timedelta(seconds=30)).isoformat(),
         sample_rate=48000,
@@ -279,3 +283,81 @@ def test_audio_push_rejects_path_traversal(
         headers=auth,
     )
     assert resp.status_code == 400
+
+
+def test_the_fleet_rehomes_the_path_into_its_own_archive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The bug that would have made every recording on the fleet unplayable.
+
+    A segment's `path` is absolute and belongs to the machine that recorded it —
+    `/Volumes/Backup/recall/usb/usb-20260613T172550.opus` on the Mac. The push stored it
+    verbatim, while the audio blob it accompanies lands under the fleet's OWN root
+    (`/data/usb/...`, see the /sync/audio route). The fleet's database therefore
+    described files on a filesystem it cannot see: transcripts would look perfect and
+    every play button would fail, for ever, silently. Found on the real Isis
+    deployment — three test segments, three paths pointing at the Mac.
+
+    The fleet owns its archive layout, so the fleet decides where its files are. The
+    sender's directories are none of its business; only the filename survives.
+    """
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        pushed = client.push_segment(
+            _segment(source="usb"),
+        )
+
+    store = Store.open(db)
+    segment = store.audio_segment(AudioSegmentId(pushed.audio_segment_id))
+    store.close()
+    assert segment is not None
+    # Where the /sync/audio route actually writes the blob — not where the Mac kept it.
+    assert segment.path == str(tmp_path / "usb" / "seg.opus")
+
+
+def test_a_pushed_path_can_never_escape_the_fleet_archive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The Mac is authenticated, but a stolen token must not become a file write
+    anywhere on the fleet. Re-homing makes that structural rather than vigilant: only
+    the basename survives, so a hostile path cannot point outside the archive even in
+    principle — there is no directory left in it to point with.
+    """
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        pushed = client.push_segment(
+            _segment(source="usb", path="/etc/../../root/.ssh/authorized_keys")
+        )
+
+    store = Store.open(db)
+    segment = store.audio_segment(AudioSegmentId(pushed.audio_segment_id))
+    store.close()
+    assert segment is not None
+    # Contained: inside the fleet's archive, under the pushing source, basename only.
+    assert Path(segment.path).parent == tmp_path / "usb"
+    assert Path(segment.path).is_relative_to(tmp_path)
+
+
+def test_a_filename_that_is_not_a_filename_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A basename of ".." is not a name at all. Rejected outright rather than sanitised
+    # into something plausible — a push the fleet cannot make sense of is an error.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(tmp_path / "recall.sqlite"), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        with pytest.raises(HTTPStatusError):
+            client.push_segment(_segment(source="usb", path="/archive/usb/.."))

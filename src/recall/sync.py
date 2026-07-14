@@ -166,7 +166,7 @@ def _job_of(req: RefineRequest) -> JobOut:
     )
 
 
-def _ingest_segment(store: Store, body: SegmentIn) -> SegmentStoredOut:
+def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentStoredOut:
     """Persist a pushed segment, reconciling across the split. The fleet is the system
     of record: a newer machine pass (worker → refine) SUPERSEDES the old machine turns,
     while human edits made on the fleet are authoritative and preserved — the same rule
@@ -180,13 +180,25 @@ def _ingest_segment(store: Store, body: SegmentIn) -> SegmentStoredOut:
     )
     seg_start = datetime.fromisoformat(body.start)
     seg_end = datetime.fromisoformat(body.end)
+    # Re-home the path. The sender's `path` is absolute on the machine that recorded
+    # it (`/Volumes/Backup/recall/usb/…` on the Mac), and storing it verbatim gave the
+    # fleet a database describing a filesystem it cannot see: the transcripts read
+    # perfectly and every play button 404s, silently, for ever. The blob itself lands
+    # under the fleet's own root (see /sync/audio), so the row must point there too.
+    # The fleet owns its archive layout; only the filename survives the trip — and it
+    # is checked: an authenticated Mac is still hostile input if the token ever leaks.
+    path = (
+        data_root
+        / _safe_component(body.source_id)
+        / _safe_component(Path(body.path).name)
+    )
     audio_id = store.add_audio_segment(
         Segment(
             source_id=body.source_id,
             sequence=0,
             start=seg_start,
             end=seg_end,
-            path=body.path,
+            path=str(path),
             sample_rate=body.sample_rate,
             channels=body.channels,
         )
@@ -263,7 +275,7 @@ def register_sync_routes(
         check_token(bearer(authorization), expected)
         store = store_factory()
         try:
-            return _ingest_segment(store, body)
+            return _ingest_segment(store, body, data_root)
         finally:
             store.close()
 

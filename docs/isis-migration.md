@@ -1,7 +1,30 @@
-# Splitting recall: Isis system-of-record + Mac compute worker (PROPOSED)
+# Splitting recall: Isis system-of-record + Mac compute worker
 
-Status: **proposal, 2026-07-11.** Nothing here is built. The open decisions in
-"Forks" are unresolved; resolve them before implementing.
+Status: **decided and being built, 2026-07-13.** The forks below are resolved (see
+"Decisions"). The archive was pruned first — it is now ~700 MB (389 MB audio in 2,252
+segments, a 303 MB SQLite DB), so this is a topology change, not a bulk-data move.
+
+## Decisions (2026-07-13)
+
+1. **Host: Isis.** Not because Isis is the sturdier machine — it is not — but because
+   **amun is due to be reinstalled**, and the point of the exercise is to get services
+   off amun so it can be wiped without taking them down. Consolidating onto Isis is the
+   goal, not a compromise.
+2. **At-rest encryption: deferred, and tracked as an open item — not a precondition.**
+   The original plan called it one. That was inconsistent: the same audio *already* sits
+   in plaintext on odin every night via the existing backup, so encrypting Isis alone
+   would protect against a stolen Isis disk while odin keeps plaintext copies of the
+   same recordings. It is a real gap, but it is a **fleet-wide** gap and predates this
+   migration; blocking the migration on it would buy nothing. It is listed under "Open"
+   below and must not be quietly forgotten.
+3. **Access: VPN/LAN-only** (unchanged — the stance since the 2026-07-09 rollback).
+4. **Database: SQLite on Isis** (only Isis writes; `.backup` for a consistent snapshot).
+
+## Open (do not lose these)
+
+- **At-rest encryption, fleet-wide.** Isis and odin both store this household/medical
+  audio on plaintext disk. Fixing Isis alone is half a step. Needs a key-custody answer
+  first — a keyfile on the same disk is theatre.
 
 ## Goal
 
@@ -46,7 +69,7 @@ transcripts, and summaries live on Isis (and its backups).
                                    ▼
   ┌─────────────── Isis (10.100.0.2, single-node k3s) ────────────────────┐
   │  ingest/queue API   (WG-bound, authenticated)                         │
-  │  store: SQLite system-of-record + audio archive  (encrypted dataset)  │
+  │  store: SQLite system-of-record + audio archive  (plaintext — see Open) │
   │  api + web: timeline / search / review / ask      (VPN/LAN-only)      │
   └───────────────────────────────┬───────────────────────────────────────┘
                                    │  odin restic PULLS (SSH)
@@ -82,12 +105,15 @@ obscurity, not a firewall; a prior remote-access attempt confirmed this and was 
 back.) Authenticate the Mac with mTLS or a bearer token sourced from agenix/Vaultwarden,
 not committed.
 
-**Encryption at rest.** Isis's disk shows no LUKS/dm-crypt (checked 2026-07-11), and this
-moves sensitive household/medical audio onto it. Provision an **encrypted dataset** for
-recall on Isis before any audio lands there, and confirm odin's repo posture too. The
-Mac's `/Volumes/Backup` is encrypted today; parity on Isis is a precondition, not a
-follow-up. (Note: audio already replicates to odin under the current backup, so Isis
-storing it is not a new class of exposure — but the at-rest gap is real.)
+**Encryption at rest — NOT done, and not a blocker (decided 2026-07-13).** Isis has no
+LUKS/dm-crypt (re-checked 2026-07-13; neither has amun). This migration therefore puts
+household and medical audio on plaintext disk — but so does today's arrangement: the
+nightly backup has been copying the same audio to odin in the clear all along. Encrypting
+Isis alone would guard a stolen Isis disk while odin kept plaintext copies of the same
+recordings, which is a ritual, not a control. The gap is real and **fleet-wide**; it is
+tracked under "Open" and needs a key-custody answer (a keyfile on the same disk buys
+nothing) rather than a rushed LUKS container. The Mac's `/Volumes/Backup` is encrypted
+today and stays so.
 
 ## Queue API sketch (WG-bound, token/mTLS)
 
@@ -152,21 +178,12 @@ special path.
 unit — so this shapes the manifests (`~/Code/pippijn/code/kubes/`) and odin's
 nixos-config, not the Python. It is inert until `RECALL_SYNC_TOKEN` is set.
 
-## Forks (decide before building)
+## Forks — resolved
 
-1. **At-rest encryption on Isis** — recommended: required precondition (LUKS/dm-crypt
-   dataset for recall). Not optional given the audio's sensitivity.
-2. **Database** — recommended: keep **SQLite** on Isis (only Isis writes now, so the
-   single-writer model holds; back it up via `.backup`). Alternative: port to MariaDB for
-   a fleet-uniform dump block — larger rewrite (migrations, FTS5), defer.
-3. **Host** — you named **Isis**, but it is the fragile host (a bad upgrade once forced
-   the amun/isis split). recall's DB+API+audio is light and fits, provided no ML runs
-   there. Weigh **amun** (more robust) as the alternative.
-4. **Access** — recommended: **VPN/LAN-only** (the current stance since the 2026-07-09
-   rollback). The rolled-back `oauth2-proxy` + ACME DNS-01 design for a public
-   `recall.xinutec.org` is sound and can be revived later.
-5. **Server location / privacy** — confirm the fleet is home-lab, not colo, for the
-   household-audio privacy model. (Audio already reaches odin today either way.)
+All five are settled; see "Decisions" at the top. Recorded here so the reasoning is not
+lost: **host** (Isis, to free amun for reinstall), **encryption** (deferred, tracked, and
+argued above), **access** (VPN/LAN-only), **database** (SQLite), **server location**
+(home-lab — the audio already reaches odin there today).
 
 ## Migration path (incremental, each step reversible)
 
