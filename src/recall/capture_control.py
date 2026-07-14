@@ -19,10 +19,12 @@ is fully unit-testable.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Protocol
 
 # All recall agents share this prefix; the USB capture agent has this exact label.
 _AGENT_PREFIX = "com.pippijn.recall-"
@@ -109,6 +111,94 @@ def auto_resume_if_expired(root: Path, now: datetime) -> bool:
         resume(root)
         return True
     return False
+
+
+# --- Fleet-side capture intent (the Isis split) ---
+#
+# The fleet (Isis) is where the web UI is reachable over the VPN, but it runs no capture
+# agent — a pause file there actuates nothing. So the fleet holds only the *desired*
+# state (this "intent"); the Mac polls it (see recall.capture_mirror) and mirrors it
+# onto its own pause file, where the capture agents self-gate. Isis is the authority:
+# the button lives where the UI is, the mic obeys where it physically is. The Mac can't
+# be dialled (one-way WireGuard peer), so control inverts to a Mac-initiated poll.
+
+FLEET_ROLE = "fleet"
+_INTENT_KEY = "capture_intent"  # ISO resume-by; blank/absent = running
+# The Mac reports what it actually applied so the fleet's status shows reality, not just
+# intent — a pause you cannot confirm took effect is worthless for a privacy control.
+_REPORTED_RUNNING_KEY = "capture_reported_running"
+_REPORTED_PAUSED_KEY = "capture_reported_paused_until"
+_REPORTED_AT_KEY = "capture_reported_at"
+# A report older than this means the Mac has stopped checking in; the fleet then falls
+# back to showing intent (and the separate fleetwatch alarm covers a dead Mac).
+_REPORT_FRESH = timedelta(seconds=30)
+
+
+class _Settings(Protocol):
+    """The slice of Store the intent needs — kept structural so capture_control stays
+    free of a Store import (and the logic is testable with a trivial fake)."""
+
+    def get_setting(self, key: str) -> str | None: ...
+    def set_setting(self, key: str, value: str) -> None: ...
+
+
+def is_fleet() -> bool:
+    """True on the system-of-record node (Isis), which holds capture intent but runs no
+    capture agent. Read from an explicit env, not inferred: the Mac also sets
+    RECALL_SYNC_TOKEN, so the token can't tell the two roles apart."""
+    return os.environ.get("RECALL_ROLE") == FLEET_ROLE
+
+
+def intent_pause(
+    store: _Settings, now: datetime, *, minutes: int | None = None
+) -> datetime:
+    """Record a (bounded) pause as the fleet's desired state. Returns its resume-by."""
+    until = compute_resume_by(now, minutes)
+    store.set_setting(_INTENT_KEY, until.isoformat())
+    return until
+
+
+def intent_resume(store: _Settings) -> None:
+    """Record "run" as the fleet's desired state (clear the pause intent)."""
+    store.set_setting(_INTENT_KEY, "")
+
+
+def intent_until(store: _Settings, now: datetime) -> datetime | None:
+    """The desired resume-by, or None when running. An elapsed intent reads as running —
+    the same bounded-pause safety net the local file has via auto_resume_if_expired."""
+    raw = store.get_setting(_INTENT_KEY)
+    if not raw:
+        return None
+    try:
+        until = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return until if until > now else None
+
+
+def record_reported(
+    store: _Settings, *, running: bool, paused_until: str | None, now: datetime
+) -> None:
+    """Store the Mac's just-applied capture state, so the fleet's status is honest."""
+    store.set_setting(_REPORTED_RUNNING_KEY, "1" if running else "0")
+    store.set_setting(_REPORTED_PAUSED_KEY, paused_until or "")
+    store.set_setting(_REPORTED_AT_KEY, now.isoformat())
+
+
+def reported_state(store: _Settings, now: datetime) -> tuple[bool, str | None] | None:
+    """The Mac's last-reported (running, pausedUntil) if fresh, else None — the Mac has
+    stopped reporting, so the caller shows intent instead."""
+    at = store.get_setting(_REPORTED_AT_KEY)
+    running = store.get_setting(_REPORTED_RUNNING_KEY)
+    if not at or running is None:
+        return None
+    try:
+        at_dt = datetime.fromisoformat(at)
+    except ValueError:
+        return None
+    if now - at_dt > _REPORT_FRESH:
+        return None
+    return running == "1", store.get_setting(_REPORTED_PAUSED_KEY)
 
 
 # --- launchctl reads (thin; for status + the health check) ---

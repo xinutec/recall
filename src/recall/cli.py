@@ -1298,6 +1298,35 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_capture_mirror(args: argparse.Namespace) -> int:
+    """Mirror the fleet's capture intent onto this Mac's mic (the Isis split). Polls the
+    fleet every --interval seconds and applies pause/resume locally, reporting back what
+    it applied. The token is RECALL_SYNC_TOKEN. Imports are lazy so `recall.cli` stays
+    framework-free for the capture agents (recall.sync drags in the web framework)."""
+    token = os.environ.get("RECALL_SYNC_TOKEN")
+    if not token:
+        print("capture-mirror needs RECALL_SYNC_TOKEN")
+        return 1
+    import time  # noqa: PLC0415
+
+    from recall.capture_mirror import reconcile_once, run_loop  # noqa: PLC0415
+    from recall.sync import SyncClient  # noqa: PLC0415 - lazy: pulls the web framework
+
+    client = SyncClient(args.url, token)
+    if args.loop:
+        run_loop(
+            args.out,
+            client,
+            now=lambda: datetime.now(UTC),
+            sleep=time.sleep,
+            interval=args.interval,
+        )
+        return 0
+    changed = reconcile_once(args.out, client, now=datetime.now(UTC))
+    print(f"capture-mirror: {'applied fleet intent' if changed else 'no change'}")
+    return 0
+
+
 def _cmd_repair_transcripts(args: argparse.Namespace) -> int:
     """Restore transcripts a refine pass hid and never replaced (see recall.repair).
 
@@ -1381,6 +1410,7 @@ _COMMANDS = {
     "record": _cmd_record,
     "backup": _cmd_backup,
     "sync": _cmd_sync,
+    "capture-mirror": _cmd_capture_mirror,
     "scan-quiet": _cmd_scan_quiet,
     "repair-transcripts": _cmd_repair_transcripts,
     "verify": _cmd_verify,

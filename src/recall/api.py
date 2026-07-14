@@ -496,13 +496,36 @@ def _capture_state(running: bool) -> CaptureOut:
     return {"running": running, "pausedUntil": until.isoformat() if until else None}
 
 
+def _fleet_capture_state(store: Store, now: datetime) -> CaptureOut:
+    """The fleet runs no capture agent, so it answers from the Mac's reported state (the
+    truth, when it's checking in) and falls back to the intent it holds (what was asked
+    for) when the Mac has gone quiet."""
+    reported = capture_control.reported_state(store, now)
+    if reported is not None:
+        running, paused_until = reported
+        return {"running": running, "pausedUntil": paused_until}
+    until = capture_control.intent_until(store, now)
+    return {
+        "running": until is None,
+        "pausedUntil": until.isoformat() if until else None,
+    }
+
+
 @app.get("/api/capture")
 def capture_status() -> CaptureOut:
     """Whether the always-on capture is recording, and (if paused) when it
     auto-resumes by. Agents self-gate, so they stay loaded while paused — "running"
-    means the capture agent is loaded *and* not currently paused."""
+    means the capture agent is loaded *and* not currently paused. On the fleet (Isis)
+    there is no local agent: it reports the Mac's mirrored state instead."""
+    now = datetime.now(UTC)
+    if capture_control.is_fleet():
+        store = _store()
+        try:
+            return _fleet_capture_state(store, now)
+        finally:
+            store.close()
     running = capture_control.capture_running() and not capture_control.is_paused(
-        DATA_ROOT, datetime.now(UTC)
+        DATA_ROOT, now
     )
     return _capture_state(running)
 
@@ -510,8 +533,18 @@ def capture_status() -> CaptureOut:
 @app.post("/api/capture/pause")
 def capture_pause() -> CaptureOut:
     """Stop capture so the room can be worked in without recording. Bounded: it
-    auto-resumes by the returned time even if left."""
-    capture_control.pause(DATA_ROOT, datetime.now(UTC))
+    auto-resumes by the returned time even if left. On the fleet this records *intent*
+    the Mac mirrors onto the mic; on the Mac it writes the local pause file directly."""
+    now = datetime.now(UTC)
+    if capture_control.is_fleet():
+        store = _store()
+        try:
+            until = capture_control.intent_pause(store, now)
+        finally:
+            store.close()
+        _log.info("PAUSE intent recorded (fleet)")
+        return {"running": False, "pausedUntil": until.isoformat()}
+    capture_control.pause(DATA_ROOT, now)
     _log.info("PAUSE requested")
     return _capture_state(running=False)
 
@@ -519,6 +552,14 @@ def capture_pause() -> CaptureOut:
 @app.post("/api/capture/resume")
 def capture_resume() -> CaptureOut:
     """Start capture again now."""
+    if capture_control.is_fleet():
+        store = _store()
+        try:
+            capture_control.intent_resume(store)
+        finally:
+            store.close()
+        _log.info("RESUME intent recorded (fleet)")
+        return {"running": True, "pausedUntil": None}
     capture_control.resume(DATA_ROOT)
     _log.info("RESUME requested")
     return _capture_state(running=True)

@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from conftest import make_flac, make_mp3
-from recall import api, loudness
+from recall import api, capture_control, loudness
 from recall.abcompare import CorrectionScore, Report, SegmentDiff, render_json
 from recall.api import _precise, _tier, clip_window
 from recall.api_models import VoiceNameIn
@@ -1685,3 +1685,46 @@ def test_quiet_never_offers_a_segment_that_still_bears_a_turn(
     swept = {a for span in items for a in span["audioIds"]}
     assert int(audio_ids[3]) not in swept  # the audio under the words survives
     assert (tmp_path / "seg3.opus").exists()
+
+
+def test_capture_pause_on_the_fleet_records_intent_not_the_local_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On Isis there is no capture agent, so a local pause file would actuate nothing —
+    # the fleet records intent instead, and the Mac mirrors it onto the real mic.
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setenv("RECALL_ROLE", "fleet")
+    Store.open(tmp_path / "recall.sqlite").close()
+    client = TestClient(api.app)
+
+    paused = client.post("/api/capture/pause").json()
+    assert paused["running"] is False
+    assert paused["pausedUntil"]
+    assert not (tmp_path / "capture_paused_until").exists()  # intent, not a local file
+
+    # With no Mac report yet, status falls back to the intent it holds.
+    assert client.get("/api/capture").json()["running"] is False
+
+    assert client.post("/api/capture/resume").json()["running"] is True
+    assert client.get("/api/capture").json()["running"] is True
+
+
+def test_capture_status_on_the_fleet_shows_the_macs_reported_reality(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The fleet asked for a pause, but the Mac reports it is still recording (it hasn't
+    # applied it yet). Status must show reality, not the wish — a pause you can't
+    # confirm is worthless.
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setenv("RECALL_ROLE", "fleet")
+    Store.open(tmp_path / "recall.sqlite").close()
+    client = TestClient(api.app)
+
+    client.post("/api/capture/pause")
+    store = Store.open(tmp_path / "recall.sqlite")
+    capture_control.record_reported(
+        store, running=True, paused_until=None, now=datetime.now(UTC)
+    )
+    store.close()
+
+    assert client.get("/api/capture").json()["running"] is True

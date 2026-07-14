@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from httpx import HTTPStatusError
 
+from recall import capture_control
 from recall.ids import AudioSegmentId
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
@@ -118,6 +119,45 @@ def test_sync_client_polls_and_marks_done_over_the_transport(
         jobs = client.poll_jobs()
         assert [j.type for j in jobs] == ["refine"]
         client.mark_done(jobs[0].id)
+
+
+def test_capture_exchange_reports_state_and_returns_intent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The capture-control inversion over the wire: the Mac reports what it applied and
+    # pulls the fleet's desired intent in one round trip. Isis can't dial the Mac, so
+    # this Mac-initiated exchange is the whole channel.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    Store.open(db).close()  # create the schema
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    # the gate applies here too
+    assert (
+        TestClient(app).post("/sync/capture", json={"running": True}).status_code == 401
+    )
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        # nothing set on the fleet → the Mac is told to run
+        assert client.exchange_capture(running=True, paused_until=None) is None
+
+        # the fleet UI records a pause; the Mac's next exchange pulls the resume-by. Use
+        # real now — the route evaluates intent against wall-clock, so a past resume-by
+        # would read as already-elapsed (running).
+        store = Store.open(db)
+        until = capture_control.intent_pause(store, datetime.now(UTC), minutes=30)
+        store.close()
+        assert client.exchange_capture(running=True, paused_until=None) == (
+            until.isoformat()
+        )
+
+        # and the fleet now holds the Mac's reported state (for an honest status). The
+        # route stamps it with real wall-clock time, so read it back at real now.
+        store = Store.open(db)
+        assert capture_control.reported_state(store, datetime.now(UTC)) == (True, None)
+        store.close()
         assert client.poll_jobs() == []
 
 

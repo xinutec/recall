@@ -21,13 +21,14 @@ import hmac
 import os
 import shutil
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from recall import capture_control
 from recall.schemas import OkOut
 from recall.sources import AudioSource, SourceKind
 from recall.store import RefineRequest, Store, TranscriptSegment
@@ -142,6 +143,21 @@ class SummaryIn(BaseModel):
     model: str
 
 
+class CaptureAppliedIn(BaseModel):
+    """What the Mac currently has applied to its own capture — reported each mirror pass
+    so the fleet's status reflects reality, not just what was asked for."""
+
+    running: bool
+    pausedUntil: str | None = None  # ISO resume-by, or null when recording
+
+
+class CaptureIntentOut(BaseModel):
+    """The fleet's desired capture state: the resume-by time of a pause, or null to run.
+    The Mac mirrors this onto its local pause file."""
+
+    pausedUntil: str | None
+
+
 def _incoming_turn_keys(turns: list[TurnIn]) -> list[tuple[str, str, str, str]]:
     """An order-independent identity for a pushed turn set — to skip a no-op re-push."""
     return sorted((t.start, t.end, t.text, t.asr_model) for t in turns)
@@ -154,6 +170,18 @@ def _machine_turn_keys(
     return sorted(
         (t.start.isoformat(), t.end.isoformat(), t.text, t.asr_model) for t in turns
     )
+
+
+def _capture_exchange(
+    store: Store, body: CaptureAppliedIn, now: datetime
+) -> CaptureIntentOut:
+    """Record the Mac's applied capture state and return the fleet's desired intent —
+    the /sync/capture handshake body, pulled out so the route stays a thin wrapper."""
+    capture_control.record_reported(
+        store, running=body.running, paused_until=body.pausedUntil, now=now
+    )
+    until = capture_control.intent_until(store, now)
+    return CaptureIntentOut(pausedUntil=until.isoformat() if until else None)
 
 
 def _job_of(req: RefineRequest) -> JobOut:
@@ -231,6 +259,26 @@ def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentSt
     return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=written)
 
 
+def _register_capture_route(
+    app: FastAPI, store_factory: Callable[[], Store], expected: str
+) -> None:
+    """The capture-control inversion route (its own helper so register_sync_routes stays
+    small). The Mac reports its applied state and pulls the fleet's desired intent in
+    one round trip; Isis can't dial the one-way peer, so this Mac-initiated exchange is
+    how a pause pressed on the fleet's UI reaches the mic. See recall.capture_mirror."""
+
+    @app.post("/sync/capture")
+    def sync_capture(
+        body: CaptureAppliedIn, authorization: str | None = Header(default=None)
+    ) -> CaptureIntentOut:
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            return _capture_exchange(store, body, datetime.now(UTC))
+        finally:
+            store.close()
+
+
 def register_sync_routes(
     app: FastAPI, store_factory: Callable[[], Store], data_root: Path
 ) -> bool:
@@ -292,6 +340,8 @@ def register_sync_routes(
         finally:
             store.close()
         return {"ok": True}
+
+    _register_capture_route(app, store_factory, expected)
 
     @app.get("/sync/jobs")
     def sync_jobs(
@@ -394,3 +444,16 @@ class SyncClient:
             headers=self._headers,
         )
         resp.raise_for_status()
+
+    def exchange_capture(
+        self, *, running: bool, paused_until: str | None
+    ) -> str | None:
+        """Report the Mac's applied capture state and receive the fleet's desired intent
+        (its resume-by, or None to run). One round trip: push reality, pull intent."""
+        resp = self._client.post(
+            f"{self._base}/sync/capture",
+            json={"running": running, "pausedUntil": paused_until},
+            headers=self._headers,
+        )
+        resp.raise_for_status()
+        return CaptureIntentOut.model_validate(resp.json()).pausedUntil
