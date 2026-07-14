@@ -39,16 +39,37 @@ cd "$FRONTEND"
 # `set -e`). On success the mv below has already consumed it, so this is a no-op.
 trap 'rm -rf "$STAGE"' EXIT
 
-# A staged build is usable if index.html is non-empty AND the main bundle it points
-# at exists and is non-empty. We validate the *artifact*, not the build's exit code:
-# the kqueue abort happens in the CLI's teardown *after* "bundle generation complete",
-# so the process exits non-zero even though the output is fully written and valid.
+# A staged build is usable if index.html is non-empty, the main bundle it points at
+# exists and is non-empty, AND every file in public/ actually arrived. We validate the
+# *artifact*, not the build's exit code: the kqueue abort happens in the CLI's teardown
+# *after* "bundle generation complete", so the process exits non-zero even though the
+# output is usually fully written and valid.
+#
+# The assets check is not belt-and-braces. That same abort can kill the CLI *mid-copy*
+# of public/**, and it did: a build shipped with an EMPTY fonts/ directory — the
+# directory created, not one font in it. index.html was fine, the JS was fine, the
+# check passed, and the app deployed to the phone with every icon rendered as ligature
+# text ("delete", "graphic_eq") instead of a glyph. A half-copied build must never swap
+# into place; comparing the file count is what makes "half" detectable at all.
 staged_ok() {
     local idx="$STAGE/browser/index.html"
     [[ -s "$idx" ]] || return 1
     local main
     main=$(grep -oE 'main-[A-Za-z0-9]+\.js' "$idx" | head -1) || true
-    [[ -n "$main" && -s "$STAGE/browser/$main" ]]
+    [[ -n "$main" && -s "$STAGE/browser/$main" ]] || return 1
+
+    # Every file under public/ is copied verbatim into the bundle root (angular.json
+    # assets). Check each one arrived and is non-empty — by name, not by count: the
+    # bundle also holds hashed JS/CSS the build emits, so a count would compare two
+    # different populations and be wrong in both directions.
+    local missing=0 rel
+    while IFS= read -r rel; do
+        [[ -s "$STAGE/browser/$rel" ]] || {
+            echo "recall-build-frontend: asset missing from the staged build: $rel" >&2
+            missing=1
+        }
+    done < <(cd "$FRONTEND/public" && find . -type f | sed 's|^\./||')
+    ((missing == 0))
 }
 
 built=""

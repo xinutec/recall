@@ -47,6 +47,31 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      # Build it, BOOT it, and only then publish it. Without the smoke step an image
+      # that cannot import its own app still gets tagged :latest and deployed — which
+      # is exactly what happened: a lint fix moved recall.calibrate to a top-level
+      # import, dragging numpy into recall.api's chain, and Isis CrashLoopBackOff'd on
+      # a green build. The Dockerfile's dep set is a claim; running it is the proof.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: xinutec/recall:ci
+          cache-from: type=registry,ref=xinutec/recall:cache
+
+      - name: smoke — the image can import the app it exists to serve
+        run: |
+          docker run --rm xinutec/recall:ci python -c "
+          import recall.api, recall.sync
+          print('recall.api + recall.sync import on the fleet dep set')
+          "
+          # The web UI is half the point of the fleet tier; an image with no bundle is
+          # a working API serving 404s.
+          docker run --rm xinutec/recall:ci \
+            test -f /app/frontend/dist/recall-web/browser/index.html
+
       - uses: docker/build-push-action@v7
         with:
           context: .

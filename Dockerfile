@@ -23,9 +23,16 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 # Non-ML runtime deps only (see deploy/k8s/README.md), pinned to the app's floors. A
 # dedicated fleet lockfile would make this reproducible — a follow-up.
+#
+# numpy is here and is NOT a concession on "no ML". It is arithmetic over audio: the
+# envelope (RMS per 0.1s bucket), the spectrum (log-band shapes) and the per-mic
+# threshold calibration. The cleanup review — the page where the household's dead air is
+# actually deleted — runs on those, and the archive it deletes from now lives HERE. The
+# feature has to work where the audio is. What stays on the Mac is the ML proper:
+# mlx-whisper, pyannote, mlx-lm — none of which this image has, or can run.
 RUN pip install --no-cache-dir \
     "fastapi>=0.136" "uvicorn>=0.49" "pydantic>=2.13" "httpx>=0.28" \
-    "python-multipart>=0.0.32"
+    "python-multipart>=0.0.32" "numpy>=2.1"
 # uid 1000 matches the Deployment's runAsUser + fsGroup.
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin recall
 WORKDIR /app

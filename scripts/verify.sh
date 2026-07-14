@@ -90,6 +90,30 @@ if [ "$has_venv" = true ]; then
   # Import the CLI on the exact interpreter the agents use.
   python -c "import recall.cli"
 
+  step "fleet import surface (no ML reachable from recall.api)"
+  # The Isis container has no mlx, no torch, no pyannote — the Mac keeps all of that.
+  # An ML import reachable from `recall.api` CrashLoopBackOffs the fleet pod.
+  #
+  # This catches ML creep, and ONLY that. It cannot catch a *missing non-ML* dep (it
+  # runs on the fully-stocked .venv, where numpy is present whether the image has it or
+  # not) — which is precisely the bug that took Isis down: a lint fix moved
+  # recall.calibrate to a top-level import, dragging numpy into api.py's chain, and the
+  # build stayed green all the way to the deploy. The gate for THAT is booting the real
+  # image, which CI now does before publishing it (.github/workflows/build.yml). Two
+  # different failures, two different checks; neither substitutes for the other.
+  .venv/bin/python - <<'PY'
+import importlib
+import sys
+
+# What the fleet image does NOT have. Importing recall.api must not reach any of them.
+ML = ("mlx", "mlx_lm", "mlx_whisper", "torch", "pyannote", "faster_whisper", "soundfile")
+for name in ML:
+    sys.modules[name] = None  # type: ignore[assignment]  # a hard failure if imported
+
+importlib.import_module("recall.api")
+importlib.import_module("recall.sync")
+PY
+
   step "pytest (backend, via the uv .venv that holds the ML deps)"
   # Plain `pytest` is the nix interpreter and can't import fastapi/numpy/pyannote;
   # those live in the uv-managed .venv (the same interpreter mypy resolves from).
