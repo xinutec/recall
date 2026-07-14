@@ -237,12 +237,23 @@ monorepo `06f226ce` sets `RECALL_ROLE=fleet`):
 - **B — Isis rolled out:** done and verified over VPN. `RECALL_ROLE=fleet` live;
   `pause`→bounded intent, `resume`→clear, both correct from the Mac's WG IP; data serving
   intact (2,252 segments). Intent left in the **running** state.
-- **C — the Mac cutover: NOT done. This is the next action.** Until C, the fleet is ready
-  but disconnected: pressing pause on Isis records intent that nothing applies, and Isis
-  is still the frozen seed (the Mac isn't pushing). The Mac's local LAN UI still controls
-  the mic directly, unaffected.
+- **C — the Mac cutover: INSTALLED 2026-07-14, end-to-end test still pending.** Token is
+  in `~/Code/recall/.env`; both agents (`recall-sync`, `recall-capture-mirror`) are loaded
+  and healthy. Manual dry-runs passed (`sync` flushed the 1,440-segment backlog; a later
+  timer run pushed 0 — watermark current). The mic agents `recall-capture`/`recall-live`
+  kept their **exact PIDs** across the switch (never reloaded), so the mic-TCC grant is
+  intact. The live mirror is running: Isis's `/api/capture` shows the Mac's *reported*
+  state. **Not yet done:** the pause/resume end-to-end test (step 5) — deferred because a
+  deliberate **local** pause was active on the Mac (set on its own LAN UI, until
+  2026-07-14 19:40 UTC); the edge-triggered mirror correctly left it alone, and running
+  the e2e would have resumed capture early. Do the e2e once that pause has lifted.
 
 ### Step C — the Mac cutover (runbook)
+
+> **Status 2026-07-14:** steps 1–4 DONE (token in `.env`, dry-runs passed, agents
+> installed, mic-TCC survived — capture/live kept their PIDs). Only **step 5 (e2e)**
+> remains, deferred until a deliberate local pause on the Mac lifted (~19:40 UTC). When
+> picking this up, skip to step 5.
 
 Do these on the **Mac** (this repo). The token must go from the cluster into a file
 without passing through logs/output.
