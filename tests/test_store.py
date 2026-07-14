@@ -789,49 +789,98 @@ def test_add_audio_segment_dedups_by_source_and_start() -> None:
     assert first == again
 
 
-def test_hide_provisional_before_reconciles_live() -> None:
+def _add_live(store: Store, at_s: float, text: str) -> int:
+    return store.add_transcript_segment(
+        audio_segment_id=None,
+        start=BASE + timedelta(seconds=at_s),
+        end=BASE + timedelta(seconds=at_s + 1),
+        text=text,
+        asr_model="live",
+    )
+
+
+def test_hide_provisional_covered_reconciles_only_spanned_live() -> None:
+    # A live turn is reconciled only where a *transcribed* audio segment spans its
+    # moment. Segment [0,60) is transcribed; [60,120) is not yet. The live turn at
+    # t=90 (inside the un-transcribed segment) must survive — the archive has not
+    # caught up to it — while t=5 (inside the transcribed one) is hidden.
     store = Store.memory()
     store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    # fast live transcripts at t=0 and t=5
+    covered = store.add_audio_segment(_segment(start_s=0, dur_s=60))
+    store.add_audio_segment(_segment(start_s=60, dur_s=60))  # not transcribed yet
+    store.mark_transcribed(covered)
+
+    _add_live(store, 5, "live covered")
+    _add_live(store, 90, "live pending")
     store.add_transcript_segment(
-        audio_segment_id=None,
-        start=BASE,
-        end=BASE + timedelta(seconds=1),
-        text="live a",
-        asr_model="live",
-    )
-    store.add_transcript_segment(
-        audio_segment_id=None,
-        start=BASE + timedelta(seconds=5),
-        end=BASE + timedelta(seconds=6),
-        text="live b",
-        asr_model="live",
-    )
-    # the archive pass has reached t=2
-    archive = store.add_transcript_segment(
-        audio_segment_id=audio_id,
+        audio_segment_id=covered,
         start=BASE + timedelta(seconds=2),
         end=BASE + timedelta(seconds=3),
         text="archive",
         asr_model="whisper",
     )
 
-    latest = store.latest_archive_transcript()
-    assert latest is not None
-    assert latest[0] == archive
-    hidden = store.hide_provisional_before(latest[1])
-    assert hidden == 1  # only the live transcript before t=2
-
+    assert store.hide_provisional_covered() == 1  # only the spanned live turn
     current = {
-        s.text
-        for s in store.segments_in_range(
-            BASE - timedelta(seconds=1), BASE + timedelta(seconds=10)
-        )
+        s.text for s in store.segments_in_range(BASE, BASE + timedelta(seconds=120))
     }
-    assert current == {"archive", "live b"}  # 'live a' hidden; 'live b' kept
-    # Idempotent: a second reconcile pass has nothing left to hide.
-    assert store.hide_provisional_before(latest[1]) == 0
+    assert current == {"archive", "live pending"}
+    # Idempotent.
+    assert store.hide_provisional_covered() == 0
+
+
+def test_hide_provisional_covered_spares_never_recorded_gap() -> None:
+    # The bug: capture wrote empty files on start (cleared as dead stubs, so NO
+    # audio segment) for the first stretch, then recorded normally. A blanket
+    # "before the latest archive turn" watermark would hide the live turns in that
+    # gap — their only record. Coverage-by-segment must keep them.
+    store = Store.memory()
+    store.add_source(_source())
+    # Segment [0,60) was never recorded (empty stub cleared): no audio_segments row.
+    later = store.add_audio_segment(_segment(start_s=120, dur_s=60))
+    store.mark_transcribed(later)
+
+    gap_live = _add_live(store, 30, "one two three")  # in the never-recorded gap
+    _add_live(store, 130, "later live")  # spanned by the transcribed segment
+    store.add_transcript_segment(
+        audio_segment_id=later,
+        start=BASE + timedelta(seconds=125),
+        end=BASE + timedelta(seconds=126),
+        text="archive later",
+        asr_model="whisper",
+    )
+
+    assert store.hide_provisional_covered() == 1  # only the later, spanned turn
+    resolved = store.current_version(gap_live)
+    assert resolved is not None and resolved.text == "one two three"
+    visible = {
+        s.text for s in store.segments_in_range(BASE, BASE + timedelta(seconds=200))
+    }
+    assert visible == {"one two three", "archive later"}
+
+
+def test_restore_uncovered_provisional_reverses_watermark_loss() -> None:
+    # Recovery for turns the old watermark reconcile wrongly hid: un-hide reconciled
+    # live turns no transcribed segment spans, leaving genuinely-covered ones hidden.
+    store = Store.memory()
+    store.add_source(_source())
+    covered = store.add_audio_segment(_segment(start_s=120, dur_s=60))
+    store.mark_transcribed(covered)
+
+    lost = _add_live(store, 30, "lost count")  # never-recorded gap
+    spanned = _add_live(store, 130, "reconciled ok")  # legitimately covered
+    # Both were hidden by the old watermark pass.
+    store.hide(lost, RECONCILED_MARKER)
+    store.hide(spanned, RECONCILED_MARKER)
+
+    assert store.restore_uncovered_provisional() == 1  # only the uncovered one
+    visible = {
+        s.text for s in store.segments_in_range(BASE, BASE + timedelta(seconds=200))
+    }
+    assert "lost count" in visible  # restored
+    assert "reconciled ok" not in visible  # stays hidden (a segment spans it)
+    # Idempotent.
+    assert store.restore_uncovered_provisional() == 0
 
 
 def test_counts_and_source_names() -> None:

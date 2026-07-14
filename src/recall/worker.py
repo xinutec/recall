@@ -33,17 +33,15 @@ _NON_SOURCE_DIRS = {"work"}
 def reconcile_live(store: Store) -> int:
     """Hide provisional live transcripts the archive pass has caught up to.
 
-    Once the (higher-quality) archive transcription exists up to time T, the fast
-    live transcripts before T are redundant and get hidden. Hidden — NOT
-    superseded: `superseded_by` means "a better version of this same utterance",
-    and there is no single archive turn that is that; pointing it at an arbitrary
-    one made deep links resolve to unrelated text. Returns how many.
+    A live turn is hidden once a transcribed audio segment actually spans its
+    moment — not merely because some later archive turn exists (a watermark would
+    hide live turns in never-recorded gaps, e.g. empty-start segments cleared as
+    dead stubs, losing the only record of that stretch). Hidden — NOT superseded:
+    `superseded_by` means "a better version of this same utterance", and there is
+    no single archive turn that is that; pointing it at an arbitrary one made deep
+    links resolve to unrelated text. Returns how many.
     """
-    latest = store.latest_archive_transcript()
-    if latest is None:
-        return 0
-    _, cutoff = latest
-    return store.hide_provisional_before(cutoff)
+    return store.hide_provisional_covered()
 
 
 def _old_enough(path: Path, current: float, min_age_seconds: float) -> bool:

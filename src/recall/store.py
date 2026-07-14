@@ -1715,31 +1715,56 @@ class Store:
         rows = self._conn.execute(" ".join(sql), params).fetchall()
         return [_row_to_segment(row) for row in rows]
 
-    def latest_archive_transcript(self) -> tuple[int, datetime] | None:
-        """The most recent current non-live transcript (id, start), if any."""
-        row = self._conn.execute(
-            """SELECT id, start_utc FROM transcript_segments
-               WHERE superseded_by IS NULL AND hidden_reason IS NULL
-                 AND asr_model != ?
-               ORDER BY start_utc DESC LIMIT 1""",
-            (LIVE_MODEL,),
-        ).fetchone()
-        if row is None:
-            return None
-        return int(row["id"]), datetime.fromisoformat(row["start_utc"])
+    # A live turn is "caught up to" only where the archive actually processed the
+    # audio of its moment — a transcribed audio segment spanning it. Not a blanket
+    # "before the latest archive turn" watermark: capture can write empty files on
+    # start (cleared as dead stubs, no audio segment) so a later segment exists while
+    # an earlier stretch was never recorded. A watermark hides the live turns in that
+    # gap even though nothing replaced them — and they are the ONLY record of that
+    # moment. Coverage by segment span (not by where archive *turns* land) also means
+    # a fully-transcribed silent minute correctly reconciles the noise the live pass
+    # guessed inside it.
+    _LIVE_COVERED = """
+        EXISTS (
+            SELECT 1 FROM audio_segments a
+            WHERE a.transcribed_utc IS NOT NULL
+              AND a.start_utc <= transcript_segments.start_utc
+              AND a.end_utc   >  transcript_segments.start_utc
+        )
+    """
 
-    def hide_provisional_before(self, cutoff: datetime) -> int:
-        """Hide live transcripts starting before `cutoff` (archive caught up).
+    def hide_provisional_covered(self) -> int:
+        """Hide live transcripts a transcribed audio segment actually spans.
 
         Hidden, not superseded: there is no single archive turn that is "the
         better version" of a live turn, so a deep-linked live turn must keep
         resolving to itself. Returns how many were hidden.
         """
         cursor = self._conn.execute(
-            """UPDATE transcript_segments SET hidden_reason = ?
+            f"""UPDATE transcript_segments SET hidden_reason = ?
                WHERE asr_model = ? AND superseded_by IS NULL
-                 AND hidden_reason IS NULL AND start_utc < ?""",
-            (RECONCILED_MARKER, LIVE_MODEL, cutoff.isoformat()),
+                 AND hidden_reason IS NULL AND {self._LIVE_COVERED}""",
+            (RECONCILED_MARKER, LIVE_MODEL),
+        )
+        self._commit()
+        return cursor.rowcount
+
+    def restore_uncovered_provisional(self) -> int:
+        """Un-hide live turns reconciled with no covering audio (loss repair).
+
+        The old watermark reconcile hid every live turn before the latest archive
+        transcript — including moments the archive never covered (empty-start
+        segments cleared as dead stubs). Those live turns are the sole record of
+        their moment. Restore any reconciled live turn no transcribed audio segment
+        spans; the predicate is the exact inverse of `hide_provisional_covered`, so a
+        turn a segment does span stays hidden and nothing ever double-shows.
+        Idempotent.
+        """
+        cursor = self._conn.execute(
+            f"""UPDATE transcript_segments SET hidden_reason = NULL
+               WHERE asr_model = ? AND hidden_reason = ?
+                 AND superseded_by IS NULL AND NOT {self._LIVE_COVERED}""",
+            (LIVE_MODEL, RECONCILED_MARKER),
         )
         self._commit()
         return cursor.rowcount

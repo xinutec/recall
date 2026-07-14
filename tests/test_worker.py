@@ -245,6 +245,7 @@ def test_reconcile_live_hides_rather_than_superseding(tmp_path: Path) -> None:
         text="different archive words",
         asr_model="whisper",
     )
+    store.mark_transcribed(audio_id)  # reconcile runs after the segment is processed
 
     assert reconcile_live(store) == 1
 
