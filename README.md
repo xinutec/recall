@@ -10,6 +10,7 @@ in the house. Everything stays on-device.
 - **Phone/mic ingest (connect, identity, liveness):** [`docs/devices.md`](docs/devices.md)
 - **Reading a recorded call from the CLI:** [`docs/review.md`](docs/review.md)
 - **Ingesting discrete meeting recordings (download → ingest → transcribe → clean):** [`docs/meetings.md`](docs/meetings.md)
+- **Capture startup dead-window (silent loss of a session's opening — open bug + test plan):** [`docs/capture-startup-deadwindow.md`](docs/capture-startup-deadwindow.md)
 - **Conventions (strict typing, TDD):** [`docs/conventions.md`](docs/conventions.md)
 
 ## Web app

@@ -147,6 +147,33 @@ def test_health_is_read_from_the_disk_not_the_database(tmp_path: Path) -> None:
     assert _verdicts(capture_checks(recorders, now=NOW))["pixel9"] == "warn"
 
 
+def test_a_dead_window_of_empty_stubs_does_not_read_as_recording(
+    tmp_path: Path,
+) -> None:
+    """Capture can run — rolling a fresh file every segment — while the device
+    delivers only silence, leaving a trail of zero-byte stubs (a coreaudio startup
+    dead-window). Counting those as audio is how a 13-minute dead window read as
+    healthy. The newest *real* audio is an old session's, so the always-on mic fails.
+    """
+    (tmp_path / "usb").mkdir()
+    old = tmp_path / "usb" / "usb-20260713T120000.opus"  # a past session's real audio
+    old.write_bytes(b"audio")
+    old_time = (NOW - timedelta(hours=3)).timestamp()
+    os.utime(old, (old_time, old_time))
+    for i in range(3):  # the current dead window: fresh but empty, one a minute
+        stub = tmp_path / "usb" / f"usb-20260713T2059{i:02d}.opus"
+        stub.write_bytes(b"")
+        fresh = (NOW - timedelta(minutes=i)).timestamp()
+        os.utime(stub, (fresh, fresh))
+
+    recorders = recorders_on_disk(tmp_path, [("usb", SourceKind.COREAUDIO)], now=NOW)
+
+    assert recorders[0].last_audio is not None
+    # last_audio is the old session's file, not the fresh empty stubs
+    assert NOW - recorders[0].last_audio >= timedelta(hours=2)
+    assert _verdicts(capture_checks(recorders, now=NOW))["usb"] == "fail"
+
+
 def test_the_report_declares_the_cadence_that_makes_a_dead_producer_visible() -> None:
     """The property this whole design rests on.
 

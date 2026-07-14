@@ -216,9 +216,12 @@ def recorders_on_disk(
 ) -> list[Recorder]:
     """When each microphone last wrote audio, read from the archive directory itself.
 
-    The newest file's mtime, not the database: capture writing to disk is the fact under
-    test, and the pipeline that indexes those files can be far behind without the
-    microphone having missed a second.
+    The newest *non-empty* file's mtime, not the database: capture writing to disk is
+    the fact under test, and the pipeline that indexes those files can be far behind
+    without the microphone having missed a second. Zero-byte segments are skipped —
+    capture can run and roll a fresh file every segment while the device delivers only
+    digital silence (a coreaudio startup dead-window), and those empty stubs must not
+    read as "recording": counting them is how a 13-minute dead window looked healthy.
     """
     recorders = []
     for source_id, kind in sources:
@@ -227,11 +230,13 @@ def recorders_on_disk(
         if directory.is_dir():
             for path in directory.glob(f"{source_id}-*"):
                 try:
-                    mtime = path.stat().st_mtime
+                    stat = path.stat()
                 except OSError:
                     continue  # vanished mid-scan; the next pass will see it
-                if newest is None or mtime > newest:
-                    newest = mtime
+                if stat.st_size == 0:
+                    continue  # dead stub — capture rolled a file but caught no audio
+                if newest is None or stat.st_mtime > newest:
+                    newest = stat.st_mtime
         recorders.append(
             Recorder(
                 source_id=source_id,
