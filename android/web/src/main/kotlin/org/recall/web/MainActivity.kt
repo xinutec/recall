@@ -15,8 +15,9 @@ import androidx.core.view.WindowInsetsCompat
 /**
  * A full-screen [WebView] onto the recall web UI — the Angular SPA the recall API
  * serves at [RECALL_URL]. No address bar, no tabs, a home-screen icon: the website
- * presented as an app, avoiding browser chrome. LAN-only and cleartext (the host is
- * a private reserved address; see `usesCleartextTraffic` in the manifest).
+ * presented as an app, avoiding browser chrome. Points at Isis over WireGuard, so it
+ * works on the VPN whether home or away; cleartext is fine over the encrypted tunnel to
+ * a private address (see `usesCleartextTraffic` in the manifest).
  *
  * Deliberately tiny — a plain Activity holding one WebView, no Compose/AppCompat.
  * `configChanges` keeps the WebView (and its SPA route + scroll) across rotation
@@ -91,8 +92,12 @@ class MainActivity : Activity() {
             WindowInsetsCompat.CONSUMED
         }
         setContentView(root)
-        // Reopen where we left off; the hardcoded URL is only the first-run default.
-        web.loadUrl(prefs.getString(KEY_LAST_URL, null) ?: RECALL_URL)
+        // Reopen where we left off — but only if that saved page is on the current
+        // host. A URL saved against a previous RECALL_URL (e.g. after repointing the app
+        // at a new host) is dropped, so the new default loads instead of silently
+        // reloading the old host that startsWith(RECALL_URL) below would never refresh.
+        val last = prefs.getString(KEY_LAST_URL, null)
+        web.loadUrl(if (last?.startsWith(RECALL_URL) == true) last else RECALL_URL)
     }
 
     // The hardware/gesture Back walks the SPA's history; it only leaves the app once
@@ -113,9 +118,11 @@ class MainActivity : Activity() {
     }
 
     companion object {
-        // mac-mini's DHCP-reserved LAN address (192.168.1.81); the recall API serves
-        // the built Angular UI here on :8000. Hardcoded — this app is single-purpose.
-        private const val RECALL_URL = "http://192.168.1.81:8000/"
+        // Isis's WireGuard address (10.100.0.2) — the fleet system of record; the recall
+        // API serves the built Angular UI here on :8000, WG-bound so it's reachable over
+        // the VPN whether home or away. Pause/resume on this UI drives the capture intent
+        // the Mac mirrors. Hardcoded — this app is single-purpose.
+        private const val RECALL_URL = "http://10.100.0.2:8000/"
         private const val KEY_LAST_URL = "last_url"
     }
 }

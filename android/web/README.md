@@ -12,8 +12,10 @@ or updating one never touches the other.
 
 ## What it does
 
-- Loads `http://192.168.1.81:8000/` (mac-mini's DHCP-reserved LAN address) — the
-  host is **hardcoded** (`MainActivity.RECALL_URL`); this app is single-purpose.
+- Loads `http://10.100.0.2:8000/` (Isis's WireGuard address, the fleet system of
+  record) — the host is **hardcoded** (`MainActivity.RECALL_URL`); this app is
+  single-purpose. Being on the VPN, it works whether home or away, and pause/resume
+  on this UI drives the capture intent the Mac mirrors.
 - JavaScript + DOM storage on (Angular), media playback without a gesture (so the
   UI's audio clips play on tap), all navigation kept in-app, Back walks the SPA's
   history.
@@ -22,7 +24,8 @@ or updating one never touches the other.
   tracks the Material light/dark theme). The WebView no longer underlaps the bars,
   so the page's own `env(safe-area-inset-*)` collapse to 0 and add nothing on top.
 
-It needs only `INTERNET` and cleartext (LAN, HTTP) — no other permissions.
+It needs only `INTERNET` and cleartext (HTTP over the WireGuard tunnel to a private
+address) — no other permissions.
 
 ## Build & install
 
