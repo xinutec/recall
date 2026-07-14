@@ -132,4 +132,32 @@ in
       LowPriorityIO = true;
     };
   };
+
+  # Push the archive to Isis, the system of record (the Isis split). A timer, not
+  # KeepAlive: each run sends only what changed since the last (a transcript-id
+  # watermark) and exits. The Mac must push — it is a one-way WireGuard peer the fleet
+  # cannot reach. Inert until RECALL_SYNC_TOKEN is set in .env.
+  launchd.agents."com.pippijn.recall-sync" = daemon {
+    label = "com.pippijn.recall-sync";
+    name = "sync";
+    script = "recall-sync.sh";
+    extra = {
+      KeepAlive = false;
+      RunAtLoad = true;
+      StartInterval = 120;
+      LowPriorityIO = true;
+      Nice = 10;
+    };
+  };
+
+  # Mirror Isis's mic pause/resume onto this Mac (the Isis split). A KeepAlive loop that
+  # polls Isis every ~5s: Isis holds the desired capture state (its VPN UI) but cannot
+  # dial this one-way peer, so control is inverted to a Mac-initiated poll and a pause
+  # pressed on the VPN UI takes hold within seconds. Lightweight — an HTTP round trip,
+  # no ML. Inert until RECALL_SYNC_TOKEN is set in .env.
+  launchd.agents."com.pippijn.recall-capture-mirror" = daemon {
+    label = "com.pippijn.recall-capture-mirror";
+    name = "capture-mirror";
+    script = "recall-capture-mirror.sh";
+  };
 }
