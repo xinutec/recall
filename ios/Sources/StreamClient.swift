@@ -90,8 +90,9 @@ final class StreamClient {
             }
             if Task.isCancelled { break }
 
-            // Not connected — ask the recorder whether this is a deliberate pause.
-            let cap = await CaptureApi.state(host: Prefs.host)
+            // Not connected — ask the control plane (Isis) whether this is a deliberate
+            // pause (vs the recorder host just being unreachable).
+            let cap = await CaptureApi.state(host: Prefs.controlHost)
             await MainActor.run {
                 state.capture = cap
                 state.phase = (cap.reachable && !cap.running) ? .paused : .waitingForHost

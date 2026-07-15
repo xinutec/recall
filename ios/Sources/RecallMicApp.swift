@@ -67,11 +67,11 @@ final class RecallController: ObservableObject {
     // MARK: household pause (control plane)
 
     func pauseHousehold() {
-        Task { state.capture = await CaptureApi.pause(host: Prefs.host) }
+        Task { state.capture = await CaptureApi.pause(host: Prefs.controlHost) }
     }
 
     func resumeHousehold() {
-        Task { state.capture = await CaptureApi.resume(host: Prefs.host) }
+        Task { state.capture = await CaptureApi.resume(host: Prefs.controlHost) }
     }
 
     // MARK: polling — capture state every 5s, fleet liveness every 1.5s (Android
@@ -93,8 +93,8 @@ final class RecallController: ObservableObject {
         sourcesPoll?.cancel()
         capturePoll = Task { [weak self] in
             while !Task.isCancelled {
-                if !Prefs.host.isEmpty {
-                    let cap = await CaptureApi.state(host: Prefs.host)
+                if !Prefs.controlHost.isEmpty {
+                    let cap = await CaptureApi.state(host: Prefs.controlHost)
                     self?.state.capture = cap
                 }
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -102,7 +102,8 @@ final class RecallController: ObservableObject {
         }
         sourcesPoll = Task { [weak self] in
             while !Task.isCancelled {
-                if !Prefs.host.isEmpty, let s = await CaptureApi.sources(host: Prefs.host) {
+                if !Prefs.controlHost.isEmpty,
+                    let s = await CaptureApi.sources(host: Prefs.controlHost) {
                     self?.state.sources = s
                 }
                 try? await Task.sleep(nanoseconds: 1_500_000_000)

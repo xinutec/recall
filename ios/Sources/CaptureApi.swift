@@ -12,9 +12,11 @@ struct SourceStatus: Identifiable, Equatable {
 
 /// Talks to the recall web API (port 8000) — the same control plane the web app and the
 /// Android app use — to read the *household* capture pause, control it, and read the
-/// fleet's per-recorder liveness. The API stays up during a pause, so the app shows the
-/// true state even while the stream port is closed. Off the home LAN, calls just fail
-/// and the panels stay hidden (you shouldn't control the system from away).
+/// fleet's per-recorder liveness. Since the Isis split the caller passes the *control
+/// host* (Isis), NOT the recorder host the stream uses: the API moved to Isis while the
+/// PCM ingest stayed on the Mac. The API stays up during a pause, so the app shows the
+/// true state even while the stream port is closed. If Isis is unreachable, calls just
+/// fail and the panels stay hidden rather than showing stale state.
 enum CaptureApi {
     private static let port = 8000
     private static let timeout: TimeInterval = 4

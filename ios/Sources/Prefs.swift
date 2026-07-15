@@ -6,15 +6,34 @@ enum Prefs {
     private static let d = UserDefaults.standard
     private enum Key {
         static let host = "host"
+        static let controlHost = "control_host"
         static let port = "port"
         static let enabled = "enabled"
         static let deviceID = "device_id"
     }
 
-    /// Recorder host (IP or hostname). Empty until the user sets it.
+    /// Isis (the fleet control plane) over WireGuard: a stable address, so it's the
+    /// out-of-the-box default and existing installs self-heal without reconfiguration.
+    /// The stream still goes to the recorder `host`; only the API moved here.
+    static let defaultControlHost = "10.100.0.2"
+
+    /// Recorder host the PCM stream connects to (the Mac's ingest, on the home LAN).
+    /// Empty until the user sets it.
     static var host: String {
         get { d.string(forKey: Key.host) ?? "" }
         set { d.set(newValue, forKey: Key.host) }
+    }
+
+    /// Control-plane host for the capture API — pause/resume and the fleet liveness the
+    /// Devices panel shows. That's Isis, not the recorder host: the Isis split put the API
+    /// and the PCM ingest on different machines. Empty/unset falls back to
+    /// `defaultControlHost`, so the controls and panel work out of the box.
+    static var controlHost: String {
+        get {
+            let h = d.string(forKey: Key.controlHost) ?? ""
+            return h.isEmpty ? defaultControlHost : h
+        }
+        set { d.set(newValue, forKey: Key.controlHost) }
     }
 
     /// Shared ingest port (matches the recorder's DEFAULT_INGEST_PORT).

@@ -49,12 +49,14 @@ fun parseSources(body: String): List<SourceStatus> =
 
 /**
  * Talks to the recall web API — the same one the web app uses — to read the global
- * capture pause (and control it), and the fleet's per-recorder liveness. The API
- * lives on the configured host at a fixed port and stays up *during* a pause (it's
- * control-plane), so the app shows the true state even when the stream port is closed.
+ * capture pause (and control it), and the fleet's per-recorder liveness. Since the Isis
+ * split this is the *control host* (Isis), NOT the recorder host the stream uses: the API
+ * moved to Isis while the PCM ingest stayed on the Mac. The API stays up *during* a pause
+ * (it's control-plane), so the app shows the true state even when the stream port is
+ * closed.
  *
- * Only reachable on the home LAN (same as streaming); off it, calls just fail and the
- * panels stay hidden — which is correct, you shouldn't control the system from away.
+ * Reachable wherever the caller can reach Isis (over the VPN); if it can't, calls just
+ * fail and the panels stay hidden rather than showing stale state.
  */
 object CaptureApi {
     private const val API_PORT = 8000 // `recall api --port 8000`

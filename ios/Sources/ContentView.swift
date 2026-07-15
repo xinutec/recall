@@ -12,6 +12,7 @@ struct ContentView: View {
     var onHostChanged: () -> Void
 
     @State private var host: String = Prefs.host
+    @State private var controlHost: String = Prefs.controlHost
     private let segments = 24
 
     var body: some View {
@@ -23,6 +24,7 @@ struct ContentView: View {
                     captureBanner
                     devicesPanel
                     hostField
+                    controlHostField
                     deviceRow
                     buttons
                 }
@@ -134,7 +136,7 @@ struct ContentView: View {
 
     private var hostField: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Recorder host").font(.caption).foregroundStyle(.secondary)
+            Text("Recorder host (stream)").font(.caption).foregroundStyle(.secondary)
             TextField("192.168.1.81", text: $host)
                 .textFieldStyle(.roundedBorder)
                 .keyboardType(.numbersAndPunctuation)
@@ -143,6 +145,24 @@ struct ContentView: View {
                 .disabled(state.running)
                 .onChange(of: host) { newValue in
                     Prefs.host = newValue
+                    onHostChanged()
+                }
+        }
+    }
+
+    // The control-plane host (Isis). Separate from the recorder host because the Isis
+    // split put the capture API on a different machine than the PCM ingest; this drives
+    // the pause banner and Devices panel. Editable any time — it doesn't touch the stream.
+    private var controlHostField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Control host (Isis)").font(.caption).foregroundStyle(.secondary)
+            TextField(Prefs.defaultControlHost, text: $controlHost)
+                .textFieldStyle(.roundedBorder)
+                .keyboardType(.numbersAndPunctuation)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .onChange(of: controlHost) { newValue in
+                    Prefs.controlHost = newValue
                     onHostChanged()
                 }
         }

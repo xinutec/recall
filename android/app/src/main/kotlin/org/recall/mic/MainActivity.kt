@@ -79,9 +79,11 @@ class MainActivity : ComponentActivity() {
             RecallMicTheme {
                 MicScreen(
                     initialHost = Prefs.host(this),
+                    initialControlHost = Prefs.controlHost(this),
                     deviceId = Prefs.deviceId(this),
                     onStart = ::beginStream,
                     onStop = ::endStream,
+                    onControlHostChanged = { Prefs.saveControlHost(this, it) },
                 )
             }
         }
@@ -128,11 +130,17 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MicScreen(
     initialHost: String,
+    initialControlHost: String,
     deviceId: String,
     onStart: (String) -> Unit,
     onStop: (String) -> Unit,
+    onControlHostChanged: (String) -> Unit,
 ) {
     var host by remember { mutableStateOf(initialHost) }
+    // The control-plane host (Isis) — separate from the recorder [host] because the
+    // Isis split put the capture API on a different machine than the PCM ingest. The
+    // pause banner and Devices panel poll THIS host; the stream still uses [host].
+    var controlHost by remember { mutableStateOf(initialControlHost) }
     val running by MicState.running.collectAsStateWithLifecycle()
     val connected by MicState.connected.collectAsStateWithLifecycle()
     val level by MicState.level.collectAsStateWithLifecycle()
@@ -143,11 +151,11 @@ fun MicScreen(
     // transient blip doesn't flicker the banner.
     val capture by MicState.capture.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    LaunchedEffect(host) {
-        if (host.isBlank()) return@LaunchedEffect
+    LaunchedEffect(controlHost) {
+        if (controlHost.isBlank()) return@LaunchedEffect
         delay(500) // debounce: typing restarts this effect per keystroke
         while (true) {
-            CaptureApi.state(host)?.let { MicState.setCapture(it) }
+            CaptureApi.state(controlHost)?.let { MicState.setCapture(it) }
             delay(5_000)
         }
     }
@@ -163,14 +171,15 @@ fun MicScreen(
     }
 
     // Fleet liveness: which recorders are streaming. Polled fast (~1.5s) so the
-    // panel tracks devices going active within a second or two.
+    // panel tracks devices going active within a second or two. Off the control host
+    // (Isis), not the recorder host.
     var devices by remember { mutableStateOf<List<SourceStatus>>(emptyList()) }
-    LaunchedEffect(host) {
-        if (host.isBlank()) return@LaunchedEffect
+    LaunchedEffect(controlHost) {
+        if (controlHost.isBlank()) return@LaunchedEffect
         delay(500) // debounce, as above
         while (true) {
             // null = request failed → keep the last list so a blip can't blank the panel.
-            CaptureApi.sources(host)?.let { devices = it }
+            CaptureApi.sources(controlHost)?.let { devices = it }
             delay(1_500)
         }
     }
@@ -179,10 +188,10 @@ fun MicScreen(
     // we can highlight our own row in the Devices list with no extra call.
     val selfId = deviceId
 
-    // Run a capture action (pause/resume), then publish its result to the one shared
-    // state — so the screen and notification both reflect it.
+    // Run a capture action (pause/resume) against the control host, then publish its
+    // result to the one shared state — so the screen and notification both reflect it.
     fun control(call: suspend (String) -> CaptureState?) {
-        scope.launch { call(host)?.let { MicState.setCapture(it) } }
+        scope.launch { call(controlHost)?.let { MicState.setCapture(it) } }
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Recall Mic") }) }) { inner ->
@@ -221,12 +230,25 @@ fun MicScreen(
             OutlinedTextField(
                 value = host,
                 onValueChange = { host = it.trim() },
-                label = { Text("recall host") },
+                label = { Text("recorder host (stream)") },
                 placeholder = { Text("192.168.1.81") },
                 singleLine = true,
                 // Locked while streaming (as on iOS): the service connects to the
                 // SAVED host, so an edit here would make the status card lie.
                 enabled = !running,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = controlHost,
+                onValueChange = {
+                    controlHost = it.trim()
+                    onControlHostChanged(controlHost)
+                },
+                label = { Text("control host (Isis)") },
+                placeholder = { Text(Prefs.DEFAULT_CONTROL_HOST) },
+                singleLine = true,
+                // Not tied to the stream, so it's editable any time — it only drives the
+                // pause controls and Devices panel (the fleet API on Isis).
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
