@@ -1,4 +1,4 @@
-"""The pluggable audio-source abstraction (sox mic + ffmpeg network/synthetic)."""
+"""The pluggable audio-source abstraction (ffmpeg mic + network/synthetic)."""
 
 from __future__ import annotations
 
@@ -7,39 +7,51 @@ import pytest
 from recall.sources import AudioSource, SourceKind
 
 
-def test_coreaudio_uses_sox_default_device() -> None:
+def test_coreaudio_uses_avfoundation_default() -> None:
+    # ffmpeg's avfoundation input, not sox: sox's CoreAudio driver wedges to digital
+    # silence for minutes (the dead-window). avfoundation reads the device reliably.
     src = AudioSource(id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="")
     argv = src.producer_argv(48000, 1)
-    assert argv[0] == "sox"
-    assert "-d" in argv  # default input device
-    assert argv[argv.index("-r") + 1] == "48000"
-    assert argv[argv.index("-c") + 1] == "1"
+    assert argv[0] == "ffmpeg"
+    assert argv[argv.index("-f") + 1] == "avfoundation"  # first -f is the input format
+    assert argv[argv.index("-i") + 1] == ":default"
+    assert argv[argv.index("-ar") + 1] == "48000"
+    assert argv[argv.index("-ac") + 1] == "1"
     assert argv[-1] == "-"  # raw PCM to stdout
 
 
-def test_coreaudio_named_device_pins_sox_input() -> None:
-    # A Bluetooth speaker with a hands-free mic (the Bose) can become the system
-    # default input, so `-d` would record telephone-quality audio through it (and
-    # make it chime). A named spec pins the exact device instead.
+def test_coreaudio_named_device_pins_avfoundation_input() -> None:
+    # A Bluetooth speaker with a hands-free mic (the Bose) can become the system default
+    # input, so an unpinned default would record telephone-quality through it. A named
+    # spec selects the exact device: avfoundation's ":<name>" is audio-only.
     src = AudioSource(
         id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="USB Condenser Microphone"
     )
     argv = src.producer_argv(48000, 1)
-    assert argv[:4] == ["sox", "-t", "coreaudio", "USB Condenser Microphone"]
-    assert "-d" not in argv
+    assert argv[:8] == [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "avfoundation",
+        "-i",
+        ":USB Condenser Microphone",
+    ]
+    assert ":default" not in argv
     assert argv[-1] == "-"
 
 
-def test_coreaudio_named_device_bounded_appends_trim() -> None:
+def test_coreaudio_named_device_bounded_limits_duration() -> None:
     src = AudioSource(id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="mic")
     argv = src.producer_argv(48000, 1, max_seconds=10)
-    assert argv[-3:] == ["trim", "0", "10"]
+    assert argv[argv.index("-t") + 1] == "10"  # ffmpeg duration cap
 
 
-def test_coreaudio_bounded_appends_trim() -> None:
+def test_coreaudio_bounded_limits_duration() -> None:
     src = AudioSource(id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="")
     argv = src.producer_argv(48000, 1, max_seconds=10)
-    assert argv[-3:] == ["trim", "0", "10"]
+    assert argv[argv.index("-t") + 1] == "10"
 
 
 def test_lavfi_uses_ffmpeg_realtime_synthetic() -> None:

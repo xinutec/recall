@@ -15,9 +15,11 @@ from recall.live import drain_to_queue, mic_argv, write_wav
 
 def test_mic_argv_default_device() -> None:
     argv = mic_argv("")
-    assert argv[:2] == ["sox", "-d"]
-    assert argv[argv.index("-r") + 1] == "16000"
-    assert argv[argv.index("-c") + 1] == "1"
+    assert argv[0] == "ffmpeg"
+    assert argv[argv.index("-f") + 1] == "avfoundation"
+    assert argv[argv.index("-i") + 1] == ":default"
+    assert argv[argv.index("-ar") + 1] == "16000"  # live runs the mic at 16 kHz
+    assert argv[argv.index("-ac") + 1] == "1"
     assert argv[-1] == "-"
 
 
@@ -25,8 +27,9 @@ def test_mic_argv_named_device_pins_the_mic() -> None:
     # Same pinning as capture: never let a Bluetooth speaker's hands-free mic
     # (the system default input) become the live-transcription source.
     argv = mic_argv("USB Condenser Microphone")
-    assert argv[:4] == ["sox", "-t", "coreaudio", "USB Condenser Microphone"]
-    assert "-d" not in argv
+    assert argv[argv.index("-i") + 1] == ":USB Condenser Microphone"
+    assert argv[argv.index("-f") + 1] == "avfoundation"
+    assert ":default" not in argv
 
 
 def test_write_wav_is_valid_mono_16k(tmp_path: Path) -> None:

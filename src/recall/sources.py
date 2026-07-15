@@ -87,27 +87,26 @@ class AudioSource:
         """Command that streams raw s16le PCM for this source to stdout."""
         match self.kind:
             case SourceKind.COREAUDIO:
-                # An unknown device name makes sox fail hard (the launchd agent
-                # crash-loops visibly) — never a silent fallback to the default.
-                device = ["-t", "coreaudio", self.spec] if self.spec else ["-d"]
-                argv = [
-                    "sox",
-                    *device,
-                    "-c",
-                    str(channels),
-                    "-r",
-                    str(sample_rate),
-                    "-b",
-                    "16",
-                    "-t",
-                    "raw",
-                    "-e",
-                    "signed-integer",
-                    "-",
+                # ffmpeg avfoundation, NOT sox. sox's CoreAudio driver wedges: its input
+                # silently drops to digital zero for minutes while the device stays
+                # healthy — proven side-by-side (avfoundation read real audio from the
+                # mic the instant sox was writing empty segments). That wedge is the
+                # "dead-window" that lost the opening/middle of recordings. avfoundation
+                # reads the device reliably; `-i ":<device>"` is audio-only. An unknown
+                # name still fails hard (the agent crash-loops visibly) — never a silent
+                # fallback to the default, which a Bluetooth handsfree mic can grab.
+                device = self.spec if self.spec else "default"
+                return [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "avfoundation",
+                    "-i",
+                    f":{device}",
+                    *_ffmpeg_pcm_tail(sample_rate, channels, max_seconds),
                 ]
-                if max_seconds is not None:
-                    argv += ["trim", "0", str(max_seconds)]
-                return argv
             case SourceKind.LAVFI:
                 return [
                     "ffmpeg",
