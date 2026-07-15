@@ -1769,6 +1769,48 @@ class Store:
         self._commit()
         return cursor.rowcount
 
+    def visible_live_turns_since(
+        self, watermark: int, *, limit: int = 500
+    ) -> list[TranscriptSegment]:
+        """Current (visible) live turns with id > `watermark`, oldest id first — the
+        fast provisional transcripts the fleet's UI shows before the archive catches up.
+        Reconciled (hidden) live turns are excluded: the clean segment carries their
+        content to the fleet, so re-pushing them would only churn. Bounded, so one push
+        pass is O(new)."""
+        rows = self._conn.execute(
+            """SELECT * FROM transcript_segments
+               WHERE asr_model = ? AND superseded_by IS NULL AND hidden_reason IS NULL
+                 AND id > ?
+               ORDER BY id LIMIT ?""",
+            (LIVE_MODEL, watermark, limit),
+        ).fetchall()
+        return [_row_to_segment(row) for row in rows]
+
+    def hide_live_turns_covered_by(self, seg_start: datetime, seg_end: datetime) -> int:
+        """Hide visible live turns an incoming archive segment spans — the fleet-side
+        mirror of `hide_provisional_covered`, run when a clean segment arrives so the
+        fleet swaps the provisional live turn for the archive version instead of showing
+        both. Same predicate: the live turn's start falls within the segment's span."""
+        cursor = self._conn.execute(
+            """UPDATE transcript_segments SET hidden_reason = ?
+               WHERE asr_model = ? AND superseded_by IS NULL AND hidden_reason IS NULL
+                 AND start_utc >= ? AND start_utc < ?""",
+            (RECONCILED_MARKER, LIVE_MODEL, seg_start.isoformat(), seg_end.isoformat()),
+        )
+        self._commit()
+        return cursor.rowcount
+
+    def live_turn_present(self, start: datetime, text: str) -> bool:
+        """Whether a live turn with this start+text already exists (in any state). The
+        fleet ingest is idempotent: a retried push never duplicates a turn, nor
+        resurrects one the archive already reconciled to hidden."""
+        row = self._conn.execute(
+            "SELECT 1 FROM transcript_segments "
+            "WHERE asr_model = ? AND start_utc = ? AND text = ? LIMIT 1",
+            (LIVE_MODEL, start.isoformat(), text),
+        ).fetchone()
+        return row is not None
+
     def get_transcript(self, segment_id: int) -> TranscriptSegment | None:
         row = self._conn.execute(
             "SELECT * FROM transcript_segments WHERE id = ?", (segment_id,)

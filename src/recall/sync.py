@@ -143,6 +143,20 @@ class SummaryIn(BaseModel):
     model: str
 
 
+class LiveTurnsIn(BaseModel):
+    """A batch of provisional live turns the Mac pushes for the fleet's instant feed.
+    Audio-less and time-anchored — shown at once, then reconciled (hidden) when the
+    archive segment spanning them arrives (see `_ingest_segment`)."""
+
+    turns: list[TurnIn]
+
+
+class LiveStoredOut(BaseModel):
+    """How many pushed live turns the fleet newly stored (present ones are skipped)."""
+
+    stored: int
+
+
 class CaptureAppliedIn(BaseModel):
     """What the Mac currently has applied to its own capture — reported each mirror pass
     so the fleet's status reflects reality, not just what was asked for."""
@@ -231,6 +245,12 @@ def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentSt
             channels=body.channels,
         )
     )
+    # Reconcile the instant feed: this archive segment now covers its span, so any
+    # provisional live turns the fleet is still showing inside it are hidden — the
+    # fleet-side mirror of worker.reconcile_live, so it swaps live for archive instead
+    # of showing both. Runs on every ingest (before the no-op check) so a live turn that
+    # arrived after the segment was first stored is still reconciled.
+    store.hide_live_turns_covered_by(seg_start, seg_end)
     current = _machine_turn_keys(store.visible_machine_turns_for_audio(audio_id))
     if current == _incoming_turn_keys(body.turns):
         return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=0)
@@ -257,6 +277,47 @@ def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentSt
             )
             written += 1
     return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=written)
+
+
+def _ingest_live(store: Store, body: LiveTurnsIn) -> LiveStoredOut:
+    """Persist pushed live turns on the fleet — audio-less provisional transcripts shown
+    instantly while the archive pass catches up. Idempotent: a turn already present (a
+    retry, or one the archive already reconciled) is skipped, so a re-push never
+    duplicates a turn or resurrects a hidden one."""
+    stored = 0
+    for turn in body.turns:
+        start = datetime.fromisoformat(turn.start)
+        if store.live_turn_present(start, turn.text):
+            continue
+        store.add_transcript_segment(
+            audio_segment_id=None,
+            start=start,
+            end=datetime.fromisoformat(turn.end),
+            text=turn.text,
+            asr_model=turn.asr_model,
+            language=turn.language,
+        )
+        stored += 1
+    return LiveStoredOut(stored=stored)
+
+
+def _register_live_route(
+    app: FastAPI, store_factory: Callable[[], Store], expected: str
+) -> None:
+    """The instant-feed ingest route (its own helper so register_sync_routes stays under
+    the statement budget). The Mac pushes provisional live turns here; they show at once
+    and are reconciled when the archive segment spanning them arrives."""
+
+    @app.post("/sync/live")
+    def sync_live(
+        body: LiveTurnsIn, authorization: str | None = Header(default=None)
+    ) -> LiveStoredOut:
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            return _ingest_live(store, body)
+        finally:
+            store.close()
 
 
 def _register_capture_route(
@@ -341,6 +402,7 @@ def register_sync_routes(
             store.close()
         return {"ok": True}
 
+    _register_live_route(app, store_factory, expected)
     _register_capture_route(app, store_factory, expected)
 
     @app.get("/sync/jobs")
@@ -444,6 +506,17 @@ class SyncClient:
             headers=self._headers,
         )
         resp.raise_for_status()
+
+    def push_live(self, turns: list[TurnIn]) -> int:
+        """Push a batch of provisional live turns to the fleet's instant feed.
+        Idempotent (the fleet skips ones it has); returns how many were newly stored."""
+        resp = self._client.post(
+            f"{self._base}/sync/live",
+            json={"turns": [t.model_dump() for t in turns]},
+            headers=self._headers,
+        )
+        resp.raise_for_status()
+        return LiveStoredOut.model_validate(resp.json()).stored
 
     def exchange_capture(
         self, *, running: bool, paused_until: str | None

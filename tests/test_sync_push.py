@@ -8,8 +8,8 @@ from pathlib import Path
 
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
-from recall.sync import SegmentIn, SegmentStoredOut, SummaryIn
-from recall.sync_push import sync_push
+from recall.sync import SegmentIn, SegmentStoredOut, SummaryIn, TurnIn
+from recall.sync_push import push_live_turns, sync_push
 from recall.timeline import Segment
 
 BASE = datetime(2026, 7, 11, 12, 0, 0, tzinfo=UTC)
@@ -23,6 +23,7 @@ class FakeClient:
         self.audio_pushed: list[tuple[str, str]] = []
         self.segments: list[SegmentIn] = []
         self.summaries: list[SummaryIn] = []
+        self.live: list[TurnIn] = []
 
     def audio_present(self, source: str, name: str) -> bool:
         return (source, name) in self.present
@@ -38,6 +39,10 @@ class FakeClient:
 
     def push_summary(self, summary: SummaryIn) -> None:
         self.summaries.append(summary)
+
+    def push_live(self, turns: list[TurnIn]) -> int:
+        self.live.extend(turns)
+        return len(turns)
 
 
 def _seed_segment(store: Store, model: str = "turbo") -> int:
@@ -108,3 +113,45 @@ def test_push_sends_day_summaries() -> None:
     assert [(s.day, s.text) for s in client.summaries] == [
         ("2026-07-11", "a quiet day")
     ]
+
+
+def _add_live(store: Store, at_s: float, text: str) -> int:
+    return store.add_transcript_segment(
+        audio_segment_id=None,
+        start=BASE + timedelta(seconds=at_s),
+        end=BASE + timedelta(seconds=at_s + 1),
+        text=text,
+        asr_model="live",
+    )
+
+
+def test_push_live_sends_visible_live_turns_then_is_idempotent() -> None:
+    store = Store.memory()
+    _add_live(store, 1, "hello")
+    _add_live(store, 2, "world")
+    client = FakeClient()
+
+    assert push_live_turns(store, client) == 2
+    assert [t.text for t in client.live] == ["hello", "world"]
+    assert all(t.asr_model == "live" for t in client.live)
+    # Watermark: a second pass with nothing new sends nothing.
+    assert push_live_turns(store, client) == 0
+    assert len(client.live) == 2
+    # A newly-arrived live turn is the only thing the next pass sends.
+    _add_live(store, 3, "again")
+    assert push_live_turns(store, client) == 1
+    assert client.live[-1].text == "again"
+
+
+def test_push_live_skips_reconciled_turns() -> None:
+    # A live turn the archive already reconciled (hidden) is the clean segment's job to
+    # carry; the instant-feed push must not re-send it.
+    store = Store.memory()
+    keep = _add_live(store, 1, "visible")
+    gone = _add_live(store, 2, "reconciled")
+    store.hide(gone, "live-reconciled")
+    client = FakeClient()
+
+    assert push_live_turns(store, client) == 1
+    assert [t.text for t in client.live] == ["visible"]
+    assert keep  # (silence the unused-var check; the visible one is what shipped)

@@ -23,6 +23,7 @@ from recall.sync import SegmentIn, SegmentStoredOut, SummaryIn, TurnIn
 from recall.timeline import Segment
 
 WATERMARK_KEY = "sync_pushed_max_turn_id"
+LIVE_WATERMARK_KEY = "sync_pushed_max_live_turn_id"
 _SUMMARY_PUSH_LIMIT = 60
 
 
@@ -33,6 +34,7 @@ class PushTarget(Protocol):
     def push_audio(self, source: str, name: str, local_path: Path) -> bool: ...
     def push_segment(self, segment: SegmentIn) -> SegmentStoredOut: ...
     def push_summary(self, summary: SummaryIn) -> None: ...
+    def push_live(self, turns: list[TurnIn]) -> int: ...
 
 
 def _segment_in(
@@ -64,6 +66,29 @@ def _segment_in(
     )
 
 
+def _live_turn_in(turn: TranscriptSegment) -> TurnIn:
+    return TurnIn(
+        start=turn.start.isoformat(),
+        end=turn.end.isoformat(),
+        text=turn.text,
+        asr_model=turn.asr_model,
+        language=turn.language,
+    )
+
+
+def push_live_turns(store: Store, client: PushTarget) -> int:
+    """Push new visible live turns to the fleet's instant feed; returns how many were
+    sent. Separate from the segment push and cheap (only unpushed visible live turns,
+    id-watermarked), so it can run on a much shorter cadence to keep the feed live."""
+    watermark = int(store.get_setting(LIVE_WATERMARK_KEY) or 0)
+    turns = store.visible_live_turns_since(watermark)
+    if not turns:
+        return 0
+    client.push_live([_live_turn_in(t) for t in turns])
+    store.set_setting(LIVE_WATERMARK_KEY, str(max(int(t.id) for t in turns)))
+    return len(turns)
+
+
 def sync_push(store: Store, client: PushTarget) -> int:
     """Push everything changed since the last pass; returns the segment count sent."""
     watermark = int(store.get_setting(WATERMARK_KEY) or 0)
@@ -87,4 +112,5 @@ def sync_push(store: Store, client: PushTarget) -> int:
         client.push_summary(SummaryIn(day=day, text=text, model=model))
     if high > watermark:
         store.set_setting(WATERMARK_KEY, str(high))
+    push_live_turns(store, client)  # also refresh the instant feed each pass
     return pushed

@@ -401,3 +401,58 @@ def test_a_filename_that_is_not_a_filename_is_refused(
         client = SyncClient("http://fleet", "secret", client=transport)
         with pytest.raises(HTTPStatusError):
             client.push_segment(_segment(source="usb", path="/archive/usb/.."))
+
+
+def _live_turn(at_s: float, text: str) -> TurnIn:
+    return TurnIn(
+        start=(BASE + timedelta(seconds=at_s)).isoformat(),
+        end=(BASE + timedelta(seconds=at_s + 1)).isoformat(),
+        text=text,
+        asr_model="live",
+    )
+
+
+def test_live_push_stores_turns_then_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        assert client.push_live([_live_turn(1, "one"), _live_turn(2, "two")]) == 2
+        # a retry of the same batch stores nothing new — never duplicated on the feed
+        assert client.push_live([_live_turn(1, "one"), _live_turn(2, "two")]) == 0
+
+    store = Store.open(db)
+    visible = store.visible_live_turns_since(0)
+    store.close()
+    assert sorted(t.text for t in visible) == ["one", "two"]
+
+
+def test_a_segment_reconciles_the_live_turns_it_covers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The instant feed → archive swap on the fleet: a live turn shown now is hidden the
+    # moment the clean segment spanning it arrives, so the UI never shows both.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        client.push_live([_live_turn(3, "provisional")])  # inside the segment's span
+        client.push_live([_live_turn(99, "much later")])  # outside it
+        store = Store.open(db)
+        assert len(store.visible_live_turns_since(0)) == 2
+        store.close()
+
+        client.push_segment(_segment(n_turns=1))  # covers BASE .. BASE+30s
+
+    store = Store.open(db)
+    still_live = [t.text for t in store.visible_live_turns_since(0)]
+    store.close()
+    assert still_live == ["much later"]  # the covered one was reconciled away
