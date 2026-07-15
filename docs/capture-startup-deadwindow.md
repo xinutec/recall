@@ -1,4 +1,16 @@
-# Capture startup dead-window
+# Capture dead-window
+
+> **RESOLVED 2026-07-15 — root cause was `sox`.** recall read the mic through sox's
+> CoreAudio driver, which intermittently wedges: its input silently drops to digital
+> zero for minutes at a time (segments come out zero-byte, cleared as dead stubs) while
+> the device stays perfectly healthy. Proven side-by-side — `ffmpeg -f avfoundation`
+> read real audio (−57 dB) from the same USB mic *at the instant* sox was writing empty
+> segments; the device enumerated fine throughout; and it happened with recall-live
+> stopped (so not two-client contention) and mid-session (so not a startup warm-up).
+> **Fix (commit `51948fa`): read the mic via ffmpeg avfoundation, not sox**
+> (`sources.producer_argv`, CoreAudio case — used by both recall-capture and
+> recall-live). Validated end-to-end with `runner.record` (a real non-empty segment).
+> The history below is the investigation that ruled out the wrong causes.
 
 Every capture session can begin with a run of **zero-byte segments** — capture is
 running and rolls a fresh file each minute, but the mic delivers only digital
