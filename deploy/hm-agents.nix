@@ -156,6 +156,24 @@ in
     };
   };
 
+  # Run on-demand ML the fleet asked for but can't do (the Isis split). A timer, not
+  # KeepAlive: each run pulls Isis's refine queue (a refine requested from its UI) into the
+  # Mac's local queue and exits; the refine daemon then does the ML while the mic is idle,
+  # and the refined turns sync back via recall-sync. The Mac must poll — it is a one-way
+  # WireGuard peer the fleet cannot reach. Inert until RECALL_SYNC_TOKEN is set in .env.
+  launchd.agents."com.pippijn.recall-jobs" = daemon {
+    label = "com.pippijn.recall-jobs";
+    name = "jobs";
+    script = "recall-jobs.sh";
+    extra = {
+      KeepAlive = false;
+      RunAtLoad = true;
+      StartInterval = 60;
+      LowPriorityIO = true;
+      Nice = 10;
+    };
+  };
+
   # Mirror Isis's mic pause/resume onto this Mac (the Isis split). A KeepAlive loop that
   # polls Isis every ~5s: Isis holds the desired capture state (its VPN UI) but cannot
   # dial this one-way peer, so control is inverted to a Mac-initiated poll and a pause

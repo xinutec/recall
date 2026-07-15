@@ -1346,6 +1346,29 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_jobs(args: argparse.Namespace) -> int:
+    """Run on-demand ML the fleet requested but can't do itself (the Isis split): pull
+    its refine queue into this Mac's local queue, where the refine daemon drains it once
+    the mic is idle (the refined turns sync back on their own). The Mac holds the ML and
+    mic; the fleet holds only the UI. Token is RECALL_SYNC_TOKEN. Imports are lazy so
+    recall.cli stays framework-free for the capture agents (recall.sync pulls the web
+    framework)."""
+    token = os.environ.get("RECALL_SYNC_TOKEN")
+    if not token:
+        print("jobs needs RECALL_SYNC_TOKEN")
+        return 1
+    from recall.jobs import run_jobs_once  # noqa: PLC0415
+    from recall.sync import SyncClient  # noqa: PLC0415 - lazy: pulls the web framework
+
+    store = Store.open(args.out / "recall.sqlite")
+    try:
+        handed = run_jobs_once(store, SyncClient(args.url, token))
+    finally:
+        store.close()
+    print(f"jobs: handed {handed} job(s) to the local refine queue from {args.url}")
+    return 0
+
+
 def _cmd_pause(args: argparse.Namespace) -> int:
     """Pause recording on THIS machine directly, with no network — the break-glass
     control for when Isis (the normal pause/resume surface) is unreachable, e.g. mid
@@ -1479,6 +1502,7 @@ _COMMANDS = {
     "record": _cmd_record,
     "backup": _cmd_backup,
     "sync": _cmd_sync,
+    "jobs": _cmd_jobs,
     "pause": _cmd_pause,
     "resume": _cmd_resume,
     "capture-mirror": _cmd_capture_mirror,

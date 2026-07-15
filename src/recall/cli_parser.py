@@ -434,6 +434,16 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         help="resume recording locally, no network (break-glass when Isis is down)",
     ).add_argument("--out", type=Path, default=Path("data"), help="data root")
 
+    job = sub.add_parser(
+        "jobs",
+        help="run on-demand ML the fleet requested but can't do itself: pull the "
+        "fleet's refine queue into this Mac's (Isis split; needs a token)",
+    )
+    job.add_argument("--out", type=Path, default=Path("data"), help="data root")
+    job.add_argument(
+        "--url", required=True, help="fleet base URL, e.g. http://10.100.0.2:8000"
+    )
+
     cm = sub.add_parser(
         "capture-mirror",
         help="mirror the fleet's pause/resume onto this Mac's mic (Isis split)",
