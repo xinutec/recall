@@ -16,6 +16,18 @@ from recall.ids import AudioSegmentId, CorrectionId, SpeakerId, TranscriptId
 
 
 @dataclass(frozen=True)
+class CaptureEvent:
+    """An immutable capture-lifecycle fact: a pause, a resume, or a dead-window — the
+    record that tells a deliberate pause-gap apart from silently lost audio."""
+
+    id: int
+    utc: datetime
+    kind: str
+    source_id: str | None
+    detail: str | None
+
+
+@dataclass(frozen=True)
 class TranscriptSegment:
     """A single transcribed utterance (a derived, versioned view)."""
 

@@ -29,6 +29,7 @@ from recall.ranking import normalize_text
 from recall.sources import AudioSource, SourceKind
 from recall.store_models import (
     AbCompareJob,
+    CaptureEvent,
     Correction,
     LabelledFragment,
     LiveSummary,
@@ -56,6 +57,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "_MIGRATIONS",
     "AbCompareJob",
+    "CaptureEvent",
     "Correction",
     "LabelledFragment",
     "LiveSummary",
@@ -1091,6 +1093,55 @@ class Store:
             (source, end.isoformat(), start.isoformat(), limit),
         ).fetchall()
         return [AudioSegmentId(int(r["id"])) for r in rows]
+
+    def add_capture_event(
+        self,
+        kind: str,
+        *,
+        utc: datetime,
+        source_id: str | None = None,
+        detail: str | None = None,
+    ) -> int:
+        """Append an immutable capture-lifecycle event (pause / resume / dead-window).
+
+        This is the durable record that tells a deliberate pause-gap apart from silently
+        lost audio: the timeline gap alone can't. `utc` is when the event happened (the
+        pause instant, or the dead segment's own timestamp), not when it was noticed.
+        Append-only — an event is never edited. Returns the event id.
+        """
+        _require_aware(utc, "utc")
+        cursor = self._conn.execute(
+            "INSERT INTO capture_events (utc, kind, source_id, detail) "
+            "VALUES (?, ?, ?, ?)",
+            (utc.isoformat(), kind, source_id, detail),
+        )
+        self._commit()
+        return int(cursor.lastrowid or 0)
+
+    def capture_events_since(
+        self, since: datetime, *, kinds: tuple[str, ...] | None = None
+    ) -> list[CaptureEvent]:
+        """Capture events at or after `since`, oldest-first; optionally only `kinds`."""
+        _require_aware(since, "since")
+        sql = (
+            "SELECT id, utc, kind, source_id, detail FROM capture_events WHERE utc >= ?"
+        )
+        params: list[str] = [since.isoformat()]
+        if kinds is not None:
+            sql += f" AND kind IN ({','.join('?' * len(kinds))})"
+            params.extend(kinds)
+        sql += " ORDER BY utc, id"
+        rows = self._conn.execute(sql, params).fetchall()
+        return [
+            CaptureEvent(
+                id=int(r["id"]),
+                utc=datetime.fromisoformat(r["utc"]),
+                kind=str(r["kind"]),
+                source_id=r["source_id"],
+                detail=r["detail"],
+            )
+            for r in rows
+        ]
 
     def add_refine_request(self, source: str, start: datetime, end: datetime) -> int:
         """Queue an on-demand refine of [start, end) of `source`; the idle daemon runs

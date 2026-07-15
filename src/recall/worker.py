@@ -14,7 +14,9 @@ import os
 import time
 from pathlib import Path
 
+from recall import capture_control
 from recall.asr import Transcriber
+from recall.capture import parse_segment_start
 from recall.diarize import Diarizer
 from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.probe import Scan, scan_source
@@ -78,8 +80,8 @@ def discover_source_ids(root: Path) -> list[str]:
     return sorted(ids)
 
 
-def _clear_dead_stubs(scan: Scan) -> None:
-    """Remove the zero-byte files capture left behind, and *say* it — loudly.
+def _clear_dead_stubs(scan: Scan, store: Store, source_id: str) -> None:
+    """Remove the zero-byte files capture left behind, and *record* it — durably.
 
     A zero-byte capture file holds no audio and never will: a segment path carries its
     own timestamp, so capture never reopens one. It is a tombstone marking the instant
@@ -87,16 +89,28 @@ def _clear_dead_stubs(scan: Scan) -> None:
     every pass for three weeks, and, being unindexed, they were invisible to every check
     the archive has.
 
-    So they go, and each one is logged with its time. That log line is the *only*
-    durable record that capture failed at that moment: the timeline gap says audio is
-    missing, but not that anything went wrong. A file that is unreadable but NOT empty
-    may still hold audio, so it is only reported, never removed.
+    So they go — but first a durable `dead_window` capture-event is written, timestamped
+    to the dead segment's own moment. That lets a later gap check tell this apart from a
+    deliberate pause: without it the timeline gap says audio is missing but not that
+    anything went *wrong*, and lost speech is unrecoverable. A file that is unreadable
+    but NOT empty may still hold audio, so it is only reported, never removed.
     """
     for path in scan.unreadable:
         _log.warning(
             "unreadable capture file (kept — it may still hold audio): %s", path
         )
     for path in scan.empty:
+        # Record the death BEFORE unlinking — the file is about to be gone, so this
+        # event becomes the evidence. utc is the segment's own timestamp (death time).
+        try:
+            store.add_capture_event(
+                capture_control.EVENT_DEAD_WINDOW,
+                utc=parse_segment_start(path.name),
+                source_id=source_id,
+                detail=path.name,
+            )
+        except Exception:  # never let bookkeeping block cleanup
+            _log.exception("could not record dead-window event for %s", path.name)
         try:
             path.unlink()
         except OSError as err:  # read-only volume, vanished file: report, don't crash
@@ -137,7 +151,7 @@ def process_pending(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     )
     for segment in scan.segments:
         store.add_audio_segment(segment)
-    _clear_dead_stubs(scan)
+    _clear_dead_stubs(scan, store, source.id)
 
     pending = [
         segment

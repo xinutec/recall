@@ -412,4 +412,19 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE sources ADD COLUMN noise_shape BLOB;
     """,
+    # Durable capture-lifecycle events (pause / resume / dead-window). A timeline gap
+    # alone cannot say whether audio is missing because of a deliberate pause or because
+    # capture silently died; these events are the record that tells them apart, so an
+    # UNEXPLAINED gap (= lost speech, unrecoverable) can be detected and alarmed.
+    # Append-only: an event is a fact about a moment, never edited.
+    """
+    CREATE TABLE capture_events (
+        id INTEGER PRIMARY KEY,
+        utc TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        source_id TEXT,
+        detail TEXT
+    );
+    CREATE INDEX idx_capture_events_utc ON capture_events (utc);
+    """,
 )

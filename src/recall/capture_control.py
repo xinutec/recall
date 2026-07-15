@@ -36,6 +36,13 @@ MAX_PAUSE = timedelta(hours=24)
 # How often a parked/recording agent re-checks whether its pause is over.
 _PAUSE_POLL_SECONDS = 5.0
 
+# Durable capture-lifecycle event kinds (recorded via recall.store.add_capture_event) —
+# the record that tells a deliberate pause-gap apart from silently lost audio, so an
+# UNEXPLAINED gap (= unrecoverable lost speech) can be detected instead of hidden.
+EVENT_PAUSE = "pause"
+EVENT_RESUME = "resume"
+EVENT_DEAD_WINDOW = "dead_window"
+
 
 def _pause_file(root: Path) -> Path:
     return root / "capture_paused_until"
