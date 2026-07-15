@@ -1346,6 +1346,27 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pause(args: argparse.Namespace) -> int:
+    """Pause recording on THIS machine directly, with no network — the break-glass
+    control for when Isis (the normal pause/resume surface) is unreachable, e.g. mid
+    pod-rollout. Writes the same bounded pause file the capture agents self-gate on, so
+    it always takes effect on the machine that holds the mic. Isis stays the authority
+    when it is reachable: capture-mirror overrides this local state the next time Isis's
+    *intent* changes (an unchanged intent is left alone, so a local pause survives)."""
+    until = capture_control.pause(args.out, datetime.now(UTC), minutes=args.minutes)
+    print(f"paused; recording auto-resumes by {until.isoformat()}")
+    return 0
+
+
+def _cmd_resume(args: argparse.Namespace) -> int:
+    """Resume recording on THIS machine directly, with no network (see _cmd_pause for
+    how this relates to Isis's intent). A no-op when not paused, so it is safe to run
+    blindly to be sure recording is on."""
+    capture_control.resume(args.out)
+    print("resumed")
+    return 0
+
+
 def _cmd_capture_mirror(args: argparse.Namespace) -> int:
     """Mirror the fleet's capture intent onto this Mac's mic (the Isis split). Polls the
     fleet every --interval seconds and applies pause/resume locally, reporting back what
@@ -1458,6 +1479,8 @@ _COMMANDS = {
     "record": _cmd_record,
     "backup": _cmd_backup,
     "sync": _cmd_sync,
+    "pause": _cmd_pause,
+    "resume": _cmd_resume,
     "capture-mirror": _cmd_capture_mirror,
     "scan-quiet": _cmd_scan_quiet,
     "repair-transcripts": _cmd_repair_transcripts,

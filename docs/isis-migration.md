@@ -248,6 +248,35 @@ monorepo `06f226ce` sets `RECALL_ROLE=fleet`):
   2026-07-14 19:40 UTC); the edge-triggered mirror correctly left it alone, and running
   the e2e would have resumed capture early. Do the e2e once that pause has lifted.
 
+### Mac UI retired + local break-glass control (2026-07-15)
+
+With Phase 1 live-sync deployed, Isis serves the full timeline (archive + the instant
+live feed), so the Mac's own web UI became pure duplication. **Retired it:** dropped the
+`recall-api` launchd agent from `deploy/hm-agents.nix` (the Mac now serves nothing —
+`:8000` refuses locally; Isis `10.100.0.2:8000` is the sole UI + control plane). Nothing
+in the Mac's pipeline needed it: `recall-sync` pushes Mac→Isis, `doctor` reads the DB and
+posts to fleetwatch, `capture-mirror` polls Isis, `backup` rsyncs to odin.
+
+Retiring the UI removed the Mac's only *local* control surface, which made Isis a **single
+point of failure for pause/resume**: exactly the gap that bit us during a rollout, when the
+mirror couldn't pull the resume intent while Isis was unreachable and capture had to be
+resumed by hand. Closed it with a **network-free break-glass CLI** — `recall pause
+[--minutes N]` / `recall resume` (`cli._cmd_pause`/`_cmd_resume`) write the same bounded
+`capture_paused_until` file the capture agents self-gate on, with zero network dependency.
+Isis stays the authority when reachable: `capture-mirror` is edge-triggered, so it leaves a
+local pause alone until Isis's *intent* actually changes. Intent lives in Isis's DB on the
+`recall-data-pvc`, so a pod rollout preserves a deliberate pause (no unwanted resume).
+
+Run break-glass from the Mac: `~/Code/recall/scripts/recall.sh pause` (or `resume`). No
+launchd agent, no deploy — the wrapper runs live `src`.
+
+**Follow-ups (not done):** interactive MLX endpoints (`/api/refine`, `/api/ab-compare`,
+`/api/sessions` share-upload) are unreachable from Isis under the one-way WireGuard model
+and need a Mac-initiated **job-pull** (same inversion as capture-mirror). Confirm the
+phone's share-to-Recall host points at Isis. Replace the flaky `recall-capture-mirror`
+transport if the 5s poll proves insufficient (the break-glass CLI now covers the worst
+case regardless).
+
 ### Step C — the Mac cutover (runbook)
 
 > **Status 2026-07-14:** steps 1–4 DONE (token in `.env`, dry-runs passed, agents

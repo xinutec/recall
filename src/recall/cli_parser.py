@@ -417,6 +417,23 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "--url", required=True, help="fleet base URL, e.g. http://10.100.0.2:8000"
     )
 
+    pau = sub.add_parser(
+        "pause",
+        help="pause recording locally, no network (break-glass when Isis is down)",
+    )
+    pau.add_argument("--out", type=Path, default=Path("data"), help="data root")
+    pau.add_argument(
+        "--minutes",
+        type=int,
+        default=None,
+        help="how long to pause (default: the 24 h safety-net maximum)",
+    )
+
+    sub.add_parser(
+        "resume",
+        help="resume recording locally, no network (break-glass when Isis is down)",
+    ).add_argument("--out", type=Path, default=Path("data"), help="data root")
+
     cm = sub.add_parser(
         "capture-mirror",
         help="mirror the fleet's pause/resume onto this Mac's mic (Isis split)",
