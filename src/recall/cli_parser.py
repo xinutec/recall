@@ -102,6 +102,17 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         default="",
         help="CoreAudio input device name (default: the system default input)",
     )
+    liv.add_argument(
+        "--fleet-url",
+        default="",
+        help="fleet base URL to push the instant feed to (Isis split); empty disables",
+    )
+    liv.add_argument(
+        "--live-interval",
+        type=float,
+        default=3.0,
+        help="how often to push new live turns to the fleet, seconds (default 3)",
+    )
 
     cmp = sub.add_parser("compress", help="transcode existing segments to Opus")
     cmp.add_argument("--out", type=Path, default=Path("data"), help="data root")

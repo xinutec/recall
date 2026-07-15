@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
+import threading
 import time
 import urllib.error
 from collections.abc import Callable
@@ -519,7 +521,48 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
     return 0
 
 
+def _live_sync_loop(
+    out: Path, url: str, token: str, interval: float, stop: threading.Event
+) -> None:
+    """Background push of new live turns to the fleet's instant feed, every `interval`s.
+
+    Its own store connection (sqlite is single-thread) and fully off the VAD loop, so a
+    slow or unreachable fleet never touches capture or transcription. Best-effort: a
+    failed push is logged and retried next tick — the archive segment push carries the
+    turns regardless, so a dropped live push only delays the instant feed, never loses.
+    """
+    from recall.sync import SyncClient  # noqa: PLC0415 - lazy: pulls the web framework
+    from recall.sync_push import push_live_turns  # noqa: PLC0415
+
+    client = SyncClient(url, token)
+    store = Store.open(out / "recall.sqlite")
+    try:
+        while not stop.wait(interval):
+            try:
+                push_live_turns(store, client)
+            except Exception:  # best-effort; a push must never crash the live agent
+                logging.getLogger("recall.live").warning(
+                    "live-sync: push failed (will retry)", exc_info=True
+                )
+    finally:
+        store.close()
+
+
 def _cmd_live(args: argparse.Namespace) -> int:
+    # Push the instant feed to the fleet on its own thread when the split is configured
+    # (a fleet URL + token); LAN-only deployments leave --fleet-url empty and are
+    # untouched. The thread never shares the VAD loop's store or timing.
+    stop = threading.Event()
+    sync_thread: threading.Thread | None = None
+    token = os.environ.get("RECALL_SYNC_TOKEN")
+    if args.fleet_url and token:
+        sync_thread = threading.Thread(
+            target=_live_sync_loop,
+            args=(args.out, args.fleet_url, token, args.live_interval, stop),
+            daemon=True,
+        )
+        sync_thread.start()
+
     def once(should_stop: Callable[[], bool]) -> int:
         run_live(
             args.out / "recall.sqlite",
@@ -530,7 +573,12 @@ def _cmd_live(args: argparse.Namespace) -> int:
         )
         return 0
 
-    return _serve_paused_aware(args.out, once)
+    try:
+        return _serve_paused_aware(args.out, once)
+    finally:
+        stop.set()
+        if sync_thread is not None:
+            sync_thread.join(timeout=5)
 
 
 def _cmd_compress(args: argparse.Namespace) -> int:

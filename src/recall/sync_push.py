@@ -112,5 +112,4 @@ def sync_push(store: Store, client: PushTarget) -> int:
         client.push_summary(SummaryIn(day=day, text=text, model=model))
     if high > watermark:
         store.set_setting(WATERMARK_KEY, str(high))
-    push_live_turns(store, client)  # also refresh the instant feed each pass
     return pushed

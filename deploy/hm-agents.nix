@@ -80,12 +80,17 @@ in
   # --device pins the exact CoreAudio input (same pin as recall-capture.sh): the
   # system default input follows whatever connects, e.g. a Bluetooth speaker's
   # hands-free mic.
+  # --fleet-url pushes the instant feed to Isis on a background thread (the Isis split):
+  # the fleet UI shows live turns within seconds, reconciled when the archive segment
+  # lands. Token is RECALL_SYNC_TOKEN (recall.sh sources .env); the push is best-effort
+  # and off the VAD loop, so it never affects capture.
   launchd.agents."com.pippijn.recall-live" = daemon {
     label = "com.pippijn.recall-live";
     name = "live";
     script = "recall.sh";
     args = [ "live" "--out" "/Volumes/Backup/recall"
-             "--device" "USB Condenser Microphone" ];
+             "--device" "USB Condenser Microphone"
+             "--fleet-url" "http://10.100.0.2:8000" ];
   };
 
   # Mic agent — the critical continuous recording stream (USB mic → segments).
