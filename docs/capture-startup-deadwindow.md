@@ -45,6 +45,43 @@ flow. Encoded as Opus (voip/DTX) a pure-silence minute muxes to a zero-byte segm
 which the worker then clears as a dead stub. This is a hypothesis from the logs; it is
 not yet confirmed against the live device (see the test plan).
 
+## 2026-07-15 controlled test — what it ruled out
+
+Resume-from-pause at 23:30:25Z, capture ran to 23:34:33Z, user counted 1→30 from bed
+(far from the USB mic, pixel9 in hand). Result: the count is **nowhere** — no clean
+audio, no live turns. What the test established:
+
+- **Multi-client contention is NOT the live crash.** `recall-live`'s `sox` aborts
+  (`buffer overrun → Aborted`) even with capture *paused*, i.e. as the sole client on
+  the device — so two-sox-on-one-device is not why live dies. Live has produced nothing
+  since 22:07Z.
+- **The device and coreaudio are healthy.** `system_profiler` shows the USB Condenser
+  Microphone present, active, 48 kHz, default input; `coreaudiod` uptime 3d+ (not
+  wedged — a wedge shows a fresh restart). So the abort is not a dead device or daemon.
+- **The USB dead-window test was inconclusive this round.** The user was far away and
+  mostly silent, so the empty USB segments are confounded with "quiet far room + Opus
+  DTX". The strong dead-window evidence is still the 22:04 *loud*-count test.
+- **The pixel9 streamed digital silence, not a dead-window.** It connected at 23:30:29Z
+  and stayed connected, but every segment is ≈ −90 dB (digital zero) — the phone was not
+  capturing mic audio. NOT backgrounding: the mic app was foreground for ~2 of those
+  minutes. Cause unknown — needs on-phone diagnosis (`adb logcat` of `org.recall.mic`,
+  mic appops/permission, whether `AudioRecord` yields samples) while counting.
+
+**Live-crash hypothesis (unconfirmed).** The read loop runs Silero VAD inline per chunk
+and offloads whisper to a thread, so under CPU load the loop can fall behind realtime,
+fail to drain sox's stdout, and overrun the coreaudio ring buffer → `sox` aborts. Fix
+would be a dedicated drain thread that empties sox's stdout into a buffer regardless of
+VAD/whisper timing (the docstring already names this failure mode). Not yet built — the
+mechanism is inferred, not reproduced on demand, and the live path is currently untested.
+
+## Open faults after the test
+
+1. **Capture startup dead-window** (original) — root cause still open; the confound above
+   means the next confirming test needs the user *loud and close* to the USB mic.
+2. **`recall-live` aborts** — down since 22:07Z; likely the inline-VAD reader overrunning
+   coreaudio under load; drain-thread fix designed but unbuilt/unverified.
+3. **pixel9 streams silence** — phone-side capture failure, needs `adb` diagnosis.
+
 ## What is in place
 
 - **Live transcripts in a never-recorded gap are no longer hidden.** Reconcile used to
