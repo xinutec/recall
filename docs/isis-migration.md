@@ -270,12 +270,22 @@ local pause alone until Isis's *intent* actually changes. Intent lives in Isis's
 Run break-glass from the Mac: `~/Code/recall/scripts/recall.sh pause` (or `resume`). No
 launchd agent, no deploy — the wrapper runs live `src`.
 
-**Follow-ups (not done):** interactive MLX endpoints (`/api/refine`, `/api/ab-compare`,
-`/api/sessions` share-upload) are unreachable from Isis under the one-way WireGuard model
-and need a Mac-initiated **job-pull** (same inversion as capture-mirror). Confirm the
-phone's share-to-Recall host points at Isis. Replace the flaky `recall-capture-mirror`
-transport if the 5s poll proves insufficient (the break-glass CLI now covers the worst
-case regardless).
+**MLX job-pull — refine done (2026-07-15).** Interactive MLX endpoints are unreachable
+from Isis under the one-way WireGuard model (Isis can't dial the Mac), so they need a
+Mac-initiated **job-pull** — the same inversion capture-mirror uses. The refine path is
+now closed: the `/sync/jobs` + `/sync/jobs/{id}/done` endpoints and `SyncClient.poll_jobs`
+/`mark_done` already existed but had no Mac-side consumer; added `recall.jobs.run_jobs_once`
+(the `recall jobs` command + a 60s `recall-jobs` launchd timer) that pulls Isis's refine
+queue into the Mac's *local* refine queue. It runs no ML itself — the existing idle-gated
+refine daemon drains the local queue (never during recording) and the refined turns sync
+back through the normal segment/turn push. So a refine requested from Isis's UI now
+reaches the Mac. Commit `e29fa43`; TDD `tests/test_jobs.py`.
+
+**Job-pull follow-ups (not done):** `ab-compare` (needs its own pull + a result push-back
+of the report json, not just turn-sync) and `/api/sessions` share-upload (needs the audio
+blob shipped to the Mac to transcribe). Confirm the phone's share-to-Recall host points at
+Isis. Replace the flaky `recall-capture-mirror` transport if the 5s poll proves
+insufficient (the break-glass CLI now covers the worst case regardless).
 
 ### Step C — the Mac cutover (runbook)
 
