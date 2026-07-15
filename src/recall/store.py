@@ -1094,6 +1094,26 @@ class Store:
         ).fetchall()
         return [AudioSegmentId(int(r["id"])) for r in rows]
 
+    def audio_segment_intervals(
+        self, source: str, *, since: datetime
+    ) -> list[tuple[datetime, datetime]]:
+        """(start, end) of `source`'s audio segments ending at or after `since`,
+        oldest-first — the recorded coverage a loss check reconciles against the
+        pause/resume events to tell a deliberate pause from silently lost speech."""
+        _require_aware(since, "since")
+        rows = self._conn.execute(
+            "SELECT start_utc, end_utc FROM audio_segments "
+            "WHERE source_id = ? AND end_utc >= ? ORDER BY start_utc",
+            (source, since.isoformat()),
+        ).fetchall()
+        return [
+            (
+                datetime.fromisoformat(r["start_utc"]),
+                datetime.fromisoformat(r["end_utc"]),
+            )
+            for r in rows
+        ]
+
     def add_capture_event(
         self,
         kind: str,

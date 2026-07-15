@@ -37,10 +37,12 @@ from recall.finetune import (
 from recall.finetune_pilot import PilotReport, run_pilot
 from recall.fleetwatch import build_report, post_report, read_token
 from recall.health import (
+    ALWAYS_ON,
     Check,
     agent_checks,
     backup_check,
     capture_checks,
+    loss_check,
     recorders_on_disk,
 )
 from recall.hf_asr import is_adapter_dir, make_hf_transcriber
@@ -49,6 +51,7 @@ from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.live import run_live
 from recall.llm import Generator, make_mlx_generator
 from recall.logrotate import rotate_logs
+from recall.loss import gaps_between, unexplained_loss
 from recall.loudness import backfill_loudness
 from recall.maintenance import (
     backup_age_hours,
@@ -67,7 +70,7 @@ from recall.speakerid import pyannote_embed
 from recall.store import AbCompareJob, Store
 from recall.stream_server import serve as serve_ingest
 from recall.summarize import days_needing_summaries, summarize_day
-from recall.timeline import find_gaps, find_overlaps
+from recall.timeline import Gap, find_gaps, find_overlaps
 from recall.training import export_corpus
 from recall.transcript_view import (
     attribution,
@@ -145,12 +148,20 @@ def _db_path(root: Path) -> Path:
 
 
 def _serve_paused_aware(
-    out: Path, run_once: Callable[[Callable[[], bool]], int]
+    out: Path,
+    run_once: Callable[[Callable[[], bool]], int],
+    *,
+    record_event: Callable[[str, datetime], None] | None = None,
 ) -> int:
     """Run a self-gating recording entrypoint: park while paused, run while active,
     and re-park when a pause interrupts it. `run_once(should_stop)` runs the
     recording until `should_stop()` (a pause) fires or the producer ends; we exit
-    (letting KeepAlive respawn) only when it ends for a non-pause reason."""
+    (letting KeepAlive respawn) only when it ends for a non-pause reason.
+
+    `record_event(kind, utc)` (optional) durably marks the resume/pause transitions —
+    the ground truth of when capture was actually running, which a loss check reconciles
+    against timeline gaps. It runs on a daemon thread and swallows errors, so this
+    bookkeeping can never stall or crash the recorder (completeness beats an audit)."""
 
     def now() -> datetime:
         return datetime.now(UTC)
@@ -158,11 +169,28 @@ def _serve_paused_aware(
     def paused() -> bool:
         return capture_control.is_paused(out, now())
 
+    def note(kind: str) -> None:
+        if record_event is None:
+            return
+        stamped = now()
+
+        def write() -> None:
+            try:
+                record_event(kind, stamped)
+            except Exception:
+                logging.getLogger("recall.capture").warning(
+                    "capture-event %r not recorded", kind, exc_info=True
+                )
+
+        threading.Thread(target=write, daemon=True).start()
+
     while True:
         capture_control.wait_until_unpaused(out, now=now, sleep=time.sleep)
+        note(capture_control.EVENT_RESUME)  # capture is becoming active
         result = run_once(paused)
         if not paused():
             return result
+        note(capture_control.EVENT_PAUSE)  # a pause stopped it (not an EOF exit)
 
 
 def _cmd_record(args: argparse.Namespace) -> int:
@@ -192,7 +220,16 @@ def _cmd_record(args: argparse.Namespace) -> int:
             source, config, args.out, max_seconds=args.seconds, should_stop=should_stop
         )
 
-    return _serve_paused_aware(args.out, once)
+    def record_event(kind: str, utc: datetime) -> None:
+        # Short-lived connection per transition (a few a day): the durable resume/pause
+        # record the loss check reconciles gaps against. Runs off the recorder's thread.
+        event_store = Store.open(args.out / "recall.sqlite")
+        try:
+            event_store.add_capture_event(kind, utc=utc, source_id=source.id)
+        finally:
+            event_store.close()
+
+    return _serve_paused_aware(args.out, once, record_event=record_event)
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:
@@ -1087,6 +1124,32 @@ def _print_attribution(
 # The mirror runs nightly; 48h of slack tolerates one missed night (Mac asleep,
 # odin briefly down) without letting a dead backup go quiet for a week.
 _BACKUP_MAX_AGE_HOURS = 48.0
+# How far back the speech-loss reconciliation looks, and the smallest active-capture gap
+# it will call loss — below this is the boundary slop of a pause recorded a beat after
+# the last segment, not real lost speech.
+_LOSS_WINDOW = timedelta(hours=48)
+_LOSS_MIN = timedelta(minutes=2)
+
+
+def _speech_loss(
+    store: Store, sources: list[tuple[str, SourceKind]], *, now: datetime
+) -> tuple[list[Gap], int]:
+    """Reconcile the always-on mic's recorded coverage against the pause/resume events
+    over the recent window: unexplained gaps (capture active, no audio) + the dead
+    window count — telling a deliberate pause from lost speech (recall.loss)."""
+    since = now - _LOSS_WINDOW
+    events = store.capture_events_since(since)
+    dead = len(
+        store.capture_events_since(since, kinds=(capture_control.EVENT_DEAD_WINDOW,))
+    )
+    losses: list[Gap] = []
+    for source_id, kind in sources:
+        if kind is not ALWAYS_ON:
+            continue
+        intervals = store.audio_segment_intervals(source_id, since=since)
+        gaps = gaps_between(intervals, source_id, tolerance=timedelta(seconds=2))
+        losses.extend(unexplained_loss(gaps, events, now=now, min_loss=_LOSS_MIN))
+    return losses, dead
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
@@ -1112,6 +1175,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             (source_id, SourceKind(kind))
             for source_id, _name, kind in store.source_rows()
         ]
+        losses, dead_windows = _speech_loss(store, sources, now=now)
     finally:
         store.close()
 
@@ -1121,6 +1185,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             now=now,
             paused_until=capture_control.paused_until(args.out),
         ),
+        loss_check(losses, dead_windows, window=_LOSS_WINDOW),
         *agent_checks(capture_control.agent_health()),
         backup_check(backup_age_hours(args.out), max_age_hours=_BACKUP_MAX_AGE_HOURS),
     ]

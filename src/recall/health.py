@@ -34,6 +34,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from recall.sources import SourceKind
+from recall.timeline import Gap
 
 # A live capture writes a segment file every 60 seconds. Two missed rotations is noise
 # (a slow disk, a rotation straddling the check); five is not.
@@ -208,6 +209,41 @@ def backup_check(age_hours: float | None, *, max_age_hours: float) -> Check:
         expected=f"within {max_age_hours:.0f}h",
         value=round(age_hours, 1),
         unit="h",
+    )
+
+
+def loss_check(losses: Sequence[Gap], dead_windows: int, *, window: timedelta) -> Check:
+    """Did recorded speech go missing while capture was meant to be running?
+
+    An unexplained gap (capture active, yet no audio landed) or a dead-window is lost,
+    unrecoverable speech — the worst outcome the archive has — so it fails hard. Clean
+    means every timeline gap in the window is accounted for by a deliberate pause. This
+    is the reconciliation the archive lacked: a bare gap couldn't say whether audio was
+    missing on purpose or because capture silently died (see recall.loss).
+    """
+    lost = sum((g.end - g.start for g in losses), timedelta())
+    hours = round(window.total_seconds() / 3600)
+    if losses or dead_windows:
+        return Check(
+            section="capture",
+            label="speech-loss",
+            verdict="fail",
+            observed=(
+                f"{len(losses)} unexplained gap(s) totalling {_minutes(lost)} min, "
+                f"{dead_windows} dead-window(s) in {hours}h"
+            ),
+            expected="every gap explained by a deliberate pause",
+            value=_minutes(lost),
+            unit="min",
+        )
+    return Check(
+        section="capture",
+        label="speech-loss",
+        verdict="pass",
+        observed=f"no unexplained loss in {hours}h",
+        expected="every gap explained by a deliberate pause",
+        value=0.0,
+        unit="min",
     )
 
 
