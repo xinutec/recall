@@ -25,6 +25,17 @@ html {
       density: 0,
     )
   );
+
+  // Lift dialogs off the base surface. Material 3 maps the dialog container to
+  // `surface` — the same token as the page body — so on a dark theme a dialog
+  // has no tonal step and its elevation shadow is invisible; it blends into
+  // whatever it opens over. M3 puts dialogs on surface-container-high; restore
+  // that. (DL-ANGULAR-DIALOG-SURFACE)
+  @include mat.dialog-overrides(
+    (
+      container-color: var(--mat-sys-surface-container-high),
+    )
+  );
 }
 
 body {

@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import override
 
 import pytest
 
@@ -102,6 +103,7 @@ def test_a_failed_enqueue_is_not_marked_done_and_does_not_drop_the_rest() -> Non
     # (re-serve next poll) rather than believe it was handled. One bad job must not skip
     # the others.
     class _OneBadQueue(_FakeQueue):
+        @override
         def add_refine_request(
             self, source: str, start: datetime, end: datetime
         ) -> int:
@@ -123,6 +125,7 @@ def test_marks_done_only_after_the_local_enqueue() -> None:
     order: list[str] = []
 
     class _OrderQueue(_FakeQueue):
+        @override
         def add_refine_request(
             self, source: str, start: datetime, end: datetime
         ) -> int:
@@ -130,6 +133,7 @@ def test_marks_done_only_after_the_local_enqueue() -> None:
             return super().add_refine_request(source, start, end)
 
     class _OrderClient(_FakeClient):
+        @override
         def mark_done(self, job_id: int) -> None:
             order.append("done")
             super().mark_done(job_id)
