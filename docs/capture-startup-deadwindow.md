@@ -11,6 +11,16 @@
 > (`sources.producer_argv`, CoreAudio case — used by both recall-capture and
 > recall-live). Validated end-to-end with `runner.record` (a real non-empty segment).
 > The history below is the investigation that ruled out the wrong causes.
+>
+> **Confirmed again 2026-07-15 via acoustic loopback (no human, capture left paused).**
+> Three known TTS phrases played through the Mac mini Speakers were read back off the
+> USB mic with an *isolated bounded* `ffmpeg -f avfoundation` to a scratch WAV (not
+> production capture; the pause file was untouched). The window carried real audio
+> (max −19.6 dB / mean −44.2 dB, vs ~−91 dB for the sox dead-window) and mlx-whisper
+> turbo recovered all three phrases verbatim. The ffmpeg path read real intelligible
+> room audio and did not wedge over the window. Reusable technique: play known audio
+> through a speaker + read the mic in isolation to verify the capture/ASR path with no
+> person at the mic and without resuming the always-on recorder.
 
 Every capture session can begin with a run of **zero-byte segments** — capture is
 running and rolls a fresh file each minute, but the mic delivers only digital
