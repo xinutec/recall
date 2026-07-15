@@ -532,6 +532,58 @@ def test_sources_liveness_local_vs_marker(
     assert after["pixel9"] is True  # fresh marker → live
 
 
+def test_sources_liveness_on_the_fleet_uses_the_macs_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On Isis there is no local capture agent and no phone sockets — the .alive markers
+    # live on the Mac. So liveness must come from the Mac's mirror report, not local
+    # files (the bug: /api/sources read host-local state Isis can't see, and showed
+    # every mic dead). The USB mic reads live from the reported running state; a phone
+    # from the reported .alive freshness.
+    monkeypatch.setenv("RECALL_ROLE", "fleet")
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+    store.register_source(
+        AudioSource(id="pixel9", name="Pixel 9", kind=SourceKind.TCP_PCM, spec="")
+    )
+
+    now = datetime.now(UTC)
+    # No report yet: the fleet doesn't know, so nothing reads live (not a false "on").
+    capture_control.record_reported(store, running=True, paused_until=None, now=now)
+    store.close()
+    empty = {s["id"]: s["active"] for s in api.sources()["items"]}
+    assert empty["usb"] is True  # Mac reports running → USB live
+    assert empty["pixel9"] is False  # no phone liveness reported → idle
+
+    # the Mac's next report ships the phone's fresh .alive time (the mirror's gather)
+    store = Store.open(tmp_path / "recall.sqlite")
+    capture_control.record_reported(
+        store,
+        running=True,
+        paused_until=None,
+        now=now,
+        source_liveness={"pixel9": now.isoformat()},
+    )
+    store.close()
+    live = {s["id"]: s["active"] for s in api.sources()["items"]}
+    assert live["pixel9"] is True  # reported fresh → live on the fleet too
+
+    # and when the Mac reports capture paused, the USB mic reads idle on the fleet
+    store = Store.open(tmp_path / "recall.sqlite")
+    capture_control.record_reported(
+        store,
+        running=False,
+        paused_until=(now + timedelta(hours=1)).isoformat(),
+        now=now,
+    )
+    store.close()
+    paused = {s["id"]: s["active"] for s in api.sources()["items"]}
+    assert paused["usb"] is False
+
+
 def test_name_voice_endpoint_labels_a_whole_session_voice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

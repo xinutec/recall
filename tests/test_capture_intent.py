@@ -88,3 +88,51 @@ def test_a_stale_report_is_ignored_so_the_fleet_falls_back_to_intent() -> None:
     capture_control.record_reported(s, running=True, paused_until=None, now=NOW)
     stale = NOW + capture_control._REPORT_FRESH + timedelta(seconds=1)
     assert capture_control.reported_state(s, stale) is None
+
+
+def test_source_liveness_roundtrips_while_fresh() -> None:
+    s = FakeSettings()
+    assert capture_control.reported_source_liveness(s, NOW) is None  # nothing reported
+
+    capture_control.record_reported(
+        s,
+        running=True,
+        paused_until=None,
+        now=NOW,
+        source_liveness={"pixel9": "2026-07-14T11:59:30+00:00"},
+    )
+    assert capture_control.reported_source_liveness(s, NOW) == {
+        "pixel9": datetime(2026, 7, 14, 11, 59, 30, tzinfo=UTC)
+    }
+
+
+def test_source_liveness_defaults_to_empty_when_omitted() -> None:
+    # An older Mac client posts no liveness; the fleet reads an empty map (no phones
+    # live), not None — None means "the Mac is not reporting at all".
+    s = FakeSettings()
+    capture_control.record_reported(s, running=True, paused_until=None, now=NOW)
+    assert capture_control.reported_source_liveness(s, NOW) == {}
+
+
+def test_stale_source_liveness_reads_as_no_report() -> None:
+    # Gated by the same freshness as reported_state: a quiet Mac reports no live phones.
+    s = FakeSettings()
+    capture_control.record_reported(
+        s, running=True, paused_until=None, now=NOW, source_liveness={"pixel9": "x"}
+    )
+    stale = NOW + capture_control._REPORT_FRESH + timedelta(seconds=1)
+    assert capture_control.reported_source_liveness(s, stale) is None
+
+
+def test_a_malformed_liveness_entry_is_dropped_not_fatal() -> None:
+    s = FakeSettings()
+    capture_control.record_reported(
+        s,
+        running=True,
+        paused_until=None,
+        now=NOW,
+        source_liveness={"pixel9": "not-a-time", "pixel5": "2026-07-14T11:59:30+00:00"},
+    )
+    assert capture_control.reported_source_liveness(s, NOW) == {
+        "pixel5": datetime(2026, 7, 14, 11, 59, 30, tzinfo=UTC)
+    }

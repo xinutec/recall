@@ -20,7 +20,7 @@ from __future__ import annotations
 import hmac
 import os
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -163,6 +163,10 @@ class CaptureAppliedIn(BaseModel):
 
     running: bool
     pausedUntil: str | None = None  # ISO resume-by, or null when recording
+    # Each remote recorder's last-active ISO time (the phones' .alive freshness the Mac
+    # owns), so /api/sources on the fleet is truthful. Defaulted: an older Mac client
+    # omits it and the fleet just shows no phone liveness, as before.
+    sourceLiveness: dict[str, str] = {}
 
 
 class CaptureIntentOut(BaseModel):
@@ -192,7 +196,11 @@ def _capture_exchange(
     """Record the Mac's applied capture state and return the fleet's desired intent —
     the /sync/capture handshake body, pulled out so the route stays a thin wrapper."""
     capture_control.record_reported(
-        store, running=body.running, paused_until=body.pausedUntil, now=now
+        store,
+        running=body.running,
+        paused_until=body.pausedUntil,
+        now=now,
+        source_liveness=body.sourceLiveness,
     )
     until = capture_control.intent_until(store, now)
     return CaptureIntentOut(pausedUntil=until.isoformat() if until else None)
@@ -519,13 +527,22 @@ class SyncClient:
         return LiveStoredOut.model_validate(resp.json()).stored
 
     def exchange_capture(
-        self, *, running: bool, paused_until: str | None
+        self,
+        *,
+        running: bool,
+        paused_until: str | None,
+        source_liveness: Mapping[str, str],
     ) -> str | None:
         """Report the Mac's applied capture state and receive the fleet's desired intent
-        (its resume-by, or None to run). One round trip: push reality, pull intent."""
+        (its resume-by, or None to run). One round trip: push reality, pull intent.
+        `source_liveness` carries the phones' .alive freshness the fleet can't see."""
         resp = self._client.post(
             f"{self._base}/sync/capture",
-            json={"running": running, "pausedUntil": paused_until},
+            json={
+                "running": running,
+                "pausedUntil": paused_until,
+                "sourceLiveness": dict(source_liveness),
+            },
             headers=self._headers,
         )
         resp.raise_for_status()

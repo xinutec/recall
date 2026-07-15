@@ -54,7 +54,7 @@ from recall.conversations import (
 )
 from recall.finetune import DEFAULT_BASE_MODEL
 from recall.ids import AudioSegmentId
-from recall.liveness import source_statuses
+from recall.liveness import ACTIVE_WITHIN, FLEET_ACTIVE_WITHIN, source_statuses
 from recall.llm import DEFAULT_LLM, Generator, make_mlx_generator
 from recall.loudness import normalize_loudness
 from recall.moments import Moment, best_colocated_guess, cluster_moments
@@ -451,22 +451,11 @@ def session_transcript(source: str) -> TranscriptExportOut:
         store.close()
 
 
-@app.get("/api/sources")
-def sources() -> SourcesOut:
-    """Per-recorder liveness for the fleet view. Local capture (the USB mic) is known
-    to the host directly (its agent loaded + not paused); remote recorders (phones)
-    are known from the marker the ingest server refreshes while their socket is
-    connected — the host owns the socket, so there's no phone-sent heartbeat. Each
-    reduces to a real-time last-active time."""
-    store = _store()
-    try:
-        rows = store.source_rows()
-    finally:
-        store.close()
-    # Only live recorders belong in the fleet view — uploaded recordings (meetings)
-    # are sources too, but they're not devices; they live in the Sessions view.
-    rows = [r for r in rows if r[2] != SourceKind.UPLOAD.value]
-    now = datetime.now(UTC)
+def _local_last_active(
+    rows: list[tuple[str, str, str]], now: datetime
+) -> dict[str, datetime | None]:
+    """Liveness on the capturing host (the Mac): the USB mic from its own agent state,
+    each phone from the .alive marker the local ingest refreshes."""
     usb_live = capture_control.capture_running() and not capture_control.is_paused(
         DATA_ROOT, now
     )
@@ -476,7 +465,53 @@ def sources() -> SourcesOut:
             last_active[source_id] = _alive_mtime(DATA_ROOT / source_id)
         else:
             last_active[source_id] = now if usb_live else None
-    statuses = source_statuses(rows, last_active, now)
+    return last_active
+
+
+def _fleet_last_active(
+    store: Store, rows: list[tuple[str, str, str]], now: datetime
+) -> dict[str, datetime | None]:
+    """Liveness on the fleet (Isis), which runs no capture or ingest and cannot see the
+    Mac's markers. It comes entirely from the Mac's mirror report
+    (recall.capture_mirror): the USB mic from the reported running state, each phone
+    from the reported .alive freshness. A quiet Mac (no fresh report) reads as no one
+    live —
+    correct: the fleet genuinely does not know, and fleetwatch covers a dead Mac
+    separately."""
+    usb_live = _fleet_capture_state(store, now)["running"]
+    reported = capture_control.reported_source_liveness(store, now) or {}
+    last_active: dict[str, datetime | None] = {}
+    for source_id, _, kind in rows:
+        if kind == SourceKind.TCP_PCM.value:
+            last_active[source_id] = reported.get(source_id)
+        else:
+            last_active[source_id] = now if usb_live else None
+    return last_active
+
+
+@app.get("/api/sources")
+def sources() -> SourcesOut:
+    """Per-recorder liveness for the fleet view. On the capturing host (the Mac) it
+    comes from local signals — the USB agent's state and the ingest's .alive markers. On
+    the fleet (Isis), which runs no capture, it comes from the Mac's ~5s mirror report,
+    since Isis owns neither the mic nor the phones' sockets; the wider
+    FLEET_ACTIVE_WITHIN absorbs the report cadence. Uploaded recordings (meetings) are
+    sources but not live
+    devices, so they're excluded — they live in the Sessions view."""
+    now = datetime.now(UTC)
+    on_fleet = capture_control.is_fleet()
+    store = _store()
+    try:
+        rows = [r for r in store.source_rows() if r[2] != SourceKind.UPLOAD.value]
+        last_active = (
+            _fleet_last_active(store, rows, now)
+            if on_fleet
+            else _local_last_active(rows, now)
+        )
+    finally:
+        store.close()
+    window = FLEET_ACTIVE_WITHIN if on_fleet else ACTIVE_WITHIN
+    statuses = source_statuses(rows, last_active, now, active_within=window)
     return {
         "items": [
             {

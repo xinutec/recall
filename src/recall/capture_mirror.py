@@ -22,12 +22,13 @@ Pure file + injected client, so the reconcile logic is unit-tested with a fake e
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from datetime import datetime
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
 from recall import capture_control
+from recall.stream_server import ALIVE_FILE
 
 _log = logging.getLogger("recall.capture_mirror")
 
@@ -40,8 +41,29 @@ class IntentExchange(Protocol):
     """What the mirror needs of a client — `SyncClient` satisfies it structurally."""
 
     def exchange_capture(
-        self, *, running: bool, paused_until: str | None
+        self,
+        *,
+        running: bool,
+        paused_until: str | None,
+        source_liveness: Mapping[str, str],
     ) -> str | None: ...
+
+
+def _source_liveness(root: Path) -> dict[str, str]:
+    """Each remote recorder's last-active ISO time, read from the .alive markers the
+    ingest server refreshes while a phone streams (recall.stream_server). The USB mic
+    has no marker — its liveness is the global running state — so only phones appear
+    here. The fleet can't see these files (they're on the Mac), so the mirror ships them
+    each pass. Store-free, matching the mirror's file-only design; an unreadable marker
+    is skipped."""
+    out: dict[str, str] = {}
+    for marker in root.glob(f"*/{ALIVE_FILE}"):
+        try:
+            mtime = marker.stat().st_mtime
+        except OSError:
+            continue
+        out[marker.parent.name] = datetime.fromtimestamp(mtime, tz=UTC).isoformat()
+    return out
 
 
 def _marker_file(root: Path) -> Path:
@@ -77,6 +99,7 @@ def reconcile_once(root: Path, client: IntentExchange, *, now: datetime) -> bool
     intent = client.exchange_capture(
         running=running,
         paused_until=local_until.isoformat() if local_until else None,
+        source_liveness=_source_liveness(root),
     )
     intent_value = intent or ""
     if intent_value == _read_marker(root):

@@ -4,10 +4,12 @@ every cycle by an unchanged "running" intent from the fleet."""
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from recall import capture_control, capture_mirror
+from recall.stream_server import ALIVE_FILE
 
 NOW = datetime(2026, 7, 14, 12, 0, 0, tzinfo=UTC)
 FUTURE = (NOW + timedelta(hours=1)).isoformat()
@@ -19,11 +21,17 @@ class FakeExchange:
     def __init__(self, intent: str | None) -> None:
         self.intent = intent
         self.reported: list[tuple[bool, str | None]] = []
+        self.liveness: list[dict[str, str]] = []
 
     def exchange_capture(
-        self, *, running: bool, paused_until: str | None
+        self,
+        *,
+        running: bool,
+        paused_until: str | None,
+        source_liveness: dict[str, str],
     ) -> str | None:
         self.reported.append((running, paused_until))
+        self.liveness.append(dict(source_liveness))
         return self.intent
 
 
@@ -83,3 +91,24 @@ def test_a_fleet_pause_already_elapsed_is_treated_as_running(tmp_path: Path) -> 
     client = FakeExchange(past)
     capture_mirror.reconcile_once(tmp_path, client, now=NOW)
     assert not capture_control.is_paused(tmp_path, NOW)
+
+
+def test_each_pass_ships_the_phones_alive_freshness(tmp_path: Path) -> None:
+    # The fleet can't see the phones' .alive markers (they're on the Mac), so the mirror
+    # reports each one's last-active time — that's what makes /api/sources truthful on
+    # Isis. The USB mic has no marker and must not appear here.
+    marker_time = datetime(2026, 7, 14, 11, 59, 30, tzinfo=UTC)
+    phone = tmp_path / "pixel9"
+    phone.mkdir()
+    (phone / ALIVE_FILE).touch()
+    os.utime(phone / ALIVE_FILE, (marker_time.timestamp(), marker_time.timestamp()))
+
+    client = FakeExchange(None)
+    capture_mirror.reconcile_once(tmp_path, client, now=NOW)
+    assert client.liveness[0] == {"pixel9": marker_time.isoformat()}
+
+
+def test_liveness_report_is_empty_with_no_phones(tmp_path: Path) -> None:
+    client = FakeExchange(None)
+    capture_mirror.reconcile_once(tmp_path, client, now=NOW)
+    assert client.liveness[0] == {}

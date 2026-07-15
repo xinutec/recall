@@ -141,22 +141,35 @@ def test_capture_exchange_reports_state_and_returns_intent(
     with TestClient(app) as transport:
         client = SyncClient("http://fleet", "secret", client=transport)
         # nothing set on the fleet → the Mac is told to run
-        assert client.exchange_capture(running=True, paused_until=None) is None
+        assert (
+            client.exchange_capture(running=True, paused_until=None, source_liveness={})
+            is None
+        )
 
         # the fleet UI records a pause; the Mac's next exchange pulls the resume-by. Use
         # real now — the route evaluates intent against wall-clock, so a past resume-by
-        # would read as already-elapsed (running).
+        # would read as already-elapsed (running). The Mac also ships the phones' .alive
+        # freshness, which the fleet can't see itself.
         store = Store.open(db)
         until = capture_control.intent_pause(store, datetime.now(UTC), minutes=30)
         store.close()
-        assert client.exchange_capture(running=True, paused_until=None) == (
-            until.isoformat()
+        alive = "2026-07-14T12:00:00+00:00"
+        assert (
+            client.exchange_capture(
+                running=True, paused_until=None, source_liveness={"pixel9": alive}
+            )
+            == until.isoformat()
         )
 
-        # and the fleet now holds the Mac's reported state (for an honest status). The
-        # route stamps it with real wall-clock time, so read it back at real now.
+        # and the fleet now holds the Mac's reported state (for an honest status), and
+        # the phone liveness the Mac shipped. The route stamps its report with real
+        # wall-clock time, so read it back at real now.
         store = Store.open(db)
-        assert capture_control.reported_state(store, datetime.now(UTC)) == (True, None)
+        now = datetime.now(UTC)
+        assert capture_control.reported_state(store, now) == (True, None)
+        assert capture_control.reported_source_liveness(store, now) == {
+            "pixel9": datetime.fromisoformat(alive)
+        }
         store.close()
         assert client.poll_jobs() == []
 

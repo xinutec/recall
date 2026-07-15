@@ -19,9 +19,10 @@ is fully unit-testable.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
@@ -136,6 +137,11 @@ _INTENT_KEY = "capture_intent"  # ISO resume-by; blank/absent = running
 _REPORTED_RUNNING_KEY = "capture_reported_running"
 _REPORTED_PAUSED_KEY = "capture_reported_paused_until"
 _REPORTED_AT_KEY = "capture_reported_at"
+# Each remote recorder's last-active time (JSON {source_id: ISO}) as the Mac last saw
+# it. The phones' .alive markers live on the Mac (the ingest host); the fleet can't read
+# them, so the mirror ships them here for /api/sources to serve. Gated by the same
+# _REPORTED_AT freshness — a Mac that stopped checking in reports no current liveness.
+_REPORTED_LIVENESS_KEY = "capture_reported_source_liveness"
 # A report older than this means the Mac has stopped checking in; the fleet then falls
 # back to showing intent (and the separate fleetwatch alarm covers a dead Mac).
 _REPORT_FRESH = timedelta(seconds=30)
@@ -184,12 +190,53 @@ def intent_until(store: _Settings, now: datetime) -> datetime | None:
 
 
 def record_reported(
-    store: _Settings, *, running: bool, paused_until: str | None, now: datetime
+    store: _Settings,
+    *,
+    running: bool,
+    paused_until: str | None,
+    now: datetime,
+    source_liveness: Mapping[str, str] | None = None,
 ) -> None:
-    """Store the Mac's just-applied capture state, so the fleet's status is honest."""
+    """Store the Mac's just-applied capture state, so the fleet's status is honest.
+    `source_liveness` is each remote recorder's last-active ISO time (the phones' .alive
+    freshness the Mac owns) — the fleet serves it from /api/sources, having no markers
+    of its own. Optional so a not-yet-updated Mac client just leaves it empty."""
     store.set_setting(_REPORTED_RUNNING_KEY, "1" if running else "0")
     store.set_setting(_REPORTED_PAUSED_KEY, paused_until or "")
     store.set_setting(_REPORTED_AT_KEY, now.isoformat())
+    store.set_setting(_REPORTED_LIVENESS_KEY, json.dumps(dict(source_liveness or {})))
+
+
+def reported_source_liveness(
+    store: _Settings, now: datetime
+) -> dict[str, datetime] | None:
+    """Each remote recorder's last-active time as the Mac last reported it, or None when
+    the Mac has stopped checking in (same freshness gate as reported_state). A missing
+    or malformed entry is dropped, not fatal — liveness is best-effort status, not
+    control."""
+    at = store.get_setting(_REPORTED_AT_KEY)
+    if not at:
+        return None
+    try:
+        at_dt = datetime.fromisoformat(at)
+    except ValueError:
+        return None
+    if now - at_dt > _REPORT_FRESH:
+        return None
+    raw = store.get_setting(_REPORTED_LIVENESS_KEY)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    out: dict[str, datetime] = {}
+    for source_id, iso in data.items():
+        try:
+            out[str(source_id)] = datetime.fromisoformat(iso)
+        except (ValueError, TypeError):
+            continue
+    return out
 
 
 def reported_state(store: _Settings, now: datetime) -> tuple[bool, str | None] | None:

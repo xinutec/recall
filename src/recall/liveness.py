@@ -20,6 +20,12 @@ from datetime import datetime, timedelta
 # host-owned marker / agent state), not buffered audio.
 ACTIVE_WITHIN = timedelta(seconds=5)
 
+# On the fleet (Isis) the liveness signal arrives via the Mac's ~5s mirror report, not a
+# local marker, so a streaming phone's last-active reads up to a report-cadence older
+# here than on the Mac. Widen the window to absorb that lag (report cadence + marker
+# staleness + margin), while still flipping to idle within a couple of missed reports.
+FLEET_ACTIVE_WITHIN = timedelta(seconds=12)
+
 
 @dataclass(frozen=True)
 class SourceStatus:
