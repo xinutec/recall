@@ -51,6 +51,10 @@ class StreamService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (running) return START_STICKY
         val host = Prefs.host(this)
+        // The capture API moved to Isis (the control host), separate from the recorder
+        // host the stream connects to — so the pause-vs-unreachable check below asks Isis,
+        // not the Mac's (retired) API. See Prefs / CaptureApi.
+        val controlHost = Prefs.controlHost(this)
         val deviceId = Prefs.deviceId(this)
 
         if (!startInForeground()) {
@@ -61,7 +65,7 @@ class StreamService : Service() {
         }
         running = true
         MicState.setRunning(true)
-        worker = thread(name = "mic-stream") { streamLoop(host, deviceId) }
+        worker = thread(name = "mic-stream") { streamLoop(host, controlHost, deviceId) }
         return START_STICKY
     }
 
@@ -78,8 +82,10 @@ class StreamService : Service() {
         super.onDestroy()
     }
 
-    /** Capture/connect until stopped, reconnecting after any failure with a delay. */
-    private fun streamLoop(host: String, deviceId: String) {
+    /** Capture/connect until stopped, reconnecting after any failure with a delay.
+     * `host` is the recorder host the PCM stream connects to; `controlHost` is Isis, asked
+     * only to tell a deliberate pause from an unreachable recorder. */
+    private fun streamLoop(host: String, controlHost: String, deviceId: String) {
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
         // ~1s of headroom so a brief network stall doesn't drop mic frames.
         val bufSize = maxOf(minBuf, SAMPLE_RATE * BYTES_PER_SAMPLE)
@@ -151,7 +157,7 @@ class StreamService : Service() {
                     // publish to the shared state, so the screen and notification
                     // render the one value and can't disagree about
                     // pause-vs-unreachable.
-                    val cap = runBlocking { CaptureApi.state(host) }
+                    val cap = runBlocking { CaptureApi.state(controlHost) }
                     MicState.setCapture(cap)
                     val paused = cap?.let { !it.running } == true
                     setNotification(
