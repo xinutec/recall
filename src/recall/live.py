@@ -1,25 +1,26 @@
 """Live, low-latency transcription via voice-activity detection.
 
-Reads the mic (a second sox stream), detects utterances with Silero VAD, and
+Reads the mic (a second ffmpeg stream), detects utterances with Silero VAD, and
 transcribes each one the moment the speaker pauses — latency ~2-3 s. These are
 fast, *provisional* transcripts (asr_model = LIVE_MODEL, no archive file); the
 worker's higher-quality archive pass supersedes them once it catches up
 (recall.worker.reconcile_live).
 
 The run loop is heavy/integration (lazy-imports torch/silero-vad/mlx and reads
-the live device) so it is not exercised by tests; the WAV helper is tested.
+the live device) so it is not exercised by tests; the WAV + teardown helpers are.
 """
 
 from __future__ import annotations
 
 import queue
+import signal
 import subprocess
 import threading
 import wave
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import IO
+from typing import IO, Protocol
 
 from recall.asr import DEFAULT_MODEL, mlx_transcribe, scratch_wav
 from recall.loops import is_repetition_loop
@@ -35,10 +36,38 @@ _STOP_CHECK_CHUNKS = _SAMPLE_RATE // _VAD_CHUNK
 
 
 def mic_argv(device: str) -> list[str]:
-    """The sox command that streams the live mic (same source abstraction as
+    """The ffmpeg command that streams the live mic (same source abstraction as
     capture, so device pinning behaves identically — see AudioSource.spec)."""
     source = AudioSource(id="live", name="live", kind=SourceKind.COREAUDIO, spec=device)
     return source.producer_argv(_SAMPLE_RATE, 1)
+
+
+class _Producer(Protocol):
+    """The subprocess surface `_stop_producer` needs — `subprocess.Popen` satisfies it,
+    and a fake satisfies it in tests."""
+
+    def poll(self) -> int | None: ...
+    def terminate(self) -> None: ...
+    def wait(self, timeout: float | None = None) -> int: ...
+    def kill(self) -> None: ...
+
+
+def _stop_producer(producer: _Producer) -> None:
+    """Tear the mic reader down for good: terminate, then hard-kill if it lingers.
+
+    A live-agent stop MUST leave no reader behind. An orphaned mic process keeps the
+    shared CoreAudio device open and wedges it to digital silence — which is what turned
+    a live restart into a capture dead-window (the reader survived the agent's death and
+    starved capture's own stream). terminate → wait → kill guarantees it's gone.
+    """
+    if producer.poll() is not None:
+        return  # already exited
+    producer.terminate()
+    try:
+        producer.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        producer.kill()
+        producer.wait()
 
 
 def write_wav(pcm: bytes, path: Path, *, sample_rate: int = _SAMPLE_RATE) -> None:
@@ -54,13 +83,12 @@ def drain_to_queue(
     stdout: IO[bytes], frames: queue.Queue[bytes | None], chunk_bytes: int
 ) -> None:
     """Read fixed-size PCM chunks off the mic pipe as fast as the OS delivers them,
-    parking each on `frames`. This decouples *draining sox* from VAD/whisper timing:
-    if the consumer stalls (GC, a slow VAD call under CPU load), this thread still
-    empties sox's stdout, so sox's CoreAudio input ring never overruns. That overrun
-    (`coreaudio: unhandled buffer overrun. Data discarded`) is what silently dropped
-    live speech and, sustained, aborted sox — capture's ffmpeg consumer never hit it
-    because C drains at full speed. A short read means the producer ended (EOF or a
-    torn-down pipe): forward `None` as the end sentinel so the consumer stops too.
+    parking each on `frames`. This decouples *draining the producer* from VAD/whisper
+    timing: if the consumer stalls (GC, a slow VAD call under load), this thread still
+    empties the producer's stdout, so its CoreAudio input ring never overruns. That
+    overrun (`coreaudio: unhandled buffer overrun. Data discarded`) is what silently
+    dropped live speech under the old sox reader. A short read means the producer ended
+    (EOF or a torn-down pipe): forward `None` as the end sentinel so the consumer stops.
     """
     try:
         while True:
@@ -72,7 +100,7 @@ def drain_to_queue(
         frames.put(None)
 
 
-def run_live(  # noqa: PLR0915 - cohesive streaming loop
+def run_live(  # noqa: PLR0915, PLR0912 - cohesive streaming loop
     db_path: Path,
     *,
     work_dir: Path,
@@ -113,7 +141,7 @@ def run_live(  # noqa: PLR0915 - cohesive streaming loop
 
     producer = subprocess.Popen(mic_argv(device), stdout=subprocess.PIPE)
     if producer.stdout is None:  # pragma: no cover
-        msg = "sox produced no stdout"
+        msg = "the mic producer produced no stdout"
         raise RuntimeError(msg)
 
     chunk_bytes = _VAD_CHUNK * 2
@@ -132,6 +160,20 @@ def run_live(  # noqa: PLR0915 - cohesive streaming loop
         target=drain_to_queue, args=(producer.stdout, frames, chunk_bytes), daemon=True
     )
     drain.start()
+
+    # launchd stops the agent with SIGTERM, whose default action exits Python WITHOUT
+    # running the finally below — orphaning the mic reader to hold and wedge the shared
+    # CoreAudio device. This handler tears the reader down first. Off the main thread
+    # signal.signal raises ValueError off the main thread (never in the agent); the
+    # finally below still runs regardless.
+    def _handle_sigterm(*_: object) -> None:
+        _stop_producer(producer)
+        raise SystemExit(0)
+
+    try:
+        previous_sigterm = signal.signal(signal.SIGTERM, _handle_sigterm)
+    except ValueError:
+        previous_sigterm = None
 
     try:
         chunks = 0
@@ -167,9 +209,10 @@ def run_live(  # noqa: PLR0915 - cohesive streaming loop
                 utterance = bytearray()
             samples_seen += _VAD_CHUNK
     finally:
-        producer.terminate()  # release the mic (no-op if it already ended)
-        producer.wait()
-        drain.join(timeout=5)  # sox is gone → its stdout EOFs → the drain returns
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
+        _stop_producer(producer)  # release the mic for good — never orphan it
+        drain.join(timeout=5)  # producer gone → its stdout EOFs → the drain returns
         utterances.put(None)
         thread.join(timeout=30)
 

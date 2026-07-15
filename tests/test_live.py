@@ -5,12 +5,64 @@ from __future__ import annotations
 import io
 import os
 import queue
+import subprocess
 import threading
 import time
 import wave
 from pathlib import Path
 
-from recall.live import drain_to_queue, mic_argv, write_wav
+from recall.live import _stop_producer, drain_to_queue, mic_argv, write_wav
+
+
+class _FakeProducer:
+    """Stands in for the mic reader Popen. `dies_on_terminate=False` models a reader
+    that ignores SIGTERM and must be hard-killed."""
+
+    def __init__(self, *, alive: bool = True, dies_on_terminate: bool = True) -> None:
+        self._alive = alive
+        self._dies_on_terminate = dies_on_terminate
+        self.terminated = False
+        self.killed = False
+
+    def poll(self) -> int | None:
+        return None if self._alive else 0
+
+    def terminate(self) -> None:
+        self.terminated = True
+        if self._dies_on_terminate:
+            self._alive = False
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self._alive and timeout is not None:
+            raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=timeout)
+        return 0
+
+    def kill(self) -> None:
+        self.killed = True
+        self._alive = False
+
+
+def test_stop_producer_is_a_noop_when_already_exited() -> None:
+    producer = _FakeProducer(alive=False)
+    _stop_producer(producer)
+    assert not producer.terminated
+    assert not producer.killed
+
+
+def test_stop_producer_terminates_a_live_reader() -> None:
+    # The mic reader must never survive a live-agent stop — an orphan wedges the shared
+    # CoreAudio device and dead-windows capture.
+    producer = _FakeProducer(alive=True, dies_on_terminate=True)
+    _stop_producer(producer)
+    assert producer.terminated
+    assert not producer.killed  # a well-behaved reader stops on terminate
+
+
+def test_stop_producer_hard_kills_a_reader_that_ignores_terminate() -> None:
+    producer = _FakeProducer(alive=True, dies_on_terminate=False)
+    _stop_producer(producer)
+    assert producer.terminated
+    assert producer.killed  # it didn't die on terminate, so it gets killed
 
 
 def test_mic_argv_default_device() -> None:
