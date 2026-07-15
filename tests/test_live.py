@@ -65,23 +65,23 @@ def test_stop_producer_hard_kills_a_reader_that_ignores_terminate() -> None:
     assert producer.killed  # it didn't die on terminate, so it gets killed
 
 
-def test_mic_argv_default_device() -> None:
+def test_mic_argv_reads_the_udp_tap_not_the_device() -> None:
+    # Live reads the best-effort tap capture publishes, NOT the mic — two CoreAudio
+    # clients on one device starve each other, so only capture may hold it.
     argv = mic_argv("")
     assert argv[0] == "ffmpeg"
-    assert argv[argv.index("-f") + 1] == "avfoundation"
-    assert argv[argv.index("-i") + 1] == ":default"
-    assert argv[argv.index("-ar") + 1] == "16000"  # live runs the mic at 16 kHz
+    assert "avfoundation" not in argv  # NOT a device client
+    i = argv.index("-i")
+    assert argv[i + 1].startswith("udp://127.0.0.1:")
+    assert argv[argv.index("-ar") + 1] == "16000"  # the tap is 16 kHz mono
     assert argv[argv.index("-ac") + 1] == "1"
-    assert argv[-1] == "-"
+    assert argv[-1] == "-"  # PCM to stdout, for the existing drain loop
 
 
-def test_mic_argv_named_device_pins_the_mic() -> None:
-    # Same pinning as capture: never let a Bluetooth speaker's hands-free mic
-    # (the system default input) become the live-transcription source.
-    argv = mic_argv("USB Condenser Microphone")
-    assert argv[argv.index("-i") + 1] == ":USB Condenser Microphone"
-    assert argv[argv.index("-f") + 1] == "avfoundation"
-    assert ":default" not in argv
+def test_mic_argv_ignores_the_device_arg_now() -> None:
+    # The device pin lives on capture (the sole reader); live's --device is vestigial.
+    assert mic_argv("USB Condenser Microphone") == mic_argv("")
+    assert ":USB Condenser Microphone" not in mic_argv("USB Condenser Microphone")
 
 
 def test_write_wav_is_valid_mono_16k(tmp_path: Path) -> None:

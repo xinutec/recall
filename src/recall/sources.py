@@ -21,11 +21,25 @@ _SAFE_ID: re.Pattern[str] = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # wedging forever on a quietly-dead socket. 15s tolerates brief Wi-Fi stalls.
 _TCP_READ_TIMEOUT_US: Final = 15_000_000
 
+# The live-feed tap. Only ONE process may hold the CoreAudio device — two clients on one
+# device starve each other (proven 2026-07-15: capture + live both got silence). So the
+# single mic reader (capture) emits a SECOND, best-effort PCM copy on this localhost UDP
+# port, and recall-live reads that, not the device. UDP is fire-and-forget:
+# a full or absent receiver just drops packets, so the tap can NEVER backpressure the
+# archive segmenter (completeness stays the segmenter's alone). 16 kHz mono = live's
+# format, so live needs no resampling.
+FANOUT_HOST: Final = "127.0.0.1"
+FANOUT_PORT: Final = 9876
+FANOUT_SAMPLE_RATE: Final = 16000
+FANOUT_CHANNELS: Final = 1
+# Datagram payload that fits a loopback packet without IP fragmentation.
+_FANOUT_PKT_SIZE: Final = 1316
+
 
 class SourceKind(Enum):
     """How a source's PCM stream is produced."""
 
-    COREAUDIO = "coreaudio"  # sox (CoreAudio) — reliable macOS device capture
+    COREAUDIO = "coreaudio"  # ffmpeg (avfoundation) — reliable macOS device capture
     LAVFI = "lavfi"  # ffmpeg synthetic source (testing/calibration)
     RTSP = "rtsp"  # ffmpeg network source (e.g. a phone on the LAN)
     TCP_PCM = "tcp_pcm"  # ffmpeg listens for raw s16le PCM (the recall-mic app)
@@ -40,6 +54,50 @@ def _ffmpeg_pcm_tail(
         tail += ["-t", str(max_seconds)]
     tail += ["-ar", str(sample_rate), "-ac", str(channels), "-f", "s16le", "-"]
     return tail
+
+
+def _fanout_output() -> list[str]:
+    """A second ffmpeg output: the best-effort live tap. Appended after the stdout PCM
+    output so one mic input feeds both — the archive (stdout, reliable) and the live
+    feed (this UDP, droppable). Fire-and-forget, so it can't stall the archive."""
+    url = f"udp://{FANOUT_HOST}:{FANOUT_PORT}?pkt_size={_FANOUT_PKT_SIZE}"
+    return [
+        "-ar",
+        str(FANOUT_SAMPLE_RATE),
+        "-ac",
+        str(FANOUT_CHANNELS),
+        "-f",
+        "s16le",
+        url,
+    ]
+
+
+def live_input_argv() -> list[str]:
+    """ffmpeg that reads the best-effort UDP tap capture publishes (FANOUT_*) and sends
+    it to stdout — what recall-live consumes INSTEAD of opening the mic, so only capture
+    holds the device. `overrun_nonfatal` + a fifo keep a burst from killing the reader;
+    the tap is already 16 kHz mono, so this is a pass-through."""
+    url = (
+        f"udp://{FANOUT_HOST}:{FANOUT_PORT}"
+        f"?overrun_nonfatal=1&fifo_size={_FANOUT_PKT_SIZE * 64}"
+    )
+    return [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "s16le",
+        "-ar",
+        str(FANOUT_SAMPLE_RATE),
+        "-ac",
+        str(FANOUT_CHANNELS),
+        "-i",
+        url,
+        "-f",
+        "s16le",
+        "-",
+    ]
 
 
 @dataclass(frozen=True)
@@ -83,8 +141,13 @@ class AudioSource:
         channels: int,
         *,
         max_seconds: int | None = None,
+        fanout: bool = False,
     ) -> list[str]:
-        """Command that streams raw s16le PCM for this source to stdout."""
+        """Command that streams raw s16le PCM for this source to stdout.
+
+        `fanout` (COREAUDIO only) appends a second, best-effort UDP output: the live tap
+        capture publishes so recall-live needn't open the device (see _fanout_output).
+        It cannot backpressure the stdout/archive output, so completeness is safe."""
         match self.kind:
             case SourceKind.COREAUDIO:
                 # ffmpeg avfoundation, NOT sox. sox's CoreAudio driver wedges: its input
@@ -106,6 +169,7 @@ class AudioSource:
                     "-i",
                     f":{device}",
                     *_ffmpeg_pcm_tail(sample_rate, channels, max_seconds),
+                    *(_fanout_output() if fanout else []),
                 ]
             case SourceKind.LAVFI:
                 return [

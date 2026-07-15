@@ -216,8 +216,15 @@ def _cmd_record(args: argparse.Namespace) -> int:
         store.close()
 
     def once(should_stop: Callable[[], bool]) -> int:
+        # fanout=True: this single mic reader also publishes the best-effort UDP tap
+        # recall-live consumes, so live never opens the device (two clients starve).
         return record(
-            source, config, args.out, max_seconds=args.seconds, should_stop=should_stop
+            source,
+            config,
+            args.out,
+            max_seconds=args.seconds,
+            should_stop=should_stop,
+            fanout=True,
         )
 
     def record_event(kind: str, utc: datetime) -> None:

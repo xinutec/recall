@@ -24,7 +24,7 @@ from typing import IO, Protocol
 
 from recall.asr import DEFAULT_MODEL, mlx_transcribe, scratch_wav
 from recall.loops import is_repetition_loop
-from recall.sources import AudioSource, SourceKind
+from recall.sources import live_input_argv
 from recall.store import LIVE_MODEL, Store
 from recall.vocabulary import build_initial_prompt
 
@@ -36,10 +36,12 @@ _STOP_CHECK_CHUNKS = _SAMPLE_RATE // _VAD_CHUNK
 
 
 def mic_argv(device: str) -> list[str]:
-    """The ffmpeg command that streams the live mic (same source abstraction as
-    capture, so device pinning behaves identically — see AudioSource.spec)."""
-    source = AudioSource(id="live", name="live", kind=SourceKind.COREAUDIO, spec=device)
-    return source.producer_argv(_SAMPLE_RATE, 1)
+    """The live input: ffmpeg reads the best-effort UDP tap that capture publishes
+    (recall.sources.live_input_argv), NOT the mic. Only capture holds the CoreAudio
+    device — two clients on one device starve each other — so live subscribes to the tap
+    instead. `device` is unused now (capture owns device pinning); the parameter stays
+    so the caller and the agent's `--device` arg are unchanged."""
+    return live_input_argv()
 
 
 class _Producer(Protocol):

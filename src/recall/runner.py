@@ -70,6 +70,7 @@ def record(  # noqa: PLR0913 - capture config + the optional pause hook
     max_seconds: int | None = None,
     should_stop: Callable[[], bool] | None = None,
     poll_seconds: float = _STOP_POLL_S,
+    fanout: bool = False,
 ) -> int:
     """Capture `source` into `root/<source.id>/` as rotating segment files.
 
@@ -78,13 +79,17 @@ def record(  # noqa: PLR0913 - capture config + the optional pause hook
     the pipe is torn down cleanly (current segment finalised) and record() returns,
     so the caller can park on the pause and call record() again to resume. Returns
     the segmenter's exit code. ffmpeg runs with TZ=UTC so filenames carry UTC times.
+
+    `fanout` makes the mic reader also publish a best-effort PCM copy on the live-feed
+    UDP tap (recall.sources), so recall-live needn't open the device — only one process
+    holds the mic. The tap can't backpressure the segmenter, so the archive is safe.
     """
     out_dir = root / source.id
     out_dir.mkdir(parents=True, exist_ok=True)
     ext = container_ext(config.codec)
     pattern = segment_output_pattern(str(root), source.id, ext=ext)
     producer_argv = source.producer_argv(
-        config.sample_rate, config.channels, max_seconds=max_seconds
+        config.sample_rate, config.channels, max_seconds=max_seconds, fanout=fanout
     )
     consumer_argv = build_segment_argv(config, pattern)
     env = {**os.environ, "TZ": "UTC"}
