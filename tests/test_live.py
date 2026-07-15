@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import io
+import os
+import queue
+import threading
+import time
 import wave
 from pathlib import Path
 
-from recall.live import mic_argv, write_wav
+from recall.live import drain_to_queue, mic_argv, write_wav
 
 
 def test_mic_argv_default_device() -> None:
@@ -34,3 +39,66 @@ def test_write_wav_is_valid_mono_16k(tmp_path: Path) -> None:
         assert wav.getsampwidth() == 2
         assert wav.getframerate() == 16000
         assert wav.getnframes() == 16000
+
+
+def test_drain_preserves_every_chunk_in_order_then_a_sentinel() -> None:
+    chunk = 512
+    payload = [bytes([i % 256]) * chunk for i in range(8)]
+    frames: queue.Queue[bytes | None] = queue.Queue()
+
+    drain_to_queue(io.BytesIO(b"".join(payload)), frames, chunk)
+
+    got = [frames.get_nowait() for _ in range(len(payload) + 1)]
+    assert got[:-1] == payload
+    assert got[-1] is None  # end sentinel so the consumer stops too
+
+
+def test_drain_treats_a_short_final_read_as_end() -> None:
+    # A trailing partial chunk (or a clean EOF) means the producer ended — it is not a
+    # frame; forward only whole frames, then the sentinel.
+    chunk = 512
+    whole = bytes(chunk)
+    frames: queue.Queue[bytes | None] = queue.Queue()
+
+    drain_to_queue(io.BytesIO(whole + b"\x00\x00\x00"), frames, chunk)
+
+    assert frames.get_nowait() == whole
+    assert frames.get_nowait() is None
+    assert frames.empty()
+
+
+def test_drain_never_blocks_the_producer_when_the_consumer_stalls() -> None:
+    # The real failure this fixes: sox writes to a fixed-size OS pipe; a stalled VAD
+    # consumer leaves the pipe unread, it backs up, and sox's CoreAudio buffer overruns
+    # (data discarded / abort). The drain thread must empty the pipe regardless, so the
+    # producer streams > a pipe-buffer of data through a deliberately slow consumer with
+    # nothing lost and no deadlock.
+    chunk = 512
+    payload = [bytes([i % 256]) * chunk for i in range(500)]  # 256 KB >> ~64 KB pipe
+    read_fd, write_fd = os.pipe()
+    frames: queue.Queue[bytes | None] = queue.Queue()
+
+    reader = io.BufferedReader(io.FileIO(read_fd, closefd=True))
+    drain = threading.Thread(target=drain_to_queue, args=(reader, frames, chunk))
+    drain.start()
+
+    def write_all() -> None:
+        with os.fdopen(write_fd, "wb") as sink:
+            for c in payload:
+                sink.write(c)
+
+    writer = threading.Thread(target=write_all)
+    writer.start()
+
+    got: list[bytes] = []
+    while True:
+        item = frames.get(timeout=5)
+        if item is None:
+            break
+        got.append(item)
+        time.sleep(0.001)  # stall on every frame — the drain must not wait on us
+
+    writer.join(timeout=5)
+    drain.join(timeout=5)
+    assert not writer.is_alive()  # never blocked on a full pipe
+    assert got == payload  # every chunk, in order, none discarded

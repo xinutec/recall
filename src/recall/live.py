@@ -19,6 +19,7 @@ import wave
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import IO
 
 from recall.asr import DEFAULT_MODEL, mlx_transcribe, scratch_wav
 from recall.loops import is_repetition_loop
@@ -47,6 +48,28 @@ def write_wav(pcm: bytes, path: Path, *, sample_rate: int = _SAMPLE_RATE) -> Non
         wav.setsampwidth(2)
         wav.setframerate(sample_rate)
         wav.writeframes(pcm)
+
+
+def drain_to_queue(
+    stdout: IO[bytes], frames: queue.Queue[bytes | None], chunk_bytes: int
+) -> None:
+    """Read fixed-size PCM chunks off the mic pipe as fast as the OS delivers them,
+    parking each on `frames`. This decouples *draining sox* from VAD/whisper timing:
+    if the consumer stalls (GC, a slow VAD call under CPU load), this thread still
+    empties sox's stdout, so sox's CoreAudio input ring never overruns. That overrun
+    (`coreaudio: unhandled buffer overrun. Data discarded`) is what silently dropped
+    live speech and, sustained, aborted sox — capture's ffmpeg consumer never hit it
+    because C drains at full speed. A short read means the producer ended (EOF or a
+    torn-down pipe): forward `None` as the end sentinel so the consumer stops too.
+    """
+    try:
+        while True:
+            data = stdout.read(chunk_bytes)
+            if len(data) < chunk_bytes:
+                break
+            frames.put(data)
+    finally:
+        frames.put(None)
 
 
 def run_live(  # noqa: PLR0915 - cohesive streaming loop
@@ -101,6 +124,15 @@ def run_live(  # noqa: PLR0915 - cohesive streaming loop
     utterance_start = 0
     anchor: datetime | None = None
 
+    # A dedicated thread drains sox so a slow VAD/whisper step never backs up the mic
+    # pipe and overruns CoreAudio (see drain_to_queue). The main loop consumes decoded
+    # frames from here; `get(timeout=...)` keeps the pause check responsive when quiet.
+    frames: queue.Queue[bytes | None] = queue.Queue()
+    drain = threading.Thread(
+        target=drain_to_queue, args=(producer.stdout, frames, chunk_bytes), daemon=True
+    )
+    drain.start()
+
     try:
         chunks = 0
         while True:
@@ -111,9 +143,12 @@ def run_live(  # noqa: PLR0915 - cohesive streaming loop
                 and should_stop()
             ):
                 break  # a pause: stop reading and release the mic
-            data = producer.stdout.read(chunk_bytes)
-            if len(data) < chunk_bytes:
-                break
+            try:
+                data = frames.get(timeout=1.0)
+            except queue.Empty:
+                continue  # no audio yet — loop back to re-check the pause
+            if data is None:
+                break  # producer ended (sox exited / pipe torn down)
             if anchor is None:
                 anchor = datetime.now(UTC)
             frame = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
@@ -134,6 +169,7 @@ def run_live(  # noqa: PLR0915 - cohesive streaming loop
     finally:
         producer.terminate()  # release the mic (no-op if it already ended)
         producer.wait()
+        drain.join(timeout=5)  # sox is gone → its stdout EOFs → the drain returns
         utterances.put(None)
         thread.join(timeout=30)
 
