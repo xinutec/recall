@@ -47,12 +47,13 @@ let
   };
 in
 {
-  launchd.agents."com.pippijn.recall-api" = daemon {
-    label = "com.pippijn.recall-api";
-    name = "api";
-    script = "recall.sh";
-    args = [ "api" "--out" "/Volumes/Backup/recall" "--host" "0.0.0.0" "--port" "8000" ];
-  };
+  # NO recall-api here — the Mac serves no UI or control plane (the Isis split). Isis
+  # (10.100.0.2:8000) is the system of record and the only web UI / control surface; the
+  # Mac is capture + all MLX + push (recall-sync) + the protected archive backup. Browsers
+  # and the phone web app point at Isis; pause/resume is mirrored down by recall-capture-
+  # mirror. Interactive MLX endpoints (refine, ab-compare, /api/sessions upload) are NOT
+  # reachable from Isis under the one-way WireGuard model and need a Mac-initiated job-pull
+  # (like capture-mirror) — tracked as Phase 2, not served from the Mac.
 
   launchd.agents."com.pippijn.recall-ingest" = daemon {
     label = "com.pippijn.recall-ingest";
