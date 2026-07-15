@@ -80,6 +80,17 @@ def test_coreaudio_fanout_appends_the_best_effort_udp_tap() -> None:
     assert argv[udp - 6 : udp] == ["-ar", "16000", "-ac", "1", "-f", "s16le"]
 
 
+def test_coreaudio_fanout_bounds_the_udp_output_too() -> None:
+    # Both outputs must carry -t, else the stdout output stops at max_seconds while the
+    # UDP one streams forever and ffmpeg (a bounded `recall record`) never exits.
+    src = AudioSource(id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="")
+    argv = src.producer_argv(48000, 1, max_seconds=8, fanout=True)
+    assert argv.count("-t") == 2  # one per output
+    udp = next(i for i, a in enumerate(argv) if a.startswith("udp://"))
+    # the -t governing the UDP output is between the stdout output and the url
+    assert "-t" in argv[argv.index("-") : udp]
+
+
 def test_live_input_reads_the_udp_tap() -> None:
     argv = live_input_argv()
     assert argv[0] == "ffmpeg"

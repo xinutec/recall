@@ -56,12 +56,19 @@ def _ffmpeg_pcm_tail(
     return tail
 
 
-def _fanout_output() -> list[str]:
+def _fanout_output(max_seconds: int | None) -> list[str]:
     """A second ffmpeg output: the best-effort live tap. Appended after the stdout PCM
     output so one mic input feeds both — the archive (stdout, reliable) and the live
-    feed (this UDP, droppable). Fire-and-forget, so it can't stall the archive."""
+    feed (this UDP, droppable). Fire-and-forget, so it can't stall the archive.
+
+    `max_seconds` bounds this output too: without it, a `-t`-limited stdout output would
+    stop while this one ran on forever, so ffmpeg (and a bounded `recall record`) would
+    never exit. The always-on agent passes None, so it streams until the pause."""
     url = f"udp://{FANOUT_HOST}:{FANOUT_PORT}?pkt_size={_FANOUT_PKT_SIZE}"
-    return [
+    out = []
+    if max_seconds is not None:
+        out += ["-t", str(max_seconds)]
+    out += [
         "-ar",
         str(FANOUT_SAMPLE_RATE),
         "-ac",
@@ -70,6 +77,7 @@ def _fanout_output() -> list[str]:
         "s16le",
         url,
     ]
+    return out
 
 
 def live_input_argv() -> list[str]:
@@ -169,7 +177,7 @@ class AudioSource:
                     "-i",
                     f":{device}",
                     *_ffmpeg_pcm_tail(sample_rate, channels, max_seconds),
-                    *(_fanout_output() if fanout else []),
+                    *(_fanout_output(max_seconds) if fanout else []),
                 ]
             case SourceKind.LAVFI:
                 return [
