@@ -74,6 +74,27 @@ would be a dedicated drain thread that empties sox's stdout into a buffer regard
 VAD/whisper timing (the docstring already names this failure mode). Not yet built — the
 mechanism is inferred, not reproduced on demand, and the live path is currently untested.
 
+## 2026-07-15 morning — live overrun fixed, dead-window seen MID-session
+
+Resume 08:57:05Z, user counted loud+close, then a test sentence at 09:18 before pausing.
+
+- **`recall-live` overrun is FIXED.** `live.drain_to_queue` runs a dedicated thread that
+  empties sox's stdout regardless of VAD/whisper timing (commit `3d98063`). Overruns went
+  from 601+ in minutes to **0** after deploy; capture's ffmpeg consumer on the same mic
+  never overran, which is what fingered the slow Python reader.
+- **The dead-window is NOT only at startup.** Capture wrote real audio 08:57–09:02 (four
+  ~187 KB segments) then **16 empty segments 09:02→09:18** (device went to digital silence
+  mid-session). The 09:18 test sentence landed in it — empty capture, one garbled live
+  fragment ("Rame."). So a running session can silently go dead for many minutes.
+- **New hypothesis:** `recall-live` crash-looping on the OLD code (each abort → launchd
+  relaunch → reopen the *shared* USB coreaudio device) may knock capture's stream into
+  silence. The drain fix stops that thrashing, so future sessions MAY see fewer
+  dead-windows — unproven (this session's window was already stuck when the fix deployed
+  ~09:08 and persisted to pause). Needs a clean session to confirm.
+- **Candidate real fix (mid-session too):** a capture silence-watchdog — while unpaused,
+  if segments go empty (device delivering zero) restart capture's producer to re-open the
+  device. Recovers regardless of root cause. Testable; needs a person + running capture.
+
 ## Open faults after the test
 
 1. **Capture startup dead-window** (original) — root cause still open; the confound above
