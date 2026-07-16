@@ -113,6 +113,8 @@ def test_clearing_a_dead_stub_records_a_durable_dead_window_then_deletes(
         usb.mkdir()
         stub = usb / "usb-20260715T090200.opus"
         stub.write_bytes(b"")  # a zero-byte tombstone
+        # A NEWER sibling exists, so the stub cannot be the open segment — clearable.
+        (usb / "usb-20260715T090300.opus").write_bytes(b"x")
         _clear_dead_stubs(Scan(segments=[], empty=[stub], unreadable=[]), store, "usb")
 
         assert not stub.exists()  # the file is gone...
@@ -124,6 +126,28 @@ def test_clearing_a_dead_stub_records_a_durable_dead_window_then_deletes(
         assert event.detail == "usb-20260715T090200.opus"
         # timestamped to WHEN capture died (from the filename), not when noticed
         assert event.utc == datetime(2026, 7, 15, 9, 2, 0, tzinfo=UTC)
+    finally:
+        store.close()
+
+
+def test_the_newest_stub_is_never_touched_it_may_be_the_open_segment(
+    tmp_path: Path,
+) -> None:
+    # ffmpeg writes a segment's bytes only when it CLOSES (rotation or EOF) — measured
+    # live 2026-07-16: the current segment sat at 0 bytes, held open, for 3 minutes
+    # (lsof confirmed the open fd). Unlinking it would send the eventual flush to a
+    # deleted inode: silent, unrecoverable loss. So the newest file of a source is
+    # never cleared, and no dead_window is recorded for it (the verdict isn't in yet).
+    store = _store(tmp_path)
+    try:
+        usb = tmp_path / "usb"
+        usb.mkdir()
+        stub = usb / "usb-20260715T090200.opus"
+        stub.write_bytes(b"")  # zero bytes, but possibly still open by ffmpeg
+        _clear_dead_stubs(Scan(segments=[], empty=[stub], unreadable=[]), store, "usb")
+
+        assert stub.exists()  # left alone
+        assert store.capture_events_since(datetime(2026, 7, 15, tzinfo=UTC)) == []
     finally:
         store.close()
 

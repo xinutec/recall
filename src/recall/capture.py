@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 
+from recall.sources import fanout_output_argv
+
 # ffmpeg -strftime token used in segment filenames, e.g. usb-20260613T140530.flac
 _TS_STRFTIME: Final = "%Y%m%dT%H%M%S"
 _TS_PARSE: Final = "%Y%m%dT%H%M%S"
@@ -54,11 +56,16 @@ class CaptureConfig:
     loglevel: str = "warning"
 
 
-def build_segment_argv(config: CaptureConfig, output_pattern: str) -> list[str]:
+def build_segment_argv(
+    config: CaptureConfig, output_pattern: str, *, fanout: bool = False
+) -> list[str]:
     """ffmpeg argv that reads raw s16le PCM from stdin and writes segment files.
 
     The producer (recall.sources) supplies the PCM stream on this process's
     stdin; ffmpeg only segments and encodes — it never touches the device.
+
+    `fanout` appends the best-effort UDP live tap as a second output (see
+    recall.sources.fanout_output_argv), so recall-live never opens the device.
     """
     argv = [
         "ffmpeg",
@@ -91,6 +98,8 @@ def build_segment_argv(config: CaptureConfig, output_pattern: str) -> list[str]:
         "1",
         output_pattern,
     ]
+    if fanout:
+        argv += fanout_output_argv()
     return argv
 
 

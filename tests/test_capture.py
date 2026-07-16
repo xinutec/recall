@@ -17,6 +17,7 @@ from recall.capture import (
     parse_segment_start,
     segment_output_pattern,
 )
+from recall.sources import FANOUT_PORT
 
 
 def test_default_config_is_opus_for_speech() -> None:
@@ -50,6 +51,23 @@ def test_build_segment_argv_reads_pcm_from_stdin() -> None:
     assert "-strftime" in argv
     assert argv[argv.index("-ar") + 1] == "48000"
     assert argv[-1] == pattern  # output pattern is last
+
+
+def test_build_segment_argv_fanout_appends_the_live_tap() -> None:
+    # The segmenter (not the sox producer, which has no second output) publishes the
+    # best-effort 16 kHz UDP copy recall-live consumes. It comes AFTER the segment
+    # output, and UDP is fire-and-forget, so it can't backpressure the archive.
+    pattern = "/data/usb/usb-%Y%m%dT%H%M%S.opus"
+    argv = build_segment_argv(CaptureConfig(), pattern, fanout=True)
+    udp = next(i for i, a in enumerate(argv) if a.startswith("udp://"))
+    assert udp > argv.index(pattern)  # tap is the SECOND output, after the segments
+    assert f":{FANOUT_PORT}" in argv[udp]
+    assert argv[udp - 6 : udp] == ["-ar", "16000", "-ac", "1", "-f", "s16le"]
+
+
+def test_build_segment_argv_without_fanout_has_no_udp_output() -> None:
+    argv = build_segment_argv(CaptureConfig(), "/data/usb/usb-%Y%m%dT%H%M%S.opus")
+    assert not any(a.startswith("udp://") for a in argv)
 
 
 def test_build_segment_argv_respects_overrides() -> None:

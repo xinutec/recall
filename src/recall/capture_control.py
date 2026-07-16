@@ -58,6 +58,9 @@ class CaptureEventKind(StrEnum):
     # The mirror applied a changed fleet intent to the local pause file — the durable
     # "intent-seen" timestamp that anchors a resume timeline.
     MIRROR_APPLIED = "mirror_applied"
+    # The dead-segment watchdog cycled a wedged/stalled producer (recall.runner):
+    # capture self-healed, and the detail says why it fired.
+    PRODUCER_CYCLED = "producer_cycled"
 
 
 def _pause_file(root: Path) -> Path:

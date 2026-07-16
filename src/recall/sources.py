@@ -3,7 +3,12 @@
 Every source knows how to emit a continuous raw little-endian s16 PCM stream on
 stdout, so capture orchestration is source-agnostic. The macOS mic uses **sox
 (CoreAudio)** rather than ffmpeg's avfoundation input — the latter drops ~20% of
-samples on this machine, which is unacceptable for a "never lose a word" record.
+samples on this machine (re-measured 2026-07-16: 15 s wall → 11.6 s of audio,
+same ratio at 30 s, thread_queue_size no help), which is unacceptable for a
+"never lose a word" record. sox delivers sample-perfect audio but its CoreAudio
+read can rarely wedge to digital zeros (the 2026-07-15 dead-window); the runner's
+dead-segment watchdog cycles the producer when that happens, so the wedge costs
+minutes, not a recording.
 """
 
 from __future__ import annotations
@@ -39,7 +44,7 @@ _FANOUT_PKT_SIZE: Final = 1316
 class SourceKind(Enum):
     """How a source's PCM stream is produced."""
 
-    COREAUDIO = "coreaudio"  # ffmpeg (avfoundation) — reliable macOS device capture
+    COREAUDIO = "coreaudio"  # sox — sample-perfect macOS device capture
     LAVFI = "lavfi"  # ffmpeg synthetic source (testing/calibration)
     RTSP = "rtsp"  # ffmpeg network source (e.g. a phone on the LAN)
     TCP_PCM = "tcp_pcm"  # ffmpeg listens for raw s16le PCM (the recall-mic app)
@@ -56,19 +61,16 @@ def _ffmpeg_pcm_tail(
     return tail
 
 
-def _fanout_output(max_seconds: int | None) -> list[str]:
-    """A second ffmpeg output: the best-effort live tap. Appended after the stdout PCM
-    output so one mic input feeds both — the archive (stdout, reliable) and the live
-    feed (this UDP, droppable). Fire-and-forget, so it can't stall the archive.
-
-    `max_seconds` bounds this output too: without it, a `-t`-limited stdout output would
-    stop while this one ran on forever, so ffmpeg (and a bounded `recall record`) would
-    never exit. The always-on agent passes None, so it streams until the pause."""
+def fanout_output_argv() -> list[str]:
+    """A second ffmpeg output: the best-effort live tap. The SEGMENTER appends this
+    after its segment output, so its one PCM input feeds both — the archive (reliable)
+    and the live feed (this UDP, droppable). Fire-and-forget, so it can't stall the
+    archive. It lives on the segmenter (not the producer) because the producer is sox,
+    which has no second output — and the segmenter sees the identical byte stream.
+    Unbounded on purpose: the segmenter ends at the producer's EOF, which closes every
+    output, so a bounded record still exits."""
     url = f"udp://{FANOUT_HOST}:{FANOUT_PORT}?pkt_size={_FANOUT_PKT_SIZE}"
-    out = []
-    if max_seconds is not None:
-        out += ["-t", str(max_seconds)]
-    out += [
+    return [
         "-ar",
         str(FANOUT_SAMPLE_RATE),
         "-ac",
@@ -77,7 +79,6 @@ def _fanout_output(max_seconds: int | None) -> list[str]:
         "s16le",
         url,
     ]
-    return out
 
 
 def live_input_argv() -> list[str]:
@@ -149,36 +150,37 @@ class AudioSource:
         channels: int,
         *,
         max_seconds: int | None = None,
-        fanout: bool = False,
     ) -> list[str]:
-        """Command that streams raw s16le PCM for this source to stdout.
-
-        `fanout` (COREAUDIO only) appends a second, best-effort UDP output: the live tap
-        capture publishes so recall-live needn't open the device (see _fanout_output).
-        It cannot backpressure the stdout/archive output, so completeness is safe."""
+        """Command that streams raw s16le PCM for this source to stdout."""
         match self.kind:
             case SourceKind.COREAUDIO:
-                # ffmpeg avfoundation, NOT sox. sox's CoreAudio driver wedges: its input
-                # silently drops to digital zero for minutes while the device stays
-                # healthy — proven side-by-side (avfoundation read real audio from the
-                # mic the instant sox was writing empty segments). That wedge is the
-                # "dead-window" that lost the opening/middle of recordings. avfoundation
-                # reads the device reliably; `-i ":<device>"` is audio-only. An unknown
-                # name still fails hard (the agent crash-loops visibly) — never a silent
-                # fallback to the default, which a Bluetooth handsfree mic can grab.
-                device = self.spec if self.spec else "default"
-                return [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-f",
-                    "avfoundation",
-                    "-i",
-                    f":{device}",
-                    *_ffmpeg_pcm_tail(sample_rate, channels, max_seconds),
-                    *(_fanout_output(max_seconds) if fanout else []),
+                # sox, NOT ffmpeg avfoundation: avfoundation continuously drops ~20%
+                # of samples on this machine (words vanish mid-sentence); sox is
+                # sample-perfect. sox's known failure — its CoreAudio read rarely
+                # wedges to digital zeros — is covered by the runner's dead-segment
+                # watchdog, which cycles the producer within minutes and records it.
+                # An unknown device name makes sox fail hard (the launchd agent
+                # crash-loops visibly) — never a silent fallback to the default,
+                # which a Bluetooth handsfree mic can grab.
+                device = ["-t", "coreaudio", self.spec] if self.spec else ["-d"]
+                argv = [
+                    "sox",
+                    *device,
+                    "-c",
+                    str(channels),
+                    "-r",
+                    str(sample_rate),
+                    "-b",
+                    "16",
+                    "-t",
+                    "raw",
+                    "-e",
+                    "signed-integer",
+                    "-",
                 ]
+                if max_seconds is not None:
+                    argv += ["trim", "0", str(max_seconds)]
+                return argv
             case SourceKind.LAVFI:
                 return [
                     "ffmpeg",

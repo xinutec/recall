@@ -83,23 +83,40 @@ def discover_source_ids(root: Path) -> list[str]:
 def _clear_dead_stubs(scan: Scan, store: Store, source_id: str) -> None:
     """Remove the zero-byte files capture left behind, and *record* it — durably.
 
-    A zero-byte capture file holds no audio and never will: a segment path carries its
-    own timestamp, so capture never reopens one. It is a tombstone marking the instant
-    capture died. Left in place it is not harmless — the indexer re-probed 46 of them on
-    every pass for three weeks, and, being unindexed, they were invisible to every check
-    the archive has.
+    A zero-byte capture file that is NOT the source's newest holds no audio and never
+    will: ffmpeg writes segments strictly in sequence, so once a newer file exists the
+    older one was closed, and a closed segment got its flush. It is a tombstone marking
+    the instant capture died. Left in place it is not harmless — the indexer re-probed
+    46 of them on every pass for three weeks, and, being unindexed, they were invisible
+    to every check the archive has.
 
-    So they go — but first a durable `dead_window` capture-event is written, timestamped
-    to the dead segment's own moment. That lets a later gap check tell this apart from a
-    deliberate pause: without it the timeline gap says audio is missing but not that
-    anything went *wrong*, and lost speech is unrecoverable. A file that is unreadable
-    but NOT empty may still hold audio, so it is only reported, never removed.
+    The NEWEST file is exempt, whatever its age: ffmpeg writes a segment's bytes only
+    when it closes (measured live 2026-07-16 — the current segment sat at 0 bytes,
+    held open, for 3 minutes while lsof showed ffmpeg's open fd). Unlinking it would
+    send that eventual flush to a deleted inode: silent, unrecoverable loss — the very
+    thing this bookkeeping exists to prevent.
+
+    For the rest, a durable `dead_window` capture-event is written before the unlink,
+    timestamped to the dead segment's own moment. That lets a later gap check tell this
+    apart from a deliberate pause: without it the timeline gap says audio is missing but
+    not that anything went *wrong*. A file that is unreadable but NOT empty may still
+    hold audio, so it is only reported, never removed.
     """
     for path in scan.unreadable:
         _log.warning(
             "unreadable capture file (kept — it may still hold audio): %s", path
         )
+    newest = (
+        max(
+            (p.name for p in scan.empty[0].parent.glob(f"{source_id}-*")),
+            default=None,
+        )
+        if scan.empty
+        else None
+    )
     for path in scan.empty:
+        if path.name == newest:
+            continue  # possibly ffmpeg's open segment — see the docstring
         # Record the death BEFORE unlinking — the file is about to be gone, so this
         # event becomes the evidence. utc is the segment's own timestamp (death time).
         try:

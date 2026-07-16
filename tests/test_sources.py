@@ -12,83 +12,46 @@ from recall.sources import (
 )
 
 
-def test_coreaudio_uses_avfoundation_default() -> None:
-    # ffmpeg's avfoundation input, not sox: sox's CoreAudio driver wedges to digital
-    # silence for minutes (the dead-window). avfoundation reads the device reliably.
+def test_coreaudio_uses_sox_default_device() -> None:
+    # sox, not ffmpeg avfoundation: avfoundation continuously drops ~20% of samples
+    # on this machine (measured 2026-07-16) — words vanish mid-sentence. sox is
+    # sample-perfect; its rare CoreAudio wedge is the dead-segment watchdog's job.
     src = AudioSource(id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="")
     argv = src.producer_argv(48000, 1)
-    assert argv[0] == "ffmpeg"
-    assert argv[argv.index("-f") + 1] == "avfoundation"  # first -f is the input format
-    assert argv[argv.index("-i") + 1] == ":default"
-    assert argv[argv.index("-ar") + 1] == "48000"
-    assert argv[argv.index("-ac") + 1] == "1"
-    assert argv[-1] == "-"  # raw PCM to stdout
+    assert argv[0] == "sox"
+    assert argv[1] == "-d"  # the default device, only when no spec pins one
+    assert argv[argv.index("-r") + 1] == "48000"
+    assert argv[argv.index("-c") + 1] == "1"
+    assert argv[argv.index("-e") + 1] == "signed-integer"
+    assert "-" in argv  # raw PCM to stdout
 
 
-def test_coreaudio_named_device_pins_avfoundation_input() -> None:
+def test_coreaudio_named_device_pins_the_sox_input() -> None:
     # A Bluetooth speaker with a hands-free mic (the Bose) can become the system default
     # input, so an unpinned default would record telephone-quality through it. A named
-    # spec selects the exact device: avfoundation's ":<name>" is audio-only.
+    # spec selects the exact CoreAudio device; an unknown name fails hard (crash-loops
+    # visibly), never a silent fallback to the default.
     src = AudioSource(
         id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="USB Condenser Microphone"
     )
     argv = src.producer_argv(48000, 1)
-    assert argv[:8] == [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        "avfoundation",
-        "-i",
-        ":USB Condenser Microphone",
-    ]
-    assert ":default" not in argv
-    assert argv[-1] == "-"
-
-
-def test_coreaudio_named_device_bounded_limits_duration() -> None:
-    src = AudioSource(id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="mic")
-    argv = src.producer_argv(48000, 1, max_seconds=10)
-    assert argv[argv.index("-t") + 1] == "10"  # ffmpeg duration cap
+    assert argv[:3] == ["sox", "-t", "coreaudio"]
+    assert argv[3] == "USB Condenser Microphone"
+    assert "-d" not in argv
 
 
 def test_coreaudio_bounded_limits_duration() -> None:
     src = AudioSource(id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="")
     argv = src.producer_argv(48000, 1, max_seconds=10)
-    assert argv[argv.index("-t") + 1] == "10"
+    assert argv[-3:] == ["trim", "0", "10"]  # sox duration cap
 
 
-def test_coreaudio_without_fanout_has_no_udp_output() -> None:
+def test_coreaudio_producer_has_no_udp_output() -> None:
+    # The live tap moved to the SEGMENTER (capture.build_segment_argv fanout): sox has
+    # no second output, and the segmenter sees the identical byte stream anyway.
     src = AudioSource(id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="")
     argv = src.producer_argv(48000, 1)
     assert not any(a.startswith("udp://") for a in argv)
-    assert argv[-1] == "-"  # single output: PCM to stdout
-
-
-def test_coreaudio_fanout_appends_the_best_effort_udp_tap() -> None:
-    # The single mic reader tees a second, best-effort 16 kHz copy to the live tap so
-    # recall-live needn't open the device. It comes AFTER the stdout archive output, so
-    # the archive path is unchanged and the UDP can't backpressure it.
-    src = AudioSource(id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="")
-    argv = src.producer_argv(48000, 1, fanout=True)
-    dash = argv.index("-")  # the stdout (archive) output
-    udp = next(i for i, a in enumerate(argv) if a.startswith("udp://"))
-    assert udp > dash  # tap is the SECOND output, after the archive
-    assert f":{FANOUT_PORT}" in argv[udp]
-    # the tap output opts: 16 kHz mono s16le, resampled to live's format
-    assert argv[udp - 6 : udp] == ["-ar", "16000", "-ac", "1", "-f", "s16le"]
-
-
-def test_coreaudio_fanout_bounds_the_udp_output_too() -> None:
-    # Both outputs must carry -t, else the stdout output stops at max_seconds while the
-    # UDP one streams forever and ffmpeg (a bounded `recall record`) never exits.
-    src = AudioSource(id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="")
-    argv = src.producer_argv(48000, 1, max_seconds=8, fanout=True)
-    assert argv.count("-t") == 2  # one per output
-    udp = next(i for i, a in enumerate(argv) if a.startswith("udp://"))
-    # the -t governing the UDP output is between the stdout output and the url
-    assert "-t" in argv[argv.index("-") : udp]
 
 
 def test_live_input_reads_the_udp_tap() -> None:

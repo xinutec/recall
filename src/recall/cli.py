@@ -218,9 +218,35 @@ def _cmd_record(args: argparse.Namespace) -> int:
     finally:
         store.close()
 
+    def record_event(
+        kind: capture_control.CaptureEventKind,
+        utc: datetime,
+        detail: str | None = None,
+    ) -> None:
+        # Short-lived connection per transition (a few a day): the durable resume/pause
+        # record the loss check reconciles gaps against. Runs off the recorder's thread.
+        event_store = Store.open(args.out / "recall.sqlite")
+        try:
+            event_store.add_capture_event(
+                kind, utc=utc, source_id=source.id, detail=detail
+            )
+        finally:
+            event_store.close()
+
+    def on_cycled(why: str) -> None:
+        # The watchdog killed a wedged/stalled producer: capture self-healed. Durable,
+        # so the trace shows the cycle — and a cluster of these means a real fault.
+        record_event(
+            capture_control.CaptureEventKind.PRODUCER_CYCLED,
+            datetime.now(UTC),
+            detail=why,
+        )
+
     def once(should_stop: Callable[[], bool]) -> int:
-        # fanout=True: this single mic reader also publishes the best-effort UDP tap
+        # fanout=True: the segmenter also publishes the best-effort UDP tap
         # recall-live consumes, so live never opens the device (two clients starve).
+        # watch_dead: a wedged sox read (digital zeros) or a stalled producer gets
+        # cycled — record() returns, and the KeepAlive respawn re-opens the device.
         return record(
             source,
             config,
@@ -228,16 +254,9 @@ def _cmd_record(args: argparse.Namespace) -> int:
             max_seconds=args.seconds,
             should_stop=should_stop,
             fanout=True,
+            watch_dead=True,
+            on_cycled=on_cycled,
         )
-
-    def record_event(kind: capture_control.CaptureEventKind, utc: datetime) -> None:
-        # Short-lived connection per transition (a few a day): the durable resume/pause
-        # record the loss check reconciles gaps against. Runs off the recorder's thread.
-        event_store = Store.open(args.out / "recall.sqlite")
-        try:
-            event_store.add_capture_event(kind, utc=utc, source_id=source.id)
-        finally:
-            event_store.close()
 
     return _serve_paused_aware(args.out, once, record_event=record_event)
 
