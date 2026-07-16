@@ -1504,33 +1504,54 @@ class Store:
         page back. `after`: the oldest `limit` turns newer than the cursor
         (oldest-first) — page forward, contiguous with what's already loaded.
         `source`: restrict to one recorder/session (e.g. a meeting upload).
+
+        The cursor on the wire is a bare start time, and turns can share one
+        (co-located mics, corrections), so a full page extends past `limit` to
+        include every turn tied with its boundary — a page that split the group
+        would make the next strict-< page silently skip the group's remainder.
+        Callers therefore treat "page length >= limit" as has-more.
         """
         # Join the audio segment's source so the timeline can fold same-moment
         # turns across mics; LEFT JOIN keeps source-less turns (e.g. corrections
         # with no audio segment). start_utc is on both tables, so qualify it.
-        sql = [
+        select = (
             "SELECT t.*, a.source_id FROM transcript_segments t "
             "LEFT JOIN audio_segments a ON t.audio_segment_id = a.id "
             "WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL"
-        ]
+        )
+        where = [""]
         params: list[str | int] = []
         if source is not None:
-            sql.append("AND a.source_id = ?")
+            where.append("AND a.source_id = ?")
             params.append(source)
         if before is not None:
             _require_aware(before, "before")
-            sql.append("AND t.start_utc < ?")
+            where.append("AND t.start_utc < ?")
             params.append(before.isoformat())
         if after is not None:
             _require_aware(after, "after")
-            sql.append("AND t.start_utc > ?")
+            where.append("AND t.start_utc > ?")
             params.append(after.isoformat())
         # Forward paging takes the page adjacent to the cursor (oldest-first); every
-        # other case is newest-first.
+        # other case is newest-first. The id tiebreak makes same-instant order
+        # deterministic (and matches the tie-extension below).
         order = "ASC" if after is not None else "DESC"
-        sql.append(f"ORDER BY t.start_utc {order} LIMIT ?")
-        params.append(limit)
-        rows = self._conn.execute(" ".join(sql), params).fetchall()
+        rows = self._conn.execute(
+            f"{select}{' '.join(where)} ORDER BY t.start_utc {order}, t.id {order}"
+            " LIMIT ?",
+            [*params, limit],
+        ).fetchall()
+        if rows and len(rows) == limit:
+            # Full page: pull in the boundary's remaining ties (see docstring). The
+            # ties satisfy the before/after bounds by having the boundary's own time.
+            boundary = rows[-1]["start_utc"]
+            seen = [row["id"] for row in rows if row["start_utc"] == boundary]
+            marks = ",".join("?" * len(seen))
+            rows += self._conn.execute(
+                f"{select}{' '.join(where)} AND t.start_utc = ?"
+                f" AND t.id NOT IN ({marks}) ORDER BY t.id {order}",
+                [*params, boundary, *seen],
+            ).fetchall()
         return [_row_to_segment(row) for row in rows]
 
     def pending_audio_segments(self) -> list[Segment]:

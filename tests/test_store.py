@@ -444,6 +444,44 @@ def test_recent_transcripts_pages_forward_with_after() -> None:
     assert [r.text for r in nextp] == ["turn-3"]
 
 
+def test_recent_transcripts_page_never_splits_a_same_timestamp_group() -> None:
+    # Turns can share an exact start (co-located mics, a correction inheriting its
+    # original's time). The paging cursor on the wire is start_utc ALONE, so a page
+    # that cut such a group in half would make the next strict-< page skip the
+    # group's remainder — turns silently missing from the timeline. A full page
+    # therefore extends to swallow its boundary's ties.
+    store = Store.memory()
+    store.add_source(_source())
+    audio_id = store.add_audio_segment(_segment())
+
+    def add(start: datetime, text: str) -> None:
+        store.add_transcript_segment(
+            audio_segment_id=audio_id,
+            start=start,
+            end=start + timedelta(seconds=1),
+            text=text,
+            asr_model="v1",
+        )
+
+    add(BASE, "oldest")
+    for i in range(3):  # three turns at the SAME instant
+        add(BASE + timedelta(seconds=10), f"tie-{i}")
+    add(BASE + timedelta(seconds=20), "newest")
+
+    # Newest-first, limit 2: the boundary lands inside the tie group → the page
+    # grows to include all of it.
+    page1 = store.recent_transcripts(limit=2)
+    assert [r.text for r in page1] == ["newest", "tie-2", "tie-1", "tie-0"]
+    page2 = store.recent_transcripts(limit=2, before=page1[-1].start)
+    assert [r.text for r in page2] == ["oldest"]  # nothing skipped, nothing repeated
+
+    # Forward paging, same rule.
+    fwd1 = store.recent_transcripts(limit=2, after=BASE)
+    assert [r.text for r in fwd1] == ["tie-0", "tie-1", "tie-2"]
+    fwd2 = store.recent_transcripts(limit=2, after=fwd1[-1].start)
+    assert [r.text for r in fwd2] == ["newest"]
+
+
 def test_recent_transcripts_excludes_superseded() -> None:
     store = Store.memory()
     store.add_source(_source())

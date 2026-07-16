@@ -592,9 +592,10 @@ def timeline(limit: int = 200, before: str | None = None) -> PageOut:
     try:
         rows = store.recent_transcripts(limit=limit, before=cursor)
         # Newest-first from the DB; reverse so the page reads top-to-bottom in
-        # conversation order. `hasMore` drives the "load older" cursor.
+        # conversation order. `hasMore` drives the "load older" cursor. >=, not ==:
+        # a page extends past `limit` when its boundary has same-instant ties.
         items = [_transcript(s) for s in reversed(rows)]
-        return {"items": items, "hasMore": len(rows) == limit}
+        return {"items": items, "hasMore": len(rows) >= limit}
     finally:
         store.close()
 
@@ -668,7 +669,8 @@ def conversations(
         convs = segment_conversations(ordered, gap_seconds=gap)
         return {
             "items": [_conversation(conv) for conv in convs],
-            "hasMore": len(rows) == limit,
+            # >=, not ==: a page extends past `limit` on same-instant boundary ties.
+            "hasMore": len(rows) >= limit,
         }
     finally:
         store.close()
