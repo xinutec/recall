@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { toSignal } from '@angular/core/rxjs-interop';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { BreakpointObserver, Breakpoints } from '@angular/cdk/layout';
-import { map } from 'rxjs';
+import { map, timeout } from 'rxjs';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
@@ -21,7 +21,15 @@ interface NavItem {
   readonly exact: boolean;
 }
 
-const CAPTURE_POLL_MS = 30_000;
+// Long-poll pacing: the server holds /api/capture?wait&known until the state
+// actually changes (a press on any client, a mirror confirmation), so changes
+// land in ~RTT. The delays below only guard the edges: a breather between
+// polls, a retry gap after an error, and the plain-poll cadence against an
+// older server that answers immediately (no stateToken).
+const CAPTURE_WAIT_S = 25;
+const CAPTURE_REPOLL_MS = 250;
+const CAPTURE_RETRY_MS = 5_000;
+const CAPTURE_PLAIN_POLL_MS = 5_000;
 
 @Component({
   selector: 'app-root',
@@ -104,45 +112,52 @@ export class App {
   });
 
   constructor() {
-    this.refreshCapture();
-    setInterval(() => {
-      this.refreshCapture();
-      this.now.set(Date.now());
-    }, CAPTURE_POLL_MS);
+    this.pollCapture(0);
+    setInterval(() => this.now.set(Date.now()), 30_000);
   }
 
-  // A transition settles within a couple of ~5s mirror cycles; the regular 30s
-  // poll would leave "Pausing…" up long after the mic confirmed, so poll fast
-  // while unsettled. One pending timer at most.
-  private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  // One chained capture poll at a time: each response (or error) schedules the
+  // next request. Against a long-polling server the request itself hangs until
+  // something changes, so the chain is mostly one idle held request.
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-  private applyCapture(state: CaptureState): void {
-    this.capture.set(state);
-    if (this.settleTimer !== null) {
-      clearTimeout(this.settleTimer);
-      this.settleTimer = null;
+  private pollCapture(delayMs: number): void {
+    if (this.pollTimer !== null) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
     }
-    if (!state.settled && state.micReachable) {
-      this.settleTimer = setTimeout(() => this.refreshCapture(), 3_000);
+    const go = () => {
+      this.api
+        .capture(this.capture().stateToken ?? '', CAPTURE_WAIT_S)
+        // A dead connection would otherwise hold the chain forever: the server
+        // answers within CAPTURE_WAIT_S, so anything slower is a lost socket.
+        .pipe(timeout({ first: (CAPTURE_WAIT_S + 10) * 1_000 }))
+        .subscribe({
+          next: (s) => {
+            this.capture.set(s);
+            this.pollCapture(s.stateToken ? CAPTURE_REPOLL_MS : CAPTURE_PLAIN_POLL_MS);
+          },
+          error: () => this.pollCapture(CAPTURE_RETRY_MS),
+        });
+    };
+    // delay 0 runs synchronously so the initial state is applied on construction.
+    if (delayMs <= 0) {
+      go();
+    } else {
+      this.pollTimer = setTimeout(go, delayMs);
     }
-  }
-
-  private refreshCapture(): void {
-    this.api
-      .capture()
-      .subscribe({ next: (s) => this.applyCapture(s), error: () => undefined });
   }
 
   protected pauseCapture(): void {
     this.api
       .pauseCapture()
-      .subscribe({ next: (s) => this.applyCapture(s), error: () => undefined });
+      .subscribe({ next: (s) => this.capture.set(s), error: () => undefined });
   }
 
   protected resumeCapture(): void {
     this.api
       .resumeCapture()
-      .subscribe({ next: (s) => this.applyCapture(s), error: () => undefined });
+      .subscribe({ next: (s) => this.capture.set(s), error: () => undefined });
   }
 
   /** Build stamp embedded at build time; shown in the footer so a stale cached

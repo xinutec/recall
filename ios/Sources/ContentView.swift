@@ -74,19 +74,19 @@ struct ContentView: View {
                     Text(bannerTitle(paused: paused, transitioning: transitioning, now: ctx.date))
                         .font(.headline)
                 }
+                // Buttons stay enabled while transitioning: intent is cheap and
+                // idempotent, so pressing again (or the other way) just overwrites
+                // the target — always abortable, never locked out.
                 if paused {
                     HStack(spacing: 12) {
                         Button("Still away (24h)", action: onPause)
                             .buttonStyle(.bordered).frame(maxWidth: .infinity)
-                            .disabled(transitioning)
                         Button("Resume now", action: onResume)
                             .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
-                            .disabled(transitioning)
                     }
                 } else {
                     Button("Pause recording", action: onPause)
                         .buttonStyle(.bordered).frame(maxWidth: .infinity)
-                        .disabled(transitioning)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

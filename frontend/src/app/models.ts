@@ -90,6 +90,9 @@ export interface CaptureState {
   readonly desiredPausedUntil: string | null;
   readonly settled: boolean;
   readonly micReachable: boolean;
+  /** Fingerprint echoed back as ?known= to long-poll /api/capture — the request
+   * hangs until the state changes. Absent on an older server (plain polling). */
+  readonly stateToken?: string;
 }
 
 export interface Ok {

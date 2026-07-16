@@ -27,8 +27,12 @@ enum CaptureApi {
 
     // MARK: capture pause
 
-    static func state(host: String) async -> CaptureState {
-        await parseCapture(await body(host, "/capture", "GET"))
+    /// With `wait` + `known` (the last stateToken) the server long-polls: the request
+    /// hangs until the household state changes, so a press anywhere lands in ~RTT.
+    static func state(host: String, wait: Int = 0, known: String? = nil) async -> CaptureState {
+        let query = wait > 0 ? "?wait=\(wait)&known=\(known ?? "")" : ""
+        return await parseCapture(
+            await body(host, "/capture\(query)", "GET", timeout: timeout + Double(wait)))
     }
 
     static func pause(host: String) async -> CaptureState {
@@ -78,10 +82,14 @@ enum CaptureApi {
                 ? (o["desiredPausedUntil"] as? String).flatMap(parseISO)
                 : until,
             settled: o["settled"] as? Bool ?? true,
-            micReachable: o["micReachable"] as? Bool ?? true)
+            micReachable: o["micReachable"] as? Bool ?? true,
+            stateToken: o["stateToken"] as? String)
     }
 
-    private static func body(_ host: String, _ path: String, _ method: String) async -> Data? {
+    private static func body(
+        _ host: String, _ path: String, _ method: String,
+        timeout: TimeInterval = CaptureApi.timeout
+    ) async -> Data? {
         guard !host.isEmpty, let u = url(host, path) else { return nil }
         var req = URLRequest(url: u)
         req.httpMethod = method

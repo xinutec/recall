@@ -36,13 +36,12 @@
     class="capture-toggle"
     [class.paused]="paused()"
     [class.unreachable]="unreachable()"
-    [disabled]="transitioning()"
     (click)="paused() ? resumeCapture() : pauseCapture()"
     [matTooltip]="
       unreachable()
         ? 'Recorder not reporting — state unconfirmed'
         : transitioning()
-          ? transitionLabel() + '…'
+          ? transitionLabel() + '… — tap to change your mind'
           : paused()
             ? 'Recording paused — tap to resume'
             : 'Pause recording'

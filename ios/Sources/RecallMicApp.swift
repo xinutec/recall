@@ -74,8 +74,9 @@ final class RecallController: ObservableObject {
         Task { state.capture = await CaptureApi.resume(host: Prefs.controlHost) }
     }
 
-    // MARK: polling — capture state every 5s, fleet liveness every 1.5s (Android
-    // cadence), and — like Android — only while the UI is actually visible.
+    // MARK: polling — capture state long-polls (held by the server until it
+    // changes; ~RTT latency), fleet liveness every 1.5s (Android cadence), and —
+    // like Android — only while the UI is actually visible.
 
     func setUIVisible(_ visible: Bool) {
         if visible {
@@ -93,11 +94,19 @@ final class RecallController: ObservableObject {
         sourcesPoll?.cancel()
         capturePoll = Task { [weak self] in
             while !Task.isCancelled {
-                if !Prefs.controlHost.isEmpty {
-                    let cap = await CaptureApi.state(host: Prefs.controlHost)
-                    self?.state.capture = cap
+                guard !Prefs.controlHost.isEmpty else {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    continue
                 }
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                // Long-poll: the request hangs on the server until the household
+                // state changes (a press on any client, the mic confirming), so
+                // changes land in ~RTT. An older server (no stateToken) answers at
+                // once → plain 5s poll; so does an unreachable one (failed call).
+                let known = self?.state.capture.stateToken
+                let cap = await CaptureApi.state(host: Prefs.controlHost, wait: 25, known: known)
+                self?.state.capture = cap
+                let pace: UInt64 = cap.stateToken != nil ? 250_000_000 : 5_000_000_000
+                try? await Task.sleep(nanoseconds: pace)
             }
         }
         sourcesPoll = Task { [weak self] in

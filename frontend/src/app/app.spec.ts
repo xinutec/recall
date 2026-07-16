@@ -161,6 +161,20 @@ describe('App', () => {
     expect(el.querySelector('.paused-banner .rec-dot')).toBeTruthy();
   });
 
+  it('a transition is abortable: the toggle stays enabled to change your mind', () => {
+    // Intent is cheap and idempotent — pressing the opposite action mid-transition
+    // just overwrites the desired state. Freezing the buttons was the old flap
+    // fix overshooting; only the LABEL needed to be honest.
+    const { fixture, c } = setup();
+    c.pauseCapture();
+    expect(c.transitioning()).toBe(true);
+    fixture.detectChanges();
+    const btn = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+      '.capture-toggle',
+    );
+    expect(btn?.disabled).toBe(false);
+  });
+
   it('an unreachable mic is said out loud, not presented as fact', () => {
     const { fixture, c } = setup(
       cap({ running: false, desiredRunning: false, settled: false, micReachable: false }),

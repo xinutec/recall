@@ -6,11 +6,14 @@ no capture agent, so it cannot stop the mic itself. The Mac is a one-way WireGua
 pause file, which the capture agents already self-gate on. Each pass reports what the
 Mac applied, so Isis's status shows reality rather than just intent.
 
-Short-poll every ~5s, matching the capture agents' own 5s self-gate: the transport is
-never the bottleneck, and each poll is independent — a dropped packet or an Isis pod
-rollout just means the next tick succeeds, with no held connection to reconnect. (If the
-self-gate is ever tightened below 5s and instant delivery matters, an SSE stream would
-be the upgrade; not worth its held-connection machinery today.)
+Each pass is one round trip that both reports and long-polls: the exchange hangs on
+Isis (up to the loop interval) while the fleet's intent still equals what the Mac last
+applied, so a press on any UI comes back in ~RTT — and the very next pass reports the
+newly-applied state, confirming it to the fleet immediately. While nothing changes, the
+hang doubles as the pacing, so liveness reports still ship every ~interval. Each pass
+stays independent — a dropped packet or an Isis pod rollout just means the next tick
+succeeds — and against an older fleet (which answers at once, no hang) the loop sleeps
+the remainder itself, degrading to exactly the old short-poll.
 
 Edge-triggered: Isis intent is applied only when it *changes* (tracked in a local marker
 file), so a pause set on the Mac's own LAN UI is not clobbered every cycle by an
@@ -46,6 +49,8 @@ class IntentExchange(Protocol):
         running: bool,
         paused_until: str | None,
         source_liveness: Mapping[str, str],
+        wait: float = 0,
+        known_intent: str | None = None,
     ) -> str | None: ...
 
 
@@ -104,9 +109,14 @@ def reconcile_once(
     *,
     now: datetime,
     on_applied: Callable[[str], None] | None = None,
+    wait: float = 0,
 ) -> bool:
     """One mirror pass: report the Mac's local capture state, pull the fleet's intent,
     and apply it iff it changed since we last did. Returns whether the pause file moved.
+
+    With `wait` > 0 the exchange long-polls: the fleet holds the reply while its
+    intent still equals the marker (what we last applied), so a change arrives in
+    ~RTT and an unchanged pass takes ~`wait` — the hang is the loop's pacing.
 
     `on_applied` (optional) is called with the just-applied intent ("" = running) —
     the durable "intent-seen" timestamp a resume timeline starts from (the caller
@@ -115,13 +125,16 @@ def reconcile_once(
     """
     local_until = capture_control.paused_until(root)
     running = not capture_control.is_paused(root, now)
+    applied = _read_marker(root)
     intent = client.exchange_capture(
         running=running,
         paused_until=local_until.isoformat() if local_until else None,
         source_liveness=_source_liveness(root),
+        wait=wait,
+        known_intent=applied or None,
     )
     intent_value = intent or ""
-    if intent_value == _read_marker(root):
+    if intent_value == applied:
         return False  # fleet intent unchanged since we last applied it — leave local be
     _apply(root, intent, now)
     _write_marker(root, intent_value)
@@ -144,10 +157,22 @@ def run_loop(  # noqa: PLR0913 - injected clock/sleep + the telemetry hook
     on_applied: Callable[[str], None] | None = None,
 ) -> None:
     """Mirror the fleet's capture intent forever. A transient network error is logged
-    and the loop continues — a blip must never wedge the mic; the next tick retries."""
+    and the loop continues — a blip must never wedge the mic; the next tick retries.
+
+    Pacing: a pass that applied a change loops again at once, so the freshly-applied
+    state is REPORTED immediately (that's what settles the fleet's "Pausing…"). An
+    unchanged pass sleeps only the interval's remainder — with a long-polling fleet
+    the hang already consumed it (sleep ≈ 0); with an older fleet (instant answers)
+    this degrades to the old short-poll, never a hot loop."""
     while True:
+        started = now()
+        changed = False
         try:
-            reconcile_once(root, client, now=now(), on_applied=on_applied)
+            changed = reconcile_once(
+                root, client, now=started, on_applied=on_applied, wait=interval
+            )
         except Exception:  # a poll failure must not kill the mirror
             _log.exception("capture-mirror pass failed; will retry next tick")
-        sleep(interval)
+        if not changed:
+            elapsed = (now() - started).total_seconds()
+            sleep(max(0.0, interval - elapsed))

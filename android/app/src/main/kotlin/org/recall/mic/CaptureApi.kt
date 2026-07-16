@@ -20,6 +20,9 @@ data class CaptureState(
     val desiredPausedUntil: String?,
     val settled: Boolean,
     val micReachable: Boolean,
+    /** Fingerprint echoed back as ?known= to long-poll: the server holds the request
+     * until the state changes. Null on an older server (fall back to plain polling). */
+    val stateToken: String? = null,
 )
 
 /** One recorder's liveness for the fleet view (which mics are streaming now). */
@@ -50,6 +53,7 @@ fun parseCaptureState(body: String): CaptureState? =
                 },
             settled = json.optBoolean("settled", true),
             micReachable = json.optBoolean("micReachable", true),
+            stateToken = if (json.isNull("stateToken")) null else json.getString("stateToken"),
         )
     }.getOrNull()
 
@@ -86,8 +90,17 @@ object CaptureApi {
 
     private fun endpoint(host: String, path: String) = "http://$host:$API_PORT/api$path"
 
-    suspend fun state(host: String): CaptureState? =
-        get(endpoint(host, "/capture"), "GET")?.let { parseCaptureState(it) }
+    /** With [waitS] + [known] (the last stateToken) the server long-polls: the request
+     * hangs until the household state changes, so a press anywhere lands here in ~RTT.
+     * The read timeout stretches to cover the hang. */
+    suspend fun state(host: String, waitS: Int = 0, known: String? = null): CaptureState? {
+        val query = if (waitS > 0) "?wait=$waitS&known=${known.orEmpty()}" else ""
+        return get(
+            endpoint(host, "/capture$query"),
+            "GET",
+            readTimeoutMs = TIMEOUT_MS + waitS * 1000,
+        )?.let { parseCaptureState(it) }
+    }
 
     suspend fun pause(host: String): CaptureState? =
         get(endpoint(host, "/capture/pause"), "POST")?.let { parseCaptureState(it) }
@@ -101,13 +114,13 @@ object CaptureApi {
         get(endpoint(host, "/sources"), "GET")?.let { parseSources(it) }
 
     /** One request; returns the response body, or null on any failure. */
-    private suspend fun get(url: String, method: String): String? =
+    private suspend fun get(url: String, method: String, readTimeoutMs: Int = TIMEOUT_MS): String? =
         withContext(Dispatchers.IO) {
             runCatching {
                 val conn = URL(url).openConnection() as HttpURLConnection
                 conn.requestMethod = method
                 conn.connectTimeout = TIMEOUT_MS
-                conn.readTimeout = TIMEOUT_MS
+                conn.readTimeout = readTimeoutMs
                 if (method == "POST") {
                     conn.doOutput = true
                     conn.outputStream.close() // empty body; the endpoints take none

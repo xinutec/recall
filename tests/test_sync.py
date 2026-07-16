@@ -7,6 +7,8 @@ and the "not enabled" vs "wrong token" distinction."""
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -469,3 +471,66 @@ def test_a_segment_reconciles_the_live_turns_it_covers(
     still_live = [t.text for t in store.visible_live_turns_since(0)]
     store.close()
     assert still_live == ["much later"]  # the covered one was reconciled away
+
+
+def test_capture_exchange_long_poll_wakes_when_intent_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The mirror's half of the latency fix: its exchange hangs on Isis while intent
+    # equals what it already applied, and a press wakes it in ~RTT — so the pause
+    # file on the Mac moves near-instantly, not a poll interval later.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    Store.open(db).close()
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        results: list[str | None] = []
+
+        def hang() -> None:
+            results.append(
+                client.exchange_capture(
+                    running=True,
+                    paused_until=None,
+                    source_liveness={},
+                    wait=10,
+                    known_intent=None,
+                )
+            )
+
+        waiter = threading.Thread(target=hang)
+        waiter.start()
+        time.sleep(0.3)  # let the exchange reach its hang
+        assert waiter.is_alive()  # held: intent still equals the known value
+        store = Store.open(db)
+        until = capture_control.intent_pause(store, datetime.now(UTC), minutes=30)
+        store.close()
+        capture_control.notify_capture_changed()  # what the pause endpoint does
+        waiter.join(timeout=5.0)
+        assert not waiter.is_alive()
+        assert results == [until.isoformat()]
+
+
+def test_capture_exchange_long_poll_times_out_to_the_unchanged_intent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    Store.open(db).close()
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        started = time.monotonic()
+        intent = client.exchange_capture(
+            running=True,
+            paused_until=None,
+            source_liveness={},
+            wait=0.4,
+            known_intent=None,
+        )
+        assert time.monotonic() - started >= 0.35
+        assert intent is None

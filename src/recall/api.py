@@ -8,6 +8,7 @@ at frontend/dist/, it's served as static files so everything is one origin.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -502,19 +504,32 @@ def sources() -> SourcesOut:
     }
 
 
+def _with_token(state: CaptureOut) -> CaptureOut:
+    """Stamp the state's fingerprint (CaptureOut.stateToken): the value a long-poll
+    echoes back as ?known= so "unchanged" is the server's judgement, not the
+    client's field-by-field comparison."""
+    payload = {k: v for k, v in state.items() if k != "stateToken"}
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode())
+    state["stateToken"] = digest.hexdigest()[:12]
+    return state
+
+
 def _capture_state(running: bool) -> CaptureOut:
     """Local (capturing-host) view: the pause file IS the actuation, so desired and
     confirmed are the same thing and the state is settled by construction."""
     until = capture_control.paused_until(DATA_ROOT)
     iso = until.isoformat() if until else None
-    return {
-        "running": running,
-        "pausedUntil": iso,
-        "desiredRunning": running,
-        "desiredPausedUntil": iso,
-        "settled": True,
-        "micReachable": True,
-    }
+    return _with_token(
+        {
+            "running": running,
+            "pausedUntil": iso,
+            "desiredRunning": running,
+            "desiredPausedUntil": iso,
+            "settled": True,
+            "micReachable": True,
+            "stateToken": "",
+        }
+    )
 
 
 def _fleet_capture_state(store: Store, now: datetime) -> CaptureOut:
@@ -529,36 +544,45 @@ def _fleet_capture_state(store: Store, now: datetime) -> CaptureOut:
     desired_until = until.isoformat() if until else None
     reported = capture_control.reported_state(store, now)
     if reported is None:
-        return {
-            "running": desired_running,
-            "pausedUntil": desired_until,
-            "desiredRunning": desired_running,
-            "desiredPausedUntil": desired_until,
-            "settled": False,
-            "micReachable": False,
-        }
+        return _with_token(
+            {
+                "running": desired_running,
+                "pausedUntil": desired_until,
+                "desiredRunning": desired_running,
+                "desiredPausedUntil": desired_until,
+                "settled": False,
+                "micReachable": False,
+                "stateToken": "",
+            }
+        )
     # Settled = the mic confirmed the desired state. When paused, the resume-by must
     # match too, so extending a pause (snooze) reads as transitioning until applied;
     # the Mac round-trips the intent's exact ISO string, so equality is exact.
     settled = reported.running == desired_running and (
         desired_running or reported.paused_until == desired_until
     )
-    return {
-        "running": reported.running,
-        "pausedUntil": reported.paused_until,
-        "desiredRunning": desired_running,
-        "desiredPausedUntil": desired_until,
-        "settled": settled,
-        "micReachable": True,
-    }
+    return _with_token(
+        {
+            "running": reported.running,
+            "pausedUntil": reported.paused_until,
+            "desiredRunning": desired_running,
+            "desiredPausedUntil": desired_until,
+            "settled": settled,
+            "micReachable": True,
+            "stateToken": "",
+        }
+    )
 
 
-@app.get("/api/capture")
-def capture_status() -> CaptureOut:
-    """Whether the always-on capture is recording, and (if paused) when it
-    auto-resumes by. Agents self-gate, so they stay loaded while paused — "running"
-    means the capture agent is loaded *and* not currently paused. On the fleet (Isis)
-    there is no local agent: it reports the Mac's mirrored state instead."""
+# Long-poll bounds: never hold a request past the cap (proxies and threadpools need
+# a horizon), and re-derive the state every slice while hanging — transitions with no
+# notify (a pause elapsing, a report aging into micReachable=False, a break-glass CLI
+# pause writing the file directly) surface within a slice.
+_WAIT_CAP_S = 25.0
+_WAIT_SLICE_S = 2.0
+
+
+def _capture_snapshot() -> CaptureOut:
     now = datetime.now(UTC)
     if capture_control.is_fleet():
         store = _store()
@@ -570,6 +594,28 @@ def capture_status() -> CaptureOut:
         DATA_ROOT, now
     )
     return _capture_state(running)
+
+
+@app.get("/api/capture")
+def capture_status(wait: float = 0, known: str = "") -> CaptureOut:
+    """Whether the always-on capture is recording, and (if paused) when it
+    auto-resumes by. Agents self-gate, so they stay loaded while paused — "running"
+    means the capture agent is loaded *and* not currently paused. On the fleet (Isis)
+    there is no local agent: it reports the Mac's mirrored state instead.
+
+    Long-poll: with ?wait=<seconds>&known=<stateToken>, the request hangs while the
+    state still fingerprints to `known` — a press or a confirming mirror report
+    wakes it in ~RTT (capture_control.notify_capture_changed) instead of a poll
+    interval. Without the params (an older client) it answers immediately."""
+    state = _capture_snapshot()
+    deadline = time.monotonic() + min(wait, _WAIT_CAP_S)
+    while state["stateToken"] == known:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        capture_control.wait_capture_changed(min(_WAIT_SLICE_S, remaining))
+        state = _capture_snapshot()
+    return state
 
 
 @app.post("/api/capture/pause")
@@ -586,11 +632,15 @@ def capture_pause() -> CaptureOut:
         finally:
             store.close()
         _log.info("PAUSE intent recorded (fleet)")
+        # Wake the hanging mirror exchange (intent changed) and every hanging
+        # client poll — the press propagates in ~RTT, not a poll interval.
+        capture_control.notify_capture_changed()
         # Desired just flipped; confirmed lags until the Mac applies — the client
         # shows "Pausing…", and the next poll returns this same shape (no flap).
         return state
     capture_control.pause(DATA_ROOT, now)
     _log.info("PAUSE requested")
+    capture_control.notify_capture_changed()
     return _capture_state(running=False)
 
 
@@ -605,9 +655,11 @@ def capture_resume() -> CaptureOut:
         finally:
             store.close()
         _log.info("RESUME intent recorded (fleet)")
+        capture_control.notify_capture_changed()
         return state
     capture_control.resume(DATA_ROOT)
     _log.info("RESUME requested")
+    capture_control.notify_capture_changed()
     return _capture_state(running=True)
 
 

@@ -139,6 +139,10 @@ class CaptureOut(TypedDict):
     settled: bool
     # The mic is checking in (always True on the capturing host itself).
     micReachable: bool
+    # Fingerprint of this state. A client passes it back as GET /api/capture?known=
+    # with ?wait= to long-poll: the request hangs until the state differs or the
+    # wait elapses, so a change reaches clients in ~RTT instead of a poll interval.
+    stateToken: str
 
 
 class OkOut(TypedDict):

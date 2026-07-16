@@ -52,4 +52,20 @@ class CaptureApiTest {
     fun malformedJsonIsNullNotACrash() {
         assertNull(parseCaptureState("not json"))
     }
+
+    @Test
+    fun parsesTheLongPollStateToken() {
+        val state =
+            parseCaptureState(
+                """{"running": true, "pausedUntil": null, "stateToken": "abc123def456"}""",
+            )!!
+        assertEquals("abc123def456", state.stateToken)
+    }
+
+    @Test
+    fun anOlderServerWithoutATokenReadsAsNull() {
+        // Null token = no long-poll support; the poll loop falls back to plain 5s.
+        val state = parseCaptureState("""{"running": true, "pausedUntil": null}""")!!
+        assertNull(state.stateToken)
+    }
 }

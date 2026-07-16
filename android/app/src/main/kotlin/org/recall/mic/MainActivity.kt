@@ -155,8 +155,16 @@ fun MicScreen(
         if (controlHost.isBlank()) return@LaunchedEffect
         delay(500) // debounce: typing restarts this effect per keystroke
         while (true) {
-            CaptureApi.state(controlHost)?.let { MicState.setCapture(it) }
-            delay(5_000)
+            // Long-poll: the request hangs on the server until the household state
+            // changes (a press on any client, the mic confirming), so changes land in
+            // ~RTT. An older server (no stateToken) answers at once → plain 5s poll.
+            val cap = CaptureApi.state(
+                controlHost,
+                waitS = 25,
+                known = MicState.capture.value?.stateToken,
+            )
+            cap?.let { MicState.setCapture(it) }
+            delay(if (cap?.stateToken != null) 250 else 5_000)
         }
     }
 
@@ -422,18 +430,19 @@ private fun CaptureBanner(
                 },
                 style = MaterialTheme.typography.titleMedium,
             )
+            // Buttons stay enabled while transitioning: intent is cheap and
+            // idempotent, so pressing again (or the other way) just overwrites the
+            // target and the system converges — always abortable, never locked out.
             if (paused) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(
                         onClick = onSnooze,
-                        enabled = !transitioning,
                         modifier = Modifier.weight(1f),
                     ) {
                         Text("Still away (24h)")
                     }
                     Button(
                         onClick = onResume,
-                        enabled = !transitioning,
                         modifier = Modifier.weight(1f),
                     ) {
                         Text("Resume now")
@@ -442,7 +451,6 @@ private fun CaptureBanner(
             } else {
                 OutlinedButton(
                     onClick = onPause,
-                    enabled = !transitioning,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Pause recording")

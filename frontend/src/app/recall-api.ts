@@ -46,9 +46,12 @@ import {
 export class RecallApi {
   private readonly http = inject(HttpClient);
 
-  /** Whether the always-on capture is recording (or paused, with auto-resume time). */
-  capture(): Observable<CaptureState> {
-    return this.http.get<CaptureState>('/api/capture');
+  /** Whether the always-on capture is recording (or paused, with auto-resume time).
+   * With `known` (a stateToken) + `waitS`, the server long-polls: it holds the
+   * request until the state differs, so a change lands in ~RTT of the press. */
+  capture(known = '', waitS = 0): Observable<CaptureState> {
+    const query = waitS > 0 ? `?wait=${waitS}&known=${encodeURIComponent(known)}` : '';
+    return this.http.get<CaptureState>(`/api/capture${query}`);
   }
 
   /** Measure one batch of segments' raw volume; call until `measured` is 0. */

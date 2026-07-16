@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -1873,3 +1874,52 @@ def test_capture_status_on_the_fleet_shows_the_macs_reported_reality(
     store.close()
 
     assert client.get("/api/capture").json()["running"] is True
+
+
+def test_capture_long_poll_wakes_on_a_press(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The latency fix: a GET hanging on ?wait&known is woken by a pause press in
+    # ~RTT — the press propagates to every watching client without a poll interval.
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setenv("RECALL_ROLE", "fleet")
+    Store.open(tmp_path / "recall.sqlite").close()
+    client = TestClient(api.app)
+
+    first = client.get("/api/capture").json()
+    token = first["stateToken"]
+    assert token  # every response carries the fingerprint a long-poll echoes back
+    # the fingerprint is stable while nothing changes…
+    assert client.get("/api/capture").json()["stateToken"] == token
+
+    results: list[dict[str, object]] = []
+
+    def hang() -> None:
+        results.append(
+            client.get("/api/capture", params={"wait": 10, "known": token}).json()
+        )
+
+    waiter = threading.Thread(target=hang)
+    waiter.start()
+    time.sleep(0.3)  # let the GET reach its hang
+    assert waiter.is_alive()  # …so the request is actually held, not answered
+    client.post("/api/capture/pause")
+    waiter.join(timeout=5.0)
+    assert not waiter.is_alive()  # the press woke it, not the 10s wait
+    assert results[0]["desiredRunning"] is False
+    assert results[0]["stateToken"] != token
+
+
+def test_capture_long_poll_times_out_quietly_when_nothing_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setenv("RECALL_ROLE", "fleet")
+    Store.open(tmp_path / "recall.sqlite").close()
+    client = TestClient(api.app)
+
+    token = client.get("/api/capture").json()["stateToken"]
+    started = time.monotonic()
+    state = client.get("/api/capture", params={"wait": 0.4, "known": token}).json()
+    assert time.monotonic() - started >= 0.35  # held for the wait…
+    assert state["stateToken"] == token  # …and returned the unchanged state

@@ -18,6 +18,9 @@ struct CaptureState: Equatable {
     var desiredPausedUntil: Date?
     var settled = true
     var micReachable = true
+    /// Fingerprint echoed back as ?known= to long-poll /api/capture — the request
+    /// hangs until the state changes. Nil on an older server (plain polling).
+    var stateToken: String?
 }
 
 /// Connection / streaming phase, used to drive the status card text.

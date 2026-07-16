@@ -9,6 +9,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from recall import capture_control, capture_mirror
 from recall.capture import ALIVE_FILE
 
@@ -23,6 +25,7 @@ class FakeExchange:
         self.intent = intent
         self.reported: list[tuple[bool, str | None]] = []
         self.liveness: list[dict[str, str]] = []
+        self.known_intents: list[str | None] = []
 
     def exchange_capture(
         self,
@@ -30,9 +33,12 @@ class FakeExchange:
         running: bool,
         paused_until: str | None,
         source_liveness: Mapping[str, str],
+        wait: float = 0,
+        known_intent: str | None = None,
     ) -> str | None:
         self.reported.append((running, paused_until))
         self.liveness.append(dict(source_liveness))
+        self.known_intents.append(known_intent)
         return self.intent
 
 
@@ -157,3 +163,42 @@ def test_liveness_report_is_empty_with_no_phones(tmp_path: Path) -> None:
     client = FakeExchange(None)
     capture_mirror.reconcile_once(tmp_path, client, now=NOW)
     assert client.liveness[0] == {}
+
+
+def test_reconcile_sends_the_applied_intent_as_the_long_poll_known(
+    tmp_path: Path,
+) -> None:
+    # The long-poll contract: the fleet hangs while its intent equals what the Mac
+    # last APPLIED (the marker), so the mirror must echo exactly that — first pass
+    # has applied nothing yet (None), later passes echo the applied value.
+    client = FakeExchange(FUTURE)
+    capture_mirror.reconcile_once(tmp_path, client, now=NOW)
+    capture_mirror.reconcile_once(tmp_path, client, now=NOW)
+    assert client.known_intents == [None, FUTURE]
+
+
+class _Stop(Exception):
+    """Breaks run_loop out of forever, from the injected sleep."""
+
+
+def test_run_loop_reports_a_change_at_once_and_paces_when_idle(tmp_path: Path) -> None:
+    # A pass that applied a change must loop straight into the next exchange (that
+    # next report is what settles the fleet's "Pausing…") — no sleep in between.
+    # An unchanged pass sleeps only the interval's remainder: with a long-polling
+    # fleet the hang consumed it; with an older instant-answer fleet this degrades
+    # to the old short-poll rather than a hot loop.
+    sleeps: list[float] = []
+    client = FakeExchange(FUTURE)
+    # now() calls: pass-1 start; pass-2 start; pass-2 elapsed (1s into the interval).
+    times = iter([NOW, NOW, NOW + timedelta(seconds=1)])
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        raise _Stop
+
+    with pytest.raises(_Stop):
+        capture_mirror.run_loop(
+            tmp_path, client, now=lambda: next(times), sleep=sleep, interval=5.0
+        )
+    assert len(client.reported) == 2  # changed pass 1 went straight into pass 2
+    assert sleeps == [4.0]  # unchanged pass 2 slept only the remainder

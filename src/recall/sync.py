@@ -20,6 +20,7 @@ from __future__ import annotations
 import hmac
 import os
 import shutil
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -157,6 +158,13 @@ class LiveStoredOut(BaseModel):
     stored: int
 
 
+# /sync/capture long-poll bounds: cap how long the exchange may hang, and re-derive
+# the intent every slice while hanging so a pause elapsing on its own (no POST, no
+# notify) is still caught mid-hang.
+_INTENT_WAIT_CAP_S = 25.0
+_INTENT_WAIT_SLICE_S = 2.0
+
+
 class CaptureAppliedIn(BaseModel):
     """What the Mac currently has applied to its own capture — reported each mirror pass
     so the fleet's status reflects reality, not just what was asked for."""
@@ -167,6 +175,13 @@ class CaptureAppliedIn(BaseModel):
     # owns), so /api/sources on the fleet is truthful. Defaulted: an older Mac client
     # omits it and the fleet just shows no liveness, as before.
     sourceLiveness: dict[str, str] = {}
+    # Long-poll: with wait > 0, the exchange hangs (up to `wait` seconds) while the
+    # fleet's intent still equals `knownIntent` — the value the Mac last applied
+    # (null = running). A press on any UI wakes it in ~RTT, so intent reaches the
+    # mic near-instantly while the report cadence stays the mirror's interval.
+    # Defaulted: an older Mac short-polls exactly as before.
+    wait: float = 0
+    knownIntent: str | None = None
 
 
 class CaptureIntentOut(BaseModel):
@@ -202,6 +217,9 @@ def _capture_exchange(
         now=now,
         source_liveness=body.sourceLiveness,
     )
+    # The report just changed what /api/capture serves (confirmed state, freshness):
+    # wake hanging client polls so a settle shows in ~RTT of the mirror's confirmation.
+    capture_control.notify_capture_changed()
     until = capture_control.intent_until(store, now)
     return CaptureIntentOut(pausedUntil=until.isoformat() if until else None)
 
@@ -343,9 +361,26 @@ def _register_capture_route(
         check_token(bearer(authorization), expected)
         store = store_factory()
         try:
-            return _capture_exchange(store, body, datetime.now(UTC))
+            reply = _capture_exchange(store, body, datetime.now(UTC))
         finally:
             store.close()
+        # Long-poll (see CaptureAppliedIn.wait): the report has landed; now hang
+        # while the intent still equals what the Mac already applied. A pause/resume
+        # POST wakes the wait; the slices catch a pause elapsing on its own (intent
+        # flips with no POST). The store is reopened per check, never held hanging.
+        deadline = time.monotonic() + min(body.wait, _INTENT_WAIT_CAP_S)
+        while body.wait > 0 and reply.pausedUntil == body.knownIntent:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            capture_control.wait_capture_changed(min(_INTENT_WAIT_SLICE_S, remaining))
+            store = store_factory()
+            try:
+                until = capture_control.intent_until(store, datetime.now(UTC))
+            finally:
+                store.close()
+            reply = CaptureIntentOut(pausedUntil=until.isoformat() if until else None)
+        return reply
 
 
 def register_sync_routes(
@@ -532,16 +567,23 @@ class SyncClient:
         running: bool,
         paused_until: str | None,
         source_liveness: Mapping[str, str],
+        wait: float = 0,
+        known_intent: str | None = None,
     ) -> str | None:
         """Report the Mac's applied capture state and receive the fleet's desired intent
         (its resume-by, or None to run). One round trip: push reality, pull intent.
-        `source_liveness` carries the sources' .alive freshness the fleet can't see."""
+        `source_liveness` carries the sources' .alive freshness the fleet can't see.
+        With `wait` > 0 the fleet hangs the reply while its intent still equals
+        `known_intent`, so a press comes back in ~RTT (an older fleet ignores both
+        and answers immediately, which the mirror paces itself around)."""
         resp = self._client.post(
             f"{self._base}/sync/capture",
             json={
                 "running": running,
                 "pausedUntil": paused_until,
                 "sourceLiveness": dict(source_liveness),
+                "wait": wait,
+                "knownIntent": known_intent,
             },
             headers=self._headers,
         )

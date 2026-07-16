@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -35,8 +36,29 @@ CAPTURE_LABEL = f"{_AGENT_PREFIX}capture"
 # forgotten pause can't leave recording off indefinitely. 24 h covers a full day away
 # and is back on within a day even if the user forgets to re-enable it.
 MAX_PAUSE = timedelta(hours=24)
-# How often a parked/recording agent re-checks whether its pause is over.
-_PAUSE_POLL_SECONDS = 5.0
+# How often a parked/recording agent re-checks whether its pause is over. A local
+# file stat, effectively free — 1s keeps the agent's share of the press-to-recording
+# chain negligible next to opening the device.
+_PAUSE_POLL_SECONDS = 1.0
+
+# Long-poll support for the capture API: one process-wide condition, notified when
+# anything feeding /api/capture changes (a fleet intent write, a mirror report
+# landing). Purely a wake-up accelerator — waiters re-derive the state themselves,
+# so a missed notify costs a poll slice, never correctness.
+_capture_changed = threading.Condition()
+
+
+def notify_capture_changed() -> None:
+    """Wake every request currently hanging on the capture state."""
+    with _capture_changed:
+        _capture_changed.notify_all()
+
+
+def wait_capture_changed(timeout: float) -> None:
+    """Park until the capture state is notified or `timeout` elapses. May wake
+    spuriously; callers recompute and re-check."""
+    with _capture_changed:
+        _capture_changed.wait(timeout)
 
 
 class CaptureEventKind(StrEnum):
