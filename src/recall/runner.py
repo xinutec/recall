@@ -15,6 +15,7 @@ macOS microphone permission.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import subprocess
@@ -23,10 +24,12 @@ from array import array
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import IO
 
 from recall.capture import (
     SILENCE_PEAK,
     CaptureConfig,
+    StreamMeter,
     build_segment_argv,
     container_ext,
     mark_alive,
@@ -49,6 +52,40 @@ _STOP_POLL_S = 1.0
 # a single one could straddle the moment a wedge began.
 _WATCH_POLL_S = 30.0
 _DEAD_SEGMENTS_TO_CYCLE = 2
+
+# producer -> segmenter pump chunk (matches the ingest pump's socket chunk).
+_PUMP_CHUNK_BYTES = 65536
+
+
+def _pump_metered(
+    producer_out: IO[bytes],
+    consumer_in: IO[bytes],
+    producer: subprocess.Popen[bytes],
+    out_dir: Path,
+    meter: StreamMeter,
+) -> None:
+    """Carry the producer's PCM into the segmenter, metering it on the way — the
+    ingest pump's rule (recall.stream_server), applied to the mic: the archive
+    write comes first, and a chunk whose peak clears the silence floor refreshes
+    the liveness marker. That is what turns the mic's dot on within seconds of
+    real sound after a resume; the dead-segment watchdog's archive-level proof
+    stays as the backstop for a segmenter writing nothing. Producer EOF closes
+    the segmenter's stdin so the open segment finalises cleanly; a dead segmenter
+    terminates the producer so sox never wedges against a full pipe."""
+    try:
+        while True:
+            data = producer_out.read(_PUMP_CHUNK_BYTES)
+            if not data:
+                break
+            consumer_in.write(data)
+            if meter.feed(data) >= SILENCE_PEAK:
+                mark_alive(out_dir)
+    except OSError:  # BrokenPipeError et al: the segmenter died mid-run
+        producer.terminate()
+    finally:
+        # close-flush can hit the same dead pipe the write just did
+        with contextlib.suppress(OSError):
+            consumer_in.close()
 
 
 def _segment_is_digital_silence(path: Path) -> bool:
@@ -105,13 +142,13 @@ def _watch_dead_segments(  # noqa: PLR0913 - the watchdog's tuning knobs
     which clears a CoreAudio wedge. Detection costs minutes; the old failure mode
     cost the rest of the recording.
 
-    The inverse verdict maintains the mic's liveness marker (capture.ALIVE_FILE):
+    The inverse verdict also refreshes the mic's liveness marker (capture.ALIVE_FILE):
     a closed segment from THIS run (`started_utc` — segments left from before a
     pause prove nothing about now) that decoded to real audio, with rotation still
-    fresh, is measured proof of recording, so the marker is refreshed each healthy
-    poll. Until the first segment of a run closes there is no proof either way and
-    the marker stays untouched — after a resume the mic honestly reads idle until
-    the archive shows audio, instead of green over a startup dead-window."""
+    fresh, is measured proof of recording. The pump's in-flight metering
+    (_pump_metered) is what normally keeps the marker fresh — within seconds of
+    real sound — but it proves the pipe, not the archive; this poll is the
+    archive-level confirmation."""
     dead_streak = 0
     last_checked: str | None = None
     closed_live = False
@@ -206,11 +243,14 @@ def record(  # noqa: PLR0913 - capture config + the optional pause/telemetry hoo
     holds the mic. The tap can't backpressure the segment output, so the archive is
     safe.
 
+    The producer's PCM reaches the segmenter through the metered pump
+    (_pump_metered), which refreshes the source's liveness marker on measured
+    signal — the mic's "active" dot turns on within seconds of real sound.
     `watch_dead` arms the dead-segment watchdog (see _watch_dead_segments): a wedged
     or stalled device read cycles the producer, so record() returns and the caller's
-    respawn re-opens the device; while healthy it refreshes the source's liveness
-    marker, which is what makes the mic's "active" dot mean measured recording.
-    `on_cycled` (optional) is told why — the caller records it durably.
+    respawn re-opens the device; while healthy its closed-segment verdicts add the
+    archive-level marker refresh. `on_cycled` (optional) is told why — the caller
+    records it durably.
     """
     out_dir = root / source.id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -225,13 +265,34 @@ def record(  # noqa: PLR0913 - capture config + the optional pause/telemetry hoo
     # Taken BEFORE the producer starts, so the run's first segment (whose filename
     # timestamp is ffmpeg's start) counts as this run's — see _watch_dead_segments.
     started_utc = datetime.now(UTC)
-    producer = subprocess.Popen(producer_argv, stdout=subprocess.PIPE, env=env)
+    # bufsize=0: raw pipe reads return whatever PCM is available (recv semantics),
+    # so the pump meters in near-real-time instead of blocking for a full buffer.
+    producer = subprocess.Popen(
+        producer_argv, stdout=subprocess.PIPE, bufsize=0, env=env
+    )
     if producer.stdout is None:  # pragma: no cover - Popen with PIPE always sets it
         msg = "producer stdout pipe was not created"
         raise RuntimeError(msg)
-    consumer = subprocess.Popen(consumer_argv, stdin=producer.stdout, env=env)
-    # Close our copy so the producer sees SIGPIPE if the consumer exits early.
-    producer.stdout.close()
+    consumer = subprocess.Popen(consumer_argv, stdin=subprocess.PIPE, env=env)
+    if consumer.stdin is None:  # pragma: no cover - Popen with PIPE always sets it
+        producer.terminate()
+        msg = "consumer stdin pipe was not created"
+        raise RuntimeError(msg)
+    # The metered pump sits between them (see _pump_metered): the liveness marker
+    # follows the PCM actually flowing to the segmenter. A dead pump ends the pipe
+    # like a producer death would — record() returns and the respawn recovers.
+    pump = threading.Thread(
+        target=_pump_metered,
+        args=(
+            producer.stdout,
+            consumer.stdin,
+            producer,
+            out_dir,
+            StreamMeter(config.sample_rate, config.channels),
+        ),
+        daemon=True,
+    )
+    pump.start()
     _log.info("listening: %s (%s)", source.id, source.spec or source.kind.value)
     watch_stop = threading.Event()
     if watch_dead:
@@ -254,9 +315,11 @@ def record(  # noqa: PLR0913 - capture config + the optional pause/telemetry hoo
     finally:
         watch_stop.set()
     # Safety net: ensure the producer is gone (a no-op when _run_pipe already closed
-    # it on a pause, or when it ended on its own / via SIGPIPE on the unpaused path).
+    # it on a pause, or when it ended on its own / the pump closed it after the
+    # consumer died). The pump then sees EOF and exits.
     producer.terminate()
     producer.wait()
+    pump.join(timeout=_TERM_GRACE_S)
     reason = "pause" if should_stop is not None and should_stop() else "producer ended"
     _log.info("stopped: %s (%s)", source.id, reason)
     return consumer.returncode

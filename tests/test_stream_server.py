@@ -13,11 +13,10 @@ from pathlib import Path
 import pytest
 
 from recall import capture_control
-from recall.capture import CaptureConfig
+from recall.capture import CaptureConfig, StreamMeter
 from recall.store import Store
 from recall.stream_server import (
     Handshake,
-    StreamMeter,
     handle_connection,
     parse_handshake,
     read_handshake,
