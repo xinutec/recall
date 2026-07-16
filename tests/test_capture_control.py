@@ -128,3 +128,12 @@ def test_auto_resume_only_fires_after_expiry(tmp_path: Path) -> None:
 
     assert cc.auto_resume_if_expired(tmp_path, NOW + timedelta(minutes=31)) is True
     assert cc.paused_until(tmp_path) is None  # pause cleared → parked agents resume
+
+
+def test_a_naive_pause_timestamp_reads_as_utc_not_a_crash(tmp_path: Path) -> None:
+    # A hand-written pause file without a timezone must not make is_paused raise
+    # (naive-vs-aware compare is a TypeError, and it gates every capture agent).
+    (tmp_path / "capture_paused_until").write_text("2026-07-16T15:00:00")
+    until = cc.paused_until(tmp_path)
+    assert until == datetime(2026, 7, 16, 15, 0, tzinfo=UTC)
+    assert cc.is_paused(tmp_path, datetime(2026, 7, 16, 14, 0, tzinfo=UTC))

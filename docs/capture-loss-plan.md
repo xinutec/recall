@@ -75,59 +75,83 @@ decoding its segments after the fact, which the archive already preserves.
 Deliverable (met): after Phase 1, one controlled resume produces a readable trace
 (`recall capture-trace`) that says which source recorded what, at what level, and when.
 
-## Phase 2 — controlled diagnosis (needs a person at the mic)
+## Phase 2 — controlled diagnosis — RUN 2026-07-16 (autonomous, speaker loopback)
 
-Capture must never be resumed unprompted; these run with the user speaking. Use the
-acoustic-loopback method already proven (a distinctive phrase; verify by transcript, not by
-ear). Separate the variables the 25 s test confounded:
+Run with per-session authorization while the house was empty, using the Bose +
+`scripts/loopback-test.py` (the committed Phase-4 harness) and a live segment-size watch.
+Confirmed mechanisms:
 
-1. **Long window.** Resume, wait for real audio confirmed landing (Phase 1 trace), speak,
-   then keep recording ~2 min before pausing. Does each source *ever* capture the speech in a
-   stable (non-startup) segment? This splits "startup dead-window in a short window" from
-   "this device never captures."
-2. **Per-device isolation.** Speak *into* the Pixel 9 as the sole nearby source; repeat for
-   Pixel 5 and the USB mic. Confirms per-device whether the mic yields real samples
-   (question 1) — in particular whether the Pixel 9 silence bug reproduces when spoken
-   directly into.
-3. **Short window, instrumented.** Reproduce tonight's 25 s flow with Phase 1 tracing on, to
-   see exactly which hop dropped the speech and whether the pause discarded a partial segment.
+1. **The USB mic was losing ~22% of ALL samples, continuously** — the 2026-07-15
+   sox→ffmpeg-avfoundation switch reintroduced avfoundation's known drop (measured: 15 s
+   wall → 11.6 s audio; same ratio at 30 s; `-thread_queue_size` no help; in-agent windows
+   as bad as 15.6 s audio per 190 s). Real windows since the switch: 1–15 s of audio per
+   minute. sox re-measured sample-perfect (15.000 s in 15 s). **This — not a startup
+   dead-window — is why usb dead-windowed every resume since the switch.**
+2. **Segment files get their bytes only when the segment CLOSES** (rotation or EOF) —
+   watched live: the current segment sits at 0 bytes, held open by ffmpeg (lsof), for
+   minutes. So a 0-byte *newest* file is normal, not evidence of death — and:
+3. **The worker could delete ffmpeg's open segment.** A stalled producer keeps one segment
+   open past the 120 s dead-stub bar; `_clear_dead_stubs` unlinked it while ffmpeg held the
+   fd, sending the eventual flush to a deleted inode — silent, unrecoverable loss (this is
+   the likely shape of several past "dead windows", including the 12:14 window's whole usb
+   audio today).
+4. **pixel5 "failures" in loopback are physics** — it streams fine (bytes + room floor
+   −51 to −69 dB) but sits too far from the Bose to hear a phrase above −40 dB.
+5. **Phone reconnect latency after a resume is variable: 3 s to 62 s** (OS-throttled
+   background retry timers; both phones connected at the same instant in the slow case).
+   The 21:04 loss happened partly because the phones weren't connected yet when the phrase
+   was spoken — and "active" dots said they were.
+6. **iphone11 end-to-end is solid** (phrase at −13.5 dB, transcribed). The pixel9's
+   zero-byte close (nothing flushed despite the pause finalising the segment) means it sent
+   ~no PCM in that window — phone-side, reproducible only with the pixel9 present; not a
+   priority.
 
-Outcome: a confirmed mechanism (or mechanisms) for each source, written back into
-[capture-startup-deadwindow.md](capture-startup-deadwindow.md).
+Question 3 (pause-flush) is answered: the pause path DOES finalise and flush the open
+segment (usb's 27.6 s of a 28 s window arrived at close). Nothing is dropped by pausing.
 
-## Phase 3 — fixes (each contingent on Phase 2 confirming its cause)
+## Phase 3 — fixes — SHIPPED 2026-07-16 (each cause measured first)
 
-- **Startup dead-window (first N s not recorded).** Warm-up-and-verify: open the device on
-  resume and do not report "recording" until non-silent samples are confirmed landing; if a
-  producer yields only zero-level input for N s, cycle it (a coreaudio re-open clears a
-  stall). Gate on *signal present*, not loudness, so a genuinely quiet room isn't cycled.
-- **"Active" means recording, not connected.** Make `/api/sources` `active` (and the app's
-  dot) reflect real audio landing recently — a non-empty segment / level above the source's
-  floor within the window — not just a fresh `.alive`. This is the cheapest fix that would
-  have *prevented tonight's loss*: the user would not have spoken into a dead window. Both a
-  UX fix and a safety fix.
-- **Pixel 9 silence.** If confirmed phone-side: an `AudioRecord` silence watchdog on Android
-  that restarts the record path when it yields sustained zero-level (the iOS app already has
-  this — `Watchdog`/`StreamClient`; port the idea). Needs on-phone `adb` confirmation first.
-- **Pause-flush.** If the pause drops a partial segment: finalize the in-progress segment with
-  its audio on pause, so words spoken just before a pause are never lost.
+- **sox restored as the USB producer** (sample-perfect; avfoundation cut). The live tap
+  moved to the segmenter (`build_segment_argv(..., fanout=True)`) since sox has one output.
+- **Dead-segment watchdog** (`runner._watch_dead_segments`): two consecutive closed
+  segments of digital silence (a sox wedge keeps rotating silent segments), or rotation
+  stalled ≥3 segment-lengths (a producer delivering nothing), terminate the producer; the
+  agent respawn re-opens the device (which clears a CoreAudio wedge); durable
+  `producer_cycled` event. This is what makes sox's rare wedge cost minutes, not a
+  recording.
+- **The worker never deletes a source's newest (possibly open) zero-byte segment** —
+  closes mechanism 3.
+- Validated live: full resume→phrase→pause loopback PASS — usb −22 dB (27.6 s/28 s
+  window), iphone11 −13.5 dB, phones connected in 4 s.
 
-## Phase 4 — regression guard (so this can't silently come back)
+Still open (deliberately):
+- **"Active" means recording, not connected** — unchanged from the original plan; now
+  backed by finding 5. The phones' meter data (`ingest_disconnect` stats / a live meter
+  read) is the honest signal. Next piece of work.
+- Phone reconnect latency (finding 5) — mitigated by honest "active" dots; a push-style
+  reconnect nudge is possible but adds machinery.
 
-1. **Automated acoustic-loopback assertion.** A committed script: resume → play a known
-   phrase through a speaker → pause → wait → assert the phrase transcribes on the target
-   source. Run it after any capture-path change. Makes "the short flow records" a testable,
-   non-regressing property rather than a thing we re-discover by hand.
-2. **Confirm `recall doctor` would have caught it.** The Track-A speech-loss alarm exists;
-   verify tonight's pattern (unexplained gap during an active span) actually trips it, and
-   tighten if not.
+## Phase 4 — regression guard — IN PLACE 2026-07-16
+
+1. **`scripts/loopback-test.py`** (committed): resume via the fleet (the real production
+   path) → play a nonce phrase through a speaker → re-pause (restore is in a `finally`) →
+   judge per source from the ingest telemetry (phones) or the segment files (usb), with an
+   optional transcript tier. Run it after any capture-path change:
+   `scripts/loopback-test.py --speaker "Bose Revolve SoundLink" --expect usb --expect iphone11`
+   (pixel5 can't hear the Bose from its room — expect it only with a nearer speaker).
+   Note: `say` blocks for up to ~a minute while a sleeping Bluetooth speaker wakes; the
+   script's timestamped lines make that visible.
+2. **Loss reconciler upgraded to coverage** (`loss.uncovered_loss`): any uncovered part of
+   an active span ≥2 min is loss — a span with NO segments at all (the crash-loop shape)
+   is caught now, which gap-between-segments missed. `recall doctor` also counts
+   dead-window events (it flags today's, correctly).
 
 ## Order and cost
 
 Phase 1 first (small, safe, no behaviour change) — without it we keep guessing. Then Phase 2
-with the user (one sitting). Phase 3 fixes only the confirmed causes. Phase 4 locks it in.
-The "active means recording" fix (Phase 3) is worth pulling early: it's cheap and it directly
-stops a user speaking into a dead window, which is the specific way tonight's words were lost.
+(ran autonomously via speaker loopback with per-session authorization). Phase 3 fixed only
+measured causes. Phase 4 locks it in. Still open: the "active means recording" surface (see
+Phase 3) — the remaining piece that stops a person speaking into a not-yet-recording window.
 
 Not in scope: the Mac↔Isis poll cadence — deliberately left at 5 s; it affects resume
 *latency*, not whether captured audio is recorded correctly, which is the actual failure here.

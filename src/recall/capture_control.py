@@ -23,7 +23,7 @@ import json
 import os
 import subprocess
 from collections.abc import Callable, Mapping
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -82,14 +82,17 @@ def clear_pause(root: Path) -> None:
 
 
 def paused_until(root: Path) -> datetime | None:
-    """The recorded resume-by time, or None if not paused."""
+    """The recorded resume-by time, or None if not paused. A hand-written naive
+    timestamp is read as UTC rather than raising: comparing naive-vs-aware is a
+    TypeError, and is_paused gates every capture agent's main loop."""
     f = _pause_file(root)
     if not f.exists():
         return None
     try:
-        return datetime.fromisoformat(f.read_text().strip())
+        until = datetime.fromisoformat(f.read_text().strip())
     except ValueError:
         return None
+    return until if until.tzinfo else until.replace(tzinfo=UTC)
 
 
 def is_paused(root: Path, now: datetime) -> bool:
