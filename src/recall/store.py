@@ -40,6 +40,7 @@ from recall.store_models import (
     SessionSummary,
     SourceCoverage,
     TranscriptSegment,
+    UploadJob,
     VocabularyTerm,
 )
 from recall.store_schema import _MIGRATIONS
@@ -70,6 +71,7 @@ __all__ = [
     "SourceCoverage",
     "Store",
     "TranscriptSegment",
+    "UploadJob",
     "VocabularyTerm",
 ]
 
@@ -1194,6 +1196,33 @@ class Store:
             (datetime.now(UTC).isoformat(), request_id),
         )
         self._commit()
+
+    def pending_upload_jobs(self, *, limit: int = 100) -> list[UploadJob]:
+        """Uploaded-session segments not yet through ASR, oldest-first — the fleet-side
+        upload queue served to the Mac (which holds the ML). Derived from the segment
+        rows themselves, so nothing has to remember to enqueue; done = mark_transcribed.
+        """
+        rows = self._conn.execute(
+            "SELECT a.id, a.source_id, s.name, a.path, a.start_utc, a.end_utc, "
+            "a.sample_rate, a.channels "
+            "FROM audio_segments a JOIN sources s ON s.id = a.source_id "
+            "WHERE s.kind = ? AND a.transcribed_utc IS NULL "
+            "ORDER BY a.start_utc LIMIT ?",
+            (SourceKind.UPLOAD.value, limit),
+        ).fetchall()
+        return [
+            UploadJob(
+                audio_id=int(r["id"]),
+                source=str(r["source_id"]),
+                title=str(r["name"]),
+                file=Path(str(r["path"])).name,
+                start=datetime.fromisoformat(r["start_utc"]),
+                end=datetime.fromisoformat(r["end_utc"]),
+                sample_rate=int(r["sample_rate"]),
+                channels=int(r["channels"]),
+            )
+            for r in rows
+        ]
 
     def add_ab_compare_run(  # noqa: PLR0913 - source + window + the two models
         self,

@@ -190,6 +190,24 @@ class RefineRequest:
 
 
 @dataclass(frozen=True)
+class UploadJob:
+    """An uploaded session segment awaiting the Mac's ASR (the fleet has no ML).
+
+    Derived, never enqueued: any UPLOAD-kind segment the Mac has not processed yet
+    (`transcribed_utc` unset) IS the job — so an upload can't be lost to a missed
+    enqueue, and the queue survives a DB restore."""
+
+    audio_id: int
+    source: str
+    title: str  # the source's display name, so the Mac registers it verbatim
+    file: str  # blob filename under the fleet archive (fetched via /sync/audio/file)
+    start: datetime
+    end: datetime
+    sample_rate: int
+    channels: int
+
+
+@dataclass(frozen=True)
 class LiveSummary:
     """The running day's provisional summary, stamped with the day-state
     watermark it saw — fresh iff that still matches Store.day_watermark."""

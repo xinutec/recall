@@ -31,6 +31,7 @@ from recall.sync import (
     check_token,
     register_sync_routes,
 )
+from recall.timeline import Segment
 
 BASE = datetime(2026, 7, 11, 12, 0, 0, tzinfo=UTC)
 
@@ -534,3 +535,144 @@ def test_capture_exchange_long_poll_times_out_to_the_unchanged_intent(
         )
         assert time.monotonic() - started >= 0.35
         assert intent is None
+
+
+def _seed_upload(db: Path, archive: Path) -> Path:
+    """An uploaded session on the fleet, untranscribed — exactly what
+    api.create_session leaves behind. Returns the blob path."""
+    blob = (
+        archive / "meeting-20260716-1400" / "meeting-20260716-1400-20260716T130000.m4a"
+    )
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"m4a-bytes")
+    store = Store.open(db)
+    store.add_source(
+        AudioSource(
+            id="meeting-20260716-1400",
+            name="Neurology follow-up",
+            kind=SourceKind.UPLOAD,
+            spec="",
+        )
+    )
+    store.add_audio_segment(
+        Segment(
+            source_id="meeting-20260716-1400",
+            sequence=0,
+            start=BASE,
+            end=BASE + timedelta(minutes=45),
+            path=str(blob),
+            sample_rate=48000,
+            channels=1,
+        )
+    )
+    store.close()
+    return blob
+
+
+def test_an_untranscribed_upload_is_served_as_a_job_until_acknowledged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The upload queue is derived from the rows create_session wrote — nothing
+    # enqueues, so nothing can forget to. Done = mark_transcribed, so the ack and the
+    # eventual turn push both retire it.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    archive = tmp_path / "archive"
+    _seed_upload(db, archive)
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), archive)
+    client = TestClient(app)
+    auth = {"Authorization": "Bearer secret"}
+
+    (job,) = client.get("/sync/jobs", headers=auth).json()
+    assert job["type"] == "upload"
+    assert job["source"] == "meeting-20260716-1400"
+    assert job["file"] == "meeting-20260716-1400-20260716T130000.m4a"
+    assert job["title"] == "Neurology follow-up"
+    assert (job["sample_rate"], job["channels"]) == (48000, 1)
+    assert job["start"] == BASE.isoformat()
+
+    done = client.post(f"/sync/jobs/{job['id']}/done?type=upload", headers=auth)
+    assert done.status_code == 200
+    assert client.get("/sync/jobs", headers=auth).json() == []
+
+
+def test_the_mac_fetches_the_upload_blob_over_the_wire(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # SyncClient.fetch_audio against the real route: bytes land at dest, the .part
+    # temp is gone, and a job with no blob on the fleet 404s instead of writing junk.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    archive = tmp_path / "archive"
+    _seed_upload(db, archive)
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), archive)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        dest = tmp_path / "mac" / "meeting-20260716-1400" / "blob.m4a"
+        client.fetch_audio(
+            "meeting-20260716-1400", "meeting-20260716-1400-20260716T130000.m4a", dest
+        )
+        assert dest.read_bytes() == b"m4a-bytes"
+        assert list(dest.parent.glob(".*.part")) == []
+
+        with pytest.raises(HTTPStatusError):
+            client.fetch_audio(
+                "meeting-20260716-1400", "no-such-file.m4a", tmp_path / "mac" / "x.m4a"
+            )
+
+
+def test_the_blob_download_is_token_gated_and_traversal_proof(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    archive = tmp_path / "archive"
+    app = FastAPI()
+    register_sync_routes(app, Store.memory, archive)
+    client = TestClient(app)
+
+    params = {"source": "usb", "name": "seg.opus"}
+    assert client.get("/sync/audio/file", params=params).status_code == 401
+    auth = {"Authorization": "Bearer secret"}
+    evil = {"source": "..", "name": "recall.sqlite"}
+    assert client.get("/sync/audio/file", params=evil, headers=auth).status_code == 400
+
+
+def test_a_turn_push_retires_the_pending_upload_job(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The belt to the explicit ack: even if the Mac's job-done call is lost, the
+    # pushed turns prove the session was processed and the job stops being served.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    archive = tmp_path / "archive"
+    blob = _seed_upload(db, archive)
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), archive)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        assert len(client.poll_jobs()) == 1
+        client.push_segment(
+            SegmentIn(
+                source_id="meeting-20260716-1400",
+                source_name="Neurology follow-up",
+                kind="upload",
+                path=str(blob),
+                start=BASE.isoformat(),
+                end=(BASE + timedelta(minutes=45)).isoformat(),
+                sample_rate=48000,
+                channels=1,
+                turns=[
+                    TurnIn(
+                        start=BASE.isoformat(),
+                        end=(BASE + timedelta(seconds=5)).isoformat(),
+                        text="so the MRI shows",
+                        asr_model="mlx-community/whisper-large-v3-turbo",
+                    )
+                ],
+            )
+        )
+        assert client.poll_jobs() == []

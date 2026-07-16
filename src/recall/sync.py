@@ -10,8 +10,9 @@ routes are only registered when a token is configured, so a stock LAN-only deplo
 is untouched. When enabled, the routes are meant to bind to the WireGuard interface only
 — never the shared public ingress, which answers on the public IP regardless of DNS.
 
-The whole Mac→fleet flow is here: job poll, audio-blob push, segment/turns push
-(supersede-aware), and day-summary push. The auth check and bearer parsing are pure, so
+The whole Mac→fleet flow is here: job poll (refine + uploaded-session pulls),
+audio-blob push and fetch, segment/turns push (supersede-aware), and day-summary
+push. The auth check and bearer parsing are pure, so
 they're unit-tested; routes and client are exercised against a FastAPI test transport.
 """
 
@@ -27,12 +28,13 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from recall import capture_control
 from recall.schemas import OkOut
 from recall.sources import AudioSource, SourceKind
-from recall.store import RefineRequest, Store, TranscriptSegment
+from recall.store import RefineRequest, Store, TranscriptSegment, UploadJob
 from recall.timeline import Segment
 
 SYNC_TOKEN_ENV = "RECALL_SYNC_TOKEN"
@@ -79,13 +81,23 @@ def check_token(presented: str | None, expected: str | None) -> None:
 
 
 class JobOut(BaseModel):
-    """A unit of work the fleet hands the Mac worker (the Mac has the ML + the mic)."""
+    """A unit of work the fleet hands the Mac worker (the Mac has the ML + the mic).
+
+    `type="refine"`: id is a refine-request id. `type="upload"`: id is the fleet's
+    audio-segment id, and the upload-only fields below carry what the Mac needs to
+    bring the session home — the blob filename (fetch via /sync/audio/file), the
+    source's display title, and the probed stream shape (so no re-probe). They are
+    None on refine jobs, and an older fleet simply never sends them."""
 
     id: int
     type: str
     source: str
     start: str  # ISO-8601
     end: str
+    file: str | None = None
+    title: str | None = None
+    sample_rate: int | None = None
+    channels: int | None = None
 
 
 class AudioStoredOut(BaseModel):
@@ -234,6 +246,20 @@ def _job_of(req: RefineRequest) -> JobOut:
     )
 
 
+def _upload_job_of(job: UploadJob) -> JobOut:
+    return JobOut(
+        id=job.audio_id,
+        type="upload",
+        source=job.source,
+        start=job.start.isoformat(),
+        end=job.end.isoformat(),
+        file=job.file,
+        title=job.title,
+        sample_rate=job.sample_rate,
+        channels=job.channels,
+    )
+
+
 def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentStoredOut:
     """Persist a pushed segment, reconciling across the split. The fleet is the system
     of record: a newer machine pass (worker → refine) SUPERSEDES the old machine turns,
@@ -277,6 +303,10 @@ def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentSt
     # of showing both. Runs on every ingest (before the no-op check) so a live turn that
     # arrived after the segment was first stored is still reconciled.
     store.hide_live_turns_covered_by(seg_start, seg_end)
+    # A push proves the Mac's ASR has processed this segment — record that on the
+    # fleet's row too. For an uploaded session this is what retires its pending
+    # upload job (the belt to the Mac's explicit job-done call).
+    store.mark_transcribed(int(audio_id))
     current = _machine_turn_keys(store.visible_machine_turns_for_audio(audio_id))
     if current == _incoming_turn_keys(body.turns):
         return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=0)
@@ -427,6 +457,18 @@ def register_sync_routes(
         dest = data_root / _safe_component(source) / _safe_component(name)
         return AudioPresentOut(present=dest.exists())
 
+    @app.get("/sync/audio/file")
+    def sync_audio_file(
+        source: str, name: str, authorization: str | None = Header(default=None)
+    ) -> FileResponse:
+        # The reverse of the push: the Mac fetches a blob the fleet holds and it
+        # doesn't — an uploaded session it must transcribe (see JobOut type="upload").
+        check_token(bearer(authorization), expected)
+        path = data_root / _safe_component(source) / _safe_component(name)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="no such audio")
+        return FileResponse(path)
+
     @app.post("/sync/segments")
     def sync_segments(
         body: SegmentIn, authorization: str | None = Header(default=None)
@@ -454,6 +496,17 @@ def register_sync_routes(
 
     _register_live_route(app, store_factory, expected)
     _register_capture_route(app, store_factory, expected)
+    _register_job_routes(app, store_factory, expected)
+
+    return True
+
+
+def _register_job_routes(
+    app: FastAPI, store_factory: Callable[[], Store], expected: str
+) -> None:
+    """The Mac-initiated job queue (its own helper so register_sync_routes stays under
+    the statement budget): refine requests and uploaded-session pulls, plus the typed
+    acknowledgement that retires each."""
 
     @app.get("/sync/jobs")
     def sync_jobs(
@@ -462,23 +515,42 @@ def register_sync_routes(
         check_token(bearer(authorization), expected)
         store = store_factory()
         try:
-            return [_job_of(r) for r in store.pending_refine_requests(limit=limit)]
+            jobs = [_job_of(r) for r in store.pending_refine_requests(limit=limit)]
+            # Uploads fill whatever the interactive refine queue left of the batch.
+            remaining = limit - len(jobs)
+            if remaining > 0:
+                jobs += [
+                    _upload_job_of(u)
+                    for u in store.pending_upload_jobs(limit=remaining)
+                ]
+            return jobs
         finally:
             store.close()
 
     @app.post("/sync/jobs/{job_id}/done")
     def sync_job_done(
-        job_id: int, authorization: str | None = Header(default=None)
+        job_id: int,
+        type: str = "refine",
+        authorization: str | None = Header(default=None),
     ) -> OkOut:
+        # `type` names the id space (refine-request vs audio-segment id) — see JobOut.
+        # Defaulted so an older Mac keeps acknowledging refines exactly as before.
         check_token(bearer(authorization), expected)
         store = store_factory()
         try:
-            store.mark_refine_request_done(job_id)
+            if type == "upload":
+                # "Done" for an upload = the Mac holds it and will ASR it; the row is
+                # marked processed so pending_upload_jobs stops serving it.
+                store.mark_transcribed(job_id)
+            elif type == "refine":
+                store.mark_refine_request_done(job_id)
+            else:
+                raise HTTPException(
+                    status_code=400, detail=f"unknown job type {type!r}"
+                )
         finally:
             store.close()
         return {"ok": True}
-
-    return True
 
 
 class SyncClient:
@@ -506,12 +578,35 @@ class SyncClient:
         resp.raise_for_status()
         return [JobOut.model_validate(job) for job in resp.json()]
 
-    def mark_done(self, job_id: int) -> None:
-        """Tell the fleet a job is finished so it isn't handed out again."""
+    def mark_done(self, job_id: int, *, job_type: str = "refine") -> None:
+        """Tell the fleet a job is finished so it isn't handed out again. `job_type`
+        names the id space (see JobOut); an older fleet ignores the parameter, which is
+        harmless because it only serves refine jobs in the first place."""
         resp = self._client.post(
-            f"{self._base}/sync/jobs/{job_id}/done", headers=self._headers
+            f"{self._base}/sync/jobs/{job_id}/done",
+            params={"type": job_type},
+            headers=self._headers,
         )
         resp.raise_for_status()
+
+    def fetch_audio(self, source: str, name: str, dest: Path) -> None:
+        """Download one audio blob the fleet holds into `dest` (an uploaded session the
+        Mac must transcribe). Streamed through a dot-file then renamed into place, so a
+        torn download never leaves a plausible-looking partial file — and the dot name
+        is invisible to the worker's segment glob (`{source}-*`)."""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        part = dest.parent / f".{dest.name}.part"
+        with self._client.stream(
+            "GET",
+            f"{self._base}/sync/audio/file",
+            params={"source": source, "name": name},
+            headers=self._headers,
+        ) as resp:
+            resp.raise_for_status()
+            with part.open("wb") as fh:
+                for chunk in resp.iter_bytes():
+                    fh.write(chunk)
+        part.replace(dest)
 
     def audio_present(self, source: str, name: str) -> bool:
         """Whether the fleet already holds this file — check before uploading."""

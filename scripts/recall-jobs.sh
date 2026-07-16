@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Run on-demand ML the fleet requested but can't do itself (the Isis split), for the
-# launchd agent. Each run pulls Isis's refine queue into this Mac's local queue and exits
-# — the launchd timer drives the cadence; the refine daemon then does the ML while the mic
-# is idle, and the refined turns sync back on their own. Uses recall.sh, which sources
+# Run on-demand work the fleet requested but can't do itself (the Isis split), for the
+# launchd agent. Each run pulls Isis's job queue and exits — refines land in this Mac's
+# local refine queue (drained while the mic is idle), uploaded sessions are fetched into
+# this Mac's archive for the worker to transcribe; the launchd timer drives the cadence
+# and the results sync back on their own. Uses recall.sh, which sources
 # .env for RECALL_SYNC_TOKEN (the bearer the fleet checks); the command is inert and exits
 # non-zero if the token is unset, so a stock LAN-only Mac is untouched.
 #

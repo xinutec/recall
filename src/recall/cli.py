@@ -1452,12 +1452,12 @@ def _cmd_sync(args: argparse.Namespace) -> int:
 
 
 def _cmd_jobs(args: argparse.Namespace) -> int:
-    """Run on-demand ML the fleet requested but can't do itself (the Isis split): pull
-    its refine queue into this Mac's local queue, where the refine daemon drains it once
-    the mic is idle (the refined turns sync back on their own). The Mac holds the ML and
-    mic; the fleet holds only the UI. Token is RECALL_SYNC_TOKEN. Imports are lazy so
-    recall.cli stays framework-free for the capture agents (recall.sync pulls the web
-    framework)."""
+    """Run on-demand work the fleet requested but can't do itself (the Isis split):
+    pull its refine queue into this Mac's local queue (the idle refine daemon drains
+    it), and fetch uploaded sessions into this Mac's archive (the worker transcribes
+    them; results sync back on their own). The Mac holds the ML and mic; the fleet
+    holds only the UI. Token is RECALL_SYNC_TOKEN. Imports are lazy so recall.cli stays
+    framework-free for the capture agents (recall.sync pulls the web framework)."""
     token = os.environ.get("RECALL_SYNC_TOKEN")
     if not token:
         print("jobs needs RECALL_SYNC_TOKEN")
@@ -1467,10 +1467,10 @@ def _cmd_jobs(args: argparse.Namespace) -> int:
 
     store = Store.open(args.out / "recall.sqlite")
     try:
-        handed = run_jobs_once(store, SyncClient(args.url, token))
+        handed = run_jobs_once(store, SyncClient(args.url, token), data_root=args.out)
     finally:
         store.close()
-    print(f"jobs: handed {handed} job(s) to the local refine queue from {args.url}")
+    print(f"jobs: brought {handed} fleet job(s) home from {args.url}")
     return 0
 
 

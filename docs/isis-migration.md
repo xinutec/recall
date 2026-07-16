@@ -284,12 +284,27 @@ refine daemon drains the local queue (never during recording) and the refined tu
 back through the normal segment/turn push. So a refine requested from Isis's UI now
 reaches the Mac. Commit `e29fa43`; TDD `tests/test_jobs.py`.
 
+**Share-upload job-pull — done (2026-07-16).** A session uploaded to Isis's
+`/api/sessions` used to sit there recorded-but-never-transcribed: the blob and its rows
+landed on Isis, where no worker runs. Closed with the same job-pull inversion, and with
+**no queue to maintain**: a pending upload job is *derived* — any UPLOAD-kind segment
+whose `transcribed_utc` is unset (nothing on Isis ever sets it) — so an upload can't be
+lost to a missed enqueue. `/sync/jobs` now serves them as `type="upload"` alongside
+refines (blob filename, title, and stream shape in the job), the Mac's `recall jobs`
+timer fetches the blob via the new `GET /sync/audio/file` into its own archive root and
+registers the source + segment keyed to the fleet's exact start — so the worker's normal
+pass transcribes it, the refine daemon diarizes it, and the pushed-back turns dedupe onto
+Isis's existing row (UNIQUE source_id+start). The job retires on the Mac's typed
+acknowledgement (`/sync/jobs/{id}/done?type=upload` → `mark_transcribed`), with a belt:
+any segment push now marks the fleet row transcribed too. Pre-split sessions self-heal —
+their blobs and rows are already on the Mac, so the first pass skips straight to the
+acknowledgement. Still to confirm by hand: the phone's share-to-Recall flow points at
+Isis.
+
 **Job-pull follow-ups (not done):** `ab-compare` (needs its own pull + a result push-back
-of the report json, not just turn-sync) and `/api/sessions` share-upload (needs the audio
-blob shipped to the Mac to transcribe). Confirm the phone's share-to-Recall host points at
-Isis. (The capture-mirror transport was upgraded to long-poll 2026-07-16 — intent in
-~RTT — so the "replace the transport" follow-up is closed; the break-glass CLI still
-covers an unreachable Isis.)
+of the report json, not just turn-sync). (The capture-mirror transport was upgraded to
+long-poll 2026-07-16 — intent in ~RTT — so the "replace the transport" follow-up is
+closed; the break-glass CLI still covers an unreachable Isis.)
 
 ### Step C — the Mac cutover (runbook)
 
