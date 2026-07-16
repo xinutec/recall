@@ -48,6 +48,25 @@
   color: var(--mat-sys-error);
 }
 
+.capture-toggle.unreachable {
+  color: var(--mat-sys-outline);
+}
+
+// The state is in flight (desired ≠ confirmed): the sync icon turns while the
+// mic catches up, so a press reads as "working on it", never as a flap.
+.spin {
+  animation: spin 1.2s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .paused-banner {
   position: sticky;
   top: calc(var(--toolbar-h) + var(--safe-top, 0px));
@@ -71,6 +90,18 @@
 
   span {
     flex: 1 1 auto;
+  }
+
+  // In-flight: neutral colours — it's progress, not an alarm.
+  &.transitioning {
+    background: var(--mat-sys-surface-variant);
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  // The mic isn't reporting: unknown state, flagged distinctly from paused.
+  &.unreachable {
+    background: var(--mat-sys-tertiary-container);
+    color: var(--mat-sys-on-tertiary-container);
   }
 }
 

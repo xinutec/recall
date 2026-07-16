@@ -126,8 +126,19 @@ class LabelOut(TypedDict):
 
 
 class CaptureOut(TypedDict):
+    """Capture state as spec-vs-status, so a client can render "Pausing…" instead
+    of flapping between the intent it just set and the mic's not-yet-caught-up
+    report. running/pausedUntil stay the confirmed view (the mic's word when it is
+    reporting, else the desired state) for older clients."""
+
     running: bool
     pausedUntil: str | None
+    desiredRunning: bool
+    desiredPausedUntil: str | None
+    # The mic has confirmed the desired state; False = transitioning (or unreachable).
+    settled: bool
+    # The mic is checking in (always True on the capturing host itself).
+    micReachable: bool
 
 
 class OkOut(TypedDict):

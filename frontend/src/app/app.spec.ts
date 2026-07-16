@@ -9,11 +9,47 @@ import { BUILD_INFO } from './build-info';
 import { RecallApi } from './recall-api';
 import { CaptureState } from './models';
 
-function setup(initial: CaptureState = { running: true, pausedUntil: null }) {
+/** A settled CaptureState (desired == confirmed), overridable per test. */
+function cap(overrides: Partial<CaptureState> = {}): CaptureState {
+  const running = overrides.running ?? true;
+  const pausedUntil = overrides.pausedUntil ?? null;
+  return {
+    running,
+    pausedUntil,
+    desiredRunning: running,
+    desiredPausedUntil: pausedUntil,
+    settled: true,
+    micReachable: true,
+    ...overrides,
+  };
+}
+
+function setup(initial: CaptureState = cap()) {
   const state = new BehaviorSubject<CaptureState>(initial);
   const capture = vi.fn(() => state);
-  const pauseCapture = vi.fn(() => of({ running: false, pausedUntil: '2026-06-17T20:00:00Z' }));
-  const resumeCapture = vi.fn(() => of({ running: true, pausedUntil: null }));
+  // A press answers with the TRANSITIONING shape: desired flipped, confirmed
+  // unchanged — the same shape the next poll returns, so nothing can flap.
+  const pauseCapture = vi.fn(() =>
+    of(
+      cap({
+        running: true,
+        desiredRunning: false,
+        desiredPausedUntil: '2026-06-17T20:00:00Z',
+        settled: false,
+      }),
+    ),
+  );
+  const resumeCapture = vi.fn(() =>
+    of(
+      cap({
+        running: false,
+        pausedUntil: '2026-06-17T20:00:00Z',
+        desiredRunning: true,
+        desiredPausedUntil: null,
+        settled: false,
+      }),
+    ),
+  );
   TestBed.configureTestingModule({
     imports: [App],
     providers: [
@@ -72,24 +108,26 @@ describe('App', () => {
   });
 
   it('shows the paused banner only when capture is paused', () => {
-    const { fixture, c } = setup({ running: false, pausedUntil: '2026-06-17T20:00:00Z' });
+    const { fixture, c } = setup(cap({ running: false, pausedUntil: '2026-06-17T20:00:00Z' }));
     fixture.detectChanges();
     expect(c.paused()).toBe(true);
     expect((fixture.nativeElement as HTMLElement).querySelector('.paused-banner')).toBeTruthy();
   });
 
   it('resume-by leads with a yyyy-mm-dd date before the time', () => {
-    const { c } = setup({ running: false, pausedUntil: '2026-06-17T20:00:00Z' });
+    const { c } = setup(cap({ running: false, pausedUntil: '2026-06-17T20:00:00Z' }));
     // Shape, not exact value — the local date/time depend on the runner's timezone.
     expect(c.resumeBy()).toMatch(/^\d{4}-\d{2}-\d{2} \S/);
   });
 
   it('resume-in shows the remaining hours/minutes', () => {
     // Timezone-independent (a duration, not a wall clock): a far-future deadline.
-    const { c } = setup({
-      running: false,
-      pausedUntil: new Date(Date.now() + 5 * 3_600_000 + 23 * 60_000).toISOString(),
-    });
+    const { c } = setup(
+      cap({
+        running: false,
+        pausedUntil: new Date(Date.now() + 5 * 3_600_000 + 23 * 60_000).toISOString(),
+      }),
+    );
     expect(c.resumeIn()).toBe('5h 23m');
   });
 
@@ -97,14 +135,42 @@ describe('App', () => {
     expect(setup().c.resumeIn()).toBe('');
   });
 
-  it('pausing calls the API and flips to paused; resuming flips back', () => {
-    const { c, pauseCapture, resumeCapture } = setup();
+  it('a press flips to the desired state as transitioning — no flap possible', () => {
+    // The flap seen live 2026-07-16: POST said "paused" (intent), the next poll
+    // said "running" (the mic's stale report), and the banner blinked. Desired
+    // and confirmed are now separate fields, rendered as an explicit "Pausing…".
+    const { fixture, c, pauseCapture } = setup();
     expect(c.paused()).toBe(false);
     c.pauseCapture();
     expect(pauseCapture).toHaveBeenCalled();
-    expect(c.paused()).toBe(true);
-    c.resumeCapture();
-    expect(resumeCapture).toHaveBeenCalled();
-    expect(c.paused()).toBe(false);
+    expect(c.paused()).toBe(true); // the banner follows the desired state…
+    expect(c.transitioning()).toBe(true); // …flagged as awaiting confirmation
+    expect(c.transitionLabel()).toBe('Pausing');
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('.paused-banner.transitioning')?.textContent).toContain('Pausing');
+    // the settled paused banner (with its resume buttons) is NOT shown yet
+    expect(el.querySelector('.paused-banner .rec-dot')).toBeFalsy();
+  });
+
+  it('settles once the mic confirms: transitioning clears, paused banner shows', () => {
+    const { fixture, c } = setup(cap({ running: false, pausedUntil: '2026-06-17T20:00:00Z' }));
+    fixture.detectChanges();
+    expect(c.transitioning()).toBe(false);
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('.paused-banner .rec-dot')).toBeTruthy();
+  });
+
+  it('an unreachable mic is said out loud, not presented as fact', () => {
+    const { fixture, c } = setup(
+      cap({ running: false, desiredRunning: false, settled: false, micReachable: false }),
+    );
+    fixture.detectChanges();
+    expect(c.unreachable()).toBe(true);
+    expect(c.transitioning()).toBe(false); // unknown ≠ in-flight
+    const banner = (fixture.nativeElement as HTMLElement).querySelector(
+      '.paused-banner.unreachable',
+    );
+    expect(banner?.textContent).toContain('not reporting');
   });
 });

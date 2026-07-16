@@ -65,19 +65,41 @@ export class App {
   ];
 
   // Capture (whole-house recording) state, so it can be paused while working in
-  // the room. Polled so the banner reflects the worker's auto-resume.
-  private readonly capture = signal<CaptureState>({ running: true, pausedUntil: null });
+  // the room. Polled so the banner reflects the worker's auto-resume. Rendered
+  // spec-vs-status: `desired*` moves at the button press, `running` is the mic's
+  // confirmed word, and the gap between them shows as "Pausing…"/"Resuming…" —
+  // never a flap between the two truths.
+  private readonly capture = signal<CaptureState>({
+    running: true,
+    pausedUntil: null,
+    desiredRunning: true,
+    desiredPausedUntil: null,
+    settled: true,
+    micReachable: true,
+  });
   // Ticks so the "resumes in Xh Ym" countdown stays current between polls.
   private readonly now = signal(Date.now());
-  protected readonly paused = computed(() => this.capture().pausedUntil !== null);
+  // The banner/button follow the DESIRED state (what was asked for)…
+  protected readonly paused = computed(() => this.capture().desiredPausedUntil !== null);
+  // …with an explicit in-between while the mic hasn't confirmed it yet.
+  protected readonly transitioning = computed(() => {
+    const c = this.capture();
+    return c.micReachable && !c.settled;
+  });
+  protected readonly transitionLabel = computed(() =>
+    this.capture().desiredRunning ? 'Resuming' : 'Pausing',
+  );
+  // The mic stopped reporting: its true state is unknown, and saying so beats
+  // presenting the intent as fact.
+  protected readonly unreachable = computed(() => !this.capture().micReachable);
   protected readonly resumeBy = computed(() => {
-    const until = this.capture().pausedUntil;
+    const until = this.capture().desiredPausedUntil;
     // yyyy-mm-dd before the local time, so an overnight pause reads unambiguously.
     return until ? `${dayKey(until)} ${timeOfDay(until)}` : '';
   });
   // Time left until the worker auto-resumes, e.g. "5h 23m".
   protected readonly resumeIn = computed(() => {
-    const until = this.capture().pausedUntil;
+    const until = this.capture().desiredPausedUntil;
     return until ? durationUntil(until, this.now()) : '';
   });
 
@@ -89,18 +111,38 @@ export class App {
     }, CAPTURE_POLL_MS);
   }
 
+  // A transition settles within a couple of ~5s mirror cycles; the regular 30s
+  // poll would leave "Pausing…" up long after the mic confirmed, so poll fast
+  // while unsettled. One pending timer at most.
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private applyCapture(state: CaptureState): void {
+    this.capture.set(state);
+    if (this.settleTimer !== null) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = null;
+    }
+    if (!state.settled && state.micReachable) {
+      this.settleTimer = setTimeout(() => this.refreshCapture(), 3_000);
+    }
+  }
+
   private refreshCapture(): void {
-    this.api.capture().subscribe({ next: (s) => this.capture.set(s), error: () => undefined });
+    this.api
+      .capture()
+      .subscribe({ next: (s) => this.applyCapture(s), error: () => undefined });
   }
 
   protected pauseCapture(): void {
-    this.api.pauseCapture().subscribe({ next: (s) => this.capture.set(s), error: () => undefined });
+    this.api
+      .pauseCapture()
+      .subscribe({ next: (s) => this.applyCapture(s), error: () => undefined });
   }
 
   protected resumeCapture(): void {
     this.api
       .resumeCapture()
-      .subscribe({ next: (s) => this.capture.set(s), error: () => undefined });
+      .subscribe({ next: (s) => this.applyCapture(s), error: () => undefined });
   }
 
   /** Build stamp embedded at build time; shown in the footer so a stale cached

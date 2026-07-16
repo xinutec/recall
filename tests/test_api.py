@@ -603,6 +603,80 @@ def test_sources_liveness_on_the_fleet_uses_the_macs_report(
     assert paused["usb"] is False
 
 
+def test_fleet_capture_state_separates_desired_from_confirmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The UI flap (seen live 2026-07-16): a pause POST answered with *intent*
+    # ("paused") while the next poll answered with the Mac's *report* ("running"),
+    # so the app claimed recording resumed for a beat. The API must serve BOTH
+    # truths so clients can render "Pausing…" instead of flapping.
+    monkeypatch.setenv("RECALL_ROLE", "fleet")
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    now = datetime.now(UTC)
+    store = Store.open(tmp_path / "recall.sqlite")
+    capture_control.record_reported(store, running=True, paused_until=None, now=now)
+    store.close()
+
+    # Settled: desired running, Mac confirms running.
+    settled = api.capture_status()
+    assert settled["running"] is True
+    assert settled["desiredRunning"] is True
+    assert settled["settled"] is True
+    assert settled["micReachable"] is True
+
+    # Press pause: desired flips NOW; the Mac hasn't applied yet, so the state is
+    # transitioning — confirmed still says running, and nothing here contradicts a
+    # later poll (this exact shape is what the next poll returns too).
+    pausing = api.capture_pause()
+    assert pausing["desiredRunning"] is False
+    assert pausing["desiredPausedUntil"] is not None
+    assert pausing["running"] is True  # the mic's last confirmed word
+    assert pausing["settled"] is False
+
+    # The Mac applies + reports the pause: settled again.
+    store = Store.open(tmp_path / "recall.sqlite")
+    capture_control.record_reported(
+        store,
+        running=False,
+        paused_until=pausing["desiredPausedUntil"],
+        now=datetime.now(UTC),
+    )
+    store.close()
+    confirmed = api.capture_status()
+    assert confirmed["running"] is False
+    assert confirmed["settled"] is True
+
+    # A Mac that stops reporting: unreachable, never settled — the UI says so
+    # instead of presenting intent as fact.
+    store = Store.open(tmp_path / "recall.sqlite")
+    capture_control.record_reported(
+        store,
+        running=False,
+        paused_until=pausing["desiredPausedUntil"],
+        now=datetime.now(UTC) - timedelta(minutes=5),
+    )
+    store.close()
+    unreachable = api.capture_status()
+    assert unreachable["micReachable"] is False
+    assert unreachable["settled"] is False
+    assert unreachable["running"] is False  # falls back to desired
+
+
+def test_local_capture_state_is_always_settled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Locally (dev) the pause file IS the actuation — desired and confirmed are the
+    # same thing, so the state is settled by construction.
+    monkeypatch.delenv("RECALL_ROLE", raising=False)
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr("recall.capture_control.capture_running", lambda: True)
+    state = api.capture_pause()
+    assert state["running"] is False
+    assert state["desiredRunning"] is False
+    assert state["settled"] is True
+    assert state["micReachable"] is True
+
+
 def test_name_voice_endpoint_labels_a_whole_session_voice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

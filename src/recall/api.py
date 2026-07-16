@@ -503,21 +503,53 @@ def sources() -> SourcesOut:
 
 
 def _capture_state(running: bool) -> CaptureOut:
+    """Local (capturing-host) view: the pause file IS the actuation, so desired and
+    confirmed are the same thing and the state is settled by construction."""
     until = capture_control.paused_until(DATA_ROOT)
-    return {"running": running, "pausedUntil": until.isoformat() if until else None}
+    iso = until.isoformat() if until else None
+    return {
+        "running": running,
+        "pausedUntil": iso,
+        "desiredRunning": running,
+        "desiredPausedUntil": iso,
+        "settled": True,
+        "micReachable": True,
+    }
 
 
 def _fleet_capture_state(store: Store, now: datetime) -> CaptureOut:
-    """The fleet runs no capture agent, so it answers from the Mac's reported state (the
-    truth, when it's checking in) and falls back to the intent it holds (what was asked
-    for) when the Mac has gone quiet."""
-    reported = capture_control.reported_state(store, now)
-    if reported is not None:
-        return {"running": reported.running, "pausedUntil": reported.paused_until}
+    """The fleet holds the *desired* state (intent) while the Mac actuates and
+    reports back, so the two can disagree for a couple of mirror cycles. Serve both:
+    running/pausedUntil carry the mic's confirmed word (falling back to desired when
+    it isn't reporting), desired* carries the intent, and settled says whether they
+    agree — the client renders the disagreement as "Pausing…"/"Resuming…" instead of
+    flapping between two truths it can't tell apart."""
     until = capture_control.intent_until(store, now)
+    desired_running = until is None
+    desired_until = until.isoformat() if until else None
+    reported = capture_control.reported_state(store, now)
+    if reported is None:
+        return {
+            "running": desired_running,
+            "pausedUntil": desired_until,
+            "desiredRunning": desired_running,
+            "desiredPausedUntil": desired_until,
+            "settled": False,
+            "micReachable": False,
+        }
+    # Settled = the mic confirmed the desired state. When paused, the resume-by must
+    # match too, so extending a pause (snooze) reads as transitioning until applied;
+    # the Mac round-trips the intent's exact ISO string, so equality is exact.
+    settled = reported.running == desired_running and (
+        desired_running or reported.paused_until == desired_until
+    )
     return {
-        "running": until is None,
-        "pausedUntil": until.isoformat() if until else None,
+        "running": reported.running,
+        "pausedUntil": reported.paused_until,
+        "desiredRunning": desired_running,
+        "desiredPausedUntil": desired_until,
+        "settled": settled,
+        "micReachable": True,
     }
 
 
@@ -549,11 +581,14 @@ def capture_pause() -> CaptureOut:
     if capture_control.is_fleet():
         store = _store()
         try:
-            until = capture_control.intent_pause(store, now)
+            capture_control.intent_pause(store, now)
+            state = _fleet_capture_state(store, now)
         finally:
             store.close()
         _log.info("PAUSE intent recorded (fleet)")
-        return {"running": False, "pausedUntil": until.isoformat()}
+        # Desired just flipped; confirmed lags until the Mac applies — the client
+        # shows "Pausing…", and the next poll returns this same shape (no flap).
+        return state
     capture_control.pause(DATA_ROOT, now)
     _log.info("PAUSE requested")
     return _capture_state(running=False)
@@ -566,10 +601,11 @@ def capture_resume() -> CaptureOut:
         store = _store()
         try:
             capture_control.intent_resume(store)
+            state = _fleet_capture_state(store, datetime.now(UTC))
         finally:
             store.close()
         _log.info("RESUME intent recorded (fleet)")
-        return {"running": True, "pausedUntil": None}
+        return state
     capture_control.resume(DATA_ROOT)
     _log.info("RESUME requested")
     return _capture_state(running=True)

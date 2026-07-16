@@ -35,15 +35,37 @@
     matIconButton
     class="capture-toggle"
     [class.paused]="paused()"
+    [class.unreachable]="unreachable()"
+    [disabled]="transitioning()"
     (click)="paused() ? resumeCapture() : pauseCapture()"
-    [matTooltip]="paused() ? 'Recording paused — tap to resume' : 'Pause recording'"
+    [matTooltip]="
+      unreachable()
+        ? 'Recorder not reporting — state unconfirmed'
+        : transitioning()
+          ? transitionLabel() + '…'
+          : paused()
+            ? 'Recording paused — tap to resume'
+            : 'Pause recording'
+    "
     aria-label="Pause or resume recording"
   >
-    <mat-icon>{{ paused() ? 'mic_off' : 'mic' }}</mat-icon>
+    <mat-icon [class.spin]="transitioning()">
+      {{ transitioning() ? 'sync' : paused() ? 'mic_off' : 'mic' }}
+    </mat-icon>
   </button>
 </mat-toolbar>
 
-@if (paused()) {
+@if (unreachable()) {
+  <div class="paused-banner unreachable" role="status">
+    <mat-icon>cloud_off</mat-icon>
+    <span>Recorder not reporting — pause state unconfirmed</span>
+  </div>
+} @else if (transitioning()) {
+  <div class="paused-banner transitioning" role="status">
+    <mat-icon class="spin">sync</mat-icon>
+    <span>{{ transitionLabel() }} — waiting for the recorder to confirm…</span>
+  </div>
+} @else if (paused()) {
   <div class="paused-banner" role="status">
     <mat-icon class="rec-dot">fiber_manual_record</mat-icon>
     <span>Recording paused — auto-resumes in {{ resumeIn() }} (by {{ resumeBy() }})</span>

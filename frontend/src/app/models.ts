@@ -77,9 +77,19 @@ export interface Label {
   readonly audioUrl: string;
 }
 
+/**
+ * Spec-vs-status capture state: `running`/`pausedUntil` is the mic's confirmed
+ * word; `desired*` is the intent (moves the instant a button is pressed). While
+ * they disagree (`settled` false) the UI renders "Pausing…"/"Resuming…" instead
+ * of flapping between the two truths.
+ */
 export interface CaptureState {
   readonly running: boolean;
   readonly pausedUntil: string | null;
+  readonly desiredRunning: boolean;
+  readonly desiredPausedUntil: string | null;
+  readonly settled: boolean;
+  readonly micReachable: boolean;
 }
 
 export interface Ok {
