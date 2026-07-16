@@ -15,7 +15,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from recall.capture import parse_segment_start
+from recall.capture import parse_segment_start, segment_glob
 from recall.timeline import Segment
 
 _S16_BYTES_PER_SAMPLE = 2
@@ -119,7 +119,7 @@ def scan_source(
     segments: list[Segment] = []
     empty: list[Path] = []
     unreadable: list[Path] = []
-    for path in sorted(source_dir.glob(f"{source_id}-*")):
+    for path in segment_glob(source_dir, source_id):
         if str(path) in known:
             continue
         try:

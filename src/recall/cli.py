@@ -24,7 +24,7 @@ from recall.abcompare import Report, compare_models, render_json, render_markdow
 from recall.asr import AsrResult, Transcriber, mlx_transcribe
 from recall.attribution import AttributionReport
 from recall.backup import run_backup
-from recall.capture import CaptureConfig, parse_segment_start
+from recall.capture import CaptureConfig, parse_segment_start, segment_glob
 from recall.cleanup import scan_hallucinations, scan_loops
 from recall.cli_parser import build_parser
 from recall.conversations import segment_conversations
@@ -1578,7 +1578,7 @@ def _cmd_capture_trace(args: argparse.Namespace) -> int:
             # Segment FILES the worker hasn't indexed yet (min-age guard) — the only
             # place a fresh zero-byte stub is visible before it is dead-windowed, and
             # what makes the trace usable live, mid-sitting, not two minutes later.
-            for path in (args.out / source_id).glob(f"{source_id}-*"):
+            for path in segment_glob(args.out / source_id, source_id):
                 if str(path) in known:
                     continue
                 try:

@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from recall.capture import segment_glob
 from recall.sources import SourceKind
 from recall.timeline import Gap
 
@@ -264,7 +265,7 @@ def recorders_on_disk(
         directory = root / source_id
         newest: float | None = None
         if directory.is_dir():
-            for path in directory.glob(f"{source_id}-*"):
+            for path in segment_glob(directory, source_id):
                 try:
                     stat = path.stat()
                 except OSError:

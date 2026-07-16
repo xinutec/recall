@@ -35,6 +35,7 @@ from recall.capture import (
     build_segment_argv,
     container_ext,
     mark_alive,
+    segment_glob,
     segment_output_pattern,
 )
 from recall.sources import AudioSource, SourceKind
@@ -199,7 +200,7 @@ def _flushed_segment(
     the connection opened. None when the connection wrote no file at all — naming an
     older file would blame the wrong window."""
     newest: tuple[float, str, int] | None = None
-    for path in out_dir.glob(f"{source_id}-*"):
+    for path in segment_glob(out_dir, source_id):
         try:
             stat = path.stat()
         except OSError:

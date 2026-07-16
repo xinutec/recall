@@ -16,7 +16,7 @@ from pathlib import Path
 
 from recall import capture_control
 from recall.asr import Transcriber
-from recall.capture import parse_segment_start
+from recall.capture import parse_segment_start, segment_glob
 from recall.diarize import Diarizer
 from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.probe import Scan, scan_source
@@ -106,14 +106,8 @@ def _clear_dead_stubs(scan: Scan, store: Store, source_id: str) -> None:
         _log.warning(
             "unreadable capture file (kept — it may still hold audio): %s", path
         )
-    newest = (
-        max(
-            (p.name for p in scan.empty[0].parent.glob(f"{source_id}-*")),
-            default=None,
-        )
-        if scan.empty
-        else None
-    )
+    files = segment_glob(scan.empty[0].parent, source_id) if scan.empty else []
+    newest = files[-1].name if files else None
     for path in scan.empty:
         if path.name == newest:
             continue  # possibly ffmpeg's open segment — see the docstring
