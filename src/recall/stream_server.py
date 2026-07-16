@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import socket
 import subprocess
 import threading
 import time
+from array import array
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -52,6 +54,64 @@ _PAUSE_POLL_SECONDS = 2.0  # how often the accept loop re-checks the global paus
 # Per-source liveness marker the server refreshes while a device streams; the API
 # reads its freshness for the fleet view. (Replaces the phone-sent heartbeat.)
 ALIVE_FILE = ".alive"
+
+# |s16 sample| at/above this counts as signal (~ -66 dBFS): safely above digital
+# silence and codec dither (the pixel9 dead-path bug streams at amplitude ~1, -90 dB),
+# safely below any live mic in a quiet room (~ -60..-50 dB).
+_AUDIBLE_FLOOR = 16
+_S16_FULL_SCALE = 32768
+
+
+class StreamMeter:
+    """Measures a raw s16le PCM stream as it is pumped, so a connection leaves
+    evidence of what the device actually sent (docs/capture-loss-plan.md Phase 1):
+    total bytes, peak level, and when the first *audible* sample arrived — in stream
+    time, so the phone's wall clock can't confuse it. Chunks need not respect sample
+    boundaries; a half sample carries to the next feed."""
+
+    def __init__(self, sample_rate: int, channels: int) -> None:
+        self._byte_rate = 2 * sample_rate * channels  # s16 = 2 bytes/sample
+        self._carry = b""
+        self.bytes_total = 0
+        self.peak = 0
+        self.first_audible_byte: int | None = None
+
+    def feed(self, data: bytes) -> None:
+        start = self.bytes_total - len(self._carry)  # stream offset of buf[0]
+        self.bytes_total += len(data)
+        buf = self._carry + data
+        if len(buf) % 2:
+            self._carry = buf[-1:]
+            buf = buf[:-1]
+        else:
+            self._carry = b""
+        if not buf:
+            return
+        # array('h') reads native-endian shorts == little-endian s16 on every host
+        # recall runs on (arm64/x86_64).
+        samples = array("h", buf)
+        low, high = min(samples), max(samples)
+        peak = max(high, -low)
+        self.peak = max(self.peak, peak)
+        if self.first_audible_byte is None and peak >= _AUDIBLE_FLOOR:
+            index = next(i for i, s in enumerate(samples) if abs(s) >= _AUDIBLE_FLOOR)
+            self.first_audible_byte = start + 2 * index
+
+    @property
+    def peak_db(self) -> float | None:
+        """Loudest sample seen, in dBFS; None when not one non-zero sample arrived
+        (pure digital zeros — indistinguishable from no capture path at all)."""
+        if self.peak == 0:
+            return None
+        return round(20 * math.log10(self.peak / _S16_FULL_SCALE), 1)
+
+    @property
+    def first_audible_s(self) -> float | None:
+        """Stream-time seconds until the first sample at/above the audible floor;
+        None when the whole stream stayed below it (silence)."""
+        if self.first_audible_byte is None:
+            return None
+        return self.first_audible_byte / self._byte_rate
 
 
 @dataclass(frozen=True)
@@ -110,12 +170,54 @@ def _register_source(root: Path, source_id: str) -> None:
         store.close()
 
 
+def _record_event(
+    root: Path, kind: str, source_id: str, detail: str | None = None
+) -> None:
+    """Durable telemetry row (capture_events). Best-effort: the audio pump must never
+    stall or die over bookkeeping, so a failure is logged and swallowed."""
+    try:
+        store = Store.open(root / "recall.sqlite")
+        try:
+            store.add_capture_event(
+                kind, utc=datetime.now(UTC), source_id=source_id, detail=detail
+            )
+        finally:
+            store.close()
+    except Exception:
+        _log.exception("ingest: could not record %s for %s", kind, source_id)
+
+
+def _flushed_segment(
+    out_dir: Path, source_id: str, *, since: float
+) -> tuple[str, int] | None:
+    """The segment file this connection last finalised: the newest one touched since
+    the connection opened. None when the connection wrote no file at all — naming an
+    older file would blame the wrong window."""
+    newest: tuple[float, str, int] | None = None
+    for path in out_dir.glob(f"{source_id}-*"):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if stat.st_mtime < since:
+            continue
+        if newest is None or (stat.st_mtime, path.name) > (newest[0], newest[1]):
+            newest = (stat.st_mtime, path.name, stat.st_size)
+    return (newest[1], newest[2]) if newest else None
+
+
 def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) -> None:
     """Serve one device connection: read its handshake, register it, then pump its
     raw-PCM stream into an ffmpeg segmenter. The pump (socket -> ffmpeg's stdin pipe)
     is the one bit of Python in the path, but the kernel's TCP receive buffer absorbs
     any pause, so a momentary stall can't lose audio (the samples stay contiguous).
-    Returns when the device disconnects."""
+    Returns when the device disconnects.
+
+    Every connection leaves durable evidence (capture_events): an ingest_connect on
+    open, and an ingest_disconnect on close carrying what the device actually sent —
+    bytes, measured peak level, time to the first byte and to the first *audible*
+    sample, and which segment file the close flushed. That record is what tells a
+    stream of digital silence from no stream at all when speech goes missing."""
     try:
         handshake = read_handshake(sock.recv)
         if handshake is None:
@@ -132,6 +234,10 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
         )
         env = {**os.environ, "TZ": "UTC"}
         _log.info("ingest: %s connected", handshake.source_id)
+        _record_event(root, capture_control.EVENT_INGEST_CONNECT, handshake.source_id)
+        connected = time.time()
+        meter = StreamMeter(handshake.sample_rate, handshake.channels)
+        first_byte: float | None = None
         proc = subprocess.Popen(
             build_segment_argv(seg, pattern), stdin=subprocess.PIPE, env=env
         )
@@ -147,12 +253,48 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
                 data = sock.recv(_READ_CHUNK_BYTES)
                 if not data:
                     break  # the device disconnected
-                proc.stdin.write(data)
+                proc.stdin.write(data)  # the archive comes first; meter after
                 alive.touch()
+                if first_byte is None:
+                    first_byte = time.time()
+                heard = meter.first_audible_s is not None
+                meter.feed(data)
+                if not heard and meter.first_audible_s is not None:
+                    _log.info(
+                        "ingest: %s first audible sample at %.2fs of stream",
+                        handshake.source_id,
+                        meter.first_audible_s,
+                    )
         finally:
             proc.stdin.close()  # EOF -> ffmpeg finalises the current segment cleanly
             proc.wait()
-        _log.info("ingest: %s disconnected", handshake.source_id)
+            flushed = _flushed_segment(out_dir, handshake.source_id, since=connected)
+            stats = json.dumps(
+                {
+                    "seconds": round(time.time() - connected, 1),
+                    "bytes": meter.bytes_total,
+                    "peak_db": meter.peak_db,
+                    "first_byte_s": (
+                        round(first_byte - connected, 2)
+                        if first_byte is not None
+                        else None
+                    ),
+                    "first_audible_s": (
+                        round(meter.first_audible_s, 2)
+                        if meter.first_audible_s is not None
+                        else None
+                    ),
+                    "flushed": flushed[0] if flushed else None,
+                    "flushed_bytes": flushed[1] if flushed else None,
+                }
+            )
+            _record_event(
+                root,
+                capture_control.EVENT_INGEST_DISCONNECT,
+                handshake.source_id,
+                stats,
+            )
+            _log.info("ingest: %s disconnected — %s", handshake.source_id, stats)
     finally:
         sock.close()
 

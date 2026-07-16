@@ -93,6 +93,36 @@ def test_a_fleet_pause_already_elapsed_is_treated_as_running(tmp_path: Path) -> 
     assert not capture_control.is_paused(tmp_path, NOW)
 
 
+def test_reconcile_reports_an_applied_intent_to_the_hook(tmp_path: Path) -> None:
+    # The hook is the durable "intent-seen" timestamp of the resume timeline
+    # (docs/capture-loss-plan.md Phase 1): called only when intent actually changes,
+    # with what was applied — a pause's resume-by, or "" for running.
+    applied: list[str] = []
+    paused = FakeExchange(FUTURE)
+    capture_mirror.reconcile_once(tmp_path, paused, now=NOW, on_applied=applied.append)
+    assert applied == [FUTURE]
+
+    capture_mirror.reconcile_once(tmp_path, paused, now=NOW, on_applied=applied.append)
+    assert applied == [FUTURE]  # unchanged intent -> not called
+
+    running = FakeExchange(None)
+    capture_mirror.reconcile_once(tmp_path, running, now=NOW, on_applied=applied.append)
+    assert applied == [FUTURE, ""]
+
+
+def test_a_failing_hook_never_blocks_the_intent_application(tmp_path: Path) -> None:
+    # Telemetry must not be able to wedge the mirror — the pause still applies.
+    def boom(_intent: str) -> None:
+        raise RuntimeError("db locked")
+
+    client = FakeExchange(FUTURE)
+    assert (
+        capture_mirror.reconcile_once(tmp_path, client, now=NOW, on_applied=boom)
+        is True
+    )
+    assert capture_control.is_paused(tmp_path, NOW)
+
+
 def test_each_pass_ships_the_phones_alive_freshness(tmp_path: Path) -> None:
     # The fleet can't see the phones' .alive markers (they're on the Mac), so the mirror
     # reports each one's last-active time — that's what makes /api/sources truthful on

@@ -37,27 +37,43 @@ contingent on Phase 1–2 confirming its cause.
 The evidence that would answer these is currently **destroyed**: `worker._clear_dead_stubs`
 unlinks the zero-byte segments before we can inspect them. That is the first thing to fix.
 
-## Phase 1 — instrument so the failure is observable
+## Phase 1 — instrument so the failure is observable — DONE 2026-07-16
 
-No behaviour change to capture; only make it *legible*. Small, safe, ships first.
+No behaviour change to capture; only make it *legible*. Small, safe, shipped first.
 
-1. **Stop destroying evidence.** Before `_clear_dead_stubs` unlinks a stub, record its exact
-   byte size, decoded sample count, and measured dB into the `dead_window` event's `detail`
-   (and, under a diagnostic flag, move it to a `quarantine/` dir instead of deleting). Then
-   "empty" vs "silent" vs "faint" is a fact, not an inference.
-2. **Per-source ingest telemetry.** In `stream_server`, log per connection: connect time,
-   first-byte time, bytes received, and the level of the received PCM (reuse the envelope /
-   `calibrate` dB path). So a resume answers "pixel9 connected at T, sent N bytes at −90 dB"
-   (silence) vs "−25 dB" (real audio) — directly settling question 1.
-3. **Resume timeline.** Emit one ordered trace per resume: intent-seen (mirror) →
-   pause-file-cleared → producer-opened → first-non-silent-sample → first-segment-finalized,
-   per source. This makes the gap between "resumed" and "actually recording" measurable, and
-   pins where in the chain the speech is lost.
-4. **Pause-flush trace.** Log what the segmenter does to the open segment on pause: finalized
-   with M bytes, or discarded. Settles question 3.
+1. **Stop destroying evidence.** ~~Record the stub's byte size / sample count / dB before
+   unlinking, quarantine under a flag.~~ Resolved by reading the code: a dead-window stub is
+   **zero bytes by construction** (`probe.Scan.empty` is exactly the `st_size == 0` files),
+   so there is nothing to measure or quarantine — a stub *cannot* hold silence. "Silent vs
+   empty" is therefore settled on the ingest side (item 2): ffmpeg receiving 25 s of digital
+   silence writes a small-but-nonzero FLAC/Opus segment; a zero-byte file means ffmpeg
+   received (almost) nothing. And `recall capture-trace` (item 3) shows fresh stubs live,
+   from disk, before the worker clears them.
+2. **Per-source ingest telemetry.** `stream_server` now meters every connection as it pumps
+   (`StreamMeter`): on close it writes a durable `ingest_disconnect` capture event with
+   seconds connected, bytes received, peak dBFS, time-to-first-byte, time-to-first-*audible*-
+   sample (≥ −66 dBFS — above the pixel9 −90 dB silence signature, below any live room), and
+   which segment file the close flushed with how many bytes. `ingest_connect` marks the open.
+   So a resume answers "pixel9 connected at T, sent N bytes at −90 dB" (silence) vs "−25 dB"
+   (real audio) — directly settling question 1.
+3. **Resume timeline.** `recall capture-trace [--minutes N]` prints one merged, time-ordered
+   trace: mirror intent applications (new durable `mirror_applied` event + timestamped agent
+   logs), USB resume/pause events, phone connects/disconnects with their measured levels,
+   dead windows, indexed segments, and fresh **un-indexed** segment files straight from disk
+   (the min-age guard means the store lags a live sitting by minutes). This makes the gap
+   between "resumed" and "actually recording" measurable per source.
+4. **Pause-flush trace.** The `ingest_disconnect` event's `flushed`/`flushed_bytes` fields
+   say what the close finalised (phones). The USB path's flush is visible as the segment
+   file itself (trace item 3); its finalisation on pause is already handled by
+   `runner._run_pipe` (producer closed first, ffmpeg finalises on EOF with a 10 s grace).
+   Settles question 3.
 
-Deliverable: after Phase 1, one controlled resume produces a readable trace that says which
-source recorded what, at what level, and when — no guessing.
+Not measurable inline: the USB mic's first-audible time — its PCM flows producer→ffmpeg
+through a kernel pipe with no Python in the path, deliberately. Its levels come from
+decoding its segments after the fact, which the archive already preserves.
+
+Deliverable (met): after Phase 1, one controlled resume produces a readable trace
+(`recall capture-trace`) that says which source recorded what, at what level, and when.
 
 ## Phase 2 — controlled diagnosis (needs a person at the mic)
 

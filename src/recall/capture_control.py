@@ -43,6 +43,14 @@ _PAUSE_POLL_SECONDS = 5.0
 EVENT_PAUSE = "pause"
 EVENT_RESUME = "resume"
 EVENT_DEAD_WINDOW = "dead_window"
+# Ingest telemetry (docs/capture-loss-plan.md Phase 1): a phone's stream opening and
+# closing, the close carrying what it actually sent (bytes, measured level, flushed
+# segment) — the evidence that tells a silent stream from no stream at all.
+EVENT_INGEST_CONNECT = "ingest_connect"
+EVENT_INGEST_DISCONNECT = "ingest_disconnect"
+# The mirror applied a changed fleet intent to the local pause file — the durable
+# "intent-seen" timestamp that anchors a resume timeline.
+EVENT_MIRROR_APPLIED = "mirror_applied"
 
 
 def _pause_file(root: Path) -> Path:

@@ -3,17 +3,21 @@ itself, so many devices share one port instead of one ffmpeg listener each."""
 
 from __future__ import annotations
 
+import json
 import socket
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from recall import capture_control
 from recall.capture import CaptureConfig
 from recall.store import Store
 from recall.stream_server import (
     Handshake,
+    StreamMeter,
     handle_connection,
     parse_handshake,
     read_handshake,
@@ -70,6 +74,86 @@ def test_read_handshake_rejects_overlong_or_eof() -> None:
     assert read_handshake(lambda _n: b"x", max_bytes=64) is None
     # EOF before the newline is a failed handshake, not a hang.
     assert read_handshake(lambda _n: b"") is None
+
+
+def test_meter_counts_pure_zeros_without_calling_them_audible() -> None:
+    # Digital zeros are what a dead capture path produces: bytes flow, no signal.
+    m = StreamMeter(sample_rate=48000, channels=1)
+    m.feed(b"\x00\x00" * 48000)  # 1s of digital silence
+    assert m.bytes_total == 96000
+    assert m.peak_db is None  # not one non-zero sample
+    assert m.first_audible_s is None
+
+
+def test_meter_reports_near_silence_as_a_level_but_not_audible() -> None:
+    # The pixel9 failure signature: amplitude-1 samples ≈ -90 dB. The meter must
+    # REPORT that level (it's the diagnostic) while still not calling it audible.
+    m = StreamMeter(sample_rate=48000, channels=1)
+    m.feed(b"\x01\x00" * 4800)  # 0.1s at amplitude 1
+    assert m.peak_db == -90.3
+    assert m.first_audible_s is None
+
+
+def test_meter_finds_the_first_audible_sample_and_the_peak() -> None:
+    m = StreamMeter(sample_rate=48000, channels=1)
+    m.feed(b"\x00\x00" * 48000)  # 1s of silence first
+    m.feed((1000).to_bytes(2, "little", signed=True) * 4800)  # then real signal
+    assert m.first_audible_s == pytest.approx(1.0, abs=0.01)
+    assert m.peak_db == -30.3  # 20*log10(1000/32768)
+
+
+def test_meter_hears_a_negative_swing() -> None:
+    m = StreamMeter(sample_rate=48000, channels=1)
+    m.feed((-1000).to_bytes(2, "little", signed=True) * 480)
+    assert m.first_audible_s == 0.0
+    assert m.peak_db == -30.3
+
+
+def test_meter_handles_a_sample_split_across_chunks() -> None:
+    # recv() chunks don't respect sample boundaries; the half-sample must carry over.
+    m = StreamMeter(sample_rate=48000, channels=1)
+    m.feed(b"\x00")  # first half of a sample
+    m.feed(b"\x10")  # completes 0x1000 = 4096 — audible
+    assert m.bytes_total == 2
+    assert m.first_audible_s == 0.0
+    assert m.peak_db == pytest.approx(-18.1, abs=0.1)
+
+
+def test_handle_connection_records_ingest_telemetry(tmp_path: Path) -> None:
+    # The Phase-1 evidence (docs/capture-loss-plan.md): a connection leaves a durable
+    # record of what the device actually SENT — bytes and level — plus which segment
+    # file the close flushed. This is what settles "silent stream" vs "no stream".
+    server_sock, client_sock = socket.socketpair()
+
+    def device() -> None:
+        client_sock.sendall(b'{"id":"kitchen"}\n')
+        client_sock.sendall((2000).to_bytes(2, "little", signed=True) * 48000)
+        client_sock.close()
+
+    sender = threading.Thread(target=device)
+    sender.start()
+    handle_connection(server_sock, tmp_path, CaptureConfig())
+    sender.join()
+
+    store = Store.open(tmp_path / "recall.sqlite")
+    try:
+        events = store.capture_events_since(datetime.now(UTC) - timedelta(minutes=5))
+    finally:
+        store.close()
+    kinds = [e.kind for e in events]
+    assert capture_control.EVENT_INGEST_CONNECT in kinds
+    disconnect = next(
+        e for e in events if e.kind == capture_control.EVENT_INGEST_DISCONNECT
+    )
+    assert disconnect.source_id == "kitchen"
+    assert disconnect.detail is not None
+    stats = json.loads(disconnect.detail)
+    assert stats["bytes"] == 96000  # every byte the device sent, counted
+    assert stats["peak_db"] == -24.3  # 20*log10(2000/32768) — real signal, measured
+    assert stats["first_audible_s"] == 0.0
+    assert stats["first_byte_s"] is not None
+    assert stats["flushed"].startswith("kitchen-")  # the close finalised a segment
+    assert stats["flushed_bytes"] > 0
 
 
 def test_handle_connection_segments_a_handshaked_stream(tmp_path: Path) -> None:

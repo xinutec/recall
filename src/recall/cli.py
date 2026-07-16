@@ -24,7 +24,7 @@ from recall.abcompare import Report, compare_models, render_json, render_markdow
 from recall.asr import AsrResult, Transcriber, mlx_transcribe
 from recall.attribution import AttributionReport
 from recall.backup import run_backup
-from recall.capture import CaptureConfig
+from recall.capture import CaptureConfig, parse_segment_start
 from recall.cleanup import scan_hallucinations, scan_loops
 from recall.cli_parser import build_parser
 from recall.conversations import segment_conversations
@@ -1467,6 +1467,7 @@ def _cmd_capture_mirror(args: argparse.Namespace) -> int:
     fleet every --interval seconds and applies pause/resume locally, reporting back what
     it applied. The token is RECALL_SYNC_TOKEN. Imports are lazy so `recall.cli` stays
     framework-free for the capture agents (recall.sync drags in the web framework)."""
+    runlog.setup()  # timestamped intent-application logging to the agent's .err.log
     token = os.environ.get("RECALL_SYNC_TOKEN")
     if not token:
         print("capture-mirror needs RECALL_SYNC_TOKEN")
@@ -1476,6 +1477,19 @@ def _cmd_capture_mirror(args: argparse.Namespace) -> int:
     from recall.capture_mirror import reconcile_once, run_loop  # noqa: PLC0415
     from recall.sync import SyncClient  # noqa: PLC0415 - lazy: pulls the web framework
 
+    def note_applied(intent: str) -> None:
+        # The durable "intent-seen" timestamp a resume timeline starts from
+        # (recall capture-trace). Short-lived connection; a few rows a day.
+        store = Store.open(_db_path(args.out))
+        try:
+            store.add_capture_event(
+                capture_control.EVENT_MIRROR_APPLIED,
+                utc=datetime.now(UTC),
+                detail=intent or "running",
+            )
+        finally:
+            store.close()
+
     client = SyncClient(args.url, token)
     if args.loop:
         run_loop(
@@ -1484,10 +1498,75 @@ def _cmd_capture_mirror(args: argparse.Namespace) -> int:
             now=lambda: datetime.now(UTC),
             sleep=time.sleep,
             interval=args.interval,
+            on_applied=note_applied,
         )
         return 0
-    changed = reconcile_once(args.out, client, now=datetime.now(UTC))
+    changed = reconcile_once(
+        args.out, client, now=datetime.now(UTC), on_applied=note_applied
+    )
     print(f"capture-mirror: {'applied fleet intent' if changed else 'no change'}")
+    return 0
+
+
+def _cmd_capture_trace(args: argparse.Namespace) -> int:
+    """One readable, time-ordered trace of what capture did: every capture event
+    (mirror applications, resume/pause, phone connects/disconnects with their measured
+    levels, dead windows) merged with the audio segments actually written. The Phase-1
+    deliverable of docs/capture-loss-plan.md: after a controlled resume, this says
+    which source recorded what, at what level, and when — no guessing."""
+    now = datetime.now(UTC)
+    since = now - timedelta(minutes=args.minutes)
+    store = Store.open(_db_path(args.out))
+    try:
+        events = store.capture_events_since(since)
+        source_ids = [source_id for source_id, _name, _kind in store.source_rows()]
+        known = frozenset(path for _, path in store.audio_segment_paths())
+        # (utc, tiebreak, line): at the same instant, a segment's start sorts before
+        # events noticed at that moment, reading naturally.
+        rows: list[tuple[datetime, int, str]] = []
+        for event in events:
+            who = event.source_id or "household"
+            suffix = f"  {event.detail}" if event.detail else ""
+            rows.append((event.utc, 1, f"{event.kind:<18} {who}{suffix}"))
+        for source_id in source_ids:
+            for start, end in store.audio_segment_intervals(source_id, since=since):
+                seconds = (end - start).total_seconds()
+                rows.append(
+                    (
+                        start,
+                        0,
+                        f"{'segment':<18} {source_id}  "
+                        f"{seconds:.0f}s (ends {end:%H:%M:%S}Z)",
+                    )
+                )
+            # Segment FILES the worker hasn't indexed yet (min-age guard) — the only
+            # place a fresh zero-byte stub is visible before it is dead-windowed, and
+            # what makes the trace usable live, mid-sitting, not two minutes later.
+            for path in (args.out / source_id).glob(f"{source_id}-*"):
+                if str(path) in known:
+                    continue
+                try:
+                    stat = path.stat()
+                    start = parse_segment_start(path.name)
+                except (OSError, ValueError):
+                    continue
+                if datetime.fromtimestamp(stat.st_mtime, tz=UTC) < since:
+                    continue
+                rows.append(
+                    (
+                        start,
+                        0,
+                        f"{'file':<18} {source_id}  "
+                        f"{path.name} ({stat.st_size} bytes, not yet indexed)",
+                    )
+                )
+    finally:
+        store.close()
+    if not rows:
+        print(f"no capture events or segments in the last {args.minutes} minutes")
+        return 0
+    for utc, _tiebreak, line in sorted(rows, key=lambda r: (r[0], r[1])):
+        print(f"{utc:%Y-%m-%dT%H:%M:%S}Z  {line}")
     return 0
 
 
@@ -1578,6 +1657,7 @@ _COMMANDS = {
     "pause": _cmd_pause,
     "resume": _cmd_resume,
     "capture-mirror": _cmd_capture_mirror,
+    "capture-trace": _cmd_capture_trace,
     "scan-quiet": _cmd_scan_quiet,
     "repair-transcripts": _cmd_repair_transcripts,
     "verify": _cmd_verify,

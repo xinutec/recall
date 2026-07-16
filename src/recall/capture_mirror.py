@@ -90,9 +90,20 @@ def _apply(root: Path, intent: str | None, now: datetime) -> None:
     capture_control.clear_pause(root)
 
 
-def reconcile_once(root: Path, client: IntentExchange, *, now: datetime) -> bool:
+def reconcile_once(
+    root: Path,
+    client: IntentExchange,
+    *,
+    now: datetime,
+    on_applied: Callable[[str], None] | None = None,
+) -> bool:
     """One mirror pass: report the Mac's local capture state, pull the fleet's intent,
     and apply it iff it changed since we last did. Returns whether the pause file moved.
+
+    `on_applied` (optional) is called with the just-applied intent ("" = running) —
+    the durable "intent-seen" timestamp a resume timeline starts from (the caller
+    records it as a capture event). Best-effort: a failing hook never blocks the
+    application, which has already happened.
     """
     local_until = capture_control.paused_until(root)
     running = not capture_control.is_paused(root, now)
@@ -106,22 +117,29 @@ def reconcile_once(root: Path, client: IntentExchange, *, now: datetime) -> bool
         return False  # fleet intent unchanged since we last applied it — leave local be
     _apply(root, intent, now)
     _write_marker(root, intent_value)
+    _log.info("fleet intent changed — applied: %s", intent_value or "running")
+    if on_applied is not None:
+        try:
+            on_applied(intent_value)
+        except Exception:
+            _log.exception("on_applied hook failed (the intent was still applied)")
     return True
 
 
-def run_loop(
+def run_loop(  # noqa: PLR0913 - injected clock/sleep + the telemetry hook
     root: Path,
     client: IntentExchange,
     *,
     now: Callable[[], datetime],
     sleep: Callable[[float], None],
     interval: float = 5.0,
+    on_applied: Callable[[str], None] | None = None,
 ) -> None:
     """Mirror the fleet's capture intent forever. A transient network error is logged
     and the loop continues — a blip must never wedge the mic; the next tick retries."""
     while True:
         try:
-            reconcile_once(root, client, now=now())
+            reconcile_once(root, client, now=now(), on_applied=on_applied)
         except Exception:  # a poll failure must not kill the mirror
             _log.exception("capture-mirror pass failed; will retry next tick")
         sleep(interval)

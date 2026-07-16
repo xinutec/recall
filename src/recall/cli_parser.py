@@ -457,6 +457,15 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "--interval", type=float, default=5.0, help="loop poll seconds (default 5)"
     )
 
+    trace = sub.add_parser(
+        "capture-trace",
+        help="print the merged capture timeline (events + segments) for loss diagnosis",
+    )
+    trace.add_argument("--out", type=Path, default=Path("data"), help="data root")
+    trace.add_argument(
+        "--minutes", type=int, default=30, help="how far back to look (default 30)"
+    )
+
     sq = sub.add_parser(
         "scan-quiet", help="measure raw volume + list long total-quiet spans to review"
     )
