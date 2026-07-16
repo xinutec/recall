@@ -11,7 +11,6 @@ import pytest
 from recall.envelope import Measurement, SpanSound, encode_envelope
 from recall.ids import AudioSegmentId
 from recall.quiet import (
-    SWEEPABLE_KINDS,
     QuietSpan,
     find_quiet_spans,
     measured_volumes,
@@ -19,7 +18,7 @@ from recall.quiet import (
     rank_spans,
     scan_segments,
 )
-from recall.sources import AudioSource, SourceKind
+from recall.sources import SWEEPABLE_KINDS, AudioSource, SourceKind
 from recall.store import SegmentVolume, Store
 from recall.timeline import Segment
 

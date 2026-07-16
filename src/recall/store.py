@@ -39,6 +39,7 @@ from recall.store_models import (
     SegmentVolume,
     SessionSummary,
     SourceCoverage,
+    SweepEvidence,
     SweepTombstone,
     TranscriptSegment,
     UploadJob,
@@ -71,6 +72,7 @@ __all__ = [
     "SessionSummary",
     "SourceCoverage",
     "Store",
+    "SweepEvidence",
     "SweepTombstone",
     "TranscriptSegment",
     "UploadJob",
@@ -1283,6 +1285,53 @@ class Store:
             (source, start.isoformat()),
         ).fetchone()
         return AudioSegmentId(int(row["id"])) if row else None
+
+    def sweep_evidence(self, source: str, start: datetime) -> SweepEvidence | None:
+        """What this Mac's own database knows about the segment a fleet tombstone
+        names — the ground it stands on to decide whether to honour the sweep. None =
+        already swept or never held here (either way the sweep has converged).
+
+        Carries the source kind, the Mac's own VAD verdict (`speech_s`), and whether a
+        current, visible turn survives — the same three signals the local quiet review
+        used to justify the deletion in the first place, so the Mac can re-derive that
+        justification instead of trusting the fleet's word for it."""
+        row = self._conn.execute(
+            """SELECT a.id, a.speech_s, s.kind,
+                      EXISTS (SELECT 1 FROM transcript_segments t
+                              WHERE t.audio_segment_id = a.id
+                                AND t.superseded_by IS NULL
+                                AND t.hidden_reason IS NULL) AS has_speech
+               FROM audio_segments a JOIN sources s ON s.id = a.source_id
+               WHERE a.source_id = ? AND a.start_utc = ?""",
+            (source, start.isoformat()),
+        ).fetchone()
+        if row is None:
+            return None
+        return SweepEvidence(
+            audio_id=AudioSegmentId(int(row["id"])),
+            kind=SourceKind(str(row["kind"])),
+            speech_s=None if row["speech_s"] is None else float(row["speech_s"]),
+            has_speech=bool(row["has_speech"]),
+        )
+
+    def record_sweep_refusal(self, source: str, start: datetime, reason: str) -> None:
+        """Journal a fleet sweep the Mac declined to apply — the segment's audio is
+        kept, and the doctor reports the count so a run of refusals surfaces as a
+        tamper signal rather than silently accreting. OR IGNORE: the first refusal of
+        an identity is the fact; re-serving the same tombstone doesn't multiply it."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO sweep_refusals "
+            "(source_id, start_utc, refused_utc, reason) VALUES (?, ?, ?, ?)",
+            (source, start.isoformat(), datetime.now(UTC).isoformat(), reason),
+        )
+        self._commit()
+
+    def sweep_refusal_count(self) -> int:
+        """How many distinct fleet sweeps the Mac has declined — the doctor's tamper
+        gauge. A healthy split holds this at 0: every legitimate quiet-review deletion
+        is of audio the Mac also measured speechless, so it passes the local check."""
+        row = self._conn.execute("SELECT count(*) AS n FROM sweep_refusals").fetchone()
+        return int(row["n"])
 
     def is_tombstoned(self, source: str, start: datetime) -> bool:
         """Whether this identity was deliberately deleted here — the veto that stops

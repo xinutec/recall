@@ -66,7 +66,7 @@ from recall.envelope import (
     measure,
 )
 from recall.ids import AudioSegmentId
-from recall.sources import SourceKind
+from recall.sources import SWEEPABLE_KINDS
 from recall.store import SegmentVolume, Store
 
 # How much of a minute may rise above its mic's own sound threshold and still be called
@@ -87,9 +87,6 @@ MIN_QUIET_SPAN_S = 300.0
 # Back-to-back capture segments abut within milliseconds; anything larger is a hole in
 # the recording, which is unknown, not quiet, and so must break the run.
 MAX_GAP_S = 2.0
-# Continuous capture only. UPLOAD is an imported recording (a meeting) — the archive's
-# most valuable audio, never a stream of idle noise, so never a delete candidate.
-SWEEPABLE_KINDS = frozenset(SourceKind) - {SourceKind.UPLOAD}
 # Concurrent decodes in a scan. The scan is ffmpeg-bound and ffmpeg is a subprocess, so
 # these overlap: eight measured 2.6x the throughput of one. Kept modest so a scan cannot
 # starve live capture and transcription, which share this machine.

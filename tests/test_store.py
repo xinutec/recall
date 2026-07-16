@@ -1955,3 +1955,53 @@ def test_audio_segment_id_at_resolves_the_cross_machine_identity() -> None:
     audio_id = store.add_audio_segment(_segment())
     assert store.audio_segment_id_at("usb", BASE) == audio_id
     assert store.audio_segment_id_at("usb", BASE + timedelta(seconds=1)) is None
+
+
+def test_sweep_evidence_reports_the_macs_own_verdict_on_a_segment() -> None:
+    # The Mac decides whether to honour a fleet sweep from its OWN database, not the
+    # fleet's word: kind, its VAD verdict, and whether a visible turn survives.
+    store = Store.memory()
+    store.add_source(_source())
+    audio_id = store.add_audio_segment(_segment())
+
+    # Never measured, no turn: kind is captured, but speech_s is still unknown here.
+    e = store.sweep_evidence("usb", BASE)
+    assert e is not None
+    assert e.audio_id == audio_id
+    assert e.kind == SourceKind.COREAUDIO
+    assert e.speech_s is None
+    assert e.has_speech is False
+
+    # Scored speechless: now the sweep bar is cleared.
+    store.set_audio_analysis(audio_id, speech_s=0.0, structure=None)
+    e = store.sweep_evidence("usb", BASE)
+    assert e is not None and e.speech_s == 0.0
+
+    # A surviving turn flips has_speech, however quiet the mean looked.
+    store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=1),
+        text="not idle after all",
+        asr_model="m",
+    )
+    e = store.sweep_evidence("usb", BASE)
+    assert e is not None and e.has_speech is True
+
+
+def test_sweep_evidence_is_none_when_the_segment_is_not_held() -> None:
+    store = Store.memory()
+    store.add_source(_source())
+    store.add_audio_segment(_segment())
+    assert store.sweep_evidence("usb", BASE + timedelta(seconds=1)) is None
+
+
+def test_sweep_refusals_are_journaled_once_per_identity_and_counted() -> None:
+    # The doctor's tamper gauge: a refused fleet sweep is kept audio, recorded so it
+    # surfaces; re-serving the same tombstone must not multiply the count.
+    store = Store.memory()
+    assert store.sweep_refusal_count() == 0
+    store.record_sweep_refusal("usb", BASE, "the Mac's VAD measured 4.2s of speech")
+    store.record_sweep_refusal("usb", BASE, "re-served next pass")  # same identity
+    store.record_sweep_refusal("usb", BASE + timedelta(seconds=60), "another")
+    assert store.sweep_refusal_count() == 2

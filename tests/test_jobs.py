@@ -21,7 +21,7 @@ from recall.cli_parser import build_parser
 from recall.ids import AudioSegmentId
 from recall.jobs import run_jobs_once
 from recall.sources import AudioSource, SourceKind
-from recall.store_models import AbCompareJob
+from recall.store_models import AbCompareJob, SweepEvidence
 from recall.timeline import Segment
 
 
@@ -90,9 +90,12 @@ class _FakeStore:
         self.segments: list[Segment] = []
         self.ab_added: list[tuple[str, int | None]] = []
         self.ab_local: dict[int, AbCompareJob] = {}  # fleet_id -> local mirror
-        # (source, start) -> (audio id, paths its deletion frees)
-        self.sweepable: dict[tuple[str, datetime], tuple[int, list[str]]] = {}
+        # (source, start) -> the Mac's own evidence about the segment a sweep names
+        self.evidence: dict[tuple[str, datetime], SweepEvidence] = {}
+        # audio id -> paths its deletion frees
+        self.freed: dict[int, list[str]] = {}
         self.deleted: list[list[int]] = []
+        self.refusals: list[tuple[str, datetime, str]] = []
 
     def add_refine_request(self, source: str, start: datetime, end: datetime) -> int:
         self.refines.append((source, start, end))
@@ -122,18 +125,17 @@ class _FakeStore:
     def ab_compare_run_by_fleet_id(self, fleet_id: int) -> AbCompareJob | None:
         return self.ab_local.get(fleet_id)
 
-    def audio_segment_id_at(
-        self, source: str, start: datetime
-    ) -> AudioSegmentId | None:
-        entry = self.sweepable.get((source, start))
-        return AudioSegmentId(entry[0]) if entry else None
+    def sweep_evidence(self, source: str, start: datetime) -> SweepEvidence | None:
+        return self.evidence.get((source, start))
+
+    def record_sweep_refusal(self, source: str, start: datetime, reason: str) -> None:
+        self.refusals.append((source, start, reason))
 
     def delete_audio_segments(self, audio_ids: Sequence[AudioSegmentId]) -> list[str]:
         self.deleted.append([int(a) for a in audio_ids])
         paths: list[str] = []
-        for _key, (audio_id, freed) in list(self.sweepable.items()):
-            if audio_id in audio_ids:
-                paths.extend(freed)
+        for audio_id in audio_ids:
+            paths.extend(self.freed.get(int(audio_id), []))
         return paths
 
 
@@ -421,22 +423,34 @@ def _sweep_job(job_id: int = 31) -> _Job:
     return _Job(job_id, "sweep", "usb", "2026-07-15T10:00:00+00:00", None)
 
 
-def test_a_sweep_job_removes_the_local_copy_then_acknowledges(
+_SWEEP_AT = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
+
+
+def _speechless(audio_id: int = 7) -> SweepEvidence:
+    # What the Mac's own review already scored empty — the only thing a sweep may hit.
+    return SweepEvidence(
+        audio_id=AudioSegmentId(audio_id),
+        kind=SourceKind.COREAUDIO,
+        speech_s=0.0,
+        has_speech=False,
+    )
+
+
+def test_a_sweep_the_mac_scored_speechless_removes_the_local_copy(
     tmp_path: Path,
 ) -> None:
-    # A deletion confirmed once on the fleet's review converges the master archive:
-    # the local segment (rows + file) goes, then the tombstone is acked.
+    # The Mac's own VAD agrees the span is idle capture: the fleet tombstone earns the
+    # deletion (rows + file), then is acked. No refusal recorded.
     blob = tmp_path / "usb" / "usb-20260715T100000.opus"
     blob.parent.mkdir(parents=True)
     blob.write_bytes(b"quiet")
     store = _FakeStore()
-    store.sweepable[("usb", datetime(2026, 7, 15, 10, 0, tzinfo=UTC))] = (
-        7,
-        [str(blob)],
-    )
+    store.evidence[("usb", _SWEEP_AT)] = _speechless(7)
+    store.freed[7] = [str(blob)]
     client = _FakeClient([_sweep_job(31)])
     assert run_jobs_once(store, client, data_root=tmp_path) == 1
     assert store.deleted == [[7]]
+    assert store.refusals == []
     assert not blob.exists()
     assert client.done == [(31, "sweep")]
 
@@ -450,4 +464,49 @@ def test_a_sweep_for_a_segment_not_held_here_is_still_acknowledged(
     client = _FakeClient([_sweep_job(32)])
     assert run_jobs_once(store, client, data_root=tmp_path) == 1
     assert store.deleted == []
+    assert store.refusals == []
     assert client.done == [(32, "sweep")]
+
+
+@pytest.mark.parametrize(
+    ("evidence", "why"),
+    [
+        (
+            SweepEvidence(AudioSegmentId(7), SourceKind.UPLOAD, 0.0, False),
+            "an uploaded recording is never a sweep target",
+        ),
+        (
+            SweepEvidence(AudioSegmentId(7), SourceKind.COREAUDIO, 0.0, True),
+            "a surviving turn means kept speech",
+        ),
+        (
+            SweepEvidence(AudioSegmentId(7), SourceKind.COREAUDIO, None, False),
+            "the Mac never measured it speechless",
+        ),
+        (
+            SweepEvidence(AudioSegmentId(7), SourceKind.COREAUDIO, 4.2, False),
+            "the Mac's own VAD heard speech",
+        ),
+    ],
+)
+def test_a_sweep_the_mac_cannot_justify_is_refused_and_the_audio_kept(
+    tmp_path: Path, evidence: SweepEvidence, why: str
+) -> None:
+    # The Mac is the protected master archive: a fleet (or a compromised Isis) can
+    # only command the deletion of audio the Mac itself scored as idle. Every other
+    # tombstone is refused — the segment is kept, the refusal journaled — yet still
+    # acked so the fleet's own tombstone (which stops re-ingestion) closes the loop
+    # without re-serving.
+    blob = tmp_path / "usb" / "usb-20260715T100000.opus"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"real speech")
+    store = _FakeStore()
+    store.evidence[("usb", _SWEEP_AT)] = evidence
+    store.freed[7] = [str(blob)]
+    client = _FakeClient([_sweep_job(33)])
+    assert run_jobs_once(store, client, data_root=tmp_path) == 1
+    assert store.deleted == []  # nothing destroyed
+    assert blob.exists()  # the bytes survive on the Mac
+    assert len(store.refusals) == 1
+    assert store.refusals[0][0] == "usb"
+    assert client.done == [(33, "sweep")], why

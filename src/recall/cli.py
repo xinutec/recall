@@ -45,6 +45,7 @@ from recall.health import (
     loss_check,
     mirror_check,
     recorders_on_disk,
+    sweep_refusal_check,
 )
 from recall.hf_asr import is_adapter_dir, make_hf_transcriber
 from recall.identify import identify_segments
@@ -1242,6 +1243,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         unmirrored = len(
             store.unmirrored_segments(limit=10_000, older_than=now - _MIRROR_SLACK)
         )
+        sweep_refusals = store.sweep_refusal_count()
     finally:
         store.close()
 
@@ -1259,6 +1261,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     # stock LAN-only deployment has no fleet to be incomplete against.
     if os.environ.get("RECALL_SYNC_TOKEN"):
         checks.append(mirror_check(unmirrored, slack=_MIRROR_SLACK))
+        checks.append(sweep_refusal_check(sweep_refusals))
 
     for check in checks:
         mark = {"pass": "ok", "warn": "WARN", "fail": "FAIL", "skip": "--"}[

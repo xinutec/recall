@@ -347,6 +347,25 @@ confirmed on Isis reach the Mac?":
   on neither*, and the doctor asserts it (`mirror_check`: unmirrored-beyond-slack =
   FAIL, same class as a stalled backup).
 
+**Sweep is a request, not an order — the Mac protects itself from Isis (2026-07-16).**
+The one-way VPN exists so a compromised Isis cannot reach the Mac; the deletion pull
+above quietly broke that — an attacker with the sync token (or Isis itself) could
+write tombstones and the Mac would obediently hard-delete its master archive. Fixed by
+making a sweep *conditional on the Mac's own evidence*: `_apply_sweep` reads
+`sweep_evidence` (the segment's kind, the Mac's own VAD `speech_s`, and whether a
+visible turn survives) and honours the tombstone only when all three say speechless
+idle capture — the same bar the local quiet review clears before deleting. Any other
+tombstone is **refused**: the audio is kept, the refusal journaled in `sweep_refusals`,
+and the doctor surfaces the count (`sweep_refusal_check`: >0 = WARN, the alarm that the
+guard fired — never FAIL, because nothing was lost). The job is still acked either way,
+so there's no re-serve loop; Isis's own tombstone stops the kept segment being
+re-mirrored. Consequence, blessed: deleting a *speech-bearing* session from Isis's UI
+no longer cascades to the Mac (Isis drops its copy and the tombstone blocks re-sync,
+but the Mac keeps its master copy) — deliberate removal of real speech is now a
+Mac-local act, which is exactly what "protected master archive" means. The worst a
+hostile Isis can command is the deletion of audio the Mac already measured as an empty
+room, with odin's restic history behind even that.
+
 (The capture-mirror transport was upgraded to long-poll 2026-07-16 — intent in ~RTT —
 so the "replace the transport" follow-up is closed; the break-glass CLI still covers an
 unreachable Isis. The one manual check left: the phone's share-to-Recall flow points at

@@ -51,6 +51,13 @@ class SourceKind(Enum):
     UPLOAD = "upload"  # clips uploaded over HTTP (e.g. phone recorder); not captured
 
 
+# Kinds the quiet review may delete and a fleet sweep may target: everything recall
+# captured itself, never an uploaded recording (a meeting is real speech we chose to
+# keep, not idle room noise). The single source of truth — quiet detection, the Mac's
+# sweep-safety check, and the audio-volume query all read this one set.
+SWEEPABLE_KINDS: frozenset[SourceKind] = frozenset(SourceKind) - {SourceKind.UPLOAD}
+
+
 class SourceRow(NamedTuple):
     """A registered source as the fleet/liveness view needs it (Store.source_rows),
     with `kind` already parsed to the enum so callers never compare raw strings."""

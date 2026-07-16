@@ -211,6 +211,33 @@ def mirror_check(unmirrored: int, *, slack: timedelta) -> Check:
     )
 
 
+def sweep_refusal_check(refused: int) -> Check:
+    """Has the Mac declined any fleet sweep?
+
+    A sweep is a deletion the system of record asks the Mac to apply to its master
+    archive. The Mac honours one only when its own VAD already scored the segment
+    speechless — so a refusal means Isis asked to delete audio the Mac measured as
+    real speech. In normal operation that never happens: every legitimate quiet-review
+    deletion is of audio both machines saw as idle. A non-zero count therefore reads
+    as a compromised or misbehaving fleet trying to reach protected audio — `warn`,
+    not `fail`, because the audio was *kept*: the invariant held, this is the alarm
+    that it was tested.
+    """
+    return Check(
+        section="sync",
+        label="fleet sweeps honoured",
+        verdict="pass" if refused == 0 else "warn",
+        observed=(
+            "no sweep refused"
+            if refused == 0
+            else f"{refused} fleet sweep(s) refused — kept audio the Mac scored speech"
+        ),
+        expected="0 refusals",
+        value=float(refused),
+        unit="refusals",
+    )
+
+
 def backup_check(age_hours: float | None, *, max_age_hours: float) -> Check:
     """The archive's only unrecoverable failure is losing the one local copy.
 

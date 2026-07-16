@@ -14,6 +14,7 @@ from typing import NamedTuple
 
 from recall.asr import Word
 from recall.ids import AudioSegmentId, CorrectionId, SpeakerId, TranscriptId
+from recall.sources import SourceKind
 
 
 class SessionSummary(NamedTuple):
@@ -198,6 +199,25 @@ class SweepTombstone:
     id: int
     source: str
     start: datetime
+
+
+@dataclass(frozen=True)
+class SweepEvidence:
+    """What the Mac's *own* database knows about a segment a fleet tombstone wants
+    deleted — the ground the Mac stands on when it decides whether to honour the sweep.
+
+    The one-way VPN makes the Mac the protected master archive precisely so a
+    compromised Isis cannot destroy the household's audio. A sweep is therefore a
+    *request*, checked against this evidence: the Mac only deletes what its own VAD
+    already measured as speechless capture (`speech_s == 0`, no surviving turn, a
+    captured — not uploaded — kind). Anything else it keeps. So the worst a hostile
+    Isis can command is the deletion of audio the Mac itself already scored as an idle
+    room; deliberate removal of real speech stays a Mac-local act."""
+
+    audio_id: AudioSegmentId
+    kind: SourceKind
+    speech_s: float | None  # the Mac's VAD verdict; None = never measured here
+    has_speech: bool  # a current, visible turn (human or machine) stands on it
 
 
 @dataclass(frozen=True)

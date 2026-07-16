@@ -19,7 +19,8 @@ from dataclasses import dataclass
 
 from recall.analyse import analyse_segments
 from recall.calibrate import calibrate
-from recall.quiet import SWEEPABLE_KINDS, scan_segments
+from recall.quiet import scan_segments
+from recall.sources import SWEEPABLE_KINDS
 from recall.store import Store
 
 

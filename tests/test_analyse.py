@@ -10,8 +10,8 @@ import pytest
 from recall.analyse import analyse_segments
 from recall.envelope import encode_envelope
 from recall.ids import AudioSegmentId
-from recall.quiet import SWEEPABLE_KINDS, quiet_spans
-from recall.sources import AudioSource, SourceKind
+from recall.quiet import quiet_spans
+from recall.sources import SWEEPABLE_KINDS, AudioSource, SourceKind
 from recall.store import Store
 from recall.timeline import Segment
 from recall.vad import SpeechRegion

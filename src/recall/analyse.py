@@ -35,7 +35,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from recall.quiet import SWEEPABLE_KINDS
+from recall.sources import SWEEPABLE_KINDS
 from recall.spectrum import band_shapes, decode_shape, structure
 from recall.store import Store
 from recall.vad import Vad, silero_speech_regions

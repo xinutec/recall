@@ -458,4 +458,21 @@ _MIGRATIONS: tuple[str, ...] = (
         UNIQUE (source_id, start_utc)
     );
     """,
+    # A fleet sweep the Mac declined to apply, because its own evidence contradicted
+    # the tombstone (the segment carries speech, a surviving turn, or was never
+    # measured speechless here). The Mac is the protected master archive: a
+    # compromised Isis must not be able to command permanent deletion of real audio,
+    # so a sweep is honoured only when the Mac can independently justify it. Declined
+    # sweeps are journaled here — kept audio, not lost — and surfaced by the doctor so
+    # a flood of them reads as tampering rather than silently piling up.
+    """
+    CREATE TABLE sweep_refusals (
+        id          INTEGER PRIMARY KEY,
+        source_id   TEXT NOT NULL,
+        start_utc   TEXT NOT NULL,
+        refused_utc TEXT NOT NULL,
+        reason      TEXT NOT NULL,
+        UNIQUE (source_id, start_utc)
+    );
+    """,
 )
