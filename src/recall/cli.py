@@ -43,6 +43,7 @@ from recall.health import (
     backup_check,
     capture_checks,
     loss_check,
+    mirror_check,
     recorders_on_disk,
 )
 from recall.hf_asr import is_adapter_dir, make_hf_transcriber
@@ -1171,6 +1172,10 @@ def _print_attribution(
 # The mirror runs nightly; 48h of slack tolerates one missed night (Mac asleep,
 # odin briefly down) without letting a dead backup go quiet for a week.
 _BACKUP_MAX_AGE_HOURS = 48.0
+# In-flight slack for the fleet-mirror check: the sync timer runs every 120s and the
+# mirror-completion queue drains 500 a pass, so anything processed an hour ago and
+# still unpushed means the push has actually stopped.
+_MIRROR_SLACK = timedelta(hours=1)
 # How far back the speech-loss reconciliation looks, and the smallest uncovered
 # active-capture stretch it will call loss — below this is the boundary slop of a pause
 # recorded a beat after the last segment, not real lost speech.
@@ -1234,6 +1239,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         # actually uses is one the archive knows about.
         sources = [(row.id, row.kind) for row in store.source_rows()]
         losses, dead_windows = _speech_loss(store, sources, now=now)
+        unmirrored = len(
+            store.unmirrored_segments(limit=10_000, older_than=now - _MIRROR_SLACK)
+        )
     finally:
         store.close()
 
@@ -1247,6 +1255,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         *agent_checks(capture_control.agent_health()),
         backup_check(backup_age_hours(args.out), max_age_hours=_BACKUP_MAX_AGE_HOURS),
     ]
+    # The fleet mirror only exists when the split is on (RECALL_SYNC_TOKEN set); a
+    # stock LAN-only deployment has no fleet to be incomplete against.
+    if os.environ.get("RECALL_SYNC_TOKEN"):
+        checks.append(mirror_check(unmirrored, slack=_MIRROR_SLACK))
 
     for check in checks:
         mark = {"pass": "ok", "warn": "WARN", "fail": "FAIL", "skip": "--"}[

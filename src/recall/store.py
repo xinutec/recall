@@ -39,6 +39,7 @@ from recall.store_models import (
     SegmentVolume,
     SessionSummary,
     SourceCoverage,
+    SweepTombstone,
     TranscriptSegment,
     UploadJob,
     VocabularyTerm,
@@ -70,6 +71,7 @@ __all__ = [
     "SessionSummary",
     "SourceCoverage",
     "Store",
+    "SweepTombstone",
     "TranscriptSegment",
     "UploadJob",
     "VocabularyTerm",
@@ -294,11 +296,16 @@ class Store:
         them. Atomic. The caller must confirm the source is an UPLOAD first: the
         continuous household capture is append-only and must never be deletable."""
         seg_rows = self._conn.execute(
-            "SELECT id, path FROM audio_segments WHERE source_id = ?", (source_id,)
+            "SELECT id, path, start_utc FROM audio_segments WHERE source_id = ?",
+            (source_id,),
         ).fetchall()
         audio_ids = [int(r["id"]) for r in seg_rows]
         paths = [str(r["path"]) for r in seg_rows]
         with self.transaction():
+            for r in seg_rows:
+                # Journaled so the deletion crosses the split: the Mac removes its
+                # copies, and a later refine push can't resurrect the session here.
+                self._tombstone(source_id, str(r["start_utc"]))
             for audio_id in audio_ids:
                 turn_ids = [
                     int(r["id"])
@@ -721,20 +728,35 @@ class Store:
             datetime.fromisoformat(row["last"]),
         )
 
+    def _tombstone(self, source_id: str, start_utc: str) -> None:
+        """Journal one deliberate segment deletion by cross-machine identity, inside
+        the caller's transaction — the record the Mac's sweep pull is served from, and
+        the veto that stops a later push resurrecting the segment. OR IGNORE: deleting
+        twice is one fact."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO deleted_segments "
+            "(source_id, start_utc, deleted_utc) VALUES (?, ?, ?)",
+            (source_id, start_utc, datetime.now(UTC).isoformat()),
+        )
+
     def delete_audio_segments(self, audio_ids: Sequence[AudioSegmentId]) -> list[str]:
         """Hard-delete specific capture segments and all derived from them (turns and
         their lineage/embeddings/corrections/FTS), returning the audio file paths to
         unlink. For the quiet-cleanup: a human-confirmed span of total-quiet capture is
-        truly removed to reclaim disk. Atomic."""
+        truly removed to reclaim disk. Atomic. Each deletion is journaled as a
+        tombstone (see `_tombstone`) so it propagates across the Isis split."""
         paths: list[str] = []
         with self.transaction():
             for audio_id in audio_ids:
                 row = self._conn.execute(
-                    "SELECT path FROM audio_segments WHERE id = ?", (int(audio_id),)
+                    "SELECT path, source_id, start_utc FROM audio_segments "
+                    "WHERE id = ?",
+                    (int(audio_id),),
                 ).fetchone()
                 if row is None:
                     continue
                 paths.append(str(row["path"]))
+                self._tombstone(str(row["source_id"]), str(row["start_utc"]))
                 turn_ids = [
                     int(r["id"])
                     for r in self._conn.execute(
@@ -1223,6 +1245,78 @@ class Store:
             )
             for r in rows
         ]
+
+    def unmirrored_segments(
+        self, *, limit: int = 500, older_than: datetime | None = None
+    ) -> list[AudioSegmentId]:
+        """Processed segments that have never reached the fleet (`pushed_utc` unset),
+        oldest-first — the mirror-completion queue. Covers what the turn-watermark
+        push cannot: a speechless segment mints no turn ids, so it never synced and
+        the fleet's quiet review could never sweep it. `older_than` filters to
+        segments processed before that time (the doctor's in-flight slack)."""
+        clause = "WHERE transcribed_utc IS NOT NULL AND pushed_utc IS NULL"
+        args: list[object] = []
+        if older_than is not None:
+            clause += " AND transcribed_utc < ?"
+            args.append(older_than.isoformat())
+        rows = self._conn.execute(
+            f"SELECT id FROM audio_segments {clause} ORDER BY id LIMIT ?",
+            (*args, limit),
+        ).fetchall()
+        return [AudioSegmentId(int(r["id"])) for r in rows]
+
+    def mark_pushed(self, audio_id: AudioSegmentId) -> None:
+        """Stamp that this segment (audio + current turns) reached the fleet."""
+        self._conn.execute(
+            "UPDATE audio_segments SET pushed_utc = ? WHERE id = ?",
+            (datetime.now(UTC).isoformat(), int(audio_id)),
+        )
+        self._commit()
+
+    def audio_segment_id_at(
+        self, source: str, start: datetime
+    ) -> AudioSegmentId | None:
+        """The segment at a cross-machine identity — how the Mac resolves a fleet
+        tombstone against its own archive. None = already swept or never held."""
+        row = self._conn.execute(
+            "SELECT id FROM audio_segments WHERE source_id = ? AND start_utc = ?",
+            (source, start.isoformat()),
+        ).fetchone()
+        return AudioSegmentId(int(row["id"])) if row else None
+
+    def is_tombstoned(self, source: str, start: datetime) -> bool:
+        """Whether this identity was deliberately deleted here — the veto that stops
+        a later sync push resurrecting a swept segment on the fleet."""
+        row = self._conn.execute(
+            "SELECT 1 FROM deleted_segments WHERE source_id = ? AND start_utc = ?",
+            (source, start.isoformat()),
+        ).fetchone()
+        return row is not None
+
+    def pending_sweeps(self, *, limit: int = 100) -> list[SweepTombstone]:
+        """Tombstones the Mac has not yet applied to its master archive, oldest-first
+        — served over /sync/jobs as type="sweep"."""
+        rows = self._conn.execute(
+            "SELECT id, source_id, start_utc FROM deleted_segments "
+            "WHERE swept_utc IS NULL ORDER BY id LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [
+            SweepTombstone(
+                id=int(r["id"]),
+                source=str(r["source_id"]),
+                start=datetime.fromisoformat(r["start_utc"]),
+            )
+            for r in rows
+        ]
+
+    def mark_sweep_done(self, tombstone_id: int) -> None:
+        """The Mac confirmed its copy is gone; stop serving this tombstone."""
+        self._conn.execute(
+            "UPDATE deleted_segments SET swept_utc = ? WHERE id = ?",
+            (datetime.now(UTC).isoformat(), tombstone_id),
+        )
+        self._commit()
 
     def add_ab_compare_run(  # noqa: PLR0913 - source + window + the two models
         self,

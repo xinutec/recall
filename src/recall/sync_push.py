@@ -9,6 +9,14 @@ touches what changed since the last one: new segments AND refine re-derivations 
 mint new turn ids), never the whole archive. The audio blob is uploaded only when the
 fleet lacks it.
 
+Two queues drive the pass. The watermark covers segments that produced speech; a
+speechless segment mints no turn ids, so it never crossed and the fleet's quiet review
+could never see (or sweep) it. The mirror-completion queue closes that: any processed
+segment not yet stamped `pushed_utc` is pushed with whatever turns it has (often none),
+so the fleet holds the COMPLETE archive. A push the fleet refuses as tombstoned (the
+identity was deliberately deleted there) is stamped too — never retried, never
+resurrected.
+
 The client is a Protocol, so the push logic is unit-tested with a fake in place of the
 real `SyncClient` (which drags in the server framework).
 """
@@ -18,6 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
+from recall.ids import AudioSegmentId
 from recall.store import Store, TranscriptSegment
 from recall.sync import SegmentIn, SegmentStoredOut, SummaryIn, TurnIn
 from recall.timeline import Segment
@@ -25,6 +34,10 @@ from recall.timeline import Segment
 WATERMARK_KEY = "sync_pushed_max_turn_id"
 LIVE_WATERMARK_KEY = "sync_pushed_max_live_turn_id"
 _SUMMARY_PUSH_LIMIT = 60
+# Mirror-completion pushes per pass. The first passes after the pushed_utc column
+# lands reconcile the whole historical archive (the fleet no-ops what it holds); the
+# cap bounds each pass so the 120s timer stays snappy, and steady state is a handful.
+_MIRROR_PUSH_LIMIT = 500
 
 
 class PushTarget(Protocol):
@@ -89,6 +102,30 @@ def push_live_turns(store: Store, client: PushTarget) -> int:
     return len(turns)
 
 
+def _push_one(store: Store, client: PushTarget, audio_id: AudioSegmentId) -> bool:
+    """Push one segment (blob if the fleet lacks it, then metadata + current turns)
+    and stamp it pushed; returns whether anything was sent. A tombstoned refusal is
+    stamped too: the fleet deliberately deleted this identity, so retrying would only
+    try to resurrect it."""
+    seg = store.audio_segment(audio_id)
+    if seg is None:
+        return False
+    path = Path(seg.path)
+    if not path.exists():
+        # A row whose file vanished outside a sweep can never be mirrored; stamp it
+        # so it doesn't wedge the queue for ever.
+        store.mark_pushed(audio_id)
+        return False
+    name = path.name
+    if not client.audio_present(seg.source_id, name):
+        client.push_audio(seg.source_id, name, path)
+    client.push_segment(
+        _segment_in(store, seg, store.visible_machine_turns_for_audio(audio_id))
+    )
+    store.mark_pushed(audio_id)
+    return True
+
+
 def sync_push(store: Store, client: PushTarget) -> int:
     """Push everything changed since the last pass; returns the segment count sent."""
     watermark = int(store.get_setting(WATERMARK_KEY) or 0)
@@ -99,15 +136,15 @@ def sync_push(store: Store, client: PushTarget) -> int:
         seg_max = max((int(t.id) for t in turns), default=0)
         if seg_max <= watermark:
             continue  # unchanged since the last push
-        seg = store.audio_segment(audio_id)
-        if seg is None:
-            continue
-        name = Path(seg.path).name
-        if not client.audio_present(seg.source_id, name):
-            client.push_audio(seg.source_id, name, Path(seg.path))
-        client.push_segment(_segment_in(store, seg, turns))
-        pushed += 1
+        if _push_one(store, client, audio_id):
+            pushed += 1
         high = max(high, seg_max)
+    # Mirror completion: processed segments the watermark can't see (no turn ids —
+    # usually speechless minutes). They belong on the fleet too: its quiet review
+    # must see everything the Mac recorded, or nothing can ever sweep them.
+    for audio_id in store.unmirrored_segments(limit=_MIRROR_PUSH_LIMIT):
+        if _push_one(store, client, audio_id):
+            pushed += 1
     for day, text, model in store.recent_day_summaries(limit=_SUMMARY_PUSH_LIMIT):
         client.push_summary(SummaryIn(day=day, text=text, model=model))
     if high > watermark:

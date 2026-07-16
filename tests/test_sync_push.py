@@ -45,7 +45,22 @@ class FakeClient:
         return len(turns)
 
 
-def _seed_segment(store: Store, model: str = "turbo") -> int:
+def _blob(root: Path, name: str = "seg-0001.opus") -> Path:
+    """A real file on disk — the push checks existence before sending."""
+    path = root / "usb" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"opus-bytes")
+    return path
+
+
+def _seed_segment(
+    store: Store,
+    root: Path,
+    model: str | None = "turbo",
+    *,
+    name: str = "seg-0001.opus",
+    start: datetime = BASE,
+) -> int:
     store.add_source(
         AudioSource(id="usb", name="Household", kind=SourceKind.COREAUDIO, spec="")
     )
@@ -53,26 +68,27 @@ def _seed_segment(store: Store, model: str = "turbo") -> int:
         Segment(
             source_id="usb",
             sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=30),
-            path="/archive/usb/seg-0001.opus",
+            start=start,
+            end=start + timedelta(seconds=30),
+            path=str(_blob(root, name)),
             sample_rate=48000,
             channels=1,
         )
     )
-    store.add_transcript_segment(
-        audio_segment_id=int(audio_id),
-        start=BASE,
-        end=BASE + timedelta(seconds=5),
-        text="hello",
-        asr_model=model,
-    )
+    if model is not None:
+        store.add_transcript_segment(
+            audio_segment_id=int(audio_id),
+            start=start,
+            end=start + timedelta(seconds=5),
+            text="hello",
+            asr_model=model,
+        )
     return int(audio_id)
 
 
-def test_push_sends_new_segment_and_audio_then_is_idempotent() -> None:
+def test_push_sends_new_segment_and_audio_then_is_idempotent(tmp_path: Path) -> None:
     store = Store.memory()
-    _seed_segment(store)
+    _seed_segment(store, tmp_path)
 
     client = FakeClient()
     assert sync_push(store, client) == 1
@@ -85,9 +101,9 @@ def test_push_sends_new_segment_and_audio_then_is_idempotent() -> None:
     assert client.audio_pushed == [("usb", "seg-0001.opus")]
 
 
-def test_push_resends_a_re_derived_segment_but_not_its_audio() -> None:
+def test_push_resends_a_re_derived_segment_but_not_its_audio(tmp_path: Path) -> None:
     store = Store.memory()
-    audio_id = _seed_segment(store)
+    audio_id = _seed_segment(store, tmp_path)
     client = FakeClient()
     sync_push(store, client)  # initial push sets the watermark
 
@@ -103,6 +119,46 @@ def test_push_resends_a_re_derived_segment_but_not_its_audio() -> None:
     # …but the immutable audio is already on the fleet, so it isn't re-uploaded
     assert client.audio_pushed == [("usb", "seg-0001.opus")]
     assert len(client.segments) == 2
+
+
+def test_a_processed_speechless_segment_is_mirrored_once(tmp_path: Path) -> None:
+    # The watermark can't see it (no turn ids), but the fleet's quiet review must:
+    # a segment nobody can see is a segment nobody can ever sweep.
+    store = Store.memory()
+    audio_id = _seed_segment(store, tmp_path, model=None)  # VAD heard nothing
+    store.mark_transcribed(audio_id)
+
+    client = FakeClient()
+    assert sync_push(store, client) == 1
+    assert client.audio_pushed == [("usb", "seg-0001.opus")]
+    assert len(client.segments) == 1
+    assert client.segments[0].turns == []  # honestly speechless
+    # stamped pushed: the next pass sends nothing
+    assert sync_push(store, client) == 0
+
+
+def test_an_unprocessed_segment_is_not_mirrored_yet(tmp_path: Path) -> None:
+    # Untranscribed = the worker hasn't listened yet; mirroring it would race the
+    # pipeline. It ships once processed.
+    store = Store.memory()
+    _seed_segment(store, tmp_path, model=None)
+    client = FakeClient()
+    assert sync_push(store, client) == 0
+    assert client.segments == []
+
+
+def test_a_mirrored_segment_whose_file_vanished_does_not_wedge_the_queue(
+    tmp_path: Path,
+) -> None:
+    store = Store.memory()
+    audio_id = _seed_segment(store, tmp_path, model=None)
+    store.mark_transcribed(audio_id)
+    (tmp_path / "usb" / "seg-0001.opus").unlink()
+
+    client = FakeClient()
+    assert sync_push(store, client) == 0  # nothing sent — but stamped as handled
+    assert client.segments == []
+    assert sync_push(store, client) == 0  # and never retried
 
 
 def test_push_sends_day_summaries() -> None:

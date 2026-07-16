@@ -14,6 +14,7 @@ from recall.health import (
     agent_checks,
     backup_check,
     capture_checks,
+    mirror_check,
     recorders_on_disk,
 )
 from recall.sources import SourceKind
@@ -228,3 +229,14 @@ def test_a_silently_dead_backup_fails() -> None:
     assert backup_check(72.0, max_age_hours=48.0).verdict == "fail"
     assert backup_check(None, max_age_hours=48.0).verdict == "fail"
     assert "never completed" in backup_check(None, max_age_hours=48.0).observed
+
+
+def test_mirror_check_passes_only_when_the_fleet_holds_everything() -> None:
+    # "If the Mac dies the archive lives on Isis" is only true while this is zero;
+    # a stuck count is a silently stopped mirror — the stalled-backup class of
+    # failure, and the same verdict.
+    ok = mirror_check(0, slack=timedelta(hours=1))
+    assert (ok.section, ok.verdict) == ("sync", "pass")
+    stalled = mirror_check(3, slack=timedelta(hours=1))
+    assert stalled.verdict == "fail"
+    assert "3" in stalled.observed

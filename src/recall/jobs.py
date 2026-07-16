@@ -15,10 +15,13 @@ The Mac POLLS those queues (`GET /sync/jobs`) and brings each job home:
   `ab_compare_runs` queue (stamped with the fleet's run id), where the refine daemon
   executes it; each later pass relays the lifecycle back — "running" once started,
   then the report (or error) itself, which is what retires the run on the fleet.
+- **sweep** — a segment deliberately deleted on Isis (a human-confirmed quiet span,
+  or a deleted session). The same deletion is applied to this Mac's master archive,
+  so a sweep confirmed once on the system of record converges both machines.
 
-Refine and upload jobs are marked done on Isis only after the local hand-off, so a
-crash re-serves them (harmlessly: every step is idempotent) rather than dropping them;
-an ab-compare run is retired by its result landing, never by an acknowledgement.
+Refine, upload, and sweep jobs are marked done on Isis only after the local hand-off,
+so a crash re-serves them (harmlessly: every step is idempotent) rather than dropping
+them; an ab-compare run is retired by its result landing, never by an acknowledgement.
 Control inverts to a Mac-initiated poll for the same reason capture_mirror does.
 
 The runner only *bridges* the queues; it runs no ML itself. That keeps heavy work on
@@ -36,6 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
+from recall.ids import AudioSegmentId
 from recall.sources import AudioSource, SourceKind
 from recall.store_models import AbCompareJob
 from recall.timeline import Segment
@@ -48,6 +52,7 @@ _log = logging.getLogger("recall.jobs")
 _REFINE = "refine"
 _UPLOAD = "upload"
 _AB_COMPARE = "ab-compare"
+_SWEEP = "sweep"
 
 
 class _Job(Protocol):
@@ -114,6 +119,12 @@ class _LocalStore(Protocol):
         fleet_id: int | None = None,
     ) -> int: ...
     def ab_compare_run_by_fleet_id(self, fleet_id: int) -> AbCompareJob | None: ...
+    def audio_segment_id_at(
+        self, source: str, start: datetime
+    ) -> AudioSegmentId | None: ...
+    def delete_audio_segments(
+        self, audio_ids: Sequence[AudioSegmentId]
+    ) -> list[str]: ...
 
 
 def _pull_upload(
@@ -203,6 +214,28 @@ def _bridge_ab_compare(store: _LocalStore, client: _JobClient, job: _Job) -> boo
     return False  # adopted and awaiting the local daemon — nothing to relay yet
 
 
+def _apply_sweep(store: _LocalStore, job: _Job) -> None:
+    """Remove this Mac's copy of a segment deliberately deleted on the system of
+    record — the human confirmed the span once, on the fleet's quiet review (or
+    deleted the session there); this makes the master archive agree. Identity is
+    (source, start), the same key the push dedupes on. Not found locally = already
+    swept or never held here; the acknowledgement is correct either way."""
+    if job.start is None:
+        raise ValueError(f"sweep job #{job.id} is missing its identity")
+    audio_id = store.audio_segment_id_at(job.source, datetime.fromisoformat(job.start))
+    if audio_id is None:
+        return
+    paths = store.delete_audio_segments([audio_id])
+    for p in paths:
+        Path(p).unlink(missing_ok=True)
+    _log.info(
+        "sweep: removed %s @ %s from the master archive (fleet tombstone #%s)",
+        job.source,
+        job.start,
+        job.id,
+    )
+
+
 def run_jobs_once(
     store: _LocalStore, client: _JobClient, *, data_root: Path, limit: int = 50
 ) -> int:
@@ -227,6 +260,8 @@ def run_jobs_once(
                 )
             elif job.type == _UPLOAD:
                 _pull_upload(store, client, data_root, job)
+            elif job.type == _SWEEP:
+                _apply_sweep(store, job)
             elif job.type == _AB_COMPARE:
                 # A relay, not a hand-off: the run retires when its result lands,
                 # so there is no mark_done here.

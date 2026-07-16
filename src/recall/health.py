@@ -186,6 +186,31 @@ def agent_checks(agents: Sequence[tuple[str, bool]]) -> list[Check]:
     ]
 
 
+def mirror_check(unmirrored: int, *, slack: timedelta) -> Check:
+    """Is the fleet's copy of the archive complete?
+
+    The invariant since the mirror-completion push: every processed segment reaches
+    the fleet within a couple of sync passes. A count stuck above zero (beyond the
+    in-flight slack) means the mirror has silently stopped — the same class of
+    failure as a stalled backup, and it gets the same verdict: `fail`, because "if
+    the Mac dies the archive lives on Isis" is only true while this is zero.
+    """
+    slack_min = slack.total_seconds() / 60.0
+    return Check(
+        section="sync",
+        label="fleet mirror complete",
+        verdict="pass" if unmirrored == 0 else "fail",
+        observed=(
+            "every processed segment mirrored"
+            if unmirrored == 0
+            else f"{unmirrored} processed segment(s) not on the fleet"
+        ),
+        expected=f"0 unmirrored older than {slack_min:.0f}m",
+        value=float(unmirrored),
+        unit="segments",
+    )
+
+
 def backup_check(age_hours: float | None, *, max_age_hours: float) -> Check:
     """The archive's only unrecoverable failure is losing the one local copy.
 

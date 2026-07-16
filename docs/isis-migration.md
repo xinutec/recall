@@ -321,6 +321,32 @@ for model B is now the bare name `adapter-current` (was an absolute path under t
 server's own data root, meaningless across the split), resolved against the local data
 root at run time (`cli._resolve_model`).
 
+**Mirror completion + deletion tombstones — done (2026-07-16).** Two mirror gaps,
+found by asking "does everything the Mac records reach Isis, and does a deletion
+confirmed on Isis reach the Mac?":
+
+- *Creation was speech-only.* The turn-watermark push only crossed segments that
+  produced machine turns; a speechless minute minted no turn ids, never synced, and
+  Isis's quiet review could never see or sweep it (it piled up on the Mac for ever).
+  Fixed with a **mirror-completion queue**: every processed segment gets a
+  `pushed_utc` stamp when it reaches the fleet (new column), and the sync pass pushes
+  anything processed-but-unstamped — with whatever turns it has, often none — capped
+  at 500/pass. Old rows are NULL, so the first passes reconcile the whole historical
+  archive idempotently (the fleet no-ops what it already holds).
+- *Deletion crossed nowhere.* The quiet review lives on Isis now, so a confirmed
+  sweep deleted only Isis's copy — the Mac's master archive kept it, and a later push
+  could even resurrect it on Isis. Fixed with **tombstones**: every hard delete
+  (`delete_audio_segments`, `delete_source`) journals the segment identity
+  (source + start, the same key the sync dedupes on) into `deleted_segments`, inside
+  the same transaction. `/sync/jobs` serves them as `type="sweep"`; the Mac applies
+  the identical deletion to its archive and acks (`done?type=sweep`). The tombstone
+  also **vetoes re-ingestion**: a push for a tombstoned identity is refused
+  (`SegmentStoredOut.tombstoned`), any racing blob is cleaned up, and the Mac stamps
+  it pushed so it never retries — this also fixes the old resurrect-a-deleted-session
+  quirk. The invariant is now simple: *a processed segment exists on both machines or
+  on neither*, and the doctor asserts it (`mirror_check`: unmirrored-beyond-slack =
+  FAIL, same class as a stalled backup).
+
 (The capture-mirror transport was upgraded to long-poll 2026-07-16 — intent in ~RTT —
 so the "replace the transport" follow-up is closed; the break-glass CLI still covers an
 unreachable Isis. The one manual check left: the phone's share-to-Recall flow points at

@@ -38,6 +38,7 @@ from recall.store import (
     AbCompareJob,
     RefineRequest,
     Store,
+    SweepTombstone,
     TranscriptSegment,
     UploadJob,
 )
@@ -95,8 +96,10 @@ class JobOut(BaseModel):
     title, and the probed stream shape (so no re-probe). `type="ab-compare"`: id is the
     fleet's run id, start/end are None for a whole-recording run, and the ab-only
     fields carry the two models plus the fleet's current status (so the Mac only
-    reports "running" once). Fields outside a job's type are None, and an older fleet
-    simply never sends them."""
+    reports "running" once). `type="sweep"`: id is a tombstone id, and source+start
+    name the deliberately-deleted segment the Mac must remove from its own archive.
+    Fields outside a job's type are None, and an older fleet simply never sends
+    them."""
 
     id: int
     type: str
@@ -155,10 +158,13 @@ class SegmentIn(BaseModel):
 
 
 class SegmentStoredOut(BaseModel):
-    """The fleet's audio-segment id, and how many turns it wrote (0 = already had)."""
+    """The fleet's audio-segment id, and how many turns it wrote (0 = already had).
+    `tombstoned` = the fleet refused the push because this identity was deliberately
+    deleted here (audio_segment_id is 0 then) — the Mac must not retry."""
 
     audio_segment_id: int
     turns_written: int
+    tombstoned: bool = False
 
 
 class SummaryIn(BaseModel):
@@ -301,6 +307,15 @@ def _ab_job_of(run: AbCompareJob) -> JobOut:
     )
 
 
+def _sweep_job_of(tomb: SweepTombstone) -> JobOut:
+    return JobOut(
+        id=tomb.id,
+        type="sweep",
+        source=tomb.source,
+        start=tomb.start.isoformat(),
+    )
+
+
 def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentStoredOut:
     """Persist a pushed segment, reconciling across the split. The fleet is the system
     of record: a newer machine pass (worker → refine) SUPERSEDES the old machine turns,
@@ -310,11 +325,23 @@ def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentSt
         kind = SourceKind(body.kind)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"bad kind {body.kind!r}") from exc
+    seg_start = datetime.fromisoformat(body.start)
+    seg_end = datetime.fromisoformat(body.end)
+    # A deliberately-deleted identity is refused, not re-stored: without this veto,
+    # the mirror-completion pass (or a refine minting new turns for a deleted
+    # session) would quietly resurrect what a human explicitly removed. Any blob a
+    # racing audio push landed first is cleaned up here too.
+    if store.is_tombstoned(body.source_id, seg_start):
+        blob = (
+            data_root
+            / _safe_component(body.source_id)
+            / _safe_component(Path(body.path).name)
+        )
+        blob.unlink(missing_ok=True)
+        return SegmentStoredOut(audio_segment_id=0, turns_written=0, tombstoned=True)
     store.add_source(
         AudioSource(id=body.source_id, name=body.source_name, kind=kind, spec="")
     )
-    seg_start = datetime.fromisoformat(body.start)
-    seg_end = datetime.fromisoformat(body.end)
     # Re-home the path. The sender's `path` is absolute on the machine that recorded
     # it (`/Volumes/Backup/recall/usb/…` on the Mac), and storing it verbatim gave the
     # fleet a database describing a filesystem it cannot see: the transcripts read
@@ -622,6 +649,11 @@ def _register_job_routes(
                     _ab_job_of(r)
                     for r in store.unfinished_ab_compare_runs(limit=remaining)
                 ]
+            remaining = limit - len(jobs)
+            if remaining > 0:
+                jobs += [
+                    _sweep_job_of(t) for t in store.pending_sweeps(limit=remaining)
+                ]
             return jobs
         finally:
             store.close()
@@ -641,6 +673,10 @@ def _register_job_routes(
                 # "Done" for an upload = the Mac holds it and will ASR it; the row is
                 # marked processed so pending_upload_jobs stops serving it.
                 store.mark_transcribed(job_id)
+            elif type == "sweep":
+                # The Mac confirmed its master-archive copy of the deleted segment
+                # is gone; both machines have now converged.
+                store.mark_sweep_done(job_id)
             elif type == "refine":
                 store.mark_refine_request_done(job_id)
             else:

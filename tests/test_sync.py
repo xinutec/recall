@@ -773,3 +773,63 @@ def test_an_empty_ab_result_push_is_refused(
     auth = {"Authorization": "Bearer secret"}
     resp = client.post(f"/sync/ab-compare/{run_id}/result", json={}, headers=auth)
     assert resp.status_code == 400
+
+
+def test_a_tombstoned_identity_is_refused_not_resurrected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Delete on the fleet, then push the same identity again (the mirror pass, or a
+    # refine re-deriving a deleted session): the fleet must refuse — quietly
+    # re-storing it would undo a deliberate human deletion. A blob the racing audio
+    # push landed first is cleaned up by the refusal too.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    archive = tmp_path / "archive"
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), archive)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        first = client.push_segment(_segment(n_turns=1))
+        store = Store.open(db)
+        store.delete_audio_segments([AudioSegmentId(first.audio_segment_id)])
+        store.close()
+
+        client.push_audio("usb", "seg.opus", _clip(tmp_path))  # the racing blob
+        again = client.push_segment(_segment(n_turns=1))
+        assert again.tombstoned is True
+        assert again.turns_written == 0
+        assert not (archive / "usb" / "seg.opus").exists()  # refusal cleaned it up
+
+    store = Store.open(db)
+    assert store.audio_segment_id_at("usb", BASE) is None  # really not re-stored
+    store.close()
+
+
+def _clip(root: Path) -> Path:
+    clip = root / "clip.opus"
+    clip.write_bytes(b"opus-bytes")
+    return clip
+
+
+def test_a_deletion_is_served_as_a_sweep_job_until_acknowledged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The full relay: a hard delete on the fleet journals a tombstone, /sync/jobs
+    # serves it to the Mac, and the typed acknowledgement retires it.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        stored = client.push_segment(_segment(n_turns=1))
+        store = Store.open(db)
+        store.delete_audio_segments([AudioSegmentId(stored.audio_segment_id)])
+        store.close()
+
+        (job,) = client.poll_jobs()
+        assert (job.type, job.source, job.start) == ("sweep", "usb", BASE.isoformat())
+        client.mark_done(job.id, job_type="sweep")
+        assert client.poll_jobs() == []

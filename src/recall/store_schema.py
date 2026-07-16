@@ -433,4 +433,29 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE ab_compare_runs ADD COLUMN fleet_id INTEGER;
     """,
+    # Make the fleet mirror complete AND make deletion cross the split.
+    #
+    # pushed_utc: when this segment last reached the fleet. The turn-watermark push
+    # only covers segments that produced speech; a speechless segment never synced,
+    # so the fleet's quiet review could never see (or sweep) it. The mirror pass
+    # pushes anything processed-but-unstamped — NULL on old rows means the first
+    # passes reconcile the whole archive against the fleet (idempotently).
+    #
+    # deleted_segments: tombstones. A deliberate deletion on the system of record
+    # (a human-confirmed quiet span, a deleted session) is journaled here by
+    # identity — (source_id, start_utc), the same key the sync dedupes on — and the
+    # Mac pulls and applies it to its master archive. Without this, a swept segment
+    # lived on forever on the Mac, or was resurrected on the fleet by a later push.
+    """
+    ALTER TABLE audio_segments ADD COLUMN pushed_utc TEXT;
+
+    CREATE TABLE deleted_segments (
+        id          INTEGER PRIMARY KEY,
+        source_id   TEXT NOT NULL,
+        start_utc   TEXT NOT NULL,
+        deleted_utc TEXT NOT NULL,
+        swept_utc   TEXT,
+        UNIQUE (source_id, start_utc)
+    );
+    """,
 )

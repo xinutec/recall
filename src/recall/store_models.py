@@ -190,6 +190,17 @@ class RefineRequest:
 
 
 @dataclass(frozen=True)
+class SweepTombstone:
+    """A deliberate deletion on the system of record, by segment identity — served to
+    the Mac so its master-archive copy is removed too (the quiet review confirms a
+    span once; both machines converge)."""
+
+    id: int
+    source: str
+    start: datetime
+
+
+@dataclass(frozen=True)
 class UploadJob:
     """An uploaded session segment awaiting the Mac's ASR (the fleet has no ML).
 

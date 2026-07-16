@@ -9,6 +9,7 @@ pass transcribes it. Results flow back through the normal segment/turn sync.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import override
 import pytest
 
 from recall.cli_parser import build_parser
+from recall.ids import AudioSegmentId
 from recall.jobs import run_jobs_once
 from recall.sources import AudioSource, SourceKind
 from recall.store_models import AbCompareJob
@@ -88,6 +90,9 @@ class _FakeStore:
         self.segments: list[Segment] = []
         self.ab_added: list[tuple[str, int | None]] = []
         self.ab_local: dict[int, AbCompareJob] = {}  # fleet_id -> local mirror
+        # (source, start) -> (audio id, paths its deletion frees)
+        self.sweepable: dict[tuple[str, datetime], tuple[int, list[str]]] = {}
+        self.deleted: list[list[int]] = []
 
     def add_refine_request(self, source: str, start: datetime, end: datetime) -> int:
         self.refines.append((source, start, end))
@@ -116,6 +121,20 @@ class _FakeStore:
 
     def ab_compare_run_by_fleet_id(self, fleet_id: int) -> AbCompareJob | None:
         return self.ab_local.get(fleet_id)
+
+    def audio_segment_id_at(
+        self, source: str, start: datetime
+    ) -> AudioSegmentId | None:
+        entry = self.sweepable.get((source, start))
+        return AudioSegmentId(entry[0]) if entry else None
+
+    def delete_audio_segments(self, audio_ids: Sequence[AudioSegmentId]) -> list[str]:
+        self.deleted.append([int(a) for a in audio_ids])
+        paths: list[str] = []
+        for _key, (audio_id, freed) in list(self.sweepable.items()):
+            if audio_id in audio_ids:
+                paths.extend(freed)
+        return paths
 
 
 def _job(
@@ -396,3 +415,39 @@ def test_parser_wires_jobs() -> None:
 def test_parser_requires_a_fleet_url() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(["jobs", "--out", "d"])
+
+
+def _sweep_job(job_id: int = 31) -> _Job:
+    return _Job(job_id, "sweep", "usb", "2026-07-15T10:00:00+00:00", None)
+
+
+def test_a_sweep_job_removes_the_local_copy_then_acknowledges(
+    tmp_path: Path,
+) -> None:
+    # A deletion confirmed once on the fleet's review converges the master archive:
+    # the local segment (rows + file) goes, then the tombstone is acked.
+    blob = tmp_path / "usb" / "usb-20260715T100000.opus"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"quiet")
+    store = _FakeStore()
+    store.sweepable[("usb", datetime(2026, 7, 15, 10, 0, tzinfo=UTC))] = (
+        7,
+        [str(blob)],
+    )
+    client = _FakeClient([_sweep_job(31)])
+    assert run_jobs_once(store, client, data_root=tmp_path) == 1
+    assert store.deleted == [[7]]
+    assert not blob.exists()
+    assert client.done == [(31, "sweep")]
+
+
+def test_a_sweep_for_a_segment_not_held_here_is_still_acknowledged(
+    tmp_path: Path,
+) -> None:
+    # Already swept, or never existed locally: the goal state (no copy) holds, so
+    # the ack is correct — the fleet must not re-serve it for ever.
+    store = _FakeStore()
+    client = _FakeClient([_sweep_job(32)])
+    assert run_jobs_once(store, client, data_root=tmp_path) == 1
+    assert store.deleted == []
+    assert client.done == [(32, "sweep")]

@@ -1884,3 +1884,74 @@ def test_settings_roundtrip_and_overwrite() -> None:
     # Clearing = storing empty; reads back as None so callers can `if context:`.
     store.set_setting("household_context", "  ")
     assert store.get_setting("household_context") is None
+
+
+def test_a_hard_delete_journals_a_tombstone() -> None:
+    # The deletion must cross the Isis split: the tombstone is what the Mac's sweep
+    # pull is served from, and the veto that stops a later push resurrecting it.
+    store = Store.memory()
+    store.add_source(_source())
+    audio_id = store.add_audio_segment(_segment())
+
+    assert store.is_tombstoned("usb", BASE) is False
+    store.delete_audio_segments([audio_id])
+
+    assert store.is_tombstoned("usb", BASE) is True
+    (tomb,) = store.pending_sweeps()
+    assert (tomb.source, tomb.start) == ("usb", BASE)
+    # deleting twice is one fact, not two tombstones
+    store.delete_audio_segments([audio_id])
+    assert len(store.pending_sweeps()) == 1
+
+    store.mark_sweep_done(tomb.id)
+    assert store.pending_sweeps() == []
+    assert store.is_tombstoned("usb", BASE) is True  # the veto outlives the sweep
+
+
+def test_deleting_a_source_journals_every_segment() -> None:
+    store = Store.memory()
+    store.add_source(
+        AudioSource(id="meeting-1", name="Meeting", kind=SourceKind.UPLOAD, spec="")
+    )
+    for offset in (0.0, 60.0):
+        seg = _segment(offset)
+        store.add_audio_segment(
+            Segment(
+                source_id="meeting-1",
+                sequence=0,
+                start=seg.start,
+                end=seg.end,
+                path=seg.path,
+                sample_rate=48000,
+                channels=1,
+            )
+        )
+    store.delete_source("meeting-1")
+    assert len(store.pending_sweeps()) == 2
+
+
+def test_unmirrored_segments_are_the_processed_unstamped_ones() -> None:
+    store = Store.memory()
+    store.add_source(_source())
+    unprocessed = store.add_audio_segment(_segment(0.0))
+    processed = store.add_audio_segment(_segment(60.0))
+    stamped = store.add_audio_segment(_segment(120.0))
+    store.mark_transcribed(processed)
+    store.mark_transcribed(stamped)
+    store.mark_pushed(stamped)
+
+    assert store.unmirrored_segments() == [processed]
+    assert unprocessed  # the worker hasn't listened yet — not the mirror's turn
+
+    # the doctor's in-flight slack: only segments processed before the cutoff count
+    # (transcribed_utc is stamped with the segment's end time)
+    assert store.unmirrored_segments(older_than=BASE + timedelta(seconds=61)) == []
+    assert store.unmirrored_segments(older_than=datetime.now(UTC)) == [processed]
+
+
+def test_audio_segment_id_at_resolves_the_cross_machine_identity() -> None:
+    store = Store.memory()
+    store.add_source(_source())
+    audio_id = store.add_audio_segment(_segment())
+    assert store.audio_segment_id_at("usb", BASE) == audio_id
+    assert store.audio_segment_id_at("usb", BASE + timedelta(seconds=1)) is None
