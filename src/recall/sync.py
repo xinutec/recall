@@ -364,16 +364,23 @@ def _register_capture_route(
             reply = _capture_exchange(store, body, datetime.now(UTC))
         finally:
             store.close()
+        # Read AFTER the exchange: its own report-notify must not self-wake the
+        # hang, while an intent change racing in right here still returns at once.
+        seen = capture_control.capture_change_version()
         # Long-poll (see CaptureAppliedIn.wait): the report has landed; now hang
         # while the intent still equals what the Mac already applied. A pause/resume
-        # POST wakes the wait; the slices catch a pause elapsing on its own (intent
-        # flips with no POST). The store is reopened per check, never held hanging.
+        # POST wakes the wait (the `seen` version closes the lost-wakeup gap); the
+        # slices catch a pause elapsing on its own (intent flips with no POST). The
+        # store is reopened per check, never held hanging.
         deadline = time.monotonic() + min(body.wait, _INTENT_WAIT_CAP_S)
         while body.wait > 0 and reply.pausedUntil == body.knownIntent:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            capture_control.wait_capture_changed(min(_INTENT_WAIT_SLICE_S, remaining))
+            capture_control.wait_capture_changed(
+                min(_INTENT_WAIT_SLICE_S, remaining), seen=seen
+            )
+            seen = capture_control.capture_change_version()
             store = store_factory()
             try:
                 until = capture_control.intent_until(store, datetime.now(UTC))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -137,3 +138,22 @@ def test_a_naive_pause_timestamp_reads_as_utc_not_a_crash(tmp_path: Path) -> Non
     until = cc.paused_until(tmp_path)
     assert until == datetime(2026, 7, 16, 15, 0, tzinfo=UTC)
     assert cc.is_paused(tmp_path, datetime(2026, 7, 16, 14, 0, tzinfo=UTC))
+
+
+def test_wait_capture_changed_never_loses_a_notify_fired_before_the_wait() -> None:
+    # The lost-wakeup race, measured live 2026-07-16: a notify landing while a
+    # long-poll waiter is between waits (recomputing its snapshot) was dropped,
+    # turning a ~0.8s settle into a ~2.3s slice-catch. With `seen`, a notify after
+    # the version was read makes the wait return immediately instead of parking.
+    seen = cc.capture_change_version()
+    cc.notify_capture_changed()  # fires in the "gap" — before the wait starts
+    started = time.monotonic()
+    cc.wait_capture_changed(5.0, seen=seen)
+    assert time.monotonic() - started < 0.5  # returned at once, not at timeout
+
+
+def test_wait_capture_changed_parks_when_nothing_fired_since_seen() -> None:
+    seen = cc.capture_change_version()
+    started = time.monotonic()
+    cc.wait_capture_changed(0.2, seen=seen)
+    assert time.monotonic() - started >= 0.15  # genuinely parked until timeout

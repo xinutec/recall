@@ -607,13 +607,17 @@ def capture_status(wait: float = 0, known: str = "") -> CaptureOut:
     state still fingerprints to `known` — a press or a confirming mirror report
     wakes it in ~RTT (capture_control.notify_capture_changed) instead of a poll
     interval. Without the params (an older client) it answers immediately."""
+    # The version is read BEFORE each snapshot: a change landing mid-snapshot
+    # makes the next wait return at once instead of being lost to the gap.
+    seen = capture_control.capture_change_version()
     state = _capture_snapshot()
     deadline = time.monotonic() + min(wait, _WAIT_CAP_S)
     while state["stateToken"] == known:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        capture_control.wait_capture_changed(min(_WAIT_SLICE_S, remaining))
+        capture_control.wait_capture_changed(min(_WAIT_SLICE_S, remaining), seen=seen)
+        seen = capture_control.capture_change_version()
         state = _capture_snapshot()
     return state
 

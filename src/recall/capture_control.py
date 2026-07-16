@@ -41,24 +41,58 @@ MAX_PAUSE = timedelta(hours=24)
 # chain negligible next to opening the device.
 _PAUSE_POLL_SECONDS = 1.0
 
+
 # Long-poll support for the capture API: one process-wide condition, notified when
 # anything feeding /api/capture changes (a fleet intent write, a mirror report
 # landing). Purely a wake-up accelerator — waiters re-derive the state themselves,
-# so a missed notify costs a poll slice, never correctness.
-_capture_changed = threading.Condition()
+# so a missed notify costs a poll slice, never correctness. The version counter
+# closes the lost-wakeup window: a notify that fires while a waiter is between
+# waits (recomputing its snapshot) still wakes it at once, because the waiter
+# passes the version it read BEFORE recomputing (measured live 2026-07-16: the
+# lost wake turned a ~0.8s settle into a ~2.3s slice-catch).
+class _CaptureChanged:
+    """The condition + its change counter, together under one lock."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._version = 0
+
+    def notify(self) -> None:
+        with self._cond:
+            self._version += 1
+            self._cond.notify_all()
+
+    def version(self) -> int:
+        with self._cond:
+            return self._version
+
+    def wait(self, timeout: float, seen: int | None) -> None:
+        with self._cond:
+            if seen is not None and self._version != seen:
+                return
+            self._cond.wait(timeout)
+
+
+_capture_changed = _CaptureChanged()
 
 
 def notify_capture_changed() -> None:
     """Wake every request currently hanging on the capture state."""
-    with _capture_changed:
-        _capture_changed.notify_all()
+    _capture_changed.notify()
 
 
-def wait_capture_changed(timeout: float) -> None:
-    """Park until the capture state is notified or `timeout` elapses. May wake
-    spuriously; callers recompute and re-check."""
-    with _capture_changed:
-        _capture_changed.wait(timeout)
+def capture_change_version() -> int:
+    """The current change counter — read it BEFORE deriving the state a long-poll
+    compares against, then pass it to wait_capture_changed as `seen`."""
+    return _capture_changed.version()
+
+
+def wait_capture_changed(timeout: float, *, seen: int | None = None) -> None:
+    """Park until the capture state is notified past `seen` (a value from
+    capture_change_version) or `timeout` elapses. Returns immediately when a
+    notify already fired since `seen` was read — nothing is lost to the gap
+    between reading and waiting. May wake spuriously; callers recompute."""
+    _capture_changed.wait(timeout, seen)
 
 
 class CaptureEventKind(StrEnum):
