@@ -163,8 +163,11 @@ class AudioSource:
                 # crash-loops visibly) — never a silent fallback to the default,
                 # which a Bluetooth handsfree mic can grab.
                 device = ["-t", "coreaudio", self.spec] if self.spec else ["-d"]
+                # -q: no progress meter — it repaints stderr several times a second,
+                # burying the agent log's real lines. Errors still print.
                 argv = [
                     "sox",
+                    "-q",
                     *device,
                     "-c",
                     str(channels),

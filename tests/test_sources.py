@@ -19,7 +19,8 @@ def test_coreaudio_uses_sox_default_device() -> None:
     src = AudioSource(id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="")
     argv = src.producer_argv(48000, 1)
     assert argv[0] == "sox"
-    assert argv[1] == "-d"  # the default device, only when no spec pins one
+    assert argv[1] == "-q"  # progress meter off - it floods the agent log
+    assert argv[2] == "-d"  # the default device, only when no spec pins one
     assert argv[argv.index("-r") + 1] == "48000"
     assert argv[argv.index("-c") + 1] == "1"
     assert argv[argv.index("-e") + 1] == "signed-integer"
@@ -35,8 +36,8 @@ def test_coreaudio_named_device_pins_the_sox_input() -> None:
         id="usb", name="USB", kind=SourceKind.COREAUDIO, spec="USB Condenser Microphone"
     )
     argv = src.producer_argv(48000, 1)
-    assert argv[:3] == ["sox", "-t", "coreaudio"]
-    assert argv[3] == "USB Condenser Microphone"
+    assert argv[:4] == ["sox", "-q", "-t", "coreaudio"]
+    assert argv[4] == "USB Condenser Microphone"
     assert "-d" not in argv
 
 
