@@ -81,12 +81,20 @@ def _write_marker(root: Path, value: str) -> None:
 
 def _apply(root: Path, intent: str | None, now: datetime) -> None:
     """Make the local pause file match the fleet's intent: a future resume-by pauses,
-    anything else (running, or an already-elapsed pause) resumes."""
+    anything else (running, an already-elapsed pause, or an unparseable value)
+    resumes — the same conservative fallback paused_until/intent_until use. The parse
+    must not raise: an exception here would skip the marker write, so the mirror
+    would retry the same poisoned value every tick forever, and a real pause pressed
+    later on the UI would never be applied."""
     if intent:
-        until = datetime.fromisoformat(intent)
-        if until > now:
-            capture_control.write_pause_until(root, until)
-            return
+        try:
+            until = datetime.fromisoformat(intent)
+        except ValueError:
+            _log.warning("unparseable fleet intent %r — treating as running", intent)
+        else:
+            if until > now:
+                capture_control.write_pause_until(root, until)
+                return
     capture_control.clear_pause(root)
 
 

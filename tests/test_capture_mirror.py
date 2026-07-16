@@ -5,6 +5,7 @@ every cycle by an unchanged "running" intent from the fleet."""
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -28,7 +29,7 @@ class FakeExchange:
         *,
         running: bool,
         paused_until: str | None,
-        source_liveness: dict[str, str],
+        source_liveness: Mapping[str, str],
     ) -> str | None:
         self.reported.append((running, paused_until))
         self.liveness.append(dict(source_liveness))
@@ -91,6 +92,20 @@ def test_a_fleet_pause_already_elapsed_is_treated_as_running(tmp_path: Path) -> 
     client = FakeExchange(past)
     capture_mirror.reconcile_once(tmp_path, client, now=NOW)
     assert not capture_control.is_paused(tmp_path, NOW)
+
+
+def test_a_malformed_intent_reads_as_running_and_does_not_wedge(tmp_path: Path) -> None:
+    # A garbage resume-by from the fleet must not throw: an unparseable intent is
+    # treated as "running" (the same conservative fallback paused_until/intent_until
+    # use). Before this guard, the raise skipped the marker write, so the mirror
+    # retried the same poisoned value every tick forever — and a real pause pressed
+    # later on the UI would never have been applied.
+    capture_control.pause(tmp_path, NOW, minutes=15)  # a pre-existing local pause
+    client = FakeExchange("not-a-timestamp")
+    assert capture_mirror.reconcile_once(tmp_path, client, now=NOW) is True
+    assert not capture_control.is_paused(tmp_path, NOW)  # fallback: running
+    # The marker recorded it, so the next identical poll is a no-op, not a retry loop.
+    assert capture_mirror.reconcile_once(tmp_path, client, now=NOW) is False
 
 
 def test_reconcile_reports_an_applied_intent_to_the_hook(tmp_path: Path) -> None:
