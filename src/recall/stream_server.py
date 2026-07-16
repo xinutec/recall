@@ -3,8 +3,9 @@
 Every phone shares ONE port; the handshake carries identity, not the port. A device
 opens a connection, sends a one-line handshake announcing its id and PCM format, then
 streams raw PCM. The server reads only the handshake, then hands the socket to an
-ffmpeg segmenter — so ffmpeg does all the audio, gap-free. The live connection is the
-liveness signal, so there is no separate heartbeat.
+ffmpeg segmenter — so ffmpeg does all the audio, gap-free. The measured stream is the
+liveness signal (the marker is refreshed only while real signal arrives), so there is
+no separate heartbeat — and no way for a silent stream to read as recording.
 
 This module starts with the handshake protocol (pure, fully tested); the accepting
 server and the ffmpeg hand-off build on it.
@@ -29,9 +30,11 @@ from pathlib import Path
 
 from recall import capture_control
 from recall.capture import (
+    SILENCE_PEAK,
     CaptureConfig,
     build_segment_argv,
     container_ext,
+    mark_alive,
     segment_output_pattern,
 )
 from recall.sources import AudioSource, SourceKind
@@ -50,10 +53,6 @@ _DEFAULT_CHANNELS = 1
 _MAX_HANDSHAKE_BYTES = 8192
 _READ_CHUNK_BYTES = 65536  # socket -> ffmpeg pump chunk
 _PAUSE_POLL_SECONDS = 2.0  # how often the accept loop re-checks the global pause
-
-# Per-source liveness marker the server refreshes while a device streams; the API
-# reads its freshness for the fleet view. (Replaces the phone-sent heartbeat.)
-ALIVE_FILE = ".alive"
 
 # |s16 sample| at/above this counts as signal (~ -66 dBFS): safely above digital
 # silence and codec dither (the pixel9 dead-path bug streams at amplitude ~1, -90 dB),
@@ -76,7 +75,9 @@ class StreamMeter:
         self.peak = 0
         self.first_audible_byte: int | None = None
 
-    def feed(self, data: bytes) -> None:
+    def feed(self, data: bytes) -> int:
+        """Meter one chunk; returns the chunk's own peak |sample| so the caller can
+        act on the instantaneous level (the liveness marker keys off it)."""
         start = self.bytes_total - len(self._carry)  # stream offset of buf[0]
         self.bytes_total += len(data)
         buf = self._carry + data
@@ -86,7 +87,7 @@ class StreamMeter:
         else:
             self._carry = b""
         if not buf:
-            return
+            return 0
         # array('h') reads native-endian shorts == little-endian s16 on every host
         # recall runs on (arm64/x86_64).
         samples = array("h", buf)
@@ -96,6 +97,7 @@ class StreamMeter:
         if self.first_audible_byte is None and peak >= _AUDIBLE_FLOOR:
             index = next(i for i, s in enumerate(samples) if abs(s) >= _AUDIBLE_FLOOR)
             self.first_audible_byte = start + 2 * index
+        return peak
 
     @property
     def peak_db(self) -> float | None:
@@ -249,21 +251,21 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
         if proc.stdin is None:  # pragma: no cover - PIPE always sets it
             msg = "ffmpeg stdin pipe was not created"
             raise RuntimeError(msg)
-        # Liveness: the server owns the connection, so it reports the device live by
-        # refreshing this file while data flows. /api/sources reads its freshness — no
-        # phone-sent heartbeat needed any more.
-        alive = out_dir / ALIVE_FILE
         try:
             while True:
                 data = sock.recv(_READ_CHUNK_BYTES)
                 if not data:
                     break  # the device disconnected
                 proc.stdin.write(data)  # the archive comes first; meter after
-                alive.touch()
                 if first_byte is None:
                     first_byte = time.time()
                 heard = meter.first_audible_s is not None
-                meter.feed(data)
+                # Liveness: refresh the marker only when the chunk carries real
+                # signal — "active" must mean recording. A connected phone streaming
+                # digital silence (the pixel9 dead path) reads idle, so nobody
+                # speaks trusting a dot the audio can't back.
+                if meter.feed(data) >= SILENCE_PEAK:
+                    mark_alive(out_dir)
                 if not heard and meter.first_audible_s is not None:
                     _log.info(
                         "ingest: %s first audible sample at %.2fs of stream",

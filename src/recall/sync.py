@@ -163,9 +163,9 @@ class CaptureAppliedIn(BaseModel):
 
     running: bool
     pausedUntil: str | None = None  # ISO resume-by, or null when recording
-    # Each remote recorder's last-active ISO time (the phones' .alive freshness the Mac
+    # Each source's last-proved-recording ISO time (the .alive freshness the Mac
     # owns), so /api/sources on the fleet is truthful. Defaulted: an older Mac client
-    # omits it and the fleet just shows no phone liveness, as before.
+    # omits it and the fleet just shows no liveness, as before.
     sourceLiveness: dict[str, str] = {}
 
 
@@ -535,7 +535,7 @@ class SyncClient:
     ) -> str | None:
         """Report the Mac's applied capture state and receive the fleet's desired intent
         (its resume-by, or None to run). One round trip: push reality, pull intent.
-        `source_liveness` carries the phones' .alive freshness the fleet can't see."""
+        `source_liveness` carries the sources' .alive freshness the fleet can't see."""
         resp = self._client.post(
             f"{self._base}/sync/capture",
             json={

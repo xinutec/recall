@@ -158,10 +158,11 @@ _INTENT_KEY = "capture_intent"  # ISO resume-by; blank/absent = running
 _REPORTED_RUNNING_KEY = "capture_reported_running"
 _REPORTED_PAUSED_KEY = "capture_reported_paused_until"
 _REPORTED_AT_KEY = "capture_reported_at"
-# Each remote recorder's last-active time (JSON {source_id: ISO}) as the Mac last saw
-# it. The phones' .alive markers live on the Mac (the ingest host); the fleet can't read
-# them, so the mirror ships them here for /api/sources to serve. Gated by the same
-# _REPORTED_AT freshness — a Mac that stopped checking in reports no current liveness.
+# Each source's last-proved-recording time (JSON {source_id: ISO}) as the Mac last saw
+# it. The .alive markers live on the Mac (the host that measures the audio); the fleet
+# can't read them, so the mirror ships them here for /api/sources to serve. Gated by the
+# same _REPORTED_AT freshness — a Mac that stopped checking in reports no current
+# liveness.
 _REPORTED_LIVENESS_KEY = "capture_reported_source_liveness"
 # A report older than this means the Mac has stopped checking in; the fleet then falls
 # back to showing intent (and the separate fleetwatch alarm covers a dead Mac).
@@ -219,7 +220,7 @@ def record_reported(
     source_liveness: Mapping[str, str] | None = None,
 ) -> None:
     """Store the Mac's just-applied capture state, so the fleet's status is honest.
-    `source_liveness` is each remote recorder's last-active ISO time (the phones' .alive
+    `source_liveness` is each source's last-proved-recording ISO time (the .alive
     freshness the Mac owns) — the fleet serves it from /api/sources, having no markers
     of its own. Optional so a not-yet-updated Mac client just leaves it empty."""
     store.set_setting(_REPORTED_RUNNING_KEY, "1" if running else "0")
@@ -231,10 +232,10 @@ def record_reported(
 def reported_source_liveness(
     store: _Settings, now: datetime
 ) -> dict[str, datetime] | None:
-    """Each remote recorder's last-active time as the Mac last reported it, or None when
-    the Mac has stopped checking in (same freshness gate as reported_state). A missing
-    or malformed entry is dropped, not fatal — liveness is best-effort status, not
-    control."""
+    """Each source's last-proved-recording time as the Mac last reported it, or None
+    when the Mac has stopped checking in (same freshness gate as reported_state). A
+    missing or malformed entry is dropped, not fatal — liveness is best-effort status,
+    not control."""
     at = store.get_setting(_REPORTED_AT_KEY)
     if not at:
         return None

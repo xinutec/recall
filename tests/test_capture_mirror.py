@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from recall import capture_control, capture_mirror
-from recall.stream_server import ALIVE_FILE
+from recall.capture import ALIVE_FILE
 
 NOW = datetime(2026, 7, 14, 12, 0, 0, tzinfo=UTC)
 FUTURE = (NOW + timedelta(hours=1)).isoformat()

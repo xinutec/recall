@@ -79,10 +79,19 @@ def test_read_handshake_rejects_overlong_or_eof() -> None:
 def test_meter_counts_pure_zeros_without_calling_them_audible() -> None:
     # Digital zeros are what a dead capture path produces: bytes flow, no signal.
     m = StreamMeter(sample_rate=48000, channels=1)
-    m.feed(b"\x00\x00" * 48000)  # 1s of digital silence
+    assert m.feed(b"\x00\x00" * 48000) == 0  # 1s of digital silence
     assert m.bytes_total == 96000
     assert m.peak_db is None  # not one non-zero sample
     assert m.first_audible_s is None
+
+
+def test_meter_feed_returns_each_chunks_own_peak() -> None:
+    # The chunk peak (not the running max) is what gates the liveness marker: a loud
+    # stream that goes digitally silent must stop refreshing it.
+    m = StreamMeter(sample_rate=48000, channels=1)
+    assert m.feed((1000).to_bytes(2, "little", signed=True) * 480) == 1000
+    assert m.feed(b"\x00\x00" * 480) == 0
+    assert m.peak == 1000  # the running max still remembers the loud chunk
 
 
 def test_meter_reports_near_silence_as_a_level_but_not_audible() -> None:
@@ -156,6 +165,31 @@ def test_handle_connection_records_ingest_telemetry(tmp_path: Path) -> None:
     assert stats["first_byte_s"] is not None
     assert stats["flushed"].startswith("kitchen-")  # the close finalised a segment
     assert stats["flushed_bytes"] > 0
+
+
+def _stream_once(tmp_path: Path, pcm: bytes) -> None:
+    server_sock, client_sock = socket.socketpair()
+
+    def device() -> None:
+        client_sock.sendall(b'{"id":"kitchen"}\n')
+        client_sock.sendall(pcm)
+        client_sock.close()
+
+    sender = threading.Thread(target=device)
+    sender.start()
+    handle_connection(server_sock, tmp_path, CaptureConfig())
+    sender.join()
+
+
+def test_alive_marker_needs_real_signal_not_just_bytes(tmp_path: Path) -> None:
+    # "Active" must mean recording: a connected device streaming digital silence
+    # (the pixel9 dead path, amplitude ~1) must NOT read as live — that green dot is
+    # how speech got spoken into a not-recording window (docs/capture-loss-plan.md).
+    _stream_once(tmp_path, b"\x01\x00" * 48000)
+    assert not (tmp_path / "kitchen" / ".alive").exists()
+    # Real signal (a live room's floor and above) refreshes the marker.
+    _stream_once(tmp_path, (100).to_bytes(2, "little", signed=True) * 48000)
+    assert (tmp_path / "kitchen" / ".alive").exists()
 
 
 def test_handle_connection_segments_a_handshaked_stream(tmp_path: Path) -> None:

@@ -21,12 +21,17 @@ import subprocess
 import threading
 from array import array
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from recall.capture import (
+    SILENCE_PEAK,
     CaptureConfig,
     build_segment_argv,
     container_ext,
+    mark_alive,
+    parse_segment_start,
+    segment_glob,
     segment_output_pattern,
 )
 from recall.sources import AudioSource
@@ -44,10 +49,6 @@ _STOP_POLL_S = 1.0
 # a single one could straddle the moment a wedge began.
 _WATCH_POLL_S = 30.0
 _DEAD_SEGMENTS_TO_CYCLE = 2
-# |s16| below this across a whole segment = digital silence. A live room's noise floor
-# measures -69..-51 dB here (amplitude 10-90); a wedged CoreAudio read yields exact
-# zeros. 2 (~ -84 dB) tolerates dither while never firing on a real, quiet room.
-_SILENCE_PEAK = 2
 
 
 def _segment_is_digital_silence(path: Path) -> bool:
@@ -69,7 +70,14 @@ def _segment_is_digital_silence(path: Path) -> bool:
         return True
     samples = array("h", pcm)
     low, high = min(samples), max(samples)
-    return max(high, -low) < _SILENCE_PEAK
+    return max(high, -low) < SILENCE_PEAK
+
+
+def _starts_after(name: str, cutoff: datetime) -> bool:
+    try:
+        return parse_segment_start(name) >= cutoff
+    except ValueError:
+        return False
 
 
 def _watch_dead_segments(  # noqa: PLR0913 - the watchdog's tuning knobs
@@ -79,6 +87,7 @@ def _watch_dead_segments(  # noqa: PLR0913 - the watchdog's tuning knobs
     stop: threading.Event,
     *,
     stall_after_s: float,
+    started_utc: datetime,
     on_cycled: Callable[[str], None] | None = None,
     poll_s: float = _WATCH_POLL_S,
 ) -> None:
@@ -89,13 +98,22 @@ def _watch_dead_segments(  # noqa: PLR0913 - the watchdog's tuning knobs
     happens). Terminating the producer EOFs the segmenter — flushing whatever audio
     is buffered — record() returns, and the agent's respawn re-opens the device,
     which clears a CoreAudio wedge. Detection costs minutes; the old failure mode
-    cost the rest of the recording."""
+    cost the rest of the recording.
+
+    The inverse verdict maintains the mic's liveness marker (capture.ALIVE_FILE):
+    a closed segment from THIS run (`started_utc` — segments left from before a
+    pause prove nothing about now) that decoded to real audio, with rotation still
+    fresh, is measured proof of recording, so the marker is refreshed each healthy
+    poll. Until the first segment of a run closes there is no proof either way and
+    the marker stays untouched — after a resume the mic honestly reads idle until
+    the archive shows audio, instead of green over a startup dead-window."""
     dead_streak = 0
     last_checked: str | None = None
+    closed_live = False
     newest_seen: str | None = None
     newest_for_s = 0.0
     while not stop.wait(poll_s):
-        names = sorted(p.name for p in out_dir.glob(f"{source_id}-*"))
+        names = [p.name for p in segment_glob(out_dir, source_id)]
         if not names:
             continue
         if names[-1] != newest_seen:
@@ -110,8 +128,10 @@ def _watch_dead_segments(  # noqa: PLR0913 - the watchdog's tuning knobs
             last_checked = closed
             if _segment_is_digital_silence(out_dir / closed):
                 dead_streak += 1
+                closed_live = False
             else:
                 dead_streak = 0
+                closed_live = _starts_after(closed, started_utc)
         if dead_streak >= _DEAD_SEGMENTS_TO_CYCLE or stalled:
             why = "stalled producer" if stalled else f"{dead_streak} silent segments"
             _log.warning("dead capture stream (%s) — cycling the producer", why)
@@ -122,6 +142,8 @@ def _watch_dead_segments(  # noqa: PLR0913 - the watchdog's tuning knobs
                     _log.exception("on_cycled hook failed (still cycling)")
             producer.terminate()
             return
+        if closed_live and not stalled:
+            mark_alive(out_dir)
 
 
 def _run_pipe(
@@ -181,8 +203,9 @@ def record(  # noqa: PLR0913 - capture config + the optional pause/telemetry hoo
 
     `watch_dead` arms the dead-segment watchdog (see _watch_dead_segments): a wedged
     or stalled device read cycles the producer, so record() returns and the caller's
-    respawn re-opens the device. `on_cycled` (optional) is told why — the caller
-    records it durably.
+    respawn re-opens the device; while healthy it refreshes the source's liveness
+    marker, which is what makes the mic's "active" dot mean measured recording.
+    `on_cycled` (optional) is told why — the caller records it durably.
     """
     out_dir = root / source.id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -194,6 +217,9 @@ def record(  # noqa: PLR0913 - capture config + the optional pause/telemetry hoo
     consumer_argv = build_segment_argv(config, pattern, fanout=fanout)
     env = {**os.environ, "TZ": "UTC"}
 
+    # Taken BEFORE the producer starts, so the run's first segment (whose filename
+    # timestamp is ffmpeg's start) counts as this run's — see _watch_dead_segments.
+    started_utc = datetime.now(UTC)
     producer = subprocess.Popen(producer_argv, stdout=subprocess.PIPE, env=env)
     if producer.stdout is None:  # pragma: no cover - Popen with PIPE always sets it
         msg = "producer stdout pipe was not created"
@@ -212,6 +238,7 @@ def record(  # noqa: PLR0913 - capture config + the optional pause/telemetry hoo
                 # (floored so short test segments don't make it hair-triggered) means
                 # the producer is delivering no samples at all.
                 "stall_after_s": max(3.0 * config.segment_seconds, 90.0),
+                "started_utc": started_utc,
                 "on_cycled": on_cycled,
                 "poll_s": watch_poll_s,
             },

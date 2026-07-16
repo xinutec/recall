@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Protocol
 
 from recall import capture_control
-from recall.stream_server import ALIVE_FILE
+from recall.capture import ALIVE_FILE
 
 _log = logging.getLogger("recall.capture_mirror")
 
@@ -50,12 +50,12 @@ class IntentExchange(Protocol):
 
 
 def _source_liveness(root: Path) -> dict[str, str]:
-    """Each remote recorder's last-active ISO time, read from the .alive markers the
-    ingest server refreshes while a phone streams (recall.stream_server). The USB mic
-    has no marker — its liveness is the global running state — so only phones appear
-    here. The fleet can't see these files (they're on the Mac), so the mirror ships them
-    each pass. Store-free, matching the mirror's file-only design; an unreadable marker
-    is skipped."""
+    """Each source's last-proved-recording ISO time, read from the .alive markers
+    (recall.capture.ALIVE_FILE) — the ingest pump refreshes a phone's while real
+    signal streams, the capture watchdog refreshes the mic's while its segments
+    decode to real audio. The fleet can't see these files (they're on the Mac), so
+    the mirror ships them each pass. Store-free, matching the mirror's file-only
+    design; an unreadable marker is skipped."""
     out: dict[str, str] = {}
     for marker in root.glob(f"*/{ALIVE_FILE}"):
         try:

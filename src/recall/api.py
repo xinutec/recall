@@ -45,6 +45,7 @@ from recall.api_models import (
 )
 from recall.ask import answer_question
 from recall.asr import DEFAULT_MODEL, slice_clip
+from recall.capture import alive_mtime
 from recall.context import CONTEXT_KEY
 from recall.conversation import assign_span
 from recall.conversations import (
@@ -54,7 +55,7 @@ from recall.conversations import (
 )
 from recall.finetune import DEFAULT_BASE_MODEL
 from recall.ids import AudioSegmentId
-from recall.liveness import ACTIVE_WITHIN, FLEET_ACTIVE_WITHIN, source_statuses
+from recall.liveness import source_statuses
 from recall.llm import DEFAULT_LLM, Generator, make_mlx_generator
 from recall.loudness import normalize_loudness
 from recall.moments import Moment, best_colocated_guess, cluster_moments
@@ -122,7 +123,6 @@ from recall.store import (
     Store,
     TranscriptSegment,
 )
-from recall.stream_server import ALIVE_FILE
 from recall.summarize import refresh_live_summary
 from recall.sync import register_sync_routes
 from recall.timeline import Segment
@@ -253,17 +253,6 @@ def client_log(body: ClientLog) -> OkOut:
     with _CLIENT_LOG.open("a") as fh:
         fh.write(" ".join(parts) + "\n")
     return {"ok": True}
-
-
-# Per-source liveness: the ingest server refreshes a marker file while a device is
-# connected and streaming (recall.stream_server). The fleet view reads its freshness —
-# liveness now comes from the host that owns the socket, not a phone-sent heartbeat.
-def _alive_mtime(source_dir: Path) -> datetime | None:
-    try:
-        mtime = (source_dir / ALIVE_FILE).stat().st_mtime
-    except OSError:
-        return None
-    return datetime.fromtimestamp(mtime, tz=UTC)
 
 
 @app.get("/api/sessions")
@@ -438,50 +427,54 @@ def session_transcript(source: str) -> TranscriptExportOut:
 def _local_last_active(
     rows: list[tuple[str, str, str]], now: datetime
 ) -> dict[str, datetime | None]:
-    """Liveness on the capturing host (the Mac): the USB mic from its own agent state,
-    each phone from the .alive marker the local ingest refreshes."""
-    usb_live = capture_control.capture_running() and not capture_control.is_paused(
+    """Liveness on the capturing host (the Mac), from each source's .alive marker —
+    refreshed by the ingest pump while a phone streams real signal, and by the
+    capture watchdog while the mic's closed segments decode to real audio
+    (recall.capture.ALIVE_FILE) — so "active" means measured recording. The mic's
+    marker is additionally gated on the pause state: its window is a leisurely
+    ~75s (watchdog cadence), and a pause must read idle at once."""
+    usb_recording = capture_control.capture_running() and not capture_control.is_paused(
         DATA_ROOT, now
     )
     last_active: dict[str, datetime | None] = {}
     for source_id, _, kind in rows:
+        marker = alive_mtime(DATA_ROOT / source_id)
         if kind == SourceKind.TCP_PCM.value:
-            last_active[source_id] = _alive_mtime(DATA_ROOT / source_id)
+            last_active[source_id] = marker
         else:
-            last_active[source_id] = now if usb_live else None
+            last_active[source_id] = marker if usb_recording else None
     return last_active
 
 
 def _fleet_last_active(
     store: Store, rows: list[tuple[str, str, str]], now: datetime
 ) -> dict[str, datetime | None]:
-    """Liveness on the fleet (Isis), which runs no capture or ingest and cannot see the
-    Mac's markers. It comes entirely from the Mac's mirror report
-    (recall.capture_mirror): the USB mic from the reported running state, each phone
-    from the reported .alive freshness. A quiet Mac (no fresh report) reads as no one
-    live —
-    correct: the fleet genuinely does not know, and fleetwatch covers a dead Mac
-    separately."""
-    usb_live = _fleet_capture_state(store, now)["running"]
+    """Liveness on the fleet (Isis), which runs no capture or ingest and cannot see
+    the Mac's markers. It comes entirely from the Mac's mirror report
+    (recall.capture_mirror), which ships every source's .alive freshness — the same
+    measured-recording signal the Mac serves locally, one report cadence older. The
+    mic keeps its local pause gate. A quiet Mac (no fresh report) reads as no one
+    live — correct: the fleet genuinely does not know, and fleetwatch covers a dead
+    Mac separately."""
+    usb_recording = _fleet_capture_state(store, now)["running"]
     reported = capture_control.reported_source_liveness(store, now) or {}
     last_active: dict[str, datetime | None] = {}
     for source_id, _, kind in rows:
         if kind == SourceKind.TCP_PCM.value:
             last_active[source_id] = reported.get(source_id)
         else:
-            last_active[source_id] = now if usb_live else None
+            last_active[source_id] = reported.get(source_id) if usb_recording else None
     return last_active
 
 
 @app.get("/api/sources")
 def sources() -> SourcesOut:
-    """Per-recorder liveness for the fleet view. On the capturing host (the Mac) it
-    comes from local signals — the USB agent's state and the ingest's .alive markers. On
-    the fleet (Isis), which runs no capture, it comes from the Mac's ~5s mirror report,
-    since Isis owns neither the mic nor the phones' sockets; the wider
-    FLEET_ACTIVE_WITHIN absorbs the report cadence. Uploaded recordings (meetings) are
-    sources but not live
-    devices, so they're excluded — they live in the Sessions view."""
+    """Per-recorder liveness for the fleet view: active iff the source's liveness
+    marker — refreshed only on measured audio — is fresh, so a dot means recording,
+    not connected. On the fleet (Isis), which runs no capture, the markers arrive via
+    the Mac's ~5s mirror report; the windows widen to absorb the cadence
+    (recall.liveness.active_window). Uploaded recordings (meetings) are sources but
+    not live devices, so they're excluded — they live in the Sessions view."""
     now = datetime.now(UTC)
     on_fleet = capture_control.is_fleet()
     store = _store()
@@ -494,8 +487,7 @@ def sources() -> SourcesOut:
         )
     finally:
         store.close()
-    window = FLEET_ACTIVE_WITHIN if on_fleet else ACTIVE_WITHIN
-    statuses = source_statuses(rows, last_active, now, active_within=window)
+    statuses = source_statuses(rows, last_active, now, on_fleet=on_fleet)
     return {
         "items": [
             {

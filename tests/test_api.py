@@ -498,11 +498,14 @@ def test_backfill_loudness_fills_the_cache_offline(tmp_path: Path) -> None:
     store.close()
 
 
-def test_sources_liveness_local_vs_marker(
+def test_sources_liveness_local_needs_a_measured_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Local capture (USB) is known to the host directly; a phone is live when the
-    # ingest server (which owns its socket) is refreshing its .alive marker.
+    # "Active" means measured recording, never just process state: every source
+    # reads from its .alive marker — the ingest refreshes a phone's on real signal,
+    # the capture watchdog refreshes the mic's on real closed segments. A loaded,
+    # unpaused capture agent with no measured proof yet is NOT active (that green
+    # dot is how speech got spoken into a startup dead-window).
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     store = Store.open(tmp_path / "recall.sqlite")
     store.add_source(
@@ -518,18 +521,29 @@ def test_sources_liveness_local_vs_marker(
     )
     store.close()
     monkeypatch.setattr("recall.capture_control.capture_running", lambda: True)
-    monkeypatch.setattr("recall.capture_control.is_paused", lambda root, now: False)
+    paused = {"v": False}
+    monkeypatch.setattr(
+        "recall.capture_control.is_paused", lambda root, now: paused["v"]
+    )
 
     before = {s["id"]: s["active"] for s in api.sources()["items"]}
-    assert before["usb"] is True  # local: agent loaded + not paused
+    assert before["usb"] is False  # running, but no measured proof yet
     assert before["pixel9"] is False  # no live connection yet
     assert "meeting-x" not in before  # uploads aren't devices
 
-    # the server marks the phone live by refreshing its .alive marker while streaming
-    (tmp_path / "pixel9").mkdir()
-    (tmp_path / "pixel9" / ".alive").touch()
+    # fresh markers (real signal measured) → live
+    for source_id in ("usb", "pixel9"):
+        (tmp_path / source_id).mkdir()
+        (tmp_path / source_id / ".alive").touch()
     after = {s["id"]: s["active"] for s in api.sources()["items"]}
-    assert after["pixel9"] is True  # fresh marker → live
+    assert after["usb"] is True
+    assert after["pixel9"] is True
+
+    # a pause reads idle at once for the mic — its 75s marker window must not
+    # keep the dot green after recording stopped
+    paused["v"] = True
+    stopped = {s["id"]: s["active"] for s in api.sources()["items"]}
+    assert stopped["usb"] is False
 
 
 def test_sources_liveness_on_the_fleet_uses_the_macs_report(
@@ -538,8 +552,8 @@ def test_sources_liveness_on_the_fleet_uses_the_macs_report(
     # On Isis there is no local capture agent and no phone sockets — the .alive markers
     # live on the Mac. So liveness must come from the Mac's mirror report, not local
     # files (the bug: /api/sources read host-local state Isis can't see, and showed
-    # every mic dead). The USB mic reads live from the reported running state; a phone
-    # from the reported .alive freshness.
+    # every mic dead). Every source reads from its reported .alive freshness; the mic
+    # is additionally gated on the reported running state.
     monkeypatch.setenv("RECALL_ROLE", "fleet")
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     store = Store.open(tmp_path / "recall.sqlite")
@@ -551,33 +565,38 @@ def test_sources_liveness_on_the_fleet_uses_the_macs_report(
     )
 
     now = datetime.now(UTC)
-    # No report yet: the fleet doesn't know, so nothing reads live (not a false "on").
+    # Reported running but no measured liveness shipped: nothing reads live — a
+    # running agent is not proof of recording.
     capture_control.record_reported(store, running=True, paused_until=None, now=now)
     store.close()
     empty = {s["id"]: s["active"] for s in api.sources()["items"]}
-    assert empty["usb"] is True  # Mac reports running → USB live
-    assert empty["pixel9"] is False  # no phone liveness reported → idle
+    assert empty["usb"] is False
+    assert empty["pixel9"] is False
 
-    # the Mac's next report ships the phone's fresh .alive time (the mirror's gather)
+    # the Mac's next report ships both sources' fresh .alive times (the mirror's
+    # gather) → live on the fleet too
     store = Store.open(tmp_path / "recall.sqlite")
     capture_control.record_reported(
         store,
         running=True,
         paused_until=None,
         now=now,
-        source_liveness={"pixel9": now.isoformat()},
+        source_liveness={"pixel9": now.isoformat(), "usb": now.isoformat()},
     )
     store.close()
     live = {s["id"]: s["active"] for s in api.sources()["items"]}
-    assert live["pixel9"] is True  # reported fresh → live on the fleet too
+    assert live["pixel9"] is True
+    assert live["usb"] is True
 
-    # and when the Mac reports capture paused, the USB mic reads idle on the fleet
+    # when the Mac reports capture paused, the mic reads idle at once — even though
+    # its marker (wide 75s+ window) is still fresh
     store = Store.open(tmp_path / "recall.sqlite")
     capture_control.record_reported(
         store,
         running=False,
         paused_until=(now + timedelta(hours=1)).isoformat(),
         now=now,
+        source_liveness={"usb": now.isoformat()},
     )
     store.close()
     paused = {s["id"]: s["active"] for s in api.sources()["items"]}

@@ -5,7 +5,8 @@ pipes it into ffmpeg's `segment` muxer, which writes a continuous ring of
 fixed-length files — a crash loses at most one segment. Filenames embed a UTC
 start timestamp (ffmpeg is run with TZ=UTC).
 
-Only pure construction/parsing lives here; running the pipe is in recall.runner.
+Only construction/parsing and the tiny shared file-layout helpers (the liveness
+marker, the segment glob) live here; running the pipe is in recall.runner.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Final
 
 from recall.sources import fanout_output_argv
@@ -21,6 +23,41 @@ from recall.sources import fanout_output_argv
 _TS_STRFTIME: Final = "%Y%m%dT%H%M%S"
 _TS_PARSE: Final = "%Y%m%dT%H%M%S"
 _TS_RE: Final = re.compile(r"(\d{8}T\d{6})")
+
+# Per-source liveness marker under the source's directory. Touched by whoever
+# MEASURES the source delivering real signal — the ingest pump for a streaming
+# phone, the dead-segment watchdog for the local mic — never by mere process
+# aliveness. Its freshness is what /api/sources calls "active": recording, not
+# just connected (docs/capture-loss-plan.md — a green dot over a silent stream
+# is how speech gets spoken into a not-recording window).
+ALIVE_FILE: Final = ".alive"
+
+# |s16| below this is digital silence, not a live mic: a real room's noise floor
+# measures amplitude 10-90 (-69..-51 dB); a wedged CoreAudio read or the pixel9
+# dead path yields exact zeros / amplitude 1. 2 tolerates dither while never
+# calling a real, quiet room dead.
+SILENCE_PEAK: Final = 2
+
+
+def mark_alive(source_dir: Path) -> None:
+    """Refresh the source's liveness marker — call only on measured signal."""
+    (source_dir / ALIVE_FILE).touch()
+
+
+def alive_mtime(source_dir: Path) -> datetime | None:
+    """When the source last proved it was recording, or None if never/unreadable."""
+    try:
+        mtime = (source_dir / ALIVE_FILE).stat().st_mtime
+    except OSError:
+        return None
+    return datetime.fromtimestamp(mtime, tz=UTC)
+
+
+def segment_glob(source_dir: Path, source_id: str) -> list[Path]:
+    """The source's segment files (any state: open, closed, stub), sorted by name —
+    which is chronological, because the name embeds the UTC start time."""
+    return sorted(source_dir.glob(f"{source_id}-*"))
+
 
 # ffmpeg audio codec -> container file extension for segment files.
 _CODEC_EXT: Final = {

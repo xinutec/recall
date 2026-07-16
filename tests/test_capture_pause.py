@@ -8,10 +8,14 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from recall import capture_control, cli
 from recall.runner import _run_pipe, _segment_is_digital_silence, _watch_dead_segments
+
+# Before every segment timestamp used below — "this run started before them all".
+RUN_START = datetime(2026, 7, 16, 0, 0, 0, tzinfo=UTC)
 
 
 class _FakeProducer:
@@ -105,7 +109,12 @@ def test_watchdog_cycles_after_two_dead_closed_segments(tmp_path: Path) -> None:
     watcher = threading.Thread(
         target=_watch_dead_segments,
         args=(usb, "usb", producer, stop),
-        kwargs={"stall_after_s": 999.0, "on_cycled": cycled.append, "poll_s": 0.02},
+        kwargs={
+            "stall_after_s": 999.0,
+            "started_utc": RUN_START,
+            "on_cycled": cycled.append,
+            "poll_s": 0.02,
+        },
         daemon=True,
     )
     watcher.start()
@@ -130,7 +139,12 @@ def test_watchdog_live_audio_resets_the_streak(tmp_path: Path) -> None:
     watcher = threading.Thread(
         target=_watch_dead_segments,
         args=(usb, "usb", producer, stop),
-        kwargs={"stall_after_s": 999.0, "on_cycled": None, "poll_s": 0.02},
+        kwargs={
+            "stall_after_s": 999.0,
+            "started_utc": RUN_START,
+            "on_cycled": None,
+            "poll_s": 0.02,
+        },
         daemon=True,
     )
     watcher.start()
@@ -159,11 +173,74 @@ def test_watchdog_cycles_a_stalled_producer(tmp_path: Path) -> None:
         producer,  # type: ignore[arg-type]
         threading.Event(),
         stall_after_s=0.05,
+        started_utc=RUN_START,
         on_cycled=cycled.append,
         poll_s=0.02,
     )
     assert producer.terminated
     assert cycled == ["stalled producer"]
+
+
+def test_watchdog_marks_alive_on_a_live_closed_segment_of_this_run(
+    tmp_path: Path,
+) -> None:
+    # The mic's "active" dot must mean measured recording: once a segment of THIS
+    # run closes and decodes to real audio, the watchdog refreshes the liveness
+    # marker each healthy poll.
+    usb = tmp_path / "usb"
+    usb.mkdir()
+    _wav(usb / "usb-20260716T120000.wav", "sine=frequency=440:sample_rate=16000")
+    (usb / "usb-20260716T120100.opus").write_bytes(b"")  # the open newest
+    producer = _FakeProducer()
+    stop = threading.Event()
+    watcher = threading.Thread(
+        target=_watch_dead_segments,
+        args=(usb, "usb", producer, stop),
+        kwargs={
+            "stall_after_s": 999.0,
+            "started_utc": RUN_START,
+            "on_cycled": None,
+            "poll_s": 0.02,
+        },
+        daemon=True,
+    )
+    watcher.start()
+    time.sleep(0.15)
+    stop.set()
+    watcher.join(timeout=2.0)
+    assert (usb / ".alive").exists()
+    assert not producer.terminated
+
+
+def test_watchdog_never_marks_alive_from_a_previous_runs_segments(
+    tmp_path: Path,
+) -> None:
+    # Segments left from before a pause prove nothing about NOW: after a resume the
+    # mic reads idle until this run's first segment closes with real audio —
+    # honest, instead of green over a startup dead-window.
+    usb = tmp_path / "usb"
+    usb.mkdir()
+    _wav(usb / "usb-20260716T120000.wav", "sine=frequency=440:sample_rate=16000")
+    (usb / "usb-20260716T120100.opus").write_bytes(b"")
+    producer = _FakeProducer()
+    stop = threading.Event()
+    watcher = threading.Thread(
+        target=_watch_dead_segments,
+        args=(usb, "usb", producer, stop),
+        kwargs={
+            "stall_after_s": 999.0,
+            # this run began AFTER every segment on disk
+            "started_utc": datetime(2026, 7, 16, 13, 0, 0, tzinfo=UTC),
+            "on_cycled": None,
+            "poll_s": 0.02,
+        },
+        daemon=True,
+    )
+    watcher.start()
+    time.sleep(0.15)
+    stop.set()
+    watcher.join(timeout=2.0)
+    assert not (usb / ".alive").exists()
 
 
 def test_serve_paused_aware_exits_when_a_run_ends_unpaused(
