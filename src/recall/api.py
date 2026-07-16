@@ -103,7 +103,6 @@ from recall.schemas import (
     SessionsOut,
     SourcesOut,
     SpeakerNamesOut,
-    StatusOut,
     SuggestOut,
     Tier,
     TodaySummaryOut,
@@ -249,26 +248,11 @@ def client_log(body: ClientLog) -> OkOut:
     stamp = datetime.now(UTC).isoformat(timespec="seconds")
     parts = [stamp, f"[{body.level}]", body.url or "-", body.message]
     if body.stack:
-        parts.append(f"\n    {body.stack.splitlines()[0] if body.stack else ''}")
+        parts.append(f"\n    {body.stack.splitlines()[0]}")
     _CLIENT_LOG.parent.mkdir(parents=True, exist_ok=True)
     with _CLIENT_LOG.open("a") as fh:
         fh.write(" ".join(parts) + "\n")
     return {"ok": True}
-
-
-@app.get("/api/status")
-def status() -> StatusOut:
-    store = _store()
-    try:
-        return {
-            "audioSegments": store.audio_segment_count(),
-            "transcripts": store.transcript_count(),
-            "pending": len(store.pending_audio_segments()),
-            "corrections": store.correction_count(),
-            "sources": store.source_names(),
-        }
-    finally:
-        store.close()
 
 
 # Per-source liveness: the ingest server refreshes a marker file while a device is
@@ -848,15 +832,6 @@ def unintelligible(body: UnintelligibleIn) -> OkOut:
         store.close()
 
 
-@app.get("/api/hidden")
-def hidden(limit: int = 50) -> ItemsOut:
-    store = _store()
-    try:
-        return {"items": [_transcript(s) for s in store.hidden_segments(limit=limit)]}
-    finally:
-        store.close()
-
-
 @app.post("/api/unhide")
 def unhide(body: UnhideIn) -> OkOut:
     store = _store()
@@ -1179,10 +1154,8 @@ def refine_request(body: RefineRequestIn) -> OkOut:
 def ab_compare_start(body: AbCompareStartIn) -> NewIdOut:
     """Queue a non-destructive A/B comparison of two ASR models over a recording. The
     refine daemon runs it; poll `GET /api/ab-compare/{id}` for the result."""
-    frm = datetime.fromisoformat(body.frm) if body.frm else None
-    to = datetime.fromisoformat(body.to) if body.to else None
-    frm = frm.replace(tzinfo=UTC) if frm and not frm.tzinfo else frm
-    to = to.replace(tzinfo=UTC) if to and not to.tzinfo else to
+    frm = _parse_iso(body.frm or None)
+    to = _parse_iso(body.to or None)
     store = _store()
     try:
         run_id = store.add_ab_compare_run(

@@ -141,9 +141,11 @@ def test_handle_connection_records_ingest_telemetry(tmp_path: Path) -> None:
     finally:
         store.close()
     kinds = [e.kind for e in events]
-    assert capture_control.EVENT_INGEST_CONNECT in kinds
+    assert capture_control.CaptureEventKind.INGEST_CONNECT in kinds
     disconnect = next(
-        e for e in events if e.kind == capture_control.EVENT_INGEST_DISCONNECT
+        e
+        for e in events
+        if e.kind == capture_control.CaptureEventKind.INGEST_DISCONNECT
     )
     assert disconnect.source_id == "kitchen"
     assert disconnect.detail is not None

@@ -883,47 +883,6 @@ def test_restore_uncovered_provisional_reverses_watermark_loss() -> None:
     assert store.restore_uncovered_provisional() == 0
 
 
-def test_counts_and_source_names() -> None:
-    store = Store.memory()
-    assert store.audio_segment_count() == 0
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=1),
-        text="hi",
-        asr_model="v1",
-    )
-    assert store.audio_segment_count() == 1
-    assert store.transcript_count() == 1
-    assert store.source_names() == ["usb"]
-
-
-def test_transcript_count_reads_an_index_not_the_table() -> None:
-    """Counting current transcripts must not walk every row.
-
-    Without an index matching both NULL predicates SQLite scans the whole table.
-    On the real archive (44k rows, most superseded) that took 8.7s, and over 25s
-    when the worker was competing for the disk — long enough to hang /api/status.
-    """
-    store = Store.memory()
-    plan = " ".join(
-        str(value)
-        for row in store._conn.execute(
-            "EXPLAIN QUERY PLAN SELECT count(*) AS n FROM transcript_segments "
-            "WHERE superseded_by IS NULL AND hidden_reason IS NULL"
-        ).fetchall()
-        for value in row
-    )
-    # A partial index holds only the current rows, so walking one *is* the fast path
-    # (SQLite still calls that a SCAN). Either of the two qualifies — they cover the
-    # same rows, and SQLite picks whichever it likes. What must not happen is falling
-    # back to idx_ts_start, which covers none of the predicates and so tests every row.
-    assert "idx_ts_current" in plan or "idx_ts_audio_current" in plan, plan
-    assert "idx_ts_start" not in plan, plan
-
-
 def test_speech_veto_searches_an_index_not_every_turn() -> None:
     """Quiet detection asks, per capture segment, "does a turn that still stands hang
     off this audio?" — the veto that stops a delete from destroying a transcript.

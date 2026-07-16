@@ -130,14 +130,6 @@ class CaptureOut(TypedDict):
     pausedUntil: str | None
 
 
-class StatusOut(TypedDict):
-    audioSegments: int
-    transcripts: int
-    pending: int
-    corrections: int
-    sources: list[str]
-
-
 class OkOut(TypedDict):
     ok: bool
 

@@ -171,7 +171,10 @@ def _register_source(root: Path, source_id: str) -> None:
 
 
 def _record_event(
-    root: Path, kind: str, source_id: str, detail: str | None = None
+    root: Path,
+    kind: capture_control.CaptureEventKind,
+    source_id: str,
+    detail: str | None = None,
 ) -> None:
     """Durable telemetry row (capture_events). Best-effort: the audio pump must never
     stall or die over bookkeeping, so a failure is logged and swallowed."""
@@ -234,7 +237,9 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
         )
         env = {**os.environ, "TZ": "UTC"}
         _log.info("ingest: %s connected", handshake.source_id)
-        _record_event(root, capture_control.EVENT_INGEST_CONNECT, handshake.source_id)
+        _record_event(
+            root, capture_control.CaptureEventKind.INGEST_CONNECT, handshake.source_id
+        )
         connected = time.time()
         meter = StreamMeter(handshake.sample_rate, handshake.channels)
         first_byte: float | None = None
@@ -290,7 +295,7 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
             )
             _record_event(
                 root,
-                capture_control.EVENT_INGEST_DISCONNECT,
+                capture_control.CaptureEventKind.INGEST_DISCONNECT,
                 handshake.source_id,
                 stats,
             )

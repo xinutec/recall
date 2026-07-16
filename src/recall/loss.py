@@ -1,16 +1,18 @@
-"""Reconcile archive gaps against capture-lifecycle events to find LOST speech.
+"""Reconcile recorded coverage against capture-lifecycle events to find LOST speech.
 
-A gap in the always-on mic's timeline is benign only when capture was deliberately
+A hole in the always-on mic's coverage is benign only when capture was deliberately
 paused across it. The durable pause/resume events (recall.store capture_events) say
 when capture was *meant* to be recording: each resume opens an active span, the next
-pause closes it. Any archive gap overlapping an active span is capture running but
-producing no audio — UNEXPLAINED, i.e. silently lost, unrecoverable speech.
+pause closes it. Any part of an active span not covered by recorded audio is capture
+running but producing nothing — UNEXPLAINED, i.e. silently lost, unrecoverable speech.
+Judged as coverage of the span (not as gaps between segments) so that a span with no
+segments at all — the crash-loop shape — is caught too.
 
 Deliberately conservative: with no events (pre-epoch history) or before the first
 resume, we make no claim — the reconciler only judges stretches it can account for, so
 it never cries loss over an old deliberate pause it has no record of.
 
-Pure logic over events + gaps, so it is unit-tested with fakes.
+Pure logic over events + coverage intervals, so it is unit-tested with fakes.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from recall.capture_control import EVENT_PAUSE, EVENT_RESUME
+from recall.capture_control import CaptureEventKind
 from recall.timeline import Gap
 
 
@@ -50,10 +52,10 @@ def active_spans(events: Iterable[_Event], *, now: datetime) -> list[Span]:
     spans: list[Span] = []
     open_start: datetime | None = None
     for event in sorted(events, key=lambda e: e.utc):
-        if event.kind == EVENT_RESUME:
+        if event.kind == CaptureEventKind.RESUME:
             if open_start is None:
                 open_start = event.utc
-        elif event.kind == EVENT_PAUSE and open_start is not None:
+        elif event.kind == CaptureEventKind.PAUSE and open_start is not None:
             spans.append(Span(open_start, event.utc))
             open_start = None
     if open_start is not None:
@@ -61,46 +63,56 @@ def active_spans(events: Iterable[_Event], *, now: datetime) -> list[Span]:
     return spans
 
 
-def gaps_between(
+def _merged(
     intervals: Iterable[tuple[datetime, datetime]],
-    source_id: str,
-    *,
-    tolerance: timedelta,
-) -> list[Gap]:
-    """Gaps between consecutive coverage intervals (start, end), exceeding `tolerance`.
-
-    Overlaps are merged (running max end), so back-to-back or overlapping segments never
-    read as a gap. `tolerance` absorbs the sub-second seam between adjacent segments.
-    """
-    gaps: list[Gap] = []
-    covered_to: datetime | None = None
+) -> list[tuple[datetime, datetime]]:
+    """Coverage intervals sorted and merged (overlaps collapse, running max end)."""
+    merged: list[tuple[datetime, datetime]] = []
     for start, end in sorted(intervals):
-        if covered_to is not None and start - covered_to > tolerance:
-            gaps.append(Gap(source_id=source_id, start=covered_to, end=start))
-        covered_to = end if covered_to is None else max(covered_to, end)
-    return gaps
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
-def unexplained_loss(
-    gaps: Iterable[Gap],
+def uncovered_loss(  # noqa: PLR0913 - the reconciliation's tuning knobs are the point
+    intervals: Iterable[tuple[datetime, datetime]],
     events: Iterable[_Event],
+    source_id: str,
     *,
     now: datetime,
     min_loss: timedelta,
+    settle: timedelta,
 ) -> list[Gap]:
-    """Gaps (or the portions of them) that fall while capture was active — lost speech.
+    """Portions of the active spans not covered by any recorded audio — lost speech.
 
-    Each gap is intersected with the active spans; an intersection at least `min_loss`
-    long is reported (as a Gap trimmed to that stretch). `min_loss` absorbs the boundary
-    sliver a pause recorded a few seconds after the last segment would otherwise leave.
+    Coverage-based, not gap-between-segments-based: a span with NO segments at all
+    (capture "active" but producing nothing — the crash-loop shape that cost ninety
+    minutes in June) leaves no between-segments gap, yet is exactly the total loss
+    this check exists for. `min_loss` absorbs boundary slop (a first segment starting
+    a beat after the resume, a pause recorded a beat after the last segment; the
+    sub-second seams between adjacent segments fall out the same way). `settle`
+    excludes the trailing stretch the indexer cannot have caught up with yet — the
+    newest audio is an in-progress segment plus the worker's min-age guard, so a
+    running capture's last few minutes are always uncovered in the store and must
+    never read as loss.
     """
-    spans = active_spans(events, now=now)
+    horizon = now - settle
+    merged = _merged(intervals)
     losses: list[Gap] = []
-    for gap in gaps:
-        for span in spans:
-            lo = max(gap.start, span.start)
-            hi = min(gap.end, span.end)
-            if hi - lo >= min_loss:
-                losses.append(Gap(source_id=gap.source_id, start=lo, end=hi))
+    for span in active_spans(events, now=now):
+        end = min(span.end, horizon)
+        cursor = span.start
+        for start, stop in merged:
+            if stop <= cursor:
+                continue
+            if start >= end:
+                break
+            if start - cursor >= min_loss:
+                losses.append(Gap(source_id=source_id, start=cursor, end=start))
+            cursor = max(cursor, stop)
+        if end - cursor >= min_loss:
+            losses.append(Gap(source_id=source_id, start=cursor, end=end))
     losses.sort(key=lambda g: g.start)
     return losses

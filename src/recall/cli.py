@@ -51,7 +51,7 @@ from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.live import run_live
 from recall.llm import Generator, make_mlx_generator
 from recall.logrotate import rotate_logs
-from recall.loss import gaps_between, unexplained_loss
+from recall.loss import uncovered_loss
 from recall.loudness import backfill_loudness
 from recall.maintenance import (
     backup_age_hours,
@@ -151,7 +151,8 @@ def _serve_paused_aware(
     out: Path,
     run_once: Callable[[Callable[[], bool]], int],
     *,
-    record_event: Callable[[str, datetime], None] | None = None,
+    record_event: Callable[[capture_control.CaptureEventKind, datetime], None]
+    | None = None,
 ) -> int:
     """Run a self-gating recording entrypoint: park while paused, run while active,
     and re-park when a pause interrupts it. `run_once(should_stop)` runs the
@@ -169,7 +170,7 @@ def _serve_paused_aware(
     def paused() -> bool:
         return capture_control.is_paused(out, now())
 
-    def note(kind: str) -> None:
+    def note(kind: capture_control.CaptureEventKind) -> None:
         if record_event is None:
             return
         stamped = now()
@@ -186,11 +187,13 @@ def _serve_paused_aware(
 
     while True:
         capture_control.wait_until_unpaused(out, now=now, sleep=time.sleep)
-        note(capture_control.EVENT_RESUME)  # capture is becoming active
+        note(capture_control.CaptureEventKind.RESUME)  # capture is becoming active
         result = run_once(paused)
         if not paused():
             return result
-        note(capture_control.EVENT_PAUSE)  # a pause stopped it (not an EOF exit)
+        note(
+            capture_control.CaptureEventKind.PAUSE
+        )  # a pause stopped it (not an EOF exit)
 
 
 def _cmd_record(args: argparse.Namespace) -> int:
@@ -227,7 +230,7 @@ def _cmd_record(args: argparse.Namespace) -> int:
             fanout=True,
         )
 
-    def record_event(kind: str, utc: datetime) -> None:
+    def record_event(kind: capture_control.CaptureEventKind, utc: datetime) -> None:
         # Short-lived connection per transition (a few a day): the durable resume/pause
         # record the loss check reconciles gaps against. Runs off the recorder's thread.
         event_store = Store.open(args.out / "recall.sqlite")
@@ -1131,31 +1134,45 @@ def _print_attribution(
 # The mirror runs nightly; 48h of slack tolerates one missed night (Mac asleep,
 # odin briefly down) without letting a dead backup go quiet for a week.
 _BACKUP_MAX_AGE_HOURS = 48.0
-# How far back the speech-loss reconciliation looks, and the smallest active-capture gap
-# it will call loss — below this is the boundary slop of a pause recorded a beat after
-# the last segment, not real lost speech.
+# How far back the speech-loss reconciliation looks, and the smallest uncovered
+# active-capture stretch it will call loss — below this is the boundary slop of a pause
+# recorded a beat after the last segment, not real lost speech.
 _LOSS_WINDOW = timedelta(hours=48)
 _LOSS_MIN = timedelta(minutes=2)
+# The store always trails a running capture: an in-progress segment (up to 60s) plus
+# the worker's min-age guard (120s) plus its pass cadence. Coverage inside this
+# trailing stretch is unknowable, so the reconciler never judges it.
+_LOSS_SETTLE = timedelta(minutes=10)
 
 
 def _speech_loss(
     store: Store, sources: list[tuple[str, SourceKind]], *, now: datetime
 ) -> tuple[list[Gap], int]:
     """Reconcile the always-on mic's recorded coverage against the pause/resume events
-    over the recent window: unexplained gaps (capture active, no audio) + the dead
-    window count — telling a deliberate pause from lost speech (recall.loss)."""
+    over the recent window: uncovered active stretches (capture active, no audio) + the
+    dead window count — telling a deliberate pause from lost speech (recall.loss)."""
     since = now - _LOSS_WINDOW
     events = store.capture_events_since(since)
     dead = len(
-        store.capture_events_since(since, kinds=(capture_control.EVENT_DEAD_WINDOW,))
+        store.capture_events_since(
+            since, kinds=(capture_control.CaptureEventKind.DEAD_WINDOW,)
+        )
     )
     losses: list[Gap] = []
     for source_id, kind in sources:
         if kind is not ALWAYS_ON:
             continue
         intervals = store.audio_segment_intervals(source_id, since=since)
-        gaps = gaps_between(intervals, source_id, tolerance=timedelta(seconds=2))
-        losses.extend(unexplained_loss(gaps, events, now=now, min_loss=_LOSS_MIN))
+        losses.extend(
+            uncovered_loss(
+                intervals,
+                events,
+                source_id,
+                now=now,
+                min_loss=_LOSS_MIN,
+                settle=_LOSS_SETTLE,
+            )
+        )
     return losses, dead
 
 
@@ -1483,7 +1500,7 @@ def _cmd_capture_mirror(args: argparse.Namespace) -> int:
         store = Store.open(_db_path(args.out))
         try:
             store.add_capture_event(
-                capture_control.EVENT_MIRROR_APPLIED,
+                capture_control.CaptureEventKind.MIRROR_APPLIED,
                 utc=datetime.now(UTC),
                 detail=intent or "running",
             )

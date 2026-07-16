@@ -30,7 +30,10 @@ def test_add_and_read_a_capture_event(tmp_path: Path) -> None:
     try:
         t = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
         store.add_capture_event(
-            capture_control.EVENT_PAUSE, utc=t, source_id="usb", detail="until 11:00"
+            capture_control.CaptureEventKind.PAUSE,
+            utc=t,
+            source_id="usb",
+            detail="until 11:00",
         )
         got = store.capture_events_since(datetime(2026, 7, 15, tzinfo=UTC))
         assert len(got) == 1
@@ -47,8 +50,8 @@ def test_capture_events_since_is_a_lower_bound(tmp_path: Path) -> None:
     try:
         old = datetime(2026, 7, 15, 9, 0, tzinfo=UTC)
         new = datetime(2026, 7, 15, 11, 0, tzinfo=UTC)
-        store.add_capture_event(capture_control.EVENT_RESUME, utc=old)
-        store.add_capture_event(capture_control.EVENT_RESUME, utc=new)
+        store.add_capture_event(capture_control.CaptureEventKind.RESUME, utc=old)
+        store.add_capture_event(capture_control.CaptureEventKind.RESUME, utc=new)
         got = store.capture_events_since(datetime(2026, 7, 15, 10, 0, tzinfo=UTC))
         assert [e.utc for e in got] == [new]
     finally:
@@ -59,15 +62,16 @@ def test_capture_events_can_be_filtered_by_kind(tmp_path: Path) -> None:
     store = _store(tmp_path)
     try:
         base = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
-        store.add_capture_event(capture_control.EVENT_PAUSE, utc=base)
+        store.add_capture_event(capture_control.CaptureEventKind.PAUSE, utc=base)
         store.add_capture_event(
-            capture_control.EVENT_DEAD_WINDOW, utc=base + timedelta(minutes=1)
+            capture_control.CaptureEventKind.DEAD_WINDOW,
+            utc=base + timedelta(minutes=1),
         )
         store.add_capture_event(
-            capture_control.EVENT_RESUME, utc=base + timedelta(minutes=2)
+            capture_control.CaptureEventKind.RESUME, utc=base + timedelta(minutes=2)
         )
         dead = store.capture_events_since(
-            base, kinds=(capture_control.EVENT_DEAD_WINDOW,)
+            base, kinds=(capture_control.CaptureEventKind.DEAD_WINDOW,)
         )
         assert [e.kind for e in dead] == ["dead_window"]
     finally:
@@ -80,9 +84,9 @@ def test_capture_events_come_back_oldest_first(tmp_path: Path) -> None:
         base = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
         # insert out of chronological order
         store.add_capture_event(
-            capture_control.EVENT_RESUME, utc=base + timedelta(minutes=5)
+            capture_control.CaptureEventKind.RESUME, utc=base + timedelta(minutes=5)
         )
-        store.add_capture_event(capture_control.EVENT_PAUSE, utc=base)
+        store.add_capture_event(capture_control.CaptureEventKind.PAUSE, utc=base)
         got = store.capture_events_since(base)
         assert [e.kind for e in got] == ["pause", "resume"]
     finally:
@@ -94,7 +98,7 @@ def test_add_capture_event_rejects_a_naive_timestamp(tmp_path: Path) -> None:
     try:
         with pytest.raises(ValueError, match="utc"):
             store.add_capture_event(
-                capture_control.EVENT_PAUSE, utc=datetime(2026, 7, 15, 10, 0)
+                capture_control.CaptureEventKind.PAUSE, utc=datetime(2026, 7, 15, 10, 0)
             )
     finally:
         store.close()
@@ -115,7 +119,7 @@ def test_clearing_a_dead_stub_records_a_durable_dead_window_then_deletes(
         events = store.capture_events_since(datetime(2026, 7, 15, tzinfo=UTC))
         assert len(events) == 1  # ...but the evidence survives
         event = events[0]
-        assert event.kind == capture_control.EVENT_DEAD_WINDOW
+        assert event.kind == capture_control.CaptureEventKind.DEAD_WINDOW
         assert event.source_id == "usb"
         assert event.detail == "usb-20260715T090200.opus"
         # timestamped to WHEN capture died (from the filename), not when noticed
@@ -140,7 +144,7 @@ def test_the_supervisor_records_a_resume_when_capture_starts(tmp_path: Path) -> 
     rc = cli._serve_paused_aware(tmp_path, run_once, record_event=record_event)
     assert rc == 0
     assert done.wait(2)  # the event is written on a daemon thread
-    assert recorded == [capture_control.EVENT_RESUME]
+    assert recorded == [capture_control.CaptureEventKind.RESUME]
 
 
 def test_an_unreadable_stub_is_kept_and_not_recorded_as_dead(tmp_path: Path) -> None:

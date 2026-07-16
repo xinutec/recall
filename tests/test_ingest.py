@@ -158,7 +158,7 @@ def test_vad_gate_skips_silence_but_marks_processed(tmp_path: Path) -> None:
     )
     assert written == 0
     # the segment is recorded and marked processed, so it won't be retried
-    assert store.audio_segment_count() == 1
+    assert len(store.audio_segment_paths()) == 1
     assert store.pending_audio_segments() == []
 
 

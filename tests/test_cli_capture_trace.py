@@ -24,12 +24,12 @@ def _seed(tmp_path: Path, now: datetime) -> None:
             AudioSource(id="pixel9", name="pixel9", kind=SourceKind.TCP_PCM, spec="")
         )
         store.add_capture_event(
-            capture_control.EVENT_MIRROR_APPLIED,
+            capture_control.CaptureEventKind.MIRROR_APPLIED,
             utc=now - timedelta(minutes=5),
             detail="running",
         )
         store.add_capture_event(
-            capture_control.EVENT_INGEST_CONNECT,
+            capture_control.CaptureEventKind.INGEST_CONNECT,
             utc=now - timedelta(minutes=4),
             source_id="pixel9",
         )
@@ -45,7 +45,7 @@ def _seed(tmp_path: Path, now: datetime) -> None:
             )
         )
         store.add_capture_event(
-            capture_control.EVENT_INGEST_DISCONNECT,
+            capture_control.CaptureEventKind.INGEST_DISCONNECT,
             utc=now - timedelta(minutes=1),
             source_id="pixel9",
             detail='{"bytes": 0, "peak_db": null}',

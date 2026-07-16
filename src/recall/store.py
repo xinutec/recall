@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Self
 
 from recall.asr import Word
+from recall.capture_control import CaptureEventKind
 from recall.ids import AudioSegmentId, CorrectionId, SpeakerId, TranscriptId
 from recall.ranking import normalize_text
 from recall.sources import AudioSource, SourceKind
@@ -972,16 +973,6 @@ class Store:
         ).fetchall()
         return {str(r["text"]) for r in rows}
 
-    def hidden_segments(self, *, limit: int = 50) -> list[TranscriptSegment]:
-        """Current turns that have been soft-hidden (for auditing/recovery)."""
-        rows = self._conn.execute(
-            """SELECT * FROM transcript_segments
-               WHERE hidden_reason IS NOT NULL AND superseded_by IS NULL
-               ORDER BY start_utc DESC LIMIT ?""",
-            (limit,),
-        ).fetchall()
-        return [_row_to_segment(row) for row in rows]
-
     def visible_machine_turns_for_audio(
         self, audio_segment_id: int
     ) -> list[TranscriptSegment]:
@@ -1116,7 +1107,7 @@ class Store:
 
     def add_capture_event(
         self,
-        kind: str,
+        kind: CaptureEventKind,
         *,
         utc: datetime,
         source_id: str | None = None,
@@ -1139,7 +1130,7 @@ class Store:
         return int(cursor.lastrowid or 0)
 
     def capture_events_since(
-        self, since: datetime, *, kinds: tuple[str, ...] | None = None
+        self, since: datetime, *, kinds: tuple[CaptureEventKind, ...] | None = None
     ) -> list[CaptureEvent]:
         """Capture events at or after `since`, oldest-first; optionally only `kinds`."""
         _require_aware(since, "since")
@@ -2323,20 +2314,6 @@ class Store:
 
     def _count(self, sql: str) -> int:
         return int(self._conn.execute(sql).fetchone()["n"])
-
-    def audio_segment_count(self) -> int:
-        return self._count("SELECT count(*) AS n FROM audio_segments")
-
-    def transcript_count(self) -> int:
-        """Current (non-superseded) transcript segments."""
-        return self._count(
-            "SELECT count(*) AS n FROM transcript_segments "
-            "WHERE superseded_by IS NULL AND hidden_reason IS NULL"
-        )
-
-    def source_names(self) -> list[str]:
-        rows = self._conn.execute("SELECT id FROM sources ORDER BY id").fetchall()
-        return [str(row["id"]) for row in rows]
 
     def source_rows(self) -> list[tuple[str, str, str]]:
         """Registered sources as (id, name, kind) — for the fleet liveness view."""

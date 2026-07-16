@@ -24,6 +24,7 @@ import os
 import subprocess
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
@@ -37,20 +38,26 @@ MAX_PAUSE = timedelta(hours=24)
 # How often a parked/recording agent re-checks whether its pause is over.
 _PAUSE_POLL_SECONDS = 5.0
 
-# Durable capture-lifecycle event kinds (recorded via recall.store.add_capture_event) —
-# the record that tells a deliberate pause-gap apart from silently lost audio, so an
-# UNEXPLAINED gap (= unrecoverable lost speech) can be detected instead of hidden.
-EVENT_PAUSE = "pause"
-EVENT_RESUME = "resume"
-EVENT_DEAD_WINDOW = "dead_window"
-# Ingest telemetry (docs/capture-loss-plan.md Phase 1): a phone's stream opening and
-# closing, the close carrying what it actually sent (bytes, measured level, flushed
-# segment) — the evidence that tells a silent stream from no stream at all.
-EVENT_INGEST_CONNECT = "ingest_connect"
-EVENT_INGEST_DISCONNECT = "ingest_disconnect"
-# The mirror applied a changed fleet intent to the local pause file — the durable
-# "intent-seen" timestamp that anchors a resume timeline.
-EVENT_MIRROR_APPLIED = "mirror_applied"
+
+class CaptureEventKind(StrEnum):
+    """Durable capture-lifecycle event kinds (recall.store.add_capture_event) — the
+    record that tells a deliberate pause-gap apart from silently lost audio, so an
+    UNEXPLAINED gap (= unrecoverable lost speech) can be detected instead of hidden.
+    A closed taxonomy: a typo'd kind would be written and then silently never match
+    in the loss reconciler, which is exactly the check that must not fail quietly.
+    """
+
+    PAUSE = "pause"
+    RESUME = "resume"
+    DEAD_WINDOW = "dead_window"
+    # Ingest telemetry (docs/capture-loss-plan.md Phase 1): a phone's stream opening
+    # and closing, the close carrying what it actually sent (bytes, measured level,
+    # flushed segment) — the evidence that tells a silent stream from no stream.
+    INGEST_CONNECT = "ingest_connect"
+    INGEST_DISCONNECT = "ingest_disconnect"
+    # The mirror applied a changed fleet intent to the local pause file — the durable
+    # "intent-seen" timestamp that anchors a resume timeline.
+    MIRROR_APPLIED = "mirror_applied"
 
 
 def _pause_file(root: Path) -> Path:

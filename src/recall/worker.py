@@ -104,7 +104,7 @@ def _clear_dead_stubs(scan: Scan, store: Store, source_id: str) -> None:
         # event becomes the evidence. utc is the segment's own timestamp (death time).
         try:
             store.add_capture_event(
-                capture_control.EVENT_DEAD_WINDOW,
+                capture_control.CaptureEventKind.DEAD_WINDOW,
                 utc=parse_segment_start(path.name),
                 source_id=source_id,
                 detail=path.name,
