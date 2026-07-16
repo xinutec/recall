@@ -1233,9 +1233,12 @@ class Store:
         model_a: str,
         model_b: str,
         base_model: str,
+        fleet_id: int | None = None,
     ) -> int:
         """Queue an A/B comparison of `model_a` vs `model_b` over `source` (the whole
-        recording, or [start, end) if given). The runner drains it. Returns the id."""
+        recording, or [start, end) if given). The runner drains it. Returns the id.
+        `fleet_id` marks a run mirrored from the fleet's queue (the Isis split), so
+        its result can be pushed back to that row."""
         if start is not None:
             _require_aware(start, "start")
         if end is not None:
@@ -1243,7 +1246,7 @@ class Store:
         cursor = self._conn.execute(
             "INSERT INTO ab_compare_runs "
             "(source_id, start_utc, end_utc, model_a, model_b, base_model, status, "
-            "created_utc) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)",
+            "created_utc, fleet_id) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
             (
                 source,
                 start.isoformat() if start else None,
@@ -1252,6 +1255,7 @@ class Store:
                 model_b,
                 base_model,
                 datetime.now(UTC).isoformat(),
+                fleet_id,
             ),
         )
         self._commit()
@@ -1265,6 +1269,27 @@ class Store:
             (limit,),
         ).fetchall()
         return [_row_to_ab_compare_job(r, with_result=False) for r in rows]
+
+    def unfinished_ab_compare_runs(self, *, limit: int = 100) -> list[AbCompareJob]:
+        """Runs still awaiting a result (queued or running), oldest-first — what the
+        fleet serves to the Mac across the split. Running rows stay served so a Mac
+        that lost its local mirror re-adopts them instead of wedging them forever."""
+        rows = self._conn.execute(
+            f"SELECT {_AB_COMPARE_COLS} FROM ab_compare_runs "
+            "WHERE status IN ('queued', 'running') ORDER BY id LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [_row_to_ab_compare_job(r, with_result=False) for r in rows]
+
+    def ab_compare_run_by_fleet_id(self, fleet_id: int) -> AbCompareJob | None:
+        """The local mirror of a fleet-queued run (with its result_json, for the
+        push-back), or None if this Mac has not adopted it yet."""
+        row = self._conn.execute(
+            f"SELECT {_AB_COMPARE_COLS}, result_json FROM ab_compare_runs "
+            "WHERE fleet_id = ?",
+            (fleet_id,),
+        ).fetchone()
+        return _row_to_ab_compare_job(row, with_result=True) if row else None
 
     def list_ab_compare_runs(self, *, limit: int = 100) -> list[AbCompareJob]:
         """All comparison runs, newest-first, without the (large) result_json."""

@@ -427,4 +427,10 @@ _MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX idx_capture_events_utc ON capture_events (utc);
     """,
+    # Bridge A/B comparisons across the Isis split: a run queued on the fleet is
+    # mirrored into the Mac's local queue, and fleet_id remembers which fleet row a
+    # local run answers so its result can be pushed back. NULL for runs born locally.
+    """
+    ALTER TABLE ab_compare_runs ADD COLUMN fleet_id INTEGER;
+    """,
 )

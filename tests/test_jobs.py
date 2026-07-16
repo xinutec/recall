@@ -19,6 +19,7 @@ import pytest
 from recall.cli_parser import build_parser
 from recall.jobs import run_jobs_once
 from recall.sources import AudioSource, SourceKind
+from recall.store_models import AbCompareJob
 from recall.timeline import Segment
 
 
@@ -27,12 +28,16 @@ class _Job:
     id: int
     type: str
     source: str
-    start: str
-    end: str
+    start: str | None
+    end: str | None
     file: str | None = None
     title: str | None = None
     sample_rate: int | None = None
     channels: int | None = None
+    model_a: str | None = None
+    model_b: str | None = None
+    base_model: str | None = None
+    status: str | None = None
 
 
 class _FakeClient:
@@ -42,6 +47,8 @@ class _FakeClient:
         self._jobs = jobs
         self.done: list[tuple[int, str]] = []
         self.fetched: list[tuple[str, str, Path]] = []
+        self.ab_running: list[int] = []
+        self.ab_results: list[tuple[int, dict[str, object]]] = []
 
     def poll_jobs(self, *, limit: int = 50) -> list[_Job]:
         return list(self._jobs)
@@ -54,6 +61,23 @@ class _FakeClient:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"opus-bytes")
 
+    def mark_ab_compare_running(self, run_id: int) -> None:
+        self.ab_running.append(run_id)
+
+    def push_ab_compare_result(  # noqa: PLR0913 - mirrors the SyncClient signature
+        self,
+        run_id: int,
+        *,
+        error: str | None = None,
+        result_json: str | None = None,
+        mean_wer_a: float | None = None,
+        mean_wer_b: float | None = None,
+        n_corrections: int = 0,
+        n_segments: int = 0,
+        n_changed: int = 0,
+    ) -> None:
+        self.ab_results.append((run_id, {"error": error, "result_json": result_json}))
+
 
 class _FakeStore:
     """Records the local hand-offs (the slice of Store the runner touches)."""
@@ -62,6 +86,8 @@ class _FakeStore:
         self.refines: list[tuple[str, datetime, datetime]] = []
         self.sources: list[AudioSource] = []
         self.segments: list[Segment] = []
+        self.ab_added: list[tuple[str, int | None]] = []
+        self.ab_local: dict[int, AbCompareJob] = {}  # fleet_id -> local mirror
 
     def add_refine_request(self, source: str, start: datetime, end: datetime) -> int:
         self.refines.append((source, start, end))
@@ -73,6 +99,23 @@ class _FakeStore:
     def add_audio_segment(self, segment: Segment) -> int:
         self.segments.append(segment)
         return len(self.segments)
+
+    def add_ab_compare_run(  # noqa: PLR0913 - mirrors the Store signature
+        self,
+        source: str,
+        start: datetime | None,
+        end: datetime | None,
+        *,
+        model_a: str,
+        model_b: str,
+        base_model: str,
+        fleet_id: int | None = None,
+    ) -> int:
+        self.ab_added.append((source, fleet_id))
+        return len(self.ab_added)
+
+    def ab_compare_run_by_fleet_id(self, fleet_id: int) -> AbCompareJob | None:
+        return self.ab_local.get(fleet_id)
 
 
 def _job(
@@ -186,7 +229,7 @@ def test_an_upload_job_without_blob_metadata_is_left_pending(tmp_path: Path) -> 
 def test_unknown_job_type_is_left_pending_not_run_or_dropped(tmp_path: Path) -> None:
     # A newer fleet may enqueue a type this Mac can't run yet. Skip it (don't wedge the
     # batch) but do NOT mark it done — leave it for a worker that understands it.
-    client = _FakeClient([_job(1, type="ab-compare"), _job(2, type="refine")])
+    client = _FakeClient([_job(1, type="score-asr"), _job(2, type="refine")])
     store = _FakeStore()
     handed = run_jobs_once(store, client, data_root=tmp_path)
     assert handed == 1
@@ -238,6 +281,107 @@ def test_marks_done_only_after_the_local_enqueue(tmp_path: Path) -> None:
 
     run_jobs_once(_OrderStore(), _OrderClient([_job(3)]), data_root=tmp_path)
     assert order == ["enqueue", "done"]
+
+
+def _ab_job(job_id: int = 21, *, status: str = "queued") -> _Job:
+    return _Job(
+        job_id,
+        "ab-compare",
+        "meeting-20260622-1033",
+        None,  # whole recording
+        None,
+        model_a="mlx-community/whisper-large-v3-turbo",
+        model_b="adapter-current",
+        base_model="openai/whisper-large-v3",
+        status=status,
+    )
+
+
+def _local_run(status: str, *, error: str | None = None) -> AbCompareJob:
+    return AbCompareJob(
+        id=1,
+        source="meeting-20260622-1033",
+        start=None,
+        end=None,
+        model_a="mlx-community/whisper-large-v3-turbo",
+        model_b="adapter-current",
+        base_model="openai/whisper-large-v3",
+        status=status,
+        created=datetime(2026, 7, 16, tzinfo=UTC),
+        started=None,
+        done=None,
+        error=error,
+        result_json='{"n": 1}' if status == "done" else None,
+        mean_wer_a=0.2 if status == "done" else None,
+        mean_wer_b=0.25 if status == "done" else None,
+        n_corrections=3 if status == "done" else None,
+        n_segments=1 if status == "done" else None,
+        n_changed=1 if status == "done" else None,
+    )
+
+
+def test_an_unseen_ab_run_is_adopted_locally_and_never_acknowledged(
+    tmp_path: Path,
+) -> None:
+    # Adoption is not completion: the run lands in the local queue (stamped with the
+    # fleet's id) for the refine daemon, and the fleet keeps serving it — only the
+    # result landing retires it, so no mark_done may ever fire for this type.
+    client = _FakeClient([_ab_job(21)])
+    store = _FakeStore()
+    handed = run_jobs_once(store, client, data_root=tmp_path)
+    assert handed == 1
+    assert store.ab_added == [("meeting-20260622-1033", 21)]
+    assert client.done == []
+    assert client.ab_results == []
+
+
+def test_an_adopted_ab_run_still_pending_locally_relays_nothing(
+    tmp_path: Path,
+) -> None:
+    client = _FakeClient([_ab_job(21)])
+    store = _FakeStore()
+    store.ab_local[21] = _local_run("queued")
+    handed = run_jobs_once(store, client, data_root=tmp_path)
+    assert handed == 0
+    assert store.ab_added == []  # not adopted twice
+    assert client.ab_running == []
+    assert client.ab_results == []
+
+
+def test_a_locally_running_ab_run_is_reported_once(tmp_path: Path) -> None:
+    # "Running" is relayed only while the fleet still says queued, so the call
+    # happens once, not every 60s pass.
+    store = _FakeStore()
+    store.ab_local[21] = _local_run("running")
+    client = _FakeClient([_ab_job(21, status="queued")])
+    assert run_jobs_once(store, client, data_root=tmp_path) == 1
+    assert client.ab_running == [21]
+
+    quiet = _FakeClient([_ab_job(21, status="running")])
+    assert run_jobs_once(store, quiet, data_root=tmp_path) == 0
+    assert quiet.ab_running == []
+
+
+def test_a_finished_ab_run_pushes_its_report_back(tmp_path: Path) -> None:
+    client = _FakeClient([_ab_job(21, status="running")])
+    store = _FakeStore()
+    store.ab_local[21] = _local_run("done")
+    assert run_jobs_once(store, client, data_root=tmp_path) == 1
+    ((run_id, pushed),) = client.ab_results
+    assert run_id == 21
+    assert pushed["result_json"] == '{"n": 1}'
+    assert pushed["error"] is None
+    assert client.done == []  # retirement is the result itself, not an ack
+
+
+def test_a_failed_ab_run_pushes_its_error_back(tmp_path: Path) -> None:
+    client = _FakeClient([_ab_job(21, status="running")])
+    store = _FakeStore()
+    store.ab_local[21] = _local_run("error", error="no audio for source")
+    assert run_jobs_once(store, client, data_root=tmp_path) == 1
+    ((run_id, pushed),) = client.ab_results
+    assert run_id == 21
+    assert pushed["error"] == "no audio for source"
 
 
 def test_parser_wires_jobs() -> None:

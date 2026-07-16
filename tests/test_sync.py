@@ -676,3 +676,100 @@ def test_a_turn_push_retires_the_pending_upload_job(
             )
         )
         assert client.poll_jobs() == []
+
+
+def _seed_ab_run(db: Path) -> int:
+    store = Store.open(db)
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+    run_id = store.add_ab_compare_run(
+        "usb",
+        None,
+        None,
+        model_a="mlx-community/whisper-large-v3-turbo",
+        model_b="adapter-current",
+        base_model="openai/whisper-large-v3",
+    )
+    store.close()
+    return run_id
+
+
+def test_a_queued_ab_run_is_served_until_its_result_lands(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The full relay: served while queued, still served (with honest status) after
+    # the Mac reports it running, retired the moment the report lands — where the
+    # Compare page can read it.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    run_id = _seed_ab_run(db)
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        (job,) = client.poll_jobs()
+        assert (job.type, job.id, job.status) == ("ab-compare", run_id, "queued")
+        assert job.model_b == "adapter-current"
+        assert job.start is None and job.end is None  # whole recording
+
+        client.mark_ab_compare_running(run_id)
+        (job,) = client.poll_jobs()
+        assert job.status == "running"  # still served — a lost Mac re-adopts it
+
+        client.push_ab_compare_result(
+            run_id,
+            result_json='{"segments": []}',
+            mean_wer_a=0.2,
+            mean_wer_b=0.25,
+            n_corrections=3,
+            n_segments=1,
+            n_changed=1,
+        )
+        assert client.poll_jobs() == []
+
+    store = Store.open(db)
+    run = store.get_ab_compare_run(run_id)
+    store.close()
+    assert run is not None
+    assert run.status == "done"
+    assert run.result_json == '{"segments": []}'
+    assert run.mean_wer_a == 0.2
+
+
+def test_an_ab_error_lands_and_retires_the_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    run_id = _seed_ab_run(db)
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        client.push_ab_compare_result(run_id, error="no audio for source 'usb'")
+        assert client.poll_jobs() == []
+
+    store = Store.open(db)
+    run = store.get_ab_compare_run(run_id)
+    store.close()
+    assert run is not None
+    assert run.status == "error"
+    assert run.error == "no audio for source 'usb'"
+
+
+def test_an_empty_ab_result_push_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Neither a report nor an error would silently wedge the run as done-with-nothing.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    run_id = _seed_ab_run(db)
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+    client = TestClient(app)
+    auth = {"Authorization": "Bearer secret"}
+    resp = client.post(f"/sync/ab-compare/{run_id}/result", json={}, headers=auth)
+    assert resp.status_code == 400

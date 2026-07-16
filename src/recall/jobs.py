@@ -11,10 +11,15 @@ The Mac POLLS those queues (`GET /sync/jobs`) and brings each job home:
   upload endpoint used to put it) and its source + segment rows are registered, keyed
   to the fleet's start time — so the worker's normal pass transcribes it and the
   pushed-back turns dedupe against the row the fleet already holds.
+- **ab-compare** — an A/B run queued on Isis's Compare page. Mirrored into the local
+  `ab_compare_runs` queue (stamped with the fleet's run id), where the refine daemon
+  executes it; each later pass relays the lifecycle back — "running" once started,
+  then the report (or error) itself, which is what retires the run on the fleet.
 
-Each job is marked done on Isis only after the local hand-off, so a crash re-serves it
-(harmlessly: every step is idempotent) rather than dropping it. Control inverts to a
-Mac-initiated poll for the same reason capture_mirror does.
+Refine and upload jobs are marked done on Isis only after the local hand-off, so a
+crash re-serves them (harmlessly: every step is idempotent) rather than dropping them;
+an ab-compare run is retired by its result landing, never by an acknowledgement.
+Control inverts to a Mac-initiated poll for the same reason capture_mirror does.
 
 The runner only *bridges* the queues; it runs no ML itself. That keeps heavy work on
 the existing idle-gated daemons (never during recording) and reuses those battle-tested
@@ -32,15 +37,17 @@ from pathlib import Path
 from typing import Protocol
 
 from recall.sources import AudioSource, SourceKind
+from recall.store_models import AbCompareJob
 from recall.timeline import Segment
 
 _log = logging.getLogger("recall.jobs")
 
 # The job types this Mac knows how to service. A fleet running ahead of it may enqueue
-# others (e.g. ab-compare); those are left pending for a worker that understands them
-# rather than acknowledged and lost.
+# others; those are left pending for a worker that understands them rather than
+# acknowledged and lost.
 _REFINE = "refine"
 _UPLOAD = "upload"
+_AB_COMPARE = "ab-compare"
 
 
 class _Job(Protocol):
@@ -49,14 +56,19 @@ class _Job(Protocol):
     id: int
     type: str
     source: str
-    start: str  # ISO-8601
-    end: str
-    # Upload-only payload (None on refine jobs / from an older fleet): the blob
+    start: str | None  # ISO-8601; None = whole recording (ab-compare only)
+    end: str | None
+    # Upload-only payload (None on other jobs / from an older fleet): the blob
     # filename, the source's display title, and the fleet-probed stream shape.
     file: str | None
     title: str | None
     sample_rate: int | None
     channels: int | None
+    # ab-compare-only payload: the two models and the fleet's current run status.
+    model_a: str | None
+    model_b: str | None
+    base_model: str | None
+    status: str | None
 
 
 class _JobClient(Protocol):
@@ -66,17 +78,42 @@ class _JobClient(Protocol):
     def poll_jobs(self, *, limit: int = 50) -> Sequence[_Job]: ...
     def mark_done(self, job_id: int, *, job_type: str = "refine") -> None: ...
     def fetch_audio(self, source: str, name: str, dest: Path) -> None: ...
+    def mark_ab_compare_running(self, run_id: int) -> None: ...
+    def push_ab_compare_result(  # noqa: PLR0913 - the report's denormalized summary
+        self,
+        run_id: int,
+        *,
+        error: str | None = None,
+        result_json: str | None = None,
+        mean_wer_a: float | None = None,
+        mean_wer_b: float | None = None,
+        n_corrections: int = 0,
+        n_segments: int = 0,
+        n_changed: int = 0,
+    ) -> None: ...
 
 
 class _LocalStore(Protocol):
-    """The slice of `Store` the runner needs — the local refine queue plus the
-    (idempotent, INSERT OR IGNORE) source/segment registration an upload lands in."""
+    """The slice of `Store` the runner needs — the local queues plus the (idempotent,
+    INSERT OR IGNORE) source/segment registration an upload lands in."""
 
     def add_refine_request(
         self, source: str, start: datetime, end: datetime
     ) -> int: ...
     def add_source(self, source: AudioSource) -> None: ...
     def add_audio_segment(self, segment: Segment) -> int: ...
+    def add_ab_compare_run(  # noqa: PLR0913 - mirrors the Store signature
+        self,
+        source: str,
+        start: datetime | None,
+        end: datetime | None,
+        *,
+        model_a: str,
+        model_b: str,
+        base_model: str,
+        fleet_id: int | None = None,
+    ) -> int: ...
+    def ab_compare_run_by_fleet_id(self, fleet_id: int) -> AbCompareJob | None: ...
 
 
 def _pull_upload(
@@ -91,7 +128,13 @@ def _pull_upload(
     pending (not yet acked) and the next 60s pass registers the rows, well inside the
     worker's 120s min-age guard — so the scan never indexes the file first under a
     filename-derived (second-truncated) start."""
-    if not job.file or job.sample_rate is None or job.channels is None:
+    if (
+        not job.file
+        or job.sample_rate is None
+        or job.channels is None
+        or job.start is None
+        or job.end is None
+    ):
         raise ValueError(f"upload job #{job.id} is missing its blob metadata")
     dest = data_root / job.source / job.file
     if not dest.exists():
@@ -117,6 +160,49 @@ def _pull_upload(
     )
 
 
+def _bridge_ab_compare(store: _LocalStore, client: _JobClient, job: _Job) -> bool:
+    """Advance one fleet A/B run by one lifecycle step; returns whether it moved.
+
+    The fleet serves the run every pass until its result lands, so this is a relay,
+    not a hand-off: adopt it into the local queue when unseen (the refine daemon
+    executes it), report "running" once the daemon has started (only while the fleet
+    still thinks it's queued, so the call happens once), and push the report or error
+    when finished — the landing is what retires the run. A fleet row stuck on a Mac
+    that lost its local mirror is simply re-adopted on the next pass."""
+    local = store.ab_compare_run_by_fleet_id(job.id)
+    if local is None:
+        if job.model_a is None or job.model_b is None or job.base_model is None:
+            raise ValueError(f"ab-compare job #{job.id} is missing its models")
+        store.add_ab_compare_run(
+            job.source,
+            datetime.fromisoformat(job.start) if job.start else None,
+            datetime.fromisoformat(job.end) if job.end else None,
+            model_a=job.model_a,
+            model_b=job.model_b,
+            base_model=job.base_model,
+            fleet_id=job.id,
+        )
+        return True
+    if local.status == "done":
+        client.push_ab_compare_result(
+            job.id,
+            result_json=local.result_json or "{}",
+            mean_wer_a=local.mean_wer_a,
+            mean_wer_b=local.mean_wer_b,
+            n_corrections=local.n_corrections or 0,
+            n_segments=local.n_segments or 0,
+            n_changed=local.n_changed or 0,
+        )
+        return True
+    if local.status == "error":
+        client.push_ab_compare_result(job.id, error=local.error or "failed")
+        return True
+    if local.status == "running" and job.status == "queued":
+        client.mark_ab_compare_running(job.id)
+        return True
+    return False  # adopted and awaiting the local daemon — nothing to relay yet
+
+
 def run_jobs_once(
     store: _LocalStore, client: _JobClient, *, data_root: Path, limit: int = 50
 ) -> int:
@@ -132,6 +218,8 @@ def run_jobs_once(
     for job in client.poll_jobs(limit=limit):
         try:
             if job.type == _REFINE:
+                if job.start is None or job.end is None:
+                    raise ValueError(f"refine job #{job.id} is missing its window")
                 store.add_refine_request(
                     job.source,
                     datetime.fromisoformat(job.start),
@@ -139,6 +227,12 @@ def run_jobs_once(
                 )
             elif job.type == _UPLOAD:
                 _pull_upload(store, client, data_root, job)
+            elif job.type == _AB_COMPARE:
+                # A relay, not a hand-off: the run retires when its result lands,
+                # so there is no mark_done here.
+                if _bridge_ab_compare(store, client, job):
+                    handed += 1
+                continue
             else:
                 _log.warning(
                     "leaving job #%s of unknown type %r pending for a capable worker",

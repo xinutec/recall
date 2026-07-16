@@ -1247,8 +1247,12 @@ def ab_compare_start(body: AbCompareStartIn) -> NewIdOut:
             body.source,
             frm,
             to,
+            # The default adapter is stored by its machine-independent NAME: the row
+            # crosses the Isis split (queued here, executed on the Mac), so another
+            # machine's absolute path would be meaningless. The Mac resolves it
+            # against its own data root at run time (cli._resolve_model).
             model_a=body.modelA or DEFAULT_MODEL,
-            model_b=body.modelB or str(DATA_ROOT / "adapter-current"),
+            model_b=body.modelB or "adapter-current",
             base_model=body.baseModel or DEFAULT_BASE_MODEL,
         )
     finally:

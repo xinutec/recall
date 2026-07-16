@@ -301,10 +301,24 @@ their blobs and rows are already on the Mac, so the first pass skips straight to
 acknowledgement. Still to confirm by hand: the phone's share-to-Recall flow points at
 Isis.
 
-**Job-pull follow-ups (not done):** `ab-compare` (needs its own pull + a result push-back
-of the report json, not just turn-sync). (The capture-mirror transport was upgraded to
-long-poll 2026-07-16 — intent in ~RTT — so the "replace the transport" follow-up is
-closed; the break-glass CLI still covers an unreachable Isis.)
+**Ab-compare job-pull — done (2026-07-16).** Unlike refine, an A/B run's result is the
+report row itself (result_json + WER summary), so turn-sync can't carry it back — it
+needed its own relay. `/sync/jobs` now serves unfinished runs (queued AND running) as
+`type="ab-compare"`; the Mac's jobs pass mirrors each into its local `ab_compare_runs`
+queue stamped with the run's fleet id (migration: `fleet_id` column), where the existing
+refine daemon executes it. Later passes relay the lifecycle back: "running" once the
+daemon starts (`POST /sync/ab-compare/{id}/running`, sent only while the fleet still
+says queued), then the report or error (`POST …/result`) — the landing is what retires
+the run, never an acknowledgement, so a Mac that loses its local mirror simply re-adopts
+the still-served run. Model paths had to become machine-independent too: the API default
+for model B is now the bare name `adapter-current` (was an absolute path under the
+server's own data root, meaningless across the split), resolved against the local data
+root at run time (`cli._resolve_model`).
+
+(The capture-mirror transport was upgraded to long-poll 2026-07-16 — intent in ~RTT —
+so the "replace the transport" follow-up is closed; the break-glass CLI still covers an
+unreachable Isis. The one manual check left: the phone's share-to-Recall flow points at
+Isis.)
 
 ### Step C — the Mac cutover (runbook)
 

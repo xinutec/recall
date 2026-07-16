@@ -34,7 +34,13 @@ from pydantic import BaseModel
 from recall import capture_control
 from recall.schemas import OkOut
 from recall.sources import AudioSource, SourceKind
-from recall.store import RefineRequest, Store, TranscriptSegment, UploadJob
+from recall.store import (
+    AbCompareJob,
+    RefineRequest,
+    Store,
+    TranscriptSegment,
+    UploadJob,
+)
 from recall.timeline import Segment
 
 SYNC_TOKEN_ENV = "RECALL_SYNC_TOKEN"
@@ -84,20 +90,27 @@ class JobOut(BaseModel):
     """A unit of work the fleet hands the Mac worker (the Mac has the ML + the mic).
 
     `type="refine"`: id is a refine-request id. `type="upload"`: id is the fleet's
-    audio-segment id, and the upload-only fields below carry what the Mac needs to
-    bring the session home — the blob filename (fetch via /sync/audio/file), the
-    source's display title, and the probed stream shape (so no re-probe). They are
-    None on refine jobs, and an older fleet simply never sends them."""
+    audio-segment id, and the upload-only fields carry what the Mac needs to bring the
+    session home — the blob filename (fetch via /sync/audio/file), the source's display
+    title, and the probed stream shape (so no re-probe). `type="ab-compare"`: id is the
+    fleet's run id, start/end are None for a whole-recording run, and the ab-only
+    fields carry the two models plus the fleet's current status (so the Mac only
+    reports "running" once). Fields outside a job's type are None, and an older fleet
+    simply never sends them."""
 
     id: int
     type: str
     source: str
-    start: str  # ISO-8601
-    end: str
+    start: str | None = None  # ISO-8601
+    end: str | None = None
     file: str | None = None
     title: str | None = None
     sample_rate: int | None = None
     channels: int | None = None
+    model_a: str | None = None
+    model_b: str | None = None
+    base_model: str | None = None
+    status: str | None = None
 
 
 class AudioStoredOut(BaseModel):
@@ -154,6 +167,20 @@ class SummaryIn(BaseModel):
     day: str  # YYYY-MM-DD
     text: str
     model: str
+
+
+class AbResultIn(BaseModel):
+    """The outcome of a fleet-queued A/B run the Mac executed: either the report
+    (resultJson + its denormalized summary) or an error message. Landing it is what
+    retires the run from /sync/jobs."""
+
+    error: str | None = None
+    resultJson: str | None = None
+    meanWerA: float | None = None
+    meanWerB: float | None = None
+    nCorrections: int = 0
+    nSegments: int = 0
+    nChanged: int = 0
 
 
 class LiveTurnsIn(BaseModel):
@@ -257,6 +284,20 @@ def _upload_job_of(job: UploadJob) -> JobOut:
         title=job.title,
         sample_rate=job.sample_rate,
         channels=job.channels,
+    )
+
+
+def _ab_job_of(run: AbCompareJob) -> JobOut:
+    return JobOut(
+        id=run.id,
+        type="ab-compare",
+        source=run.source,
+        start=run.start.isoformat() if run.start else None,
+        end=run.end.isoformat() if run.end else None,
+        model_a=run.model_a,
+        model_b=run.model_b,
+        base_model=run.base_model,
+        status=run.status,
     )
 
 
@@ -497,8 +538,58 @@ def register_sync_routes(
     _register_live_route(app, store_factory, expected)
     _register_capture_route(app, store_factory, expected)
     _register_job_routes(app, store_factory, expected)
+    _register_ab_compare_routes(app, store_factory, expected)
 
     return True
+
+
+def _register_ab_compare_routes(
+    app: FastAPI, store_factory: Callable[[], Store], expected: str
+) -> None:
+    """The A/B lifecycle relay (its own helper so register_sync_routes stays under the
+    statement budget): the Mac reports a fleet-queued run's progress and, when its
+    local daemon finishes, lands the result — which is what retires the run."""
+
+    @app.post("/sync/ab-compare/{run_id}/running")
+    def sync_ab_running(
+        run_id: int, authorization: str | None = Header(default=None)
+    ) -> OkOut:
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            store.mark_ab_compare_running(run_id)
+        finally:
+            store.close()
+        return {"ok": True}
+
+    @app.post("/sync/ab-compare/{run_id}/result")
+    def sync_ab_result(
+        run_id: int,
+        body: AbResultIn,
+        authorization: str | None = Header(default=None),
+    ) -> OkOut:
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            if body.error is not None:
+                store.mark_ab_compare_error(run_id, body.error)
+            elif body.resultJson is not None:
+                store.save_ab_compare_result(
+                    run_id,
+                    result_json=body.resultJson,
+                    mean_wer_a=body.meanWerA,
+                    mean_wer_b=body.meanWerB,
+                    n_corrections=body.nCorrections,
+                    n_segments=body.nSegments,
+                    n_changed=body.nChanged,
+                )
+            else:
+                raise HTTPException(
+                    status_code=400, detail="neither a result nor an error"
+                )
+        finally:
+            store.close()
+        return {"ok": True}
 
 
 def _register_job_routes(
@@ -515,13 +606,21 @@ def _register_job_routes(
         check_token(bearer(authorization), expected)
         store = store_factory()
         try:
+            # Interactive refines first; uploads and A/B runs fill what's left of the
+            # batch. A/B runs stay served (queued AND running) until their result
+            # lands — the push-back is what retires them, not an acknowledgement.
             jobs = [_job_of(r) for r in store.pending_refine_requests(limit=limit)]
-            # Uploads fill whatever the interactive refine queue left of the batch.
             remaining = limit - len(jobs)
             if remaining > 0:
                 jobs += [
                     _upload_job_of(u)
                     for u in store.pending_upload_jobs(limit=remaining)
+                ]
+            remaining = limit - len(jobs)
+            if remaining > 0:
+                jobs += [
+                    _ab_job_of(r)
+                    for r in store.unfinished_ab_compare_runs(limit=remaining)
                 ]
             return jobs
         finally:
@@ -585,6 +684,44 @@ class SyncClient:
         resp = self._client.post(
             f"{self._base}/sync/jobs/{job_id}/done",
             params={"type": job_type},
+            headers=self._headers,
+        )
+        resp.raise_for_status()
+
+    def mark_ab_compare_running(self, run_id: int) -> None:
+        """Tell the fleet its queued A/B run is now executing on this Mac, so the
+        Compare page shows honest progress."""
+        resp = self._client.post(
+            f"{self._base}/sync/ab-compare/{run_id}/running", headers=self._headers
+        )
+        resp.raise_for_status()
+
+    def push_ab_compare_result(  # noqa: PLR0913 - the report's denormalized summary
+        self,
+        run_id: int,
+        *,
+        error: str | None = None,
+        result_json: str | None = None,
+        mean_wer_a: float | None = None,
+        mean_wer_b: float | None = None,
+        n_corrections: int = 0,
+        n_segments: int = 0,
+        n_changed: int = 0,
+    ) -> None:
+        """Land a fleet-queued A/B run's outcome (report or error) on the fleet —
+        this is what retires the run from /sync/jobs, so it's safe to re-push."""
+        body = AbResultIn(
+            error=error,
+            resultJson=result_json,
+            meanWerA=mean_wer_a,
+            meanWerB=mean_wer_b,
+            nCorrections=n_corrections,
+            nSegments=n_segments,
+            nChanged=n_changed,
+        )
+        resp = self._client.post(
+            f"{self._base}/sync/ab-compare/{run_id}/result",
+            json=body.model_dump(),
             headers=self._headers,
         )
         resp.raise_for_status()

@@ -452,6 +452,17 @@ def _result_text(result: AsrResult) -> str:
     return " ".join(parts).strip()
 
 
+def _resolve_model(model: str, data_root: Path) -> str:
+    """Resolve a machine-independent adapter name ("adapter-current") against this
+    machine's data root. A run queued on the fleet crosses the Isis split, so it can't
+    store another machine's absolute path — the relative name resolves where the
+    adapter actually lives. HF model ids and absolute paths pass through untouched."""
+    candidate = data_root / model
+    if not Path(model).is_absolute() and is_adapter_dir(str(candidate)):
+        return str(candidate)
+    return model
+
+
 def _run_ab_compare(  # noqa: PLR0913 - selection window + the two models + naming
     store: Store,
     *,
@@ -461,6 +472,7 @@ def _run_ab_compare(  # noqa: PLR0913 - selection window + the two models + nami
     model_a: str,
     model_b: str,
     base_model: str,
+    data_root: Path,
     work_dir: Path,
     limit: int = 100_000,
 ) -> Report:
@@ -475,8 +487,12 @@ def _run_ab_compare(  # noqa: PLR0913 - selection window + the two models + nami
         audio_ids = store.audio_segments_for_source(source, limit=limit)
     if not audio_ids:
         raise ValueError(f"no audio for source {source!r} in that range")
-    tr_a = _build_transcriber(model_a, base_model, words=False)
-    tr_b = _build_transcriber(model_b, base_model, words=False)
+    tr_a = _build_transcriber(
+        _resolve_model(model_a, data_root), base_model, words=False
+    )
+    tr_b = _build_transcriber(
+        _resolve_model(model_b, data_root), base_model, words=False
+    )
     return compare_models(
         store,
         lambda p: _result_text(tr_a(p)),
@@ -515,7 +531,7 @@ def _process_ab_compare_job(
     )
 
 
-def _drain_ab_compare(store: Store, *, work_dir: Path) -> bool:
+def _drain_ab_compare(store: Store, *, data_root: Path, work_dir: Path) -> bool:
     """Run one queued A/B comparison if any is pending; return whether it did. Each job
     carries its own models, so the runner builds them per job. Pause-independent — the
     refine daemon calls this every loop regardless of capture state."""
@@ -534,6 +550,7 @@ def _drain_ab_compare(store: Store, *, work_dir: Path) -> bool:
             model_a=j.model_a,
             model_b=j.model_b,
             base_model=j.base_model,
+            data_root=data_root,
             work_dir=work_dir,
         ),
     )
@@ -554,6 +571,7 @@ def _cmd_ab_compare(args: argparse.Namespace) -> int:
             model_a=args.model_a,
             model_b=args.model_b,
             base_model=args.base_model,
+            data_root=args.out,
             work_dir=args.out / "work",
             limit=args.limit,
         )
@@ -1015,7 +1033,7 @@ def _cmd_refine(args: argparse.Namespace) -> int:
             now = datetime.now(UTC)
             # A/B comparisons run first and regardless of pause — operator-chosen and
             # read-only, so they don't wait for an idle window or need a token.
-            if _drain_ab_compare(store, work_dir=args.out / "work"):
+            if _drain_ab_compare(store, data_root=args.out, work_dir=args.out / "work"):
                 continue
             if _drain_day_summaries(store, llm_model=args.llm, cache=summarizer):
                 continue
