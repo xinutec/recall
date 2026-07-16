@@ -212,6 +212,37 @@ def test_watchdog_marks_alive_on_a_live_closed_segment_of_this_run(
     assert not producer.terminated
 
 
+def test_watchdog_counts_a_segment_named_the_same_second_as_the_run_start(
+    tmp_path: Path,
+) -> None:
+    # Segment names carry whole seconds; the run's start does not. The run's first
+    # segment (opened within the start's own second) must count as this run's, or
+    # liveness silently waits a full extra segment (seen live 2026-07-16).
+    usb = tmp_path / "usb"
+    usb.mkdir()
+    _wav(usb / "usb-20260716T120000.wav", "sine=frequency=440:sample_rate=16000")
+    (usb / "usb-20260716T120100.opus").write_bytes(b"")
+    producer = _FakeProducer()
+    stop = threading.Event()
+    watcher = threading.Thread(
+        target=_watch_dead_segments,
+        args=(usb, "usb", producer, stop),
+        kwargs={
+            "stall_after_s": 999.0,
+            # started mid-second: 12:00:00.900, first segment named 12:00:00
+            "started_utc": datetime(2026, 7, 16, 12, 0, 0, 900000, tzinfo=UTC),
+            "on_cycled": None,
+            "poll_s": 0.02,
+        },
+        daemon=True,
+    )
+    watcher.start()
+    time.sleep(0.15)
+    stop.set()
+    watcher.join(timeout=2.0)
+    assert (usb / ".alive").exists()
+
+
 def test_watchdog_never_marks_alive_from_a_previous_runs_segments(
     tmp_path: Path,
 ) -> None:

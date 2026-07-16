@@ -74,8 +74,13 @@ def _segment_is_digital_silence(path: Path) -> bool:
 
 
 def _starts_after(name: str, cutoff: datetime) -> bool:
+    # Floor the cutoff to the second: segment names carry whole seconds, so the
+    # run's own first segment would otherwise miss the bar by the cutoff's
+    # microseconds and liveness would wait a full extra segment (measured live
+    # 2026-07-16: the dot came up ~60 s late). A pre-pause segment is named by its
+    # START minutes earlier, so flooring cannot let one through.
     try:
-        return parse_segment_start(name) >= cutoff
+        return parse_segment_start(name) >= cutoff.replace(microsecond=0)
     except ValueError:
         return False
 
