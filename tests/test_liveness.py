@@ -7,12 +7,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from recall.liveness import source_statuses
+from recall.sources import SourceKind, SourceRow
 
 NOW = datetime(2026, 6, 22, 12, 0, 0, tzinfo=UTC)
 SOURCES = [
-    ("usb", "usb", "coreaudio"),
-    ("pixel9", "Pixel 9", "tcp_pcm"),
-    ("pixel5", "Pixel 5", "tcp_pcm"),
+    SourceRow("usb", "usb", SourceKind.COREAUDIO),
+    SourceRow("pixel9", "Pixel 9", SourceKind.TCP_PCM),
+    SourceRow("pixel5", "Pixel 5", SourceKind.TCP_PCM),
 ]
 
 
@@ -29,7 +30,7 @@ def test_fresh_is_active_stale_is_idle_missing_is_idle() -> None:
     assert by_id["pixel5"].last_active is None
     # name/kind carried through for the panel
     assert by_id["pixel9"].name == "Pixel 9"
-    assert by_id["pixel9"].kind == "tcp_pcm"
+    assert by_id["pixel9"].kind is SourceKind.TCP_PCM
 
 
 def test_mic_window_matches_the_watchdog_cadence_not_the_stream_window() -> None:

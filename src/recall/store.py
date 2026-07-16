@@ -27,7 +27,7 @@ from recall.asr import Word
 from recall.capture_control import CaptureEventKind
 from recall.ids import AudioSegmentId, CorrectionId, SpeakerId, TranscriptId
 from recall.ranking import normalize_text
-from recall.sources import AudioSource, SourceKind
+from recall.sources import AudioSource, SourceKind, SourceRow
 from recall.store_models import (
     AbCompareJob,
     CaptureEvent,
@@ -37,6 +37,7 @@ from recall.store_models import (
     PendingVoiceprint,
     RefineRequest,
     SegmentVolume,
+    SessionSummary,
     SourceCoverage,
     TranscriptSegment,
     VocabularyTerm,
@@ -65,6 +66,7 @@ __all__ = [
     "PendingVoiceprint",
     "RefineRequest",
     "SegmentVolume",
+    "SessionSummary",
     "SourceCoverage",
     "Store",
     "TranscriptSegment",
@@ -777,7 +779,7 @@ class Store:
         )
         self._commit()
 
-    def session_summaries(self) -> list[tuple[str, str, str, str, int, str | None]]:
+    def session_summaries(self) -> list[SessionSummary]:
         """Per uploaded session (a discrete recording, e.g. a meeting): id, name,
         span (first segment start → last segment end), visible-turn count, and a CSV
         of the people heard — for the sessions list. Newest first.
@@ -811,7 +813,8 @@ class Store:
             (SourceKind.UPLOAD.value,),
         ).fetchall()
         return [
-            (str(r[0]), str(r[1]), str(r[2]), str(r[3]), int(r[4]), r[5]) for r in rows
+            SessionSummary(str(r[0]), str(r[1]), str(r[2]), str(r[3]), int(r[4]), r[5])
+            for r in rows
         ]
 
     def add_audio_segment(self, segment: Segment) -> AudioSegmentId:
@@ -2031,6 +2034,10 @@ class Store:
         A display label only — no correction or voiceprint is recorded, so naming a
         meeting's clinician doesn't enrol them as a household voice. This is the
         authoritative human naming of a voice; it overrides the auto guess.
+
+        Deliberately no hidden_reason filter (unlike the read-side queries):
+        hiding is a display state, but who spoke is a fact about the turn — a
+        hidden turn that is later unhidden must come back correctly named.
         """
         cur = self._conn.execute(
             "UPDATE transcript_segments SET speaker_label = ? WHERE id IN ("
@@ -2336,12 +2343,17 @@ class Store:
     def _count(self, sql: str) -> int:
         return int(self._conn.execute(sql).fetchone()["n"])
 
-    def source_rows(self) -> list[tuple[str, str, str]]:
-        """Registered sources as (id, name, kind) — for the fleet liveness view."""
+    def source_rows(self) -> list[SourceRow]:
+        """Registered sources — for the fleet liveness view. The kind parses through
+        the enum: an unknown kind in the DB fails loud here, not as a silently
+        never-matching string downstream."""
         rows = self._conn.execute(
             "SELECT id, name, kind FROM sources ORDER BY id"
         ).fetchall()
-        return [(str(r["id"]), str(r["name"]), str(r["kind"])) for r in rows]
+        return [
+            SourceRow(str(r["id"]), str(r["name"]), SourceKind(str(r["kind"])))
+            for r in rows
+        ]
 
     def unidentified_segments(self) -> list[TranscriptSegment]:
         """Current segments with audio but no resolved speaker yet."""

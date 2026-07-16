@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from recall.sources import SourceKind
+from recall.sources import SourceKind, SourceRow
 
 # A streamed phone's marker is refreshed sub-second while signal flows; idle once
 # it's older than this.
@@ -30,10 +30,9 @@ WATCHDOG_ACTIVE_WITHIN = timedelta(seconds=75)
 _FLEET_REPORT_LAG = timedelta(seconds=7)
 
 
-def active_window(kind: str, *, on_fleet: bool) -> timedelta:
+def active_window(kind: SourceKind, *, on_fleet: bool) -> timedelta:
     """How fresh `kind`'s marker must be to call the source recording."""
-    streamed = kind == SourceKind.TCP_PCM.value
-    base = ACTIVE_WITHIN if streamed else WATCHDOG_ACTIVE_WITHIN
+    base = ACTIVE_WITHIN if kind is SourceKind.TCP_PCM else WATCHDOG_ACTIVE_WITHIN
     return base + (_FLEET_REPORT_LAG if on_fleet else timedelta(0))
 
 
@@ -41,23 +40,23 @@ def active_window(kind: str, *, on_fleet: bool) -> timedelta:
 class SourceStatus:
     source_id: str
     name: str
-    kind: str
+    kind: SourceKind
     last_active: datetime | None
     active: bool
 
 
 def source_statuses(
-    sources: list[tuple[str, str, str]],
+    sources: list[SourceRow],
     last_active: Mapping[str, datetime | None],
     now: datetime,
     *,
     on_fleet: bool = False,
 ) -> list[SourceStatus]:
-    """Combine registered sources (id, name, kind) with their last-activity time."""
+    """Combine registered sources with their last-activity time."""
     statuses: list[SourceStatus] = []
-    for source_id, name, kind in sources:
-        seen = last_active.get(source_id)
-        window = active_window(kind, on_fleet=on_fleet)
+    for row in sources:
+        seen = last_active.get(row.id)
+        window = active_window(row.kind, on_fleet=on_fleet)
         active = seen is not None and now - seen < window
-        statuses.append(SourceStatus(source_id, name, kind, seen, active))
+        statuses.append(SourceStatus(row.id, row.name, row.kind, seen, active))
     return statuses

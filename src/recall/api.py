@@ -113,7 +113,7 @@ from recall.schemas import (
     VocabularyOut,
     VoiceSuggestionsOut,
 )
-from recall.sources import AudioSource, SourceKind
+from recall.sources import AudioSource, SourceKind, SourceRow
 from recall.store import (
     DIARIZED_MARKER,
     HUMAN_MODEL,
@@ -425,7 +425,7 @@ def session_transcript(source: str) -> TranscriptExportOut:
 
 
 def _local_last_active(
-    rows: list[tuple[str, str, str]], now: datetime
+    rows: list[SourceRow], now: datetime
 ) -> dict[str, datetime | None]:
     """Liveness on the capturing host (the Mac), from each source's .alive marker —
     refreshed by the ingest pump while a phone streams real signal, and by the
@@ -437,17 +437,17 @@ def _local_last_active(
         DATA_ROOT, now
     )
     last_active: dict[str, datetime | None] = {}
-    for source_id, _, kind in rows:
-        marker = alive_mtime(DATA_ROOT / source_id)
-        if kind == SourceKind.TCP_PCM.value:
-            last_active[source_id] = marker
+    for row in rows:
+        marker = alive_mtime(DATA_ROOT / row.id)
+        if row.kind is SourceKind.TCP_PCM:
+            last_active[row.id] = marker
         else:
-            last_active[source_id] = marker if usb_recording else None
+            last_active[row.id] = marker if usb_recording else None
     return last_active
 
 
 def _fleet_last_active(
-    store: Store, rows: list[tuple[str, str, str]], now: datetime
+    store: Store, rows: list[SourceRow], now: datetime
 ) -> dict[str, datetime | None]:
     """Liveness on the fleet (Isis), which runs no capture or ingest and cannot see
     the Mac's markers. It comes entirely from the Mac's mirror report
@@ -459,11 +459,11 @@ def _fleet_last_active(
     usb_recording = _fleet_capture_state(store, now)["running"]
     reported = capture_control.reported_source_liveness(store, now) or {}
     last_active: dict[str, datetime | None] = {}
-    for source_id, _, kind in rows:
-        if kind == SourceKind.TCP_PCM.value:
-            last_active[source_id] = reported.get(source_id)
+    for row in rows:
+        if row.kind is SourceKind.TCP_PCM:
+            last_active[row.id] = reported.get(row.id)
         else:
-            last_active[source_id] = reported.get(source_id) if usb_recording else None
+            last_active[row.id] = reported.get(row.id) if usb_recording else None
     return last_active
 
 
@@ -479,7 +479,7 @@ def sources() -> SourcesOut:
     on_fleet = capture_control.is_fleet()
     store = _store()
     try:
-        rows = [r for r in store.source_rows() if r[2] != SourceKind.UPLOAD.value]
+        rows = [r for r in store.source_rows() if r.kind is not SourceKind.UPLOAD]
         last_active = (
             _fleet_last_active(store, rows, now)
             if on_fleet
@@ -493,7 +493,7 @@ def sources() -> SourcesOut:
             {
                 "id": s.source_id,
                 "name": s.name,
-                "kind": s.kind,
+                "kind": s.kind.value,
                 "active": s.active,
                 "lastActive": s.last_active.isoformat() if s.last_active else None,
             }
@@ -513,8 +513,7 @@ def _fleet_capture_state(store: Store, now: datetime) -> CaptureOut:
     for) when the Mac has gone quiet."""
     reported = capture_control.reported_state(store, now)
     if reported is not None:
-        running, paused_until = reported
-        return {"running": running, "pausedUntil": paused_until}
+        return {"running": reported.running, "pausedUntil": reported.paused_until}
     until = capture_control.intent_until(store, now)
     return {
         "running": until is None,

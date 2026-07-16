@@ -27,6 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 from recall import capture_control
 from recall.capture import (
@@ -193,9 +194,14 @@ def _record_event(
         _log.exception("ingest: could not record %s for %s", kind, source_id)
 
 
+class _FlushedSegment(NamedTuple):
+    name: str
+    size: int
+
+
 def _flushed_segment(
     out_dir: Path, source_id: str, *, since: float
-) -> tuple[str, int] | None:
+) -> _FlushedSegment | None:
     """The segment file this connection last finalised: the newest one touched since
     the connection opened. None when the connection wrote no file at all — naming an
     older file would blame the wrong window."""
@@ -209,7 +215,7 @@ def _flushed_segment(
             continue
         if newest is None or (stat.st_mtime, path.name) > (newest[0], newest[1]):
             newest = (stat.st_mtime, path.name, stat.st_size)
-    return (newest[1], newest[2]) if newest else None
+    return _FlushedSegment(newest[1], newest[2]) if newest else None
 
 
 def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) -> None:
@@ -292,8 +298,8 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
                         if meter.first_audible_s is not None
                         else None
                     ),
-                    "flushed": flushed[0] if flushed else None,
-                    "flushed_bytes": flushed[1] if flushed else None,
+                    "flushed": flushed.name if flushed else None,
+                    "flushed_bytes": flushed.size if flushed else None,
                 }
             )
             _record_event(

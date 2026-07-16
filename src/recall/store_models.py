@@ -10,9 +10,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import NamedTuple
 
 from recall.asr import Word
 from recall.ids import AudioSegmentId, CorrectionId, SpeakerId, TranscriptId
+
+
+class SessionSummary(NamedTuple):
+    """One uploaded session (a discrete recording, e.g. a meeting) as the sessions
+    list shows it. A NamedTuple (not a dataclass) so JSON/CSV formatters can still
+    iterate it positionally."""
+
+    id: str
+    name: str
+    start: str  # ISO, first segment start
+    end: str  # ISO, last segment end
+    turn_count: int
+    speakers: str | None  # CSV of confirmed names, 'unknown' for the rest
 
 
 @dataclass(frozen=True)

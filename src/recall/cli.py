@@ -1214,10 +1214,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     try:
         # Registered recorders, not whatever directories exist: a mic the household
         # actually uses is one the archive knows about.
-        sources = [
-            (source_id, SourceKind(kind))
-            for source_id, _name, kind in store.source_rows()
-        ]
+        sources = [(row.id, row.kind) for row in store.source_rows()]
         losses, dead_windows = _speech_loss(store, sources, now=now)
     finally:
         store.close()
@@ -1555,7 +1552,7 @@ def _cmd_capture_trace(args: argparse.Namespace) -> int:
     store = Store.open(_db_path(args.out))
     try:
         events = store.capture_events_since(since)
-        source_ids = [source_id for source_id, _name, _kind in store.source_rows()]
+        source_ids = [row.id for row in store.source_rows()]
         known = frozenset(path for _, path in store.audio_segment_paths())
         # (utc, tiebreak, line): at the same instant, a segment's start sorts before
         # events noticed at that moment, reading naturally.

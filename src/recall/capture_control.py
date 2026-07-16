@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 # All recall agents share this prefix; the USB capture agent has this exact label.
 _AGENT_PREFIX = "com.pippijn.recall-"
@@ -261,9 +261,17 @@ def reported_source_liveness(
     return out
 
 
-def reported_state(store: _Settings, now: datetime) -> tuple[bool, str | None] | None:
-    """The Mac's last-reported (running, pausedUntil) if fresh, else None — the Mac has
-    stopped reporting, so the caller shows intent instead."""
+class ReportedState(NamedTuple):
+    """The Mac's last-applied capture state as reported to the fleet. paused_until
+    stays the ISO string the mirror shipped — it is served straight back as JSON."""
+
+    running: bool
+    paused_until: str | None
+
+
+def reported_state(store: _Settings, now: datetime) -> ReportedState | None:
+    """The Mac's last-reported state if fresh, else None — the Mac has stopped
+    reporting, so the caller shows intent instead."""
     at = store.get_setting(_REPORTED_AT_KEY)
     running = store.get_setting(_REPORTED_RUNNING_KEY)
     if not at or running is None:
@@ -274,7 +282,7 @@ def reported_state(store: _Settings, now: datetime) -> tuple[bool, str | None] |
         return None
     if now - at_dt > _REPORT_FRESH:
         return None
-    return running == "1", store.get_setting(_REPORTED_PAUSED_KEY)
+    return ReportedState(running == "1", store.get_setting(_REPORTED_PAUSED_KEY))
 
 
 # --- launchctl reads (thin; for status + the health check) ---
@@ -303,11 +311,16 @@ def installed_agents() -> list[str]:
     return sorted(p.stem for p in agents.glob(f"{_AGENT_PREFIX}*.plist"))
 
 
-def agent_health() -> list[tuple[str, bool]]:
-    """(label, loaded?) for every installed agent. Self-gating means agents stay
-    loaded even while paused, so any installed-but-not-loaded agent is a fault."""
+class AgentStatus(NamedTuple):
+    label: str
+    loaded: bool
+
+
+def agent_health() -> list[AgentStatus]:
+    """Every installed agent and whether launchd has it loaded. Self-gating means
+    agents stay loaded even while paused, so installed-but-not-loaded is a fault."""
     loaded = loaded_agents()
-    return [(label, label in loaded) for label in installed_agents()]
+    return [AgentStatus(label, label in loaded) for label in installed_agents()]
 
 
 def capture_running() -> bool:

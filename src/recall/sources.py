@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final
+from typing import Final, NamedTuple
 
 _SAFE_ID: re.Pattern[str] = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -49,6 +49,15 @@ class SourceKind(Enum):
     RTSP = "rtsp"  # ffmpeg network source (e.g. a phone on the LAN)
     TCP_PCM = "tcp_pcm"  # ffmpeg listens for raw s16le PCM (the recall-mic app)
     UPLOAD = "upload"  # clips uploaded over HTTP (e.g. phone recorder); not captured
+
+
+class SourceRow(NamedTuple):
+    """A registered source as the fleet/liveness view needs it (Store.source_rows),
+    with `kind` already parsed to the enum so callers never compare raw strings."""
+
+    id: str
+    name: str
+    kind: SourceKind
 
 
 def _ffmpeg_pcm_tail(

@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from recall.capture import parse_segment_start, segment_glob
 from recall.timeline import Segment
@@ -47,12 +47,16 @@ def _decode_duration(path: Path, sample_rate: int, channels: int) -> timedelta:
     return timedelta(seconds=frames / sample_rate)
 
 
-def probe_media(path: Path) -> tuple[timedelta, int, int]:
-    """Return (duration, sample_rate, channels) for an audio file.
+class MediaInfo(NamedTuple):
+    duration: timedelta
+    sample_rate: int
+    channels: int
 
-    Sample rate and channels come from the (reliable) stream header; duration is
-    measured by decoding, since segment-muxer output lacks a duration header.
-    """
+
+def probe_media(path: Path) -> MediaInfo:
+    """What an audio file holds. Sample rate and channels come from the (reliable)
+    stream header; duration is measured by decoding, since segment-muxer output
+    lacks a duration header."""
     argv = [
         "ffprobe",
         "-v",
@@ -70,7 +74,8 @@ def probe_media(path: Path) -> tuple[timedelta, int, int]:
     stream = data["streams"][0]
     sample_rate = int(stream["sample_rate"])
     channels = int(stream["channels"])
-    return _decode_duration(path, sample_rate, channels), sample_rate, channels
+    duration = _decode_duration(path, sample_rate, channels)
+    return MediaInfo(duration, sample_rate, channels)
 
 
 @dataclass(frozen=True)

@@ -10,11 +10,7 @@ import json
 from datetime import datetime
 
 from recall.schemas import TranscriptBubbleOut, TranscriptExportOut
-from recall.store import TranscriptSegment
-
-# A session summary as returned by Store.session_summaries():
-# (id, name, start_iso, end_iso, turn_count, speakers_csv).
-SessionSummary = tuple[str, str, str, str, int, str | None]
+from recall.store import SessionSummary, TranscriptSegment
 
 # A day-conversation summary row: (number, start, end, turn_count, preview).
 ConversationRow = tuple[int, datetime, datetime, int, str]
