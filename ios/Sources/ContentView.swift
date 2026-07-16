@@ -63,23 +63,30 @@ struct ContentView: View {
 
     @ViewBuilder private var captureBanner: some View {
         if state.capture.reachable {
-            let paused = !state.capture.running
+            // The banner follows the DESIRED state, with an explicit in-between while
+            // the mic hasn't confirmed — a press can't flap back on the next poll.
+            let paused = !state.capture.desiredRunning
+            let transitioning = state.capture.micReachable && !state.capture.settled
             VStack(alignment: .leading, spacing: 10) {
                 // TimelineView ticks the "auto-resumes in Xh Ym" countdown every 30s
                 // without a manual timer (minute-granularity text stays within a minute).
                 TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                    Text(bannerTitle(paused: paused, now: ctx.date)).font(.headline)
+                    Text(bannerTitle(paused: paused, transitioning: transitioning, now: ctx.date))
+                        .font(.headline)
                 }
                 if paused {
                     HStack(spacing: 12) {
                         Button("Still away (24h)", action: onPause)
                             .buttonStyle(.bordered).frame(maxWidth: .infinity)
+                            .disabled(transitioning)
                         Button("Resume now", action: onResume)
                             .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
+                            .disabled(transitioning)
                     }
                 } else {
                     Button("Pause recording", action: onPause)
                         .buttonStyle(.bordered).frame(maxWidth: .infinity)
+                        .disabled(transitioning)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -89,7 +96,11 @@ struct ContentView: View {
         }
     }
 
-    private func bannerTitle(paused: Bool, now: Date) -> String {
+    private func bannerTitle(paused: Bool, transitioning: Bool, now: Date) -> String {
+        guard state.capture.micReachable else {
+            return "Recorder not reporting — state unconfirmed"
+        }
+        if transitioning { return paused ? "Pausing…" : "Resuming…" }
         guard paused else { return "Recording active" }
         return Banner.pausedText(
             pausedUntil: state.capture.pausedUntil, now: now, timeZone: .current)

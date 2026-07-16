@@ -34,8 +34,13 @@ object MicState {
     val capture: StateFlow<CaptureState?> = _capture.asStateFlow()
 
     fun setCapture(value: CaptureState?) {
-        if (value?.running != _capture.value?.running) {
-            Log.i(UI_LOG, "household capture running=${value?.running}")
+        val old = _capture.value
+        if (value?.running != old?.running || value?.settled != old?.settled) {
+            Log.i(
+                UI_LOG,
+                "household capture running=${value?.running} " +
+                    "desired=${value?.desiredRunning} settled=${value?.settled}",
+            )
         }
         _capture.value = value
     }

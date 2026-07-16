@@ -206,7 +206,9 @@ fun MicScreen(
             StatusCard(
                 running,
                 connected,
-                paused = capture?.let { !it.running } == true,
+                // The desired state: while "Pausing…" the phone may still stream for
+                // a few seconds, but the household has been told to stop.
+                paused = capture?.let { !it.desiredRunning } == true,
                 level,
                 host,
             )
@@ -395,7 +397,10 @@ private fun CaptureBanner(
     onResume: () -> Unit,
 ) {
     if (capture == null) return // API unreachable — nothing beyond the stream status
-    val paused = !capture.running
+    // The card follows the DESIRED state, with an explicit in-between while the mic
+    // hasn't confirmed it — a press can't flap back to the old state on the next poll.
+    val paused = !capture.desiredRunning
+    val transitioning = capture.micReachable && !capture.settled
     val container =
         if (paused) {
             MaterialTheme.colorScheme.errorContainer
@@ -408,24 +413,38 @@ private fun CaptureBanner(
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
-                if (paused) {
-                    Banner.pausedText(capture.pausedUntil, now, ZoneId.systemDefault())
-                } else {
-                    "Recording active"
+                when {
+                    !capture.micReachable -> "Recorder not reporting — state unconfirmed"
+                    transitioning && paused -> "Pausing…"
+                    transitioning -> "Resuming…"
+                    paused -> Banner.pausedText(capture.pausedUntil, now, ZoneId.systemDefault())
+                    else -> "Recording active"
                 },
                 style = MaterialTheme.typography.titleMedium,
             )
             if (paused) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = onSnooze, modifier = Modifier.weight(1f)) {
+                    OutlinedButton(
+                        onClick = onSnooze,
+                        enabled = !transitioning,
+                        modifier = Modifier.weight(1f),
+                    ) {
                         Text("Still away (24h)")
                     }
-                    Button(onClick = onResume, modifier = Modifier.weight(1f)) {
+                    Button(
+                        onClick = onResume,
+                        enabled = !transitioning,
+                        modifier = Modifier.weight(1f),
+                    ) {
                         Text("Resume now")
                     }
                 }
             } else {
-                OutlinedButton(onClick = onPause, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = onPause,
+                    enabled = !transitioning,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Text("Pause recording")
                 }
             }

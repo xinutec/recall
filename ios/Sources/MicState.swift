@@ -4,10 +4,20 @@ import Foundation
 /// Household pause state, read from the recorder's `/api/capture`. Mirrors the
 /// Android `CaptureState` — the API is the authority on pause, never the socket.
 /// `reachable` is false when the API call failed (off the LAN), so the banner hides.
+///
+/// Spec-vs-status: `running`/`pausedUntil` is the mic's confirmed word, `desired*`
+/// is the intent (moves the instant a button is pressed), `settled` says they
+/// agree. Unsettled renders as "Pausing…"/"Resuming…" — never a flap between the
+/// intent just set and a not-yet-caught-up report. Defaults read an older server's
+/// confirmed-only answer as settled.
 struct CaptureState: Equatable {
     var running: Bool
     var reachable: Bool
     var pausedUntil: Date?
+    var desiredRunning = true
+    var desiredPausedUntil: Date?
+    var settled = true
+    var micReachable = true
 }
 
 /// Connection / streaming phase, used to drive the status card text.

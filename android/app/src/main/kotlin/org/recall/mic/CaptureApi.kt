@@ -6,10 +6,20 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** The recall *household* capture state (the whole system, not just this phone). */
+/**
+ * The recall *household* capture state (the whole system, not just this phone), as
+ * spec-vs-status: [running]/[pausedUntil] is the mic's confirmed word, [desiredRunning]/
+ * [desiredPausedUntil] is the intent (moves the instant a button is pressed), and
+ * [settled] says they agree. While unsettled the UI shows "Pausing…"/"Resuming…" —
+ * never a flap between the intent it just set and a not-yet-caught-up report.
+ */
 data class CaptureState(
     val running: Boolean,
     val pausedUntil: String?,
+    val desiredRunning: Boolean,
+    val desiredPausedUntil: String?,
+    val settled: Boolean,
+    val micReachable: Boolean,
 )
 
 /** One recorder's liveness for the fleet view (which mics are streaming now). */
@@ -21,13 +31,25 @@ data class SourceStatus(
     val lastActive: String?,
 )
 
-/** Parse `/api/capture`'s JSON. Pure (no I/O), so it's unit-tested. */
+/** Parse `/api/capture`'s JSON. Pure (no I/O), so it's unit-tested. An older server
+ * sends only the confirmed view; that reads as settled (desired == confirmed). */
 fun parseCaptureState(body: String): CaptureState? =
     runCatching {
         val json = JSONObject(body)
+        val running = json.optBoolean("running", true)
+        val until = if (json.isNull("pausedUntil")) null else json.getString("pausedUntil")
         CaptureState(
-            running = json.optBoolean("running", true),
-            pausedUntil = if (json.isNull("pausedUntil")) null else json.getString("pausedUntil"),
+            running = running,
+            pausedUntil = until,
+            desiredRunning = json.optBoolean("desiredRunning", running),
+            desiredPausedUntil =
+                when {
+                    !json.has("desiredPausedUntil") -> until // old server: field absent
+                    json.isNull("desiredPausedUntil") -> null
+                    else -> json.getString("desiredPausedUntil")
+                },
+            settled = json.optBoolean("settled", true),
+            micReachable = json.optBoolean("micReachable", true),
         )
     }.getOrNull()
 
