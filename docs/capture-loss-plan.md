@@ -127,10 +127,11 @@ segment (usb's 27.6 s of a 28 s window arrived at close). Nothing is dropped by 
 - **"Active" means recording, not connected — DONE 2026-07-16.** Every source's
   `.alive` marker is now refreshed only on *measured* audio: the ingest pump touches a
   phone's only when the chunk carries real signal (digital silence — the pixel9 dead
-  path — reads idle), and the dead-segment watchdog touches the mic's each healthy
-  poll once a segment of the current run has closed with real audio (after a resume
-  the mic honestly reads idle until the archive proves recording, ~30–90 s).
-  `/api/sources` serves marker freshness with per-kind windows
+  path — reads idle), and the mic's PCM is metered inline on its way to the segmenter
+  (`runner._pump_metered`, same rule as the phone pump), so its dot turns on within
+  seconds of real sound after a resume. The dead-segment watchdog's closed-segment
+  verdict stays as the archive-level backstop (the pump proves the pipe; the watchdog
+  proves the archive). `/api/sources` serves marker freshness with per-kind windows
   (`recall.liveness.active_window`); the mirror ships all markers to Isis unchanged.
 
 Still open (deliberately):
@@ -160,5 +161,7 @@ measured causes. Phase 4 locks it in. The "active means recording" surface shipp
 2026-07-16 (see Phase 3) — the piece that stops a person speaking into a
 not-yet-recording window.
 
-Not in scope: the Mac↔Isis poll cadence — deliberately left at 5 s; it affects resume
-*latency*, not whether captured audio is recorded correctly, which is the actual failure here.
+Not in scope here: the Mac↔Isis control latency — it affects resume *latency*, not
+whether captured audio is recorded correctly, which is the actual failure this plan
+addressed. (Later closed separately, 2026-07-16: capture control long-polls end to
+end — press-to-settled under a second, abortable transitions.)

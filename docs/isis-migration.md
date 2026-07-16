@@ -222,8 +222,11 @@ monorepo `06f226ce` sets `RECALL_ROLE=fleet`):
   `RECALL_SYNC_TOKEN`, so the token can't tell the roles apart.
 - **The Mac mirrors it** (`recall.capture_mirror`): a `POST /sync/capture` handshake
   reports the Mac's applied state and pulls the intent in one round trip; the Mac writes
-  its local `capture_paused_until` to match. **Short-poll every ~5s** (matches the capture
-  agents' own 5s self-gate; SSE noted as a later upgrade if that gate is tightened).
+  its local `capture_paused_until` to match. Originally short-poll every ~5s; since
+  2026-07-16 the same exchange **long-polls** — Isis holds the reply until intent
+  actually changes, so a press reaches the mic in ~RTT while reports still ship every
+  ~5s (the hang is the pacing). Still every-connection-Mac-initiated, still degrades
+  to the plain short-poll against an older server.
   **Edge-triggered** so it doesn't clobber a pause set on the Mac's own LAN UI. The
   fleet's `/api/capture` status shows the Mac's *reported reality*, falling back to intent
   when the Mac goes quiet (a pause you can't confirm is worthless).
@@ -284,8 +287,9 @@ reaches the Mac. Commit `e29fa43`; TDD `tests/test_jobs.py`.
 **Job-pull follow-ups (not done):** `ab-compare` (needs its own pull + a result push-back
 of the report json, not just turn-sync) and `/api/sessions` share-upload (needs the audio
 blob shipped to the Mac to transcribe). Confirm the phone's share-to-Recall host points at
-Isis. Replace the flaky `recall-capture-mirror` transport if the 5s poll proves
-insufficient (the break-glass CLI now covers the worst case regardless).
+Isis. (The capture-mirror transport was upgraded to long-poll 2026-07-16 — intent in
+~RTT — so the "replace the transport" follow-up is closed; the break-glass CLI still
+covers an unreachable Isis.)
 
 ### Step C — the Mac cutover (runbook)
 
