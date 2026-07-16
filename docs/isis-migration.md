@@ -24,6 +24,12 @@ segments, a 303 MB SQLite DB), so this is a topology change, not a bulk-data mov
    below and must not be quietly forgotten.
 3. **Access: VPN/LAN-only** (unchanged — the stance since the 2026-07-09 rollback).
 4. **Database: SQLite on Isis** (only Isis writes; `.backup` for a consistent snapshot).
+5. **Phone ingest stays on the Mac/LAN (2026-07-16).** The phones' PCM must reach the
+   Mac regardless — the live MLX pass and the master archive live there — and Isis
+   cannot dial the Mac, so Isis-side ingest would need a Mac-initiated pull-stream
+   re-architecture. It would buy exactly one thing (phone capture surviving a Mac
+   outage), and a Mac outage is already visible (liveness dots, doctor), not silent.
+   All capture, USB and phones alike, is the Mac's job.
 
 ## Open (do not lose these)
 
