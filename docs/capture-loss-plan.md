@@ -124,10 +124,16 @@ segment (usb's 27.6 s of a 28 s window arrived at close). Nothing is dropped by 
 - Validated live: full resume→phrase→pause loopback PASS — usb −22 dB (27.6 s/28 s
   window), iphone11 −13.5 dB, phones connected in 4 s.
 
+- **"Active" means recording, not connected — DONE 2026-07-16.** Every source's
+  `.alive` marker is now refreshed only on *measured* audio: the ingest pump touches a
+  phone's only when the chunk carries real signal (digital silence — the pixel9 dead
+  path — reads idle), and the dead-segment watchdog touches the mic's each healthy
+  poll once a segment of the current run has closed with real audio (after a resume
+  the mic honestly reads idle until the archive proves recording, ~30–90 s).
+  `/api/sources` serves marker freshness with per-kind windows
+  (`recall.liveness.active_window`); the mirror ships all markers to Isis unchanged.
+
 Still open (deliberately):
-- **"Active" means recording, not connected** — unchanged from the original plan; now
-  backed by finding 5. The phones' meter data (`ingest_disconnect` stats / a live meter
-  read) is the honest signal. Next piece of work.
 - Phone reconnect latency (finding 5) — mitigated by honest "active" dots; a push-style
   reconnect nudge is possible but adds machinery.
 
@@ -150,8 +156,9 @@ Still open (deliberately):
 
 Phase 1 first (small, safe, no behaviour change) — without it we keep guessing. Then Phase 2
 (ran autonomously via speaker loopback with per-session authorization). Phase 3 fixed only
-measured causes. Phase 4 locks it in. Still open: the "active means recording" surface (see
-Phase 3) — the remaining piece that stops a person speaking into a not-yet-recording window.
+measured causes. Phase 4 locks it in. The "active means recording" surface shipped
+2026-07-16 (see Phase 3) — the piece that stops a person speaking into a
+not-yet-recording window.
 
 Not in scope: the Mac↔Isis poll cadence — deliberately left at 5 s; it affects resume
 *latency*, not whether captured audio is recorded correctly, which is the actual failure here.

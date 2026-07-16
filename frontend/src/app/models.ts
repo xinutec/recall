@@ -82,14 +82,6 @@ export interface CaptureState {
   readonly pausedUntil: string | null;
 }
 
-export interface Status {
-  readonly audioSegments: number;
-  readonly transcripts: number;
-  readonly pending: number;
-  readonly corrections: number;
-  readonly sources: readonly string[];
-}
-
 export interface Ok {
   readonly ok: boolean;
 }
@@ -197,11 +189,6 @@ export interface AskAnswer {
 
 export interface TranscriptList {
   readonly items: readonly Transcript[];
-}
-
-export interface TimelinePage {
-  readonly items: readonly Transcript[];
-  readonly hasMore: boolean;
 }
 
 export interface ConversationPage {
