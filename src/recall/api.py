@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import shutil
 import subprocess
 import tempfile
@@ -61,6 +60,7 @@ from recall.liveness import source_statuses
 from recall.llm import DEFAULT_LLM, Generator, make_mlx_generator
 from recall.loudness import normalize_loudness
 from recall.moments import Moment, best_colocated_guess, cluster_moments
+from recall.paths import default_data_root
 from recall.probe import probe_media
 from recall.ranking import (
     diversity_factor,
@@ -130,7 +130,7 @@ from recall.sync import register_sync_routes
 from recall.timeline import Segment
 from recall.transcript_view import clean_transcript
 
-DATA_ROOT = Path(os.environ.get("RECALL_OUT", "/Volumes/Backup/recall"))
+DATA_ROOT = default_data_root()
 _log = logging.getLogger("recall.api")
 # The one background archive-measuring scan (see recall.scan_job), created on first use.
 _SCAN_JOB: ScanJob | None = None
