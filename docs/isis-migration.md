@@ -126,6 +126,40 @@ tracked under "Open" and needs a key-custody answer (a keyfile on the same disk 
 nothing) rather than a rushed LUKS container. The Mac's `/Volumes/Backup` is encrypted
 today and stays so.
 
+### Web-UI sign-in via Nextcloud SSO (2026-07-17)
+
+The WG binding is the network gate; on top of it the **human web UI** is gated behind a
+Nextcloud sign-in (`dash.xinutec.org`), so reaching recall over the VPN isn't enough — you
+also have to be a signed-in, allowlisted user. This mirrors health-sync's "Sign in with
+Nextcloud" wall. It lives in `recall.webauth` and is **inert unless configured**, exactly
+like the sync token: with `RECALL_SESSION_SECRET` + `NC_CLIENT_ID` + `NC_CLIENT_SECRET`
+unset, recall is an open LAN UI (the Mac's local UI, dev, and tests are untouched); the
+Isis pod sets them (from `recall-secret`) and raises the gate.
+
+**Two planes, deliberately split** — because the recording side is driven by devices and
+daemons that cannot do an interactive OAuth login:
+
+- **Browsing plane (gated).** The Angular SPA and its read/write `/api/*` routes require a
+  valid session; without one they return `401 {"error": "not authenticated"}` and the SPA
+  shows the sign-in wall. A username allowlist (`RECALL_ALLOWED_USERS`, default `pippijn`;
+  empty = any dash user) restricts who may enter even after a valid Nextcloud sign-in —
+  recall holds household + medical audio, so it is single-user by default.
+- **Recording plane (login-free, network-gated only).** `/sync/*` keeps its own bearer
+  token (untouched). The iOS mic app talks to Isis's `/api/capture` (long-poll pause
+  state), `/api/sources` (fleet liveness), and — by explicit choice — `/api/capture/pause`
+  and `/api/capture/resume`, so the phone keeps its pause button without a login. These
+  stay reachable by anything on WG/LAN, which is the same trust boundary they had before.
+
+**Mechanics.** OAuth authorization-code flow against Nextcloud's `apps/oauth2`, identity
+only: the access token is used once to read the user (`ocs/v2.php/cloud/user`) and then
+discarded — there is no local user store. Identity rides a **stateless, HMAC-signed
+session cookie** (7-day TTL), so it needs no server-side session store and survives pod
+restarts and the read-only rootfs. The OAuth `state` is likewise a short-TTL signed token.
+The cookie is **not** `Secure`: recall answers over plain http on the wg0 hostPort
+(`10.100.0.2:8000`), and the network remains the real gate — revisit if it ever gains an
+https origin. Redirect URI: `http://10.100.0.2:8000/auth/callback`, which must match both
+the client registered on dash and the address the browser actually loads recall at.
+
 ## Queue API sketch (WG-bound, token/mTLS)
 
 Illustrative, not final — shape it to the real store methods.

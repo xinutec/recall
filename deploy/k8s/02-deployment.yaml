@@ -75,6 +75,36 @@ spec:
                 secretKeyRef:
                   name: recall-secret
                   key: SYNC_TOKEN
+            # Nextcloud SSO over the human web UI (recall.webauth). All three keys must
+            # be present to raise the gate; missing any of them leaves recall an open LAN
+            # UI (same inert-unless-configured contract as the sync token). optional:true
+            # is deliberate: applying this manifest before the keys exist must NOT wedge
+            # the pod (CreateContainerConfigError) — the env just stays unset, gate off.
+            - name: RECALL_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: recall-secret
+                  key: SESSION_SECRET
+                  optional: true
+            - name: NC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: recall-secret
+                  key: NC_CLIENT_ID
+                  optional: true
+            - name: NC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: recall-secret
+                  key: NC_CLIENT_SECRET
+                  optional: true
+            # Non-secret: who may sign in (empty = any dash user) and the OAuth redirect
+            # the browser is sent back to — must match the client's registered URI on
+            # dash and the address the browser actually loads recall at (the wg0 hostPort).
+            - name: RECALL_ALLOWED_USERS
+              value: "pippijn"
+            - name: NC_REDIRECT_URI
+              value: "http://10.100.0.2:8000/auth/callback"
           resources:
             requests:
               cpu: 100m
