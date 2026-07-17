@@ -129,6 +129,16 @@ class AudioPresentOut(BaseModel):
     present: bool
 
 
+class LabelOut(BaseModel):
+    """One human voice-naming the Mac pulls back from the fleet: '(source, cluster) is
+    <name>'. The UI lives on the fleet, so human naming happens there; this is the only
+    way it reaches the Mac's master archive and re-feeds voiceprint enrolment."""
+
+    source_id: str
+    cluster: str
+    name: str
+
+
 class TurnIn(BaseModel):
     """One transcript turn the Mac computed for a segment, for the fleet's store."""
 
@@ -139,6 +149,12 @@ class TurnIn(BaseModel):
     language: str | None = None
     asr_confidence: float | None = None
     speaker_cluster: str | None = None
+    # The Mac's voiceprint guess for this turn (name + cosine strength). The Mac owns
+    # the ML; the fleet has none, so unless the guess rides along the push, Isis's UI
+    # can only show 'unknown' for freshly-pushed audio. Display-only — speaker_label
+    # (the human name) stays authoritative and travels the other way (GET /sync/labels).
+    speaker_guess: str | None = None
+    speaker_score: float | None = None
     provenance: str | None = None
 
 
@@ -388,7 +404,7 @@ def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentSt
             end = datetime.fromisoformat(turn.end)
             if any(c.start < end and c.end > start for c in human):
                 continue  # human ground truth already covers this span
-            store.add_transcript_segment(
+            turn_id = store.add_transcript_segment(
                 audio_segment_id=int(audio_id),
                 start=start,
                 end=end,
@@ -399,6 +415,13 @@ def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentSt
                 speaker_cluster=turn.speaker_cluster,
                 provenance=turn.provenance,
             )
+            # The guess is written by a separate ML pass on the Mac, so it isn't an
+            # add_transcript_segment column; set it here so the fleet holds what the
+            # Mac already computed (the fleet has no ML to recompute it).
+            if turn.speaker_guess is not None and turn.speaker_score is not None:
+                store.set_speaker_guess(
+                    int(turn_id), turn.speaker_guess, turn.speaker_score
+                )
             written += 1
     return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=written)
 
@@ -687,6 +710,24 @@ def _register_job_routes(
             store.close()
         return {"ok": True}
 
+    @app.get("/sync/labels")
+    def sync_labels(
+        authorization: str | None = Header(default=None),
+    ) -> list[LabelOut]:
+        # Human voice-namings flow fleet→Mac: the UI is on the fleet, so this is the
+        # Mac's only path to the names — for its master archive and to re-feed
+        # voiceprint enrolment. The whole set each time (it is tiny and lets a missed
+        # pass self-heal); the Mac applies only the diffs.
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            return [
+                LabelOut(source_id=n.source_id, cluster=n.cluster, name=n.name)
+                for n in store.cluster_namings()
+            ]
+        finally:
+            store.close()
+
 
 class SyncClient:
     """Mac-side client: dials the fleet (never the reverse). Every call carries the
@@ -712,6 +753,14 @@ class SyncClient:
         )
         resp.raise_for_status()
         return [JobOut.model_validate(job) for job in resp.json()]
+
+    def fetch_labels(self) -> list[LabelOut]:
+        """Pull the fleet's human voice-namings (the whole set) so the Mac can replay
+        them onto its own archive. The reverse of every other call here — the fleet is
+        authoritative for human input, the Mac for ML — but still Mac-initiated."""
+        resp = self._client.get(f"{self._base}/sync/labels", headers=self._headers)
+        resp.raise_for_status()
+        return [LabelOut.model_validate(lbl) for lbl in resp.json()]
 
     def mark_done(self, job_id: int, *, job_type: str = "refine") -> None:
         """Tell the fleet a job is finished so it isn't handed out again. `job_type`

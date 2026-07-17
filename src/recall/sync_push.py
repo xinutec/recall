@@ -28,7 +28,7 @@ from typing import Protocol
 
 from recall.ids import AudioSegmentId
 from recall.store import Store, TranscriptSegment
-from recall.sync import SegmentIn, SegmentStoredOut, SummaryIn, TurnIn
+from recall.sync import LabelOut, SegmentIn, SegmentStoredOut, SummaryIn, TurnIn
 from recall.timeline import Segment
 
 WATERMARK_KEY = "sync_pushed_max_turn_id"
@@ -48,6 +48,7 @@ class PushTarget(Protocol):
     def push_segment(self, segment: SegmentIn) -> SegmentStoredOut: ...
     def push_summary(self, summary: SummaryIn) -> None: ...
     def push_live(self, turns: list[TurnIn]) -> int: ...
+    def fetch_labels(self) -> list[LabelOut]: ...
 
 
 def _segment_in(
@@ -72,6 +73,8 @@ def _segment_in(
                 language=t.language,
                 asr_confidence=t.asr_confidence,
                 speaker_cluster=t.speaker_cluster,
+                speaker_guess=t.speaker_guess,
+                speaker_score=t.speaker_score,
                 provenance=t.provenance,
             )
             for t in turns
@@ -150,3 +153,32 @@ def sync_push(store: Store, client: PushTarget) -> int:
     if high > watermark:
         store.set_setting(WATERMARK_KEY, str(high))
     return pushed
+
+
+def pull_labels(store: Store, client: PushTarget) -> int:
+    """Bring the fleet's human voice-namings home and apply them; returns how many
+    voices were newly (re)named on this machine.
+
+    The UI is on the fleet, so a person names a voice there — but the master archive and
+    the voiceprint enrolment both live here, and neither learns a name until it is
+    replayed onto this store. This is that replay: pull the fleet's namings, apply the
+    ones that differ from what this store holds (so a re-run is a no-op), then let
+    `turns_needing_voiceprint` pick the freshly-labelled turns up on the next enrolment
+    pass. `name_voice` sets the label across the whole cluster — the same gesture the
+    person made on the fleet.
+
+    Trust note: the fleet is authoritative for human input by design (it is the only
+    UI), so a naming is applied as given — there is no independent evidence here to
+    check it against, unlike a *deletion*, which the Mac still refuses without its own
+    speechless verdict (see recall.jobs sweep veto). A label only names audio; it never
+    destroys it, and `prune_stale_voiceprints` re-derives enrolment from the current
+    labels, so a bad name is fully reversible by renaming.
+    """
+    have = {(n.source_id, n.cluster): n.name for n in store.cluster_namings()}
+    applied = 0
+    for label in client.fetch_labels():
+        if have.get((label.source_id, label.cluster)) == label.name:
+            continue  # this store already names that voice the same — nothing to do
+        if store.name_voice(label.source_id, label.cluster, label.name):
+            applied += 1
+    return applied

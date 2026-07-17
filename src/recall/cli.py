@@ -1466,14 +1466,21 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         print("sync needs RECALL_SYNC_TOKEN")
         return 1
     from recall.sync import SyncClient  # noqa: PLC0415 - lazy: pulls the web framework
-    from recall.sync_push import sync_push  # noqa: PLC0415
+    from recall.sync_push import pull_labels, sync_push  # noqa: PLC0415
 
     store = Store.open(args.out / "recall.sqlite")
+    client = SyncClient(args.url, token)
     try:
-        pushed = sync_push(store, SyncClient(args.url, token))
+        pushed = sync_push(store, client)
+        # Reverse leg: bring the fleet's human voice-namings home. The UI is on the
+        # fleet, so this is the only path a name reaches the master archive and the
+        # voiceprint enrolment.
+        named = pull_labels(store, client)
     finally:
         store.close()
-    print(f"sync: pushed {pushed} segment(s) to {args.url}")
+    print(
+        f"sync: pushed {pushed} segment(s), pulled {named} voice-naming(s) — {args.url}"
+    )
     return 0
 
 

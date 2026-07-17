@@ -23,6 +23,7 @@ from recall.sources import AudioSource, SourceKind
 from recall.store import Store
 from recall.sync import (
     SYNC_TOKEN_ENV,
+    LabelOut,
     SegmentIn,
     SummaryIn,
     SyncClient,
@@ -243,6 +244,75 @@ def test_segment_push_writes_turns_then_is_idempotent(
     turns = store.visible_machine_turns_for_audio(first.audio_segment_id)
     store.close()
     assert sorted(t.text for t in turns) == ["turn 0", "turn 1"]
+
+
+def test_segment_push_carries_the_speaker_guess_to_the_fleet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The Mac holds the ML: it computes each turn's voiceprint guess ("Dr. Kosmin",
+    # 0.41). The fleet (no ML) can only show what the push carries. Before this the
+    # push dropped the guess, so Isis's UI showed 'unknown' for freshly-pushed audio.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    seg = _segment(n_turns=1)
+    seg.turns[0].speaker_cluster = "SPEAKER_00"
+    seg.turns[0].speaker_guess = "Dr. Kosmin"
+    seg.turns[0].speaker_score = 0.41
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        stored = client.push_segment(seg)
+        assert stored.turns_written == 1
+
+    store = Store.open(db)
+    turns = store.visible_machine_turns_for_audio(stored.audio_segment_id)
+    store.close()
+    assert len(turns) == 1
+    assert turns[0].speaker_guess == "Dr. Kosmin"
+    assert turns[0].speaker_score == 0.41
+
+
+def test_labels_endpoint_publishes_human_namings_over_the_wire(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The fleet→Mac reverse leg: a person names a voice in the fleet UI, and the Mac's
+    # real SyncClient pulls it. Proves the two agree on the label wire contract.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+
+    # Land a clustered turn on the fleet (as a push would), then name its voice.
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        seg = _segment(n_turns=1)
+        seg.turns[0].speaker_cluster = "SPEAKER_00"
+        client.push_segment(seg)
+
+    store = Store.open(db)
+    store.name_voice("usb", "SPEAKER_00", "Dr. Kosmin")
+    store.close()
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        labels = client.fetch_labels()
+    assert labels == [
+        LabelOut(source_id="usb", cluster="SPEAKER_00", name="Dr. Kosmin")
+    ]
+
+
+def test_labels_endpoint_needs_the_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    Store.open(db).close()
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+    assert TestClient(app).get("/sync/labels").status_code == 401
 
 
 def test_segment_repush_supersedes_the_old_machine_turns(

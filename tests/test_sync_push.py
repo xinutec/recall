@@ -8,8 +8,8 @@ from pathlib import Path
 
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
-from recall.sync import SegmentIn, SegmentStoredOut, SummaryIn, TurnIn
-from recall.sync_push import push_live_turns, sync_push
+from recall.sync import LabelOut, SegmentIn, SegmentStoredOut, SummaryIn, TurnIn
+from recall.sync_push import pull_labels, push_live_turns, sync_push
 from recall.timeline import Segment
 
 BASE = datetime(2026, 7, 11, 12, 0, 0, tzinfo=UTC)
@@ -24,6 +24,8 @@ class FakeClient:
         self.segments: list[SegmentIn] = []
         self.summaries: list[SummaryIn] = []
         self.live: list[TurnIn] = []
+        # What the fleet would return on GET /sync/labels.
+        self.labels: list[LabelOut] = []
 
     def audio_present(self, source: str, name: str) -> bool:
         return (source, name) in self.present
@@ -43,6 +45,9 @@ class FakeClient:
     def push_live(self, turns: list[TurnIn]) -> int:
         self.live.extend(turns)
         return len(turns)
+
+    def fetch_labels(self) -> list[LabelOut]:
+        return list(self.labels)
 
 
 def _blob(root: Path, name: str = "seg-0001.opus") -> Path:
@@ -211,3 +216,60 @@ def test_push_live_skips_reconciled_turns() -> None:
     assert push_live_turns(store, client) == 1
     assert [t.text for t in client.live] == ["visible"]
     assert keep  # (silence the unused-var check; the visible one is what shipped)
+
+
+def _seed_clustered_turn(store: Store, tmp_path: Path, cluster: str) -> int:
+    """Seed one machine turn tagged with a diarization cluster but not yet named — the
+    state a freshly-pushed meeting is in on the Mac before its labels come back."""
+    audio_id = _seed_segment(store, tmp_path, model=None)
+    store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=5),
+        text="hello",
+        asr_model="turbo",
+        speaker_cluster=cluster,
+    )
+    return audio_id
+
+
+def test_pull_labels_names_a_voice_from_the_fleet_then_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    # The UI is on the fleet: a person names SPEAKER_00 there. Until it is replayed
+    # here, the master archive and the voiceprint enrolment never learn the name.
+    store = Store.memory()
+    audio_id = _seed_clustered_turn(store, tmp_path, "SPEAKER_00")
+    client = FakeClient()
+    client.labels = [LabelOut(source_id="usb", cluster="SPEAKER_00", name="Dr. Kosmin")]
+
+    assert pull_labels(store, client) == 1
+    turns = store.visible_machine_turns_for_audio(audio_id)
+    assert [t.speaker_label for t in turns] == ["Dr. Kosmin"]
+
+    # A second pass changes nothing — the store already names that voice the same way.
+    assert pull_labels(store, client) == 0
+
+
+def test_pull_labels_applies_a_rename(tmp_path: Path) -> None:
+    # The fleet is authoritative for human input: a corrected name overrides the old.
+    store = Store.memory()
+    audio_id = _seed_clustered_turn(store, tmp_path, "SPEAKER_00")
+    client = FakeClient()
+    client.labels = [LabelOut(source_id="usb", cluster="SPEAKER_00", name="Dr Lee")]
+    assert pull_labels(store, client) == 1
+
+    client.labels = [LabelOut(source_id="usb", cluster="SPEAKER_00", name="Dr. Kosmin")]
+    assert pull_labels(store, client) == 1
+    turns = store.visible_machine_turns_for_audio(audio_id)
+    assert [t.speaker_label for t in turns] == ["Dr. Kosmin"]
+
+
+def test_pull_labels_ignores_a_voice_this_machine_does_not_have(tmp_path: Path) -> None:
+    # A naming for a cluster with no turns here (a source the Mac hasn't got) applies to
+    # nothing and is not counted — no crash, no phantom.
+    store = Store.memory()
+    _seed_clustered_turn(store, tmp_path, "SPEAKER_00")
+    client = FakeClient()
+    client.labels = [LabelOut(source_id="usb", cluster="SPEAKER_99", name="Nobody")]
+    assert pull_labels(store, client) == 0

@@ -31,6 +31,7 @@ from recall.sources import AudioSource, SourceKind, SourceRow
 from recall.store_models import (
     AbCompareJob,
     CaptureEvent,
+    ClusterNaming,
     Correction,
     LabelledFragment,
     LiveSummary,
@@ -63,6 +64,7 @@ __all__ = [
     "_MIGRATIONS",
     "AbCompareJob",
     "CaptureEvent",
+    "ClusterNaming",
     "Correction",
     "LabelledFragment",
     "LiveSummary",
@@ -2248,6 +2250,37 @@ class Store:
         )
         self._commit()
         return cur.rowcount
+
+    def cluster_namings(self) -> list[ClusterNaming]:
+        """Every human naming of a voice, as (source, cluster, name) — the whole set,
+        so it is the fleet→Mac label channel's payload and the Mac's own diff baseline.
+
+        A human name lives denormalized on `speaker_label`; the cluster is the shared
+        key both machines carry (it rides every segment push). A cluster is one voice,
+        so if a few of its turns were individually reassigned to different names, the
+        cluster's *dominant* (most-turns) label wins — a single mapping per voice, which
+        is exactly what `name_voice` replays on the Mac. Ordered for a stable payload.
+        """
+        rows = self._conn.execute(
+            "SELECT a.source_id src, ts.speaker_cluster cl, ts.speaker_label lbl, "
+            "COUNT(*) n FROM transcript_segments ts "
+            "JOIN audio_segments a ON a.id = ts.audio_segment_id "
+            "WHERE ts.speaker_label IS NOT NULL AND ts.speaker_cluster IS NOT NULL "
+            "AND ts.superseded_by IS NULL AND ts.hidden_reason IS NULL "
+            "GROUP BY a.source_id, ts.speaker_cluster, ts.speaker_label "
+            "ORDER BY a.source_id, ts.speaker_cluster, n DESC, ts.speaker_label"
+        ).fetchall()
+        dominant: dict[tuple[str, str], str] = {}
+        for r in rows:
+            key = (str(r["src"]), str(r["cl"]))
+            if (
+                key not in dominant
+            ):  # first row per (src, cl) is the highest-count label
+                dominant[key] = str(r["lbl"])
+        return [
+            ClusterNaming(source_id=src, cluster=cl, name=name)
+            for (src, cl), name in dominant.items()
+        ]
 
     def session_voice_suggestions(
         self, source_id: str, *, min_score: float = 0.6

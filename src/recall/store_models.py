@@ -31,6 +31,18 @@ class SessionSummary(NamedTuple):
 
 
 @dataclass(frozen=True)
+class ClusterNaming:
+    """A human's naming of one diarization voice: '(this source, this cluster) is
+    called <name>'. The cluster id is the key both machines share for a voice (it
+    rides along every segment push), so it's what the fleet→Mac label sync travels on —
+    the fleet publishes its human namings, the Mac replays them via `name_voice`."""
+
+    source_id: str
+    cluster: str
+    name: str
+
+
+@dataclass(frozen=True)
 class CaptureEvent:
     """An immutable capture-lifecycle fact: a pause, a resume, or a dead-window — the
     record that tells a deliberate pause-gap apart from silently lost audio."""

@@ -1316,6 +1316,35 @@ def test_name_voice_labels_a_whole_cluster_in_a_source() -> None:
     assert rows[ids[0]].speaker_label is None
 
 
+def test_cluster_namings_returns_one_dominant_name_per_voice() -> None:
+    # cluster_namings is the fleet→Mac label payload. It reports (source, cluster, name)
+    # for every human-named voice, one row per voice — the whole set, so the Mac can
+    # diff it. A cluster names one voice, so if a couple of turns were reassigned to
+    # another name, the voice's dominant (most-turns) label wins.
+    store = Store.memory()
+    store.add_source(_source())
+    audio_id = store.add_audio_segment(_segment())
+    for i, cluster in enumerate(["SPEAKER_00", "SPEAKER_00", "SPEAKER_01"]):
+        store.add_transcript_segment(
+            audio_segment_id=audio_id,
+            start=BASE + timedelta(seconds=i),
+            end=BASE + timedelta(seconds=i + 1),
+            text=f"turn {i}",
+            asr_model="diarized",
+            speaker_cluster=cluster,
+        )
+    # No human labels yet → nothing to publish.
+    assert store.cluster_namings() == []
+
+    store.name_voice("usb", "SPEAKER_00", "Dr. Kosmin")
+    store.name_voice("usb", "SPEAKER_01", "Pippijn")
+    namings = {(n.source_id, n.cluster): n.name for n in store.cluster_namings()}
+    assert namings == {
+        ("usb", "SPEAKER_00"): "Dr. Kosmin",
+        ("usb", "SPEAKER_01"): "Pippijn",
+    }
+
+
 def test_set_turn_speaker_reassigns_a_single_turn() -> None:
     store = Store.memory()
     store.add_source(_source())
