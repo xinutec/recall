@@ -6,6 +6,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
+import pytest
+
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
 from recall.sync import LabelOut, SegmentIn, SegmentStoredOut, SummaryIn, TurnIn
@@ -273,3 +276,33 @@ def test_pull_labels_ignores_a_voice_this_machine_does_not_have(tmp_path: Path) 
     client = FakeClient()
     client.labels = [LabelOut(source_id="usb", cluster="SPEAKER_99", name="Nobody")]
     assert pull_labels(store, client) == 0
+
+
+class _OldFleetClient(FakeClient):
+    """A fleet that predates GET /sync/labels: the endpoint 404s."""
+
+    def fetch_labels(self) -> list[LabelOut]:
+        request = httpx.Request("GET", "http://fleet/sync/labels")
+        response = httpx.Response(404, request=request)
+        raise httpx.HTTPStatusError("not found", request=request, response=response)
+
+
+def test_pull_labels_tolerates_a_fleet_without_the_endpoint(tmp_path: Path) -> None:
+    # The Mac runs live source, so pull_labels is active before the fleet is redeployed.
+    # A 404 must not fail the sync pass (the push already ran); it self-heals on deploy.
+    store = Store.memory()
+    _seed_clustered_turn(store, tmp_path, "SPEAKER_00")
+    assert pull_labels(store, _OldFleetClient()) == 0
+
+
+def test_pull_labels_reraises_a_real_error(tmp_path: Path) -> None:
+    # Only a missing endpoint is tolerated; an auth/server failure is real and surfaces.
+    class _BrokenFleet(FakeClient):
+        def fetch_labels(self) -> list[LabelOut]:
+            request = httpx.Request("GET", "http://fleet/sync/labels")
+            response = httpx.Response(401, request=request)
+            raise httpx.HTTPStatusError("nope", request=request, response=response)
+
+    store = Store.memory()
+    with pytest.raises(httpx.HTTPStatusError):
+        pull_labels(store, _BrokenFleet())

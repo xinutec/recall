@@ -23,13 +23,19 @@ real `SyncClient` (which drags in the server framework).
 
 from __future__ import annotations
 
+import logging
+from http import HTTPStatus
 from pathlib import Path
 from typing import Protocol
+
+import httpx
 
 from recall.ids import AudioSegmentId
 from recall.store import Store, TranscriptSegment
 from recall.sync import LabelOut, SegmentIn, SegmentStoredOut, SummaryIn, TurnIn
 from recall.timeline import Segment
+
+_log = logging.getLogger("recall.sync_push")
 
 WATERMARK_KEY = "sync_pushed_max_turn_id"
 LIVE_WATERMARK_KEY = "sync_pushed_max_live_turn_id"
@@ -174,9 +180,20 @@ def pull_labels(store: Store, client: PushTarget) -> int:
     destroys it, and `prune_stale_voiceprints` re-derives enrolment from the current
     labels, so a bad name is fully reversible by renaming.
     """
+    try:
+        fleet_labels = client.fetch_labels()
+    except httpx.HTTPStatusError as exc:
+        # A fleet that predates GET /sync/labels 404s. The push half already ran and
+        # matters more than the pull, so treat "endpoint not there yet" as "no names to
+        # bring home" rather than failing the whole pass — it self-heals on deploy.
+        # Any other status (auth, server error) is real and re-raised.
+        if exc.response.status_code == HTTPStatus.NOT_FOUND:
+            _log.info("fleet has no /sync/labels yet; skipping label pull")
+            return 0
+        raise
     have = {(n.source_id, n.cluster): n.name for n in store.cluster_namings()}
     applied = 0
-    for label in client.fetch_labels():
+    for label in fleet_labels:
         if have.get((label.source_id, label.cluster)) == label.name:
             continue  # this store already names that voice the same — nothing to do
         if store.name_voice(label.source_id, label.cluster, label.name):
