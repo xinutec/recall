@@ -28,7 +28,10 @@ class CaptureApiTest {
     fun anOlderServersConfirmedOnlyAnswerReadsAsSettled() {
         // Rollout order safety: the app may meet a server that only sends the old
         // two-field shape. That is a settled state (desired == confirmed).
-        val state = parseCaptureState("""{"running": false, "pausedUntil": "2026-07-17T15:13:32+00:00"}""")!!
+        val state =
+            parseCaptureState(
+                """{"running": false, "pausedUntil": "2026-07-17T15:13:32+00:00"}""",
+            )!!
         assertEquals(false, state.running)
         assertEquals(false, state.desiredRunning)
         assertEquals("2026-07-17T15:13:32+00:00", state.desiredPausedUntil)

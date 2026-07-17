@@ -158,11 +158,12 @@ fun MicScreen(
             // Long-poll: the request hangs on the server until the household state
             // changes (a press on any client, the mic confirming), so changes land in
             // ~RTT. An older server (no stateToken) answers at once → plain 5s poll.
-            val cap = CaptureApi.state(
-                controlHost,
-                waitS = 25,
-                known = MicState.capture.value?.stateToken,
-            )
+            val cap =
+                CaptureApi.state(
+                    controlHost,
+                    waitS = 25,
+                    known = MicState.capture.value?.stateToken,
+                )
             cap?.let { MicState.setCapture(it) }
             delay(if (cap?.stateToken != null) 250 else 5_000)
         }

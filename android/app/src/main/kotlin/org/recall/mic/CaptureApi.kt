@@ -47,8 +47,11 @@ fun parseCaptureState(body: String): CaptureState? =
             desiredRunning = json.optBoolean("desiredRunning", running),
             desiredPausedUntil =
                 when {
-                    !json.has("desiredPausedUntil") -> until // old server: field absent
+                    !json.has("desiredPausedUntil") -> until
+
+                    // old server: field absent
                     json.isNull("desiredPausedUntil") -> null
+
                     else -> json.getString("desiredPausedUntil")
                 },
             settled = json.optBoolean("settled", true),
