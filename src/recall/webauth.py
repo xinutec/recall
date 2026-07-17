@@ -34,6 +34,7 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, Request
@@ -45,6 +46,7 @@ SESSION_SECRET_ENV = "RECALL_SESSION_SECRET"
 CLIENT_ID_ENV = "NC_CLIENT_ID"
 CLIENT_SECRET_ENV = "NC_CLIENT_SECRET"
 NC_BASE_URL_ENV = "NC_BASE_URL"
+NC_INTERNAL_URL_ENV = "NC_INTERNAL_URL"
 REDIRECT_URI_ENV = "NC_REDIRECT_URI"
 ALLOWED_USERS_ENV = "RECALL_ALLOWED_USERS"
 
@@ -96,7 +98,13 @@ class WebAuthConfig:
     session_secret: str
     client_id: str
     client_secret: str
+    # Public, browser-facing base URL (the authorize redirect + redirect_uri go here).
     nc_base_url: str
+    # Where the *server* reaches Nextcloud for the token + userinfo calls. Usually the
+    # same as nc_base_url, but on the fleet the pod can't reach the public host (it is
+    # the node's own IP → hairpin), so this points at Nextcloud's in-cluster Service DNS
+    # name and the calls carry a Host header of the public host. Defaults to the public.
+    nc_internal_url: str
     redirect_uri: str
     allowed_users: frozenset[str]
 
@@ -125,16 +133,27 @@ class WebAuthConfig:
             for u in os.environ.get(ALLOWED_USERS_ENV, "").split(",")
             if u.strip()
         }
+        nc_base_url = os.environ.get(NC_BASE_URL_ENV, _DEFAULT_NC_BASE_URL).rstrip("/")
+        internal = os.environ.get(NC_INTERNAL_URL_ENV, "").rstrip("/") or nc_base_url
         return cls(
             session_secret=secret,
             client_id=client_id,
             client_secret=client_secret,
-            nc_base_url=os.environ.get(NC_BASE_URL_ENV, _DEFAULT_NC_BASE_URL).rstrip(
-                "/"
-            ),
+            nc_base_url=nc_base_url,
+            nc_internal_url=internal,
             redirect_uri=os.environ.get(REDIRECT_URI_ENV, _DEFAULT_REDIRECT_URI),
             allowed_users=frozenset(allowed),
         )
+
+    def server_call(self, path: str) -> tuple[str, dict[str, str]]:
+        """The (url, headers) for a *server-side* Nextcloud call at `path`. When the
+        internal URL differs from the public one, the request goes to the in-cluster
+        address but presents the public host as `Host:` so Nextcloud's trusted-domain
+        routing treats it exactly like the public request."""
+        url = f"{self.nc_internal_url}{path}"
+        if self.nc_internal_url == self.nc_base_url:
+            return url, {}
+        return url, {"Host": urlsplit(self.nc_base_url).netloc}
 
     def permits(self, user_id: str) -> bool:
         """Whether a signed-in Nextcloud user may enter. Empty allowlist = any
@@ -247,8 +266,9 @@ def authorize_url(cfg: WebAuthConfig, state: str) -> str:
 
 def exchange_code(cfg: WebAuthConfig, code: str) -> str:
     """Trade the authorization code for an access token at Nextcloud's OAuth2 route."""
+    url, headers = cfg.server_call("/index.php/apps/oauth2/api/v1/token")
     resp = httpx.post(
-        f"{cfg.nc_base_url}/index.php/apps/oauth2/api/v1/token",
+        url,
         data={
             "grant_type": "authorization_code",
             "code": code,
@@ -256,6 +276,7 @@ def exchange_code(cfg: WebAuthConfig, code: str) -> str:
             "client_secret": cfg.client_secret,
             "redirect_uri": cfg.redirect_uri,
         },
+        headers=headers,
         timeout=15.0,
     )
     resp.raise_for_status()
@@ -268,9 +289,11 @@ def exchange_code(cfg: WebAuthConfig, code: str) -> str:
 def fetch_userinfo(cfg: WebAuthConfig, access_token: str) -> Session:
     """Look up the signed-in user (id + display name) via the OCS user endpoint. The
     access token is used here once and then discarded — identity-only."""
+    url, headers = cfg.server_call("/ocs/v2.php/cloud/user?format=json")
     resp = httpx.get(
-        f"{cfg.nc_base_url}/ocs/v2.php/cloud/user?format=json",
+        url,
         headers={
+            **headers,
             "Authorization": f"Bearer {access_token}",
             "OCS-APIRequest": "true",
         },

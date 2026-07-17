@@ -19,6 +19,7 @@ from recall.webauth import (
     CLIENT_ID_ENV,
     CLIENT_SECRET_ENV,
     COOKIE_NAME,
+    NC_INTERNAL_URL_ENV,
     SESSION_SECRET_ENV,
     Session,
     WebAuthConfig,
@@ -35,12 +36,15 @@ from recall.webauth import (
 NOW = datetime(2026, 7, 17, 12, 0, 0, tzinfo=UTC)
 
 
-def _cfg(allowed: set[str] | None = None) -> WebAuthConfig:
+def _cfg(
+    allowed: set[str] | None = None, internal: str = "https://dash.example"
+) -> WebAuthConfig:
     return WebAuthConfig(
         session_secret="s3cret-key-material-0123456789",
         client_id="recall-client",
         client_secret="recall-secret",
         nc_base_url="https://dash.example",
+        nc_internal_url=internal,
         redirect_uri="http://10.100.0.2:8000/auth/callback",
         allowed_users=frozenset(allowed or set()),
     )
@@ -70,6 +74,7 @@ def test_session_cookie_rejects_a_different_secret() -> None:
         client_id="recall-client",
         client_secret="recall-secret",
         nc_base_url="https://dash.example",
+        nc_internal_url="https://dash.example",
         redirect_uri="http://10.100.0.2:8000/auth/callback",
         allowed_users=frozenset(),
     )
@@ -188,6 +193,48 @@ def test_from_env_builds_when_complete(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.client_id == "cid"
     assert cfg.allowed_users == frozenset({"pippijn", "guest"})
     assert cfg.nc_base_url == "https://dash.xinutec.org"
+
+
+def test_from_env_internal_url_defaults_to_public(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(SESSION_SECRET_ENV, "secret")
+    monkeypatch.setenv(CLIENT_ID_ENV, "cid")
+    monkeypatch.setenv(CLIENT_SECRET_ENV, "csec")
+    monkeypatch.delenv(NC_INTERNAL_URL_ENV, raising=False)
+    cfg = WebAuthConfig.from_env()
+    assert cfg is not None
+    assert cfg.nc_internal_url == cfg.nc_base_url == "https://dash.xinutec.org"
+
+
+def test_from_env_internal_url_split(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(SESSION_SECRET_ENV, "secret")
+    monkeypatch.setenv(CLIENT_ID_ENV, "cid")
+    monkeypatch.setenv(CLIENT_SECRET_ENV, "csec")
+    monkeypatch.setenv(NC_INTERNAL_URL_ENV, "http://nextcloud-server.nextcloud.svc/")
+    cfg = WebAuthConfig.from_env()
+    assert cfg is not None
+    assert cfg.nc_base_url == "https://dash.xinutec.org"
+    # trailing slash dropped
+    assert cfg.nc_internal_url == "http://nextcloud-server.nextcloud.svc"
+
+
+def test_server_call_same_origin_sends_no_host_header() -> None:
+    # internal == public: call the public URL directly, no Host override needed.
+    url, headers = _cfg().server_call("/index.php/apps/oauth2/api/v1/token")
+    assert url == "https://dash.example/index.php/apps/oauth2/api/v1/token"
+    assert headers == {}
+
+
+def test_server_call_internal_routes_with_public_host_header() -> None:
+    # internal != public: hit the in-cluster URL but present the public host as Host,
+    # so Nextcloud's trusted-domain routing treats it like the public request.
+    cfg = _cfg(internal="http://nextcloud-server.nextcloud.svc")
+    url, headers = cfg.server_call("/ocs/v2.php/cloud/user?format=json")
+    assert (
+        url == "http://nextcloud-server.nextcloud.svc/ocs/v2.php/cloud/user?format=json"
+    )
+    assert headers == {"Host": "dash.example"}
 
 
 def test_permits_allowlist() -> None:

@@ -26,13 +26,13 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # SSO: reach Nextcloud (dash.xinutec.org) via the in-cluster ingress on 443. dash is
-    # co-located on this node and unreachable via the public IP (hairpin), so the pod goes
-    # through the nginx ingress ClusterIP (see the deployment's hostAlias for dash).
+    # SSO: reach Nextcloud for the token + userinfo calls. dash is co-located on this node
+    # and unreachable via the public IP (hairpin), so the pod talks to the nextcloud-server
+    # Service directly on 80 (see the deployment's NC_INTERNAL_URL + Host header).
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx
+              kubernetes.io/metadata.name: nextcloud
       ports:
-        - port: 443
+        - port: 80
           protocol: TCP
