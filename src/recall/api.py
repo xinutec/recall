@@ -129,6 +129,7 @@ from recall.summarize import refresh_live_summary
 from recall.sync import register_sync_routes
 from recall.timeline import Segment
 from recall.transcript_view import clean_transcript
+from recall.webauth import register_web_auth
 
 DATA_ROOT = default_data_root()
 _log = logging.getLogger("recall.api")
@@ -184,6 +185,12 @@ def _store() -> Store:
 # RECALL_SYNC_TOKEN is set — register_sync_routes adds nothing and returns False — so a
 # stock LAN-only deployment is unchanged.
 register_sync_routes(app, _store, DATA_ROOT)
+
+# Nextcloud SSO gate over the human-facing web UI (recall.webauth). Also inert unless
+# configured (RECALL_SESSION_SECRET + NC_CLIENT_ID + NC_CLIENT_SECRET), so the Mac's
+# LAN-only UI stays open; only the Isis fleet pod, where the secret lives, raises the
+# wall. The recording plane (/sync/* and the iOS mic app's capture endpoints) is exempt.
+register_web_auth(app)
 
 
 def _tier(segment: TranscriptSegment) -> Tier:
