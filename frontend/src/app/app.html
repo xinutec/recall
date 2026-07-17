@@ -1,3 +1,17 @@
+@if (auth.needsSignIn()) {
+  <div class="signin-wall">
+    <mat-card class="signin-card" appearance="outlined">
+      <mat-icon class="signin-logo">graphic_eq</mat-icon>
+      <h1>recall</h1>
+      <p>Sign in to view your recordings.</p>
+      <a matButton="filled" [href]="auth.loginUrl()">
+        <mat-icon>login</mat-icon>
+        Sign in with Nextcloud
+      </a>
+    </mat-card>
+  </div>
+}
+
 <mat-toolbar color="primary" class="bar">
   <!-- dev-lint: allow-unstyled-class .ham-btn is a unit-test selector (app.spec.ts) -->
   <button matIconButton class="ham-btn" [matMenuTriggerFor]="moreMenu" aria-label="More pages">

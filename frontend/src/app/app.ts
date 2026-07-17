@@ -5,10 +5,12 @@ import { BreakpointObserver, Breakpoints } from '@angular/cdk/layout';
 import { map, timeout } from 'rxjs';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatButtonModule } from '@angular/material/button';
+import { MatCardModule } from '@angular/material/card';
 import { MatIconModule } from '@angular/material/icon';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatTooltipModule } from '@angular/material/tooltip';
 
+import { AuthState } from './auth';
 import { BUILD_INFO } from './build-info';
 import { dayKey, durationUntil, timeOfDay } from './format';
 import { CaptureState } from './models';
@@ -39,6 +41,7 @@ const CAPTURE_PLAIN_POLL_MS = 5_000;
     RouterLinkActive,
     MatToolbarModule,
     MatButtonModule,
+    MatCardModule,
     MatIconModule,
     MatMenuModule,
     MatTooltipModule,
@@ -50,6 +53,9 @@ const CAPTURE_PLAIN_POLL_MS = 5_000;
 export class App {
   private readonly breakpoints = inject(BreakpointObserver);
   private readonly api = inject(RecallApi);
+
+  /** Nextcloud sign-in wall state; only ever active on the SSO-gated fleet UI. */
+  protected readonly auth = inject(AuthState);
 
   /** Phone-sized viewport → bottom nav; otherwise nav lives in the top toolbar. */
   protected readonly handset = toSignal(
