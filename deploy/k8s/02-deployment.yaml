@@ -70,6 +70,11 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 30
           env:
+            # System-of-record role: is_fleet() reads this to serve /data from the PVC
+            # and hold capture intent without running a capture agent. Load-bearing —
+            # do not drop it (RECALL_SYNC_TOKEN alone can't distinguish Mac from fleet).
+            - name: RECALL_ROLE
+              value: "fleet"
             - name: RECALL_SYNC_TOKEN
               valueFrom:
                 secretKeyRef:
