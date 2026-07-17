@@ -2228,9 +2228,11 @@ class Store:
         """Human-name a diarization voice across a source: set speaker_label on every
         current turn of that cluster (name=None clears it). Returns turns updated.
 
-        A display label only — no correction or voiceprint is recorded, so naming a
-        meeting's clinician doesn't enrol them as a household voice. This is the
-        authoritative human naming of a voice; it overrides the auto guess.
+        The authoritative human naming of a voice; it overrides the auto guess. It
+        writes no correction, but it is not display-only: `speaker_label` is what
+        `turns_needing_voiceprint` selects on, so the backfill enrols this voice from
+        its turns — naming a meeting's clinician does add them to the matching pool,
+        the same as any household voice.
 
         Deliberately no hidden_reason filter (unlike the read-side queries):
         hiding is a display state, but who spoke is a fact about the turn — a

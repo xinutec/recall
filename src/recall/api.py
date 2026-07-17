@@ -1184,8 +1184,9 @@ def correct(body: CorrectIn) -> NewIdOut:
 @app.post("/api/sessions/{source}/voice")
 def name_voice(source: str, body: VoiceNameIn) -> OkOut:
     """Human-name a diarization voice across a session — labels every turn of that
-    voice at once. Display only; records no correction/voiceprint, so a meeting's
-    clinician is never enrolled as a household voice."""
+    voice at once. Writes no correction, but the label feeds the voiceprint backfill
+    (`speaker_label` is its work-list), so the named voice becomes matchable — a
+    meeting's clinician is enrolled like any household voice."""
     name = (body.name or "").strip() or None
     store = _store()
     try:
