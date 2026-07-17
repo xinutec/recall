@@ -375,6 +375,33 @@ so the "replace the transport" follow-up is closed; the break-glass CLI still co
 unreachable Isis. The one manual check left: the phone's share-to-Recall flow points at
 Isis.)
 
+**Speaker attribution has to travel both ways (2026-07-17).** The split severed it in
+both directions, because each machine owned half and shared neither. The Mac owns the ML
+(it computes each turn's voiceprint `speaker_guess`); Isis owns the UI (a person names a
+voice there, writing `speaker_label`). But the Mac→fleet push (`TurnIn`) carried only
+the diarization `speaker_cluster` — not the guess — so freshly-pushed audio read
+*unknown* on Isis even when the Mac had already guessed the voice; and naming a voice on
+Isis wrote `speaker_label` only on the fleet, so the Mac's master archive never learned
+the name and, worse, voiceprint **enrolment went silent** — `turns_needing_voiceprint`
+keys on `speaker_label`, which stopped being set on the Mac the day the UI moved (no new
+voice enrolled after ~2026-07-10). Two additions, each following an existing grain:
+- **Guess rides the push.** `TurnIn` now carries `speaker_guess`/`speaker_score`; the
+  fleet stores them (`set_speaker_guess` after the insert, since the guess is a
+  separate ML pass, not an `add_transcript_segment` column). Isis shows what the Mac
+  computed; the Mac has no reason to recompute on the fleet (it has no ML there).
+- **Names ride back.** `GET /sync/labels` publishes the fleet's human voice-namings as
+  `(source_id, cluster, name)` — the cluster is the key both machines already share. The
+  Mac's sync pass pulls the whole set and replays `name_voice` for the diffs
+  (`pull_labels`), which lands the names in the master archive and re-feeds enrolment on
+  the next backfill pass. Idempotent; an older fleet without the endpoint 404s and the
+  pull is skipped (the push half already ran), so deploy order doesn't matter.
+
+Authority is split the way the machines are: the fleet is authoritative for human input
+(it is the only UI), the Mac for ML output. A pulled label is applied as given — unlike
+a *deletion*, there is no independent local evidence to check a name against, and a name
+is reversible (rename; `prune_stale_voiceprints` re-derives enrolment) where a delete is
+not. So the sweep veto stays the security boundary; labels are trusted metadata.
+
 ### Step C — the Mac cutover (runbook)
 
 > **Status 2026-07-14:** steps 1–4 DONE (token in `.env`, dry-runs passed, agents
