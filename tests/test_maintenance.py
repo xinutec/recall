@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 from datetime import UTC, datetime, timedelta
@@ -10,7 +9,6 @@ from pathlib import Path
 
 from recall.ids import AudioSegmentId
 from recall.maintenance import (
-    backup_age_hours,
     compress_to_opus,
     reprobe_short_segments,
 )
@@ -169,15 +167,3 @@ def test_compress_replaces_flac_and_relinks(tmp_path: Path) -> None:
     # already-opus segments are skipped on a second pass
     again, _ = compress_to_opus(store)
     assert again == 0
-
-
-def test_backup_age_reads_the_marker(tmp_path: Path) -> None:
-    # The nightly mirror stamps .last-backup-ok on success; doctor alarms on a
-    # stale or missing marker so a silently-dead backup can't go unnoticed.
-    assert backup_age_hours(tmp_path, now=1_000_000.0) is None  # never backed up
-    marker = tmp_path / ".last-backup-ok"
-    marker.write_text("2026-07-02T23:30:00+00:00\n")
-    os.utime(marker, (999_000.0, 999_000.0))
-    age = backup_age_hours(tmp_path, now=1_000_000.0)
-    assert age is not None
-    assert abs(age - 1000.0 / 3600.0) < 1e-6

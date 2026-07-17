@@ -238,31 +238,11 @@ def sweep_refusal_check(refused: int) -> Check:
     )
 
 
-def backup_check(age_hours: float | None, *, max_age_hours: float) -> Check:
-    """The archive's only unrecoverable failure is losing the one local copy.
-
-    Transcripts are derived views and can be rebuilt; the raw audio and the human
-    corrections exist on one volume and nowhere else. A mirror that has silently stopped
-    is therefore a `fail`, not a `warn` — it stopped once before, for nine days, and
-    nothing said a word.
-    """
-    if age_hours is None:
-        return Check(
-            section="backup",
-            label="off-machine mirror",
-            verdict="fail",
-            observed="never completed",
-            expected=f"within {max_age_hours:.0f}h",
-        )
-    return Check(
-        section="backup",
-        label="off-machine mirror",
-        verdict="pass" if age_hours <= max_age_hours else "fail",
-        observed=f"last succeeded {age_hours:.1f}h ago",
-        expected=f"within {max_age_hours:.0f}h",
-        value=round(age_hours, 1),
-        unit="h",
-    )
+# NO backup_check here — the Mac does not perform the off-machine backup and so must
+# not claim to observe one. odin's nightly restic pulls recall from Isis (an
+# integrity-checked SQLite snapshot taken inside the pod, plus the audio PVC) and
+# reports its own success; asserting it here would check someone else's machine,
+# and the Mac's own copy is the master the backup is taken *of*.
 
 
 def loss_check(losses: Sequence[Gap], dead_windows: int, *, window: timedelta) -> Check:

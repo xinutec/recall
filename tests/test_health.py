@@ -12,7 +12,6 @@ from recall.health import (
     Check,
     Recorder,
     agent_checks,
-    backup_check,
     capture_checks,
     mirror_check,
     recorders_on_disk,
@@ -217,19 +216,6 @@ def test_an_unloaded_agent_is_always_a_fault() -> None:
 
 def test_no_agents_installed_at_all_is_not_quietly_fine() -> None:
     assert agent_checks([])[0].verdict == "fail"
-
-
-def test_a_silently_dead_backup_fails() -> None:
-    """The archive's only unrecoverable failure is losing the one local copy.
-
-    Transcripts are derived and can be rebuilt; the raw audio and the human corrections
-    exist on one volume and nowhere else. The mirror stopped once, for nine days, and
-    nothing said a word — so a stale mirror is a fail, not a warn.
-    """
-    assert backup_check(20.3, max_age_hours=48.0).verdict == "pass"
-    assert backup_check(72.0, max_age_hours=48.0).verdict == "fail"
-    assert backup_check(None, max_age_hours=48.0).verdict == "fail"
-    assert "never completed" in backup_check(None, max_age_hours=48.0).observed
 
 
 def test_mirror_check_passes_only_when_the_fleet_holds_everything() -> None:

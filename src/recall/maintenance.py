@@ -6,8 +6,6 @@
 - `reprobe_short_segments`: repair rows that were indexed while their file was
   still being written (a partial file probes fine but short), so coverage,
   refine windows and trim clamps see the real duration again.
-- `backup_age_hours`: how long since the off-machine mirror last succeeded
-  (scripts/recall-backup.sh stamps `.last-backup-ok`); doctor alarms on staleness.
 """
 
 from __future__ import annotations
@@ -93,19 +91,3 @@ def reprobe_short_segments(
             store.update_audio_segment_end(audio_id, end)
             repaired += 1
     return repaired
-
-
-BACKUP_MARKER = ".last-backup-ok"
-
-
-def backup_age_hours(root: Path, *, now: float | None = None) -> float | None:
-    """Hours since the off-machine mirror last succeeded, or None if never.
-
-    Reads the mtime of the marker `recall-backup.sh` touches after a successful
-    sync — mtime, not the file's text, so a hand-copied marker can't fake it.
-    """
-    current = time.time() if now is None else now
-    try:
-        return (current - (root / BACKUP_MARKER).stat().st_mtime) / 3600.0
-    except FileNotFoundError:
-        return None

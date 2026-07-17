@@ -22,12 +22,14 @@ agent is loaded).
 | `com.pippijn.recall-api` | Angular web app + JSON API on `:8000` | always on |
 | `com.pippijn.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
 | `com.pippijn.recall-refine` | re-derive segments diarized + speaker-split; also drains queued A/B model comparisons | diarize: while capture paused · A/B: any time |
-| `com.pippijn.recall-backup` | mirror the archive to odin (snapshot DB + rsync audio) | nightly 23:30 |
 
-The archive's only unrecoverable copy is this volume, so the backup agent mirrors
-it nightly to `odin:/backup/recall-mirror` (`scripts/recall-backup.sh`: consistent
-SQLite snapshot + rsync of the audio, no `--delete` so deletions never propagate).
-`recall doctor` fails when the last successful mirror is older than 48h.
+The off-machine backup is **odin's**, not the Mac's: odin's nightly restic takes an
+integrity-checked SQLite snapshot from inside the Isis pod plus an rsync of the audio
+PVC (`nixos-config machines/odin/backup-prepare.sh`), so every recording is protected
+server-to-server. The Mac keeps the protected master archive on this volume and pushes
+it to Isis (`recall-sync`); it runs no backup agent of its own. The training corpora
+(`finetune-corpus`, `pilot-*`) live only here and are deliberately not backed up — they
+are derived from the archive + corrections and can be regenerated.
 
 > **macOS mic permission is per-agent:** capture and live each need their own
 > grant. If an err log shows `Out:0`, allow the prompt (or System Settings →

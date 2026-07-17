@@ -49,7 +49,7 @@ in
 {
   # NO recall-api here — the Mac serves no UI or control plane (the Isis split). Isis
   # (10.100.0.2:8000) is the system of record and the only web UI / control surface; the
-  # Mac is capture + all MLX + push (recall-sync) + the protected archive backup. Browsers
+  # Mac is capture + all MLX + push (recall-sync) + the protected master archive. Browsers
   # and the phone web app point at Isis; pause/resume is mirrored down by recall-capture-
   # mirror. Interactive MLX endpoints (refine, ab-compare, /api/sessions upload) are NOT
   # reachable from Isis under the one-way WireGuard model and need a Mac-initiated job-pull
@@ -101,20 +101,15 @@ in
     script = "recall-capture.sh";
   };
 
-  # Nightly off-machine mirror (odin). Calendar-scheduled, NOT KeepAlive: it runs
-  # once and exits; `recall doctor` alarms if the success marker goes stale. The
-  # Mac must push — it is a one-way WireGuard peer the servers cannot reach.
-  launchd.agents."com.pippijn.recall-backup" = daemon {
-    label = "com.pippijn.recall-backup";
-    name = "backup";
-    script = "recall-backup.sh";
-    extra = {
-      KeepAlive = false;
-      RunAtLoad = false;
-      StartCalendarInterval = [{ Hour = 23; Minute = 30; }];
-      LowPriorityIO = true;
-    };
-  };
+  # NO recall-backup here — the off-machine backup is odin's job, not the Mac's.
+  # odin's nightly restic takes an integrity-checked SQLite snapshot from inside the
+  # Isis pod plus an audio rsync of the recall PVC (nixos-config
+  # machines/odin/backup-prepare.sh), so every recording is already protected
+  # server-to-server. The Mac used to push its whole archive here too — a pre-split
+  # leftover from when the Mac was the system of record. Its only content Isis lacks
+  # is the training corpora (finetune-corpus, pilot-*), which are derived from the
+  # archive + corrections and are deliberately NOT backed up: they can be regenerated.
+  # Retiring it also drops the /Volumes/Backup TCC fragility that broke it before.
 
   # Is recall actually working? Every 5 minutes, reported to fleetwatch.
   #

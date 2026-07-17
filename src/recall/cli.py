@@ -23,7 +23,6 @@ from recall import capture_control, runlog
 from recall.abcompare import Report, compare_models, render_json, render_markdown
 from recall.asr import AsrResult, Transcriber, mlx_transcribe
 from recall.attribution import AttributionReport
-from recall.backup import run_backup
 from recall.capture import CaptureConfig, parse_segment_start, segment_glob
 from recall.cleanup import scan_hallucinations, scan_loops
 from recall.cli_parser import build_parser
@@ -40,7 +39,6 @@ from recall.health import (
     ALWAYS_ON,
     Check,
     agent_checks,
-    backup_check,
     capture_checks,
     loss_check,
     mirror_check,
@@ -56,7 +54,6 @@ from recall.logrotate import rotate_logs
 from recall.loss import uncovered_loss
 from recall.loudness import backfill_loudness
 from recall.maintenance import (
-    backup_age_hours,
     compress_to_opus,
     reprobe_short_segments,
 )
@@ -1170,9 +1167,6 @@ def _print_attribution(
     print("  words taken, by true speaker: " + ", ".join(f"{k} {v}" for k, v in worst))
 
 
-# The mirror runs nightly; 48h of slack tolerates one missed night (Mac asleep,
-# odin briefly down) without letting a dead backup go quiet for a week.
-_BACKUP_MAX_AGE_HOURS = 48.0
 # In-flight slack for the fleet-mirror check: the sync timer runs every 120s and the
 # mirror-completion queue drains 500 a pass, so anything processed an hour ago and
 # still unpushed means the push has actually stopped.
@@ -1255,7 +1249,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         ),
         loss_check(losses, dead_windows, window=_LOSS_WINDOW),
         *agent_checks(capture_control.agent_health()),
-        backup_check(backup_age_hours(args.out), max_age_hours=_BACKUP_MAX_AGE_HOURS),
     ]
     # The fleet mirror only exists when the split is on (RECALL_SYNC_TOKEN set); a
     # stock LAN-only deployment has no fleet to be incomplete against.
@@ -1705,19 +1698,8 @@ def _cmd_scan_quiet(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_backup(args: argparse.Namespace) -> int:
-    """Mirror the archive off-machine (see recall.backup). Runs in the recall python
-    context so it has the external volume's TCC grant — the reason this is a command
-    and not the old shell agent, whose bare rsync was denied the volume after a
-    remount reset TCC."""
-    run_backup(args.out, args.dest)
-    print(f"backup: mirrored {args.out} to {args.dest}")
-    return 0
-
-
 _COMMANDS = {
     "record": _cmd_record,
-    "backup": _cmd_backup,
     "sync": _cmd_sync,
     "jobs": _cmd_jobs,
     "pause": _cmd_pause,

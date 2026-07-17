@@ -156,10 +156,14 @@ a special case:
 2. The Mac's existing `restic copy` off-site job pulls from odin over read-only SFTP
    (Mac-initiated) — recall rides along like every other app.
 
-The bespoke `recall-backup.sh` (Mac → `odin:/backup/recall-mirror` rsync) is retired.
-Today it is **broken**: the launchd agent's shell tools have no macOS TCC grant for the
-external volume, so it has produced no off-site copy since 2026-07-02. Moving the data off
-the Mac makes that whole path — and its failure mode — disappear.
+The bespoke `recall-backup.sh` (Mac → `odin:/backup/recall-mirror` rsync) is retired —
+**done 2026-07-17**, closing step 5 below. odin's block above had been backing recall up
+from Isis nightly for some time, making the Mac's push redundant: its only content Isis
+lacks is the training corpora, which are derived and deliberately unprotected. Retiring it
+also removes the TCC failure mode that broke it once (the launchd agent's shell tools have
+no macOS grant for the external volume). Cut with it: `recall backup`, `recall.backup`,
+`maintenance.backup_age_hours`, and `health.backup_check` — the Mac no longer performs an
+off-machine backup, so it must not claim to observe one.
 
 ## Deploying the Isis side (k3s)
 

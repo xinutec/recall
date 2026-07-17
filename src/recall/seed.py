@@ -66,7 +66,7 @@ def build_seed(
     A snapshot, never a file copy: the live database is in WAL mode and is being
     written by the worker as this runs, so copying the file would ship a torn page.
     `sqlite3.backup` takes a consistent point-in-time image of a database in use — the
-    same reason `recall.backup` uses it for the nightly mirror.
+    same reason odin's nightly backup-prepare takes its snapshot this way.
 
     Every rewritten row is checked against the audio actually on disk. A row pointing at
     a file that is not there is reported, not silently carried: on the fleet it would be
