@@ -58,7 +58,7 @@ class MainActivity : Activity() {
                             isReload: Boolean,
                         ) {
                             super.doUpdateVisitedHistory(view, url, isReload)
-                            if (url.startsWith(RECALL_URL)) {
+                            if (url.startsWith(RECALL_URL) && !isAuthFlowUrl(url)) {
                                 prefs.edit().putString(KEY_LAST_URL, url).apply()
                             }
                         }
@@ -96,8 +96,10 @@ class MainActivity : Activity() {
         // host. A URL saved against a previous RECALL_URL (e.g. after repointing the app
         // at a new host) is dropped, so the new default loads instead of silently
         // reloading the old host that startsWith(RECALL_URL) below would never refresh.
+        // Also guard restore against a stale auth URL already saved by an older build.
         val last = prefs.getString(KEY_LAST_URL, null)
-        web.loadUrl(if (last?.startsWith(RECALL_URL) == true) last else RECALL_URL)
+        val restorable = last != null && last.startsWith(RECALL_URL) && !isAuthFlowUrl(last)
+        web.loadUrl(if (restorable) last!! else RECALL_URL)
     }
 
     // The hardware/gesture Back walks the SPA's history; it only leaves the app once
@@ -124,5 +126,12 @@ class MainActivity : Activity() {
         // the Mac mirrors. Hardcoded — this app is single-purpose.
         private const val RECALL_URL = "http://10.100.0.2:8000/"
         private const val KEY_LAST_URL = "last_url"
+
+        // The Nextcloud sign-in bounces through /login and /auth/callback. Those are
+        // one-shot OAuth transitions (single-use code, short-lived state) — never a page
+        // worth reopening. Restoring one on launch just replays a dead login (a 403 error
+        // page the user can't escape), so we neither persist nor restore them.
+        private fun isAuthFlowUrl(url: String): Boolean =
+            url.contains("/auth/callback") || url.contains("/login")
     }
 }
