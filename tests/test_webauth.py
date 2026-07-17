@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from recall import webauth
@@ -259,16 +260,16 @@ def _app(cfg: WebAuthConfig) -> FastAPI:
     app = FastAPI()
 
     @app.get("/api/transcripts")
-    def _transcripts() -> dict[str, str]:
-        return {"ok": "browsing"}
+    def _transcripts() -> JSONResponse:
+        return JSONResponse({"ok": "browsing"})
 
     @app.get("/api/capture")
-    def _capture() -> dict[str, str]:
-        return {"ok": "device"}
+    def _capture() -> JSONResponse:
+        return JSONResponse({"ok": "device"})
 
     @app.get("/")
-    def _root() -> dict[str, str]:
-        return {"ok": "static"}
+    def _root() -> JSONResponse:
+        return JSONResponse({"ok": "static"})
 
     assert register_web_auth(app, cfg) is True
     return app
@@ -355,8 +356,8 @@ def test_register_is_inert_without_config() -> None:
     app = FastAPI()
 
     @app.get("/api/transcripts")
-    def _transcripts() -> dict[str, str]:
-        return {"ok": "open"}
+    def _transcripts() -> JSONResponse:
+        return JSONResponse({"ok": "open"})
 
     assert register_web_auth(app, None) is False
     # No gate: the browsing route answers without any cookie.
