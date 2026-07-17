@@ -20,6 +20,19 @@ spec:
       labels:
         app: recall
     spec:
+      # dash.xinutec.org is Isis's OWN public IP — Nextcloud is co-located on this node.
+      # A pod cannot reach the node's public IP (hairpin → connection refused), so the
+      # SSO server-side token/userinfo calls to dash must go through the in-cluster nginx
+      # ingress instead. Pin dash to the ingress-nginx controller's ClusterIP: the pod
+      # then reaches Nextcloud over the exact same TLS+routing path the browser does
+      # (SNI/Host = dash.xinutec.org, valid cert, ingress routes to nextcloud-server).
+      # Only the pod's own outbound calls use this; the browser resolves dash via real
+      # public DNS. NOTE: if ingress-nginx is reinstalled and its ClusterIP changes,
+      # update this IP (symptom would be SSO login → 502, "connection refused" in logs).
+      hostAliases:
+        - ip: "10.43.65.74"
+          hostnames:
+            - "dash.xinutec.org"
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
