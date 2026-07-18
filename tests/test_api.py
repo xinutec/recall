@@ -1319,8 +1319,72 @@ def test_ask_declines_without_evidence_and_never_generates(
     client = TestClient(api.app)
     r = client.post("/api/ask", json={"question": "anything about zeppelins?"})
     assert r.status_code == 200
-    assert r.json() == {"answer": None, "sources": []}
+    assert r.json() == {
+        "status": "done",
+        "id": None,
+        "answer": None,
+        "sources": [],
+        "error": None,
+    }
     assert client.post("/api/ask", json={"question": "   "}).status_code == 400
+
+
+def test_ask_on_fleet_queues_a_job_and_the_poll_resolves_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On the fleet (Isis has no MLX) POST /api/ask must NOT generate: it retrieves,
+    # queues the built prompt for the Mac, and returns a poll id with the cited sources
+    # shown immediately. GET /api/ask/{id} is pending until the Mac lands the answer.
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setenv("RECALL_ROLE", "fleet")
+    _seed_ask_store(tmp_path)
+
+    def explode(_p: str) -> str:
+        raise AssertionError("the fleet must never run the generator")
+
+    monkeypatch.setattr(api, "_llm", explode)
+    client = TestClient(api.app)
+
+    r = client.post("/api/ask", json={"question": "When is the plumber coming?"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "pending"
+    rid = body["id"]
+    assert isinstance(rid, int)
+    # sources are shown while it waits
+    assert [t["text"] for t in body["sources"]] == ["the plumber is coming on Thursday"]
+
+    poll = client.get(f"/api/ask/{rid}").json()
+    assert poll["status"] == "pending" and poll["answer"] is None
+
+    # The Mac lands the answer (the relay's push-back); the poll now resolves.
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.save_ask_answer(rid, "Thursday, per Alice.")
+    store.close()
+    done = client.get(f"/api/ask/{rid}").json()
+    assert done["status"] == "done"
+    assert done["answer"] == "Thursday, per Alice."
+    assert [t["text"] for t in done["sources"]] == ["the plumber is coming on Thursday"]
+
+    assert client.get("/api/ask/999999").status_code == 404
+
+
+def test_ask_poll_surfaces_a_generation_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setenv("RECALL_ROLE", "fleet")
+    _seed_ask_store(tmp_path)
+    monkeypatch.setattr(api, "_llm", lambda _p: "unused")
+    client = TestClient(api.app)
+    rid = client.post(
+        "/api/ask", json={"question": "When is the plumber coming?"}
+    ).json()["id"]
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.mark_ask_error(rid, "model failed to load")
+    store.close()
+    poll = client.get(f"/api/ask/{rid}").json()
+    assert poll["status"] == "error" and poll["error"] == "model failed to load"
 
 
 def test_vocabulary_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

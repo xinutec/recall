@@ -44,10 +44,10 @@ from recall.api_models import (
     VocabularyIn,
     VoiceNameIn,
 )
-from recall.ask import answer_question
+from recall.ask import build_ask_prompt, retrieve
 from recall.asr import DEFAULT_MODEL, slice_clip
 from recall.capture import alive_mtime
-from recall.context import CONTEXT_KEY
+from recall.context import CONTEXT_KEY, household_context_block
 from recall.conversation import assign_span
 from recall.conversations import (
     DEFAULT_GAP_SECONDS,
@@ -1794,21 +1794,59 @@ def summary_today() -> TodaySummaryOut:
     }
 
 
+def _ask_done(answer: str | None, sources: list[TranscriptOut]) -> AskOut:
+    return {"status": "done", "id": None, "answer": answer, "sources": sources,
+            "error": None}
+
+
 @app.post("/api/ask")
 def ask(body: AskIn) -> AskOut:
-    """Answer a question from the archive, grounded in retrieved turns. Slow-ish
-    (local generation, plus a one-time model load on the first call) — the UI
-    shows progress; the answer cites the turns it drew on."""
+    """Answer a question from the archive, grounded in retrieved turns.
+
+    Retrieval + prompt-building happen here (the store + FTS live here). Generation is
+    the only MLX-bound step: on the Mac the model is local, so it runs inline; on the
+    fleet (Isis has no MLX) the built prompt is queued for the Mac and this returns a
+    poll id — GET /api/ask/{id} resolves once the Mac lands the answer. Either way the
+    cited turns come back immediately so the UI can show its sources while it waits."""
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="question must not be blank")
     store = _store()
     try:
-        result = answer_question(store, _generator(), question)
-        if result is None:
-            return {"answer": None, "sources": []}
-        cited = store.turns_by_id(list(result.sources))
-        return {"answer": result.answer, "sources": [_transcript(t) for t in cited]}
+        turns = retrieve(store, question)
+        if not turns:
+            # No evidence: answer honestly now (no generation) — same on both hosts.
+            return _ask_done(None, [])
+        prompt = build_ask_prompt(
+            question, turns, context=household_context_block(store)
+        )
+        sources = [_transcript(t) for t in turns]
+        if capture_control.is_fleet():
+            rid = store.add_ask_request(question, prompt, [t.id for t in turns])
+            return {"status": "pending", "id": rid, "answer": None,
+                    "sources": sources, "error": None}
+        return _ask_done(_generator()(prompt).strip(), sources)
+    finally:
+        store.close()
+
+
+@app.get("/api/ask/{request_id}")
+def ask_status(request_id: int) -> AskOut:
+    """Poll a queued ask job (the fleet path): pending until the Mac's LLM lands the
+    answer or an error. The cited sources are returned throughout."""
+    store = _store()
+    try:
+        state = store.get_ask_request(request_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail="unknown ask request")
+        sources = [_transcript(t) for t in store.turns_by_id(list(state.sources))]
+        if not state.done:
+            return {"status": "pending", "id": request_id, "answer": None,
+                    "sources": sources, "error": None}
+        if state.error is not None:
+            return {"status": "error", "id": None, "answer": None,
+                    "sources": sources, "error": state.error}
+        return _ask_done(state.answer, sources)
     finally:
         store.close()
 

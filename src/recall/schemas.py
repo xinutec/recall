@@ -283,11 +283,18 @@ class TodaySummaryOut(TypedDict):
 
 
 class AskOut(TypedDict):
-    """A grounded answer over the archive; answer is null when retrieval found
-    no evidence (the UI says so instead of letting a model improvise)."""
+    """A grounded answer over the archive. `status`: "done" (answer ready — or null
+    when retrieval found no evidence, so the UI says so instead of letting a model
+    improvise), "pending" (queued for the Mac's LLM — poll GET /api/ask/{id}), or
+    "error". `id` is the poll id while pending, else null. `sources` are the cited
+    turns (deep links), shown even while pending. `error` carries a failure, else null.
+    """
 
+    status: str
+    id: int | None
     answer: str | None
-    sources: list[TranscriptOut]  # the turns the answer drew on (deep links)
+    sources: list[TranscriptOut]
+    error: str | None
 
 
 class ItemsOut(TypedDict):
