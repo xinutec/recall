@@ -103,9 +103,12 @@ def _clear_dead_stubs(scan: Scan, store: Store, source_id: str) -> None:
     hold audio, so it is only reported, never removed.
     """
     for path in scan.unreadable:
-        _log.warning(
-            "unreadable capture file (kept — it may still hold audio): %s", path
-        )
+        # Record once so the next scan skips it (it stays in `known`); log only on that
+        # first sighting, not on every pass. The file is kept — it may still hold audio.
+        if store.mark_unreadable_capture(source_id, path.name):
+            _log.warning(
+                "unreadable capture file (kept, recorded — won't re-probe): %s", path
+            )
     files = segment_glob(scan.empty[0].parent, source_id) if scan.empty else []
     newest = files[-1].name if files else None
     for path in scan.empty:
@@ -156,7 +159,12 @@ def process_pending(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     # so re-scanning the entire archive each pass would grow unbounded. The min-age
     # guard applies here at INDEX time too: a partial file probes fine but yields
     # a truncated duration that would be recorded permanently.
-    known = frozenset(path for _, path in store.audio_segment_paths())
+    known = frozenset(path for _, path in store.audio_segment_paths()) | frozenset(
+        # Files already found unreadable are kept but never re-probed (see v42) —
+        # without this they re-probed and re-logged every pass forever.
+        str(audio_dir / name)
+        for name in store.unreadable_capture_names(source.id)
+    )
     scan = scan_source(
         audio_dir, source.id, known=known, min_age_seconds=min_age_seconds, now=current
     )

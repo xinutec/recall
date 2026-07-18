@@ -2661,6 +2661,27 @@ class Store:
         ).fetchall()
         return [(int(row["id"]), str(row["path"])) for row in rows]
 
+    def mark_unreadable_capture(self, source_id: str, name: str) -> bool:
+        """Record a capture file ffprobe can't decode (truncated/corrupt) so the scan
+        stops re-probing it every pass — the file is KEPT (its bytes may still hold
+        audio), just skipped via `known`. Returns True the first time it's recorded (so
+        the caller logs it exactly once), False if already known. See v42."""
+        cursor = self._conn.execute(
+            "INSERT OR IGNORE INTO unreadable_captures (source_id, name, recorded_utc) "
+            "VALUES (?, ?, ?)",
+            (source_id, name, datetime.now(UTC).isoformat()),
+        )
+        self._commit()
+        return cursor.rowcount == 1
+
+    def unreadable_capture_names(self, source_id: str) -> set[str]:
+        """Filenames already recorded unreadable for `source_id` — folded into the
+        scan's `known` set so they're skipped without a re-probe."""
+        rows = self._conn.execute(
+            "SELECT name FROM unreadable_captures WHERE source_id = ?", (source_id,)
+        ).fetchall()
+        return {str(row["name"]) for row in rows}
+
     def relink_audio_segment(self, audio_segment_id: int, new_path: str) -> None:
         """Re-point a segment at a new file (e.g. after transcoding FLAC->Opus)."""
         self._conn.execute(

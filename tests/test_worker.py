@@ -300,3 +300,18 @@ def test_the_worker_clears_capture_tombstones_and_keeps_corrupt_audio(
 
     # Neither is in the archive; only the two real recordings are.
     assert len(store.audio_segment_paths()) == 2
+
+    # Recorded once: a second pass skips it (kept in `known`), so it is NOT re-probed or
+    # re-logged — the loop that spammed 10k+ log lines for one file is gone.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        process_pending(
+            store,
+            tmp_path,
+            USB,
+            _stub_transcriber,
+            model_name="stub",
+            min_age_seconds=0.0,
+        )
+    assert "unreadable capture file" not in caplog.text  # no re-log
+    assert corrupt.exists()  # still kept

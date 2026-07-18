@@ -514,4 +514,18 @@ _MIGRATIONS: tuple[str, ...] = (
         UNIQUE (fleet_id)
     );
     """,
+    # v42 — capture files ffprobe can't decode (truncated/corrupt mid-write, not
+    # 0-byte). The 0-byte tombstones are removed, but a non-empty-but-unreadable file is
+    # KEPT (its bytes might one day be recoverable) — and so it was re-probed and
+    # re-logged on EVERY worker pass forever (one file hit 10k+ log lines). Recording it
+    # here once lets the scan add it to its `known` set and skip it, exactly like an
+    # indexed segment: kept on disk, never re-probed. Same shape as `diarize_skips`.
+    """
+    CREATE TABLE unreadable_captures (
+        source_id    TEXT NOT NULL,
+        name         TEXT NOT NULL,
+        recorded_utc TEXT NOT NULL,
+        PRIMARY KEY (source_id, name)
+    );
+    """,
 )

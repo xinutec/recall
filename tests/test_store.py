@@ -92,6 +92,19 @@ def test_diarize_skip_drops_a_segment_from_the_rediarize_picker() -> None:
     assert store.audio_segments_to_rediarize(limit=10) == [audio_id]
 
 
+def test_unreadable_capture_is_recorded_once_and_then_known() -> None:
+    # An unreadable capture file is recorded once (so the caller logs it once) and then
+    # listed as known (so the scan skips re-probing it) — the fix for the re-probe loop.
+    store = Store.memory()
+    assert store.unreadable_capture_names("usb") == set()
+    assert store.mark_unreadable_capture("usb", "usb-20260627T135734.opus") is True
+    assert store.mark_unreadable_capture("usb", "usb-20260627T135734.opus") is False
+    assert store.unreadable_capture_names("usb") == {"usb-20260627T135734.opus"}
+    # scoped per source
+    assert store.mark_unreadable_capture("pixel9", "pixel9-x.opus") is True
+    assert store.unreadable_capture_names("usb") == {"usb-20260627T135734.opus"}
+
+
 def test_rollback_recovers_a_connection_wedged_by_a_failed_write(
     tmp_path: Path,
 ) -> None:
