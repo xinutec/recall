@@ -92,6 +92,54 @@ def test_diarize_skip_drops_a_segment_from_the_rediarize_picker() -> None:
     assert store.audio_segments_to_rediarize(limit=10) == [audio_id]
 
 
+def test_ask_request_queue_roundtrips_and_retires_on_answer() -> None:
+    # The fleet enqueues an ask job (question + grounded prompt + cited turn ids); it's
+    # pending until the Mac lands an answer, which retires it and resolves the UI poll.
+    store = Store.memory()
+    rid = store.add_ask_request("when did we discuss recipes?", "PROMPT TEXT", [7, 9])
+
+    pend = store.pending_ask_requests(limit=10)
+    assert [p.id for p in pend] == [rid]
+    assert pend[0].prompt == "PROMPT TEXT"
+    assert pend[0].sources == (7, 9)  # cited turn ids carried through
+
+    before = store.get_ask_request(rid)
+    assert before is not None and not before.done and before.answer is None
+
+    store.save_ask_answer(rid, "We talked about recipes on Tuesday.")
+    assert store.pending_ask_requests(limit=10) == []  # retired
+    after = store.get_ask_request(rid)
+    assert after is not None and after.done
+    assert after.answer == "We talked about recipes on Tuesday."
+    assert after.sources == (7, 9)
+    assert after.error is None
+
+
+def test_ask_request_error_retires_the_job() -> None:
+    # A generation failure retires the job with an error the UI can show, rather than
+    # leaving it pending forever.
+    store = Store.memory()
+    rid = store.add_ask_request("q", "p", [])
+    store.mark_ask_error(rid, "model failed to load")
+    assert store.pending_ask_requests(limit=10) == []
+    got = store.get_ask_request(rid)
+    assert got is not None and got.done and got.error == "model failed to load"
+    assert got.answer is None
+
+
+def test_ask_request_adopted_by_fleet_id_for_the_relay() -> None:
+    # The Mac adopts a fleet-origin ask job under the fleet's id (like A/B compare), so
+    # the jobs relay can look it up and push the answer back to the right fleet row.
+    store = Store.memory()
+    local = store.add_ask_request("q", "p", [3], fleet_id=42)
+    assert store.ask_request_by_fleet_id(42) is not None
+    assert store.ask_request_by_fleet_id(42).id == local  # type: ignore[union-attr]
+    assert store.ask_request_by_fleet_id(999) is None  # unknown fleet id
+    store.save_ask_answer(local, "answer")
+    adopted = store.ask_request_by_fleet_id(42)
+    assert adopted is not None and adopted.done and adopted.answer == "answer"
+
+
 def test_search_finds_inserted_text() -> None:
     store = Store.memory()
     store.add_source(_source())

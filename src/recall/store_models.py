@@ -203,6 +203,31 @@ class RefineRequest:
 
 
 @dataclass(frozen=True)
+class AskRequest:
+    """A queued "Ask the archive" job: a self-contained grounded `prompt` (built on the
+    fleet from retrieved turns) the Mac's LLM generates an answer for. `sources` are the
+    fleet turn ids the retrieval cited, carried through for the answer's citations."""
+
+    id: int
+    question: str
+    prompt: str
+    sources: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class AskRequestStatus:
+    """The current state of an ask job, for the UI's poll: the answer once the Mac has
+    generated it (or an `error`), else pending. `sources` are the turn ids to cite."""
+
+    id: int
+    question: str
+    sources: tuple[int, ...]
+    answer: str | None
+    error: str | None
+    done: bool
+
+
+@dataclass(frozen=True)
 class SweepTombstone:
     """A deliberate deletion on the system of record, by segment identity — served to
     the Mac so its master-archive copy is removed too (the quiet review confirms a

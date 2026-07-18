@@ -30,6 +30,8 @@ from recall.ranking import normalize_text
 from recall.sources import AudioSource, SourceKind, SourceRow
 from recall.store_models import (
     AbCompareJob,
+    AskRequest,
+    AskRequestStatus,
     CaptureEvent,
     ClusterNaming,
     Correction,
@@ -63,6 +65,8 @@ __all__ = [
     "SCHEMA_VERSION",
     "_MIGRATIONS",
     "AbCompareJob",
+    "AskRequest",
+    "AskRequestStatus",
     "CaptureEvent",
     "ClusterNaming",
     "Correction",
@@ -1271,6 +1275,102 @@ class Store:
         self._conn.execute(
             "UPDATE refine_requests SET done_utc = ? WHERE id = ?",
             (datetime.now(UTC).isoformat(), request_id),
+        )
+        self._commit()
+
+    def add_ask_request(
+        self,
+        question: str,
+        prompt: str,
+        sources: Sequence[int],
+        *,
+        fleet_id: int | None = None,
+    ) -> int:
+        """Queue an "Ask the archive" job. `prompt` is the self-contained grounded
+        prompt (built here from retrieved turns) the Mac's LLM answers; `sources` are
+        the turn ids the answer cites. `fleet_id` set = the Mac adopting a fleet job
+        (see the A/B-compare relay); NULL = a fleet-origin request. Returns the id."""
+        cursor = self._conn.execute(
+            "INSERT INTO ask_requests "
+            "(fleet_id, question, prompt, sources, created_utc) VALUES (?, ?, ?, ?, ?)",
+            (
+                fleet_id,
+                question,
+                prompt,
+                json.dumps(list(sources)),
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        self._commit()
+        return int(cursor.lastrowid or 0)
+
+    def pending_ask_requests(self, *, limit: int = 100) -> list[AskRequest]:
+        """Ask jobs not yet answered (no answer or error landed), oldest-first — served
+        to the Mac over /sync/jobs, and drained by the Mac's refine daemon locally."""
+        rows = self._conn.execute(
+            "SELECT id, question, prompt, sources FROM ask_requests "
+            "WHERE done_utc IS NULL ORDER BY id LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [
+            AskRequest(
+                id=int(r["id"]),
+                question=str(r["question"]),
+                prompt=str(r["prompt"]),
+                sources=tuple(json.loads(r["sources"])),
+            )
+            for r in rows
+        ]
+
+    def get_ask_request(self, request_id: int) -> AskRequestStatus | None:
+        """The current state of one ask job, for the UI poll — the answer once the Mac
+        has generated it (or the error), else pending (`done=False`)."""
+        return self._ask_status_row(
+            "SELECT id, question, sources, answer, error, done_utc "
+            "FROM ask_requests WHERE id = ?",
+            (request_id,),
+        )
+
+    def ask_request_by_fleet_id(self, fleet_id: int) -> AskRequestStatus | None:
+        """The Mac's adopted copy of a fleet ask job — the relay reads its status to
+        decide whether the answer (or error) is ready to push back."""
+        return self._ask_status_row(
+            "SELECT id, question, sources, answer, error, done_utc "
+            "FROM ask_requests WHERE fleet_id = ?",
+            (fleet_id,),
+        )
+
+    def _ask_status_row(
+        self, sql: str, params: tuple[object, ...]
+    ) -> AskRequestStatus | None:
+        row = self._conn.execute(sql, params).fetchone()
+        if row is None:
+            return None
+        return AskRequestStatus(
+            id=int(row["id"]),
+            question=str(row["question"]),
+            sources=tuple(json.loads(row["sources"])),
+            answer=row["answer"],
+            error=row["error"],
+            done=row["done_utc"] is not None,
+        )
+
+    def save_ask_answer(self, request_id: int, answer: str) -> None:
+        """Land a generated answer and retire the job (done), so /sync/jobs stops
+        serving it and the UI poll resolves."""
+        self._conn.execute(
+            "UPDATE ask_requests SET answer = ?, error = NULL, done_utc = ? "
+            "WHERE id = ?",
+            (answer, datetime.now(UTC).isoformat(), request_id),
+        )
+        self._commit()
+
+    def mark_ask_error(self, request_id: int, error: str) -> None:
+        """Retire an ask job with an error (generation failed) — the UI shows it rather
+        than spinning forever."""
+        self._conn.execute(
+            "UPDATE ask_requests SET error = ?, done_utc = ? WHERE id = ?",
+            (error, datetime.now(UTC).isoformat(), request_id),
         )
         self._commit()
 

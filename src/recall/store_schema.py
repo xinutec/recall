@@ -491,4 +491,27 @@ _MIGRATIONS: tuple[str, ...] = (
         created_utc      TEXT NOT NULL
     );
     """,
+    # v41 — on-demand "Ask the archive" jobs. The web UI runs on the fleet (Isis),
+    # which has no LLM (MLX is Apple-Silicon only, on the Mac). So the fleet RETRIEVES
+    # and builds the grounded prompt with its own turn ids (`sources`), queues it here,
+    # and the Mac — which already holds the model in its refine daemon — generates the
+    # answer and pushes it back. Same relay as A/B compare: the fleet-origin row has a
+    # NULL fleet_id; the Mac's adopted copy carries the fleet's id, and the answer (or
+    # error) landing retires it. `sources` is a JSON array of the turn ids grounding the
+    # answer (for the UI's citations); `prompt` is self-contained (the Mac needs no
+    # retrieval).
+    """
+    CREATE TABLE ask_requests (
+        id          INTEGER PRIMARY KEY,
+        fleet_id    INTEGER,
+        question    TEXT NOT NULL,
+        prompt      TEXT NOT NULL,
+        sources     TEXT NOT NULL,
+        created_utc TEXT NOT NULL,
+        done_utc    TEXT,
+        answer      TEXT,
+        error       TEXT,
+        UNIQUE (fleet_id)
+    );
+    """,
 )
