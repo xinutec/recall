@@ -282,6 +282,11 @@ class TodaySummaryOut(TypedDict):
     pending: bool  # a background regeneration is running
 
 
+# A Literal (not str) so mypy checks every returned status and the generated TS is a
+# union, not `string` — same rule as Tier / AbCompareStatus above.
+AskStatus = Literal["done", "pending", "error"]
+
+
 class AskOut(TypedDict):
     """A grounded answer over the archive. `status`: "done" (answer ready — or null
     when retrieval found no evidence, so the UI says so instead of letting a model
@@ -290,7 +295,7 @@ class AskOut(TypedDict):
     turns (deep links), shown even while pending. `error` carries a failure, else null.
     """
 
-    status: str
+    status: AskStatus
     id: int | None
     answer: str | None
     sources: list[TranscriptOut]

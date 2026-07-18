@@ -188,7 +188,7 @@ export interface TodaySummary {
 }
 
 export interface AskAnswer {
-  readonly status: string;
+  readonly status: 'done' | 'pending' | 'error';
   readonly id: number | null;
   readonly answer: string | null;
   readonly sources: readonly Transcript[];

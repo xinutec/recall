@@ -25,9 +25,20 @@
 Every capture session can begin with a run of **zero-byte segments** — capture is
 running and rolls a fresh file each minute, but the mic delivers only digital
 silence, so the opening of the session records nothing. The worker clears the empty
-stubs as dead capture (`worker._clear_dead_stubs`), leaving only a per-file log line
-and a gap in the archive. This is silent loss of the start of a recording, and it
-recurs.
+stubs as dead capture (`worker._clear_dead_stubs`), recording a `dead_window`
+capture-event first (the durable evidence a gap check reads apart from a deliberate
+pause) and leaving a per-file log line. This is silent loss of the start of a
+recording, and it recurs.
+
+A related artifact is a **truncated** segment: capture died mid-write, leaving a
+header with no audio pages (ffprobe refuses it, observed ~136 bytes for Opus). These
+are treated the same as zero-byte stubs — removed with a `dead_window` event — when
+they are at or below `worker._DEAD_CAPTURE_MAX_BYTES` (a header can't hold usable
+audio). A *larger* unreadable file might hold a recoverable audio body behind a corrupt
+header, so it is kept and recorded once in `unreadable_captures` (v42) — folded into the
+scan's `known` set so it is never re-probed (before that, three such files were re-probed
+and re-logged every pass, 10k+ lines each). The newest file is always exempt from
+removal: ffmpeg only flushes a segment's bytes when it closes, so it may be open.
 
 ## Evidence
 

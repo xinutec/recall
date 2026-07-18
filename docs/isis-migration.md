@@ -359,6 +359,30 @@ for model B is now the bare name `adapter-current` (was an absolute path under t
 server's own data root, meaningless across the split), resolved against the local data
 root at run time (`cli._resolve_model`).
 
+**Ask-the-archive relay — done (2026-07-18).** The web UI's "Ask" runs a local MLX LLM,
+which Isis lacks (`import mlx_lm` → `ModuleNotFoundError` on the x86 pod), so the old
+`POST /api/ask` 500'd there and the UI showed "Could not get an answer". Split like every
+other MLX job: retrieval + prompt-building stay on the fleet (its store + FTS own the
+turn ids), generation is the only MLX step and moves to the Mac. `POST /api/ask` on the
+fleet retrieves, builds the grounded prompt, queues an `ask_requests` row (migration
+`v41`; `sources` = the cited fleet turn ids, `prompt` self-contained) and returns a poll
+id; `GET /api/ask/{id}` resolves once the answer lands. `/sync/jobs` serves ask jobs
+**first** (a human is waiting), carrying the prompt; the Mac's `recall jobs` runner adopts
+each into a local `ask_requests` copy (never generating — it is a 60s one-shot and must
+not load a model), the **refine daemon's** resident model generates it, and the answer
+posts back via `POST /sync/ask/{id}/result`, retiring the job. On the Mac's own LAN UI
+`/api/ask` still answers inline (MLX is local). Three hardenings, each from a bug that
+bit in testing: (1) the relay checks an adopted row's prompt still matches the job before
+relaying, so a **reused** fleet id (ids are plain `INTEGER PRIMARY KEY` and free on
+delete) can't leak a stale answer — a test "pong" once surfaced for a real question; (2)
+the refine loop `store.rollback()`s at the top of each pass, because a write that failed
+under lock contention left an aborted transaction open that froze the connection's WAL
+read-snapshot, so the idle daemon stopped seeing queued asks and hung — plus recover-and-
+continue on any pass error; (3) an ask-save under a busy DB **defers and retries** instead
+of turning a transient lock into a terminal error, and `GET /api/ask/{id}` reports a
+timeout after 10 min so the UI never spins forever. Commits `dfc61af`→`b35e1e9`; TDD
+`tests/test_{store,api,sync,jobs}.py`.
+
 **Mirror completion + deletion tombstones — done (2026-07-16).** Two mirror gaps,
 found by asking "does everything the Mac records reach Isis, and does a deletion
 confirmed on Isis reach the Mac?":
