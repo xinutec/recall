@@ -219,9 +219,17 @@ def refine_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
             )
             if written is None:
                 # Coverage guard tripped: kept the existing transcript, wrote nothing.
-                # Left un-diarized on purpose, so a later (fixed) pass can re-derive it.
+                # Record the skip so the newest-first auto-pickers advance past this
+                # segment instead of re-picking it forever (a live-lock — a paused
+                # capture never supplies a newer segment to bump it out of the "newest"
+                # slot). Still un-diarized on purpose: an explicit re-derive (`source` /
+                # on-demand request) ignores the skip table, so a later, fixed pass
+                # re-derives it.
+                store.mark_diarize_skipped(audio_id, f"coverage-guard ({model_name})")
                 skipped += 1
                 continue
+            # A real refinement supersedes any earlier guard-skip for this segment.
+            store.clear_diarize_skip(audio_id)
             added += len(written)
             # Embed each turn's audio + match to enrolled voiceprints (immediate
             # attribution) — after the atomic swap, so the slow per-clip work never

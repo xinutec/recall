@@ -475,4 +475,20 @@ _MIGRATIONS: tuple[str, ...] = (
         UNIQUE (source_id, start_utc)
     );
     """,
+    # v40 — segments the diarize pass attempted but the coverage guard declined to swap
+    # (the refined transcript covered too little to trust, or produced no turns worth
+    # keeping). Recorded so the newest-first auto-pickers advance PAST them instead of
+    # re-picking the same segment forever: with capture paused no newer segment ever
+    # arrives to bump a guard-tripping one out of the "newest" slot, so limit-1
+    # newest-first selection live-locks on it. The segment stays un-diarized on purpose
+    # — an explicit re-derive (a chosen `source` or an on-demand refine request) ignores
+    # this table, so a later, fixed pass still reprocesses it; a pass that does write
+    # turns clears the row.
+    """
+    CREATE TABLE diarize_skips (
+        audio_segment_id INTEGER PRIMARY KEY REFERENCES audio_segments(id),
+        reason           TEXT NOT NULL,
+        created_utc      TEXT NOT NULL
+    );
+    """,
 )

@@ -1044,20 +1044,35 @@ class Store:
         return [_row_to_segment(row) for row in rows]
 
     def _segments_without_marker(
-        self, marker: str, *, limit: int, newest_first: bool = False
+        self,
+        marker: str,
+        *,
+        limit: int,
+        newest_first: bool = False,
+        exclude_diarize_skips: bool = False,
     ) -> list[AudioSegmentId]:
         """Audio segments that still have visible machine turns but no turn yet
         hidden with `marker` (a 'reason' prefix). The hidden-turn marker is what
-        makes a re-derive pass resumable + chunkable."""
+        makes a re-derive pass resumable + chunkable.
+
+        `exclude_diarize_skips` drops segments the diarize coverage guard already
+        declined (see `diarize_skips`), so the newest-first picker advances past them
+        instead of live-locking on the same one."""
         # `order` is a controlled literal (not user input), so inlining it is safe.
         order = "DESC" if newest_first else "ASC"
+        skip_clause = (
+            " AND audio_segment_id NOT IN (SELECT audio_segment_id FROM diarize_skips)"
+            if exclude_diarize_skips
+            else ""
+        )
         rows = self._conn.execute(
             "SELECT DISTINCT audio_segment_id FROM transcript_segments "
             "WHERE audio_segment_id IS NOT NULL AND superseded_by IS NULL "
             "AND hidden_reason IS NULL AND asr_model != ? "
             "AND audio_segment_id NOT IN ("
             "  SELECT audio_segment_id FROM transcript_segments "
-            "  WHERE hidden_reason LIKE ? AND audio_segment_id IS NOT NULL) "
+            "  WHERE hidden_reason LIKE ? AND audio_segment_id IS NOT NULL)"
+            f"{skip_clause} "
             f"ORDER BY audio_segment_id {order} LIMIT ?",
             (HUMAN_MODEL, marker + "%", limit),
         ).fetchall()
@@ -1071,7 +1086,10 @@ class Store:
         """Segments still needing diarized refinement (no 'diarized' marker).
         Newest-first, so the most recent (most relevant) audio is refined first."""
         return self._segments_without_marker(
-            DIARIZED_MARKER, limit=limit, newest_first=True
+            DIARIZED_MARKER,
+            limit=limit,
+            newest_first=True,
+            exclude_diarize_skips=True,
         )
 
     def audio_segments_to_rediarize(self, *, limit: int) -> list[AudioSegmentId]:
@@ -1084,10 +1102,43 @@ class Store:
             "WHERE audio_segment_id IS NOT NULL AND superseded_by IS NULL "
             "AND hidden_reason IS NULL AND asr_model != ? "
             "AND provenance LIKE ? AND provenance NOT LIKE ? "
+            "AND audio_segment_id NOT IN (SELECT audio_segment_id FROM diarize_skips) "
             "ORDER BY audio_segment_id DESC LIMIT ?",
             (HUMAN_MODEL, DIARIZED_MARKER + "%", ALIGNED_MARKER + "%", limit),
         ).fetchall()
         return [AudioSegmentId(int(r["audio_segment_id"])) for r in rows]
+
+    def mark_diarize_skipped(self, audio_segment_id: int, reason: str) -> None:
+        """Record that the diarize pass attempted this segment but its coverage guard
+        declined the swap — so the newest-first auto-pickers stop re-picking it forever
+        (a live-lock while capture is paused). Scoped to
+        `audio_segments_to_diarize`/`audio_segments_to_rediarize`; an explicit re-derive
+        (`source` / on-demand request) ignores it. Idempotent."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO diarize_skips "
+            "(audio_segment_id, reason, created_utc) VALUES (?, ?, ?)",
+            (int(audio_segment_id), reason, datetime.now(UTC).isoformat()),
+        )
+        self._commit()
+
+    def clear_diarize_skip(self, audio_segment_id: int) -> None:
+        """Drop a segment's guard-skip marker — called when a pass does write turns for
+        it, so a segment that once tripped the guard but later refines cleanly (e.g. an
+        improved model via a forced re-derive) doesn't keep a stale skip row."""
+        self._conn.execute(
+            "DELETE FROM diarize_skips WHERE audio_segment_id = ?",
+            (int(audio_segment_id),),
+        )
+        self._commit()
+
+    def is_diarize_skipped(self, audio_segment_id: int) -> bool:
+        """Whether the diarize coverage guard has declined this segment (see
+        `mark_diarize_skipped`) — so it's held out of the auto-pickers."""
+        row = self._conn.execute(
+            "SELECT 1 FROM diarize_skips WHERE audio_segment_id = ?",
+            (int(audio_segment_id),),
+        ).fetchone()
+        return row is not None
 
     def audio_segments_for_source(
         self, source: str, *, limit: int

@@ -38,6 +38,60 @@ def _segment(start_s: float = 0.0, dur_s: float = 60.0) -> Segment:
     )
 
 
+def test_diarize_skip_drops_a_segment_from_the_never_diarized_picker() -> None:
+    # A segment the diarize coverage guard declined is journaled in diarize_skips, so
+    # the newest-first `audio_segments_to_diarize` advances past it instead of the
+    # daemon re-picking the same one forever (the live-lock: capture is paused, so no
+    # newer segment ever bumps it out of the "newest" slot). A forced re-derive sees it.
+    store = Store.memory()
+    store.add_source(_source())
+    a = store.add_audio_segment(_segment(0))
+    b = store.add_audio_segment(_segment(120))
+    for aid in (a, b):
+        store.add_transcript_segment(
+            audio_segment_id=aid,
+            start=BASE,
+            end=BASE + timedelta(seconds=3),
+            text="hello there",
+            asr_model="m",
+        )
+    assert set(store.audio_segments_to_diarize(limit=10)) == {a, b}
+
+    store.mark_diarize_skipped(a, "coverage-guard (m)")
+    assert store.audio_segments_to_diarize(limit=10) == [b]  # a advanced past
+    assert store.is_diarize_skipped(a)
+    # a forced source re-derive still sees it (skip table is scoped to the auto-pickers)
+    assert a in store.audio_segments_for_source("usb", limit=10)
+
+    store.clear_diarize_skip(a)
+    assert set(store.audio_segments_to_diarize(limit=10)) == {a, b}  # back in the queue
+    assert not store.is_diarize_skipped(a)
+
+
+def test_diarize_skip_drops_a_segment_from_the_rediarize_picker() -> None:
+    # The same skip also holds a segment out of the re-diarize (older-pipeline) queue,
+    # so a guard-tripping segment can't live-lock that pass once the never-diarized
+    # queue drains.
+    store = Store.memory()
+    store.add_source(_source())
+    audio_id = store.add_audio_segment(_segment(0))
+    store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=3),
+        text="older pipeline turn",
+        asr_model="m",
+        provenance="diarized (old)",  # visible, old-pipeline → eligible for re-diarize
+    )
+    assert store.audio_segments_to_rediarize(limit=10) == [audio_id]
+
+    store.mark_diarize_skipped(audio_id, "coverage-guard (m)")
+    assert store.audio_segments_to_rediarize(limit=10) == []
+
+    store.clear_diarize_skip(audio_id)
+    assert store.audio_segments_to_rediarize(limit=10) == [audio_id]
+
+
 def test_search_finds_inserted_text() -> None:
     store = Store.memory()
     store.add_source(_source())

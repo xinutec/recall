@@ -490,6 +490,74 @@ def test_refine_keeps_a_full_transcript_when_the_pass_covers_too_little(
     assert [t.id for t in turns] == [kept]  # the full transcript is still visible…
     got = store.get_transcript(kept)
     assert got is not None and got.hidden_reason is None  # …and not hidden
+    # …and the guard records a skip so the daemon advances past it instead of
+    # re-picking the same newest un-diarized segment every pass (a live-lock while
+    # capture is paused — no newer segment ever bumps it out of the "newest" slot).
+    assert store.is_diarize_skipped(audio_id)
+    assert store.audio_segments_to_diarize(limit=10) == []
+
+
+def test_guard_skipped_segment_leaves_the_picker_but_a_forced_rederive_still_runs(
+    tmp_path: Path,
+) -> None:
+    # The coverage guard keeps a good transcript by writing nothing — but the segment
+    # then still matched `audio_segments_to_diarize` (it never got a 'diarized' marker),
+    # so the newest-first, limit-1 daemon re-picked the SAME segment every pass and
+    # live-locked, never draining the queue while capture was paused. The guard now
+    # records a skip: the auto-picker advances past it, while an explicit forced
+    # re-derive still ignores the skip, reprocesses it, and clears it on success.
+    flac = tmp_path / "usb-20260619T130000.flac"
+    make_flac(flac, 4.0)
+    store = Store.memory()
+    audio_id = _seg(store, flac)
+    full = ("the quick brown fox jumps over the lazy dog " * 8).strip()
+    store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=4),
+        text=full,
+        asr_model="mlx-community/whisper-large-v3-turbo",
+    )
+
+    def diarizer(_a: Path) -> list[SpeakerTurn]:
+        return [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0)]
+
+    assert store.audio_segments_to_diarize(limit=10) == [audio_id]  # queued to start
+
+    # First pass: the refined transcript is degenerate (a couple of words), guard trips.
+    thin = _result("en", (0.0, 0.5, " yes"))
+    assert (
+        refine_diarized(
+            store,
+            diarizer,
+            lambda _a: thin,
+            _embed,
+            work_dir=tmp_path / "work",
+            model_name="adapter",
+        )
+        == 0
+    )
+    # The live-lock is gone: the auto-picker no longer returns the skipped segment.
+    assert store.audio_segments_to_diarize(limit=10) == []
+    assert store.is_diarize_skipped(audio_id)
+
+    # A forced re-derive of the source ignores the skip and reprocesses it. This pass
+    # covers the segment properly (well over half the existing text, all inside the
+    # 0-4s diarized window), so it writes the refined turns and clears the skip.
+    good = _result(
+        "en", *[(i * 0.12, i * 0.12 + 0.06, f" token{i:02d}") for i in range(30)]
+    )
+    added = refine_diarized(
+        store,
+        diarizer,
+        lambda _a: good,
+        _embed,
+        work_dir=tmp_path / "work",
+        model_name="adapter",
+        source="usb",
+    )
+    assert added == 1  # the forced pass wrote the refined turns…
+    assert not store.is_diarize_skipped(audio_id)  # …and cleared the stale skip
 
 
 def test_refine_survives_a_clip_that_fails_to_slice(
