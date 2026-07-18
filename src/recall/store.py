@@ -1326,7 +1326,7 @@ class Store:
         """The current state of one ask job, for the UI poll — the answer once the Mac
         has generated it (or the error), else pending (`done=False`)."""
         return self._ask_status_row(
-            "SELECT id, question, sources, answer, error, done_utc "
+            "SELECT id, question, prompt, sources, answer, error, done_utc "
             "FROM ask_requests WHERE id = ?",
             (request_id,),
         )
@@ -1335,7 +1335,7 @@ class Store:
         """The Mac's adopted copy of a fleet ask job — the relay reads its status to
         decide whether the answer (or error) is ready to push back."""
         return self._ask_status_row(
-            "SELECT id, question, sources, answer, error, done_utc "
+            "SELECT id, question, prompt, sources, answer, error, done_utc "
             "FROM ask_requests WHERE fleet_id = ?",
             (fleet_id,),
         )
@@ -1349,11 +1349,18 @@ class Store:
         return AskRequestStatus(
             id=int(row["id"]),
             question=str(row["question"]),
+            prompt=str(row["prompt"]),
             sources=tuple(json.loads(row["sources"])),
             answer=row["answer"],
             error=row["error"],
             done=row["done_utc"] is not None,
         )
+
+    def delete_ask_request(self, request_id: int) -> None:
+        """Drop an ask row — used by the relay to discard a stale adopted copy when a
+        reused fleet id no longer matches the job's prompt."""
+        self._conn.execute("DELETE FROM ask_requests WHERE id = ?", (request_id,))
+        self._commit()
 
     def save_ask_answer(self, request_id: int, answer: str) -> None:
         """Land a generated answer and retire the job (done), so /sync/jobs stops

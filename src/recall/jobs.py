@@ -124,6 +124,7 @@ class _LocalStore(Protocol):
         fleet_id: int | None = None,
     ) -> int: ...
     def ask_request_by_fleet_id(self, fleet_id: int) -> AskRequestStatus | None: ...
+    def delete_ask_request(self, request_id: int) -> None: ...
     def add_source(self, source: AudioSource) -> None: ...
     def add_audio_segment(self, segment: Segment) -> int: ...
     def add_ab_compare_run(  # noqa: PLR0913 - mirrors the Store signature
@@ -202,6 +203,13 @@ def _bridge_ask(store: _LocalStore, client: _JobClient, job: _Job) -> bool:
     if job.prompt is None:
         raise ValueError(f"ask job #{job.id} is missing its prompt")
     local = store.ask_request_by_fleet_id(job.id)
+    if local is not None and local.prompt != job.prompt:
+        # This fleet id was reused for a DIFFERENT question — only possible after a
+        # manual row deletion (the app never deletes ask jobs), but a stale adopted copy
+        # would relay a wrong answer (a "pong" for a real question). Discard it and
+        # re-adopt for the real prompt rather than trust the id alone.
+        store.delete_ask_request(local.id)
+        local = None
     if local is None:
         # Adopt: the question/sources are the fleet's to keep — locally only the prompt
         # (to generate) and the fleet id (to relay back) matter.

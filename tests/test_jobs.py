@@ -105,6 +105,7 @@ class _FakeStore:
         self.refusals: list[tuple[str, datetime, str]] = []
         self.ask_added: list[tuple[str, int | None]] = []  # (prompt, fleet_id)
         self.ask_local: dict[int, AskRequestStatus] = {}  # fleet_id -> local status
+        self.ask_deleted: list[int] = []  # local ids the relay discarded as stale
 
     def add_refine_request(self, source: str, start: datetime, end: datetime) -> int:
         self.refines.append((source, start, end))
@@ -123,6 +124,12 @@ class _FakeStore:
 
     def ask_request_by_fleet_id(self, fleet_id: int) -> AskRequestStatus | None:
         return self.ask_local.get(fleet_id)
+
+    def delete_ask_request(self, request_id: int) -> None:
+        self.ask_deleted.append(request_id)
+        for fid, st in list(self.ask_local.items()):
+            if st.id == request_id:
+                del self.ask_local[fid]
 
     def add_source(self, source: AudioSource) -> None:
         self.sources.append(source)
@@ -332,10 +339,20 @@ def _ask_job(job_id: int = 31, *, prompt: str = "PROMPT") -> _Job:
 
 
 def _local_ask(
-    *, done: bool, answer: str | None = None, error: str | None = None
+    *,
+    done: bool,
+    answer: str | None = None,
+    error: str | None = None,
+    prompt: str = "PROMPT",  # matches _ask_job's default prompt
 ) -> AskRequestStatus:
     return AskRequestStatus(
-        id=1, question="", sources=(), answer=answer, error=error, done=done
+        id=1,
+        question="",
+        prompt=prompt,
+        sources=(),
+        answer=answer,
+        error=error,
+        done=done,
     )
 
 
@@ -382,6 +399,25 @@ def test_a_failed_ask_job_pushes_the_error_back(tmp_path: Path) -> None:
     assert client.ask_results == [
         (31, {"answer": None, "error": "model failed to load"})
     ]
+
+
+def test_a_reused_fleet_id_with_a_new_prompt_discards_the_stale_answer(
+    tmp_path: Path,
+) -> None:
+    # Fleet ask ids can be reused (after a manual row delete). If the adopted local copy
+    # for that id belongs to a DIFFERENT question, relaying its answer would return a
+    # stale/wrong answer (the "pong for a real question" bug). The relay must detect the
+    # prompt mismatch, discard the stale copy, and re-adopt for the real prompt.
+    client = _FakeClient([_ask_job(1, prompt="REAL: when did I meet Dr Kosmin?")])
+    store = _FakeStore()
+    store.ask_local[1] = _local_ask(
+        done=True, answer="pong", prompt="STALE synthetic: reply pong"
+    )
+    handed = run_jobs_once(store, client, data_root=tmp_path)
+    assert handed == 1
+    assert store.ask_deleted == [1]  # the stale adopted copy was dropped
+    assert store.ask_added == [("REAL: when did I meet Dr Kosmin?", 1)]  # re-adopted
+    assert client.ask_results == []  # and the stale "pong" was NOT relayed
 
 
 def _ab_job(job_id: int = 21, *, status: str = "queued") -> _Job:

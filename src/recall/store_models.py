@@ -216,11 +216,14 @@ class AskRequest:
 
 @dataclass(frozen=True)
 class AskRequestStatus:
-    """The current state of an ask job, for the UI's poll: the answer once the Mac has
-    generated it (or an `error`), else pending. `sources` are the turn ids to cite."""
+    """The current state of an ask job: the answer once the Mac has generated it (or an
+    `error`), else pending. `sources` are the turn ids to cite. `prompt` lets the Mac's
+    relay confirm an adopted row still matches the job (a reused fleet id must not relay
+    a stale answer)."""
 
     id: int
     question: str
+    prompt: str
     sources: tuple[int, ...]
     answer: str | None
     error: str | None
