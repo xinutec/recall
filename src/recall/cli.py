@@ -11,9 +11,11 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sqlite3
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
@@ -735,11 +737,21 @@ def _drain_ask_requests(
     if not cache:
         cache.append(make_mlx_generator(llm_model))
     try:
-        store.save_ask_answer(job.id, cache[0](job.prompt).strip())
+        answer = cache[0](job.prompt).strip()
+    except Exception as exc:  # generation itself failed → terminal error for the UI
+        store.rollback()
+        store.mark_ask_error(job.id, f"generation failed: {exc}")
+        print(f"refine: ask #{job.id} generation failed: {exc}", flush=True)
+        return True
+    try:
+        store.save_ask_answer(job.id, answer)
         print(f"refine: answered ask #{job.id}", flush=True)
-    except Exception as exc:  # record on the job, never crash the daemon
-        store.mark_ask_error(job.id, str(exc))
-        print(f"refine: ask #{job.id} failed: {exc}", flush=True)
+    except sqlite3.OperationalError as exc:
+        # DB busy — don't burn the answer on a terminal error; clear the aborted write
+        # and leave the job pending so the next pass retries the save (regeneration is
+        # cheap now the model is warm). The fleet's timeout is the ultimate backstop.
+        store.rollback()
+        print(f"refine: ask #{job.id} save deferred (store busy): {exc}", flush=True)
     return True
 
 
@@ -995,7 +1007,7 @@ def _refine_one_source(
     return 0
 
 
-def _cmd_refine(args: argparse.Namespace) -> int:
+def _cmd_refine(args: argparse.Namespace) -> int:  # noqa: PLR0915 - daemon dispatch loop
     """Diarize-refine the archive, but only while capture is idle (paused) so the
     heavy pyannote pass never competes with live recording. Runs as a daemon by
     default; --max-segments N does a bounded run (one segment at a time, re-checking
@@ -1055,30 +1067,45 @@ def _cmd_refine(args: argparse.Namespace) -> int:
     try:
         while args.max_segments == 0 or segments < args.max_segments:
             now = datetime.now(UTC)
-            # Ask jobs first — a human is waiting on the answer — then A/B comparisons
-            # and day-summaries. All run regardless of pause (read-only generation, no
-            # token needed), so they never wait for an idle window.
-            if _drain_ask_requests(store, llm_model=args.llm, cache=summarizer):
-                continue
-            if _drain_ab_compare(store, data_root=args.out, work_dir=args.out / "work"):
-                continue
-            if _drain_day_summaries(store, llm_model=args.llm, cache=summarizer):
-                continue
-            idle = diarize_enabled and capture_control.is_paused(args.out, now)
-            if idle and store.pending_refine_requests(limit=1):
-                added, n = refine_request_one()  # on-demand requests first
-                turns += added
-                segments += n
-            elif idle and store.audio_segments_to_diarize(limit=1):
-                turns += diarize_one(redo=False)  # never-diarized audio first
-                segments += 1
-            elif idle and store.audio_segments_to_rediarize(limit=1):
-                turns += diarize_one(redo=True)  # then upgrade older diarized days
-                segments += 1
-            elif args.max_segments:
-                break  # bounded run: nothing to do right now, so stop
-            else:
-                time.sleep(args.poll_seconds)  # capture active or caught up — idle
+            # Start each pass on a clean connection. A write that failed under lock
+            # contention leaves an aborted transaction open, which freezes this
+            # connection's read snapshot — the daemon then never sees an ask the jobs
+            # runner queued and sleeps forever with it pending (the bug that silently
+            # hung Ask). Rolling back is a no-op when nothing is open.
+            store.rollback()
+            try:
+                # Ask jobs first — a human is waiting — then A/B comparisons and
+                # day-summaries. All run regardless of pause (read-only generation, no
+                # token), so they never wait for an idle window.
+                if _drain_ask_requests(store, llm_model=args.llm, cache=summarizer):
+                    continue
+                if _drain_ab_compare(
+                    store, data_root=args.out, work_dir=args.out / "work"
+                ):
+                    continue
+                if _drain_day_summaries(store, llm_model=args.llm, cache=summarizer):
+                    continue
+                idle = diarize_enabled and capture_control.is_paused(args.out, now)
+                if idle and store.pending_refine_requests(limit=1):
+                    added, n = refine_request_one()  # on-demand requests first
+                    turns += added
+                    segments += n
+                elif idle and store.audio_segments_to_diarize(limit=1):
+                    turns += diarize_one(redo=False)  # never-diarized audio first
+                    segments += 1
+                elif idle and store.audio_segments_to_rediarize(limit=1):
+                    turns += diarize_one(redo=True)  # then upgrade older diarized days
+                    segments += 1
+                elif args.max_segments:
+                    break  # bounded run: nothing to do right now, so stop
+                else:
+                    time.sleep(args.poll_seconds)  # capture active or caught up — idle
+            except Exception:  # one bad pass must never wedge the daemon
+                # Recover the connection and keep serving — the failed unit is left for
+                # the next pass to retry (or time out on the fleet).
+                store.rollback()
+                traceback.print_exc()
+                time.sleep(args.poll_seconds)
     finally:
         store.close()
     print(f"refine: diarized {segments} segment(s), {turns} turn(s)")

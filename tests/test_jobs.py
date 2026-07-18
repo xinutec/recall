@@ -353,6 +353,7 @@ def _local_ask(
         answer=answer,
         error=error,
         done=done,
+        created=datetime(2026, 7, 18, tzinfo=UTC),
     )
 
 

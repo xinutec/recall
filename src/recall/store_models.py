@@ -228,6 +228,7 @@ class AskRequestStatus:
     answer: str | None
     error: str | None
     done: bool
+    created: datetime
 
 
 @dataclass(frozen=True)

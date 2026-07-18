@@ -139,6 +139,10 @@ _SCAN_JOB: ScanJob | None = None
 # (softmax over the enrolled people) clears this — a confirmable hint, not a coin
 # flip. The timeline still shows every guess with its %.
 _SUGGEST_MIN_PROB = 0.4
+# How long a queued ask may stay pending before the poll reports a timeout instead of
+# spinning forever. Generous: the Mac path is a couple of 60s job cycles plus a possible
+# cold model load, so only a genuine stall (Mac offline/wedged) should ever hit this.
+_ASK_TIMEOUT_SECONDS = 600
 _REPO = Path(__file__).resolve().parent.parent.parent
 _FRONTEND = _REPO / "frontend" / "dist" / "recall-web" / "browser"
 # Client-side (phone browser) errors are logged here so they're visible
@@ -1851,6 +1855,20 @@ def ask_status(request_id: int) -> AskOut:
             raise HTTPException(status_code=404, detail="unknown ask request")
         sources = [_transcript(t) for t in store.turns_by_id(list(state.sources))]
         if not state.done:
+            # Non-silent: a job the Mac never answers (Mac offline, stuck, wedged) would
+            # otherwise spin "Thinking…" forever. After a generous backstop, surface a
+            # timeout the UI can show. The row is left intact — a late answer still
+            # lands for a fresh ask; this only stops one poll hanging indefinitely.
+            age = (datetime.now(UTC) - state.created).total_seconds()
+            if age > _ASK_TIMEOUT_SECONDS:
+                return {
+                    "status": "error",
+                    "id": None,
+                    "answer": None,
+                    "sources": sources,
+                    "error": "Timed out — the archive is busy or the Mac is "
+                    "unreachable. Please try again.",
+                }
             return {
                 "status": "pending",
                 "id": request_id,

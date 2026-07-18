@@ -163,6 +163,17 @@ class Store:
         if not self._in_transaction:
             self._conn.commit()
 
+    def rollback(self) -> None:
+        """End any open transaction, discarding uncommitted work.
+
+        A write that fails under lock contention (busy_timeout elapsed) leaves the
+        connection with an ABORTED transaction still open — which in WAL mode freezes
+        this connection's read snapshot, so a long-lived daemon stops seeing rows other
+        processes commit (e.g. an ask queued by the jobs runner) until it's cleared. A
+        no-op when nothing is open; call it to recover a wedged connection."""
+        self._conn.rollback()
+        self._in_transaction = False
+
     @contextmanager
     def transaction(self) -> Iterator[None]:
         """Group several store calls into one atomic commit.
@@ -1326,8 +1337,8 @@ class Store:
         """The current state of one ask job, for the UI poll — the answer once the Mac
         has generated it (or the error), else pending (`done=False`)."""
         return self._ask_status_row(
-            "SELECT id, question, prompt, sources, answer, error, done_utc "
-            "FROM ask_requests WHERE id = ?",
+            "SELECT id, question, prompt, sources, answer, error, done_utc, "
+            "created_utc FROM ask_requests WHERE id = ?",
             (request_id,),
         )
 
@@ -1335,8 +1346,8 @@ class Store:
         """The Mac's adopted copy of a fleet ask job — the relay reads its status to
         decide whether the answer (or error) is ready to push back."""
         return self._ask_status_row(
-            "SELECT id, question, prompt, sources, answer, error, done_utc "
-            "FROM ask_requests WHERE fleet_id = ?",
+            "SELECT id, question, prompt, sources, answer, error, done_utc, "
+            "created_utc FROM ask_requests WHERE fleet_id = ?",
             (fleet_id,),
         )
 
@@ -1354,6 +1365,7 @@ class Store:
             answer=row["answer"],
             error=row["error"],
             done=row["done_utc"] is not None,
+            created=datetime.fromisoformat(row["created_utc"]),
         )
 
     def delete_ask_request(self, request_id: int) -> None:

@@ -1387,6 +1387,30 @@ def test_ask_poll_surfaces_a_generation_error(
     assert poll["status"] == "error" and poll["error"] == "model failed to load"
 
 
+def test_ask_poll_times_out_a_job_the_mac_never_answers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A pending job older than the backstop must report a timeout instead of spinning
+    # "Thinking…" forever (Mac offline/wedged). The row is left intact.
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setenv("RECALL_ROLE", "fleet")
+    monkeypatch.setattr(api, "_ASK_TIMEOUT_SECONDS", 0)  # anything pending is "too old"
+    _seed_ask_store(tmp_path)
+    monkeypatch.setattr(api, "_llm", lambda _p: "unused")
+    client = TestClient(api.app)
+    rid = client.post(
+        "/api/ask", json={"question": "When is the plumber coming?"}
+    ).json()["id"]
+    poll = client.get(f"/api/ask/{rid}").json()
+    assert poll["status"] == "error"
+    assert "Timed out" in poll["error"]
+    # the row is untouched — a late answer could still land for a fresh ask
+    store = Store.open(tmp_path / "recall.sqlite")
+    assert store.get_ask_request(rid) is not None
+    assert not store.get_ask_request(rid).done  # type: ignore[union-attr]
+    store.close()
+
+
 def test_vocabulary_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     Store.open(tmp_path / "recall.sqlite").close()

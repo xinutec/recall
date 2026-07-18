@@ -92,6 +92,37 @@ def test_diarize_skip_drops_a_segment_from_the_rediarize_picker() -> None:
     assert store.audio_segments_to_rediarize(limit=10) == [audio_id]
 
 
+def test_rollback_recovers_a_connection_wedged_by_a_failed_write(
+    tmp_path: Path,
+) -> None:
+    # A write that fails under lock contention leaves the connection with an aborted
+    # transaction open, which in WAL mode freezes its read snapshot — so a long-lived
+    # daemon stops seeing rows other connections commit (the bug that hung Ask).
+    # store.rollback() must clear that state and restore fresh reads.
+    db = tmp_path / "recall.sqlite"
+    a = Store.open(db)
+    a.add_source(_source())
+    b = Store.open(db)  # the "daemon" connection
+
+    # b's write is blocked by a holds the write lock, so it fails and leaves b wedged.
+    a._conn.execute("BEGIN IMMEDIATE")
+    a._conn.execute("INSERT INTO settings(key, value) VALUES ('x', '1')")
+    b._conn.execute("PRAGMA busy_timeout = 200")
+    with pytest.raises(sqlite3.OperationalError):
+        b.set_setting("y", "2")  # blocked → busy timeout → raises, txn left open
+    assert b._conn.in_transaction  # wedged: an aborted transaction is still open
+    a._conn.rollback()  # the other writer releases the lock
+
+    # Another connection commits a NEW row while b is wedged.
+    a.add_ask_request("q", "p", [])
+
+    b.rollback()  # recover
+    assert not b._conn.in_transaction
+    assert len(b.pending_ask_requests(limit=10)) == 1  # b now sees the fresh row
+    a.close()
+    b.close()
+
+
 def test_ask_request_queue_roundtrips_and_retires_on_answer() -> None:
     # The fleet enqueues an ask job (question + grounded prompt + cited turn ids); it's
     # pending until the Mac lands an answer, which retires it and resolves the UI poll.
