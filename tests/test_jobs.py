@@ -331,9 +331,9 @@ def _ask_job(job_id: int = 31, *, prompt: str = "PROMPT") -> _Job:
     return _Job(job_id, "ask", "", None, None, prompt=prompt)
 
 
-def _local_ask(*, done: bool, answer: str | None = None, error: str | None = None) -> (
-    AskRequestStatus
-):
+def _local_ask(
+    *, done: bool, answer: str | None = None, error: str | None = None
+) -> AskRequestStatus:
     return AskRequestStatus(
         id=1, question="", sources=(), answer=answer, error=error, done=done
     )

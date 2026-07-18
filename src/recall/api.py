@@ -1795,8 +1795,13 @@ def summary_today() -> TodaySummaryOut:
 
 
 def _ask_done(answer: str | None, sources: list[TranscriptOut]) -> AskOut:
-    return {"status": "done", "id": None, "answer": answer, "sources": sources,
-            "error": None}
+    return {
+        "status": "done",
+        "id": None,
+        "answer": answer,
+        "sources": sources,
+        "error": None,
+    }
 
 
 @app.post("/api/ask")
@@ -1823,8 +1828,13 @@ def ask(body: AskIn) -> AskOut:
         sources = [_transcript(t) for t in turns]
         if capture_control.is_fleet():
             rid = store.add_ask_request(question, prompt, [t.id for t in turns])
-            return {"status": "pending", "id": rid, "answer": None,
-                    "sources": sources, "error": None}
+            return {
+                "status": "pending",
+                "id": rid,
+                "answer": None,
+                "sources": sources,
+                "error": None,
+            }
         return _ask_done(_generator()(prompt).strip(), sources)
     finally:
         store.close()
@@ -1841,11 +1851,21 @@ def ask_status(request_id: int) -> AskOut:
             raise HTTPException(status_code=404, detail="unknown ask request")
         sources = [_transcript(t) for t in store.turns_by_id(list(state.sources))]
         if not state.done:
-            return {"status": "pending", "id": request_id, "answer": None,
-                    "sources": sources, "error": None}
+            return {
+                "status": "pending",
+                "id": request_id,
+                "answer": None,
+                "sources": sources,
+                "error": None,
+            }
         if state.error is not None:
-            return {"status": "error", "id": None, "answer": None,
-                    "sources": sources, "error": state.error}
+            return {
+                "status": "error",
+                "id": None,
+                "answer": None,
+                "sources": sources,
+                "error": state.error,
+            }
         return _ask_done(state.answer, sources)
     finally:
         store.close()
