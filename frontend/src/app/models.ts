@@ -188,8 +188,11 @@ export interface TodaySummary {
 }
 
 export interface AskAnswer {
+  readonly status: string;
+  readonly id: number | null;
   readonly answer: string | null;
   readonly sources: readonly Transcript[];
+  readonly error: string | null;
 }
 
 export interface TranscriptList {

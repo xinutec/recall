@@ -192,11 +192,17 @@ export class RecallApi {
     return this.http.delete<Ok>(`/api/vocabulary/${id}`);
   }
 
-  /** Ask the archive a question — grounded retrieval + local generation. Slow
-   * (seconds; the first call also loads the model), so callers show progress. */
+  /** Ask the archive a question — grounded retrieval here, generation on the Mac's LLM.
+   * Returns 'done' inline (Mac) or 'pending' with a poll id (fleet: Isis has no LLM, so
+   * the Mac answers async — poll askStatus). */
   ask(question: string): Observable<AskAnswer> {
     const body: AskRequest = { question };
     return this.http.post<AskAnswer>('/api/ask', body);
+  }
+
+  /** Poll a pending ask job until it resolves (fleet path). */
+  askStatus(id: number): Observable<AskAnswer> {
+    return this.http.get<AskAnswer>(`/api/ask/${id}`);
   }
 
   /** Assign one turn to a person (display label only; `name` may be brand-new). */

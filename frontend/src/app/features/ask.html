@@ -19,19 +19,29 @@
 
   @if (asking()) {
     <mat-progress-bar mode="indeterminate" />
-    <p class="hint">Thinking locally — the first question also loads the model…</p>
+    <p class="hint">
+      Thinking — the answer is generated on the Mac (the first one also loads the
+      model, so it can take a minute)…
+    </p>
   }
   @if (failed()) {
     <p class="hint error">Could not get an answer — is the backend running?</p>
   }
   @if (result(); as r) {
-    @if (r.answer === null) {
-      <p class="hint">The recordings don't show anything about that.</p>
-    } @else {
+    @if (r.error) {
+      <p class="hint error">Couldn't generate an answer: {{ r.error }}</p>
+    } @else if (r.answer !== null) {
       <mat-card appearance="outlined" class="answer">
         <mat-card-content>{{ r.answer }}</mat-card-content>
       </mat-card>
       <p class="hint">Drawn from these turns:</p>
+      @for (t of r.sources; track t.id) {
+        <app-transcript-card [transcript]="t" />
+      }
+    } @else if (!asking()) {
+      <p class="hint">The recordings don't show anything about that.</p>
+    } @else if (r.sources.length) {
+      <p class="hint">Found these — generating an answer…</p>
       @for (t of r.sources; track t.id) {
         <app-transcript-card [transcript]="t" />
       }

@@ -44,25 +44,36 @@ function askFn(result: () => AskAnswer | Subject<AskAnswer>) {
   });
 }
 
-function setup(ask = askFn(() => ({ answer: 'x', sources: [] }))) {
+// A resolved answer (the Mac-inline path, or a poll that has landed).
+function done(answer: string | null, sources: readonly Transcript[] = []): AskAnswer {
+  return { status: 'done', id: null, answer, sources, error: null };
+}
+
+function setup(
+  ask = askFn(() => done('x')),
+  askStatus = vi.fn((id: number) => {
+    void id;
+    return of(done('x'));
+  }),
+) {
   TestBed.configureTestingModule({
     providers: [
       provideZonelessChangeDetection(),
       provideHttpClient(),
       provideHttpClientTesting(),
-      { provide: RecallApi, useValue: { ask } },
+      { provide: RecallApi, useValue: { ask, askStatus } },
     ],
   });
   const fixture = TestBed.createComponent(Ask);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const c = fixture.componentInstance as any;
   const http = TestBed.inject(HttpTestingController);
-  return { fixture, c, ask, http };
+  return { fixture, c, ask, askStatus, http };
 }
 
 describe('Ask', () => {
   it('submits the question and renders the cited answer', () => {
-    const ask = askFn(() => ({ answer: 'Thursday, per Alice.', sources: [TURN] }));
+    const ask = askFn(() => done('Thursday, per Alice.', [TURN]));
     const { fixture, c } = setup(ask);
     c.question.set('When is the plumber coming?');
     c.submit();
@@ -74,7 +85,7 @@ describe('Ask', () => {
   });
 
   it('renders the honest no-evidence message for a null answer', () => {
-    const ask = askFn(() => ({ answer: null, sources: [] }));
+    const ask = askFn(() => done(null));
     const { fixture, c } = setup(ask);
     c.question.set('zeppelins?');
     c.submit();
@@ -93,9 +104,80 @@ describe('Ask', () => {
     expect(c.asking()).toBe(true);
     c.submit(); // second tap while in flight
     expect(ask).toHaveBeenCalledTimes(1);
-    pending.next({ answer: 'done', sources: [] });
+    pending.next(done('done'));
     pending.complete();
     expect(c.asking()).toBe(false);
+  });
+
+  it('polls a pending ask until the Mac lands the answer', async () => {
+    vi.useFakeTimers();
+    try {
+      // The fleet path: POST returns 'pending' with a poll id and the retrieved sources;
+      // the component shows them and polls askStatus until the answer arrives.
+      const ask = askFn(() => ({
+        status: 'pending' as const,
+        id: 5,
+        answer: null,
+        sources: [TURN],
+        error: null,
+      }));
+      const askStatus = vi.fn((id: number) => {
+        void id;
+        return of(done('Thursday, per Alice.', [TURN]));
+      });
+      const { fixture, c } = setup(ask, askStatus);
+      c.question.set('when?');
+      c.submit();
+      fixture.detectChanges();
+      expect(c.asking()).toBe(true); // still waiting…
+      expect((fixture.nativeElement as HTMLElement).textContent).toContain(
+        'Found these', // sources shown while it generates
+      );
+
+      await vi.advanceTimersByTimeAsync(2500); // ASK_POLL_MS → the poll fires
+      fixture.detectChanges();
+      expect(askStatus).toHaveBeenCalledWith(5);
+      expect(c.asking()).toBe(false);
+      expect((fixture.nativeElement as HTMLElement).textContent).toContain(
+        'Thursday, per Alice.',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('surfaces a generation error reported by the poll', async () => {
+    vi.useFakeTimers();
+    try {
+      const ask = askFn(() => ({
+        status: 'pending' as const,
+        id: 8,
+        answer: null,
+        sources: [],
+        error: null,
+      }));
+      const askStatus = vi.fn((id: number) => {
+        void id;
+        return of<AskAnswer>({
+          status: 'error',
+          id: null,
+          answer: null,
+          sources: [],
+          error: 'model failed to load',
+        });
+      });
+      const { fixture, c } = setup(ask, askStatus);
+      c.question.set('when?');
+      c.submit();
+      await vi.advanceTimersByTimeAsync(2500);
+      fixture.detectChanges();
+      expect(c.asking()).toBe(false);
+      expect((fixture.nativeElement as HTMLElement).textContent).toContain(
+        'model failed to load',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('lists the recent day summaries', async () => {

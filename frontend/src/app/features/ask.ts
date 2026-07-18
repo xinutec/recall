@@ -24,6 +24,11 @@ import { TranscriptCard } from '../shared/transcript-card';
 // how quickly the fresh text replaces it).
 const TODAY_POLL_MS = 7000;
 
+// Re-poll cadence for a queued ask (the fleet has no LLM, so the Mac generates it
+// async and pushes the answer back — see /api/ask). The Mac relay runs on a ~60s
+// cycle, so an answer can take a minute or two; poll steadily until it lands.
+const ASK_POLL_MS = 2500;
+
 /** The recall layer: ask the archive a question (grounded, cited), a live
  * "today so far" summary, and the settled per-day summaries the refine daemon
  * generates. */
@@ -55,6 +60,7 @@ export class Ask implements OnDestroy {
   protected readonly today = httpResource<TodaySummary>(() => '/api/summaries/today');
   protected readonly asOf = timeOfDay;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private askPollTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     // Stale-while-revalidate, client half: while the backend says a
@@ -76,8 +82,16 @@ export class Ask implements OnDestroy {
     }
   }
 
+  private clearAskPoll(): void {
+    if (this.askPollTimer !== null) {
+      clearTimeout(this.askPollTimer);
+      this.askPollTimer = null;
+    }
+  }
+
   ngOnDestroy(): void {
     this.clearPoll();
+    this.clearAskPoll();
   }
 
   protected submit(): void {
@@ -85,20 +99,41 @@ export class Ask implements OnDestroy {
     if (!q || this.asking()) {
       return;
     }
+    this.clearAskPoll();
     this.asking.set(true);
     this.failed.set(false);
     this.result.set(null);
-    // Generation is local and slow (first call also loads the model) — the
-    // template shows progress until this lands.
+    // Generation runs on the Mac's LLM. On the Mac it answers inline ('done'); on the
+    // fleet it queues ('pending') and the Mac fills it in async — poll until it lands.
     this.api.ask(q).subscribe({
-      next: (r) => {
-        this.result.set(r);
-        this.asking.set(false);
-      },
-      error: () => {
-        this.failed.set(true);
-        this.asking.set(false);
-      },
+      next: (r) => this.onAskResult(r),
+      error: () => this.failAsk(),
     });
+  }
+
+  private onAskResult(r: AskAnswer): void {
+    // Keep the retrieved sources on screen even while pending, so the wait shows what
+    // the answer will be grounded in.
+    this.result.set(r);
+    if (r.status === 'pending' && r.id !== null) {
+      const id = r.id; // narrowed; captured so the closure keeps the non-null type
+      this.askPollTimer = setTimeout(() => this.pollAsk(id), ASK_POLL_MS);
+      return;
+    }
+    // 'done' (answer or honest null) and 'error' both settle here — the template
+    // renders the answer, the "not found" line, or the error from the result.
+    this.asking.set(false);
+  }
+
+  private pollAsk(id: number): void {
+    this.api.askStatus(id).subscribe({
+      next: (r) => this.onAskResult(r),
+      error: () => this.failAsk(),
+    });
+  }
+
+  private failAsk(): void {
+    this.failed.set(true);
+    this.asking.set(false);
   }
 }
