@@ -718,6 +718,31 @@ def _cmd_score_asr(args: argparse.Namespace) -> int:
     return 0
 
 
+def _drain_ask_requests(
+    store: Store, *, llm_model: str, cache: list[Generator]
+) -> bool:
+    """Answer ONE queued "Ask the archive" job with the local LLM — the fleet has none,
+    so it queued the (self-contained, already-retrieved) prompt for this Mac to generate
+    and push back. Pause-independent: a human is waiting. The model loads lazily into
+    `cache`, shared with the day-summaries. Never runs on the fleet (no MLX there);
+    generation failures are recorded on the job so the UI shows them, not the daemon."""
+    if capture_control.is_fleet():
+        return False
+    pending = store.pending_ask_requests(limit=1)
+    if not pending:
+        return False
+    job = pending[0]
+    if not cache:
+        cache.append(make_mlx_generator(llm_model))
+    try:
+        store.save_ask_answer(job.id, cache[0](job.prompt).strip())
+        print(f"refine: answered ask #{job.id}", flush=True)
+    except Exception as exc:  # record on the job, never crash the daemon
+        store.mark_ask_error(job.id, str(exc))
+        print(f"refine: ask #{job.id} failed: {exc}", flush=True)
+    return True
+
+
 def _drain_day_summaries(
     store: Store, *, llm_model: str, cache: list[Generator]
 ) -> bool:
@@ -1030,8 +1055,11 @@ def _cmd_refine(args: argparse.Namespace) -> int:
     try:
         while args.max_segments == 0 or segments < args.max_segments:
             now = datetime.now(UTC)
-            # A/B comparisons run first and regardless of pause — operator-chosen and
-            # read-only, so they don't wait for an idle window or need a token.
+            # Ask jobs first — a human is waiting on the answer — then A/B comparisons
+            # and day-summaries. All run regardless of pause (read-only generation, no
+            # token needed), so they never wait for an idle window.
+            if _drain_ask_requests(store, llm_model=args.llm, cache=summarizer):
+                continue
             if _drain_ab_compare(store, data_root=args.out, work_dir=args.out / "work"):
                 continue
             if _drain_day_summaries(store, llm_model=args.llm, cache=summarizer):

@@ -125,6 +125,57 @@ def test_sync_client_polls_and_marks_done_over_the_transport(
         client.mark_done(jobs[0].id)
 
 
+def test_ask_job_served_then_retired_by_the_answer_over_the_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The full ask relay wire contract: the fleet queues an ask job, /sync/jobs serves
+    # it (with the prompt) ahead of a refine, and pushing the answer back retires it and
+    # lands the answer on the fleet's row — driven through the real SyncClient.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    store = Store.open(db)
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+    store.add_refine_request("usb", BASE, BASE + timedelta(minutes=5))
+    ask_id = store.add_ask_request("when?", "GROUNDED PROMPT", [7])
+    store.close()
+
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        jobs = client.poll_jobs()
+        # ask is served first (a human is waiting), carrying the prompt as payload
+        assert [j.type for j in jobs] == ["ask", "refine"]
+        assert jobs[0].id == ask_id and jobs[0].prompt == "GROUNDED PROMPT"
+
+        client.push_ask_result(ask_id, answer="Tuesday.")
+        # retired from the queue, and the answer + done landed on the fleet row
+        assert [j.type for j in client.poll_jobs()] == ["refine"]
+
+    got = Store.open(db).get_ask_request(ask_id)
+    assert got is not None and got.done and got.answer == "Tuesday."
+
+
+def test_ask_result_error_retires_the_job_with_an_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    store = Store.open(db)
+    ask_id = store.add_ask_request("q", "p", [])
+    store.close()
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        client.push_ask_result(ask_id, error="model failed to load")
+        assert client.poll_jobs() == []
+    got = Store.open(db).get_ask_request(ask_id)
+    assert got is not None and got.done and got.error == "model failed to load"
+
+
 def test_capture_exchange_reports_state_and_returns_intent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

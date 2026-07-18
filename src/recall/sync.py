@@ -36,6 +36,7 @@ from recall.schemas import OkOut
 from recall.sources import AudioSource, SourceKind
 from recall.store import (
     AbCompareJob,
+    AskRequest,
     RefineRequest,
     Store,
     SweepTombstone,
@@ -114,6 +115,9 @@ class JobOut(BaseModel):
     model_b: str | None = None
     base_model: str | None = None
     status: str | None = None
+    # ask-only payload: the self-contained grounded prompt the Mac's LLM answers. id is
+    # the fleet's ask-request id; the answer is pushed back via /sync/ask/{id}/result.
+    prompt: str | None = None
 
 
 class AudioStoredOut(BaseModel):
@@ -189,6 +193,14 @@ class SummaryIn(BaseModel):
     day: str  # YYYY-MM-DD
     text: str
     model: str
+
+
+class AskResultIn(BaseModel):
+    """The outcome of a fleet-queued ask job the Mac's LLM generated: the answer text,
+    or an error message. Landing it retires the job from /sync/jobs."""
+
+    answer: str | None = None
+    error: str | None = None
 
 
 class AbResultIn(BaseModel):
@@ -321,6 +333,11 @@ def _ab_job_of(run: AbCompareJob) -> JobOut:
         base_model=run.base_model,
         status=run.status,
     )
+
+
+def _ask_job_of(req: AskRequest) -> JobOut:
+    # source is unused for ask (not recording-scoped); the prompt is the whole payload.
+    return JobOut(id=req.id, type="ask", source="", prompt=req.prompt)
 
 
 def _sweep_job_of(tomb: SweepTombstone) -> JobOut:
@@ -612,6 +629,27 @@ def _register_ab_compare_routes(
             store.close()
         return {"ok": True}
 
+    @app.post("/sync/ask/{request_id}/result")
+    def sync_ask_result(
+        request_id: int,
+        body: AskResultIn,
+        authorization: str | None = Header(default=None),
+    ) -> OkOut:
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            if body.error is not None:
+                store.mark_ask_error(request_id, body.error)
+            elif body.answer is not None:
+                store.save_ask_answer(request_id, body.answer)
+            else:
+                raise HTTPException(
+                    status_code=400, detail="neither an answer nor an error"
+                )
+        finally:
+            store.close()
+        return {"ok": True}
+
     @app.post("/sync/ab-compare/{run_id}/result")
     def sync_ab_result(
         run_id: int,
@@ -656,10 +694,16 @@ def _register_job_routes(
         check_token(bearer(authorization), expected)
         store = store_factory()
         try:
-            # Interactive refines first; uploads and A/B runs fill what's left of the
-            # batch. A/B runs stay served (queued AND running) until their result
-            # lands — the push-back is what retires them, not an acknowledgement.
-            jobs = [_job_of(r) for r in store.pending_refine_requests(limit=limit)]
+            # Ask jobs first — a human is waiting on the answer. Then interactive
+            # refines; uploads and A/B runs fill what's left of the batch. Ask and A/B
+            # runs stay served until their result lands — the push-back is what retires
+            # them, not an acknowledgement.
+            jobs = [_ask_job_of(a) for a in store.pending_ask_requests(limit=limit)]
+            remaining = limit - len(jobs)
+            if remaining > 0:
+                jobs += [
+                    _job_of(r) for r in store.pending_refine_requests(limit=remaining)
+                ]
             remaining = limit - len(jobs)
             if remaining > 0:
                 jobs += [
@@ -778,6 +822,19 @@ class SyncClient:
         Compare page shows honest progress."""
         resp = self._client.post(
             f"{self._base}/sync/ab-compare/{run_id}/running", headers=self._headers
+        )
+        resp.raise_for_status()
+
+    def push_ask_result(
+        self, request_id: int, *, answer: str | None = None, error: str | None = None
+    ) -> None:
+        """Land a fleet-queued ask job's outcome (the generated answer or an error) on
+        the fleet — this retires it from /sync/jobs and resolves the UI poll."""
+        body = AskResultIn(answer=answer, error=error)
+        resp = self._client.post(
+            f"{self._base}/sync/ask/{request_id}/result",
+            json=body.model_dump(),
+            headers=self._headers,
         )
         resp.raise_for_status()
 

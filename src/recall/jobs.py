@@ -45,7 +45,7 @@ from typing import Protocol
 
 from recall.ids import AudioSegmentId
 from recall.sources import SWEEPABLE_KINDS, AudioSource, SourceKind
-from recall.store_models import AbCompareJob, SweepEvidence
+from recall.store_models import AbCompareJob, AskRequestStatus, SweepEvidence
 from recall.timeline import Segment
 
 _log = logging.getLogger("recall.jobs")
@@ -56,6 +56,7 @@ _log = logging.getLogger("recall.jobs")
 _REFINE = "refine"
 _UPLOAD = "upload"
 _AB_COMPARE = "ab-compare"
+_ASK = "ask"
 _SWEEP = "sweep"
 
 
@@ -78,6 +79,8 @@ class _Job(Protocol):
     model_b: str | None
     base_model: str | None
     status: str | None
+    # ask-only payload: the self-contained grounded prompt the Mac's LLM answers.
+    prompt: str | None
 
 
 class _JobClient(Protocol):
@@ -87,6 +90,9 @@ class _JobClient(Protocol):
     def poll_jobs(self, *, limit: int = 50) -> Sequence[_Job]: ...
     def mark_done(self, job_id: int, *, job_type: str = "refine") -> None: ...
     def fetch_audio(self, source: str, name: str, dest: Path) -> None: ...
+    def push_ask_result(
+        self, request_id: int, *, answer: str | None = None, error: str | None = None
+    ) -> None: ...
     def mark_ab_compare_running(self, run_id: int) -> None: ...
     def push_ab_compare_result(  # noqa: PLR0913 - the report's denormalized summary
         self,
@@ -109,6 +115,15 @@ class _LocalStore(Protocol):
     def add_refine_request(
         self, source: str, start: datetime, end: datetime
     ) -> int: ...
+    def add_ask_request(
+        self,
+        question: str,
+        prompt: str,
+        sources: Sequence[int],
+        *,
+        fleet_id: int | None = None,
+    ) -> int: ...
+    def ask_request_by_fleet_id(self, fleet_id: int) -> AskRequestStatus | None: ...
     def add_source(self, source: AudioSource) -> None: ...
     def add_audio_segment(self, segment: Segment) -> int: ...
     def add_ab_compare_run(  # noqa: PLR0913 - mirrors the Store signature
@@ -174,6 +189,31 @@ def _pull_upload(
             channels=job.channels,
         )
     )
+
+
+def _bridge_ask(store: _LocalStore, client: _JobClient, job: _Job) -> bool:
+    """Advance one fleet ask job by one step; returns whether it moved.
+
+    A relay, like A/B compare: the fleet serves the job until its answer lands. Adopt it
+    into the local queue when unseen (the refine daemon — which holds the LLM — drains
+    it), then push the answer or error back once the local copy is done; the push-back
+    retires it on the fleet. Generation is deliberately NOT done here: `recall jobs` is
+    a 60s one-shot and must never load a model."""
+    if job.prompt is None:
+        raise ValueError(f"ask job #{job.id} is missing its prompt")
+    local = store.ask_request_by_fleet_id(job.id)
+    if local is None:
+        # Adopt: the question/sources are the fleet's to keep — locally only the prompt
+        # (to generate) and the fleet id (to relay back) matter.
+        store.add_ask_request("", job.prompt, [], fleet_id=job.id)
+        return True
+    if not local.done:
+        return False  # adopted, awaiting the local refine daemon — nothing to relay yet
+    if local.error is not None:
+        client.push_ask_result(job.id, error=local.error)
+    else:
+        client.push_ask_result(job.id, answer=local.answer or "")
+    return True
 
 
 def _bridge_ab_compare(store: _LocalStore, client: _JobClient, job: _Job) -> bool:
@@ -304,6 +344,12 @@ def run_jobs_once(
                 _pull_upload(store, client, data_root, job)
             elif job.type == _SWEEP:
                 _apply_sweep(store, job)
+            elif job.type == _ASK:
+                # A relay, not a hand-off: the job retires when its answer lands, so
+                # there is no mark_done here.
+                if _bridge_ask(store, client, job):
+                    handed += 1
+                continue
             elif job.type == _AB_COMPARE:
                 # A relay, not a hand-off: the run retires when its result lands,
                 # so there is no mark_done here.

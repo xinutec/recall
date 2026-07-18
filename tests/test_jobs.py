@@ -21,7 +21,7 @@ from recall.cli_parser import build_parser
 from recall.ids import AudioSegmentId
 from recall.jobs import run_jobs_once
 from recall.sources import AudioSource, SourceKind
-from recall.store_models import AbCompareJob, SweepEvidence
+from recall.store_models import AbCompareJob, AskRequestStatus, SweepEvidence
 from recall.timeline import Segment
 
 
@@ -40,6 +40,7 @@ class _Job:
     model_b: str | None = None
     base_model: str | None = None
     status: str | None = None
+    prompt: str | None = None
 
 
 class _FakeClient:
@@ -51,12 +52,18 @@ class _FakeClient:
         self.fetched: list[tuple[str, str, Path]] = []
         self.ab_running: list[int] = []
         self.ab_results: list[tuple[int, dict[str, object]]] = []
+        self.ask_results: list[tuple[int, dict[str, str | None]]] = []
 
     def poll_jobs(self, *, limit: int = 50) -> list[_Job]:
         return list(self._jobs)
 
     def mark_done(self, job_id: int, *, job_type: str = "refine") -> None:
         self.done.append((job_id, job_type))
+
+    def push_ask_result(
+        self, request_id: int, *, answer: str | None = None, error: str | None = None
+    ) -> None:
+        self.ask_results.append((request_id, {"answer": answer, "error": error}))
 
     def fetch_audio(self, source: str, name: str, dest: Path) -> None:
         self.fetched.append((source, name, dest))
@@ -96,10 +103,26 @@ class _FakeStore:
         self.freed: dict[int, list[str]] = {}
         self.deleted: list[list[int]] = []
         self.refusals: list[tuple[str, datetime, str]] = []
+        self.ask_added: list[tuple[str, int | None]] = []  # (prompt, fleet_id)
+        self.ask_local: dict[int, AskRequestStatus] = {}  # fleet_id -> local status
 
     def add_refine_request(self, source: str, start: datetime, end: datetime) -> int:
         self.refines.append((source, start, end))
         return len(self.refines)
+
+    def add_ask_request(
+        self,
+        question: str,
+        prompt: str,
+        sources: Sequence[int],
+        *,
+        fleet_id: int | None = None,
+    ) -> int:
+        self.ask_added.append((prompt, fleet_id))
+        return len(self.ask_added)
+
+    def ask_request_by_fleet_id(self, fleet_id: int) -> AskRequestStatus | None:
+        return self.ask_local.get(fleet_id)
 
     def add_source(self, source: AudioSource) -> None:
         self.sources.append(source)
@@ -302,6 +325,63 @@ def test_marks_done_only_after_the_local_enqueue(tmp_path: Path) -> None:
 
     run_jobs_once(_OrderStore(), _OrderClient([_job(3)]), data_root=tmp_path)
     assert order == ["enqueue", "done"]
+
+
+def _ask_job(job_id: int = 31, *, prompt: str = "PROMPT") -> _Job:
+    return _Job(job_id, "ask", "", None, None, prompt=prompt)
+
+
+def _local_ask(*, done: bool, answer: str | None = None, error: str | None = None) -> (
+    AskRequestStatus
+):
+    return AskRequestStatus(
+        id=1, question="", sources=(), answer=answer, error=error, done=done
+    )
+
+
+def test_an_unseen_ask_job_is_adopted_locally_and_never_acknowledged(
+    tmp_path: Path,
+) -> None:
+    # Like A/B compare: the ask lands in the local queue (stamped with the fleet's id)
+    # for the refine daemon's LLM, and the fleet keeps serving it — only the answer
+    # landing retires it, so no mark_done ever fires and generation never happens here.
+    client = _FakeClient([_ask_job(31, prompt="Answer this.")])
+    store = _FakeStore()
+    handed = run_jobs_once(store, client, data_root=tmp_path)
+    assert handed == 1
+    assert store.ask_added == [("Answer this.", 31)]  # prompt adopted under fleet id 31
+    assert client.done == []
+    assert client.ask_results == []
+
+
+def test_an_adopted_ask_job_still_pending_relays_nothing(tmp_path: Path) -> None:
+    client = _FakeClient([_ask_job(31)])
+    store = _FakeStore()
+    store.ask_local[31] = _local_ask(done=False)
+    handed = run_jobs_once(store, client, data_root=tmp_path)
+    assert handed == 0
+    assert store.ask_added == []  # already adopted — not re-added
+    assert client.ask_results == []
+
+
+def test_a_finished_ask_job_pushes_the_answer_back(tmp_path: Path) -> None:
+    client = _FakeClient([_ask_job(31)])
+    store = _FakeStore()
+    store.ask_local[31] = _local_ask(done=True, answer="It was Tuesday.")
+    handed = run_jobs_once(store, client, data_root=tmp_path)
+    assert handed == 1
+    assert client.ask_results == [(31, {"answer": "It was Tuesday.", "error": None})]
+    assert client.done == []  # the answer landing retires it, not an acknowledgement
+
+
+def test_a_failed_ask_job_pushes_the_error_back(tmp_path: Path) -> None:
+    client = _FakeClient([_ask_job(31)])
+    store = _FakeStore()
+    store.ask_local[31] = _local_ask(done=True, error="model failed to load")
+    run_jobs_once(store, client, data_root=tmp_path)
+    assert client.ask_results == [
+        (31, {"answer": None, "error": "model failed to load"})
+    ]
 
 
 def _ab_job(job_id: int = 21, *, status: str = "queued") -> _Job:
