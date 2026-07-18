@@ -20,6 +20,7 @@ function cap(overrides: Partial<CaptureState> = {}): CaptureState {
     desiredPausedUntil: pausedUntil,
     settled: true,
     micReachable: true,
+    stateToken: '',
     ...overrides,
   };
 }

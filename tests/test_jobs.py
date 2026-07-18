@@ -308,7 +308,7 @@ def _ab_job(job_id: int = 21, *, status: str = "queued") -> _Job:
     return _Job(
         job_id,
         "ab-compare",
-        "meeting-20260622-1033",
+        "meeting-20240102-1033",
         None,  # whole recording
         None,
         model_a="mlx-community/whisper-large-v3-turbo",
@@ -321,7 +321,7 @@ def _ab_job(job_id: int = 21, *, status: str = "queued") -> _Job:
 def _local_run(status: str, *, error: str | None = None) -> AbCompareJob:
     return AbCompareJob(
         id=1,
-        source="meeting-20260622-1033",
+        source="meeting-20240102-1033",
         start=None,
         end=None,
         model_a="mlx-community/whisper-large-v3-turbo",
@@ -351,7 +351,7 @@ def test_an_unseen_ab_run_is_adopted_locally_and_never_acknowledged(
     store = _FakeStore()
     handed = run_jobs_once(store, client, data_root=tmp_path)
     assert handed == 1
-    assert store.ab_added == [("meeting-20260622-1033", 21)]
+    assert store.ab_added == [("meeting-20240102-1033", 21)]
     assert client.done == []
     assert client.ab_results == []
 

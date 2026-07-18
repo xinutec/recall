@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import override
 
 import httpx
 import pytest
@@ -244,11 +245,11 @@ def test_pull_labels_names_a_voice_from_the_fleet_then_is_idempotent(
     store = Store.memory()
     audio_id = _seed_clustered_turn(store, tmp_path, "SPEAKER_00")
     client = FakeClient()
-    client.labels = [LabelOut(source_id="usb", cluster="SPEAKER_00", name="Dr. Kosmin")]
+    client.labels = [LabelOut(source_id="usb", cluster="SPEAKER_00", name="Dr. Voss")]
 
     assert pull_labels(store, client) == 1
     turns = store.visible_machine_turns_for_audio(audio_id)
-    assert [t.speaker_label for t in turns] == ["Dr. Kosmin"]
+    assert [t.speaker_label for t in turns] == ["Dr. Voss"]
 
     # A second pass changes nothing — the store already names that voice the same way.
     assert pull_labels(store, client) == 0
@@ -262,10 +263,10 @@ def test_pull_labels_applies_a_rename(tmp_path: Path) -> None:
     client.labels = [LabelOut(source_id="usb", cluster="SPEAKER_00", name="Dr Lee")]
     assert pull_labels(store, client) == 1
 
-    client.labels = [LabelOut(source_id="usb", cluster="SPEAKER_00", name="Dr. Kosmin")]
+    client.labels = [LabelOut(source_id="usb", cluster="SPEAKER_00", name="Dr. Voss")]
     assert pull_labels(store, client) == 1
     turns = store.visible_machine_turns_for_audio(audio_id)
-    assert [t.speaker_label for t in turns] == ["Dr. Kosmin"]
+    assert [t.speaker_label for t in turns] == ["Dr. Voss"]
 
 
 def test_pull_labels_ignores_a_voice_this_machine_does_not_have(tmp_path: Path) -> None:
@@ -281,6 +282,7 @@ def test_pull_labels_ignores_a_voice_this_machine_does_not_have(tmp_path: Path) 
 class _OldFleetClient(FakeClient):
     """A fleet that predates GET /sync/labels: the endpoint 404s."""
 
+    @override
     def fetch_labels(self) -> list[LabelOut]:
         request = httpx.Request("GET", "http://fleet/sync/labels")
         response = httpx.Response(404, request=request)
@@ -298,6 +300,7 @@ def test_pull_labels_tolerates_a_fleet_without_the_endpoint(tmp_path: Path) -> N
 def test_pull_labels_reraises_a_real_error(tmp_path: Path) -> None:
     # Only a missing endpoint is tolerated; an auth/server failure is real and surfaces.
     class _BrokenFleet(FakeClient):
+        @override
         def fetch_labels(self) -> list[LabelOut]:
             request = httpx.Request("GET", "http://fleet/sync/labels")
             response = httpx.Response(401, request=request)

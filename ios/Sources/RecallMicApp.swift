@@ -112,7 +112,8 @@ final class RecallController: ObservableObject {
         sourcesPoll = Task { [weak self] in
             while !Task.isCancelled {
                 if !Prefs.controlHost.isEmpty,
-                    let s = await CaptureApi.sources(host: Prefs.controlHost) {
+                    let s = await CaptureApi.sources(host: Prefs.controlHost)
+                {
                     self?.state.sources = s
                 }
                 try? await Task.sleep(nanoseconds: 1_500_000_000)

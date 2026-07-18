@@ -90,6 +90,7 @@ export class App {
     desiredPausedUntil: null,
     settled: true,
     micReachable: true,
+    stateToken: '',
   });
   // Ticks so the "resumes in Xh Ym" countdown stays current between polls.
   private readonly now = signal(Date.now());

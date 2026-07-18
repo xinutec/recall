@@ -1390,11 +1390,11 @@ def test_cluster_namings_returns_one_dominant_name_per_voice() -> None:
     # No human labels yet → nothing to publish.
     assert store.cluster_namings() == []
 
-    store.name_voice("usb", "SPEAKER_00", "Dr. Kosmin")
+    store.name_voice("usb", "SPEAKER_00", "Dr. Voss")
     store.name_voice("usb", "SPEAKER_01", "Pippijn")
     namings = {(n.source_id, n.cluster): n.name for n in store.cluster_namings()}
     assert namings == {
-        ("usb", "SPEAKER_00"): "Dr. Kosmin",
+        ("usb", "SPEAKER_00"): "Dr. Voss",
         ("usb", "SPEAKER_01"): "Pippijn",
     }
 

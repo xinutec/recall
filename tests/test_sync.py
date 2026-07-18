@@ -249,7 +249,7 @@ def test_segment_push_writes_turns_then_is_idempotent(
 def test_segment_push_carries_the_speaker_guess_to_the_fleet(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # The Mac holds the ML: it computes each turn's voiceprint guess ("Dr. Kosmin",
+    # The Mac holds the ML: it computes each turn's voiceprint guess ("Dr. Voss",
     # 0.41). The fleet (no ML) can only show what the push carries. Before this the
     # push dropped the guess, so Isis's UI showed 'unknown' for freshly-pushed audio.
     monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
@@ -259,7 +259,7 @@ def test_segment_push_carries_the_speaker_guess_to_the_fleet(
 
     seg = _segment(n_turns=1)
     seg.turns[0].speaker_cluster = "SPEAKER_00"
-    seg.turns[0].speaker_guess = "Dr. Kosmin"
+    seg.turns[0].speaker_guess = "Dr. Voss"
     seg.turns[0].speaker_score = 0.41
 
     with TestClient(app) as transport:
@@ -271,7 +271,7 @@ def test_segment_push_carries_the_speaker_guess_to_the_fleet(
     turns = store.visible_machine_turns_for_audio(stored.audio_segment_id)
     store.close()
     assert len(turns) == 1
-    assert turns[0].speaker_guess == "Dr. Kosmin"
+    assert turns[0].speaker_guess == "Dr. Voss"
     assert turns[0].speaker_score == 0.41
 
 
@@ -293,15 +293,13 @@ def test_labels_endpoint_publishes_human_namings_over_the_wire(
         client.push_segment(seg)
 
     store = Store.open(db)
-    store.name_voice("usb", "SPEAKER_00", "Dr. Kosmin")
+    store.name_voice("usb", "SPEAKER_00", "Dr. Voss")
     store.close()
 
     with TestClient(app) as transport:
         client = SyncClient("http://fleet", "secret", client=transport)
         labels = client.fetch_labels()
-    assert labels == [
-        LabelOut(source_id="usb", cluster="SPEAKER_00", name="Dr. Kosmin")
-    ]
+    assert labels == [LabelOut(source_id="usb", cluster="SPEAKER_00", name="Dr. Voss")]
 
 
 def test_labels_endpoint_needs_the_token(
