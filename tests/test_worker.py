@@ -259,26 +259,24 @@ def test_reconcile_live_hides_rather_than_superseding(tmp_path: Path) -> None:
     assert visible == {"different archive words"}
 
 
-def test_the_worker_clears_capture_tombstones_and_keeps_corrupt_audio(
+def test_the_worker_removes_dead_capture_files_and_keeps_recoverable_ones(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The 46 empty files that sat in the real archive from June, unnoticed.
-
-    A zero-byte capture file holds no audio and never will — capture never reopens a
-    timestamped path. It marks the instant capture died. Left alone it was re-probed on
-    every pass for three weeks and, being unindexed, was invisible to every check the
-    archive has. So the worker removes it and logs it, and that line becomes the only
-    durable record that capture failed there.
-
-    A file unreadable but NOT empty is a different thing: there may be real audio in
-    those bytes. It is reported and kept.
+    """A dead-capture file holds no usable audio and marks the instant capture died: a
+    zero-byte file (capture wrote nothing), or a tiny truncated header (ffprobe refuses
+    it, ~136 bytes). Both are removed and journalled with a dead-window event. Left in
+    place they were re-probed every pass forever and, unindexed, invisible to every
+    archive check. A LARGER unreadable file might hold a recoverable audio body behind a
+    corrupt header, so it is kept — recorded once, then skipped (never re-probed).
     """
     audio_dir = tmp_path / "usb"
     _capture_two_segments(audio_dir)
-    tombstone = audio_dir / "usb-20260613T120010.flac"
-    tombstone.touch()  # capture opened it and wrote nothing
-    corrupt = audio_dir / "usb-20260613T120020.flac"
-    corrupt.write_bytes(b"fLaC truncated mid-write")
+    empty = audio_dir / "usb-20260613T120010.flac"
+    empty.touch()  # capture opened it and wrote nothing
+    truncated = audio_dir / "usb-20260613T120020.flac"
+    truncated.write_bytes(b"fLaC truncated mid-write")  # header only, no audio pages
+    big_corrupt = audio_dir / "usb-20260613T120030.flac"
+    big_corrupt.write_bytes(b"fLaC truncated mid-write " * 200)  # ~5 kB, may hold audio
 
     store = Store.memory()
     with caplog.at_level(logging.WARNING):
@@ -291,18 +289,20 @@ def test_the_worker_clears_capture_tombstones_and_keeps_corrupt_audio(
             min_age_seconds=0.0,
         )
 
-    assert not tombstone.exists()  # gone...
-    assert "capture died here" in caplog.text  # ...and it said so
-    assert tombstone.name in caplog.text
+    # Both dead-capture files are removed and journalled as dead windows.
+    assert not empty.exists()
+    assert not truncated.exists()
+    assert "capture died here" in caplog.text
+    events = store.capture_events_since(datetime(2026, 1, 1, tzinfo=UTC))
+    assert {empty.name, truncated.name} <= {e.detail for e in events}
 
-    assert corrupt.exists()  # kept: it may hold audio
+    # The larger corrupt file is kept (may hold audio), recorded so it isn't re-probed.
+    assert big_corrupt.exists()
     assert "unreadable capture file" in caplog.text
+    assert len(store.audio_segment_paths()) == 2  # only the two real recordings
 
-    # Neither is in the archive; only the two real recordings are.
-    assert len(store.audio_segment_paths()) == 2
-
-    # Recorded once: a second pass skips it (kept in `known`), so it is NOT re-probed or
-    # re-logged — the loop that spammed 10k+ log lines for one file is gone.
+    # Second pass: the kept file is skipped (in `known`) — NOT re-probed/re-logged
+    # — the loop that spammed 10k+ log lines for one file is gone.
     caplog.clear()
     with caplog.at_level(logging.WARNING):
         process_pending(
@@ -313,5 +313,5 @@ def test_the_worker_clears_capture_tombstones_and_keeps_corrupt_audio(
             model_name="stub",
             min_age_seconds=0.0,
         )
-    assert "unreadable capture file" not in caplog.text  # no re-log
-    assert corrupt.exists()  # still kept
+    assert "unreadable capture file" not in caplog.text
+    assert big_corrupt.exists()

@@ -28,6 +28,14 @@ _log = logging.getLogger("recall.worker")
 
 DEFAULT_MIN_AGE_S = 120.0
 
+# An UNREADABLE capture file at or below this size is a header-only dead-capture
+# tombstone — capture opened the segment and died before writing any audio pages
+# (observed ~136 bytes for Opus). It holds nothing the pipeline can use (ffprobe refuses
+# it), so it is removed like a 0-byte file. A LARGER unreadable file might hold a
+# recoverable audio body behind a corrupt header, so it is kept. Only unreadable files
+# are measured here — a readable short segment decodes fine and never reaches this.
+_DEAD_CAPTURE_MAX_BYTES = 1024
+
 # subdirectories under the data root that are not audio sources
 _NON_SOURCE_DIRS = {"work"}
 
@@ -80,15 +88,24 @@ def discover_source_ids(root: Path) -> list[str]:
     return sorted(ids)
 
 
-def _clear_dead_stubs(scan: Scan, store: Store, source_id: str) -> None:
-    """Remove the zero-byte files capture left behind, and *record* it — durably.
+def _is_dead_capture(path: Path) -> bool:
+    """True if an unreadable file is small enough to be a header-only tombstone (no room
+    for usable audio) rather than a larger corrupt file that might hold a recoverable
+    audio body. A vanished file counts as nothing to remove."""
+    try:
+        return path.stat().st_size <= _DEAD_CAPTURE_MAX_BYTES
+    except OSError:
+        return False
 
-    A zero-byte capture file that is NOT the source's newest holds no audio and never
-    will: ffmpeg writes segments strictly in sequence, so once a newer file exists the
-    older one was closed, and a closed segment got its flush. It is a tombstone marking
-    the instant capture died. Left in place it is not harmless — the indexer re-probed
-    46 of them on every pass for three weeks, and, being unindexed, they were invisible
-    to every check the archive has.
+
+def _clear_dead_stubs(scan: Scan, store: Store, source_id: str) -> None:
+    """Remove the dead-capture files capture left behind, and *record* each — durably.
+
+    A dead-capture file holds no usable audio and marks the instant capture died: a
+    zero-byte file (capture opened it and wrote nothing), or a tiny truncated one (a
+    header with no audio pages — ffprobe refuses it; observed ~136 bytes for Opus). Both
+    are removed. Left in place they were re-probed on every pass forever and, being
+    unindexed, were invisible to every check the archive has.
 
     The NEWEST file is exempt, whatever its age: ffmpeg writes a segment's bytes only
     when it closes (measured live 2026-07-16 — the current segment sat at 0 bytes,
@@ -96,22 +113,28 @@ def _clear_dead_stubs(scan: Scan, store: Store, source_id: str) -> None:
     send that eventual flush to a deleted inode: silent, unrecoverable loss — the very
     thing this bookkeeping exists to prevent.
 
-    For the rest, a durable `dead_window` capture-event is written before the unlink,
-    timestamped to the dead segment's own moment. That lets a later gap check tell this
-    apart from a deliberate pause: without it the timeline gap says audio is missing but
-    not that anything went *wrong*. A file that is unreadable but NOT empty may still
-    hold audio, so it is only reported, never removed.
+    Before each unlink a durable `dead_window` capture-event is written, timestamped to
+    the dead segment's own moment, so a later gap check tells this apart from a
+    deliberate pause. A LARGER unreadable file may hold a recoverable audio body behind
+    a corrupt header, so it is NOT removed — only recorded once so the scan stops
+    re-probing it (see `unreadable_captures`).
     """
+    tombstones = list(scan.empty)
     for path in scan.unreadable:
-        # Record once so the next scan skips it (it stays in `known`); log only on that
-        # first sighting, not on every pass. The file is kept — it may still hold audio.
-        if store.mark_unreadable_capture(source_id, path.name):
+        if _is_dead_capture(path):
+            tombstones.append(path)  # header-only — removed below, like a 0-byte file
+        elif store.mark_unreadable_capture(source_id, path.name):
+            # Too big to be header-only: keep it (may hold audio), record once so the
+            # next scan skips it instead of re-probing + re-logging every pass.
             _log.warning(
                 "unreadable capture file (kept, recorded — won't re-probe): %s", path
             )
-    files = segment_glob(scan.empty[0].parent, source_id) if scan.empty else []
+
+    if not tombstones:
+        return
+    files = segment_glob(tombstones[0].parent, source_id)
     newest = files[-1].name if files else None
-    for path in scan.empty:
+    for path in tombstones:
         if path.name == newest:
             continue  # possibly ffmpeg's open segment — see the docstring
         # Record the death BEFORE unlinking — the file is about to be gone, so this
@@ -128,9 +151,9 @@ def _clear_dead_stubs(scan: Scan, store: Store, source_id: str) -> None:
         try:
             path.unlink()
         except OSError as err:  # read-only volume, vanished file: report, don't crash
-            _log.warning("could not remove empty capture file %s: %s", path, err)
+            _log.warning("could not remove dead capture file %s: %s", path, err)
             continue
-        _log.warning("capture died here — removed empty file: %s", path.name)
+        _log.warning("capture died here — removed dead file: %s", path.name)
 
 
 def process_pending(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
