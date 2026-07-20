@@ -409,7 +409,7 @@ def test_a_reused_fleet_id_with_a_new_prompt_discards_the_stale_answer(
     # for that id belongs to a DIFFERENT question, relaying its answer would return a
     # stale/wrong answer (the "pong for a real question" bug). The relay must detect the
     # prompt mismatch, discard the stale copy, and re-adopt for the real prompt.
-    client = _FakeClient([_ask_job(1, prompt="REAL: when did I meet Dr Kosmin?")])
+    client = _FakeClient([_ask_job(1, prompt="REAL: when did I meet the dentist?")])
     store = _FakeStore()
     store.ask_local[1] = _local_ask(
         done=True, answer="pong", prompt="STALE synthetic: reply pong"
@@ -417,7 +417,7 @@ def test_a_reused_fleet_id_with_a_new_prompt_discards_the_stale_answer(
     handed = run_jobs_once(store, client, data_root=tmp_path)
     assert handed == 1
     assert store.ask_deleted == [1]  # the stale adopted copy was dropped
-    assert store.ask_added == [("REAL: when did I meet Dr Kosmin?", 1)]  # re-adopted
+    assert store.ask_added == [("REAL: when did I meet the dentist?", 1)]  # re-adopted
     assert client.ask_results == []  # and the stale "pong" was NOT relayed
 
 
