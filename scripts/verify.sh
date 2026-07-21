@@ -145,14 +145,29 @@ step "frontend: build (Angular strict templates)"
 #  - a scratch --output-path, so verify can never clobber the served bundle in
 #    dist/recall-web (deploying is recall-build-frontend.sh's job, not verify's);
 #  - success judged by the artifact, not the exit code: a headless build on this Mac
-#    can abort in the CLI's teardown (kqueue.c:279) AFTER the bundle is fully written.
+#    can abort in the CLI's teardown (kqueue.c:279 / Piscina) with `Abort trap: 6`.
 #    A real compile error produces no usable bundle, so nothing is masked.
+#
+# The teardown abort usually lands AFTER the bundle is written, so the artifact is
+# intact and accepted. But intermittently — seen under the headless launchd env the
+# fleetwatch `verify` collector runs in — it aborts BEFORE the bundle is flushed,
+# leaving an empty output dir. That is a flaky teardown, not a build error (a real
+# error yields no bundle on EVERY attempt), so retry a few times and only fail if no
+# attempt produces a usable bundle. Retries can't mask a genuine failure.
 verify_build=frontend/dist/.verify-build
-rm -rf "$verify_build"
-( cd frontend && npm run build -- --output-path=dist/.verify-build ) || true
-verify_main=$(grep -oE 'main-[A-Za-z0-9]+\.js' "$verify_build/browser/index.html" 2>/dev/null | head -1 || true)
-if [[ -z "$verify_main" || ! -s "$verify_build/browser/$verify_main" ]]; then
-  echo "frontend build produced no usable bundle — see errors above" >&2
+verify_main=""
+for attempt in 1 2 3; do
+  rm -rf "$verify_build"
+  ( cd frontend && npm run build -- --output-path=dist/.verify-build ) || true
+  verify_main=$(grep -oE 'main-[A-Za-z0-9]+\.js' "$verify_build/browser/index.html" 2>/dev/null | head -1 || true)
+  if [[ -n "$verify_main" && -s "$verify_build/browser/$verify_main" ]]; then
+    break
+  fi
+  echo "frontend build produced no usable bundle (attempt $attempt/3) — retrying" >&2
+  verify_main=""
+done
+if [[ -z "$verify_main" ]]; then
+  echo "frontend build produced no usable bundle after 3 attempts — see errors above" >&2
   exit 1
 fi
 
