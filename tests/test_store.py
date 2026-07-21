@@ -123,14 +123,19 @@ def test_rollback_recovers_a_connection_wedged_by_a_failed_write(
     b._conn.execute("PRAGMA busy_timeout = 200")
     with pytest.raises(sqlite3.OperationalError):
         b.set_setting("y", "2")  # blocked → busy timeout → raises, txn left open
-    assert b._conn.in_transaction  # wedged: an aborted transaction is still open
+    # Read into a local: asserting on `b._conn.in_transaction` directly pins it to
+    # Literal[True] in mypy's binder, and it can't see that b.rollback() below clears
+    # it — so the post-rollback assert would look always-false (unreachable).
+    wedged = b._conn.in_transaction
+    assert wedged  # an aborted transaction is still open
     a._conn.rollback()  # the other writer releases the lock
 
     # Another connection commits a NEW row while b is wedged.
     a.add_ask_request("q", "p", [])
 
     b.rollback()  # recover
-    assert not b._conn.in_transaction
+    recovered = b._conn.in_transaction
+    assert not recovered
     assert len(b.pending_ask_requests(limit=10)) == 1  # b now sees the fresh row
     a.close()
     b.close()
