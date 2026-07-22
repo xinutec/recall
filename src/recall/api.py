@@ -115,7 +115,7 @@ from recall.schemas import (
     VocabularyOut,
     VoiceSuggestionsOut,
 )
-from recall.sources import AudioSource, SourceKind, SourceRow
+from recall.sources import DEVICE_KINDS, AudioSource, SourceKind, SourceRow
 from recall.store import (
     DIARIZED_MARKER,
     HUMAN_MODEL,
@@ -492,7 +492,7 @@ def sources() -> SourcesOut:
     on_fleet = capture_control.is_fleet()
     store = _store()
     try:
-        rows = [r for r in store.source_rows() if r.kind is not SourceKind.UPLOAD]
+        rows = [r for r in store.source_rows() if r.kind in DEVICE_KINDS]
         last_active = (
             _fleet_last_active(store, rows, now)
             if on_fleet

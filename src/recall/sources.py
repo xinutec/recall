@@ -57,6 +57,16 @@ class SourceKind(Enum):
 # sweep-safety check, and the audio-volume query all read this one set.
 SWEEPABLE_KINDS: frozenset[SourceKind] = frozenset(SourceKind) - {SourceKind.UPLOAD}
 
+# Kinds with a live recorder behind them — a device that can stall, die, or be carried
+# out of the house. An UPLOAD arrives over HTTP as a finished file, so there is no
+# capture to go wrong: it is a source, but never a *device*. Every health question about
+# recording ("is it live?", "did it lose speech?") applies to these and only these,
+# which is why an imported meeting must not appear as a microphone that stopped.
+#
+# Deliberately its own set, not an alias of SWEEPABLE_KINDS: they coincide today but
+# answer different questions (what may be deleted vs what is being recorded).
+DEVICE_KINDS: frozenset[SourceKind] = frozenset(SourceKind) - {SourceKind.UPLOAD}
+
 
 class SourceRow(NamedTuple):
     """A registered source as the fleet/liveness view needs it (Store.source_rows),
