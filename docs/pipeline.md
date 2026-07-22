@@ -159,8 +159,8 @@ was un-deployed. The fix is wired into the export + train path
   the old 1e-3 plus early stopping is what stops it memorising.
 - **Gate = whole-segment A/B on real recordings** (`recall ab-compare`), not the
   pilot's held-out clip WER — the pilot already passed once while the adapter
-  regressed in production shape. Only an A/B win re-points
-  `scripts/recall-refine.sh` at `adapter-current`.
+  regressed in production shape. Only an A/B win re-points the refine agent
+  (`deploy/hm-agents.nix`) at `adapter-current`.
 - **Run in a capture-idle window only** — two Whispers starve capture (sox
   buffer overrun = dropped samples), same constraint as refine.
 
@@ -182,10 +182,11 @@ head. The fix stamps each label with its own language + the transcribe task
 `<|sot|>` so training lines up with forced-language decoding. The **retrain
 (adapter-20260708b)** then trained even cleaner (eval loss 0.80 → 0.267) and **won
 the same A/B gate**: 0/74 garbling, mean WER 0.125 → 0.064, 18 per-correction wins to
-6 trivial (single-word article/dialect) losses. It is **deployed** —
-`scripts/recall-refine.sh` runs the idle refine pass through `adapter-current`
-(→ adapter-20260708b) on `--base-model openai/whisper-large-v3`, non-turbo, never live
-capture.
+6 trivial (single-word article/dialect) losses. It ran the idle refine pass from
+2026-07-09, then was **reverted on 2026-07-11**: the win was only ever measured on
+short clips, and on long recordings full fp32 large-v3 (a 32-layer decoder vs turbo's
+4) is ~8x slower. Refine is back on turbo; the args that re-enable the adapter are kept
+in `deploy/hm-agents.nix` next to the refine agent.
 
 > **Still a follow-up:** per-person adapters (selected at transcription time by the
 > identified speaker), and an mlx conversion if the adapter ever needs the live path.

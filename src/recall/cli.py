@@ -102,7 +102,11 @@ _VOICEPRINT_BACKFILL_PER_PASS = 8
 # embedding, so keep it light next to live capture.
 _EMBED_BACKFILL_PER_PASS = 16
 # The agents' log directory, bounded each worker pass so it can't grow without limit.
-_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
+# An absolute path rather than one derived from __file__: the agents run this source
+# from a read-only store copy (deploy/hm-agents.nix), where "next to the code" is both
+# the wrong place and unwritable — rotation would quietly stop. RECALL_LOG_DIR
+# overrides it.
+_LOG_DIR = Path(os.environ.get("RECALL_LOG_DIR") or Path.home() / "Library/Logs/recall")
 
 
 def _speaker_id_pass(store: Store, out: Path) -> None:

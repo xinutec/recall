@@ -7,12 +7,20 @@ mlx-whisper/pyannote + `HF_TOKEN` from `.env`). Data root is
 ## Services (launchd)
 
 The agents are defined in `deploy/hm-agents.nix` and installed by **home-manager**
-— there are no hand-written plists. Apply a change with: edit that module, commit,
-then in `~/.config/home-manager` run
+— there are no hand-written plists, and no per-agent shell scripts either: each
+agent's command lives in that module and is wrapped into the nix store. Apply a
+change with: edit that module, commit, then in `~/.config/home-manager` run
 `nix flake update recall && home-manager switch --flake .#pippijn`. Restart one
 ad-hoc with `launchctl kickstart -k gui/$(id -u)/<name>`. Logs:
-`logs/<agent>.{out,err}.log`; health: `./scripts/recall.sh doctor` (checks every
-agent is loaded).
+`~/Library/Logs/recall/<agent>.{out,err}.log`; health: `./scripts/recall.sh doctor`
+(checks every agent is loaded).
+
+**What an agent runs is what was committed.** Its `PYTHONPATH` is the store copy of
+the pinned revision, so editing `src/` does not change a running daemon — bump the
+lock and switch, as above. The toolchain is unchanged by this: each wrapper still
+enters this repo's own devshell, so sox/ffmpeg/python are the versions `flake.lock`
+pins. `./scripts/recall.sh <cmd>` still runs the working tree, which is what you
+want while developing.
 
 | agent | does | when |
 |---|---|---|
@@ -52,7 +60,7 @@ nix develop --command bash -c 'cd frontend && npx ng serve'   # dev: hot reload,
 USB mic → `/Volumes/Backup/recall/`, gap-free, auto-restarts.
 
 Capture and live both pin the mic with `--device "USB Condenser Microphone"`
-(`scripts/recall-capture.sh`, `deploy/hm-agents.nix`). Never record from the
+(`deploy/hm-agents.nix`). Never record from the
 *default* input: macOS re-points it at whatever connects, e.g. a Bluetooth
 speaker's hands-free mic — which then chimes into call mode and records at
 telephone quality. A renamed/missing device makes sox fail hard and the agent
