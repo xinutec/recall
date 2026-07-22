@@ -152,6 +152,59 @@ def test_the_newest_stub_is_never_touched_it_may_be_the_open_segment(
         store.close()
 
 
+def test_a_stub_cut_short_by_a_deliberate_pause_is_not_recorded_as_lost_speech(
+    tmp_path: Path,
+) -> None:
+    """Turning capture off mid-segment leaves exactly what a dead device leaves.
+
+    Observed 2026-07-22: capture resumed at 11:19:34, ffmpeg opened its first segment
+    at 11:19:38, and the pause landed 0.4s later. The header-only stub read as a dead
+    window and held the loss check red for 48 hours — over an act the household chose.
+    """
+    store = _store(tmp_path)
+    try:
+        usb = tmp_path / "usb"
+        usb.mkdir()
+        stub = usb / "usb-20260715T090200.opus"
+        stub.write_bytes(b"")
+        (usb / "usb-20260715T090300.opus").write_bytes(b"x")  # newer: stub is clearable
+        store.add_capture_event(
+            capture_control.CaptureEventKind.PAUSE,
+            utc=datetime(2026, 7, 15, 9, 2, 0, 400_000, tzinfo=UTC),
+            source_id="usb",
+        )
+        _clear_dead_stubs(Scan(segments=[], empty=[stub], unreadable=[]), store, "usb")
+
+        assert not stub.exists()  # the empty file still goes...
+        events = store.capture_events_since(datetime(2026, 7, 15, tzinfo=UTC))
+        assert [e.kind for e in events] == ["pause"]  # ...the pause is the whole story
+    finally:
+        store.close()
+
+
+def test_a_pause_long_after_the_stub_does_not_explain_it(tmp_path: Path) -> None:
+    """Only a pause inside the stub's own segment window can have killed it. A pause
+    ten minutes later is a different act, and the dead window is still real loss."""
+    store = _store(tmp_path)
+    try:
+        usb = tmp_path / "usb"
+        usb.mkdir()
+        stub = usb / "usb-20260715T090200.opus"
+        stub.write_bytes(b"")
+        (usb / "usb-20260715T090300.opus").write_bytes(b"x")
+        store.add_capture_event(
+            capture_control.CaptureEventKind.PAUSE,
+            utc=datetime(2026, 7, 15, 9, 12, 0, tzinfo=UTC),
+            source_id="usb",
+        )
+        _clear_dead_stubs(Scan(segments=[], empty=[stub], unreadable=[]), store, "usb")
+
+        events = store.capture_events_since(datetime(2026, 7, 15, tzinfo=UTC))
+        assert [e.kind for e in events] == ["dead_window", "pause"]
+    finally:
+        store.close()
+
+
 def test_the_supervisor_records_a_resume_when_capture_starts(tmp_path: Path) -> None:
     # Not paused (no pause file), so capture starts immediately: it must mark a `resume`
     # — the ground-truth start of an active span the loss check reconciles gaps against.

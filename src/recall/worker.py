@@ -12,11 +12,12 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from recall import capture_control
 from recall.asr import Transcriber
-from recall.capture import parse_segment_start, segment_glob
+from recall.capture import CaptureConfig, parse_segment_start, segment_glob
 from recall.diarize import Diarizer
 from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.probe import Scan, scan_source
@@ -35,6 +36,13 @@ DEFAULT_MIN_AGE_S = 120.0
 # recoverable audio body behind a corrupt header, so it is kept. Only unreadable files
 # are measured here — a readable short segment decodes fine and never reaches this.
 _DEAD_CAPTURE_MAX_BYTES = 1024
+
+# A stub covers its own segment window: from its start until the next rotation would
+# have closed it. A pause inside that window is what killed it.
+_SEGMENT_SPAN = timedelta(seconds=CaptureConfig().segment_seconds)
+# ffmpeg opens the segment and capture-control writes the pause from different places;
+# a pause recorded a beat before the file appeared is still the same act.
+_PAUSE_SLACK = timedelta(seconds=5)
 
 # subdirectories under the data root that are not audio sources
 _NON_SOURCE_DIRS = {"work"}
@@ -98,6 +106,26 @@ def _is_dead_capture(path: Path) -> bool:
         return False
 
 
+def _pause_explains(store: Store, start: datetime) -> bool:
+    """Was this stub cut short by a deliberate pause rather than a dead device?
+
+    Turning capture off mid-segment leaves behind exactly what a dead device leaves.
+    ffmpeg writes a segment's bytes only when it closes, so a segment killed seconds
+    after it opened is a header-only stub — indistinguishable, on disk, from a mic that
+    delivered digital silence. Recording that as a dead window is wrong twice over: no
+    speech was lost, and it hard-fails the loss check for 48 hours over something the
+    household did on purpose. The pause is already the evidence; a second event
+    contradicting it helps nobody.
+
+    A pause is a global act (capture_control.pause writes one file and every recording
+    agent parks itself), so it is not matched per source.
+    """
+    pauses = store.capture_events_since(
+        start - _PAUSE_SLACK, kinds=(capture_control.CaptureEventKind.PAUSE,)
+    )
+    return any(event.utc <= start + _SEGMENT_SPAN for event in pauses)
+
+
 def _clear_dead_stubs(scan: Scan, store: Store, source_id: str) -> None:
     """Remove the dead-capture files capture left behind, and *record* each — durably.
 
@@ -139,13 +167,22 @@ def _clear_dead_stubs(scan: Scan, store: Store, source_id: str) -> None:
             continue  # possibly ffmpeg's open segment — see the docstring
         # Record the death BEFORE unlinking — the file is about to be gone, so this
         # event becomes the evidence. utc is the segment's own timestamp (death time).
+        # Unless a deliberate pause already explains it, in which case there is no
+        # death to record: see _pause_explains.
         try:
-            store.add_capture_event(
-                capture_control.CaptureEventKind.DEAD_WINDOW,
-                utc=parse_segment_start(path.name),
-                source_id=source_id,
-                detail=path.name,
-            )
+            start = parse_segment_start(path.name)
+            if _pause_explains(store, start):
+                _log.info(
+                    "dead stub cut short by a deliberate pause, not lost speech: %s",
+                    path.name,
+                )
+            else:
+                store.add_capture_event(
+                    capture_control.CaptureEventKind.DEAD_WINDOW,
+                    utc=start,
+                    source_id=source_id,
+                    detail=path.name,
+                )
         except Exception:  # never let bookkeeping block cleanup
             _log.exception("could not record dead-window event for %s", path.name)
         try:
