@@ -42,7 +42,7 @@ from recall.health import (
     Check,
     agent_checks,
     capture_checks,
-    loss_check,
+    loss_checks,
     mirror_check,
     recorders_on_disk,
     sweep_refusal_check,
@@ -66,7 +66,7 @@ from recall.refine import refine_diarized
 from recall.reprocess import reprocess
 from recall.review import apply_correction
 from recall.runner import record
-from recall.sources import AudioSource, SourceKind
+from recall.sources import DEVICE_KINDS, AudioSource, SourceKind
 from recall.speakerid import pyannote_embed
 from recall.store import AbCompareJob, Store
 from recall.stream_server import serve as serve_ingest
@@ -1245,17 +1245,21 @@ _LOSS_SETTLE = timedelta(minutes=10)
 
 def _speech_loss(
     store: Store, sources: list[tuple[str, SourceKind]], *, now: datetime
-) -> tuple[list[Gap], int]:
+) -> tuple[list[Gap], dict[str, int]]:
     """Reconcile the always-on mic's recorded coverage against the pause/resume events
     over the recent window: uncovered active stretches (capture active, no audio) + the
-    dead window count — telling a deliberate pause from lost speech (recall.loss)."""
+    dead windows *per device* — telling a deliberate pause from lost speech
+    (recall.loss), and one broken microphone from a broken house (recall.health)."""
     since = now - _LOSS_WINDOW
     events = store.capture_events_since(since)
-    dead = len(
-        store.capture_events_since(
-            since, kinds=(capture_control.CaptureEventKind.DEAD_WINDOW,)
-        )
-    )
+    dead: dict[str, int] = {}
+    for event in store.capture_events_since(
+        since, kinds=(capture_control.CaptureEventKind.DEAD_WINDOW,)
+    ):
+        # source_id is nullable in the schema. Loss the archive cannot attribute is
+        # still loss, so it gets its own bucket instead of being dropped.
+        source_id = event.source_id or "unattributed"
+        dead[source_id] = dead.get(source_id, 0) + 1
     losses: list[Gap] = []
     for source_id, kind in sources:
         if kind is not ALWAYS_ON:
@@ -1292,8 +1296,14 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     store = Store.open(_db_path(args.out))
     try:
         # Registered recorders, not whatever directories exist: a mic the household
-        # actually uses is one the archive knows about.
-        sources = [(row.id, row.kind) for row in store.source_rows()]
+        # actually uses is one the archive knows about. Devices only — an imported
+        # meeting is a source but has no recorder that could stop or lose speech, and
+        # a row per meeting would bury the four microphones that matter.
+        sources = [
+            (row.id, row.kind)
+            for row in store.source_rows()
+            if row.kind in DEVICE_KINDS
+        ]
         losses, dead_windows = _speech_loss(store, sources, now=now)
         unmirrored = len(
             store.unmirrored_segments(limit=10_000, older_than=now - _MIRROR_SLACK)
@@ -1308,7 +1318,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             now=now,
             paused_until=capture_control.paused_until(args.out),
         ),
-        loss_check(losses, dead_windows, window=_LOSS_WINDOW),
+        *loss_checks(losses, dead_windows, sources, window=_LOSS_WINDOW),
         *agent_checks(capture_control.agent_health()),
     ]
     # The fleet mirror only exists when the split is on (RECALL_SYNC_TOKEN set); a

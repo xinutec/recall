@@ -13,11 +13,13 @@ from recall.health import (
     Recorder,
     agent_checks,
     capture_checks,
+    loss_checks,
     mirror_check,
     recorders_on_disk,
     sweep_refusal_check,
 )
-from recall.sources import SourceKind
+from recall.sources import DEVICE_KINDS, SourceKind
+from recall.timeline import Gap
 
 NOW = datetime(2026, 7, 13, 21, 0, 0, tzinfo=UTC)
 
@@ -238,3 +240,98 @@ def test_sweep_refusal_check_warns_without_failing_when_a_sweep_was_refused() ->
     tampered = sweep_refusal_check(2)
     assert tampered.verdict == "warn"
     assert "2" in tampered.observed
+
+
+# --- speech loss, per device ---------------------------------------------------------
+#
+# A single collapsed count answers the wrong question: it says the house lost speech,
+# but not which microphone to go and fix, and not whether the mic in question had an
+# excuse. See health.loss_checks.
+
+LOSS_WINDOW = timedelta(hours=48)
+LOSS_SOURCES = [("usb", SourceKind.COREAUDIO), ("pixel9", SourceKind.TCP_PCM)]
+
+
+def _gap(source_id: str, minutes: float) -> Gap:
+    return Gap(source_id=source_id, start=NOW - timedelta(minutes=minutes), end=NOW)
+
+
+def test_a_clean_window_passes_every_device_and_the_rollup() -> None:
+    checks = loss_checks([], {}, LOSS_SOURCES, window=LOSS_WINDOW)
+    assert _verdicts(checks) == {
+        "speech-loss:usb": "pass",
+        "speech-loss:pixel9": "pass",
+        "speech-loss": "pass",
+    }
+
+
+def test_a_carried_phones_dead_window_warns_and_names_the_phone() -> None:
+    """The three days of red this was built for: four dead windows on one pixel9 held
+    the whole check failing while every other mic recorded perfectly, and the tile
+    named no device. A phone gets closed, backgrounded, carried out of the house."""
+    checks = loss_checks([], {"pixel9": 4}, LOSS_SOURCES, window=LOSS_WINDOW)
+    assert _verdicts(checks) == {
+        "speech-loss:usb": "pass",
+        "speech-loss:pixel9": "warn",
+        "speech-loss": "warn",
+    }
+    rollup = next(c for c in checks if c.label == "speech-loss")
+    assert "pixel9" in rollup.observed
+    assert "4 dead-window(s)" in rollup.observed
+
+
+def test_the_wired_mic_has_no_excuse_and_fails() -> None:
+    checks = loss_checks([], {"usb": 1}, LOSS_SOURCES, window=LOSS_WINDOW)
+    verdicts = _verdicts(checks)
+    assert verdicts["speech-loss:usb"] == "fail"
+    assert verdicts["speech-loss:pixel9"] == "pass"
+    assert verdicts["speech-loss"] == "fail"
+
+
+def test_the_rollup_takes_the_worst_verdict_across_devices() -> None:
+    checks = loss_checks([], {"usb": 1, "pixel9": 2}, LOSS_SOURCES, window=LOSS_WINDOW)
+    assert _verdicts(checks)["speech-loss"] == "fail"
+
+
+def test_an_unexplained_gap_is_attributed_to_the_device_that_lost_it() -> None:
+    checks = loss_checks([_gap("usb", 3)], {}, LOSS_SOURCES, window=LOSS_WINDOW)
+    by_label = {c.label: c for c in checks}
+    assert by_label["speech-loss:usb"].verdict == "fail"
+    assert by_label["speech-loss:usb"].value == 3.0
+    assert by_label["speech-loss:pixel9"].verdict == "pass"
+    assert by_label["speech-loss:pixel9"].value == 0.0
+    assert by_label["speech-loss"].value == 3.0
+
+
+def test_loss_on_an_unregistered_device_is_never_swallowed() -> None:
+    """A dead window the archive cannot attribute still gets its own check — and the
+    strict verdict, because no excuse has been established for that device."""
+    checks = loss_checks([], {"unattributed": 1}, LOSS_SOURCES, window=LOSS_WINDOW)
+    assert _verdicts(checks)["speech-loss:unattributed"] == "fail"
+
+
+def test_loss_labels_never_collide_with_the_per_mic_recording_checks() -> None:
+    """fleetwatch's mute key is (source, collector, label): label is unique within a
+    collector, section is only presentation grouping (migrations/0003_mutes.sql). The
+    per-mic recording checks already own the bare source_id, so these must qualify
+    theirs — otherwise muting a flaky phone would silence its recording check too."""
+    live = timedelta(minutes=1)
+    recording = {c.label for c in capture_checks(_all_three(live, live), now=NOW)}
+    loss = {c.label for c in loss_checks([], {}, LOSS_SOURCES, window=LOSS_WINDOW)}
+    assert recording & loss == set()
+
+
+def test_an_imported_meeting_is_a_source_but_never_a_microphone() -> None:
+    """An UPLOAD arrives over HTTP as a finished file — there is no recorder behind it
+    to stall or die. Checking one is not just noise: thirteen imported meetings buried
+    the four real microphones, which is the opposite of what dimensioning is for."""
+    sources = [*LOSS_SOURCES, ("meeting-20260717-0912", SourceKind.UPLOAD)]
+    devices = [(sid, kind) for sid, kind in sources if kind in DEVICE_KINDS]
+
+    checks = loss_checks([], {}, devices, window=LOSS_WINDOW)
+
+    assert set(_verdicts(checks)) == {
+        "speech-loss:usb",
+        "speech-loss:pixel9",
+        "speech-loss",
+    }

@@ -28,7 +28,7 @@ time shown, so a deliberate pause reads as deliberate.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -245,39 +245,112 @@ def sweep_refusal_check(refused: int) -> Check:
 # and the Mac's own copy is the master the backup is taken *of*.
 
 
-def loss_check(losses: Sequence[Gap], dead_windows: int, *, window: timedelta) -> Check:
-    """Did recorded speech go missing while capture was meant to be running?
+_LOSS_EXPECTED = "every gap explained by a deliberate pause"
+# Worst-wins, for the roll-up. `skip` ranks with `pass`: a deliberate pause is not a
+# fault, and must never drag the summary upward.
+_SEVERITY = {"pass": 0, "skip": 0, "warn": 1, "fail": 2}
+
+
+def _loss_summary(gaps: int, lost: timedelta, dead: int) -> str:
+    parts = []
+    if gaps:
+        parts.append(f"{gaps} unexplained gap(s) totalling {_minutes(lost)} min")
+    if dead:
+        parts.append(f"{dead} dead-window(s)")
+    return ", ".join(parts)
+
+
+def _loss_verdict(kind: SourceKind | None) -> str:
+    """How loudly to say that this microphone lost speech.
+
+    The same rule `capture_checks` applies to silence: the always-on mic is wired to
+    this machine and has no excuse, a phone is carried out of the house and has several.
+    An unknown device gets the strict verdict — no excuse has been established for it.
+    """
+    return "warn" if kind is not None and kind is not ALWAYS_ON else "fail"
+
+
+def loss_checks(
+    losses: Sequence[Gap],
+    dead_windows: Mapping[str, int],
+    sources: Sequence[tuple[str, SourceKind]],
+    *,
+    window: timedelta,
+) -> list[Check]:
+    """Did recorded speech go missing while capture was meant to be running — and on
+    which microphone?
 
     An unexplained gap (capture active, yet no audio landed) or a dead-window is lost,
-    unrecoverable speech — the worst outcome the archive has — so it fails hard. Clean
-    means every timeline gap in the window is accounted for by a deliberate pause. This
-    is the reconciliation the archive lacked: a bare gap couldn't say whether audio was
-    missing on purpose or because capture silently died (see recall.loss).
+    unrecoverable speech — the worst outcome the archive has. Clean means every timeline
+    gap in the window is accounted for by a deliberate pause. This is the reconciliation
+    the archive lacked: a bare gap couldn't say whether audio was missing on purpose or
+    because capture silently died (see recall.loss).
+
+    Reported **per device**, like `capture_checks` and `agent_checks` before it, because
+    a single collapsed count answers the wrong question. It says the house lost speech;
+    it cannot say which microphone to go and fix, and it cannot tell a phone that was
+    carried away from the wired mic that has no excuse. A dead phone then reads as
+    loudly as a dead archive, which is how four dead windows on one pixel9 held the
+    whole check red for three days while every other mic recorded perfectly.
+
+    The roll-up keeps the bare `speech-loss` label so its trend survives the split, and
+    takes the worst verdict across devices. Per-device labels are qualified
+    (`speech-loss:usb`) because fleetwatch's mute key is `(source, collector, label)` —
+    label is unique within a collector, and the bare source_id is already taken by the
+    per-mic recording checks (see migrations/0003_mutes.sql in fleetwatch).
     """
-    lost = sum((g.end - g.start for g in losses), timedelta())
     hours = round(window.total_seconds() / 3600)
-    if losses or dead_windows:
-        return Check(
+    kinds = dict(sources)
+    gaps_by_source: dict[str, list[Gap]] = {}
+    for gap in losses:
+        gaps_by_source.setdefault(gap.source_id, []).append(gap)
+
+    # Every registered device, plus any that lost speech without being one: loss on an
+    # unknown source must get its own line rather than vanish into the roll-up.
+    source_ids = sorted(set(kinds) | set(dead_windows) | set(gaps_by_source))
+
+    checks: list[Check] = []
+    hurt: list[str] = []
+    total_lost = timedelta()
+    for source_id in source_ids:
+        gaps = gaps_by_source.get(source_id, [])
+        dead = dead_windows.get(source_id, 0)
+        lost = sum((g.end - g.start for g in gaps), timedelta())
+        total_lost += lost
+        if gaps or dead:
+            summary = _loss_summary(len(gaps), lost, dead)
+            hurt.append(f"{source_id}: {summary}")
+            verdict = _loss_verdict(kinds.get(source_id))
+            observed = f"{summary} in {hours}h"
+        else:
+            verdict = "pass"
+            observed = f"no unexplained loss in {hours}h"
+        checks.append(
+            Check(
+                section="capture",
+                label=f"speech-loss:{source_id}",
+                verdict=verdict,
+                observed=observed,
+                expected=_LOSS_EXPECTED,
+                value=_minutes(lost),
+                unit="min",
+            )
+        )
+
+    checks.append(
+        Check(
             section="capture",
             label="speech-loss",
-            verdict="fail",
-            observed=(
-                f"{len(losses)} unexplained gap(s) totalling {_minutes(lost)} min, "
-                f"{dead_windows} dead-window(s) in {hours}h"
+            verdict=max(
+                (c.verdict for c in checks), key=lambda v: _SEVERITY[v], default="pass"
             ),
-            expected="every gap explained by a deliberate pause",
-            value=_minutes(lost),
+            observed="; ".join(hurt) if hurt else f"no unexplained loss in {hours}h",
+            expected=_LOSS_EXPECTED,
+            value=_minutes(total_lost),
             unit="min",
         )
-    return Check(
-        section="capture",
-        label="speech-loss",
-        verdict="pass",
-        observed=f"no unexplained loss in {hours}h",
-        expected="every gap explained by a deliberate pause",
-        value=0.0,
-        unit="min",
     )
+    return checks
 
 
 def recorders_on_disk(
