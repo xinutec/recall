@@ -91,7 +91,10 @@ def load_mlx_chat(model: str = DEFAULT_LLM) -> ChatModel:
             messages.insert(0, {"role": "system", "content": system})
         # TokenizerWrapper delegates to the underlying HF tokenizer, which is
         # untyped — narrow the one boundary value instead of waiving the module.
-        templated: str = tokenizer.apply_chat_template(  # type: ignore[no-untyped-call]
+        # It returns TOKEN IDS, not text (transformers only returns a string with
+        # tokenize=False). This was annotated `str` for months without anyone
+        # noticing, because mlx-lm's generate accepts either.
+        templated: list[int] | str = tokenizer.apply_chat_template(  # type: ignore[no-untyped-call]
             messages, add_generation_prompt=True
         )
         result: str = generate(llm, tokenizer, prompt=templated, max_tokens=max_tokens)
@@ -99,9 +102,14 @@ def load_mlx_chat(model: str = DEFAULT_LLM) -> ChatModel:
         # few-shot prefix is read on every call, and reading it dominates
         # generating the reply. It is also what sizes a future prefix KV cache
         # (~56 KB/token for this model: 28 layers, 4 GQA KV heads, 128 dim).
+        prompt_tokens = (
+            len(templated)
+            if isinstance(templated, list)
+            else len(tokenizer.encode(templated))
+        )
         _log.info(
             "prompt %d tokens -> %d generated",
-            len(tokenizer.encode(templated)),
+            prompt_tokens,
             len(tokenizer.encode(result)),
         )
         return result

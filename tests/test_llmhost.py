@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 
+import pytest
 from fastapi.testclient import TestClient
 
 from recall.llm import ChatModel
@@ -87,6 +88,34 @@ def test_released_only_once_genuinely_idle() -> None:
 
     holder.generate("b")
     assert loader.names == ["m", "m"], "the next request reloads it"
+
+
+def test_a_failed_generation_does_not_make_the_model_look_idle_forever() -> None:
+    """A model that has only ever failed is still freshly loaded.
+
+    `_last_used` used to be stamped after a successful call only, so a failure on
+    a just-loaded model left it at 0 — an "idle time" of the whole process
+    uptime, and the reaper dropped ~4.3 GB of weights immediately. The next
+    request then paid a full cold load. Seen for real: "releasing … after 934391s
+    idle", seconds after loading.
+    """
+    clock = FakeClock()
+
+    def loader(name: str) -> ChatModel:
+        def chat(*, system: str | None, prompt: str, max_tokens: int) -> str:
+            raise ValueError("bad prompt")
+
+        return chat
+
+    holder = ModelHolder(
+        default_model="m", idle_unload=300.0, loader=loader, clock=clock
+    )
+
+    with pytest.raises(ValueError, match="bad prompt"):
+        holder.generate("a")
+
+    assert holder.release_if_idle() is False, "a fresh model is not idle"
+    assert holder.status()[0] == "m"
 
 
 def test_release_never_waits_on_a_generation_in_flight() -> None:

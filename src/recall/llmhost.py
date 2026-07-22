@@ -107,12 +107,21 @@ class ModelHolder:
                 _log.info("loading %s", wanted)
                 self._chat = self._loader(wanted)
                 self._model = wanted
+                # Stamped on load, not only on a successful generation: a model
+                # that has just been loaded is not idle, even if the request that
+                # loaded it goes on to fail. Leaving it at 0 made the reaper read
+                # the whole process uptime as idle time and drop the weights
+                # instantly, so the next request paid a fresh cold load.
+                self._last_used = self._clock()
                 load_secs = self._clock() - started
                 _log.info("loaded %s in %.1fs", wanted, load_secs)
             started = self._clock()
-            text = self._chat(system=system, prompt=prompt, max_tokens=max_tokens)
+            try:
+                text = self._chat(system=system, prompt=prompt, max_tokens=max_tokens)
+            finally:
+                # Same reason: time spent on a failed generation is still use.
+                self._last_used = self._clock()
             generate_secs = self._clock() - started
-            self._last_used = self._clock()
             self._generations += 1
         return Generated(
             text=text, model=wanted, load_secs=load_secs, generate_secs=generate_secs
