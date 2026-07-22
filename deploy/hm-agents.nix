@@ -70,6 +70,17 @@ in
     extra = { LowPriorityIO = true; Nice = 10; };
   };
 
+  # The one process on this Mac that holds the LLM weights (src/recall/llmhost.py).
+  # recall's summaries/Ask and life's emotion worker are clients over 127.0.0.1:8092;
+  # neither loads a model of its own, so the ~4.3 GB is paid once and released after
+  # five idle minutes. NOT background/low-priority like the other daemons: an Ask has
+  # a human waiting on it, and the process is idle (a few MB) whenever nothing asked.
+  launchd.agents."com.pippijn.recall-llm-host" = daemon {
+    label = "com.pippijn.recall-llm-host";
+    name = "llm-host";
+    script = "recall-llm-host.sh";
+  };
+
   launchd.agents."com.pippijn.recall-refine" = daemon {
     label = "com.pippijn.recall-refine";
     name = "refine";

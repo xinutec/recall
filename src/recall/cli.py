@@ -51,7 +51,7 @@ from recall.hf_asr import is_adapter_dir, make_hf_transcriber
 from recall.identify import identify_segments
 from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.live import run_live
-from recall.llm import Generator, make_mlx_generator
+from recall.llm import Generator, make_generator
 from recall.logrotate import rotate_logs
 from recall.loss import uncovered_loss
 from recall.loudness import backfill_loudness
@@ -725,9 +725,10 @@ def _drain_ask_requests(
 ) -> bool:
     """Answer ONE queued "Ask the archive" job with the local LLM — the fleet has none,
     so it queued the (self-contained, already-retrieved) prompt for this Mac to generate
-    and push back. Pause-independent: a human is waiting. The model loads lazily into
-    `cache`, shared with the day-summaries. Never runs on the fleet (no MLX there);
-    generation failures are recorded on the job so the UI shows them, not the daemon."""
+    and push back. Pause-independent: a human is waiting. Generation happens in the
+    llm-host (recall.llmhost), which owns the weights; `cache` holds the generator,
+    shared with the day-summaries. Never runs on the fleet (no MLX there); generation
+    failures are recorded on the job so the UI shows them, not the daemon."""
     if capture_control.is_fleet():
         return False
     pending = store.pending_ask_requests(limit=1)
@@ -735,7 +736,7 @@ def _drain_ask_requests(
         return False
     job = pending[0]
     if not cache:
-        cache.append(make_mlx_generator(llm_model))
+        cache.append(make_generator(llm_model))
     try:
         answer = cache[0](job.prompt).strip()
     except Exception as exc:  # generation itself failed → terminal error for the UI
@@ -760,13 +761,14 @@ def _drain_day_summaries(
 ) -> bool:
     """Summarise ONE missing complete day (the recall layer generates itself in
     the refine daemon — no separate agent). Not idle-gated: a ~20s generation
-    doesn't starve capture. The model loads lazily into `cache` so a daemon with
-    nothing to summarise never pays for it. Returns whether a day was done."""
+    doesn't starve capture. Generation happens in the llm-host, which loads the
+    weights on the first ask and releases them when they go unused, so a daemon
+    with nothing to summarise never costs any memory. Returns whether a day was done."""
     days = days_needing_summaries(store, now=datetime.now(UTC))
     if not days:
         return False
     if not cache:
-        cache.append(make_mlx_generator(llm_model))
+        cache.append(make_generator(llm_model))
     summarize_day(store, cache[0], days[0], model_name=llm_model)
     print(f"refine: summarized {days[0]}", flush=True)
     return True
@@ -785,7 +787,7 @@ def _cmd_summarize(args: argparse.Namespace) -> int:
         if not days:
             print("summarize: nothing missing")
             return 0
-        generator = make_mlx_generator(args.llm)
+        generator = make_generator(args.llm)
         for day in days:
             text = summarize_day(store, generator, day, model_name=args.llm)
             if text is None:
@@ -1372,6 +1374,18 @@ def _cmd_scan_hallucinations(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_llm_host(args: argparse.Namespace) -> int:
+    """Hold the LLM for everyone who wants it (recall.llmhost). The module is
+    imported lazily: it pulls in the web stack, and it is Mac-only."""
+    from recall.llmhost import serve  # noqa: PLC0415 - keeps the web stack local
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
+    serve(host=args.host, port=args.port, model=args.llm, idle_unload=args.idle_unload)
+    return 0
+
+
 def _cmd_api(args: argparse.Namespace) -> int:
     # uvicorn is imported lazily so every other CLI command stays free of the
     # web stack. RECALL_OUT is read by recall.api at import time.
@@ -1791,6 +1805,7 @@ _COMMANDS = {
     "doctor": _cmd_doctor,
     "scan-hallucinations": _cmd_scan_hallucinations,
     "scan-loops": _cmd_scan_loops,
+    "llm-host": _cmd_llm_host,
     "api": _cmd_api,
     "export-training": _cmd_export_training,
     "finetune": _cmd_finetune,

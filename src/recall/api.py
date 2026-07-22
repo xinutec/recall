@@ -57,7 +57,7 @@ from recall.conversations import (
 from recall.finetune import DEFAULT_BASE_MODEL
 from recall.ids import AudioSegmentId
 from recall.liveness import source_statuses
-from recall.llm import DEFAULT_LLM, Generator, make_mlx_generator
+from recall.llm import DEFAULT_LLM, Generator, make_generator
 from recall.loudness import normalize_loudness
 from recall.moments import Moment, best_colocated_guess, cluster_moments
 from recall.paths import default_data_root
@@ -1634,16 +1634,17 @@ def clip(transcript_id: int, lead: float = 1.5, tail: float = 1.5) -> Response:
         store.close()
 
 
-# The ask/summary generator, loaded lazily into the api process on the first
-# /api/ask (a few GB resident thereafter; the M4 has the headroom). Indirected
-# through _generator() so tests inject a stub without touching mlx.
+# The ask/summary generator. The weights are NOT in this process: they live in
+# the llm-host (recall.llmhost), which holds one copy for everything on the Mac
+# that wants it and releases it when idle. Indirected through _generator() so
+# tests inject a stub without touching the host.
 _llm: Generator | None = None
 
 
 def _generator() -> Generator:
-    global _llm  # noqa: PLW0603 - deliberate process-wide model cache
+    global _llm  # noqa: PLW0603 - deliberate process-wide client cache
     if _llm is None:
-        _llm = make_mlx_generator(DEFAULT_LLM)
+        _llm = make_generator(DEFAULT_LLM)
     return _llm
 
 

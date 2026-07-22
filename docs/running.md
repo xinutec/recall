@@ -22,6 +22,7 @@ agent is loaded).
 | `com.pippijn.recall-api` | Angular web app + JSON API on `:8000` | always on |
 | `com.pippijn.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
 | `com.pippijn.recall-refine` | re-derive segments diarized + speaker-split; also drains queued A/B model comparisons | diarize: while capture paused · A/B: any time |
+| `com.pippijn.recall-llm-host` | holds the LLM (one copy for the whole Mac) and generates on `127.0.0.1:8092` | always on; weights loaded on demand, released after 5 min idle |
 
 The off-machine backup is **odin's**, not the Mac's: odin's nightly restic takes an
 integrity-checked SQLite snapshot from inside the Isis pod plus an rsync of the audio
@@ -132,6 +133,21 @@ by hand:
 
 ```sh
 ./scripts/recall.sh summarize --out /Volumes/Backup/recall [--day 2026-06-28]
+```
+
+Neither loads the model itself. The weights live in **`recall-llm-host`**
+(`src/recall/llmhost.py`) — one process for the whole Mac, so recall and life's
+emotion worker cannot each hold their own ~4.3 GB copy — and everything else is
+an HTTP client (`recall.llm.make_generator`). It loads on the first request and
+lets go after five idle minutes, so an unused day costs nothing and a first
+request after a lull pays ~60s. Nothing falls back to loading in-process: with
+the agent down, generation fails loudly (`LlmHostUnavailable`) rather than
+quietly re-creating the second copy.
+
+```sh
+curl -s localhost:8092/health            # which model is resident, and how idle
+./scripts/recall.sh llm-host --idle-unload 60   # run one by hand (agent stopped)
+RECALL_LLM_HOST= ./scripts/recall.sh summarize  # deliberate in-process load
 ```
 
 ## Vocabulary (proper nouns)

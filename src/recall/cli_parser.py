@@ -12,7 +12,12 @@ from pathlib import Path
 
 from recall.asr import DEFAULT_MODEL
 from recall.finetune import DEFAULT_BASE_MODEL
-from recall.llm import DEFAULT_LLM
+from recall.llm import (
+    DEFAULT_IDLE_UNLOAD,
+    DEFAULT_LLM,
+    LLM_HOST_BIND,
+    LLM_HOST_PORT,
+)
 from recall.paths import default_data_root
 from recall.stream_server import DEFAULT_INGEST_PORT
 
@@ -285,6 +290,21 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "--post",
         action="store_true",
         help="send the verdicts to fleetwatch (needs ~/.config/fleetwatch/token)",
+    )
+
+    lmh = sub.add_parser(
+        "llm-host",
+        help="hold the LLM in ONE process and serve generation on localhost "
+        "(recall's summaries/Ask and life's emotion worker share it)",
+    )
+    lmh.add_argument("--host", default=LLM_HOST_BIND, help="bind address")
+    lmh.add_argument("--port", type=int, default=LLM_HOST_PORT)
+    lmh.add_argument("--llm", default=DEFAULT_LLM, help="model to hold")
+    lmh.add_argument(
+        "--idle-unload",
+        type=float,
+        default=DEFAULT_IDLE_UNLOAD,
+        help="seconds of quiet before the weights are released",
     )
 
     api = sub.add_parser("api", help="serve the FastAPI JSON API + Angular app")
