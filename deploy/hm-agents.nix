@@ -55,14 +55,14 @@ in
   # reachable from Isis under the one-way WireGuard model and need a Mac-initiated job-pull
   # (like capture-mirror) — tracked as Phase 2, not served from the Mac.
 
-  launchd.agents."com.pippijn.recall-ingest" = daemon {
-    label = "com.pippijn.recall-ingest";
+  launchd.agents."org.xinutec.recall-ingest" = daemon {
+    label = "org.xinutec.recall-ingest";
     name = "ingest";
     script = "recall-ingest.sh";
   };
 
-  launchd.agents."com.pippijn.recall-worker" = daemon {
-    label = "com.pippijn.recall-worker";
+  launchd.agents."org.xinutec.recall-worker" = daemon {
+    label = "org.xinutec.recall-worker";
     name = "worker";
     script = "recall.sh";
     args = [ "worker" "--loop" "--basic" "--out" "/Volumes/Backup/recall" ];
@@ -79,15 +79,15 @@ in
   # human waiting on it, and the throttled I/O made the cold weight read visibly
   # slower than the same load from a shell. Idle it costs a few MB, so it is not
   # competing with capture for anything except while it is actually answering.
-  launchd.agents."com.pippijn.recall-llm-host" = daemon {
-    label = "com.pippijn.recall-llm-host";
+  launchd.agents."org.xinutec.recall-llm-host" = daemon {
+    label = "org.xinutec.recall-llm-host";
     name = "llm-host";
     script = "recall-llm-host.sh";
     extra = { ProcessType = "Standard"; };
   };
 
-  launchd.agents."com.pippijn.recall-refine" = daemon {
-    label = "com.pippijn.recall-refine";
+  launchd.agents."org.xinutec.recall-refine" = daemon {
+    label = "org.xinutec.recall-refine";
     name = "refine";
     script = "recall-refine.sh";
   };
@@ -101,8 +101,8 @@ in
   # the fleet UI shows live turns within seconds, reconciled when the archive segment
   # lands. Token is RECALL_SYNC_TOKEN (recall.sh sources .env); the push is best-effort
   # and off the VAD loop, so it never affects capture.
-  launchd.agents."com.pippijn.recall-live" = daemon {
-    label = "com.pippijn.recall-live";
+  launchd.agents."org.xinutec.recall-live" = daemon {
+    label = "org.xinutec.recall-live";
     name = "live";
     script = "recall.sh";
     args = [ "live" "--out" "/Volumes/Backup/recall"
@@ -111,8 +111,8 @@ in
   };
 
   # Mic agent — the critical continuous recording stream (USB mic → segments).
-  launchd.agents."com.pippijn.recall-capture" = daemon {
-    label = "com.pippijn.recall-capture";
+  launchd.agents."org.xinutec.recall-capture" = daemon {
+    label = "org.xinutec.recall-capture";
     name = "capture";
     script = "recall-capture.sh";
   };
@@ -138,8 +138,8 @@ in
   # staleness from the cadence the report declares, and a producer that stops
   # reporting renders as failed. That is the point — this agent dying, or the Mac
   # dying, is itself the alarm. Nothing here has to detect it.
-  launchd.agents."com.pippijn.recall-doctor" = daemon {
-    label = "com.pippijn.recall-doctor";
+  launchd.agents."org.xinutec.recall-doctor" = daemon {
+    label = "org.xinutec.recall-doctor";
     name = "doctor";
     script = "recall-doctor.sh";
     extra = {
@@ -154,8 +154,8 @@ in
   # KeepAlive: each run sends only what changed since the last (a transcript-id
   # watermark) and exits. The Mac must push — it is a one-way WireGuard peer the fleet
   # cannot reach. Inert until RECALL_SYNC_TOKEN is set in .env.
-  launchd.agents."com.pippijn.recall-sync" = daemon {
-    label = "com.pippijn.recall-sync";
+  launchd.agents."org.xinutec.recall-sync" = daemon {
+    label = "org.xinutec.recall-sync";
     name = "sync";
     script = "recall-sync.sh";
     extra = {
@@ -172,8 +172,8 @@ in
   # Mac's local queue and exits; the refine daemon then does the ML while the mic is idle,
   # and the refined turns sync back via recall-sync. The Mac must poll — it is a one-way
   # WireGuard peer the fleet cannot reach. Inert until RECALL_SYNC_TOKEN is set in .env.
-  launchd.agents."com.pippijn.recall-jobs" = daemon {
-    label = "com.pippijn.recall-jobs";
+  launchd.agents."org.xinutec.recall-jobs" = daemon {
+    label = "org.xinutec.recall-jobs";
     name = "jobs";
     script = "recall-jobs.sh";
     extra = {
@@ -190,8 +190,8 @@ in
   # dial this one-way peer, so control is inverted to a Mac-initiated poll and a pause
   # pressed on the VPN UI takes hold within seconds. Lightweight — an HTTP round trip,
   # no ML. Inert until RECALL_SYNC_TOKEN is set in .env.
-  launchd.agents."com.pippijn.recall-capture-mirror" = daemon {
-    label = "com.pippijn.recall-capture-mirror";
+  launchd.agents."org.xinutec.recall-capture-mirror" = daemon {
+    label = "org.xinutec.recall-capture-mirror";
     name = "capture-mirror";
     script = "recall-capture-mirror.sh";
   };

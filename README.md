@@ -18,7 +18,7 @@ in the house. Everything stays on-device.
 Open **`http://<mac-ip>:8000`** (LAN): a timeline of the conversation, full-text
 search with audio playback, a review/correct queue, record-from-device (phone as
 a second mic), and speaker labelling that enrols voices as you confirm who spoke.
-It's an Angular app served by FastAPI on one origin (`com.pippijn.recall-api`).
+It's an Angular app served by FastAPI on one origin (`org.xinutec.recall-api`).
 See [`docs/running.md`](docs/running.md).
 
 ## Dev

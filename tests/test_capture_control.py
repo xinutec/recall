@@ -69,14 +69,14 @@ def test_agent_health_flags_installed_but_unloaded(monkeypatch: object) -> None:
     monkeypatch.setattr(  # type: ignore[attr-defined]
         cc,
         "installed_agents",
-        lambda: ["com.pippijn.recall-api", "com.pippijn.recall-capture"],
+        lambda: ["org.xinutec.recall-api", "org.xinutec.recall-capture"],
     )
     monkeypatch.setattr(  # type: ignore[attr-defined]
-        cc, "loaded_agents", lambda: {"com.pippijn.recall-api"}
+        cc, "loaded_agents", lambda: {"org.xinutec.recall-api"}
     )
     assert cc.agent_health() == [
-        ("com.pippijn.recall-api", True),
-        ("com.pippijn.recall-capture", False),  # installed but not loaded → fault
+        ("org.xinutec.recall-api", True),
+        ("org.xinutec.recall-capture", False),  # installed but not loaded → fault
     ]
 
 

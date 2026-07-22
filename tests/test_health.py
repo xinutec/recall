@@ -209,9 +209,9 @@ def test_the_report_id_is_a_real_ulid() -> None:
 def test_an_unloaded_agent_is_always_a_fault() -> None:
     # The agents self-gate: they park while capture is paused, they do not unload. So
     # "not loaded" never means "deliberately off" — it means something broke.
-    checks = agent_checks([("com.pippijn.recall-capture", False), ("x", True)])
+    checks = agent_checks([("org.xinutec.recall-capture", False), ("x", True)])
 
-    assert _verdicts(checks) == {"com.pippijn.recall-capture": "fail", "x": "pass"}
+    assert _verdicts(checks) == {"org.xinutec.recall-capture": "fail", "x": "pass"}
 
 
 def test_no_agents_installed_at_all_is_not_quietly_fine() -> None:

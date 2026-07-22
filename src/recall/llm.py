@@ -143,7 +143,7 @@ def generate_via_host(
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise LlmHostUnavailable(
             f"no llm-host at {base_url} ({exc}) - "
-            "is com.pippijn.recall-llm-host running?"
+            "is org.xinutec.recall-llm-host running?"
         ) from exc
     text: str = payload["text"]
     return text

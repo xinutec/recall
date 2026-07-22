@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import NamedTuple, Protocol
 
 # All recall agents share this prefix; the USB capture agent has this exact label.
-_AGENT_PREFIX = "com.pippijn.recall-"
+_AGENT_PREFIX = "org.xinutec.recall-"
 CAPTURE_LABEL = f"{_AGENT_PREFIX}capture"
 # A pause lasts at most this long, then recording auto-resumes — a safety net so a
 # forgotten pause can't leave recording off indefinitely. 24 h covers a full day away

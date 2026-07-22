@@ -16,13 +16,13 @@ agent is loaded).
 
 | agent | does | when |
 |---|---|---|
-| `com.pippijn.recall-capture` | USB mic → gap-free Opus segments | always on |
-| `com.pippijn.recall-live` | VAD → transcribe each utterance (~2–3 s, provisional) | always on |
-| `com.pippijn.recall-worker` | index + transcribe new segments (whole-clip; diarization is the refine agent's job) | continuous |
-| `com.pippijn.recall-api` | Angular web app + JSON API on `:8000` | always on |
-| `com.pippijn.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
-| `com.pippijn.recall-refine` | re-derive segments diarized + speaker-split; also drains queued A/B model comparisons | diarize: while capture paused · A/B: any time |
-| `com.pippijn.recall-llm-host` | holds the LLM (one copy for the whole Mac) and generates on `127.0.0.1:8092` | always on; weights loaded on demand, released after 5 min idle |
+| `org.xinutec.recall-capture` | USB mic → gap-free Opus segments | always on |
+| `org.xinutec.recall-live` | VAD → transcribe each utterance (~2–3 s, provisional) | always on |
+| `org.xinutec.recall-worker` | index + transcribe new segments (whole-clip; diarization is the refine agent's job) | continuous |
+| `org.xinutec.recall-api` | Angular web app + JSON API on `:8000` | always on |
+| `org.xinutec.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
+| `org.xinutec.recall-refine` | re-derive segments diarized + speaker-split; also drains queued A/B model comparisons | diarize: while capture paused · A/B: any time |
+| `org.xinutec.recall-llm-host` | holds the LLM (one copy for the whole Mac) and generates on `127.0.0.1:8092` | always on; weights loaded on demand, released after 5 min idle |
 
 The off-machine backup is **odin's**, not the Mac's: odin's nightly restic takes an
 integrity-checked SQLite snapshot from inside the Isis pod plus an rsync of the audio
@@ -60,8 +60,8 @@ crash-loop (visible in `logs/capture.err.log`) rather than silently recording
 from the wrong mic.
 
 ```sh
-launchctl bootout   gui/$(id -u)/com.pippijn.recall-capture                                # stop
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.pippijn.recall-capture.plist   # start
+launchctl bootout   gui/$(id -u)/org.xinutec.recall-capture                                # stop
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.xinutec.recall-capture.plist   # start
 nix develop --command python -m recall verify --out /Volumes/Backup/recall                # check for gaps
 ```
 
