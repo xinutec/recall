@@ -18,10 +18,13 @@ string, which means "load it in this process".
 from __future__ import annotations
 
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
 from typing import Any, Protocol
+
+_log = logging.getLogger("recall.llm")
 
 # Qwen2.5 7B (4-bit): strong EN+NL instruction following, ~4.5 GB resident — fits
 # alongside Whisper on the M4/32GB. Overridable per call site (--llm flags).
@@ -92,6 +95,15 @@ def load_mlx_chat(model: str = DEFAULT_LLM) -> ChatModel:
             messages, add_generation_prompt=True
         )
         result: str = generate(llm, tokenizer, prompt=templated, max_tokens=max_tokens)
+        # Prompt length is the number that explains a slow answer: a long
+        # few-shot prefix is read on every call, and reading it dominates
+        # generating the reply. It is also what sizes a future prefix KV cache
+        # (~56 KB/token for this model: 28 layers, 4 GQA KV heads, 128 dim).
+        _log.info(
+            "prompt %d tokens -> %d generated",
+            len(tokenizer.encode(templated)),
+            len(tokenizer.encode(result)),
+        )
         return result
 
     return run
