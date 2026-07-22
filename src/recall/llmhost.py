@@ -84,7 +84,10 @@ class ModelHolder:
         self._lock = threading.Lock()
         self._model: str | None = None
         self._chat: ChatModel | None = None
-        self._last_used = 0.0
+        # None, not 0.0: "never used" must not be representable as a number, or
+        # `clock() - never` reads as a real duration and the sweeper drops the
+        # weights (dev-lint python-zero-timestamp-sentinel).
+        self._last_used: float | None = None
         self._generations = 0
 
     def generate(
@@ -136,7 +139,7 @@ class ModelHolder:
         if not self._lock.acquire(blocking=False):
             return False
         try:
-            if self._chat is None:
+            if self._chat is None or self._last_used is None:
                 return False
             idle = self._clock() - self._last_used
             if idle < self._idle_unload:
@@ -153,7 +156,7 @@ class ModelHolder:
         Read without the lock on purpose, so `/health` answers immediately while
         a long generation is in flight. Diagnostics, not a decision input.
         """
-        if self._chat is None:
+        if self._chat is None or self._last_used is None:
             return None, None, self._generations
         return self._model, self._clock() - self._last_used, self._generations
 
