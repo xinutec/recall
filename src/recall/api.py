@@ -689,7 +689,10 @@ def search(q: str, limit: int = 100) -> ItemsOut:
 
 @app.get("/api/timeline")
 def timeline(limit: int = 200, before: str | None = None) -> PageOut:
-    cursor = _parse_iso(before)
+    try:
+        cursor = _parse_iso(before)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     store = _store()
     try:
         rows = store.recent_transcripts(limit=limit, before=cursor)
@@ -758,8 +761,11 @@ def conversations(
     conversation at the page edge may be truncated. `source` restricts to one
     recorder/session (how the sessions view focuses on a single meeting).
     """
-    before_cur = _parse_iso(before)
-    after_cur = _parse_iso(after)
+    try:
+        before_cur = _parse_iso(before)
+        after_cur = _parse_iso(after)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     store = _store()
     try:
         rows = store.recent_transcripts(
@@ -856,6 +862,11 @@ def train(
     deprioritized — the labeling default) or "time" (oldest first, to read a
     conversation in sequence). `corrections` is the labelled-corpus size (progress).
     """
+    try:
+        since_cur = _parse_iso(since)
+        until_cur = _parse_iso(until)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     store = _store()
     try:
         if order == "time":
@@ -863,8 +874,8 @@ def train(
                 min_confidence=_TRAIN_MIN_CONFIDENCE,
                 max_confidence=_TRAIN_MAX_CONFIDENCE,
                 limit=limit,
-                since=_parse_iso(since),
-                until=_parse_iso(until),
+                since=since_cur,
+                until=until_cur,
                 order="time",
             )
             return {
@@ -883,8 +894,8 @@ def train(
             min_confidence=_TRAIN_MIN_CONFIDENCE,
             max_confidence=_TRAIN_MAX_CONFIDENCE,
             limit=_TRAIN_CANDIDATES,
-            since=_parse_iso(since),
-            until=_parse_iso(until),
+            since=since_cur,
+            until=until_cur,
             order="loudness",
         )
         spans = store.media_spans(
@@ -1237,8 +1248,11 @@ def refine_request(body: RefineRequestIn) -> OkOut:
     """Queue an on-demand diarize-refine of [start, end) of a recording. The idle-gated
     refine daemon runs it, so the heavy pass stays off live capture — the timeline's
     'Refine this' action."""
-    start = _require_time(body.start)
-    end = _require_time(body.end)
+    try:
+        start = _require_time(body.start)
+        end = _require_time(body.end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     store = _store()
     try:
         store.add_refine_request(body.source, start, end)
@@ -1251,8 +1265,11 @@ def refine_request(body: RefineRequestIn) -> OkOut:
 def ab_compare_start(body: AbCompareStartIn) -> NewIdOut:
     """Queue a non-destructive A/B comparison of two ASR models over a recording. The
     refine daemon runs it; poll `GET /api/ab-compare/{id}` for the result."""
-    frm = _parse_iso(body.frm or None)
-    to = _parse_iso(body.to or None)
+    try:
+        frm = _parse_iso(body.frm or None)
+        to = _parse_iso(body.to or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     store = _store()
     try:
         run_id = store.add_ab_compare_run(

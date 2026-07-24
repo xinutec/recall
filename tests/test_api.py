@@ -903,6 +903,26 @@ def test_turn_nudge_route_reads_a_json_body_and_moves_the_edge(
     assert moved.start == BASE + timedelta(seconds=4)  # start pulled 1s earlier
 
 
+def test_malformed_time_is_a_400_not_a_500(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A bad ISO time is a client mistake: every endpoint that parses one must
+    # answer 400, never let the ValueError escape as a 500. (Guarded by
+    # dev-lint's DL-FASTAPI-UNGUARDED-PARSE.)
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    client = TestClient(api.app)
+
+    assert client.get("/api/timeline?before=not-a-time").status_code == 400
+    assert client.get("/api/conversations?after=not-a-time").status_code == 400
+    assert client.get("/api/train?since=not-a-time").status_code == 400
+    refine = client.post(
+        "/api/refine", json={"source": "usb", "start": "not-a-time", "end": "x"}
+    )
+    assert refine.status_code == 400
+    ab = client.post("/api/ab-compare", json={"source": "usb", "from": "not-a-time"})
+    assert ab.status_code == 400
+
+
 # --- meeting upload + management (Sessions page) --------------------------------
 
 
