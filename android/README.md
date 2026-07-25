@@ -21,6 +21,14 @@ killed by Doze/the OOM killer). The phone is the TCP **client**; recall listens.
   foreground notification reflects the household pause state ("Recording paused" vs
   "Waiting for recall host"), read from the same API the screen uses.
 - `BootReceiver` — restarts the stream after a reboot if it was enabled.
+- `ResumeWarning` / `ResumeWarningReceiver` — a **2h-before-auto-resume heads-up**.
+  A bounded pause records a resume-by time; `ResumeWarning` schedules an exact
+  `AlarmManager` alarm for `resumeAt − 2h` (re-armed off the same capture-state polls
+  the banner uses, so extending the pause moves it at once), and the receiver posts a
+  notification in time to extend the pause before the mic comes back on. The
+  pause-vs-resume decision is the pure, unit-tested `planResumeWarning`
+  (`ResumeWarningPlan.kt`); a pause shorter than the lead gets no warning (the banner
+  countdown is the only heads-up there).
 - `MainActivity` — set the host, Start/Stop, and a **household-pause banner**:
   when capture is paused it shows the resume time with snooze/resume, mirroring the
   web app. The pause state is one shared value (`MicState.capture`) that both the

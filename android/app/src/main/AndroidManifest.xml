@@ -12,6 +12,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Restart the stream automatically after a reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Fire the "recording resumes soon" warning at an exact wall-clock time, even in
+         doze, so it keeps its full lead. USE_EXACT_ALARM (API 33+) is auto-granted;
+         SCHEDULE_EXACT_ALARM covers 26-32 (granted on install there). -->
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <application
         android:allowBackup="true"
@@ -58,6 +65,12 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!-- Posts the "recording resumes soon" heads-up when ResumeWarning's alarm
+             fires. Internal (the alarm PendingIntent is our own), so not exported. -->
+        <receiver
+            android:name=".ResumeWarningReceiver"
+            android:exported="false" />
 
     </application>
 </manifest>

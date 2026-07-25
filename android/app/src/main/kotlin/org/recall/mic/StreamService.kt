@@ -21,6 +21,7 @@ import kotlinx.coroutines.runBlocking
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.time.Instant
 import kotlin.concurrent.thread
 
 /**
@@ -114,6 +115,9 @@ class StreamService : Service() {
                 acquireWakeLock()
                 setNotification("Streaming to $host")
                 MicState.setConnected(true)
+                // Recording is definitively on now — drop any pending resume warning
+                // (a resume the app never polled as running would otherwise leave it armed).
+                ResumeWarning.cancel(this)
                 // Note: connecting drives only *this phone's* state. The household
                 // pause state is the authority's (/api/capture + Pause/Resume) — never
                 // inferred from a socket, which races a parking listener on pause.
@@ -159,6 +163,10 @@ class StreamService : Service() {
                     // pause-vs-unreachable.
                     val cap = runBlocking { CaptureApi.state(controlHost) }
                     MicState.setCapture(cap)
+                    // A paused mic can't connect, so this failure path polls the control
+                    // host every couple of seconds while paused — the reliable place to
+                    // (re)arm the 2h-before-resume warning as the pause is set or extended.
+                    ResumeWarning.sync(this, cap, Instant.now())
                     val paused = cap?.let { !it.running } == true
                     setNotification(
                         if (paused) "Recording paused" else "Waiting for recall host",

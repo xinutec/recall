@@ -47,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -151,6 +152,7 @@ fun MicScreen(
     // transient blip doesn't flicker the banner.
     val capture by MicState.capture.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     LaunchedEffect(controlHost) {
         if (controlHost.isBlank()) return@LaunchedEffect
         delay(500) // debounce: typing restarts this effect per keystroke
@@ -165,6 +167,9 @@ fun MicScreen(
                     known = MicState.capture.value?.stateToken,
                 )
             cap?.let { MicState.setCapture(it) }
+            // Keep the 2h-before-resume warning current while the screen is open (the
+            // service does the same on its poll); a pause set/extended here re-arms it.
+            ResumeWarning.sync(context, cap, Instant.now())
             delay(if (cap?.stateToken != null) 250 else 5_000)
         }
     }
