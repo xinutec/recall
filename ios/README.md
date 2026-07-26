@@ -77,7 +77,8 @@ shell — `verify.sh` works around that (`env -u DEVELOPER_DIR`).
 ## Tests
 
 Unit tests (`Tests/` — Levels/meter-tier parity with Android, DeviceID, the
-watchdog decision) run on the iOS Simulator:
+watchdog decision, and the paused-banner text) run on the iOS Simulator, from the
+**repo root** (the script lives there, not in `ios/`):
 
 ```sh
 ./scripts/ios-test.sh
@@ -114,6 +115,10 @@ ios/
 │   ├── MicState.swift     # observable shared state
 │   ├── Prefs.swift        # UserDefaults: host, port, enabled, device id
 │   ├── DeviceID.swift     # stable source-id derivation (model + hex suffix)
-│   └── Levels.swift       # pure dBFS level-meter math (port of Levels.kt)
+│   ├── Levels.swift       # pure dBFS level-meter math (port of Levels.kt)
+│   ├── Banner.swift       # paused-banner text, byte-identical to web/Android
+│   └── Watchdog.swift     # pure decision: when a silent stream must be cycled
+├── Tests/                 # Banner, DeviceID, Levels, Watchdog (the pure units)
+├── Info.plist
 └── README.md
 ```

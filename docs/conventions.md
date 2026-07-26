@@ -74,6 +74,7 @@ gate: `ruff check` + `ruff format --check`, `swift-format lint --strict` (the iO
 app, via the Xcode toolchain), `mypy --strict`, `dev-lint` (custom rules), the
 frontend↔backend schema contract (`gen_models.py --check`), `pytest` (via the venv
 that holds the ML deps), and the frontend build + vitest. All green.
-A pre-push hook is installed to run it, though the repo is local-only so nothing
-triggers it yet — run it by hand. Fix nearby warnings opportunistically; don't punt
-them as "pre-existing".
+A pre-push hook is installed to run it. CI (`.github/workflows/build.yml`) builds the
+image and is the gate that must stay green, but it does *not* run the full local gate
+(no mypy/pytest/dev-lint there) — so run `verify.sh` by hand before pushing. Fix nearby
+warnings opportunistically; don't punt them as "pre-existing".

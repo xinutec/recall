@@ -23,23 +23,27 @@ dev server binds `0.0.0.0`, so it's reachable from the phone over the LAN.
 ## Build (what the backend serves)
 
 ```sh
-../scripts/recall-build-frontend.sh        # = npx ng build
+../scripts/recall-build-frontend.sh
 ```
 
-Output goes to `dist/recall-web/browser/`, which `recall api` serves with an SPA
-fallback. The running service picks up a new build on its next request — no
-restart needed.
+Not a bare `ng build`: it runs `npm run build` (so the `prebuild` version stamp
+fires), builds into a staging dir, checks `index.html` + the main bundle + every
+`public/` asset landed, retries a known libuv/kqueue abort, and only then swaps into
+`dist/recall-web`. Output is `dist/recall-web/browser/`, served with an SPA fallback.
+In production the Dockerfile does this build — the image is what Isis serves.
 
 ## Test
 
 ```sh
-npx ng test --watch=false                  # Vitest
+npm test                                   # Vitest (via the pretest version stamp)
+npx playwright test                        # e2e specs in e2e/
 ```
 
 ## Layout
 
-- `src/app/features/` — one component per route (timeline, home, search, review, train, record, labels, sessions, session)
-- `src/app/shared/` — reusable pieces (transcript card)
+- `src/app/features/` — one component per route: timeline (`''`), search, ask,
+  review, train, labels, cleanup, sessions, session (`sessions/:id`), compare,
+  compare-run (`compare/:id`) — plus the non-route `clip-trimmer` and `waveform`
+- `src/app/shared/` — reusable pieces (transcript card, confirm dialog)
 - `src/app/recall-api.ts` — typed client for the backend mutations
-- `src/app/audio/wav-recorder.ts` — lossless AudioWorklet PCM → WAV recorder
 - `src/app/models.ts`, `format.ts` — API types and presentation helpers

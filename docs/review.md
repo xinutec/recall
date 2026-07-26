@@ -4,8 +4,8 @@ To read a recorded session (a meeting / phone call) from the command line — fo
 own review, or to hand to another agent — use the `transcript` command. It reads
 straight from the store; no server needed.
 
-The data lives at `/Volumes/Backup/recall`, so every command takes
-`--out /Volumes/Backup/recall`.
+The data lives at `/Volumes/Backup/recall`, which is already the default on this Mac
+(`recall.paths.default_data_root`) — pass `--out` only to point somewhere else.
 
 ## List the recorded sessions
 
@@ -57,7 +57,8 @@ conversations, then dump one by its number:
 3. 16:33-16:40   56 turns  Hello, is anyone home?
 ```
 
-Times are local. `--day` takes `today` or `YYYY-MM-DD`; `--conv N` dumps conversation N
+Times are local. `--day` takes `today` or `YYYY-MM-DD`; `--conv N` (or `--conv last`)
+dumps conversation N
 (same `[time] speaker: text` format). The redundant room mics are folded to one line
 per moment, so the dump isn't doubled.
 
@@ -119,8 +120,10 @@ replace between them on each export — the bubbles carry no markers themselves:
 Because the export is deterministic, a re-run with no new corrections produces no diff —
 the manually-maintained parts of the page are never touched.
 
-> The server runs on the capture host; a remote caller needs a path to it (a tunnel/VPN,
-> or run the tool on the host).
+> `scripts/recall-api.py` speaks **no auth** (plain `urllib`), so it works only against
+> an unauthenticated API. Isis's fleet API sits behind the Nextcloud sign-in and will
+> answer `401` — point the tool at a local API, or read the store directly with the CLI
+> commands above, which need no server at all.
 
 ## Editing in the app
 

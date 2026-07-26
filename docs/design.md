@@ -145,7 +145,8 @@ suggestions).
 `llm-host` over loopback (`recall.llm.make_generator`); it loads on demand,
 serves one request at a time (one GPU), and releases the weights after five idle
 minutes. Cross-machine work does not change shape: the fleet still cannot reach
-this Mac (§2), so anything running there queues work the Mac pulls — the holder
+this Mac (one-way WireGuard — see [`isis-migration.md`](isis-migration.md)), so
+anything running there queues work the Mac pulls — the holder
 sits behind that, not in front of it.
 
 ## 6. Continual improvement

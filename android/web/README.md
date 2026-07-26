@@ -37,14 +37,15 @@ nix develop ..#android --command ./gradlew :web:assembleDebug
 # → web/build/outputs/apk/debug/web-debug.apk
 ```
 
-Install onto a phone over WiFi (Pixel 9 is at `192.168.1.133:5555`, same as the
-mic app — see `../README.md` for first-time adb pairing):
+Install onto a phone over WiFi (see `../README.md` for first-time adb pairing).
+`../deploy.sh` holds the current phone addresses — check there rather than trusting
+the one inlined here, since they have drifted before:
 
 ```sh
 ADB="$ANDROID_HOME/platform-tools/adb"
-"$ADB" connect 192.168.1.133:5555
-"$ADB" -s 192.168.1.133:5555 install -r web/build/outputs/apk/debug/web-debug.apk
-"$ADB" -s 192.168.1.133:5555 shell am start -n org.recall.web/.MainActivity
+"$ADB" connect 192.168.1.253:5555     # Pixel 9
+"$ADB" -s 192.168.1.253:5555 install -r web/build/outputs/apk/debug/web-debug.apk
+"$ADB" -s 192.168.1.253:5555 shell am start -n org.recall.web/.MainActivity
 ```
 
 The APK is signed with the auto-generated debug key — fine for sideloading, the

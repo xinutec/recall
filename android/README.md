@@ -101,7 +101,8 @@ foreground service, so this restarts streaming — no manual taps).
 For this to be friction-free, each phone is pinned:
 
 - **Stable IP** — a DHCP reservation on the router (Mac `192.168.1.81`, Pixel 9
-  `.133`, Pixel 5 `.242`), so the addresses don't drift.
+  `.253`, Pixel 5 `.242`). These do drift in practice (the Pixel 9 moved off `.133`),
+  so `deploy.sh`'s `PHONES` list is the source of truth — fix it there when it moves.
 - **Fixed adb port** — `adb tcpip 5555` (set once while connected over wireless
   debugging) gives a stable port instead of wireless debugging's rotating one.
   This resets on phone reboot; after a reboot, reconnect once (re-enable wireless

@@ -14,10 +14,11 @@ in the house. Everything stays on-device.
 
 ## Web app
 
-Open **`http://<mac-ip>:8000`** (LAN): a timeline of the conversation, full-text
-search with audio playback, a review/correct queue, record-from-device (phone as
-a second mic), and speaker labelling that enrols voices as you confirm who spoke.
-It's an Angular app served by FastAPI on one origin (`org.xinutec.recall-api`).
+Open **`http://10.100.0.2:8000`** (Isis, over the VPN, behind a Nextcloud sign-in):
+a timeline of the conversation, full-text search with audio playback, a
+review/correct queue, record-from-device (phone as a second mic), and speaker
+labelling that enrols voices as you confirm who spoke. It's an Angular app served
+by FastAPI on one origin, running on Isis — the Mac serves no UI.
 See [`docs/running.md`](docs/running.md).
 
 ## Dev
@@ -42,8 +43,10 @@ runs any command with the full environment.
 
 ## Status
 
-Live and self-running on the Mac mini: capture, live + batch transcription, and
-the web app run as launchd services recording the household to an encrypted disk.
+Live and self-running, split across two machines: the Mac mini does capture and
+live + batch transcription as launchd services, recording the household to an
+encrypted disk, and pushes to Isis, which is the system of record and serves the
+web app.
 Per-turn EN/NL transcription works; speaker attribution turns on once a
 HuggingFace token is set and voices are enrolled (see `docs/running.md`).
 Transcripts are versioned and re-derived, never overwritten, so accuracy improves

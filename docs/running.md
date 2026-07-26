@@ -27,10 +27,16 @@ want while developing.
 | `org.xinutec.recall-capture` | USB mic → gap-free Opus segments | always on |
 | `org.xinutec.recall-live` | VAD → transcribe each utterance (~2–3 s, provisional) | always on |
 | `org.xinutec.recall-worker` | index + transcribe new segments (whole-clip; diarization is the refine agent's job) | continuous |
-| `org.xinutec.recall-api` | Angular web app + JSON API on `:8000` | always on |
 | `org.xinutec.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
 | `org.xinutec.recall-refine` | re-derive segments diarized + speaker-split; also drains queued A/B model comparisons | diarize: while capture paused · A/B: any time |
 | `org.xinutec.recall-llm-host` | holds the LLM (one copy for the whole Mac) and generates on `127.0.0.1:8092` | always on; weights loaded on demand, released after 5 min idle |
+| `org.xinutec.recall-sync` | push the archive to Isis (the system of record) — only what changed since the last watermark | timer |
+| `org.xinutec.recall-capture-mirror` | poll Isis's desired capture state and mirror it onto the local pause file | every ~5 s |
+| `org.xinutec.recall-jobs` | pull Isis-queued work (refine, upload, A/B, sweep) into the Mac's local queues | timer |
+| `org.xinutec.recall-doctor` | run the health checks and report them to fleetwatch | every 5 min |
+
+There is deliberately **no `recall-api` agent**: the Mac serves no UI or control plane
+(see the Isis split below). The last four are inert until `RECALL_SYNC_TOKEN` is set.
 
 The off-machine backup is **odin's**, not the Mac's: odin's nightly restic takes an
 integrity-checked SQLite snapshot from inside the Isis pod plus an rsync of the audio
@@ -44,14 +50,19 @@ are derived from the archive + corrections and can be regenerated.
 > grant. If an err log shows `Out:0`, allow the prompt (or System Settings →
 > Privacy → Microphone) and `kickstart -k`.
 
-## Web app (`:8000`)
+## Web app (Isis, `:8000`)
 
-`http://<mac-ip>:8000` (LAN) — timeline, full-text search with playback,
-review/correct queue, phone-as-mic recording, and speaker labelling (which enrols
-voices as you confirm who spoke).
+**`http://10.100.0.2:8000`** — on Isis, over the VPN, behind a Nextcloud sign-in.
+Timeline, full-text search with playback, review/correct queue, phone-as-mic
+recording, and speaker labelling (which enrols voices as you confirm who spoke).
+The Mac serves nothing: it is capture + ML + push, and `:8000` there refuses.
+
+Shipping a UI change means shipping the image: the Dockerfile builds the Angular app,
+so push to `main` (CI builds `xinutec/recall:latest`) then roll Isis with
+`ssh root@10.100.0.2 'kubectl -n recall rollout restart deployment/recall'`.
 
 ```sh
-./scripts/recall-build-frontend.sh    # rebuild UI; the service serves it live, no restart
+./scripts/recall-build-frontend.sh    # build into dist/ (what the image does; also for a local check)
 nix develop --command bash -c 'cd frontend && npx ng serve'   # dev: hot reload, proxies /api
 ```
 
