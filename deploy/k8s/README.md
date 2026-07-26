@@ -1,10 +1,18 @@
-# recall on Isis (k3s) — deployment (STAGED, not applied)
+# recall on Isis (k3s) — deployment notes
 
-Status: **proposal, 2026-07-11.** These manifests are staged here, not yet in the `kubes`
-monorepo where the fleet's deployed manifests live. Nothing auto-applies anywhere — the
-fleet does NOT run Flux; every app is deployed by running a per-app `sync.sh` that does
-`sudo kubectl apply` by hand. So applying these (and the host changes below) is always a
-deliberate, fragile-host step. Rationale and topology: `docs/isis-migration.md`.
+Status: **LIVE since 2026-07-17.** The manifests no longer live here — they are in the
+`pippijn` monorepo at `code/kubes/recall/k8s/`, with the fleet's usual `sync.sh` and
+`secret.sh` beside them. This file is kept for the setup and rationale below (secrets,
+WireGuard exposure, backup), not as a source of manifests.
+
+They were duplicated in both places until 2026-07-26, and the copy here silently went
+stale: it was missing the six web-SSO env vars and the nextcloud egress rule that the
+live cluster had been running for nine days. A `kubectl apply` from this directory would
+have deleted working single sign-on. That is why there is now exactly one copy. Deploy
+with `code/kubes/scripts/apply.sh recall` (dry run) / `--apply`, or the `sync.sh` there.
+
+Nothing auto-applies anywhere — the fleet does NOT run Flux; every app is deployed by
+hand. Rationale and topology: `docs/isis-migration.md`.
 
 ## What runs here
 
@@ -13,9 +21,10 @@ ML — the Mac keeps capture, ASR, diarization, and the LLM. So the image needs 
 subset of recall's deps (fastapi, pydantic, httpx, sqlite, uvicorn) plus the built Angular
 frontend, and runs `recall api`.
 
-Manifests: `00-namespace`, `01-pvc` (the SQLite DB + audio under `/data`), `02-deployment`
-(hardened: non-root uid 1000, dropped caps, read-only rootfs + `/tmp` emptyDir, seccomp,
-probes, limits), `03-service` (ClusterIP).
+Manifests (in `pippijn:code/kubes/recall/k8s/`): `00-namespace`, `01-pvc` (the SQLite DB +
+audio under `/data`), `02-deployment` (hardened: non-root uid 1000, dropped caps,
+read-only rootfs + `/tmp` emptyDir, seccomp, probes, limits), `03-service` (ClusterIP),
+`04-networkpolicy` (default-deny egress bar DNS + the nextcloud SSO exchange).
 
 ## Steps to actually deploy (each is the host-touching part)
 
@@ -47,9 +56,10 @@ probes, limits), `03-service` (ClusterIP).
 4. **WireGuard exposure** — do NOT add an nginx Ingress. Expose the Service over WireGuard
    only: a MetalLB address from a `wg0`-only pool, or a NodePort firewalled to `wg0`. That
    is the real network gate; the public ingress is not one.
-5. **Move the manifests to `kubes/recall/k8s/`** and add a `sync.sh` that `kubectl
-   apply`s them (the fleet's deploy convention — there is no Flux); run it by hand to
-   deploy. Then cut the Mac worker over to push (`recall sync`) at the Isis WG address.
+5. ~~**Move the manifests to `kubes/recall/k8s/`** and add a `sync.sh`~~ — **DONE.** They
+   live at `pippijn:code/kubes/recall/k8s/` with `sync.sh` + `secret.sh`. The copies that
+   used to sit here were deleted 2026-07-26 (see the status note at the top). The Mac
+   worker pushes (`recall sync`) at the Isis WG address.
 6. **Backup** — add a recall block to odin `backup-prepare.sh`: a consistent
    `sqlite3 .backup` of `/data/recall.sqlite` on the PVC host path + the audio dir (NOT
    the MariaDB-dump shape). Verify a restore before trusting it. Then recall rides the
