@@ -14,7 +14,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PHONES=(
-  192.168.1.133:5555   # Pixel 9 -> source 'pixel9'  (living room)
+  192.168.1.253:5555   # Pixel 9 -> source 'pixel9'  (living room)
   192.168.1.242:5555   # Pixel 5 -> source 'pixel5'
 )
 
