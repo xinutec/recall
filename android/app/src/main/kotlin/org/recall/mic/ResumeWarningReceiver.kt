@@ -31,8 +31,11 @@ class ResumeWarningReceiver : BroadcastReceiver() {
                 NotificationChannel(
                     CHANNEL_ID,
                     "Resume warning",
-                    // HIGH so it heads-up: the whole point is to be noticed in time.
-                    NotificationManager.IMPORTANCE_HIGH,
+                    // LOW: silent — no sound, no vibration, no heads-up peek. It just
+                    // appears in the shade / status bar, so the room mic never makes a
+                    // noise. (Channel importance is locked at first creation, so this
+                    // must ship before any warning ever fires.)
+                    NotificationManager.IMPORTANCE_LOW,
                 ),
             )
         }
@@ -46,7 +49,8 @@ class ResumeWarningReceiver : BroadcastReceiver() {
             .setContentText(resumeWarningText(resumeAt, Instant.now(), ZoneId.systemDefault()))
             .setSmallIcon(R.drawable.ic_mic)
             .setColor(ContextCompat.getColor(context, R.color.ic_launcher_background))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            // Silent on pre-O too (the compat mirror of the LOW channel): no sound/peek.
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setAutoCancel(true)
             .setContentIntent(launchApp(context))
             .build()
