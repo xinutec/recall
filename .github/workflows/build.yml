@@ -26,11 +26,19 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v6
+      # Pinned to the same ruff the local gate runs (flake.nix -> pkgs.ruff).
+      # Unpinned, the action tracks latest and CI enforces rules the pre-commit
+      # gate cannot even see: 0.16.0 stabilised PLR0917 and failed a push that
+      # was green locally on 0.15.20. Worse, the obvious fix (a noqa) would then
+      # fail LOCALLY as an unused-noqa, since RUF100 is selected — so the two
+      # must move together. Bump this and flake.nix in the same commit.
       - uses: astral-sh/ruff-action@v3
         with:
+          version: "0.15.20"
           args: check
       - uses: astral-sh/ruff-action@v3
         with:
+          version: "0.15.20"
           args: format --check
 
   image:
