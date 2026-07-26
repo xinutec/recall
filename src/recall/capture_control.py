@@ -106,7 +106,7 @@ class CaptureEventKind(StrEnum):
     PAUSE = "pause"
     RESUME = "resume"
     DEAD_WINDOW = "dead_window"
-    # Ingest telemetry (docs/capture-loss-plan.md Phase 1): a phone's stream opening
+    # Ingest telemetry: a phone's stream opening
     # and closing, the close carrying what it actually sent (bytes, measured level,
     # flushed segment) — the evidence that tells a silent stream from no stream.
     INGEST_CONNECT = "ingest_connect"

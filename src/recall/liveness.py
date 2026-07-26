@@ -5,7 +5,7 @@ marker (recall.capture.ALIVE_FILE) — refreshed by the ingest pump while a phon
 streams real signal, and by the capture watchdog while the local mic's closed
 segments decode to real audio. "Active" therefore means *recording*, never just
 connected: a phone streaming digital silence, or a mic in a startup dead-window,
-reads idle (docs/capture-loss-plan.md). The freshness window matches how each
+reads idle. The freshness window matches how each
 marker is refreshed — per chunk for a stream, per watchdog poll for the mic.
 Pure — no I/O — so it's unit-tested.
 """

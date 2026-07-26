@@ -128,7 +128,7 @@ def test_meter_handles_a_sample_split_across_chunks() -> None:
 
 
 def test_handle_connection_records_ingest_telemetry(tmp_path: Path) -> None:
-    # The Phase-1 evidence (docs/capture-loss-plan.md): a connection leaves a durable
+    # A connection leaves a durable
     # record of what the device actually SENT — bytes and level — plus which segment
     # file the close flushed. This is what settles "silent stream" vs "no stream".
     server_sock, client_sock = socket.socketpair()
@@ -183,7 +183,7 @@ def _stream_once(tmp_path: Path, pcm: bytes) -> None:
 def test_alive_marker_needs_real_signal_not_just_bytes(tmp_path: Path) -> None:
     # "Active" must mean recording: a connected device streaming digital silence
     # (the pixel9 dead path, amplitude ~1) must NOT read as live — that green dot is
-    # how speech got spoken into a not-recording window (docs/capture-loss-plan.md).
+    # how speech got spoken into a not-recording window.
     _stream_once(tmp_path, b"\x01\x00" * 48000)
     assert not (tmp_path / "kitchen" / ".alive").exists()
     # Real signal (a live room's floor and above) refreshes the marker.

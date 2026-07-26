@@ -116,7 +116,7 @@ def test_a_malformed_intent_reads_as_running_and_does_not_wedge(tmp_path: Path) 
 
 def test_reconcile_reports_an_applied_intent_to_the_hook(tmp_path: Path) -> None:
     # The hook is the durable "intent-seen" timestamp of the resume timeline
-    # (docs/capture-loss-plan.md Phase 1): called only when intent actually changes,
+    # called only when intent actually changes,
     # with what was applied — a pause's resume-by, or "" for running.
     applied: list[str] = []
     paused = FakeExchange(FUTURE)

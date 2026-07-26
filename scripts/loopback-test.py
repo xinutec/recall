@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Acoustic-loopback test of the capture path (docs/capture-loss-plan.md Phase 4).
+"""Acoustic-loopback test of the capture path.
 
 Drives the REAL production control path — resume via the fleet's
 /api/capture/resume (Isis intent -> capture-mirror -> Mac agents + phone

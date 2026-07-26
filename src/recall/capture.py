@@ -31,8 +31,8 @@ _TS_RE: Final = re.compile(r"(\d{8}T\d{6})")
 # phone, the metered producer→segmenter pump (plus the dead-segment watchdog's
 # archive-level proof) for the local mic — never by mere process aliveness. Its
 # freshness is what /api/sources calls "active": recording, not just connected
-# (docs/capture-loss-plan.md — a green dot over a silent stream is how speech
-# gets spoken into a not-recording window).
+# (a green dot over a silent stream is how speech gets spoken into a
+# not-recording window).
 ALIVE_FILE: Final = ".alive"
 
 # |s16| below this is digital silence, not a live mic: a real room's noise floor
@@ -50,7 +50,7 @@ _S16_FULL_SCALE: Final = 32768
 
 class StreamMeter:
     """Measures a raw s16le PCM stream as it is pumped, so a connection leaves
-    evidence of what the device actually sent (docs/capture-loss-plan.md Phase 1):
+    evidence of what the device actually sent:
     total bytes, peak level, and when the first *audible* sample arrived — in stream
     time, so the phone's wall clock can't confuse it. Chunks need not respect sample
     boundaries; a half sample carries to the next feed. Shared by both pumps that

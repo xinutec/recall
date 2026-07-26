@@ -1,5 +1,5 @@
-"""`recall capture-trace`: the merged, time-ordered capture timeline — the Phase-1
-deliverable of docs/capture-loss-plan.md. After a controlled resume this one command
+"""`recall capture-trace`: the merged, time-ordered capture timeline.
+After a controlled resume this one command
 says which source recorded what, at what level, and when — events (mirror applications,
 resume/pause, phone connects with measured levels, dead windows) interleaved with the
 audio segments actually written."""

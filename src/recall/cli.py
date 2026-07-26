@@ -1660,9 +1660,9 @@ def _cmd_capture_mirror(args: argparse.Namespace) -> int:
 def _cmd_capture_trace(args: argparse.Namespace) -> int:
     """One readable, time-ordered trace of what capture did: every capture event
     (mirror applications, resume/pause, phone connects/disconnects with their measured
-    levels, dead windows) merged with the audio segments actually written. The Phase-1
-    deliverable of docs/capture-loss-plan.md: after a controlled resume, this says
-    which source recorded what, at what level, and when — no guessing."""
+    levels, dead windows) merged with the audio segments actually written. After a
+    controlled resume, this says which source recorded what, at what level, and
+    when — no guessing."""
     now = datetime.now(UTC)
     since = now - timedelta(minutes=args.minutes)
     store = Store.open(_db_path(args.out))
