@@ -70,6 +70,7 @@ class ResumeWarningReceiver : BroadcastReceiver() {
 
     private companion object {
         const val CHANNEL_ID = "resume-warning"
+
         // Distinct from the service's ongoing notification (id 1) so the two coexist.
         const val NOTIFICATION_ID = 2
     }

@@ -8,12 +8,12 @@ import java.time.format.DateTimeFormatter
 import kotlin.math.max
 import kotlin.math.roundToLong
 
-/**
- * Decides — purely, from a [CaptureState] snapshot — whether to warn that the
+/*
+ * Decides — purely, from a CaptureState snapshot — whether to warn that the
  * household recording is about to auto-resume, so there's time to extend the pause
  * before the mic comes back on. All the timing logic lives here (no Android in the
- * loop), so it's unit-tested exactly like [Banner]; the AlarmManager plumbing that
- * acts on the decision is the thin [ResumeWarning] object.
+ * loop), so it's unit-tested exactly like Banner; the AlarmManager plumbing that
+ * acts on the decision is the thin ResumeWarning object.
  */
 
 /** How far ahead of the auto-resume we warn. Long enough to notice and re-pause. */
@@ -27,7 +27,10 @@ sealed interface ResumeWarningPlan {
      * Schedule (or move) the warning to wall-clock instant [at]; [resumeAt] is when
      * recording actually resumes, carried through for the notification text.
      */
-    data class Warn(val at: Instant, val resumeAt: Instant) : ResumeWarningPlan
+    data class Warn(
+        val at: Instant,
+        val resumeAt: Instant,
+    ) : ResumeWarningPlan
 
     /** Recording is on (or resuming): drop any pending warning. */
     data object Cancel : ResumeWarningPlan
