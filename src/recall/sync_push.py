@@ -1,4 +1,4 @@
-"""Mac-side sync push — replicate the local archive to the fleet (the proposed split,
+"""Mac-side sync push — replicate the local archive to the fleet (the split,
 `docs/isis-migration.md`).
 
 Runs on the Mac (the compute node). The Mac is a one-way WireGuard peer, so it

@@ -6,6 +6,7 @@ in the house. Everything stays on-device.
 
 - **Running it (services, web app, HF setup, enrollment, daily flow):** [`docs/running.md`](docs/running.md)
 - **Design:** [`docs/design.md`](docs/design.md)
+- **The Mac/Isis split (topology, one-way VPN, SSO, sweep veto):** [`docs/isis-migration.md`](docs/isis-migration.md)
 - **Analysis pipeline (ASR, EN/NL, speakers, reprocessing):** [`docs/pipeline.md`](docs/pipeline.md)
 - **Phone/mic ingest (connect, identity, liveness):** [`docs/devices.md`](docs/devices.md)
 - **Reading a recorded call from the CLI:** [`docs/review.md`](docs/review.md)

@@ -1,4 +1,4 @@
-"""Mac→fleet sync — the security core of the proposed Isis/Mac split.
+"""Mac→fleet sync — the security core of the Isis/Mac split.
 
 See `docs/isis-migration.md`. The Mac is a one-way WireGuard peer: it may dial the
 fleet, nothing may dial back. So every exchange is **Mac-initiated** — the Mac POLLS the
