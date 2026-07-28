@@ -124,6 +124,28 @@ class AttributionReport:
     errors_by_speaker: dict[str, int]  # truth name → how many of its words were stolen
 
     @staticmethod
+    def empty() -> AttributionReport:
+        """The identity for `merged_with` — what an eval starts accumulating from."""
+        return AttributionReport(0, 0, 0, 0, 0, 0, {})
+
+    def merged_with(self, other: AttributionReport) -> AttributionReport:
+        """This report plus `other`. The eval scores one segment at a time and sums
+        them, so the reported accuracy is over every word of the recording rather than
+        a mean of per-segment rates (which would weight a 3-word segment like a 300-word
+        one)."""
+        errors = Counter(self.errors_by_speaker)
+        errors.update(other.errors_by_speaker)
+        return AttributionReport(
+            words=self.words + other.words,
+            correct=self.correct + other.correct,
+            near_words=self.near_words + other.near_words,
+            near_correct=self.near_correct + other.near_correct,
+            short_words=self.short_words + other.short_words,
+            short_correct=self.short_correct + other.short_correct,
+            errors_by_speaker=dict(errors),
+        )
+
+    @staticmethod
     def _pct(correct: int, total: int) -> float:
         return correct / total if total else 0.0
 

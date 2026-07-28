@@ -9,6 +9,14 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from recall.diarize import Diarization, SpeakerTurn
+
+
+def sequential(*turns: SpeakerTurn) -> Diarization:
+    """A stub diarizer's output for turns with no simultaneous speech, where pyannote's
+    two views coincide. Tests that care about overlap build a `Diarization` directly."""
+    return Diarization(exclusive=turns, overlapping=turns)
+
 
 def make_flac(path: Path, seconds: float = 3.0) -> None:
     """A real FLAC segment file (440 Hz sine) — enough for probe/slice/embed paths."""

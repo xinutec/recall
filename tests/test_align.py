@@ -84,6 +84,75 @@ def test_aligned_turn_carries_its_words() -> None:
     assert [w.text for w in aligned[1].words] == [" 29", " april"]
 
 
+def test_handover_words_go_to_the_incoming_speaker() -> None:
+    # The bug this rule exists for. SPEAKER_01 starts at 2.0 while SPEAKER_00 is still
+    # finishing at 2.6, so the *exclusive* view awards the contested stretch to the
+    # speaker already talking and its boundary sits late. Assigning by midpoint on that
+    # view hands 01's first two words to 00; the overlap-aware view keeps both spans, so
+    # coverage puts them where they belong.
+    exclusive = [
+        SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.6),
+        SpeakerTurn(speaker="SPEAKER_01", start=2.6, end=6.0),
+    ]
+    overlapping = [
+        SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.6),
+        SpeakerTurn(speaker="SPEAKER_01", start=2.0, end=6.0),
+    ]
+    words = [
+        _w(0.5, 1.0, " so"),
+        _w(1.1, 1.8, " anyway"),
+        _w(2.1, 2.4, " well"),  # 01's, but inside 00's exclusive span
+        _w(2.4, 2.6, " I"),  # ditto
+        _w(2.7, 3.2, " think"),
+        _w(3.3, 3.9, " so"),
+    ]
+    assert [a.text for a in assign_words_to_speakers(words, exclusive)] == [
+        "so anyway well I",
+        "think so",
+    ]
+    aligned = assign_words_to_speakers(words, exclusive, overlapping=overlapping)
+    assert [(a.speaker, a.text) for a in aligned] == [
+        ("SPEAKER_00", "so anyway"),
+        ("SPEAKER_01", "well I think so"),
+    ]
+
+
+def test_backchannel_leaves_the_continuing_speaker_alone() -> None:
+    # The other shape of overlap: 01 says "mm-hm" over 00 mid-sentence. Both cover the
+    # contested words completely, so coverage ties — and the tie-break (who is still
+    # talking latest) keeps the words with 00, who is producing the speech around them.
+    exclusive = [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=6.0)]
+    overlapping = [
+        SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=6.0),
+        SpeakerTurn(speaker="SPEAKER_01", start=2.4, end=2.9),
+    ]
+    words = [
+        _w(0.5, 1.0, " we"),
+        _w(2.5, 2.8, " should"),  # inside 01's backchannel
+        _w(3.0, 3.6, " go"),
+    ]
+    aligned = assign_words_to_speakers(words, exclusive, overlapping=overlapping)
+    assert [(a.speaker, a.text) for a in aligned] == [("SPEAKER_00", "we should go")]
+
+
+def test_overlap_aware_matches_midpoint_when_nothing_overlaps() -> None:
+    # The two views coincide on old pyannote (and on any clip without simultaneous
+    # speech), and then the coverage rule must reproduce the midpoint rule exactly —
+    # otherwise shipping it would change untold turns for no reason.
+    words = [
+        _w(0.0, 0.5, " can"),
+        _w(0.5, 1.0, " you"),
+        _w(1.1, 1.3, " do"),  # straddles the 1.2 boundary, 40/60
+        _w(1.6, 2.0, " 29"),
+        _w(2.0, 2.5, " april"),
+        _w(3.0, 3.5, " thanks"),
+        _w(5.0, 5.4, " bye"),  # past every turn — the gap fallback
+    ]
+    assert assign_words_to_speakers(words, TURNS, overlapping=TURNS) == (
+        assign_words_to_speakers(words, TURNS)
+    )
+
+
 def test_keeps_genuine_turns_above_the_threshold() -> None:
     # A real exchange (each turn well over the threshold) is preserved, not merged.
     aligned = assign_words_to_speakers(

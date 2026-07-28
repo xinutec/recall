@@ -10,9 +10,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from conftest import make_flac
+from conftest import make_flac, sequential
 from recall.asr import AsrResult, AsrSegment
-from recall.diarize import SpeakerTurn
+from recall.diarize import Diarization, SpeakerTurn
 from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
@@ -232,11 +232,11 @@ def test_ingest_diarized_tags_speaker_turns(tmp_path: Path) -> None:
         channels=1,
     )
 
-    def fake_diarizer(_audio: Path) -> list[SpeakerTurn]:
-        return [
+    def fake_diarizer(_audio: Path) -> Diarization:
+        return sequential(
             SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=1.5),
             SpeakerTurn(speaker="SPEAKER_01", start=1.5, end=3.0),
-        ]
+        )
 
     def fake_transcriber(_audio: Path) -> AsrResult:
         return AsrResult(

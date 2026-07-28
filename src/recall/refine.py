@@ -205,8 +205,12 @@ def refine_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
             # Transcribe the whole segment once (full context, word timings), diarize
             # it, and assign each word to the active speaker.
             result = transcriber(working)
-            speakers = list(diarizer(working))
-            aligned = assign_words_to_speakers(list(result.words), speakers)
+            diarization = diarizer(working)
+            aligned = assign_words_to_speakers(
+                list(result.words),
+                list(diarization.exclusive),
+                overlapping=diarization.overlapping,
+            )
 
             written = _replace_turns(
                 store,

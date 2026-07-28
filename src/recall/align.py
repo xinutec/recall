@@ -13,11 +13,23 @@ turn. So after the raw per-word assignment we **smooth**: any run shorter than
 `_MIN_TURN_S` is absorbed into a neighbour. Real speaking turns are longer than
 that; sub-threshold "turns" are alignment artefacts.
 
+**Handovers need the overlap-aware view.** A turn change is a moment of overlap:
+the incoming speaker starts before the outgoing one stops. pyannote's *exclusive*
+diarization resolves that overlap in favour of the dominant voice, which is
+normally the one already talking — so its boundary sits late, and assigning by the
+exclusive view alone gives the incoming speaker's first few words to the previous
+speaker. Passing `overlapping` (pyannote's other view, where both speakers keep the
+contested stretch) fixes that: each word goes to whoever covers more of it, and a
+word both cover fully goes to whoever is still talking afterwards. Without it the
+rule reduces to the midpoint lookup, which is why `overlapping` is a parameter and
+not a hard dependency — `score-attribution` scores both to prove the delta.
+
 Pure (words + speaker turns in, attributed runs out), so it's fully unit-tested.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from recall.asr import Word
@@ -62,6 +74,35 @@ def _speaker_at(t: float, turns: list[SpeakerTurn]) -> str:
     return nearest.speaker
 
 
+def _speaker_over(
+    word: Word, overlapping: Sequence[SpeakerTurn], exclusive: list[SpeakerTurn]
+) -> str:
+    """The speaker of `word`, decided on the overlap-aware view.
+
+    Whoever covers more of the word wins; a tie goes to whoever is still talking
+    latest. That single rule reads both cases of overlap correctly. At a **handover**
+    the incoming speaker covers the whole word while the outgoing one only catches its
+    first moments, so the word goes to the incoming speaker — the late-boundary error
+    this exists to fix. During a **backchannel** ("mm-hm" over someone mid-sentence)
+    both cover the word entirely, and the tie-break gives it to the speaker who carries
+    on, which is the one actually producing the words around it.
+
+    A word in a gap — no speaker active at all — falls back to the exclusive view's
+    nearest turn; there is no overlap evidence to read there.
+    """
+    active = [t for t in overlapping if t.start < word.end and t.end > word.start]
+    if not active:
+        return _speaker_at((word.start + word.end) / 2.0, exclusive)
+    covered: dict[str, float] = {}
+    latest: dict[str, float] = {}
+    for turn in active:
+        overlap = min(word.end, turn.end) - max(word.start, turn.start)
+        covered[turn.speaker] = covered.get(turn.speaker, 0.0) + max(0.0, overlap)
+        latest[turn.speaker] = max(latest.get(turn.speaker, 0.0), turn.end)
+    # The speaker name is the last key only so a total tie resolves deterministically.
+    return max(covered, key=lambda s: (covered[s], latest[s], s))
+
+
 def _coalesce(runs: list[_Run]) -> list[_Run]:
     """Merge adjacent runs that share a speaker into one."""
     merged: list[_Run] = []
@@ -98,18 +139,31 @@ def _smooth(runs: list[_Run], min_turn_s: float) -> list[_Run]:
 
 
 def assign_words_to_speakers(
-    words: list[Word], turns: list[SpeakerTurn], *, min_turn_s: float = _MIN_TURN_S
+    words: list[Word],
+    turns: list[SpeakerTurn],
+    *,
+    min_turn_s: float = _MIN_TURN_S,
+    overlapping: Sequence[SpeakerTurn] | None = None,
 ) -> list[AlignedTurn]:
-    """Group `words` into per-speaker runs by which diarized `turn` each word's
-    midpoint falls in, then smooth away sub-`min_turn_s` turns. The text is the words
-    joined (Whisper words carry their own leading spaces). `min_turn_s` is exposed so
-    the attribution eval can sweep it; production uses the default."""
+    """Group `words` into per-speaker runs, then smooth away sub-`min_turn_s` turns.
+    The text is the words joined (Whisper words carry their own leading spaces).
+
+    `turns` is the exclusive diarization. Pass `overlapping` (the overlap-aware view)
+    to decide each word by coverage instead of by its midpoint — see `_speaker_over`
+    for why that is the one that gets handovers right. Both `min_turn_s` and
+    `overlapping` are exposed so the attribution eval can score each setting against
+    human ground truth; production passes the overlap-aware view.
+    """
     if not words or not turns:
         return []
 
     raw: list[_Run] = []
     for word in words:
-        speaker = _speaker_at((word.start + word.end) / 2.0, turns)
+        speaker = (
+            _speaker_at((word.start + word.end) / 2.0, turns)
+            if overlapping is None
+            else _speaker_over(word, overlapping, turns)
+        )
         if raw and raw[-1].speaker == speaker:
             raw[-1].words.append(word)
         else:

@@ -26,15 +26,47 @@ class SpeakerTurn:
     end: float
 
 
+@dataclass(frozen=True)
+class Diarization:
+    """One clip's turns in both views pyannote produces.
+
+    `exclusive` gives one speaker per instant: where two people talk at once, the
+    dominant voice takes the whole stretch and the other is erased. `overlapping`
+    keeps both, so a moment of simultaneous speech appears under each speaker.
+
+    Word alignment wants both, because a handover *is* a moment of overlap — the
+    incoming speaker starts before the outgoing one stops. The exclusive view is
+    precisely where that evidence has been thrown away, so on its own it hands the
+    incoming speaker's first words to whoever was talking before.
+    """
+
+    exclusive: tuple[SpeakerTurn, ...]
+    overlapping: tuple[SpeakerTurn, ...]
+
+
 class Diarizer(Protocol):
     """Anything that splits an audio file into speaker turns."""
 
-    def __call__(self, audio: Path, /) -> list[SpeakerTurn]: ...
+    def __call__(self, audio: Path, /) -> Diarization: ...
+
+
+def _turns(annotation: object) -> tuple[SpeakerTurn, ...]:
+    """A pyannote `Annotation`'s tracks as sorted `SpeakerTurn`s."""
+    turns = [
+        SpeakerTurn(
+            speaker=str(speaker),
+            start=float(segment.start),
+            end=float(segment.end),
+        )
+        for segment, _, speaker in annotation.itertracks(yield_label=True)  # type: ignore[attr-defined]
+    ]
+    turns.sort(key=lambda t: (t.start, t.end, t.speaker))
+    return tuple(turns)
 
 
 def pyannote_diarize(
     audio: Path, *, model: str = DEFAULT_DIARIZER, hf_token: str | None = None
-) -> list[SpeakerTurn]:
+) -> Diarization:
     """Diarize `audio` with pyannote.audio (PyTorch/MPS). Lazy import.
 
     The pyannote model is gated on Hugging Face; `hf_token` (defaulting to the
@@ -57,17 +89,10 @@ def pyannote_diarize(
     samples = decode_pcm_f32(audio, sample_rate=rate).copy()
     waveform = torch.from_numpy(samples).unsqueeze(0)
     result = pipeline({"waveform": waveform, "sample_rate": rate})
-    # pyannote 4.x returns a DiarizeOutput; its exclusive (non-overlapping)
-    # diarization is the clean one for per-turn transcript attribution. Older
-    # pyannote returns an Annotation directly.
-    annotation = getattr(result, "exclusive_speaker_diarization", result)
-    turns = [
-        SpeakerTurn(
-            speaker=str(speaker),
-            start=float(segment.start),
-            end=float(segment.end),
-        )
-        for segment, _, speaker in annotation.itertracks(yield_label=True)
-    ]
-    turns.sort(key=lambda t: t.start)
-    return turns
+    # pyannote 4.x returns a DiarizeOutput carrying both views; older pyannote
+    # returns a bare Annotation, in which case the two views coincide and the
+    # overlap-aware alignment rule degrades to the exclusive one.
+    return Diarization(
+        exclusive=_turns(getattr(result, "exclusive_speaker_diarization", result)),
+        overlapping=_turns(getattr(result, "speaker_diarization", result)),
+    )

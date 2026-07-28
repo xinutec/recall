@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from conftest import make_flac
+from conftest import make_flac, sequential
 from recall.asr import AsrResult, AsrSegment, Word
-from recall.diarize import SpeakerTurn
+from recall.diarize import Diarization, SpeakerTurn
 from recall.refine import refine_diarized
 from recall.review import apply_correction
 from recall.sources import AudioSource, SourceKind
@@ -80,12 +80,12 @@ def test_refine_splits_by_speaker_via_word_alignment(tmp_path: Path) -> None:
         (3.0, 3.5, " perfect"),
     )
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return [
+    def diarizer(_a: Path) -> Diarization:
+        return sequential(
             SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=1.2),
             SpeakerTurn(speaker="SPEAKER_01", start=1.2, end=2.8),
             SpeakerTurn(speaker="SPEAKER_00", start=2.8, end=4.0),
-        ]
+        )
 
     added = refine_diarized(
         store,
@@ -132,11 +132,11 @@ def test_refine_cleans_up_its_working_clips(tmp_path: Path) -> None:
         "en", (0.0, 0.5, " can"), (0.5, 1.0, " you"), (2.0, 2.5, " perfect")
     )
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return [
+    def diarizer(_a: Path) -> Diarization:
+        return sequential(
             SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=1.2),
             SpeakerTurn(speaker="SPEAKER_01", start=1.2, end=4.0),
-        ]
+        )
 
     work = tmp_path / "work"
     refine_diarized(
@@ -166,8 +166,8 @@ def test_refine_persists_word_timings_rebased_to_the_turn(tmp_path: Path) -> Non
     )
     result = _result("en", (1.6, 2.0, " 29"), (2.0, 2.5, " april"))
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0)]
+    def diarizer(_a: Path) -> Diarization:
+        return sequential(SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0))
 
     refine_diarized(
         store,
@@ -221,12 +221,12 @@ def test_refine_preserves_human_and_drops_loops(tmp_path: Path) -> None:
         (3.8, 4.0, " grey"),  # speaker 00, a loop
     )
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return [
+    def diarizer(_a: Path) -> Diarization:
+        return sequential(
             SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=1.5),
             SpeakerTurn(speaker="SPEAKER_01", start=1.5, end=2.8),  # human span
             SpeakerTurn(speaker="SPEAKER_00", start=2.8, end=4.0),  # the loop
-        ]
+        )
 
     added = refine_diarized(
         store,
@@ -261,8 +261,8 @@ def test_refine_attributes_turns_to_enrolled_voices(tmp_path: Path) -> None:
 
     result = _result("nl", (0.0, 0.5, " dit"), (0.5, 1.0, " is"), (1.0, 2.0, " alice"))
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.0)]
+    def diarizer(_a: Path) -> Diarization:
+        return sequential(SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.0))
 
     refine_diarized(
         store,
@@ -310,8 +310,8 @@ def test_refine_redo_upgrades_older_pipeline_turns(tmp_path: Path) -> None:
 
     result = _result("nl", (0.0, 0.5, " dit"), (0.5, 1.0, " is"), (1.0, 2.0, " nieuw"))
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.0)]
+    def diarizer(_a: Path) -> Diarization:
+        return sequential(SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.0))
 
     added = refine_diarized(
         store,
@@ -350,8 +350,8 @@ def test_refine_flags_non_household_language_as_unreliable(tmp_path: Path) -> No
     # with high per-word probability — confident, but garbage.
     result = _result("ja", (0.0, 1.0, " ちょっと"), (1.0, 2.0, " 耳を"))
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.0)]
+    def diarizer(_a: Path) -> Diarization:
+        return sequential(SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.0))
 
     refine_diarized(
         store,
@@ -397,8 +397,8 @@ def test_refine_keeps_old_turns_visible_during_the_heavy_pass(tmp_path: Path) ->
         )
         return result
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=1.0)]
+    def diarizer(_a: Path) -> Diarization:
+        return sequential(SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=1.0))
 
     refine_diarized(
         store,
@@ -438,7 +438,9 @@ def test_refine_crash_mid_write_leaves_the_old_turns_visible(
     with pytest.raises(RuntimeError, match="mid-write"):
         refine_diarized(
             store,
-            lambda _a: [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=1.0)],
+            lambda _a: sequential(
+                SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=1.0)
+            ),
             lambda _a: result,
             _embed,
             work_dir=tmp_path / "work",
@@ -474,8 +476,8 @@ def test_refine_keeps_a_full_transcript_when_the_pass_covers_too_little(
     # the refined pass comes back with almost nothing (the truncation bug's signature)
     result = _result("en", (0.0, 0.5, " yes"))
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0)]
+    def diarizer(_a: Path) -> Diarization:
+        return sequential(SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0))
 
     added = refine_diarized(
         store,
@@ -519,8 +521,8 @@ def test_guard_skipped_segment_leaves_the_picker_but_a_forced_rederive_still_run
         asr_model="mlx-community/whisper-large-v3-turbo",
     )
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0)]
+    def diarizer(_a: Path) -> Diarization:
+        return sequential(SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0))
 
     assert store.audio_segments_to_diarize(limit=10) == [audio_id]  # queued to start
 
@@ -588,7 +590,7 @@ def test_refine_survives_a_clip_that_fails_to_slice(
 
     added = refine_diarized(
         store,
-        lambda _a: [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0)],
+        lambda _a: sequential(SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0)),
         lambda _a: result,
         _embed,
         work_dir=tmp_path / "work",
@@ -629,8 +631,8 @@ def test_refine_source_redrives_a_finished_segment(tmp_path: Path) -> None:
 
     result = _result("nl", (0.0, 0.5, " dit"), (0.5, 1.0, " is"), (1.0, 2.0, " nieuw"))
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.0)]
+    def diarizer(_a: Path) -> Diarization:
+        return sequential(SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.0))
 
     added = refine_diarized(
         store,
@@ -676,8 +678,8 @@ def test_a_refine_that_produces_nothing_keeps_the_transcript(tmp_path: Path) -> 
     # The diarizer finds no speaker at all, so the pass yields no turns to write.
     result = _result("nl", (0.0, 0.5, " ja"), (0.5, 1.0, " ja"), (1.0, 1.5, " ja"))
 
-    def diarizer(_a: Path) -> list[SpeakerTurn]:
-        return []
+    def diarizer(_a: Path) -> Diarization:
+        return sequential()
 
     added = refine_diarized(
         store,

@@ -108,7 +108,7 @@ def ingest_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
         # never balloons (see scratch_wav).
         with scratch_wav(work_dir / f"{stem}.wav") as working:
             make_working_copy(Path(segment.path), working)
-            for index, turn in enumerate(diarizer(working)):
+            for index, turn in enumerate(diarizer(working).exclusive):
                 with scratch_wav(work_dir / f"{stem}-turn{index:04d}.wav") as clip:
                     slice_clip(working, clip, turn.start, turn.end)
                     result = transcriber(clip)
