@@ -23,6 +23,12 @@ export default tseslint.config(
     processor: angular.processInlineTemplates,
     rules: {
       "@angular-eslint/component-max-inline-declarations": ["error", { template: 0, styles: 0 }],
+      // `x as Shape` is a claim, not a check — and it is the one hole in the
+      // otherwise-total protection against a value reaching the screen in the
+      // wrong shape. dev-lint's DL-ANGULAR-STRINGIFIED-OBJECT types every
+      // template expression honestly, so the only way to fool it is with a type
+      // we manufactured ourselves. Narrow at the boundary instead.
+      "@typescript-eslint/no-unsafe-type-assertion": "error",
       "@typescript-eslint/no-empty-function": "off",
     },
   },
@@ -31,6 +37,10 @@ export default tseslint.config(
     // unsafe-any family here; app code stays fully type-checked.
     files: ["src/**/*.spec.ts"],
     rules: {
+      // A double asserted into the interface it stands in for is the whole
+      // point of a double; getting it wrong fails a test, it never reaches a
+      // user. App code stays strict.
+      "@typescript-eslint/no-unsafe-type-assertion": "off",
       "@typescript-eslint/no-unsafe-member-access": "off",
       "@typescript-eslint/no-unsafe-call": "off",
       "@typescript-eslint/no-unsafe-assignment": "off",

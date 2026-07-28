@@ -168,12 +168,15 @@ export class Session implements OnDestroy {
   // Consecutive same-speaker turns coalesced into one paragraph (so a fixed split reads
   // as one, and merge is free — just relabel neighbours). The turns stay separate.
   protected readonly runs = computed<Run[]>(() => {
-    const out: Run[] = [];
+    // Built mutable, handed out readonly — rather than casting the readonly
+    // away at the one line that pushes. `Run` is readonly for its consumers;
+    // that is a fact about the finished value, not about how it is assembled.
+    const out: (Omit<Run, 'turns'> & { turns: Transcript[] })[] = [];
     for (const t of this.turns()) {
       const speaker = this.voiceLabel(t);
       const last = out[out.length - 1];
       if (last?.speaker === speaker) {
-        (last.turns as Transcript[]).push(t);
+        last.turns.push(t);
       } else {
         out.push({
           key: t.id,

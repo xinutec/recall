@@ -2,6 +2,8 @@ import { ErrorHandler, Injectable } from '@angular/core';
 import { HttpInterceptorFn } from '@angular/common/http';
 import { catchError, throwError } from 'rxjs';
 
+import { stringField } from './narrow';
+
 /**
  * The phone has no console you can read, so browser errors are POSTed to the
  * server (logs/client.log). Uses fetch directly so logging never re-enters the
@@ -22,8 +24,14 @@ export function reportToServer(level: string, message: string, stack?: string): 
 @Injectable()
 export class ServerErrorHandler implements ErrorHandler {
   handleError(error: unknown): void {
-    const e = error as { message?: string; stack?: string };
-    reportToServer('error', e?.message ?? String(error), e?.stack);
+    // Read, don't assert: an ErrorHandler catches literally anything a
+    // component threw, and `String(error)` on a plain object reports
+    // "[object Object]" to the server — a log line that says nothing at all.
+    reportToServer(
+      'error',
+      stringField(error, 'message') ?? (typeof error === 'string' ? error : 'non-Error thrown'),
+      stringField(error, 'stack') ?? undefined,
+    );
     console.error(error);
   }
 }

@@ -479,8 +479,8 @@ export class Train {
       save();
       return;
     }
-    const el = e.target as HTMLElement | null;
-    if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')) {
+    const el = e.target;
+    if (el instanceof HTMLElement && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')) {
       return; // don't hijack typing
     }
     const roster = this.speakers();

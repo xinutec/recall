@@ -23,10 +23,13 @@ interface Endpoint {
 }
 
 function endpointFor(node: Node, offset: number): Endpoint | null {
-  const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
-  const span = el?.closest('span.t') as HTMLElement | null;
-  const id = span?.dataset['id'];
-  if (!span || id === undefined) {
+  // A Range endpoint can sit on any node — a text node, an element, or a
+  // comment. `as Element` covered the third case by declaring it away, and
+  // `closest` on a non-Element throws inside a selection handler.
+  const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node instanceof Element ? node : null;
+  const span = el?.closest('span.t');
+  const id = span instanceof HTMLElement ? span.dataset['id'] : undefined;
+  if (!(span instanceof HTMLElement) || id === undefined) {
     return null;
   }
   const len = (span.textContent ?? '').trimEnd().length; // past a template trailing space
