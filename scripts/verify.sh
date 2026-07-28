@@ -16,12 +16,15 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 step() { printf '\n\033[1m=== %s ===\033[0m\n' "$*"; }
 
 # Backend virtual environment must exist before linting, testing, and typechecking.
-# Create and sync dependencies if they are missing or if requirements.lock is newer.
+# Reconcile it from uv.lock if it is missing or the lock is newer. `--frozen` uses
+# the lock exactly and never re-resolves, so the venv can only ever be what is
+# committed; `--no-install-project` keeps recall itself out of it (the devshell
+# puts src/ on PYTHONPATH).
 has_venv=true
-if [ ! -d .venv ] || [ requirements.lock -nt .venv ] || [ ! -f .venv/.sync-success ]; then
-  step "restoring backend virtual environment (uv pip sync)"
+if [ ! -d .venv ] || [ uv.lock -nt .venv ] || [ ! -f .venv/.sync-success ]; then
+  step "restoring backend virtual environment (uv sync)"
   rm -f .venv/.sync-success
-  if uv venv --clear && uv pip sync requirements.lock && touch .venv/.sync-success; then
+  if uv sync --frozen --all-groups --no-install-project && touch .venv/.sync-success; then
     has_venv=true
   else
     echo "  warning: failed to restore virtual environment (lack of credentials for private registry?)"
@@ -57,12 +60,13 @@ if [ "$has_venv" = true ]; then
   step "mypy --strict (types, real third-party types from .venv)"
   mypy
 
-  step "venv matches requirements.lock (the ML runtime is reconstructible)"
-  # The venv holds the runtime the agents actually run on; requirements.lock is its
-  # committed pin set. Drift either way (ad-hoc install, stale lock) fails here.
-  # After an intentional upgrade, regenerate the lock (see its header) and commit.
-  diff <(uv pip freeze --python .venv/bin/python) <(grep -v "^#" requirements.lock) \
-    || { echo "venv and requirements.lock disagree (see diff above)" >&2; exit 1; }
+  step "venv matches uv.lock (the ML runtime is reconstructible)"
+  # The venv holds the runtime the agents actually run on; uv.lock is its committed
+  # pin set. Drift either way (ad-hoc install, stale lock) fails here. `--check`
+  # reports without mutating, so a failing gate never silently repairs the thing it
+  # is meant to be reporting on. After an intentional upgrade: `uv lock` + commit.
+  uv sync --frozen --all-groups --no-install-project --check \
+    || { echo "venv and uv.lock disagree (see above)" >&2; exit 1; }
 
   step "dev-lint (custom static-analysis rules)"
   # Strict (no baseline): the bare-dict-route debt was cleared via TypedDicts, so

@@ -4,15 +4,69 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+
+    # The ML runtime as a nix package, built from uv.lock's PyPI wheels. NOT
+    # from nixpkgs' python packages: nixpkgs has no mlx-whisper at all and is
+    # several minors behind on transformers/peft, and compiling that stack from
+    # source on aarch64-darwin is uncached (~377 derivations). Wheels make it a
+    # download instead.
+    pyproject-nix = {
+      url = "github:pyproject-nix/pyproject.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    uv2nix = {
+      url = "github:pyproject-nix/uv2nix";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    pyproject-build-systems = {
+      url = "github:pyproject-nix/build-system-pkgs";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.uv2nix.follows = "uv2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { self, nixpkgs, flake-utils }:
+    { self, nixpkgs, flake-utils, pyproject-nix, uv2nix, pyproject-build-systems }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = import nixpkgs { inherit system; };
         python = pkgs.python312;
+
+        # --- ML runtime as a package (uv.lock -> wheels -> store path) ---------
+        uvWorkspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./.; };
+
+        # "wheel", not "sdist": the point is to take PyPI's prebuilt binaries.
+        uvOverlay = uvWorkspace.mkPyprojectOverlay { sourcePreference = "wheel"; };
+
+        # mlx ships as TWO wheels that expect to share one directory: `mlx` has
+        # mlx/core.cpython-312-darwin.so, `mlx-metal` has mlx/lib/libmlx.dylib.
+        # uv installs both into one site-packages so the .so's @rpath resolves;
+        # nix gives each wheel its own store path and @rpath resolves relative to
+        # the .so's OWN output, where the dylib isn't — so mlx fails to import.
+        # Link mlx-metal's lib/ into mlx's output, where the loader already looks.
+        mlxMetalFix = final: prev: {
+          mlx = prev.mlx.overrideAttrs (old: {
+            postInstall = (old.postInstall or "") + ''
+              for sp in $out/lib/python*/site-packages/mlx; do
+                mkdir -p "$sp/lib"
+                ln -sfn ${final."mlx-metal"}/lib/python*/site-packages/mlx/lib/* "$sp/lib/"
+              done
+            '';
+          });
+        };
+
+        mlPythonSet =
+          (pkgs.callPackage pyproject-nix.build.packages { inherit python; })
+          .overrideScope (nixpkgs.lib.composeManyExtensions [
+            pyproject-build-systems.overlays.default
+            uvOverlay
+            mlxMetalFix
+          ]);
+
+        mlEnv = mlPythonSet.mkVirtualEnv "recall-ml-env" uvWorkspace.deps.default;
 
         # Android toolchain for the recall-mic app (android/). Kept in its own pkgs
         # import + dev shell so the unfree SDK licence stays scoped to it and the
@@ -36,6 +90,8 @@
         androidHome = "${androidSdk}/libexec/android-sdk";
       in
       {
+        packages.ml-env = mlEnv;
+
         devShells.android = androidPkgs.mkShell {
           packages = [ androidPkgs.jdk17 androidSdk androidPkgs.ktlint ];
           shellHook = ''

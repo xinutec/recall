@@ -27,6 +27,29 @@ dependencies = [
     "uvicorn>=0.49",
 ]
 
+# Test-only dependency. It has to be IN the venv, not merely in the devshell,
+# because mypy resolves third-party imports through `python_executable =
+# ".venv/bin/python"` (below) — so without it every `import pytest` in tests/ is
+# an unfollowed import and mypy --strict reports ~175 errors.
+[dependency-groups]
+dev = ["pytest>=9.1"]
+
+# mlx is transitive (via mlx-lm / mlx-whisper), constrained here because 0.32.0
+# is a TYPING regression: it ships `py.typed` — claiming it is typed — but no
+# stub for `mlx.core`, only the compiled core.cpython-312-darwin.so. mypy then
+# cannot resolve `import mlx.core` in llm.py / llmhost.py. 0.31.2 shipped the
+# stub and works with the same mlx-lm 0.31.3 / mlx-whisper 0.4.3. Waiving it in
+# the mypy overrides instead would drop real type checking on our own ML code;
+# lift this when upstream ships stubs again.
+[tool.uv]
+constraint-dependencies = ["mlx<0.32"]
+# Resolve for THIS Mac only. These locks describe the local ML venv and nothing
+# else — the Isis image installs its own non-ML subset directly in the Dockerfile
+# and never reads them. Without this, uv emits every platform's packages behind
+# markers (the CUDA/nvidia stack, win32 tzdata), which `uv pip freeze` on darwin
+# will never report, so verify.sh's venv-vs-lock drift check can never agree.
+environments = ["sys_platform == 'darwin'"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/recall"]
 
