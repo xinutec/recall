@@ -67,11 +67,25 @@ errors fall (near a speaker change, interior of a turn, inside short turns, and 
 speaker). It's how the alignment knobs get tuned on real human ground truth instead of
 guesses. On the densest ground-truth set so far it read **~94%** per-word, with the
 errors concentrated **at speaker changes (~76%) and in short interjections (~37%)**,
-while turn interiors were ~98%. Two heuristic levers were measured and *ruled out* —
-the smoothing threshold barely moves it, and switching word→turn assignment from
-midpoint to maximum-overlap changed nothing — so the remaining errors are input-precision
-(pyannote boundaries / word timings), not the assignment rule. The harness gates any
-future attribution change: prove the delta, don't eyeball it.
+while turn interiors were ~98%. Three heuristic levers were measured and *ruled out* —
+the smoothing threshold barely moves it, switching word→turn assignment from
+midpoint to maximum-overlap changed nothing, and using pyannote's **overlap-aware**
+diarization instead of its exclusive one (below) lost — so the remaining errors are
+input-precision (pyannote boundaries / word timings), not the assignment rule. The
+harness gates any future attribution change: prove the delta, don't eyeball it.
+
+**Ruled out: the overlap-aware view.** The exclusive diarization resolves simultaneous
+speech to one voice, normally the one already talking, so its boundary sits late and the
+incoming speaker's first words join the previous turn — the error people actually notice.
+Deciding each word by coverage on the overlap-aware view instead (`recall.align`, the
+`overlapping` parameter) looks like the fix and isn't: it won 06-22 (94.0% → 94.5%
+overall, +1.7pt near a change, +9.2pt on short turns) and lost 07-10 (96.6% → 95.8%,
+**−4.7pt** near a change on 865 such words), 95.3% against 95.7% over both. It
+over-corrects, because the non-exclusive view extends *both* speakers across a handover,
+so "covers more" keeps picking the incoming speaker and a late boundary becomes an early
+one. Anything that replaces it needs a **bound on how far a word may move**, not a better
+tie-break. `score-attribution` scores both rules off one replay, so the comparison costs
+no extra model time — and it takes two recordings to see this: one alone said ship it.
 
 ## 5. Continual improvement
 
