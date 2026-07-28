@@ -13,16 +13,19 @@ turn. So after the raw per-word assignment we **smooth**: any run shorter than
 `_MIN_TURN_S` is absorbed into a neighbour. Real speaking turns are longer than
 that; sub-threshold "turns" are alignment artefacts.
 
-**Handovers need the overlap-aware view.** A turn change is a moment of overlap:
-the incoming speaker starts before the outgoing one stops. pyannote's *exclusive*
-diarization resolves that overlap in favour of the dominant voice, which is
-normally the one already talking — so its boundary sits late, and assigning by the
-exclusive view alone gives the incoming speaker's first few words to the previous
-speaker. Passing `overlapping` (pyannote's other view, where both speakers keep the
-contested stretch) fixes that: each word goes to whoever covers more of it, and a
-word both cover fully goes to whoever is still talking afterwards. Without it the
-rule reduces to the midpoint lookup, which is why `overlapping` is a parameter and
-not a hard dependency — `score-attribution` scores both to prove the delta.
+**The overlap-aware rule is measured, and NOT shipped.** A turn change is a moment of
+overlap: the incoming speaker starts before the outgoing one stops. pyannote's
+*exclusive* diarization resolves that overlap in favour of the voice already talking,
+so its boundary sits late and the incoming speaker's first few words land in the
+previous turn. Passing `overlapping` (pyannote's other view, which keeps both speakers
+over the contested stretch) decides each word by coverage instead, tie-broken by who is
+still talking. It reads like the fix and it isn't: scored against two corrected
+meetings it won one (+1.7pt near a speaker change) and lost the other (-4.7pt on 865
+such words), 95.3% against 95.7% over both. It over-corrects — the non-exclusive view
+extends *both* speakers across the handover, so coverage favours the incoming speaker's
+longer span and a late boundary becomes an early one. `refine` therefore passes the
+exclusive view alone. The parameter stays so `score-attribution` keeps scoring both,
+and so the next attempt starts from a measurement rather than from this docstring.
 
 Pure (words + speaker turns in, attributed runs out), so it's fully unit-tested.
 """
@@ -80,12 +83,16 @@ def _speaker_over(
     """The speaker of `word`, decided on the overlap-aware view.
 
     Whoever covers more of the word wins; a tie goes to whoever is still talking
-    latest. That single rule reads both cases of overlap correctly. At a **handover**
-    the incoming speaker covers the whole word while the outgoing one only catches its
-    first moments, so the word goes to the incoming speaker — the late-boundary error
-    this exists to fix. During a **backchannel** ("mm-hm" over someone mid-sentence)
-    both cover the word entirely, and the tie-break gives it to the speaker who carries
-    on, which is the one actually producing the words around it.
+    latest. At a **handover** the incoming speaker covers the whole word while the
+    outgoing one only catches its first moments, so the word goes to the incoming
+    speaker. During a **backchannel** ("mm-hm" over someone mid-sentence) both cover the
+    word entirely, and the tie-break gives it to the speaker who carries on.
+
+    The measured flaw is in that first case: pyannote's non-exclusive view extends both
+    speakers well past the actual handover, so "covers more" keeps choosing the incoming
+    speaker for words the outgoing one really said, and the boundary lands early instead
+    of late. Whatever replaces this needs a bound on how far a word may move, not a
+    better tie-break. See the module docstring for the numbers.
 
     A word in a gap — no speaker active at all — falls back to the exclusive view's
     nearest turn; there is no overlap evidence to read there.
@@ -149,10 +156,10 @@ def assign_words_to_speakers(
     The text is the words joined (Whisper words carry their own leading spaces).
 
     `turns` is the exclusive diarization. Pass `overlapping` (the overlap-aware view)
-    to decide each word by coverage instead of by its midpoint — see `_speaker_over`
-    for why that is the one that gets handovers right. Both `min_turn_s` and
+    to decide each word by coverage instead of by its midpoint. Both `min_turn_s` and
     `overlapping` are exposed so the attribution eval can score each setting against
-    human ground truth; production passes the overlap-aware view.
+    human ground truth; production passes neither — the module docstring records what
+    the overlap-aware rule measured, and why it isn't the default.
     """
     if not words or not turns:
         return []

@@ -1224,15 +1224,31 @@ def _print_attribution(
             acc = ok / scored if scored else 0.0
             print(f"  {mode:<14} min_turn={m:>4}s   {acc:6.1%}   ({ok}/{scored} words)")
     print(f"\nwhere the errors are (min_turn={ref}s):")
-    print("  " + " " * 30 + "".join(f"{mode:>16}" for mode in modes))
-    rows: tuple[tuple[str, Callable[[AttributionReport], float]], ...] = (
-        ("near a speaker change (<=1s):", lambda r: r.near_accuracy),
-        ("interior of turns:", lambda r: r.interior_accuracy),
-        ("inside short turns (<2s):", lambda r: r.short_accuracy),
+    print("  " + " " * 30 + f"{'words':>8}" + "".join(f"{mode:>16}" for mode in modes))
+    # The denominators are the same for every mode — same words, same truth spans; only
+    # which speaker each word was given differs. So one shared count column, and a
+    # percentage gap can be read against the population it came from (a point on 200
+    # short-turn words is 2 words, and worth knowing before believing it).
+    rows: tuple[tuple[str, Callable[[AttributionReport], float], int], ...] = (
+        (
+            "near a speaker change (<=1s):",
+            lambda r: r.near_accuracy,
+            aggs[modes[0]].near_words,
+        ),
+        (
+            "interior of turns:",
+            lambda r: r.interior_accuracy,
+            aggs[modes[0]].words - aggs[modes[0]].near_words,
+        ),
+        (
+            "inside short turns (<2s):",
+            lambda r: r.short_accuracy,
+            aggs[modes[0]].short_words,
+        ),
     )
-    for label, pick in rows:
+    for label, pick, population in rows:
         cells = "".join(f"{pick(aggs[mode]):>15.1%} " for mode in modes)
-        print(f"  {label:<30}{cells}")
+        print(f"  {label:<30}{population:>8}{cells}")
     for mode in modes:
         worst = sorted(aggs[mode].errors_by_speaker.items(), key=lambda kv: -kv[1])
         taken = ", ".join(f"{k} {v}" for k, v in worst)
