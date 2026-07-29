@@ -23,13 +23,13 @@ from pathlib import Path
 
 from recall import capture_control, runlog
 from recall.abcompare import Report, compare_models, render_json, render_markdown
-from recall.asr import AsrResult, Transcriber, mlx_transcribe
+from recall.asr import AsrResult, Transcriber, Word, mlx_transcribe
 from recall.attribution import AttributionReport
 from recall.capture import CaptureConfig, parse_segment_start, segment_glob
 from recall.cleanup import scan_hallucinations, scan_loops
 from recall.cli_parser import build_parser
 from recall.conversations import segment_conversations
-from recall.diarize import pyannote_diarize
+from recall.diarize import SpeakerTurn, pyannote_diarize
 from recall.finetune import (
     FinetuneConfig,
     finetune_lora,
@@ -1169,14 +1169,21 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
             scored += 1
             with scratch_wav(work / f"attr-{int(aid):06d}.wav") as working:
                 make_working_copy(Path(seg.path), working)
-                result = mlx_transcribe(working, model=args.model, words=True)
-                words = list(result.words)
-                speakers = list(pyannote_diarize(working))
+                pieces = _attribution_pieces(
+                    working,
+                    duration=(seg.end - seg.start).total_seconds(),
+                    chop=args.chop,
+                    model=args.model,
+                    work=work,
+                )
             for m in sweep:
-                runs = assign_words_to_speakers(words, speakers, min_turn_s=m)
+                # One aligned prediction list per piece, shifted back into segment time.
+                # The cluster label is namespaced by piece: an unchopped replay has one
+                # piece and so behaves exactly as before.
                 predicted = [
-                    ((w.start + w.end) / 2.0, run.speaker)
-                    for run in runs
+                    ((w.start + w.end) / 2.0 + offset, f"{index}:{run.speaker}")
+                    for index, (offset, pwords, pspeakers) in enumerate(pieces)
+                    for run in assign_words_to_speakers(pwords, pspeakers, min_turn_s=m)
                     for w in run.words
                 ]
                 score = score_attribution(predicted, truth)
@@ -1188,6 +1195,43 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
     finally:
         store.close()
     return 0
+
+
+def _attribution_pieces(
+    working: Path, *, duration: float, chop: float | None, model: str, work: Path
+) -> list[tuple[float, list[Word], list[SpeakerTurn]]]:
+    """The (offset, words, speakers) units a replay transcribes and diarizes on its own.
+
+    Without `chop` that is the whole segment — the shape an uploaded meeting has in
+    production. With it, the segment is cut into `chop`-second pieces and each is
+    transcribed and diarized independently: the shape *live capture* has, where a
+    conversation arrives as a run of 60 s files, each diarized alone. Cluster labels are
+    namespaced per piece because that limitation is the point — a `SPEAKER_00` in one
+    file is not the `SPEAKER_00` of the next, and nothing in the pipeline joins them.
+
+    Chopping a recording that scores well is therefore a controlled test of whether the
+    diarization *window* is what costs the household its boundary accuracy: same audio,
+    same ground truth, only the window changes.
+    """
+    from recall.asr import scratch_wav, slice_clip  # noqa: PLC0415 - heavy/optional
+
+    if chop is None:
+        result = mlx_transcribe(working, model=model, words=True)
+        return [(0.0, list(result.words), list(pyannote_diarize(working)))]
+    pieces: list[tuple[float, list[Word], list[SpeakerTurn]]] = []
+    offset = 0.0
+    index = 0
+    while offset < duration:
+        end = min(offset + chop, duration)
+        if end - offset < 1.0:
+            break  # a sub-second tail carries no speech worth diarizing
+        with scratch_wav(work / f"chop-{index:04d}.wav") as piece:
+            slice_clip(working, piece, offset, end)
+            result = mlx_transcribe(piece, model=model, words=True)
+            pieces.append((offset, list(result.words), list(pyannote_diarize(piece))))
+        offset = end
+        index += 1
+    return pieces
 
 
 def _print_attribution(

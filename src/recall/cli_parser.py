@@ -379,6 +379,14 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         help="stop after scoring this many segments (a whole-archive source like "
         "'usb' replays for hours and only reports at the end; this bounds the run)",
     )
+    att.add_argument(
+        "--chop",
+        type=float,
+        default=None,
+        help="diarize each segment in independent pieces of this many seconds, as live "
+        "capture does to a conversation — chop a meeting at 60 to test whether the "
+        "diarization window is what costs the household its boundary accuracy",
+    )
 
     abc = sub.add_parser(
         "ab-compare",
