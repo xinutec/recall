@@ -65,9 +65,38 @@ diarize + word-assignment and reports the fraction of words given the right spea
 swept over the smoothing threshold (`align._MIN_TURN_S`) and broken down by where the
 errors fall (near a speaker change, interior of a turn, inside short turns, and per
 speaker). It's how the alignment knobs get tuned on real human ground truth instead of
-guesses. On the densest ground-truth set so far it read **~94%** per-word, with the
-errors concentrated **at speaker changes (~76%) and in short interjections (~37%)**,
-while turn interiors were ~98%. Three heuristic levers were measured and *ruled out* —
+guesses. `--max-segments` bounds a run: a whole-archive source replays for hours and only
+reports at the end.
+
+Measured over seven corrected recordings (2026-07-29), the headline is **98%+ per-word**
+almost everywhere — and that number hides the whole problem. Errors live at speaker
+changes; turn interiors run 98.5–99.6%. **The household capture is the worst case and the
+best case at once:** 98.7% overall, 99.6% in interiors, but **73.8% near a speaker
+change** — the lowest measured. Only ~4% of its words sit near a change, so a quarter of
+them being wrong barely dents the headline while being audible at every single handover.
+Judge attribution work on the near-change column, never on the total.
+
+What separates a good recording from a bad one is **how many voices are in it**:
+
+| near-change | words | speakers | mean turn |
+|---|---|---|---|
+| 73.8% | 103 | 5 | 3.9 s |
+| 76.0% | 575 | 3 | 15.8 s |
+| 87.7% | 865 | 2 | 14.4 s |
+| 98.5% | 324 | 2 | 10.8 s |
+| 99.8% | 430 | 2 | 11.4 s |
+| 100.0% | 358 | 2 | 27.7 s |
+
+(A seventh recording, a phone mic, is left out of the table: 2 speakers, 88.9%, but only
+27 near-change words — too few to read either way.)
+
+Two speakers are 87.7–100%; three are 76.0%; five are 73.8%. Mean turn length does *not*
+explain it — the two worst recordings sit at 3.9 s and 15.8 s, and the perfect one has the
+longest turns of all. So the lever is diarization's ability to keep N voices apart, not
+the turn-taking pace and not the word→speaker rule. The household is hardest on both
+counts at once (5 voices, shortest turns), which is where the complaint comes from.
+
+Three heuristic levers were measured and *ruled out* —
 the smoothing threshold barely moves it, switching word→turn assignment from
 midpoint to maximum-overlap changed nothing, and using pyannote's **overlap-aware**
 diarization instead of its exclusive one (below) lost — so the remaining errors are
