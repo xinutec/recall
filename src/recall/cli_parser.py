@@ -372,6 +372,13 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         nargs="*",
         help="min-turn thresholds to sweep (default: 0.3 0.5 0.8 1.2)",
     )
+    att.add_argument(
+        "--max-segments",
+        type=int,
+        default=None,
+        help="stop after scoring this many segments (a whole-archive source like "
+        "'usb' replays for hours and only reports at the end; this bounds the run)",
+    )
 
     abc = sub.add_parser(
         "ab-compare",

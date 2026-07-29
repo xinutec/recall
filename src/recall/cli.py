@@ -1145,7 +1145,11 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
         work.mkdir(parents=True, exist_ok=True)
         totals: dict[float, list[int]] = {m: [0, 0] for m in sweep}  # m -> [words, ok]
         agg = AttributionReport.empty()  # accumulated breakdown at `ref`
+        scored = 0
         for aid in store.audio_segments_for_source(args.source, limit=100_000):
+            if args.max_segments is not None and scored >= args.max_segments:
+                print(f"(stopped at --max-segments {args.max_segments})")
+                break
             seg = store.audio_segment(aid)
             if seg is None or not Path(seg.path).exists():
                 continue
@@ -1162,6 +1166,7 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
             ]
             if not truth:
                 continue
+            scored += 1
             with scratch_wav(work / f"attr-{int(aid):06d}.wav") as working:
                 make_working_copy(Path(seg.path), working)
                 result = mlx_transcribe(working, model=args.model, words=True)
