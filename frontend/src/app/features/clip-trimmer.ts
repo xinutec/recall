@@ -19,6 +19,29 @@ interface Span {
   readonly end: string;
 }
 
+/**
+ * Resolve a Material system token to a colour a canvas can actually parse.
+ *
+ * `getComputedStyle(el).getPropertyValue('--mat-sys-primary')` returns the raw
+ * substitution text — `light-dark(#005cbb, #abc7ff)` — because custom properties
+ * are untyped. Canvas cannot parse that, and `ctx.fillStyle = <unparseable>`
+ * fails SILENTLY, keeping the previous colour: this drew every in-selection
+ * waveform bar in the out-of-selection grey, so the selection never showed.
+ *
+ * Setting the token on a real `color` property makes the style engine collapse
+ * light-dark() to a used value first, which reads back as `rgb(…)`. The probe
+ * has to be in the document for that to happen.
+ */
+function resolveToken(host: HTMLElement, token: string): string {
+  const probe = document.createElement('span');
+  probe.style.display = 'none';
+  probe.style.color = `var(${token})`;
+  host.appendChild(probe);
+  const colour = getComputedStyle(probe).color;
+  probe.remove();
+  return colour;
+}
+
 const NUDGE_S = 0.1;
 const LEAD = 1.5;
 const TAIL = 1.5;
@@ -124,8 +147,7 @@ export class ClipTrimmer implements OnDestroy {
     const w = (canvas.width = canvas.clientWidth);
     const h = (canvas.height = canvas.clientHeight);
     ctx.clearRect(0, 0, w, h);
-    const styles = getComputedStyle(canvas);
-    const accent = styles.getPropertyValue('--mat-sys-primary') || '#7cc';
+    const accent = resolveToken(canvas.parentElement ?? document.body, '--mat-sys-primary');
     const dim = 'rgba(127,127,127,0.45)';
     // selection shading
     const sx = (this.selStart() / this.duration) * w;
