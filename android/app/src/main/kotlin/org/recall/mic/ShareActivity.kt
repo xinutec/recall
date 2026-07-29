@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -136,7 +137,10 @@ class ShareActivity : ComponentActivity() {
     private fun ShareScreen() {
         Surface(modifier = Modifier.fillMaxSize()) {
             Column(
-                Modifier.fillMaxSize().padding(32.dp),
+                // The content is centred, so it does not currently reach the status
+                // bar — but targetSdk 36 means nothing insets this window, so a
+                // longer message would run under the icons.
+                Modifier.fillMaxSize().safeDrawingPadding().padding(32.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
