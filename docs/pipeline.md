@@ -94,12 +94,37 @@ diarizer sees one audio segment at a time, and the household's 60 s segments ave
 
 Neither speaker count nor turn length orders that column: 1.15 speakers scores worst and
 2 scores perfect; the best recording has the longest turns and the second-worst has the
-second-longest. **Segment length is the leading untested hypothesis** — the two 60 s
-sources are 73.8% and 88.9% while every multi-minute one is ≥76% and mostly ≥98%, and
-there is a mechanism behind it: each segment is diarized *independently*, so a 60 s clip
-gives the clustering step an order of magnitude fewer embeddings to work with (against
-`min_cluster_size: 12` on 10 s windows) and cluster identity cannot carry across segment
-boundaries. The one recording that argues against it is the 18.5 min meeting at 76.0%.
+second-longest.
+
+**The diarization window does — confirmed by control (`--chop`).** Take the two
+recordings that score ~100% at handovers as single multi-minute files, and re-score them
+cut into independent 60 s pieces: the shape live capture gives a conversation, where each
+segment is diarized alone and no cluster identity survives a file boundary.
+
+| recording | window | near a change | short turns | interior | overall |
+|---|---|---|---|---|---|
+| D | whole (33.5 min) | 100.0% | 100.0% | 100.0% | 100.0% |
+| D | chopped to 60 s | **81.1%** | **50.8%** | 99.4% | 98.2% |
+| E | whole (20.4 min) | 99.8% | 100.0% | 100.0% | 100.0% |
+| E | chopped to 60 s | **90.9%** | **74.3%** | 98.4% | 97.1% |
+
+Same audio, same truth, same code — only the window. Handovers lose up to 18.9 points and
+short interjections up to 49, while interiors barely move: the signature of the complaint.
+The mechanism is that a 60 s clip gives clustering an order of magnitude fewer embeddings
+(against `min_cluster_size: 12` on 10 s windows) and cluster identity cannot cross a
+segment boundary.
+
+**The fix is time-neutral**, which is what makes it worth doing: recording D took 37m02s
+whole and 36m51s chopped. A longer diarization window costs no more wall clock — the
+per-call overhead and the longer attention window cancel out. `refine` diarizes one audio
+segment at a time (60 s for live capture), so diarizing *runs of consecutive segments* as
+one window is the indicated change, and it is idle-gated so it competes with nothing.
+
+Not the whole story: chopped meetings sit at 81.1% and 90.9% while the household sits at
+73.8%, so the window accounts for most of the gap and something else — far-field room
+audio, genuinely simultaneous family speech — accounts for the remaining 7–17 points.
+Confirming the fix needs the mirror experiment: diarize *concatenated* runs of household
+segments and check the household number moves toward the chopped-meeting range.
 
 Read the household figure with its sample in mind: 103 near-change words, and since a
 near-change word needs two differently-labelled truth spans in the same segment, they come
