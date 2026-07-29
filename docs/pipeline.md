@@ -76,25 +76,34 @@ change** — the lowest measured. Only ~4% of its words sit near a change, so a 
 them being wrong barely dents the headline while being audible at every single handover.
 Judge attribution work on the near-change column, never on the total.
 
-What separates a good recording from a bad one is **how many voices are in it**:
+**What makes a recording bad is not yet established.** Seven recordings is too few to
+separate the candidates, and the obvious one does not survive contact. Speaker count
+looks decisive until you count it per *diarized unit* rather than per source — the
+diarizer sees one audio segment at a time, and the household's 60 s segments average
+**1.15** distinct speakers (145 of 170 hold only one). Against near-change accuracy:
 
-| near-change | words | speakers | mean turn |
-|---|---|---|---|
-| 73.8% | 103 | 5 | 3.9 s |
-| 76.0% | 575 | 3 | 15.8 s |
-| 87.7% | 865 | 2 | 14.4 s |
-| 98.5% | 324 | 2 | 10.8 s |
-| 99.8% | 430 | 2 | 11.4 s |
-| 100.0% | 358 | 2 | 27.7 s |
+| near-change | words | speakers/segment | segment length | mean turn |
+|---|---|---|---|---|
+| 73.8% | 103 | 1.15 | 60 s | 3.9 s |
+| 76.0% | 575 | 3 | 18.5 min | 15.8 s |
+| 87.7% | 865 | 2 | 33.8 min | 14.4 s |
+| 88.9% | 27 | 1.25 | 60 s | 5.3 s |
+| 98.5% | 324 | 2 | 13.4 min | 10.8 s |
+| 99.8% | 430 | 2 | 20.4 min | 11.4 s |
+| 100.0% | 358 | 2 | 33.5 min | 27.7 s |
 
-(A seventh recording, a phone mic, is left out of the table: 2 speakers, 88.9%, but only
-27 near-change words — too few to read either way.)
+Neither speaker count nor turn length orders that column: 1.15 speakers scores worst and
+2 scores perfect; the best recording has the longest turns and the second-worst has the
+second-longest. **Segment length is the leading untested hypothesis** — the two 60 s
+sources are 73.8% and 88.9% while every multi-minute one is ≥76% and mostly ≥98%, and
+there is a mechanism behind it: each segment is diarized *independently*, so a 60 s clip
+gives the clustering step an order of magnitude fewer embeddings to work with (against
+`min_cluster_size: 12` on 10 s windows) and cluster identity cannot carry across segment
+boundaries. The one recording that argues against it is the 18.5 min meeting at 76.0%.
 
-Two speakers are 87.7–100%; three are 76.0%; five are 73.8%. Mean turn length does *not*
-explain it — the two worst recordings sit at 3.9 s and 15.8 s, and the perfect one has the
-longest turns of all. So the lever is diarization's ability to keep N voices apart, not
-the turn-taking pace and not the word→speaker rule. The household is hardest on both
-counts at once (5 voices, shortest turns), which is where the complaint comes from.
+Read the household figure with its sample in mind: 103 near-change words, and since a
+near-change word needs two differently-labelled truth spans in the same segment, they come
+from roughly the 25 segments that have more than one speaker.
 
 Three heuristic levers were measured and *ruled out* —
 the smoothing threshold barely moves it, switching word→turn assignment from
