@@ -13,26 +13,11 @@ turn. So after the raw per-word assignment we **smooth**: any run shorter than
 `_MIN_TURN_S` is absorbed into a neighbour. Real speaking turns are longer than
 that; sub-threshold "turns" are alignment artefacts.
 
-**The overlap-aware rule is measured, and NOT shipped.** A turn change is a moment of
-overlap: the incoming speaker starts before the outgoing one stops. pyannote's
-*exclusive* diarization resolves that overlap in favour of the voice already talking,
-so its boundary sits late and the incoming speaker's first few words land in the
-previous turn. Passing `overlapping` (pyannote's other view, which keeps both speakers
-over the contested stretch) decides each word by coverage instead, tie-broken by who is
-still talking. It reads like the fix and it isn't: scored against two corrected
-meetings it won one (+1.7pt near a speaker change) and lost the other (-4.7pt on 865
-such words), 95.3% against 95.7% over both. It over-corrects — the non-exclusive view
-extends *both* speakers across the handover, so coverage favours the incoming speaker's
-longer span and a late boundary becomes an early one. `refine` therefore passes the
-exclusive view alone. The parameter stays so `score-attribution` keeps scoring both,
-and so the next attempt starts from a measurement rather than from this docstring.
-
 Pure (words + speaker turns in, attributed runs out), so it's fully unit-tested.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 from recall.asr import Word
@@ -77,56 +62,6 @@ def _speaker_at(t: float, turns: list[SpeakerTurn]) -> str:
     return nearest.speaker
 
 
-def _speaker_over(
-    word: Word,
-    overlapping: Sequence[SpeakerTurn],
-    exclusive: list[SpeakerTurn],
-    bound: float | None,
-) -> str:
-    """The speaker of `word`, decided on the overlap-aware view.
-
-    Whoever covers more of the word wins; a tie goes to whoever is still talking
-    latest. At a **handover** the incoming speaker covers the whole word while the
-    outgoing one only catches its first moments, so the word goes to the incoming
-    speaker. During a **backchannel** ("mm-hm" over someone mid-sentence) both cover the
-    word entirely, and the tie-break gives it to the speaker who carries on.
-
-    `bound` caps how long the **contested stretch** — the span where the top two
-    speakers are both active — may be for that rule to apply at all. It is the fix for
-    the way the unbounded rule failed: a real handover overlaps by a moment, but
-    pyannote also emits dual-active stretches seconds long (cross-talk, an uncertain
-    boundary, a room where one voice bleeds into the other's mic). In those the incoming
-    speaker covers everything and wins every word, so the boundary lands *early* —
-    trading the error this was built to fix for its mirror image. Above `bound` the
-    overlap is not evidence of a handover, so the word falls back to the exclusive
-    view. `None` leaves it uncapped: the rule as first measured, kept so the eval can
-    still score it.
-
-    A word in a gap — no speaker active at all — falls back to the exclusive view's
-    nearest turn; there is no overlap evidence to read there.
-    """
-    active = [t for t in overlapping if t.start < word.end and t.end > word.start]
-    if not active:
-        return _speaker_at((word.start + word.end) / 2.0, exclusive)
-    covered: dict[str, float] = {}
-    latest: dict[str, float] = {}
-    widest: dict[str, SpeakerTurn] = {}
-    for turn in active:
-        overlap = min(word.end, turn.end) - max(word.start, turn.start)
-        if overlap >= covered.get(turn.speaker, -1.0):
-            widest[turn.speaker] = turn
-        covered[turn.speaker] = covered.get(turn.speaker, 0.0) + max(0.0, overlap)
-        latest[turn.speaker] = max(latest.get(turn.speaker, 0.0), turn.end)
-    # The speaker name is the last key only so a total tie resolves deterministically.
-    ranked = sorted(covered, key=lambda s: (covered[s], latest[s], s), reverse=True)
-    if bound is not None and len(ranked) > 1:
-        first, second = widest[ranked[0]], widest[ranked[1]]
-        contested = min(first.end, second.end) - max(first.start, second.start)
-        if contested > bound:
-            return _speaker_at((word.start + word.end) / 2.0, exclusive)
-    return ranked[0]
-
-
 def _coalesce(runs: list[_Run]) -> list[_Run]:
     """Merge adjacent runs that share a speaker into one."""
     merged: list[_Run] = []
@@ -163,33 +98,18 @@ def _smooth(runs: list[_Run], min_turn_s: float) -> list[_Run]:
 
 
 def assign_words_to_speakers(
-    words: list[Word],
-    turns: list[SpeakerTurn],
-    *,
-    min_turn_s: float = _MIN_TURN_S,
-    overlapping: Sequence[SpeakerTurn] | None = None,
-    overlap_bound_s: float | None = None,
+    words: list[Word], turns: list[SpeakerTurn], *, min_turn_s: float = _MIN_TURN_S
 ) -> list[AlignedTurn]:
-    """Group `words` into per-speaker runs, then smooth away sub-`min_turn_s` turns.
-    The text is the words joined (Whisper words carry their own leading spaces).
-
-    `turns` is the exclusive diarization. Pass `overlapping` (the overlap-aware view)
-    to decide each word by coverage instead of by its midpoint, and `overlap_bound_s`
-    to cap how long a contested stretch may be for that to apply — see `_speaker_over`.
-    All three are exposed so the attribution eval can score each setting against human
-    ground truth; production passes only `turns` — the module docstring records what
-    the overlap-aware rule measured, and why it isn't the default.
-    """
+    """Group `words` into per-speaker runs by which diarized `turn` each word's
+    midpoint falls in, then smooth away sub-`min_turn_s` turns. The text is the words
+    joined (Whisper words carry their own leading spaces). `min_turn_s` is exposed so
+    the attribution eval can sweep it; production uses the default."""
     if not words or not turns:
         return []
 
     raw: list[_Run] = []
     for word in words:
-        speaker = (
-            _speaker_at((word.start + word.end) / 2.0, turns)
-            if overlapping is None
-            else _speaker_over(word, overlapping, turns, overlap_bound_s)
-        )
+        speaker = _speaker_at((word.start + word.end) / 2.0, turns)
         if raw and raw[-1].speaker == speaker:
             raw[-1].words.append(word)
         else:

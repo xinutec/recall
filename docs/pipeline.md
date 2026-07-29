@@ -74,18 +74,45 @@ diarization instead of its exclusive one (below) lost — so the remaining error
 input-precision (pyannote boundaries / word timings), not the assignment rule. The
 harness gates any future attribution change: prove the delta, don't eyeball it.
 
-**Ruled out: the overlap-aware view.** The exclusive diarization resolves simultaneous
-speech to one voice, normally the one already talking, so its boundary sits late and the
-incoming speaker's first words join the previous turn — the error people actually notice.
-Deciding each word by coverage on the overlap-aware view instead (`recall.align`, the
-`overlapping` parameter) looks like the fix and isn't: it won 06-22 (94.0% → 94.5%
-overall, +1.7pt near a change, +9.2pt on short turns) and lost 07-10 (96.6% → 95.8%,
-**−4.7pt** near a change on 865 such words), 95.3% against 95.7% over both. It
-over-corrects, because the non-exclusive view extends *both* speakers across a handover,
-so "covers more" keeps picking the incoming speaker and a late boundary becomes an early
-one. Anything that replaces it needs a **bound on how far a word may move**, not a better
-tie-break. `score-attribution` scores both rules off one replay, so the comparison costs
-no extra model time — and it takes two recordings to see this: one alone said ship it.
+**Ruled out: the overlap-aware view (measured 2026-07-29, then removed).** pyannote
+returns two diarizations. The *exclusive* one — what `recall.diarize` keeps — resolves
+simultaneous speech to a single voice, normally the one already talking, so its boundary
+sits late and the incoming speaker's first words join the previous turn: the error people
+actually notice. Deciding each word by coverage on the *overlap-aware* view instead reads
+like the obvious fix. It is not. Scored over six corrected recordings, 18 368 words:
+
+Recordings are unlabelled on purpose — a meeting id carries its date, and some of those
+dates are denylisted (`check-pii`). Re-derive the table by running `score-attribution`
+over every source that has human speaker labels; the point is the shape, not which
+meeting is which.
+
+| recording | words | exclusive | overlap | ≤0.2s | ≤0.4s | ≤0.8s |
+|---|---|---|---|---|---|---|
+| A (meeting) | 2903 | 94.0% | **94.5%** | 94.0% | 94.0% | 94.0% |
+| B (meeting) | 2117 | **99.7%** | 98.1% | 99.4% | 99.3% | 99.1% |
+| C (meeting) | 4981 | 96.6% | 95.8% | 96.6% | **96.7%** | 96.4% |
+| D (meeting) | 5307 | **100.0%** | 98.8% | 99.9% | 99.9% | 99.8% |
+| E (meeting) | 2565 | **100.0%** | 97.9% | 99.8% | 99.7% | 99.4% |
+| F (phone mic) | 495 | 99.2% | **99.4%** | 99.2% | 99.4% | 99.4% |
+| **all** | **18368** | **98.08%** | 97.11% | 98.00% | 97.99% | 97.81% |
+
+Unbounded it over-corrects: the non-exclusive view extends *both* speakers across a
+handover, so "covers more" keeps choosing the incoming speaker and a late boundary
+becomes an early one (−4.7pt near a change on C, −11.2pt on E, which the exclusive rule
+already gets 99.8% right). Capping the contested stretch (the ≤N columns)
+stops the harm and yields nothing: every bound lands at or just below baseline. The code
+was removed — see `git log` around 2026-07-29 for the implementation and its unit tests.
+
+Two lessons the numbers carry, both costlier to relearn than to read:
+
+- **One recording proves nothing.** A is the only one of six where the rule helps, and
+  it is an outlier at both ends: worst baseline and sole win. Measured on it alone the
+  change ships.
+- **The error is a property of the recording, not the algorithm.** Near-change accuracy
+  ranges from 76.0% (A) to 100.0% (D) with identical code. Four of six
+  recordings are already ≥99.2% overall, so any future attribution work should start by
+  asking *which recordings are bad and what they have in common* — mic, room, number of
+  speakers — rather than by changing the assignment rule for all of them.
 
 ## 5. Continual improvement
 

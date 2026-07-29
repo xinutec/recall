@@ -20,7 +20,6 @@ import urllib.error
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import NamedTuple
 
 from recall import capture_control, runlog
 from recall.abcompare import Report, compare_models, render_json, render_markdown
@@ -93,29 +92,6 @@ _LOUDNESS_BACKFILL_PER_PASS = 100
 # Smoothing threshold the attribution breakdown is reported at (the sweep showed it
 # barely matters, so any in-range value gives the same localisation).
 _REF_MIN_TURN = 0.5
-
-
-class _AttributionMode(NamedTuple):
-    """One word→speaker assignment rule for score-attribution to score.
-
-    `exclusive` is production: the midpoint lookup on pyannote's exclusive view.
-    The rest read the overlap-aware view too (recall.align), differing in `bound` —
-    the longest contested stretch still treated as a handover, `None` meaning uncapped
-    (the variant that lost its first measurement by moving boundaries early).
-    """
-
-    name: str
-    overlapping: bool
-    bound: float | None
-
-
-_ATTRIBUTION_MODES = (
-    _AttributionMode("exclusive", overlapping=False, bound=None),
-    _AttributionMode("overlap", overlapping=True, bound=None),
-    _AttributionMode("ovl<=0.2s", overlapping=True, bound=0.2),
-    _AttributionMode("ovl<=0.4s", overlapping=True, bound=0.4),
-    _AttributionMode("ovl<=0.8s", overlapping=True, bound=0.8),
-)
 # Per pass, how many human-corrected turns to align to ASR for word timings. Each is a
 # word-level Whisper pass, so keep it small next to live capture.
 _WORD_TIMINGS_BACKFILL_PER_PASS = 3
@@ -1167,14 +1143,8 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
             return 1
         work = args.out / "work"
         work.mkdir(parents=True, exist_ok=True)
-        # (mode, min_turn) -> [words, correct]; breakdown at `ref` kept per mode. Every
-        # combination is scored off ONE transcribe + ONE diarize per segment — the two
-        # heavy steps — so comparing modes costs no extra model time.
-        totals: dict[tuple[str, float], list[int]] = {
-            (mode.name, m): [0, 0] for mode in _ATTRIBUTION_MODES for m in sweep
-        }
-        aggs = {mode.name: AttributionReport.empty() for mode in _ATTRIBUTION_MODES}
-        bounds = {mode.name: mode for mode in _ATTRIBUTION_MODES}
+        totals: dict[float, list[int]] = {m: [0, 0] for m in sweep}  # m -> [words, ok]
+        agg = AttributionReport.empty()  # accumulated breakdown at `ref`
         for aid in store.audio_segments_for_source(args.source, limit=100_000):
             seg = store.audio_segment(aid)
             if seg is None or not Path(seg.path).exists():
@@ -1196,30 +1166,20 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
                 make_working_copy(Path(seg.path), working)
                 result = mlx_transcribe(working, model=args.model, words=True)
                 words = list(result.words)
-                diarization = pyannote_diarize(working)
-            speakers = list(diarization.exclusive)
-            for (mode, m), total in totals.items():
-                rule = bounds[mode]
-                runs = assign_words_to_speakers(
-                    words,
-                    speakers,
-                    min_turn_s=m,
-                    overlapping=(diarization.overlapping if rule.overlapping else None),
-                    overlap_bound_s=rule.bound,
-                )
+                speakers = list(pyannote_diarize(working))
+            for m in sweep:
+                runs = assign_words_to_speakers(words, speakers, min_turn_s=m)
                 predicted = [
                     ((w.start + w.end) / 2.0, run.speaker)
                     for run in runs
                     for w in run.words
                 ]
                 score = score_attribution(predicted, truth)
-                total[0] += score.words
-                total[1] += score.correct
+                totals[m][0] += score.words
+                totals[m][1] += score.correct
                 if m == ref:
-                    aggs[mode] = aggs[mode].merged_with(
-                        attribution_report(predicted, truth)
-                    )
-        _print_attribution(args.source, totals, aggs, ref)
+                    agg = agg.merged_with(attribution_report(predicted, truth))
+        _print_attribution(args.source, totals, agg, ref)
     finally:
         store.close()
     return 0
@@ -1227,51 +1187,31 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
 
 def _print_attribution(
     source: str,
-    totals: dict[tuple[str, float], list[int]],
-    aggs: dict[str, AttributionReport],
+    totals: dict[float, list[int]],
+    agg: AttributionReport,
     ref: float,
 ) -> None:
-    """Report the sweep table per assignment rule, then the localised error breakdown
-    with the rules side by side — the near-a-change column is the one that decides
-    whether an alignment change was worth shipping."""
-    modes = list(aggs)
+    """Report the sweep table and the localised error breakdown."""
     print(f"per-word speaker-attribution accuracy for {source!r}:")
-    for mode in modes:
-        for (m_mode, m), (scored, ok) in totals.items():
-            if m_mode != mode:
-                continue
-            acc = ok / scored if scored else 0.0
-            print(f"  {mode:<14} min_turn={m:>4}s   {acc:6.1%}   ({ok}/{scored} words)")
+    for m, (scored, ok) in totals.items():
+        acc = ok / scored if scored else 0.0
+        print(f"  min_turn={m:>4}s   {acc:6.1%}   ({ok}/{scored} words)")
     print(f"\nwhere the errors are (min_turn={ref}s):")
-    print("  " + " " * 30 + f"{'words':>8}" + "".join(f"{mode:>16}" for mode in modes))
-    # The denominators are the same for every mode — same words, same truth spans; only
-    # which speaker each word was given differs. So one shared count column, and a
-    # percentage gap can be read against the population it came from (a point on 200
-    # short-turn words is 2 words, and worth knowing before believing it).
-    rows: tuple[tuple[str, Callable[[AttributionReport], float], int], ...] = (
-        (
-            "near a speaker change (<=1s):",
-            lambda r: r.near_accuracy,
-            aggs[modes[0]].near_words,
-        ),
-        (
-            "interior of turns:",
-            lambda r: r.interior_accuracy,
-            aggs[modes[0]].words - aggs[modes[0]].near_words,
-        ),
-        (
-            "inside short turns (<2s):",
-            lambda r: r.short_accuracy,
-            aggs[modes[0]].short_words,
-        ),
+    print(
+        f"  near a speaker change (<=1s): {agg.near_accuracy:6.1%}"
+        f"   ({agg.near_correct}/{agg.near_words})"
     )
-    for label, pick, population in rows:
-        cells = "".join(f"{pick(aggs[mode]):>15.1%} " for mode in modes)
-        print(f"  {label:<30}{population:>8}{cells}")
-    for mode in modes:
-        worst = sorted(aggs[mode].errors_by_speaker.items(), key=lambda kv: -kv[1])
-        taken = ", ".join(f"{k} {v}" for k, v in worst)
-        print(f"  words taken, by true speaker ({mode}): {taken}")
+    interior = agg.correct - agg.near_correct, agg.words - agg.near_words
+    print(
+        f"  interior of turns:            {agg.interior_accuracy:6.1%}"
+        f"   ({interior[0]}/{interior[1]})"
+    )
+    print(
+        f"  inside short turns (<2s):     {agg.short_accuracy:6.1%}"
+        f"   ({agg.short_correct}/{agg.short_words})"
+    )
+    worst = sorted(agg.errors_by_speaker.items(), key=lambda kv: -kv[1])
+    print("  words taken, by true speaker: " + ", ".join(f"{k} {v}" for k, v in worst))
 
 
 # In-flight slack for the fleet-mirror check: the sync timer runs every 120s and the

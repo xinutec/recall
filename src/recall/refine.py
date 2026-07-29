@@ -205,17 +205,8 @@ def refine_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
             # Transcribe the whole segment once (full context, word timings), diarize
             # it, and assign each word to the active speaker.
             result = transcriber(working)
-            diarization = diarizer(working)
-            # Exclusive view only. The overlap-aware rule (recall.align) was measured
-            # against two corrected meetings and LOST: it won 06-22 (+1.7pt near a
-            # speaker change) but lost 07-10 (-4.7pt on 865 such words), 95.3% vs 95.7%
-            # over both. It over-corrects — pyannote's non-exclusive view extends both
-            # speakers across a handover, so coverage hands contested words to the
-            # incoming speaker and turns a late boundary into an early one. Keep it
-            # reachable from `score-attribution`, not from the archive.
-            aligned = assign_words_to_speakers(
-                list(result.words), list(diarization.exclusive)
-            )
+            speakers = list(diarizer(working))
+            aligned = assign_words_to_speakers(list(result.words), speakers)
 
             written = _replace_turns(
                 store,

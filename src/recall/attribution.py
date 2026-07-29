@@ -130,8 +130,8 @@ class AttributionReport:
 
     def merged_with(self, other: AttributionReport) -> AttributionReport:
         """This report plus `other`. The eval scores one segment at a time and sums
-        them, so the reported accuracy is over every word of the recording rather than
-        a mean of per-segment rates (which would weight a 3-word segment like a 300-word
+        them, so the reported accuracy is over every word of the recording rather than a
+        mean of per-segment rates (which would weight a 3-word segment like a 300-word
         one)."""
         errors = Counter(self.errors_by_speaker)
         errors.update(other.errors_by_speaker)
