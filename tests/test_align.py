@@ -135,6 +135,69 @@ def test_backchannel_leaves_the_continuing_speaker_alone() -> None:
     assert [(a.speaker, a.text) for a in aligned] == [("SPEAKER_00", "we should go")]
 
 
+def test_a_long_contested_stretch_is_not_treated_as_a_handover() -> None:
+    # How the unbounded rule lost its measurement. Here pyannote has both speakers
+    # active for a full 3s — cross-talk or an uncertain boundary, not a handover. The
+    # incoming speaker covers every contested word and takes them all, moving the
+    # boundary EARLY. A bound shorter than the contested stretch refuses that and keeps
+    # the exclusive answer; a bound longer than it does not.
+    exclusive = [
+        SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0),
+        SpeakerTurn(speaker="SPEAKER_01", start=4.0, end=8.0),
+    ]
+    overlapping = [
+        SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0),
+        SpeakerTurn(speaker="SPEAKER_01", start=1.0, end=8.0),  # 3s contested
+    ]
+    words = [
+        _w(0.2, 0.8, " these"),
+        _w(1.5, 2.0, " words"),  # inside the contested stretch, truly SPEAKER_00's
+        _w(2.5, 3.0, " are"),
+        _w(3.2, 3.8, " mine"),
+        _w(4.5, 5.0, " yours"),
+    ]
+    unbounded = assign_words_to_speakers(words, exclusive, overlapping=overlapping)
+    assert [(a.speaker, a.text) for a in unbounded] == [
+        ("SPEAKER_00", "these"),
+        ("SPEAKER_01", "words are mine yours"),  # the early-boundary failure
+    ]
+    bounded = assign_words_to_speakers(
+        words, exclusive, overlapping=overlapping, overlap_bound_s=0.4
+    )
+    assert [(a.speaker, a.text) for a in bounded] == [
+        ("SPEAKER_00", "these words are mine"),
+        ("SPEAKER_01", "yours"),
+    ]
+
+
+def test_the_bound_still_lets_a_real_handover_through() -> None:
+    # A genuine handover overlaps by a moment, so it stays under the bound and the
+    # incoming speaker still gets their opening words — the bound must not neuter the
+    # rule, only stop it running away.
+    exclusive = [
+        SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.6),
+        SpeakerTurn(speaker="SPEAKER_01", start=2.6, end=6.0),
+    ]
+    overlapping = [
+        SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=2.6),
+        SpeakerTurn(speaker="SPEAKER_01", start=2.3, end=6.0),  # 0.3s contested
+    ]
+    words = [
+        _w(0.5, 1.0, " so"),
+        _w(1.1, 1.8, " anyway"),
+        _w(2.35, 2.55, " well"),
+        _w(2.7, 3.2, " I"),
+        _w(3.3, 3.9, " think"),
+    ]
+    aligned = assign_words_to_speakers(
+        words, exclusive, overlapping=overlapping, overlap_bound_s=0.4
+    )
+    assert [(a.speaker, a.text) for a in aligned] == [
+        ("SPEAKER_00", "so anyway"),
+        ("SPEAKER_01", "well I think"),
+    ]
+
+
 def test_overlap_aware_matches_midpoint_when_nothing_overlaps() -> None:
     # The two views coincide on old pyannote (and on any clip without simultaneous
     # speech), and then the coverage rule must reproduce the midpoint rule exactly —

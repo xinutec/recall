@@ -78,7 +78,10 @@ def _speaker_at(t: float, turns: list[SpeakerTurn]) -> str:
 
 
 def _speaker_over(
-    word: Word, overlapping: Sequence[SpeakerTurn], exclusive: list[SpeakerTurn]
+    word: Word,
+    overlapping: Sequence[SpeakerTurn],
+    exclusive: list[SpeakerTurn],
+    bound: float | None,
 ) -> str:
     """The speaker of `word`, decided on the overlap-aware view.
 
@@ -88,11 +91,16 @@ def _speaker_over(
     speaker. During a **backchannel** ("mm-hm" over someone mid-sentence) both cover the
     word entirely, and the tie-break gives it to the speaker who carries on.
 
-    The measured flaw is in that first case: pyannote's non-exclusive view extends both
-    speakers well past the actual handover, so "covers more" keeps choosing the incoming
-    speaker for words the outgoing one really said, and the boundary lands early instead
-    of late. Whatever replaces this needs a bound on how far a word may move, not a
-    better tie-break. See the module docstring for the numbers.
+    `bound` caps how long the **contested stretch** — the span where the top two
+    speakers are both active — may be for that rule to apply at all. It is the fix for
+    the way the unbounded rule failed: a real handover overlaps by a moment, but
+    pyannote also emits dual-active stretches seconds long (cross-talk, an uncertain
+    boundary, a room where one voice bleeds into the other's mic). In those the incoming
+    speaker covers everything and wins every word, so the boundary lands *early* —
+    trading the error this was built to fix for its mirror image. Above `bound` the
+    overlap is not evidence of a handover, so the word falls back to the exclusive
+    view. `None` leaves it uncapped: the rule as first measured, kept so the eval can
+    still score it.
 
     A word in a gap — no speaker active at all — falls back to the exclusive view's
     nearest turn; there is no overlap evidence to read there.
@@ -102,12 +110,21 @@ def _speaker_over(
         return _speaker_at((word.start + word.end) / 2.0, exclusive)
     covered: dict[str, float] = {}
     latest: dict[str, float] = {}
+    widest: dict[str, SpeakerTurn] = {}
     for turn in active:
         overlap = min(word.end, turn.end) - max(word.start, turn.start)
+        if overlap >= covered.get(turn.speaker, -1.0):
+            widest[turn.speaker] = turn
         covered[turn.speaker] = covered.get(turn.speaker, 0.0) + max(0.0, overlap)
         latest[turn.speaker] = max(latest.get(turn.speaker, 0.0), turn.end)
     # The speaker name is the last key only so a total tie resolves deterministically.
-    return max(covered, key=lambda s: (covered[s], latest[s], s))
+    ranked = sorted(covered, key=lambda s: (covered[s], latest[s], s), reverse=True)
+    if bound is not None and len(ranked) > 1:
+        first, second = widest[ranked[0]], widest[ranked[1]]
+        contested = min(first.end, second.end) - max(first.start, second.start)
+        if contested > bound:
+            return _speaker_at((word.start + word.end) / 2.0, exclusive)
+    return ranked[0]
 
 
 def _coalesce(runs: list[_Run]) -> list[_Run]:
@@ -151,14 +168,16 @@ def assign_words_to_speakers(
     *,
     min_turn_s: float = _MIN_TURN_S,
     overlapping: Sequence[SpeakerTurn] | None = None,
+    overlap_bound_s: float | None = None,
 ) -> list[AlignedTurn]:
     """Group `words` into per-speaker runs, then smooth away sub-`min_turn_s` turns.
     The text is the words joined (Whisper words carry their own leading spaces).
 
     `turns` is the exclusive diarization. Pass `overlapping` (the overlap-aware view)
-    to decide each word by coverage instead of by its midpoint. Both `min_turn_s` and
-    `overlapping` are exposed so the attribution eval can score each setting against
-    human ground truth; production passes neither — the module docstring records what
+    to decide each word by coverage instead of by its midpoint, and `overlap_bound_s`
+    to cap how long a contested stretch may be for that to apply — see `_speaker_over`.
+    All three are exposed so the attribution eval can score each setting against human
+    ground truth; production passes only `turns` — the module docstring records what
     the overlap-aware rule measured, and why it isn't the default.
     """
     if not words or not turns:
@@ -169,7 +188,7 @@ def assign_words_to_speakers(
         speaker = (
             _speaker_at((word.start + word.end) / 2.0, turns)
             if overlapping is None
-            else _speaker_over(word, overlapping, turns)
+            else _speaker_over(word, overlapping, turns, overlap_bound_s)
         )
         if raw and raw[-1].speaker == speaker:
             raw[-1].words.append(word)

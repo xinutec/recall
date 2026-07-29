@@ -20,6 +20,7 @@ import urllib.error
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 from recall import capture_control, runlog
 from recall.abcompare import Report, compare_models, render_json, render_markdown
@@ -92,12 +93,29 @@ _LOUDNESS_BACKFILL_PER_PASS = 100
 # Smoothing threshold the attribution breakdown is reported at (the sweep showed it
 # barely matters, so any in-range value gives the same localisation).
 _REF_MIN_TURN = 0.5
-# The two word→speaker assignment rules score-attribution compares. `exclusive` is the
-# midpoint lookup on pyannote's exclusive view; `overlap-aware` decides by coverage on
-# the view that keeps simultaneous speech (recall.align). Production runs the latter —
-# this is how that choice is kept honest against ground truth.
-_OVERLAP_AWARE = "overlap-aware"
-_ATTRIBUTION_MODES = ("exclusive", _OVERLAP_AWARE)
+
+
+class _AttributionMode(NamedTuple):
+    """One word→speaker assignment rule for score-attribution to score.
+
+    `exclusive` is production: the midpoint lookup on pyannote's exclusive view.
+    The rest read the overlap-aware view too (recall.align), differing in `bound` —
+    the longest contested stretch still treated as a handover, `None` meaning uncapped
+    (the variant that lost its first measurement by moving boundaries early).
+    """
+
+    name: str
+    overlapping: bool
+    bound: float | None
+
+
+_ATTRIBUTION_MODES = (
+    _AttributionMode("exclusive", overlapping=False, bound=None),
+    _AttributionMode("overlap", overlapping=True, bound=None),
+    _AttributionMode("ovl<=0.2s", overlapping=True, bound=0.2),
+    _AttributionMode("ovl<=0.4s", overlapping=True, bound=0.4),
+    _AttributionMode("ovl<=0.8s", overlapping=True, bound=0.8),
+)
 # Per pass, how many human-corrected turns to align to ASR for word timings. Each is a
 # word-level Whisper pass, so keep it small next to live capture.
 _WORD_TIMINGS_BACKFILL_PER_PASS = 3
@@ -1153,9 +1171,10 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
         # combination is scored off ONE transcribe + ONE diarize per segment — the two
         # heavy steps — so comparing modes costs no extra model time.
         totals: dict[tuple[str, float], list[int]] = {
-            (mode, m): [0, 0] for mode in _ATTRIBUTION_MODES for m in sweep
+            (mode.name, m): [0, 0] for mode in _ATTRIBUTION_MODES for m in sweep
         }
-        aggs = {mode: AttributionReport.empty() for mode in _ATTRIBUTION_MODES}
+        aggs = {mode.name: AttributionReport.empty() for mode in _ATTRIBUTION_MODES}
+        bounds = {mode.name: mode for mode in _ATTRIBUTION_MODES}
         for aid in store.audio_segments_for_source(args.source, limit=100_000):
             seg = store.audio_segment(aid)
             if seg is None or not Path(seg.path).exists():
@@ -1180,13 +1199,13 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
                 diarization = pyannote_diarize(working)
             speakers = list(diarization.exclusive)
             for (mode, m), total in totals.items():
+                rule = bounds[mode]
                 runs = assign_words_to_speakers(
                     words,
                     speakers,
                     min_turn_s=m,
-                    overlapping=(
-                        diarization.overlapping if mode == _OVERLAP_AWARE else None
-                    ),
+                    overlapping=(diarization.overlapping if rule.overlapping else None),
+                    overlap_bound_s=rule.bound,
                 )
                 predicted = [
                     ((w.start + w.end) / 2.0, run.speaker)
