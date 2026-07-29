@@ -387,6 +387,14 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "capture does to a conversation — chop a meeting at 60 to test whether the "
         "diarization window is what costs the household its boundary accuracy",
     )
+    att.add_argument(
+        "--context",
+        type=int,
+        default=0,
+        help="diarize each scored segment together with this many adjacent segments on "
+        "each side (never across a recording gap), scoring only the centre — the "
+        "opposite of --chop, and the way to test a longer window on live capture",
+    )
 
     abc = sub.add_parser(
         "ab-compare",

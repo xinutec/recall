@@ -104,6 +104,40 @@ def score_attribution(
     )
 
 
+def context_window(
+    index: int,
+    spans: Sequence[tuple[float, float]],
+    *,
+    context: int,
+    max_gap: float = 0.5,
+) -> tuple[int, int]:
+    """The half-open `[lo, hi)` run of segments to diarize together around `index`.
+
+    `spans` is every segment of a source as (start, end) epoch seconds, in order. Walks
+    out `context` segments each way but **stops at a gap**: capture writes a file a
+    minute, so consecutive files abut, and a gap means the recorder was paused or moved.
+    Joining across one would splice unrelated audio and invent a speaker change that
+    never happened.
+
+    Exists because live capture diarizes each 60 s file alone, which is measurably
+    where boundary accuracy goes (see `docs/pipeline.md` §4); this is how the eval
+    reconstructs the longer window a fix would use, without touching the archive.
+    """
+    lo = index
+    while (
+        lo > index - context and lo > 0 and spans[lo - 1][1] >= spans[lo][0] - max_gap
+    ):
+        lo -= 1
+    hi = index + 1
+    while (
+        hi < index + 1 + context
+        and hi < len(spans)
+        and spans[hi][0] <= spans[hi - 1][1] + max_gap
+    ):
+        hi += 1
+    return lo, hi
+
+
 def _change_points(truth: Sequence[TruthSpan]) -> list[float]:
     """Times where the speaker changes between consecutive (in time) truth spans — the
     spots where attribution is most likely to cross."""

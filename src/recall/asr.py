@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -120,6 +120,51 @@ def make_working_copy(src: Path, dst: Path, *, sample_rate: int = 16000) -> None
     subprocess.run(
         build_working_copy_argv(src, dst, sample_rate=sample_rate), check=True
     )
+
+
+def build_concat_argv(
+    sources: Sequence[Path], dst: Path, *, sample_rate: int = 16000
+) -> list[str]:
+    """ffmpeg argv to join `sources` end-to-end into one working copy.
+
+    Same mono/16 kHz/loudnorm shape as `build_working_copy_argv`, over several inputs —
+    for treating a run of consecutive capture segments as the single recording it
+    acoustically is. Loudness is normalised once across the join rather than per input,
+    so a quiet minute next to a loud one doesn't get its gain jumped mid-conversation.
+    Caller's job to pass only temporally adjacent sources, in order — nothing here
+    checks it, and joining across a recording gap would invent adjacency, and with it a
+    speaker change that never happened. `attribution.context_window` is what enforces
+    adjacency for the eval.
+    """
+    argv = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+    for src in sources:
+        argv += ["-i", str(src)]
+    streams = "".join(f"[{i}:a]" for i in range(len(sources)))
+    argv += [
+        "-filter_complex",
+        f"{streams}concat=n={len(sources)}:v=0:a=1[j];[j]loudnorm[out]",
+        "-map",
+        "[out]",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-f",
+        "wav",
+        str(dst),
+    ]
+    return argv
+
+
+def concat_working_copy(
+    sources: Sequence[Path], dst: Path, *, sample_rate: int = 16000
+) -> None:
+    """Join `sources` (adjacent, in order) into one normalised working copy at `dst`."""
+    if not sources:
+        msg = "concat_working_copy needs at least one source"
+        raise ValueError(msg)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(build_concat_argv(sources, dst, sample_rate=sample_rate), check=True)
 
 
 def build_slice_argv(src: Path, dst: Path, start: float, end: float) -> list[str]:

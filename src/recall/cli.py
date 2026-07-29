@@ -23,8 +23,14 @@ from pathlib import Path
 
 from recall import capture_control, runlog
 from recall.abcompare import Report, compare_models, render_json, render_markdown
-from recall.asr import AsrResult, Transcriber, Word, mlx_transcribe
-from recall.attribution import AttributionReport
+from recall.asr import (
+    AsrResult,
+    Transcriber,
+    Word,
+    concat_working_copy,
+    mlx_transcribe,
+)
+from recall.attribution import AttributionReport, context_window
 from recall.capture import CaptureConfig, parse_segment_start, segment_glob
 from recall.cleanup import scan_hallucinations, scan_loops
 from recall.cli_parser import build_parser
@@ -60,7 +66,7 @@ from recall.maintenance import (
     reprobe_short_segments,
 )
 from recall.moments import cluster_moments
-from recall.probe import scan_segments
+from recall.probe import probe_media, scan_segments
 from recall.redrive import redrive_archive
 from recall.refine import refine_diarized
 from recall.reprocess import reprocess
@@ -1146,13 +1152,20 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
         totals: dict[float, list[int]] = {m: [0, 0] for m in sweep}  # m -> [words, ok]
         agg = AttributionReport.empty()  # accumulated breakdown at `ref`
         scored = 0
-        for aid in store.audio_segments_for_source(args.source, limit=100_000):
+        # The whole source in time order, so `--context` can reach a segment's
+        # neighbours. Ordering is explicit rather than assumed of the query.
+        segments = [
+            (aid, seg)
+            for aid in store.audio_segments_for_source(args.source, limit=100_000)
+            if (seg := store.audio_segment(aid)) is not None and Path(seg.path).exists()
+        ]
+        segments.sort(key=lambda pair: pair[1].start)
+        spans = [(s.start.timestamp(), s.end.timestamp()) for _, s in segments]
+        durations: dict[str, float] = {}
+        for position, (aid, seg) in enumerate(segments):
             if args.max_segments is not None and scored >= args.max_segments:
                 print(f"(stopped at --max-segments {args.max_segments})")
                 break
-            seg = store.audio_segment(aid)
-            if seg is None or not Path(seg.path).exists():
-                continue
             truth = [
                 TruthSpan(
                     (t.start - seg.start).total_seconds(),
@@ -1167,15 +1180,26 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
             if not truth:
                 continue
             scored += 1
+            lo, hi = context_window(position, spans, context=args.context)
+            parts = [Path(s.path) for _, s in segments[lo:hi]]
+            lengths = _part_durations(parts, durations)
+            # Where this segment starts inside the joined window, so predictions come
+            # back into segment-relative time and score against the same truth spans
+            # the per-segment baseline used.
+            centre = sum(lengths[: position - lo])
             with scratch_wav(work / f"attr-{int(aid):06d}.wav") as working:
-                make_working_copy(Path(seg.path), working)
+                if len(parts) == 1:
+                    make_working_copy(parts[0], working)
+                else:
+                    concat_working_copy(parts, working)
                 pieces = _attribution_pieces(
                     working,
-                    duration=(seg.end - seg.start).total_seconds(),
+                    duration=sum(lengths),
                     chop=args.chop,
                     model=args.model,
                     work=work,
                 )
+            pieces = [(off - centre, pw, ps) for off, pw, ps in pieces]
             for m in sweep:
                 # One aligned prediction list per piece, shifted back into segment time.
                 # The cluster label is namespaced by piece: an unchopped replay has one
@@ -1195,6 +1219,16 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
     finally:
         store.close()
     return 0
+
+
+def _part_durations(parts: list[Path], cache: dict[str, float]) -> list[float]:
+    """Each part's real decoded duration, memoised — overlapping `--context` windows
+    revisit the same files, and the recorded duration can trail the file's actual one
+    (a row indexed mid-write), which would shift every offset in the window."""
+    for part in parts:
+        if str(part) not in cache:
+            cache[str(part)] = probe_media(part).duration.total_seconds()
+    return [cache[str(p)] for p in parts]
 
 
 def _attribution_pieces(

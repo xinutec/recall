@@ -7,14 +7,20 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
+from conftest import make_flac
 from recall.asr import (
     AsrResult,
     AsrSegment,
+    build_concat_argv,
     build_slice_argv,
     build_working_copy_argv,
+    concat_working_copy,
     decode_pcm_f32,
     result_to_drafts,
 )
+from recall.probe import probe_media
 
 BASE = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
 
@@ -27,6 +33,41 @@ def test_working_copy_is_mono_16k_normalised() -> None:
     # loudness-normalised for the ASR copy (raw archive is untouched)
     assert "loudnorm" in argv[argv.index("-af") + 1]
     assert argv[-1] == "/b/seg.wav"
+
+
+def test_concat_argv_joins_every_input_and_normalises_once() -> None:
+    argv = build_concat_argv(
+        [Path("/a/1.opus"), Path("/a/2.opus"), Path("/a/3.opus")], Path("/b/run.wav")
+    )
+    assert argv[0] == "ffmpeg"
+    assert argv.count("-i") == 3
+    graph = argv[argv.index("-filter_complex") + 1]
+    assert "[0:a][1:a][2:a]concat=n=3" in graph
+    # loudnorm sits after the join, not per input: one gain for the whole run, so a
+    # quiet minute beside a loud one isn't lifted mid-conversation.
+    assert graph.endswith("[j];[j]loudnorm[out]")
+    assert argv[argv.index("-ar") + 1] == "16000"
+    assert argv[argv.index("-ac") + 1] == "1"
+    assert argv[-1] == "/b/run.wav"
+
+
+def test_concat_needs_a_source(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="at least one source"):
+        concat_working_copy([], tmp_path / "out.wav")
+
+
+def test_concat_really_joins_audio(tmp_path: Path) -> None:
+    # End-to-end through ffmpeg: three 1s tones must come back as ~3s of audio, so the
+    # filter graph is right and not just plausible.
+    parts = []
+    for i in range(3):
+        part = tmp_path / f"p{i}.flac"
+        make_flac(part, seconds=1.0)
+        parts.append(part)
+    out = tmp_path / "joined.wav"
+    concat_working_copy(parts, out)
+    assert out.exists()
+    assert 2.5 <= probe_media(out).duration.total_seconds() <= 3.5
 
 
 def test_slice_argv_extracts_window() -> None:

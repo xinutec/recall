@@ -2,7 +2,43 @@
 
 from __future__ import annotations
 
-from recall.attribution import TruthSpan, attribution_report, score_attribution
+from recall.attribution import (
+    TruthSpan,
+    attribution_report,
+    context_window,
+    score_attribution,
+)
+
+# Four abutting 60s files, then a 10-minute gap, then two more — a pause in the middle.
+SPANS = [
+    (0.0, 60.0),
+    (60.0, 120.0),
+    (120.0, 180.0),
+    (180.0, 240.0),
+    (840.0, 900.0),
+    (900.0, 960.0),
+]
+
+
+def test_context_window_walks_out_both_ways() -> None:
+    assert context_window(2, SPANS, context=1) == (1, 4)
+    assert context_window(2, SPANS, context=2) == (0, 4)
+
+
+def test_context_window_stops_at_a_gap() -> None:
+    # Segment 3 abuts 2 but a 10-minute pause follows: never splice across it, or the
+    # join invents a speaker change that never happened.
+    assert context_window(3, SPANS, context=2) == (1, 4)
+    assert context_window(4, SPANS, context=2) == (4, 6)
+
+
+def test_context_window_clamps_at_the_ends() -> None:
+    assert context_window(0, SPANS, context=3) == (0, 4)
+    assert context_window(5, SPANS, context=3) == (4, 6)
+
+
+def test_context_window_of_zero_is_one_segment() -> None:
+    assert context_window(2, SPANS, context=0) == (2, 3)
 
 
 def test_perfect_attribution_scores_one() -> None:
