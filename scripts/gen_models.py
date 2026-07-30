@@ -103,6 +103,7 @@ REQUEST_NAME_MAP = {
     "SessionRenameIn": "SessionRenameRequest",
     "ContextIn": "ContextRequest",
     "QuietDeleteIn": "QuietDeleteRequest",
+    "TelemetryEvent": "TelemetryEvent",
 }
 
 # Shapes not emitted to the generated web models: the web app never consumes them

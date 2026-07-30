@@ -15,6 +15,7 @@ import { BUILD_INFO } from './build-info';
 import { dayKey, durationUntil, timeOfDay } from './format';
 import { CaptureState } from './models';
 import { RecallApi } from './recall-api';
+import { Telemetry } from './telemetry';
 
 interface NavItem {
   readonly path: string;
@@ -56,6 +57,9 @@ export class App {
 
   /** Nextcloud sign-in wall state; only ever active on the SSO-gated fleet UI. */
   protected readonly auth = inject(AuthState);
+  // Instrumented from the shell alone: a trace each screen had to remember to
+  // join would have holes in exactly the screens nobody thought about.
+  private readonly telemetry = inject(Telemetry);
 
   /** Phone-sized viewport → bottom nav; otherwise nav lives in the top toolbar. */
   protected readonly handset = toSignal(
@@ -119,6 +123,7 @@ export class App {
   });
 
   constructor() {
+    this.telemetry.init();
     this.pollCapture(0);
     setInterval(() => this.now.set(Date.now()), 30_000);
   }

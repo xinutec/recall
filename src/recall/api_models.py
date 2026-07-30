@@ -16,6 +16,21 @@ class ClientLog(BaseModel):
     url: str | None = None
 
 
+class TelemetryEvent(BaseModel):
+    """One thing that happened in the client.
+
+    ``kind`` is ``nav`` for a route change, where ``label`` is absent, or ``tap``
+    for a control, where ``label`` is its visible text, verbatim. ``at`` is the
+    client's clock in epoch milliseconds — a batch arrives all at once, so the
+    server's receive time cannot order the events inside it and the client's can.
+    """
+
+    kind: str
+    path: str
+    label: str | None = None
+    at: int = 0
+
+
 class CorrectIn(BaseModel):
     id: int
     text: str

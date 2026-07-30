@@ -290,6 +290,13 @@ export interface ClientLogRequest {
   readonly url?: string | null;
 }
 
+export interface TelemetryEvent {
+  readonly kind: string;
+  readonly path: string;
+  readonly label?: string | null;
+  readonly at?: number;
+}
+
 export interface CorrectRequest {
   readonly id: number;
   readonly text: string;
