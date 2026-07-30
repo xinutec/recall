@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -276,6 +277,26 @@ _MAX_EVENTS = 100
 _MAX_LABEL = 160
 
 
+def _one_line(label: str, max_len: int) -> str:
+    """Flatten a client-supplied label to a single harmless log field.
+
+    The security boundary of the telemetry endpoint, not tidiness. A label is
+    verbatim UI text written into a log line as ``label=…``, so a newline inside
+    it forges *whole log lines* — including further ``client-event`` lines
+    attributed to someone else. The log stops being evidence, which is the one
+    thing it exists to be.
+
+    ``str.split()`` with no argument splits on every Unicode whitespace,
+    including the U+2028/U+2029 separators that are not control characters; the
+    category pass ahead of it catches the format and control characters that are
+    not whitespace at all.
+    """
+    unbroken = "".join(
+        " " if unicodedata.category(c) in {"Cc", "Cf", "Zl", "Zp"} else c for c in label
+    )
+    return " ".join(unbroken.split())[:max_len]
+
+
 @app.post("/api/telemetry")
 def telemetry(events: list[TelemetryEvent]) -> OkOut:
     """Record what the person did, beside what the API was asked for.
@@ -293,7 +314,7 @@ def telemetry(events: list[TelemetryEvent]) -> OkOut:
     value is being able to grep one word anywhere and get the same fields.
     """
     for e in events[:_MAX_EVENTS]:
-        label = (e.label or "")[:_MAX_LABEL]
+        label = _one_line(e.label or "", _MAX_LABEL)
         _log.info(
             "client-event kind=%s path=%s label=%s at=%s", e.kind, e.path, label, e.at
         )
