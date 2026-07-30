@@ -37,23 +37,35 @@ def test_working_copy_is_mono_16k_normalised() -> None:
 
 def test_concat_argv_joins_every_input_and_normalises_once() -> None:
     argv = build_concat_argv(
-        [Path("/a/1.opus"), Path("/a/2.opus"), Path("/a/3.opus")], Path("/b/run.wav")
+        [Path("/a/1.opus"), Path("/a/2.opus"), Path("/a/3.opus")],
+        Path("/b/run.wav"),
+        normalize=True,
     )
     assert argv[0] == "ffmpeg"
     assert argv.count("-i") == 3
     graph = argv[argv.index("-filter_complex") + 1]
     assert "[0:a][1:a][2:a]concat=n=3" in graph
-    # loudnorm sits after the join, not per input: one gain for the whole run, so a
-    # quiet minute beside a loud one isn't lifted mid-conversation.
     assert graph.endswith("[j];[j]loudnorm[out]")
     assert argv[argv.index("-ar") + 1] == "16000"
     assert argv[argv.index("-ac") + 1] == "1"
     assert argv[-1] == "/b/run.wav"
 
 
+def test_concat_can_skip_normalising_so_a_join_changes_nothing_else() -> None:
+    # The comparison-safe mode: sources are already normalised, so joining them must
+    # not re-gain the audio — otherwise a windowed run differs from its baseline in
+    # two ways at once and neither can be attributed.
+    argv = build_concat_argv(
+        [Path("/a/1.wav"), Path("/a/2.wav")], Path("/b/run.wav"), normalize=False
+    )
+    graph = argv[argv.index("-filter_complex") + 1]
+    assert "loudnorm" not in graph
+    assert graph.endswith("[j];[j]anull[out]")
+
+
 def test_concat_needs_a_source(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="at least one source"):
-        concat_working_copy([], tmp_path / "out.wav")
+        concat_working_copy([], tmp_path / "out.wav", normalize=True)
 
 
 def test_concat_really_joins_audio(tmp_path: Path) -> None:
@@ -65,7 +77,7 @@ def test_concat_really_joins_audio(tmp_path: Path) -> None:
         make_flac(part, seconds=1.0)
         parts.append(part)
     out = tmp_path / "joined.wav"
-    concat_working_copy(parts, out)
+    concat_working_copy(parts, out, normalize=True)
     assert out.exists()
     assert 2.5 <= probe_media(out).duration.total_seconds() <= 3.5
 

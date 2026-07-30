@@ -123,14 +123,20 @@ def make_working_copy(src: Path, dst: Path, *, sample_rate: int = 16000) -> None
 
 
 def build_concat_argv(
-    sources: Sequence[Path], dst: Path, *, sample_rate: int = 16000
+    sources: Sequence[Path], dst: Path, *, sample_rate: int = 16000, normalize: bool
 ) -> list[str]:
     """ffmpeg argv to join `sources` end-to-end into one working copy.
 
-    Same mono/16 kHz/loudnorm shape as `build_working_copy_argv`, over several inputs —
-    for treating a run of consecutive capture segments as the single recording it
-    acoustically is. Loudness is normalised once across the join rather than per input,
-    so a quiet minute next to a loud one doesn't get its gain jumped mid-conversation.
+    Mono and 16 kHz like `build_working_copy_argv`, over several inputs — for treating a
+    run of consecutive capture segments as the single recording it acoustically is.
+
+    `normalize` decides where loudness normalisation happens, and it is not a detail.
+    True applies one `loudnorm` across the join, which reads well but makes the joined
+    audio differ from the same segments normalised singly — so a comparison against a
+    per-segment baseline is measuring two changes at once. False expects the caller to
+    have normalised each source already and only joins them, which isolates the join.
+    Prefer False whenever the join is being compared against unjoined segments.
+
     Caller's job to pass only temporally adjacent sources, in order — nothing here
     checks it, and joining across a recording gap would invent adjacency, and with it a
     speaker change that never happened. `attribution.context_window` is what enforces
@@ -140,9 +146,11 @@ def build_concat_argv(
     for src in sources:
         argv += ["-i", str(src)]
     streams = "".join(f"[{i}:a]" for i in range(len(sources)))
+    graph = f"{streams}concat=n={len(sources)}:v=0:a=1[j]"
+    graph += ";[j]loudnorm[out]" if normalize else ";[j]anull[out]"
     argv += [
         "-filter_complex",
-        f"{streams}concat=n={len(sources)}:v=0:a=1[j];[j]loudnorm[out]",
+        graph,
         "-map",
         "[out]",
         "-ac",
@@ -157,14 +165,18 @@ def build_concat_argv(
 
 
 def concat_working_copy(
-    sources: Sequence[Path], dst: Path, *, sample_rate: int = 16000
+    sources: Sequence[Path], dst: Path, *, sample_rate: int = 16000, normalize: bool
 ) -> None:
-    """Join `sources` (adjacent, in order) into one normalised working copy at `dst`."""
+    """Join `sources` (adjacent, in order) into one working copy at `dst`. See
+    `build_concat_argv` for what `normalize` costs you if you get it wrong."""
     if not sources:
         msg = "concat_working_copy needs at least one source"
         raise ValueError(msg)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(build_concat_argv(sources, dst, sample_rate=sample_rate), check=True)
+    subprocess.run(
+        build_concat_argv(sources, dst, sample_rate=sample_rate, normalize=normalize),
+        check=True,
+    )
 
 
 def build_slice_argv(src: Path, dst: Path, start: float, end: float) -> list[str]:

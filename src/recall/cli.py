@@ -18,6 +18,7 @@ import time
 import traceback
 import urllib.error
 from collections.abc import Callable
+from contextlib import ExitStack
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -1191,7 +1192,12 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
                 if len(parts) == 1:
                     make_working_copy(parts[0], working)
                 else:
-                    concat_working_copy(parts, working)
+                    # Normalise each segment on its own and only THEN join, so the
+                    # centre segment's audio is bit-for-bit what the --context 0
+                    # baseline transcribed. Normalising across the join instead makes
+                    # the run measure gain-sharing as well as window length, which is
+                    # how the first household comparison went wrong.
+                    _join_normalised(parts, working, work=work)
                 pieces = _attribution_pieces(
                     working,
                     duration=sum(lengths),
@@ -1219,6 +1225,23 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
     finally:
         store.close()
     return 0
+
+
+def _join_normalised(parts: list[Path], dst: Path, *, work: Path) -> None:
+    """Join `parts` after normalising each one separately — the join is then the only
+    difference from scoring those segments individually."""
+    from recall.asr import (  # noqa: PLC0415 - heavy/optional path
+        make_working_copy,
+        scratch_wav,
+    )
+
+    copies: list[Path] = []
+    with ExitStack() as stack:
+        for index, part in enumerate(parts):
+            copy = stack.enter_context(scratch_wav(work / f"join-{index:04d}.wav"))
+            make_working_copy(part, copy)
+            copies.append(copy)
+        concat_working_copy(copies, dst, normalize=False)
 
 
 def _part_durations(parts: list[Path], cache: dict[str, float]) -> list[float]:
