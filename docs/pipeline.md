@@ -114,6 +114,22 @@ The mechanism is that a 60 s clip gives clustering an order of magnitude fewer e
 (against `min_cluster_size: 12` on 10 s windows) and cluster identity cannot cross a
 segment boundary.
 
+**It's a dose-response, and it says how long the window has to be.** Recording D at four
+window lengths:
+
+| window | near a change | short turns | interior | wall time |
+|---|---|---|---|---|
+| 60 s | 81.1% | 50.8% | 99.4% | 36m51s |
+| 180 s | 92.0% | 84.2% | 99.5% | 42m09s |
+| 600 s | 98.0% | 96.7% | 99.8% | 37m34s |
+| whole (2010 s) | 100.0% | 100.0% | 100.0% | 37m02s |
+
+Monotonic in window length and **flat in wall time** — the replay costs the same however
+it's cut, so window length is free. Ten minutes recovers 16.9 of the 18.9 lost points
+(~90%) and three minutes recovers 58%, so a fix does not need the whole recording: a
+bounded multi-minute window gets nearly all of it, which matters because `refine` has to
+hold the window in memory and re-derive whole segments.
+
 **The fix is time-neutral**, which is what makes it worth doing: recording D took 37m02s
 whole and 36m51s chopped. A longer diarization window costs no more wall clock — the
 per-call overhead and the longer attention window cancel out. `refine` diarizes one audio
