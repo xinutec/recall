@@ -1,36 +1,21 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
+import { phoneConfig } from '@xinutec/ui-harness/config';
+import harness from './e2e/harness.mjs';
 
-// Pixel 9 web viewport. The phone's panel is 1080×2424 physical at devicePixelRatio
-// 2.625, which is 412×915 CSS px once the status bar is excluded. The recall web app
-// is used on the Pixel 9, so e2e runs at its real size to catch controls clipped or
-// hidden behind the fixed bottom nav — geometry the jsdom unit tests can't see.
-const pixel9 = {
-  defaultBrowserType: 'chromium' as const,
-  viewport: { width: 412, height: 915 },
-  deviceScaleFactor: 2.625,
-  isMobile: true,
-  hasTouch: true,
-  userAgent:
-    'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) ' +
-    'Chrome/130.0.0.0 Mobile Safari/537.36',
-};
-
-const PORT = 4293;
-
-export default defineConfig({
-  testDir: './e2e',
-  reporter: 'list',
-  use: { baseURL: `http://localhost:${PORT}` },
-  projects: [{ name: 'pixel9', use: pixel9 }],
-  // Serve the BUILT bundle via a tiny static server (e2e/serve.mjs), not `ng serve`:
-  // tests mock every /api call so no backend/real-data is involved, and serving the
-  // built dist dodges the macOS kqueue.c:279 abort that spawning the CLI dev server
-  // trips. `npm run ui-check` builds first; reuseExistingServer attaches to a
-  // serve.mjs you started yourself.
-  webServer: {
-    command: `node e2e/serve.mjs ${PORT}`,
-    url: `http://localhost:${PORT}/`,
-    reuseExistingServer: true,
-    timeout: 60_000,
-  },
-});
+/**
+ * Phone-width layout harness. The recall web app is used on the Pixel 9, so the
+ * suite runs at its real size to catch controls clipped or hidden behind the
+ * fixed bottom nav — geometry the jsdom unit tests cannot see.
+ *
+ * Everything shared — the Pixel geometry, the port, the static server — comes
+ * from @xinutec/ui-harness. This app used to spell out its own device
+ * descriptor; it now takes the fleet's, which is the same 412 CSS px at
+ * deviceScaleFactor 1 (CSS-pixel geometry is DPR-invariant, and forcing 1 keeps
+ * measurements small).
+ *
+ * The BUILT bundle is served, not `ng serve`: the tests mock every /api call so
+ * no backend is involved, and serving the built dist dodges the macOS
+ * kqueue.c:279 abort that spawning the CLI dev server trips. `npm run ui-check`
+ * builds first; reuseExistingServer attaches to a server you started yourself.
+ */
+export default defineConfig(phoneConfig(harness, devices));
