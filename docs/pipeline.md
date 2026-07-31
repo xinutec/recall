@@ -197,9 +197,11 @@ one person *and* merges two, in the same recording. The two do not cost the same
 is why the aggregate hides it: extra clusters of one person still map to that person by
 majority, while a merged cluster takes the head of the next speaker's sentence.
 
-**Not fixable by a clustering knob.** `min_cluster_size` 12 → 6 is bit-for-bit identical
-at the boundary (51/66 both times, same per-speaker error split); it only admits ~86 more
-interior words by changing turn coverage. The threshold does *not* behave as its name
+**Not fixable by a clustering knob.** `min_cluster_size` 12 → 6 → 3 is bit-for-bit
+identical at the boundary (51/66 every time, and the same 9/8/5 split of lost words
+across the three speakers); 6 only admits ~86 more interior words by changing turn coverage,
+and 3 does not even do that. A floor of 12 was never what bound these clusters — lowering
+it permits small clusters the embeddings never propose. The threshold does *not* behave as its name
 suggests — the shipped 0.7046 sits near a cluster-count **maximum**, and 0.40 and 0.90
 both collapse a 6-cluster segment to 2. Knob values are reachable via
 `score-attribution --min-cluster-size / --clustering-threshold`; `diarize.tuned_parameters`
