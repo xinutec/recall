@@ -178,6 +178,10 @@ is real; the window is not its cause.
 Five candidate causes, each measured and each ruled out. Read this before proposing a
 sixth: the cheap explanations are gone, and four of the five looked convincing first.
 
+All five are single-view explanations — one way of reading one microphone. That framing
+turned out to be the limit, not the audio: see *What is left, corrected* at the end of
+this section, where two views of the same recording disagree usefully.
+
 **Not overlapping speech.** Read straight off the corrected turns, no model involved:
 of 42 confirmed speaker changes on `usb`, **2 (4.8%)** involve more than 0.25 s of
 simultaneous speech. Two thirds are separated by half a second or more, with a **median
@@ -230,7 +234,49 @@ them in an incompatible space (512-dim vs 256-dim) for that. Note the corollary:
 a clean turn already works at ~95%**, so these errors are not "matched the wrong person" —
 they are "the cluster was wrong".
 
-**What is left.** Only evidence the single far-field mic does not carry. `design.md` §5.1a
+**What is left, corrected (2026-08-01).** The paragraph below said the only evidence left
+was evidence one microphone cannot carry. That is too strong, and the correction matters
+more than the claim did: it is a ceiling on any *single view* of the audio, not on the
+audio. Two views already exist, and they fail on different turns.
+
+Scored per turn on the 42 household handovers, asking who the turn that *begins* a
+handover belongs to:
+
+| how the turn is assigned | correct |
+|---|---|
+| its dominant diarizer cluster, each cluster named by its true majority speaker | 36/42 (85.7%) |
+| its own embedding matched to enrolled voiceprints, leave-one-out | 34/42 (81.0%) |
+| **either one, whichever is right** | **40/42 (95.2%)** |
+
+The cluster row is an upper bound — no live pipeline can name a cluster by ground truth.
+Yet only **2 of 42** handovers defeat both views. Six are right by cluster only, four by
+naming only. The evidence for the rest is present and is being discarded by picking one
+view in advance.
+
+Which view to trust is predictable from naming's own cosine margin (best minus
+runner-up), measured over 583 handover turns across seven sources:
+
+| | median margin | |
+|---|---|---|
+| naming is right | 0.432 | n=549 |
+| naming is wrong | 0.056 | n=34 |
+
+| gate | precision | coverage |
+|---|---|---|
+| margin ≥ 0.04 | 95.9% | 96% |
+| margin ≥ 0.08 | 97.8% | 92% |
+| margin ≥ 0.15 | 99.0% | 85% |
+
+Monotone on every source separately, so the effect generalises. Two limits before this is
+believed: six of the seven sources are two-speaker near-field, where naming already scores
+92–100%, and the one five-speaker far-field source (82.9%, rising to 94% at margin ≥ 0.08)
+is the source the threshold was chosen on. The mechanism is validated; the size of the win
+in the hard case is not. Turns under 0.5 s cannot be embedded at all and must fall back.
+
+The next lever is therefore fusing two views recall already computes — no new hardware, no
+new ground truth. What follows remains true and remains the lever after that.
+
+**What one microphone cannot give.** `design.md` §5.1a
 specifies fusing the co-located mics, and two observations of one handover from different
 positions is genuinely new information rather than another reading of the same ambiguous
 embedding. It cannot be validated yet: of the 25 ground-truth segments, **2** have a phone
