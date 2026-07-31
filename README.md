@@ -11,6 +11,7 @@ in the house. Everything stays on-device.
 - **Phone/mic ingest (connect, identity, liveness):** [`docs/devices.md`](docs/devices.md)
 - **Reading a recorded call from the CLI:** [`docs/review.md`](docs/review.md)
 - **Ingesting discrete meeting recordings (download → ingest → transcribe → clean):** [`docs/meetings.md`](docs/meetings.md)
+- **Meeting recorder in the Android app (planned):** [`docs/meeting-recorder.md`](docs/meeting-recorder.md)
 - **Conventions (strict typing, TDD):** [`docs/conventions.md`](docs/conventions.md)
 
 ## Web app
