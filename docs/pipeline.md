@@ -130,17 +130,48 @@ it's cut, so window length is free. Ten minutes recovers 16.9 of the 18.9 lost p
 bounded multi-minute window gets nearly all of it, which matters because `refine` has to
 hold the window in memory and re-derive whole segments.
 
-**The fix is time-neutral**, which is what makes it worth doing: recording D took 37m02s
-whole and 36m51s chopped. A longer diarization window costs no more wall clock — the
-per-call overhead and the longer attention window cancel out. `refine` diarizes one audio
-segment at a time (60 s for live capture), so diarizing *runs of consecutive segments* as
-one window is the indicated change, and it is idle-gated so it competes with nothing.
+**The fix is time-neutral**, which is what made it look worth doing: recording D took
+37m02s whole and 36m51s chopped. A longer diarization window costs no more wall clock —
+the per-call overhead and the longer attention window cancel out. `refine` diarizes one
+audio segment at a time (60 s for live capture), so diarizing *runs of consecutive
+segments* as one window was the indicated change, and it is idle-gated so it competes with
+nothing. **Read that with the household result below — on live capture the same lever
+made attribution worse, and the change was not made.**
 
 Not the whole story: chopped meetings sit at 81.1% and 90.9% while the household sits at
 73.8%, so the window accounts for most of the gap and something else — far-field room
 audio, genuinely simultaneous family speech — accounts for the remaining 7–17 points.
-Confirming the fix needs the mirror experiment: diarize *concatenated* runs of household
-segments and check the household number moves toward the chopped-meeting range.
+
+**The mirror experiment on household audio FAILED — the fix does not transfer.** Ninety
+consecutive household segments, each re-scored inside a window of its temporally adjacent
+neighbours (`--context`, which stops at any recording gap so a join never invents
+adjacency):
+
+| window | near a change | short turns | interior | overall | words scored | wall |
+|---|---|---|---|---|---|---|
+| 1 segment (60 s) | 77.3% | 88.1% | 99.5% | 98.8% | 2023 | 1h57m |
+| ±1 segment (~180 s) | 78.3% | 87.2% | 99.0% | 98.5% | 2460 | 4h16m |
+| ±2 segments (~300 s) | **65.6%** | 90.2% | 98.6% | 97.6% | 2115 | 7h43m |
+
+Nothing like the meeting curve, which gained 10.9 points at the same first step. The
+±1 arm moves by less than one word; the ±2 arm is 11.7 points *worse*, and interiors —
+which a window change should barely touch — fall monotonically across all three.
+
+Two things limit how hard this can be read, both worth stating rather than filing the
+result as clean. **The arms do not share a word set** (2023 / 2460 / 2115 words): a longer
+window changes what Whisper emits for the same centre segment, so these are unpaired
+comparisons and a one-point difference means nothing. Only the ±2 collapse is larger than
+that noise. And **wall time is not flat here**, unlike the `--chop` experiment: the eval
+re-transcribes an overlapping window per segment, so its cost scales with the window and
+says nothing about what a production change would cost, which would diarize each run once.
+
+Inference, not measurement: the household's segments average 1.15 speakers, so extending
+the window adds voices and far-field room noise that a 60 s clip did not contain, giving
+clustering more to get wrong — where a meeting's extra context is the same two or three
+voices recurring. That would explain why the same lever helps one and hurts the other.
+
+So the indicated change above stays **unbuilt**. The near-change gap on household capture
+is real and unexplained; the window is not its cause.
 
 Read the household figure with its sample in mind: 103 near-change words, and since a
 near-change word needs two differently-labelled truth spans in the same segment, they come
