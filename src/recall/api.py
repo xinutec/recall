@@ -390,7 +390,11 @@ def create_session(
         raise HTTPException(status_code=400, detail="could not read audio") from exc
     store = _store()
     try:
-        store.add_source(
+        # register, not add: an upload KNOWS what it is, and the worker may already
+        # have discovered this directory (it scans the data root continuously). An
+        # INSERT OR IGNORE here would leave the guess standing and the session would
+        # never appear in the list.
+        store.register_source(
             AudioSource(id=source_id, name=name, kind=SourceKind.UPLOAD, spec="")
         )
         store.add_audio_segment(

@@ -2185,3 +2185,42 @@ def test_sweep_refusals_are_journaled_once_per_identity_and_counted() -> None:
     store.record_sweep_refusal("usb", BASE, "re-served next pass")  # same identity
     store.record_sweep_refusal("usb", BASE + timedelta(seconds=60), "another")
     assert store.sweep_refusal_count() == 2
+
+
+def test_register_source_corrects_a_guessed_kind_but_keeps_a_human_name() -> None:
+    # The worker registers what it discovers on disk; the agent that actually produces
+    # the audio corrects the kind when it starts. A name the user chose in the UI is
+    # theirs, though — re-registering a phone must not rename it back to its id.
+    store = Store.memory()
+    store.add_source(
+        AudioSource(id="pixel9", name="pixel9", kind=SourceKind.DISCOVERED, spec="")
+    )
+    store.rename_source("pixel9", "Kitchen")
+    store.register_source(
+        AudioSource(id="pixel9", name="pixel9", kind=SourceKind.TCP_PCM, spec="")
+    )
+    assert store.source_kind("pixel9") is SourceKind.TCP_PCM
+    src = store.source("pixel9")
+    assert src is not None and src.name == "Kitchen"
+
+
+def test_register_source_replaces_a_placeholder_name() -> None:
+    # A name equal to the id is the worker's placeholder, not a choice — the registrar
+    # that knows what this is may say so. Without this an upload the worker discovered
+    # first stays listed as "meeting-20260731-0916" instead of "Meeting …".
+    store = Store.memory()
+    store.add_source(
+        AudioSource(
+            id="meeting-x", name="meeting-x", kind=SourceKind.DISCOVERED, spec=""
+        )
+    )
+    store.register_source(
+        AudioSource(
+            id="meeting-x",
+            name="Meeting 2026-07-31 09:16",
+            kind=SourceKind.UPLOAD,
+            spec="",
+        )
+    )
+    src = store.source("meeting-x")
+    assert src is not None and src.name == "Meeting 2026-07-31 09:16"

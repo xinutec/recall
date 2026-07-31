@@ -134,6 +134,11 @@ class _FakeStore:
     def add_source(self, source: AudioSource) -> None:
         self.sources.append(source)
 
+    def register_source(self, source: AudioSource) -> None:
+        # The upload bridge registers authoritatively so it can correct the kind the
+        # worker guessed for a directory it discovered first.
+        self.sources.append(source)
+
     def add_audio_segment(self, segment: Segment) -> int:
         self.segments.append(segment)
         return len(self.segments)

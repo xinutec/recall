@@ -372,7 +372,11 @@ def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentSt
         )
         blob.unlink(missing_ok=True)
         return SegmentStoredOut(audio_segment_id=0, turns_written=0, tombstoned=True)
-    store.add_source(
+    # The sender owns the kind: the Mac runs the capture agents and the upload path, so
+    # it is the machine that can know. Registering (not INSERT OR IGNORE) is what lets a
+    # correction there reach here — otherwise the fleet keeps the first kind it was ever
+    # told and the two databases disagree for good.
+    store.register_source(
         AudioSource(id=body.source_id, name=body.source_name, kind=kind, spec="")
     )
     # Re-home the path. The sender's `path` is absolute on the machine that recorded

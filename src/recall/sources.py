@@ -49,13 +49,25 @@ class SourceKind(Enum):
     RTSP = "rtsp"  # ffmpeg network source (e.g. a phone on the LAN)
     TCP_PCM = "tcp_pcm"  # ffmpeg listens for raw s16le PCM (the recall-mic app)
     UPLOAD = "upload"  # clips uploaded over HTTP (e.g. phone recorder); not captured
+    # Audio the worker found on disk with no registered source. It is an admission,
+    # not a producer: nothing here says what wrote those files. The worker used to
+    # answer COREAUDIO, which silently turned a meeting someone copied into the data
+    # root into a microphone — invisible in the sessions list, health-checked as a mic
+    # that had stopped, and sweepable. Whoever actually knows (the capture agent, the
+    # ingest handshake, an upload) corrects it via `Store.register_source`.
+    DISCOVERED = "discovered"
 
 
 # Kinds the quiet review may delete and a fleet sweep may target: everything recall
 # captured itself, never an uploaded recording (a meeting is real speech we chose to
 # keep, not idle room noise). The single source of truth — quiet detection, the Mac's
 # sweep-safety check, and the audio-volume query all read this one set.
-SWEEPABLE_KINDS: frozenset[SourceKind] = frozenset(SourceKind) - {SourceKind.UPLOAD}
+SWEEPABLE_KINDS: frozenset[SourceKind] = frozenset(SourceKind) - {
+    SourceKind.UPLOAD,
+    # DISCOVERED means "we don't know what this is", and deletion is irreversible:
+    # anything we can't positively identify as our own capture stays.
+    SourceKind.DISCOVERED,
+}
 
 # Kinds with a live recorder behind them — a device that can stall, die, or be carried
 # out of the house. An UPLOAD arrives over HTTP as a finished file, so there is no
@@ -65,7 +77,13 @@ SWEEPABLE_KINDS: frozenset[SourceKind] = frozenset(SourceKind) - {SourceKind.UPL
 #
 # Deliberately its own set, not an alias of SWEEPABLE_KINDS: they coincide today but
 # answer different questions (what may be deleted vs what is being recorded).
-DEVICE_KINDS: frozenset[SourceKind] = frozenset(SourceKind) - {SourceKind.UPLOAD}
+DEVICE_KINDS: frozenset[SourceKind] = frozenset(SourceKind) - {
+    SourceKind.UPLOAD,
+    # A DISCOVERED source has no recorder to be up or down, so every device check
+    # would be answering a question about a machine that may not exist. If it really
+    # is a recorder, its agent registers the true kind on start and it joins this set.
+    SourceKind.DISCOVERED,
+}
 
 
 class SourceRow(NamedTuple):
@@ -268,4 +286,10 @@ class AudioSource:
                 ]
             case SourceKind.UPLOAD:
                 msg = "uploaded sources are not captured by recall"
+                raise NotImplementedError(msg)
+            case SourceKind.DISCOVERED:
+                msg = (
+                    "discovered sources are not captured by recall — "
+                    "nothing here knows what produced them"
+                )
                 raise NotImplementedError(msg)

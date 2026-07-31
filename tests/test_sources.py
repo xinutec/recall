@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 
 from recall.sources import (
+    DEVICE_KINDS,
     FANOUT_PORT,
+    SWEEPABLE_KINDS,
     AudioSource,
     SourceKind,
     live_input_argv,
@@ -131,6 +133,26 @@ def test_upload_source_is_not_captured() -> None:
     src = AudioSource(id="phone", name="Phone", kind=SourceKind.UPLOAD, spec="")
     with pytest.raises(NotImplementedError, match="not captured"):
         src.producer_argv(48000, 1)
+
+
+def test_discovered_source_is_not_captured() -> None:
+    # Nothing produces a discovered source: the worker found files on disk and does not
+    # know what wrote them. Guessing a producer here is how a copied-in meeting became
+    # a microphone.
+    src = AudioSource(id="found", name="found", kind=SourceKind.DISCOVERED, spec="")
+    with pytest.raises(NotImplementedError, match="not captured"):
+        src.producer_argv(48000, 1)
+
+
+def test_a_discovered_source_is_neither_a_device_nor_sweepable() -> None:
+    # Both exclusions are the conservative reading of "we don't know what this is":
+    # it must not be health-checked as a microphone that stopped, and it must not be
+    # deletable as idle room noise — it may be an uploaded recording.
+    assert SourceKind.DISCOVERED not in DEVICE_KINDS
+    assert SourceKind.DISCOVERED not in SWEEPABLE_KINDS
+    # the kinds that ARE recorders stay in both
+    assert SourceKind.COREAUDIO in DEVICE_KINDS
+    assert SourceKind.TCP_PCM in SWEEPABLE_KINDS
 
 
 def test_blank_id_is_rejected() -> None:

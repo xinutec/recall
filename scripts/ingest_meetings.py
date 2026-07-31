@@ -58,7 +58,9 @@ def main() -> None:
             local = anchor.start.astimezone(LONDON)
             source_id = f"meeting-{local:%Y%m%d-%H%M}"
             name = f"Meeting {local:%Y-%m-%d %H:%M}"
-            store.add_source(
+            # Authoritative, so re-running over a directory the worker already
+            # discovered repairs it rather than leaving the guess in place.
+            store.register_source(
                 AudioSource(id=source_id, name=name, kind=SourceKind.UPLOAD, spec="")
             )
             for sequence, rec in enumerate(session):

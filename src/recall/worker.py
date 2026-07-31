@@ -270,8 +270,11 @@ def process_all(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     """Transcribe pending audio across every source under `root`."""
     total = 0
     for source_id in discover_source_ids(root):
+        # DISCOVERED, not COREAUDIO: a directory of audio says nothing about what
+        # recorded it, and `add_source` is INSERT OR IGNORE — so a guess made here is
+        # permanent unless the real registrar can correct it (Store.register_source).
         source = AudioSource(
-            id=source_id, name=source_id, kind=SourceKind.COREAUDIO, spec=""
+            id=source_id, name=source_id, kind=SourceKind.DISCOVERED, spec=""
         )
         total += process_pending(
             store,

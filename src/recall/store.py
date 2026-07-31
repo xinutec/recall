@@ -810,14 +810,23 @@ class Store:
         return paths
 
     def register_source(self, source: AudioSource) -> None:
-        """Authoritative registration by the recording agent, which knows the source's
-        true kind (the USB mic is coreaudio; a phone announces itself as tcp_pcm via
-        the ingest handshake). Corrects a kind the worker may have guessed when it
-        first discovered the directory, but preserves the name."""
+        """Authoritative registration by whoever knows the source's true kind — the
+        capture agent (coreaudio), the ingest handshake (tcp_pcm), an upload. Corrects
+        the DISCOVERED kind the worker registers when it finds a directory of audio
+        with no source row.
+
+        The name is preserved *unless* it is still the worker's placeholder (equal to
+        the id): a name the user chose in the UI is theirs and re-registering a phone
+        must never rename it back, but "meeting-20260731-0916" is nobody's choice and
+        the registrar that knows this is a meeting may say so.
+        """
         self._conn.execute(
             """INSERT INTO sources (id, name, kind, port) VALUES (?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
-                   kind = excluded.kind, port = excluded.port""",
+                   kind = excluded.kind,
+                   port = excluded.port,
+                   name = CASE WHEN sources.name = sources.id
+                               THEN excluded.name ELSE sources.name END""",
             (source.id, source.name, source.kind.value, source.port),
         )
         self._commit()

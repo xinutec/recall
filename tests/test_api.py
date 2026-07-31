@@ -948,6 +948,36 @@ def _upload_meeting(
     return created
 
 
+def test_upload_corrects_a_kind_the_worker_already_guessed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An upload is authoritative about what it is. If the worker got to the directory
+    first — it scans the data root and registers whatever holds segment files — the
+    upload must still land as an UPLOAD, or the session is invisible in the list and
+    unrenameable/undeletable for ever (`_require_upload` refuses a non-upload)."""
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.add_source(  # the worker's guess, placeholder name and all
+        AudioSource(
+            id="meeting-20260703-1420",
+            name="meeting-20260703-1420",
+            kind=SourceKind.DISCOVERED,
+            spec="",
+        )
+    )
+    store.close()
+    client = TestClient(api.app)
+
+    created = _upload_meeting(
+        client, tmp_path, title="Karthica RT", start="2026-07-03T14:20:00+01:00"
+    )
+
+    assert created["id"] == "meeting-20260703-1420"  # same id the worker had claimed
+    listed = client.get("/api/sessions").json()["items"]
+    assert [i["id"] for i in listed] == ["meeting-20260703-1420"]
+    assert listed[0]["title"] == "Karthica RT"  # placeholder name replaced, too
+
+
 def test_create_session_stores_the_mp3_and_lists_it_immediately(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

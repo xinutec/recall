@@ -109,8 +109,11 @@ class _JobClient(Protocol):
 
 
 class _LocalStore(Protocol):
-    """The slice of `Store` the runner needs — the local queues plus the (idempotent,
-    INSERT OR IGNORE) source/segment registration an upload lands in."""
+    """The slice of `Store` the runner needs — the local queues plus the idempotent
+    source/segment registration an upload lands in. Sources go in via
+    `register_source`, not `add_source`: the worker scans the data root continuously
+    and can claim a freshly fetched blob's directory first, and only an authoritative
+    registration corrects the kind it guessed."""
 
     def add_refine_request(
         self, source: str, start: datetime, end: datetime
@@ -126,6 +129,7 @@ class _LocalStore(Protocol):
     def ask_request_by_fleet_id(self, fleet_id: int) -> AskRequestStatus | None: ...
     def delete_ask_request(self, request_id: int) -> None: ...
     def add_source(self, source: AudioSource) -> None: ...
+    def register_source(self, source: AudioSource) -> None: ...
     def add_audio_segment(self, segment: Segment) -> int: ...
     def add_ab_compare_run(  # noqa: PLR0913 - mirrors the Store signature
         self,
@@ -171,7 +175,10 @@ def _pull_upload(
     dest = data_root / job.source / job.file
     if not dest.exists():
         client.fetch_audio(job.source, job.file, dest)
-    store.add_source(
+    # Authoritative: the blob was just fetched into `data_root/job.source/`, so the
+    # worker's directory scan can race this registration and win. Correcting the kind
+    # is the difference between a session and a phantom microphone.
+    store.register_source(
         AudioSource(
             id=job.source,
             name=job.title or job.source,

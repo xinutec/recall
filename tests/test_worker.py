@@ -127,6 +127,41 @@ def test_process_all_handles_multiple_sources(tmp_path: Path) -> None:
     assert written == 4  # two segments from each of the two sources
 
 
+def test_discovered_sources_are_registered_as_discovered_not_as_microphones(
+    tmp_path: Path,
+) -> None:
+    # The worker finds a directory of audio; it does NOT know what produced it. Claiming
+    # COREAUDIO here is what branded a copied-in meeting a microphone: `add_source` is
+    # INSERT OR IGNORE, so the first registrar wins for good and the real one (the
+    # upload path) could never correct it.
+    _capture_two_segments(tmp_path / "meeting-20260731-0916")
+    store = Store.memory()
+    process_all(
+        store, tmp_path, _stub_transcriber, model_name="stub", now=9_999_999_999.0
+    )
+    assert store.source_kind("meeting-20260731-0916") is SourceKind.DISCOVERED
+
+
+def test_an_authoritative_registration_corrects_the_worker_guess(
+    tmp_path: Path,
+) -> None:
+    # The whole point of guessing quietly: whoever actually knows gets to say so.
+    _capture_two_segments(tmp_path / "meeting-20260731-0916")
+    store = Store.memory()
+    process_all(
+        store, tmp_path, _stub_transcriber, model_name="stub", now=9_999_999_999.0
+    )
+    store.register_source(
+        AudioSource(
+            id="meeting-20260731-0916",
+            name="Meeting 2026-07-31 09:16",
+            kind=SourceKind.UPLOAD,
+            spec="",
+        )
+    )
+    assert store.source_kind("meeting-20260731-0916") is SourceKind.UPLOAD
+
+
 def test_worker_skips_in_progress_segment(tmp_path: Path) -> None:
     audio_dir = tmp_path / "usb"
     _capture_two_segments(audio_dir)
