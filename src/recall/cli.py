@@ -1178,7 +1178,13 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
             return 1
         work = args.out / "work"
         work.mkdir(parents=True, exist_ok=True)
-        run = _AttributionRun(chop=args.chop, model=args.model, work=work)
+        run = _AttributionRun(
+            chop=args.chop,
+            model=args.model,
+            work=work,
+            clustering_threshold=args.clustering_threshold,
+            min_cluster_size=args.min_cluster_size,
+        )
         totals: dict[float, list[int]] = {m: [0, 0] for m in sweep}  # m -> [words, ok]
         agg = AttributionReport.empty()  # accumulated breakdown at `ref`
         scored = 0
@@ -1254,6 +1260,8 @@ class _AttributionRun:
     chop: float | None
     model: str
     work: Path
+    clustering_threshold: float | None = None
+    min_cluster_size: int | None = None
 
 
 def _window_pieces(
@@ -1280,13 +1288,7 @@ def _window_pieces(
             # gain-sharing as well as window length, which is how the first household
             # comparison went wrong.
             _join_normalised(parts, working, work=run.work)
-        pieces = _attribution_pieces(
-            working,
-            duration=duration,
-            chop=run.chop,
-            model=run.model,
-            work=run.work,
-        )
+        pieces = _attribution_pieces(working, run, duration=duration)
     return [(off - centre, pw, ps) for off, pw, ps in pieces]
 
 
@@ -1318,7 +1320,7 @@ def _part_durations(parts: list[Path], cache: dict[str, float]) -> list[float]:
 
 
 def _attribution_pieces(
-    working: Path, *, duration: float, chop: float | None, model: str, work: Path
+    working: Path, run: _AttributionRun, *, duration: float
 ) -> list[tuple[float, list[Word], list[SpeakerTurn]]]:
     """The (offset, words, speakers) units a replay transcribes and diarizes on its own.
 
@@ -1335,20 +1337,27 @@ def _attribution_pieces(
     """
     from recall.asr import scratch_wav, slice_clip  # noqa: PLC0415 - heavy/optional
 
-    if chop is None:
-        result = mlx_transcribe(working, model=model, words=True)
-        return [(0.0, list(result.words), list(pyannote_diarize(working)))]
+    def diarize(clip: Path) -> list[SpeakerTurn]:
+        return pyannote_diarize(
+            clip,
+            clustering_threshold=run.clustering_threshold,
+            min_cluster_size=run.min_cluster_size,
+        )
+
+    if run.chop is None:
+        result = mlx_transcribe(working, model=run.model, words=True)
+        return [(0.0, list(result.words), list(diarize(working)))]
     pieces: list[tuple[float, list[Word], list[SpeakerTurn]]] = []
     offset = 0.0
     index = 0
     while offset < duration:
-        end = min(offset + chop, duration)
+        end = min(offset + run.chop, duration)
         if end - offset < 1.0:
             break  # a sub-second tail carries no speech worth diarizing
-        with scratch_wav(work / f"chop-{index:04d}.wav") as piece:
+        with scratch_wav(run.work / f"chop-{index:04d}.wav") as piece:
             slice_clip(working, piece, offset, end)
-            result = mlx_transcribe(piece, model=model, words=True)
-            pieces.append((offset, list(result.words), list(pyannote_diarize(piece))))
+            result = mlx_transcribe(piece, model=run.model, words=True)
+            pieces.append((offset, list(result.words), list(diarize(piece))))
         offset = end
         index += 1
     return pieces

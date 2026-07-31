@@ -388,6 +388,24 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "diarization window is what costs the household its boundary accuracy",
     )
     att.add_argument(
+        "--clustering-threshold",
+        type=float,
+        default=None,
+        help="override pyannote's clustering threshold (shipped 0.7046, tuned on "
+        "meeting corpora). Measured on household audio, the shipped value sits near a "
+        "cluster-count MAXIMUM: moving it either way merges (0.55 -> 5, 0.40 -> 2, "
+        "0.80 -> 3, 0.90 -> 2 on a 6-cluster segment)",
+    )
+    att.add_argument(
+        "--min-cluster-size",
+        type=int,
+        default=None,
+        help="override pyannote's min_cluster_size (shipped 12, counted in 10s "
+        "windows). This is the knob that ADDS clusters (3 -> 8 where 12 gives 6): a "
+        "short second speaker in a 60s segment never clears 12, so it is absorbed into "
+        "the dominant speaker's cluster — which is a cluster straddling the handover",
+    )
+    att.add_argument(
         "--while-recording",
         action="store_true",
         help="run even while capture is live. Off by default: this replay runs the "
