@@ -7,9 +7,8 @@ name = "recall"
 version = "0.0.0"
 description = "Local household speech recall system (memory aid)"
 requires-python = ">=3.12"
-# The DIRECT dependencies (what src/recall imports + serving glue). The venv is
-# built from requirements.lock (the frozen, complete pin set); this list is the
-# human-readable intent behind it.
+# The DIRECT dependencies (what src/recall imports + serving glue). uv.lock is the
+# frozen, complete pin set; this list is the human-readable intent behind it.
 dependencies = [
     "datasets>=5.0",
     "fastapi>=0.136",
@@ -17,6 +16,15 @@ dependencies = [
     "mlx-lm>=0.31",
     "mlx-whisper>=0.4",
     "numpy>=2.4",
+    # NOT imported by any line of ours, and required all the same: `torch.load`
+    # unpickles the `pyannote/embedding` checkpoint, whose pickled objects name
+    # omegaconf classes. No import scan can see that — the dependency lives inside a
+    # model file — so it was dropped as "unused" in a8035f6 and every embed call
+    # raised ModuleNotFoundError for three days, silently (refine swallows a per-turn
+    # embed failure by design). Voiceprint enrolment and speaker_guess were dead the
+    # whole time. Keep it declared, and be suspicious of any dependency audit that
+    # only reads source.
+    "omegaconf>=2.3",
     "peft>=0.19",
     "pyannote-audio>=4.0",
     "pydantic>=2.13",
