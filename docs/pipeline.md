@@ -289,7 +289,7 @@ transition scores), so it aligns and scores like the mlx path; its first-word st
 be a touch coarser than mlx (a known Whisper word-timestamp quirk), which doesn't affect
 whole-segment speaker assignment.
 
-### The deployed adapter (recipe + language fix)
+### The 2026-07 adapter (recipe + language fix) — trained, not deployed
 
 The 2026-06 adapter won its pilot but **regressed on real audio** (truncated long
 one-shots — it learned early EOS from a corpus that was ~74% short clips), so it

@@ -19,6 +19,7 @@ import traceback
 import urllib.error
 from collections.abc import Callable
 from contextlib import ExitStack
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -157,6 +158,30 @@ def _speaker_id_pass(store: Store, out: Path) -> None:
 
 def _db_path(root: Path) -> Path:
     return root / "recall.sqlite"
+
+
+def capture_is_idle(out: Path) -> bool:
+    """Is the recorder parked right now? A live pause marker is the one signal the
+    capture agents themselves gate on, so this reads the same truth they do."""
+    return capture_control.is_paused(out, datetime.now(UTC))
+
+
+def recording_refusal(out: Path, *, allow: bool) -> str | None:
+    """Why a heavy offline pass must not start, or None if it may.
+
+    The evaluation passes run the same pyannote + Whisper work `refine` does, and refine
+    only runs while capture is paused because two Whispers starve the recorder (sox
+    buffer overrun = dropped samples). Completeness is requirement #1 and lost audio is
+    unrecoverable, so the default is to refuse rather than to compete; `allow` is the
+    deliberate override, never an inferred fallback.
+    """
+    if allow or capture_is_idle(out):
+        return None
+    return (
+        "capture is recording — this pass would compete with it for the GPU and can "
+        "cost speech (two Whispers starve the recorder). Pause first with "
+        "`recall pause --minutes N`, or pass --while-recording to run anyway."
+    )
 
 
 def _serve_paused_aware(
@@ -1132,8 +1157,11 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
     if not os.environ.get("HF_TOKEN"):
         print("score-attribution needs HF_TOKEN (pyannote diarization)")
         return 1
+    refusal = recording_refusal(args.out, allow=args.while_recording)
+    if refusal is not None:
+        print(refusal)
+        return 1
     from recall.align import assign_words_to_speakers  # noqa: PLC0415 - heavy/gated
-    from recall.asr import make_working_copy, scratch_wav  # noqa: PLC0415 - heavy/gated
     from recall.attribution import (  # noqa: PLC0415 - heavy/gated
         TruthSpan,
         attribution_report,
@@ -1150,6 +1178,7 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
             return 1
         work = args.out / "work"
         work.mkdir(parents=True, exist_ok=True)
+        run = _AttributionRun(chop=args.chop, model=args.model, work=work)
         totals: dict[float, list[int]] = {m: [0, 0] for m in sweep}  # m -> [words, ok]
         agg = AttributionReport.empty()  # accumulated breakdown at `ref`
         scored = 0
@@ -1166,6 +1195,12 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
         for position, (aid, seg) in enumerate(segments):
             if args.max_segments is not None and scored >= args.max_segments:
                 print(f"(stopped at --max-segments {args.max_segments})")
+                break
+            if not (args.while_recording or capture_is_idle(args.out)):
+                # The pause elapsed mid-run and the recorder came back on its own.
+                # A replay runs for hours, so re-check every segment rather than only
+                # at the start — and report what was scored instead of discarding it.
+                print("(stopped: capture resumed — the recorder gets the GPU back)")
                 break
             truth = [
                 TruthSpan(
@@ -1188,24 +1223,7 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
             # back into segment-relative time and score against the same truth spans
             # the per-segment baseline used.
             centre = sum(lengths[: position - lo])
-            with scratch_wav(work / f"attr-{int(aid):06d}.wav") as working:
-                if len(parts) == 1:
-                    make_working_copy(parts[0], working)
-                else:
-                    # Normalise each segment on its own and only THEN join, so the
-                    # centre segment's audio is bit-for-bit what the --context 0
-                    # baseline transcribed. Normalising across the join instead makes
-                    # the run measure gain-sharing as well as window length, which is
-                    # how the first household comparison went wrong.
-                    _join_normalised(parts, working, work=work)
-                pieces = _attribution_pieces(
-                    working,
-                    duration=sum(lengths),
-                    chop=args.chop,
-                    model=args.model,
-                    work=work,
-                )
-            pieces = [(off - centre, pw, ps) for off, pw, ps in pieces]
+            pieces = _window_pieces(parts, run, centre=centre, duration=sum(lengths))
             for m in sweep:
                 # One aligned prediction list per piece, shifted back into segment time.
                 # The cluster label is namespaced by piece: an unchopped replay has one
@@ -1225,6 +1243,51 @@ def _cmd_score_attribution(args: argparse.Namespace) -> int:
     finally:
         store.close()
     return 0
+
+
+@dataclass(frozen=True)
+class _AttributionRun:
+    """What stays the same for every window of one replay — the model, the scratch dir,
+    and whether each segment is cut into independent pieces. Kept together because it
+    is genuinely per-run configuration, not per-window input."""
+
+    chop: float | None
+    model: str
+    work: Path
+
+
+def _window_pieces(
+    parts: list[Path], run: _AttributionRun, *, centre: float, duration: float
+) -> list[tuple[float, list[Word], list[SpeakerTurn]]]:
+    """Transcribe + diarize the window around one scored segment, with every offset
+    shifted back into that segment's own time base (`centre` is where it starts inside
+    the window), so predictions score against the same truth spans a `--context 0` run
+    used. `duration` comes from the caller's memoised probe — overlapping windows
+    revisit the same files, and re-probing here would pay for each of them again.
+    """
+    from recall.asr import (  # noqa: PLC0415 - heavy/optional path
+        make_working_copy,
+        scratch_wav,
+    )
+
+    with scratch_wav(run.work / f"attr-{parts[0].stem}.wav") as working:
+        if len(parts) == 1:
+            make_working_copy(parts[0], working)
+        else:
+            # Normalise each segment on its own and only THEN join, so the centre
+            # segment's audio is bit-for-bit what the --context 0 baseline
+            # transcribed. Normalising across the join instead makes the run measure
+            # gain-sharing as well as window length, which is how the first household
+            # comparison went wrong.
+            _join_normalised(parts, working, work=run.work)
+        pieces = _attribution_pieces(
+            working,
+            duration=duration,
+            chop=run.chop,
+            model=run.model,
+            work=run.work,
+        )
+    return [(off - centre, pw, ps) for off, pw, ps in pieces]
 
 
 def _join_normalised(parts: list[Path], dst: Path, *, work: Path) -> None:

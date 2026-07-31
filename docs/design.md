@@ -57,14 +57,18 @@ fix efficiently.
 | Vocab biasing (`initial_prompt` + names) | trivial | proper nouns | **built** |
 | Diarization + speaker enrolment | low | attribution | **built** |
 | Post-correction dictionary | low | systematic errors | not built |
-| LoRA fine-tune on corrections | high | accent/acoustic residue | **deployed** (adapter-20260708b, on the idle refine pass) |
+| LoRA fine-tune on corrections | high | accent/acoustic residue | trained, **not deployed** (`adapter-20260708b`) |
 
 "Training on the actual people" is delivered mainly by **enrolment** (lightweight
-voiceprints), not retraining. The LoRA retrain is the heavy lever: two earlier
-adapters were held back by the A/B gate (truncation, then a language-head bug), and
-the third won it and is **deployed on the idle refine pass** — non-turbo, never live
-capture (see [pipeline.md §5](pipeline.md)). The post-correction dictionary is the
-cheap lever still un-built.
+voiceprints), not retraining. The LoRA retrain is the heavy lever, and **nothing runs
+it today**: two adapters were held back by the A/B gate (truncation, then a
+language-head bug), the third rode the idle refine pass 2026-07-09..07-11 and was
+pulled — once windowing made it correct on long audio it was **~8x slower** there (a
+32-layer fp32 decoder against turbo's 4) for a WER win only ever measured on short
+clips. Refine's precision is the diarization and word alignment, not the ASR model, so
+it stays on turbo; the re-enable arguments sit commented in `deploy/hm-agents.nix` and
+only an A/B win on real audio should uncomment them (see [pipeline.md §5](pipeline.md)).
+The post-correction dictionary is the cheap lever still un-built.
 
 ## 5. Components
 

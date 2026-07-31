@@ -388,6 +388,13 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "diarization window is what costs the household its boundary accuracy",
     )
     att.add_argument(
+        "--while-recording",
+        action="store_true",
+        help="run even while capture is live. Off by default: this replay runs the "
+        "same pyannote+Whisper work refine does, and refine is idle-gated because two "
+        "Whispers starve the recorder — lost speech is unrecoverable",
+    )
+    att.add_argument(
         "--context",
         type=int,
         default=0,
