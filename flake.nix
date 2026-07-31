@@ -58,12 +58,26 @@
           });
         };
 
+        # antlr4-python3-runtime (pulled in by omegaconf) publishes an sdist only, and
+        # its pyproject omits setuptools from build-system.requires — so the isolated
+        # build has no backend and fails. uv papers over this with its own fallback;
+        # nix does not. Supply the build system rather than pin an older release: the
+        # package is a dependency of a dependency, not something we chose.
+        antlrBuildSystem = final: prev: {
+          antlr4-python3-runtime = prev.antlr4-python3-runtime.overrideAttrs (old: {
+            nativeBuildInputs =
+              (old.nativeBuildInputs or [ ])
+              ++ final.resolveBuildSystem { setuptools = [ ]; };
+          });
+        };
+
         mlPythonSet =
           (pkgs.callPackage pyproject-nix.build.packages { inherit python; })
           .overrideScope (nixpkgs.lib.composeManyExtensions [
             pyproject-build-systems.overlays.default
             uvOverlay
             mlxMetalFix
+            antlrBuildSystem
           ]);
 
         mlEnv = mlPythonSet.mkVirtualEnv "recall-ml-env" uvWorkspace.deps.default;

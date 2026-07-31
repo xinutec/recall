@@ -21,9 +21,10 @@
 #     own flake.lock pins and tests against — the same store paths the working
 #     tree resolves to, which is what keeps the mic-TCC identity stable.
 #   - the interpreter split. capture/ingest run the DEVSHELL python (no ML deps —
-#     verify.sh gates that their import surface stays ML-free); everything else
-#     runs the uv `.venv` python that holds mlx/pyannote/torch. That venv stays in
-#     the working tree: nixpkgs has no cached darwin build of that stack.
+#     verify.sh gates that their import surface stays ML-free); everything else runs
+#     the python that holds mlx/pyannote/torch. What DID change (2026-07-31): that
+#     second interpreter is now the uv2nix store env (`nix build .#ml-env`), not the
+#     working tree's `.venv`, so nothing an agent imports lives in $HOME any more.
 #   - `.env` (HF_TOKEN, RECALL_SYNC_TOKEN) is still read at runtime from
 #     ~/Code/recall/.env. Secrets must never enter the store.
 #
@@ -32,12 +33,14 @@
 # agent down with exit 78 and an empty log — the failure that hid 470 crash-loops
 # for weeks. `recall.cli._LOG_DIR` points at the same place for rotation.
 #
-# NOTE: recall-live and recall-capture open the microphone (docs/running.md).
+# NOTE: recall-capture opens the microphone. recall-live does NOT — it reads the UDP
+# tap capture publishes, because two CoreAudio clients on one device starve each other
+# (sources.live_input_argv); its `--device` argument is vestigial.
 #
 # home-manager writes each plist read-only into ~/Library/LaunchAgents with no
 # native comment, so a provenance `Comment` key points back here. Do NOT
 # hand-edit the generated plists.
-{ pkgs, lib, ... }:
+{ pkgs, lib, recall, ... }:
 
 let
   # The store copy of this commit: what the flake lock pins, and what the agents
@@ -49,9 +52,17 @@ let
   fleet = "http://10.100.0.2:8000";
   logs = "/Users/pippijn/Library/Logs/recall";
 
-  # The uv-managed venv with the ML stack (mlx-whisper, pyannote, torch). A fixed
-  # path on purpose: macOS keys the mic grant to the binary, so this must not move.
-  venvPython = "/Users/pippijn/Code/recall/.venv/bin/python";
+  # The ML stack (mlx-whisper, pyannote, torch) as a STORE PATH, built from uv.lock's
+  # wheels by uv2nix (`nix build .#ml-env`) — no longer the working tree's uv venv.
+  # It moves with the flake lock, so what these agents import is pinned by the same
+  # commit as the code they run, and a `uv sync` in the tree can no longer change a
+  # running daemon.
+  #
+  # Safe to move because NO agent on this interpreter opens the microphone: capture
+  # owns the device and live consumes its UDP tap (sources.live_input_argv), so the
+  # mic-TCC identity — the devshell python that capture and ingest run — is untouched.
+  # The grant these need is /Volumes/Backup, re-established once for the new binary.
+  venvPython = "${recall.packages.${pkgs.stdenv.hostPlatform.system}.ml-env}/bin/python";
 
   # One store wrapper per agent. `python` selects the interpreter; everything else
   # is identical, so the arguments below are the single source of truth for what
