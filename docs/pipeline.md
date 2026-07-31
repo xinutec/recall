@@ -171,7 +171,71 @@ clustering more to get wrong — where a meeting's extra context is the same two
 voices recurring. That would explain why the same lever helps one and hurts the other.
 
 So the indicated change above stays **unbuilt**. The near-change gap on household capture
-is real and unexplained; the window is not its cause.
+is real; the window is not its cause.
+
+### What the near-change errors actually are (2026-07-31)
+
+Five candidate causes, each measured and each ruled out. Read this before proposing a
+sixth: the cheap explanations are gone, and four of the five looked convincing first.
+
+**Not overlapping speech.** Read straight off the corrected turns, no model involved:
+of 42 confirmed speaker changes on `usb`, **2 (4.8%)** involve more than 0.25 s of
+simultaneous speech. Two thirds are separated by half a second or more, with a **median
+gap of +2.96 s**. The system is losing words at handovers where one person stopped and
+another started three seconds later — the easiest boundary there is.
+
+**Not a mis-placed boundary.** For each change, the nearest diarizer boundary:
+**21 of 42 are marked** within a second, and their signed offset is unbiased — median
+−0.00 s, mean +0.03 s, 10 late against 11 early, spread −0.86…+0.65 s. No constant
+correction is available because there is no constant error. The other **21 are
+STRADDLED**: no boundary within a second, one cluster spanning both speakers.
+
+**Not a cluster-count problem in one direction.** Diarizing the 25 segments that hold a
+real change and comparing cluster count to speaker count: **under-clustered 3, exact 6,
+over-split 16** — two people returning as up to six clusters. The pipeline over-splits
+one person *and* merges two, in the same recording. The two do not cost the same, which
+is why the aggregate hides it: extra clusters of one person still map to that person by
+majority, while a merged cluster takes the head of the next speaker's sentence.
+
+**Not fixable by a clustering knob.** `min_cluster_size` 12 → 6 is bit-for-bit identical
+at the boundary (51/66 both times, same per-speaker error split); it only admits ~86 more
+interior words by changing turn coverage. The threshold does *not* behave as its name
+suggests — the shipped 0.7046 sits near a cluster-count **maximum**, and 0.40 and 0.90
+both collapse a 6-cluster segment to 2. Knob values are reachable via
+`score-attribution --min-cluster-size / --clustering-threshold`; `diarize.tuned_parameters`
+leaves the shipped config untouched by default.
+
+**Not the embedder, and this is the one that explains the rest.** Cosine distances over
+the same clips — two different people in one segment (BETWEEN) against one person's own
+speech split in half (WITHIN):
+
+| embedder | BETWEEN | WITHIN | separation | pairs closer than a typical same-speaker pair |
+|---|---|---|---|---|
+| `pyannote/embedding` (voiceprints) | 0.854 | 0.742 | +0.112 | 4/24 |
+| `wespeaker-resnet34-LM` (the diarizer's) | 0.802 | 0.586 | +0.216 | 1/24 |
+
+The distributions **overlap**: within-speaker reaches 0.867 while between-speaker drops to
+0.501. One person's voice varies nearly as much as two people differ. That single fact
+produces both failures at once and admits no threshold — raising it merges more, lowering
+it splits more, and no value does neither.
+
+The tempting conclusion is to move voiceprints onto the better embedder. **Measured, it
+buys nothing:** naming held-out turns by nearest enrolled centroid scores 173/183 (94.5%)
+on `pyannote/embedding` against 175/183 (95.6%) on wespeaker — two turns, noise. Enrolment
+averages many turns into a centroid, and averaging washes out exactly the variability the
+pairwise numbers expose. It is not worth discarding ~700 enrolled vectors and re-deriving
+them in an incompatible space (512-dim vs 256-dim) for that. Note the corollary: **naming
+a clean turn already works at ~95%**, so these errors are not "matched the wrong person" —
+they are "the cluster was wrong".
+
+**What is left.** Only evidence the single far-field mic does not carry. `design.md` §5.1a
+specifies fusing the co-located mics, and two observations of one handover from different
+positions is genuinely new information rather than another reading of the same ambiguous
+embedding. It cannot be validated yet: of the 25 ground-truth segments, **2** have a phone
+recording the same moment. There are **172 usb segments** that hold speech *and* a
+concurrent phone recording (1131 turns, 19 Jun–19 Jul) — correcting a slice of those is
+the prerequisite, and the arrival-time stamping caveat in §5.1a has to be handled first,
+or fusing clocks that disagree by seconds will read as a null.
 
 Read the household figure with its sample in mind: 103 near-change words, and since a
 near-change word needs two differently-labelled truth spans in the same segment, they come
