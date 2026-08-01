@@ -2,14 +2,15 @@ import { test, type Route } from '@playwright/test';
 // The fleet-shared layout harness, consumed as the published @xinutec/ui-harness
 // package (source repo ~/Code/ui-harness). It renders the app in a real browser at
 // true phone geometry and asserts the failure classes that read fine in source and
-// only show in a painted layout — text collisions, horizontal overflow, and
-// controls occluded behind the fixed bottom nav.
+// only show in a painted layout — text collisions, horizontal overflow, controls
+// occluded behind the fixed bottom nav, and icons squeezed below their own glyph.
 import {
   expectViewportIsPhone,
   expectIconFontLoaded,
   expectNoHorizontalOverflow,
   expectNoTextOverlaps,
   expectNoOccludedControls,
+  expectNoClippedIcons,
 } from '@xinutec/ui-harness';
 
 // Hermetic: every /api call is mocked — no real data, no backend. A rich session
@@ -40,34 +41,6 @@ function turn(
     source: 'm',
     cluster,
   };
-}
-
-// An icon painted narrower than its glyph. `mat-icon` carries `overflow: hidden`,
-// which voids the `min-width: auto` floor that stops a flex item collapsing below
-// its content — so beside a long text sibling the icon is silently CLIPPED rather
-// than scaled, and shows as a fragment. None of the harness checks see this: it
-// causes no overflow (shrinking is what avoids it), no overlap, no occlusion, and
-// findClippedText deliberately exempts icon ligatures and only looks at vertical
-// shear. Local until @xinutec/ui-harness grows an icon-geometry check.
-async function expectIconsNotClipped(page: import('@playwright/test').Page): Promise<void> {
-  const clipped = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('mat-icon'))
-      .filter((el) => {
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && el.scrollWidth - el.clientWidth > 1;
-      })
-      .map((el) => ({
-        icon: el.textContent?.trim() ?? '',
-        painted: Math.round(el.getBoundingClientRect().width * 100) / 100,
-        glyph: el.scrollWidth,
-      })),
-  );
-  if (clipped.length > 0) {
-    const detail = clipped
-      .map((c) => `  ${c.icon}: ${c.painted}px of a ${c.glyph}px glyph`)
-      .join('\n');
-    throw new Error(`Icons clipped by their own overflow box (${clipped.length}):\n${detail}`);
-  }
 }
 
 // Synthetic speakers/content only — no real names (see scripts/check-pii.sh).
@@ -140,7 +113,7 @@ test('session screen holds phone geometry with no overflow, overlap, or occlusio
   // parent, which the centre-point occlusion model reads as occluded. The check
   // still guards the real block controls (nav, pause/resume, voice actions).
   await expectNoOccludedControls(page, testInfo, 'button, a[href], [role="button"]', ['.t']);
-  await expectIconsNotClipped(page);
+  await expectNoClippedIcons(page, testInfo);
 });
 
 test('finalizing banner keeps its icon whole', async ({ page }, testInfo) => {
@@ -151,6 +124,6 @@ test('finalizing banner keeps its icon whole', async ({ page }, testInfo) => {
   await page.goto('/sessions/test');
   await page.locator('.status.finalizing').waitFor();
 
-  await expectIconsNotClipped(page);
+  await expectNoClippedIcons(page, testInfo);
   await expectNoHorizontalOverflow(page, testInfo);
 });
