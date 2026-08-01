@@ -1,137 +1,45 @@
 package org.recall.web
 
-import android.annotation.SuppressLint
-import android.app.Activity
-import android.content.Context
-import android.graphics.Color
-import android.os.Bundle
-import android.view.ViewGroup
 import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.widget.FrameLayout
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
+import org.xinutec.shell.ShellConfig
+import org.xinutec.shell.WebShellActivity
 
 /**
- * A full-screen [WebView] onto the recall web UI — the Angular SPA the recall API
- * serves at [RECALL_URL]. No address bar, no tabs, a home-screen icon: the website
- * presented as an app, avoiding browser chrome. Points at Isis over WireGuard, so it
- * works on the VPN whether home or away; cleartext is fine over the encrypted tunnel to
- * a private address (see `usesCleartextTraffic` in the manifest).
+ * The recall web UI — the Angular SPA the recall API serves at [RECALL_URL], in the
+ * fleet's shared [WebShellActivity]. Points at Isis over WireGuard, so it works on
+ * the VPN whether home or away; cleartext is fine over the encrypted tunnel to a
+ * private address (see `usesCleartextTraffic` in the manifest).
  *
- * Deliberately tiny — a plain Activity holding one WebView, no Compose/AppCompat.
- * `configChanges` keeps the WebView (and its SPA route + scroll) across rotation
- * instead of recreating the activity.
- *
- * The WebView is inset from the system bars by padding a wrapper (see onCreate),
- * and the strips behind the bars are painted with the page's own surface colour.
+ * The eighth wrapper, and the one that shows why they are shared: while it kept its
+ * own copy it had drifted to insetting for `systemBars()` alone, so the keyboard
+ * drew straight over the page — the exact bug the other seven had already fixed.
  */
-class MainActivity : Activity() {
-    private lateinit var web: WebView
-    private lateinit var root: FrameLayout
+class MainActivity : WebShellActivity() {
+    override val shell =
+        ShellConfig(
+            url = RECALL_URL,
+            // The UI plus the Nextcloud login hop — without the second, the OAuth
+            // round-trip would be ejected to the browser and the app could never
+            // sign in again. Everything else opens in the real browser.
+            allowedHosts = setOf(RECALL_HOST, NC_HOST),
+        )
 
-    @SuppressLint("SetJavaScriptEnabled")
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        val prefs = getSharedPreferences("viewer", Context.MODE_PRIVATE)
-        web =
-            WebView(this).apply {
-                layoutParams =
-                    ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    )
-                settings.javaScriptEnabled = true // Angular needs JS
-                settings.domStorageEnabled = true // localStorage / sessionStorage
-                // Audio clips (/api/audio…) should play on tap without a prior gesture.
-                settings.mediaPlaybackRequiresUserGesture = false
-                settings.useWideViewPort = true
-                settings.loadWithOverviewMode = true
-                // Keep every navigation inside this WebView — never hand off to a
-                // browser — and remember the current in-app page so a cold reopen
-                // returns to it (SPA route changes fire doUpdateVisitedHistory too).
-                webViewClient =
-                    object : WebViewClient() {
-                        override fun doUpdateVisitedHistory(
-                            view: WebView,
-                            url: String,
-                            isReload: Boolean,
-                        ) {
-                            super.doUpdateVisitedHistory(view, url, isReload)
-                            if (url.startsWith(RECALL_URL) && !isAuthFlowUrl(url)) {
-                                prefs.edit().putString(KEY_LAST_URL, url).apply()
-                            }
-                        }
-
-                        // Paint the strips behind the system bars with the web UI's
-                        // own surface colour instead of a hardcoded black; it follows
-                        // the page's light/dark theme, so read its body background.
-                        override fun onPageFinished(view: WebView, url: String) {
-                            super.onPageFinished(view, url)
-                            view.evaluateJavascript(
-                                "getComputedStyle(document.body).backgroundColor",
-                            ) { result -> parseCssColor(result)?.let(root::setBackgroundColor) }
-                        }
-                    }
-                // Black until the page loads and reports its surface colour; avoids a
-                // white flash on launch.
-                setBackgroundColor(Color.BLACK)
-            }
-        // Inset the WebView from the system bars by padding a wrapper ViewGroup
-        // (WebView.setPadding() doesn't offset content under wide-viewport mode).
-        // Once the WebView no longer underlaps the bars its env(safe-area-inset-*)
-        // collapse to 0, so the page's own safe-area CSS adds nothing on top.
-        root =
-            FrameLayout(this).apply {
-                addView(web)
-                setBackgroundColor(Color.BLACK)
-            }
-        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            WindowInsetsCompat.CONSUMED
-        }
-        setContentView(root)
-        // Reopen where we left off — but only if that saved page is on the current
-        // host. A URL saved against a previous RECALL_URL (e.g. after repointing the app
-        // at a new host) is dropped, so the new default loads instead of silently
-        // reloading the old host that startsWith(RECALL_URL) below would never refresh.
-        // Also guard restore against a stale auth URL already saved by an older build.
-        val last = prefs.getString(KEY_LAST_URL, null)
-        val restorable = last != null && last.startsWith(RECALL_URL) && !isAuthFlowUrl(last)
-        web.loadUrl(if (restorable) last!! else RECALL_URL)
+    override fun onWebViewCreated(web: WebView) {
+        // Audio clips (/api/audio…) should play on tap without a prior gesture.
+        web.settings.mediaPlaybackRequiresUserGesture = false
     }
 
-    // The hardware/gesture Back walks the SPA's history; it only leaves the app once
-    // there's nothing left to go back to.
-    @Deprecated("Deprecated in Java")
-    @Suppress("DEPRECATION")
-    override fun onBackPressed() {
-        if (web.canGoBack()) web.goBack() else super.onBackPressed()
-    }
-
-    // evaluateJavascript hands back the JSON-encoded result, e.g. the string
-    // "rgb(18, 18, 18)" (with quotes) or "rgba(18, 18, 18, 1)". Pull out the RGB
-    // triple; alpha is ignored (the surface is opaque). null if it can't be read.
-    private fun parseCssColor(raw: String?): Int? {
-        val m = raw?.let { Regex("""rgba?\((\d+),\s*(\d+),\s*(\d+)""").find(it) } ?: return null
-        val (r, g, b) = m.destructured
-        return Color.rgb(r.toInt(), g.toInt(), b.toInt())
-    }
-
-    companion object {
+    private companion object {
         // Isis's WireGuard address (10.100.0.2) — the fleet system of record; the recall
         // API serves the built Angular UI here on :8000, WG-bound so it's reachable over
         // the VPN whether home or away. Pause/resume on this UI drives the capture intent
         // the Mac mirrors. Hardcoded — this app is single-purpose.
-        private const val RECALL_URL = "http://10.100.0.2:8000/"
-        private const val KEY_LAST_URL = "last_url"
+        const val RECALL_HOST = "10.100.0.2"
+        const val RECALL_URL = "http://$RECALL_HOST:8000/"
 
-        // The Nextcloud sign-in bounces through /login and /auth/callback. Those are
-        // one-shot OAuth transitions (single-use code, short-lived state) — never a page
-        // worth reopening. Restoring one on launch just replays a dead login (a 403 error
-        // page the user can't escape), so we neither persist nor restore them.
-        private fun isAuthFlowUrl(url: String): Boolean =
-            url.contains("/auth/callback") || url.contains("/login")
+        // The Nextcloud identity provider the sign-in bounces through. Its one-shot
+        // /login and /auth/callback hops are never restore points — the shell's
+        // Restore filters them, which is what this app's own isAuthFlowUrl did.
+        const val NC_HOST = "dash.xinutec.org"
     }
 }
