@@ -139,13 +139,17 @@ else
 fi
 
 step "frontend: eslint (type-aware)"
-if [ ! -x frontend/node_modules/.bin/eslint ] || [ frontend/package-lock.json -nt frontend/node_modules ]; then
-  ( cd frontend && npm ci )
+# --frozen-lockfile is pnpm ci: install exactly pnpm-lock.yaml, or fail. The
+# guard is not just a speed-up — a node_modules left behind by npm still has a
+# working .bin, so verify would pass against packages the lockfile no longer
+# describes.
+if [ ! -x frontend/node_modules/.bin/eslint ] || [ frontend/pnpm-lock.yaml -nt frontend/node_modules ]; then
+  ( cd frontend && pnpm install --frozen-lockfile )
 fi
-( cd frontend && npm run lint )
+( cd frontend && pnpm run lint )
 
 step "frontend: build (Angular strict templates)"
-# Two deliberate differences from a plain `npm run build`:
+# Two deliberate differences from a plain `pnpm run build`:
 #  - a scratch --output-path, so verify can never clobber the served bundle in
 #    dist/recall-web (deploying is recall-build-frontend.sh's job, not verify's);
 #  - success judged by the artifact, not the exit code: a headless build on this Mac
@@ -162,7 +166,7 @@ verify_build=frontend/dist/.verify-build
 verify_main=""
 for attempt in 1 2 3; do
   rm -rf "$verify_build"
-  ( cd frontend && npm run build -- --output-path=dist/.verify-build ) || true
+  ( cd frontend && pnpm run build --output-path=dist/.verify-build ) || true
   verify_main=$(grep -oE 'main-[A-Za-z0-9]+\.js' "$verify_build/browser/index.html" 2>/dev/null | head -1 || true)
   if [[ -n "$verify_main" && -s "$verify_build/browser/$verify_main" ]]; then
     break
@@ -182,10 +186,10 @@ step "frontend: layout harness (playwright, phone-width e2e @ @xinutec/ui-harnes
 # woff2 would fail the icon-font check with ligature text). serve.mjs/playwright are
 # plain node, so this run doesn't trip the ng-cli teardown crash.
 cp -R frontend/public/. "$verify_build/browser/"
-( cd frontend && RECALL_E2E_DIST=dist/.verify-build/browser npm run e2e )
+( cd frontend && RECALL_E2E_DIST=dist/.verify-build/browser pnpm run e2e )
 rm -rf "$verify_build"
 
 step "frontend: unit tests (vitest, jsdom)"
-( cd frontend && npm test -- --watch=false )
+( cd frontend && pnpm test --watch=false )
 
 printf '\n\033[1;32mALL GREEN\033[0m — verified\n'

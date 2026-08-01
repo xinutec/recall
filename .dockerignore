@@ -1,0 +1,45 @@
+# A build context is copied wholesale to the daemon, whether or not a COPY names
+# it. Without this file recall's context is the entire working tree: 1.5 GB of
+# .venv, the mode-600 .env, and data/ — real recordings and real transcripts of
+# real conversations. None of it is referenced by the Dockerfile, and all of it
+# was being handed over anyway.
+#
+# CI never saw this: it builds from a clean checkout, where every path below is
+# either gitignored or absent. The exposure is local, which is exactly why it is
+# worth naming rather than trusting the Dockerfile's COPY lines to be enough.
+
+# Secrets and runtime data — the reason this file exists.
+.env
+data/
+audio/
+logs/
+work/
+*.wav
+*.flac
+*.opus
+*.sqlite
+*.sqlite3
+*.db
+
+# Installed trees and build output. The frontend stage installs its own
+# dependencies in a layer of its own; without this, the later `COPY frontend/ ./`
+# puts the developer's node_modules straight back on top of it. pnpm's
+# node_modules is a tree of symlinks into node_modules/.pnpm, which does not
+# survive being copied out of context — so this stops being a wasted layer and
+# starts being a broken build.
+.venv/
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+__pycache__/
+*.egg-info/
+result
+result-*
+
+# Caches and platform sources the image has no use for.
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+android/
+ios/
+.git/

@@ -11,10 +11,23 @@
 # --- frontend build ---
 FROM node:24-slim AS frontend
 WORKDIR /build/frontend
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# pnpm-workspace.yaml belongs in this layer, not with the sources: it carries the
+# install-script allowlist, and without it neither esbuild nor the ui-harness
+# unpacks — the build then fails on dependencies that look installed.
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
+# git: the shared layout harness is a git dependency (github:xinutec/ui-harness),
+# so the install clones it — node:slim ships no git.
+#
+# pnpm is taken unpinned. The host gets its copy from the flake, and pinning a
+# second version here would be two numbers held level by hand; the lockfile is
+# what has to match, and --frozen-lockfile fails rather than drift.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g pnpm \
+    && pnpm install --frozen-lockfile
 COPY frontend/ ./
-RUN npm run build
+RUN pnpm run build
 
 # --- runtime ---
 FROM python:3.12-slim

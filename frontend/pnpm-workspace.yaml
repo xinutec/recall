@@ -1,0 +1,22 @@
+# pnpm runs a dependency's install script only if it is listed here; npm runs
+# them all silently. Keeping that default means the list stays as short as the
+# build needs — the first four fetch or compile a platform binary and do not
+# work without one.
+#
+# @xinutec/ui-harness ships TypeScript and builds itself in `prepare`, so pnpm
+# must be allowed to run it. The key is the resolved codeload URL rather than
+# the package name, because pnpm keys a git dependency by its full spec — so
+# this line has to move whenever the harness commit does. Note the commit here
+# is not the one the other frontends pin; each repo's lockfile decides.
+#
+# A local install will NOT tell you this entry is missing. The machine-wide
+# store already holds the built harness from a sibling repo, so nothing needs
+# running and the install passes; CI, with a cold store, fails on
+# ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED. Test a change to this file with
+# `pnpm install --store-dir <empty dir>`, never a plain install.
+allowBuilds:
+  "@parcel/watcher": true
+  esbuild: true
+  lmdb: true
+  msgpackr-extract: true
+  "@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/369252ebbcf16a2b446c21c83730b987ec6f9479": true
