@@ -21,7 +21,9 @@ class MainActivity : WebShellActivity() {
             // The UI plus the Nextcloud login hop — without the second, the OAuth
             // round-trip would be ejected to the browser and the app could never
             // sign in again. Everything else opens in the real browser.
-            allowedHosts = setOf(RECALL_HOST, NC_HOST),
+            // The port is part of it: isis runs several of the fleet's services, and
+            // a host-only rule would let any of them open in place.
+            allowedHosts = setOf(RECALL_AUTHORITY, NC_HOST),
         )
 
     override fun onWebViewCreated(web: WebView) {
@@ -34,8 +36,8 @@ class MainActivity : WebShellActivity() {
         // API serves the built Angular UI here on :8000, WG-bound so it's reachable over
         // the VPN whether home or away. Pause/resume on this UI drives the capture intent
         // the Mac mirrors. Hardcoded — this app is single-purpose.
-        const val RECALL_HOST = "10.100.0.2"
-        const val RECALL_URL = "http://$RECALL_HOST:8000/"
+        const val RECALL_AUTHORITY = "10.100.0.2:8000"
+        const val RECALL_URL = "http://$RECALL_AUTHORITY/"
 
         // The Nextcloud identity provider the sign-in bounces through. Its one-shot
         // /login and /auth/callback hops are never restore points — the shell's
