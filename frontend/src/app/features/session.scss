@@ -54,16 +54,6 @@
   margin-bottom: 1rem;
   font: var(--mat-sys-body-medium);
 
-  // The icon must not absorb the row's shrink. Material gives `mat-icon`
-  // `overflow: hidden`, which voids the `min-width: auto` floor that would stop a
-  // flex item collapsing below its content — and the sibling <span>'s flex-basis is
-  // the whole unwrapped sentence, so the icon takes nearly all of it. It is then
-  // CLIPPED, not scaled: the finalizing banner painted 9.6px of a 24px glyph, while
-  // the shorter "ready" sentence lost only 0.7px. Guarded by e2e/layout.spec.ts.
-  mat-icon {
-    flex-shrink: 0;
-  }
-
   &.finalizing {
     background: var(--mat-sys-surface-container-high);
     color: var(--mat-sys-on-surface-variant);
