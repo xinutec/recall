@@ -75,6 +75,13 @@
 
 .when {
   display: flex;
+
+  // An icon has one correct size and must not absorb this row's shrink:
+  // `overflow: hidden` on mat-icon voids its `min-width: auto` floor, so it is
+  // clipped rather than scaled. (DL-ANGULAR-ICON-SHRINK)
+  mat-icon {
+    flex-shrink: 0;
+  }
   align-items: center;
   gap: 0.5rem;
   font-weight: 600;
