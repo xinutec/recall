@@ -1,0 +1,11 @@
+{
+  "boundaries": [
+    {
+      "path": "frontend/src/app/shared",
+      "mustNotImport": [
+        "frontend/src/app/features"
+      ],
+      "why": "shared is reusable only while it depends on no feature: a shared component that reaches into features/ creates a cycle, pins the component to one screen's model, and cannot be lifted into another app"
+    }
+  ]
+}
