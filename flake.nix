@@ -71,6 +71,23 @@
           });
         };
 
+        # uv2nix installs the workspace's OWN package into the venv, so `recall`'s
+        # `src` decides whether the ML env's store path moves. Left as the whole
+        # workspace root, every commit produced a new `recall-ml-env` — a frontend
+        # tweak or a docs line handed the eight ML agents a different binary path,
+        # which is the path macOS attributes their /Volumes/Backup access to.
+        #
+        # The wheel is built by hatchling from `packages = ["src/recall"]`, so those
+        # two files are all it can legitimately read. Narrowing `src` to them means
+        # the env moves when the Python moves, and stays put otherwise.
+        wheelSrc = nixpkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = nixpkgs.lib.fileset.unions [ ./pyproject.toml ./src ];
+        };
+        recallWheelSrc = _final: prev: {
+          recall = prev.recall.overrideAttrs (_: { src = wheelSrc; });
+        };
+
         mlPythonSet =
           (pkgs.callPackage pyproject-nix.build.packages { inherit python; })
           .overrideScope (nixpkgs.lib.composeManyExtensions [
@@ -78,6 +95,7 @@
             uvOverlay
             mlxMetalFix
             antlrBuildSystem
+            recallWheelSrc
           ]);
 
         mlEnv = mlPythonSet.mkVirtualEnv "recall-ml-env" uvWorkspace.deps.default;
