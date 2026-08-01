@@ -15,11 +15,19 @@
 # restart. Now the two move together, and `./scripts/recall.sh …` in the tree is
 # purely a development entry point.
 #
+# HOW THEY RUN IT (changed 2026-08-01): a real package. The wrapper names the store
+# paths of the interpreter, sox and ffmpeg directly instead of entering the devshell
+# (`nix develop path:${src} --command …`), which used to put a full flake evaluation
+# in every agent's startup path. Same flake.lock, so the same store paths — including
+# the mic-TCC-bearing python — but no eval, and no dependency on nix being reachable
+# at spawn.
+#
 # What deliberately did NOT change:
-#   - the toolchain. Each wrapper still enters THIS repo's devshell
-#     (`nix develop path:${src}`), so sox/ffmpeg/python are the versions recall's
-#     own flake.lock pins and tests against — the same store paths the working
-#     tree resolves to, which is what keeps the mic-TCC identity stable.
+#   - the toolchain. sox/ffmpeg/python are still the versions recall's own flake.lock
+#     pins and tests against — the same store paths the working tree resolves to,
+#     which is what keeps the mic-TCC identity stable. `flake.nix` defines the
+#     interpreter once (`packages.dev-python`) and the devshell uses that same
+#     derivation, so the two cannot drift.
 #   - the interpreter split. capture/ingest run the DEVSHELL python (no ML deps —
 #     verify.sh gates that their import surface stays ML-free); everything else runs
 #     the python that holds mlx/pyannote/torch. What DID change (2026-07-31): that
@@ -64,17 +72,34 @@ let
   # The grant these need is /Volumes/Backup, re-established once for the new binary.
   venvPython = "${recall.packages.${pkgs.stdenv.hostPlatform.system}.ml-env}/bin/python";
 
+  # The non-ML interpreter capture and ingest run. The SAME derivation the devshell
+  # uses (flake.nix defines it once), so the store path — and with it the microphone
+  # grant macOS attributes to that binary — is unchanged by this packaging.
+  devPython = "${recall.packages.${pkgs.stdenv.hostPlatform.system}.dev-python}/bin/python";
+
   # One store wrapper per agent. `python` selects the interpreter; everything else
   # is identical, so the arguments below are the single source of truth for what
   # each daemon does (the old scripts/recall-*.sh wrappers duplicated them).
-  wrapper = { name, python ? "python", args }:
+  #
+  # A real package, not a devshell entry (changed 2026-08-01). Each wrapper used to
+  # `exec nix develop path:${src} --command …`, which put a full flake evaluation in
+  # every agent's startup path — including capture's. That was never free, and on
+  # 2026-07-17/18 it was catastrophic: with nix's cache on the USB volume, evals went
+  # from 15s to over 30 minutes machine-wide for nine hours. The devshell was only
+  # ever there for three things — the interpreter, sox and ffmpeg — and all three are
+  # store paths this can name directly, from the same flake.lock the devshell resolves
+  # against. `runtimeInputs` PREPENDS to PATH, so `say` and `launchctl` still come
+  # from the system paths launchd provides.
+  wrapper = { name, python, args }:
     pkgs.writeShellApplication {
       name = "recall-${name}";
+      # sox captures the mic (CoreAudio, sample-perfect); ffmpeg segments and encodes,
+      # and ffprobe reads durations. All are invoked by bare name. From RECALL's flake,
+      # not `pkgs.sox`: this module is evaluated by home-manager against its own
+      # nixpkgs, so naming them here would hand the agents binaries that no run of
+      # recall's own test suite has ever seen.
+      runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
       text = ''
-        # The nix daemon profile: launchd's environment has no nix on PATH.
-        # shellcheck disable=SC1091
-        source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
-
         ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
         if [ -r "$ENV_FILE" ]; then
           set -a
@@ -83,13 +108,12 @@ let
           set +a
         fi
 
-        exec nix develop path:${src} --command \
-          env PYTHONPATH=${src}/src ${python} -m recall ${lib.escapeShellArgs args}
+        exec env PYTHONPATH=${src}/src ${python} -m recall ${lib.escapeShellArgs args}
       '';
     };
 
   # A KeepAlive recall daemon at background priority. `extra` adds per-agent keys.
-  daemon = { label, name, python ? "python", args, extra ? { } }:
+  daemon = { label, name, python ? devPython, args, extra ? { } }:
     let program = wrapper { inherit name python args; };
     in {
       enable = true;

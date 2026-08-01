@@ -82,6 +82,25 @@
 
         mlEnv = mlPythonSet.mkVirtualEnv "recall-ml-env" uvWorkspace.deps.default;
 
+        # The non-ML interpreter, defined ONCE and used by both the devshell and the
+        # launchd agents (deploy/hm-agents.nix). Same expression means the same store
+        # path, and that is load-bearing: capture and ingest run this python, and
+        # macOS attributes the microphone grant to the binary — a leaner interpreter
+        # here would be a new path and a re-prompt on the one agent that must never
+        # die. mypy/pytest ride along for that reason, not because an agent needs them.
+        devPython = python.withPackages (ps: [ ps.mypy ps.pytest ]);
+
+        # The external binaries the agents shell out to by bare name: sox captures
+        # the mic, ffmpeg segments and encodes, ffprobe reads durations. Exposed as
+        # a package because home-manager evaluates deploy/hm-agents.nix against ITS
+        # OWN nixpkgs — writing `pkgs.sox` there would silently give the agents a
+        # different sox from the one this repo pins and tests against. (The two locks
+        # happen to agree today; that is not a guarantee.)
+        agentTools = pkgs.buildEnv {
+          name = "recall-agent-tools";
+          paths = [ pkgs.sox pkgs.ffmpeg ];
+        };
+
         # Android toolchain for the recall-mic app (android/). Kept in its own pkgs
         # import + dev shell so the unfree SDK licence stays scoped to it and the
         # default Python shell is unaffected.
@@ -105,6 +124,8 @@
       in
       {
         packages.ml-env = mlEnv;
+        packages.dev-python = devPython;
+        packages.agent-tools = agentTools;
 
         devShells.android = androidPkgs.mkShell {
           packages = [ androidPkgs.jdk17 androidSdk androidPkgs.ktlint ];
@@ -118,11 +139,9 @@
 
         devShells.default = pkgs.mkShell {
           packages = [
-            # toolchain + type checking
-            (python.withPackages (ps: [
-              ps.mypy
-              ps.pytest
-            ]))
+            # toolchain + type checking (also `packages.dev-python` — the agents run
+            # this exact derivation, so the two can never drift apart)
+            devPython
             pkgs.ruff
             # capture (Phase 0): sox captures the mic (CoreAudio, sample-accurate),
             # ffmpeg segments/encodes the stream.
