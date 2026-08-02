@@ -1,11 +1,16 @@
-# Meeting recorder (plan)
+# Meeting recorder
 
 A record-to-file mode inside the existing Android app, so a meeting or appointment is
 captured by recall's own app and uploaded as a session — replacing the third-party mp3
-recorder currently used for that job, whose ads are the reason to stop using it.
+recorder previously used for that job, whose ads are the reason to stop using it.
 
-**Status: planned, not built.** This file is the design decisions and why they were
-made, so the plan survives being put down.
+**Status: built** (`MeetingService`, `MeetingActivity`, `MeetingQueue`, `MeetingUpload`).
+This file is the design decisions and why they were made.
+
+**It does not record mp3, and cannot:** Android has no MP3 encoder — `MediaRecorder` and
+`MediaCodec` decode the format but have never encoded it. Emitting `.mp3` would mean
+bundling LAME through the NDK. Opus is what the platform encodes well, and the server
+accepts it, so the choice below costs nothing.
 
 ## Where it lives: `android/app`, as a second mode
 
@@ -43,16 +48,31 @@ with several voices, and a one-off hour costs ~25 MB, so the storage argument be
 `.ogg` is already in `_UPLOAD_AUDIO_SUFFIXES` ([`src/recall/api.py`](../src/recall/api.py)),
 so **no server change is needed** for any of this.
 
+Opus encoding arrived in Android 10, so meeting recording requires API 29 and says so on
+anything older. `minSdk` stays 26: an older phone can still do the streaming job, and
+quietly writing an m4a instead would put an unrecoverable container exactly where the
+crash strategy expects a recoverable one.
+
 ## The upload queue
 
 Meetings happen where the recall host is unreachable, and some guest networks block the
 VPN outright, so there may be no route home from the building at all. The recorder is
 therefore offline-first: record to a file, queue it, upload when the host answers.
 
-- Write to `getExternalFilesDir(DIRECTORY_MUSIC)`, not `filesDir`. Both are app-private,
-  but the former is visible over USB, so a recording whose upload never succeeds can
-  still be retrieved by plugging the phone in.
-- Upload via a `WorkManager` job with a network constraint and backoff.
+- Write to `getExternalFilesDir(DIRECTORY_MUSIC)/meetings`, not `filesDir`. Both are
+  app-private, but the former is visible over USB, so a recording whose upload never
+  succeeds can still be retrieved by plugging the phone in.
+- Upload via a `WorkManager` job with a network constraint and backoff. Each run drains
+  the **whole** queue rather than one item, so a missed enqueue can't strand a recording:
+  the files on disk are the state, not the job.
+- The queue is kicked on three "the host might be reachable now" events — the screen
+  opening, a recording finishing, and the mic stream connecting (which proves we're home).
+  All three use `REPLACE`, so a previous failure's backoff is abandoned rather than
+  waited out.
+- Each recording is `meeting-<local stamp>.ogg` plus a `.ogg.json` sidecar holding the
+  title and true start. The sidecar is written **before the first audio frame**, so a
+  recording that ends in a crash still knows what it is; if it's lost anyway, the start is
+  recovered from the filename and the title falls back to the server's default.
 - The pending queue is **shown in the app** ("2 recordings waiting to upload"). A silent
   queue is how a lost recording goes unnoticed for weeks.
 
@@ -78,17 +98,34 @@ meeting named `Meeting <date> <time>`.
 
 ## Scope
 
-Phone: a `MeetingService` mirroring `StreamService`'s lifecycle; a screen with
-start/stop/pause, elapsed time, the existing level meter and a title field; the upload
-queue. Tests cover the pure parts — file naming, queue transitions, start/title choice —
-as `ShareUpload`'s time helpers are covered now.
+Phone: `MeetingService` mirroring `StreamService`'s lifecycle; `MeetingActivity` with
+start/stop, elapsed time, the shared level meter and a title field; `MeetingQueue` (the
+files) and `MeetingUpload` (the WorkManager job). Tests cover the pure parts — file
+naming, start recovery, queue listing, the title's wire format — as `ShareUpload`'s time
+helpers were covered before.
 
 Server: nothing.
 
-## Open questions
+## Decisions that were open, and how they went
 
-- **Delete a recording from the phone once uploaded?** Recommended yes: the host archive
-  is what gets backed up, and the queue only exists to reach it.
-- **Should pause/resume be offered at all?** `MediaRecorder` supports it, and a break in
-  a long appointment is real, but a paused recorder that is never resumed loses audio
-  silently — the same failure the resume warning already guards against for capture.
+- **The recording is deleted from the phone once the host has it.** The host archive is
+  what gets backed up, and the queue only exists to reach it. Nothing is deleted before a
+  2xx.
+- **No pause/resume.** `MediaRecorder` supports it, but a paused recorder that is never
+  resumed loses audio silently — the same failure the resume warning guards against for
+  continuous capture. A break in a long appointment is Stop then Start, which costs a
+  second session and, unlike silence, is visible.
+- **The level meter reads `MediaRecorder.getMaxAmplitude()`**, polled every 100 ms, not
+  `AudioRecord` frames — `MediaRecorder` owns the mic and never hands over the samples.
+  Both modes scale it through the same `amplitudeLevel`, so the two meters read alike.
+
+## The `title` field, and the host it goes to
+
+The app knows the true start instant and can offer a title box, so both the `start` and
+`title` form fields are filled — the share flow sets only `start`, leaving every meeting
+named `Meeting <date> <time>`.
+
+Uploads go to the **control host** (Isis), not the recorder host the PCM stream connects
+to. `ShareActivity` used to post to the recorder host, which has served nothing on `:8000`
+since the Mac's UI was retired in the Isis split — so sharing a recording in had been
+silently failing. Both paths now use `Prefs.controlHost`.

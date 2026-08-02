@@ -53,8 +53,22 @@
             </intent-filter>
         </activity>
 
+        <!-- The meeting recorder's screen. Reached from the main screen and from its own
+             ongoing notification; not a second launcher icon. -->
+        <activity
+            android:name=".MeetingActivity"
+            android:exported="false"
+            android:label="Record a meeting" />
+
         <service
             android:name=".StreamService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- Records one meeting to a file. Same microphone type as the stream; the two
+             never run together (starting a meeting stops the stream). -->
+        <service
+            android:name=".MeetingService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
 

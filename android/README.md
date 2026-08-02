@@ -45,6 +45,31 @@ killed by Doze/the OOM killer). The phone is the TCP **client**; recall listens.
   falling back to `MIC` — the rawest signal is best for downstream speaker-ID
   and separation.
 
+## The second mode: recording a meeting
+
+"Record a meeting…" on the main screen opens a recorder for one appointment or meeting —
+the job a third-party mp3 recorder used to do. It writes **one Ogg/Opus file** (48 kHz
+mono, 56 kbps, same `UNPROCESSED`→`MIC` preference) and uploads it to `/api/sessions` as a
+session, transcribed and diarized like any other.
+
+- `MeetingService` — the recording, as a mic-type foreground service. Starting it stops
+  the stream; stopping it starts the stream again if it was enabled. Both modes live in
+  one process so that rule can be enforced rather than discovered.
+- `MeetingQueue` — the files, in `getExternalFilesDir(Music)/meetings` (app-private but
+  visible over USB). Each recording carries a sidecar with its title and true start,
+  written before the first audio frame.
+- `MeetingUpload` — a `WorkManager` job that drains the queue whenever the host is
+  reachable, and keeps retrying while it isn't. Meetings happen where recall is
+  unreachable, so the recording is a file first and an upload second; nothing is deleted
+  from the phone until the host has it, and the app shows what is still waiting.
+
+Ogg, not m4a, because a truncated Ogg still decodes to its last complete page — a flat
+battery costs the tail, not the appointment. (Android has no MP3 encoder at all; Opus is
+what it encodes well.) Needs Android 10+; older phones can still stream.
+
+Uploads — from here and from the share sheet — go to the **control host** (Isis), which
+is where the API lives; the recorder host serves only the PCM stream.
+
 The recall side ingests this as a TCP-PCM source kind (see the main repo): the
 ingest server (`recall.stream_server`) listens on the one shared port, reads each
 phone's handshake + raw PCM, and pumps it into the same ffmpeg segmenter the USB

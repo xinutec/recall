@@ -12,10 +12,17 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * Uploads a shared audio file to the recall host's `POST /api/sessions` — the same
- * endpoint the web Upload button uses — so a conversation recorded elsewhere (the mp3
- * recorder's Share sheet) becomes a recall session, transcribed and diarized like any
- * meeting. The pure time helpers are unit-tested; the network call mirrors CaptureApi.
+ * Uploads an audio file to `POST /api/sessions` — the same endpoint the web Upload button
+ * uses — so a conversation recorded outside continuous capture becomes a recall session,
+ * transcribed and diarized like any meeting. Used by both the share sheet
+ * ([ShareActivity]) and the app's own recorder ([MeetingUpload]).
+ *
+ * The `host` is the **control host** (Isis), not the recorder host: the Mac's own web UI
+ * was retired in the Isis split and its `:8000` refuses, so an upload sent to the machine
+ * the PCM stream goes to has nowhere to land. Isis picks the session up and the Mac pulls
+ * the blob back through the job-pull to transcribe it.
+ *
+ * The pure time helpers are unit-tested; the network call mirrors CaptureApi.
  */
 object ShareUpload {
     private const val API_PORT = 8000 // `recall api --port 8000`, as CaptureApi
@@ -42,9 +49,28 @@ object ShareUpload {
             ?: modifiedMillis?.takeIf { it > 0 }?.let(Instant::ofEpochMilli)
             ?: now
 
+    /** The optional `title` multipart section — empty when there is nothing to send, so
+     * the server keeps its own `Meeting <date> <time>` naming rather than being handed a
+     * blank one. Pure, so the wire format is unit-tested rather than trusted. */
+    fun titlePart(boundary: String, title: String): String {
+        val clean = title.trim()
+        if (clean.isEmpty()) return ""
+        return "--$boundary\r\n" +
+            "Content-Disposition: form-data; name=\"title\"\r\n\r\n" +
+            clean + "\r\n"
+    }
+
     /** POST `file` to /api/sessions as multipart. Returns the created session's title on
-     * success, or a failure. Streams the file (an appointment can be tens of MB). */
-    suspend fun upload(host: String, file: File, filename: String, start: Instant): Result<String> =
+     * success, or a failure. Streams the file (an appointment can be tens of MB).
+     * A blank [title] is omitted, leaving the server's `Meeting <date> <time>` default —
+     * which is all the share sheet can offer, since it has only a filename to go on. */
+    suspend fun upload(
+        host: String,
+        file: File,
+        filename: String,
+        start: Instant,
+        title: String = "",
+    ): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val boundary = "----recall${System.nanoTime()}"
@@ -68,6 +94,7 @@ object ShareUpload {
                         "--$boundary\r\n" +
                             "Content-Disposition: form-data; name=\"start\"\r\n\r\n" +
                             DateTimeFormatter.ISO_INSTANT.format(start) + "\r\n" +
+                            titlePart(boundary, title) +
                             "--$boundary\r\n" +
                             "Content-Disposition: form-data; name=\"audio\"; " +
                             "filename=\"$filename\"\r\n" +

@@ -118,6 +118,10 @@ class StreamService : Service() {
                 // Recording is definitively on now — drop any pending resume warning
                 // (a resume the app never polled as running would otherwise leave it armed).
                 ResumeWarning.cancel(this)
+                // Connecting proves we're on the home network, which is the one thing a
+                // queued meeting recording is waiting for. Cheap, and it means walking
+                // back in uploads yesterday's appointment without opening anything.
+                MeetingUpload.enqueue(this)
                 // Note: connecting drives only *this phone's* state. The household
                 // pause state is the authority's (/api/capture + Pause/Resume) — never
                 // inferred from a socket, which races a parking listener on pause.

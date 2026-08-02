@@ -24,7 +24,17 @@ fun peakLevel(buf: ByteArray, n: Int, floorDbfs: Float = METER_FLOOR_DBFS): Floa
         if (amp > peak) peak = amp
         i += 2
     }
-    if (peak == 0) return 0f
+    return amplitudeLevel(peak, floorDbfs)
+}
+
+/**
+ * The same 0f..1f meter scaling for a peak amplitude that was measured elsewhere —
+ * `MediaRecorder.getMaxAmplitude()` reports the same 0..32767 units but never hands over
+ * the samples, so the meeting recorder can't compute it from a buffer the way
+ * [peakLevel] does. One function so both modes' meters read alike.
+ */
+fun amplitudeLevel(peak: Int, floorDbfs: Float = METER_FLOOR_DBFS): Float {
+    if (peak <= 0) return 0f
     val dbfs = 20f * log10(peak / 32768f)
     return ((dbfs - floorDbfs) / -floorDbfs).coerceIn(0f, 1f)
 }

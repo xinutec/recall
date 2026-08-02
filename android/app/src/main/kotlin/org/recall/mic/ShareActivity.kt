@@ -63,19 +63,14 @@ class ShareActivity : ComponentActivity() {
         setContent { RecallMicTheme { ShareScreen() } }
 
         val uri = streamUri(intent)
-        val host = Prefs.host(this)
-        when {
-            uri == null -> {
-                state = UiState.Failed("No audio file was shared.")
-            }
-
-            host.isBlank() -> {
-                state = UiState.Failed("Open Recall Mic and set the recall host first.")
-            }
-
-            else -> {
-                lifecycleScope.launch { run(uri, host) }
-            }
+        // The API host (Isis), NOT the recorder host the PCM stream goes to: the Mac's
+        // own UI was retired in the Isis split and its :8000 refuses, so uploads sent
+        // there went nowhere. Never blank — it falls back to DEFAULT_CONTROL_HOST.
+        val host = Prefs.controlHost(this)
+        if (uri == null) {
+            state = UiState.Failed("No audio file was shared.")
+        } else {
+            lifecycleScope.launch { run(uri, host) }
         }
     }
 

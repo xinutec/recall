@@ -1,6 +1,7 @@
 package org.recall.mic
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -9,7 +10,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,12 +18,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -60,7 +58,6 @@ import java.time.Duration
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneId
-import kotlin.math.roundToInt
 
 /**
  * Compose UI: a live status card (connection state + a mic level meter) over the
@@ -284,6 +281,16 @@ fun MicScreen(
                     modifier = Modifier.weight(1f),
                 ) { Text("Stop") }
             }
+            // The other mode: record one meeting to a file and upload it as a session,
+            // rather than streaming the room continuously. Its own screen because it has
+            // its own lifecycle — it keeps going with this one closed.
+            OutlinedButton(
+                onClick = {
+                    Log.i(UI_LOG, "button: Record a meeting")
+                    context.startActivity(Intent(context, MeetingActivity::class.java))
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Record a meeting…") }
         }
     }
 }
@@ -367,35 +374,6 @@ private fun StatusCard(
         }
     }
 }
-
-@Composable
-private fun LevelMeter(level: Float, segments: Int = 24) {
-    val animated by animateFloatAsState(targetValue = level, label = "mic-level")
-    val lit = (animated * segments).roundToInt()
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        for (i in 0 until segments) {
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(32.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(segmentColor(meterTier(i, lit, segments))),
-            )
-        }
-    }
-}
-
-@Composable
-private fun segmentColor(tier: MeterTier) =
-    when (tier) {
-        MeterTier.OFF -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
-        MeterTier.LOW -> MaterialTheme.colorScheme.primary
-        MeterTier.MID -> MaterialTheme.colorScheme.tertiary
-        MeterTier.HIGH -> MaterialTheme.colorScheme.error
-    }
 
 /**
  * Mirrors the web app's pause banner for the *household* capture (the whole system).

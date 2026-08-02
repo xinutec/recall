@@ -50,4 +50,22 @@ class BannerTest {
         assertEquals("Recording paused", Banner.pausedText(null, now, london))
         assertEquals("Recording paused", Banner.pausedText("not-a-date", now, london))
     }
+
+    @Test
+    fun elapsedCountsSecondsThenHours() {
+        val since = Instant.parse("2026-07-04T09:00:00Z")
+        assertEquals("00:00", elapsedLabel(since, since))
+        assertEquals("07:12", elapsedLabel(since, since.plusSeconds(432)))
+        assertEquals("59:59", elapsedLabel(since, since.plusSeconds(3599)))
+        assertEquals("1:00:00", elapsedLabel(since, since.plusSeconds(3600)))
+        assertEquals("2:07:12", elapsedLabel(since, since.plusSeconds(7632)))
+    }
+
+    @Test
+    fun elapsedNeverGoesNegative() {
+        // A clock that steps backwards mid-meeting must not paint a minus sign onto the
+        // one readout that says whether the recorder is running.
+        val since = Instant.parse("2026-07-04T09:00:00Z")
+        assertEquals("00:00", elapsedLabel(since, since.minusSeconds(90)))
+    }
 }
