@@ -18,13 +18,20 @@ data class PendingRecording(
 )
 
 /**
- * The on-disk queue of meeting recordings: where they live, what they're called, and the
- * metadata that has to survive the app dying between the recording and its upload.
+ * The recordings on the phone: where they live, what they're called, and the metadata that
+ * has to survive the app dying between the recording and its upload.
  *
  * Offline-first is the whole point — a meeting happens where the recall host is
  * unreachable, and some guest networks block the VPN outright, so there may be no route
  * home from the building at all. The recording is therefore a file first and an upload
  * second, and nothing about it may live only in memory.
+ *
+ * **Two directories, because approval is a decision and decisions must survive a reboot.**
+ * A finished recording stays in `meetings/`, where it can be played back and kept or
+ * deleted, and *nothing sends it*. Pressing Upload moves it into `meetings/outbox/`, which
+ * is the only place [MeetingUpload] looks. The move is a rename within one directory tree,
+ * so it is atomic: a recording is either awaiting a decision or acting on one, never both
+ * and never neither.
  *
  * Each recording is a pair: `meeting-<local stamp>.ogg` and a `.ogg.json` sidecar holding
  * the title and the true start instant. The sidecar is written *before* the first audio
@@ -35,6 +42,7 @@ data class PendingRecording(
 object MeetingQueue {
     const val AUDIO_SUFFIX = ".ogg"
     private const val DIR = "meetings"
+    private const val OUTBOX = "outbox"
     private const val SIDECAR_SUFFIX = ".json"
     private const val KEY_TITLE = "title"
     private const val KEY_START = "start"
@@ -52,6 +60,9 @@ object MeetingQueue {
      */
     fun dir(ctx: Context): File =
         File(ctx.getExternalFilesDir(Environment.DIRECTORY_MUSIC), DIR).apply { mkdirs() }
+
+    /** Recordings the user has approved for upload — the only ones that get sent. */
+    fun outbox(ctx: Context): File = File(dir(ctx), OUTBOX).apply { mkdirs() }
 
     fun fileName(start: Instant, zone: ZoneId): String =
         "meeting-${STAMP.format(start.atZone(zone))}$AUDIO_SUFFIX"
@@ -95,11 +106,11 @@ object MeetingQueue {
         }.getOrNull()
 
     /**
-     * Everything waiting to upload, oldest first. Zero-length files are skipped: a
+     * The recordings in one directory, oldest first. Zero-length files are skipped: a
      * `MediaRecorder` that was stopped before it wrote a page leaves one, and posting it
      * would only earn a 400 from the server's ffprobe.
      */
-    fun pending(dir: File, zone: ZoneId): List<PendingRecording> =
+    fun list(dir: File, zone: ZoneId): List<PendingRecording> =
         (dir.listFiles() ?: emptyArray())
             .filter { it.isFile && it.name.endsWith(AUDIO_SUFFIX) && it.length() > 0 }
             .sortedBy { it.name }
@@ -115,7 +126,26 @@ object MeetingQueue {
                 )
             }
 
-    /** Drop a recording and its sidecar — called once the host has it. */
+    /**
+     * Move a recording into [outbox] — the act of approving it for upload. Returns it at
+     * its new home, or null if the move failed, in which case it stays held rather than
+     * quietly becoming a recording nobody is going to send.
+     *
+     * The sidecar moves first: an audio file in the outbox without its metadata would
+     * upload under a recovered start and no title, whereas a stray sidecar left behind is
+     * inert. Same filesystem, so both are renames.
+     */
+    fun approve(recording: PendingRecording, outbox: File): PendingRecording? {
+        val movedAudio = File(outbox, recording.audio.name)
+        sidecar(recording.audio).renameTo(sidecar(movedAudio))
+        if (!recording.audio.renameTo(movedAudio)) {
+            sidecar(movedAudio).renameTo(sidecar(recording.audio)) // put the metadata back
+            return null
+        }
+        return recording.copy(audio = movedAudio)
+    }
+
+    /** Drop a recording and its sidecar — once the host has it, or on the user's say-so. */
     fun complete(recording: PendingRecording) {
         sidecar(recording.audio).delete()
         recording.audio.delete()

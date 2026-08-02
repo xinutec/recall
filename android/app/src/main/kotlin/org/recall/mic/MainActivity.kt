@@ -22,19 +22,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DrawerState
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,10 +53,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Duration
@@ -60,11 +65,22 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 
 /**
- * Compose UI: a live status card (connection state + a mic level meter) over the
- * host/port config and Start/Stop. The heavy lifting is in StreamService; the UI
- * just reflects MicState and toggles the service.
+ * Compose UI: a live status card (connection state + a mic level meter), the household
+ * pause banner, the fleet's devices and Start/Stop. The heavy lifting is in StreamService;
+ * the UI just reflects MicState and toggles the service.
+ *
+ * The hosts live in [SettingsActivity], reached from the drawer — they are set once per
+ * phone and then never again, so keeping them here made the daily screen mostly a form.
+ * The saved values are re-read in `onResume`, so a change made in Settings is reflected
+ * the moment you come back.
  */
 class MainActivity : ComponentActivity() {
+    // Re-read on resume rather than captured at composition: Settings can change either
+    // one while this screen is merely stopped, and the Start button must not act on a
+    // host the user has since replaced.
+    private val host = mutableStateOf("")
+    private val controlHost = mutableStateOf("")
+
     private val requestPermissions =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
             if (grants[Manifest.permission.RECORD_AUDIO] == true) StreamService.start(this)
@@ -76,21 +92,27 @@ class MainActivity : ComponentActivity() {
         setContent {
             RecallMicTheme {
                 MicScreen(
-                    initialHost = Prefs.host(this),
-                    initialControlHost = Prefs.controlHost(this),
-                    deviceId = Prefs.deviceId(this),
+                    host = host.value,
+                    controlHost = controlHost.value,
                     onStart = ::beginStream,
                     onStop = ::endStream,
-                    onControlHostChanged = { Prefs.saveControlHost(this, it) },
+                    onOpenMeetings = { startActivity(Intent(this, MeetingActivity::class.java)) },
+                    onOpenSettings = { startActivity(Intent(this, SettingsActivity::class.java)) },
                 )
             }
         }
         resumeIfEnabled()
     }
 
-    private fun beginStream(host: String) {
-        Log.i(UI_LOG, "button: Start ($host)")
-        Prefs.save(this, host, enabled = true)
+    override fun onResume() {
+        super.onResume()
+        host.value = Prefs.host(this)
+        controlHost.value = Prefs.controlHost(this)
+    }
+
+    private fun beginStream() {
+        Log.i(UI_LOG, "button: Start (${host.value})")
+        Prefs.save(this, host.value, enabled = true)
         val needed =
             buildList {
                 add(Manifest.permission.RECORD_AUDIO)
@@ -107,9 +129,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun endStream(host: String) {
+    private fun endStream() {
         Log.i(UI_LOG, "button: Stop")
-        Prefs.save(this, host, enabled = false)
+        Prefs.save(this, host.value, enabled = false)
         StreamService.stop(this)
     }
 
@@ -127,18 +149,17 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MicScreen(
-    initialHost: String,
-    initialControlHost: String,
-    deviceId: String,
-    onStart: (String) -> Unit,
-    onStop: (String) -> Unit,
-    onControlHostChanged: (String) -> Unit,
+    // The recorder host the stream connects to, and the control-plane host (Isis) — two,
+    // because the Isis split put the capture API on a different machine than the PCM
+    // ingest. The pause banner and Devices panel poll the latter. Both are owned by
+    // SettingsActivity; this screen only reads them.
+    host: String,
+    controlHost: String,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onOpenMeetings: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
-    var host by remember { mutableStateOf(initialHost) }
-    // The control-plane host (Isis) — separate from the recorder [host] because the
-    // Isis split put the capture API on a different machine than the PCM ingest. The
-    // pause banner and Devices panel poll THIS host; the stream still uses [host].
-    var controlHost by remember { mutableStateOf(initialControlHost) }
     val running by MicState.running.collectAsStateWithLifecycle()
     val connected by MicState.connected.collectAsStateWithLifecycle()
     val level by MicState.level.collectAsStateWithLifecycle()
@@ -197,7 +218,7 @@ fun MicScreen(
 
     // We know our own source id directly (it's what we announce in the handshake), so
     // we can highlight our own row in the Devices list with no extra call.
-    val selfId = deviceId
+    val selfId = remember { Prefs.deviceId(context) }
 
     // Run a capture action (pause/resume) against the control host, then publish its
     // result to the one shared state — so the screen and notification both reflect it.
@@ -205,7 +226,90 @@ fun MicScreen(
         scope.launch { call(controlHost)?.let { MicState.setCapture(it) } }
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Recall Mic") }) }) { inner ->
+    val drawer = rememberDrawerState(DrawerValue.Closed)
+
+    fun closeThen(action: () -> Unit) {
+        scope.launch { drawer.close() }
+        action()
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawer,
+        drawerContent = {
+            ModalDrawerSheet {
+                Text(
+                    "Recall Mic",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(24.dp),
+                )
+                NavigationDrawerItem(
+                    label = { Text("Record a meeting") },
+                    selected = false,
+                    onClick = {
+                        Log.i(UI_LOG, "menu: Record a meeting")
+                        closeThen(onOpenMeetings)
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+                NavigationDrawerItem(
+                    label = { Text("Settings") },
+                    selected = false,
+                    onClick = {
+                        Log.i(UI_LOG, "menu: Settings")
+                        closeThen(onOpenSettings)
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+            }
+        },
+    ) {
+        MicContent(
+            drawer = drawer,
+            scope = scope,
+            running = running,
+            connected = connected,
+            level = level,
+            host = host,
+            capture = capture,
+            now = now,
+            devices = devices,
+            selfId = selfId,
+            onStart = onStart,
+            onStop = onStop,
+            onCapture = ::control,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MicContent(
+    drawer: DrawerState,
+    scope: CoroutineScope,
+    running: Boolean,
+    connected: Boolean,
+    level: Float,
+    host: String,
+    capture: CaptureState?,
+    now: Instant,
+    devices: List<SourceStatus>,
+    selfId: String,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onCapture: (suspend (String) -> CaptureState?) -> Unit,
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Recall Mic") },
+                navigationIcon = {
+                    IconButton(onClick = { scope.launch { drawer.open() } }) {
+                        Icon(painterResource(R.drawable.ic_menu), contentDescription = "Menu")
+                    }
+                },
+            )
+        },
+    ) { inner ->
         Column(
             Modifier
                 .padding(inner)
@@ -228,69 +332,39 @@ fun MicScreen(
                 now = now,
                 onPause = {
                     Log.i(UI_LOG, "button: Pause recording")
-                    control(CaptureApi::pause)
+                    onCapture(CaptureApi::pause)
                 },
                 onSnooze = {
                     Log.i(UI_LOG, "button: Still away (snooze 24h)")
-                    control(CaptureApi::pause)
+                    onCapture(CaptureApi::pause)
                 },
                 onResume = {
                     Log.i(UI_LOG, "button: Resume now")
-                    control(CaptureApi::resume)
+                    onCapture(CaptureApi::resume)
                 },
             )
             DevicesPanel(devices, selfId)
-            OutlinedTextField(
-                value = host,
-                onValueChange = { host = it.trim() },
-                label = { Text("recorder host (stream)") },
-                placeholder = { Text("192.168.1.81") },
-                singleLine = true,
-                // Locked while streaming (as on iOS): the service connects to the
-                // SAVED host, so an edit here would make the status card lie.
-                enabled = !running,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = controlHost,
-                onValueChange = {
-                    controlHost = it.trim()
-                    onControlHostChanged(controlHost)
-                },
-                label = { Text("control host (Isis)") },
-                placeholder = { Text(Prefs.DEFAULT_CONTROL_HOST) },
-                singleLine = true,
-                // Not tied to the stream, so it's editable any time — it only drives the
-                // pause controls and Devices panel (the fleet API on Isis).
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                text = "This device: $selfId",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(
-                    onClick = { onStart(host.trim()) },
+                    onClick = onStart,
                     enabled = host.isNotBlank() && !running,
                     modifier = Modifier.weight(1f),
                 ) { Text("Start") }
                 OutlinedButton(
-                    onClick = { onStop(host.trim()) },
+                    onClick = onStop,
                     enabled = running,
                     modifier = Modifier.weight(1f),
                 ) { Text("Stop") }
             }
-            // The other mode: record one meeting to a file and upload it as a session,
-            // rather than streaming the room continuously. Its own screen because it has
-            // its own lifecycle — it keeps going with this one closed.
-            OutlinedButton(
-                onClick = {
-                    Log.i(UI_LOG, "button: Record a meeting")
-                    context.startActivity(Intent(context, MeetingActivity::class.java))
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Record a meeting…") }
+            if (host.isBlank()) {
+                // Start is dead without one, and the field is no longer on this screen —
+                // so say where it went rather than leave a button that does nothing.
+                Text(
+                    "Set the recorder host in Settings before starting.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
     }
 }

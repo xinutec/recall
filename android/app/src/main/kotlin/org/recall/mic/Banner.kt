@@ -13,8 +13,12 @@ import kotlin.math.roundToLong
  * because the readout doubles as the proof that the recorder is actually running.
  * Never negative: a clock that steps backwards mid-meeting shows 00:00, not a minus sign.
  */
-fun elapsedLabel(since: Instant, now: Instant): String {
-    val secs = max(0L, Duration.between(since, now).seconds)
+fun elapsedLabel(since: Instant, now: Instant): String =
+    elapsedLabel(Duration.between(since, now).seconds)
+
+/** As above, for a duration already in seconds — a recording's length, a playback head. */
+fun elapsedLabel(seconds: Long): String {
+    val secs = max(0L, seconds)
     val h = secs / 3600
     val m = (secs % 3600) / 60
     val s = secs % 60
@@ -24,6 +28,22 @@ fun elapsedLabel(since: Instant, now: Instant): String {
         "%02d:%02d".format(m, s)
     }
 }
+
+/** When a recording was made, for its row in the list: "2 Aug, 09:50". */
+fun startedLabel(start: Instant, zone: ZoneId): String =
+    DateTimeFormatter.ofPattern("d MMM, HH:mm").format(start.atZone(zone))
+
+/**
+ * A recording's size, rounded the way a person reads it: "21.4 MB", "812 KB". Shown
+ * because it is the other half of "is this the recording I think it is" — a 40-minute
+ * appointment that came out 300 KB did not record what you were expecting.
+ */
+fun sizeLabel(bytes: Long): String =
+    when {
+        bytes >= 1_000_000L -> "%.1f MB".format(bytes / 1_000_000.0)
+        bytes >= 1_000L -> "${bytes / 1_000} KB"
+        else -> "$bytes B"
+    }
 
 /**
  * The household paused-banner text, kept byte-for-byte identical to the website's

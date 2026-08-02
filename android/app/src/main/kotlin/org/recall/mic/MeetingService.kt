@@ -120,7 +120,7 @@ class MeetingService : Service() {
         startedAt = start
         acquireWakeLock()
         MeetingState.setError(null)
-        MeetingState.setRecording(true, start)
+        MeetingState.setRecording(true, start, file)
         setNotification("Recording — tap to open", start)
         meter = thread(name = "meeting-meter") { meterLoop() }
         Log.i(UI_LOG, "meeting recording to ${file.name}")
@@ -185,14 +185,15 @@ class MeetingService : Service() {
             if (kept && file.length() > 0) {
                 title?.let { MeetingQueue.writeSidecar(file, it, startOf(file)) }
                 Log.i(UI_LOG, "meeting saved: ${file.name} (${file.length()} bytes)")
-                MeetingUpload.enqueue(this)
+                // Saved, and that is all. It stays on the phone to be listened to; only
+                // an explicit Upload hands it to MeetingUpload.
             } else {
                 Log.w(UI_LOG, "meeting discarded: ${file.name} — no audio was written")
                 MeetingQueue.discard(file)
                 MeetingState.setError("Nothing was recorded — the file was empty.")
             }
         }
-        MeetingUpload.refreshPending(this)
+        MeetingLibrary.refresh(this)
         restoreStream()
         stopSelf()
     }

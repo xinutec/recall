@@ -53,6 +53,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Hosts and device identity, off the daily screen. Reached from the drawer. -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="Settings" />
+
         <!-- The meeting recorder's screen. Reached from the main screen and from its own
              ongoing notification; not a second launcher icon. -->
         <activity

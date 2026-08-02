@@ -58,7 +58,7 @@ class MeetingQueueTest {
         MeetingQueue.writeSidecar(first, "Clinic", start)
         MeetingQueue.writeSidecar(second, "", Instant.parse("2026-07-03T13:00:00Z"))
 
-        val queue = MeetingQueue.pending(tmp.root, london)
+        val queue = MeetingQueue.list(tmp.root, london)
         assertEquals(listOf(first, second), queue.map { it.audio })
         assertEquals(listOf("Clinic", ""), queue.map { it.title })
         assertEquals(start, queue[0].start)
@@ -69,7 +69,7 @@ class MeetingQueueTest {
         // The crash case: audio written, sidecar lost. The recording must still upload,
         // at the right time, rather than be stranded.
         record("meeting-20260703-095050.ogg")
-        val queue = MeetingQueue.pending(tmp.root, london)
+        val queue = MeetingQueue.list(tmp.root, london)
         assertEquals(1, queue.size)
         assertEquals(start, queue[0].start)
         assertEquals("", queue[0].title)
@@ -81,7 +81,7 @@ class MeetingQueueTest {
         // would only earn a 400 from the server's ffprobe.
         File(tmp.root, "meeting-20260703-095050.ogg").createNewFile()
         record("notes.txt")
-        assertTrue(MeetingQueue.pending(tmp.root, london).isEmpty())
+        assertTrue(MeetingQueue.list(tmp.root, london).isEmpty())
     }
 
     @Test
@@ -91,9 +91,38 @@ class MeetingQueueTest {
         val sidecar = File(audio.path + ".json")
         assertTrue(sidecar.exists())
 
-        MeetingQueue.complete(MeetingQueue.pending(tmp.root, london).single())
+        MeetingQueue.complete(MeetingQueue.list(tmp.root, london).single())
         assertFalse(audio.exists())
         assertFalse(sidecar.exists())
+    }
+
+    @Test
+    fun approveMovesARecordingAndItsMetadataIntoTheOutbox() {
+        // Approval is the only thing that makes a recording uploadable, so it has to be a
+        // fact on disk — not a flag that a reboot forgets.
+        val audio = record("meeting-20260703-095050.ogg")
+        MeetingQueue.writeSidecar(audio, "Clinic", start)
+        val outbox = tmp.newFolder("outbox")
+
+        val moved = MeetingQueue.approve(MeetingQueue.list(tmp.root, london).single(), outbox)
+
+        assertEquals(File(outbox, audio.name), moved?.audio)
+        assertFalse(audio.exists())
+        assertFalse(File(audio.path + ".json").exists())
+        // And it arrives whole: title and start survive the move, so it doesn't upload
+        // under a recovered name.
+        val queued = MeetingQueue.list(outbox, london).single()
+        assertEquals("Clinic", queued.title)
+        assertEquals(start, queued.start)
+    }
+
+    @Test
+    fun theOutboxIsNotListedAsARecording() {
+        // The outbox is a subdirectory of the recordings directory; held recordings must
+        // not gain a phantom row for it.
+        record("meeting-20260703-095050.ogg")
+        tmp.newFolder("outbox")
+        assertEquals(1, MeetingQueue.list(tmp.root, london).size)
     }
 
     /** A file with some bytes in it, standing in for a recording. */

@@ -53,22 +53,40 @@ anything older. `minSdk` stays 26: an older phone can still do the streaming job
 quietly writing an m4a instead would put an unrecoverable container exactly where the
 crash strategy expects a recoverable one.
 
+## Nothing uploads until it has been listened to
+
+A recording is evidence about an appointment, and whether it is worth keeping is a
+judgement that can only be made after hearing it. So the recorder does not send anything
+on its own: a finished recording appears in a list on the phone with **Play**, **Upload**
+and **Delete**, and stays there until one of the last two is pressed.
+
+Approval is a **move on disk**, `meetings/` → `meetings/outbox/`, not a flag. The uploader
+looks only in the outbox, so it cannot send something that was never approved, and a
+reboot between the decision and the upload cannot lose the decision. Both are renames
+within one directory tree, so the move is atomic; the sidecar goes first, because a
+stray sidecar is inert whereas an audio file in the outbox without one would upload under
+a recovered start and no title.
+
+Playback is deliberately small — one file, no queue, no service, released when the screen
+closes. It is a check before uploading, not a media player, and it never touches the
+device volume.
+
 ## The upload queue
 
 Meetings happen where the recall host is unreachable, and some guest networks block the
-VPN outright, so there may be no route home from the building at all. The recorder is
-therefore offline-first: record to a file, queue it, upload when the host answers.
+VPN outright, so there may be no route home from the building at all. So once a recording
+*is* approved, delivery is offline-first: it waits in the outbox until the host answers.
 
 - Write to `getExternalFilesDir(DIRECTORY_MUSIC)/meetings`, not `filesDir`. Both are
   app-private, but the former is visible over USB, so a recording whose upload never
   succeeds can still be retrieved by plugging the phone in.
 - Upload via a `WorkManager` job with a network constraint and backoff. Each run drains
-  the **whole** queue rather than one item, so a missed enqueue can't strand a recording:
-  the files on disk are the state, not the job.
-- The queue is kicked on three "the host might be reachable now" events — the screen
-  opening, a recording finishing, and the mic stream connecting (which proves we're home).
-  All three use `REPLACE`, so a previous failure's backoff is abandoned rather than
-  waited out.
+  the **whole outbox** rather than one named item, so a missed enqueue can't strand an
+  approved recording: the files on disk are the state, not the job.
+- The outbox is kicked on three "the host might be reachable now" events — a recording
+  being approved, the screen opening, and the mic stream connecting (which proves we're
+  home). All three use `REPLACE`, so a previous failure's backoff is abandoned rather
+  than waited out.
 - Each recording is `meeting-<local stamp>.ogg` plus a `.ogg.json` sidecar holding the
   title and true start. The sidecar is written **before the first audio frame**, so a
   recording that ends in a crash still knows what it is; if it's lost anyway, the start is
@@ -99,18 +117,21 @@ meeting named `Meeting <date> <time>`.
 ## Scope
 
 Phone: `MeetingService` mirroring `StreamService`'s lifecycle; `MeetingActivity` with
-start/stop, elapsed time, the shared level meter and a title field; `MeetingQueue` (the
-files) and `MeetingUpload` (the WorkManager job). Tests cover the pure parts — file
-naming, start recovery, queue listing, the title's wire format — as `ShareUpload`'s time
-helpers were covered before.
+start/stop, elapsed time, the shared level meter, a title field and the list of what is
+still on the phone; `MeetingQueue` (the files and the two directories), `MeetingLibrary`
+(what the list shows, and the approve/delete actions), `MeetingPlayer` (listening back)
+and `MeetingUpload` (the WorkManager job). The hosts moved to `SettingsActivity`, behind
+the drawer, so the daily screen is status and Start/Stop rather than a form. Tests cover
+the pure parts — file naming, start recovery, listing, approval, the row labels, the
+title's wire format — as `ShareUpload`'s time helpers were covered before.
 
 Server: nothing.
 
 ## Decisions that were open, and how they went
 
 - **The recording is deleted from the phone once the host has it.** The host archive is
-  what gets backed up, and the queue only exists to reach it. Nothing is deleted before a
-  2xx.
+  what gets backed up, and the outbox only exists to reach it. Nothing is deleted before a
+  2xx — or before the user says so, which is the other way a recording leaves the phone.
 - **No pause/resume.** `MediaRecorder` supports it, but a paused recorder that is never
   resumed loses audio silently — the same failure the resume warning guards against for
   continuous capture. A break in a long appointment is Stop then Start, which costs a

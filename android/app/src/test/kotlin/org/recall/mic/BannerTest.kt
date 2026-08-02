@@ -62,6 +62,16 @@ class BannerTest {
     }
 
     @Test
+    fun labelsARecordingsDateAndSize() {
+        assertEquals("3 Jul, 09:50", startedLabel(Instant.parse("2026-07-03T08:50:50Z"), london))
+        // Rounded the way a person reads it — the point is "is this the recording I think
+        // it is", not an exact byte count.
+        assertEquals("21.4 MB", sizeLabel(21_400_000))
+        assertEquals("812 KB", sizeLabel(812_345))
+        assertEquals("640 B", sizeLabel(640))
+    }
+
+    @Test
     fun elapsedNeverGoesNegative() {
         // A clock that steps backwards mid-meeting must not paint a minus sign onto the
         // one readout that says whether the recorder is running.

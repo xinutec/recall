@@ -47,21 +47,30 @@ killed by Doze/the OOM killer). The phone is the TCP **client**; recall listens.
 
 ## The second mode: recording a meeting
 
-"Record a meeting…" on the main screen opens a recorder for one appointment or meeting —
-the job a third-party mp3 recorder used to do. It writes **one Ogg/Opus file** (48 kHz
-mono, 56 kbps, same `UNPROCESSED`→`MIC` preference) and uploads it to `/api/sessions` as a
-session, transcribed and diarized like any other.
+"Record a meeting" in the drawer opens a recorder for one appointment or meeting — the job
+a third-party mp3 recorder used to do. It writes **one Ogg/Opus file** (48 kHz mono,
+56 kbps, same `UNPROCESSED`→`MIC` preference), which can then be played back on the phone
+and either deleted or uploaded to `/api/sessions` as a session, transcribed and diarized
+like any other.
+
+**Nothing uploads by itself.** A finished recording sits in the list on that screen with
+Play, Upload and Delete until you choose; the phone holds the only copy until you do.
 
 - `MeetingService` — the recording, as a mic-type foreground service. Starting it stops
   the stream; stopping it starts the stream again if it was enabled. Both modes live in
   one process so that rule can be enforced rather than discovered.
 - `MeetingQueue` — the files, in `getExternalFilesDir(Music)/meetings` (app-private but
   visible over USB). Each recording carries a sidecar with its title and true start,
-  written before the first audio frame.
-- `MeetingUpload` — a `WorkManager` job that drains the queue whenever the host is
+  written before the first audio frame. Pressing Upload *moves* it into `meetings/outbox/`
+  — approval is a fact on disk, so a reboot can't lose it and the uploader can't send
+  anything you didn't approve.
+- `MeetingLibrary` / `MeetingPlayer` — what the list shows (length, size, when), and
+  listening back before deciding. Playback is released when the screen closes and never
+  changes the device volume.
+- `MeetingUpload` — a `WorkManager` job that drains the outbox whenever the host is
   reachable, and keeps retrying while it isn't. Meetings happen where recall is
-  unreachable, so the recording is a file first and an upload second; nothing is deleted
-  from the phone until the host has it, and the app shows what is still waiting.
+  unreachable, so an approved recording is still a file first and an upload second;
+  nothing is deleted from the phone until the host has it.
 
 Ogg, not m4a, because a truncated Ogg still decodes to its last complete page — a flat
 battery costs the tail, not the appointment. (Android has no MP3 encoder at all; Opus is
@@ -137,10 +146,14 @@ Add a phone by appending `<ip>:5555  # comment` to the `PHONES` array.
 
 ## Config
 
-| setting | default | meaning |
-|---------|---------|---------|
-| host    | —       | recall host IP/hostname (must be set) |
+Both hosts live in **Settings**, behind the drawer — they are set once per phone and then
+never again, so the daily screen shows status and Start/Stop instead of a form.
 
-The **host is the only setting**. The ingest port is fixed at **9999** (one shared
-port for all phones — `StreamService.INGEST_PORT`) and the device id is derived
-automatically on first run, so there's nothing else to enter.
+| setting      | default      | meaning |
+|--------------|--------------|---------|
+| recorder host| —            | where the PCM stream goes (must be set) |
+| control host | `10.100.0.2` | the recall web API: pause, device list, uploads |
+
+The ingest port is fixed at **9999** (one shared port for all phones —
+`StreamService.INGEST_PORT`) and the device id is derived automatically on first run, so
+there's nothing else to enter.

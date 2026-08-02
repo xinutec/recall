@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
 import java.time.Instant
 
 /**
@@ -23,10 +24,20 @@ object MeetingState {
     private val _level = MutableStateFlow(0f)
     val level: StateFlow<Float> = _level.asStateFlow()
 
+    /** The file being recorded into right now — excluded from the library, since it is
+     * not a thing that can be played, uploaded or deleted yet. */
+    private val _activeFile = MutableStateFlow<File?>(null)
+    val activeFile: StateFlow<File?> = _activeFile.asStateFlow()
+
     /**
-     * How many finished recordings are still on the phone. Shown in the app because a
-     * silent queue is how a lost recording goes unnoticed for weeks.
+     * Every recording still on the phone: held ones awaiting a decision and approved ones
+     * on their way out. Shown in the app because audio that exists in exactly one place
+     * and is invisible is how a lost recording goes unnoticed for weeks.
      */
+    private val _recordings = MutableStateFlow<List<RecordingRow>>(emptyList())
+    val recordings: StateFlow<List<RecordingRow>> = _recordings.asStateFlow()
+
+    /** How many approved recordings have yet to reach the host. */
     private val _pending = MutableStateFlow(0)
     val pending: StateFlow<Int> = _pending.asStateFlow()
 
@@ -34,11 +45,17 @@ object MeetingState {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    fun setRecording(value: Boolean, startedAt: Instant? = null) {
+    fun setRecording(value: Boolean, startedAt: Instant? = null, file: File? = null) {
         if (value != _recording.value) Log.i(UI_LOG, "meeting recording=$value")
         _recording.value = value
         _startedAt.value = if (value) startedAt else null
+        _activeFile.value = if (value) file else null
         if (!value) _level.value = 0f
+    }
+
+    fun setRecordings(value: List<RecordingRow>) {
+        _recordings.value = value
+        setPending(value.count { it.queued })
     }
 
     fun setLevel(value: Float) {
