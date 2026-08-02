@@ -29,7 +29,7 @@ killed by Doze/the OOM killer). The phone is the TCP **client**; recall listens.
   pause-vs-resume decision is the pure, unit-tested `planResumeWarning`
   (`ResumeWarningPlan.kt`); a pause shorter than the lead gets no warning (the banner
   countdown is the only heads-up there).
-- `MainActivity` — set the host, Start/Stop, and a **household-pause banner**:
+- `MainActivity` — Start/Stop, the device list, and a **household-pause banner**:
   when capture is paused it shows the resume time with snooze/resume, mirroring the
   web app. The pause state is one shared value (`MicState.capture`) that both the
   screen and the notification render, polled from the recall web API via
@@ -60,8 +60,8 @@ Play, Upload and Delete until you choose; the phone holds the only copy until yo
   the stream; stopping it starts the stream again if it was enabled. Both modes live in
   one process so that rule can be enforced rather than discovered.
 - `MeetingQueue` — the files, in `getExternalFilesDir(Music)/meetings` (app-private but
-  visible over USB). Each recording carries a sidecar with its title and true start,
-  written before the first audio frame. Pressing Upload *moves* it into `meetings/outbox/`
+  visible over USB). One file per recording, named for when it was made — no title and no
+  sidecar; the name is the whole record. Pressing Upload *moves* it into `meetings/outbox/`
   — approval is a fact on disk, so a reboot can't lose it and the uploader can't send
   anything you didn't approve.
 - `MeetingLibrary` / `MeetingPlayer` — what the list shows (length, size, when), and
@@ -116,8 +116,9 @@ adb shell pm grant org.recall.mic android.permission.RECORD_AUDIO
 adb shell pm grant org.recall.mic android.permission.POST_NOTIFICATIONS
 ```
 
-Then open the app, enter the recall host IP, and press Start. Keep the phone on
-mains power; disable battery optimisation for the app for best longevity.
+Then open the app, set the recorder host in Settings (behind the drawer), and press
+Start. Keep the phone on mains power; disable battery optimisation for the app for best
+longevity.
 
 ## Deploying updates
 

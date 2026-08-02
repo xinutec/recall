@@ -39,13 +39,8 @@ class MeetingUpload(
         var stuck = false
         for (recording in queue) {
             ShareUpload
-                .upload(
-                    host,
-                    recording.audio,
-                    recording.audio.name,
-                    recording.start,
-                    recording.title,
-                ).onSuccess {
+                .upload(host, recording.audio, recording.audio.name, recording.start)
+                .onSuccess {
                     Log.i(UI_LOG, "meeting uploaded: ${recording.audio.name} -> $it")
                     // The host archive is what gets backed up, and this queue exists only
                     // to reach it — so once it's there, the phone's copy goes.

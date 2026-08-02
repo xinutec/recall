@@ -27,7 +27,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -68,12 +67,10 @@ import java.time.ZoneId
  * tied to this screen and released when it goes away.
  */
 class MeetingActivity : ComponentActivity() {
-    private var pendingTitle = ""
-
     private val requestPermissions =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
             if (grants[Manifest.permission.RECORD_AUDIO] == true) {
-                MeetingService.start(this, pendingTitle)
+                MeetingService.start(this)
             } else {
                 MeetingState.setError("Recording needs microphone permission.")
             }
@@ -112,9 +109,8 @@ class MeetingActivity : ComponentActivity() {
         super.onStop()
     }
 
-    private fun begin(title: String) {
+    private fun begin() {
         Log.i(UI_LOG, "button: Record meeting")
-        pendingTitle = title
         val needed =
             buildList {
                 add(Manifest.permission.RECORD_AUDIO)
@@ -127,13 +123,13 @@ class MeetingActivity : ComponentActivity() {
         if (needed.isNotEmpty()) {
             requestPermissions.launch(needed.toTypedArray())
         } else {
-            MeetingService.start(this, title)
+            MeetingService.start(this)
         }
     }
 
-    private fun end(title: String) {
+    private fun end() {
         Log.i(UI_LOG, "button: Stop meeting")
-        MeetingService.stop(this, title)
+        MeetingService.stop(this)
     }
 
     private fun approve(row: RecordingRow) {
@@ -161,8 +157,8 @@ class MeetingActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MeetingScreen(
-    onStart: (String) -> Unit,
-    onStop: (String) -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
     onPlay: (RecordingRow) -> Unit,
     onUpload: (RecordingRow) -> Unit,
     onDelete: (RecordingRow) -> Unit,
@@ -175,7 +171,6 @@ fun MeetingScreen(
     val recordings by MeetingState.recordings.collectAsStateWithLifecycle()
     val pending by MeetingState.pending.collectAsStateWithLifecycle()
     val error by MeetingState.error.collectAsStateWithLifecycle()
-    var title by remember { mutableStateOf("") }
     // Deleting is the one action with no undo — the phone holds the only copy.
     var confirmDelete by remember { mutableStateOf<RecordingRow?>(null) }
 
@@ -210,22 +205,8 @@ fun MeetingScreen(
         ) {
             RecorderCard(recording, startedAt, now, level)
 
-            OutlinedTextField(
-                value = title,
-                onValueChange = { title = it },
-                label = { Text("what is this? (optional)") },
-                placeholder = { Text("Oncology clinic — Dr …") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                "Left blank, recall names it by date and time. It can be renamed there later.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
             Button(
-                onClick = { if (recording) onStop(title) else onStart(title) },
+                onClick = { if (recording) onStop() else onStart() },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(if (recording) "Stop and save" else "Start recording") }
 
@@ -361,17 +342,16 @@ private fun RecordingItem(
     val isThis = playingFile == row.file
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // When it was recorded is the whole identity of a recording — recall names the
+        // session the same way, and it can be renamed there once there's a transcript to
+        // name it after.
         Text(
-            row.recording.title.ifBlank { "Untitled" },
+            startedLabel(row.recording.start, ZoneId.systemDefault()),
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
         )
         Text(
-            listOf(
-                startedLabel(row.recording.start, ZoneId.systemDefault()),
-                elapsedLabel(row.durationMs / 1000),
-                sizeLabel(row.sizeBytes),
-            ).joinToString(" · "),
+            "${elapsedLabel(row.durationMs / 1000)} · ${sizeLabel(row.sizeBytes)}",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

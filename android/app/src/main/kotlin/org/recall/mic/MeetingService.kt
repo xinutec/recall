@@ -54,10 +54,9 @@ class MeetingService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val title = intent?.getStringExtra(EXTRA_TITLE).orEmpty()
         when (intent?.action) {
-            ACTION_STOP -> finish(title)
-            else -> begin(title)
+            ACTION_STOP -> finish()
+            else -> begin()
         }
         return START_NOT_STICKY // a killed recording is finished, never silently restarted
     }
@@ -65,11 +64,11 @@ class MeetingService : Service() {
     override fun onDestroy() {
         // The system killed us mid-recording (or the process is going away): close the
         // file properly rather than leaving the last page unwritten.
-        if (recorder != null) finish(null)
+        if (recorder != null) finish()
         super.onDestroy()
     }
 
-    private fun begin(title: String) {
+    private fun begin() {
         if (recorder != null) return // already recording; a second Start is a no-op
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             // Opus encoding (and the OGG container) arrived in Android 10. Nothing below
@@ -80,11 +79,11 @@ class MeetingService : Service() {
             stopSelf()
             return
         }
-        beginOnQ(title)
+        beginOnQ()
     }
 
     @RequiresApi(Build.VERSION_CODES.Q)
-    private fun beginOnQ(title: String) {
+    private fun beginOnQ() {
         if (!startInForeground()) {
             // The OS refused a mic-type foreground start — recording on would capture
             // nothing but silence.
@@ -101,8 +100,6 @@ class MeetingService : Service() {
         val start = Instant.now()
         val file =
             File(MeetingQueue.dir(this), MeetingQueue.fileName(start, ZoneId.systemDefault()))
-        // Sidecar first: from here on, a crash leaves a file that still knows what it is.
-        MeetingQueue.writeSidecar(file, title, start)
 
         val started =
             openRecorder(file, MediaRecorder.AudioSource.UNPROCESSED)
@@ -154,12 +151,9 @@ class MeetingService : Service() {
         }
     }
 
-    /**
-     * Finish the recording and hand it to the upload queue. [title] is what the user had
-     * typed when they pressed Stop — null when the system is tearing us down, in which
-     * case whatever was written at the start stands.
-     */
-    private fun finish(title: String?) {
+    /** Close the file and publish it to the list, whether the user pressed Stop or the
+     * system is tearing us down. */
+    private fun finish() {
         val rec =
             recorder ?: run {
                 stopSelf()
@@ -183,7 +177,6 @@ class MeetingService : Service() {
 
         if (file != null) {
             if (kept && file.length() > 0) {
-                title?.let { MeetingQueue.writeSidecar(file, it, startOf(file)) }
                 Log.i(UI_LOG, "meeting saved: ${file.name} (${file.length()} bytes)")
                 // Saved, and that is all. It stays on the phone to be listened to; only
                 // an explicit Upload hands it to MeetingUpload.
@@ -197,12 +190,6 @@ class MeetingService : Service() {
         restoreStream()
         stopSelf()
     }
-
-    /** The start already recorded for [file] — the sidecar's, else its filename's. */
-    private fun startOf(file: File): Instant =
-        MeetingQueue.readSidecar(file)?.second
-            ?: MeetingQueue.startFromName(file.name, ZoneId.systemDefault())
-            ?: Instant.now()
 
     /** Put continuous capture back if it was running before this recording took the mic. */
     private fun restoreStream() {
@@ -279,8 +266,8 @@ class MeetingService : Service() {
                 .setColor(ContextCompat.getColor(this, R.color.ic_launcher_background))
                 .setOngoing(true)
                 .setContentIntent(open)
-                // Stopping from the shade keeps the title written at the start — the
-                // alternative is walking out of an appointment with the recorder still on.
+                // Stoppable from the shade: the alternative is walking out of an
+                // appointment with the recorder still running.
                 .addAction(R.drawable.ic_mic, "Stop", stop)
         // A live elapsed counter for free, so the shade shows how long it has been going.
         since?.let {
@@ -311,7 +298,6 @@ class MeetingService : Service() {
         private const val WAKE_TAG = "recall-mic:meeting"
 
         private const val ACTION_STOP = "org.recall.mic.STOP_MEETING"
-        private const val EXTRA_TITLE = "title"
 
         // 48 kHz mono, as the rest of recall. 56 kbps sits in the 48-64 range a far-field
         // multi-voice meeting wants — above continuous capture's 32 kbps.
@@ -320,18 +306,12 @@ class MeetingService : Service() {
 
         private const val METER_INTERVAL_MS = 100L
 
-        fun start(ctx: Context, title: String) {
-            ctx.startForegroundService(
-                Intent(ctx, MeetingService::class.java).putExtra(EXTRA_TITLE, title),
-            )
+        fun start(ctx: Context) {
+            ctx.startForegroundService(Intent(ctx, MeetingService::class.java))
         }
 
-        fun stop(ctx: Context, title: String) {
-            ctx.startService(
-                Intent(ctx, MeetingService::class.java)
-                    .setAction(ACTION_STOP)
-                    .putExtra(EXTRA_TITLE, title),
-            )
+        fun stop(ctx: Context) {
+            ctx.startService(Intent(ctx, MeetingService::class.java).setAction(ACTION_STOP))
         }
     }
 }

@@ -4,7 +4,8 @@ A record-to-file mode inside the existing Android app, so a meeting or appointme
 captured by recall's own app and uploaded as a session — replacing the third-party mp3
 recorder previously used for that job, whose ads are the reason to stop using it.
 
-**Status: built** (`MeetingService`, `MeetingActivity`, `MeetingQueue`, `MeetingUpload`).
+**Status: built** — `MeetingService`, `MeetingActivity`, `MeetingQueue`, `MeetingLibrary`,
+`MeetingPlayer`, `MeetingUpload`.
 This file is the design decisions and why they were made.
 
 **It does not record mp3, and cannot:** Android has no MP3 encoder — `MediaRecorder` and
@@ -62,10 +63,8 @@ and **Delete**, and stays there until one of the last two is pressed.
 
 Approval is a **move on disk**, `meetings/` → `meetings/outbox/`, not a flag. The uploader
 looks only in the outbox, so it cannot send something that was never approved, and a
-reboot between the decision and the upload cannot lose the decision. Both are renames
-within one directory tree, so the move is atomic; the sidecar goes first, because a
-stray sidecar is inert whereas an audio file in the outbox without one would upload under
-a recovered start and no title.
+reboot between the decision and the upload cannot lose the decision. One rename within one
+directory tree, so the move is atomic.
 
 Playback is deliberately small — one file, no queue, no service, released when the screen
 closes. It is a check before uploading, not a media player, and it never touches the
@@ -87,10 +86,9 @@ VPN outright, so there may be no route home from the building at all. So once a 
   being approved, the screen opening, and the mic stream connecting (which proves we're
   home). All three use `REPLACE`, so a previous failure's backoff is abandoned rather
   than waited out.
-- Each recording is `meeting-<local stamp>.ogg` plus a `.ogg.json` sidecar holding the
-  title and true start. The sidecar is written **before the first audio frame**, so a
-  recording that ends in a crash still knows what it is; if it's lost anyway, the start is
-  recovered from the filename and the title falls back to the server's default.
+- Each recording is a single file, `meeting-<local stamp>.ogg` — no title, no sidecar. The
+  filename is the whole record, so a recording that ends in a crash still knows when it
+  was made, and there is no second file to lose or keep in step.
 - The pending queue is **shown in the app** ("2 recordings waiting to upload"). A silent
   queue is how a lost recording goes unnoticed for weeks.
 
@@ -110,20 +108,19 @@ boundaries (see [pipeline.md](pipeline.md) §4). It appears in the web app immed
 with 0 turns while the worker transcribes and refine diarizes; rename, delete and
 re-diarize already work on it.
 
-Because the app knows the true start instant and can offer a title box, both the `start`
-and `title` form fields can be filled — the share flow sets only `start`, leaving every
-meeting named `Meeting <date> <time>`.
+The app knows the true start instant, so `start` is filled and the session lands at the
+right point in the timeline rather than at the moment it happened to be uploaded.
 
 ## Scope
 
 Phone: `MeetingService` mirroring `StreamService`'s lifecycle; `MeetingActivity` with
-start/stop, elapsed time, the shared level meter, a title field and the list of what is
-still on the phone; `MeetingQueue` (the files and the two directories), `MeetingLibrary`
+start/stop, elapsed time, the shared level meter and the list of what is still on the
+phone; `MeetingQueue` (the files and the two directories), `MeetingLibrary`
 (what the list shows, and the approve/delete actions), `MeetingPlayer` (listening back)
 and `MeetingUpload` (the WorkManager job). The hosts moved to `SettingsActivity`, behind
 the drawer, so the daily screen is status and Start/Stop rather than a form. Tests cover
-the pure parts — file naming, start recovery, listing, approval, the row labels, the
-title's wire format — as `ShareUpload`'s time helpers were covered before.
+the pure parts — file naming, start recovery, listing, approval, the row labels — as
+`ShareUpload`'s time helpers were covered before.
 
 Server: nothing.
 
@@ -140,11 +137,14 @@ Server: nothing.
   `AudioRecord` frames — `MediaRecorder` owns the mic and never hands over the samples.
   Both modes scale it through the same `amplitudeLevel`, so the two meters read alike.
 
-## The `title` field, and the host it goes to
+## No name, and the host it goes to
 
-The app knows the true start instant and can offer a title box, so both the `start` and
-`title` form fields are filled — the share flow sets only `start`, leaving every meeting
-named `Meeting <date> <time>`.
+A recording has no title, on the phone or on the wire. The only thing worth knowing about
+one before it is transcribed is when it happened, and the filename says that; the server
+names the session `Meeting <date> <time>` from the `start` field. If it ever needs a name
+it gets one in recall, where the transcript is to hand and the name can be chosen for what
+the meeting turned out to be — rather than typed into a phone on the way into a waiting
+room, which is the worst moment to be asked.
 
 Uploads go to the **control host** (Isis), not the recorder host the PCM stream connects
 to. `ShareActivity` used to post to the recorder host, which has served nothing on `:8000`

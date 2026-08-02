@@ -36,18 +36,6 @@ class ShareUploadTest {
     }
 
     @Test
-    fun sendsATitlePartOnlyWhenThereIsATitle() {
-        assertEquals(
-            "--B\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nOncology clinic\r\n",
-            ShareUpload.titlePart("B", "  Oncology clinic  "),
-        )
-        // Blank means "let the server name it" — an empty title part would override the
-        // server's `Meeting <date> <time>` with nothing at all.
-        assertEquals("", ShareUpload.titlePart("B", ""))
-        assertEquals("", ShareUpload.titlePart("B", "   "))
-    }
-
-    @Test
     fun fallsBackToLastModifiedThenNow() {
         val now = Instant.parse("2026-07-03T20:00:00Z")
         val modified = Instant.parse("2026-07-03T19:00:00Z").toEpochMilli()
