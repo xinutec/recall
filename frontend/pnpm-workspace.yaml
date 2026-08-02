@@ -19,4 +19,5 @@ allowBuilds:
   esbuild: true
   lmdb: true
   msgpackr-extract: true
-  "@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/369252ebbcf16a2b446c21c83730b987ec6f9479": true
+  "@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/8d8340ff672392ac472c1fb16e0d8fdfecbd710d": true
+  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/65e85a03e9b76b38c01d34e8b4e7b0f302199fd8': set this to true or false
