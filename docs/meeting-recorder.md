@@ -61,14 +61,41 @@ judgement that can only be made after hearing it. So the recorder does not send 
 on its own: a finished recording appears in a list on the phone with **Play**, **Upload**
 and **Delete**, and stays there until one of the last two is pressed.
 
-Approval is a **move on disk**, `meetings/` → `meetings/outbox/`, not a flag. The uploader
-looks only in the outbox, so it cannot send something that was never approved, and a
-reboot between the decision and the upload cannot lose the decision. One rename within one
-directory tree, so the move is atomic.
+Approval is a **move on disk**, not a flag — and so is every other state a recording can
+be in, because each one is a decision or a verdict that has to survive a reboot, and a
+rename is the only change that cannot half-happen:
+
+| directory              | meaning                                            |
+|------------------------|----------------------------------------------------|
+| `meetings/`            | held: nothing sends it                             |
+| `meetings/outbox/`     | approved — the only place the uploader looks       |
+| `meetings/uploaded/`   | recall has it, and its length matches this copy    |
+| `meetings/unverified/` | recall has it, but the lengths don't agree         |
+
+The uploader looks only in the outbox, so it cannot send something that was never
+approved, and a reboot between the decision and the upload cannot lose the decision.
 
 Playback is deliberately small — one file, no queue, no service, released when the screen
 closes. It is a check before uploading, not a media player, and it never touches the
 device volume.
+
+## A 2xx is not proof, so the lengths are compared
+
+The server does check what arrives: `create_session` runs ffprobe on the uploaded file and,
+if it can't read it, unlinks it and returns 400. Garbage cannot earn a success.
+
+What that misses is a **post cut short mid-stream** — a dropped connection partway through
+40 MB. ffprobe reports the duration of whatever showed up, so a truncated body still parses
+and still returns 2xx, with seconds or minutes missing off the end. That is exactly the
+case where the phone holds the only complete recording, and it was also the case where the
+old behaviour deleted it.
+
+So the response is read as a receipt. `create_session` returns `start` and `end`, so the
+phone knows how long recall thinks the recording is, and compares it with the file it still
+has. Shorter by more than 1.5 s — clear of two decoders rounding one file differently, well
+under any real truncation — and it goes to `unverified/`, where the row says so next to the
+Delete button. A length that can't be read on either side is *also* unverified: "couldn't
+compare" must never render as "checked and fine".
 
 ## The upload queue
 
@@ -81,7 +108,8 @@ VPN outright, so there may be no route home from the building at all. So once a 
   succeeds can still be retrieved by plugging the phone in.
 - Upload via a `WorkManager` job with a network constraint and backoff. Each run drains
   the **whole outbox** rather than one named item, so a missed enqueue can't strand an
-  approved recording: the files on disk are the state, not the job.
+  approved recording: the files on disk are the state, not the job. A delivered recording
+  leaves the outbox, so it is never sent twice and can't produce a duplicate session.
 - The outbox is kicked on three "the host might be reachable now" events — a recording
   being approved, the screen opening, and the mic stream connecting (which proves we're
   home). All three use `REPLACE`, so a previous failure's backoff is abandoned rather
@@ -126,9 +154,12 @@ Server: nothing.
 
 ## Decisions that were open, and how they went
 
-- **The recording is deleted from the phone once the host has it.** The host archive is
-  what gets backed up, and the outbox only exists to reach it. Nothing is deleted before a
-  2xx — or before the user says so, which is the other way a recording leaves the phone.
+- **Nothing is ever deleted automatically — not even after a successful upload.** This was
+  the other way round at first, on the reasoning that the phone is the least reliable
+  device and recall is what gets backed up (Isis's `recall-data-pvc` is rsynced nightly
+  into odin's restic repo, with an off-site copy after). Both halves of that are true and
+  it was still wrong, because of what a 2xx does *not* prove — see below. Deleting is now
+  the one thing only a person does.
 - **No pause/resume.** `MediaRecorder` supports it, but a paused recorder that is never
   resumed loses audio silently — the same failure the resume warning guards against for
   continuous capture. A break in a long appointment is Stop then Start, which costs a

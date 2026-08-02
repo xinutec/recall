@@ -53,8 +53,9 @@ a third-party mp3 recorder used to do. It writes **one Ogg/Opus file** (48 kHz m
 and either deleted or uploaded to `/api/sessions` as a session, transcribed and diarized
 like any other.
 
-**Nothing uploads by itself.** A finished recording sits in the list on that screen with
-Play, Upload and Delete until you choose; the phone holds the only copy until you do.
+**Nothing uploads by itself, and nothing is ever deleted by itself.** A finished recording
+sits in the list on that screen with Play, Upload and Delete; after a successful upload it
+stays there, marked with whether recall's copy came out the same length.
 
 - `MeetingService` — the recording, as a mic-type foreground service. Starting it stops
   the stream; stopping it starts the stream again if it was enabled. Both modes live in
@@ -69,8 +70,12 @@ Play, Upload and Delete until you choose; the phone holds the only copy until yo
   changes the device volume.
 - `MeetingUpload` — a `WorkManager` job that drains the outbox whenever the host is
   reachable, and keeps retrying while it isn't. Meetings happen where recall is
-  unreachable, so an approved recording is still a file first and an upload second;
-  nothing is deleted from the phone until the host has it.
+  unreachable, so an approved recording is still a file first and an upload second.
+  On delivery it compares the length recall reports against the file on the phone and
+  files it under `uploaded/` or `unverified/` — a post cut short mid-stream still parses
+  on the server and still returns 2xx, so the lengths are the only thing that tells the
+  two apart. **Nothing is ever deleted automatically**, delivered or not; Delete is the
+  only thing that removes a recording, and only you press it.
 
 Ogg, not m4a, because a truncated Ogg still decodes to its last complete page — a flat
 battery costs the tail, not the appointment. (Android has no MP3 encoder at all; Opus is

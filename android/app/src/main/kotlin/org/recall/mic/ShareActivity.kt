@@ -83,7 +83,7 @@ class ShareActivity : ComponentActivity() {
                 try {
                     val start =
                         ShareUpload.chooseStart(name, null, Instant.now(), ZoneId.systemDefault())
-                    ShareUpload.upload(host, cached, name, start).getOrThrow()
+                    ShareUpload.upload(host, cached, name, start).getOrThrow().title
                 } finally {
                     withContext(Dispatchers.IO) { cached.delete() }
                 }

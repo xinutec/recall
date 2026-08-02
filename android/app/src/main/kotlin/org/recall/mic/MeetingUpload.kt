@@ -40,12 +40,8 @@ class MeetingUpload(
         for (recording in queue) {
             ShareUpload
                 .upload(host, recording.audio, recording.audio.name, recording.start)
-                .onSuccess {
-                    Log.i(UI_LOG, "meeting uploaded: ${recording.audio.name} -> $it")
-                    // The host archive is what gets backed up, and this queue exists only
-                    // to reach it — so once it's there, the phone's copy goes.
-                    MeetingQueue.complete(recording)
-                }.onFailure {
+                .onSuccess { file(recording, it) }
+                .onFailure {
                     Log.w(UI_LOG, "meeting upload failed: ${recording.audio.name}: ${it.message}")
                     stuck = true
                 }
@@ -53,6 +49,33 @@ class MeetingUpload(
         }
         // Retry rather than fail: the usual reason is "not home yet", which time fixes.
         return if (stuck) Result.retry() else Result.success()
+    }
+
+    /**
+     * Put a delivered recording where its verdict says it belongs. A 2xx only means recall
+     * received *something*: the server probes what arrived, so a post cut short mid-stream
+     * still parses and still succeeds — with seconds missing off the end. Comparing the
+     * length recall reports against the file still on the phone is what turns "sent" into
+     * "sent intact", and the phone's copy is kept either way.
+     */
+    private fun file(recording: PendingRecording, session: UploadedSession) {
+        val localMs = MeetingLibrary.durationMs(recording.audio)
+        val short = MeetingQueue.landedShort(localMs, session.durationMs)
+        val target =
+            if (short) {
+                MeetingQueue.unverified(applicationContext)
+            } else {
+                MeetingQueue.uploaded(applicationContext)
+            }
+        // The numbers, not just the verdict: "why does it say unverified" has to be
+        // answerable from the log after the fact.
+        Log.i(
+            UI_LOG,
+            "meeting uploaded: ${recording.audio.name} -> ${session.title} " +
+                "(phone ${localMs}ms, recall ${session.durationMs}ms" +
+                if (short) ", NOT VERIFIED)" else ")",
+        )
+        MeetingQueue.moveTo(recording, target)
     }
 
     companion object {

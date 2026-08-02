@@ -36,6 +36,25 @@ class ShareUploadTest {
     }
 
     @Test
+    fun readsTheDeliveredLengthFromTheResponse() {
+        // The receipt: what recall says it actually received, which is what makes a 2xx
+        // checkable rather than merely reassuring.
+        val body =
+            """{"id":"meeting-20260703-0950","title":"Meeting 2026-07-03 09:50",""" +
+                """"start":"2026-07-03T08:50:50+00:00","end":"2026-07-03T09:35:50+00:00",""" +
+                """"turnCount":0,"speakers":[]}"""
+        assertEquals(45 * 60 * 1000L, ShareUpload.sessionDurationMs(body))
+    }
+
+    @Test
+    fun reportsNoLengthRatherThanGuessingOne() {
+        // An older server, an error body, or junk: 0, which the caller reads as
+        // "not verified" — never as agreement.
+        assertEquals(0L, ShareUpload.sessionDurationMs("""{"title":"x"}"""))
+        assertEquals(0L, ShareUpload.sessionDurationMs("not json"))
+    }
+
+    @Test
     fun fallsBackToLastModifiedThenNow() {
         val now = Instant.parse("2026-07-03T20:00:00Z")
         val modified = Instant.parse("2026-07-03T19:00:00Z").toEpochMilli()

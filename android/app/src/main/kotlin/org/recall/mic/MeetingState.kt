@@ -55,7 +55,7 @@ object MeetingState {
 
     fun setRecordings(value: List<RecordingRow>) {
         _recordings.value = value
-        setPending(value.count { it.queued })
+        setPending(value.count { it.state == RecordingState.QUEUED })
     }
 
     fun setLevel(value: Float) {

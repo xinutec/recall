@@ -29,17 +29,36 @@ data class PendingRecording(
  * `Meeting <date> <time>` and it can be renamed there, where the transcript is to hand
  * and the name can be chosen for what the meeting turned out to be.
  *
- * **Two directories, because approval is a decision and decisions must survive a reboot.**
- * A finished recording stays in `meetings/`, where it can be played back and kept or
- * deleted, and *nothing sends it*. Pressing Upload moves it into `meetings/outbox/`, which
- * is the only place [MeetingUpload] looks. One rename within one directory tree, so it is
- * atomic: a recording is either awaiting a decision or acting on one, never both and
- * never neither.
+ * **A recording's state is which directory it is in**, because every one of those states
+ * is a decision or a verdict that has to survive a reboot, and a rename is the only way
+ * to change one that can't half-happen:
+ *
+ * | directory              | meaning                                                |
+ * |------------------------|--------------------------------------------------------|
+ * | `meetings/`            | held: listened to or not, nothing sends it              |
+ * | `meetings/outbox/`     | approved — the only place [MeetingUpload] looks          |
+ * | `meetings/uploaded/`   | recall has it, and its length matches this copy          |
+ * | `meetings/unverified/` | recall has it, but the two lengths don't agree           |
+ *
+ * Nothing is ever deleted by getting to the end of that list. The phone's copy goes when
+ * the user says so and at no other time: a 2xx means recall *received* something, and the
+ * one failure that survives every check upstream — a body cut short mid-post, which still
+ * parses and so still returns 2xx — is exactly the one where the phone holds the only
+ * complete recording.
  */
 object MeetingQueue {
     const val AUDIO_SUFFIX = ".ogg"
     private const val DIR = "meetings"
     private const val OUTBOX = "outbox"
+    private const val UPLOADED = "uploaded"
+    private const val UNVERIFIED = "unverified"
+
+    // How much shorter recall's copy may be before it stops counting as the same
+    // recording. Two container probes of one file disagree by tens of milliseconds
+    // (ffprobe on the server, MediaMetadataRetriever on the phone); a post that was cut
+    // short loses seconds at least. A second and a half sits clear of the first and well
+    // under the second.
+    private const val LENGTH_TOLERANCE_MS = 1_500L
 
     // Local wall-clock in the name: this is what a human scanning the directory over USB
     // reads, and it is the recording's start. Ambiguous for one repeated hour when the
@@ -59,6 +78,30 @@ object MeetingQueue {
 
     /** Recordings the user has approved for upload — the only ones that get sent. */
     fun outbox(ctx: Context): File = File(dir(ctx), OUTBOX).apply { mkdirs() }
+
+    /** Delivered, and recall's copy is as long as this one. */
+    fun uploaded(ctx: Context): File = File(dir(ctx), UPLOADED).apply { mkdirs() }
+
+    /** Delivered, but the lengths don't agree — look before deleting this one. */
+    fun unverified(ctx: Context): File = File(dir(ctx), UNVERIFIED).apply { mkdirs() }
+
+    /**
+     * Whether recall's copy is materially shorter than the phone's, i.e. whether the 2xx
+     * can be believed. Only *short* counts: a copy that probes a shade longer is two
+     * decoders rounding the same file differently, not a loss.
+     *
+     * Unknown lengths (either probe failed) cannot be compared, and report `true` — the
+     * whole point is to decide whether the upload has been *verified*, and an unanswered
+     * question has not been.
+     */
+    fun landedShort(
+        localMs: Long,
+        remoteMs: Long,
+        toleranceMs: Long = LENGTH_TOLERANCE_MS,
+    ): Boolean {
+        if (localMs <= 0 || remoteMs <= 0) return true
+        return remoteMs < localMs - toleranceMs
+    }
 
     fun fileName(start: Instant, zone: ZoneId): String =
         "meeting-${STAMP.format(start.atZone(zone))}$AUDIO_SUFFIX"
@@ -102,18 +145,18 @@ object MeetingQueue {
             }
 
     /**
-     * Move a recording into [outbox] — the act of approving it for upload. Returns it at
-     * its new home, or null if the move failed, in which case it stays held rather than
-     * quietly becoming a recording nobody is going to send.
+     * Move a recording into [target] — how every state change happens here. Returns it at
+     * its new home, or null if the rename failed, in which case it stays where it was
+     * rather than quietly falling out of the flow.
      */
-    fun approve(recording: PendingRecording, outbox: File): PendingRecording? {
-        val moved = File(outbox, recording.audio.name)
+    fun moveTo(recording: PendingRecording, target: File): PendingRecording? {
+        val moved = File(target, recording.audio.name)
         if (!recording.audio.renameTo(moved)) return null
         return recording.copy(audio = moved)
     }
 
-    /** Drop a recording — once the host has it, or on the user's say-so. */
-    fun complete(recording: PendingRecording) {
+    /** Delete a recording. Only ever on the user's say-so. */
+    fun delete(recording: PendingRecording) {
         recording.audio.delete()
     }
 

@@ -6,10 +6,23 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+
+/**
+ * What recall made of an upload: the session's name, and **how long the audio it actually
+ * received turned out to be**. The second one is the receipt — the server probes what
+ * arrived, so comparing its length with the file still on the phone is the only way to
+ * tell a complete post from one that was cut short and still parsed.
+ */
+data class UploadedSession(
+    val title: String,
+    val durationMs: Long,
+)
 
 /**
  * Uploads an audio file to `POST /api/sessions` — the same endpoint the web Upload button
@@ -24,6 +37,7 @@ import java.time.format.DateTimeFormatter
  *
  * The pure time helpers are unit-tested; the network call mirrors CaptureApi.
  */
+
 object ShareUpload {
     private const val API_PORT = 8000 // `recall api --port 8000`, as CaptureApi
 
@@ -49,11 +63,31 @@ object ShareUpload {
             ?: modifiedMillis?.takeIf { it > 0 }?.let(Instant::ofEpochMilli)
             ?: now
 
+    /**
+     * How long recall says the session is, from the `start`/`end` it returns — 0 when the
+     * response doesn't carry both, which [MeetingQueue.landedShort] reads as "not
+     * verified" rather than as agreement.
+     */
+    fun sessionDurationMs(body: String): Long =
+        runCatching {
+            val json = JSONObject(body)
+            Duration
+                .between(
+                    OffsetDateTime.parse(json.getString("start")),
+                    OffsetDateTime.parse(json.getString("end")),
+                ).toMillis()
+        }.getOrDefault(0L)
+
     /** POST `file` to /api/sessions as multipart. Returns the created session's title on
      * success, or a failure. Streams the file (an appointment can be tens of MB).
      * No `title` is sent: the server names the session `Meeting <date> <time>` from the
      * start, and it is renamed there if it ever needs a name. */
-    suspend fun upload(host: String, file: File, filename: String, start: Instant): Result<String> =
+    suspend fun upload(
+        host: String,
+        file: File,
+        filename: String,
+        start: Instant,
+    ): Result<UploadedSession> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val boundary = "----recall${System.nanoTime()}"
@@ -90,7 +124,10 @@ object ShareUpload {
                 val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
                 conn.disconnect()
                 if (code !in 200..299) error("HTTP $code")
-                JSONObject(body).optString("title", filename)
+                UploadedSession(
+                    title = JSONObject(body).optString("title", filename),
+                    durationMs = sessionDurationMs(body),
+                )
             }
         }
 }

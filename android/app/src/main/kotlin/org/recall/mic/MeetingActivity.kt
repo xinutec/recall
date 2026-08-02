@@ -40,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -235,8 +236,23 @@ fun MeetingScreen(
             title = { Text("Delete this recording?") },
             text = {
                 Text(
-                    "This phone has the only copy — it has not been uploaded. " +
-                        "Deleting it cannot be undone.",
+                    when (row.state) {
+                        RecordingState.UPLOADED -> {
+                            "recall has this one, and its copy is the same length. " +
+                                "Deleting it here frees the space."
+                        }
+
+                        RecordingState.UNVERIFIED -> {
+                            "recall received this, but its copy is SHORTER than the one " +
+                                "here — this may be the only complete recording. " +
+                                "Deleting it cannot be undone."
+                        }
+
+                        else -> {
+                            "This phone has the only copy — it has not been uploaded. " +
+                                "Deleting it cannot be undone."
+                        }
+                    },
                 )
             },
             confirmButton = {
@@ -297,7 +313,7 @@ private fun RecordingList(
     Text("On this phone", style = MaterialTheme.typography.titleMedium)
     if (recordings.isEmpty()) {
         Text(
-            "Nothing recorded yet. Recordings stay here until you upload them.",
+            "Nothing recorded yet. Recordings stay on the phone until you delete them.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -356,6 +372,17 @@ private fun RecordingItem(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
+        if (row.state == RecordingState.UNVERIFIED) {
+            // The one case where the phone's copy is the better one — say so where the
+            // Delete button is, not in a log nobody reads.
+            Text(
+                "recall received this, but its copy is shorter than the one here. " +
+                    "Keep this until you have checked it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
         if (isThis) PlaybackBar(row)
 
         Row(
@@ -365,18 +392,32 @@ private fun RecordingItem(
             OutlinedButton(onClick = { onPlay(row) }) {
                 Text(if (isThis && playing) "Pause" else "Play")
             }
-            if (row.queued) {
-                Text(
-                    "Uploading…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            } else {
-                Button(onClick = { onUpload(row) }) { Text("Upload") }
+            when (row.state) {
+                RecordingState.HELD -> {
+                    Button(onClick = { onUpload(row) }) { Text("Upload") }
+                }
+
+                RecordingState.QUEUED -> {
+                    StateNote("Uploading…", MaterialTheme.colorScheme.primary)
+                }
+
+                RecordingState.UPLOADED -> {
+                    StateNote("On recall ✓", MaterialTheme.colorScheme.primary)
+                }
+
+                RecordingState.UNVERIFIED -> {
+                    StateNote("Length doesn't match", MaterialTheme.colorScheme.error)
+                }
             }
             TextButton(onClick = { onDelete(row) }) { Text("Delete") }
         }
     }
+}
+
+/** A row's state, where the Upload button would otherwise be. */
+@Composable
+private fun StateNote(text: String, color: Color) {
+    Text(text, style = MaterialTheme.typography.bodySmall, color = color)
 }
 
 /** Position and a scrubber for the recording being played — an appointment is an hour
