@@ -65,7 +65,7 @@ test('the bubble play button requests the full joined span (Pixel 9)', async ({ 
   // Registered after the catch-all, so it wins for the span request.
   await page.route('**/api/audio-span*', async (route: Route) => {
     spanUrl = route.request().url();
-    await route.fulfill({ status: 200, contentType: 'audio/wav', body: Buffer.from('') });
+    await route.fulfill({ status: 200, contentType: 'audio/wav', body: '' });
   });
 
   await page.goto('/sessions/test');
