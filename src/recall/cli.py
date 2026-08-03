@@ -160,6 +160,25 @@ def _db_path(root: Path) -> Path:
     return root / "recall.sqlite"
 
 
+def _source_found_on_disk(source_id: str) -> AudioSource:
+    """A source id the CLI was handed for audio that is already in the data root.
+
+    DISCOVERED, not COREAUDIO — the same answer `process_all` gives (worker.py). These
+    commands did not record the audio and nothing about a directory says what did, and
+    `add_source` is INSERT OR IGNORE, so a guess made here sticks until an authoritative
+    registrar corrects it (`Store.register_source`). Guessing COREAUDIO filed a meeting
+    copied into the data root as a microphone: gone from the sessions list, health-
+    checked as a mic that had stopped, and — the cost that is not recoverable —
+    SWEEPABLE, so the quiet review was entitled to delete it.
+
+    One helper rather than a literal per call site: the bug was three constructions of
+    the same thing drifting from the one in worker.py.
+    """
+    return AudioSource(
+        id=source_id, name=source_id, kind=SourceKind.DISCOVERED, spec=""
+    )
+
+
 def capture_is_idle(out: Path) -> bool:
     """Is the recorder parked right now? A live pause marker is the one signal the
     capture agents themselves gate on, so this reads the same truth they do."""
@@ -319,7 +338,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 
 def _cmd_index(args: argparse.Namespace) -> int:
-    source = AudioSource(id=args.id, name=args.id, kind=SourceKind.COREAUDIO, spec="")
+    source = _source_found_on_disk(args.id)
     segments = scan_segments(args.out / args.id, args.id)
     store = Store.open(_db_path(args.out))
     try:
@@ -333,7 +352,7 @@ def _cmd_index(args: argparse.Namespace) -> int:
 
 
 def _cmd_transcribe(args: argparse.Namespace) -> int:
-    source = AudioSource(id=args.id, name=args.id, kind=SourceKind.COREAUDIO, spec="")
+    source = _source_found_on_disk(args.id)
     segments = scan_segments(args.out / args.id, args.id)
     store = Store.open(_db_path(args.out))
 
@@ -403,9 +422,7 @@ def _cmd_worker(args: argparse.Namespace) -> int:
                     min_age_seconds=args.min_age,
                 )
             else:
-                source = AudioSource(
-                    id=args.id, name=args.id, kind=SourceKind.COREAUDIO, spec=""
-                )
+                source = _source_found_on_disk(args.id)
                 written = process_pending(
                     store,
                     args.out,
