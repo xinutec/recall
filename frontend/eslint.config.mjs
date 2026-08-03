@@ -49,6 +49,31 @@ export default tseslint.config(
     },
   },
   {
+    // The layout harness and its specs. The blocks above say `src`, so until
+    // this existed the e2e tree was linted by nothing, on top of being
+    // type-checked by nothing (see tsconfig.e2e.json). It is the only gate that
+    // can see what a phone actually suffers, which makes "nobody checks it" the
+    // wrong property for it to have.
+    //
+    // Type-aware, and that is the point: the rule that pays here is
+    // no-floating-promises. A `route.fulfill(...)` dropped inside a route
+    // handler still mocks the request, so the test passes and nothing says the
+    // handler returned before the fulfilment finished.
+    //
+    // ⚠ `project`, not `projectService`, and only here. The service discovers a
+    // file's project by walking up to the nearest tsconfig.json — and this
+    // repo's is solution-style, `"files": []`, so it claims nothing and the
+    // specs bind to no project at all. The symptom is a parsing error per file,
+    // which at least fails loudly; the danger is "fixing" it by loosening the
+    // rules until the noise stops. Naming tsconfig.e2e.json is the honest
+    // answer: it is the config that actually covers these files.
+    files: ["e2e/**/*.ts", "playwright.config.ts"],
+    extends: [...tseslint.configs.recommendedTypeChecked, ...tseslint.configs.stylisticTypeChecked],
+    languageOptions: {
+      parserOptions: { project: ["tsconfig.e2e.json"], tsconfigRootDir: import.meta.dirname },
+    },
+  },
+  {
     files: ["src/**/*.html"],
     extends: [...angular.configs.templateRecommended, ...angular.configs.templateAccessibility],
   },
