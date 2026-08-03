@@ -14,7 +14,8 @@
     "prelint": "node scripts/stamp-version.mjs",
     "e2e": "playwright test",
     "ui-check": "ng build && playwright test",
-    "lint": "eslint src"
+    "lint": "eslint src e2e playwright.config.ts",
+    "typecheck:e2e": "tsc -p tsconfig.e2e.json"
   },
   "private": true,
   "dependencies": {

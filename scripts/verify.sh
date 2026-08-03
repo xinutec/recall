@@ -146,7 +146,7 @@ step "frontend: eslint (type-aware)"
 if [ ! -x frontend/node_modules/.bin/eslint ] || [ frontend/pnpm-lock.yaml -nt frontend/node_modules ]; then
   ( cd frontend && pnpm install --frozen-lockfile )
 fi
-( cd frontend && pnpm run lint )
+( cd frontend && pnpm run lint && pnpm run typecheck:e2e )
 
 step "frontend: build (Angular strict templates)"
 # Two deliberate differences from a plain `pnpm run build`:

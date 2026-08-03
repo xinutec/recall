@@ -1,0 +1,24 @@
+// The layout harness and the Playwright config, type-checked.
+//
+// ⚠ **Nothing else reads these files.** `tsconfig.app.json` reaches only what
+// `src/main.ts` imports and `tsconfig.spec.json` only `src/**/*.spec.ts`, so the
+// e2e tree is in neither; and Playwright transforms specs with esbuild, which
+// strips types without checking them. Measured in memview on 2026-08-03: a
+// planted `const planted: number = "not a number"` passed the lint script,
+// eslint aimed straight at the file, `ng build`, and a full Playwright run.
+//
+// The harness is the only gate that can see what a phone actually suffers —
+// text overlaps, content past the right edge, controls too small for a thumb.
+// It should not be the least-checked code in the repo, and a harness that
+// silently stopped asserting would look exactly like one that passes.
+//
+// `harness.d.mts` beside the spec describes the `.mjs` rather than inferring it,
+// so no `allowJs` is needed. The file cannot be TypeScript: the harness's own
+// static server loads it under plain Node.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["playwright.config.ts", "e2e/**/*.ts", "e2e/**/*.d.mts"]
+}
