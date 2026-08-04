@@ -172,7 +172,7 @@
             # Angular front-end toolchain (Angular 22 needs Node >= 24.15)
             pkgs.nodejs_24
             pkgs.pnpm # the frontend's installer; node ships npm too, ignore it
-            # dev-lint is invoked via `nix run ~/Code/dev-lint` in verify.sh
+            # dev-lint is invoked via `nix run git+file:../dev-lint?ref=HEAD` by the gate
             # (always-live, no pinned/stale copy) — not a devshell dependency.
           ];
           shellHook = ''

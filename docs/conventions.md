@@ -37,7 +37,7 @@ The Python in this project is fully, strictly typed.
   small changes. Pipeline/geometry code gets real-data fixtures (captured audio
   clips), not just synthetic units.
 - Tests live in `tests/` (backend) plus the frontend specs. Run the whole gate
-  with **`./scripts/verify.sh`**; for just the backend tests use
+  with **`nix run ../dev-lint#gate -- . gate.json`**; for just the backend tests use
   `nix develop --command .venv/bin/python -m pytest` (the venv holds the ML deps —
   bare `pytest` can't import numpy/fastapi).
 
@@ -69,12 +69,15 @@ The web app in `frontend/` is Angular 22, kept on the most modern footing:
 
 ## Verify cycle
 
-Before considering a unit of work done, run **`./scripts/verify.sh`** — the full
-gate: `ruff check` + `ruff format --check`, `swift-format lint --strict` (the iOS
-app, via the Xcode toolchain), `mypy --strict`, `dev-lint` (custom rules), the
-frontend↔backend schema contract (`gen_models.py --check`), `pytest` (via the venv
-that holds the ML deps), and the frontend build + vitest. All green.
+Before considering a unit of work done, run **`nix run ../dev-lint#gate -- . gate.json`**
+— the full gate, twenty-two rows in `gate.dhall`: `ruff check` + `ruff format
+--check`, `swift-format lint --strict` (the iOS app, via the Xcode toolchain),
+the venv/`uv.lock` check, `mypy --strict`, `dev-lint` (custom rules), the
+frontend↔backend schema contract (`gen_models.py --check`), both import-surface
+checks, `pytest` (via the venv that holds the ML deps), the frontend build +
+layout harness + vitest, and the Android app. All green. It runs every row and
+names every one that failed, rather than stopping at the first.
 A pre-push hook is installed to run it. CI (`.github/workflows/build.yml`) builds the
 image and is the gate that must stay green, but it does *not* run the full local gate
-(no mypy/pytest/dev-lint there) — so run `verify.sh` by hand before pushing. Fix nearby
+(no mypy/pytest/dev-lint there) — so run the gate by hand before pushing. Fix nearby
 warnings opportunistically; don't punt them as "pre-existing".

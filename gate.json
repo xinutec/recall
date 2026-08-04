@@ -1,0 +1,352 @@
+{
+  "checks": [
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "scripts/check-pii.sh"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "check-pii (no personal terms in tracked files)",
+      "timeout_s": 300
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "ruff",
+        "check"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "ruff check (lint)",
+      "timeout_s": 300
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "ruff",
+        "format",
+        "--check"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "ruff format --check (formatting)",
+      "timeout_s": 300
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "env",
+        "-u",
+        "DEVELOPER_DIR",
+        "-u",
+        "SDKROOT",
+        "/usr/bin/xcrun",
+        "swift-format",
+        "lint",
+        "--strict",
+        "--recursive",
+        "--configuration",
+        "ios/.swift-format",
+        "ios/Sources",
+        "ios/Tests"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "swift-format lint --strict (ios)",
+      "timeout_s": 600
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "uv",
+        "sync",
+        "--frozen",
+        "--all-groups",
+        "--no-install-project",
+        "--check"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "venv matches uv.lock (the ML runtime is reconstructible)",
+      "timeout_s": 900
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "mypy"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "mypy --strict (types)",
+      "timeout_s": 900
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        ".venv/bin/python",
+        "scripts/gen_models.py",
+        "--check"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "contract: frontend models.ts is generated from the API shapes",
+      "timeout_s": 300
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "python",
+        "-c",
+        "import recall.cli"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "capture-agent import surface (devshell python, no ML deps)",
+      "timeout_s": 300
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        ".venv/bin/python",
+        "scripts/check_import_surface.py"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "fleet import surface (no ML reachable from recall.api)",
+      "timeout_s": 300
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        ".venv/bin/python",
+        "-m",
+        "pytest"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "pytest (backend)",
+      "timeout_s": 3600
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "pnpm",
+        "install",
+        "--frozen-lockfile"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "name": "frontend deps match the lockfile",
+      "timeout_s": 900
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "pnpm",
+        "run",
+        "lint"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "name": "frontend lint (eslint, type-aware)",
+      "timeout_s": 900
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "pnpm",
+        "run",
+        "typecheck:e2e"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "name": "frontend typecheck (e2e)",
+      "timeout_s": 900
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "nix",
+        "run",
+        "../../dev-lint#ng-build",
+        "--",
+        "--expect",
+        "dist/.verify-build/browser",
+        "--",
+        "pnpm",
+        "run",
+        "build",
+        "--output-path=dist/.verify-build"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "name": "frontend build (Angular strict templates)",
+      "timeout_s": 1800
+    },
+    {
+      "argv": [
+        "cp",
+        "-R",
+        "public/.",
+        "dist/.verify-build/browser/"
+      ],
+      "cwd": "frontend",
+      "env": {},
+      "name": "restore public/ assets into the scratch build",
+      "timeout_s": 120
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "pnpm",
+        "run",
+        "e2e"
+      ],
+      "cwd": "frontend",
+      "env": {
+        "RECALL_E2E_DIST": "dist/.verify-build/browser"
+      },
+      "name": "frontend layout harness (playwright, phone width)",
+      "timeout_s": 1800
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "pnpm",
+        "test",
+        "--watch=false"
+      ],
+      "cwd": "frontend",
+      "env": {
+        "NG_BUILD_MAX_WORKERS": "1"
+      },
+      "name": "frontend unit tests (vitest, jsdom)",
+      "timeout_s": 1800
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "..#android",
+        "--no-warn-dirty",
+        "--command",
+        "ktlint",
+        "app/src/**/*.kt"
+      ],
+      "cwd": "android",
+      "env": {},
+      "name": "ktlint (android/)",
+      "timeout_s": 900
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "..#android",
+        "--no-warn-dirty",
+        "--command",
+        "./gradlew",
+        "--console=plain",
+        ":app:assembleDebug"
+      ],
+      "cwd": "android",
+      "env": {},
+      "name": "android :app assembleDebug",
+      "timeout_s": 1800
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "..#android",
+        "--no-warn-dirty",
+        "--command",
+        "./gradlew",
+        "--console=plain",
+        ":app:testDebugUnitTest"
+      ],
+      "cwd": "android",
+      "env": {},
+      "name": "android :app unit tests",
+      "timeout_s": 1800
+    },
+    {
+      "argv": [
+        "nix",
+        "run",
+        "git+file:../dev-lint?ref=HEAD",
+        "--",
+        "."
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "dev-lint",
+      "timeout_s": 900
+    },
+    {
+      "argv": [
+        "nix",
+        "run",
+        "../dev-lint#gate",
+        "--",
+        "--check-table",
+        "gate.dhall",
+        "gate.json"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "the table matches its Dhall",
+      "timeout_s": 300
+    }
+  ],
+  "name": "recall"
+}

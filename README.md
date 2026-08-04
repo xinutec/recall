@@ -29,7 +29,7 @@ Backend (Python) in the Nix devshell:
 
 ```sh
 nix develop          # python + mypy + ruff + pytest + ffmpeg + sox + uv + node
-./scripts/verify.sh   # the full gate: ruff/format/mypy/dev-lint/contract/pytest/frontend
+nix run ../dev-lint#gate -- . gate.json   # the full gate (gate.dhall -> gate.json)
 ```
 
 Frontend (Angular 22, in `frontend/`):

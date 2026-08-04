@@ -6,7 +6,7 @@ name: build
 # do (health/life/coach/fleetwatch each have this workflow). The k8s manifests live in
 # deploy/k8s (and, once deployed, the kubes monorepo); the image tag is the only contract.
 #
-# Unlike the pure-Node apps, recall's full `scripts/verify.sh` can't run here: it needs
+# Unlike the pure-Node apps, recall's full gate can't run here: it needs
 # nix + the mlx/pyannote venv, which is Apple-Silicon-only. So CI runs a light lint (ruff,
 # no project deps) and lets the Docker build — which installs and builds the
 # frontend and installs the non-ML python deps — be the real build gate. The full gate

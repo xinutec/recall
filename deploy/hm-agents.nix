@@ -29,7 +29,7 @@
 #     interpreter once (`packages.dev-python`) and the devshell uses that same
 #     derivation, so the two cannot drift.
 #   - the interpreter split. capture/ingest run the DEVSHELL python (no ML deps —
-#     verify.sh gates that their import surface stays ML-free); everything else runs
+#     the gate checks that their import surface stays ML-free); everything else runs
 #     the python that holds mlx/pyannote/torch. What DID change (2026-07-31): that
 #     second interpreter is now the uv2nix store env (`nix build .#ml-env`), not the
 #     working tree's `.venv`, so nothing an agent imports lives in $HOME any more.
@@ -148,7 +148,7 @@ in
   # (like capture-mirror) — tracked as Phase 2, not served from the Mac.
 
   # Single-port audio ingest for the phone mics. Devshell python: this path must
-  # stay free of ML imports (it is one of the two agents verify.sh gates for that).
+  # stay free of ML imports (it is one of the two agents the gate checks for that).
   launchd.agents."org.xinutec.recall-ingest" = daemon {
     label = "org.xinutec.recall-ingest";
     name = "ingest";

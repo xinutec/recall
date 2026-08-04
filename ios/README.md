@@ -72,7 +72,7 @@ xcrun devicectl device install app --device "$DEV" \
 
 `<UDID>` comes from `idevice_id -l` (USB) or Xcode; the CoreDevice id from
 `xcrun devicectl list devices`. Note `xcrun` only finds the toolchain **outside** the Nix
-shell — `verify.sh` works around that (`env -u DEVELOPER_DIR`).
+shell — the gate works around that (`env -u DEVELOPER_DIR -u SDKROOT`).
 
 ## Tests
 
@@ -86,7 +86,7 @@ watchdog decision, and the paused-banner text) run on the iOS Simulator, from th
 
 One-time setup (already done on this Mac): `xcodebuild -downloadPlatform iOS`,
 then `xcrun simctl create recall-test "iPhone 16" com.apple.CoreSimulator.SimRuntime.iOS-26-5`.
-`verify.sh` lint-checks `Sources/` + `Tests/` on every run; the tests themselves
+The gate lint-checks `Sources/` + `Tests/` on every run; the tests themselves
 are on-demand (simulator boot is slow).
 
 ## First run on the phone

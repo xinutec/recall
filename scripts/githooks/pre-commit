@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Single health gate. A commit must be healthy: this runs the full verify inside
-# the dev shell — this repo's scripts/verify.sh expects its toolchain on PATH via
-# `nix develop` (documented at its head). There is NO separate pre-push step.
+# Single health gate. A commit must be healthy: this runs the full gate
+# (gate.json, rendered from gate.dhall) — check-pii, ruff, swift-format, the
+# venv/lock check, mypy, the model contract, both import surfaces, pytest, the
+# Angular frontend and its layout harness, the Android app, and dev-lint.
+# There is NO separate pre-push step.
 # Slow by design; we optimise for healthy commits, not commit speed.
-# Quiet on success: the full verify output is printed only when it FAILS, so a
+# Quiet on success: the gate prints a check's output only when it FAILS, so a
 # healthy commit isn't buried under build/test noise (DL-GIT-PRECOMMIT-GATE).
+# Nothing here is conditional on the venv being present: a run that skipped the
+# backend used to be green, and a gate that skips is a gate that lies.
 # Bypass a genuine work-in-progress commit with:  git commit --no-verify
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-if ! out=$(nix develop -c scripts/verify.sh 2>&1); then
+if ! out=$(nix run ../dev-lint#gate -- . gate.json 2>&1); then
   printf '%s\n' "$out" >&2
   exit 1
 fi
