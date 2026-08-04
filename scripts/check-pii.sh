@@ -9,9 +9,19 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 DENYLIST=/Volumes/Backup/recall/pii-denylist.txt
 
+# A missing denylist FAILS. It used to `exit 0` with a warning, added on
+# 2026-07-09 to "make validation gates resilient to unmounted volumes" — but this
+# is the check that stops real names and addresses reaching tracked files, and
+# those files get pushed. Resilient here meant: when the external volume happens
+# not to be mounted, the one gate that guards personal data silently passes.
+# An unmounted volume is a normal condition on this machine, so that was not a
+# rare corner. Being unable to commit until it is mounted is the cheaper failure.
 if [[ ! -r "$DENYLIST" ]]; then
-    echo "check-pii: $DENYLIST not readable (volume unmounted?) — skipping PII verification"
-    exit 0
+    echo "check-pii: cannot read $DENYLIST" >&2
+    echo "check-pii: the PII gate cannot run, so this is a FAILURE, not a skip." >&2
+    echo "check-pii: mount the Backup volume and re-run, or commit with --no-verify" >&2
+    echo "check-pii: only if you are certain no personal terms are in the change." >&2
+    exit 1
 fi
 
 # -F fixed strings, -i case-insensitive, -w whole words (a short name must not match
