@@ -2,10 +2,9 @@
   display: flex;
   flex-direction: column;
   min-block-size: 100dvh;
-}
 
-// Toolbar height differs by breakpoint; sticky day-headers key off this var.
-:host {
+  // Toolbar height differs by breakpoint; sticky day-headers key off this var,
+  // and the @media below overrides it.
   --toolbar-h: 56px;
 }
 @media (min-width: 600px) {
