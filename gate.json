@@ -89,6 +89,19 @@
     {
       "argv": [
         "nix",
+        "build",
+        "--no-warn-dirty",
+        "--no-link",
+        ".#agents"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "the launchd agents build (what home-manager deploys)",
+      "timeout_s": 900
+    },
+    {
+      "argv": [
+        "nix",
         "develop",
         "--no-warn-dirty",
         "--command",

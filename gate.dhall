@@ -126,6 +126,27 @@ in  { name = "recall"
               ]
         , timeout_s = 900
         }
+      , {-  What home-manager will actually run, built here instead of discovered
+            at `home-manager switch`. `.#agents` is a farm of the launchd wrappers
+            in `deploy/hm-agents.nix`, so one row builds `ml-env`, `dev-python`,
+            `agent-tools` and every wrapper — including the shellcheck pass
+            `writeShellApplication` does on the wrapper text.
+
+            Every other row in this table reads the source tree. Nothing built the
+            deployed outputs, and that gap is not theoretical: gamepads and thoth
+            each carried a packaged build that had been dead for weeks with a green
+            gate the whole time, found only when an unrelated edit invalidated a
+            cached derivation.
+
+            Measured 2026-08-06: 2.5s when nothing moved, 21s when `src/` changed.
+            Only a `uv.lock` change makes it expensive, which is the change it most
+            needs to catch.
+        -}
+        G.Check::{
+        , name = "the launchd agents build (what home-manager deploys)"
+        , argv = [ "nix", "build", "--no-warn-dirty", "--no-link", ".#agents" ]
+        , timeout_s = 900
+        }
       , {-  Real third-party types, resolved from the .venv above.
         -}
         G.Check::{

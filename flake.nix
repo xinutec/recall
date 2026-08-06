@@ -119,6 +119,39 @@
           paths = [ pkgs.sox pkgs.ffmpeg ];
         };
 
+        # Everything home-manager will actually run, as ONE buildable output: a farm
+        # of the launchd wrappers named in deploy/hm-agents.nix, keyed by label.
+        #
+        # The gate proved the source tree healthy and built nothing the agents run, so
+        # an unbuildable ml-env or a wrapper that fails shellcheck stayed invisible
+        # until `home-manager switch` — which is a different day, a different repo, and
+        # a bare error with no commit attached. gamepads and thoth sat broken for weeks
+        # in exactly that gap (a pnpm-deps FOD, cached green since long after it died).
+        #
+        # No home-manager dependency: that module is a plain function, so it is applied
+        # here with the arguments home-manager passes it. The cost is that it is applied
+        # rather than evaluated as a MODULE, so launchd option types are not checked —
+        # a misspelled `KeepAlive` still gets through. What is covered is every part
+        # that is a derivation, and that is where the breakage has actually been.
+        deployedAgents =
+          let
+            lib = nixpkgs.lib;
+            hm = import ./deploy/hm-agents.nix {
+              inherit pkgs lib;
+              recall.packages.${system} = {
+                ml-env = mlEnv;
+                dev-python = devPython;
+                agent-tools = agentTools;
+              };
+            };
+          in
+          pkgs.linkFarm "recall-agents" (
+            lib.mapAttrsToList (label: agent: {
+              name = label;
+              path = lib.head agent.config.ProgramArguments;
+            }) hm.launchd.agents
+          );
+
         # Android toolchain for the recall-mic app (android/). Kept in its own pkgs
         # import + dev shell so the unfree SDK licence stays scoped to it and the
         # default Python shell is unaffected.
@@ -144,6 +177,7 @@
         packages.ml-env = mlEnv;
         packages.dev-python = devPython;
         packages.agent-tools = agentTools;
+        packages.agents = deployedAgents;
 
         devShells.android = androidPkgs.mkShell {
           packages = [ androidPkgs.jdk17 androidSdk androidPkgs.ktlint ];
