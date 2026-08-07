@@ -89,6 +89,12 @@ class ModelHolder:
         # weights (dev-lint python-zero-timestamp-sentinel).
         self._last_used: float | None = None
         self._generations = 0
+        # What is being loaded right now, and since when. Written under the lock,
+        # read without it — a caller queued behind a load must be able to learn
+        # that is what it is waiting for, and taking the lock to ask would be the
+        # very wait it is trying to describe.
+        self._loading: str | None = None
+        self._loading_since: float | None = None
 
     def generate(
         self,
@@ -108,7 +114,13 @@ class ModelHolder:
                     self._drop()
                 started = self._clock()
                 _log.info("loading %s", wanted)
-                self._chat = self._loader(wanted)
+                self._loading = wanted
+                self._loading_since = started
+                try:
+                    self._chat = self._loader(wanted)
+                finally:
+                    self._loading = None
+                    self._loading_since = None
                 self._model = wanted
                 # Stamped on load, not only on a successful generation: a model
                 # that has just been loaded is not idle, even if the request that
@@ -160,6 +172,21 @@ class ModelHolder:
             return None, None, self._generations
         return self._model, self._clock() - self._last_used, self._generations
 
+    def loading(self) -> tuple[str | None, float | None]:
+        """(model being loaded, seconds it has been loading) — (None, None) when
+        no load is in flight.
+
+        Lock-free like `status`, and for a sharper reason: this is what tells a
+        waiting caller that the silence is a load rather than a dead daemon.
+        Measured loads run from 0.7s to 1533.6s on this machine, so "nothing is
+        resident" and "your model is on its way" are very different answers and
+        were previously indistinguishable from outside.
+        """
+        model, since = self._loading, self._loading_since
+        if model is None or since is None:
+            return None, None
+        return model, self._clock() - since
+
     def _drop(self) -> None:
         """Caller holds the lock."""
         self._chat = None
@@ -200,6 +227,10 @@ class HealthOut(BaseModel):
     model: str | None
     idle_secs: float | None
     generations: int
+    # Set only while weights are being read. A caller whose request is queued
+    # behind that can say so instead of reporting the host as unreachable.
+    loading: str | None = None
+    loading_secs: float | None = None
 
 
 def build_app(holder: ModelHolder) -> FastAPI:
@@ -226,7 +257,14 @@ def build_app(holder: ModelHolder) -> FastAPI:
     @app.get("/health")
     def health() -> HealthOut:
         model, idle_secs, generations = holder.status()
-        return HealthOut(model=model, idle_secs=idle_secs, generations=generations)
+        loading, loading_secs = holder.loading()
+        return HealthOut(
+            model=model,
+            idle_secs=idle_secs,
+            generations=generations,
+            loading=loading,
+            loading_secs=loading_secs,
+        )
 
     return app
 

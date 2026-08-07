@@ -184,6 +184,8 @@ def test_http_surface() -> None:
         "model": None,
         "idle_secs": None,
         "generations": 0,
+        "loading": None,
+        "loading_secs": None,
     }
 
     body = client.post(
@@ -202,3 +204,54 @@ def test_http_rejects_an_unusable_token_bound() -> None:
     response = client.post("/generate", json={"prompt": "hi", "max_tokens": 0})
 
     assert response.status_code == 422
+
+
+def test_a_load_in_flight_is_visible_without_taking_the_lock() -> None:
+    # The whole point of the flag: a caller queued behind a load has to be able
+    # to learn that is what it is queued behind. Asking used to be impossible
+    # from outside — /health reported model=None, which is also what a daemon
+    # holding nothing at all reports — so a 25-minute load was indistinguishable
+    # from a dead process, and callers logged it as one.
+    clock = FakeClock()
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_loader(name: str) -> ChatModel:
+        started.set()
+        release.wait(timeout=5)
+
+        def chat(*, system: str | None, prompt: str, max_tokens: int) -> str:
+            return "loaded"
+
+        return chat
+
+    holder = ModelHolder(default_model="m", loader=slow_loader, clock=clock)
+    client = TestClient(build_app(holder))
+    worker = threading.Thread(target=lambda: holder.generate("hi"), daemon=True)
+    worker.start()
+    assert started.wait(timeout=5)
+
+    clock.now += 90.0
+    health = client.get("/health").json()  # answered while the load holds the lock
+    assert health["loading"] == "m"
+    assert health["loading_secs"] == pytest.approx(90.0)
+    assert health["model"] is None, "not resident until the load finishes"
+
+    release.set()
+    worker.join(timeout=5)
+
+    assert client.get("/health").json()["loading"] is None
+
+
+def test_a_failed_load_does_not_leave_the_host_looking_busy_forever() -> None:
+    # Without the finally, one raising loader would make every later caller
+    # defer on a load that is not happening — a permanent, invisible stall.
+    def broken_loader(name: str) -> ChatModel:
+        raise RuntimeError("weights are gone")
+
+    holder = ModelHolder(default_model="m", loader=broken_loader, clock=FakeClock())
+
+    with pytest.raises(RuntimeError):
+        holder.generate("hi")
+
+    assert holder.loading() == (None, None)
