@@ -29,6 +29,7 @@ class MeetingUpload(
 ) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         val host = Prefs.controlHost(applicationContext)
+        val token = Prefs.deviceToken(applicationContext)
         val outbox = MeetingQueue.outbox(applicationContext)
         val queue = MeetingQueue.list(outbox, ZoneId.systemDefault())
         if (queue.isEmpty()) {
@@ -39,7 +40,7 @@ class MeetingUpload(
         var stuck = false
         for (recording in queue) {
             ShareUpload
-                .upload(host, recording.audio, recording.audio.name, recording.start)
+                .upload(host, recording.audio, recording.audio.name, recording.start, token)
                 .onSuccess { file(recording, it) }
                 .onFailure {
                     Log.w(UI_LOG, "meeting upload failed: ${recording.audio.name}: ${it.message}")

@@ -16,6 +16,26 @@ Two planes, deliberately:
   token-gated `/sync/*` ingest (its own bearer auth, untouched here) and the iOS mic
   app's capture control/liveness (`GET /api/capture`, `GET /api/sources`, and — by
   explicit choice — `POST /api/capture/pause|resume` so the phone keeps its button).
+* **Device-token plane** — paths a device may use, but only with a credential. A
+  `RECALL_DEVICE_TOKEN` bearer is accepted *instead of* a cookie on these, and nowhere
+  else.
+
+The third plane exists because the second one could not answer the Android meeting
+recorder. `POST /api/sessions` is the endpoint it uploads to; the browser's Upload
+button reaches it with a cookie, and the phone has none — the WebView that signs in is
+a separate app (`org.recall.web`) with its own cookie jar. Until 2026-08-07 every
+meeting upload got a 401, silently and forever, retried by WorkManager against a wall.
+
+The alternative was to add the path to the exempt set above, and that set can only ever
+say *no credential at all*. Pausing a microphone is a fair thing to leave login-free;
+accepting tens of megabytes and creating a session is not the same trade, so the grant
+is a token rather than an exemption. The token authorises those paths **only** — a
+phone that can upload a recording still cannot read the household's transcripts, which
+a session cookie would have let it do.
+
+Deliberately NOT the sync token: that one opens the whole `/sync/*` surface — the
+archive push, the job pull, the path-checked writes — and a phone is easier to lose
+than a Mac. Two secrets, rotated independently.
 
 Identity only: the OAuth access token is used once to look up who the user is, then
 discarded. There is no local user store — a signed, stateless cookie carries the
@@ -49,6 +69,7 @@ NC_BASE_URL_ENV = "NC_BASE_URL"
 NC_INTERNAL_URL_ENV = "NC_INTERNAL_URL"
 REDIRECT_URI_ENV = "NC_REDIRECT_URI"
 ALLOWED_USERS_ENV = "RECALL_ALLOWED_USERS"
+DEVICE_TOKEN_ENV = "RECALL_DEVICE_TOKEN"
 
 _DEFAULT_NC_BASE_URL = "https://dash.xinutec.org"
 _DEFAULT_REDIRECT_URI = "http://10.100.0.2:8000/auth/callback"
@@ -72,6 +93,20 @@ _DEVICE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
 )
 
 
+# The device-token plane: (method, path) pairs where a `RECALL_DEVICE_TOKEN` bearer is
+# accepted in place of a session cookie. A cookie still works — this widens who may call
+# these, it does not narrow it.
+#
+# Kept as a closed set rather than "a token is as good as a session anywhere", so the
+# credential on the phone grants exactly what the phone does. Adding a path here is a
+# deliberate act with a blast radius to weigh; that is the point of it being a list.
+_DEVICE_TOKEN_PATHS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", "/api/sessions"),  # Android meeting recorder + share sheet upload
+    }
+)
+
+
 def requires_session(method: str, path: str) -> bool:
     """True when this request must carry a valid session. Only the browsing plane
     (`/api/*` minus the device allowlist) is gated; static assets, the OAuth routes, and
@@ -79,6 +114,11 @@ def requires_session(method: str, path: str) -> bool:
     if not path.startswith("/api/"):
         return False
     return (method.upper(), path) not in _DEVICE_EXEMPT
+
+
+def accepts_device_token(method: str, path: str) -> bool:
+    """True when a device bearer token may stand in for a session on this route."""
+    return (method.upper(), path) in _DEVICE_TOKEN_PATHS
 
 
 def validate_return_to(raw: str | None) -> str:
@@ -107,6 +147,10 @@ class WebAuthConfig:
     nc_internal_url: str
     redirect_uri: str
     allowed_users: frozenset[str]
+    # The bearer a device may present instead of a cookie, on `_DEVICE_TOKEN_PATHS`
+    # alone. None (the default) leaves those routes cookie-only, so a deployment that
+    # does not set it behaves exactly as it did before the plane existed.
+    device_token: str | None = None
 
     @classmethod
     def from_env(cls) -> WebAuthConfig | None:
@@ -143,6 +187,10 @@ class WebAuthConfig:
             nc_internal_url=internal,
             redirect_uri=os.environ.get(REDIRECT_URI_ENV, _DEFAULT_REDIRECT_URI),
             allowed_users=frozenset(allowed),
+            # Optional, and independent of the three above: unset simply means no
+            # device may upload. It is NOT part of the `present`/`all` check, because a
+            # missing device token is a smaller deployment rather than a broken one.
+            device_token=os.environ.get(DEVICE_TOKEN_ENV) or None,
         )
 
     def server_call(self, path: str) -> tuple[str, dict[str, str]]:
@@ -159,6 +207,29 @@ class WebAuthConfig:
         """Whether a signed-in Nextcloud user may enter. Empty allowlist = any
         authenticated user; otherwise an exact-match allowlist."""
         return not self.allowed_users or user_id in self.allowed_users
+
+    def presents_device_token(
+        self, method: str, path: str, authorization: str | None
+    ) -> bool:
+        """Whether this request carries the device token on a route that accepts one.
+
+        Constant-time compare, like `sync.check_token`: a wrong token must leak no
+        timing signal. Returns a bool rather than raising, because a device that fails
+        here earns exactly the 401 an absent cookie earns and should learn nothing more
+        about which of the two it missed.
+
+        The `Bearer ` parse is deliberately not imported from `recall.sync`, which has
+        the identical helper. Keeping it here is what keeps this module a leaf: the
+        request-authorisation path should not pull in the store, the timeline and httpx
+        by way of the sync plane. The duplicated part is a fixed header format, not a
+        policy that can drift.
+        """
+        if self.device_token is None or not accepts_device_token(method, path):
+            return False
+        prefix = "Bearer "
+        if not authorization or not authorization.startswith(prefix):
+            return False
+        return hmac.compare_digest(authorization[len(prefix) :], self.device_token)
 
 
 @dataclass(frozen=True)
@@ -328,6 +399,12 @@ def register_web_auth(app: FastAPI, config: WebAuthConfig | None = None) -> bool
             return await call_next(request)
         session = read_session_cookie(cfg, request.cookies.get(COOKIE_NAME), _now())
         if session is None:
+            # A device with the token, on the routes that accept one. Checked only
+            # after the cookie fails, so a signed-in browser is unaffected either way.
+            if cfg.presents_device_token(
+                request.method, request.url.path, request.headers.get("authorization")
+            ):
+                return await call_next(request)
             return JSONResponse({"error": "not authenticated"}, status_code=401)
         if not cfg.permits(session.user_id):
             return JSONResponse({"error": "not authorised"}, status_code=403)

@@ -46,9 +46,11 @@ class SettingsActivity : ComponentActivity() {
                 SettingsScreen(
                     initialHost = Prefs.host(this),
                     initialControlHost = Prefs.controlHost(this),
+                    initialDeviceToken = Prefs.deviceToken(this),
                     deviceId = Prefs.deviceId(this),
                     onHostChanged = { Prefs.save(this, it, Prefs.enabled(this)) },
                     onControlHostChanged = { Prefs.saveControlHost(this, it) },
+                    onDeviceTokenChanged = { Prefs.saveDeviceToken(this, it) },
                     onBack = { finish() },
                 )
             }
@@ -61,13 +63,16 @@ class SettingsActivity : ComponentActivity() {
 fun SettingsScreen(
     initialHost: String,
     initialControlHost: String,
+    initialDeviceToken: String,
     deviceId: String,
     onHostChanged: (String) -> Unit,
     onControlHostChanged: (String) -> Unit,
+    onDeviceTokenChanged: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     var host by remember { mutableStateOf(initialHost) }
     var controlHost by remember { mutableStateOf(initialControlHost) }
+    var deviceToken by remember { mutableStateOf(initialDeviceToken) }
     val running by MicState.running.collectAsStateWithLifecycle()
 
     Scaffold(
@@ -129,6 +134,24 @@ fun SettingsScreen(
             Text(
                 "The recall web API: the pause controls, the device list, and where " +
                     "meeting recordings are uploaded.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            OutlinedTextField(
+                value = deviceToken,
+                onValueChange = {
+                    deviceToken = it.trim()
+                    onDeviceTokenChanged(deviceToken)
+                },
+                label = { Text("upload token") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                "Isis requires a sign-in, and a phone can't do one — this is what lets " +
+                    "uploads through. Leave it empty for a host with no sign-in. Uploads " +
+                    "fail with 401 if it is wrong.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

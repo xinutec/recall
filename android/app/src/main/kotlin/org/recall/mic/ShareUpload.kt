@@ -81,12 +81,19 @@ object ShareUpload {
     /** POST `file` to /api/sessions as multipart. Returns the created session's title on
      * success, or a failure. Streams the file (an appointment can be tens of MB).
      * No `title` is sent: the server names the session `Meeting <date> <time>` from the
-     * start, and it is renamed there if it ever needs a name. */
+     * start, and it is renamed there if it ever needs a name.
+     *
+     * `token` is the device bearer ([Prefs.deviceToken]). Isis gates its `/api` routes
+     * behind a Nextcloud sign-in and a phone cannot do an interactive OAuth login — the
+     * WebView that can is a different app with its own cookie jar — so without it every
+     * upload to the fleet is a 401. Blank sends no header at all, which is what an
+     * ungated LAN deployment (the Mac, dev, tests) expects. */
     suspend fun upload(
         host: String,
         file: File,
         filename: String,
         start: Instant,
+        token: String = "",
     ): Result<UploadedSession> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -105,6 +112,9 @@ object ShareUpload {
                             "Content-Type",
                             "multipart/form-data; boundary=$boundary",
                         )
+                        if (token.isNotBlank()) {
+                            setRequestProperty("Authorization", "Bearer $token")
+                        }
                     }
                 conn.outputStream.use { out ->
                     val header =

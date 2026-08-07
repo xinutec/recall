@@ -20,10 +20,12 @@ from recall.webauth import (
     CLIENT_ID_ENV,
     CLIENT_SECRET_ENV,
     COOKIE_NAME,
+    DEVICE_TOKEN_ENV,
     NC_INTERNAL_URL_ENV,
     SESSION_SECRET_ENV,
     Session,
     WebAuthConfig,
+    accepts_device_token,
     authorize_url,
     make_session_cookie,
     make_state,
@@ -37,8 +39,13 @@ from recall.webauth import (
 NOW = datetime(2026, 7, 17, 12, 0, 0, tzinfo=UTC)
 
 
+DEVICE_TOKEN = "device-token-abcdef0123456789"
+
+
 def _cfg(
-    allowed: set[str] | None = None, internal: str = "https://dash.example"
+    allowed: set[str] | None = None,
+    internal: str = "https://dash.example",
+    device_token: str | None = None,
 ) -> WebAuthConfig:
     return WebAuthConfig(
         session_secret="s3cret-key-material-0123456789",
@@ -48,6 +55,7 @@ def _cfg(
         nc_internal_url=internal,
         redirect_uri="http://10.100.0.2:8000/auth/callback",
         allowed_users=frozenset(allowed or set()),
+        device_token=device_token,
     )
 
 
@@ -163,6 +171,26 @@ def test_pause_is_still_gated_under_a_different_method() -> None:
     assert requires_session("GET", "/api/capture/pause") is True
 
 
+def test_upload_is_gated_but_accepts_a_device_token() -> None:
+    # The two planes are orthogonal: the upload still needs *a* credential, and a token
+    # is one of the two that count.
+    assert requires_session("POST", "/api/sessions") is True
+    assert accepts_device_token("POST", "/api/sessions") is True
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/api/sessions"),  # reading the list is browsing, not uploading
+        ("GET", "/api/transcripts"),  # the household's words — never a device's to read
+        ("POST", "/api/sessions/usb/rediarize"),  # spends ML on the Mac
+        ("POST", "/api/correct"),
+    ],
+)
+def test_device_token_buys_nothing_else(method: str, path: str) -> None:
+    assert accepts_device_token(method, path) is False
+
+
 # --- config ---------------------------------------------------------------
 
 
@@ -267,6 +295,10 @@ def _app(cfg: WebAuthConfig) -> FastAPI:
     def _capture() -> JSONResponse:
         return JSONResponse({"ok": "device"})
 
+    @app.post("/api/sessions")
+    def _upload() -> JSONResponse:
+        return JSONResponse({"ok": "upload"})
+
     @app.get("/")
     def _root() -> JSONResponse:
         return JSONResponse({"ok": "static"})
@@ -286,6 +318,89 @@ def test_gate_lets_the_recording_plane_through() -> None:
     client = TestClient(_app(_cfg({"pippijn"})))
     assert client.get("/api/capture").status_code == 200
     assert client.get("/").status_code == 200
+
+
+# --- the device-token plane -----------------------------------------------
+
+
+def _bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_device_token_uploads_without_a_cookie() -> None:
+    client = TestClient(_app(_cfg({"pippijn"}, device_token=DEVICE_TOKEN)))
+    resp = client.post("/api/sessions", headers=_bearer(DEVICE_TOKEN))
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": "upload"}
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},  # nothing at all
+        {"Authorization": f"Bearer {DEVICE_TOKEN}x"},  # near miss
+        {"Authorization": DEVICE_TOKEN},  # right token, no scheme
+        {"Authorization": f"Basic {DEVICE_TOKEN}"},  # wrong scheme
+    ],
+    ids=["absent", "wrong", "unschemed", "basic"],
+)
+def test_upload_refuses_anything_but_the_token(headers: dict[str, str]) -> None:
+    client = TestClient(_app(_cfg({"pippijn"}, device_token=DEVICE_TOKEN)))
+    assert client.post("/api/sessions", headers=headers).status_code == 401
+
+
+def test_device_token_does_not_unlock_the_browsing_plane() -> None:
+    # The whole point of the closed path set: a phone that can upload a recording still
+    # cannot read the household's transcripts.
+    client = TestClient(_app(_cfg({"pippijn"}, device_token=DEVICE_TOKEN)))
+    assert (
+        client.get("/api/transcripts", headers=_bearer(DEVICE_TOKEN)).status_code == 401
+    )
+
+
+def test_upload_is_cookie_only_when_no_device_token_is_configured() -> None:
+    # Inert by default: a deployment that never sets the token is unchanged, and a
+    # bearer presented to it is just an unauthenticated request.
+    client = TestClient(_app(_cfg({"pippijn"})))
+    assert (
+        client.post("/api/sessions", headers=_bearer(DEVICE_TOKEN)).status_code == 401
+    )
+
+
+def test_a_signed_in_browser_still_uploads() -> None:
+    # The browser's Upload button carries a cookie and no bearer; the token plane must
+    # widen access rather than replace it.
+    cfg = _cfg({"pippijn"}, device_token=DEVICE_TOKEN)
+    client = TestClient(_app(cfg))
+    client.cookies.set(
+        COOKIE_NAME,
+        make_session_cookie(cfg, Session("pippijn", "Pippijn"), datetime.now(UTC)),
+    )
+    assert client.post("/api/sessions").status_code == 200
+
+
+def test_from_env_reads_the_device_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(SESSION_SECRET_ENV, "s")
+    monkeypatch.setenv(CLIENT_ID_ENV, "i")
+    monkeypatch.setenv(CLIENT_SECRET_ENV, "c")
+    monkeypatch.setenv(DEVICE_TOKEN_ENV, DEVICE_TOKEN)
+    cfg = WebAuthConfig.from_env()
+    assert cfg is not None
+    assert cfg.device_token == DEVICE_TOKEN
+
+
+def test_from_env_treats_an_empty_device_token_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An empty env var is how a k8s secretKeyRef renders a missing key; it must not
+    # become a token that an empty bearer header could match.
+    monkeypatch.setenv(SESSION_SECRET_ENV, "s")
+    monkeypatch.setenv(CLIENT_ID_ENV, "i")
+    monkeypatch.setenv(CLIENT_SECRET_ENV, "c")
+    monkeypatch.setenv(DEVICE_TOKEN_ENV, "")
+    cfg = WebAuthConfig.from_env()
+    assert cfg is not None
+    assert cfg.device_token is None
 
 
 def test_login_redirects_to_nextcloud() -> None:

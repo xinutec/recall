@@ -132,7 +132,7 @@ like the sync token: with `RECALL_SESSION_SECRET` + `NC_CLIENT_ID` + `NC_CLIENT_
 unset, recall is an open LAN UI (the Mac's local UI, dev, and tests are untouched); the
 Isis pod sets them (from `recall-secret`) and raises the gate.
 
-**Two planes, deliberately split** — because the recording side is driven by devices and
+**Three planes, deliberately split** — because the recording side is driven by devices and
 daemons that cannot do an interactive OAuth login:
 
 - **Browsing plane (gated).** The Angular SPA and its read/write `/api/*` routes require a
@@ -145,6 +145,15 @@ daemons that cannot do an interactive OAuth login:
   state), `/api/sources` (fleet liveness), and — by explicit choice — `/api/capture/pause`
   and `/api/capture/resume`, so the phone keeps its pause button without a login. These
   stay reachable by anything on WG/LAN, which is the same trust boundary they had before.
+- **Device-token plane (credential required, added 2026-08-07).** `POST /api/sessions` —
+  and only that — accepts a `RECALL_DEVICE_TOKEN` bearer instead of a session cookie, so
+  the Android meeting recorder and share sheet can upload a recording without a login they
+  cannot perform. Until this existed every such upload got a 401, silently, retried
+  forever by WorkManager against a wall. It is a token rather than an entry in the
+  login-free list above because that list can only grant *no credential at all*, and
+  accepting tens of megabytes is not the same trade as a pause button. It is not the sync
+  token, because that opens all of `/sync/*` and a phone is easier to lose than a Mac.
+  Optional, like the three above: unset leaves the route cookie-only.
 
 **Mechanics.** OAuth authorization-code flow against Nextcloud's `apps/oauth2`, identity
 only: the access token is used once to read the user (`ocs/v2.php/cloud/user`) and then

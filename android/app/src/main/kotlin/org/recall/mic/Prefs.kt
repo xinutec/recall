@@ -20,6 +20,7 @@ object Prefs {
     private const val KEY_HOST = "host"
     private const val KEY_CONTROL_HOST = "control_host"
     private const val KEY_DEVICE_ID = "device_id"
+    private const val KEY_DEVICE_TOKEN = "device_token"
 
     // Legacy key from the manual-device-id version; adopted for source continuity.
     private const val KEY_LEGACY_SOURCE_ID = "source_id"
@@ -45,6 +46,20 @@ object Prefs {
 
     fun saveControlHost(ctx: Context, controlHost: String) {
         prefs(ctx).edit().putString(KEY_CONTROL_HOST, controlHost).apply()
+    }
+
+    /**
+     * The bearer this phone presents when uploading a recording (`RECALL_DEVICE_TOKEN`
+     * on the server). Empty when unset, which is what a stock LAN deployment wants: the
+     * gate is only up on Isis, and the upload works without a token everywhere else.
+     *
+     * Not the sync token, and not a password: it authorises `POST /api/sessions` and
+     * nothing else, so losing the phone costs uploads rather than the archive.
+     */
+    fun deviceToken(ctx: Context): String = prefs(ctx).getString(KEY_DEVICE_TOKEN, "") ?: ""
+
+    fun saveDeviceToken(ctx: Context, token: String) {
+        prefs(ctx).edit().putString(KEY_DEVICE_TOKEN, token.trim()).apply()
     }
 
     /** This device's stable recall source id, announced in the stream handshake.

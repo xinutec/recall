@@ -47,7 +47,8 @@ with several voices, and a one-off hour costs ~25 MB, so the storage argument be
 32 kbps does not apply here.
 
 `.ogg` is already in `_UPLOAD_AUDIO_SUFFIXES` ([`src/recall/api.py`](../src/recall/api.py)),
-so **no server change is needed** for any of this.
+so **the format needs no server change**. Reaching the endpoint at all did — see
+"Authenticating the upload" below.
 
 Opus encoding arrived in Android 10, so meeting recording requires API 29 and says so on
 anything older. `minSdk` stays 26: an older phone can still do the streaming job, and
@@ -150,7 +151,34 @@ the drawer, so the daily screen is status and Start/Stop rather than a form. Tes
 the pure parts — file naming, start recovery, listing, approval, the row labels — as
 `ShareUpload`'s time helpers were covered before.
 
-Server: nothing.
+Server: the device-token plane (below); nothing else.
+
+## Authenticating the upload
+
+Found on 2026-08-07, the first time a real recording was uploaded to Isis: **every
+upload got a 401**, deterministically, and always would have. `POST /api/sessions` is on
+the browsing plane behind the Nextcloud sign-in ([isis-migration.md](isis-migration.md)),
+and `ShareUpload` sent no credential at all. The web Upload button works because a
+browser carries the `recall_session` cookie; the phone has none, and the WebView that
+could get one is a different app (`org.recall.web`) with its own cookie jar. The share
+sheet had the same defect for the same reason.
+
+Nothing was lost — the outbox is the state, so the recording sat there retrying — but the
+success signal is unreachable until the server answers, so the length comparison above had
+never run in anger either.
+
+The fix is a **device token**: `RECALL_DEVICE_TOKEN` on the server, accepted as a bearer
+in place of a session cookie on `POST /api/sessions` **and nowhere else**, and set on the
+phone under Settings → "upload token". Blank sends no header, so an ungated LAN host (the
+Mac, dev, tests) is unchanged.
+
+Why a token rather than adding the path to the login-free device allowlist: that
+allowlist can only say *no credential at all*. A pause button is a fair thing to leave
+open; accepting tens of megabytes and creating a session is not the same trade. And why
+not the sync token: that one opens the whole `/sync/*` surface — archive push, job pull,
+path-checked writes — and a phone is easier to lose than a Mac. Two secrets, rotated
+independently. The closed path set is what keeps a phone that can upload a recording from
+being able to read the household's transcripts.
 
 ## Decisions that were open, and how they went
 
