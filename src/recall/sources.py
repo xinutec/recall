@@ -195,7 +195,17 @@ class AudioSource:
         *,
         max_seconds: int | None = None,
     ) -> list[str]:
-        """Command that streams raw s16le PCM for this source to stdout."""
+        """Command that streams raw s16le PCM for this source to stdout.
+
+        ⚠ **No `-nostdin` here, unlike every ffmpeg that reads a FILE.** These
+        are live producers in the capture pipeline, and the pipeline is the one
+        path that cannot be exercised while capture is paused — so they were
+        left exactly as they are rather than swept along with the derived-copy
+        builders (`asr`, `vad`, `probe`, `speakerid`, `loudness`, `maintenance`)
+        on 2026-08-10. The flag would very likely be harmless for LAVFI and
+        RTSP, which take neither stdin nor a file; "very likely" is not the bar
+        for the recording path.
+        """
         match self.kind:
             case SourceKind.COREAUDIO:
                 # sox, NOT ffmpeg avfoundation: avfoundation continuously drops ~20%

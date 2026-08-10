@@ -61,6 +61,7 @@ def _decode_mono_16k(audio_path: Path) -> bytes:
     proc = subprocess.run(
         [
             "ffmpeg",
+            "-nostdin",
             "-hide_banner",
             "-loglevel",
             "error",

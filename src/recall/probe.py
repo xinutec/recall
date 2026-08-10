@@ -30,6 +30,7 @@ def _decode_duration(path: Path, sample_rate: int, channels: int) -> timedelta:
     """
     argv = [
         "ffmpeg",
+        "-nostdin",
         "-v",
         "error",
         "-i",

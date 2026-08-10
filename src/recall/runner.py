@@ -96,7 +96,22 @@ def _segment_is_digital_silence(path: Path) -> bool:
         if path.stat().st_size == 0:
             return True
         pcm = subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", str(path), "-f", "s16le", "-ac", "1", "-"],
+            # `-nostdin` although the OUTPUT is stdout: the flag is about ffmpeg
+            # reading the parent's stdin for its interactive keys, which is a
+            # different stream from the `-` sink at the end.
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-v",
+                "error",
+                "-i",
+                str(path),
+                "-f",
+                "s16le",
+                "-ac",
+                "1",
+                "-",
+            ],
             check=True,
             capture_output=True,
         ).stdout

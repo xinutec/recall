@@ -96,6 +96,7 @@ def build_working_copy_argv(
     """
     return [
         "ffmpeg",
+        "-nostdin",
         "-hide_banner",
         "-loglevel",
         "error",
@@ -142,7 +143,7 @@ def build_concat_argv(
     speaker change that never happened. `attribution.context_window` is what enforces
     adjacency for the eval.
     """
-    argv = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+    argv = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]
     for src in sources:
         argv += ["-i", str(src)]
     streams = "".join(f"[{i}:a]" for i in range(len(sources)))
@@ -183,6 +184,7 @@ def build_slice_argv(src: Path, dst: Path, start: float, end: float) -> list[str
     """ffmpeg argv to extract the [start, end] second window of `src`."""
     return [
         "ffmpeg",
+        "-nostdin",
         "-hide_banner",
         "-loglevel",
         "error",
@@ -230,6 +232,7 @@ def decode_pcm_f32(audio: Path, *, sample_rate: int = 16000) -> np.ndarray:
     pcm = subprocess.run(
         [
             "ffmpeg",
+            "-nostdin",
             "-hide_banner",
             "-loglevel",
             "error",

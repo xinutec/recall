@@ -109,3 +109,16 @@ def test_parse_segment_start_tolerates_dashed_source_id() -> None:
 def test_parse_segment_start_rejects_garbage() -> None:
     with pytest.raises(ValueError, match="timestamp"):
         parse_segment_start("not-a-segment.flac")
+
+
+def test_the_capture_consumer_still_takes_its_audio_on_stdin() -> None:
+    """The counterpart to `-nostdin` on the derived-copy builders.
+
+    Every other ffmpeg in recall is told to leave stdin alone; this one IS the
+    stdin reader — sox owns the mic and hands the PCM over on it (`-i -`). A
+    blanket sweep that added the flag here would stop capture recording, and
+    nothing else in the suite would notice, so the guard is here.
+    """
+    argv = build_segment_argv(CaptureConfig(), "/tmp/usb-%Y%m%dT%H%M%S.opus")
+    assert "-nostdin" not in argv
+    assert argv[argv.index("-i") + 1] == "-"

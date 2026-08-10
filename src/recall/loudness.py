@@ -39,6 +39,7 @@ def speech_level(audio_path: Path, start_s: float, end_s: float) -> float:
     pcm = subprocess.run(
         [
             "ffmpeg",
+            "-nostdin",
             "-hide_banner",
             "-loglevel",
             "error",

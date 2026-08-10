@@ -88,6 +88,7 @@ def _decode_mono(audio: Path, rate: int = _EMBED_RATE) -> object:
     pcm = subprocess.run(
         [
             "ffmpeg",
+            "-nostdin",
             "-hide_banner",
             "-loglevel",
             "error",

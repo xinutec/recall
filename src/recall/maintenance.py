@@ -32,6 +32,7 @@ def compress_to_opus(
         subprocess.run(
             [
                 "ffmpeg",
+                "-nostdin",
                 "-hide_banner",
                 "-loglevel",
                 "error",

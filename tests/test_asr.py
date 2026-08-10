@@ -190,3 +190,26 @@ def test_result_to_drafts_skips_empty_text() -> None:
     )
     drafts = result_to_drafts(result, segment_start=BASE, model_name="m")
     assert [d.text for d in drafts] == ["real"]
+
+
+def test_every_derived_copy_builder_refuses_stdin() -> None:
+    """ffmpeg reads stdin for its interactive controls, so it eats the parent's.
+
+    Invisible under launchd, where stdin is closed — which is why this went
+    unnoticed. It shows up when a person runs `scripts/recall.sh transcribe`
+    from a terminal and ffmpeg swallows the keystrokes, once per segment.
+
+    The flag lives in the argv rather than `stdin=DEVNULL` at the call site so
+    that it travels with the command and this test is what holds it there.
+    """
+    builders = [
+        build_working_copy_argv(Path("/a/seg.flac"), Path("/b/seg.wav")),
+        build_concat_argv(
+            [Path("/a/1.opus"), Path("/a/2.opus")], Path("/b/run.wav"), normalize=True
+        ),
+        build_slice_argv(Path("/a/clip.wav"), Path("/b/turn.wav"), 1.5, 4.25),
+    ]
+    for argv in builders:
+        assert "-nostdin" in argv, argv
+        # Before the first -i: ffmpeg only honours it as an input option.
+        assert argv.index("-nostdin") < argv.index("-i"), argv
