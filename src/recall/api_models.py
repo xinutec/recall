@@ -31,6 +31,25 @@ class TelemetryEvent(BaseModel):
     at: int = 0
 
 
+class OutboxIn(BaseModel):
+    """What a phone still holds that it was told to send.
+
+    Posted after every upload pass, including the ones that find nothing — a
+    report only sent on failure would leave the last bad reading standing after
+    the queue drained, and a check that cannot go back to green gets muted.
+
+    `reason` is the phone's own text for the last failure. It is composed on the
+    phone from a fixed set of sentences plus an HTTP status, never from the
+    exception's message, so it cannot carry the bearer token.
+    """
+
+    device: str
+    queued: int = 0
+    oldestQueuedAt: str | None = None
+    failing: int = 0
+    reason: str | None = None
+
+
 class CorrectIn(BaseModel):
     id: int
     text: str

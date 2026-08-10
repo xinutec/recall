@@ -15,6 +15,21 @@ data class PendingRecording(
 )
 
 /**
+ * The outbox in one sentence, for the fleet: how much is undelivered, how old the
+ * oldest of it is, how much of it is actively failing, and why.
+ *
+ * Sent after *every* upload pass, including the ones that find nothing — a report only
+ * made on failure would leave the last bad reading standing after the queue drained,
+ * and a check that cannot go back to green is one that gets muted.
+ */
+data class OutboxState(
+    val queued: Int,
+    val oldestStart: Instant?,
+    val failing: Int,
+    val reason: String?,
+)
+
+/**
  * The recordings on the phone: where they live and what they're called.
  *
  * Offline-first is the whole point — a meeting happens where the recall host is
@@ -199,6 +214,26 @@ object MeetingQueue {
             ?.takeIf { it.isNotBlank() }
 
     private fun failureFile(audio: File) = File(audio.parentFile, audio.name + FAILURE_SUFFIX)
+
+    /**
+     * What this phone is still holding that it was told to send — the thing no fleet
+     * component could see (#77).
+     *
+     * `oldestStart` is the *recording's* start, not when it was approved: the start is
+     * the only time the phone carries, and "how long has this been stuck" wants the
+     * older of the two anyway. `reason` is the newest failure among them, which is the
+     * one worth showing — a queue usually fails for one reason at a time.
+     */
+    fun state(outbox: File, zone: ZoneId): OutboxState {
+        val queue = list(outbox, zone)
+        val failures = queue.mapNotNull { failure(it.audio) }
+        return OutboxState(
+            queued = queue.size,
+            oldestStart = queue.minByOrNull { it.start }?.start,
+            failing = failures.size,
+            reason = failures.lastOrNull(),
+        )
+    }
 
     /** Discard a recording that never got any audio (stopped instantly, or failed). */
     fun discard(audio: File) {

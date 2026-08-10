@@ -55,6 +55,27 @@ class SourcesOut(TypedDict):
     items: list[SourceStatusOut]
 
 
+class OutboxOut(TypedDict):
+    """One phone's undelivered recordings, as it last reported them.
+
+    `reason` is the phone's own wording for the last failure (recall's Android
+    `UploadFailure`), which is composed from constants and a status code and so
+    never carries the token. Ages are left to the reader: this says *when*, and
+    the fleetwatch collector that grades it decides what is too long.
+    """
+
+    device: str
+    queued: int
+    oldestQueuedAt: str | None
+    failing: int
+    reason: str | None
+    at: str
+
+
+class OutboxesOut(TypedDict):
+    items: list[OutboxOut]
+
+
 class SessionOut(TypedDict):
     """One uploaded session — a discrete recording (e.g. a meeting) — for the list."""
 

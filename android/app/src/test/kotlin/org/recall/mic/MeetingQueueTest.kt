@@ -167,6 +167,34 @@ class MeetingQueueTest {
         assertFalse(File(tmp.root, audio.name + MeetingQueue.FAILURE_SUFFIX).exists())
     }
 
+    @Test
+    fun theOutboxStateIsWhatTheFleetIsTold() {
+        // The four things a stuck queue needs to be visible from outside the phone:
+        // how much, how old, how much of it is failing, and why.
+        val old = record("meeting-20260703-095050.ogg")
+        record("meeting-20260703-140000.ogg")
+        MeetingQueue.noteFailure(old, "Not authorised — check the upload token.")
+
+        val state = MeetingQueue.state(tmp.root, london)
+
+        assertEquals(2, state.queued)
+        assertEquals(start, state.oldestStart)
+        assertEquals(1, state.failing)
+        assertEquals("Not authorised — check the upload token.", state.reason)
+    }
+
+    @Test
+    fun anEmptyOutboxIsStillAReportableState() {
+        // ⚠ Not "nothing to say". Only reporting failures would leave the last bad
+        // reading standing after the queue drained, and a check that cannot go back
+        // to green is one that gets muted — which is where this task started.
+        val state = MeetingQueue.state(tmp.root, london)
+        assertEquals(0, state.queued)
+        assertEquals(0, state.failing)
+        assertNull(state.oldestStart)
+        assertNull(state.reason)
+    }
+
     /** A file with some bytes in it, standing in for a recording. */
     private fun record(name: String): File =
         File(tmp.root, name).apply { writeBytes(ByteArray(64)) }

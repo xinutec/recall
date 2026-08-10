@@ -34,6 +34,7 @@ from recall.api_models import (
     ContextIn,
     CorrectIn,
     NudgeIn,
+    OutboxIn,
     QuietDeleteIn,
     ReassignIn,
     RefineRequestIn,
@@ -62,6 +63,7 @@ from recall.liveness import source_statuses
 from recall.llm import DEFAULT_LLM, Generator, make_generator
 from recall.loudness import normalize_loudness
 from recall.moments import Moment, best_colocated_guess, cluster_moments
+from recall.outbox import OutboxReport, read_reports, record_report
 from recall.paths import default_data_root
 from recall.probe import probe_media
 from recall.ranking import (
@@ -100,6 +102,7 @@ from recall.schemas import (
     NewIdOut,
     NewIdsOut,
     OkOut,
+    OutboxesOut,
     PageOut,
     QuietDeletedOut,
     QuietScanOut,
@@ -570,6 +573,79 @@ def sources() -> SourcesOut:
             for s in statuses
         ]
     }
+
+
+@app.post("/api/devices/outbox")
+def report_outbox(body: OutboxIn) -> OkOut:
+    """A phone says what it is still holding.
+
+    The gap this closes: an approved recording the phone cannot deliver was state
+    no fleet component could see. The meeting recorder 401ed from the day it was
+    written, retried out to a +1h23m backoff, and said "N recordings waiting to
+    upload" throughout — the same sentence it shows when you are simply not home
+    yet (#77). The Mac's doctor posts to fleetwatch every five minutes and had no
+    way to know.
+
+    Best-effort status, never control: an unparseable time is dropped rather than
+    refused, because a phone on an older build should cost its own line and
+    nothing else.
+    """
+    now = datetime.now(UTC)
+    store = _store()
+    try:
+        record_report(
+            store,
+            OutboxReport(
+                device=body.device,
+                queued=max(0, body.queued),
+                oldest_queued_at=_iso_or_none(body.oldestQueuedAt),
+                failing=max(0, body.failing),
+                reason=body.reason,
+                at=now,
+            ),
+        )
+    finally:
+        store.close()
+    return {"ok": True}
+
+
+@app.get("/api/devices/outbox")
+def outboxes() -> OutboxesOut:
+    """Every phone's last outbox report, for the fleetwatch collector that grades it.
+
+    No verdict here on purpose. What counts as too long belongs with the other
+    fleetwatch thresholds, beside the checks it will sit next to, rather than
+    split across two repositories.
+    """
+    store = _store()
+    try:
+        reports = read_reports(store)
+    finally:
+        store.close()
+    return {
+        "items": [
+            {
+                "device": r.device,
+                "queued": r.queued,
+                "oldestQueuedAt": (
+                    r.oldest_queued_at.isoformat() if r.oldest_queued_at else None
+                ),
+                "failing": r.failing,
+                "reason": r.reason,
+                "at": r.at.isoformat(),
+            }
+            for r in reports
+        ]
+    }
+
+
+def _iso_or_none(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).astimezone(UTC)
+    except ValueError:
+        return None
 
 
 def _with_token(state: CaptureOut) -> CaptureOut:

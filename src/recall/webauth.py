@@ -103,6 +103,18 @@ _DEVICE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
 _DEVICE_TOKEN_PATHS: frozenset[tuple[str, str]] = frozenset(
     {
         ("POST", "/api/sessions"),  # Android meeting recorder + share sheet upload
+        # The same phone saying what it could NOT upload (#77). It is a write, but
+        # of last-known status only: it stores a count, a timestamp and the phone's
+        # own words for the failure, and nothing reads it back as control. The
+        # blast radius of the token gaining this is that a holder of it could lie
+        # about a queue depth in a health check.
+        ("POST", "/api/devices/outbox"),
+        # And the Mac's fleetwatch collector reading them back. On the device plane
+        # rather than exempt because it names devices; on it at all because the
+        # alternative — a whole third auth plane for one status GET — buys nothing.
+        # What a stolen phone token gains by this: it can read how many recordings
+        # are queued on the household's phones, and the sentence saying why.
+        ("GET", "/api/devices/outbox"),
     }
 )
 

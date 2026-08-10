@@ -25,6 +25,19 @@ export interface Transcript {
   readonly cluster: string | null;
 }
 
+export interface DeviceOutbox {
+  readonly device: string;
+  readonly queued: number;
+  readonly oldestQueuedAt: string | null;
+  readonly failing: number;
+  readonly reason: string | null;
+  readonly at: string;
+}
+
+export interface DeviceOutboxList {
+  readonly items: readonly DeviceOutbox[];
+}
+
 export interface Session {
   readonly id: string;
   readonly title: string;
@@ -295,6 +308,14 @@ export interface TelemetryEvent {
   readonly path: string;
   readonly label?: string | null;
   readonly at?: number;
+}
+
+export interface DeviceOutboxRequest {
+  readonly device: string;
+  readonly queued?: number;
+  readonly oldestQueuedAt?: string | null;
+  readonly failing?: number;
+  readonly reason?: string | null;
 }
 
 export interface CorrectRequest {

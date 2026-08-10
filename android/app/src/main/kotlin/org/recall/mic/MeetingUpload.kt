@@ -10,6 +10,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import java.io.File
 import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 
@@ -34,6 +35,9 @@ class MeetingUpload(
         val queue = MeetingQueue.list(outbox, ZoneId.systemDefault())
         if (queue.isEmpty()) {
             MeetingLibrary.refresh(applicationContext)
+            // Still report: an empty outbox is the reading that lets the fleet check
+            // go back to green, and one that cannot is one that gets muted.
+            report(host, token, outbox)
             return Result.success()
         }
 
@@ -51,8 +55,24 @@ class MeetingUpload(
                 }
             MeetingLibrary.refresh(applicationContext)
         }
+        // After the pass, not before: the fleet wants what is left, not what was there.
+        report(host, token, outbox)
         // Retry rather than fail: the usual reason is "not home yet", which time fixes.
         return if (stuck) Result.retry() else Result.success()
+    }
+
+    /**
+     * Say what is still here. Best-effort and unchecked — a report about undelivered
+     * recordings that failed the pass because the report failed would be absurd, and
+     * the fleet reads a missing report as a finding of its own (#77).
+     */
+    private suspend fun report(host: String, token: String, outbox: File) {
+        OutboxReport.send(
+            host,
+            Prefs.deviceId(applicationContext),
+            MeetingQueue.state(outbox, ZoneId.systemDefault()),
+            token,
+        )
     }
 
     /**

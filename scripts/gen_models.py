@@ -79,6 +79,8 @@ NAME_MAP = {
     "EnvelopeSegmentOut": "EnvelopeSegment",
     "SoundEventOut": "SoundEvent",
     "EnvelopeOut": "Envelope",
+    "OutboxOut": "DeviceOutbox",
+    "OutboxesOut": "DeviceOutboxList",
 }
 
 # Request bodies (pydantic models in api_models.py) -> frontend interface name.
@@ -86,6 +88,7 @@ NAME_MAP = {
 # silently stay un-generated (and hand-duplicated) on the frontend.
 REQUEST_NAME_MAP = {
     "ClientLog": "ClientLogRequest",
+    "OutboxIn": "DeviceOutboxRequest",
     "CorrectIn": "CorrectRequest",
     "VoiceNameIn": "VoiceNameRequest",
     "TurnSpeakerIn": "TurnSpeakerRequest",

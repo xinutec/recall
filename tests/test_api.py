@@ -2061,3 +2061,75 @@ def test_capture_long_poll_times_out_quietly_when_nothing_changes(
     state = client.get("/api/capture", params={"wait": 0.4, "known": token}).json()
     assert time.monotonic() - started >= 0.35  # held for the wait…
     assert state["stateToken"] == token  # …and returned the unchanged state
+
+
+def test_a_phone_can_say_what_it_could_not_upload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The gap #77 closes, end to end through the routes.
+
+    An approved recording the phone cannot deliver was state no fleet component
+    could see: the meeting recorder 401ed from the day it was written and said
+    "N recordings waiting to upload" throughout, which is what it also says when
+    you are simply not home yet.
+    """
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    Store.open(tmp_path / "recall.sqlite").close()
+    client = TestClient(api.app)
+
+    posted = client.post(
+        "/api/devices/outbox",
+        json={
+            "device": "pixel9",
+            "queued": 2,
+            "oldestQueuedAt": "2026-08-10T09:00:00+00:00",
+            "failing": 2,
+            "reason": "Not authorised — check the upload token in Settings.",
+        },
+    )
+    assert posted.status_code == 200
+
+    [item] = client.get("/api/devices/outbox").json()["items"]
+    assert item["device"] == "pixel9"
+    assert item["queued"] == 2
+    assert item["oldestQueuedAt"].startswith("2026-08-10T09:00")
+    assert "token" in item["reason"], "the fleet gets the phone's own diagnosis"
+    assert item["at"], "and when it said so, which is what staleness is judged on"
+
+
+def test_a_phone_with_nothing_queued_still_reports(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The clearing signal. Without it the last bad reading stands forever and the
+    # check can never go back to green, which is how a check gets muted.
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    Store.open(tmp_path / "recall.sqlite").close()
+    client = TestClient(api.app)
+
+    client.post(
+        "/api/devices/outbox", json={"device": "pixel9", "queued": 3, "failing": 3}
+    )
+    client.post("/api/devices/outbox", json={"device": "pixel9"})
+
+    [item] = client.get("/api/devices/outbox").json()["items"]
+    assert (item["queued"], item["failing"], item["oldestQueuedAt"]) == (0, 0, None)
+
+
+def test_an_unparseable_time_from_a_phone_is_dropped_not_a_500(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Best-effort status, never control: an older build must cost its own field,
+    # not the endpoint. (The 400 rule above is for the browsing plane, where a bad
+    # time means the caller asked a question that cannot be answered.)
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    Store.open(tmp_path / "recall.sqlite").close()
+    client = TestClient(api.app)
+
+    posted = client.post(
+        "/api/devices/outbox",
+        json={"device": "pixel9", "queued": 1, "oldestQueuedAt": "yesterday-ish"},
+    )
+    assert posted.status_code == 200
+    [item] = client.get("/api/devices/outbox").json()["items"]
+    assert item["queued"] == 1
+    assert item["oldestQueuedAt"] is None
