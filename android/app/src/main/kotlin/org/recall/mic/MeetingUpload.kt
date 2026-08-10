@@ -111,10 +111,18 @@ class MeetingUpload(
          * screen opening, the mic stream connecting — so the backoff a previous failure
          * earned should be abandoned rather than waited out.
          */
-        fun enqueue(ctx: Context) {
+        fun enqueue(ctx: Context, always: Boolean = false) {
             // An empty outbox is the common case — the mic stream calls this on every
             // reconnect — and waking WorkManager to discover that is pure cost.
-            if (approvedCount(ctx) == 0) return
+            //
+            // ⚠ Except when the queue emptied by HAND. A delete sends no report, so the
+            // fleet would go on believing the recording is stuck: measured on the
+            // Pixel 9, the check still read "1 failing" after the recording was gone
+            // and the token fixed. A check that cannot go back to green is one that
+            // gets muted, which is the failure this whole task exists to end — so a
+            // caller that changed the queue itself passes `always` and the pass runs
+            // for the report alone.
+            if (!always && approvedCount(ctx) == 0) return
             WorkManager.getInstance(ctx).enqueueUniqueWork(
                 WORK_NAME,
                 ExistingWorkPolicy.REPLACE,

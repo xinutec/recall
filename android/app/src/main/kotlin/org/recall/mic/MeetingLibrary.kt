@@ -93,8 +93,13 @@ object MeetingLibrary {
     fun delete(ctx: Context, row: RecordingRow) {
         if (MeetingPlayer.playingFile() == row.file) MeetingPlayer.stop()
         Log.i(UI_LOG, "meeting deleted from phone: ${row.file.name} (was ${row.state})")
+        val wasQueued = row.state == RecordingState.QUEUED
         MeetingQueue.delete(row.recording)
         refresh(ctx)
+        // Deleting something the fleet was told about changes what the fleet should
+        // be told. Nothing else would send that: an upload pass is what reports, and
+        // there is now nothing to upload.
+        if (wasQueued) MeetingUpload.enqueue(ctx, always = true)
     }
 
     private fun row(recording: PendingRecording, state: RecordingState) =
