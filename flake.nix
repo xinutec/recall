@@ -80,6 +80,15 @@
         # The wheel is built by hatchling from `packages = ["src/recall"]`, so those
         # two files are all it can legitimately read. Narrowing `src` to them means
         # the env moves when the Python moves, and stays put otherwise.
+        #
+        # ⚠ **A COMMENT in pyproject.toml moves it too**, measured 2026-08-10:
+        # rewording the `[tool.uv] environments` note took `recall-ml-env` from
+        # `rcd89avp…` to `kmrbklrv…` with not one dependency changed, which on the
+        # next `home-manager switch` is a new binary path for the agents that reach
+        # /Volumes/Backup. Nothing can be trimmed here — hatchling reads the whole
+        # file — so the rule is the practical one: edit pyproject.toml for a reason,
+        # and keep prose that is really about the toolchain in flake.nix or
+        # gate.dhall, where it is free.
         wheelSrc = nixpkgs.lib.fileset.toSource {
           root = ./.;
           fileset = nixpkgs.lib.fileset.unions [ ./pyproject.toml ./src ];
@@ -99,6 +108,27 @@
           ]);
 
         mlEnv = mlPythonSet.mkVirtualEnv "recall-ml-env" uvWorkspace.deps.default;
+
+        # The same runtime plus the `dev` group, and THIS is what `.venv` is.
+        #
+        # It used to be a directory uv built from the same lock, which made the
+        # checks the odd one out: the agents ran a store path, everything a
+        # person or the gate ran came out of a mutable directory holding PyPI
+        # wheels — outside the store, outside every GC root, and reconstructed by
+        # hand after a fresh clone. `uv sync --check` existed only to report when
+        # the two had drifted, which is a check that would not be needed if there
+        # were one artifact.
+        #
+        # `deps.all` rather than `deps.default` is the whole difference: the dev
+        # group is where `pytest` lives, and it has to be IN the environment
+        # rather than beside it because mypy resolves third-party imports through
+        # `python_executable = ".venv/bin/python"` — so a pytest it cannot see is
+        # ~175 unfollowed-import errors under --strict.
+        #
+        # Deliberately NOT added to the devshell: it would drag the whole ML
+        # closure into `ruff check`. The gate builds it into `.venv` in one row,
+        # ahead of the rows that use it (see gate.dhall).
+        devEnv = mlPythonSet.mkVirtualEnv "recall-dev-env" uvWorkspace.deps.all;
 
         # The non-ML interpreter, defined ONCE and used by both the devshell and the
         # launchd agents (deploy/hm-agents.nix). Same expression means the same store
@@ -175,6 +205,7 @@
       in
       {
         packages.ml-env = mlEnv;
+        packages.dev-env = devEnv;
         packages.dev-python = devPython;
         packages.agent-tools = agentTools;
         packages.agents = deployedAgents;
@@ -199,9 +230,9 @@
             # ffmpeg segments/encodes the stream.
             pkgs.sox
             pkgs.ffmpeg
-            # ML deps (Phase 1+) live in a uv-managed venv — mlx-whisper /
-            # pyannote are not cleanly in nixpkgs. uv provides the venv; the
-            # interpreter stays the Nix one above for reproducibility.
+            # uv still owns the LOCK — `uv lock` after a dependency change — but
+            # no longer the venv: `.venv` is `packages.dev-env`, built from that
+            # lock by uv2nix. Kept here for relocking and for `uv tree`.
             pkgs.uv
             # Angular front-end toolchain (Angular 22 needs Node >= 24.15)
             pkgs.nodejs_24

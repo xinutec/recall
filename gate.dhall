@@ -16,12 +16,15 @@ unmounted volumes and credential blocks", which added three graceful bypasses at
 once — the same commit that made `check-pii.sh` exit 0 when its denylist was
 unreadable.
 
-**The venv is reported on, not repaired.** One row, `uv sync --check`, which
-fails when the venv is missing or has drifted from `uv.lock` and never mutates
-either. The script synced first and checked afterwards, so an ad-hoc `pip install`
-was silently reverted rather than reported — and the venv is not a disposable
-`node_modules`, it is the runtime the ML agents actually run on. Missing or
-drifted, the fix is one command and it is in the failure message.
+**The venv is built here, and there is nothing left to report on.** It was a
+directory uv filled from `uv.lock`, and this gate carried a `uv sync --check` row
+to say when the two had drifted — reporting rather than repairing, because the
+script it replaced synced first and checked afterwards, which silently reverted
+an ad-hoc `pip install` instead of reporting it. Both of those are answers to
+having two artifacts. `.venv` is now `nix build .#dev-env --out-link .venv`: one
+store path, built from the same lock the agents' `ml-env` is built from, and a GC
+root rather than 1.5 GB of loose wheels that a fresh clone had to reconstruct by
+hand. What is left to check is that it *builds*, which is the row itself.
 
 **swift-format is a check rather than a courtesy.** `swift-format not found (no
 Xcode) — Swift formatting NOT checked` was the loud-skip shape again. `env -u
@@ -104,27 +107,31 @@ in  { name = "recall"
               ]
         , timeout_s = 600
         }
-      , {-  The venv holds the runtime the agents actually run on; `uv.lock` is
-            its committed pin set. `--check` reports drift either way — a stale
-            lock or an ad-hoc install — without mutating, so a failing gate never
-            silently repairs the thing it is reporting on. Missing or drifted:
+      , {-  `.venv` IS a store path, and this row is what makes it one.
 
-                uv sync --frozen --all-groups --no-install-project
+            It was a directory uv built from the same `uv.lock`, and the check
+            here was `uv sync --check`: report drift, repair nothing. That check
+            only existed because there were two artifacts to compare. There is
+            one now — `packages.dev-env`, uv2nix over the same lock, which is
+            `packages.ml-env` plus the `dev` group — so `--out-link` points
+            `.venv` at it and drift has nowhere to come from. It is also a GC
+            root, which the 1.5 GB of PyPI wheels it replaced was not.
 
-            and after an intentional upgrade, `uv lock` and commit it.
+            ⚠ **This row must come before every row that runs `.venv/bin/python`**
+            (the model contract, the fleet import surface, pytest) and before
+            `mypy`, which resolves third-party imports through
+            `python_executable = ".venv/bin/python"`. The gate runs its rows in
+            order; a reshuffle that moves this one down turns four rows into
+            "no such file" with nothing saying why.
+
+            NOT in the devshell, deliberately: putting it there would drag the
+            whole ML closure into `ruff check`.
         -}
         G.Check::{
-        , name = "venv matches uv.lock (the ML runtime is reconstructible)"
+        , name = "the venv is a store path (nix builds it, uv does not)"
         , argv =
-            G.inDevShell
-              [ "uv"
-              , "sync"
-              , "--frozen"
-              , "--all-groups"
-              , "--no-install-project"
-              , "--check"
-              ]
-        , timeout_s = 900
+            [ "nix", "build", "--no-warn-dirty", ".#dev-env", "--out-link", ".venv" ]
+        , timeout_s = 1800
         }
       , {-  What home-manager will actually run, built here instead of discovered
             at `home-manager switch`. `.#agents` is a farm of the launchd wrappers

@@ -4,7 +4,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
-.venv/
+# No trailing slash: `.venv` is a SYMLINK into the store now (built by
+# `nix build .#dev-env --out-link .venv`), and `.venv/` matches only directories
+# — so the trailing slash left the symlink showing as an untracked file.
+.venv
 *.egg-info/
 dist/
 build/

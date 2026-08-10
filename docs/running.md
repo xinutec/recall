@@ -4,6 +4,10 @@ All ML commands run via `scripts/recall.sh <cmd>` (Nix tools + the `.venv` with
 mlx-whisper/pyannote + `HF_TOKEN` from `.env`). Data root is
 `/Volumes/Backup/recall` (encrypted), passed as `--out`.
 
+`.venv` is a symlink into the nix store (`nix build .#dev-env --out-link .venv`),
+so a person runs the same interpreter the agents do rather than a second copy
+built by hand. If it is missing, that command is how it comes back.
+
 ## Services (launchd)
 
 The agents are defined in `deploy/hm-agents.nix` and installed by **home-manager**

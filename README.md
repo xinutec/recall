@@ -40,8 +40,12 @@ nix develop --command bash -c 'cd frontend && npx ng serve'   # dev, proxies /ap
 nix develop --command bash -c 'cd frontend && npx ng test --watch=false'
 ```
 
-ML deps (mlx-whisper, pyannote) live in a uv-managed `.venv`; `scripts/recall.sh`
-runs any command with the full environment.
+ML deps (mlx-whisper, pyannote) live in `.venv`, which is a **symlink into the
+nix store** — `nix build .#dev-env --out-link .venv` builds it from `uv.lock`,
+the same lock the agents' `ml-env` comes from, plus the `dev` group. It was a
+uv-managed directory until 2026-08-10; nothing needs `uv sync` any more, and a
+fresh clone gets it from the gate's first venv row. `scripts/recall.sh` runs any
+command with the full environment.
 
 ## Status
 

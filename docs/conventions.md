@@ -39,7 +39,9 @@ The Python in this project is fully, strictly typed.
 - Tests live in `tests/` (backend) plus the frontend specs. Run the whole gate
   with **`nix run ../dev-lint#gate -- . gate.json`**; for just the backend tests use
   `nix develop --command .venv/bin/python -m pytest` (the venv holds the ML deps —
-  bare `pytest` can't import numpy/fastapi).
+  bare `pytest` can't import numpy/fastapi). `.venv` is a symlink into the store,
+  built by `nix build .#dev-env --out-link .venv`; if it is missing, that is the
+  command, not `uv sync`.
 
 ## Toolchain
 

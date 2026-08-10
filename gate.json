@@ -71,20 +71,16 @@
     {
       "argv": [
         "nix",
-        "develop",
+        "build",
         "--no-warn-dirty",
-        "--command",
-        "uv",
-        "sync",
-        "--frozen",
-        "--all-groups",
-        "--no-install-project",
-        "--check"
+        ".#dev-env",
+        "--out-link",
+        ".venv"
       ],
       "cwd": ".",
       "env": {},
-      "name": "venv matches uv.lock (the ML runtime is reconstructible)",
-      "timeout_s": 900
+      "name": "the venv is a store path (nix builds it, uv does not)",
+      "timeout_s": 1800
     },
     {
       "argv": [

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run any recall command with the full environment:
 #   - Nix tools (sox, ffmpeg) on PATH
-#   - the persistent .venv python (mlx-whisper, pyannote)
+#   - the .venv python (mlx-whisper, pyannote) — a symlink into the nix store,
+#     built by `nix build .#dev-env --out-link .venv`, so this is the same
+#     interpreter the worker and refine agents run
 #   - the package on PYTHONPATH
 #   - HF_TOKEN from .env (for pyannote, gated on HuggingFace)
 #
