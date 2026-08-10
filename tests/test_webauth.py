@@ -477,3 +477,24 @@ def test_register_is_inert_without_config() -> None:
     assert register_web_auth(app, None) is False
     # No gate: the browsing route answers without any cookie.
     assert TestClient(app).get("/api/transcripts").status_code == 200
+
+
+def test_the_outbox_report_survives_the_credential_being_the_problem() -> None:
+    """⚠ The report about a bad token cannot itself need a good one.
+
+    The phone reports with the same device token it uploads with, so gating the
+    report means that when the token is wrong — the 2026-08-07 incident, and the
+    likeliest fault there is — the report is 401ed too and the fleet learns
+    nothing. The one failure the whole check exists to catch would be the one it
+    cannot see (#77).
+
+    Found by running it end to end on the Pixel 9: the phone wrote "Not
+    authorised — check the upload token in Settings." onto its own row while
+    `/sync/devices/outbox` still answered `{"items":[]}`.
+    """
+    assert not requires_session("POST", "/api/devices/outbox")
+    # And it is NOT on the token plane, which would reintroduce exactly that.
+    assert not accepts_device_token("POST", "/api/devices/outbox")
+    # Reading them back is a different question with a different caller: the Mac,
+    # on the sync plane, which is gated by its own bearer.
+    assert requires_session("GET", "/api/devices/outbox")

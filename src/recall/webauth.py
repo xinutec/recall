@@ -89,6 +89,20 @@ _DEVICE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/capture/pause"),  # phone's pause button (login-free by choice)
         ("POST", "/api/capture/resume"),  # phone's resume button
         ("POST", "/api/log"),  # browser-side error log — usable from the sign-in wall
+        # ⚠ The phone saying what it could NOT upload (#77), and it MUST be here
+        # rather than on the device-token plane. It reports with the same credential
+        # it uploads with, so gating it means that when the token is wrong — the
+        # 2026-08-07 incident, and the single most likely fault — the report is 401ed
+        # too and the fleet learns nothing. The one failure the check exists to catch
+        # would be the one it cannot see. Found by running it: the phone wrote "Not
+        # authorised — check the upload token" to its own row while `/sync/devices/
+        # outbox` still returned `{"items":[]}`.
+        #
+        # Same trade as `/api/log` directly above: a report about being unable to
+        # authenticate cannot require authentication. What it costs is that anyone
+        # already inside WireGuard/the LAN can lie about a queue depth in a health
+        # check — no read access, no audio, no archive.
+        ("POST", "/api/devices/outbox"),
     }
 )
 
@@ -103,12 +117,6 @@ _DEVICE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
 _DEVICE_TOKEN_PATHS: frozenset[tuple[str, str]] = frozenset(
     {
         ("POST", "/api/sessions"),  # Android meeting recorder + share sheet upload
-        # The same phone saying what it could NOT upload (#77). It is a write, but
-        # of last-known status only: it stores a count, a timestamp and the phone's
-        # own words for the failure, and nothing reads it back as control. The
-        # blast radius of the token gaining this is that a holder of it could lie
-        # about a queue depth in a health check.
-        ("POST", "/api/devices/outbox"),
     }
 )
 
