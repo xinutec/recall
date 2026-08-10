@@ -56,6 +56,20 @@ so leaving it is the only way for the doctor to come back at all. It exits by
 itself when the volume does. Do not go hunting it — go and find what owns the
 disk queue.
 
+### The worker leaves a pulse
+
+`<data root>/worker-heartbeat.json` is stamped at the start and again at the end
+of every worker pass, and the doctor grades its age as `capture/worker pulse`
+(warn 15 min, fail 1 h). The worker's *log* cannot answer this: it prints only
+when a pass writes transcript rows, so a quiet house and a wedged pipeline both
+leave an empty `worker.out.log` — on 2026-08-10 that log was three days old while
+an hour of captured audio went unindexed.
+
+A pass stamped as started but never finished says `a pass has been running N min`,
+which is a different fault from `last pass N min ago` even though the clock is the
+same one: the first points at the archive, the second at launchd. A pass that
+raises never stamps a finish, so a crash-looping worker reads as the former.
+
 The reason is 2026-08-10: a bulk delete on that volume starved every reader for
 over an hour, the doctor wedged along with the worker, refine and sync, and
 because launchd will not start a new run while the old one is stuck

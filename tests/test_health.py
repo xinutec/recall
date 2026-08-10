@@ -20,7 +20,9 @@ from recall.health import (
     mirror_check,
     recorders_on_disk,
     sweep_refusal_check,
+    worker_check,
 )
+from recall.heartbeat import Beat
 from recall.sources import DEVICE_KINDS, SourceKind
 from recall.timeline import Gap
 
@@ -243,6 +245,66 @@ def test_sweep_refusal_check_warns_without_failing_when_a_sweep_was_refused() ->
     tampered = sweep_refusal_check(2)
     assert tampered.verdict == "warn"
     assert "2" in tampered.observed
+
+
+# --- the worker's pulse --------------------------------------------------------------
+#
+# The worker prints only when a pass writes transcript rows, so a quiet house and a
+# wedged pipeline leave the same empty log — `worker.out.log` was three days old while
+# an hour of captured audio went unindexed (#709).
+
+
+def _pass(*, ago: timedelta, took: float | None = 0.4, rows: int = 0) -> Beat:
+    finished = NOW - ago
+    return Beat(
+        started=finished - timedelta(seconds=took or 0.0),
+        finished=finished,
+        seconds=took,
+        rows=rows,
+    )
+
+
+def test_a_worker_ticking_over_with_nothing_to_do_passes() -> None:
+    """The case the log cannot express, and the reason the heartbeat exists."""
+    result = worker_check(_pass(ago=timedelta(seconds=8)), now=NOW)
+    assert (result.section, result.label) == ("capture", "worker pulse")
+    assert result.verdict == "pass"
+    assert "nothing to do" in result.observed
+    assert result.unit == "min"
+
+
+def test_a_worker_that_did_work_says_how_much() -> None:
+    result = worker_check(_pass(ago=timedelta(seconds=8), took=31.0, rows=4), now=NOW)
+    assert result.verdict == "pass"
+    assert "4 row(s)" in result.observed
+    assert "31.0s" in result.observed
+
+
+def test_a_worker_that_has_stopped_completing_passes_fails() -> None:
+    # The 2026-08-10 shape: the loop is alive, a pass went into the archive and
+    # never came back. Ten-second polling makes an hour of this unambiguous.
+    assert worker_check(_pass(ago=timedelta(minutes=20)), now=NOW).verdict == "warn"
+    assert worker_check(_pass(ago=timedelta(hours=2)), now=NOW).verdict == "fail"
+
+
+def test_a_pass_that_never_returned_is_named_as_such() -> None:
+    """A stuck pass and a stopped loop get different words for the same clock.
+
+    They are different faults with different places to look — the archive for one,
+    launchd for the other — and the verdict alone cannot say which.
+    """
+    running = Beat(
+        started=NOW - timedelta(hours=2), finished=None, seconds=None, rows=0
+    )
+    result = worker_check(running, now=NOW)
+    assert result.verdict == "fail"
+    assert "has been running" in result.observed
+
+
+def test_a_worker_that_never_ran_is_not_quietly_fine() -> None:
+    result = worker_check(None, now=NOW)
+    assert result.verdict == "fail"
+    assert "never" in result.observed
 
 
 # --- the archive answering at all ----------------------------------------------------

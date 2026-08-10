@@ -25,7 +25,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import recall
-from recall import bounded, capture_control, runlog
+from recall import bounded, capture_control, heartbeat, runlog
 from recall.abcompare import Report, compare_models, render_json, render_markdown
 from recall.asr import (
     AsrResult,
@@ -58,6 +58,7 @@ from recall.health import (
     mirror_check,
     recorders_on_disk,
     sweep_refusal_check,
+    worker_check,
 )
 from recall.hf_asr import is_adapter_dir, make_hf_transcriber
 from recall.identify import identify_segments
@@ -410,6 +411,17 @@ def _cmd_worker(args: argparse.Namespace) -> int:
     mode = "diarized" if diarizer else "basic+vad"
 
     def one_pass() -> int:
+        # ⚠ Stamp the START, not just the end. A pass that never returns and a loop
+        # that never starts one look identical from a finish-only heartbeat, and
+        # they point at different things: the first is the archive, the second is
+        # launchd. This is the only proof that a pass happened at all when it found
+        # nothing to do — the worker's log says nothing in that case, which is how
+        # an hour of unindexed audio stayed invisible on 2026-08-10 (#709).
+        started_at = datetime.now(UTC)
+        started_clock = time.monotonic()
+        heartbeat.write(
+            args.out, heartbeat.Beat(started_at, finished=None, seconds=None, rows=0)
+        )
         # Safety net: if capture was paused and the pause has elapsed, resume it
         # so recording can never be left off (completeness is the #1 requirement).
         capture_control.auto_resume_if_expired(args.out, datetime.now(UTC))
@@ -453,9 +465,21 @@ def _cmd_worker(args: argparse.Namespace) -> int:
             # Offline speaker ID: enrol voiceprints from labels, embed turns once,
             # re-match guesses against current voiceprints (bounded, token-gated).
             _speaker_id_pass(store, args.out)
-            return written
         finally:
             store.close()
+        # Only on the way out clean: a pass that raised did not complete, and a
+        # crash-looping worker must keep reading as one whose passes never return
+        # rather than as one ticking over nicely.
+        heartbeat.write(
+            args.out,
+            heartbeat.Beat(
+                started_at,
+                finished=datetime.now(UTC),
+                seconds=time.monotonic() - started_clock,
+                rows=written,
+            ),
+        )
+        return written
 
     if args.loop:
         while True:
@@ -1499,6 +1523,7 @@ def _archive_checks(args: argparse.Namespace) -> list[Check]:
             paused_until=capture_control.paused_until(args.out),
         ),
         *loss_checks(losses, dead_windows, sources, window=_LOSS_WINDOW),
+        worker_check(heartbeat.read(args.out), now=now),
     ]
     # The fleet mirror only exists when the split is on (RECALL_SYNC_TOKEN set); a
     # stock LAN-only deployment has no fleet to be incomplete against.

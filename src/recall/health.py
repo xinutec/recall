@@ -34,6 +34,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from recall.capture import segment_glob
+from recall.heartbeat import Beat
 from recall.sources import SourceKind
 from recall.timeline import Gap
 
@@ -224,6 +225,70 @@ def archive_check(
         expected=expected,
         value=round(seconds, 2),
         unit="s",
+    )
+
+
+# How long the worker may go without completing a pass. The loop polls every 10s and
+# an empty pass takes under a second, so a quarter of an hour is some ninety missed
+# passes — nothing ambiguous about it. An hour is a fault by any reading: even the
+# largest legitimate backlog drain returns to the top of the loop well inside it.
+WORKER_SLOW = timedelta(minutes=15)
+WORKER_STOPPED = timedelta(hours=1)
+
+
+def worker_check(
+    beat: Beat | None,
+    *,
+    now: datetime,
+    slow: timedelta = WORKER_SLOW,
+    stopped: timedelta = WORKER_STOPPED,
+) -> Check:
+    """Is the transcription pipeline still turning, or has it merely gone quiet?
+
+    ⚠ **The worker's log cannot answer this**, which is the whole reason for the
+    check: it prints only when a pass writes transcript rows, so a house with
+    nothing to transcribe and a worker in uninterruptible disk wait produce the
+    same empty log. On 2026-08-10 that log was three days old and an hour of
+    captured audio was going unindexed behind it (#709).
+
+    A running pass and a stopped loop are both graded on the same clock — time
+    since a pass last *completed* — but they are named differently in `observed`,
+    because they point at different things: a pass that will not return is the
+    archive, and a loop that will not start one is launchd.
+    """
+    expected = f"a pass completed within {slow.total_seconds() / 60:.0f} min"
+    if beat is None:
+        return Check(
+            section="capture",
+            label="worker pulse",
+            verdict="fail",
+            observed="the worker has never completed a pass",
+            expected=expected,
+        )
+
+    reference = beat.finished or beat.started
+    since = now - reference
+    if beat.finished is None:
+        observed = f"a pass has been running {_minutes(since):.1f} min"
+    else:
+        rows = f"{beat.rows} row(s)" if beat.rows else "nothing to do"
+        took = "" if beat.seconds is None else f" in {beat.seconds:.1f}s"
+        observed = f"last pass {_minutes(since):.1f} min ago — {rows}{took}"
+
+    if since >= stopped:
+        verdict = "fail"
+    elif since >= slow:
+        verdict = "warn"
+    else:
+        verdict = "pass"
+    return Check(
+        section="capture",
+        label="worker pulse",
+        verdict=verdict,
+        observed=observed,
+        expected=expected,
+        value=_minutes(since),
+        unit="min",
     )
 
 
