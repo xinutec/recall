@@ -160,6 +160,73 @@ def capture_checks(
     return checks
 
 
+# How long the archive-reading half of the doctor may take before it is treated as
+# not having answered. A healthy run is ~1.5s end to end, so this is forty times the
+# work — and it has to stay far under the agent's 300s StartInterval, because
+# `KeepAlive = false` means launchd will not start the next doctor while this one is
+# still going: one wedged run silences every run after it.
+ARCHIVE_BOUND = timedelta(seconds=60)
+# And the reading that predicts the bound being hit. During the 2026-08-10 starvation
+# a two-table COUNT(*) alone took 4m19s, so the interesting range is not near 1.5s;
+# anything past a few seconds means the volume is already contended.
+ARCHIVE_SLOW = timedelta(seconds=10)
+
+
+def archive_check(
+    seconds: float | None,
+    *,
+    detail: str = "",
+    bound: timedelta = ARCHIVE_BOUND,
+    slow: timedelta = ARCHIVE_SLOW,
+) -> Check:
+    """Could this machine read its own archive at all — and how long did it take?
+
+    Every other check in this module presumes the archive answered. On 2026-08-10
+    it did not, for over an hour, and the doctor did not report that: it lives on
+    the volume it checks, so it went into uninterruptible disk wait alongside the
+    worker and the sync (#709). This is the check that survives that, because the
+    archive is read in a child process the parent abandons (`recall.bounded`) and
+    the timeout is reported from off the disk.
+
+    ⚠ **Unanswered is `fail`, never `skip`.** A skip reads as "not applicable",
+    and nothing is more applicable than the archive being unreachable — the June
+    lesson was that a silence which looks deliberate is how a fault survives for
+    weeks. The latency is carried as `value` so the trend is visible while it is
+    still only slow, which is the only warning anyone gets before it wedges.
+    """
+    expected = f"the archive read in under {slow.total_seconds():.0f}s"
+    if seconds is None:
+        return Check(
+            section="archive",
+            label="archive answers",
+            verdict="fail",
+            observed=detail or f"no answer in {bound.total_seconds():.0f}s",
+            expected=expected,
+        )
+    observed = f"read in {seconds:.1f}s"
+    if detail:
+        return Check(
+            section="archive",
+            label="archive answers",
+            verdict="fail",
+            observed=f"{detail} (after {seconds:.1f}s)",
+            expected=expected,
+        )
+    return Check(
+        section="archive",
+        label="archive answers",
+        verdict="warn" if seconds >= slow.total_seconds() else "pass",
+        observed=(
+            observed
+            if seconds < slow.total_seconds()
+            else f"{observed} — something else owns the disk"
+        ),
+        expected=expected,
+        value=round(seconds, 2),
+        unit="s",
+    )
+
+
 def agent_checks(agents: Sequence[tuple[str, bool]]) -> list[Check]:
     """One check per launchd agent. An installed-but-unloaded agent is always a fault:
     the agents self-gate (they park while capture is paused, they do not unload), so

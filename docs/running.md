@@ -42,6 +42,28 @@ want while developing.
 There is deliberately **no `recall-api` agent**: the Mac serves no UI or control plane
 (see the Isis split below). The last four are inert until `RECALL_SYNC_TOKEN` is set.
 
+### The doctor runs itself twice, and that is on purpose
+
+`recall doctor` starts a child — `python -m recall doctor --collect` — that does
+every read of `/Volumes/Backup` and prints its checks as JSON, and a parent that
+reports them while touching only launchd and `~/.config`. If the child does not
+answer within 60 seconds the parent **abandons it** and reports
+`archive/archive answers: no answer in 60s`, naming the abandoned pid on stderr.
+
+So a stray `recall doctor --collect` in `ps`, in `U` state, is the system working:
+a process in uninterruptible disk wait cannot be killed until its I/O completes,
+so leaving it is the only way for the doctor to come back at all. It exits by
+itself when the volume does. Do not go hunting it — go and find what owns the
+disk queue.
+
+The reason is 2026-08-10: a bulk delete on that volume starved every reader for
+over an hour, the doctor wedged along with the worker, refine and sync, and
+because launchd will not start a new run while the old one is stuck
+(`KeepAlive = false`, `StartInterval = 300`), *every* doctor after it was
+silenced too. The outside view of the same fault is fleetwatch's `volume-latency`
+collector on this machine (`xinutec-infra/mac-mini/volume_latency.py`); this is
+the inside one.
+
 The off-machine backup is **odin's**, not the Mac's: odin's nightly restic takes an
 integrity-checked SQLite snapshot from inside the Isis pod plus an rsync of the audio
 PVC (`nixos-config machines/odin/backup-prepare.sh`), so every recording is protected

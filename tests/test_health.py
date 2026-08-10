@@ -9,9 +9,12 @@ from pathlib import Path
 
 from recall.fleetwatch import COLLECTOR, INTERVAL_S, build_report, mint_ulid
 from recall.health import (
+    ARCHIVE_BOUND,
+    ARCHIVE_SLOW,
     Check,
     Recorder,
     agent_checks,
+    archive_check,
     capture_checks,
     loss_checks,
     mirror_check,
@@ -240,6 +243,47 @@ def test_sweep_refusal_check_warns_without_failing_when_a_sweep_was_refused() ->
     tampered = sweep_refusal_check(2)
     assert tampered.verdict == "warn"
     assert "2" in tampered.observed
+
+
+# --- the archive answering at all ----------------------------------------------------
+#
+# Every other check in this module presumes the archive could be read. On 2026-08-10 it
+# could not, for over an hour, and the doctor reported nothing at all — it lives on the
+# volume it checks and went into uninterruptible disk wait with everything else (#709).
+
+
+def test_a_readable_archive_passes_and_carries_the_latency() -> None:
+    result = archive_check(1.1)
+    assert (result.section, result.label) == ("archive", "archive answers")
+    assert result.verdict == "pass"
+    # The trend is the only warning anyone gets before it wedges, so the figure is
+    # charted rather than just narrated.
+    assert (result.value, result.unit) == (1.1, "s")
+
+
+def test_a_slow_archive_warns_before_it_stops_answering() -> None:
+    warned = archive_check(ARCHIVE_SLOW.total_seconds())
+    assert warned.verdict == "warn"
+    assert warned.value == ARCHIVE_SLOW.total_seconds()
+
+
+def test_an_archive_that_did_not_answer_fails_rather_than_skipping() -> None:
+    """A skip reads as "not applicable" — the June lesson, in a new place.
+
+    Capture's pause is the one thing here that legitimately skips, and it is
+    deliberate and time-bounded. An unreachable archive is neither.
+    """
+    result = archive_check(None)
+    assert result.verdict == "fail"
+    assert f"{ARCHIVE_BOUND.total_seconds():.0f}s" in result.observed
+    assert result.value is None, "a timeout has no latency to chart"
+
+
+def test_an_archive_that_answered_with_an_error_says_which_error() -> None:
+    result = archive_check(2.0, detail="sqlite3.DatabaseError: malformed")
+    assert result.verdict == "fail"
+    assert "malformed" in result.observed
+    assert "2.0s" in result.observed
 
 
 # --- speech loss, per device ---------------------------------------------------------

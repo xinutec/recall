@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sqlite3
@@ -19,11 +20,12 @@ import traceback
 import urllib.error
 from collections.abc import Callable
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from recall import capture_control, runlog
+import recall
+from recall import bounded, capture_control, runlog
 from recall.abcompare import Report, compare_models, render_json, render_markdown
 from recall.asr import (
     AsrResult,
@@ -47,8 +49,10 @@ from recall.finetune_pilot import PilotReport, run_pilot
 from recall.fleetwatch import build_report, post_report, read_token
 from recall.health import (
     ALWAYS_ON,
+    ARCHIVE_BOUND,
     Check,
     agent_checks,
+    archive_check,
     capture_checks,
     loss_checks,
     mirror_check,
@@ -1459,19 +1463,14 @@ def _speech_loss(
     return losses, dead
 
 
-def _cmd_doctor(args: argparse.Namespace) -> int:
-    """Is recall working? Agents loaded, archive mirrored — and, above all, is the
-    recording actually recording.
+def _archive_checks(args: argparse.Namespace) -> list[Check]:
+    """Every check that has to READ the archive volume. Runs in the child process.
 
-    That last one was missing, and its absence cost real memory: capture crash-looped on
-    22 June, recorded nothing for ninety minutes, and was found three weeks later by
-    diffing the filesystem by hand. launchd restarts capture when it dies, so a
-    persistent fault becomes a loop, and a loop looks exactly like a quiet house.
-
-    `--post` sends the verdicts to fleetwatch, where they sit beside the rest of the
-    fleet's health. That is what makes this a monitor rather than a command nobody runs:
-    fleetwatch renders a producer that has *stopped reporting* as failed, so the case
-    "the Mac is dead" needs no detector here — not reporting is the report.
+    Split out of `_cmd_doctor` for one reason: all of this can block indefinitely.
+    The store queries, the segment stat walk and the pause marker all live on
+    `/Volumes/Backup`, and on 2026-08-10 all three were in uninterruptible disk
+    wait at once. Keeping them behind one function keeps the boundary honest —
+    if a check belongs here it is unsafe to run in the reporting process.
     """
     now = datetime.now(UTC)
     store = Store.open(_db_path(args.out))
@@ -1500,13 +1499,106 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             paused_until=capture_control.paused_until(args.out),
         ),
         *loss_checks(losses, dead_windows, sources, window=_LOSS_WINDOW),
-        *agent_checks(capture_control.agent_health()),
     ]
     # The fleet mirror only exists when the split is on (RECALL_SYNC_TOKEN set); a
     # stock LAN-only deployment has no fleet to be incomplete against.
     if os.environ.get("RECALL_SYNC_TOKEN"):
         checks.append(mirror_check(unmirrored, slack=_MIRROR_SLACK))
         checks.append(sweep_refusal_check(sweep_refusals))
+    return checks
+
+
+def _same_recall_env() -> dict[str, str]:
+    """Make the child import the same recall this process did.
+
+    The child starts in `/` rather than the parent's working directory — a wedged
+    cwd would hang it before it ran a line — so it cannot find a source checkout
+    the way the parent did. Without this, one doctor run can be two builds: the
+    parent from a checkout and the child from the installed wheel, which is a
+    difference that shows up as an argparse error rather than as itself.
+    """
+    root = str(Path(recall.__file__).resolve().parent.parent)
+    existing = os.environ.get("PYTHONPATH")
+    return {
+        **os.environ,
+        "PYTHONPATH": root if not existing else f"{root}{os.pathsep}{existing}",
+    }
+
+
+def _read_archive_checks(args: argparse.Namespace) -> tuple[list[Check], Check]:
+    """Ask a child process for the archive's checks, and give up on it if it hangs.
+
+    Returns what it managed to say plus the verdict on the asking itself, which
+    is reported whether or not the archive answered — that check IS the finding
+    when it did not.
+    """
+    answer = bounded.run(
+        [sys.executable, "-m", "recall", "doctor", "--out", str(args.out), "--collect"],
+        timeout_s=ARCHIVE_BOUND.total_seconds(),
+        env=_same_recall_env(),
+    )
+    if answer.stdout is None:
+        print(
+            f"doctor: the archive did not answer in "
+            f"{ARCHIVE_BOUND.total_seconds():.0f}s — abandoned pid {answer.pid} "
+            f"(it is in uninterruptible disk wait; it exits when the volume does)",
+            file=sys.stderr,
+        )
+        return [], archive_check(None)
+    if answer.returncode != 0:
+        reason = (answer.stderr or "the archive read failed").strip()
+        last = reason.splitlines()[-1] if reason else "the archive read failed"
+        return [], archive_check(answer.seconds, detail=last)
+    try:
+        report = json.loads(answer.stdout)
+        checks = [Check(**row) for row in report["checks"]]
+        seconds = float(report["seconds"])
+    except (json.JSONDecodeError, LookupError, TypeError, ValueError):
+        return [], archive_check(answer.seconds, detail="unreadable archive report")
+    return checks, archive_check(seconds)
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Is recall working? Agents loaded, archive mirrored — and, above all, is the
+    recording actually recording.
+
+    That last one was missing, and its absence cost real memory: capture crash-looped on
+    22 June, recorded nothing for ninety minutes, and was found three weeks later by
+    diffing the filesystem by hand. launchd restarts capture when it dies, so a
+    persistent fault becomes a loop, and a loop looks exactly like a quiet house.
+
+    `--post` sends the verdicts to fleetwatch, where they sit beside the rest of the
+    fleet's health. That is what makes this a monitor rather than a command nobody runs:
+    fleetwatch renders a producer that has *stopped reporting* as failed, so the case
+    "the Mac is dead" needs no detector here — not reporting is the report.
+
+    ⚠ **This process must never read the archive volume itself.** Everything that
+    does is in `_archive_checks`, behind a child process this one abandons if it
+    hangs (`recall.bounded`). On 2026-08-10 the doctor sat in uninterruptible
+    disk wait for over an hour — with `KeepAlive = false` and a 300s
+    `StartInterval`, launchd starts no further run while one is stuck, so a
+    single wedged doctor silenced every doctor after it. What is left here reads
+    launchd and `~/.config`, both on the boot disk.
+    """
+    now = datetime.now(UTC)
+    if args.collect:
+        # The child times ITSELF, so the figure that reaches fleetwatch is the
+        # archive read rather than a second interpreter's startup — about 1.3s of
+        # imports, which would swamp the reading it is meant to trend.
+        started = time.monotonic()
+        checks = _archive_checks(args)
+        print(
+            json.dumps(
+                {
+                    "seconds": time.monotonic() - started,
+                    "checks": [asdict(check) for check in checks],
+                }
+            )
+        )
+        return 0
+
+    archive, reachable = _read_archive_checks(args)
+    checks = [reachable, *archive, *agent_checks(capture_control.agent_health())]
 
     for check in checks:
         mark = {"pass": "ok", "warn": "WARN", "fail": "FAIL", "skip": "--"}[
