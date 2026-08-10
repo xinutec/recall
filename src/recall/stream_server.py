@@ -196,11 +196,27 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
         if proc.stdin is None:  # pragma: no cover - PIPE always sets it
             msg = "ffmpeg stdin pipe was not created"
             raise RuntimeError(msg)
+        # Why the stream ended, for the disconnect record. The two are not the
+        # same event and the log could not tell them apart: a phone walking out
+        # of range and a pause dropping the stream both just stopped.
+        ended = "unknown"
         try:
             while True:
-                data = sock.recv(_READ_CHUNK_BYTES)
+                try:
+                    data = sock.recv(_READ_CHUNK_BYTES)
+                except OSError as exc:
+                    # `serve` closes an active socket to drop the stream when
+                    # capture pauses, and a recv on the closed fd is HOW the
+                    # reader is told — see the comment on that close. Expected,
+                    # so it finalises like any other disconnect instead of
+                    # escaping into `_serve_conn` and printing a thread
+                    # traceback, which it did 168 times in this log before
+                    # 2026-08-10 without one of them meaning anything.
+                    ended = f"closed locally ({exc.strerror or exc})"
+                    break
                 if not data:
-                    break  # the device disconnected
+                    ended = "device disconnected"
+                    break
                 proc.stdin.write(data)  # the archive comes first; meter after
                 if first_byte is None:
                     first_byte = time.time()
@@ -238,6 +254,7 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
                     ),
                     "flushed": flushed.name if flushed else None,
                     "flushed_bytes": flushed.size if flushed else None,
+                    "ended": ended,
                 }
             )
             _record_event(

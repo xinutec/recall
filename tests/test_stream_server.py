@@ -3,12 +3,14 @@ itself, so many devices share one port instead of one ffmpeg listener each."""
 
 from __future__ import annotations
 
+import errno
 import json
 import socket
 import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -245,3 +247,65 @@ def test_serve_listens_only_when_not_paused(
         except OSError:
             time.sleep(0.2)
     assert connected
+
+
+class _ClosedMidStream:
+    """A socket whose `recv` raises EBADF partway through, as a real one does
+    when `serve` closes it from the pause loop.
+
+    A `socketpair` cannot test this reliably: whether closing from another
+    thread wakes a blocked `recv` or leaves it blocked is kernel behaviour, and
+    the first attempt at this test hung for ten minutes on exactly that. The
+    stub asserts what our code does with the error, which is the part we own.
+    """
+
+    def __init__(self, payload: bytes) -> None:
+        self._buf = payload
+        self.closed = False
+
+    def recv(self, n: int) -> bytes:
+        # Honours `n`, because `read_handshake` reads ONE BYTE AT A TIME so it
+        # cannot swallow any of the PCM behind the newline. A stub that ignored
+        # the size handed it the whole line as a single non-newline "byte".
+        if not self._buf:
+            raise OSError(errno.EBADF, "Bad file descriptor")
+        head, self._buf = self._buf[:n], self._buf[n:]
+        return head
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_a_pause_dropping_the_stream_is_a_disconnect_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    """`serve` closes an active socket to stop a phone when capture pauses, and
+    the reader learns by `recv` raising on the closed fd — that is the design.
+
+    What it did with the exception was let it escape into the thread, so every
+    pause printed a traceback: 168 of them in one log, none meaning anything,
+    and a real one would have been indistinguishable. The audio was always fine
+    (the `finally` still flushed), which is exactly why it went unnoticed.
+    """
+    sock = _ClosedMidStream(
+        b'{"id":"kitchen"}\n' + (2000).to_bytes(2, "little", signed=True) * 4800
+    )
+    # The assertion is that this RETURNS rather than raising.
+    handle_connection(cast("socket.socket", sock), tmp_path, CaptureConfig())
+    assert sock.closed, "the handler left the socket open"
+
+    store = Store.open(tmp_path / "recall.sqlite")
+    try:
+        events = store.capture_events_since(datetime.now(UTC) - timedelta(minutes=5))
+    finally:
+        store.close()
+    disconnect = next(
+        e
+        for e in events
+        if e.kind == capture_control.CaptureEventKind.INGEST_DISCONNECT
+    )
+    assert disconnect.detail is not None
+    stats = json.loads(disconnect.detail)
+    # And it says which of the two endings it was, which the record could not.
+    assert "closed locally" in stats["ended"]
+    assert stats["flushed"] is not None, "the pause lost the segment"
