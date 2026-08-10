@@ -11,6 +11,7 @@ from recall.fleetwatch import COLLECTOR, INTERVAL_S, build_report, mint_ulid
 from recall.health import (
     ARCHIVE_BOUND,
     ARCHIVE_SLOW,
+    WORKER_SLOW,
     Check,
     Recorder,
     agent_checks,
@@ -282,9 +283,26 @@ def test_a_worker_that_did_work_says_how_much() -> None:
 
 def test_a_worker_that_has_stopped_completing_passes_fails() -> None:
     # The 2026-08-10 shape: the loop is alive, a pass went into the archive and
-    # never came back. Ten-second polling makes an hour of this unambiguous.
-    assert worker_check(_pass(ago=timedelta(minutes=20)), now=NOW).verdict == "warn"
+    # never came back. That stall ran over an hour.
+    assert worker_check(_pass(ago=timedelta(minutes=40)), now=NOW).verdict == "warn"
     assert worker_check(_pass(ago=timedelta(hours=2)), now=NOW).verdict == "fail"
+
+
+def test_the_slowest_pass_ever_measured_here_does_not_warn() -> None:
+    """The cold start is what sets the warn line, not the steady state.
+
+    Measured on the Mac immediately after a home-manager switch on 2026-08-10:
+    the first pass took **513 s** and wrote nothing, because it loads the
+    speaker-ID models off the spinning disk. Steady-state empty passes settle at
+    17-22 s. A threshold picked from the steady state would go yellow on every
+    activation, and a check that cries wolf after every deploy is one nobody
+    reads by the time it matters.
+    """
+    cold = Beat(
+        started=NOW - timedelta(seconds=513), finished=None, seconds=None, rows=0
+    )
+    assert worker_check(cold, now=NOW).verdict == "pass", "a normal restart warns"
+    assert timedelta(seconds=513 * 3) <= WORKER_SLOW, "no margin over the cold start"
 
 
 def test_a_pass_that_never_returned_is_named_as_such() -> None:

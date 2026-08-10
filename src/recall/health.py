@@ -228,11 +228,24 @@ def archive_check(
     )
 
 
-# How long the worker may go without completing a pass. The loop polls every 10s and
-# an empty pass takes under a second, so a quarter of an hour is some ninety missed
-# passes — nothing ambiguous about it. An hour is a fault by any reading: even the
-# largest legitimate backlog drain returns to the top of the loop well inside it.
-WORKER_SLOW = timedelta(minutes=15)
+# How long the worker may go without completing a pass. Both ends measured on the Mac,
+# 2026-08-10, straight after a home-manager switch:
+#
+#     first pass after a restart   513 s   (8.5 min, 0 rows)
+#     steady-state empty pass       17-22 s
+#
+# ⚠ **An empty pass is not a fast pass**, which is the thing to know before touching
+# these numbers. A pass that writes no transcript rows still runs the bounded
+# backfills — loudness, word timings, speaker ID — and the first one after a restart
+# loads the pyannote embedding models off the spinning disk, which is where 8.5 of
+# those minutes go. So the warn line is set from the COLD start, not the steady state:
+# 30 min is three and a half times the slowest real pass ever measured here. Tighter
+# than that and every activation paints the pipeline yellow, which is how a colour
+# stops meaning anything.
+#
+# The fail line is the incident's own shape: the 2026-08-10 starvation ran over an
+# hour, and no legitimate pass has come close to that.
+WORKER_SLOW = timedelta(minutes=30)
 WORKER_STOPPED = timedelta(hours=1)
 
 

@@ -60,7 +60,10 @@ disk queue.
 
 `<data root>/worker-heartbeat.json` is stamped at the start and again at the end
 of every worker pass, and the doctor grades its age as `capture/worker pulse`
-(warn 15 min, fail 1 h). The worker's *log* cannot answer this: it prints only
+(warn 30 min, fail 1 h — set from the **cold** first pass, measured at 513 s
+because it loads the speaker-ID models off the spinning disk; steady-state empty
+passes are 17–22 s, and an empty pass is not a fast one since the bounded
+backfills run regardless). The worker's *log* cannot answer this: it prints only
 when a pass writes transcript rows, so a quiet house and a wedged pipeline both
 leave an empty `worker.out.log` — on 2026-08-10 that log was three days old while
 an hour of captured audio went unindexed.
