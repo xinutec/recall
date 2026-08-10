@@ -19,6 +19,7 @@ from httpx import HTTPStatusError
 
 from recall import capture_control
 from recall.ids import AudioSegmentId
+from recall.outbox import OutboxReport, record_report
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
 from recall.sync import (
@@ -952,3 +953,43 @@ def test_a_deletion_is_served_as_a_sweep_job_until_acknowledged(
         assert (job.type, job.source, job.start) == ("sweep", "usb", BASE.isoformat())
         client.mark_done(job.id, job_type="sweep")
         assert client.poll_jobs() == []
+
+
+def test_the_mac_reads_the_phones_outboxes_off_the_sync_plane(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#77's reader is the Mac, so it authenticates the way the Mac already can.
+
+    ⚠ The first version put this GET on the device-token plane and the collector's
+    first real run said `no RECALL_DEVICE_TOKEN in ~/Code/recall/.env` — the Mac has
+    never held the phone's credential, because the Mac does not upload recordings.
+    Which plane a route belongs on is a question about *which machine calls it*, not
+    about which endpoint is nearest.
+    """
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    store = Store.open(db)
+    record_report(
+        store,
+        OutboxReport(
+            device="pixel9",
+            queued=1,
+            oldest_queued_at=datetime(2026, 8, 10, 9, 0, tzinfo=UTC),
+            failing=1,
+            reason="Not authorised — check the upload token in Settings.",
+            at=datetime(2026, 8, 10, 19, 0, tzinfo=UTC),
+        ),
+    )
+    store.close()
+
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+    client = TestClient(app)
+
+    assert client.get("/sync/devices/outbox").status_code == 401
+    ok = client.get("/sync/devices/outbox", headers={"Authorization": "Bearer secret"})
+    assert ok.status_code == 200
+    [item] = ok.json()["items"]
+    assert item["device"] == "pixel9"
+    assert item["failing"] == 1
+    assert "upload token" in item["reason"]

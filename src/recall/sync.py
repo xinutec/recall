@@ -32,7 +32,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from recall import capture_control
-from recall.schemas import OkOut
+from recall.outbox import read_reports
+from recall.schemas import OkOut, OutboxesOut
 from recall.sources import AudioSource, SourceKind
 from recall.store import (
     AbCompareJob,
@@ -580,6 +581,42 @@ def register_sync_routes(
         if not path.is_file():
             raise HTTPException(status_code=404, detail="no such audio")
         return FileResponse(path)
+
+    @app.get("/sync/devices/outbox")
+    def sync_device_outboxes(
+        authorization: str | None = Header(default=None),
+    ) -> OutboxesOut:
+        """What the phones last said they were still holding (#77).
+
+        On the SYNC plane rather than the browsing one because the reader is the
+        Mac — this is Mac↔fleet traffic, and `RECALL_SYNC_TOKEN` is the credential
+        that relationship already has. The phone's own `POST /api/devices/outbox`
+        stays on the device plane, which is the credential IT has. Neither side
+        gains anything it did not need: the first design read this back on the
+        device plane and would have needed the phone's token on the Mac, which is
+        not there and should not be.
+        """
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            reports = read_reports(store)
+        finally:
+            store.close()
+        return {
+            "items": [
+                {
+                    "device": r.device,
+                    "queued": r.queued,
+                    "oldestQueuedAt": (
+                        r.oldest_queued_at.isoformat() if r.oldest_queued_at else None
+                    ),
+                    "failing": r.failing,
+                    "reason": r.reason,
+                    "at": r.at.isoformat(),
+                }
+                for r in reports
+            ]
+        }
 
     @app.post("/sync/segments")
     def sync_segments(

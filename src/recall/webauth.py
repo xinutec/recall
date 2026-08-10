@@ -109,12 +109,6 @@ _DEVICE_TOKEN_PATHS: frozenset[tuple[str, str]] = frozenset(
         # blast radius of the token gaining this is that a holder of it could lie
         # about a queue depth in a health check.
         ("POST", "/api/devices/outbox"),
-        # And the Mac's fleetwatch collector reading them back. On the device plane
-        # rather than exempt because it names devices; on it at all because the
-        # alternative — a whole third auth plane for one status GET — buys nothing.
-        # What a stolen phone token gains by this: it can read how many recordings
-        # are queued on the household's phones, and the sentence saying why.
-        ("GET", "/api/devices/outbox"),
     }
 )
 
