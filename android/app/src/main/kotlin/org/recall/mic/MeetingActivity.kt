@@ -332,14 +332,28 @@ private fun RecordingList(
         }
     }
     if (pending > 0) {
+        // "Waiting for the recall host" is the same untruth the rows used to tell, one
+        // level up: it names the one cause — not home yet — while the row above it says
+        // the token is wrong. Seen side by side on the real screen, the footer reads as
+        // the summary and quietly contradicts the diagnosis.
+        val failing = recordings.count { it.failure != null }
         Row(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "Waiting for the recall host…",
+                if (failing == 0) {
+                    "Waiting for the recall host…"
+                } else {
+                    "$failing of $pending couldn't be sent — see above."
+                },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color =
+                    if (failing == 0) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
             )
             OutlinedButton(onClick = onRetry) { Text("Try now") }
         }
@@ -372,6 +386,18 @@ private fun RecordingItem(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
+        row.failure?.let { why ->
+            // Same place and the same colour as the length warning below, because it is
+            // the same kind of thing: something about THIS recording that the person
+            // deciding what to do with it needs, said where the buttons are rather than
+            // in a log nobody reads.
+            Text(
+                why,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
         if (row.state == RecordingState.UNVERIFIED) {
             // The one case where the phone's copy is the better one — say so where the
             // Delete button is, not in a log nobody reads.
@@ -398,7 +424,15 @@ private fun RecordingItem(
                 }
 
                 RecordingState.QUEUED -> {
-                    StateNote("Uploading…", MaterialTheme.colorScheme.primary)
+                    // "Uploading…" next to a recording that has been failing for an hour
+                    // is the lie this task exists to end: the count on the meeting screen
+                    // read the same whether the host was unreachable or the token was
+                    // wrong, so a 401 survived from the day the feature was written.
+                    if (row.failure == null) {
+                        StateNote("Uploading…", MaterialTheme.colorScheme.primary)
+                    } else {
+                        StateNote("Upload failed", MaterialTheme.colorScheme.error)
+                    }
                 }
 
                 RecordingState.UPLOADED -> {

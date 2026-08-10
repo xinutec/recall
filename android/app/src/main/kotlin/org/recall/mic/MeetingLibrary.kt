@@ -34,6 +34,9 @@ data class RecordingRow(
     val durationMs: Long,
     val sizeBytes: Long,
     val state: RecordingState,
+    /** Why the last delivery attempt didn't land, or null if none has failed. Only ever
+     * set on a [RecordingState.QUEUED] row — anywhere else it has been delivered. */
+    val failure: String? = null,
 ) {
     val file: File get() = recording.audio
 }
@@ -100,6 +103,12 @@ object MeetingLibrary {
             durationMs = durationMs(recording.audio),
             sizeBytes = recording.audio.length(),
             state = state,
+            failure =
+                if (state == RecordingState.QUEUED) {
+                    MeetingQueue.failure(recording.audio)
+                } else {
+                    null
+                },
         )
 
     /**

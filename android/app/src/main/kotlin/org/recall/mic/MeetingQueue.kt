@@ -23,11 +23,17 @@ data class PendingRecording(
  * second, and nothing about it may live only in memory.
  *
  * **One file per recording, named for when it was made** — `meeting-<local stamp>.ogg`,
- * the same convention the third-party recorder used. There is no title and no sidecar:
- * the only thing worth knowing about a recording before it is transcribed is when it
- * happened, and the filename already says that. recall names the session
- * `Meeting <date> <time>` and it can be renamed there, where the transcript is to hand
- * and the name can be chosen for what the meeting turned out to be.
+ * the same convention the third-party recorder used. There is no title: the only thing
+ * worth knowing about a recording before it is transcribed is when it happened, and the
+ * filename already says that. recall names the session `Meeting <date> <time>` and it
+ * can be renamed there, where the transcript is to hand and the name can be chosen for
+ * what the meeting turned out to be.
+ *
+ * **The one exception is [FAILURE_SUFFIX]**, `<name>.ogg.failure`, holding why the last
+ * delivery attempt didn't land. It is not metadata about the recording — it is state
+ * about an attempt, it is deleted the moment one succeeds, and it has to be on disk for
+ * the same reason the audio is: [MeetingUpload] runs under WorkManager when the app is
+ * gone, so a reason kept in memory is lost exactly when someone opens the screen to ask.
  *
  * **A recording's state is which directory it is in**, because every one of those states
  * is a decision or a verdict that has to survive a reboot, and a rename is the only way
@@ -48,6 +54,10 @@ data class PendingRecording(
  */
 object MeetingQueue {
     const val AUDIO_SUFFIX = ".ogg"
+
+    /** Suffixed onto the audio's full name, so `list` — which matches [AUDIO_SUFFIX] at
+     * the end — can never mistake a note for a recording. */
+    const val FAILURE_SUFFIX = ".failure"
     private const val DIR = "meetings"
     private const val OUTBOX = "outbox"
     private const val UPLOADED = "uploaded"
@@ -148,17 +158,47 @@ object MeetingQueue {
      * Move a recording into [target] — how every state change happens here. Returns it at
      * its new home, or null if the rename failed, in which case it stays where it was
      * rather than quietly falling out of the flow.
+     *
+     * A move is always the end of the last attempt — approved, or delivered — so the
+     * failure note goes with it. Leaving one behind would put "not authorised" under a
+     * recording that is now safely on recall.
      */
     fun moveTo(recording: PendingRecording, target: File): PendingRecording? {
         val moved = File(target, recording.audio.name)
         if (!recording.audio.renameTo(moved)) return null
+        clearFailure(recording.audio)
         return recording.copy(audio = moved)
     }
 
     /** Delete a recording. Only ever on the user's say-so. */
     fun delete(recording: PendingRecording) {
+        clearFailure(recording.audio)
         recording.audio.delete()
     }
+
+    /**
+     * Why the last attempt to deliver [audio] didn't land, written beside it.
+     *
+     * On disk rather than in memory because the uploader runs under WorkManager with the
+     * app gone: a reason held in a field is collected before anyone opens the screen to
+     * find out, which is the state this whole task is fixing.
+     */
+    fun noteFailure(audio: File, reason: String) {
+        runCatching { failureFile(audio).writeText(reason) }
+    }
+
+    /** Forget the last failure — a delivery landed, or the recording moved on. */
+    fun clearFailure(audio: File) {
+        runCatching { failureFile(audio).delete() }
+    }
+
+    /** The noted reason, or null if the last attempt succeeded or none has been made. */
+    fun failure(audio: File): String? =
+        runCatching { failureFile(audio).takeIf { it.isFile }?.readText() }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+
+    private fun failureFile(audio: File) = File(audio.parentFile, audio.name + FAILURE_SUFFIX)
 
     /** Discard a recording that never got any audio (stopped instantly, or failed). */
     fun discard(audio: File) {

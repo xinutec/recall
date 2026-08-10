@@ -44,6 +44,9 @@ class MeetingUpload(
                 .onSuccess { file(recording, it) }
                 .onFailure {
                     Log.w(UI_LOG, "meeting upload failed: ${recording.audio.name}: ${it.message}")
+                    // Beside the recording, not only in the log: the screen is where
+                    // somebody asks why, and this worker runs with the app gone.
+                    MeetingQueue.noteFailure(recording.audio, UploadFailure.describe(it))
                     stuck = true
                 }
             MeetingLibrary.refresh(applicationContext)

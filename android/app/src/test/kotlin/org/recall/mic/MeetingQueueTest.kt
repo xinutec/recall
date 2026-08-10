@@ -122,6 +122,51 @@ class MeetingQueueTest {
         assertEquals(1, MeetingQueue.list(tmp.root, london).size)
     }
 
+    @Test
+    fun aFailureIsRememberedBesideTheRecording() {
+        // On disk, not in memory: MeetingUpload runs under WorkManager with the app gone,
+        // so a reason held in a field is collected before anyone opens the screen to ask.
+        val audio = record("meeting-20260703-095050.ogg")
+        assertNull(MeetingQueue.failure(audio))
+
+        MeetingQueue.noteFailure(audio, "Not authorised — check the upload token.")
+        assertEquals("Not authorised — check the upload token.", MeetingQueue.failure(audio))
+
+        MeetingQueue.clearFailure(audio)
+        assertNull(MeetingQueue.failure(audio))
+    }
+
+    @Test
+    fun aFailureNoteIsNeverListedAsARecording() {
+        // It sits in the outbox next to the audio, and the outbox is exactly what the
+        // uploader iterates — a note that listed as a recording would be posted.
+        val audio = record("meeting-20260703-095050.ogg")
+        MeetingQueue.noteFailure(audio, "Upload failed.")
+        assertEquals(listOf(audio), MeetingQueue.list(tmp.root, london).map { it.audio })
+    }
+
+    @Test
+    fun deliveryTakesTheFailureNoteWithIt() {
+        // Otherwise "not authorised" stays under a recording that is now safely on
+        // recall — the retry that succeeded would leave the reason it once failed.
+        val audio = record("meeting-20260703-095050.ogg")
+        MeetingQueue.noteFailure(audio, "Not authorised — check the upload token.")
+        val uploaded = tmp.newFolder("uploaded")
+
+        MeetingQueue.moveTo(MeetingQueue.list(tmp.root, london).single(), uploaded)
+
+        assertNull(MeetingQueue.failure(audio))
+        assertFalse(File(tmp.root, audio.name + MeetingQueue.FAILURE_SUFFIX).exists())
+    }
+
+    @Test
+    fun deletingARecordingTakesItsFailureNoteToo() {
+        val audio = record("meeting-20260703-095050.ogg")
+        MeetingQueue.noteFailure(audio, "Upload failed.")
+        MeetingQueue.delete(MeetingQueue.list(tmp.root, london).single())
+        assertFalse(File(tmp.root, audio.name + MeetingQueue.FAILURE_SUFFIX).exists())
+    }
+
     /** A file with some bytes in it, standing in for a recording. */
     private fun record(name: String): File =
         File(tmp.root, name).apply { writeBytes(ByteArray(64)) }
