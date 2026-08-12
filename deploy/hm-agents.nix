@@ -90,6 +90,25 @@ let
   # store paths this can name directly, from the same flake.lock the devshell resolves
   # against. `runtimeInputs` PREPENDS to PATH, so `say` and `launchctl` still come
   # from the system paths launchd provides.
+  # Where the Hugging Face models live, DECLARED rather than symlinked.
+  #
+  # This was `~/.cache/huggingface` -> here, a symlink nothing in this repo knew
+  # about: the agents inherited it by accident of the filesystem, so the one
+  # thing that decided where tens of gigabytes of models lived was invisible to
+  # every reader of this module (memview #645). Config states it; a symlink only
+  # implies it.
+  #
+  # ⚠ **The path is on the external volume ON PURPOSE**, and it moved hardware on
+  # 2026-08-12: it was the 6 TB HDD, it is now the 2 TB SSD that took the name
+  # `/Volumes/Backup`. Nothing here changed because the NAME did not — which is
+  # exactly why the volume was renamed rather than the paths rewritten.
+  #
+  # The `cache/cache` doubling is a fossil of the era when `~/.cache` itself was
+  # a symlink to `/Volumes/Backup/cache`. Kept because tidying it means moving
+  # the models, and the point of this change is to stop the location being an
+  # accident — not to pick a new one.
+  hfHome = "/Volumes/Backup/cache/cache/huggingface";
+
   wrapper = { name, python, args }:
     pkgs.writeShellApplication {
       name = "recall-${name}";
@@ -108,7 +127,7 @@ let
           set +a
         fi
 
-        exec env PYTHONPATH=${src}/src ${python} -m recall ${lib.escapeShellArgs args}
+        exec env PYTHONPATH=${src}/src HF_HOME=${hfHome} ${python} -m recall ${lib.escapeShellArgs args}
       '';
     };
 
