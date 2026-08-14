@@ -645,6 +645,7 @@ def record_heartbeat(body: HeartbeatIn) -> OkOut:
                 streaming=body.streaming,
                 charging=body.charging,
                 mic_ok=body.micOk,
+                via_lan=body.viaLan,
                 at=now,
             ),
         )
@@ -678,6 +679,7 @@ def _heartbeat(beat: Beat) -> HeartbeatOut:
         "streaming": beat.streaming,
         "charging": beat.charging,
         "micOk": beat.mic_ok,
+        "viaLan": beat.via_lan,
         "at": beat.at.isoformat(),
     }
 

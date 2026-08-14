@@ -148,17 +148,31 @@ object Heartbeat {
      */
     fun send(
         controlHost: String,
+        lanHost: String,
         device: String,
         streaming: Boolean,
         micOk: Boolean,
         ctx: Context,
-    ): Boolean =
+    ): Boolean {
+        val body = body(device, version(ctx), startedAt, streaming, charging(ctx), micOk)
+        // Control plane FIRST, the recorder's LAN address second (#888). The beat used
+        // to demand more reachability than recording does — audio goes to the LAN host,
+        // so a phone at home with its tunnel off recorded every sample and still read as
+        // dead. The Mac runs a relay on the same port, so the fallback is the identical
+        // request with the host swapped. Trying the VPN first keeps the LAN a backstop
+        // rather than a shortcut, so a phone away from home behaves exactly as before.
+        for (host in listOf(controlHost, lanHost)) {
+            if (host.isBlank()) continue
+            if (post(body, host)) return true
+        }
+        return false
+    }
+
+    private fun post(body: String, host: String): Boolean =
         runCatching {
-            if (controlHost.isBlank()) return false
-            val body = body(device, version(ctx), startedAt, streaming, charging(ctx), micOk)
             val conn =
                 (
-                    URL("http://$controlHost:$API_PORT/api/devices/heartbeat")
+                    URL("http://$host:$API_PORT/api/devices/heartbeat")
                         .openConnection() as HttpURLConnection
                 ).apply {
                     requestMethod = "POST"
@@ -168,6 +182,8 @@ object Heartbeat {
                     setRequestProperty("Content-Type", "application/json")
                 }
             conn.outputStream.use { it.write(body.toByteArray()) }
+            // Any 2xx: the fleet answers 200, the LAN relay 204 — it stores nothing of
+            // its own, so it has no body to return.
             val code = conn.responseCode
             conn.disconnect()
             code in 200..299

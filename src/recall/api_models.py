@@ -73,6 +73,10 @@ class HeartbeatIn(BaseModel):
     # False when the app is up but its audio engine would not open (#887). Optional:
     # an app too old to say sends nothing, which must not read as a working mic.
     micOk: bool | None = None
+    # Set by the Mac's LAN relay (#888), never by a phone — a beat that had to come
+    # the back way means the tunnel is down, which is worth seeing rather than
+    # papering over. The relay strips any value a phone sends.
+    viaLan: bool | None = None
 
 
 class CorrectIn(BaseModel):

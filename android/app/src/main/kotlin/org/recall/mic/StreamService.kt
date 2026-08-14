@@ -69,7 +69,7 @@ class StreamService : Service() {
         running = true
         MicState.setRunning(true)
         worker = thread(name = "mic-stream") { streamLoop(host, controlHost, deviceId) }
-        beater = thread(name = "mic-heartbeat") { beatLoop(controlHost, deviceId) }
+        beater = thread(name = "mic-heartbeat") { beatLoop(controlHost, host, deviceId) }
         return START_STICKY
     }
 
@@ -219,7 +219,7 @@ class StreamService : Service() {
      * Beats immediately on start, so a check that went red while the app was down
      * clears within a minute of it coming back rather than at the next hour mark.
      */
-    private fun beatLoop(controlHost: String, deviceId: String) {
+    private fun beatLoop(controlHost: String, host: String, deviceId: String) {
         // Consecutive failures, reset by any beat that lands. A blip must not cost an
         // hour of looking dead (#886): the sleep below is chosen from this, so the
         // first retry is a minute away rather than at the next hour mark.
@@ -228,6 +228,7 @@ class StreamService : Service() {
             val landed =
                 Heartbeat.send(
                     controlHost,
+                    host,
                     deviceId,
                     MicState.connected.value,
                     MicState.micOk.value,

@@ -97,6 +97,7 @@ class Beat:
     streaming: bool
     charging: bool | None
     mic_ok: bool | None
+    via_lan: bool | None
     at: datetime
 
 
@@ -110,6 +111,7 @@ def record_beat(settings: Settings, beat: Beat) -> None:
         "streaming": bool(beat.streaming),
         "charging": None if beat.charging is None else bool(beat.charging),
         "micOk": None if beat.mic_ok is None else bool(beat.mic_ok),
+        "viaLan": None if beat.via_lan is None else bool(beat.via_lan),
         "at": beat.at.isoformat(),
     }
     settings.set_setting(BEATS_KEY, json.dumps(_evicted(existing)))
@@ -169,6 +171,7 @@ def _one(device: str, raw: object) -> Beat | None:
             streaming=bool(raw["streaming"]),
             charging=_flag(raw.get("charging")),
             mic_ok=_flag(raw.get("micOk")),
+            via_lan=_flag(raw.get("viaLan")),
             at=_required(raw["at"]),
         )
     except (LookupError, TypeError, ValueError):

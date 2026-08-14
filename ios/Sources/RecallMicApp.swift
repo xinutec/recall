@@ -111,8 +111,8 @@ final class RecallController: ObservableObject {
     private func beatNow() async -> Heartbeat.Outcome {
         guard Prefs.enabled else { return .skipped }
         let sent = await Heartbeat.send(
-            host: Prefs.controlHost, device: Prefs.deviceID, streaming: state.connected,
-            micOk: state.micOk)
+            host: Prefs.controlHost, lanHost: Prefs.host, device: Prefs.deviceID,
+            streaming: state.connected, micOk: state.micOk)
         return sent ? .sent : .failed
     }
 

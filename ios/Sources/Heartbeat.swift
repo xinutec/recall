@@ -131,15 +131,34 @@ enum Heartbeat {
         #endif
     }
 
-    /// POST one beat. Returns whether it landed; nothing depends on it.
+    /// POST one beat, trying the control plane first and the recorder's LAN address
+    /// second (#888).
+    ///
+    /// The fallback exists because the beat used to demand MORE reachability than
+    /// recording does: audio goes to `host` on the LAN, so a phone at home with its
+    /// tunnel off records every sample and still read as dead. `lanHost` runs the
+    /// relay on the same port, so this is the identical request with the host
+    /// swapped — and the relay marks what it forwards, so "alive but its tunnel is
+    /// down" stays visible instead of being papered over.
+    ///
+    /// Order matters: the VPN is tried FIRST so the LAN path is a backstop rather
+    /// than a shortcut, and a phone away from home behaves exactly as before.
     @discardableResult
-    static func send(host: String, device: String, streaming: Bool, micOk: Bool) async -> Bool {
-        guard !host.isEmpty,
-            let url = URL(string: "http://\(host):\(port)/api/devices/heartbeat")
-        else { return false }
+    static func send(
+        host: String, lanHost: String = "", device: String, streaming: Bool, micOk: Bool
+    ) async -> Bool {
         let payload = body(
             device: device, version: version, startedAt: startedAt,
             streaming: streaming, charging: charging(), micOk: micOk)
+        for candidate in [host, lanHost] where !candidate.isEmpty {
+            if await post(payload, to: candidate) { return true }
+        }
+        return false
+    }
+
+    private static func post(_ payload: [String: Any], to host: String) async -> Bool {
+        guard let url = URL(string: "http://\(host):\(port)/api/devices/heartbeat")
+        else { return false }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             return false
         }
@@ -151,7 +170,11 @@ enum Heartbeat {
         guard let (_, resp) = try? await URLSession.shared.data(for: req) else {
             return false
         }
-        return (resp as? HTTPURLResponse)?.statusCode == 200
+        // Any 2xx: the fleet answers 200, the LAN relay 204 (it stores nothing of
+        // its own, so it has no body to return). Insisting on 200 would have made
+        // every relayed beat read as a failure.
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        return (200..<300).contains(code)
     }
 
     private static func iso(_ date: Date) -> String {

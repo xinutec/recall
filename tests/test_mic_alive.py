@@ -46,6 +46,7 @@ def _beat(**over: object) -> Beat:
         "streaming": True,
         "charging": True,
         "mic_ok": True,
+        "via_lan": None,
         "at": NOW,
     }
     fields.update(over)

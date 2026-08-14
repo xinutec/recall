@@ -99,6 +99,7 @@ class HeartbeatOut(TypedDict):
     streaming: bool
     charging: bool | None
     micOk: bool | None
+    viaLan: bool | None
     at: str
 
 

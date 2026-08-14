@@ -9,8 +9,8 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    MARKETING_VERSION: "1.2"
-    CURRENT_PROJECT_VERSION: "3"
+    MARKETING_VERSION: "1.3"
+    CURRENT_PROJECT_VERSION: "4"
     SWIFT_VERSION: "5.0"
     DEVELOPMENT_TEAM: "83SSMZ4T7X"  # Pippijn's signing team (auto-provisioned org.recall.mic)
     CODE_SIGN_STYLE: Automatic

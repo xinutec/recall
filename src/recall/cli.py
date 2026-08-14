@@ -35,6 +35,7 @@ from recall.asr import (
     mlx_transcribe,
 )
 from recall.attribution import AttributionReport, context_window
+from recall.beat_relay import serve as serve_beat_relay
 from recall.capture import CaptureConfig, parse_segment_start, segment_glob
 from recall.cleanup import scan_hallucinations, scan_loops
 from recall.cli_parser import build_parser
@@ -1062,6 +1063,12 @@ def _cmd_redrive(args: argparse.Namespace) -> int:
 def _cmd_ingest(args: argparse.Namespace) -> int:
     runlog.setup()  # timestamped connect/disconnect logging to the agent's .err.log
     serve_ingest(args.out, args.port)
+    return 0
+
+
+def _cmd_beat_relay(args: argparse.Namespace) -> int:
+    runlog.setup()
+    serve_beat_relay(args.port, args.fleet_url)
     return 0
 
 
@@ -2102,6 +2109,7 @@ _COMMANDS = {
     "reprocess": _cmd_reprocess,
     "worker": _cmd_worker,
     "ingest": _cmd_ingest,
+    "beat-relay": _cmd_beat_relay,
     "live": _cmd_live,
     "compress": _cmd_compress,
     "score-asr": _cmd_score_asr,

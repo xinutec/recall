@@ -610,6 +610,7 @@ def _register_device_routes(
                     "streaming": b.streaming,
                     "charging": b.charging,
                     "micOk": b.mic_ok,
+                    "viaLan": b.via_lan,
                     "at": b.at.isoformat(),
                 }
                 for b in beats
