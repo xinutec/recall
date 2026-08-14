@@ -19,7 +19,7 @@ allowBuilds:
   esbuild: true
   lmdb: true
   msgpackr-extract: true
-  "@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/8d8340ff672392ac472c1fb16e0d8fdfecbd710d": true
+  "@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/971cb32736d8ae40c26474fb7876f1e9c58c493e": true
 
 # Two floors the Angular toolchain will not reach on its own, so `pnpm update`
 # cannot shift either — nothing in the tree asks for a newer version, and an
