@@ -59,6 +59,24 @@ final class HeartbeatTests: XCTestCase {
         XCTAssertEqual(body()["micOk"] as? Bool, true)
     }
 
+    func testTheVPNIsTriedBeforeTheLANSoTheFallbackStaysABackstop() {
+        // #888: audio goes to the LAN host, so a phone at home with its tunnel off
+        // records fine and used to read as dead. The fallback fixes that WITHOUT
+        // making the LAN the normal path — a phone away from home must behave exactly
+        // as before, and a beat that took the back way is marked by the relay.
+        XCTAssertEqual(
+            Heartbeat.hostsToTry(control: "10.100.0.2", lan: "192.168.1.81"),
+            ["10.100.0.2", "192.168.1.81"])
+        // Blank halves are skipped rather than tried: an unconfigured host is not an
+        // address, and attempting it would cost a timeout per beat.
+        XCTAssertEqual(Heartbeat.hostsToTry(control: "", lan: "192.168.1.81"), ["192.168.1.81"])
+        XCTAssertEqual(Heartbeat.hostsToTry(control: "10.100.0.2", lan: ""), ["10.100.0.2"])
+        XCTAssertEqual(Heartbeat.hostsToTry(control: "", lan: ""), [])
+        // One host configured for both: try it once, not twice.
+        XCTAssertEqual(
+            Heartbeat.hostsToTry(control: "10.100.0.2", lan: "10.100.0.2"), ["10.100.0.2"])
+    }
+
     func testALandedBeatWaitsTheFullHour() {
         XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 0), Heartbeat.every)
     }

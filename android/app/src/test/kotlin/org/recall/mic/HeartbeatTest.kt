@@ -62,6 +62,25 @@ class HeartbeatTest {
     }
 
     @Test
+    fun `the vpn is tried before the lan, so the fallback stays a backstop`() {
+        // #888: audio goes to the LAN host, so a phone at home with its tunnel off
+        // records fine and used to read as dead. The fallback fixes that WITHOUT
+        // making the LAN the normal path — a phone away from home must behave
+        // exactly as before, and a beat that took the back way is marked by the relay.
+        assertEquals(
+            listOf("10.100.0.2", "192.168.1.81"),
+            Heartbeat.hostsToTry("10.100.0.2", "192.168.1.81"),
+        )
+        // Blank halves are skipped rather than tried: an unconfigured host is not an
+        // address, and attempting it would cost a timeout per beat.
+        assertEquals(listOf("192.168.1.81"), Heartbeat.hostsToTry("", "192.168.1.81"))
+        assertEquals(listOf("10.100.0.2"), Heartbeat.hostsToTry("10.100.0.2", ""))
+        assertEquals(emptyList<String>(), Heartbeat.hostsToTry("", ""))
+        // One host configured for both: try it once, not twice.
+        assertEquals(listOf("10.100.0.2"), Heartbeat.hostsToTry("10.100.0.2", "10.100.0.2"))
+    }
+
+    @Test
     fun `a landed beat waits the full hour`() {
         assertEquals(Heartbeat.EVERY_MINUTES, Heartbeat.nextDelayMinutes(0))
     }

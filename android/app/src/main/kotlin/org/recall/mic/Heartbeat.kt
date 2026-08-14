@@ -161,12 +161,22 @@ object Heartbeat {
         // dead. The Mac runs a relay on the same port, so the fallback is the identical
         // request with the host swapped. Trying the VPN first keeps the LAN a backstop
         // rather than a shortcut, so a phone away from home behaves exactly as before.
-        for (host in listOf(controlHost, lanHost)) {
-            if (host.isBlank()) continue
+        for (host in hostsToTry(controlHost, lanHost)) {
             if (post(body, host)) return true
         }
         return false
     }
+
+    /**
+     * Which hosts to try, in order. Pure, so the ORDER — the part that matters, and the
+     * part a network test cannot pin cheaply — is checked without a network.
+     *
+     * Control plane first: the LAN is a backstop, not a shortcut, so a phone away from
+     * home behaves exactly as it did before the fallback existed. Duplicates dropped so
+     * a device configured with one host for both does not pay the timeout twice.
+     */
+    fun hostsToTry(controlHost: String, lanHost: String): List<String> =
+        listOf(controlHost, lanHost).filter { it.isNotBlank() }.distinct()
 
     private fun post(body: String, host: String): Boolean =
         runCatching {

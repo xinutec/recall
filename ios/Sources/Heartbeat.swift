@@ -150,10 +150,21 @@ enum Heartbeat {
         let payload = body(
             device: device, version: version, startedAt: startedAt,
             streaming: streaming, charging: charging(), micOk: micOk)
-        for candidate in [host, lanHost] where !candidate.isEmpty {
+        for candidate in hostsToTry(control: host, lan: lanHost) {
             if await post(payload, to: candidate) { return true }
         }
         return false
+    }
+
+    /// Which hosts to try, in order. Pure, so the ORDER — the part that matters and
+    /// the part a network test cannot pin cheaply — is checked without a network.
+    static func hostsToTry(control: String, lan: String) -> [String] {
+        // Control plane first: the LAN is a backstop, not a shortcut, so a phone away
+        // from home behaves exactly as it did before the fallback existed. Duplicates
+        // dropped so a device configured with one host for both does not pay the
+        // timeout twice.
+        var seen: Set<String> = []
+        return [control, lan].filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
     private static func post(_ payload: [String: Any], to host: String) async -> Bool {
