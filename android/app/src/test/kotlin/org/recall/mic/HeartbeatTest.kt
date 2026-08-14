@@ -54,6 +54,51 @@ class HeartbeatTest {
     }
 
     @Test
+    fun `a landed beat waits the full hour`() {
+        assertEquals(Heartbeat.EVERY_MINUTES, Heartbeat.nextDelayMinutes(0))
+    }
+
+    @Test
+    fun `a failed beat retries soon, not at the next hour mark`() {
+        // #886: the loop used to sleep the full hour whatever happened, so a phone
+        // whose tunnel blipped for a minute read dead for an hour — measured on the
+        // iPhone 2026-08-14, which only went green because it was relaunched by hand.
+        assertEquals(1L, Heartbeat.nextDelayMinutes(1))
+        assertEquals(2L, Heartbeat.nextDelayMinutes(2))
+        assertEquals(4L, Heartbeat.nextDelayMinutes(3))
+        assertEquals(8L, Heartbeat.nextDelayMinutes(4))
+    }
+
+    @Test
+    fun `a long outage costs no more than the hourly cadence`() {
+        // The bound that keeps this a backoff and not a poll: one request an hour is
+        // the design, and a phone that is simply off must never beat harder than that.
+        assertEquals(Heartbeat.EVERY_MINUTES, Heartbeat.nextDelayMinutes(7))
+        assertEquals(Heartbeat.EVERY_MINUTES, Heartbeat.nextDelayMinutes(64))
+        // No overflow at absurd counts — this counter is only ever reset by success,
+        // so a phone left in a dead spot for a month keeps incrementing it.
+        assertEquals(Heartbeat.EVERY_MINUTES, Heartbeat.nextDelayMinutes(Int.MAX_VALUE))
+    }
+
+    @Test
+    fun `an outage costs a few extra requests, then settles`() {
+        // The bound that matters is the COUNT of extra requests an outage can cost
+        // before the schedule reaches the hourly cap — not the wall-clock they span.
+        // (An earlier version asserted the burst fit inside one cadence; it does not,
+        // by three minutes, and that was never the property worth having.)
+        val delays = mutableListOf<Long>()
+        var n = 1
+        while (Heartbeat.nextDelayMinutes(n) < Heartbeat.EVERY_MINUTES) {
+            delays.add(Heartbeat.nextDelayMinutes(n))
+            n++
+        }
+        assertTrue("an outage costs ${delays.size} retries", delays.size <= 8)
+        // Monotonic: each wait is at least the one before it, so the schedule can only
+        // ever back OFF. A dip would mean an outage beating harder the longer it lasts.
+        assertEquals(delays.sorted(), delays)
+    }
+
+    @Test
     fun `the process start is fixed for the life of the process`() {
         // "Alive now" and "alive since Tuesday" are different answers, and only the
         // second tells a stable app from one relaunching between beats.

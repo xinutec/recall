@@ -216,10 +216,15 @@ class StreamService : Service() {
      * clears within a minute of it coming back rather than at the next hour mark.
      */
     private fun beatLoop(controlHost: String, deviceId: String) {
+        // Consecutive failures, reset by any beat that lands. A blip must not cost an
+        // hour of looking dead (#886): the sleep below is chosen from this, so the
+        // first retry is a minute away rather than at the next hour mark.
+        var failures = 0
         while (running) {
-            Heartbeat.send(controlHost, deviceId, MicState.connected.value, this)
+            val landed = Heartbeat.send(controlHost, deviceId, MicState.connected.value, this)
+            failures = if (landed) 0 else failures + 1
             try {
-                Thread.sleep(TimeUnit.MINUTES.toMillis(Heartbeat.EVERY_MINUTES))
+                Thread.sleep(TimeUnit.MINUTES.toMillis(Heartbeat.nextDelayMinutes(failures)))
             } catch (_: InterruptedException) {
                 break // onDestroy interrupted the wait — exit cleanly
             }

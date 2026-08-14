@@ -57,7 +57,10 @@ final class RecallController: ObservableObject {
             Prefs.enabled = ok
             // Beat at once rather than at the next hour mark, so a check that went
             // red while this was down clears within a minute of it coming back.
-            if ok { await beatNow() }
+            // The outcome is dropped on purpose: this is a one-off alongside the beat
+            // loop, and the loop owns the retry schedule. Counting a failure here
+            // would shorten a wait the loop is already timing.
+            if ok { _ = await beatNow() }
         }
     }
 
@@ -80,19 +83,30 @@ final class RecallController: ObservableObject {
     private func startBeating() {
         guard beatLoop == nil else { return }
         beatLoop = Task { [weak self] in
+            // Consecutive failures, reset by any beat that lands. A blip must not cost
+            // an hour of looking dead (#886) — which is exactly what it did on
+            // 2026-08-14, when this phone stayed red for the full interval after its
+            // tunnel came back and only cleared on a manual relaunch.
+            var failures = 0
             while !Task.isCancelled {
-                await self?.beatNow()
-                try? await Task.sleep(nanoseconds: UInt64(Heartbeat.every) * 1_000_000_000)
+                let outcome = await self?.beatNow() ?? .skipped
+                failures = outcome.nextFailureCount(after: failures)
+                let delay = Heartbeat.nextDelay(consecutiveFailures: failures)
+                try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000)
             }
         }
     }
 
     /// Sends only while started: a stopped app is not going to record, and saying
     /// "alive" for it would paint the state we most want to see as healthy.
-    private func beatNow() async {
-        guard Prefs.enabled else { return }
-        await Heartbeat.send(
+    ///
+    /// Reports which of the three it was, because `skipped` must not drive the retry
+    /// backoff — see `Heartbeat.Outcome`.
+    private func beatNow() async -> Heartbeat.Outcome {
+        guard Prefs.enabled else { return .skipped }
+        let sent = await Heartbeat.send(
             host: Prefs.controlHost, device: Prefs.deviceID, streaming: state.connected)
+        return sent ? .sent : .failed
     }
 
     // MARK: household pause (control plane)

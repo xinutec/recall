@@ -33,10 +33,54 @@ enum Heartbeat {
     /// (recall.mic_alive.BEAT_EVERY_MINUTES), so the two cannot drift apart silently.
     static let every: TimeInterval = 60 * 60
 
+    /// First retry after a beat that did not land. Doubles per consecutive failure up
+    /// to `every`, so a blip costs minutes rather than an hour (#886).
+    private static let retryBase: TimeInterval = 60
+
     /// When this process started. Read once, at first touch, which is app launch —
     /// so a beat carrying a recent value means the app restarted, and "up all week"
     /// is distinguishable from "crash-looping between beats".
     static let startedAt = Date()
+
+    /// What one attempt did. Three cases, not two: a beat SKIPPED because the app is
+    /// stopped is a deliberate state, not an unreachable control plane, and feeding it
+    /// to the failure counter would spin the backoff and then beat hourly for nothing.
+    enum Outcome {
+        case sent
+        case failed
+        case skipped
+
+        /// The failure count to carry into the next wait.
+        func nextFailureCount(after current: Int) -> Int {
+            switch self {
+            case .sent: 0
+            case .failed: current + 1
+            case .skipped: current
+            }
+        }
+    }
+
+    /// Seconds until the next beat: the full cadence when the last one landed, a short
+    /// backoff when it did not.
+    ///
+    /// Pure, so the schedule is pinned in tests without a network or an hour of
+    /// waiting — the same reason `body` is pure.
+    ///
+    /// ⚠ The cap is what keeps this a BACKOFF and not a poll. One request an hour is
+    /// the design; a phone that is simply off must never beat harder than that, and
+    /// the whole retry burst is bounded to fit inside one cadence.
+    static func nextDelay(consecutiveFailures: Int) -> TimeInterval {
+        guard consecutiveFailures > 0 else { return every }
+        // Doubling by multiplication rather than shifting: this counter is reset only
+        // by a success, so a phone in a dead spot keeps incrementing it forever and a
+        // shift would wrap.
+        var delay = retryBase
+        for _ in 1..<max(consecutiveFailures, 1) {
+            if delay >= every { return every }
+            delay *= 2
+        }
+        return min(delay, every)
+    }
 
     /// App version and build, so a restart *into a new build* reads as a deploy
     /// rather than as a fault.

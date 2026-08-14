@@ -49,6 +49,56 @@ final class HeartbeatTests: XCTestCase {
         XCTAssertEqual(Heartbeat.startedAt, Heartbeat.startedAt)
     }
 
+    func testALandedBeatWaitsTheFullHour() {
+        XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 0), Heartbeat.every)
+    }
+
+    func testAFailedBeatRetriesSoonNotAtTheNextHourMark() {
+        // #886: the loop used to sleep the full interval whatever happened, so this
+        // very phone read `never sent a beat` for an hour after its tunnel came back
+        // on 2026-08-14, and only went green because it was relaunched by hand.
+        XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 1), 60)
+        XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 2), 120)
+        XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 3), 240)
+        XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 4), 480)
+    }
+
+    func testALongOutageCostsNoMoreThanTheHourlyCadence() {
+        // The bound that keeps this a backoff and not a poll.
+        XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 7), Heartbeat.every)
+        XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 64), Heartbeat.every)
+        // No overflow at absurd counts: only a success resets this counter, so a phone
+        // in a dead spot for a month keeps incrementing it.
+        XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: .max), Heartbeat.every)
+    }
+
+    func testAnOutageCostsAFewExtraRequestsThenSettles() {
+        // The bound that matters is the COUNT of extra requests an outage can cost
+        // before the schedule reaches the hourly cap — not the wall-clock they span.
+        // (An earlier version of this test asserted the burst fit inside one cadence;
+        // it does not, by three minutes, and that was never the property worth having.)
+        var delays: [TimeInterval] = []
+        var n = 1
+        while Heartbeat.nextDelay(consecutiveFailures: n) < Heartbeat.every {
+            delays.append(Heartbeat.nextDelay(consecutiveFailures: n))
+            n += 1
+        }
+        XCTAssertLessThanOrEqual(delays.count, 8, "an outage costs \(delays.count) retries")
+        // Monotonic: each wait is at least the one before it, so the schedule can only
+        // ever back OFF. A dip would mean an outage beating harder the longer it lasts.
+        XCTAssertEqual(delays, delays.sorted())
+    }
+
+    func testASkippedBeatIsNotAFailure() {
+        // A stopped app is a deliberate state, not an unreachable control plane. If
+        // `skipped` fed the failure counter, stopping the app would spin the backoff
+        // and then beat hourly forever for nothing.
+        XCTAssertEqual(Heartbeat.Outcome.skipped.nextFailureCount(after: 0), 0)
+        XCTAssertEqual(Heartbeat.Outcome.skipped.nextFailureCount(after: 3), 3)
+        XCTAssertEqual(Heartbeat.Outcome.sent.nextFailureCount(after: 3), 0)
+        XCTAssertEqual(Heartbeat.Outcome.failed.nextFailureCount(after: 3), 4)
+    }
+
     func testTheCadenceMatchesWhatTheGraderWasToldToExpect() {
         // recall.mic_alive.BEAT_EVERY_MINUTES is 60; the fleetwatch thresholds are
         // written as multiples of it. Drifting apart here would silently make every

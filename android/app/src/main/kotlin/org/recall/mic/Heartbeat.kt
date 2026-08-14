@@ -45,11 +45,41 @@ object Heartbeat {
     const val EVERY_MINUTES = 60L
 
     /**
+     * First retry after a beat that did not land. Doubles per consecutive failure up to
+     * [EVERY_MINUTES], so a blip costs minutes rather than an hour (#886).
+     */
+    private const val RETRY_BASE_MINUTES = 1L
+
+    /**
      * When this process started. Set on class load — the service is the first thing to
      * touch it — so a beat carrying a recent value means the app restarted, and "up all
      * week" is distinguishable from "relaunching between beats".
      */
     val startedAt: Instant = Instant.now()
+
+    /**
+     * Minutes until the next beat: the full cadence when the last one landed, a short
+     * backoff when it did not.
+     *
+     * Pure, so the schedule is pinned in unit tests without a network or an hour of
+     * waiting — the same reason [body] is pure.
+     *
+     * ⚠ The cap is what keeps this a BACKOFF and not a poll. One request an hour is the
+     * design; a phone that is simply off (or out of range for a week) must never beat
+     * harder than that, and the whole retry burst is bounded to fit inside one cadence.
+     * Growing it would trade the thing this exists to protect for a little less latency.
+     */
+    fun nextDelayMinutes(consecutiveFailures: Int): Long {
+        if (consecutiveFailures <= 0) return EVERY_MINUTES
+        // Shift-free: `1L shl 63` would wrap, and this counter is reset only by a
+        // success, so a phone left in a dead spot keeps incrementing it forever.
+        var delay = RETRY_BASE_MINUTES
+        repeat(consecutiveFailures - 1) {
+            if (delay >= EVERY_MINUTES) return EVERY_MINUTES
+            delay *= 2
+        }
+        return minOf(delay, EVERY_MINUTES)
+    }
 
     /** App version and build, so a restart *into a new build* reads as a deploy. */
     fun version(ctx: Context): String =
