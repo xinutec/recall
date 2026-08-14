@@ -25,7 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NamedTuple
+from typing import IO, NamedTuple
 
 from recall import capture_control
 from recall.capture import (
@@ -54,6 +54,18 @@ _DEFAULT_CHANNELS = 1
 _MAX_HANDSHAKE_BYTES = 8192
 _READ_CHUNK_BYTES = 65536  # socket -> ffmpeg pump chunk
 _PAUSE_POLL_SECONDS = 2.0  # how often the accept loop re-checks the global pause
+# A mic stream is CONTINUOUS — 48 kHz * 2 bytes flows even in a silent room — so no
+# data for this long means the peer is gone, and that is a far stronger signal than
+# TCP keepalive, which never probes a connection the kernel still believes is fine.
+# 15 s tolerates a brief Wi-Fi stall.
+#
+# This restores an intent the port dropped, rather than inventing one: the per-device
+# ffmpeg listeners this module replaced passed the same 15 s as
+# `tcp://...?listen=1&timeout=`, and `sources._TCP_READ_TIMEOUT_US` still carries it
+# with the same reasoning in its comment. Without it a phone that vanishes without a
+# FIN leaves `recv` blocked forever: no disconnect is ever recorded and the source
+# simply goes quiet, which is indistinguishable from a quiet room.
+_READ_TIMEOUT_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -156,6 +168,89 @@ def _flushed_segment(
     return _FlushedSegment(newest[1], newest[2]) if newest else None
 
 
+def _accept_handshake(sock: socket.socket) -> Handshake | None:
+    """The opening line, under the same deadline as the stream behind it.
+
+    Bounded because the handshake read runs BEFORE the pump's error handling exists:
+    a peer that connects and then says nothing — a port scanner, a phone that died
+    between connect and handshake — would otherwise hold a thread and a slot in
+    `conns` for good. Returns None for every way of not getting one, each logged
+    with which way it was.
+    """
+    try:
+        handshake = read_handshake(sock.recv)
+    except TimeoutError:
+        _log.warning("ingest: no handshake within %.0fs", _READ_TIMEOUT_SECONDS)
+        return None
+    if handshake is None:
+        _log.warning("ingest: malformed handshake, dropping connection")
+    return handshake
+
+
+@dataclass
+class _Pump:
+    """The socket -> ffmpeg pump, and what it learned on the way.
+
+    A dataclass rather than a function returning its findings, because the caller's
+    `finally` files the disconnect record even when the pump exits by exception (a
+    broken ffmpeg pipe, say) — and on that path `first_byte` is still evidence. A
+    return value would be lost exactly when the record matters most.
+    """
+
+    sock: socket.socket
+    stdin: IO[bytes]
+    out_dir: Path
+    meter: StreamMeter
+    source_id: str
+    #: Why the stream ended, for the disconnect record. The endings are not the
+    #: same event and the log could not tell them apart: a phone walking out of
+    #: range and a pause dropping the stream both just stopped.
+    ended: str = "unknown"
+    first_byte: float | None = None
+
+    def run(self) -> None:
+        while True:
+            try:
+                data = self.sock.recv(_READ_CHUNK_BYTES)
+            except TimeoutError:
+                # MUST precede the OSError branch below: `TimeoutError` is a
+                # subclass of it, so without this a phone that died mid-stream
+                # would be filed as `closed locally` — the label that means the
+                # household pause dropped the stream. Two opposite causes, and
+                # this record is the only witness either of them leaves.
+                self.ended = f"no data for {_READ_TIMEOUT_SECONDS:.0f}s — peer gone"
+                _log.warning("ingest: %s stopped sending", self.source_id)
+                return
+            except OSError as exc:
+                # `serve` closes an active socket to drop the stream when capture
+                # pauses, and a recv on the closed fd is HOW the reader is told —
+                # see the comment on that close. Expected, so it finalises like any
+                # other disconnect instead of escaping into `_serve_conn` and
+                # printing a thread traceback, which it did 168 times in this log
+                # before 2026-08-10 without one of them meaning anything.
+                self.ended = f"closed locally ({exc.strerror or exc})"
+                return
+            if not data:
+                self.ended = "device disconnected"
+                return
+            self.stdin.write(data)  # the archive comes first; meter after
+            if self.first_byte is None:
+                self.first_byte = time.time()
+            heard = self.meter.first_audible_s is not None
+            # Liveness: refresh the marker only when the chunk carries real signal —
+            # "active" must mean recording. A connected phone streaming digital
+            # silence (the pixel9 dead path) reads idle, so nobody speaks trusting a
+            # dot the audio can't back.
+            if self.meter.feed(data) >= SILENCE_PEAK:
+                mark_alive(self.out_dir)
+            if not heard and self.meter.first_audible_s is not None:
+                _log.info(
+                    "ingest: %s first audible sample at %.2fs of stream",
+                    self.source_id,
+                    self.meter.first_audible_s,
+                )
+
+
 def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) -> None:
     """Serve one device connection: read its handshake, register it, then pump its
     raw-PCM stream into an ffmpeg segmenter. The pump (socket -> ffmpeg's stdin pipe)
@@ -169,9 +264,10 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
     sample, and which segment file the close flushed. That record is what tells a
     stream of digital silence from no stream at all when speech goes missing."""
     try:
-        handshake = read_handshake(sock.recv)
+        # Bound every read on this socket, the handshake included.
+        sock.settimeout(_READ_TIMEOUT_SECONDS)
+        handshake = _accept_handshake(sock)
         if handshake is None:
-            _log.warning("ingest: malformed handshake, dropping connection")
             return
         _register_source(root, handshake.source_id)
         seg = replace(
@@ -189,51 +285,23 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
         )
         connected = time.time()
         meter = StreamMeter(handshake.sample_rate, handshake.channels)
-        first_byte: float | None = None
         proc = subprocess.Popen(
             build_segment_argv(seg, pattern), stdin=subprocess.PIPE, env=env
         )
         if proc.stdin is None:  # pragma: no cover - PIPE always sets it
             msg = "ffmpeg stdin pipe was not created"
             raise RuntimeError(msg)
-        # Why the stream ended, for the disconnect record. The two are not the
-        # same event and the log could not tell them apart: a phone walking out
-        # of range and a pause dropping the stream both just stopped.
-        ended = "unknown"
+        pump = _Pump(
+            sock=sock,
+            stdin=proc.stdin,
+            out_dir=out_dir,
+            meter=meter,
+            source_id=handshake.source_id,
+        )
         try:
-            while True:
-                try:
-                    data = sock.recv(_READ_CHUNK_BYTES)
-                except OSError as exc:
-                    # `serve` closes an active socket to drop the stream when
-                    # capture pauses, and a recv on the closed fd is HOW the
-                    # reader is told — see the comment on that close. Expected,
-                    # so it finalises like any other disconnect instead of
-                    # escaping into `_serve_conn` and printing a thread
-                    # traceback, which it did 168 times in this log before
-                    # 2026-08-10 without one of them meaning anything.
-                    ended = f"closed locally ({exc.strerror or exc})"
-                    break
-                if not data:
-                    ended = "device disconnected"
-                    break
-                proc.stdin.write(data)  # the archive comes first; meter after
-                if first_byte is None:
-                    first_byte = time.time()
-                heard = meter.first_audible_s is not None
-                # Liveness: refresh the marker only when the chunk carries real
-                # signal — "active" must mean recording. A connected phone streaming
-                # digital silence (the pixel9 dead path) reads idle, so nobody
-                # speaks trusting a dot the audio can't back.
-                if meter.feed(data) >= SILENCE_PEAK:
-                    mark_alive(out_dir)
-                if not heard and meter.first_audible_s is not None:
-                    _log.info(
-                        "ingest: %s first audible sample at %.2fs of stream",
-                        handshake.source_id,
-                        meter.first_audible_s,
-                    )
+            pump.run()
         finally:
+            ended, first_byte = pump.ended, pump.first_byte
             proc.stdin.close()  # EOF -> ffmpeg finalises the current segment cleanly
             proc.wait()
             flushed = _flushed_segment(out_dir, handshake.source_id, since=connected)

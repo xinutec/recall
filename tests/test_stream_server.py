@@ -10,7 +10,7 @@ import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import cast, override
 
 import pytest
 
@@ -262,6 +262,7 @@ class _ClosedMidStream:
     def __init__(self, payload: bytes) -> None:
         self._buf = payload
         self.closed = False
+        self.deadline: float | None = None
 
     def recv(self, n: int) -> bytes:
         # Honours `n`, because `read_handshake` reads ONE BYTE AT A TIME so it
@@ -272,8 +273,28 @@ class _ClosedMidStream:
         head, self._buf = self._buf[:n], self._buf[n:]
         return head
 
+    def settimeout(self, seconds: float | None) -> None:
+        self.deadline = seconds
+
     def close(self) -> None:
         self.closed = True
+
+
+class _VanishedMidStream(_ClosedMidStream):
+    """A socket whose `recv` TIMES OUT partway through, as a real one does once it
+    has a deadline and the peer stopped sending without closing.
+
+    Same reason for a stub as its parent: whether a kernel ever delivers anything
+    for a half-open socket is not ours to control, and waiting 15 real seconds to
+    find out is not a test.
+    """
+
+    @override
+    def recv(self, n: int) -> bytes:
+        if not self._buf:
+            raise TimeoutError("timed out")
+        head, self._buf = self._buf[:n], self._buf[n:]
+        return head
 
 
 def test_a_pause_dropping_the_stream_is_a_disconnect_not_a_crash(
@@ -309,3 +330,94 @@ def test_a_pause_dropping_the_stream_is_a_disconnect_not_a_crash(
     # And it says which of the two endings it was, which the record could not.
     assert "closed locally" in stats["ended"]
     assert stats["flushed"] is not None, "the pause lost the segment"
+
+
+def _disconnect_stats(tmp_path: Path) -> dict[str, object]:
+    store = Store.open(tmp_path / "recall.sqlite")
+    try:
+        events = store.capture_events_since(datetime.now(UTC) - timedelta(minutes=5))
+    finally:
+        store.close()
+    disconnect = next(
+        e
+        for e in events
+        if e.kind == capture_control.CaptureEventKind.INGEST_DISCONNECT
+    )
+    assert disconnect.detail is not None
+    return cast("dict[str, object]", json.loads(disconnect.detail))
+
+
+def test_a_phone_that_vanishes_is_recorded_as_gone_not_as_a_local_pause(
+    tmp_path: Path,
+) -> None:
+    """A phone that dies without a FIN — reboot, force-quit, a Wi-Fi drop that ate
+    the FIN — leaves a half-open socket. Without a deadline `recv` blocks forever:
+    no ingest_disconnect is ever written and the source just goes quiet, which is
+    indistinguishable from a quiet room because the liveness marker only tracks
+    audible signal.
+
+    The trap this pins: `TimeoutError` IS an `OSError`, so the pre-existing handler
+    would have swallowed it and filed every dead phone under `closed locally` — the
+    branch that means the household pause dropped the stream. Two opposite causes,
+    one label, and the record is the only witness either leaves.
+    """
+    sock = _VanishedMidStream(
+        b'{"id":"kitchen"}\n' + (2000).to_bytes(2, "little", signed=True) * 4800
+    )
+    handle_connection(cast("socket.socket", sock), tmp_path, CaptureConfig())
+    assert sock.closed, "the handler left the socket open"
+
+    stats = _disconnect_stats(tmp_path)
+    ended = cast("str", stats["ended"])
+    assert "closed locally" not in ended, "a vanished phone was filed as a local pause"
+    assert "15s" in ended, f"the record does not say what happened: {ended!r}"
+    # The audio the phone did send is still finalised, as on every other ending.
+    assert stats["flushed"] is not None, "the timeout lost the segment"
+    assert stats["bytes"] == 9600
+
+
+def test_the_accepted_socket_carries_a_read_deadline(tmp_path: Path) -> None:
+    """The deadline has to be on the SOCKET, not merely handled when it fires.
+
+    Asserting only on the stub above would pass against a handler that never set
+    one — the stub raises whatever it likes. This checks the real thing: a real
+    socket, and what its timeout is by the time the pump is reading it.
+    """
+    server_sock, client_sock = socket.socketpair()
+    seen: list[float | None] = []
+
+    def device() -> None:
+        client_sock.sendall(b'{"id":"kitchen"}\n')
+        client_sock.sendall((2000).to_bytes(2, "little", signed=True) * 4800)
+        # Read back by the handler before it can close; sample the deadline while
+        # the connection is genuinely open.
+        seen.append(server_sock.gettimeout())
+        client_sock.close()
+
+    sender = threading.Thread(target=device)
+    sender.start()
+    handle_connection(server_sock, tmp_path, CaptureConfig())
+    sender.join()
+
+    assert seen == [15.0], f"the accepted socket's deadline was {seen}"
+
+
+def test_a_peer_that_never_speaks_does_not_hold_the_thread(tmp_path: Path) -> None:
+    """The handshake read was unbounded too, and it runs before any of the pump's
+    error handling exists. A peer that opens a connection and says nothing — a
+    port scanner, a phone that died between connect and handshake — would hold a
+    thread and a slot in `conns` for good, and it must not raise either: an
+    escaping exception is the traceback flood the pause branch was written to end.
+    """
+    sock = _VanishedMidStream(b"")  # connects, then never sends a byte
+    handle_connection(cast("socket.socket", sock), tmp_path, CaptureConfig())
+    assert sock.closed, "the handler left the socket open"
+
+    store = Store.open(tmp_path / "recall.sqlite")
+    try:
+        events = store.capture_events_since(datetime.now(UTC) - timedelta(minutes=5))
+    finally:
+        store.close()
+    # No handshake means no source id, so there is nothing to file the connection
+    # under — it must leave no half-formed record behind.
+    assert events == []
