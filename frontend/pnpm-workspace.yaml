@@ -20,3 +20,19 @@ allowBuilds:
   lmdb: true
   msgpackr-extract: true
   "@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/8d8340ff672392ac472c1fb16e0d8fdfecbd710d": true
+
+# Two floors the Angular toolchain will not reach on its own, so `pnpm update`
+# cannot shift either — nothing in the tree asks for a newer version, and an
+# advisory is not a resolution constraint.
+#
+# esbuild: the toolchain pulls an older 0.27.7 beside the 0.28.1 it declares, and
+# only the older copy is affected. The floor collapses them to one version.
+#
+# @babel/core: @angular/build pins 7.29.0, which GHSA covers; 7.29.1 is the first
+# fix. `tasks` carries this same floor with a note wondering whether it is
+# vestigial scaffold — it is not, and this is why.
+#
+# Both match `tasks` and `home` exactly. Two spellings of one constraint drift.
+overrides:
+  esbuild: ^0.28.1
+  "@babel/core": ^7.29.6
