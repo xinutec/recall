@@ -969,13 +969,13 @@ def test_upload_corrects_a_kind_the_worker_already_guessed(
     client = TestClient(api.app)
 
     created = _upload_meeting(
-        client, tmp_path, title="Karthica RT", start="2026-07-03T14:20:00+01:00"
+        client, tmp_path, title="Dr Lee RT", start="2026-07-03T14:20:00+01:00"
     )
 
     assert created["id"] == "meeting-20260703-1420"  # same id the worker had claimed
     listed = client.get("/api/sessions").json()["items"]
     assert [i["id"] for i in listed] == ["meeting-20260703-1420"]
-    assert listed[0]["title"] == "Karthica RT"  # placeholder name replaced, too
+    assert listed[0]["title"] == "Dr Lee RT"  # placeholder name replaced, too
 
 
 def test_create_session_stores_the_mp3_and_lists_it_immediately(
@@ -988,7 +988,7 @@ def test_create_session_stores_the_mp3_and_lists_it_immediately(
     client = TestClient(api.app)
 
     created = _upload_meeting(
-        client, tmp_path, title="Karthica RT", start="2026-07-03T14:20:00+01:00"
+        client, tmp_path, title="Dr Lee RT", start="2026-07-03T14:20:00+01:00"
     )
     sid = created["id"]
     assert (
@@ -1000,7 +1000,7 @@ def test_create_session_stores_the_mp3_and_lists_it_immediately(
 
     listed = client.get("/api/sessions").json()["items"]
     row = next(i for i in listed if i["id"] == sid)
-    assert row["title"] == "Karthica RT"
+    assert row["title"] == "Dr Lee RT"
     assert (
         row["turnCount"] == 0
     )  # present immediately, before the worker transcribes it

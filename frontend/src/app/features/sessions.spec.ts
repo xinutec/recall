@@ -51,7 +51,7 @@ function fileInput(file: File | null): HTMLInputElement {
 describe('Sessions', () => {
   it('uploads a picked file with its last-modified time as the start', () => {
     const { c, createSession } = setup();
-    const file = new File(['audio'], 'karthica.mp3', {
+    const file = new File(['audio'], 'appointment.mp3', {
       type: 'audio/mpeg',
       lastModified: Date.UTC(2026, 6, 3, 13, 20, 0), // 2026-07-03 14:20 BST
     });
