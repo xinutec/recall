@@ -38,6 +38,20 @@ export interface DeviceOutboxList {
   readonly items: readonly DeviceOutbox[];
 }
 
+export interface DeviceHeartbeat {
+  readonly device: string;
+  readonly app: string;
+  readonly version: string;
+  readonly startedAt: string | null;
+  readonly streaming: boolean;
+  readonly charging: boolean | null;
+  readonly at: string;
+}
+
+export interface DeviceHeartbeatList {
+  readonly items: readonly DeviceHeartbeat[];
+}
+
 export interface Session {
   readonly id: string;
   readonly title: string;
@@ -316,6 +330,15 @@ export interface DeviceOutboxRequest {
   readonly oldestQueuedAt?: string | null;
   readonly failing?: number;
   readonly reason?: string | null;
+}
+
+export interface DeviceHeartbeatRequest {
+  readonly device: string;
+  readonly app?: string;
+  readonly version?: string;
+  readonly startedAt?: string | null;
+  readonly streaming?: boolean;
+  readonly charging?: boolean | null;
 }
 
 export interface CorrectRequest {

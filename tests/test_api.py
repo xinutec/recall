@@ -2133,3 +2133,96 @@ def test_an_unparseable_time_from_a_phone_is_dropped_not_a_500(
     [item] = client.get("/api/devices/outbox").json()["items"]
     assert item["queued"] == 1
     assert item["oldestQueuedAt"] is None
+
+
+def test_a_mic_app_beat_round_trips_through_the_api(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The signal that survives a paused household and a silent room (#837).
+
+    recall's own liveness marker cannot answer this: it is refreshed only by audio
+    above the silence floor, so a quiet room reads idle, and while capture is paused
+    the ingest listener is closed and nothing streams at all.
+    """
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    Store.open(tmp_path / "recall.sqlite").close()
+    client = TestClient(api.app)
+
+    posted = client.post(
+        "/api/devices/heartbeat",
+        json={
+            "device": "iphone11",
+            "app": "ios",
+            "version": "1.4.0 (37)",
+            "startedAt": "2026-08-11T07:00:00+00:00",
+            "streaming": False,
+            "charging": True,
+        },
+    )
+    assert posted.status_code == 200
+
+    [item] = client.get("/api/devices/heartbeat").json()["items"]
+    assert item["device"] == "iphone11"
+    assert item["app"] == "ios"
+    assert item["startedAt"].startswith("2026-08-11T07:00")
+    assert item["streaming"] is False, "a paused app is still an alive app"
+    assert item["charging"] is True
+    assert item["at"], "and when the FLEET heard it, which staleness is judged on"
+
+
+def test_the_beats_clock_is_the_servers_not_the_phones(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """⚠ A phone with a wrong clock must not be able to grade itself.
+
+    `at` is stamped on arrival. Taking the phone's word for it would let a device
+    with a skewed clock report itself permanently fresh — or permanently stale,
+    raising an alarm about hardware that is fine.
+    """
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    Store.open(tmp_path / "recall.sqlite").close()
+    client = TestClient(api.app)
+
+    before = datetime.now(UTC)
+    client.post(
+        "/api/devices/heartbeat",
+        json={"device": "pixel5", "startedAt": "1999-01-01T00:00:00+00:00"},
+    )
+    [item] = client.get("/api/devices/heartbeat").json()["items"]
+    assert datetime.fromisoformat(item["at"]) >= before
+    assert item["startedAt"].startswith("1999"), "the phone's own time is kept as-is"
+
+
+def test_a_beat_from_an_older_build_still_counts_as_alive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Everything but the device id is optional on purpose: the beat ARRIVING is the
+    # finding, and an app that cannot name its version is not thereby dead.
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    Store.open(tmp_path / "recall.sqlite").close()
+    client = TestClient(api.app)
+
+    posted = client.post("/api/devices/heartbeat", json={"device": "pixel5"})
+    assert posted.status_code == 200
+    [item] = client.get("/api/devices/heartbeat").json()["items"]
+    assert (item["device"], item["startedAt"], item["charging"]) == (
+        "pixel5",
+        None,
+        None,
+    )
+
+
+def test_an_unparseable_start_time_costs_that_field_not_the_beat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    Store.open(tmp_path / "recall.sqlite").close()
+    client = TestClient(api.app)
+
+    posted = client.post(
+        "/api/devices/heartbeat",
+        json={"device": "pixel5", "startedAt": "since-tuesday"},
+    )
+    assert posted.status_code == 200
+    [item] = client.get("/api/devices/heartbeat").json()["items"]
+    assert item["startedAt"] is None

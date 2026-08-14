@@ -19,6 +19,7 @@ from httpx import HTTPStatusError
 
 from recall import capture_control
 from recall.ids import AudioSegmentId
+from recall.mic_alive import Beat, record_beat
 from recall.outbox import OutboxReport, record_report
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
@@ -993,3 +994,44 @@ def test_the_mac_reads_the_phones_outboxes_off_the_sync_plane(
     assert item["device"] == "pixel9"
     assert item["failing"] == 1
     assert "upload token" in item["reason"]
+
+
+def test_the_mac_reads_the_mic_heartbeats_on_the_sync_plane(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#837's reader is the Mac, so it authenticates the way the Mac already can.
+
+    The same question as the outbox route above, answered the same way: which plane
+    a route belongs on is about which MACHINE calls it. The apps post their beats
+    with no credential at all; the Mac reads them with the sync token it holds.
+    """
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    store = Store.open(db)
+    record_beat(
+        store,
+        Beat(
+            device="iphone11",
+            app="ios",
+            version="1.4.0 (37)",
+            started_at=datetime(2026, 8, 11, 7, 0, tzinfo=UTC),
+            streaming=False,
+            charging=True,
+            at=datetime(2026, 8, 14, 9, 0, tzinfo=UTC),
+        ),
+    )
+    store.close()
+
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+    client = TestClient(app)
+
+    assert client.get("/sync/devices/heartbeats").status_code == 401
+    ok = client.get(
+        "/sync/devices/heartbeats", headers={"Authorization": "Bearer secret"}
+    )
+    assert ok.status_code == 200
+    [item] = ok.json()["items"]
+    assert item["device"] == "iphone11"
+    assert item["streaming"] is False, "paused is not dead, and the reader needs both"
+    assert item["at"].startswith("2026-08-14T09:00")

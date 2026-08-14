@@ -103,6 +103,19 @@ _DEVICE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         # already inside WireGuard/the LAN can lie about a queue depth in a health
         # check — no read access, no audio, no archive.
         ("POST", "/api/devices/outbox"),
+        # The mic app saying it is still running (#837), on the same terms and for a
+        # sharper version of the same reason. This one carries NO credential at all:
+        # the mic app streams PCM over a bare TCP socket and has never held a token,
+        # and inventing one for a liveness beat would mean a phone whose credential
+        # went bad reads as DEAD — turning a config mistake into a false alarm about
+        # the hardware, which is the failure mode the beat exists to rule out.
+        #
+        # What it costs: anyone already inside WireGuard/the LAN can post a beat for
+        # any device id, so this can be made to look healthier than it is. It cannot
+        # be made to look worse (a beat only ever refreshes), it grants no read, no
+        # audio and no archive, and the device list is capped and evicted by age so a
+        # flood is bounded (recall.mic_alive.MAX_DEVICES).
+        ("POST", "/api/devices/heartbeat"),
     }
 )
 

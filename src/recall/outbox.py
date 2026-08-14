@@ -121,16 +121,30 @@ def _one(device: str, raw: object) -> OutboxReport | None:
             oldest_queued_at=_when(raw.get("oldestQueuedAt")),
             failing=int(raw["failing"]),
             reason=_text(raw.get("reason")),
-            at=datetime.fromisoformat(str(raw["at"])).astimezone(UTC),
+            at=_required(raw["at"]),
         )
     except (LookupError, TypeError, ValueError):
         return None
 
 
 def _when(value: object) -> datetime | None:
+    """⚠ A naive timestamp means UTC, and `.astimezone(UTC)` would NOT say so — it
+    reads a naive value as *local* time. The phone formats with `ISO_INSTANT` today,
+    so every value carries a `Z`; a build that stopped would have each queue read an
+    hour younger here in summer, moving a stuck upload back under the threshold that
+    exists to notice it."""
     if value is None:
         return None
-    return datetime.fromisoformat(str(value)).astimezone(UTC)
+    parsed = datetime.fromisoformat(str(value))
+    return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _required(value: object) -> datetime:
+    when = _when(value)
+    if when is None:
+        msg = "a report must carry when it was received"
+        raise ValueError(msg)  # caught by _one, costing this device its line
+    return when
 
 
 def _text(value: object) -> str | None:

@@ -32,8 +32,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from recall import capture_control
+from recall.mic_alive import read_beats
 from recall.outbox import read_reports
-from recall.schemas import OkOut, OutboxesOut
+from recall.schemas import HeartbeatsOut, OkOut, OutboxesOut
 from recall.sources import AudioSource, SourceKind
 from recall.store import (
     AbCompareJob,
@@ -533,6 +534,88 @@ def _register_capture_route(
         return reply
 
 
+def _register_device_routes(
+    app: FastAPI, store_factory: Callable[[], Store], expected: str
+) -> None:
+    """The two routes the MAC reads to grade the phones: what each is still holding
+    (#77) and whether each mic app is still running (#837).
+
+    Split out of `register_sync_routes`, which registers every sync route in one
+    closure and had grown past what one function should carry. These two belong
+    together: same reader, same plane, and the same reason for being on it — the
+    caller is the Mac, and `RECALL_SYNC_TOKEN` is the credential that relationship
+    already has. The phones' own posts stay on the device plane, which is theirs.
+    """
+
+    @app.get("/sync/devices/outbox")
+    def sync_device_outboxes(
+        authorization: str | None = Header(default=None),
+    ) -> OutboxesOut:
+        """What the phones last said they were still holding (#77).
+
+        On the SYNC plane rather than the browsing one because the reader is the
+        Mac — this is Mac↔fleet traffic, and `RECALL_SYNC_TOKEN` is the credential
+        that relationship already has. The phone's own `POST /api/devices/outbox`
+        stays on the device plane, which is the credential IT has. Neither side
+        gains anything it did not need: the first design read this back on the
+        device plane and would have needed the phone's token on the Mac, which is
+        not there and should not be.
+        """
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            reports = read_reports(store)
+        finally:
+            store.close()
+        return {
+            "items": [
+                {
+                    "device": r.device,
+                    "queued": r.queued,
+                    "oldestQueuedAt": (
+                        r.oldest_queued_at.isoformat() if r.oldest_queued_at else None
+                    ),
+                    "failing": r.failing,
+                    "reason": r.reason,
+                    "at": r.at.isoformat(),
+                }
+                for r in reports
+            ]
+        }
+
+    @app.get("/sync/devices/heartbeats")
+    def sync_device_heartbeats(
+        authorization: str | None = Header(default=None),
+    ) -> HeartbeatsOut:
+        """When each mic app last said it was still running (#837).
+
+        On the SYNC plane for the same reason as the outbox beside it: the reader is
+        the Mac, this is Mac↔fleet traffic, and `RECALL_SYNC_TOKEN` is the credential
+        that relationship already has. The apps' own `POST /api/devices/heartbeat`
+        stays unauthenticated, which is the credential THEY have.
+        """
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            beats = read_beats(store)
+        finally:
+            store.close()
+        return {
+            "items": [
+                {
+                    "device": b.device,
+                    "app": b.app,
+                    "version": b.version,
+                    "startedAt": b.started_at.isoformat() if b.started_at else None,
+                    "streaming": b.streaming,
+                    "charging": b.charging,
+                    "at": b.at.isoformat(),
+                }
+                for b in beats
+            ]
+        }
+
+
 def register_sync_routes(
     app: FastAPI, store_factory: Callable[[], Store], data_root: Path
 ) -> bool:
@@ -582,41 +665,7 @@ def register_sync_routes(
             raise HTTPException(status_code=404, detail="no such audio")
         return FileResponse(path)
 
-    @app.get("/sync/devices/outbox")
-    def sync_device_outboxes(
-        authorization: str | None = Header(default=None),
-    ) -> OutboxesOut:
-        """What the phones last said they were still holding (#77).
-
-        On the SYNC plane rather than the browsing one because the reader is the
-        Mac — this is Mac↔fleet traffic, and `RECALL_SYNC_TOKEN` is the credential
-        that relationship already has. The phone's own `POST /api/devices/outbox`
-        stays on the device plane, which is the credential IT has. Neither side
-        gains anything it did not need: the first design read this back on the
-        device plane and would have needed the phone's token on the Mac, which is
-        not there and should not be.
-        """
-        check_token(bearer(authorization), expected)
-        store = store_factory()
-        try:
-            reports = read_reports(store)
-        finally:
-            store.close()
-        return {
-            "items": [
-                {
-                    "device": r.device,
-                    "queued": r.queued,
-                    "oldestQueuedAt": (
-                        r.oldest_queued_at.isoformat() if r.oldest_queued_at else None
-                    ),
-                    "failing": r.failing,
-                    "reason": r.reason,
-                    "at": r.at.isoformat(),
-                }
-                for r in reports
-            ]
-        }
+    _register_device_routes(app, store_factory, expected)
 
     @app.post("/sync/segments")
     def sync_segments(

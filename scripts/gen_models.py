@@ -81,6 +81,8 @@ NAME_MAP = {
     "EnvelopeOut": "Envelope",
     "OutboxOut": "DeviceOutbox",
     "OutboxesOut": "DeviceOutboxList",
+    "HeartbeatOut": "DeviceHeartbeat",
+    "HeartbeatsOut": "DeviceHeartbeatList",
 }
 
 # Request bodies (pydantic models in api_models.py) -> frontend interface name.
@@ -89,6 +91,7 @@ NAME_MAP = {
 REQUEST_NAME_MAP = {
     "ClientLog": "ClientLogRequest",
     "OutboxIn": "DeviceOutboxRequest",
+    "HeartbeatIn": "DeviceHeartbeatRequest",
     "CorrectIn": "CorrectRequest",
     "VoiceNameIn": "VoiceNameRequest",
     "TurnSpeakerIn": "TurnSpeakerRequest",

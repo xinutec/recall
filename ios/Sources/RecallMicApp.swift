@@ -38,9 +38,11 @@ final class RecallController: ObservableObject {
     private lazy var client = StreamClient(state: state)
     private var capturePoll: Task<Void, Never>?
     private var sourcesPoll: Task<Void, Never>?
+    private var beatLoop: Task<Void, Never>?
 
     func onLaunch() {
         restartPolling()
+        startBeating()
         if Prefs.enabled && !Prefs.host.isEmpty { start() }
     }
 
@@ -53,6 +55,9 @@ final class RecallController: ObservableObject {
             let ok = client.start()  // false if the mic couldn't be opened
             state.running = ok
             Prefs.enabled = ok
+            // Beat at once rather than at the next hour mark, so a check that went
+            // red while this was down clears within a minute of it coming back.
+            if ok { await beatNow() }
         }
     }
 
@@ -62,6 +67,32 @@ final class RecallController: ObservableObject {
         state.phase = .stopped
         state.level = 0
         client.stop()
+    }
+
+    // MARK: liveness (#837)
+
+    /// One long-lived loop, started at launch and never cancelled — deliberately NOT
+    /// wired to `setUIVisible` like the two polls below it. A backgrounded app kept
+    /// alive for days by its audio session is exactly the thing this reports on, and
+    /// a beat that stopped when the screen went dark would read as the app dying
+    /// every time the phone was put down. One request an hour is not the traffic
+    /// those polls were trimmed for.
+    private func startBeating() {
+        guard beatLoop == nil else { return }
+        beatLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.beatNow()
+                try? await Task.sleep(nanoseconds: UInt64(Heartbeat.every) * 1_000_000_000)
+            }
+        }
+    }
+
+    /// Sends only while started: a stopped app is not going to record, and saying
+    /// "alive" for it would paint the state we most want to see as healthy.
+    private func beatNow() async {
+        guard Prefs.enabled else { return }
+        await Heartbeat.send(
+            host: Prefs.controlHost, device: Prefs.deviceID, streaming: state.connected)
     }
 
     // MARK: household pause (control plane)

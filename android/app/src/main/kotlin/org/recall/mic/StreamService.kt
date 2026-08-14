@@ -22,6 +22,7 @@ import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.time.Instant
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
@@ -44,6 +45,7 @@ class StreamService : Service() {
     // (~15 min), holding the mic and wakelock while the UI already says "Stopped".
     @Volatile private var activeSocket: Socket? = null
     private var worker: Thread? = null
+    private var beater: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var lastNotificationText: String? = null
 
@@ -67,6 +69,7 @@ class StreamService : Service() {
         running = true
         MicState.setRunning(true)
         worker = thread(name = "mic-stream") { streamLoop(host, controlHost, deviceId) }
+        beater = thread(name = "mic-heartbeat") { beatLoop(controlHost, deviceId) }
         return START_STICKY
     }
 
@@ -76,7 +79,9 @@ class StreamService : Service() {
         // reconnect/pause sleep (interrupt) — then reap it.
         runCatching { activeSocket?.close() }
         worker?.interrupt()
+        beater?.interrupt()
         worker?.join(JOIN_TIMEOUT_MS)
+        beater?.join(JOIN_TIMEOUT_MS)
         MicState.setRunning(false)
         MicState.setConnected(false)
         releaseWakeLock()
@@ -194,6 +199,29 @@ class StreamService : Service() {
                 } catch (_: InterruptedException) {
                     break // onDestroy interrupted the wait — exit cleanly
                 }
+            }
+        }
+    }
+
+    /**
+     * Say "still here" every hour for as long as this service lives (#837).
+     *
+     * Its own thread rather than a step in [streamLoop]: that loop blocks in
+     * `record.read` for hours at a time while streaming, and sits in a reconnect sleep
+     * while paused or away — so a beat folded into it would arrive on the schedule of
+     * whatever the mic happened to be doing, which is the very thing being measured.
+     * The thread costs one sleeping thread and one request an hour.
+     *
+     * Beats immediately on start, so a check that went red while the app was down
+     * clears within a minute of it coming back rather than at the next hour mark.
+     */
+    private fun beatLoop(controlHost: String, deviceId: String) {
+        while (running) {
+            Heartbeat.send(controlHost, deviceId, MicState.connected.value, this)
+            try {
+                Thread.sleep(TimeUnit.MINUTES.toMillis(Heartbeat.EVERY_MINUTES))
+            } catch (_: InterruptedException) {
+                break // onDestroy interrupted the wait — exit cleanly
             }
         }
     }

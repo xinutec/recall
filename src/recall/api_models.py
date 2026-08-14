@@ -50,6 +50,28 @@ class OutboxIn(BaseModel):
     reason: str | None = None
 
 
+class HeartbeatIn(BaseModel):
+    """A mic app saying it is still running (#837).
+
+    Sent hourly whether or not the app has anything to stream. That is the point:
+    recall's liveness marker means *recording* — it is refreshed only by audio above
+    the silence floor, so a quiet room and a dead app read alike — and while capture
+    is paused there is no stream at all. The beat is the only signal that survives
+    both.
+
+    Every field except `device` is optional so that an app on an older build still
+    counts as alive. A beat that arrives says the thing that matters; the rest is
+    detail for the reader once it stops arriving.
+    """
+
+    device: str
+    app: str = ""  # "ios" | "android" — which recorder, for the check's wording
+    version: str = ""  # app build, so a restart into a new build is legible
+    startedAt: str | None = None  # when THIS process started, ISO-8601
+    streaming: bool = False  # does it currently have the recorder?
+    charging: bool | None = None  # room phones are mains-powered; discharging leads
+
+
 class CorrectIn(BaseModel):
     id: int
     text: str

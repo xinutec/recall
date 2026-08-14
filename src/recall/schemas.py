@@ -76,6 +76,31 @@ class OutboxesOut(TypedDict):
     items: list[OutboxOut]
 
 
+class HeartbeatOut(TypedDict):
+    """One mic app's last "I am still here", as it last said so.
+
+    `streaming` and `charging` are the app's own view, carried but never graded —
+    every honest app reports `streaming: false` while the household is paused, and a
+    carried phone is off charge all day. They are here so that when the beats DO
+    stop, the last one says what state the app was in when it went.
+
+    Ages are left to the reader, as with `OutboxOut`: this says *when*, and the
+    fleetwatch collector that grades it decides what is too long.
+    """
+
+    device: str
+    app: str
+    version: str
+    startedAt: str | None
+    streaming: bool
+    charging: bool | None
+    at: str
+
+
+class HeartbeatsOut(TypedDict):
+    items: list[HeartbeatOut]
+
+
 class SessionOut(TypedDict):
     """One uploaded session — a discrete recording (e.g. a meeting) — for the list."""
 

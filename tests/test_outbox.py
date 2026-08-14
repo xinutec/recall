@@ -15,6 +15,7 @@ fleet — would never have known.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 from recall.outbox import OutboxReport, read_reports, record_report
@@ -127,3 +128,22 @@ def test_the_reason_shown_to_the_fleet_is_bounded_too() -> None:
     [only] = read_reports(settings)
     assert only.reason is not None
     assert len(only.reason) <= 200
+
+
+def test_a_timestamp_with_no_offset_is_read_as_utc_not_as_local() -> None:
+    """⚠ `.astimezone(UTC)` reads a NAIVE value as local time, not as UTC.
+
+    Latent rather than live: the phone formats with `ISO_INSTANT`, so today every
+    value carries a `Z`. But a build that stopped doing so would have every queued
+    recording read as an hour younger than it is here in summer — quietly moving a
+    stuck upload back under the threshold that exists to notice it. Found while
+    writing the same parse for the mic heartbeat (#837), where a naive value is
+    what a hand-written test post actually sends.
+    """
+    settings = FakeSettings()
+    record_report(settings, _report(oldest_queued_at=None))
+    stored = json.loads(settings.values["device_outbox_reports"])
+    stored["pixel9"]["oldestQueuedAt"] = "2026-08-10T17:00:00"
+    settings.values["device_outbox_reports"] = json.dumps(stored)
+    [only] = read_reports(settings)
+    assert only.oldest_queued_at == datetime(2026, 8, 10, 17, 0, tzinfo=UTC)

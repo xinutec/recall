@@ -33,6 +33,7 @@ from recall.api_models import (
     ClientLog,
     ContextIn,
     CorrectIn,
+    HeartbeatIn,
     NudgeIn,
     OutboxIn,
     QuietDeleteIn,
@@ -62,6 +63,7 @@ from recall.ids import AudioSegmentId
 from recall.liveness import source_statuses
 from recall.llm import DEFAULT_LLM, Generator, make_generator
 from recall.loudness import normalize_loudness
+from recall.mic_alive import Beat, read_beats, record_beat
 from recall.moments import Moment, best_colocated_guess, cluster_moments
 from recall.outbox import OutboxReport, read_reports, record_report
 from recall.paths import default_data_root
@@ -96,6 +98,8 @@ from recall.schemas import (
     CorrectionsOut,
     DaySummariesOut,
     EnvelopeOut,
+    HeartbeatOut,
+    HeartbeatsOut,
     ItemsOut,
     LabelOut,
     MomentOut,
@@ -607,6 +611,73 @@ def report_outbox(body: OutboxIn) -> OkOut:
     finally:
         store.close()
     return {"ok": True}
+
+
+@app.post("/api/devices/heartbeat")
+def record_heartbeat(body: HeartbeatIn) -> OkOut:
+    """A mic app says it is still running (#837).
+
+    The gap this closes: recall could not tell a dead recorder from a quiet room.
+    The liveness marker is refreshed only by audio above the silence floor — right
+    for "is it recording", useless for "is it alive" — and while capture is paused
+    the ingest listener is closed entirely, so nothing streams and nothing is known.
+    Capture was paused for the four days before this was written.
+
+    ⚠ `at` is the SERVER's clock, not the phone's. A beat is evidence that this app
+    reached the fleet just now, and a phone with a wrong clock would otherwise be
+    able to report itself permanently fresh or permanently stale. The phone's own
+    times are kept only where they say something about the phone (`startedAt`).
+
+    Best-effort status, never control: an unparseable `startedAt` is dropped rather
+    than refused, because an app on an older build should cost its own detail and
+    nothing else — least of all the beat itself, which is the part that matters.
+    """
+    now = datetime.now(UTC)
+    store = _store()
+    try:
+        record_beat(
+            store,
+            Beat(
+                device=body.device,
+                app=body.app,
+                version=body.version,
+                started_at=_iso_or_none(body.startedAt),
+                streaming=body.streaming,
+                charging=body.charging,
+                at=now,
+            ),
+        )
+    finally:
+        store.close()
+    return {"ok": True}
+
+
+@app.get("/api/devices/heartbeat")
+def heartbeats() -> HeartbeatsOut:
+    """Every mic app's last beat, for the fleetwatch collector that grades it.
+
+    No verdict here, for the same reason as the outbox: what counts as too long
+    belongs beside the other fleetwatch thresholds rather than split across two
+    repositories.
+    """
+    store = _store()
+    try:
+        beats = read_beats(store)
+    finally:
+        store.close()
+    return {"items": [_heartbeat(b) for b in beats]}
+
+
+def _heartbeat(beat: Beat) -> HeartbeatOut:
+    return {
+        "device": beat.device,
+        "app": beat.app,
+        "version": beat.version,
+        "startedAt": beat.started_at.isoformat() if beat.started_at else None,
+        "streaming": beat.streaming,
+        "charging": beat.charging,
+        "at": beat.at.isoformat(),
+    }
 
 
 @app.get("/api/devices/outbox")

@@ -498,3 +498,19 @@ def test_the_outbox_report_survives_the_credential_being_the_problem() -> None:
     # Reading them back is a different question with a different caller: the Mac,
     # on the sync plane, which is gated by its own bearer.
     assert requires_session("GET", "/api/devices/outbox")
+
+
+def test_a_liveness_beat_carries_no_credential_at_all() -> None:
+    """⚠ A beat that can 401 is a beat that reports healthy hardware as dead.
+
+    The mic app streams PCM over a bare TCP socket and has never held a token —
+    inventing one for a liveness signal would mean a phone whose credential went
+    bad reads exactly like a phone that died, which is the confusion the beat
+    exists to end (#837). Same trade as `/api/log` and the outbox report: what it
+    costs is that anyone already inside WireGuard can post a beat for any device
+    id, and a beat only ever makes things look healthier, never worse.
+    """
+    assert not requires_session("POST", "/api/devices/heartbeat")
+    assert not accepts_device_token("POST", "/api/devices/heartbeat")
+    # Reading them back is the Mac's question, on the Mac's plane.
+    assert requires_session("GET", "/api/devices/heartbeat")
