@@ -132,6 +132,9 @@ class StreamService : Service() {
                 // inferred from a socket, which races a parking listener on pause.
                 record = openRecord(bufSize)
                 record.startRecording()
+                // The mic opened: clear any earlier failure so a recovered app stops
+                // reporting a fault it no longer has.
+                MicState.setMicOk(true)
                 val out: OutputStream = socket.getOutputStream()
                 // Announce who we are on the shared ingest port, then stream PCM. The
                 // server reads exactly this line, registers us by id, and segments the
@@ -159,6 +162,7 @@ class StreamService : Service() {
                 // without touching the notification (a zombie must not re-post one
                 // after Stop) and without a pointless network call.
                 if (!running) break
+                MicState.setMicOk(e !is MicUnavailableException)
                 if (e is MicUnavailableException) {
                     // Blaming the network would send whoever reads it debugging the
                     // wrong thing — the connect succeeded; the microphone didn't.
@@ -221,7 +225,14 @@ class StreamService : Service() {
         // first retry is a minute away rather than at the next hour mark.
         var failures = 0
         while (running) {
-            val landed = Heartbeat.send(controlHost, deviceId, MicState.connected.value, this)
+            val landed =
+                Heartbeat.send(
+                    controlHost,
+                    deviceId,
+                    MicState.connected.value,
+                    MicState.micOk.value,
+                    this,
+                )
             failures = if (landed) 0 else failures + 1
             try {
                 Thread.sleep(TimeUnit.MINUTES.toMillis(Heartbeat.nextDelayMinutes(failures)))

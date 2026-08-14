@@ -82,6 +82,12 @@ class Beat:
     `charging` is here for the room phones, which are mains-powered: an iPhone or a
     Pixel discharging in a room is the leading indicator of the death this exists to
     catch. Not graded, for the same reason — a carried phone is off charge all day.
+
+    `mic_ok` is False when the app is running but its audio engine would not open
+    (permission revoked, the mic held by another app). It exists because #887 made
+    such an app keep beating: before that a failed mic silenced the beat entirely,
+    and the check went red for the wrong reason — accidental, but it WAS a signal,
+    and fixing the silence would have removed it. None from an app too old to say.
     """
 
     device: str
@@ -90,6 +96,7 @@ class Beat:
     started_at: datetime | None
     streaming: bool
     charging: bool | None
+    mic_ok: bool | None
     at: datetime
 
 
@@ -102,6 +109,7 @@ def record_beat(settings: Settings, beat: Beat) -> None:
         "startedAt": None if beat.started_at is None else beat.started_at.isoformat(),
         "streaming": bool(beat.streaming),
         "charging": None if beat.charging is None else bool(beat.charging),
+        "micOk": None if beat.mic_ok is None else bool(beat.mic_ok),
         "at": beat.at.isoformat(),
     }
     settings.set_setting(BEATS_KEY, json.dumps(_evicted(existing)))
@@ -160,6 +168,7 @@ def _one(device: str, raw: object) -> Beat | None:
             started_at=_when(raw.get("startedAt")),
             streaming=bool(raw["streaming"]),
             charging=_flag(raw.get("charging")),
+            mic_ok=_flag(raw.get("micOk")),
             at=_required(raw["at"]),
         )
     except (LookupError, TypeError, ValueError):

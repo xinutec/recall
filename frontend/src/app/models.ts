@@ -45,6 +45,7 @@ export interface DeviceHeartbeat {
   readonly startedAt: string | null;
   readonly streaming: boolean;
   readonly charging: boolean | null;
+  readonly micOk: boolean | null;
   readonly at: string;
 }
 
@@ -339,6 +340,7 @@ export interface DeviceHeartbeatRequest {
   readonly startedAt?: string | null;
   readonly streaming?: boolean;
   readonly charging?: boolean | null;
+  readonly micOk?: boolean | null;
 }
 
 export interface CorrectRequest {

@@ -99,6 +99,7 @@ object Heartbeat {
         startedAt: Instant,
         streaming: Boolean,
         charging: Boolean?,
+        micOk: Boolean,
     ): String =
         JSONObject()
             .put("device", device)
@@ -106,6 +107,9 @@ object Heartbeat {
             .put("version", version)
             .put("startedAt", DateTimeFormatter.ISO_INSTANT.format(startedAt))
             .put("streaming", streaming)
+            // A running app that cannot open its mic must SAY so rather than fall
+            // silent, which is what it used to do (#887).
+            .put("micOk", micOk)
             // Absent rather than null when unknown: guessing "discharging" would invent
             // the very reading a mains-powered room phone is watched for.
             .apply { if (charging != null) put("charging", charging) }
@@ -142,10 +146,16 @@ object Heartbeat {
      * Blocking rather than `suspend` on purpose: the caller is [StreamService]'s own beat
      * thread, which has no coroutine scope and whose whole job is to sleep and send.
      */
-    fun send(controlHost: String, device: String, streaming: Boolean, ctx: Context): Boolean =
+    fun send(
+        controlHost: String,
+        device: String,
+        streaming: Boolean,
+        micOk: Boolean,
+        ctx: Context,
+    ): Boolean =
         runCatching {
             if (controlHost.isBlank()) return false
-            val body = body(device, version(ctx), startedAt, streaming, charging(ctx))
+            val body = body(device, version(ctx), startedAt, streaming, charging(ctx), micOk)
             val conn =
                 (
                     URL("http://$controlHost:$API_PORT/api/devices/heartbeat")

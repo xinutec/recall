@@ -16,8 +16,8 @@ import java.time.Instant
 class HeartbeatTest {
     private val started: Instant = Instant.parse("2026-08-11T07:00:00Z")
 
-    private fun body(streaming: Boolean = true, charging: Boolean? = true) =
-        JSONObject(Heartbeat.body("pixel5", "0.6 (6)", started, streaming, charging))
+    private fun body(streaming: Boolean = true, charging: Boolean? = true, micOk: Boolean = true) =
+        JSONObject(Heartbeat.body("pixel5", "0.6 (6)", started, streaming, charging, micOk))
 
     @Test
     fun `carries the fields the server reads`() {
@@ -51,6 +51,14 @@ class HeartbeatTest {
         // written as multiples of it. Drifting apart here would quietly leave every
         // threshold describing a cadence nothing sends.
         assertEquals(60L, Heartbeat.EVERY_MINUTES)
+    }
+
+    @Test
+    fun `a deaf app says so instead of falling silent`() {
+        // #887: an app whose AudioRecord will not initialise used to stop beating, and
+        // the check went red for the wrong reason. It now beats and carries the fault.
+        assertFalse(body(micOk = false).getBoolean("micOk"))
+        assertTrue(body().getBoolean("micOk"))
     }
 
     @Test

@@ -8,10 +8,12 @@ import XCTest
 final class HeartbeatTests: XCTestCase {
     private let started = ISO8601DateFormatter().date(from: "2026-08-11T07:00:00Z")!
 
-    private func body(streaming: Bool = true, charging: Bool? = true) -> [String: Any] {
+    private func body(streaming: Bool = true, charging: Bool? = true, micOk: Bool = true)
+        -> [String: Any]
+    {
         Heartbeat.body(
             device: "iphone11", version: "1.4.0 (37)", startedAt: started,
-            streaming: streaming, charging: charging)
+            streaming: streaming, charging: charging, micOk: micOk)
     }
 
     func testCarriesTheFieldsTheServerReads() {
@@ -47,6 +49,14 @@ final class HeartbeatTests: XCTestCase {
         // "Alive now" and "alive since Tuesday" are different answers, and only the
         // second tells a stable app from one relaunching between beats.
         XCTAssertEqual(Heartbeat.startedAt, Heartbeat.startedAt)
+    }
+
+    func testADeafAppSaysSoInsteadOfFallingSilent() {
+        // #887: a failed `client.start()` used to clear `Prefs.enabled`, which both
+        // disabled auto-start forever and silenced the beat — so the one signal that
+        // would have reported the broken mic was what the breakage switched off.
+        XCTAssertEqual(body(micOk: false)["micOk"] as? Bool, false)
+        XCTAssertEqual(body()["micOk"] as? Bool, true)
     }
 
     func testALandedBeatWaitsTheFullHour() {

@@ -94,7 +94,8 @@ enum Heartbeat {
     /// The JSON a beat carries. Pure and separate from the send so it can be tested
     /// without a network — the field names are a contract with `HeartbeatIn`.
     static func body(
-        device: String, version: String, startedAt: Date, streaming: Bool, charging: Bool?
+        device: String, version: String, startedAt: Date, streaming: Bool, charging: Bool?,
+        micOk: Bool
     ) -> [String: Any] {
         var out: [String: Any] = [
             "device": device,
@@ -102,6 +103,9 @@ enum Heartbeat {
             "version": version,
             "startedAt": iso(startedAt),
             "streaming": streaming,
+            // A running app that cannot open its mic must SAY so rather than fall
+            // silent, which is what it used to do (#887).
+            "micOk": micOk,
         ]
         // Absent rather than null when unknown: the simulator and a device with
         // battery monitoring off both report `.unknown`, and guessing "discharging"
@@ -129,13 +133,13 @@ enum Heartbeat {
 
     /// POST one beat. Returns whether it landed; nothing depends on it.
     @discardableResult
-    static func send(host: String, device: String, streaming: Bool) async -> Bool {
+    static func send(host: String, device: String, streaming: Bool, micOk: Bool) async -> Bool {
         guard !host.isEmpty,
             let url = URL(string: "http://\(host):\(port)/api/devices/heartbeat")
         else { return false }
         let payload = body(
             device: device, version: version, startedAt: startedAt,
-            streaming: streaming, charging: charging())
+            streaming: streaming, charging: charging(), micOk: micOk)
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             return false
         }

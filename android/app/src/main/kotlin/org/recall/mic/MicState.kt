@@ -20,6 +20,19 @@ object MicState {
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
 
+    /**
+     * False while the audio engine will not open (permission revoked, mic held by
+     * another app). Carried by the heartbeat so a running-but-deaf app SAYS so:
+     * before #887 such an app simply stopped beating, and the check went red for
+     * the wrong reason. Starts true — "not known to be broken".
+     */
+    private val _micOk = MutableStateFlow(true)
+    val micOk: StateFlow<Boolean> = _micOk.asStateFlow()
+
+    fun setMicOk(value: Boolean) {
+        _micOk.value = value
+    }
+
     /** Most recent mic peak amplitude, 0f..1f, for the level meter. */
     private val _level = MutableStateFlow(0f)
     val level: StateFlow<Float> = _level.asStateFlow()

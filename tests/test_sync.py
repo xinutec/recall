@@ -1017,6 +1017,7 @@ def test_the_mac_reads_the_mic_heartbeats_on_the_sync_plane(
             started_at=datetime(2026, 8, 11, 7, 0, tzinfo=UTC),
             streaming=False,
             charging=True,
+            mic_ok=True,
             at=datetime(2026, 8, 14, 9, 0, tzinfo=UTC),
         ),
     )

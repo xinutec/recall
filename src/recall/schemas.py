@@ -84,6 +84,10 @@ class HeartbeatOut(TypedDict):
     carried phone is off charge all day. They are here so that when the beats DO
     stop, the last one says what state the app was in when it went.
 
+    `micOk` is the exception in kind: False means the app is running but its audio
+    engine would not open, which is a fault rather than a mode. Still not graded
+    here — this type reports, the collector decides.
+
     Ages are left to the reader, as with `OutboxOut`: this says *when*, and the
     fleetwatch collector that grades it decides what is too long.
     """
@@ -94,6 +98,7 @@ class HeartbeatOut(TypedDict):
     startedAt: str | None
     streaming: bool
     charging: bool | None
+    micOk: bool | None
     at: str
 
 

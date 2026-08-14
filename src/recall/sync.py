@@ -609,6 +609,7 @@ def _register_device_routes(
                     "startedAt": b.started_at.isoformat() if b.started_at else None,
                     "streaming": b.streaming,
                     "charging": b.charging,
+                    "micOk": b.mic_ok,
                     "at": b.at.isoformat(),
                 }
                 for b in beats

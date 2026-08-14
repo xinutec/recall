@@ -70,6 +70,9 @@ class HeartbeatIn(BaseModel):
     startedAt: str | None = None  # when THIS process started, ISO-8601
     streaming: bool = False  # does it currently have the recorder?
     charging: bool | None = None  # room phones are mains-powered; discharging leads
+    # False when the app is up but its audio engine would not open (#887). Optional:
+    # an app too old to say sends nothing, which must not read as a working mic.
+    micOk: bool | None = None
 
 
 class CorrectIn(BaseModel):

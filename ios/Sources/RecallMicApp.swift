@@ -52,15 +52,21 @@ final class RecallController: ObservableObject {
         guard !state.running else { return }
         Task {
             guard await AudioCapture.requestPermission() else { return }
+            // The INTENT, recorded before the engine is asked and never cleared by
+            // its answer. `enabled` means "this should be recording", not "the
+            // engine started this time" — writing the outcome here was #887: one
+            // failed mic open disabled auto-start forever AND silenced the beat,
+            // so the single signal that would have reported the fault was the thing
+            // the fault switched off.
+            Prefs.enabled = true
             let ok = client.start()  // false if the mic couldn't be opened
             state.running = ok
-            Prefs.enabled = ok
-            // Beat at once rather than at the next hour mark, so a check that went
-            // red while this was down clears within a minute of it coming back.
-            // The outcome is dropped on purpose: this is a one-off alongside the beat
-            // loop, and the loop owns the retry schedule. Counting a failure here
-            // would shorten a wait the loop is already timing.
-            if ok { _ = await beatNow() }
+            state.micOk = ok
+            // Beat EITHER WAY. A mic that will not open is exactly what the fleet
+            // wants to hear about, and the beat now carries `micOk` to say it.
+            // The outcome is dropped on purpose: this is a one-off alongside the
+            // beat loop, and the loop owns the retry schedule.
+            _ = await beatNow()
         }
     }
 
@@ -105,7 +111,8 @@ final class RecallController: ObservableObject {
     private func beatNow() async -> Heartbeat.Outcome {
         guard Prefs.enabled else { return .skipped }
         let sent = await Heartbeat.send(
-            host: Prefs.controlHost, device: Prefs.deviceID, streaming: state.connected)
+            host: Prefs.controlHost, device: Prefs.deviceID, streaming: state.connected,
+            micOk: state.micOk)
         return sent ? .sent : .failed
     }
 

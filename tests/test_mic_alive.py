@@ -45,6 +45,7 @@ def _beat(**over: object) -> Beat:
         "started_at": NOW - timedelta(days=3),
         "streaming": True,
         "charging": True,
+        "mic_ok": True,
         "at": NOW,
     }
     fields.update(over)
@@ -155,3 +156,22 @@ def test_a_real_phone_is_not_evicted_by_a_flood_of_fresher_junk() -> None:
     for n in range(MAX_DEVICES - 1):
         record_beat(settings, _beat(device=f"junk-{n:03d}", at=NOW))
     assert "iphone11" in {b.device for b in read_beats(settings)}
+
+
+def test_a_mic_that_will_not_open_survives_the_round_trip() -> None:
+    # #887: an app whose audio engine fails keeps beating rather than going silent,
+    # so the flag saying WHY has to reach the reader intact — a False that decayed
+    # to None would read as "an app too old to say" and hide a live fault.
+    settings = FakeSettings()
+    record_beat(settings, _beat(mic_ok=False))
+    (stored,) = read_beats(settings)
+    assert stored.mic_ok is False
+
+
+def test_an_app_too_old_to_say_is_unknown_not_healthy() -> None:
+    # Absent must never read as a working mic: the apps that predate #887 send no
+    # such field, and inventing True for them would assert something never measured.
+    settings = FakeSettings()
+    record_beat(settings, _beat(mic_ok=None))
+    (stored,) = read_beats(settings)
+    assert stored.mic_ok is None

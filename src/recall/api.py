@@ -644,6 +644,7 @@ def record_heartbeat(body: HeartbeatIn) -> OkOut:
                 started_at=_iso_or_none(body.startedAt),
                 streaming=body.streaming,
                 charging=body.charging,
+                mic_ok=body.micOk,
                 at=now,
             ),
         )
@@ -676,6 +677,7 @@ def _heartbeat(beat: Beat) -> HeartbeatOut:
         "startedAt": beat.started_at.isoformat() if beat.started_at else None,
         "streaming": beat.streaming,
         "charging": beat.charging,
+        "micOk": beat.mic_ok,
         "at": beat.at.isoformat(),
     }
 

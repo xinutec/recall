@@ -35,6 +35,10 @@ enum MicPhase: Equatable {
 @MainActor
 final class MicState: ObservableObject {
     @Published var running = false  // user pressed Start
+    /// False while the audio engine will not open. Carried by the heartbeat so a
+    /// running-but-deaf app SAYS so — before #887 it simply stopped beating, and the
+    /// check went red for the wrong reason. Starts true: "not known to be broken".
+    @Published var micOk = true
     @Published var connected = false  // TCP up and streaming
     @Published var phase: MicPhase = .stopped
     @Published var level: Float = 0  // 0...1 meter position
