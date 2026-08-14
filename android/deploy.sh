@@ -17,10 +17,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# name | LAN | VPN (nixos-config/network.nix)
+# name | LAN | VPN (nixos-config/network.nix) | adb serial (for the mDNS fallback)
 PHONES=(
-  "pixel9|192.168.1.253:5555|10.100.0.12:5555"   # living room, but carried
-  "pixel5|192.168.1.242:5555|10.100.0.10:5555"
+  "pixel9|192.168.1.253:5555|10.100.0.12:5555|4C070DLAQ001L1"   # living room, but carried
+  "pixel5|192.168.1.242:5555|10.100.0.10:5555|15271FDD40043S"
 )
 
 ADB="$ANDROID_HOME/platform-tools/adb"
@@ -42,10 +42,28 @@ LOCAL_MD5=$(md5 -q "$APK")
 # has printed a word, which is exactly what this one did on its first run. A stale
 # entry for one address is cleared with `disconnect`, which cannot block.
 
+# Where Wireless debugging is listening right now, via mDNS. Echoes host:port, or nothing.
+#
+# `adb tcpip 5555` does NOT survive a reboot, and what comes back after one is the
+# Settings > Wireless debugging toggle — which listens on a RANDOM high port, not 5555.
+# So a phone that is awake, on the LAN and pingable can still refuse :5555 on every
+# address it owns, which reads exactly like a phone that is away (measured 2026-08-14:
+# pixel5 pinged on both addresses with :5555 shut, while it was in fact listening on
+# :39345). The port is advertised, so look it up rather than asking Pippijn to.
+#
+# ⚠ mDNS is link-local, so this only rescues a phone on the HOME LAN — a phone that is
+# out of the house does not advertise here, and for it the VPN address is the only way in.
+mdns_addr() {
+  local serial=$1
+  "$ADB" mdns services 2>/dev/null |
+    awk -v s="$serial" '$1 ~ ("^adb-" s "-") && $2 == "_adb-tls-connect._tcp" {print $3; exit}'
+}
+
 # Reach a phone at whichever address answers. Echoes it, or nothing.
 reach() {
   local addr
   for addr in "$@"; do
+    [ -n "$addr" ] || continue
     "$ADB" disconnect "$addr" >/dev/null 2>&1 || true
     if "$ADB" connect "$addr" 2>&1 | grep -qiE "connected|already"; then
       # `connect` can report success and then sit `offline`, which every later
@@ -85,12 +103,24 @@ stage_and_install() {
 
 ok=0
 for entry in "${PHONES[@]}"; do
-  IFS='|' read -r name lan vpn <<<"$entry"
+  IFS='|' read -r name lan vpn serial <<<"$entry"
   echo "=== $name ==="
   if ! p=$(reach "$lan" "$vpn"); then
-    echo "  UNREACHABLE on $lan or $vpn — skipped"
-    echo "  (re-enable wireless debugging on the phone; \`adb tcpip 5555\` does not survive a reboot)"
-    continue
+    p=$(reach "$(mdns_addr "$serial")") || true
+    if [ -z "$p" ]; then
+      echo "  UNREACHABLE on $lan or $vpn, and not advertising over mDNS — skipped"
+      echo "  (turn on Settings > Developer options > Wireless debugging)"
+      continue
+    fi
+    # Put :5555 back, so the next run finds it at the address this file documents
+    # instead of rediscovering a port that changes on every reboot.
+    echo "  reached at $p over mDNS — restoring :5555"
+    "$ADB" -s "$p" tcpip 5555 >/dev/null 2>&1 || true
+    sleep 3
+    p=$(reach "$lan" "$vpn") || {
+      echo "  :5555 did not come back — skipped"
+      continue
+    }
   fi
   echo "  reached at $p"
   if ! stage_and_install "$p"; then
