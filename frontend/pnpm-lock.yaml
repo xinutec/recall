@@ -56,8 +56,8 @@ importers:
         specifier: ^1.61.1
         version: 1.61.1
       '@xinutec/ui-harness':
-        specifier: github:xinutec/ui-harness#971cb32736d8ae40c26474fb7876f1e9c58c493e
-        version: https://codeload.github.com/xinutec/ui-harness/tar.gz/971cb32736d8ae40c26474fb7876f1e9c58c493e(@playwright/test@1.61.1)
+        specifier: github:xinutec/ui-harness#5e3cf0a6460068362a2687b2fd8694f75a21e7f8
+        version: https://codeload.github.com/xinutec/ui-harness/tar.gz/5e3cf0a6460068362a2687b2fd8694f75a21e7f8(@playwright/test@1.61.1)
       angular-eslint:
         specifier: ^22.0.0
         version: 22.0.0(@angular/cli@22.0.5(@types/node@24.13.3)(chokidar@5.0.0))(chokidar@5.0.0)(eslint@10.6.0)(typescript-eslint@8.62.1(eslint@10.6.0)(typescript@6.0.3))(typescript@6.0.3)
@@ -1466,8 +1466,8 @@ packages:
   '@vitest/utils@4.1.9':
     resolution: {integrity: sha512-A51o8ymO5PpqlWNnBP9ZHPXDIpuMtTLlGSjN7la4US+LJzoUMyhwjA5QXlm39JexgwHKW4Xjs8Z2d3dLCXOeuA==}
 
-  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/971cb32736d8ae40c26474fb7876f1e9c58c493e':
-    resolution: {gitHosted: true, tarball: https://codeload.github.com/xinutec/ui-harness/tar.gz/971cb32736d8ae40c26474fb7876f1e9c58c493e}
+  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/5e3cf0a6460068362a2687b2fd8694f75a21e7f8':
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/xinutec/ui-harness/tar.gz/5e3cf0a6460068362a2687b2fd8694f75a21e7f8}
     version: 0.1.0
     peerDependencies:
       '@playwright/test': '>=1.61.0'
@@ -4277,7 +4277,7 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
 
-  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/971cb32736d8ae40c26474fb7876f1e9c58c493e(@playwright/test@1.61.1)':
+  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/5e3cf0a6460068362a2687b2fd8694f75a21e7f8(@playwright/test@1.61.1)':
     dependencies:
       '@types/node': 24.13.3
     optionalDependencies:

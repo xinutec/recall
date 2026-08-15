@@ -35,7 +35,7 @@
     "@angular/cli": "^22.0.5",
     "@angular/compiler-cli": "^22.0.4",
     "@playwright/test": "^1.61.1",
-    "@xinutec/ui-harness": "github:xinutec/ui-harness#971cb32736d8ae40c26474fb7876f1e9c58c493e",
+    "@xinutec/ui-harness": "github:xinutec/ui-harness#5e3cf0a6460068362a2687b2fd8694f75a21e7f8",
     "angular-eslint": "^22.0.0",
     "eslint": "^10.6.0",
     "jsdom": "^29.1.1",
