@@ -89,15 +89,28 @@ state worth catching bright green.
 
 | | |
 |---|---|
-| Where | the **control** host (Isis over WireGuard), not the recorder on the LAN — so a phone beats from away from home too, and "out of the house" stops looking like "dead" |
+| Where | the **control** host (Isis over WireGuard) first, so a phone beats from away from home too and "out of the house" stops looking like "dead"; if that fails, the **recorder host on the LAN**, where `recall beat-relay` forwards it (#888) |
 | Auth | **none**, deliberately. The mic app has never held a token, and a beat that could 401 would report a credential mistake as dead hardware (`webauth._DEVICE_EXEMPT`) |
-| Carries | `startedAt` (a restart between beats is what "it goes down now and then" looks like from here), `streaming`, `charging`, app + version |
+| Carries | `startedAt` (a restart between beats is what "it goes down now and then" looks like from here), `streaming`, `charging`, `micOk`, app + version |
+| Retries | a failed beat comes back in a minute, doubling to the hourly cadence (#886) — an app that came up while the network was still settling used to wait a full hour |
 | Stored | one settings row, capped and evicted by age (`recall.mic_alive`) — last-known status, no history, no migration |
 | Graded | not here. The Mac reads `/sync/devices/heartbeats` and `xinutec-infra/mac-mini/recall_mics.py` decides what is too long, beside the rest of the fleetwatch thresholds |
 
 `streaming` and `charging` are carried but **never graded**: every honest app reports
 `streaming: false` while the household is paused, and a carried phone is off charge all
-day. They say what the app was doing when the beats stopped.
+day. They say what the app was doing when the beats stopped. `micOk` **is** graded — it
+is a fault, not a mode: the app kept running but the audio engine would not open, which
+used to show up as silence and is now named (#887).
+
+### The LAN fallback
+
+The beat's reachability requirement used to be stricter than recording's: a phone at
+home with its tunnel off streamed every sample correctly and still read dead. So the
+Mac answers the same request on the LAN — `recall beat-relay`, its own tiny server on
+port 8000 (the fleet's port, so the apps need one URL shape), independent of the capture
+agents because a pause closes the ingest listener. It stores nothing: it filters the
+body to an allowlist, stamps `viaLan` itself so a caller cannot deny coming the back
+way, and forwards to Isis, which stays the only place a beat lives.
 
 ## Pause stops phone recording too
 

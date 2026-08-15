@@ -32,6 +32,7 @@ want while developing.
 | `org.xinutec.recall-live` | VAD → transcribe each utterance (~2–3 s, provisional) | always on |
 | `org.xinutec.recall-worker` | index + transcribe new segments (whole-clip; diarization is the refine agent's job) | continuous |
 | `org.xinutec.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
+| `org.xinutec.recall-beat-relay` | accept a mic app's heartbeat on the LAN (port 8000) and forward it to Isis, for a phone whose VPN is down | always on |
 | `org.xinutec.recall-refine` | re-derive segments diarized + speaker-split; also drains queued A/B model comparisons | diarize: while capture paused · A/B: any time |
 | `org.xinutec.recall-llm-host` | holds the LLM (one copy for the whole Mac) and generates on `127.0.0.1:8092` | always on; weights loaded on demand, released after 5 min idle |
 | `org.xinutec.recall-sync` | push the archive to Isis (the system of record) — only what changed since the last watermark | timer |
