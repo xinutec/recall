@@ -4,6 +4,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -40,6 +42,11 @@ import java.time.ZoneId
  * The upload runs in the activity's lifecycle with a small progress screen: copy the
  * shared content to cache (so a transient content-URI grant can't fail a long stream),
  * upload, then auto-dismiss on success or offer Close on failure.
+ *
+ * The session is dated when the audio was **recorded**, not when it was shared: a file
+ * kept for a week and sent in afterwards belongs in the archive at its own time, next to
+ * whatever else happened that afternoon. [modifiedMillis] is what makes that possible for
+ * a file whose name carries no recorder stamp.
  */
 class ShareActivity : ComponentActivity() {
     private sealed interface UiState {
@@ -82,7 +89,14 @@ class ShareActivity : ComponentActivity() {
                 val cached = withContext(Dispatchers.IO) { copyToCache(uri, name) }
                 try {
                     val start =
-                        ShareUpload.chooseStart(name, null, Instant.now(), ZoneId.systemDefault())
+                        withContext(Dispatchers.IO) {
+                            ShareUpload.chooseStart(
+                                name,
+                                modifiedMillis(uri),
+                                Instant.now(),
+                                ZoneId.systemDefault(),
+                            )
+                        }
                     ShareUpload
                         .upload(host, cached, name, start, Prefs.deviceToken(this@ShareActivity))
                         .getOrThrow()
@@ -111,6 +125,31 @@ class ShareActivity : ComponentActivity() {
         } ?: error("cannot open shared file")
         return out
     }
+
+    /**
+     * When the shared file was last written, or null if the provider won't say.
+     *
+     * This has to come from the **content URI**, not from the cache copy: copying stamps
+     * the copy with now, so `File.lastModified()` on it would confidently report the
+     * upload time as the recording time. Which column exists depends on who is sharing —
+     * a documents provider answers `last_modified`, MediaStore answers `date_modified` —
+     * so ask for both and let [ShareUpload.modifiedMillis] settle the units.
+     */
+    private fun modifiedMillis(uri: Uri): Long? =
+        ShareUpload.modifiedMillis(
+            longColumn(uri, DocumentsContract.Document.COLUMN_LAST_MODIFIED),
+            longColumn(uri, MediaStore.MediaColumns.DATE_MODIFIED),
+        )
+
+    /** One long column, or null. Querying a column a provider doesn't have throws, and a
+     * missing timestamp is a fallback ([ShareUpload.chooseStart] has one), not a failed
+     * upload — so this never propagates. */
+    private fun longColumn(uri: Uri, column: String): Long? =
+        runCatching {
+            contentResolver.query(uri, arrayOf(column), null, null, null)?.use { c ->
+                if (c.moveToFirst() && c.columnCount > 0 && !c.isNull(0)) c.getLong(0) else null
+            }
+        }.getOrNull()
 
     private fun displayName(uri: Uri): String {
         contentResolver

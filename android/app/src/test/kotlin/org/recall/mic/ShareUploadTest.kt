@@ -55,6 +55,25 @@ class ShareUploadTest {
     }
 
     @Test
+    fun readsMediaStoreSecondsAsSecondsAndSafMillisAsMillis() {
+        // The two providers disagree on units. Seconds read as millis would date a 2026
+        // recording to 1970 — and unlike the `now` fallback, that failure LOOKS like the
+        // file's own time was honoured, which is why it gets its own test.
+        val millis = Instant.parse("2026-07-03T19:00:00Z").toEpochMilli()
+        assertEquals(millis, ShareUpload.modifiedMillis(millis, null))
+        assertEquals(millis, ShareUpload.modifiedMillis(null, millis / 1000))
+        // SAF wins when both are offered; both are the same moment, in their own units.
+        assertEquals(millis, ShareUpload.modifiedMillis(millis, millis / 1000))
+    }
+
+    @Test
+    fun treatsAnAbsentTimestampAsAbsentRatherThanTheEpoch() {
+        assertNull(ShareUpload.modifiedMillis(null, null))
+        assertNull(ShareUpload.modifiedMillis(0, 0))
+        assertNull(ShareUpload.modifiedMillis(-1, null))
+    }
+
+    @Test
     fun fallsBackToLastModifiedThenNow() {
         val now = Instant.parse("2026-07-03T20:00:00Z")
         val modified = Instant.parse("2026-07-03T19:00:00Z").toEpochMilli()

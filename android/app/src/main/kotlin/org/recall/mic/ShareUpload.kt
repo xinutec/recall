@@ -56,6 +56,21 @@ object ShareUpload {
             }.getOrNull()
         }
 
+    /**
+     * Epoch millis from the two columns a shared content URI might carry, in priority
+     * order: SAF's `last_modified` first, then MediaStore's `date_modified`.
+     *
+     * ⚠ They are in **different units** — `last_modified` is millis, `date_modified` is
+     * SECONDS. Reading seconds as millis dates a 2026 recording to January 1970, which is
+     * worse than the `now` fallback: it looks like the file's own time was honoured.
+     *
+     * Zero, negative and null all mean "this provider has no time for the file", never
+     * the epoch.
+     */
+    fun modifiedMillis(lastModifiedMillis: Long?, dateModifiedSeconds: Long?): Long? =
+        lastModifiedMillis?.takeIf { it > 0 }
+            ?: dateModifiedSeconds?.takeIf { it > 0 }?.times(1000)
+
     /** Best available start time: the recorder stamp, else the file's last-modified,
      * else now. */
     fun chooseStart(name: String, modifiedMillis: Long?, now: Instant, zone: ZoneId): Instant =
