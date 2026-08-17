@@ -34,21 +34,20 @@ data class OutboxState(
  *
  * Offline-first is the whole point — a meeting happens where the recall host is
  * unreachable, and some guest networks block the VPN outright, so there may be no route
- * home from the building at all. The recording is therefore a file first and an upload
- * second, and nothing about it may live only in memory.
+ * home from the building at all. The recording is a file first and an upload second, and
+ * nothing about it may live only in memory.
  *
- * **One file per recording, named for when it was made** — `meeting-<local stamp>.ogg`,
- * the same convention the third-party recorder used. There is no title: the only thing
- * worth knowing about a recording before it is transcribed is when it happened, and the
- * filename already says that. recall names the session `Meeting <date> <time>` and it
- * can be renamed there, where the transcript is to hand and the name can be chosen for
- * what the meeting turned out to be.
+ * **One file per recording, named for when it was made** — `meeting-<local stamp>.ogg`.
+ * No title: the only thing worth knowing before a recording is transcribed is when it
+ * happened, and the filename says that. recall names the session `Meeting <date>
+ * <time>`, renameable there, where the transcript is to hand and the name can be chosen
+ * for what the meeting turned out to be.
  *
  * **The one exception is [FAILURE_SUFFIX]**, `<name>.ogg.failure`, holding why the last
- * delivery attempt didn't land. It is not metadata about the recording — it is state
- * about an attempt, it is deleted the moment one succeeds, and it has to be on disk for
- * the same reason the audio is: [MeetingUpload] runs under WorkManager when the app is
- * gone, so a reason kept in memory is lost exactly when someone opens the screen to ask.
+ * delivery attempt didn't land. Not metadata about the recording but state about an
+ * attempt, deleted the moment one succeeds — and on disk for the same reason the audio
+ * is: [MeetingUpload] runs under WorkManager when the app is gone, so a reason kept in
+ * memory is lost exactly when someone opens the screen to ask.
  *
  * **A recording's state is which directory it is in**, because every one of those states
  * is a decision or a verdict that has to survive a reboot, and a rename is the only way
