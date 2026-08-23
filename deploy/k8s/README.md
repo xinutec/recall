@@ -1,15 +1,20 @@
 # recall on Isis (k3s) — deployment notes
 
 Status: **LIVE since 2026-07-17.** The manifests no longer live here — they are in the
-`pippijn` monorepo at `code/kubes/recall/k8s/`, with the fleet's usual `sync.sh` and
-`secret.sh` beside them. This file is kept for the setup and rationale below (secrets,
-WireGuard exposure, backup), not as a source of manifests.
+`pippijn` monorepo at `code/kubes/recall/k8s/`, rendered from the typed Dhall model
+(`dhall/apps/recall.dhall`). This file is kept for the setup and rationale below
+(secrets, WireGuard exposure, backup), not as a source of manifests.
 
 They were duplicated in both places until 2026-07-26, and the copy here silently went
 stale: it was missing the six web-SSO env vars and the nextcloud egress rule that the
 live cluster had been running for nine days. A `kubectl apply` from this directory would
-have deleted working single sign-on. That is why there is now exactly one copy. Deploy
-with `code/kubes/scripts/apply.sh recall` (dry run) / `--apply`, or the `sync.sh` there.
+have deleted working single sign-on. That is why there is now exactly one copy.
+
+⚠ **Deploy with `kubes/deploy.sh recall`**, or equivalently `recall/k8s/sync.sh`,
+which is a three-line wrapper that `exec`s it. `scripts/apply.sh` was named here
+until 2026-08-23 and was **deleted 2026-08-16** — `plan-run deploy` replaced it.
+The cluster comes from the model (`dhall/clusters.json`: `recall: isis.xinutec.org`),
+so it is never passed by hand.
 
 Nothing auto-applies anywhere — the fleet does NOT run Flux; every app is deployed by
 hand. Rationale and topology: `docs/isis-migration.md`.
@@ -57,7 +62,8 @@ read-only rootfs + `/tmp` emptyDir, seccomp, probes, limits), `03-service` (Clus
    only: a MetalLB address from a `wg0`-only pool, or a NodePort firewalled to `wg0`. That
    is the real network gate; the public ingress is not one.
 5. ~~**Move the manifests to `kubes/recall/k8s/`** and add a `sync.sh`~~ — **DONE.** They
-   live at `pippijn:code/kubes/recall/k8s/` with `sync.sh` + `secret.sh`. The copies that
+   live at `pippijn:code/kubes/recall/k8s/` with `sync.sh` + `secret.sh` (the `sync.sh`
+   is now a wrapper on `kubes/deploy.sh`, not its own copy of the procedure). The copies that
    used to sit here were deleted 2026-07-26 (see the status note at the top). The Mac
    worker pushes (`recall sync`) at the Isis WG address.
 6. **Backup** — add a recall block to odin `backup-prepare.sh`: a consistent
