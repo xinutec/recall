@@ -68,6 +68,10 @@ class StreamService : Service() {
         }
         running = true
         MicState.setRunning(true)
+        // Streaming is back, however it was asked for — a tap on the reboot prompt, the
+        // app being opened, or the boot auto-start. Either way the prompt has nothing
+        // left to ask for.
+        BootReceiver.clearResumePrompt(this)
         worker = thread(name = "mic-stream") { streamLoop(host, controlHost, deviceId) }
         beater = thread(name = "mic-heartbeat") { beatLoop(controlHost, host, deviceId) }
         return START_STICKY
@@ -247,7 +251,7 @@ class StreamService : Service() {
         if (text == lastNotificationText) return
         lastNotificationText = text
         getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, buildNotification(text))
+            .notify(NotificationIds.STREAM, buildNotification(text))
     }
 
     /**
@@ -298,12 +302,12 @@ class StreamService : Service() {
         return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
-                    NOTIFICATION_ID,
+                    NotificationIds.STREAM,
                     notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
                 )
             } else {
-                startForeground(NOTIFICATION_ID, notification)
+                startForeground(NotificationIds.STREAM, notification)
             }
         }.onFailure { Log.w(TAG, "foreground start refused: ${it.message}") }.isSuccess
     }
@@ -354,7 +358,6 @@ class StreamService : Service() {
     companion object {
         private const val TAG = "StreamService"
         private const val CHANNEL_ID = "mic-stream"
-        private const val NOTIFICATION_ID = 1
         private const val WAKE_TAG = "recall-mic:stream"
 
         // Match recall's CaptureConfig: 48 kHz, mono, 16-bit signed little-endian.

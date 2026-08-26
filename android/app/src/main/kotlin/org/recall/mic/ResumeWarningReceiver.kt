@@ -43,7 +43,7 @@ class ResumeWarningReceiver : BroadcastReceiver() {
                 ),
             )
         }
-        mgr.notify(ResumeWarning.NOTIFICATION_ID, build(context, resumeAt))
+        mgr.notify(NotificationIds.RESUME_WARNING, build(context, resumeAt))
     }
 
     private fun build(context: Context, resumeAt: Instant) =

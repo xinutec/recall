@@ -30,16 +30,6 @@ object ResumeWarning {
     private const val TAG = "ResumeWarning"
     const val EXTRA_RESUME_AT_MILLIS = "resume_at_millis"
 
-    /**
-     * The warning's own notification id, so it can be taken down again by whoever
-     * decides it is stale.
-     *
-     * Deliberately not 2: [MeetingService]'s ongoing notification and [BootReceiver]'s
-     * both use that one, so sharing it would mean posting the warning over a meeting
-     * recording's notification — and cancelling it would aim at whatever spoke last.
-     */
-    const val NOTIFICATION_ID = 3
-
     // A distinct request code / action so this alarm's PendingIntent is stable: the
     // same intent is reused to reschedule (replacing the prior alarm) and to cancel.
     private const val REQUEST_CODE = 1001
@@ -102,7 +92,9 @@ object ResumeWarning {
      *  no-op, so this is safe on every plan change — including the common case where the
      *  alarm is still pending and nothing is on screen. */
     private fun dismiss(context: Context) {
-        context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+        context
+            .getSystemService(NotificationManager::class.java)
+            .cancel(NotificationIds.RESUME_WARNING)
     }
 
     // FLAG_UPDATE_CURRENT refreshes the resume-at extra when rescheduling; the request

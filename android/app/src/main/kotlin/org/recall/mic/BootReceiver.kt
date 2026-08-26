@@ -84,11 +84,25 @@ class BootReceiver : BroadcastReceiver() {
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .build()
-        mgr.notify(NOTIFICATION_ID, notification)
+        mgr.notify(NotificationIds.BOOT, notification)
     }
 
-    private companion object {
-        const val CHANNEL_ID = "boot-resume"
-        const val NOTIFICATION_ID = 2
+    companion object {
+        private const val CHANNEL_ID = "boot-resume"
+
+        /**
+         * Take down the reboot prompt, because what it asked for has happened.
+         *
+         * Nothing else does: `setAutoCancel` clears it when it is TAPPED, and the usual
+         * way streaming comes back is opening the app from the launcher, which restarts
+         * the service (MainActivity's resume-on-open) without going near the shade. Left
+         * alone it keeps asking for something already done, which reads as the resume
+         * having failed.
+         */
+        fun clearResumePrompt(context: Context) {
+            context
+                .getSystemService(NotificationManager::class.java)
+                .cancel(NotificationIds.BOOT)
+        }
     }
 }

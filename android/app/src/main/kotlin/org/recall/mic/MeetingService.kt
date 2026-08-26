@@ -228,7 +228,7 @@ class MeetingService : Service() {
         )
         return runCatching {
             startForeground(
-                NOTIFICATION_ID,
+                NotificationIds.MEETING,
                 buildNotification("Starting…", null),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
             )
@@ -237,7 +237,7 @@ class MeetingService : Service() {
 
     private fun setNotification(text: String, since: Instant?) {
         getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, buildNotification(text, since))
+            .notify(NotificationIds.MEETING, buildNotification(text, since))
     }
 
     private fun buildNotification(text: String, since: Instant?): Notification {
@@ -294,7 +294,6 @@ class MeetingService : Service() {
     companion object {
         private const val TAG = "MeetingService"
         private const val CHANNEL_ID = "meeting-record"
-        private const val NOTIFICATION_ID = 2 // 1 is the stream's
         private const val WAKE_TAG = "recall-mic:meeting"
 
         private const val ACTION_STOP = "org.recall.mic.STOP_MEETING"
