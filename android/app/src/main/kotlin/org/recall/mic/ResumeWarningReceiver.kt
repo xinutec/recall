@@ -16,6 +16,10 @@ import java.time.ZoneId
  * Posts the "recording resumes soon" heads-up when [ResumeWarning]'s alarm fires. A
  * plain informational notification: tapping it opens the app on the pause controls, so
  * the pause can be extended before the mic comes back on.
+ *
+ * Extending is also what makes it go away — [ResumeWarning] drops it when it next reads a
+ * moved resume time — so the text here is written as a snapshot that is never left to
+ * contradict the pause it describes.
  */
 class ResumeWarningReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -39,7 +43,7 @@ class ResumeWarningReceiver : BroadcastReceiver() {
                 ),
             )
         }
-        mgr.notify(NOTIFICATION_ID, build(context, resumeAt))
+        mgr.notify(ResumeWarning.NOTIFICATION_ID, build(context, resumeAt))
     }
 
     private fun build(context: Context, resumeAt: Instant) =
@@ -52,8 +56,16 @@ class ResumeWarningReceiver : BroadcastReceiver() {
             // Silent on pre-O too (the compat mirror of the LOW channel): no sound/peek.
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setAutoCancel(true)
+            // A warning must not outlive the resume it warns about. [ResumeWarning] takes
+            // it down as soon as it sees the pause move, but that read needs something
+            // running; this is the system's own backstop, honoured even if the app never
+            // polls again. Never negative: an alarm delivered past its resume (doze held
+            // it, the clock jumped) has nothing to count down, so it goes at once.
+            .setTimeoutAfter(msUntil(resumeAt).coerceAtLeast(1))
             .setContentIntent(launchApp(context))
             .build()
+
+    private fun msUntil(resumeAt: Instant) = resumeAt.toEpochMilli() - System.currentTimeMillis()
 
     private fun launchApp(context: Context): PendingIntent {
         val launch =
@@ -70,8 +82,5 @@ class ResumeWarningReceiver : BroadcastReceiver() {
 
     private companion object {
         const val CHANNEL_ID = "resume-warning"
-
-        // Distinct from the service's ongoing notification (id 1) so the two coexist.
-        const val NOTIFICATION_ID = 2
     }
 }

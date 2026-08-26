@@ -116,6 +116,23 @@ class ResumeWarningPlanTest {
     }
 
     @Test
+    fun extendingFromInsideTheLeadWindowWarnsAgainRatherThanLeaving() {
+        // The heads-up has already fired (resume 08:30Z, now 07:00Z, inside the 2h lead)
+        // and the pause is then extended by a day — from this screen, the web UI or the
+        // CLI, the plan cannot tell and must not care. Going back to Warn is what re-arms
+        // the alarm AND takes down the notification still on screen, which would
+        // otherwise keep showing yesterday's resume time.
+        val warn =
+            planResumeWarning(
+                paused("2026-07-05T08:30:00+00:00"),
+                Instant.parse("2026-07-04T07:00:00Z"),
+                lead,
+            ) as ResumeWarningPlan.Warn
+        assertEquals(Instant.parse("2026-07-05T06:30:00Z"), warn.at)
+        assertEquals(Instant.parse("2026-07-05T08:30:00Z"), warn.resumeAt)
+    }
+
+    @Test
     fun cancelsWhenThePauseHasElapsed() {
         // Resume time already passed (about to auto-resume): nothing to warn ahead of.
         assertEquals(

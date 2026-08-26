@@ -1,6 +1,7 @@
 package org.recall.mic
 
 import android.app.AlarmManager
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -19,10 +20,25 @@ import java.time.Instant
  *
  * An exact, allow-while-idle alarm is used (not the service's own poll loop) so the
  * warning keeps its full lead time even in doze, and independent of the poll cadence.
+ *
+ * It also takes a posted heads-up back down once the pause moves out from under it. That
+ * needs nothing new: the same state reads already re-arm the alarm, and because the plan
+ * is derived from the household state rather than from a button press, a pause extended
+ * on the web or from the CLI clears the notification exactly like one extended here.
  */
 object ResumeWarning {
     private const val TAG = "ResumeWarning"
     const val EXTRA_RESUME_AT_MILLIS = "resume_at_millis"
+
+    /**
+     * The warning's own notification id, so it can be taken down again by whoever
+     * decides it is stale.
+     *
+     * Deliberately not 2: [MeetingService]'s ongoing notification and [BootReceiver]'s
+     * both use that one, so sharing it would mean posting the warning over a meeting
+     * recording's notification — and cancelling it would aim at whatever spoke last.
+     */
+    const val NOTIFICATION_ID = 3
 
     // A distinct request code / action so this alarm's PendingIntent is stable: the
     // same intent is reused to reschedule (replacing the prior alarm) and to cancel.
@@ -45,6 +61,12 @@ object ResumeWarning {
 
     private fun schedule(context: Context, at: Instant, resumeAt: Instant) {
         if (at == scheduledFor) return // already armed for this exact moment
+        // The warn moment moved, so any heads-up already in the shade is stale by
+        // construction: it is only ever posted when the alarm fires, and a Warn plan
+        // means the warn moment is still ahead of us. Take it down, so extending the
+        // pause clears the warning no matter where it was extended from — this screen,
+        // the web UI, or the CLI — instead of leaving a wrong resume time on display.
+        dismiss(context)
         val alarms = context.getSystemService(AlarmManager::class.java)
         val pending = pendingIntent(context, resumeAt)
         try {
@@ -67,10 +89,20 @@ object ResumeWarning {
         context
             .getSystemService(AlarmManager::class.java)
             .cancel(pendingIntent(context, resumeAt = null))
+        // The alarm may already have fired, leaving the heads-up in the shade: there is
+        // nothing left to warn about, so it goes too.
+        dismiss(context)
         if (scheduledFor != null) {
             scheduledFor = null
             Log.i(UI_LOG, "resume-warning cancelled")
         }
+    }
+
+    /** Take down a posted warning. Cancelling a notification that was never posted is a
+     *  no-op, so this is safe on every plan change — including the common case where the
+     *  alarm is still pending and nothing is on screen. */
+    private fun dismiss(context: Context) {
+        context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
     }
 
     // FLAG_UPDATE_CURRENT refreshes the resume-at extra when rescheduling; the request
