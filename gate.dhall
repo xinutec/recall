@@ -213,18 +213,21 @@ in  { name = "recall"
         , name = "frontend deps match the lockfile"
         , cwd = "frontend"
         , argv = G.inDevShell [ "pnpm", "install", "--frozen-lockfile" ]
+        , env = G.nonInteractive
         , timeout_s = 900
         }
       , G.Check::{
         , name = "frontend lint (eslint, type-aware)"
         , cwd = "frontend"
         , argv = G.inDevShell [ "pnpm", "run", "lint" ]
+        , env = G.nonInteractive
         , timeout_s = 900
         }
       , G.Check::{
         , name = "frontend typecheck (e2e)"
         , cwd = "frontend"
         , argv = G.inDevShell [ "pnpm", "run", "typecheck:e2e" ]
+        , env = G.nonInteractive
         , timeout_s = 900
         }
       , {-  A scratch --output-path, so the gate can never clobber the bundle in
@@ -239,6 +242,7 @@ in  { name = "recall"
               "../../"
               [ "${scratch}/browser" ]
               [ "pnpm", "run", "build", "--output-path=${scratch}" ]
+        , env = G.nonInteractive
         , timeout_s = 1800
         }
       , {-  Re-sync public/ into the scratch build before the harness serves it.
@@ -264,14 +268,14 @@ in  { name = "recall"
         , name = "frontend layout harness (playwright, phone width)"
         , cwd = "frontend"
         , argv = G.inDevShell [ "pnpm", "run", "e2e" ]
-        , env = toMap { RECALL_E2E_DIST = "${scratch}/browser" }
+        , env = G.nonInteractive # toMap { RECALL_E2E_DIST = "${scratch}/browser" }
         , timeout_s = 1800
         }
       , G.Check::{
         , name = "frontend unit tests (vitest, jsdom)"
         , cwd = "frontend"
         , argv = G.inDevShell [ "pnpm", "test", "--watch=false" ]
-        , env = G.oneAngularWorker
+        , env = G.nonInteractive # G.oneAngularWorker
         , timeout_s = 1800
         }
       , {-  ktlint does its own pattern matching, so the glob is its to expand.

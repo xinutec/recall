@@ -178,7 +178,9 @@
         "--frozen-lockfile"
       ],
       "cwd": "frontend",
-      "env": {},
+      "env": {
+        "CI": "true"
+      },
       "name": "frontend deps match the lockfile",
       "timeout_s": 900
     },
@@ -193,7 +195,9 @@
         "lint"
       ],
       "cwd": "frontend",
-      "env": {},
+      "env": {
+        "CI": "true"
+      },
       "name": "frontend lint (eslint, type-aware)",
       "timeout_s": 900
     },
@@ -208,7 +212,9 @@
         "typecheck:e2e"
       ],
       "cwd": "frontend",
-      "env": {},
+      "env": {
+        "CI": "true"
+      },
       "name": "frontend typecheck (e2e)",
       "timeout_s": 900
     },
@@ -231,7 +237,9 @@
         "--output-path=dist/.verify-build"
       ],
       "cwd": "frontend",
-      "env": {},
+      "env": {
+        "CI": "true"
+      },
       "name": "frontend build (Angular strict templates)",
       "timeout_s": 1800
     },
@@ -259,6 +267,7 @@
       ],
       "cwd": "frontend",
       "env": {
+        "CI": "true",
         "RECALL_E2E_DIST": "dist/.verify-build/browser"
       },
       "name": "frontend layout harness (playwright, phone width)",
@@ -276,6 +285,7 @@
       ],
       "cwd": "frontend",
       "env": {
+        "CI": "true",
         "NG_BUILD_MAX_WORKERS": "1"
       },
       "name": "frontend unit tests (vitest, jsdom)",
