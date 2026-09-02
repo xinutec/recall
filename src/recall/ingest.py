@@ -12,6 +12,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from recall.asr import (
+    AsrResult,
     Transcriber,
     combine_result,
     make_working_copy,
@@ -19,7 +20,7 @@ from recall.asr import (
     scratch_wav,
     slice_clip,
 )
-from recall.diarize import Diarizer
+from recall.diarize import Diarizer, SpeakerTurn
 from recall.loops import is_repetition_loop
 from recall.store import Store
 from recall.timeline import Segment
@@ -61,6 +62,7 @@ def ingest_transcripts(  # noqa: PLR0913 - pipeline collaborators + output confi
         drafts = result_to_drafts(
             result, segment_start=segment.start, model_name=model_name
         )
+        keep = []
         for draft in drafts:
             if is_repetition_loop(draft.text):
                 continue  # degenerate loop output -> drop at the source
@@ -69,19 +71,27 @@ def ingest_transcripts(  # noqa: PLR0913 - pipeline collaborators + output confi
                 rel_end = (draft.end - segment.start).total_seconds()
                 if not overlaps_speech(rel_start, rel_end, regions):
                     continue  # turn sits in VAD silence -> hallucination, skip
-            store.add_transcript_segment(
-                audio_segment_id=audio_id,
-                start=draft.start,
-                end=draft.end,
-                text=draft.text,
-                asr_model=draft.asr_model,
-                language=draft.language,
-                language_confidence=draft.language_confidence,
-                asr_confidence=draft.asr_confidence,
-                provenance=model_name,
-            )
-            written += 1
-        store.mark_transcribed(audio_id)
+            keep.append(draft)
+        # One transaction for the turns AND the mark: transcript_segments has no
+        # UNIQUE key, so a crash between them would leave the segment pending with
+        # its turns already committed — and the retry would insert every one of
+        # them again, visibly doubling the conversation. Opened only now, with the
+        # slow transcription done, so the write lock is held for the writes alone.
+        with store.transaction():
+            for draft in keep:
+                store.add_transcript_segment(
+                    audio_segment_id=audio_id,
+                    start=draft.start,
+                    end=draft.end,
+                    text=draft.text,
+                    asr_model=draft.asr_model,
+                    language=draft.language,
+                    language_confidence=draft.language_confidence,
+                    asr_confidence=draft.asr_confidence,
+                    provenance=model_name,
+                )
+                written += 1
+            store.mark_transcribed(audio_id)
     return written
 
 
@@ -106,6 +116,7 @@ def ingest_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
         stem = Path(segment.path).stem
         # Working copy and per-turn clips are scratch — deleted on exit so work/
         # never balloons (see scratch_wav).
+        rows: list[tuple[SpeakerTurn, str, AsrResult, float | None]] = []
         with scratch_wav(work_dir / f"{stem}.wav") as working:
             make_working_copy(Path(segment.path), working)
             for index, turn in enumerate(diarizer(working)):
@@ -115,6 +126,12 @@ def ingest_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
                 text, confidence = combine_result(result)
                 if not text or is_repetition_loop(text):
                     continue
+                rows.append((turn, text, result, confidence))
+        # Turns and the mark land together, or not at all — same reasoning as
+        # ingest_transcripts, and opened only after the heavy per-turn ML so the
+        # write lock covers just the writes.
+        with store.transaction():
+            for turn, text, result, confidence in rows:
                 store.add_transcript_segment(
                     audio_segment_id=audio_id,
                     start=segment.start + timedelta(seconds=turn.start),
@@ -128,5 +145,5 @@ def ingest_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
                     provenance=model_name,
                 )
                 written += 1
-        store.mark_transcribed(audio_id)
+            store.mark_transcribed(audio_id)
     return written

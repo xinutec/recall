@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from conftest import make_flac
 from recall.asr import AsrResult, AsrSegment
 from recall.diarize import SpeakerTurn
@@ -276,3 +278,149 @@ def test_ingest_diarized_tags_speaker_turns(tmp_path: Path) -> None:
     assert rows[0].start == BASE
     assert rows[1].start == BASE + timedelta(seconds=1.5)
     assert rows[1].language == "en"
+
+
+def test_a_crash_before_mark_transcribed_does_not_duplicate_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The worker can die between writing a segment's turns and marking the segment
+    # transcribed. The turns and the mark must land together: without that, the
+    # retry pass re-transcribes the segment and inserts every turn a second time
+    # (transcript_segments has no UNIQUE key), and the duplicates are visible.
+    flac = tmp_path / "usb-20260613T120000.flac"
+    make_flac(flac, 2.0)
+    segment = Segment(
+        source_id="usb",
+        sequence=0,
+        start=BASE,
+        end=BASE + timedelta(seconds=2),
+        path=str(flac),
+        sample_rate=48000,
+        channels=1,
+    )
+
+    def fake_transcriber(_audio: Path) -> AsrResult:
+        return AsrResult(
+            language="en",
+            language_confidence=0.95,
+            segments=(
+                AsrSegment(
+                    start=0.0,
+                    end=1.0,
+                    text="first turn",
+                    avg_logprob=-0.2,
+                    no_speech_prob=0.0,
+                ),
+                AsrSegment(
+                    start=1.0,
+                    end=2.0,
+                    text="second turn",
+                    avg_logprob=-0.2,
+                    no_speech_prob=0.0,
+                ),
+            ),
+        )
+
+    store = Store.memory()
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+
+    def exploding_mark(*_args: object, **_kwargs: object) -> None:
+        msg = "simulated crash before the segment was marked transcribed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(Store, "mark_transcribed", exploding_mark)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        ingest_transcripts(
+            store,
+            [segment],
+            fake_transcriber,
+            work_dir=tmp_path / "work",
+            model_name="fake-v1",
+        )
+    monkeypatch.undo()
+
+    # The worker's next pass retries the still-pending segment.
+    ingest_transcripts(
+        store,
+        [segment],
+        fake_transcriber,
+        work_dir=tmp_path / "work",
+        model_name="fake-v1",
+    )
+
+    rows = store.segments_in_range(BASE, BASE + timedelta(seconds=10))
+    assert [r.text for r in rows] == ["first turn", "second turn"]
+
+
+def test_a_diarized_crash_before_mark_transcribed_does_not_duplicate_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same atomicity, diarized path: a crash after the per-turn writes but before
+    # the mark must roll the turns back, or the retry doubles the conversation.
+    flac = tmp_path / "usb-20260613T120000.flac"
+    make_flac(flac, 3.0)
+    segment = Segment(
+        source_id="usb",
+        sequence=0,
+        start=BASE,
+        end=BASE + timedelta(seconds=3),
+        path=str(flac),
+        sample_rate=48000,
+        channels=1,
+    )
+
+    def fake_diarizer(_audio: Path) -> list[SpeakerTurn]:
+        return [
+            SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=1.5),
+            SpeakerTurn(speaker="SPEAKER_01", start=1.5, end=3.0),
+        ]
+
+    def fake_transcriber(_audio: Path) -> AsrResult:
+        return AsrResult(
+            language="en",
+            language_confidence=0.9,
+            segments=(
+                AsrSegment(
+                    start=0.0,
+                    end=1.0,
+                    text="hello there",
+                    avg_logprob=-0.2,
+                    no_speech_prob=0.0,
+                ),
+            ),
+        )
+
+    store = Store.memory()
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+
+    def exploding_mark(*_args: object, **_kwargs: object) -> None:
+        msg = "simulated crash before the segment was marked transcribed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(Store, "mark_transcribed", exploding_mark)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        ingest_diarized(
+            store,
+            [segment],
+            fake_diarizer,
+            fake_transcriber,
+            work_dir=tmp_path / "work",
+            model_name="fake-v1",
+        )
+    monkeypatch.undo()
+
+    ingest_diarized(
+        store,
+        [segment],
+        fake_diarizer,
+        fake_transcriber,
+        work_dir=tmp_path / "work",
+        model_name="fake-v1",
+    )
+
+    rows = store.segments_in_range(BASE, BASE + timedelta(seconds=10))
+    assert [r.speaker_cluster for r in rows] == ["SPEAKER_00", "SPEAKER_01"]
