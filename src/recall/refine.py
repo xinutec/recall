@@ -111,7 +111,16 @@ def _replace_turns(  # noqa: PLR0913 - the whole per-segment write context
         # degenerate pass, and hiding the good turns would gut the recording. Counted on
         # what survives the filters, not on what the model emitted: a pass whose output
         # is all repetition loops looks big here and writes nothing.
-        existing_chars = sum(len(o.text) for o in existing)
+        #
+        # BOTH sides are filtered the same way, and that symmetry is the point. Counting
+        # the existing side raw let a hallucination win by sheer length: a Whisper loop
+        # ("видео видео видео …") is hundreds of characters of nothing, so every honest
+        # pass measured as "covering too little", the loop was kept, and the segment was
+        # marked skipped — never retried, garbage preserved. Measured on the archive
+        # 2026-09-02, 10 of 94 guard-skipped segments were held that way.
+        existing_chars = sum(
+            len(o.text) for o in existing if not is_repetition_loop(o.text)
+        )
         new_chars = sum(len(t.text) for t in keep)
         if (
             existing_chars >= _COVERAGE_REF_MIN_CHARS

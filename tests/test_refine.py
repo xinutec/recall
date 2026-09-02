@@ -497,6 +497,53 @@ def test_refine_keeps_a_full_transcript_when_the_pass_covers_too_little(
     assert store.audio_segments_to_diarize(limit=10) == []
 
 
+def test_a_hallucinated_loop_does_not_outweigh_a_real_transcript_in_the_guard(
+    tmp_path: Path,
+) -> None:
+    # The guard compares how much text the new pass keeps against how much the segment
+    # already has — but it measured the existing side RAW while filtering repetition
+    # loops out of the new side. A Whisper hallucination ("видео видео видео …") is
+    # enormous by character count and pure noise, so it beat every honest pass: the
+    # segment kept the loop, got marked skipped, and the auto-picker never came back.
+    # Measured on the live archive 2026-09-02: 10 of the 94 guard-skipped segments are
+    # majority repetition-loop text, held in place by exactly this asymmetry.
+    # Both sides must be counted the same way, so garbage weighs nothing.
+    flac = tmp_path / "usb-20260619T130000.flac"
+    make_flac(flac, 4.0)
+    store = Store.memory()
+    audio_id = _seg(store, flac)
+    loop = ("видео " * 60).strip()  # >200 chars, so long enough to reach the guard
+    hallucinated = store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=4),
+        text=loop,
+        asr_model="mlx-community/whisper-large-v3-turbo",
+    )
+    # A short but genuine refined pass — under half the loop's raw length, which is
+    # what used to trip the guard.
+    result = _result("en", (0.0, 2.0, " I was listening to a video"))
+
+    def diarizer(_a: Path) -> list[SpeakerTurn]:
+        return [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0)]
+
+    added = refine_diarized(
+        store,
+        diarizer,
+        lambda _a: result,
+        _embed,
+        work_dir=tmp_path / "work",
+        model_name="diarized-aligned (test)",
+    )
+
+    assert added == 1
+    turns = store.visible_machine_turns_for_audio(audio_id)
+    assert [t.text.strip() for t in turns] == ["I was listening to a video"]
+    got = store.get_transcript(hallucinated)
+    assert got is not None and got.hidden_reason is not None  # the loop is gone
+    assert not store.is_diarize_skipped(audio_id)
+
+
 def test_guard_skipped_segment_leaves_the_picker_but_a_forced_rederive_still_runs(
     tmp_path: Path,
 ) -> None:
