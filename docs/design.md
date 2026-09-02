@@ -56,7 +56,7 @@ fix efficiently.
 | Whisper large-v3-turbo base | none | general accuracy | **built** |
 | Vocab biasing (`initial_prompt` + names) | trivial | proper nouns | **built** |
 | Diarization + speaker enrolment | low | attribution | **built** |
-| Post-correction dictionary | low | systematic errors | not built |
+| Post-correction dictionary | low | systematic errors | **refuted 2026-09-02** |
 | LoRA fine-tune on corrections | high | accent/acoustic residue | trained, **not deployed** (`adapter-20260708b`) |
 
 "Training on the actual people" is delivered mainly by **enrolment** (lightweight
@@ -68,7 +68,16 @@ pulled — once windowing made it correct on long audio it was **~8x slower** th
 clips. Refine's precision is the diarization and word alignment, not the ASR model, so
 it stays on turbo; the re-enable arguments sit commented in `deploy/hm-agents.nix` and
 only an A/B win on real audio should uncomment them (see [pipeline.md §5](pipeline.md)).
-The post-correction dictionary is the cheap lever still un-built.
+The post-correction dictionary was the cheap lever still un-built — until the
+corrections corpus was mined for it (2026-09-02, 176 changed pairs, difflib
+word alignment): only 9 substitutions recur at all, and they split into
+proper-noun garbles (each garbling different, so exact-match replacement
+barely fires — and vocabulary biasing is the built lever for exactly those)
+and context-dependent hearing errors (EN word ↔ NL word, pronoun swaps) that
+auto-replacement would corrupt. A dictionary would have touched ~15 archive
+turns. Verdict: not worth its machinery at this corpus size; re-run the
+mining if the corpus grows several-fold, and route recurring garbles into
+vocabulary terms instead.
 
 ## 5. Components
 
