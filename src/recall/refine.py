@@ -16,6 +16,7 @@ idle (see `recall refine`). The collaborators are injected, so this is testable.
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -57,6 +58,20 @@ _MIN_COVERAGE_RATIO = 0.5
 _COVERAGE_REF_MIN_CHARS = 200
 
 
+@dataclass(frozen=True)
+class _Refusal:
+    """A refused swap, and exactly why — recorded verbatim in the skip table.
+
+    Two branches refuse, and they used to share one "coverage-guard" label; telling
+    them apart later meant re-deriving the segment by hand (the 2026-09-02 flip
+    analysis mislabelled segment 88 that way). The reason also carries the refusal
+    arithmetic: the declined pass's output is stored nowhere else, so these strings
+    are the dataset the 50% threshold can eventually be justified (or moved) on.
+    """
+
+    reason: str
+
+
 def _replace_turns(  # noqa: PLR0913 - the whole per-segment write context
     store: Store,
     *,
@@ -66,7 +81,7 @@ def _replace_turns(  # noqa: PLR0913 - the whole per-segment write context
     result: AsrResult,
     human: list[Correction],
     model_name: str,
-) -> list[tuple[int, int, AlignedTurn]] | None:
+) -> list[tuple[int, int, AlignedTurn]] | _Refusal:
     """Atomically swap a segment's old machine turns for the aligned replacements.
 
     Called only now — with the replacements computed and about to be written.
@@ -77,8 +92,8 @@ def _replace_turns(  # noqa: PLR0913 - the whole per-segment write context
     between them would otherwise leave the segment blank and never re-picked.
 
     Returns (index, turn_id, turn) for each turn written, for the embed pass — or
-    `None` if the coverage guard refused the swap (the pass produced far less text
-    than the segment already had), leaving the existing transcript untouched.
+    a `_Refusal` naming which branch declined the swap and with what arithmetic,
+    leaving the existing transcript untouched.
     """
     # A non-household language for the whole segment is the model hallucinating on
     # unclear audio — keep the turns (with their audio) but flag them unreliable.
@@ -105,7 +120,11 @@ def _replace_turns(  # noqa: PLR0913 - the whole per-segment write context
             )
         ]
         if existing and not keep:
-            return None
+            return _Refusal(
+                f"all-turns-filtered ({model_name}): the pass produced "
+                f"{len(aligned)} turn(s), every one a repetition loop or inside "
+                "a human-corrected span"
+            )
 
         # Guard: refuse to replace a substantial transcript with a far smaller one — a
         # degenerate pass, and hiding the good turns would gut the recording. Counted on
@@ -126,7 +145,10 @@ def _replace_turns(  # noqa: PLR0913 - the whole per-segment write context
             existing_chars >= _COVERAGE_REF_MIN_CHARS
             and new_chars < _MIN_COVERAGE_RATIO * existing_chars
         ):
-            return None
+            return _Refusal(
+                f"coverage-guard ({model_name}): new {new_chars} chars < "
+                f"{_MIN_COVERAGE_RATIO:.0%} of existing {existing_chars}"
+            )
 
         for old in existing:
             store.hide(old.id, f"{DIARIZED_MARKER} ({model_name})")
@@ -226,7 +248,7 @@ def refine_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
                 human=human,
                 model_name=model_name,
             )
-            if written is None:
+            if isinstance(written, _Refusal):
                 # Coverage guard tripped: kept the existing transcript, wrote nothing.
                 # Record the skip so the newest-first auto-pickers advance past this
                 # segment instead of re-picking it forever (a live-lock — a paused
@@ -234,7 +256,7 @@ def refine_diarized(  # noqa: PLR0913 - pipeline collaborators + output config
                 # slot). Still un-diarized on purpose: an explicit re-derive (`source` /
                 # on-demand request) ignores the skip table, so a later, fixed pass
                 # re-derives it.
-                store.mark_diarize_skipped(audio_id, f"coverage-guard ({model_name})")
+                store.mark_diarize_skipped(audio_id, written.reason)
                 skipped += 1
                 continue
             # A real refinement supersedes any earlier guard-skip for this segment.

@@ -738,3 +738,67 @@ def test_a_refine_that_produces_nothing_keeps_the_transcript(tmp_path: Path) -> 
     assert added == 0
     kept = store.visible_machine_turns_for_audio(audio_id)
     assert [t.text for t in kept] == ["Schrijf dingen op, zoals die recepten"]
+
+
+def test_a_guard_refusal_records_its_arithmetic_in_the_skip_reason(
+    tmp_path: Path,
+) -> None:
+    # A refused swap is the only evidence the 50% threshold ever produces — the
+    # declined pass's output is not stored anywhere else. Recording both sides of
+    # the comparison in the skip reason is what makes the threshold tunable on
+    # data later instead of staying a guess.
+    flac = tmp_path / "usb-20260619T130000.flac"
+    make_flac(flac, 4.0)
+    store = Store.memory()
+    audio_id = _seg(store, flac)
+    full = ("the quick brown fox jumps over the lazy dog " * 8).strip()
+    store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=4),
+        text=full,
+        asr_model="mlx-community/whisper-large-v3-turbo",
+    )
+    thin = _result("en", (0.0, 0.5, " yes"))
+    refine_diarized(
+        store,
+        lambda _a: [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0)],
+        lambda _a: thin,
+        _embed,
+        work_dir=tmp_path / "work",
+        model_name="adapter",
+    )
+    reason = store.diarize_skip_reason(audio_id)
+    assert reason is not None
+    assert reason.startswith("coverage-guard")
+    assert f"existing {len(full)}" in reason  # the reference it measured against
+
+
+def test_an_all_filtered_pass_records_its_own_skip_reason(tmp_path: Path) -> None:
+    # `_replace_turns` refuses from TWO branches, and both used to record the
+    # same "coverage-guard" label. A pass whose every turn was dropped (all
+    # repetition loops here) has nothing to do with the 50% ratio — mislabelling
+    # it contaminated the 2026-09-02 flip analysis (segment 88 was exactly this).
+    flac = tmp_path / "usb-20260619T130000.flac"
+    make_flac(flac, 4.0)
+    store = Store.memory()
+    audio_id = _seg(store, flac)
+    store.add_transcript_segment(
+        audio_segment_id=audio_id,
+        start=BASE,
+        end=BASE + timedelta(seconds=4),
+        text="a real transcript worth keeping",
+        asr_model="mlx-community/whisper-large-v3-turbo",
+    )
+    looped = _result("en", *[(i * 0.05, i * 0.05 + 0.04, " видео") for i in range(60)])
+    refine_diarized(
+        store,
+        lambda _a: [SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=4.0)],
+        lambda _a: looped,
+        _embed,
+        work_dir=tmp_path / "work",
+        model_name="adapter",
+    )
+    reason = store.diarize_skip_reason(audio_id)
+    assert reason is not None
+    assert reason.startswith("all-turns-filtered")

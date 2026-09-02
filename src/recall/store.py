@@ -1155,6 +1155,16 @@ class Store:
         )
         self._commit()
 
+    def diarize_skip_reason(self, audio_segment_id: int) -> str | None:
+        """Why the guard held this segment, or None if it is not skipped. The refusal
+        arithmetic recorded here is the only surviving evidence of the declined pass —
+        what the threshold question (#1333) is answered from."""
+        row = self._conn.execute(
+            "SELECT reason FROM diarize_skips WHERE audio_segment_id = ?",
+            (audio_segment_id,),
+        ).fetchone()
+        return None if row is None else str(row["reason"])
+
     def is_diarize_skipped(self, audio_segment_id: int) -> bool:
         """Whether the diarize coverage guard has declined this segment (see
         `mark_diarize_skipped`) — so it's held out of the auto-pickers."""
