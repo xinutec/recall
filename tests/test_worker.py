@@ -18,6 +18,7 @@ from recall.store import Store
 from recall.timeline import Segment
 from recall.worker import (
     discover_source_ids,
+    order_by_yield,
     process_all,
     process_pending,
     reconcile_live,
@@ -426,3 +427,45 @@ def test_indexing_completes_for_every_source_before_transcription_spends_time(
     assert indexed == {"aaa-first", "zzz-last"}, (
         "every source indexed before any transcription ran"
     )
+
+
+def test_order_by_yield_serves_the_microphone_that_can_actually_hear() -> None:
+    # #1388 stage 1. Four mics hear the same room and all four are transcribed, so
+    # under a capacity deficit every mic lags equally and the timeline is current
+    # from NONE of them. Measured 2026-09-03: iphone11 yielded ~107 chars per loud
+    # segment where pixel5 yielded 4.5 — the mics are not equals. Serve the best
+    # first so the timeline is COMPLETE from the mic that can hear, rather than
+    # partial from all four. Nothing is skipped; the rest follow in the same pass.
+    yields = {"pixel5": 4.5, "usb": 37.6, "iphone11": 107.3}
+    assert order_by_yield(["pixel5", "usb", "iphone11"], yields) == [
+        "iphone11",
+        "usb",
+        "pixel5",
+    ]
+
+
+def test_a_source_with_no_history_is_served_first_not_last() -> None:
+    # A newly added recorder has no yield yet. Sorting it last would starve it
+    # exactly when we most want to learn what it can hear — and Pippijn is adding
+    # recorders. Unknown goes FIRST, so it earns a history to be judged on.
+    yields = {"usb": 37.6}
+    assert order_by_yield(["usb", "new-mic"], yields) == ["new-mic", "usb"]
+
+
+def test_order_by_yield_is_stable_for_equal_scores() -> None:
+    # Ties keep discovery order, so the pass is deterministic run to run.
+    yields = {"a": 5.0, "b": 5.0, "c": 5.0}
+    assert order_by_yield(["a", "b", "c"], yields) == ["a", "b", "c"]
+
+
+def test_a_lagging_source_is_judged_on_its_history_not_treated_as_new() -> None:
+    # Caught by running the ranking against the real archive: pixel5 had nothing
+    # transcribed in the recent window (it was simply BEHIND, not new), so it
+    # looked unknown and jumped the queue ahead of the best mic — the opposite of
+    # the point. Only a source with NO history at all is unknown; one with a past
+    # is judged on it.
+    recent = {"iphone11": 120.6}
+    lifetime = {"iphone11": 100.0, "pixel5": 4.5}
+    assert order_by_yield(
+        ["pixel5", "iphone11", "brand-new"], recent, lifetime=lifetime
+    ) == ["brand-new", "iphone11", "pixel5"]

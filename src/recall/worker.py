@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from recall import capture_control
@@ -34,6 +34,11 @@ DEFAULT_MIN_AGE_S = 120.0
 # segment is VAD-skipped in milliseconds and a speech-bearing minute costs a few
 # seconds, so 20 is minutes of work, not hours. None disables the cap.
 DEFAULT_MAX_TRANSCRIBE_PER_SOURCE = 20
+
+# How far back a microphone's contribution is judged. Long enough to be stable
+# across a quiet hour, short enough that a phone carried to another room is
+# re-judged the same evening.
+_YIELD_WINDOW = timedelta(hours=6)
 
 # An UNREADABLE capture file at or below this size is a header-only dead-capture
 # tombstone — capture opened the segment and died before writing any audio pages
@@ -323,6 +328,42 @@ def transcribe_pending(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     )
 
 
+def order_by_yield(
+    source_ids: list[str],
+    yields: dict[str, float],
+    *,
+    lifetime: dict[str, float] | None = None,
+) -> list[str]:
+    """Sources, best-hearing first — the mic most likely to carry the conversation.
+
+    Four microphones hear the same room and all four are transcribed, so under a
+    capacity deficit (measured 2026-09-03: ~2.7 segments/min transcribed against
+    ~3/min arriving) every mic lags equally and the timeline is current from NONE
+    of them. But the mics are not equals: iphone11 yielded ~107 chars per loud
+    segment where pixel5 yielded 4.5. Serving the best first makes the timeline
+    COMPLETE from the microphone that can actually hear, instead of partial from
+    all four — and nothing is skipped, the rest follow in the same pass.
+
+    A source with no history sorts FIRST, not last: a newly added recorder has no
+    yield yet, and sorting it last would starve it exactly when we most want to
+    learn what it can hear. Ties keep discovery order so a pass is deterministic.
+    """
+    lifetime = lifetime or {}
+
+    def score(sid: str) -> float:
+        if sid in yields:
+            return yields[sid]
+        # Absent from the RECENT window usually means behind, not new — judge it
+        # on its past rather than flattering it to the front. Caught against the
+        # real archive: a lagging pixel5, the weakest mic, jumped the best one.
+        if sid in lifetime:
+            return lifetime[sid]
+        return float("inf")  # genuinely new: serve it and learn what it hears
+
+    ranked = sorted(enumerate(source_ids), key=lambda pair: (-score(pair[1]), pair[0]))
+    return [sid for _, sid in ranked]
+
+
 def process_all(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     store: Store,
     root: Path,
@@ -351,9 +392,18 @@ def process_all(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     # DISCOVERED, not COREAUDIO: a directory of audio says nothing about what
     # recorded it, and `add_source` is INSERT OR IGNORE — so a guess made here is
     # permanent unless the real registrar can correct it (Store.register_source).
+    # Best-hearing mic first (#1388): under a capacity deficit the timeline should
+    # be COMPLETE from the microphone that can hear rather than partial from all of
+    # them. Judged on recent audio only, so a phone that moves rooms is re-judged.
+    discovered = discover_source_ids(root)
+    clock = datetime.now(UTC) if now is None else datetime.fromtimestamp(now, tz=UTC)
+    yields = store.source_transcription_yield(clock - _YIELD_WINDOW)
+    # Lifetime as fallback: a source absent from the recent window is usually
+    # BEHIND, not new, and must not be flattered into the front of the queue.
+    lifetime = store.source_transcription_yield(datetime.min.replace(tzinfo=UTC))
     sources = [
         AudioSource(id=sid, name=sid, kind=SourceKind.DISCOVERED, spec="")
-        for sid in discover_source_ids(root)
+        for sid in order_by_yield(discovered, yields, lifetime=lifetime)
     ]
     # Phase 1 — index EVERY source. Cheap (ffprobe), and it is what the timeline,
     # the loss reconciler and the doctor all read, so no mic should wait behind

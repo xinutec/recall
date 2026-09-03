@@ -2261,6 +2261,39 @@ class Store:
         self._commit()
         return cursor.rowcount
 
+    def source_transcription_yield(self, since: datetime) -> dict[str, float]:
+        """Characters of surviving transcript per SECOND of audio, by source.
+
+        How much each microphone actually contributes — the evidence that the mics
+        in a room are not equals (#1388). Measured over recent audio only, so a
+        phone that moves rooms is re-judged rather than held to last month's
+        placement. Segments that yielded nothing count as zero, which is the
+        point: a mic that hears nothing should sort low.
+
+        Per SECOND, not per segment: an uploaded meeting is one hour-long segment
+        while a mic segment is 60s, so per-segment made a meeting score 60,818
+        against a microphone's 120 — a units artefact, not a better recording.
+        Seconds make every source comparable."""
+        rows = self._conn.execute(
+            """SELECT sid, sum(secs) AS secs, sum(chars) AS chars FROM (
+                 SELECT a.source_id AS sid,
+                        (julianday(a.end_utc) - julianday(a.start_utc)) * 86400 AS secs,
+                        coalesce(sum(length(t.text)), 0) AS chars
+                 FROM audio_segments a
+                 LEFT JOIN transcript_segments t
+                   ON t.audio_segment_id = a.id
+                  AND t.hidden_reason IS NULL AND t.superseded_by IS NULL
+                 WHERE a.start_utc >= ? AND a.transcribed_utc IS NOT NULL
+                 GROUP BY a.id
+               ) GROUP BY sid""",
+            (since.isoformat(),),
+        ).fetchall()
+        return {
+            str(r["sid"]): float(r["chars"]) / float(r["secs"])
+            for r in rows
+            if r["secs"] and float(r["secs"]) > 0
+        }
+
     def newest_live_turn(self) -> datetime | None:
         """When the live tier last produced a turn, or None if it never has.
 
