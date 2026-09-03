@@ -29,6 +29,12 @@ _log = logging.getLogger("recall.worker")
 
 DEFAULT_MIN_AGE_S = 120.0
 
+# Segments one source may transcribe per pass before the others get their turn.
+# Sized so a busy pass still cycles all four mics within a few minutes: a quiet
+# segment is VAD-skipped in milliseconds and a speech-bearing minute costs a few
+# seconds, so 20 is minutes of work, not hours. None disables the cap.
+DEFAULT_MAX_TRANSCRIBE_PER_SOURCE = 20
+
 # An UNREADABLE capture file at or below this size is a header-only dead-capture
 # tombstone — capture opened the segment and died before writing any audio pages
 # (observed ~136 bytes for Opus). It holds nothing the pipeline can use (ffprobe refuses
@@ -204,12 +210,17 @@ def process_pending(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     vad: Vad | None = None,
     min_age_seconds: float = DEFAULT_MIN_AGE_S,
     now: float | None = None,
+    max_transcribe: int | None = None,
 ) -> int:
     """Index new audio under `root/<source.id>/` and transcribe what's pending.
 
     Returns the number of transcript rows written. Segments modified within
     `min_age_seconds` are skipped (still being recorded). A `vad` gates the
     no-diarizer path so silence isn't transcribed (no Whisper hallucinations).
+
+    `max_transcribe` caps how many segments this call transcribes (indexing is
+    never capped — see process_all). None means "all of them", the single-source
+    behaviour.
     """
     current = time.time() if now is None else now
     store.add_source(source)
@@ -238,6 +249,10 @@ def process_pending(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
         if segment.source_id == source.id
         and _old_enough(Path(segment.path), current, min_age_seconds)
     ]
+    if max_transcribe is not None:
+        # Oldest first (pending_audio_segments is ordered), so a capped pass always
+        # advances the front of the queue rather than skimming whatever is newest.
+        pending = pending[:max_transcribe]
     if not pending:
         return 0
 
@@ -266,8 +281,21 @@ def process_all(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     vad: Vad | None = None,
     min_age_seconds: float = DEFAULT_MIN_AGE_S,
     now: float | None = None,
+    max_transcribe_per_source: int | None = DEFAULT_MAX_TRANSCRIBE_PER_SOURCE,
 ) -> int:
-    """Transcribe pending audio across every source under `root`."""
+    """Transcribe pending audio across every source under `root`, fairly.
+
+    Sources used to be served in sorted order, each drained completely before the
+    next — so under multi-mic load the alphabetically-later mics starved. Measured
+    live during a visit (2026-09-03): iphone11 current, usb two hours unindexed,
+    pixel5 three. No audio was lost — it sat on disk, unsearchable, which is its
+    own kind of loss while the conversation is still happening.
+
+    So a pass now gives every source a bounded slice of the expensive work
+    (`max_transcribe_per_source`) instead of letting the first take it all. The
+    reconciler reads audio_segment rows, so this also stops worker lag reading as
+    a recording gap in the doctor.
+    """
     total = 0
     for source_id in discover_source_ids(root):
         # DISCOVERED, not COREAUDIO: a directory of audio says nothing about what
@@ -286,5 +314,6 @@ def process_all(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
             vad=vad,
             min_age_seconds=min_age_seconds,
             now=now,
+            max_transcribe=max_transcribe_per_source,
         )
     return total

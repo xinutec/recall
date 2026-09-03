@@ -350,3 +350,53 @@ def test_the_worker_removes_dead_capture_files_and_keeps_recoverable_ones(
         )
     assert "unreadable capture file" not in caplog.text
     assert big_corrupt.exists()
+
+
+def test_every_source_is_indexed_even_when_transcription_is_capped(
+    tmp_path: Path,
+) -> None:
+    # #1365: sources were served alphabetically and each was drained fully before
+    # the next, so under multi-mic load the later ones starved — measured live
+    # 2026-09-03 with usb 2h and pixel5 3h unindexed while iphone11 stayed current.
+    # Indexing is cheap (ffprobe) and transcription is expensive (Whisper), so a
+    # pass now INDEXES every source before spending its transcription budget.
+    # Every segment must therefore have a row after one pass, whatever the cap.
+    for name in ("aaa-first", "zzz-last"):
+        _capture_two_segments(tmp_path / name)
+    store = Store.memory()
+    process_all(
+        store,
+        tmp_path,
+        _stub_transcriber,
+        model_name="stub",
+        now=9_999_999_999.0,
+        max_transcribe_per_source=1,
+    )
+    rows = {sid for sid, _ in store.audio_segment_paths()}
+    indexed = {p.split("/")[-2] for p in {p for _, p in store.audio_segment_paths()}}
+    assert indexed == {"aaa-first", "zzz-last"}, "both sources indexed in one pass"
+    assert len(rows) == 4  # every segment has a row
+
+
+def test_the_transcription_budget_is_shared_not_drained_by_the_first_source(
+    tmp_path: Path,
+) -> None:
+    # The fairness half: with a cap of one, the LAST source alphabetically must
+    # still get a turn in the same pass — under the old drain-in-order loop it got
+    # whatever was left, which under real load was nothing.
+    for name in ("aaa-first", "zzz-last"):
+        _capture_two_segments(tmp_path / name)
+    store = Store.memory()
+    process_all(
+        store,
+        tmp_path,
+        _stub_transcriber,
+        model_name="stub",
+        now=9_999_999_999.0,
+        max_transcribe_per_source=1,
+    )
+    # Each source has two segments and the cap is one, so a fair pass leaves
+    # exactly one pending on EACH — not two pending on the alphabetically-later
+    # one, which is what draining in order produced.
+    still_pending = [s.source_id for s in store.pending_audio_segments()]
+    assert sorted(still_pending) == ["aaa-first", "zzz-last"]
