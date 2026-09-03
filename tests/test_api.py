@@ -11,7 +11,7 @@ from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
 from conftest import make_flac, make_mp3
-from recall import api, capture_control, loudness
+from recall import api, api_capture, capture_control, loudness
 from recall.abcompare import CorrectionScore, Report, SegmentDiff, render_json
 from recall.api import _precise, _tier, clip_window
 from recall.api_models import VoiceNameIn
@@ -659,7 +659,7 @@ def test_fleet_capture_state_separates_desired_from_confirmed(
     store.close()
 
     # Settled: desired running, Mac confirms running.
-    settled = api.capture_status()
+    settled = api_capture.capture_status()
     assert settled["running"] is True
     assert settled["desiredRunning"] is True
     assert settled["settled"] is True
@@ -668,7 +668,7 @@ def test_fleet_capture_state_separates_desired_from_confirmed(
     # Press pause: desired flips NOW; the Mac hasn't applied yet, so the state is
     # transitioning — confirmed still says running, and nothing here contradicts a
     # later poll (this exact shape is what the next poll returns too).
-    pausing = api.capture_pause(_capture_request())
+    pausing = api_capture.capture_pause(_capture_request())
     assert pausing["desiredRunning"] is False
     assert pausing["desiredPausedUntil"] is not None
     assert pausing["running"] is True  # the mic's last confirmed word
@@ -683,7 +683,7 @@ def test_fleet_capture_state_separates_desired_from_confirmed(
         now=datetime.now(UTC),
     )
     store.close()
-    confirmed = api.capture_status()
+    confirmed = api_capture.capture_status()
     assert confirmed["running"] is False
     assert confirmed["settled"] is True
 
@@ -697,7 +697,7 @@ def test_fleet_capture_state_separates_desired_from_confirmed(
         now=datetime.now(UTC) - timedelta(minutes=5),
     )
     store.close()
-    unreachable = api.capture_status()
+    unreachable = api_capture.capture_status()
     assert unreachable["micReachable"] is False
     assert unreachable["settled"] is False
     assert unreachable["running"] is False  # falls back to desired
@@ -711,7 +711,7 @@ def test_local_capture_state_is_always_settled(
     monkeypatch.delenv("RECALL_ROLE", raising=False)
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     monkeypatch.setattr("recall.capture_control.capture_running", lambda: True)
-    state = api.capture_pause(_capture_request())
+    state = api_capture.capture_pause(_capture_request())
     assert state["running"] is False
     assert state["desiredRunning"] is False
     assert state["settled"] is True
@@ -727,7 +727,7 @@ def test_a_local_pause_records_who_asked(
     monkeypatch.delenv("RECALL_ROLE", raising=False)
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     monkeypatch.setattr("recall.capture_control.capture_running", lambda: True)
-    api.capture_pause(_capture_request(client_host="192.168.1.42"))
+    api_capture.capture_pause(_capture_request(client_host="192.168.1.42"))
 
     store = Store.open(tmp_path / "recall.sqlite")
     events = store.capture_events_since(
