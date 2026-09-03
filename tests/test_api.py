@@ -14,7 +14,6 @@ from conftest import make_flac, make_mp3
 from recall import api, api_capture, capture_control, loudness
 from recall.abcompare import CorrectionScore, Report, SegmentDiff, render_json
 from recall.api import _precise, _tier, clip_window
-from recall.api_models import VoiceNameIn
 from recall.asr import Word
 from recall.envelope import DEFAULT_EVENT_DB, Measurement
 from recall.ids import AudioSegmentId, TranscriptId
@@ -773,7 +772,10 @@ def test_name_voice_endpoint_labels_a_whole_session_voice(
     ]
     store.close()
 
-    api.name_voice("meeting-x", VoiceNameIn(cluster="SPEAKER_01", name="Dr Lee"))
+    TestClient(api.app).post(
+        "/api/sessions/meeting-x/voice",
+        json={"cluster": "SPEAKER_01", "name": "Dr Lee"},
+    )
 
     store = Store.open(tmp_path / "recall.sqlite")
     try:
@@ -911,7 +913,7 @@ def test_session_transcript_endpoint_exports_clean_coalesced(
     store.close()
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
 
-    out = api.session_transcript("m")
+    out = TestClient(api.app).get("/api/sessions/m/transcript").json()
     assert out["session"] == "m"
     assert out["speakers"] == ["Pippijn", "Dr. Adams"]
     # consecutive same-speaker turns are one bubble; current/corrected state only
