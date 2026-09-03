@@ -54,6 +54,7 @@ from recall.health import (
     Check,
     agent_checks,
     archive_check,
+    blanked_check,
     capture_checks,
     loss_checks,
     mirror_check,
@@ -1520,6 +1521,11 @@ def _archive_checks(args: argparse.Namespace) -> list[Check]:
             store.unmirrored_segments(limit=10_000, older_than=now - _MIRROR_SLACK)
         )
         sweep_refusals = store.sweep_refusal_count()
+        # repair's own lens, not raw segments_showing_no_turns: VAD-silent segments
+        # and evidence-hidden turns are correctly empty and must not page anyone.
+        from recall.repair import find_blanked  # noqa: PLC0415 - archive child only
+
+        blanked = len(find_blanked(store))
     finally:
         store.close()
 
@@ -1537,6 +1543,7 @@ def _archive_checks(args: argparse.Namespace) -> list[Check]:
     if os.environ.get("RECALL_SYNC_TOKEN"):
         checks.append(mirror_check(unmirrored, slack=_MIRROR_SLACK))
         checks.append(sweep_refusal_check(sweep_refusals))
+    checks.append(blanked_check(blanked))
     return checks
 
 

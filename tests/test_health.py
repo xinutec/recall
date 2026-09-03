@@ -16,6 +16,7 @@ from recall.health import (
     Recorder,
     agent_checks,
     archive_check,
+    blanked_check,
     capture_checks,
     loss_checks,
     mirror_check,
@@ -459,3 +460,16 @@ def test_an_imported_meeting_is_a_source_but_never_a_microphone() -> None:
         "speech-loss:pixel9",
         "speech-loss",
     }
+
+
+def test_blanked_check_fails_the_day_a_segment_goes_empty() -> None:
+    # The 175-segment blanking (repair.py's reason to exist) sat invisible until a
+    # human noticed conversation missing. A segment that once had turns and now
+    # shows none is an impossible state under "a refine replaces or keeps, never
+    # empties" — the doctor now says so the same day (#1343).
+    ok = blanked_check(0)
+    assert ok.verdict == "pass"
+    bad = blanked_check(3)
+    assert bad.verdict == "fail"
+    assert "3" in bad.observed
+    assert bad.section == "archive"

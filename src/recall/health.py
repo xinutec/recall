@@ -356,6 +356,33 @@ def mirror_check(unmirrored: int, *, slack: timedelta) -> Check:
     )
 
 
+def blanked_check(blanked: int) -> Check:
+    """Does every segment that ever had turns still show at least one?
+
+    A segment with only hidden turns and no visible replacement is an impossible
+    state under refine's contract ("a refine replaces a transcript or keeps it,
+    never empties one") — yet 175 segments sat that way for weeks in July until a
+    human noticed a minute of Dutch missing, which is why repair.py exists. This
+    is the day-one detector for that class: `fail`, because every count here is a
+    stretch of household memory currently invisible, and `recall repair` puts the
+    newest hidden generation back.
+    """
+    return Check(
+        section="archive",
+        label="no blanked segments",
+        verdict="pass" if blanked == 0 else "fail",
+        observed=(
+            "every transcribed segment shows turns"
+            if blanked == 0
+            else f"{blanked} segment(s) show NO turns where hidden ones exist — "
+            "run `recall repair`"
+        ),
+        expected="0 blanked",
+        value=float(blanked),
+        unit="segments",
+    )
+
+
 def sweep_refusal_check(refused: int) -> Check:
     """Has the Mac declined any fleet sweep?
 
