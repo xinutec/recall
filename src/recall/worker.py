@@ -222,6 +222,37 @@ def process_pending(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     never capped — see process_all). None means "all of them", the single-source
     behaviour.
     """
+    index_source(store, root, source, min_age_seconds=min_age_seconds, now=now)
+    return transcribe_pending(
+        store,
+        root,
+        source,
+        transcriber,
+        model_name=model_name,
+        diarizer=diarizer,
+        vad=vad,
+        min_age_seconds=min_age_seconds,
+        now=now,
+        max_transcribe=max_transcribe,
+    )
+
+
+def index_source(
+    store: Store,
+    root: Path,
+    source: AudioSource,
+    *,
+    min_age_seconds: float = DEFAULT_MIN_AGE_S,
+    now: float | None = None,
+) -> None:
+    """Index new audio under `root/<source.id>/` — the CHEAP half (ffprobe only).
+
+    Separated from transcription because the two have wildly different costs and
+    the timeline only needs this one. Indexing every source before any Whisper
+    runs is what stops the alphabetically-last mic waiting a whole cycle for its
+    rows (#1365: usb sorts last of 33 source dirs and sat two hours behind
+    during a visit, its audio safe on disk but unsearchable).
+    """
     current = time.time() if now is None else now
     store.add_source(source)
 
@@ -243,6 +274,27 @@ def process_pending(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
         store.add_audio_segment(segment)
     _clear_dead_stubs(scan, store, source.id)
 
+
+def transcribe_pending(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
+    store: Store,
+    root: Path,
+    source: AudioSource,
+    transcriber: Transcriber,
+    *,
+    model_name: str,
+    diarizer: Diarizer | None = None,
+    vad: Vad | None = None,
+    min_age_seconds: float = DEFAULT_MIN_AGE_S,
+    now: float | None = None,
+    max_transcribe: int | None = None,
+) -> int:
+    """Transcribe this source's already-indexed pending audio — the EXPENSIVE half.
+
+    `max_transcribe` bounds one call so the sources share the budget rather than
+    the first draining it. Oldest first, so a capped pass always advances the
+    front of the queue.
+    """
+    current = time.time() if now is None else now
     pending = [
         segment
         for segment in store.pending_audio_segments()
@@ -296,15 +348,22 @@ def process_all(  # noqa: PLR0913 - pipeline collaborators + tuning knobs
     reconciler reads audio_segment rows, so this also stops worker lag reading as
     a recording gap in the doctor.
     """
+    # DISCOVERED, not COREAUDIO: a directory of audio says nothing about what
+    # recorded it, and `add_source` is INSERT OR IGNORE — so a guess made here is
+    # permanent unless the real registrar can correct it (Store.register_source).
+    sources = [
+        AudioSource(id=sid, name=sid, kind=SourceKind.DISCOVERED, spec="")
+        for sid in discover_source_ids(root)
+    ]
+    # Phase 1 — index EVERY source. Cheap (ffprobe), and it is what the timeline,
+    # the loss reconciler and the doctor all read, so no mic should wait behind
+    # another mic's Whisper time for it.
+    for source in sources:
+        index_source(store, root, source, min_age_seconds=min_age_seconds, now=now)
+    # Phase 2 — spend the expensive budget, a bounded slice each.
     total = 0
-    for source_id in discover_source_ids(root):
-        # DISCOVERED, not COREAUDIO: a directory of audio says nothing about what
-        # recorded it, and `add_source` is INSERT OR IGNORE — so a guess made here is
-        # permanent unless the real registrar can correct it (Store.register_source).
-        source = AudioSource(
-            id=source_id, name=source_id, kind=SourceKind.DISCOVERED, spec=""
-        )
-        total += process_pending(
+    for source in sources:
+        total += transcribe_pending(
             store,
             root,
             source,

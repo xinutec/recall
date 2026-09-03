@@ -400,3 +400,29 @@ def test_the_transcription_budget_is_shared_not_drained_by_the_first_source(
     # one, which is what draining in order produced.
     still_pending = [s.source_id for s in store.pending_audio_segments()]
     assert sorted(still_pending) == ["aaa-first", "zzz-last"]
+
+
+def test_indexing_completes_for_every_source_before_transcription_spends_time(
+    tmp_path: Path,
+) -> None:
+    # The real shape of #1365, found by measuring the fix: capping transcription
+    # per source is not enough when INDEXING still queues behind the previous
+    # source's Whisper time. usb sorts last of 33 source dirs, so its rows waited
+    # a whole cycle — two hours of the visit — even after the cap landed.
+    # A pass now indexes every source first, then spends its transcription budget.
+    # Proof: transcription blowing up on the first source must not stop the last
+    # source's audio from being indexed.
+    for name in ("aaa-first", "zzz-last"):
+        _capture_two_segments(tmp_path / name)
+
+    def exploding(_audio: Path) -> AsrResult:
+        msg = "ASR down"
+        raise RuntimeError(msg)
+
+    store = Store.memory()
+    with pytest.raises(RuntimeError, match="ASR down"):
+        process_all(store, tmp_path, exploding, model_name="stub", now=9_999_999_999.0)
+    indexed = {p.split("/")[-2] for _, p in store.audio_segment_paths()}
+    assert indexed == {"aaa-first", "zzz-last"}, (
+        "every source indexed before any transcription ran"
+    )
