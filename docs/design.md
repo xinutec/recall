@@ -96,10 +96,12 @@ source shown, others kept as alternates). Raw per-source audio is retained, so
 richer offline fusion (drift-correct + blind beamforming/GSS for overlapping
 speech) can be added later — **designed, not built.** Connect/identity/liveness:
 [devices.md](devices.md).
-> **Known limitation:** phone segments are *arrival*-stamped, not capture-stamped,
-> so they lag the USB mic by a variable buffering offset — cross-mic timestamps
-> don't share a clock. No audio is lost; only cross-mic alignment is affected.
-> Clean fix (phone sends its capture epoch) is deferred until a feature needs it.
+> **Known limitation (server half fixed 2026-09-03):** phone segments used to be
+> *arrival*-stamped, lagging the USB mic by a variable buffering offset. The clean
+> fix is in on the server: a phone that announces its capture epoch in the handshake
+> gets its segments renamed to capture time ([devices.md](devices.md)). The phone
+> apps don't send the epoch yet — until they do, their segments remain
+> arrival-stamped as before. No audio was ever lost; only cross-mic alignment.
 
 **5.2 VAD.** Silero gates transcription to speech spans (Whisper hallucinates
 filler on silence). Raw audio is kept regardless, so a better VAD can re-derive.

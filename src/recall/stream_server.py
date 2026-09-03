@@ -22,8 +22,8 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import IO, NamedTuple
 
@@ -35,6 +35,7 @@ from recall.capture import (
     build_segment_argv,
     container_ext,
     mark_alive,
+    parse_segment_start,
     segment_glob,
     segment_output_pattern,
 )
@@ -70,11 +71,19 @@ _READ_TIMEOUT_SECONDS = 15.0
 
 @dataclass(frozen=True)
 class Handshake:
-    """A device's opening announcement: who it is + its PCM format."""
+    """A device's opening announcement: who it is + its PCM format.
+
+    `epoch` (optional) is the phone's wall-clock, in unix seconds, of the FIRST PCM
+    byte it streams — what lets the server shift arrival-stamped segment names back
+    to true capture time (#1332). None when the device doesn't send one (an older
+    app) or sends garbage: a bad epoch degrades to arrival-stamping, never to a
+    dropped stream — completeness outranks precision.
+    """
 
     source_id: str
     sample_rate: int
     channels: int
+    epoch: float | None = None
 
 
 def parse_handshake(line: str) -> Handshake | None:
@@ -92,7 +101,111 @@ def parse_handshake(line: str) -> Handshake | None:
         channels = int(data.get("channels", _DEFAULT_CHANNELS))
     except (ValueError, TypeError):
         return None
-    return Handshake(source_id, rate, channels)
+    try:
+        raw_epoch = data.get("epoch")
+        epoch = float(raw_epoch) if raw_epoch is not None else None
+    except (ValueError, TypeError):
+        epoch = None  # tolerated: see Handshake.epoch
+    return Handshake(source_id, rate, channels, epoch)
+
+
+# A phone clock this far from the server's is not synchronised at all (no NTP);
+# applying it would smear segment names arbitrarily. Real buffering delays are
+# seconds; real NTP skew is milliseconds.
+_MAX_EPOCH_SKEW_S = 600.0
+# How often the pump sweeps for closed segments to rebase. Cheap (one listdir),
+# and well inside the worker's 120 s min-age indexing guard.
+_REBASE_SWEEP_SECONDS = 10.0
+
+
+def connection_offset(epoch: float | None, first_byte_wall: float) -> float | None:
+    """Seconds to shift this connection's segment names: capture minus arrival.
+
+    Negative is the physical case (the phone buffered before/while connecting, so
+    the audio is OLDER than its arrival). A positive value can only be clock skew
+    beating the buffering delay; renaming a segment FORWARD could pass ffmpeg's
+    open segment — which liveness and the dead-segment watchdog identify as
+    "the newest name" — so it clamps to 0.0 (arrival-stamping, today's exact
+    behaviour). None when there is no epoch, or the epoch is so far from arrival
+    (>_MAX_EPOCH_SKEW_S) that the phone's clock cannot be trusted at all.
+    """
+    if epoch is None:
+        return None
+    offset = epoch - first_byte_wall
+    if abs(offset) > _MAX_EPOCH_SKEW_S:
+        _log.warning(
+            "ingest: epoch %.1fs away from arrival — phone clock untrusted, "
+            "keeping arrival-stamped names",
+            offset,
+        )
+        return None
+    return min(offset, 0.0)
+
+
+def rebase_segment_names(  # noqa: PLR0913 - the sweep's full write context, kept flat
+    out_dir: Path,
+    source_id: str,
+    offset_s: float,
+    done: set[str],
+    *,
+    since: datetime,
+    include_newest: bool = False,
+) -> list[tuple[str, str]]:
+    """Shift every CLOSED segment of THIS connection by `offset_s`, renaming
+    arrival time to capture time. The newest file is ffmpeg's open segment and is
+    never touched (same rule as the dead-stub sweep); a file stamped before
+    `since` (the connection's start) belongs to an earlier connection whose offset
+    this one cannot know, and is left alone. `done` carries every name this
+    connection has handled — including the names it CREATED, or the next sweep
+    would shift a renamed file again and the archive would drift by the offset
+    every sweep. A corrected name that already exists is KEPT under its arrival
+    name forever — losing audio to a rename would invert priority #1. Returns the
+    (old, new) renames performed.
+    """
+    shift = timedelta(seconds=round(offset_s))
+    if not shift:
+        return []
+    renamed: list[tuple[str, str]] = []
+    files = segment_glob(out_dir, source_id)
+    if not include_newest:
+        files = files[:-1]  # files[-1] is ffmpeg's open segment
+    for path in files:
+        if path.name in done:
+            continue
+        done.add(path.name)
+        try:
+            start = parse_segment_start(path.name)
+        except ValueError:
+            continue  # not a timestamped segment; leave it be
+        if start < since:
+            continue  # an earlier connection's segment; not ours to move
+        corrected = start + shift
+        new_name = f"{source_id}-{corrected:%Y%m%dT%H%M%S}{path.suffix}"
+        if new_name == path.name:
+            continue
+        target = out_dir / new_name
+        if target.exists():
+            _log.warning(
+                "ingest: %s keeps its arrival name — corrected slot %s is taken",
+                path.name,
+                new_name,
+            )
+            continue
+        try:
+            path.rename(target)
+        except OSError as err:  # never let bookkeeping drop a stream
+            _log.warning("ingest: could not rebase %s: %s", path.name, err)
+            continue
+        done.add(new_name)  # its own next sweep must not shift it again
+        renamed.append((path.name, new_name))
+    if renamed:
+        _log.info(
+            "ingest: %s rebased %d segment name(s) by %+.0fs to capture time",
+            source_id,
+            len(renamed),
+            round(offset_s),
+        )
+    return renamed
 
 
 def read_handshake(
@@ -202,11 +315,18 @@ class _Pump:
     out_dir: Path
     meter: StreamMeter
     source_id: str
+    #: The phone's announced capture epoch (Handshake.epoch); None = arrival-stamp.
+    epoch: float | None = None
     #: Why the stream ended, for the disconnect record. The endings are not the
     #: same event and the log could not tell them apart: a phone walking out of
     #: range and a pause dropping the stream both just stopped.
     ended: str = "unknown"
     first_byte: float | None = None
+    #: capture-minus-arrival for this connection, fixed at the first byte (#1332).
+    offset_s: float | None = None
+    #: Segment names already rebased (or created by a rebase) this connection.
+    rebased: set[str] = field(default_factory=set)
+    _next_sweep: float = 0.0
 
     def run(self) -> None:
         while True:
@@ -236,6 +356,8 @@ class _Pump:
             self.stdin.write(data)  # the archive comes first; meter after
             if self.first_byte is None:
                 self.first_byte = time.time()
+                self.offset_s = connection_offset(self.epoch, self.first_byte)
+            self._maybe_rebase()
             heard = self.meter.first_audible_s is not None
             # Liveness: refresh the marker only when the chunk carries real signal —
             # "active" must mean recording. A connected phone streaming digital
@@ -249,6 +371,35 @@ class _Pump:
                     self.source_id,
                     self.meter.first_audible_s,
                 )
+
+    def _maybe_rebase(self, *, final: bool = False) -> None:
+        """Rename this connection's closed segments to capture time (#1332).
+
+        Rides the pump loop (one listdir every _REBASE_SWEEP_SECONDS, well inside
+        the worker's 120 s min-age indexing guard) rather than a thread — one
+        fewer thing to stop. `final` runs once after ffmpeg has exited: every
+        segment is closed then, so even the newest name is safe to move — without
+        it the connection's LAST segment would stay arrival-stamped forever.
+        """
+        if self.offset_s is None or self.first_byte is None:
+            return
+        now = time.time()
+        if not final and now < self._next_sweep:
+            return
+        self._next_sweep = now + _REBASE_SWEEP_SECONDS
+        # 2 s slack: ffmpeg stamps the first segment by strftime (whole seconds),
+        # which can floor to just before the measured first-byte instant. The
+        # prior-connection exclusion only needs coarse precision — reconnects are
+        # minutes apart, and a same-second collision is the EEXIST guard's job.
+        since = datetime.fromtimestamp(self.first_byte - 2.0, tz=UTC)
+        rebase_segment_names(
+            self.out_dir,
+            self.source_id,
+            self.offset_s,
+            self.rebased,
+            since=since,
+            include_newest=final,
+        )
 
 
 def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) -> None:
@@ -297,6 +448,7 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
             out_dir=out_dir,
             meter=meter,
             source_id=handshake.source_id,
+            epoch=handshake.epoch,
         )
         try:
             pump.run()
@@ -305,6 +457,10 @@ def handle_connection(sock: socket.socket, root: Path, config: CaptureConfig) ->
             proc.stdin.close()  # EOF -> ffmpeg finalises the current segment cleanly
             proc.wait()
             flushed = _flushed_segment(out_dir, handshake.source_id, since=connected)
+            # Every segment is closed now: give the connection's LAST one its
+            # capture-time name too. After _flushed_segment, whose stats keep
+            # ffmpeg's own (arrival) name for the disconnect record.
+            pump._maybe_rebase(final=True)
             stats = json.dumps(
                 {
                     "seconds": round(time.time() - connected, 1),

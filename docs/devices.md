@@ -16,7 +16,14 @@ recall record --id usb        # the USB mic: sox -d, local, no port, no handshak
 
 A phone runs the recall-mic app and opens a plain TCP connection to the host's ingest
 port. It first sends a one-line **handshake** announcing itself —
-`{"id": "pixel5", "rate": 48000, "channels": 1}\n` — then streams **raw s16le PCM**.
+`{"id": "pixel5", "rate": 48000, "channels": 1, "epoch": 1756900000.25}\n` — then
+streams **raw s16le PCM**. `epoch` (optional) is the phone's wall-clock, in unix
+seconds, of the first PCM byte it streams: the server measures that byte's arrival,
+takes the difference as the connection's capture-vs-arrival offset, and renames each
+closed segment from arrival time to capture time — so cross-mic timestamps share a
+clock and moment folding lines up. Absent or nonsense (a clock >10 min out), segments
+stay arrival-stamped exactly as before; the shift is only ever backwards, never past
+ffmpeg's open segment.
 The server (`recall.stream_server`):
 
 1. reads *exactly* the handshake line (byte by byte, so it never consumes any PCM),

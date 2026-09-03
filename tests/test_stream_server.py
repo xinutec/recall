@@ -15,13 +15,15 @@ from typing import cast, override
 import pytest
 
 from recall import capture_control
-from recall.capture import CaptureConfig, StreamMeter
+from recall.capture import CaptureConfig, StreamMeter, parse_segment_start
 from recall.store import Store
 from recall.stream_server import (
     Handshake,
+    connection_offset,
     handle_connection,
     parse_handshake,
     read_handshake,
+    rebase_segment_names,
     serve,
 )
 
@@ -421,3 +423,135 @@ def test_a_peer_that_never_speaks_does_not_hold_the_thread(tmp_path: Path) -> No
     # No handshake means no source id, so there is nothing to file the connection
     # under — it must leave no half-formed record behind.
     assert events == []
+
+
+# --- capture-epoch rebasing (#1332) ------------------------------------------
+# Phone segments are arrival-stamped: ffmpeg names them by server wall-clock at
+# write time, so they lag true capture by the phone's buffering delay. The phone
+# now announces the wall-clock of its first PCM byte ("epoch"); the offset against
+# the measured first-byte arrival shifts each CLOSED segment's name back to true
+# capture time — the name stays the capture time, so folding needs no new column.
+
+
+def test_parse_handshake_reads_an_optional_epoch() -> None:
+    hs = parse_handshake('{"id":"pixel5","rate":16000,"epoch":1756900000.25}')
+    assert hs is not None
+    assert hs.epoch == pytest.approx(1756900000.25)
+
+
+def test_parse_handshake_tolerates_a_missing_or_garbage_epoch() -> None:
+    # An old or buggy phone must still record (completeness over precision):
+    # a bad epoch degrades to arrival-stamping, never to a dropped stream.
+    no_epoch = parse_handshake('{"id":"pixel5"}')
+    assert no_epoch is not None and no_epoch.epoch is None
+    garbage = parse_handshake('{"id":"pixel5","epoch":"noon-ish"}')
+    assert garbage is not None and garbage.epoch is None
+
+
+def test_connection_offset_is_capture_minus_arrival_clamped_to_the_past() -> None:
+    # Buffering means capture precedes arrival: negative offset, applied as-is.
+    assert connection_offset(1000.0, 1003.5) == pytest.approx(-3.5)
+    # A positive offset can only be clock skew beating the buffering delay; a
+    # forward rename would break newest-is-open, so it clamps to zero (today's
+    # behaviour), never shifts into the future.
+    assert connection_offset(1005.0, 1003.5) == 0.0
+    # No epoch, no offset.
+    assert connection_offset(None, 1003.5) is None
+    # A wildly wrong phone clock (no NTP) must not smear the archive.
+    assert connection_offset(1000.0, 5000.0) is None
+
+
+def _touch_segments(out_dir: Path, names: list[str]) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (out_dir / name).write_bytes(b"opus")
+
+
+def test_rebase_shifts_closed_segments_and_leaves_the_open_one(
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "pixel5"
+    _touch_segments(
+        out,
+        [
+            "pixel5-20260903T120000.opus",
+            "pixel5-20260903T120100.opus",
+            "pixel5-20260903T120200.opus",  # newest = ffmpeg's open segment
+        ],
+    )
+    done: set[str] = set()
+    since = datetime(2026, 9, 3, 11, 59, 0, tzinfo=UTC)
+    renamed = rebase_segment_names(out, "pixel5", -4.0, done, since=since)
+    assert sorted(p.name for p in out.iterdir()) == [
+        "pixel5-20260903T115956.opus",
+        "pixel5-20260903T120056.opus",
+        "pixel5-20260903T120200.opus",  # untouched: possibly still being written
+    ]
+    assert len(renamed) == 2
+    # The sweep is idempotent: a second pass has nothing left to do.
+    assert rebase_segment_names(out, "pixel5", -4.0, done, since=since) == []
+
+
+def test_rebase_keeps_a_segment_whose_corrected_name_already_exists(
+    tmp_path: Path,
+) -> None:
+    # A reconnect can produce a corrected name that collides with an earlier
+    # connection's segment. Losing audio to a rename would invert priority #1:
+    # the collision keeps its arrival name, forever.
+    out = tmp_path / "pixel5"
+    _touch_segments(
+        out,
+        [
+            "pixel5-20260903T115958.opus",  # already holds the corrected slot
+            "pixel5-20260903T120000.opus",
+            "pixel5-20260903T120100.opus",  # newest, untouched
+        ],
+    )
+    done: set[str] = set()
+    # This connection began at 12:00: the 11:59:58 file is an EARLIER
+    # connection's segment, holding the corrected slot.
+    since = datetime(2026, 9, 3, 12, 0, 0, tzinfo=UTC)
+    renamed = rebase_segment_names(out, "pixel5", -2.0, done, since=since)
+    assert renamed == []
+    assert (out / "pixel5-20260903T120000.opus").exists()
+    # And it is not retried every sweep.
+    assert rebase_segment_names(out, "pixel5", -2.0, done, since=since) == []
+
+
+def test_rebase_with_a_subsecond_offset_is_a_no_op(tmp_path: Path) -> None:
+    # Filenames carry whole seconds; an offset that rounds to zero must not
+    # churn renames.
+    out = tmp_path / "pixel5"
+    _touch_segments(out, ["pixel5-20260903T120000.opus", "pixel5-20260903T120100.opus"])
+    since = datetime(2026, 9, 3, 11, 0, 0, tzinfo=UTC)
+    assert rebase_segment_names(out, "pixel5", -0.3, set(), since=since) == []
+
+
+def test_an_epoch_announcing_stream_lands_under_capture_time_names(
+    tmp_path: Path,
+) -> None:
+    # End-to-end for #1332: the phone says its first PCM byte was captured five
+    # minutes ago; after the stream ends, its segments carry capture-time names —
+    # not the arrival wall-clock ffmpeg stamped them with.
+    server_sock, client_sock = socket.socketpair()
+    t0 = time.time()
+    epoch = t0 - 300.0
+
+    def device() -> None:
+        client_sock.sendall(
+            json.dumps({"id": "kitchen", "epoch": epoch}).encode() + b"\n"
+        )
+        client_sock.sendall(b"\x00\x00" * 48000)  # 1s @ 48k mono s16le
+        client_sock.close()
+
+    sender = threading.Thread(target=device)
+    sender.start()
+    handle_connection(server_sock, tmp_path, CaptureConfig())
+    sender.join()
+
+    files = list((tmp_path / "kitchen").glob("kitchen-*"))
+    assert files, "the stream should have been segmented"
+    for f in files:
+        start = parse_segment_start(f.name).timestamp()
+        # Named ~5 min before arrival (wide margin for the pump's own runtime).
+        assert start < t0 - 250, f"{f.name} still carries an arrival-time name"
