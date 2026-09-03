@@ -19,6 +19,10 @@ final class StreamClient {
     private let queue = DispatchQueue(label: "org.recall.mic.stream")
     private var loop: Task<Void, Never>?
     private var watchdog: Task<Void, Never>?
+    private var drainer: Task<Void, Never>?
+    /// Bounded capture-to-network hand-off (PcmSpool). 60s of 16kHz mono s16le,
+    /// enough to ride out a busy host or a Wi-Fi stall without the mic pausing.
+    private let spool = PcmSpool(capacityBytes: 16000 * 2 * 60)
 
     // The live connection, or nil when not connected. Read from the audio thread, so
     // access is guarded by a lock.
@@ -36,7 +40,10 @@ final class StreamClient {
         guard loop == nil else { return true }
         do {
             try audio.start(
-                onPCM: { [weak self] data in self?.sendIfConnected(data) },
+                // Capture hands frames to the spool and returns — it never waits on
+                // the network. A separate drain task does the sending, so a busy or
+                // unreachable host can never reach back into the microphone.
+                onPCM: { [weak self] data in self?.spool.offer(data) },
                 onLevel: { [weak self] level in
                     Task { @MainActor in self?.state.level = level }
                 })
@@ -45,6 +52,7 @@ final class StreamClient {
         }
         loop = Task { await run() }
         watchdog = Task { await watch() }
+        drainer = Task { await drain() }
         return true
     }
 
@@ -53,6 +61,8 @@ final class StreamClient {
         loop = nil
         watchdog?.cancel()
         watchdog = nil
+        drainer?.cancel()
+        drainer = nil
         audio.stop()
         setConnection(nil)
     }
@@ -66,6 +76,24 @@ final class StreamClient {
             if Watchdog.isStalled(lastBufferAt: audio.lastBufferAt, now: Date()) {
                 audio.kick()
                 await MainActor.run { state.level = 0 }
+            }
+        }
+    }
+
+    /// Send whatever capture has spooled, whenever a connection is up. Runs
+    /// independently of capture, so the microphone is never waiting on the network.
+    private func drain() async {
+        while !Task.isCancelled {
+            let pending = spool.drain()
+            if pending.isEmpty {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                continue
+            }
+            sendIfConnected(pending)
+            if spool.dropped > 0 {
+                // The phone is the only place that can know audio was lost here,
+                // so it must be visible rather than silently absent.
+                await MainActor.run { state.droppedBytes = spool.dropped }
             }
         }
     }

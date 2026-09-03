@@ -42,6 +42,11 @@ final class MicState: ObservableObject {
     @Published var connected = false  // TCP up and streaming
     @Published var phase: MicPhase = .stopped
     @Published var level: Float = 0  // 0...1 meter position
+    /// Bytes of captured audio this app discarded because it could not deliver
+    /// them (the spool overran). The phone is the ONLY place that knows: those
+    /// samples never reach the network, so no server-side check can see them.
+    /// Zero is the normal value; anything else is speech heard and lost.
+    @Published var droppedBytes: Int = 0
     @Published var capture = CaptureState(running: true, reachable: false, pausedUntil: nil)
     @Published var sources: [SourceStatus] = []  // fleet liveness for the Devices panel
 
