@@ -1683,7 +1683,7 @@ def test_a_second_scan_request_joins_the_running_one(
     """Two tabs (or two clicks) must not run two scans: they'd decode the same files
     twice and race each other's writes. The second request joins the first."""
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-    monkeypatch.setattr(api, "_SCAN_JOB", None)
+    monkeypatch.setattr("recall.api_quiet._SCAN_JOB", None)
     _deaf(monkeypatch)
     store = Store.open(tmp_path / "recall.sqlite")
     store.add_source(
@@ -1758,7 +1758,9 @@ def test_quiet_scan_spans_and_delete(
         "recall.quiet.measure",
         lambda p: Measurement(mean_db=vols[str(p)], buckets=(vols[str(p)],) * 600),
     )
-    monkeypatch.setattr(api, "_SCAN_JOB", None)  # a fresh job, bound to this data root
+    monkeypatch.setattr(
+        "recall.api_quiet._SCAN_JOB", None
+    )  # a fresh job, bound to this data root
     # Speech in the last two segments — and *only* the detector says so. Their volume
     # says nothing the detector doesn't: a minute of far-field speech and a minute with
     # a door closing in it look the same on a 60-second mean, which is why the mean is
@@ -1832,7 +1834,7 @@ def test_the_review_list_leads_with_the_biggest_span(
     hour. This is the only test that fails if that wiring is cut.
     """
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-    monkeypatch.setattr(api, "_SCAN_JOB", None)
+    monkeypatch.setattr("recall.api_quiet._SCAN_JOB", None)
     _deaf(monkeypatch)
     store = Store.open(tmp_path / "recall.sqlite")
     store.add_source(
@@ -1894,7 +1896,7 @@ def test_an_undecodable_segment_is_examined_once_and_drawn_as_a_gap(
     records the verdict, so the archive reads as fully measured and it is never decoded
     again; the review draws it as a gap; and it is never offered for deletion."""
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-    monkeypatch.setattr(api, "_SCAN_JOB", None)
+    monkeypatch.setattr("recall.api_quiet._SCAN_JOB", None)
     _deaf(monkeypatch)
     store = Store.open(tmp_path / "recall.sqlite")
     store.add_source(
@@ -2004,7 +2006,7 @@ def test_quiet_never_offers_a_segment_that_still_bears_a_turn(
         "recall.quiet.measure",
         lambda _p: Measurement(mean_db=-62.0, buckets=(-62.0,) * 600),
     )
-    monkeypatch.setattr(api, "_SCAN_JOB", None)
+    monkeypatch.setattr("recall.api_quiet._SCAN_JOB", None)
     _deaf(monkeypatch)
 
     client = TestClient(api.app)
