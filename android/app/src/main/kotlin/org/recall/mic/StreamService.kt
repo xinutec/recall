@@ -155,16 +155,46 @@ class StreamService : Service() {
                     ).toByteArray(),
                 )
                 // Read in small chunks (not the full ~1s buffer) so the UI level
-                // meter is responsive; the AudioRecord buffer still gives the
-                // network-stall headroom.
+                // meter is responsive.
+                //
+                // ⚠ The mic loop NEVER touches the socket. It used to write each
+                // chunk straight out, so when the recorder host was busy TCP
+                // backpressure blocked the write, read() was not called, and
+                // AudioRecord's own ~1s buffer overran — the phone dropped speech
+                // it had already heard. Measured 2026-09-03 with the Mac at load
+                // 42: phone segment rotation slipped to 162s and 228s worst-case,
+                // tracking the Mac's load. A recorder must not depend on its
+                // consumer's mood, so capture now hands frames to a bounded spool
+                // (PcmSpool) that never blocks, and a sender thread drains it.
+                val spool = PcmSpool(SPOOL_BYTES)
+                val sender =
+                    thread(name = "mic-sender") {
+                        while (running) {
+                            val pending = spool.drain()
+                            if (pending.isEmpty()) {
+                                Thread.sleep(SENDER_IDLE_MS)
+                            } else {
+                                out.write(pending)
+                            }
+                        }
+                    }
                 val chunk = ByteArray(READ_CHUNK_BYTES)
-                while (running) {
-                    val n = record.read(chunk, 0, chunk.size)
-                    if (n > 0) {
-                        out.write(chunk, 0, n)
-                        MicState.setLevel(peakLevel(chunk, n))
-                    } else if (n < 0) {
-                        throw IllegalStateException("AudioRecord.read returned $n")
+                try {
+                    while (running) {
+                        val n = record.read(chunk, 0, chunk.size)
+                        if (n > 0) {
+                            spool.offer(chunk, n)
+                            MicState.setLevel(peakLevel(chunk, n))
+                        } else if (n < 0) {
+                            throw IllegalStateException("AudioRecord.read returned $n")
+                        }
+                    }
+                } finally {
+                    sender.join(SENDER_JOIN_MS)
+                    if (spool.dropped() > 0) {
+                        // The phone is the ONLY place that knows this happened, so
+                        // it must say so rather than lose the audio silently.
+                        MicState.setDroppedBytes(spool.dropped())
                     }
                 }
             } catch (e: Exception) {
@@ -374,6 +404,13 @@ class StreamService : Service() {
 
         // ~43ms of audio per read — small enough for a lively level meter.
         private const val READ_CHUNK_BYTES = 4096
+
+        // Capture-to-network spool. 60s of 48kHz mono s16le (~5.8MB) — generous
+        // enough to ride out a busy host or a Wi-Fi stall without the mic ever
+        // pausing, small enough to be unremarkable on a phone.
+        private const val SPOOL_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * 60
+        private const val SENDER_IDLE_MS = 20L
+        private const val SENDER_JOIN_MS = 2000L
 
         private const val CONNECT_TIMEOUT_MS = 5000
         private const val RECONNECT_DELAY_MS = 2000L

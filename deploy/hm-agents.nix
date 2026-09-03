@@ -168,10 +168,14 @@ in
 
   # Single-port audio ingest for the phone mics. Devshell python: this path must
   # stay free of ML imports (it is one of the two agents the gate checks for that).
+  # Same reasoning as capture: this holds the phones' live PCM sockets and pumps them
+  # into ffmpeg in real time. A throttled reader drops a phone's samples exactly as a
+  # throttled sox drops the USB mic's.
   launchd.agents."org.xinutec.recall-ingest" = daemon {
     label = "org.xinutec.recall-ingest";
     name = "ingest";
     args = [ "ingest" "--out" out ];
+    extra = { ProcessType = "Interactive"; };
   };
 
   # LAN fallback for the mic heartbeat (#888). Independent of the capture agents ON
@@ -250,10 +254,27 @@ in
   # Devshell python (no ML deps): the one process that must never die. A renamed or
   # missing --device makes sox fail hard and the agent crash-loop, visibly, rather
   # than silently recording from the wrong mic.
+  # ⚠ ProcessType overrides the Background default, and this is the agent that most
+  # needs it: `Background` is macOS's THROTTLED class (reduced CPU share, deprioritised
+  # I/O), and this process holds the always-on microphone. sox reads CoreAudio in real
+  # time — starve it and its buffer overruns, samples are DROPPED, and the segment ring
+  # stretches. That is silent, unrecoverable loss of household speech, which is the one
+  # failure this system exists to prevent (#1330).
+  #
+  # Measured 2026-09-03, machine at load 42 (a Blender batch render at 565% CPU, other
+  # sessions' builds, this repo's own gate): usb segment intervals went from a clean
+  # 60.15 s mean in a quiet hour to 109.75 s with a 235 s worst case — roughly half the
+  # wall clock unrecorded, while capture sat in the throttled class by configuration.
+  # An earlier ablation had already cleared the transcription worker of causing it; the
+  # cause was never a particular neighbour, it was that ANY load outranks the recorder.
+  #
+  # `Interactive` is the honest description: nothing on this machine is more
+  # latency-critical than not missing what was said in the room.
   launchd.agents."org.xinutec.recall-capture" = daemon {
     label = "org.xinutec.recall-capture";
     name = "capture";
     args = [ "record" "--out" out "--id" "usb" "--device" "USB Condenser Microphone" ];
+    extra = { ProcessType = "Interactive"; };
   };
 
   # NO recall-backup here — the off-machine backup is odin's job, not the Mac's.

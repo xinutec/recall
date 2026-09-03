@@ -33,6 +33,20 @@ object MicState {
         _micOk.value = value
     }
 
+    /**
+     * Bytes of captured audio this app discarded because it could not deliver them
+     * — the spool overran (PcmSpool). The phone is the ONLY place that knows this
+     * happened: the samples never reach the network, so no server-side check can
+     * see them. Zero is the normal, expected value; anything else is speech that
+     * was heard and lost, and it belongs in the heartbeat beside micOk.
+     */
+    private val _droppedBytes = MutableStateFlow(0L)
+    val droppedBytes: StateFlow<Long> = _droppedBytes.asStateFlow()
+
+    fun setDroppedBytes(value: Long) {
+        _droppedBytes.value = value
+    }
+
     /** Most recent mic peak amplitude, 0f..1f, for the level meter. */
     private val _level = MutableStateFlow(0f)
     val level: StateFlow<Float> = _level.asStateFlow()
