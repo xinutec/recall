@@ -17,6 +17,7 @@ from recall import (
     api_capture,
     api_labels,
     api_reads,
+    api_recall,
     capture_control,
     loudness,
 )
@@ -1420,7 +1421,7 @@ def test_ask_answers_with_cited_turns(
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     _seed_ask_store(tmp_path)
     # Stub the process-wide generator: no model load in tests.
-    monkeypatch.setattr(api, "_llm", lambda _p: "Thursday, per Alice.")
+    monkeypatch.setattr(api_recall, "_llm", lambda _p: "Thursday, per Alice.")
     client = TestClient(api.app)
     r = client.post("/api/ask", json={"question": "When is the plumber coming?"})
     assert r.status_code == 200
@@ -1439,7 +1440,7 @@ def test_ask_declines_without_evidence_and_never_generates(
         msg = "generator must not run without evidence"
         raise AssertionError(msg)
 
-    monkeypatch.setattr(api, "_llm", explode)
+    monkeypatch.setattr(api_recall, "_llm", explode)
     client = TestClient(api.app)
     r = client.post("/api/ask", json={"question": "anything about zeppelins?"})
     assert r.status_code == 200
@@ -1466,7 +1467,7 @@ def test_ask_on_fleet_queues_a_job_and_the_poll_resolves_it(
     def explode(_p: str) -> str:
         raise AssertionError("the fleet must never run the generator")
 
-    monkeypatch.setattr(api, "_llm", explode)
+    monkeypatch.setattr(api_recall, "_llm", explode)
     client = TestClient(api.app)
 
     r = client.post("/api/ask", json={"question": "When is the plumber coming?"})
@@ -1499,7 +1500,7 @@ def test_ask_poll_surfaces_a_generation_error(
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     monkeypatch.setenv("RECALL_ROLE", "fleet")
     _seed_ask_store(tmp_path)
-    monkeypatch.setattr(api, "_llm", lambda _p: "unused")
+    monkeypatch.setattr(api_recall, "_llm", lambda _p: "unused")
     client = TestClient(api.app)
     rid = client.post(
         "/api/ask", json={"question": "When is the plumber coming?"}
@@ -1518,9 +1519,10 @@ def test_ask_poll_times_out_a_job_the_mac_never_answers(
     # "Thinking…" forever (Mac offline/wedged). The row is left intact.
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     monkeypatch.setenv("RECALL_ROLE", "fleet")
-    monkeypatch.setattr(api, "_ASK_TIMEOUT_SECONDS", 0)  # anything pending is "too old"
+    # anything pending is "too old"
+    monkeypatch.setattr(api_recall, "_ASK_TIMEOUT_SECONDS", 0)
     _seed_ask_store(tmp_path)
-    monkeypatch.setattr(api, "_llm", lambda _p: "unused")
+    monkeypatch.setattr(api_recall, "_llm", lambda _p: "unused")
     client = TestClient(api.app)
     rid = client.post(
         "/api/ask", json={"question": "When is the plumber coming?"}
@@ -1587,7 +1589,9 @@ def _seed_today(tmp_path: Path, texts: list[str]) -> None:
 
 def _sync_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run the background refresh inline, so tests are deterministic."""
-    monkeypatch.setattr(api, "_start_today_refresh", api._refresh_today_worker)
+    monkeypatch.setattr(
+        api_recall, "_start_today_refresh", api_recall._refresh_today_worker
+    )
 
 
 def test_today_summary_is_empty_when_nothing_was_recorded(
@@ -1600,7 +1604,7 @@ def test_today_summary_is_empty_when_nothing_was_recorded(
         msg = "must not generate for an empty day"
         raise AssertionError(msg)
 
-    monkeypatch.setattr(api, "_llm", explode)
+    monkeypatch.setattr(api_recall, "_llm", explode)
     _sync_refresh(monkeypatch)
     client = TestClient(api.app)
 
@@ -1625,7 +1629,7 @@ def test_today_summary_serves_stale_and_revalidates(
         calls += 1
         return "So far: plumber Thursday nine."
 
-    monkeypatch.setattr(api, "_llm", generator)
+    monkeypatch.setattr(api_recall, "_llm", generator)
     _sync_refresh(monkeypatch)
     client = TestClient(api.app)
 
@@ -1649,7 +1653,7 @@ def test_today_summary_goes_stale_when_a_new_turn_lands(
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     _seed_today(tmp_path, ["morning words"])
     outputs = iter(["Morning only.", "Morning and afternoon."])
-    monkeypatch.setattr(api, "_llm", lambda _p: next(outputs))
+    monkeypatch.setattr(api_recall, "_llm", lambda _p: next(outputs))
     _sync_refresh(monkeypatch)
     client = TestClient(api.app)
 
