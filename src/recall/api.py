@@ -8,13 +8,11 @@ at frontend/dist/, it's served as static files so everything is one origin.
 
 from __future__ import annotations
 
-import json
 import logging
 import tempfile
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
@@ -23,15 +21,14 @@ from recall import capture_control
 from recall.api_capture import fleet_capture_state, register_capture_routes
 from recall.api_client_reports import register_client_report_routes
 from recall.api_devices import register_device_routes
+from recall.api_experiments import register_experiment_routes
 from recall.api_models import (
-    AbCompareStartIn,
     AskIn,
     AssignSpanIn,
     ContextIn,
     CorrectIn,
     NudgeIn,
     ReassignIn,
-    RefineRequestIn,
     SplitIn,
     TurnSpeakerIn,
     UnhideIn,
@@ -41,7 +38,7 @@ from recall.api_models import (
 from recall.api_quiet import register_quiet_routes
 from recall.api_sessions import register_session_routes
 from recall.ask import build_ask_prompt, retrieve
-from recall.asr import DEFAULT_MODEL, slice_clip
+from recall.asr import slice_clip
 from recall.context import CONTEXT_KEY, household_context_block
 from recall.conversation import assign_span
 from recall.conversations import (
@@ -49,7 +46,6 @@ from recall.conversations import (
     Conversation,
     segment_conversations,
 )
-from recall.finetune import DEFAULT_BASE_MODEL
 from recall.llm import DEFAULT_LLM, Generator, make_generator
 from recall.loudness import normalize_loudness
 from recall.moments import Moment, best_colocated_guess, cluster_moments
@@ -67,12 +63,6 @@ from recall.review import (
     split_correction,
 )
 from recall.schemas import (
-    AbCompareRunOut,
-    AbCompareRunsOut,
-    AbCompareRunSummaryOut,
-    AbCompareScoreOut,
-    AbCompareSegmentDiffOut,
-    AbCompareStatus,
     AroundOut,
     AskOut,
     AssignResultOut,
@@ -101,7 +91,6 @@ from recall.store import (
     DIARIZED_MARKER,
     HUMAN_MODEL,
     LIVE_MODEL,
-    AbCompareJob,
     LabelledFragment,
     Store,
     TranscriptSegment,
@@ -570,128 +559,12 @@ def turn_nudge(segment_id: int, body: NudgeIn) -> OkOut:
     return {"ok": True}
 
 
-@app.post("/api/refine")
-def refine_request(body: RefineRequestIn) -> OkOut:
-    """Queue an on-demand diarize-refine of [start, end) of a recording. The idle-gated
-    refine daemon runs it, so the heavy pass stays off live capture — the timeline's
-    'Refine this' action."""
-    try:
-        start = _require_time(body.start)
-        end = _require_time(body.end)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    store = _store()
-    try:
-        store.add_refine_request(body.source, start, end)
-    finally:
-        store.close()
-    return {"ok": True}
-
-
-@app.post("/api/ab-compare")
-def ab_compare_start(body: AbCompareStartIn) -> NewIdOut:
-    """Queue a non-destructive A/B comparison of two ASR models over a recording. The
-    refine daemon runs it; poll `GET /api/ab-compare/{id}` for the result."""
-    try:
-        frm = _parse_iso(body.frm or None)
-        to = _parse_iso(body.to or None)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    store = _store()
-    try:
-        run_id = store.add_ab_compare_run(
-            body.source,
-            frm,
-            to,
-            # The default adapter is stored by its machine-independent NAME: the row
-            # crosses the Isis split (queued here, executed on the Mac), so another
-            # machine's absolute path would be meaningless. The Mac resolves it
-            # against its own data root at run time (cli._resolve_model).
-            model_a=body.modelA or DEFAULT_MODEL,
-            model_b=body.modelB or "adapter-current",
-            base_model=body.baseModel or DEFAULT_BASE_MODEL,
-        )
-    finally:
-        store.close()
-    return {"newId": run_id}
-
-
-@app.get("/api/ab-compare")
-def ab_compare_runs() -> AbCompareRunsOut:
-    """All A/B comparison runs, newest first (summaries only)."""
-    store = _store()
-    try:
-        return {"items": [_ab_run_summary(j) for j in store.list_ab_compare_runs()]}
-    finally:
-        store.close()
-
-
-@app.get("/api/ab-compare/{run_id}")
-def ab_compare_run(run_id: int) -> AbCompareRunOut:
-    """One run in full: its summary plus the per-span WER evidence (each with the
-    audio of that span) and the whole-segment text diffs. Lists are empty until done."""
-    store = _store()
-    try:
-        job = store.get_ab_compare_run(run_id)
-    finally:
-        store.close()
-    if job is None:
-        raise HTTPException(status_code=404, detail="no such run")
-    scores, diffs = _ab_run_detail(job)
-    return {"summary": _ab_run_summary(job), "scores": scores, "segmentDiffs": diffs}
-
-
-def _ab_run_summary(job: AbCompareJob) -> AbCompareRunSummaryOut:
-    return {
-        "id": job.id,
-        "source": job.source,
-        "modelA": job.model_a,
-        "modelB": job.model_b,
-        "baseModel": job.base_model,
-        "status": cast(AbCompareStatus, job.status),
-        "created": job.created.isoformat(),
-        "meanWerA": job.mean_wer_a,
-        "meanWerB": job.mean_wer_b,
-        "nCorrections": job.n_corrections,
-        "nSegments": job.n_segments,
-        "nChanged": job.n_changed,
-        "error": job.error,
-    }
-
-
-def _ab_run_detail(
-    job: AbCompareJob,
-) -> tuple[list[AbCompareScoreOut], list[AbCompareSegmentDiffOut]]:
-    """Parse a finished run's stored report into the per-span scores (each carrying the
-    audio URL of its corrected span) and the whole-segment diffs. Empty if not done."""
-    if not job.result_json:
-        return [], []
-    report = cast("dict[str, object]", json.loads(job.result_json))
-    raw_scores = cast("list[dict[str, object]]", report.get("correction_scores", []))
-    raw_diffs = cast("list[dict[str, object]]", report.get("segment_diffs", []))
-    scores: list[AbCompareScoreOut] = [
-        {
-            "correctionId": cast(int, s["correction_id"]),
-            "truth": cast(str, s["truth"]),
-            "textA": cast(str, s["text_a"]),
-            "textB": cast(str, s["text_b"]),
-            "werA": cast(float, s["wer_a"]),
-            "werB": cast(float, s["wer_b"]),
-            "audioUrl": f"/api/correction/{cast(int, s['correction_id'])}/audio",
-        }
-        for s in raw_scores
-    ]
-    diffs: list[AbCompareSegmentDiffOut] = [
-        {
-            "audioId": cast(int, d["audio_id"]),
-            "start": cast(str, d["start"]),
-            "changed": cast(bool, d["changed"]),
-            "textA": cast(str, d["text_a"]),
-            "textB": cast(str, d["text_b"]),
-        }
-        for d in raw_diffs
-    ]
-    return scores, diffs
+register_experiment_routes(
+    app,
+    store_factory=_store,
+    require_time=_require_time,
+    parse_iso=_parse_iso,
+)
 
 
 @app.post("/api/sessions/{source}/assign")
