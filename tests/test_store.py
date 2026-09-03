@@ -68,6 +68,53 @@ def test_diarize_skip_drops_a_segment_from_the_never_diarized_picker() -> None:
     assert not store.is_diarize_skipped(a)
 
 
+def test_diarize_picker_prefers_segments_with_more_transcribed_speech() -> None:
+    # Newest-first alone sent the daemon at the quiet-night junk tail (short
+    # hallucinations on near-silent audio, newest ids) while a visit's dense
+    # conversation (older ids, lots of text) waited hours (#1331, measured
+    # 2026-09-03 overnight). The picker now weights by how much visible speech a
+    # segment already carries, so the substantial audio is refined first and the
+    # thin tail sorts to the back; recency is only the tiebreak.
+    store = Store.memory()
+    store.add_source(_source())
+    dense = store.add_audio_segment(_segment(0))  # OLDER id
+    thin = store.add_audio_segment(_segment(120))  # NEWER id
+    store.add_transcript_segment(
+        audio_segment_id=dense,
+        start=BASE,
+        end=BASE + timedelta(seconds=3),
+        text="a long stretch of real household conversation worth attributing",
+        asr_model="m",
+    )
+    store.add_transcript_segment(
+        audio_segment_id=thin,
+        start=BASE + timedelta(seconds=120),
+        end=BASE + timedelta(seconds=121),
+        text="uh",
+        asr_model="m",
+    )
+    # Dense first despite its older id; newest-first would have returned thin first.
+    assert store.audio_segments_to_diarize(limit=10) == [dense, thin]
+
+
+def test_diarize_picker_breaks_ties_by_recency() -> None:
+    # Equal speech weight → the more recent segment still wins, so among comparable
+    # candidates the freshest audio is refined first (the good half of newest-first).
+    store = Store.memory()
+    store.add_source(_source())
+    older = store.add_audio_segment(_segment(0))
+    newer = store.add_audio_segment(_segment(120))
+    for aid, start in ((older, BASE), (newer, BASE + timedelta(seconds=120))):
+        store.add_transcript_segment(
+            audio_segment_id=aid,
+            start=start,
+            end=start + timedelta(seconds=2),
+            text="same length here",
+            asr_model="m",
+        )
+    assert store.audio_segments_to_diarize(limit=10) == [newer, older]
+
+
 def test_diarize_skip_drops_a_segment_from_the_rediarize_picker() -> None:
     # The same skip also holds a segment out of the re-diarize (older-pipeline) queue,
     # so a guard-tripping segment can't live-lock that pass once the never-diarized

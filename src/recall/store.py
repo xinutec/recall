@@ -1074,14 +1074,24 @@ class Store:
         limit: int,
         newest_first: bool = False,
         exclude_diarize_skips: bool = False,
+        speech_weighted: bool = False,
     ) -> list[AudioSegmentId]:
         """Audio segments that still have visible machine turns but no turn yet
         hidden with `marker` (a 'reason' prefix). The hidden-turn marker is what
         makes a re-derive pass resumable + chunkable.
 
         `exclude_diarize_skips` drops segments the diarize coverage guard already
-        declined (see `diarize_skips`), so the newest-first picker advances past them
-        instead of live-locking on the same one."""
+        declined (see `diarize_skips`), so the picker advances past them instead of
+        live-locking on the same one.
+
+        `speech_weighted` orders by how much visible speech text a segment already
+        carries (most first), with recency only the tiebreak. Plain recency sent the
+        refine daemon at the quiet-night junk tail — short hallucinations on
+        near-silent audio have the newest ids — while a visit's dense conversation
+        waited (#1331). Weighting by transcribed chars floats the real speech to the
+        front; the thin tail sorts to the back. Chosen over `speech_s` because that is
+        only populated by the cleanup scan, whereas every segment in this population
+        already has visible turns to measure."""
         # `order` is a controlled literal (not user input), so inlining it is safe.
         order = "DESC" if newest_first else "ASC"
         skip_clause = (
@@ -1089,17 +1099,30 @@ class Store:
             if exclude_diarize_skips
             else ""
         )
-        rows = self._conn.execute(
-            "SELECT DISTINCT audio_segment_id FROM transcript_segments "
+        # DISTINCT for the plain pickers; GROUP BY when we also need to SUM each
+        # segment's visible speech to weight it. Same WHERE either way.
+        projection = (
+            "audio_segment_id" if speech_weighted else "DISTINCT audio_segment_id"
+        )
+        where = (
             "WHERE audio_segment_id IS NOT NULL AND superseded_by IS NULL "
             "AND hidden_reason IS NULL AND asr_model != ? "
             "AND audio_segment_id NOT IN ("
             "  SELECT audio_segment_id FROM transcript_segments "
             "  WHERE hidden_reason LIKE ? AND audio_segment_id IS NOT NULL)"
             f"{skip_clause} "
-            f"ORDER BY audio_segment_id {order} LIMIT ?",
-            (HUMAN_MODEL, marker + "%", limit),
-        ).fetchall()
+        )
+        if speech_weighted:
+            # Sum each segment's visible speech; recency (id DESC) breaks ties so the
+            # fresher of two comparable segments still goes first.
+            tail = (
+                "GROUP BY audio_segment_id "
+                "ORDER BY SUM(LENGTH(text)) DESC, audio_segment_id DESC LIMIT ?"
+            )
+        else:
+            tail = f"ORDER BY audio_segment_id {order} LIMIT ?"
+        query = f"SELECT {projection} FROM transcript_segments {where}{tail}"
+        rows = self._conn.execute(query, (HUMAN_MODEL, marker + "%", limit)).fetchall()
         return [AudioSegmentId(int(r["audio_segment_id"])) for r in rows]
 
     def audio_segments_to_redrive(self, *, limit: int) -> list[AudioSegmentId]:
@@ -1108,12 +1131,14 @@ class Store:
 
     def audio_segments_to_diarize(self, *, limit: int) -> list[AudioSegmentId]:
         """Segments still needing diarized refinement (no 'diarized' marker).
-        Newest-first, so the most recent (most relevant) audio is refined first."""
+        Speech-weighted: the segments carrying the most transcribed speech are
+        refined first, recency the tiebreak — so a visit's dense conversation is
+        attributed before the quiet-night junk tail (#1331)."""
         return self._segments_without_marker(
             DIARIZED_MARKER,
             limit=limit,
-            newest_first=True,
             exclude_diarize_skips=True,
+            speech_weighted=True,
         )
 
     def audio_segments_to_rediarize(self, *, limit: int) -> list[AudioSegmentId]:
