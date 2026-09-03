@@ -8,7 +8,7 @@ be.
 
 from __future__ import annotations
 
-from recall.api import _one_line
+from recall.api_client_reports import _one_line
 
 
 def test_a_label_cannot_forge_a_log_line() -> None:

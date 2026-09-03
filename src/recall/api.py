@@ -16,7 +16,6 @@ import subprocess
 import tempfile
 import threading
 import time
-import unicodedata
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -26,12 +25,12 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from recall import capture_control
+from recall.api_client_reports import register_client_report_routes
 from recall.api_devices import register_device_routes
 from recall.api_models import (
     AbCompareStartIn,
     AskIn,
     AssignSpanIn,
-    ClientLog,
     ContextIn,
     CorrectIn,
     NudgeIn,
@@ -39,7 +38,6 @@ from recall.api_models import (
     RefineRequestIn,
     SessionRenameIn,
     SplitIn,
-    TelemetryEvent,
     TurnSpeakerIn,
     UnhideIn,
     UnintelligibleIn,
@@ -142,9 +140,6 @@ _SUGGEST_MIN_PROB = 0.4
 _ASK_TIMEOUT_SECONDS = 600
 _REPO = Path(__file__).resolve().parent.parent.parent
 _FRONTEND = _REPO / "frontend" / "dist" / "recall-web" / "browser"
-# Client-side (phone browser) errors are logged here so they're visible
-# server-side — the phone has no console you can read.
-_CLIENT_LOG = _REPO / "logs" / "client.log"
 # Playback context around a transcript turn. Whisper splits a recording into
 # short phrase-level turns; slicing exactly to one phrase yields a 1-2s clip with
 # no context, which is jarring and useless for recall. Give each clip real
@@ -252,68 +247,7 @@ def _transcript(
     }
 
 
-@app.post("/api/log")
-def client_log(body: ClientLog) -> OkOut:
-    """Record a browser-side error/event to logs/client.log (phone has no console)."""
-    stamp = datetime.now(UTC).isoformat(timespec="seconds")
-    parts = [stamp, f"[{body.level}]", body.url or "-", body.message]
-    if body.stack:
-        parts.append(f"\n    {body.stack.splitlines()[0]}")
-    _CLIENT_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with _CLIENT_LOG.open("a") as fh:
-        fh.write(" ".join(parts) + "\n")
-    return {"ok": True}
-
-
-# A per-batch cap so a buggy client cannot turn one POST into a log flood, and a
-# label cap so a pathological one cannot bloat a line. Counted in code points,
-# not bytes, so a multi-byte glyph is never split.
-_MAX_EVENTS = 100
-_MAX_LABEL = 160
-
-
-def _one_line(label: str, max_len: int) -> str:
-    """Flatten a client-supplied label to a single harmless log field.
-
-    The security boundary of the telemetry endpoint, not tidiness. A label is
-    verbatim UI text written into a log line as ``label=…``, so a newline inside
-    it forges *whole log lines* — including further ``client-event`` lines
-    attributed to someone else. The log stops being evidence, which is the one
-    thing it exists to be.
-
-    ``str.split()`` with no argument splits on every Unicode whitespace,
-    including the U+2028/U+2029 separators that are not control characters; the
-    category pass ahead of it catches the format and control characters that are
-    not whitespace at all.
-    """
-    unbroken = "".join(
-        " " if unicodedata.category(c) in {"Cc", "Cf", "Zl", "Zp"} else c for c in label
-    )
-    return " ".join(unbroken.split())[:max_len]
-
-
-@app.post("/api/telemetry")
-def telemetry(events: list[TelemetryEvent]) -> OkOut:
-    """Record what the person did, beside what the API was asked for.
-
-    Distinct from ``/api/log`` above, which reports browser *errors* to a file.
-    This is the activity trace: a tap that hits a cache, a control that was
-    disabled, a screen that rendered wrong — none of it reaches the server
-    otherwise, so "I pressed it and nothing happened" is undiagnosable.
-
-    Goes to the application logger rather than ``logs/client.log`` deliberately,
-    so it interleaves with the request log and a session reads as one timeline.
-    There is no storage: these are logs, not data.
-
-    Same ``client-event`` line shape as every other app in the fleet — the whole
-    value is being able to grep one word anywhere and get the same fields.
-    """
-    for e in events[:_MAX_EVENTS]:
-        label = _one_line(e.label or "", _MAX_LABEL)
-        _log.info(
-            "client-event kind=%s path=%s label=%s at=%s", e.kind, e.path, label, e.at
-        )
-    return {"ok": True}
+register_client_report_routes(app, client_log_path=_REPO / "logs" / "client.log")
 
 
 @app.get("/api/sessions")
