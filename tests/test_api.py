@@ -11,7 +11,7 @@ from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
 from conftest import make_flac, make_mp3
-from recall import api, api_capture, api_reads, capture_control, loudness
+from recall import api, api_capture, api_labels, api_reads, capture_control, loudness
 from recall.abcompare import CorrectionScore, Report, SegmentDiff, render_json
 from recall.api import clip_window
 from recall.api_reads import _precise, _tier
@@ -196,7 +196,7 @@ def test_train_ranks_substantial_novel_turns_first(
     store.close()
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
 
-    items = api.train(limit=10)["items"]
+    items = api_labels.train(limit=10)["items"]
     assert isinstance(items, list)
     texts = [i["text"] for i in items]
     assert texts[0] == "a full clear sentence worth learning"
@@ -227,7 +227,7 @@ def test_train_request_path_does_not_decode_audio(
 
     monkeypatch.setattr(loudness, "speech_level", _counting_speech_level)
 
-    result = api.train(limit=40)
+    result = api_labels.train(limit=40)
 
     items = result["items"]
     assert isinstance(items, list)
@@ -244,7 +244,7 @@ def test_train_time_order_returns_turns_chronologically(
     store.close()
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
 
-    result = api.train(limit=40, order="time")
+    result = api_labels.train(limit=40, order="time")
     items = result["items"]
     assert isinstance(items, list)
     assert [i["text"] for i in items] == [f"this is turn {i}" for i in range(5)]
@@ -459,8 +459,8 @@ def test_suggest_reads_the_cached_guess_above_threshold(
     store.close()
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
 
-    assert api.suggest(confident)["speaker"] == "Alice"
-    assert api.suggest(weak)["speaker"] is None  # below the pre-fill bar
+    assert api_labels.suggest(confident)["speaker"] == "Alice"
+    assert api_labels.suggest(weak)["speaker"] is None  # below the pre-fill bar
 
 
 def test_conversations_gap_param_is_tunable(
