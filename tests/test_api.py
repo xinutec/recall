@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
 from conftest import make_flac, make_mp3
@@ -24,6 +24,28 @@ from recall.timeline import Segment
 from recall.vad import SpeechRegion
 
 BASE = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
+
+
+def _capture_request(
+    *, cookie: str | None = None, client_host: str = "10.100.0.5"
+) -> Request:
+    """A minimal real Request for the capture-control endpoints — enough for
+    request_origin to read method/path/cookies/headers/client (#1347)."""
+    headers: list[tuple[bytes, bytes]] = []
+    if cookie is not None:
+        headers.append((b"cookie", f"recall_session={cookie}".encode()))
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/capture/pause",
+            "headers": headers,
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": (client_host, 54321),
+        }
+    )
 
 
 def _seg(asr_model: str, provenance: str | None = None) -> TranscriptSegment:
@@ -628,7 +650,7 @@ def test_fleet_capture_state_separates_desired_from_confirmed(
     # Press pause: desired flips NOW; the Mac hasn't applied yet, so the state is
     # transitioning — confirmed still says running, and nothing here contradicts a
     # later poll (this exact shape is what the next poll returns too).
-    pausing = api.capture_pause()
+    pausing = api.capture_pause(_capture_request())
     assert pausing["desiredRunning"] is False
     assert pausing["desiredPausedUntil"] is not None
     assert pausing["running"] is True  # the mic's last confirmed word
@@ -671,11 +693,34 @@ def test_local_capture_state_is_always_settled(
     monkeypatch.delenv("RECALL_ROLE", raising=False)
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
     monkeypatch.setattr("recall.capture_control.capture_running", lambda: True)
-    state = api.capture_pause()
+    state = api.capture_pause(_capture_request())
     assert state["running"] is False
     assert state["desiredRunning"] is False
     assert state["settled"] is True
     assert state["micReachable"] is True
+
+
+def test_a_local_pause_records_who_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #1347: capture-control is login-free on the recording plane, so the durable
+    # record must at least carry the peer that asked — enough to answer "was that
+    # pause mine?". Auth is off locally, so origin is the peer address.
+    monkeypatch.delenv("RECALL_ROLE", raising=False)
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr("recall.capture_control.capture_running", lambda: True)
+    api.capture_pause(_capture_request(client_host="192.168.1.42"))
+
+    store = Store.open(tmp_path / "recall.sqlite")
+    events = store.capture_events_since(
+        datetime.now(UTC) - timedelta(minutes=1),
+        kinds=(capture_control.CaptureEventKind.CONTROL_REQUEST,),
+    )
+    store.close()
+    assert len(events) == 1
+    assert events[0].detail is not None
+    assert "pause" in events[0].detail
+    assert "192.168.1.42" in events[0].detail
 
 
 def test_name_voice_endpoint_labels_a_whole_session_voice(

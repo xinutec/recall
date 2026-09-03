@@ -32,6 +32,7 @@ from recall.webauth import (
     read_session_cookie,
     read_state,
     register_web_auth,
+    request_origin,
     requires_session,
     validate_return_to,
 )
@@ -514,3 +515,89 @@ def test_a_liveness_beat_carries_no_credential_at_all() -> None:
     assert not accepts_device_token("POST", "/api/devices/heartbeat")
     # Reading them back is the Mac's question, on the Mac's plane.
     assert requires_session("GET", "/api/devices/heartbeat")
+
+
+# --- request_origin: the capture-control audit descriptor (#1347) ------------
+
+# POST /api/sessions is the one route that accepts a device token (the meeting
+# uploader); a capture-control path is device-EXEMPT (no credential), so on it a
+# token is not "accepted" and the caller reads as anon unless a cookie names them.
+_PAUSE = ("POST", "/api/capture/pause")
+
+
+def test_request_origin_names_the_signed_in_user() -> None:
+    cfg = _cfg(allowed={"pippijn"})
+    cookie = make_session_cookie(cfg, Session("pippijn", "Pippijn"), NOW)
+    origin = request_origin(
+        cfg,
+        method=_PAUSE[0],
+        path=_PAUSE[1],
+        cookie=cookie,
+        authorization=None,
+        client_host="10.100.0.5",
+        now=NOW,
+    )
+    assert "pippijn" in origin
+    assert "10.100.0.5" in origin
+
+
+def test_request_origin_reports_anon_for_a_credential_free_pause() -> None:
+    # The phone's login-free pause button: no cookie, no token. The record must say
+    # so plainly — that is exactly the "not obviously mine" pause worth seeing.
+    cfg = _cfg()
+    origin = request_origin(
+        cfg,
+        method=_PAUSE[0],
+        path=_PAUSE[1],
+        cookie=None,
+        authorization=None,
+        client_host="10.100.0.9",
+        now=NOW,
+    )
+    assert "anon" in origin
+    assert "10.100.0.9" in origin
+
+
+def test_request_origin_reports_device_token_on_a_token_route() -> None:
+    cfg = _cfg(device_token=DEVICE_TOKEN)
+    origin = request_origin(
+        cfg,
+        method="POST",
+        path="/api/sessions",
+        cookie=None,
+        authorization=f"Bearer {DEVICE_TOKEN}",
+        client_host="10.100.0.9",
+        now=NOW,
+    )
+    assert "device-token" in origin
+
+
+def test_request_origin_without_auth_configured_reports_the_peer_only() -> None:
+    # Mac / dev / LAN-only: no auth plane exists, so the record carries the peer
+    # address alone — still enough to tell a laptop from a phone.
+    origin = request_origin(
+        None,
+        method=_PAUSE[0],
+        path=_PAUSE[1],
+        cookie=None,
+        authorization=None,
+        client_host="192.168.1.42",
+        now=NOW,
+    )
+    assert "192.168.1.42" in origin
+    assert "no-auth" in origin
+
+
+def test_request_origin_never_raises_on_a_missing_client() -> None:
+    # request.client is None for some transports; the audit write must not crash the
+    # pause it is only annotating.
+    origin = request_origin(
+        None,
+        method=_PAUSE[0],
+        path=_PAUSE[1],
+        cookie=None,
+        authorization=None,
+        client_host=None,
+        now=NOW,
+    )
+    assert origin  # some non-empty descriptor

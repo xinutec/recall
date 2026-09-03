@@ -117,6 +117,13 @@ class CaptureEventKind(StrEnum):
     # The dead-segment watchdog cycled a wedged/stalled producer (recall.runner):
     # capture self-healed, and the detail says why it fired.
     PRODUCER_CYCLED = "producer_cycled"
+    # Who asked for a pause/resume, recorded at the API boundary — capture-control is
+    # login-free on the recording plane, so the durable PAUSE/RESUME the agent writes
+    # cannot name the caller. AUDIT ONLY: the loss reconciler (recall.loss) and
+    # `_pause_explains` (recall.worker) key on PAUSE/RESUME exactly and never see this,
+    # so it annotates "was that pause mine?" without touching gap detection. detail
+    # carries the verb + the request_origin descriptor (recall.webauth).
+    CONTROL_REQUEST = "control_request"
 
 
 def _pause_file(root: Path) -> Path:

@@ -148,6 +148,36 @@ def accepts_device_token(method: str, path: str) -> bool:
     return (method.upper(), path) in _DEVICE_TOKEN_PATHS
 
 
+def request_origin(  # noqa: PLR0913 - the request fields it reads, kept flat + pure
+    cfg: WebAuthConfig | None,
+    *,
+    method: str,
+    path: str,
+    cookie: str | None,
+    authorization: str | None,
+    client_host: str | None,
+    now: datetime,
+) -> str:
+    """A short, durable descriptor of who asked for a capture-control action — the
+    answer to "was that pause mine?" (#1347). Capture-control paths are login-free on
+    the recording plane, so the request carries no identity the gate enforced; this
+    reconstructs what it *would* have found: the signed-in user if a valid cookie is
+    present, else the device-token plane if a token was accepted on this route, else an
+    anonymous peer. With auth off (Mac / dev / LAN-only) there is no plane, so only the
+    peer address is known. Pure and total: it reads what the request already carried and
+    never raises, so annotating a pause can never break the pause.
+    """
+    host = client_host or "unknown-host"
+    if cfg is None:
+        return f"no-auth {host}"
+    session = read_session_cookie(cfg, cookie, now)
+    if session is not None:
+        return f"user {session.user_id} {host}"
+    if cfg.presents_device_token(method, path, authorization):
+        return f"device-token {host}"
+    return f"anon {host}"
+
+
 def validate_return_to(raw: str | None) -> str:
     """A safe local redirect target — a single-slash absolute path only. Anything that
     could leave the origin (`//host`, `https://…`, a scheme) collapses to `/`, so a
