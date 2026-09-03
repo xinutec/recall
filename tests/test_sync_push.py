@@ -30,6 +30,8 @@ class FakeClient:
         self.live: list[TurnIn] = []
         # What the fleet would return on GET /sync/labels.
         self.labels: list[LabelOut] = []
+        self.batch_calls = 0
+        self.fail_batches = False
 
     def audio_present(self, source: str, name: str) -> bool:
         return (source, name) in self.present
@@ -42,6 +44,13 @@ class FakeClient:
     def push_segment(self, segment: SegmentIn) -> SegmentStoredOut:
         self.segments.append(segment)
         return SegmentStoredOut(audio_segment_id=len(self.segments), turns_written=1)
+
+    def push_segments(self, segments: list[SegmentIn]) -> list[SegmentStoredOut]:
+        self.batch_calls += 1
+        if self.fail_batches:
+            msg = "fleet unreachable mid-batch"
+            raise ConnectionError(msg)
+        return [self.push_segment(s) for s in segments]
 
     def push_summary(self, summary: SummaryIn) -> None:
         self.summaries.append(summary)
@@ -309,3 +318,42 @@ def test_pull_labels_reraises_a_real_error(tmp_path: Path) -> None:
     store = Store.memory()
     with pytest.raises(httpx.HTTPStatusError):
         pull_labels(store, _BrokenFleet())
+
+
+def test_push_batches_segment_metadata_into_one_call(tmp_path: Path) -> None:
+    # A catch-up used to pay one round-trip per segment (#1346). The blobs still
+    # go one by one (they are files), but the metadata+turns ride one batch.
+    store = Store.memory()
+    for i in range(3):
+        _seed_segment(
+            store,
+            tmp_path,
+            name=f"seg-000{i}.opus",
+            start=BASE + timedelta(minutes=i),
+        )
+    client = FakeClient()
+    assert sync_push(store, client) == 3
+    assert len(client.segments) == 3
+    assert client.batch_calls == 1  # one flush, not three round-trips
+
+
+def test_a_failed_batch_marks_nothing_and_the_next_pass_retries(
+    tmp_path: Path,
+) -> None:
+    # Today an HTTP failure aborts the pass before the watermark write, so every
+    # unacked segment retries next cycle. The batch must keep exactly that: a
+    # transport failure mid-flush marks nothing pushed and advances nothing.
+    store = Store.memory()
+    _seed_segment(store, tmp_path)
+    client = FakeClient()
+    client.fail_batches = True
+    try:
+        sync_push(store, client)
+        raised = False
+    except ConnectionError:
+        raised = True
+    assert raised
+    # Nothing was marked pushed and the watermark never advanced — the proof is
+    # that the next pass still owes the fleet exactly this segment.
+    client.fail_batches = False
+    assert sync_push(store, client) == 1  # the retry delivers it

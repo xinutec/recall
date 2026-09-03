@@ -189,6 +189,19 @@ class SegmentStoredOut(BaseModel):
     tombstoned: bool = False
 
 
+class SegmentBatchIn(BaseModel):
+    """A catch-up's worth of processed segments in one request (#1346) — the same
+    items POST /sync/segments takes one at a time; blobs still travel separately."""
+
+    segments: list[SegmentIn]
+
+
+class SegmentsStoredOut(BaseModel):
+    """One result per pushed segment, aligned by index with the request."""
+
+    results: list[SegmentStoredOut]
+
+
 class SummaryIn(BaseModel):
     """A settled day-summary the Mac's LLM generated, for the fleet's Ask page."""
 
@@ -680,6 +693,26 @@ def register_sync_routes(
         finally:
             store.close()
 
+    @app.post("/sync/segments/batch")
+    def sync_segments_batch(
+        body: SegmentBatchIn, authorization: str | None = Header(default=None)
+    ) -> SegmentsStoredOut:
+        """The batch shape of /sync/segments (#1346): a catch-up pays one
+        round-trip per ~50 segments instead of one each. Items are ingested
+        sequentially on one store; an item failure fails the whole request, which
+        keeps exactly the abort-and-retry liveness the single push has (a
+        poisoned segment already aborted every per-segment pass)."""
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            return SegmentsStoredOut(
+                results=[
+                    _ingest_segment(store, seg, data_root) for seg in body.segments
+                ]
+            )
+        finally:
+            store.close()
+
     @app.post("/sync/summaries")
     def sync_summaries(
         body: SummaryIn, authorization: str | None = Header(default=None)
@@ -881,6 +914,9 @@ class SyncClient:
         self._base = base_url.rstrip("/")
         self._client = client or httpx.Client(timeout=timeout)
         self._headers = {"Authorization": f"{_BEARER}{token}"}
+        # Whether the fleet speaks /sync/segments/batch; flipped off on the first
+        # 404/405 so an older fleet costs one probe, not one per flush.
+        self._batch_ok = True
 
     def poll_jobs(self, *, limit: int = 50) -> list[JobOut]:
         """Pull pending jobs from the fleet (a cheap reachability check when empty)."""
@@ -1013,6 +1049,26 @@ class SyncClient:
         )
         resp.raise_for_status()
         return SegmentStoredOut.model_validate(resp.json())
+
+    def push_segments(self, segments: list[SegmentIn]) -> list[SegmentStoredOut]:
+        """Push a batch of processed segments in one round-trip; falls back to the
+        per-segment route (and remembers) against an older fleet that predates
+        /sync/segments/batch — additive, so neither side needs the other first."""
+        if not segments:
+            return []
+        if self._batch_ok:
+            resp = self._client.post(
+                f"{self._base}/sync/segments/batch",
+                json={"segments": [s.model_dump() for s in segments]},
+                headers=self._headers,
+            )
+            if resp.status_code not in (404, 405):
+                resp.raise_for_status()
+                return [
+                    SegmentStoredOut.model_validate(r) for r in resp.json()["results"]
+                ]
+            self._batch_ok = False  # an older fleet; don't re-probe every pass
+        return [self.push_segment(s) for s in segments]
 
     def push_summary(self, summary: SummaryIn) -> None:
         """Push a settled day-summary to the fleet (upsert by day, so idempotent)."""

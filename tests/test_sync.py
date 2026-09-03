@@ -1037,3 +1037,59 @@ def test_the_mac_reads_the_mic_heartbeats_on_the_sync_plane(
     assert item["device"] == "iphone11"
     assert item["streaming"] is False, "paused is not dead, and the reader needs both"
     assert item["at"].startswith("2026-08-14T09:00")
+
+
+def test_batch_push_stores_many_segments_in_one_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    assert register_sync_routes(app, lambda: Store.open(db), tmp_path) is True
+
+    segs = [_segment(path=f"/archive/usb/seg-{i}.opus") for i in range(3)]
+    # distinct identities: (source_id, start) is the dedupe key
+    for i, seg in enumerate(segs):
+        seg.start = (BASE + timedelta(minutes=i)).isoformat()
+        seg.end = (BASE + timedelta(minutes=i, seconds=30)).isoformat()
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        results = client.push_segments(segs)
+    assert len(results) == 3
+    assert all(r.turns_written == 2 for r in results)
+    assert len({r.audio_segment_id for r in results}) == 3
+
+    store = Store.open(db)
+    try:
+        assert len(store.audio_segment_paths()) == 3
+    finally:
+        store.close()
+
+
+def test_batch_push_falls_back_per_segment_against_an_older_fleet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # An older fleet has /sync/segments but not /sync/segments/batch. The client
+    # must deliver anyway (per segment), and remember, so one probe — not one
+    # 404 per flush.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    app = FastAPI()
+    assert register_sync_routes(app, lambda: Store.open(db), tmp_path) is True
+    # Simulate the older fleet by removing the batch route from the app.
+    app.router.routes = [
+        r for r in app.router.routes if getattr(r, "path", "") != "/sync/segments/batch"
+    ]
+
+    segs = [_segment(path="/archive/usb/a.opus"), _segment(path="/archive/usb/b.opus")]
+    segs[1].start = (BASE + timedelta(minutes=1)).isoformat()
+    segs[1].end = (BASE + timedelta(minutes=1, seconds=30)).isoformat()
+
+    with TestClient(app) as transport:
+        client = SyncClient("http://fleet", "secret", client=transport)
+        results = client.push_segments(segs)
+        assert len(results) == 2
+        assert client._batch_ok is False  # remembered; later flushes skip the probe
+        # a second call goes straight to the per-segment route and still works
+        assert len(client.push_segments([segs[0]])) == 1

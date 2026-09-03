@@ -44,6 +44,10 @@ _SUMMARY_PUSH_LIMIT = 60
 # lands reconcile the whole historical archive (the fleet no-ops what it holds); the
 # cap bounds each pass so the 120s timer stays snappy, and steady state is a handful.
 _MIRROR_PUSH_LIMIT = 500
+# Metadata pushes per batch round-trip. Blobs still go one by one (they are
+# files); this caps how much a crash mid-pass re-sends (idempotent either way)
+# and keeps each request comfortably sized.
+_SEGMENT_BATCH = 50
 
 
 class PushTarget(Protocol):
@@ -52,6 +56,7 @@ class PushTarget(Protocol):
     def audio_present(self, source: str, name: str) -> bool: ...
     def push_audio(self, source: str, name: str, local_path: Path) -> bool: ...
     def push_segment(self, segment: SegmentIn) -> SegmentStoredOut: ...
+    def push_segments(self, segments: list[SegmentIn]) -> list[SegmentStoredOut]: ...
     def push_summary(self, summary: SummaryIn) -> None: ...
     def push_live(self, turns: list[TurnIn]) -> int: ...
     def fetch_labels(self) -> list[LabelOut]: ...
@@ -111,27 +116,58 @@ def push_live_turns(store: Store, client: PushTarget) -> int:
     return len(turns)
 
 
-def _push_one(store: Store, client: PushTarget, audio_id: AudioSegmentId) -> bool:
-    """Push one segment (blob if the fleet lacks it, then metadata + current turns)
-    and stamp it pushed; returns whether anything was sent. A tombstoned refusal is
-    stamped too: the fleet deliberately deleted this identity, so retrying would only
-    try to resurrect it."""
+class _Batch:
+    """Segment metadata staged for one batch round-trip (#1346).
+
+    Blobs are ensured per segment (a file transfer can't batch), but the
+    metadata+turns of a whole catch-up used to pay one round-trip each — NxRTT
+    exactly when the queue is deepest. Staged ids are marked pushed only after
+    the fleet acks the flush, and a transport failure raises out of the pass
+    before the watermark write — the same abort-and-retry semantics the
+    per-segment push always had.
+    """
+
+    def __init__(self, store: Store, client: PushTarget) -> None:
+        self._store = store
+        self._client = client
+        self._staged: list[tuple[AudioSegmentId, SegmentIn]] = []
+        self.pushed = 0
+
+    def stage(self, audio_id: AudioSegmentId, payload: SegmentIn) -> None:
+        self._staged.append((audio_id, payload))
+        if len(self._staged) >= _SEGMENT_BATCH:
+            self.flush()
+
+    def flush(self) -> None:
+        if not self._staged:
+            return
+        self._client.push_segments([payload for _, payload in self._staged])
+        for audio_id, _ in self._staged:
+            self._store.mark_pushed(audio_id)
+        self.pushed += len(self._staged)
+        self._staged.clear()
+
+
+def _stage_one(
+    store: Store, client: PushTarget, batch: _Batch, audio_id: AudioSegmentId
+) -> bool:
+    """Ensure one segment's blob is on the fleet and stage its metadata for the
+    next batch flush; returns whether it was staged. A vanished file is stamped
+    pushed (it can never be mirrored) so it doesn't wedge the queue for ever."""
     seg = store.audio_segment(audio_id)
     if seg is None:
         return False
     path = Path(seg.path)
     if not path.exists():
-        # A row whose file vanished outside a sweep can never be mirrored; stamp it
-        # so it doesn't wedge the queue for ever.
         store.mark_pushed(audio_id)
         return False
     name = path.name
     if not client.audio_present(seg.source_id, name):
         client.push_audio(seg.source_id, name, path)
-    client.push_segment(
-        _segment_in(store, seg, store.visible_machine_turns_for_audio(audio_id))
+    batch.stage(
+        audio_id,
+        _segment_in(store, seg, store.visible_machine_turns_for_audio(audio_id)),
     )
-    store.mark_pushed(audio_id)
     return True
 
 
@@ -139,21 +175,21 @@ def sync_push(store: Store, client: PushTarget) -> int:
     """Push everything changed since the last pass; returns the segment count sent."""
     watermark = int(store.get_setting(WATERMARK_KEY) or 0)
     high = watermark
-    pushed = 0
+    batch = _Batch(store, client)
     for audio_id in store.audio_segment_ids_with_machine_turns():
         turns = store.visible_machine_turns_for_audio(audio_id)
         seg_max = max((int(t.id) for t in turns), default=0)
         if seg_max <= watermark:
             continue  # unchanged since the last push
-        if _push_one(store, client, audio_id):
-            pushed += 1
+        _stage_one(store, client, batch, audio_id)
         high = max(high, seg_max)
     # Mirror completion: processed segments the watermark can't see (no turn ids —
     # usually speechless minutes). They belong on the fleet too: its quiet review
     # must see everything the Mac recorded, or nothing can ever sweep them.
     for audio_id in store.unmirrored_segments(limit=_MIRROR_PUSH_LIMIT):
-        if _push_one(store, client, audio_id):
-            pushed += 1
+        _stage_one(store, client, batch, audio_id)
+    batch.flush()
+    pushed = batch.pushed
     for day, text, model in store.recent_day_summaries(limit=_SUMMARY_PUSH_LIMIT):
         client.push_summary(SummaryIn(day=day, text=text, model=model))
     if high > watermark:
