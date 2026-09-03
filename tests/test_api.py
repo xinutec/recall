@@ -11,9 +11,10 @@ from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
 from conftest import make_flac, make_mp3
-from recall import api, api_capture, capture_control, loudness
+from recall import api, api_capture, api_reads, capture_control, loudness
 from recall.abcompare import CorrectionScore, Report, SegmentDiff, render_json
-from recall.api import _precise, _tier, clip_window
+from recall.api import clip_window
+from recall.api_reads import _precise, _tier
 from recall.asr import Word
 from recall.envelope import DEFAULT_EVENT_DB, Measurement
 from recall.ids import AudioSegmentId, TranscriptId
@@ -291,7 +292,7 @@ def test_conversations_groups_turns_by_silence_gaps(
     store.close()
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
 
-    result = api.conversations(limit=200)
+    result = api_reads.conversations(limit=200)
     items = result["items"]
     assert isinstance(items, list)
     assert len(items) == 2  # the 10-minute gap split them
@@ -351,7 +352,7 @@ def test_folded_moment_shows_strongest_colocated_guess(
     store.close()
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
 
-    moments = api.conversations(limit=200)["items"][0]["moments"]
+    moments = api_reads.conversations(limit=200)["items"][0]["moments"]
     assert len(moments) == 1
     primary = moments[0]["primary"]
     assert [p["text"] for p in primary] == ["air con usb"]  # the cleaner-mic spine
@@ -404,7 +405,7 @@ def test_transcript_exposes_confirmed_vs_guessed_speaker(
     store.close()
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
 
-    items = api.timeline(limit=10)["items"]
+    items = api_reads.timeline(limit=10)["items"]
     assert isinstance(items, list)
     by_text = {i["text"]: i for i in items}
 
@@ -496,8 +497,8 @@ def test_conversations_gap_param_is_tunable(
     store.close()
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
 
-    split = api.conversations(limit=10, gap=60.0)["items"]
-    merged = api.conversations(limit=10, gap=200.0)["items"]
+    split = api_reads.conversations(limit=10, gap=60.0)["items"]
+    merged = api_reads.conversations(limit=10, gap=200.0)["items"]
     assert isinstance(split, list)
     assert isinstance(merged, list)
     assert len(split) == 2
