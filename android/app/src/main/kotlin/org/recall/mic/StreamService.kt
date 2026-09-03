@@ -142,11 +142,17 @@ class StreamService : Service() {
                 val out: OutputStream = socket.getOutputStream()
                 // Announce who we are on the shared ingest port, then stream PCM. The
                 // server reads exactly this line, registers us by id, and segments the
-                // rest. (One port for all devices; identity is the handshake, not a port.)
+                // rest. (One port for all devices; identity is the handshake, not a
+                // port.) The epoch is taken now — recording just started, so it is the
+                // capture instant of the first samples the loop below will stream; the
+                // server uses it to rename this connection's segments from arrival
+                // time back to capture time (see docs/devices.md).
                 out.write(
-                    """{"id":"$deviceId","rate":$SAMPLE_RATE,"channels":1}"""
-                        .plus("\n")
-                        .toByteArray(),
+                    handshakeLine(
+                        deviceId,
+                        SAMPLE_RATE,
+                        epochMillis = System.currentTimeMillis(),
+                    ).toByteArray(),
                 )
                 // Read in small chunks (not the full ~1s buffer) so the UI level
                 // meter is responsive; the AudioRecord buffer still gives the
