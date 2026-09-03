@@ -12,6 +12,7 @@ the live device) so it is not exercised by tests; the WAV + teardown helpers are
 
 from __future__ import annotations
 
+import logging
 import queue
 import signal
 import subprocess
@@ -29,6 +30,8 @@ from recall.store import LIVE_MODEL, Store
 from recall.vocabulary import build_initial_prompt
 
 _SAMPLE_RATE = 16000
+_log = logging.getLogger("recall.live")
+
 _VAD_CHUNK = 512  # samples Silero expects per call at 16 kHz
 _MIN_UTTERANCE_MS = 300
 # Re-check the pause roughly once a second (in VAD chunks) so live stops promptly.
@@ -102,6 +105,38 @@ def drain_to_queue(
         frames.put(None)
 
 
+def drain_utterances(
+    utterances: queue.Queue[tuple[bytes, datetime] | None],
+    emit: Callable[[bytes, datetime], None],
+) -> None:
+    """Transcribe each captured utterance until the sentinel. ONE FAILURE MUST NEVER
+    END THIS LOOP.
+
+    It used to call `_emit` bare, so the first exception propagated out of the
+    consumer thread and killed it — while the reader thread carried on reading the
+    mic at ~10% CPU. Live then produced NOTHING, for ever, with the process up,
+    KeepAlive satisfied and every health check green. Measured 2026-09-03: two
+    outages in one evening, 40 minutes and then 11, found only because Pippijn
+    asked from the living room what had just been said and the answer was that
+    the system could not say.
+
+    A live turn is provisional by design — the archive re-derives it properly
+    later — so dropping one to an ASR failure costs little, and stopping the
+    stream costs the whole point of the tier. Log it and take the next one.
+    """
+    while True:
+        item = utterances.get()
+        if item is None:
+            return
+        pcm, start = item
+        try:
+            emit(pcm, start)
+        except Exception:
+            _log.exception(
+                "live: utterance at %s failed to transcribe; continuing", start
+            )
+
+
 def run_live(  # noqa: PLR0915, PLR0912 - cohesive streaming loop
     db_path: Path,
     *,
@@ -129,12 +164,10 @@ def run_live(  # noqa: PLR0915, PLR0912 - cohesive streaming loop
     def transcribe_loop() -> None:
         store = Store.open(db_path)
         try:
-            while True:
-                item = utterances.get()
-                if item is None:
-                    return
-                pcm, start = item
-                _emit(store, pcm, start, work_dir, model)
+            drain_utterances(
+                utterances,
+                lambda pcm, start: _emit(store, pcm, start, work_dir, model),
+            )
         finally:
             store.close()
 

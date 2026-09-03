@@ -9,9 +9,16 @@ import subprocess
 import threading
 import time
 import wave
+from datetime import UTC, datetime
 from pathlib import Path
 
-from recall.live import _stop_producer, drain_to_queue, mic_argv, write_wav
+from recall.live import (
+    _stop_producer,
+    drain_to_queue,
+    drain_utterances,
+    mic_argv,
+    write_wav,
+)
 
 
 class _FakeProducer:
@@ -157,3 +164,44 @@ def test_drain_never_blocks_the_producer_when_the_consumer_stalls() -> None:
     drain.join(timeout=5)
     assert not writer.is_alive()  # never blocked on a full pipe
     assert got == payload  # every chunk, in order, none discarded
+
+
+NOW = datetime(2026, 9, 3, 19, 46, tzinfo=UTC)
+
+
+def test_one_failing_utterance_does_not_end_the_live_stream() -> None:
+    # 2026-09-03, twice in one evening: an exception from _emit propagated out of
+    # the consumer thread and KILLED it, while the reader carried on reading the
+    # mic at ~10% CPU. Live produced nothing for 40 minutes and then 11, with the
+    # process up, KeepAlive satisfied and every check green. The stream must
+    # survive a bad utterance — the archive re-derives it properly anyway.
+    seen: list[bytes] = []
+
+    def emit(pcm: bytes, _start: datetime) -> None:
+        if pcm == b"bad":
+            msg = "ASR blew up"
+            raise RuntimeError(msg)
+        seen.append(pcm)
+
+    q: queue.Queue[tuple[bytes, datetime] | None] = queue.Queue()
+    q.put((b"bad", NOW))
+    q.put((b"good", NOW))
+    q.put(None)
+    drain_utterances(q, emit)
+    assert seen == [b"good"], "the utterance after a failure must still be written"
+
+
+def test_the_sentinel_still_ends_the_loop() -> None:
+    q: queue.Queue[tuple[bytes, datetime] | None] = queue.Queue()
+    q.put(None)
+    drain_utterances(q, lambda _pcm, _start: None)  # returns rather than hanging
+
+
+def test_every_utterance_is_transcribed_when_nothing_fails() -> None:
+    seen: list[bytes] = []
+    q: queue.Queue[tuple[bytes, datetime] | None] = queue.Queue()
+    for pcm in (b"one", b"two", b"three"):
+        q.put((pcm, NOW))
+    q.put(None)
+    drain_utterances(q, lambda pcm, _start: seen.append(pcm))
+    assert seen == [b"one", b"two", b"three"]
