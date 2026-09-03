@@ -46,7 +46,8 @@ Bitrate **48–64 kbps**, above the 32 kbps of continuous capture: a meeting is 
 with several voices, and a one-off hour costs ~25 MB, so the storage argument behind
 32 kbps does not apply here.
 
-`.ogg` is already in `_UPLOAD_AUDIO_SUFFIXES` ([`src/recall/api.py`](../src/recall/api.py)),
+`.ogg` is already in `_UPLOAD_AUDIO_SUFFIXES`
+([`src/recall/api_sessions.py`](../src/recall/api_sessions.py)),
 so **the format needs no server change**. Reaching the endpoint at all did — see
 "Authenticating the upload" below.
 

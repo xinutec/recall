@@ -72,7 +72,7 @@ The web app in `frontend/` is Angular 22, kept on the most modern footing:
 ## Verify cycle
 
 Before considering a unit of work done, run **`nix run ../dev-lint#gate -- . gate.json`**
-— the full gate, twenty-two rows in `gate.dhall`: `ruff check` + `ruff format
+— the full gate, every row in `gate.dhall` (the count lives there, not here): `ruff check` + `ruff format
 --check`, `swift-format lint --strict` (the iOS app, via the Xcode toolchain),
 the venv/`uv.lock` check, `mypy --strict`, `dev-lint` (custom rules), the
 frontend↔backend schema contract (`gen_models.py --check`), both import-surface

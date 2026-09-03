@@ -182,6 +182,19 @@ Health surfaces last-captured / last-transcribed timestamps, queue depth, disk
 free. Explicit failure handling: disk full (keep capturing, stop transcribing),
 mic unplug (alert + auto-resume), worker crash (resume from queue).
 
+**The recorder outranks everything on the machine.** capture and ingest run as
+launchd `ProcessType = Interactive`; every other agent takes the `Background`
+default. That is not a preference, it is requirement #1 in scheduler terms:
+`Background` is macOS's *throttled* class, and sox reads CoreAudio in real time,
+so a starved reader overruns its buffer and drops samples that no later pass can
+recover. Measured 2026-09-03 on a busy machine (a batch render at 565% CPU, other
+builds): as `Background`, usb segment intervals averaged 109.75 s against a
+nominal 60 s, with 23 of 24 intervals slipping — roughly half the wall clock
+unrecorded. As `Interactive`, 0 of 105 intervals slipped. The same rule applies on
+the phones for the same reason: their capture loop hands frames to a bounded spool
+and never blocks on the network, so a busy host cannot reach back and stop a
+microphone (`PcmSpool`, mirrored in both apps).
+
 ## 8. Privacy
 
 100% local; no cloud ASR, no network in the hot path; encrypted at rest. The repo
