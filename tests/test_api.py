@@ -11,9 +11,17 @@ from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
 from conftest import make_flac, make_mp3
-from recall import api, api_capture, api_labels, api_reads, capture_control, loudness
+from recall import (
+    api,
+    api_audio,
+    api_capture,
+    api_labels,
+    api_reads,
+    capture_control,
+    loudness,
+)
 from recall.abcompare import CorrectionScore, Report, SegmentDiff, render_json
-from recall.api import clip_window
+from recall.api_audio import clip_window
 from recall.api_reads import _precise, _tier
 from recall.asr import Word
 from recall.envelope import DEFAULT_EVENT_DB, Measurement
@@ -825,7 +833,7 @@ def test_audio_span_returns_one_clip_for_a_run(
     store.close()
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
 
-    resp = api.audio_span(from_id=int(a), to_id=int(b))
+    resp = api_audio.audio_span(from_id=int(a), to_id=int(b))
     assert resp.media_type == "audio/wav"
     assert len(resp.body) > 1000  # real audio for the whole 1s to 4s span
 
@@ -879,7 +887,7 @@ def test_audio_span_rejects_a_span_across_recordings(
     monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
 
     with pytest.raises(HTTPException) as exc:
-        api.audio_span(from_id=int(a), to_id=int(b))
+        api_audio.audio_span(from_id=int(a), to_id=int(b))
     assert exc.value.status_code == 400
 
 
