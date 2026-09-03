@@ -549,7 +549,10 @@ def test_sources_liveness_local_needs_a_measured_marker(
         "recall.capture_control.is_paused", lambda root, now: paused["v"]
     )
 
-    before = {s["id"]: s["active"] for s in api.sources()["items"]}
+    before = {
+        s["id"]: s["active"]
+        for s in TestClient(api.app).get("/api/sources").json()["items"]
+    }
     assert before["usb"] is False  # running, but no measured proof yet
     assert before["pixel9"] is False  # no live connection yet
     assert "meeting-x" not in before  # uploads aren't devices
@@ -558,14 +561,20 @@ def test_sources_liveness_local_needs_a_measured_marker(
     for source_id in ("usb", "pixel9"):
         (tmp_path / source_id).mkdir()
         (tmp_path / source_id / ".alive").touch()
-    after = {s["id"]: s["active"] for s in api.sources()["items"]}
+    after = {
+        s["id"]: s["active"]
+        for s in TestClient(api.app).get("/api/sources").json()["items"]
+    }
     assert after["usb"] is True
     assert after["pixel9"] is True
 
     # a pause reads idle at once for the mic — its 75s marker window must not
     # keep the dot green after recording stopped
     paused["v"] = True
-    stopped = {s["id"]: s["active"] for s in api.sources()["items"]}
+    stopped = {
+        s["id"]: s["active"]
+        for s in TestClient(api.app).get("/api/sources").json()["items"]
+    }
     assert stopped["usb"] is False
 
 
@@ -592,7 +601,10 @@ def test_sources_liveness_on_the_fleet_uses_the_macs_report(
     # running agent is not proof of recording.
     capture_control.record_reported(store, running=True, paused_until=None, now=now)
     store.close()
-    empty = {s["id"]: s["active"] for s in api.sources()["items"]}
+    empty = {
+        s["id"]: s["active"]
+        for s in TestClient(api.app).get("/api/sources").json()["items"]
+    }
     assert empty["usb"] is False
     assert empty["pixel9"] is False
 
@@ -607,7 +619,10 @@ def test_sources_liveness_on_the_fleet_uses_the_macs_report(
         source_liveness={"pixel9": now.isoformat(), "usb": now.isoformat()},
     )
     store.close()
-    live = {s["id"]: s["active"] for s in api.sources()["items"]}
+    live = {
+        s["id"]: s["active"]
+        for s in TestClient(api.app).get("/api/sources").json()["items"]
+    }
     assert live["pixel9"] is True
     assert live["usb"] is True
 
@@ -622,7 +637,10 @@ def test_sources_liveness_on_the_fleet_uses_the_macs_report(
         source_liveness={"usb": now.isoformat()},
     )
     store.close()
-    paused = {s["id"]: s["active"] for s in api.sources()["items"]}
+    paused = {
+        s["id"]: s["active"]
+        for s in TestClient(api.app).get("/api/sources").json()["items"]
+    }
     assert paused["usb"] is False
 
 
