@@ -19,10 +19,14 @@ final class StreamClient {
     private let queue = DispatchQueue(label: "org.recall.mic.stream")
     private var loop: Task<Void, Never>?
     private var watchdog: Task<Void, Never>?
+    private static let spoolSeconds = 60
     private var drainer: Task<Void, Never>?
-    /// Bounded capture-to-network hand-off (PcmSpool). 60s of 16kHz mono s16le,
-    /// enough to ride out a busy host or a Wi-Fi stall without the mic pausing.
-    private let spool = PcmSpool(capacityBytes: 16000 * 2 * 60)
+    /// Bounded capture-to-network hand-off (PcmSpool) — 60s of audio, enough to ride
+    /// out a busy host or a Wi-Fi stall without the mic ever pausing. Derived from
+    /// the capture rate rather than written as a literal: a hardcoded 16000 here
+    /// silently made this a TWENTY-second spool against a 48 kHz stream.
+    private let spool = PcmSpool(
+        capacityBytes: Int(AudioCapture.sampleRate) * 2 * StreamClient.spoolSeconds)
 
     // The live connection, or nil when not connected. Read from the audio thread, so
     // access is guarded by a lock.

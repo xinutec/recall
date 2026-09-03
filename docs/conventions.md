@@ -4,7 +4,7 @@
 
 The Python in this project is fully, strictly typed.
 
-- **`mypy --strict` must pass with zero errors** on `src/` and `tests/`. Config
+- **`mypy --strict` must pass with zero errors** on `src/`, `tests/` and `scripts/`. Config
   lives in `pyproject.toml` (`[tool.mypy]`), with several extra error codes
   enabled on top of `strict` (`possibly-undefined`, `explicit-override`,
   `ignore-without-code`, etc.).
@@ -74,12 +74,13 @@ The web app in `frontend/` is Angular 22, kept on the most modern footing:
 Before considering a unit of work done, run **`nix run ../dev-lint#gate -- . gate.json`**
 — the full gate, every row in `gate.dhall` (the count lives there, not here): `ruff check` + `ruff format
 --check`, `swift-format lint --strict` (the iOS app, via the Xcode toolchain),
-the venv/`uv.lock` check, `mypy --strict`, `dev-lint` (custom rules), the
+the venv store-path build, `mypy --strict`, `dev-lint` (custom rules), the
 frontend↔backend schema contract (`gen_models.py --check`), both import-surface
 checks, `pytest` (via the venv that holds the ML deps), the frontend build +
 layout harness + vitest, and the Android app. All green. It runs every row and
 names every one that failed, rather than stopping at the first.
-A pre-push hook is installed to run it. CI (`.github/workflows/build.yml`) builds the
+A pre-commit hook runs it on every commit (`scripts/setup-hooks.sh`); there is no
+separate pre-push step, so a commit that landed has already passed the gate. CI (`.github/workflows/build.yml`) builds the
 image and is the gate that must stay green, but it does *not* run the full local gate
-(no mypy/pytest/dev-lint there) — so run the gate by hand before pushing. Fix nearby
+(no mypy/pytest/dev-lint there), so the local gate is the real one. Fix nearby
 warnings opportunistically; don't punt them as "pre-existing".

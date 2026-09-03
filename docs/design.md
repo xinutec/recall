@@ -96,12 +96,12 @@ source shown, others kept as alternates). Raw per-source audio is retained, so
 richer offline fusion (drift-correct + blind beamforming/GSS for overlapping
 speech) can be added later — **designed, not built.** Connect/identity/liveness:
 [devices.md](devices.md).
-> **Known limitation (server half fixed 2026-09-03):** phone segments used to be
-> *arrival*-stamped, lagging the USB mic by a variable buffering offset. The clean
-> fix is in on the server: a phone that announces its capture epoch in the handshake
-> gets its segments renamed to capture time ([devices.md](devices.md)). The phone
-> apps don't send the epoch yet — until they do, their segments remain
-> arrival-stamped as before. No audio was ever lost; only cross-mic alignment.
+> Phone segments are stamped at **capture** time, not arrival: each app announces
+> the epoch of its first PCM byte in the handshake and the server renames that
+> connection's closed segments ([devices.md](devices.md)), so cross-mic timestamps
+> share a clock. A missing or implausible epoch (>10 min from arrival, or a forward
+> shift) degrades to arrival-stamping and never to a dropped stream — completeness
+> outranks precision. Audio captured before the fix keeps its arrival names.
 
 **5.2 VAD.** Silero gates transcription to speech spans (Whisper hallucinates
 filler on silence). Raw audio is kept regardless, so a better VAD can re-derive.
@@ -183,8 +183,8 @@ free. Explicit failure handling: disk full (keep capturing, stop transcribing),
 mic unplug (alert + auto-resume), worker crash (resume from queue).
 
 **The recorder outranks everything on the machine.** capture and ingest run as
-launchd `ProcessType = Interactive`; every other agent takes the `Background`
-default. That is not a preference, it is requirement #1 in scheduler terms:
+launchd `ProcessType = Interactive`; the rest take the `Background` default,
+except llm-host (`Standard` — an Ask has a human waiting on it). That is not a preference, it is requirement #1 in scheduler terms:
 `Background` is macOS's *throttled* class, and sox reads CoreAudio in real time,
 so a starved reader overruns its buffer and drops samples that no later pass can
 recover. Measured 2026-09-03 on a busy machine (a batch render at 565% CPU, other
