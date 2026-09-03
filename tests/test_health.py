@@ -18,6 +18,7 @@ from recall.health import (
     archive_check,
     blanked_check,
     capture_checks,
+    live_check,
     loss_checks,
     mirror_check,
     recorders_on_disk,
@@ -473,3 +474,32 @@ def test_blanked_check_fails_the_day_a_segment_goes_empty() -> None:
     assert bad.verdict == "fail"
     assert "3" in bad.observed
     assert bad.section == "archive"
+
+
+def test_live_check_fails_when_the_stream_has_gone_quiet_while_recording() -> None:
+    # #1383, twice on 2026-09-03: live's consumer thread died and the tier that
+    # answers "what was just said" produced nothing for 40 minutes, then 11 more
+    # after a restart — with the PROCESS up, KeepAlive satisfied and every other
+    # check green. Existence proved nothing; only output does.
+    now = datetime(2026, 9, 3, 20, 0, tzinfo=UTC)
+    fresh = live_check(now - timedelta(minutes=2), now=now, paused_until=None)
+    assert fresh.verdict == "pass"
+    stalled = live_check(now - timedelta(minutes=40), now=now, paused_until=None)
+    assert stalled.verdict == "fail"
+    assert "40" in stalled.observed
+
+
+def test_live_check_is_silent_about_a_deliberate_pause() -> None:
+    # A paused household is not a broken one — the same rule capture_checks uses.
+    now = datetime(2026, 9, 3, 20, 0, tzinfo=UTC)
+    check = live_check(
+        now - timedelta(hours=3), now=now, paused_until=now + timedelta(hours=1)
+    )
+    assert check.verdict == "skip"
+
+
+def test_live_check_reports_a_tier_that_has_never_produced() -> None:
+    now = datetime(2026, 9, 3, 20, 0, tzinfo=UTC)
+    check = live_check(None, now=now, paused_until=None)
+    assert check.verdict == "fail"
+    assert "never" in check.observed

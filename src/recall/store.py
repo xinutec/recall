@@ -2261,6 +2261,21 @@ class Store:
         self._commit()
         return cursor.rowcount
 
+    def newest_live_turn(self) -> datetime | None:
+        """When the live tier last produced a turn, or None if it never has.
+
+        The doctor's evidence that live is PRODUCING rather than merely running
+        (#1383). Deliberately ignores hidden_reason: a live turn the archive has
+        since reconciled still proves live was working when it wrote it."""
+        row = self._conn.execute(
+            "SELECT max(start_utc) AS newest FROM transcript_segments "
+            "WHERE asr_model = ?",
+            (LIVE_MODEL,),
+        ).fetchone()
+        if row is None or row["newest"] is None:
+            return None
+        return datetime.fromisoformat(str(row["newest"]))
+
     def visible_live_turns_since(
         self, watermark: int, *, limit: int = 500
     ) -> list[TranscriptSegment]:

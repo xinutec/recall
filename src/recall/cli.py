@@ -56,6 +56,7 @@ from recall.health import (
     archive_check,
     blanked_check,
     capture_checks,
+    live_check,
     loss_checks,
     mirror_check,
     recorders_on_disk,
@@ -1526,6 +1527,7 @@ def _archive_checks(args: argparse.Namespace) -> list[Check]:
         from recall.repair import find_blanked  # noqa: PLC0415 - archive child only
 
         blanked = len(find_blanked(store))
+        newest_live = store.newest_live_turn()
     finally:
         store.close()
 
@@ -1537,6 +1539,9 @@ def _archive_checks(args: argparse.Namespace) -> list[Check]:
         ),
         *loss_checks(losses, dead_windows, sources, window=_LOSS_WINDOW),
         worker_check(heartbeat.read(args.out), now=now),
+        live_check(
+            newest_live, now=now, paused_until=capture_control.paused_until(args.out)
+        ),
     ]
     # The fleet mirror only exists when the split is on (RECALL_SYNC_TOKEN set); a
     # stock LAN-only deployment has no fleet to be incomplete against.

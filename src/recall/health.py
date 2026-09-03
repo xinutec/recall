@@ -249,6 +249,65 @@ WORKER_SLOW = timedelta(minutes=30)
 WORKER_STOPPED = timedelta(hours=1)
 
 
+# The live tier is the one that answers a question asked out loud, so it is graded
+# on a short clock: a household that is being recorded and has said nothing for this
+# long is possible, but a live tier that has written nothing for this long is far
+# more likely to be broken — and it was, twice, on 2026-09-03.
+LIVE_QUIET = timedelta(minutes=20)
+
+
+def live_check(
+    newest_turn: datetime | None,
+    *,
+    now: datetime,
+    paused_until: datetime | None,
+    quiet: timedelta = LIVE_QUIET,
+) -> Check:
+    """Is live transcription still PRODUCING, or has it merely stayed alive?
+
+    ⚠ **Process existence proved nothing here**, which is the whole reason for the
+    check. On 2026-09-03 live's consumer thread died on an exception while its
+    reader thread carried on consuming the mic at ~10% CPU: the agent was up,
+    KeepAlive was satisfied, capture was writing files, agents were loaded, the
+    archive was mirroring — every existing check green — and the tier that exists
+    to answer "what did they just say" wrote nothing for 40 minutes, then 11 more
+    after a restart. It was found because a person asked and the system could not
+    answer, which is not a monitoring strategy.
+
+    So this reads the OUTPUT, the way capture_checks reads files on disk rather
+    than asking the recorder how it feels. A deliberate pause skips (nothing is
+    being recorded, so nothing should be transcribed), matching capture's rule.
+    """
+    expected = f"a live turn within {quiet.total_seconds() / 60:.0f} min"
+    if paused_until is not None and paused_until > now:
+        return Check(
+            section="capture",
+            label="live transcription",
+            verdict="skip",
+            observed=f"paused until {paused_until.isoformat(timespec='minutes')}",
+            expected=expected,
+        )
+    if newest_turn is None:
+        return Check(
+            section="capture",
+            label="live transcription",
+            verdict="fail",
+            observed="live has never produced a turn",
+            expected=expected,
+        )
+    since = now - newest_turn
+    quiet_too_long = since >= quiet
+    return Check(
+        section="capture",
+        label="live transcription",
+        verdict="fail" if quiet_too_long else "pass",
+        observed=f"newest live turn {_minutes(since):.0f} min ago",
+        expected=expected,
+        value=_minutes(since),
+        unit="min",
+    )
+
+
 def worker_check(
     beat: Beat | None,
     *,
