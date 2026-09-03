@@ -21,7 +21,7 @@ from recall.asr import (
     slice_clip,
 )
 from recall.diarize import Diarizer, SpeakerTurn
-from recall.loops import is_repetition_loop
+from recall.quality import is_repetition_loop
 from recall.store import Store
 from recall.timeline import Segment
 from recall.vad import Vad, overlaps_speech

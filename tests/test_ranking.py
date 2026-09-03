@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pytest import approx
 
+from recall.quality import foreign_script_ratio
 from recall.ranking import (
     diversity_factor,
-    foreign_script_ratio,
     normalize_text,
     training_value,
 )
@@ -54,12 +54,6 @@ def test_diversity_sinks_a_loud_long_loop_below_a_real_turn() -> None:
     loop = training_value(loudness=0.2, duration_s=5.0, repeat=False, diversity=0.18)
     real = training_value(loudness=0.1, duration_s=3.0, repeat=False, diversity=0.7)
     assert loop < real
-
-
-def test_foreign_script_ratio() -> None:
-    assert foreign_script_ratio("おやすみなさい") == 1.0
-    assert foreign_script_ratio("En dan lees je het morgen") == 0.0
-    assert foreign_script_ratio("café crème, oké hè") == 0.0  # Latin accents
 
 
 def test_quiet_foreign_script_is_dropped_but_loud_is_kept() -> None:

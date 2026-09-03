@@ -8,8 +8,6 @@ heavy deps so it is cheap to compute per request and trivial to test.
 
 from __future__ import annotations
 
-import unicodedata
-
 # Loudness at/above which a clip counts as fully clear (≈ close, in-room speech).
 CLARITY_REF = 0.05
 # Seconds of speech beyond which extra length adds no further training value.
@@ -71,16 +69,3 @@ def diversity_factor(text: str) -> float:
         return 1.0
     ratio = len(set(words)) / len(words)
     return ratio * ratio
-
-
-def foreign_script_ratio(text: str) -> float:
-    """Fraction of a turn's letters that are non-Latin (CJK, Cyrillic, etc.).
-
-    1.0 for "おやすみなさい", 0.0 for Dutch/English including accents (é, ü are
-    Latin). High means a likely hallucination in a Latin-script household.
-    """
-    letters = [c for c in text if c.isalpha()]
-    if not letters:
-        return 0.0
-    non_latin = sum(1 for c in letters if "LATIN" not in unicodedata.name(c, ""))
-    return non_latin / len(letters)

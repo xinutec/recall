@@ -58,7 +58,6 @@ from recall.timeline import Segment
 __all__ = [
     "ALIGNED_MARKER",
     "DIARIZED_MARKER",
-    "HOUSEHOLD_LANGUAGES",
     "HUMAN_MODEL",
     "LIVE_MODEL",
     "REPROCESSED_MARKER",
@@ -103,12 +102,6 @@ _MIN_VOICEPRINT_LOUDNESS = 0.01
 # hidden (RECONCILED_MARKER) once the higher-quality archive transcription
 # catches up to their time.
 LIVE_MODEL = "live"
-
-# The languages the household actually speaks. A whole-segment transcription that
-# comes out as anything else (Japanese, Spanish, German…) is almost always the model
-# hallucinating on unclear/far-field audio, not real speech — a strong unreliability
-# signal. Single source of truth so capture/eval agree.
-HOUSEHOLD_LANGUAGES = frozenset({"nl", "en"})
 
 
 # Hidden-reason / provenance prefixes marking a turn produced by a re-derive pass.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from recall.loops import is_repetition_loop
+from recall.quality import foreign_script_ratio, is_repetition_loop
 
 LOOPS = [
     "I goog goog goog goog goog goog goog goog goog goog",
@@ -38,3 +38,9 @@ def test_detects_loops(text: str) -> None:
 @pytest.mark.parametrize("text", REAL)
 def test_passes_real_speech(text: str) -> None:
     assert is_repetition_loop(text) is False
+
+
+def test_foreign_script_ratio() -> None:
+    assert foreign_script_ratio("おやすみなさい") == 1.0
+    assert foreign_script_ratio("En dan lees je het morgen") == 0.0
+    assert foreign_script_ratio("café crème, oké hè") == 0.0  # Latin accents

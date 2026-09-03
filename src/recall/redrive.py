@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from recall.asr import Transcriber, make_working_copy, result_to_drafts, scratch_wav
-from recall.loops import is_repetition_loop
+from recall.quality import is_repetition_loop
 from recall.store import REPROCESSED_MARKER, Correction, Store
 from recall.vad import Vad, overlaps_speech
 

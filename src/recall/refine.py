@@ -32,12 +32,11 @@ from recall.asr import (
 from recall.diarize import Diarizer
 from recall.identify import rematch_speaker_guesses
 from recall.ids import AudioSegmentId
-from recall.loops import is_repetition_loop
+from recall.quality import HOUSEHOLD_LANGUAGES, is_repetition_loop
 from recall.speakerid import Embedder
 from recall.store import (
     ALIGNED_MARKER,
     DIARIZED_MARKER,
-    HOUSEHOLD_LANGUAGES,
     Correction,
     Store,
 )

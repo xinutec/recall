@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import IO, Protocol
 
 from recall.asr import DEFAULT_MODEL, mlx_transcribe, scratch_wav
-from recall.loops import is_repetition_loop
+from recall.quality import is_repetition_loop
 from recall.sources import live_input_argv
 from recall.store import LIVE_MODEL, Store
 from recall.vocabulary import build_initial_prompt

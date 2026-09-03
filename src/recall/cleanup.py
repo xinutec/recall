@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from recall.loops import is_repetition_loop
+from recall.quality import is_repetition_loop
 from recall.store import Store
 from recall.vad import Vad, overlaps_speech
 

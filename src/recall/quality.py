@@ -1,15 +1,30 @@
-"""Detect Whisper repetition-loop output ("goog goog goog…", "ASTASTAST…").
+"""Is this transcript text trustworthy? — the one home for the answer.
 
-A source-level output guard: even with the decode-time guards, Whisper still
-occasionally loops on hard/short audio (especially the live path). No human
-utterance repeats a token dozens of times, so this is safe to drop — applied when
-writing turns (live + worker) and as a one-off cleanup of existing loops.
+Five sites grew their own version of this question, each after its own incident:
+repetition loops (here), foreign-script ratios (ranking), the household-language
+set (store), the refine coverage guard, hallucination-on-silence (cleanup). The
+2026-09-02 guard asymmetry (4d185eb) is what scattering costs: one site learned
+to discount loops while its neighbour still counted them. The primitives live
+here so a lesson lands once and every consumer — writers, guards, pickers,
+rankers, cleaners — reads the same one.
+
+Loop detection: even with the decode-time guards, Whisper still occasionally
+loops on hard/short audio ("goog goog goog…", "ASTASTAST…"). No human utterance
+repeats a token dozens of times, so dropping these is safe — applied when
+writing turns (live + worker + refine) and by the cleanup of existing loops.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
+
+# The languages the household actually speaks. A whole-segment transcription that
+# comes out as anything else (Japanese, Spanish, German…) is almost always the model
+# hallucinating on unclear/far-field audio, not real speech — a strong unreliability
+# signal. Single source of truth so every consumer agrees.
+HOUSEHOLD_LANGUAGES = frozenset({"nl", "en"})
 
 _WORD_MIN = 6  # need a few words before a dominant one means "loop"
 _WORD_FRACTION = 0.5  # one token is >= half the words
@@ -71,3 +86,16 @@ def _is_char_loop(text: str) -> bool:
 def is_repetition_loop(text: str) -> bool:
     """True if `text` is a degenerate repetition loop (a model artifact)."""
     return _is_word_loop(text) or _is_char_loop(text)
+
+
+def foreign_script_ratio(text: str) -> float:
+    """Fraction of a turn's letters that are non-Latin (CJK, Cyrillic, etc.).
+
+    1.0 for "おやすみなさい", 0.0 for Dutch/English including accents (é, ü are
+    Latin). High means a likely hallucination in a Latin-script household.
+    """
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    non_latin = sum(1 for c in letters if "LATIN" not in unicodedata.name(c, ""))
+    return non_latin / len(letters)

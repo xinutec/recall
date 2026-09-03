@@ -68,9 +68,9 @@ from recall.moments import Moment, best_colocated_guess, cluster_moments
 from recall.outbox import OutboxReport, read_reports, record_report
 from recall.paths import default_data_root
 from recall.probe import probe_media
+from recall.quality import foreign_script_ratio
 from recall.ranking import (
     diversity_factor,
-    foreign_script_ratio,
     normalize_text,
     training_value,
 )
