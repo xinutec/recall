@@ -140,3 +140,24 @@ audio dropped in RAM. See ios/README.md ("Always-on").
   unique-port constraint is gone.
 - **The USB mic is unchanged** — a separate local `recall record --id usb` agent
   (sox -d), not a TCP client, so it neither handshakes nor pumps.
+
+## Updating a phone's app (and getting it recording again)
+
+An install STOPS the running recorder on both platforms, and only one of them can be
+restarted remotely. Measured 2026-09-03, updating all three mid-visit:
+
+- **Android** — `adb install -r app-debug.apk`, then
+  `adb shell monkey -p org.recall.mic -c android.intent.category.LAUNCHER 1` brings the
+  foreground service back. Verified by watching for a new segment file; no hands needed.
+  The phones answer adb on their **VPN** addresses (`adb connect 10.100.0.N:5555`), not
+  the LAN.
+- **iOS** — `xcodebuild … -destination 'platform=iOS,id=<udid>' install` needs the phone
+  **unlocked and awake**, or it fails with "The developer disk image could not be mounted
+  on this device" (which reads like a toolchain problem and is not one). ⚠ **After the
+  install someone must TAP the app open** — there is no remote equivalent of the Android
+  intent, and a new segment appearing proves only that *something* started it, not that it
+  self-recovered. Ask for the tap rather than inferring the restart.
+
+So the safe order when the household is being recorded is one device at a time, checking
+each is streaming again (a fresh segment file under its source dir) before touching the
+next — never both phones down at once.
