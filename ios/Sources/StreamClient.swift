@@ -78,7 +78,9 @@ final class StreamClient {
                 // Handshake first (sends are FIFO on the connection, so it precedes any
                 // PCM), then publish the connection so captured audio starts flowing.
                 conn.send(
-                    content: handshakeLine(id: Prefs.deviceID),
+                    content: Handshake.line(
+                        id: Prefs.deviceID, rate: 48000,
+                        epoch: Date().timeIntervalSince1970),
                     completion: .contentProcessed { [weak conn] err in
                         if err != nil { conn?.cancel() }
                     })
@@ -177,11 +179,6 @@ final class StreamClient {
                 }
             }
         }
-    }
-
-    private func handshakeLine(id: String) -> Data {
-        // Field order and trailing newline must match the recorder's parser exactly.
-        Data("{\"id\":\"\(id)\",\"rate\":48000,\"channels\":1}\n".utf8)
     }
 
     private func set(connected: Bool, phase: MicPhase?) async {
