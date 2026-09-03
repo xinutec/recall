@@ -58,6 +58,18 @@ body {
   // home-indicator inset + a little breathing room). Anything pinned to the bottom of
   // a phone screen must clear this, or it's drawn behind the nav.
   --bottom-nav-reserve: calc(64px + env(safe-area-inset-bottom, 0px) + 0.5rem);
+}
+
+// Every routed screen's content column must clear the fixed bottom nav, or its
+// last controls are drawn behind it — found by the layout harness the day it
+// first rendered all nine screens (train's Save sat under the nav; labels' Play
+// met the Timeline label). Global on purpose: screens share the failure, so
+// they share the rule rather than each rediscovering it.
+.with-bottom-nav {
+  .page,
+  .cleanup {
+    padding-block-end: var(--bottom-nav-reserve);
+  }
 
   // Status-bar / notch inset at the top (with viewport-fit=cover: edge-to-edge on
   // Android, the notch on iOS). The top toolbar pads by this, and anything sticky

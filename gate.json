@@ -226,7 +226,7 @@
         "--command",
         "nix",
         "run",
-        "../../dev-lint#ng-build",
+        "git+file:../../dev-lint?ref=HEAD#ng-build",
         "--",
         "--expect",
         "dist/.verify-build/browser",
@@ -355,7 +355,7 @@
       "argv": [
         "nix",
         "run",
-        "../dev-lint#gate",
+        "git+file:../dev-lint?ref=HEAD#gate",
         "--",
         "--check-table",
         "gate.dhall",

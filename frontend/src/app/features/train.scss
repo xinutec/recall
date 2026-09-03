@@ -261,6 +261,16 @@ audio {
 }
 
 .actions {
+  // Pinned like session's palette: while a card is being edited its Save must
+  // stay visible and tappable, not sink into the fixed nav's band at whatever
+  // height the card happens to paint (the layout harness found Save's centre
+  // landing on the nav the first time this screen was rendered at phone width).
+  position: sticky;
+  bottom: 0;
+  background: var(--mat-sys-surface);
+  :host-context(.with-bottom-nav) & {
+    inset-block-end: var(--bottom-nav-reserve);
+  }
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
