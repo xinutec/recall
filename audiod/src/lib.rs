@@ -7,6 +7,8 @@
 //! the worker, doctor, loss reconciler and sync must not be able to tell
 //! which language wrote a segment.
 
+pub mod align;
+pub mod envelope;
 pub mod meter;
 pub mod pause;
 pub mod rebase;
