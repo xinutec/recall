@@ -131,9 +131,25 @@ let
       '';
     };
 
+  # The Rust audio-plane daemon (audiod/, docs/audio-plane.md). Its wrapper
+  # sources no .env — the ingest path holds no secrets — but keeps agent-tools
+  # on PATH: audiod spawns ffmpeg as its segmenter child, and it must be the
+  # same ffmpeg the test suite and the Python agents run.
+  audiodWrapper = { name, args }:
+    pkgs.writeShellApplication {
+      name = "recall-${name}";
+      runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
+      text = ''
+        exec env RUST_LOG=info ${
+          recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
+        }/bin/audiod ${lib.escapeShellArgs args}
+      '';
+    };
+
   # A KeepAlive recall daemon at background priority. `extra` adds per-agent keys.
-  daemon = { label, name, python ? devPython, args, extra ? { } }:
-    let program = wrapper { inherit name python args; };
+  # `program` overrides the python wrapper for agents that are not `recall <args>`.
+  daemon = { label, name, python ? devPython, args, extra ? { }, program ? null }:
+    let prog = if program != null then program else wrapper { inherit name python args; };
     in {
       enable = true;
       config = {
@@ -144,7 +160,7 @@ let
           + "~/.config/home-manager run 'nix flake update recall && home-manager "
           + "switch --flake .#pippijn'. Runs: recall "
           + builtins.concatStringsSep " " args + ".";
-        ProgramArguments = [ "${program}/bin/recall-${name}" ];
+        ProgramArguments = [ "${prog}/bin/recall-${name}" ];
         RunAtLoad = true;
         KeepAlive = true;
         ProcessType = "Background";
@@ -166,15 +182,16 @@ in
   # reachable from Isis under the one-way WireGuard model and need a Mac-initiated job-pull
   # (like capture-mirror) — tracked as Phase 2, not served from the Mac.
 
-  # Single-port audio ingest for the phone mics. Devshell python: this path must
-  # stay free of ML imports (it is one of the two agents the gate checks for that).
-  # Same reasoning as capture: this holds the phones' live PCM sockets and pumps them
-  # into ffmpeg in real time. A throttled reader drops a phone's samples exactly as a
-  # throttled sox drops the USB mic's.
+  # Single-port audio ingest for the phone mics — audiod (Rust) since 2026-09-04;
+  # the Python server (`recall ingest --out`) remains in-tree as the rollback.
+  # Same reasoning as capture for the priority class: this holds the phones' live
+  # PCM sockets and pumps them into ffmpeg in real time. A throttled reader drops
+  # a phone's samples exactly as a throttled sox drops the USB mic's.
   launchd.agents."org.xinutec.recall-ingest" = daemon {
     label = "org.xinutec.recall-ingest";
     name = "ingest";
-    args = [ "ingest" "--out" out ];
+    args = [ ];
+    program = audiodWrapper { name = "ingest"; args = [ "--root" out ]; };
     extra = { ProcessType = "Interactive"; };
   };
 

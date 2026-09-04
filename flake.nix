@@ -149,6 +149,18 @@
           paths = [ pkgs.sox pkgs.ffmpeg ];
         };
 
+        # The Rust audio-plane daemon (audiod/, docs/audio-plane.md). Resolved
+        # from the committed lockfile, and the build RUNS THE TESTS — a deployed
+        # audiod is one whose suite passed inside the sandbox, same promise the
+        # agents row makes for the Python side.
+        audiodPkg = pkgs.rustPlatform.buildRustPackage {
+          pname = "audiod";
+          version = "0.1.0";
+          src = ./audiod;
+          cargoLock.lockFile = ./audiod/Cargo.lock;
+          doCheck = true;
+        };
+
         # Everything home-manager will actually run, as ONE buildable output: a farm
         # of the launchd wrappers named in deploy/hm-agents.nix, keyed by label.
         #
@@ -172,6 +184,7 @@
                 ml-env = mlEnv;
                 dev-python = devPython;
                 agent-tools = agentTools;
+                audiod = audiodPkg;
               };
             };
           in
@@ -204,6 +217,7 @@
         androidHome = "${androidSdk}/libexec/android-sdk";
       in
       {
+        packages.audiod = audiodPkg;
         packages.ml-env = mlEnv;
         packages.dev-env = devEnv;
         packages.dev-python = devPython;
