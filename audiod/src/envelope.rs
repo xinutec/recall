@@ -15,7 +15,13 @@ pub const BUCKET_S: f64 = 0.1;
 /// bucket is dropped — a shorter bucket has a different noise statistic and
 /// would put one misleading point at the end of every stream.
 pub fn rms_buckets(pcm: &[u8]) -> Vec<f32> {
-    let samples_per_bucket = (f64::from(DECODE_RATE) * BUCKET_S) as usize;
+    rms_buckets_at(pcm, DECODE_RATE, BUCKET_S)
+}
+
+/// The same measurement on any rate/bucket pair — the fusion driver reuses it
+/// at 10 ms buckets for fine alignment.
+pub fn rms_buckets_at(pcm: &[u8], rate: u32, bucket_s: f64) -> Vec<f32> {
+    let samples_per_bucket = (f64::from(rate) * bucket_s) as usize;
     let bytes_per_bucket = 2 * samples_per_bucket;
     pcm.chunks_exact(bytes_per_bucket)
         .map(|bucket| {

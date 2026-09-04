@@ -8,11 +8,15 @@
 //! which language wrote a segment.
 
 pub mod align;
+pub mod decode;
 pub mod envelope;
+pub mod fuse;
 pub mod meter;
 pub mod pause;
 pub mod rebase;
 pub mod segmenter;
 pub mod server;
+pub mod stft;
 pub mod store;
+pub mod wav;
 pub mod wire;

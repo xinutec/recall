@@ -41,6 +41,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Bundled so the build needs no system sqlite at link time — the same
 # hermeticity reason the nix package resolves everything from the lockfile.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# The fusion engine's FFT (docs/audio-plane.md stage 3). The same crate the
+# fleet's other DSP uses, so there is one FFT implementation to trust.
+rustfft = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
