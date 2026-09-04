@@ -39,8 +39,13 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
+from recall.beat_relay import DEFAULT_FLEET_URL, DEFAULT_RELAY_PORT
 from recall.wire import BYTES_PER_SAMPLE, DEFAULT_INGEST_PORT, SAMPLE_RATE
 
 _log = logging.getLogger("recall.mic")
@@ -115,6 +120,87 @@ class PcmSpool:
             out = bytes(self._buf)
             self._buf.clear()
             return out
+
+
+# Hourly, matching `mic_alive.BEAT_EVERY_MINUTES`. The fleet's thresholds are
+# written as multiples of that constant, so the two must not drift.
+BEAT_EVERY_S = 3600
+# A first beat that failed comes back in a minute, doubling to the hourly cadence.
+# A recorder that came up while the network was still settling used to wait a full
+# hour to be believed (#886).
+_BEAT_RETRY_START_S = 60
+_BEAT_TIMEOUT_S = 8.0
+# 2xx is delivered; anything else is not, including a redirect we will not follow.
+_HTTP_OK = 200
+_HTTP_REDIRECT = 300
+
+
+def beat_backoff(consecutive_failures: int) -> int:
+    """Seconds to wait before the next beat attempt."""
+    return int(min(_BEAT_RETRY_START_S * 2**consecutive_failures, BEAT_EVERY_S))
+
+
+def build_version() -> str:
+    """Which build this is, for the reader of a beat that stopped arriving.
+
+    On a deployed box this module lives at /nix/store/<hash>-source/src/recall/, and
+    that hash IS the identity of the deploy — so a restart into a new build is
+    legible rather than looking like the same unit flapping. Empty when running from
+    a checkout, where the answer would be a guess.
+    """
+    for part in Path(__file__).resolve().parts:
+        if "-" in part and part.endswith("-source"):
+            return part.split("-", 1)[0][:12]
+    return ""
+
+
+def beat_payload(
+    source_id: str,
+    *,
+    started_at: str | None,
+    streaming: bool,
+    mic_ok: bool,
+    version: str,
+) -> dict[str, object]:
+    """The hourly "I am still here" (#837).
+
+    `charging` is deliberately absent: the field renders as "on battery" when false,
+    and a mains-powered box has no such state to report either way.
+    """
+    payload: dict[str, object] = {
+        "device": source_id,
+        "app": "linux",
+        "version": version,
+        "streaming": streaming,
+        "micOk": mic_ok,
+    }
+    if started_at is not None:
+        payload["startedAt"] = started_at
+    return payload
+
+
+def post_beat(
+    base_url: str, payload: dict[str, object], *, timeout: float = _BEAT_TIMEOUT_S
+) -> bool:
+    """Send one beat. True if it was accepted.
+
+    Best-effort and quiet: a liveness report that raised its own failures would be
+    the tail wagging the dog, and half this fleet is unreachable from here at any
+    given moment. Unauthenticated on purpose — the beat plane is device-exempt, so a
+    beat that could 401 would report a credential mistake as dead hardware.
+    """
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/api/devices/heartbeat",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = int(response.status)
+            return _HTTP_OK <= status < _HTTP_REDIRECT
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
 
 
 class ConnectionNarrator:
@@ -204,6 +290,14 @@ class MicConfig:
     host: str
     device: str = "default"
     port: int = DEFAULT_INGEST_PORT
+    # Where the hourly beat goes FIRST — the fleet's control plane, which is the
+    # only place a beat lives. Empty disables the beat entirely.
+    control_url: str = DEFAULT_FLEET_URL
+    # And where it goes when the control plane cannot be reached: `recall beat-relay`
+    # on the recorder host's LAN port, which forwards it and stamps `viaLan` itself.
+    # Same two-tier fallback the phones use, so a route that starts working again
+    # silently stops being reported as the back road.
+    relay_port: int = DEFAULT_RELAY_PORT
     input_rate: int = SAMPLE_RATE
     input_channels: int = 2
     spool_seconds: int = DEFAULT_SPOOL_SECONDS
@@ -285,6 +379,46 @@ def _stream(
             reported_drops = dropped
 
 
+def _beat_forever(
+    config: MicConfig,
+    *,
+    connected: threading.Event,
+    capture_ended: threading.Event,
+    stop: threading.Event,
+) -> None:
+    """Say "still here" hourly, whether or not anything is streaming.
+
+    That is the whole point: the source's liveness marker is refreshed only by audio
+    above the silence floor, and while the household is paused the ingest listener is
+    closed and nothing streams at all — which is exactly the window in which a dead
+    recorder goes unnoticed.
+    """
+    started_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    version = build_version()
+    targets = [
+        t
+        for t in (config.control_url, f"http://{config.host}:{config.relay_port}")
+        if t
+    ]
+    failures = 0
+    while not stop.is_set():
+        payload = beat_payload(
+            config.source_id,
+            started_at=started_at,
+            streaming=connected.is_set(),
+            mic_ok=not capture_ended.is_set(),
+            version=version,
+        )
+        if any(post_beat(target, payload) for target in targets):
+            failures = 0
+            stop.wait(BEAT_EVERY_S)
+            continue
+        failures += 1
+        if failures == 1:
+            _log.info("mic: beat undelivered — retrying, first at %ds", beat_backoff(0))
+        stop.wait(beat_backoff(failures - 1))
+
+
 def run(config: MicConfig, *, stop: threading.Event | None = None) -> int:
     """Capture and stream until `stop` is set or the capture process exits.
 
@@ -308,6 +442,7 @@ def run(config: MicConfig, *, stop: threading.Event | None = None) -> int:
         config.source_id,
     )
     capture_ended = threading.Event()
+    connected = threading.Event()
     proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
     pump = threading.Thread(
         target=_pump_capture,
@@ -316,6 +451,17 @@ def run(config: MicConfig, *, stop: threading.Event | None = None) -> int:
         name="mic-capture",
     )
     pump.start()
+    threading.Thread(
+        target=_beat_forever,
+        kwargs={
+            "config": config,
+            "connected": connected,
+            "capture_ended": capture_ended,
+            "stop": stop,
+        },
+        daemon=True,
+        name="mic-beat",
+    ).start()
     try:
         while not stop.is_set():
             if capture_ended.is_set() or proc.poll() is not None:
@@ -353,10 +499,13 @@ def run(config: MicConfig, *, stop: threading.Event | None = None) -> int:
                         )
                     )
                     narrator.note_connected()
+                    connected.set()
                     _log.info("mic: streaming to %s:%d", config.host, config.port)
                     _stream(sock, spool, stop, capture_ended)
                 except OSError as err:
                     _log.info("mic: connection ended (%s)", err)
+                finally:
+                    connected.clear()
             stop.wait(_RECONNECT_DELAY_S)
     finally:
         stop.set()
@@ -402,6 +551,18 @@ def parse_args(argv: list[str] | None = None) -> MicConfig:
     )
     parser.add_argument("--input-rate", type=int, default=SAMPLE_RATE)
     parser.add_argument("--spool-seconds", type=int, default=DEFAULT_SPOOL_SECONDS)
+    parser.add_argument(
+        "--control-url",
+        default=DEFAULT_FLEET_URL,
+        help="fleet control plane for the hourly beat; empty disables beating",
+    )
+    parser.add_argument(
+        "--relay-port",
+        type=int,
+        default=DEFAULT_RELAY_PORT,
+        help="`recall beat-relay` port on --host, used when the control plane "
+        "cannot be reached",
+    )
     args = parser.parse_args(argv)
     return MicConfig(
         source_id=args.id,
@@ -411,6 +572,8 @@ def parse_args(argv: list[str] | None = None) -> MicConfig:
         input_rate=args.input_rate,
         input_channels=args.input_channels,
         spool_seconds=args.spool_seconds,
+        control_url=args.control_url,
+        relay_port=args.relay_port,
     )
 
 

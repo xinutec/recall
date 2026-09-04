@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import json
 import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import override
 
 import pytest
 
 from recall.mic import (
+    BEAT_EVERY_S,
     ConnectionNarrator,
     PcmSpool,
     _stream,
+    beat_backoff,
+    beat_payload,
     capture_argv,
     handshake_line,
     parse_args,
+    post_beat,
 )
 from recall.stream_server import parse_handshake
 from recall.wire import DEFAULT_INGEST_PORT
@@ -199,3 +205,83 @@ class TestStandaloneEntryPoint:
             parse_args(["--host", "mac-mini"])
         with pytest.raises(SystemExit):
             parse_args(["--id", "geb"])
+
+
+class TestHeartbeat:
+    """geb must say it is alive, for the same reason the phones must.
+
+    The reflex is that a Linux box needs no heartbeat because a dead unit is a failed
+    systemd service the fleet already watches. That is FALSE for this box in
+    particular: the fleet's failed-unit check covers amun, isis and odin, and
+    excludes geb deliberately (it is on the home LAN and on wifi, where unreachable
+    is normal). So without a beat, geb's recorder dying is seen by nobody — and the
+    mic collector, which grades every tcp_pcm source, would report it as a dead app
+    for ever from the moment it first connects.
+    """
+
+    def test_says_who_it_is_and_what_it_is_doing(self) -> None:
+        payload = beat_payload(
+            "geb",
+            started_at="2026-09-04T13:00:00Z",
+            streaming=True,
+            mic_ok=True,
+            version="abc123",
+        )
+        assert payload["device"] == "geb"
+        assert payload["app"] == "linux"
+        assert payload["streaming"] is True
+        assert payload["micOk"] is True
+        assert payload["startedAt"] == "2026-09-04T13:00:00Z"
+        assert payload["version"] == "abc123"
+
+    def test_never_claims_a_battery(self) -> None:
+        """`charging: false` renders as "on battery" in the fleet check. A box on
+        mains has no such state, and saying either way would be a small lie in a
+        field nobody grades."""
+        payload = beat_payload(
+            "geb", started_at=None, streaming=False, mic_ok=True, version=""
+        )
+        assert "charging" not in payload
+
+    def test_a_dead_mic_is_the_one_thing_it_grades(self) -> None:
+        payload = beat_payload(
+            "geb", started_at=None, streaming=False, mic_ok=False, version=""
+        )
+        assert payload["micOk"] is False
+
+    def test_delivers_to_a_real_endpoint(self) -> None:
+        received: list[dict[str, object]] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers["Content-Length"])
+                received.append(json.loads(self.rfile.read(length)))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            @override
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.handle_request, daemon=True)
+        thread.start()
+        url = f"http://127.0.0.1:{server.server_port}"
+        assert post_beat(url, {"device": "geb"}) is True
+        thread.join(timeout=5)
+        assert received and received[0]["device"] == "geb"
+        server.server_close()
+
+    def test_an_unreachable_fleet_is_not_an_error(self) -> None:
+        """A liveness report that raised its own failures would be the tail wagging
+        the dog — and unreachable is the normal state of half this fleet."""
+        assert post_beat("http://127.0.0.1:1", {"device": "geb"}, timeout=0.5) is False
+
+    def test_backoff_starts_soon_and_settles_at_the_beat_cadence(self) -> None:
+        """An app that came up while the network was still settling used to wait a
+        full hour (#886)."""
+        assert beat_backoff(0) == 60
+        assert beat_backoff(1) == 120
+        assert beat_backoff(2) == 240
+        assert beat_backoff(99) == BEAT_EVERY_S

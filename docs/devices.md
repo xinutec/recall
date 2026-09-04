@@ -45,12 +45,23 @@ added freely.
 | **Phones** (the mic apps) | TCP to the ingest port, handshake, raw PCM. They roam, sleep, and need a person to restart them, which is what the apps' bulk is for |
 | **Linux hosts** (`python -m recall.mic`) | the phones' protocol from a box that is always on: ffmpeg opens ALSA and downmixes, `recall.mic` moves bytes to the socket, systemd owns the restart |
 
-A Linux mic is the cheapest recorder to add, because everything that makes a phone
-hard is absent: no roaming, no battery, no app lifecycle, no hourly heartbeat to
-prove it is alive — an unreachable unit is a failed systemd service, which the fleet
-already watches. What it does share with the phones is the **spool**: capture hands
+A Linux mic is the cheapest recorder to add, because most of what makes a phone hard
+is absent: no roaming, no battery, no app lifecycle. What it does share is the
+**spool**: capture hands
 bytes to a bounded, drop-oldest, counted ring and returns immediately, so a stalled
 network can never reach back into the microphone (`recall.mic.PcmSpool`).
+
+It also shares the **hourly heartbeat**, and the tempting reason to skip it is wrong.
+"A dead unit is a failed systemd service, which the fleet already watches" is true of
+the rented machines and false of the box this was built for: `fleet_health`'s
+failed-unit check covers amun, isis and odin and excludes geb deliberately, because
+geb is on the home LAN over wifi where *unreachable* is normal rather than a fault.
+Skipping the beat would therefore have left a dead recorder seen by nobody — and
+worse, the mic collector grades **every** `tcp_pcm` source, including ones that have
+never beaten, so a silent Linux mic would read as a dead app from its first connect
+onward. It beats to the control plane first and falls back to the recorder host's
+`beat-relay` on the LAN, so a VPN route that starts working again stops being
+reported as the back road on its own.
 
 ⚠ **The spool is a backpressure cushion, not a store.** A Linux box has RAM to bank
 hours, but the server rebases a connection's segment names by ONE offset measured at
