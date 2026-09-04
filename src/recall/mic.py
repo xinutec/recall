@@ -169,6 +169,11 @@ def capture_argv(device: str, *, input_rate: int, input_channels: int) -> list[s
     return [
         "ffmpeg",
         "-hide_banner",
+        # ffmpeg reads stdin for interactive commands. Under systemd stdin is
+        # /dev/null and this changes nothing; run by hand from a shell script it
+        # is the difference between the script finishing and ffmpeg swallowing
+        # the rest of it. Belt and braces with the DEVNULL below.
+        "-nostdin",
         "-loglevel",
         "warning",
         "-f",
@@ -303,7 +308,7 @@ def run(config: MicConfig, *, stop: threading.Event | None = None) -> int:
         config.source_id,
     )
     capture_ended = threading.Event()
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE)
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
     pump = threading.Thread(
         target=_pump_capture,
         args=(proc.stdout, spool, stop, capture_ended),

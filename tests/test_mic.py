@@ -99,6 +99,13 @@ class TestCaptureArgv:
         assert argv[:i].count("-ac") == 1
         assert argv[:i].count("-ar") == 1
 
+    def test_never_reads_the_parents_stdin(self) -> None:
+        """ffmpeg parses stdin for interactive commands. Inheriting it means a shell
+        that starts this client has the rest of its script eaten — observed while
+        testing the deployed unit over ssh, where ffmpeg consumed the remaining
+        lines and the service was left stopped."""
+        assert "-nostdin" in capture_argv("hw:1,0", input_rate=48000, input_channels=2)
+
     def test_downmixes_to_mono_s16le_on_stdout(self) -> None:
         argv = capture_argv("hw:1,0", input_rate=48000, input_channels=2)
         i = argv.index("-i")
