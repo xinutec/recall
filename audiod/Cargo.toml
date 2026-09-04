@@ -1,0 +1,48 @@
+# audiod — the recall audio plane, in Rust.
+#
+# The daemon that will own everything from transducer to filesystem: device
+# capture, network ingest, segmentation, and (later) cross-mic alignment and
+# fusion. It talks to the Python half through the archive layout alone —
+# segment files named `<source>-<UTC>.<ext>`, the `.alive` liveness marker,
+# and two bookkeeping writes into recall.sqlite — so neither side depends on
+# the other's runtime. See docs/audio-plane.md.
+#
+# First inhabitant: the ingest server (the port of src/recall/stream_server.py).
+[package]
+name = "audiod"
+version = "0.1.0"
+edition = "2024"
+
+[lints.rust]
+# The audio path is s16 samples, sockets and child processes — nothing here
+# needs unsafe, and `forbid` makes adding any a visible edit to this file.
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Sample counts, byte offsets and dB conversion move between u64/i64/f64/i32 at
+# a handful of deliberate sites, none near a precision limit (a segment is 60 s
+# of 48 kHz s16). `try_from` ceremony would add noise, not safety.
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+# This crate is a binary plus its own tests, not a published API; `# Errors`
+# sections would document a boundary that does not exist.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+
+[dependencies]
+# preserve_order: the disconnect stats JSON keeps its written key order, so a
+# shadow-period diff against the Python server's log lines stays readable.
+serde_json = { version = "1", features = ["preserve_order"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Bundled so the build needs no system sqlite at link time — the same
+# hermeticity reason the nix package resolves everything from the lockfile.
+rusqlite = { version = "0.32", features = ["bundled"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"

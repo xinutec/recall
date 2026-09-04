@@ -94,8 +94,8 @@ mic; the USB mic is the always-on baseline, phones are best-effort. Co-located
 mics hearing the same speech are folded into one *moment* at recall time (best
 source shown, others kept as alternates). Raw per-source audio is retained, so
 richer offline fusion (drift-correct + blind beamforming/GSS for overlapping
-speech) can be added later — **designed, not built.** Connect/identity/liveness:
-[devices.md](devices.md).
+speech) is designed in [audio-plane.md](audio-plane.md) — not yet built.
+Connect/identity/liveness: [devices.md](devices.md).
 > Phone segments are stamped at **capture** time, not arrival: each app announces
 > the epoch of its first PCM byte in the handshake and the server renames that
 > connection's closed segments ([devices.md](devices.md)), so cross-mic timestamps
@@ -232,11 +232,13 @@ runtime enrolment data, never in the codebase or these docs.
 ## 9. Implementation
 
 **Worker → Python** (Whisper, pyannote, PEFT — the ML ecosystem lives there;
-latency isn't a requirement, so Python's speed is irrelevant). **Capturer →
-sox | ffmpeg** today; an optional self-contained **Rust** daemon (exact
-timestamps, custom ring buffer, tighter health) is a possible later hardening,
-not needed yet. The two halves talk only through the filesystem + SQLite, so
-neither depends on the other's runtime. Stack: SQLite+FTS5, Silero VAD,
+latency isn't a requirement, so Python's speed is irrelevant). **Audio plane →
+Rust**: the `audiod/` daemon ([audio-plane.md](audio-plane.md)) is taking over
+capture, ingest and (next) cross-mic fusion — the invariant-heavy half where a
+bug loses audio. The two halves talk only through the filesystem + SQLite, so
+neither depends on the other's runtime. Migration policy: Python code is
+rewritten in Rust **when a task touches it** — then without hesitation, and
+never by sweeping in untouched modules; the model calls stay Python. Stack: SQLite+FTS5, Silero VAD,
 pyannote 3.1, mlx-whisper, Nix devshell + uv venv, launchd services. Engineering
 conventions (strict typing, TDD): [conventions.md](conventions.md).
 

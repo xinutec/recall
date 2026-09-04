@@ -71,6 +71,22 @@
     {
       "argv": [
         "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "cwd": "audiod",
+      "env": {},
+      "name": "cargo fmt --check (audiod)",
+      "timeout_s": 300
+    },
+    {
+      "argv": [
+        "nix",
         "build",
         "--no-warn-dirty",
         ".#dev-env",
@@ -166,6 +182,58 @@
       "env": {},
       "name": "pytest (backend)",
       "timeout_s": 3600
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "cargo",
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "audiod",
+      "env": {
+        "CARGO_TARGET_DIR": "/Users/pippijn/.cache/cargo/clippy-target"
+      },
+      "name": "cargo clippy (audiod)",
+      "timeout_s": 1800
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "cargo",
+        "test"
+      ],
+      "cwd": "audiod",
+      "env": {},
+      "name": "cargo test (audiod)",
+      "timeout_s": 1800
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "cargo",
+        "doc",
+        "--no-deps",
+        "--workspace"
+      ],
+      "cwd": "audiod",
+      "env": {
+        "RUSTDOCFLAGS": "-D rustdoc::broken_intra_doc_links"
+      },
+      "name": "rustdoc resolves every intra-doc link",
+      "timeout_s": 900
     },
     {
       "argv": [

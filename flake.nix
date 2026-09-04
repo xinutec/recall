@@ -234,6 +234,12 @@
             # no longer the venv: `.venv` is `packages.dev-env`, built from that
             # lock by uv2nix. Kept here for relocking and for `uv tree`.
             pkgs.uv
+            # audiod/ — the Rust audio-plane daemon (docs/audio-plane.md)
+            pkgs.cargo
+            pkgs.rustc
+            pkgs.rust-analyzer
+            pkgs.rustfmt
+            pkgs.clippy
             # Angular front-end toolchain (Angular 22 needs Node >= 24.15)
             pkgs.nodejs_24
             pkgs.pnpm # the frontend's installer; node ships npm too, ignore it
