@@ -75,6 +75,8 @@ from recall.maintenance import (
     compress_to_opus,
     reprobe_short_segments,
 )
+from recall.mic import MicConfig
+from recall.mic import run as run_mic
 from recall.moments import cluster_moments
 from recall.probe import probe_media, scan_segments
 from recall.redrive import redrive_archive
@@ -1066,6 +1068,26 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     runlog.setup()  # timestamped connect/disconnect logging to the agent's .err.log
     serve_ingest(args.out, args.port)
     return 0
+
+
+def _cmd_mic(args: argparse.Namespace) -> int:
+    """Stream a Linux host's own microphone to the ingest port.
+
+    Runs in the foreground and returns only when capture ends; systemd (or any
+    supervisor) owns the restart, so a dead ffmpeg is reported, not papered over.
+    """
+    runlog.setup()  # same UTC clock as the ingest server it talks to
+    return run_mic(
+        MicConfig(
+            source_id=args.id,
+            host=args.host,
+            port=args.port,
+            device=args.device,
+            input_rate=args.input_rate,
+            input_channels=args.input_channels,
+            spool_seconds=args.spool_seconds,
+        )
+    )
 
 
 def _cmd_beat_relay(args: argparse.Namespace) -> int:
@@ -2121,6 +2143,7 @@ _COMMANDS = {
     "reprocess": _cmd_reprocess,
     "worker": _cmd_worker,
     "ingest": _cmd_ingest,
+    "mic": _cmd_mic,
     "beat-relay": _cmd_beat_relay,
     "live": _cmd_live,
     "compress": _cmd_compress,

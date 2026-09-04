@@ -44,9 +44,6 @@ from recall.store import Store
 
 _log = logging.getLogger("recall.ingest")
 
-# The one shared port every device connects to — hard-coded, so nothing needs setting
-# on a phone but the host.
-DEFAULT_INGEST_PORT = 9999
 
 # A handshake id becomes a source id (and a directory name), so it must be safe.
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")

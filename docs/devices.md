@@ -1,17 +1,18 @@
 # recall — device ingest, identity & onboarding
 
-How recorder devices (the USB mic and roaming phones) connect, are identified, and
+How recorder devices (the USB mic, roaming phones, and always-on Linux hosts) connect, are identified, and
 report liveness. Companion to design.md §5.1a, which covers *fusing* multiple sources —
 several co-located mics capturing the **same** speech; this covers getting their audio
 in and knowing which device is which.
 
 ## Model: one shared port, devices announce themselves
 
-Every phone connects to **one** TCP port, served by a single host agent:
+Every networked recorder connects to **one** TCP port, served by a single host agent:
 
 ```
 recall ingest                 # the recall-ingest agent: one server on DEFAULT_INGEST_PORT (9999)
 recall record --id usb        # the USB mic: sox -d, local, no port, no handshake
+recall mic --id geb           # a Linux host's own mic: same handshake as the phones
 ```
 
 A phone runs the recall-mic app and opens a plain TCP connection to the host's ingest
@@ -32,9 +33,35 @@ The server (`recall.stream_server`):
 3. pumps the socket's PCM into an ffmpeg segmenter that writes the 60 s segment files —
    the same files the USB mic produces.
 
-So a new phone needs **zero host-side setup**: it connects, announces itself, and the
+So a new recorder needs **zero host-side setup**: it connects, announces itself, and the
 backend learns about it on first connect — no plist, no per-device port; devices are
 added freely.
+
+## Three kinds of client, one protocol
+
+| | how the audio reaches the segmenter |
+|---|---|
+| **USB mic** (`recall record`) | local, on the recorder host itself: sox → ffmpeg, no socket and no handshake. Our code is never in this path — a real-time device has no buffer to absorb a stall |
+| **Phones** (the mic apps) | TCP to the ingest port, handshake, raw PCM. They roam, sleep, and need a person to restart them, which is what the apps' bulk is for |
+| **Linux hosts** (`recall mic`) | the phones' protocol from a box that is always on: ffmpeg opens ALSA and downmixes, `recall.mic` moves bytes to the socket, systemd owns the restart |
+
+A Linux mic is the cheapest recorder to add, because everything that makes a phone
+hard is absent: no roaming, no battery, no app lifecycle, no hourly heartbeat to
+prove it is alive — an unreachable unit is a failed systemd service, which the fleet
+already watches. What it does share with the phones is the **spool**: capture hands
+bytes to a bounded, drop-oldest, counted ring and returns immediately, so a stalled
+network can never reach back into the microphone (`recall.mic.PcmSpool`).
+
+⚠ **The spool is a backpressure cushion, not a store.** A Linux box has RAM to bank
+hours, but the server rebases a connection's segment names by ONE offset measured at
+its first byte (`stream_server.connection_offset`), so a replayed backlog would be
+stamped correctly at its head and progressively wrong toward its tail. The client
+therefore **discards while disconnected**, exactly as the phones do. Holding audio
+across a disconnect needs a protocol that times each segment, not a bigger buffer.
+
+`recall.wire` holds the handful of facts both ends must agree on (port, rate, sample
+width) and imports nothing, so a client can run on a bare `python3` without the
+store, pydantic or the ML stack coming with it.
 
 ## The audio path: Python pumps, the kernel buffers
 
@@ -50,7 +77,7 @@ and is never pumped; gap-free local capture depends on keeping our code out of t
 ## Identity: the handshake id
 
 The id is announced in the handshake (the port is just transport), so there is
-**nothing to set on a phone but the host**:
+**nothing to set on a recorder but the host**:
 
 - **Derived:** a phone makes a stable id from its model + a random suffix
   (`pixel-9-3f7a`), persisted, so two same-model phones differ (`Prefs.deviceId`).

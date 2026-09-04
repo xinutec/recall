@@ -19,8 +19,9 @@ from recall.llm import (
     LLM_HOST_BIND,
     LLM_HOST_PORT,
 )
+from recall.mic import DEFAULT_SPOOL_SECONDS
 from recall.paths import default_data_root
-from recall.stream_server import DEFAULT_INGEST_PORT
+from recall.wire import DEFAULT_INGEST_PORT, SAMPLE_RATE
 
 _FIX_DELIM = "=>"
 
@@ -280,6 +281,33 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
     ing.add_argument(
         "--port", type=int, default=DEFAULT_INGEST_PORT, help="listen port"
     )
+
+    mic = sub.add_parser(
+        "mic",
+        help="stream this Linux host's ALSA microphone to the ingest port — the "
+        "phones' protocol, for a box that is always on and never roams",
+    )
+    mic.add_argument("--id", required=True, help="source id (filesystem-safe)")
+    mic.add_argument(
+        "--host", required=True, help="the recorder host running `recall ingest`"
+    )
+    mic.add_argument(
+        "--port", type=int, default=DEFAULT_INGEST_PORT, help="ingest port on that host"
+    )
+    mic.add_argument(
+        "--device",
+        default="default",
+        help="ALSA capture device, e.g. hw:1,0 — pin it, or a card renumbering "
+        "silently moves capture to another input",
+    )
+    mic.add_argument(
+        "--input-channels",
+        type=int,
+        default=2,
+        help="channels the DEVICE offers (downmixed to mono on the wire)",
+    )
+    mic.add_argument("--input-rate", type=int, default=SAMPLE_RATE)
+    mic.add_argument("--spool-seconds", type=int, default=DEFAULT_SPOOL_SECONDS)
 
     relay = sub.add_parser(
         "beat-relay",
