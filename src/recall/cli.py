@@ -37,7 +37,12 @@ from recall.asr import (
 from recall.attribution import AttributionReport, context_window
 from recall.beat_relay import serve as serve_beat_relay
 from recall.capture import CaptureConfig, parse_segment_start, segment_glob
-from recall.cleanup import scan_hallucinations, scan_loops
+from recall.cleanup import (
+    scan_empty_text,
+    scan_foreign_script,
+    scan_hallucinations,
+    scan_loops,
+)
 from recall.cli_parser import build_parser
 from recall.conversations import segment_conversations
 from recall.diarize import SpeakerTurn, pyannote_diarize
@@ -468,6 +473,17 @@ def _cmd_worker(args: argparse.Namespace) -> int:
             # Offline speaker ID: enrol voiceprints from labels, embed turns once,
             # re-match guesses against current voiceprints (bounded, token-gated).
             _speaker_id_pass(store, args.out)
+            # Hide the filler this pass just created. Gated on `written` because new
+            # turns are the only way new junk appears, and scheduled HERE because
+            # the lesson of scan-loops and scan-hallucinations is that a cleanup
+            # nobody runs cleans nothing: both have existed for months as hand-only
+            # commands while 214 wordless turns accumulated in the read path.
+            # Cheap in steady state — the wordless check is pure text, and the
+            # foreign-script one decodes audio only for candidates, of which a
+            # swept archive has almost none.
+            if written:
+                scan_empty_text(store)
+                scan_foreign_script(store, silero_speech_regions)
         finally:
             store.close()
         # Only on the way out clean: a pass that raised did not complete, and a
@@ -1691,6 +1707,28 @@ def _cmd_scan_loops(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_scan_foreign_script(args: argparse.Namespace) -> int:
+    """Decodes audio, so it is capture-safe only in the sense the other scans are:
+    it touches just the candidate segments, not every one."""
+    store = Store.open(args.out / "recall.sqlite")
+    try:
+        hidden = scan_foreign_script(store, silero_speech_regions)
+    finally:
+        store.close()
+    print(f"scan-foreign-script: hid {hidden} non-Latin turns over silence")
+    return 0
+
+
+def _cmd_scan_wordless(args: argparse.Namespace) -> int:
+    store = Store.open(args.out / "recall.sqlite")
+    try:
+        hidden = scan_empty_text(store)
+    finally:
+        store.close()
+    print(f"scan-wordless: hid {hidden} turns with no word in them")
+    return 0
+
+
 def _cmd_scan_hallucinations(args: argparse.Namespace) -> int:
     store = Store.open(args.out / "recall.sqlite")
     try:
@@ -2137,6 +2175,8 @@ _COMMANDS = {
     "doctor": _cmd_doctor,
     "scan-hallucinations": _cmd_scan_hallucinations,
     "scan-loops": _cmd_scan_loops,
+    "scan-foreign-script": _cmd_scan_foreign_script,
+    "scan-wordless": _cmd_scan_wordless,
     "llm-host": _cmd_llm_host,
     "api": _cmd_api,
     "export-training": _cmd_export_training,

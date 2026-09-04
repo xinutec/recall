@@ -215,6 +215,23 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "--out", type=Path, default=default_data_root(), help="data root"
     )
 
+    script = sub.add_parser(
+        "scan-foreign-script",
+        help="soft-hide non-Latin-script turns whose audio holds no speech "
+        "(Whisper's filler on an empty room is not only English)",
+    )
+    script.add_argument(
+        "--out", type=Path, default=default_data_root(), help="data root"
+    )
+
+    wordless = sub.add_parser(
+        "scan-wordless",
+        help="soft-hide turns with no word in them at all (text check, instant)",
+    )
+    wordless.add_argument(
+        "--out", type=Path, default=default_data_root(), help="data root"
+    )
+
     rd = sub.add_parser(
         "redrive",
         help="re-transcribe the archive with the current pipeline (supersedes old)",

@@ -103,8 +103,36 @@ speech) can be added later — **designed, not built.** Connect/identity/livenes
 > shift) degrades to arrival-stamping and never to a dropped stream — completeness
 > outranks precision. Audio captured before the fix keeps its arrival names.
 
-**5.2 VAD.** Silero gates transcription to speech spans (Whisper hallucinates
-filler on silence). Raw audio is kept regardless, so a better VAD can re-derive.
+**5.2 VAD, and the filler that survives it.** Silero gates transcription to speech
+spans (Whisper hallucinates filler on silence). Raw audio is kept regardless, so a
+better VAD can re-derive.
+
+The gate is not airtight — a creak or a passing car reads as speech-like, and
+Whisper invents words over it — so `recall.cleanup` sweeps the archive afterwards
+and **soft-hides**, never deletes:
+
+| pass | signal | needs audio |
+|---|---|---|
+| `scan-loops` | degenerate repetition | no |
+| `scan-hallucinations` | repeated filler **and** VAD silence | yes |
+| `scan-foreign-script` | non-Latin script **and** VAD silence | yes (candidates only) |
+| `scan-wordless` | no word in the text at all | no |
+
+Two independent signals are required wherever hiding could cost real speech: a
+visitor really can speak Japanese, so script alone would erase them. `scan-wordless`
+is the one single-signal rule, and only because a turn of `...` says nothing about
+what was spoken however loud the room was.
+
+⚠ **What is deliberately NOT a rule: confidence, length, or the language label.**
+The commonest low-confidence turns here are `Ja.`, `Yeah.` and `Okay.` — quiet real
+agreement, which a memory aid must keep. And of the visible turns labelled es/de/pt,
+most are Dutch and English the model merely mislabelled; only the ones in non-Latin
+*script* are safe to act on. Recount with the queries in the tracking issue rather
+than trusting a number written here.
+
+The sweeps run from the worker pass when it wrote rows, not by hand. They were
+hand-only commands for months, which is exactly how the wordless turns reached the
+read path in the first place.
 
 **5.3 ASR.** mlx-whisper, `large-v3-turbo` (`asr.DEFAULT_MODEL`), on every pass.
 Word timestamps in the refine pass align words to diarized speakers. Non-turbo

@@ -9,7 +9,14 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from recall.cleanup import HALLUCINATION_REASON, scan_hallucinations
+from recall.cleanup import (
+    EMPTY_TEXT_REASON,
+    FOREIGN_SCRIPT_REASON,
+    HALLUCINATION_REASON,
+    scan_empty_text,
+    scan_foreign_script,
+    scan_hallucinations,
+)
 from recall.ids import TranscriptId
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
@@ -129,3 +136,130 @@ def test_scan_is_idempotent(tmp_path: Path) -> None:
     second = scan_hallucinations(store, all_silence, min_filler_count=1)
     assert first.turns_hidden == 2  # both machine turns are filler-in-silence
     assert second.turns_hidden == 0  # already hidden
+
+
+def _store_with_junk(tmp_path: Path) -> tuple[Store, dict[str, TranscriptId]]:
+    """A segment carrying the two junk shapes plus the real speech they resemble."""
+    audio_file = tmp_path / "usb-20260613T130000.opus"
+    audio_file.write_bytes(b"")
+    store = Store.memory()
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+    audio_id = store.add_audio_segment(
+        Segment(
+            source_id="usb",
+            sequence=0,
+            start=BASE,
+            end=BASE + timedelta(seconds=60),
+            path=str(audio_file),
+            sample_rate=48000,
+            channels=1,
+        )
+    )
+
+    def turn(name: str, text: str, at: int, model: str = "v1") -> None:
+        ids[name] = store.add_transcript_segment(
+            audio_segment_id=audio_id,
+            start=BASE + timedelta(seconds=at),
+            end=BASE + timedelta(seconds=at + 2),
+            text=text,
+            asr_model=model,
+        )
+
+    ids: dict[str, TranscriptId] = {}
+    # Non-Latin script over SILENCE — the shape Whisper emits into an empty room.
+    turn("japanese_silent", "おやすみなさい", 10)
+    turn("cyrillic_silent", "лавлав", 14)
+    # Non-Latin script over REAL SPEECH — a guest, or a mis-transcription of one.
+    # Hiding this would erase the fact that somebody spoke.
+    turn("japanese_speech", "おやすみなさい", 30)
+    # Punctuation with no word in it, over speech: still nothing to lose.
+    turn("punctuation", "...", 32)
+    turn("asterisks", "***", 34)
+    # The quiet real speech a confidence rule would have eaten. Latin script.
+    turn("yeah", "Yeah.", 36)
+    turn("dutch", "Ja.", 38)
+    # A human turn is never touched, whatever it says.
+    turn("human_japanese", "おやすみなさい", 12, model="human")
+    return store, ids
+
+
+def _speech_after_29s(_audio: Path) -> list[SpeechRegion]:
+    return [SpeechRegion(29.0, 45.0)]
+
+
+class TestForeignScriptScan:
+    """Non-Latin script in a Dutch/English household is a hallucination — but only
+    the module's two-signal rule makes that safe to act on, because a visitor really
+    can speak another language."""
+
+    def test_hides_non_latin_script_only_where_there_is_no_speech(
+        self, tmp_path: Path
+    ) -> None:
+        store, ids = _store_with_junk(tmp_path)
+        hidden = scan_foreign_script(store, _speech_after_29s)
+        assert hidden == 2  # the two silent ones, not the one over speech
+
+        for key in ("japanese_silent", "cyrillic_silent"):
+            turn = store.get_transcript(ids[key])
+            assert turn is not None
+            assert turn.hidden_reason == FOREIGN_SCRIPT_REASON
+
+    def test_keeps_non_latin_script_over_real_speech(self, tmp_path: Path) -> None:
+        """A guest speaking Japanese is content, not noise."""
+        store, ids = _store_with_junk(tmp_path)
+        scan_foreign_script(store, _speech_after_29s)
+        turn = store.get_transcript(ids["japanese_speech"])
+        assert turn is not None and turn.hidden_reason is None
+
+    def test_never_touches_latin_script_however_quiet(self, tmp_path: Path) -> None:
+        """`Yeah.` and `Ja.` are the commonest low-confidence turns in the archive
+        and they are real. Script is the signal precisely so these survive."""
+        store, ids = _store_with_junk(tmp_path)
+
+        def all_silence(_audio: Path) -> list[SpeechRegion]:
+            return []
+
+        scan_foreign_script(store, all_silence)
+        for key in ("yeah", "dutch"):
+            turn = store.get_transcript(ids[key])
+            assert turn is not None and turn.hidden_reason is None
+
+    def test_never_touches_human_turns(self, tmp_path: Path) -> None:
+        store, ids = _store_with_junk(tmp_path)
+
+        def all_silence(_audio: Path) -> list[SpeechRegion]:
+            return []
+
+        scan_foreign_script(store, all_silence)
+        turn = store.get_transcript(ids["human_japanese"])
+        assert turn is not None and turn.hidden_reason is None
+
+
+class TestEmptyTextScan:
+    """Punctuation-only turns need no second signal: there is no content to lose,
+    whether or not somebody was speaking at the time."""
+
+    def test_hides_turns_with_no_word_in_them(self, tmp_path: Path) -> None:
+        store, ids = _store_with_junk(tmp_path)
+        hidden = scan_empty_text(store)
+        assert hidden == 2
+        for key in ("punctuation", "asterisks"):
+            turn = store.get_transcript(ids[key])
+            assert turn is not None and turn.hidden_reason == EMPTY_TEXT_REASON
+
+    def test_keeps_anything_containing_a_word(self, tmp_path: Path) -> None:
+        store, ids = _store_with_junk(tmp_path)
+        scan_empty_text(store)
+        for key in ("yeah", "dutch", "japanese_speech"):
+            turn = store.get_transcript(ids[key])
+            assert turn is not None and turn.hidden_reason is None
+
+    def test_needs_no_audio_so_it_cannot_compete_with_capture(
+        self, tmp_path: Path
+    ) -> None:
+        """Pure text, like scan_loops: instant and capture-safe."""
+        store, _ = _store_with_junk(tmp_path)
+        (tmp_path / "usb-20260613T130000.opus").unlink()
+        assert scan_empty_text(store) == 2
