@@ -63,6 +63,11 @@ onward. It beats to the control plane first and falls back to the recorder host'
 `beat-relay` on the LAN, so a VPN route that starts working again stops being
 reported as the back road on its own.
 
+⚠ **Do not read reachability off a ping.** From geb the control plane answers a real
+POST in 0.22 s while ICMP to the same address loses 100% of packets, and a bare
+`/dev/tcp` open read as closed. Two cheap probes agreed with each other and were both
+wrong; the beat lands direct (`viaLan` absent), which is what settled it.
+
 ⚠ **The spool is a backpressure cushion, not a store.** A Linux box has RAM to bank
 hours, but the server rebases a connection's segment names by ONE offset measured at
 its first byte (`stream_server.connection_offset`), so a replayed backlog would be
