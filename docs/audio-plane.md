@@ -57,14 +57,21 @@ tier.
 
 1. **Ingest server** — port of `stream_server.py`, same wire protocol
    (`src/recall/wire.py` is the shared-facts reference), same archive layout,
-   same pause behaviour, same `capture_events` evidence. **Built** (the
-   `audiod` binary serves this today; deployment still runs the Python
-   server until the shadow comparison clears).
+   same pause behaviour, same `capture_events` evidence. **Deployed
+   2026-09-04**: audiod is the live `recall-ingest` agent; the Python server
+   stays in-tree as the rollback. The tier-1 aligner (`align.rs`,
+   `envelope.rs`, the `align-probe` bin) is also **built and measured**: on
+   the pre-epoch-fix June archive every 60 s block anchors at peak r
+   0.66–0.94 with sub-second, smoothly drifting offsets.
 2. **USB capture** — CoreAudio in-process replaces sox|ffmpeg. Last, because
    it is the sacred path (requirement #1) and TCC re-prompts on binary change.
 3. **The fused `room` source** — per ~20 ms STFT frame, per band, weight each
    aligned source by local SNR; write ordinary Opus segments under `room/`.
    The worker then transcribes `room` first and per-source becomes backfill.
+   The freed GPU budget (one transcription, not five) also makes non-turbo
+   `large-v3` — the open better-on-Dutch lever in [pipeline.md §2](pipeline.md)
+   — affordable on the room stream; the A/B harness to decide that already
+   exists.
    Gated by a WER bake-off against best-single-mic on already-recorded audio
    (`recall.abcompare` + the human corrections corpus): the denoising lesson —
    afftdn and Demucs both measured *worse* than raw — says no "better" signal
@@ -74,7 +81,10 @@ tier.
    seat where voiceprints confuse, feeding diarization as a third view, and
    the mask source for person-filtered output (GSS-style).
 
-ffmpeg remains the segmenter child in (1) so shadow output stays directly
+The WER bake-off in (3) does not wait for (2): it runs offline over the
+already-recorded archive (magnitude-tier alignment works on decoded Opus), so
+the fusion question is answered before the sacred capture path is touched.
+ffmpeg remains the segmenter child in (1) so rollback output stays directly
 comparable with the Python server's; native Opus encoding arrives with (3),
 which needs the PCM in process anyway.
 
