@@ -32,6 +32,7 @@ bigger buffer here.
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import socket
@@ -99,6 +100,12 @@ class PcmSpool:
             if excess > 0:
                 del self._buf[:excess]
                 self._dropped += excess
+
+    @property
+    def pending(self) -> int:
+        """Bytes spooled but not yet taken."""
+        with self._lock:
+            return len(self._buf)
 
     def drain(self) -> bytes:
         """Take everything spooled so far, oldest first. Empty when there is none."""
@@ -204,20 +211,26 @@ def _spool_capacity(config: MicConfig) -> int:
     return SAMPLE_RATE * BYTES_PER_SAMPLE * config.spool_seconds
 
 
-def _pump_capture(stdout: object, spool: PcmSpool, stop: threading.Event) -> None:
+def _pump_capture(
+    stdout: object, spool: PcmSpool, stop: threading.Event, ended: threading.Event
+) -> None:
     """Move captured bytes into the spool until ffmpeg ends or we are told to stop.
 
     Deliberately the shortest loop in the module: everything it does not do is
-    something that cannot delay the microphone.
+    something that cannot delay the microphone. Setting `ended` on EOF is the one
+    exception, and it earns its place — see `_stream`.
     """
-    read = getattr(stdout, "read", None)
-    if read is None:  # pragma: no cover - a closed pipe, not a reachable state
-        return
-    while not stop.is_set():
-        chunk = read(_READ_CHUNK_BYTES)
-        if not chunk:
-            return  # ffmpeg exited; the supervisor above restarts the process
-        spool.offer(chunk)
+    try:
+        read = getattr(stdout, "read", None)
+        if read is None:  # pragma: no cover - a closed pipe, not a reachable state
+            return
+        while not stop.is_set():
+            chunk = read(_READ_CHUNK_BYTES)
+            if not chunk:
+                return  # ffmpeg exited; the supervisor above restarts the process
+            spool.offer(chunk)
+    finally:
+        ended.set()
 
 
 def _connect(host: str, port: int) -> socket.socket | None:
@@ -233,10 +246,25 @@ def _connect(host: str, port: int) -> socket.socket | None:
     return sock
 
 
-def _stream(sock: socket.socket, spool: PcmSpool, stop: threading.Event) -> None:
-    """Send spooled audio until the connection fails or we are told to stop."""
+def _stream(
+    sock: socket.socket,
+    spool: PcmSpool,
+    stop: threading.Event,
+    capture_ended: threading.Event,
+) -> None:
+    """Send spooled audio until capture ends, the connection fails, or we stop.
+
+    `capture_ended` is not redundant with a dead connection. A capture process that
+    dies while the socket stays healthy would otherwise leave this loop sending
+    nothing for ever: the server would keep the connection open, stop refreshing the
+    source's liveness marker, and the mic would read as a quiet room rather than a
+    broken one. Ending here surfaces it as a restart instead.
+    """
     reported_drops = 0
     while not stop.is_set():
+        if capture_ended.is_set() and not spool.pending:
+            _log.error("mic: capture ended while connected — ending the stream")
+            return
         pending = spool.drain()
         if not pending:
             time.sleep(_IDLE_POLL_S)
@@ -274,17 +302,18 @@ def run(config: MicConfig, *, stop: threading.Event | None = None) -> int:
         config.port,
         config.source_id,
     )
+    capture_ended = threading.Event()
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE)
     pump = threading.Thread(
         target=_pump_capture,
-        args=(proc.stdout, spool, stop),
+        args=(proc.stdout, spool, stop, capture_ended),
         daemon=True,
         name="mic-capture",
     )
     pump.start()
     try:
         while not stop.is_set():
-            if proc.poll() is not None:
+            if capture_ended.is_set() or proc.poll() is not None:
                 _log.error(
                     "mic: capture exited with %s — letting the supervisor restart",
                     proc.returncode,
@@ -320,7 +349,7 @@ def run(config: MicConfig, *, stop: threading.Event | None = None) -> int:
                     )
                     narrator.note_connected()
                     _log.info("mic: streaming to %s:%d", config.host, config.port)
-                    _stream(sock, spool, stop)
+                    _stream(sock, spool, stop, capture_ended)
                 except OSError as err:
                     _log.info("mic: connection ended (%s)", err)
             stop.wait(_RECONNECT_DELAY_S)
@@ -332,3 +361,65 @@ def run(config: MicConfig, *, stop: threading.Event | None = None) -> int:
         except subprocess.TimeoutExpired:  # pragma: no cover - a wedged ffmpeg
             proc.kill()
     return 0
+
+
+def parse_args(argv: list[str] | None = None) -> MicConfig:
+    """The deployment's own command line.
+
+    Separate from the main `recall` CLI, and deliberately not a subcommand of it:
+    that parser imports the store, the web stack and the ML stack, none of which a
+    box whose only job is a microphone has any reason to install. It would also
+    offer `recall mic` on macOS, where there is no ALSA to open — a command listed
+    exactly where it cannot run.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m recall.mic",
+        description="Stream this Linux host's microphone to a recall ingest server.",
+    )
+    parser.add_argument("--id", required=True, help="source id (filesystem-safe)")
+    parser.add_argument(
+        "--host",
+        required=True,
+        help="host running `recall ingest` (a name, not an address)",
+    )
+    parser.add_argument("--port", type=int, default=DEFAULT_INGEST_PORT)
+    parser.add_argument(
+        "--device",
+        default="default",
+        help="ALSA capture device. Prefer hw:CARD=<id>,DEV=0 over hw:N,0 — card "
+        "numbers follow enumeration order and can move capture to another input",
+    )
+    parser.add_argument(
+        "--input-channels",
+        type=int,
+        default=2,
+        help="channels the DEVICE offers; always downmixed to mono on the wire",
+    )
+    parser.add_argument("--input-rate", type=int, default=SAMPLE_RATE)
+    parser.add_argument("--spool-seconds", type=int, default=DEFAULT_SPOOL_SECONDS)
+    args = parser.parse_args(argv)
+    return MicConfig(
+        source_id=args.id,
+        host=args.host,
+        port=args.port,
+        device=args.device,
+        input_rate=args.input_rate,
+        input_channels=args.input_channels,
+        spool_seconds=args.spool_seconds,
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point. Logs on the same UTC clock as the ingest server it talks to, so
+    the two sides' timelines can be read together."""
+    logging.Formatter.converter = time.gmtime
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)sZ %(name)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    return run(parse_args(argv))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

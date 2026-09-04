@@ -12,7 +12,7 @@ Every networked recorder connects to **one** TCP port, served by a single host a
 ```
 recall ingest                 # the recall-ingest agent: one server on DEFAULT_INGEST_PORT (9999)
 recall record --id usb        # the USB mic: sox -d, local, no port, no handshake
-recall mic --id geb           # a Linux host's own mic: same handshake as the phones
+python -m recall.mic --id geb # a Linux host's own mic: same handshake as the phones
 ```
 
 A phone runs the recall-mic app and opens a plain TCP connection to the host's ingest
@@ -43,7 +43,7 @@ added freely.
 |---|---|
 | **USB mic** (`recall record`) | local, on the recorder host itself: sox → ffmpeg, no socket and no handshake. Our code is never in this path — a real-time device has no buffer to absorb a stall |
 | **Phones** (the mic apps) | TCP to the ingest port, handshake, raw PCM. They roam, sleep, and need a person to restart them, which is what the apps' bulk is for |
-| **Linux hosts** (`recall mic`) | the phones' protocol from a box that is always on: ffmpeg opens ALSA and downmixes, `recall.mic` moves bytes to the socket, systemd owns the restart |
+| **Linux hosts** (`python -m recall.mic`) | the phones' protocol from a box that is always on: ffmpeg opens ALSA and downmixes, `recall.mic` moves bytes to the socket, systemd owns the restart |
 
 A Linux mic is the cheapest recorder to add, because everything that makes a phone
 hard is absent: no roaming, no battery, no app lifecycle, no hourly heartbeat to
@@ -61,7 +61,10 @@ across a disconnect needs a protocol that times each segment, not a bigger buffe
 
 `recall.wire` holds the handful of facts both ends must agree on (port, rate, sample
 width) and imports nothing, so a client can run on a bare `python3` without the
-store, pydantic or the ML stack coming with it.
+store, pydantic or the ML stack coming with it. That is also why the client is a
+module with its own entry point rather than a `recall` subcommand: the main CLI
+imports all three, and would advertise the command on macOS, which has no ALSA to
+open.
 
 ## The audio path: Python pumps, the kernel buffers
 

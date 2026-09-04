@@ -3,9 +3,20 @@
 from __future__ import annotations
 
 import json
+import threading
 
-from recall.mic import ConnectionNarrator, PcmSpool, capture_argv, handshake_line
+import pytest
+
+from recall.mic import (
+    ConnectionNarrator,
+    PcmSpool,
+    _stream,
+    capture_argv,
+    handshake_line,
+    parse_args,
+)
 from recall.stream_server import parse_handshake
+from recall.wire import DEFAULT_INGEST_PORT
 
 
 class TestPcmSpool:
@@ -115,3 +126,69 @@ class TestUnreachableLogging:
         narrator.should_report_failure()
         narrator.note_connected()
         assert narrator.should_report_failure() is True
+
+
+class TestCaptureDeathIsNoticed:
+    """A capture process that dies while the socket is still healthy is the worst
+    failure this client has: it goes on holding a connection and sending nothing, the
+    server's liveness marker stops being refreshed, and the source reads exactly like
+    a quiet room. The stream loop has to end when capture ends, not only when the
+    connection does."""
+
+    def test_the_send_loop_ends_when_capture_ends(self) -> None:
+        class FakeSocket:
+            def __init__(self) -> None:
+                self.sent = bytearray()
+
+            def sendall(self, data: bytes) -> None:
+                self.sent += data
+
+        spool = PcmSpool(capacity_bytes=1024)
+        spool.offer(b"audio")
+        stop = threading.Event()
+        capture_ended = threading.Event()
+        capture_ended.set()  # ffmpeg is already gone
+
+        sock = FakeSocket()
+        _stream(sock, spool, stop, capture_ended)  # type: ignore[arg-type]
+
+        # It returns rather than blocking forever, and does not lose what was spooled.
+        assert bytes(sock.sent) == b"audio"
+
+    def test_it_keeps_streaming_while_capture_lives(self) -> None:
+        class StopAfterFirstSend:
+            def __init__(self, stop: threading.Event) -> None:
+                self.stop = stop
+                self.sent = bytearray()
+
+            def sendall(self, data: bytes) -> None:
+                self.sent += data
+                self.stop.set()
+
+        spool = PcmSpool(capacity_bytes=1024)
+        spool.offer(b"audio")
+        stop = threading.Event()
+        sock = StopAfterFirstSend(stop)
+        _stream(sock, spool, stop, threading.Event())  # type: ignore[arg-type]
+        assert bytes(sock.sent) == b"audio"
+
+
+class TestStandaloneEntryPoint:
+    """`python -m recall.mic` is the ONLY way this runs in production: the full
+    `recall` CLI imports numpy, FastAPI and the store, none of which exist on a box
+    whose whole job is to hold a microphone."""
+
+    def test_parses_a_deployment_invocation(self) -> None:
+        config = parse_args(
+            ["--id", "geb", "--host", "mac-mini", "--device", "hw:CARD=N32,DEV=0"]
+        )
+        assert config.source_id == "geb"
+        assert config.host == "mac-mini"
+        assert config.device == "hw:CARD=N32,DEV=0"
+        assert config.port == DEFAULT_INGEST_PORT
+
+    def test_identity_and_host_are_required(self) -> None:
+        with pytest.raises(SystemExit):
+            parse_args(["--host", "mac-mini"])
+        with pytest.raises(SystemExit):
+            parse_args(["--id", "geb"])
