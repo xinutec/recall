@@ -14,6 +14,9 @@ use std::time::Duration;
 
 pub const KIND_INGEST_CONNECT: &str = "ingest_connect";
 pub const KIND_INGEST_DISCONNECT: &str = "ingest_disconnect";
+pub const KIND_PAUSE: &str = "pause";
+pub const KIND_RESUME: &str = "resume";
+pub const KIND_PRODUCER_CYCLED: &str = "producer_cycled";
 
 fn open(root: &Path) -> rusqlite::Result<rusqlite::Connection> {
     // READ_WRITE without CREATE: the Python migrations own the file. A missing
@@ -31,19 +34,25 @@ fn open(root: &Path) -> rusqlite::Result<rusqlite::Connection> {
 /// (equal to the id): a name the user chose in the UI is theirs, and
 /// re-registering a phone must never rename it back.
 pub fn register_source(root: &Path, source_id: &str) {
+    register_source_kind(root, source_id, "tcp_pcm");
+}
+
+/// The same registration under an explicit kind — the capture agent registers
+/// the local mic as `coreaudio`, correcting any kind a worker guessed.
+pub fn register_source_kind(root: &Path, source_id: &str, kind: &str) {
     let result = open(root).and_then(|conn| {
         conn.execute(
-            "INSERT INTO sources (id, name, kind, port) VALUES (?1, ?2, 'tcp_pcm', NULL)
+            "INSERT INTO sources (id, name, kind, port) VALUES (?1, ?2, ?3, NULL)
              ON CONFLICT(id) DO UPDATE SET
                  kind = excluded.kind,
                  port = excluded.port,
                  name = CASE WHEN sources.name = sources.id
                              THEN excluded.name ELSE sources.name END",
-            (source_id, source_id),
+            (source_id, source_id, kind),
         )
     });
     if let Err(err) = result {
-        tracing::error!(source = source_id, error = %err, "ingest: could not register source");
+        tracing::error!(source = source_id, error = %err, "could not register source");
     }
 }
 

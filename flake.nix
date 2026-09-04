@@ -159,6 +159,10 @@
           src = ./audiod;
           cargoLock.lockFile = ./audiod/Cargo.lock;
           doCheck = true;
+          # The watchdog tests decode real files through ffmpeg — the same
+          # binary the daemon spawns at runtime, so the sandboxed suite
+          # exercises the real verdict path, not a stub of it.
+          nativeCheckInputs = [ pkgs.ffmpeg ];
         };
 
         # Everything home-manager will actually run, as ONE buildable output: a farm

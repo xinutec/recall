@@ -56,6 +56,19 @@ pub fn window_pcm(
     buf
 }
 
+/// Decode to s16le mono at the file's native rate — the dead-segment
+/// watchdog's input, where forcing a rate would resample and dither the exact
+/// zeros it is looking for.
+pub fn decode_native_s16(path: &Path) -> Option<Vec<u8>> {
+    let out = std::process::Command::new("ffmpeg")
+        .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-i"])
+        .arg(path)
+        .args(["-ac", "1", "-f", "s16le", "-"])
+        .output()
+        .ok()?;
+    out.status.success().then_some(out.stdout)
+}
+
 /// s16le bytes to f32 samples in [-1, 1].
 pub fn to_f32(pcm: &[u8]) -> Vec<f32> {
     pcm.chunks_exact(2)

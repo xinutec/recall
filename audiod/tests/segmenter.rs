@@ -6,7 +6,7 @@ fn default_argv_matches_the_python_segmenter() {
     // The golden shape build_segment_argv produces in capture.py — byte for
     // byte, because the shadow comparison depends on identical encodes.
     let config = CaptureConfig::default();
-    let argv = build_segment_argv(&config, "/data/p/p-%Y%m%dT%H%M%S.opus");
+    let argv = build_segment_argv(&config, "/data/p/p-%Y%m%dT%H%M%S.opus", false);
     assert_eq!(
         argv,
         [

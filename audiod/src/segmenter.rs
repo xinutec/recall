@@ -82,10 +82,36 @@ pub fn segment_output_pattern(root: &Path, source_id: &str, ext: &str) -> String
     )
 }
 
+/// The live-feed tap (`recall.sources` FANOUT_*): the segmenter's SECOND
+/// output, a best-effort UDP copy at live's format. Fire-and-forget — a full
+/// or absent receiver just drops packets, so the tap can never backpressure
+/// the archive.
+const FANOUT_URL: &str = "udp://127.0.0.1:9876?pkt_size=1316";
+const FANOUT_SAMPLE_RATE: u32 = 16_000;
+
+fn fanout_output_argv() -> Vec<String> {
+    [
+        "-ar",
+        &FANOUT_SAMPLE_RATE.to_string(),
+        "-ac",
+        "1",
+        "-f",
+        "s16le",
+        FANOUT_URL,
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
 /// Argv that reads raw s16le PCM from stdin and writes segment files. The
 /// caller supplies the PCM stream on the child's stdin; the segmenter never
-/// touches a device.
-pub fn build_segment_argv(config: &CaptureConfig, output_pattern: &str) -> Vec<String> {
+/// touches a device. `fanout` appends the best-effort UDP live tap as a second
+/// output, so recall-live never opens the device.
+pub fn build_segment_argv(
+    config: &CaptureConfig,
+    output_pattern: &str,
+    fanout: bool,
+) -> Vec<String> {
     let mut argv: Vec<String> = [
         "-hide_banner",
         "-loglevel",
@@ -125,5 +151,8 @@ pub fn build_segment_argv(config: &CaptureConfig, output_pattern: &str) -> Vec<S
         .into_iter()
         .map(String::from),
     );
+    if fanout {
+        argv.extend(fanout_output_argv());
+    }
     argv
 }

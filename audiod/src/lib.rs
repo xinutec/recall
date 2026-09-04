@@ -8,6 +8,7 @@
 //! which language wrote a segment.
 
 pub mod align;
+pub mod capture_run;
 pub mod decode;
 pub mod envelope;
 pub mod fuse;

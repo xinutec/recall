@@ -258,7 +258,7 @@ fn serve_stream(
     let connected = SystemTime::now();
     let mut meter = StreamMeter::new(handshake.sample_rate, handshake.channels);
     let mut child = match std::process::Command::new(&seg.program)
-        .args(build_segment_argv(&seg, &pattern))
+        .args(build_segment_argv(&seg, &pattern, false))
         .env("TZ", "UTC") // segment names embed UTC wall-clock
         .stdin(std::process::Stdio::piped())
         .spawn()

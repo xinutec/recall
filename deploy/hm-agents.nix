@@ -191,7 +191,7 @@ in
     label = "org.xinutec.recall-ingest";
     name = "ingest";
     args = [ ];
-    program = audiodWrapper { name = "ingest"; args = [ "--root" out ]; };
+    program = audiodWrapper { name = "ingest"; args = [ "ingest" "--root" out ]; };
     extra = { ProcessType = "Interactive"; };
   };
 

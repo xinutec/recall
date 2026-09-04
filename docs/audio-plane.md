@@ -63,8 +63,12 @@ tier.
    `envelope.rs`, the `align-probe` bin) is also **built and measured**: on
    the pre-epoch-fix June archive every 60 s block anchors at peak r
    0.66–0.94 with sub-second, smoothly drifting offsets.
-2. **USB capture** — CoreAudio in-process replaces sox|ffmpeg. Last, because
-   it is the sacred path (requirement #1) and TCC re-prompts on binary change.
+2. **USB capture** — `audiod capture`: sox producer, metered pump,
+   dead-segment watchdog, pause parking — the port of `recall record`
+   (`runner.py` + `cli._cmd_record`). **Code built**; the deployment flip is
+   deliberately last, because it is the sacred path (requirement #1) and TCC
+   re-prompts on binary change. Replacing sox itself with an in-process
+   CoreAudio read is a later, separate step behind the same watchdog.
 3. **The fused `room` source** — per ~20 ms STFT frame, per band, weight each
    aligned source by local SNR; write ordinary Opus segments under `room/`.
    The worker then transcribes `room` first and per-source becomes backfill.
