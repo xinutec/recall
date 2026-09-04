@@ -33,6 +33,18 @@ LOOP_REASON = "repetition loop"
 FOREIGN_SCRIPT_REASON = "non-Latin script, no speech (VAD)"
 EMPTY_TEXT_REASON = "no words"
 
+# Every reason this module hides for, in one tuple so that adding a pass without
+# telling `repair` is a test failure rather than a silent resurrection. Each is
+# EVIDENCE about what the turn was — not provenance — so none may ever be restored:
+# `recall repair --apply` brings back the newest provenance generation, and a hide
+# missing from here reads to it as exactly that.
+CLEANUP_HIDE_REASONS = (
+    HALLUCINATION_REASON,
+    LOOP_REASON,
+    FOREIGN_SCRIPT_REASON,
+    EMPTY_TEXT_REASON,
+)
+
 # Above this fraction of non-Latin letters a turn is treated as foreign script.
 # A half is deliberately blunt: real household text is ~0.0 (é and ü are Latin) and
 # a hallucinated one is ~1.0, so nothing genuine sits near the line.
@@ -163,6 +175,12 @@ def scan_foreign_script(
     return hidden
 
 
+def is_wordless(text: str) -> bool:
+    """True if `text` contains no word at all — the `scan_empty_text` predicate,
+    exposed so `repair` can decline to restore what this would hide on sight."""
+    return text.strip(_WORDLESS).strip() == ""
+
+
 def scan_empty_text(store: Store) -> int:
     """Soft-hide machine turns containing no word at all — "...", "***", "!".
 
@@ -173,7 +191,7 @@ def scan_empty_text(store: Store) -> int:
     """
     hidden = 0
     for turn in store.visible_machine_turns():
-        if turn.text.strip(_WORDLESS).strip() == "":
+        if is_wordless(turn.text):
             store.hide(turn.id, EMPTY_TEXT_REASON)
             hidden += 1
     return hidden

@@ -4,9 +4,22 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from recall.cleanup import HALLUCINATION_REASON, LOOP_REASON
+from recall.cleanup import (
+    CLEANUP_HIDE_REASONS,
+    EMPTY_TEXT_REASON,
+    FOREIGN_SCRIPT_REASON,
+    HALLUCINATION_REASON,
+    LOOP_REASON,
+)
 from recall.ids import AudioSegmentId, TranscriptId
-from recall.repair import find_blanked, last_generation, restore, retract_into_silence
+from recall.repair import (
+    EVIDENCE_REASONS,
+    find_blanked,
+    last_generation,
+    restorable_texts,
+    restore,
+    retract_into_silence,
+)
 from recall.sources import AudioSource, SourceKind
 from recall.store import HUMAN_MODEL, Store
 from recall.timeline import Segment
@@ -180,3 +193,61 @@ def test_a_hallucination_standing_on_silence_is_retracted() -> None:
     assert human not in [
         int(i) for i, _t in retracted
     ]  # ...and the human one untouched
+
+
+class TestEvidenceReasonsCoverEveryCleanupHide:
+    """Every reason `cleanup` hides for is evidence about what the turn WAS, so none
+    of them may ever be restored.
+
+    This is the pairing that goes wrong quietly: a new hide reason added to cleanup
+    and not registered here reads as a provenance generation, so `recall repair`
+    restores it and the junk comes back — and the doctor counts the segment as
+    blanked in the meantime. Both happened when scan-wordless and
+    scan-foreign-script shipped.
+    """
+
+    def test_every_cleanup_reason_is_an_evidence_reason(self) -> None:
+        assert set(CLEANUP_HIDE_REASONS) <= set(EVIDENCE_REASONS)
+
+    def test_a_wordless_hide_is_never_restored(self) -> None:
+        turns = [
+            (TranscriptId(1), "superseded by sync push", "real speech"),
+            (TranscriptId(2), EMPTY_TEXT_REASON, "..."),
+        ]
+        assert TranscriptId(2) not in last_generation(turns)
+
+    def test_a_foreign_script_hide_is_never_restored(self) -> None:
+        turns = [
+            (TranscriptId(1), "superseded by sync push", "real speech"),
+            (TranscriptId(2), FOREIGN_SCRIPT_REASON, "おやすみなさい"),
+        ]
+        assert TranscriptId(2) not in last_generation(turns)
+
+    def test_a_segment_holding_only_cleanup_hides_is_not_blanked(self) -> None:
+        """Nothing to bring back means it is not a blanked segment — the transcript
+        was not lost, it was junk."""
+        turns = [
+            (TranscriptId(1), EMPTY_TEXT_REASON, "..."),
+            (TranscriptId(2), FOREIGN_SCRIPT_REASON, "лав"),
+        ]
+        assert last_generation(turns) == ()
+
+
+class TestRepairDoesNotResurrectWhatCleanupWouldReHide:
+    """Repair and cleanup must not fight.
+
+    A segment can hold junk in EVERY generation: the diarize pass hid `...` and
+    `***` and wrote `... ***`, which scan-wordless then hid. Restoring the newest
+    provenance generation there brings back `...` — junk the next cleanup pass
+    removes again, having briefly made an empty minute look transcribed. Whatever
+    cleanup would hide on sight is not a transcript worth bringing back.
+    """
+
+    def test_a_generation_of_wordless_turns_is_not_worth_restoring(self) -> None:
+        assert restorable_texts(["...", "***"]) == []
+
+    def test_a_generation_with_real_speech_is_restored(self) -> None:
+        assert restorable_texts(["...", "hallo daar"]) == ["hallo daar"]
+
+    def test_a_repetition_loop_is_not_worth_restoring(self) -> None:
+        assert restorable_texts(["ja ja ja ja ja ja ja ja ja ja"]) == []

@@ -24,13 +24,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from recall.cleanup import HALLUCINATION_REASON, LOOP_REASON
+from recall.cleanup import (
+    CLEANUP_HIDE_REASONS,
+    HALLUCINATION_REASON,
+    is_wordless,
+)
 from recall.ids import AudioSegmentId, TranscriptId
+from recall.quality import is_repetition_loop
 from recall.store import Store
 
 # A turn hidden for one of these was hidden because of what it *was*, not because
 # something replaced it. Restoring it would undo a judgement, not a bug.
-EVIDENCE_REASONS = (HALLUCINATION_REASON, LOOP_REASON)
+# Derived, never restated: `cleanup` owns what it hides for, and every one of those
+# is evidence about the turn rather than provenance. Restating the list here is how
+# scan-wordless and scan-foreign-script briefly became restorable.
+EVIDENCE_REASONS = CLEANUP_HIDE_REASONS
+
+
+def restorable_texts(texts: list[str]) -> list[str]:
+    """The subset worth bringing back: whatever cleanup would not hide on sight.
+
+    Pure text only — the foreign-script rule needs audio, and `find_blanked` has
+    already excluded segments the detector heard nothing in, so script over real
+    speech is protected there rather than here.
+    """
+    return [t for t in texts if not is_wordless(t) and not is_repetition_loop(t)]
 
 
 @dataclass(frozen=True)
@@ -84,6 +102,8 @@ def find_blanked(store: Store) -> list[Blanked]:
         if not restore:
             continue
         texts = [t[2] for t in turns if t[0] in restore]
+        if not restorable_texts(texts):
+            continue  # every generation here is junk; restoring it re-makes work
         blanked.append(
             Blanked(
                 audio_id=audio_id,
