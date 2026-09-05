@@ -291,17 +291,22 @@ pub async fn list_segments(
     }
 }
 
-/// Liveness for recorders that stream to nothing: each source's newest delivered
-/// segment by CAPTURE time. The `.alive` markers the panel was built on are
-/// refreshed by a STREAM, so a store-and-forward recorder never touches one and
-/// reads dead while recording perfectly (#1428).
+/// Liveness for recorders that stream to nothing: each source's newest capture
+/// time that could be someone TALKING. The `.alive` markers the panel was built
+/// on are refreshed by a STREAM, so a store-and-forward recorder never touches
+/// one and reads dead while recording perfectly (#1428).
+///
+/// Speech-gated, matching the promise the marker already made — "a dot the audio
+/// can back", so a room of digital silence reads idle on purpose. A segment not
+/// yet measured still counts: the scanner runs behind live audio, and absence of
+/// a measurement is not evidence of silence.
 pub async fn liveness(State(config): State<Arc<Config>>, headers: HeaderMap) -> Response {
     if let Err(refused) = read_auth(&config, &headers) {
         return refused.into_response();
     }
     let handle = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<(String, String)>> {
         let conn = store::open(&config.root)?;
-        store::liveness(&conn)
+        crate::speech::liveness_by_source(&conn)
     });
     match handle.await {
         Ok(Ok(rows)) => {

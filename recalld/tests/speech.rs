@@ -143,3 +143,69 @@ fn real_speech_is_measured_and_becomes_the_source_latest_speech() {
         Some("2026-09-05T12:00:00Z"),
     );
 }
+
+#[test]
+fn an_unmeasured_segment_still_counts_as_possible_speech() {
+    // The backlog scans BEHIND live audio. If "not looked at yet" were treated
+    // as silence, shipping this would black out every recorder at once.
+    let dir = tempfile::tempdir().expect("tempdir");
+    stored(dir.path(), "usb", "usb-20260905T120000.wav", &silent_wav(2));
+    // deliberately NOT scanned
+    let conn = store::open(dir.path()).expect("db");
+    assert_eq!(
+        speech::latest_speech_utc(&conn, "usb")
+            .expect("query")
+            .as_deref(),
+        Some("2026-09-05T12:00:00Z"),
+        "an unmeasured segment must not read as silence"
+    );
+}
+
+#[test]
+fn an_undecodable_segment_counts_too_because_it_was_never_heard() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    stored(dir.path(), "usb", "usb-20260905T120000.wav", b"not audio");
+    speech::scan_once(dir.path(), 10).expect("scan");
+    let conn = store::open(dir.path()).expect("db");
+    assert!(
+        speech::latest_speech_utc(&conn, "usb")
+            .expect("query")
+            .is_some()
+    );
+}
+
+#[test]
+fn the_scan_takes_the_newest_segments_first() {
+    // Liveness and the calibrated reference both read RECENT rows, so the
+    // archive must backfill behind live audio, never in front of it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let quiet = silent_wav(1);
+    for (name, stamp) in [
+        ("usb-20260901T120000.wav", "2026-09-01T12:00:00Z"),
+        ("usb-20260905T120000.wav", "2026-09-05T12:00:00Z"),
+    ] {
+        let d = dir.path().join("ingest").join("usb");
+        std::fs::create_dir_all(&d).expect("mkdir");
+        std::fs::write(d.join(name), &quiet).expect("blob");
+        let conn = store::open(dir.path()).expect("db");
+        store::insert(
+            &conn,
+            &store::Row {
+                source: "usb".to_owned(),
+                filename: name.to_owned(),
+                start_utc: stamp.to_owned(),
+                bytes: quiet.len() as u64,
+                sha256: "x".to_owned(),
+                received_utc: stamp.to_owned(),
+                sent_utc: None,
+            },
+        )
+        .expect("row");
+    }
+    assert_eq!(speech::scan_once(dir.path(), 1).expect("scan"), 1);
+    let conn = store::open(dir.path()).expect("db");
+    let first: String = conn
+        .query_row("SELECT filename FROM segment_speech", [], |r| r.get(0))
+        .expect("row");
+    assert_eq!(first, "usb-20260905T120000.wav", "newest measured first");
+}

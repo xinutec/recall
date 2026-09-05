@@ -10,8 +10,16 @@
 //! `levels::REAL_SPEECH_MARGIN_DB`, which is a loudness proxy standing in for
 //! exactly this measurement.
 //!
-//! Same discipline as the level scanner it mirrors: bounded batches, oldest
-//! first, one row per blob ever — a segment's speech is a fact about its bytes.
+//! Same discipline as the level scanner it mirrors — bounded batches, one row
+//! per blob ever, a segment's speech being a fact about its bytes — with one
+//! deliberate difference: it scans NEWEST FIRST.
+//!
+//! Both consumers that matter read RECENT rows. Liveness asks "is anyone
+//! talking now"; the calibrated reference asks for a source's recent speech
+//! levels. Oldest-first would have made a 15,800-segment archive block both of
+//! them for hours behind audio from June. Newest-first makes the scanner useful
+//! within a minute and lets the archive backfill behind it — the same
+//! newest-first priority the work queue takes (stage E1).
 
 use crate::store;
 use crate::vad::Detector;
@@ -37,7 +45,7 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
-/// Measure up to `batch` unmeasured segments, oldest first; returns rows written.
+/// Measure up to `batch` unmeasured segments, NEWEST first; returns rows written.
 ///
 /// The detector is loaded ONCE for the whole batch. Python paid ~2 s of model
 /// construction per clip to run 0.5 s of detection — five hours instead of one
@@ -55,7 +63,7 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
             "SELECT s.filename, s.source FROM segments s
              LEFT JOIN segment_speech p ON p.filename = s.filename
              WHERE p.filename IS NULL
-             ORDER BY s.start_utc, s.filename LIMIT ?1",
+             ORDER BY s.start_utc DESC, s.filename DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map([batch as u32], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect::<Result<_, _>>()?
@@ -93,18 +101,48 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     Ok(written)
 }
 
-/// This source's newest segment that actually carried speech, as its capture
-/// stamp — the honest form of "active" the architecture asks for ("a recent
-/// segment WITH SPEECH"), as opposed to a recent segment of silence.
+/// This source's newest segment that could be someone TALKING, as its capture
+/// stamp — the honest form of "active" the architecture asks for.
+///
+/// ⚠ Only a segment MEASURED AS SILENT disqualifies. An unmeasured one still
+/// counts, because "not looked at yet" is not evidence of silence — and with a
+/// backlog scanning behind live audio, treating unmeasured as silent would
+/// black out every recorder the moment this shipped. UNKNOWN (undecodable)
+/// counts for the same reason.
 ///
 /// # Errors
 /// On database failure.
 pub fn latest_speech_utc(conn: &Connection, source: &str) -> rusqlite::Result<Option<String>> {
+    // ⚠ The table may not exist: the scanner creates it, and the scanner does
+    // not run where the ONNX runtime is unavailable. Without this, liveness
+    // would 500 on exactly the deployments least able to afford it.
+    ensure_schema(conn)?;
     let mut stmt = conn.prepare(
         "SELECT MAX(s.start_utc) FROM segments s
-         JOIN segment_speech p ON p.filename = s.filename
-         WHERE s.source = ?1 AND p.speech_seconds > 0.0",
+         LEFT JOIN segment_speech p ON p.filename = s.filename
+         WHERE s.source = ?1
+           AND (p.filename IS NULL OR p.speech_seconds != 0.0)",
     )?;
     let found: Option<String> = stmt.query_row([source], |r| r.get(0))?;
     Ok(found)
+}
+
+/// Every source's newest possibly-speech capture time, for the liveness plane.
+///
+/// Same rule as [`latest_speech_utc`], grouped: only a segment MEASURED AS
+/// SILENT disqualifies, so a device whose backlog is still unmeasured keeps its
+/// dot rather than being blacked out by a measurement that has not run yet.
+///
+/// # Errors
+/// On database failure.
+pub fn liveness_by_source(conn: &Connection) -> rusqlite::Result<Vec<(String, String)>> {
+    ensure_schema(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT s.source, MAX(s.start_utc) FROM segments s
+         LEFT JOIN segment_speech p ON p.filename = s.filename
+         WHERE p.filename IS NULL OR p.speech_seconds != 0.0
+         GROUP BY s.source",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
 }

@@ -309,3 +309,38 @@ async fn liveness_is_behind_the_read_plane_not_the_write_one() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let _ = &h.dir;
 }
+
+#[tokio::test]
+async fn liveness_ignores_a_segment_measured_as_silent() {
+    // "Active" must mean someone is TALKING, matching the promise the stream
+    // marker already made. A segment measured as silence stops counting; one
+    // that has not been measured yet still counts, because the scanner runs
+    // BEHIND live audio and absence of a measurement is not evidence of silence.
+    let h = harness(Some("* write\n"), Some("read"));
+    for name in ["geb-20260905T100000.opus", "geb-20260905T100100.opus"] {
+        let (status, _) = send(&h.app, put("geb", name, b"a", Some("write"))).await;
+        assert_eq!(status, StatusCode::OK, "{name}");
+    }
+    // Unmeasured: the newest still counts.
+    let (_, body) = send(&h.app, get("/ingest/v1/liveness", Some("read"))).await;
+    assert_eq!(body["sources"]["geb"], "2026-09-05T10:01:00Z");
+
+    // Now record the newest as SILENT; liveness must fall back to the older one.
+    let conn = recalld::store::open(h.dir.path()).expect("db");
+    recalld::speech::ensure_schema(&conn).expect("schema");
+    conn.execute(
+        "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc)
+         VALUES ('geb-20260905T100100.opus', 'geb', 0.0, '2026-09-05T10:02:00Z')",
+        [],
+    )
+    .expect("insert");
+    drop(conn);
+
+    let (status, body) = send(&h.app, get("/ingest/v1/liveness", Some("read"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["sources"]["geb"], "2026-09-05T10:00:00Z",
+        "a segment measured as silent must not keep a recorder live"
+    );
+    let _ = &h.dir;
+}
