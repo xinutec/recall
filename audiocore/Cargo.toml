@@ -1,0 +1,30 @@
+# audiocore — the DSP and segment-grammar library both daemons read
+# (docs/architecture.md, stage D1).
+#
+# What lives here is exactly what must not fork: the segment-name grammar
+# (names), decode/align/envelope (the tier-1 aligner), the STFT and the
+# measured-and-bounded fusion engine, and WAV I/O. audiod (the Mac's audio
+# plane) and recalld (the fleet's system of record) both depend on it; the
+# room builder (stage D3) is its next consumer.
+[package]
+name = "audiocore"
+version = "0.1.0"
+edition = "2024"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+
+[dependencies]
+# The one FFT implementation to trust — same reasoning as audiod's original.
+rustfft = "6"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

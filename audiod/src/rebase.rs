@@ -2,10 +2,11 @@
 //! segment names back to the phone's announced capture epoch. Port of the
 //! rebase half of `src/recall/stream_server.py`.
 
-use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
+use audiocore::names::{parse_segment_start, segment_glob};
+use chrono::{DateTime, Duration, Utc};
 use std::collections::HashSet;
 use std::hash::BuildHasher;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// A phone clock this far from the server's is not synchronised at all (no
 /// NTP); applying it would smear segment names arbitrarily. Real buffering
@@ -33,45 +34,6 @@ pub fn connection_offset(epoch: Option<f64>, first_byte_wall: f64) -> Option<f64
         return None;
     }
     Some(offset.min(0.0))
-}
-
-/// The UTC start time embedded in a segment filename (the first
-/// `YYYYMMDDTHHMMSS` token), or `None` for a file that carries none.
-pub fn parse_segment_start(filename: &str) -> Option<DateTime<Utc>> {
-    for start in 0..filename.len().saturating_sub(14) {
-        // .get: a multibyte filename must not panic the sweep on a boundary
-        let Some(window) = filename.get(start..start + 15) else {
-            continue;
-        };
-        if window.as_bytes()[8] != b'T' {
-            continue;
-        }
-        if let Ok(naive) = NaiveDateTime::parse_from_str(window, TS_FORMAT) {
-            return Some(Utc.from_utc_datetime(&naive));
-        }
-    }
-    None
-}
-
-/// The source's segment files (any state: open, closed, stub), sorted by name —
-/// which is chronological, because the name embeds the UTC start time.
-pub fn segment_glob(out_dir: &Path, source_id: &str) -> Vec<PathBuf> {
-    let prefix = format!("{source_id}-");
-    let mut files: Vec<PathBuf> = std::fs::read_dir(out_dir)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with(&prefix))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    files.sort();
-    files
 }
 
 /// Shift every CLOSED segment of THIS connection by `offset_s`, renaming

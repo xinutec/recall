@@ -1,5 +1,5 @@
+use audiocore::wav::write_mono16;
 use audiod::capture_run::{segment_is_digital_silence, sox_argv};
-use audiod::wav::write_mono16;
 use std::path::Path;
 
 #[test]

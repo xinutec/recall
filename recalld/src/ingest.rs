@@ -16,9 +16,9 @@
 //!   the sync token's, so a recorder that can upload still cannot read.
 
 use crate::app::Config;
-use crate::names::{self, SegmentName};
 use crate::store::{self, Row};
 use crate::tokens::Verdict;
+use audiocore::names::{self, SegmentName};
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};

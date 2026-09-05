@@ -1,0 +1,8 @@
+# The recall Rust workspace (docs/architecture.md, stage D1): one lockfile,
+# one target dir, three crates —
+#   audiocore  the shared DSP + segment-grammar library
+#   audiod     the Mac's audio plane (capture, ingest, upload)
+#   recalld    the fleet's system-of-record daemon on Isis
+[workspace]
+resolver = "3"
+members = ["audiocore", "audiod", "recalld"]

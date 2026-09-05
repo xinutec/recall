@@ -8,9 +8,9 @@
 //!               --sources pixel5,pixel9 --start 2026-06-23T20:10:00Z \
 //!               --minutes 30
 
-use audiod::align::best_lag;
-use audiod::envelope::{BUCKET_S, DECODE_RATE, rms_buckets};
-use audiod::rebase::{parse_segment_start, segment_glob};
+use audiocore::align::best_lag;
+use audiocore::envelope::{BUCKET_S, DECODE_RATE, rms_buckets};
+use audiocore::names::{parse_segment_start, segment_glob};
 use chrono::{DateTime, Duration, Utc};
 use std::path::Path;
 use std::process::ExitCode;

@@ -34,6 +34,7 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 
 [dependencies]
+audiocore = { path = "../audiocore" }
 # preserve_order: the disconnect stats JSON keeps its written key order, so a
 # shadow-period diff against the Python server's log lines stays readable.
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -41,9 +42,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Bundled so the build needs no system sqlite at link time — the same
 # hermeticity reason the nix package resolves everything from the lockfile.
 rusqlite = { version = "0.32", features = ["bundled"] }
-# The fusion engine's FFT (docs/audio-plane.md stage 3). The same crate the
-# fleet's other DSP uses, so there is one FFT implementation to trust.
-rustfft = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Store-and-forward delivery (src/upload.rs). No TLS: recalld is reached over
@@ -54,3 +52,9 @@ hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+# The real pair: tests/upload_real_server.rs runs the uploader against the
+# actual recalld router — the workspace exists partly so this test could stop
+# being a stub that mirrors the protocol (a copy tests its copy).
+recalld = { path = "../recalld" }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }

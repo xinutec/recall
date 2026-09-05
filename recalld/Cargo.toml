@@ -28,6 +28,7 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 
 [dependencies]
+audiocore = { path = "../audiocore" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 # Bundled so the build needs no system sqlite at link time — the same

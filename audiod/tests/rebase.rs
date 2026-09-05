@@ -1,4 +1,5 @@
-use audiod::rebase::{connection_offset, parse_segment_start, rebase_segment_names};
+use audiocore::names::parse_segment_start;
+use audiod::rebase::{connection_offset, rebase_segment_names};
 use chrono::{TimeZone, Utc};
 use std::collections::HashSet;
 use std::path::Path;

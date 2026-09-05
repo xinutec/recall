@@ -149,15 +149,31 @@
           paths = [ pkgs.sox pkgs.ffmpeg ];
         };
 
-        # The Rust audio-plane daemon (audiod/, docs/audio-plane.md). Resolved
-        # from the committed lockfile, and the build RUNS THE TESTS — a deployed
-        # audiod is one whose suite passed inside the sandbox, same promise the
-        # agents row makes for the Python side.
+        # The Rust audio-plane daemon (audiod/, docs/audio-plane.md), built
+        # from the WORKSPACE (docs/architecture.md, stage D1: one lockfile,
+        # audiocore shared with recalld). Resolved from the committed lockfile,
+        # and the build RUNS THE TESTS — a deployed audiod is one whose suite
+        # passed inside the sandbox, same promise the agents row makes for the
+        # Python side. The source is a fileset of exactly the Rust workspace,
+        # so a Python or frontend edit does not rebuild the agents' daemon.
         audiodPkg = pkgs.rustPlatform.buildRustPackage {
           pname = "audiod";
           version = "0.1.0";
-          src = ./audiod;
-          cargoLock.lockFile = ./audiod/Cargo.lock;
+          src = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              ./audiocore
+              ./audiod
+              ./recalld
+            ];
+          };
+          cargoLock.lockFile = ./Cargo.lock;
+          # The whole workspace builds and tests (audiocore + recalld ride
+          # along — they are audiod's own test dependencies anyway); the
+          # installed output carries every workspace binary, of which the
+          # agents run bin/audiod.
           doCheck = true;
           # The watchdog tests decode real files through ffmpeg — the same
           # binary the daemon spawns at runtime, so the sandboxed suite

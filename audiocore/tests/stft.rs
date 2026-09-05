@@ -1,4 +1,4 @@
-use audiod::stft::Stft;
+use audiocore::stft::Stft;
 
 #[test]
 fn analysis_then_synthesis_is_the_identity() {

@@ -3,7 +3,7 @@
 //! puts every source on one nominal timeline, so what the aligner measures on
 //! top is exactly the clock disagreement.
 
-use crate::rebase::{parse_segment_start, segment_glob};
+use crate::names::{parse_segment_start, segment_glob};
 use chrono::{DateTime, Duration, Utc};
 use std::path::Path;
 

@@ -1,12 +1,12 @@
 //! The segment-name grammar every recorder speaks:
 //! `<source>-YYYYMMDDTHHMMSS.<ext>`, UTC, stamped by the recorder's own clock
 //! at segment open (docs/architecture.md, decision 4). The name is the only
-//! timing metadata a segment carries, so parsing it strictly here is what
-//! keeps the whole downstream — alignment, the room builder, the timeline —
-//! reading honest clocks. A name that does not parse is refused at the door,
-//! never guessed at.
+//! timing metadata a segment carries, so ONE crate parses it — recalld's
+//! ingest door, audiod's sweeps and rebase, and the room builder all read
+//! these functions rather than keeping grammars that could drift.
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use std::path::{Path, PathBuf};
 
 /// The closed set of containers a recorder may deliver. FLAC is the target
 /// (decision 1); the rest are what existing capture paths produce today,
@@ -108,4 +108,48 @@ pub fn parse(source: &str, filename: &str) -> Result<SegmentName, NameError> {
         start_utc: parsed.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         ext,
     })
+}
+
+const TS_FORMAT: &str = "%Y%m%dT%H%M%S";
+
+/// The UTC start time embedded in a segment filename (the first
+/// `YYYYMMDDTHHMMSS` token), or `None` for a file that carries none. Looser
+/// than [`parse`] on purpose: the sweeps and the rebase read files that may
+/// predate the strict grammar (arrival-stamped, derived copies), and a stamp
+/// anywhere in the name is still a stamp.
+pub fn parse_segment_start(filename: &str) -> Option<DateTime<Utc>> {
+    for start in 0..filename.len().saturating_sub(14) {
+        // .get: a multibyte filename must not panic the sweep on a boundary
+        let Some(window) = filename.get(start..start + 15) else {
+            continue;
+        };
+        if window.as_bytes()[8] != b'T' {
+            continue;
+        }
+        if let Ok(naive) = NaiveDateTime::parse_from_str(window, TS_FORMAT) {
+            return Some(Utc.from_utc_datetime(&naive));
+        }
+    }
+    None
+}
+
+/// The source's segment files (any state: open, closed, stub), sorted by name —
+/// which is chronological, because the name embeds the UTC start time.
+pub fn segment_glob(out_dir: &Path, source_id: &str) -> Vec<PathBuf> {
+    let prefix = format!("{source_id}-");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(out_dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with(&prefix))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files
 }

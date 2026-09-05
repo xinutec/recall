@@ -35,18 +35,17 @@ RUN pnpm run build
 # ingest container run from the same image with different commands — one artifact
 # to version, push and roll.
 FROM rust:1-slim-trixie AS recalld
-WORKDIR /build/recalld
-# Manifest + lockfile first: dependency compilation is the slow layer, and this
-# keeps it cached across source-only changes.
-COPY recalld/Cargo.toml recalld/Cargo.lock ./
-RUN mkdir src && echo 'fn main() {}' > src/main.rs \
-    && touch src/lib.rs \
-    && cargo build --release --locked \
-    && rm -rf src
-COPY recalld/src/ src/
-# The dummy build above cached a lib/bin for the same names; touch the sources so
-# cargo sees them as newer and relinks the real ones.
-RUN touch src/lib.rs src/main.rs && cargo build --release --locked
+WORKDIR /build
+# The whole Rust workspace (stage D1): cargo needs every member's manifest and
+# sources to load the graph, but `-p recalld` compiles only recalld and its
+# audiocore dependency — audiod rides along as text. Layer caching comes from
+# buildx's registry cache rather than a dummy-source dance, which a workspace
+# would make three times as fiddly for a build measured in low minutes.
+COPY Cargo.toml Cargo.lock ./
+COPY audiocore/ audiocore/
+COPY audiod/ audiod/
+COPY recalld/ recalld/
+RUN cargo build --release --locked -p recalld
 
 # --- runtime ---
 # -trixie pinned explicitly: the recalld stage links against this release's glibc,
@@ -76,7 +75,7 @@ RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin recall
 WORKDIR /app
 COPY src/ /app/src/
 COPY --from=frontend /build/frontend/dist /app/frontend/dist
-COPY --from=recalld /build/recalld/target/release/recalld /usr/local/bin/recalld
+COPY --from=recalld /build/target/release/recalld /usr/local/bin/recalld
 # _REPO in recall.api is three parents up from src/recall/api.py, i.e. /app — so the
 # frontend resolves at /app/frontend/dist/recall-web/browser and PYTHONPATH is /app/src.
 RUN mkdir -p /app/logs && chown -R 1000:1000 /app

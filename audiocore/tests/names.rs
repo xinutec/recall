@@ -1,7 +1,7 @@
 //! The name grammar is the timing contract; every refusal here is a recorder
 //! bug caught at the door instead of a mis-stamped row downstream.
 
-use recalld::names::{Extension, NameError, parse, valid_source};
+use audiocore::names::{Extension, NameError, parse, valid_source};
 
 #[test]
 fn a_wellformed_name_decomposes() {

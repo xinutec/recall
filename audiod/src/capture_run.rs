@@ -10,12 +10,12 @@
 //! segments decode to pure silence (or rotation stalls), so a wedge costs
 //! minutes instead of the rest of the recording.
 
-use crate::decode::decode_native_s16;
 use crate::meter::{SILENCE_PEAK, StreamMeter};
 use crate::pause;
-use crate::rebase::{parse_segment_start, segment_glob};
 use crate::segmenter::{CaptureConfig, build_segment_argv, segment_output_pattern};
 use crate::store;
+use audiocore::decode::decode_native_s16;
+use audiocore::names::{parse_segment_start, segment_glob};
 use chrono::{DateTime, Utc};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};

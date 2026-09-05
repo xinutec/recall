@@ -1,5 +1,5 @@
-use audiod::align::best_lag;
-use audiod::envelope::{BUCKET_S, DECODE_RATE, rms_buckets};
+use audiocore::align::best_lag;
+use audiocore::envelope::{BUCKET_S, DECODE_RATE, rms_buckets};
 
 /// A speech-shaped envelope: quiet floor with irregular bursts.
 fn bursty(len: usize, seed: u64) -> Vec<f32> {

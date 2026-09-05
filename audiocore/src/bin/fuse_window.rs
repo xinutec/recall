@@ -7,12 +7,12 @@
 //!               --sources pixel5,pixel9 --start 2026-06-23T20:10:00Z \
 //!               --minutes 30 --out /tmp/fused.wav
 
-use audiod::align::best_lag;
-use audiod::decode::{to_f32, window_pcm};
-use audiod::envelope::rms_buckets_at;
-use audiod::fuse::{Combine, PhaseSource, SourceRank, fuse, noise_floors, rank_source};
-use audiod::stft::Stft;
-use audiod::wav::write_mono16;
+use audiocore::align::best_lag;
+use audiocore::decode::{to_f32, window_pcm};
+use audiocore::envelope::rms_buckets_at;
+use audiocore::fuse::{Combine, PhaseSource, SourceRank, fuse, noise_floors, rank_source};
+use audiocore::stft::Stft;
+use audiocore::wav::write_mono16;
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 use std::process::ExitCode;

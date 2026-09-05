@@ -10,10 +10,11 @@
 
 use crate::meter::{SILENCE_PEAK, StreamMeter};
 use crate::pause;
-use crate::rebase::{connection_offset, rebase_segment_names, segment_glob};
+use crate::rebase::{connection_offset, rebase_segment_names};
 use crate::segmenter::{CaptureConfig, build_segment_argv, segment_output_pattern};
 use crate::store;
 use crate::wire::{Handshake, HandshakeError, read_handshake};
+use audiocore::names::segment_glob;
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;

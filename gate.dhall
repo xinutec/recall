@@ -107,21 +107,11 @@ in  { name = "recall"
               ]
         , timeout_s = 600
         }
-      , {-  The Rust counterpart of `ruff format --check`, for the audio-plane
-            daemon (audiod/, docs/audio-plane.md).
+      , {-  The Rust counterpart of `ruff format --check` — one row for the
+            whole workspace (audiocore + audiod + recalld, stage D1).
         -}
         G.Check::{
-        , name = "cargo fmt --check (audiod)"
-        , cwd = "audiod"
-        , argv = G.inDevShell [ "cargo", "fmt", "--all", "--check" ]
-        , timeout_s = 300
-        }
-      , {-  The same, for the fleet's system-of-record daemon
-            (recalld/, docs/architecture.md).
-        -}
-        G.Check::{
-        , name = "cargo fmt --check (recalld)"
-        , cwd = "recalld"
+        , name = "cargo fmt --check (workspace)"
         , argv = G.inDevShell [ "cargo", "fmt", "--all", "--check" ]
         , timeout_s = 300
         }
@@ -225,35 +215,26 @@ in  { name = "recall"
             shared one, forcing a full recompile every gate run.
         -}
         G.Check::{
-        , name = "cargo clippy (audiod)"
-        , cwd = "audiod"
+        , name = "cargo clippy (workspace)"
         , argv =
             G.inDevShell
-              [ "cargo", "clippy", "--all-targets", "--", "-D", "warnings" ]
+              [ "cargo"
+              , "clippy"
+              , "--workspace"
+              , "--all-targets"
+              , "--"
+              , "-D"
+              , "warnings"
+              ]
         , env = G.clippyTarget
         , timeout_s = 1800
         }
       , G.Check::{
-        , name = "cargo test (audiod)"
-        , cwd = "audiod"
-        , argv = G.inDevShell [ "cargo", "test" ]
+        , name = "cargo test (workspace)"
+        , argv = G.inDevShell [ "cargo", "test", "--workspace" ]
         , timeout_s = 1800
         }
-      , G.Check::{
-        , name = "cargo clippy (recalld)"
-        , cwd = "recalld"
-        , argv =
-            G.inDevShell
-              [ "cargo", "clippy", "--all-targets", "--", "-D", "warnings" ]
-        , env = G.clippyTarget
-        , timeout_s = 1800
-        }
-      , G.Check::{
-        , name = "cargo test (recalld)"
-        , cwd = "recalld"
-        , argv = G.inDevShell [ "cargo", "test" ]
-        , timeout_s = 1800
-        }
+      , G.cargoDoc // { cwd = "audiocore" }
       , G.cargoDoc // { cwd = "audiod" }
       , G.cargoDoc // { cwd = "recalld" }
       , {-  Unconditional. The script's guard was `[ ! -x

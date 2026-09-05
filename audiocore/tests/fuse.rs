@@ -1,5 +1,7 @@
-use audiod::fuse::{PhaseSource, SourceRank, fuse, noise_floors, rank_source, speech_to_floor_db};
-use audiod::stft::Stft;
+use audiocore::fuse::{
+    PhaseSource, SourceRank, fuse, noise_floors, rank_source, speech_to_floor_db,
+};
+use audiocore::stft::Stft;
 
 /// Two mics hear the same tone; each adds loud noise in its own band. The
 /// fused signal must beat BOTH inputs against the clean signal — the whole

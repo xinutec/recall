@@ -7,6 +7,5 @@
 
 pub mod app;
 pub mod ingest;
-pub mod names;
 pub mod store;
 pub mod tokens;
