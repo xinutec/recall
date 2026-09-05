@@ -5,6 +5,9 @@
 //!   audiod capture --root <archive> --id usb [--device <CoreAudio name>]
 //!       the local-mic capture pipeline (port of `recall record`; deployment
 //!       still runs the Python capture agent until the flip)
+//!   audiod pause-mirror --root <archive> --url <control base>
+//!       maintain `capture_paused_until` from the control plane's word — the
+//!       recorder-contract pause for hosts with no local mirror (geb)
 //!   audiod upload  --root <archive> --url <recalld base> [--token-file <path>]
 //!       one store-and-forward delivery pass (docs/architecture.md, stage B):
 //!       closed segments → recalld, sha-256 receipts verified, state recorded.
@@ -38,6 +41,7 @@ fn main() -> ExitCode {
     let mut device: Option<String> = None;
     let mut seconds: Option<u64> = None;
     let mut url: Option<String> = None;
+    let mut producer = audiod::capture_run::Producer::Sox;
     let mut token_file: Option<PathBuf> = None;
     let mut max: usize = 500;
     while let Some(arg) = args.next() {
@@ -53,6 +57,11 @@ fn main() -> ExitCode {
             "--id" => id = Some(value),
             "--device" => device = Some(value),
             "--url" => url = Some(value),
+            "--producer" => match value.as_str() {
+                "sox" => producer = audiod::capture_run::Producer::Sox,
+                "alsa" => producer = audiod::capture_run::Producer::Alsa,
+                _ => return usage(),
+            },
             "--token-file" => token_file = Some(PathBuf::from(value)),
             "--max" => match value.parse() {
                 Ok(parsed) => max = parsed,
@@ -75,41 +84,58 @@ fn main() -> ExitCode {
             let Some(id) = id else {
                 return usage();
             };
-            audiod::capture_run::serve_paused_aware(&root, &id, device.as_deref(), &config, seconds)
+            audiod::capture_run::serve_paused_aware(
+                &root,
+                &id,
+                device.as_deref(),
+                producer,
+                &config,
+                seconds,
+            )
+        }
+        Some("pause-mirror") => {
+            let Some(url) = url else {
+                return usage();
+            };
+            audiod::pause_mirror::run(&root, &url)
         }
         Some("upload") => {
             let Some(url) = url else {
                 return usage();
             };
-            // The token rides a file or the environment, never argv: argv is
-            // world-readable in `ps`, and the fleet's secrets stay out of the
-            // nix store the same way (.env, sourced by the agent wrapper).
-            let token = match token_file {
-                None => std::env::var("RECALL_INGEST_TOKEN")
-                    .ok()
-                    .map(|t| t.trim().to_owned())
-                    .filter(|t| !t.is_empty()),
-                Some(path) => match std::fs::read_to_string(&path) {
-                    Ok(text) => Some(text.trim().to_owned()),
-                    Err(err) => {
-                        eprintln!("audiod: cannot read token file {}: {err}", path.display());
-                        return ExitCode::FAILURE;
-                    }
-                },
-            };
-            let summary = audiod::upload::run_pass(&audiod::upload::Config {
-                root,
-                base_url: url,
-                token,
-                max_per_pass: max,
-                open_grace: audiod::upload::OPEN_GRACE,
-            });
-            if summary.failed == 0 {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::FAILURE
-            }
+            run_upload(root, url, token_file, max)
         }
         _ => usage(),
+    }
+}
+
+/// The upload arm: resolve the token (file or env — never argv, which is
+/// world-readable in `ps`; the fleet's secrets stay out of the nix store the
+/// same way) and run one bounded pass.
+fn run_upload(root: PathBuf, url: String, token_file: Option<PathBuf>, max: usize) -> ExitCode {
+    let token = match token_file {
+        None => std::env::var("RECALL_INGEST_TOKEN")
+            .ok()
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty()),
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(text) => Some(text.trim().to_owned()),
+            Err(err) => {
+                eprintln!("audiod: cannot read token file {}: {err}", path.display());
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    let summary = audiod::upload::run_pass(&audiod::upload::Config {
+        root,
+        base_url: url,
+        token,
+        max_per_pass: max,
+        open_grace: audiod::upload::OPEN_GRACE,
+    });
+    if summary.failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }

@@ -23,8 +23,15 @@ fn config() -> RoomConfig {
 
 fn wav(path: &Path, amplitude: f32, seconds: f32) {
     let rate = 16_000u32;
+    // BURSTS, not a steady tone: the real-speech reference gate admits a
+    // segment only when its speech quantile clears its own floor, and speech
+    // is on-off by nature — a constant sine has no floor below itself.
     let samples: Vec<f32> = (0..(seconds * rate as f32) as usize)
-        .map(|i| amplitude * (2.0 * PI * 330.0 * i as f32 / rate as f32).sin())
+        .map(|i| {
+            let on = (i / rate as usize).is_multiple_of(2);
+            let gain = if on { amplitude } else { amplitude * 0.001 };
+            gain * (2.0 * PI * 330.0 * i as f32 / rate as f32).sin()
+        })
         .collect();
     audiocore::wav::write_mono16(path, rate, &samples).expect("wav");
 }

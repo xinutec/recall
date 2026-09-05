@@ -10,6 +10,7 @@
 pub mod capture_run;
 pub mod meter;
 pub mod pause;
+pub mod pause_mirror;
 pub mod rebase;
 pub mod segmenter;
 pub mod server;

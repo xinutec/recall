@@ -100,11 +100,20 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     Ok(written)
 }
 
+/// A segment feeds its source's reference only when its speech quantile
+/// clears its own floor by this much — the plausibly-REAL-speech proxy until
+/// stage D4's VAD gives the honest gate. Without it a gated phone's quiet
+/// segments drag its reference to the noise gate and its calibrated rank
+/// explodes: the speech-to-floor trap in a new hat, and exactly what the WER
+/// referee caught on 2026-09-05 (room 0.321 vs usb 0.229, pixel9 carrying
+/// 25/29 blocks it had no business carrying).
+pub const REAL_SPEECH_MARGIN_DB: f64 = 12.0;
+
 /// The per-device reference the rank compares against: the given quantile of
-/// this source's measured speech levels over its most recent `window` rows.
-/// A low quantile (say 0.05) reads as "the faintest speech this microphone
-/// records" — the calibrate.py measurement, re-derived continuously from
-/// delivery instead of measured once by hand.
+/// this source's measured speech levels over its most recent `window`
+/// REAL-SPEECH rows. A low quantile (say 0.05) reads as "the faintest real
+/// speech this microphone records" — the calibrate.py measurement, re-derived
+/// continuously from delivery instead of measured once by hand.
 pub fn speech_reference_db(
     conn: &Connection,
     source: &str,
@@ -116,10 +125,11 @@ pub fn speech_reference_db(
             "SELECT speech_db FROM (
                  SELECT speech_db FROM segment_levels
                  WHERE source = ?1 AND speech_db > -900.0
+                   AND speech_db - floor_db > ?3
                  ORDER BY filename DESC LIMIT ?2
              )",
         )?;
-        let rows = stmt.query_map((source, window), |r| r.get(0))?;
+        let rows = stmt.query_map((source, window, REAL_SPEECH_MARGIN_DB), |r| r.get(0))?;
         rows.collect::<Result<_, _>>()?
     };
     if levels.is_empty() {

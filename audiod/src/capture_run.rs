@@ -40,6 +40,55 @@ const STOP_POLL: Duration = Duration::from_secs(1);
 /// sox argv for the pinned `CoreAudio` device. An unknown device name makes sox
 /// fail hard (the launchd agent crash-loops visibly) — never a silent fallback
 /// to the system default, which a Bluetooth handsfree mic can grab.
+/// Which program opens the audio device. `Sox` is the Mac's proven path
+/// (`CoreAudio`, sample-perfect); `Alsa` is ffmpeg reading ALSA — geb's own
+/// proven device path from its streaming era, kept rather than teaching sox a
+/// second platform (stage C3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Producer {
+    Sox,
+    Alsa,
+}
+
+/// ffmpeg argv for an ALSA device: s16le on stdout, downmixed and resampled
+/// to the segmenter's shape, exactly as geb's streaming client had ffmpeg do.
+pub fn alsa_argv(
+    device: Option<&str>,
+    sample_rate: u32,
+    channels: u16,
+    max_seconds: Option<u64>,
+) -> Vec<String> {
+    let mut argv: Vec<String> = [
+        "ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "alsa",
+        "-i",
+    ]
+    .map(String::from)
+    .to_vec();
+    argv.push(device.unwrap_or("default").to_owned());
+    if let Some(seconds) = max_seconds {
+        argv.extend(["-t".into(), seconds.to_string()]);
+    }
+    argv.extend(
+        [
+            "-ac",
+            &channels.to_string(),
+            "-ar",
+            &sample_rate.to_string(),
+            "-f",
+            "s16le",
+            "-",
+        ]
+        .map(String::from),
+    );
+    argv
+}
+
 pub fn sox_argv(
     device: Option<&str>,
     sample_rate: u32,
@@ -179,6 +228,7 @@ pub fn record(
     root: &Path,
     source_id: &str,
     device: Option<&str>,
+    producer_kind: Producer,
     config: &CaptureConfig,
     max_seconds: Option<u64>,
 ) -> Ended {
@@ -189,8 +239,12 @@ pub fn record(
     }
     let pattern = segment_output_pattern(root, source_id, config.codec.container_ext());
     let started_utc = Utc::now();
-    let mut producer = match Command::new("sox")
-        .args(&sox_argv(device, config.sample_rate, config.channels, max_seconds)[1..])
+    let producer_argv = match producer_kind {
+        Producer::Sox => sox_argv(device, config.sample_rate, config.channels, max_seconds),
+        Producer::Alsa => alsa_argv(device, config.sample_rate, config.channels, max_seconds),
+    };
+    let mut producer = match Command::new(&producer_argv[0])
+        .args(&producer_argv[1..])
         .env("TZ", "UTC")
         .stdout(Stdio::piped())
         .spawn()
@@ -347,16 +401,24 @@ pub fn serve_paused_aware(
     root: &Path,
     source_id: &str,
     device: Option<&str>,
+    producer_kind: Producer,
     config: &CaptureConfig,
     max_seconds: Option<u64>,
 ) -> ! {
-    store::register_source_kind(root, source_id, "coreaudio");
+    store::register_source_kind(
+        root,
+        source_id,
+        match producer_kind {
+            Producer::Sox => "coreaudio",
+            Producer::Alsa => "alsa",
+        },
+    );
     loop {
         while pause::is_paused(root, Utc::now()) {
             std::thread::sleep(STOP_POLL);
         }
         store::add_capture_event(root, store::KIND_RESUME, Utc::now(), source_id, None);
-        let ended = record(root, source_id, device, config, max_seconds);
+        let ended = record(root, source_id, device, producer_kind, config, max_seconds);
         if ended == Ended::Paused {
             store::add_capture_event(root, store::KIND_PAUSE, Utc::now(), source_id, None);
             continue;

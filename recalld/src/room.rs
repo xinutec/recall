@@ -219,8 +219,10 @@ fn reference_db(
     source: &str,
 ) -> rusqlite::Result<Option<f32>> {
     let measured: u32 = conn.query_row(
-        "SELECT COUNT(*) FROM segment_levels WHERE source = ?1 AND speech_db > -900.0",
-        [source],
+        "SELECT COUNT(*) FROM segment_levels
+         WHERE source = ?1 AND speech_db > -900.0
+           AND speech_db - floor_db > ?2",
+        (source, levels::REAL_SPEECH_MARGIN_DB),
         |r| r.get(0),
     )?;
     if measured < config.min_reference_rows {
