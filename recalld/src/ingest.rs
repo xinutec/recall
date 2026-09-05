@@ -325,6 +325,55 @@ pub async fn get_blob(
     }
 }
 
+/// Stage E1: lease the newest available job. The runner's plane is the sync
+/// token's — same trust as reading blobs, which the job points at.
+pub async fn lease_job(State(config): State<Arc<Config>>, headers: HeaderMap) -> Response {
+    if let Err(refused) = read_auth(&config, &headers) {
+        return refused.into_response();
+    }
+    let handle = tokio::task::spawn_blocking(move || crate::queue::lease(&config.root, Utc::now()));
+    match handle.await {
+        Ok(Ok(Some(job))) => (StatusCode::OK, axum::Json(json!({ "job": job }))).into_response(),
+        Ok(Ok(None)) => (StatusCode::OK, axum::Json(json!({ "job": null }))).into_response(),
+        Ok(Err(err)) => {
+            tracing::error!(%err, "lease failed");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "lease failed")
+        }
+        Err(err) => {
+            tracing::error!(%err, "lease task failed");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "lease failed")
+        }
+    }
+}
+
+/// Retire a leased job with its result payload.
+pub async fn finish_job(
+    State(config): State<Arc<Config>>,
+    Path(id): Path<i64>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(refused) = read_auth(&config, &headers) {
+        return refused.into_response();
+    }
+    let result = String::from_utf8_lossy(&body).into_owned();
+    let handle = tokio::task::spawn_blocking(move || {
+        crate::queue::done(&config.root, id, &result, Utc::now())
+    });
+    match handle.await {
+        Ok(Ok(true)) => (StatusCode::OK, axum::Json(json!({ "done": true }))).into_response(),
+        Ok(Ok(false)) => error(StatusCode::NOT_FOUND, "no such open job"),
+        Ok(Err(err)) => {
+            tracing::error!(%err, "finish failed");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "finish failed")
+        }
+        Err(err) => {
+            tracing::error!(%err, "finish task failed");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "finish failed")
+        }
+    }
+}
+
 pub async fn health() -> Response {
     (StatusCode::OK, axum::Json(json!({ "ok": true }))).into_response()
 }

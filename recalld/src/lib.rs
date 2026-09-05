@@ -8,6 +8,7 @@
 pub mod app;
 pub mod ingest;
 pub mod levels;
+pub mod queue;
 pub mod room;
 pub mod store;
 pub mod tokens;

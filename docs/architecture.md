@@ -448,9 +448,12 @@ B3 lands.*
 
 ### Stage E — the queue and the runner
 
-- **E1. Queue in recalld.** Jobs/results endpoints, `transcribe-room` first;
-  long-poll like capture-mirror; results write turn rows (SQL copied from
-  the Python store).
+- **E1. Queue in recalld.** *Built 2026-09-05, lean:* jobs are DERIVED from
+  room segments (the share-upload lesson — a missed enqueue cannot strand
+  audio), leased newest-first with a 10-minute TTL (`PUT /work/v1/lease`,
+  `PUT /work/v1/jobs/{id}/done`, the sync-token plane), results stored
+  opaque until E3 interprets them into turn rows. Long-poll and the resolved
+  result-writing are E3's.
 - **E2. Shim protocol + `asr` shim.** JSON-over-stdio contract; the
   mlx-whisper shim carved out of `recall.asr` with vocabulary biasing kept.
 - **E3. runner.** The Rust poller: newest-first, fetch, shim, push, ack;

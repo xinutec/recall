@@ -35,6 +35,8 @@ pub fn router(config: Arc<Config>) -> Router {
             put(ingest::put_segment),
         )
         .route("/ingest/v1/blob/{source}/{filename}", get(ingest::get_blob))
+        .route("/work/v1/lease", put(ingest::lease_job))
+        .route("/work/v1/jobs/{id}/done", put(ingest::finish_job))
         .layer(DefaultBodyLimit::max(limit))
         .with_state(config)
 }
