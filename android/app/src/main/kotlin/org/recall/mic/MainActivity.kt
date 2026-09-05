@@ -572,7 +572,12 @@ private fun DevicesPanel(sources: List<SourceStatus>, selfId: String?) {
     }
 }
 
-/** "active", or how long since a source last streamed — for the devices panel. */
+/**
+ * "active", or how long since a source last PROVED it was recording — for the
+ * devices panel. The proof is a stream for a streaming recorder and a delivered
+ * segment for a store-and-forward one (#1428), so this must not say "streamed":
+ * geb streams to nothing and is live.
+ */
 private fun activityLabel(source: SourceStatus): String {
     if (source.active) {
         return "active"
