@@ -198,7 +198,7 @@
       ],
       "cwd": "audiod",
       "env": {
-        "CARGO_TARGET_DIR": "/Users/pippijn/.cache/cargo/clippy-target"
+        "CARGO_TARGET_DIR": "target/clippy"
       },
       "name": "cargo clippy (audiod)",
       "timeout_s": 1800
