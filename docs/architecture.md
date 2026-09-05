@@ -520,7 +520,24 @@ B3 lands.*
   probability trace IDENTICAL to macOS under a different ORT version and
   architecture, which is what makes that trace worth keeping.
 
-  STILL TO BUILD: the wiring — speech into liveness, the
+  *Wired into liveness 2026-09-05:* `/ingest/v1/liveness` is SPEECH-GATED, which
+  keeps the promise the `.alive` marker already made — a dot the audio can back,
+  so a room of digital silence reads idle on purpose. ⚠ Only a segment MEASURED
+  AS SILENT disqualifies: unmeasured and undecodable ones still count, because
+  the scanner runs BEHIND live audio and "not looked at yet" is not evidence of
+  silence — treating it as silence would black out every recorder the moment it
+  ships. The scan therefore runs NEWEST FIRST (both consumers read recent rows),
+  with the archive backfilling behind, the same priority the work queue takes.
+
+  *Measured in production:* ~98 segments/min at ~0.9 core (pod 189m -> ~1080m,
+  load 1.22 -> ~2.5 on 4 cores), the 15.8k backlog clearing in ~2.6 h. The gate
+  does real work rather than passing everything through — usb's newest DELIVERED
+  segment was 21:12:29 while its newest SPEECH was 21:02:29, ten minutes of
+  measured silence correctly excluded. Per-device ratios differ the way
+  calibration needs: geb 20 speech / 6 silent, pixel5 11/39, oneplus6t 26/24.
+  Oldest-first, before the flip, had spent 25 minutes still inside 13-15 June.
+
+  STILL TO BUILD: the rest of the wiring — speech into liveness, the
   quiet review's evidence, room priority, and the calibrated reference that
   un-parks D3's rank.
 - **D5. Retention.** Window transcode to Opus + enforcement, measured cost.
