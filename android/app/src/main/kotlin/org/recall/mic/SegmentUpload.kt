@@ -65,10 +65,9 @@ class SegmentUpload(
                 }
 
                 Delivery.REJECTED -> {
-                    // 4xx other than conflict: the server refuses this segment
-                    // (bad name, bad token). Retrying cannot fix a refusal,
-                    // and deleting would lose audio — park it as a conflict
-                    // for a person, under the same "look at me" directory.
+                    // A refusal retrying cannot fix (bad name, oversize) —
+                    // deleting would lose audio, so park it for a person
+                    // under the same "look at me" directory.
                     Log.w(TAG, "segment rejected ($verdict): ${segment.name}")
                     SegmentStore.markConflict(base, segment)
                 }
@@ -117,6 +116,15 @@ class SegmentUpload(
 
                     409 -> {
                         Delivery.CONFLICT
+                    }
+
+                    // Auth answers are CONFIG, not verdicts on the segment: a
+                    // fresh install uploads before its token is typed in, and
+                    // parking everything it recorded meanwhile as "rejected"
+                    // would turn a missing setting into hand-recovery work.
+                    // Retry: the token arrives, the backlog drains.
+                    401, 403 -> {
+                        Delivery.FAILED
                     }
 
                     in 400..499 -> {
