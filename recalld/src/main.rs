@@ -145,9 +145,21 @@ fn spawn_level_scanner(root: PathBuf) {
 /// Nextcloud. The idle wait is longer for the same reason — speech evidence is
 /// wanted within minutes, never within seconds.
 fn spawn_speech_scanner(root: PathBuf) {
+    // ⚠ Do not even start where the model cannot run. isis and amun are Ivy
+    // Bridge (2012) and ort's prebuilt runtime needs AVX2 (Haswell, 2013):
+    // calling it there raises SIGILL and kills the daemon that IS the system of
+    // record. Refusing once, loudly, beats failing every batch for ever.
     const BATCH: usize = 40;
     const IDLE: std::time::Duration = std::time::Duration::from_mins(2);
     const BACKOFF: std::time::Duration = std::time::Duration::from_mins(5);
+    if !recalld::vad::cpu_can_run_the_model() {
+        tracing::warn!(
+            "speech: DISABLED — this cpu lacks avx2 and the prebuilt onnxruntime \
+             would SIGILL. Segments stay unmeasured; D4 needs an onnxruntime \
+             built for this cpu, or the measurement moved off this host."
+        );
+        return;
+    }
     tokio::spawn(async move {
         loop {
             let batch_root = root.clone();

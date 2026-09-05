@@ -73,6 +73,8 @@ pub struct Detector {
 pub enum Error {
     Model(String),
     Undecodable,
+    /// The CPU lacks AVX2, so the prebuilt runtime would SIGILL.
+    Unsupported,
 }
 
 impl std::fmt::Display for Error {
@@ -80,6 +82,7 @@ impl std::fmt::Display for Error {
         match self {
             Self::Model(err) => write!(f, "silero: {err}"),
             Self::Undecodable => write!(f, "segment did not decode"),
+            Self::Unsupported => write!(f, "cpu lacks avx2; prebuilt onnxruntime would SIGILL"),
         }
     }
 }
@@ -94,11 +97,37 @@ pub fn detection_gain(peak: f32) -> f32 {
     (TARGET_PEAK / peak).min(MAX_GAIN)
 }
 
+/// Whether this machine can run the prebuilt ONNX Runtime at all.
+///
+/// ⚠ ort's prebuilt binaries REQUIRE AVX2, and the fleet's servers do not have
+/// it: isis and amun are Ivy Bridge Xeons (2012), and AVX2 arrived with Haswell
+/// in 2013. Calling the model there does not fail — it raises SIGILL and takes
+/// the whole daemon down (exit 132, measured on isis 2026-09-05, three restarts
+/// before it was caught). The ingest plane is the system of record, so it must
+/// never be killed by an optional measurement.
+///
+/// ⚠ Building the image on amun proved the LINK, not the RUN. A build check on a
+/// machine that cannot execute the result is not a verification of the result.
+#[must_use]
+pub fn cpu_can_run_the_model() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::arch::is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        true
+    }
+}
+
 impl Detector {
     /// # Errors
-    /// If the embedded network fails to load, which is a build problem, not a
-    /// runtime condition.
+    /// If the CPU cannot run the prebuilt runtime (see `cpu_can_run_the_model`),
+    /// or if the embedded network fails to load.
     pub fn load() -> Result<Self, Error> {
+        if !cpu_can_run_the_model() {
+            return Err(Error::Unsupported);
+        }
         let session = ort::session::Session::builder()
             .map_err(|e| Error::Model(e.to_string()))?
             // ⚠ ONE thread, deliberately. onnxruntime defaults to spreading
