@@ -104,8 +104,12 @@ The id is announced in the handshake (the port is just transport), so there is
 
 - **Derived:** a phone makes a stable id from its model + a random suffix
   (`pixel-9-3f7a`), persisted, so two same-model phones differ (`Prefs.deviceId`).
-- **Pre-set:** a device can carry a fixed id (`pixel5`/`pixel9`, the iPhone's
-  `iphone11` via `Prefs.presetID`) so its recording history stays one source.
+- **Pre-set:** a device can carry a fixed id (`pixel5`/`pixel9`/`oneplus6t`,
+  the iPhone's `iphone11` via `Prefs.presetID`) so its recording history stays
+  one source. The OnePlus 6T joined 2026-09-05 (VPN 10.100.0.8, display name
+  "OnePlus 6T"); its ingest token reached the server's table only after the
+  enrolment, so its first deliveries answered 401 and retried until then —
+  the shadow's park-on-auth rule is what made that recoverable rather than lost.
 
 A friendlier name can be set later in the web UI; the underlying id is display-renamable
 without moving the data.
@@ -124,6 +128,19 @@ renders it (own device highlighted, "active / Ns ago" per recorder).
 *recording*, not connected — a phone streaming digital silence reads idle on purpose,
 because nobody should speak trusting a dot the audio can't back
 (`audiod::server`).
+
+⚠⚠ **THIS WHOLE MECHANISM IS BLIND TO A STORE-AND-FORWARD RECORDER, and two of
+them are now live.** The marker is refreshed by the server holding a STREAM; a
+recorder that writes closed segments locally and uploads them never opens that
+connection, so it reads **off while it is recording perfectly**. Measured
+2026-09-05: geb showed off in the mic app while `recall-capture` was `active`
+and had delivered 584 segments, newest 2 minutes old (the expected lag — a
+segment must CLOSE before it can upload); the OnePlus was invisible for the
+same reason. This is not a fault in the recorders and stopping one on the
+strength of this dot destroys audio. The fix is #1428: read liveness from
+delivered-segment recency (`max(received_at)` per source in recalld) instead of
+from the stream marker. Until then, verify a store-and-forward recorder by
+ASKING THE INGEST PLANE, never by looking at the panel.
 
 ## Aliveness: the app says so, hourly
 
