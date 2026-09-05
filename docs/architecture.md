@@ -488,9 +488,36 @@ B3 lands.*
   returns near-zero probability on obvious speech, which reads as a quiet room
   rather than a bug. A golden probability trace pins that contract everywhere,
   because the real-speech fixtures are gitignored (public repo, see #1433).
-  STILL TO BUILD: the ingest scanner and its schema, then the wiring — speech
-  into liveness, the quiet review's evidence, room priority, and the calibrated
-  reference that un-parks D3's rank.
+  *Scanner built 2026-09-05:* `recalld::speech` measures every delivered
+  segment in bounded batches, oldest first, one row per blob for ever, with an
+  UNKNOWN sentinel (-1 s) so "we could not look" can never be read as "nobody
+  spoke" by a sweep. Inference is pinned to one thread — a background
+  measurement must not saturate a 4-core box shared with Nextcloud.
+
+  ⚠⚠ **BLOCKED ON HARDWARE, and this is the stage's real problem.** ort's
+  prebuilt ONNX Runtime REQUIRES AVX2. isis (Xeon E3-1225 V2) and amun
+  (E3-1245 V2) are Ivy Bridge, 2012; AVX2 arrived with Haswell in 2013. Calling
+  the model there does not degrade — it raises SIGILL and kills the daemon that
+  IS the system of record. Measured the hard way on 2026-09-05: recalld
+  crash-looped (exit 132, five restarts) and the ingest plane refused
+  connections until the image was pinned back. `vad::cpu_can_run_the_model()`
+  now refuses at startup so the daemon can never be killed by an optional
+  measurement, which makes it SAFE but not DONE — on the current fleet the
+  scanner declines to start and every segment stays unmeasured.
+
+  ⚠ **Building the image on amun proved the LINK, not the RUN**, and amun shares
+  isis's CPU generation, so running the tests there would have caught this
+  before it ever reached production. A build check on a machine that cannot
+  execute the result is not a verification of the result.
+
+  THE FORK (needs a decision, not a patch): compile onnxruntime for these CPUs
+  and carry that build, or move speech detection off Isis to the Mac worker
+  where the ML already lives — which is a change to the shape this file argues
+  for, since "VAD at ingest" assumes ingest can run it.
+
+  STILL TO BUILD once that is settled: the wiring — speech into liveness, the
+  quiet review's evidence, room priority, and the calibrated reference that
+  un-parks D3's rank.
 - **D5. Retention.** Window transcode to Opus + enforcement, measured cost.
 
 ### Stage E — the queue and the runner
