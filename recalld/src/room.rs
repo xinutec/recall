@@ -334,13 +334,18 @@ pub fn build_once(
             summary.silent += 1;
             continue;
         }
+        // RAW speech level, deliberately — the arm the WER bake-off measured
+        // tying best-single exactly. Calibrated selection is PARKED: with the
+        // real-speech reference gate it still handed pixel9 13 of 29 blocks
+        // in the June referee window where usb is best throughout (measured
+        // 2026-09-05, winner census), so until stage D4's VAD gives the
+        // reference an honest speech gate, the calibrated rank is recorded in
+        // provenance but does not choose.
         let winner = audible
             .iter()
-            .filter_map(|c| c.calibrated.map(|db| (c, db)))
-            .max_by(|a, b| a.1.0.total_cmp(&b.1.0));
+            .map(|c| (c, c.speech_db))
+            .max_by(|a, b| a.1.total_cmp(&b.1));
         let Some((winner, _rank)) = winner else {
-            // Present, heard, and nothing rankable: wait for calibration
-            // rather than degrade to raw-loudest.
             summary.deferred += 1;
             continue;
         };

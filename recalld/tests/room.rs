@@ -82,7 +82,7 @@ fn now_after(block: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 #[test]
-fn calibration_beats_sensitivity() {
+fn raw_level_chooses_until_calibration_earns_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
     scan_once(dir.path(), 100).expect("levels");
@@ -97,7 +97,10 @@ fn calibration_beats_sensitivity() {
         )
         .expect("block row");
     assert_eq!(verdict, "built");
-    assert_eq!(winner, "quiet", "the mic hearing BEST FOR ITSELF wins");
+    // Parked calibration: raw level chooses (the bake-off's tying arm), so
+    // the sensitive mic carries the block; `quiet`'s better-for-itself rank
+    // is still RECORDED in provenance for D4 to reclaim.
+    assert_eq!(winner, "loud");
     // Provenance names both, with their levels and calibrated ranks.
     assert!(contributors.contains("\"loud\"") && contributors.contains("\"quiet\""));
     assert!(contributors.contains("calibrated"));
@@ -117,9 +120,9 @@ fn the_room_blob_carries_the_winners_audio() {
     let pcm = audiocore::decode::decode_s16(&blob, 16_000).expect("decodable");
     let envelope = audiocore::envelope::rms_buckets_at(&pcm, 16_000, 0.1);
     let speech = audiocore::envelope::level_quantile_db(&envelope, 0.9);
-    // The winner's block amplitude was 0.2 → about -17 dBFS RMS for a sine;
-    // the loser's 0.5 would read ~-9. Assert we carried the quiet mic.
-    assert!(speech < -12.0 && speech > -25.0, "speech {speech} dB");
+    // Raw rank carries `loud` (block amplitude 0.5 → ~-9 dBFS RMS bursts);
+    // `quiet`'s 0.2 would read ~-17. Assert we carried the sensitive mic.
+    assert!(speech > -13.0 && speech < -3.0, "speech {speech} dB");
     // And it registered as a segments row under the room source (the seeded
     // history minutes build their own room blocks too — assert on this one).
     let conn = store::open(dir.path()).expect("db");
@@ -148,6 +151,7 @@ fn no_verdict_on_partial_evidence() {
 }
 
 #[test]
+#[ignore = "parked with calibrated selection until D4's VAD-gated references"]
 fn no_reference_means_deferred_not_degraded() {
     let dir = tempfile::tempdir().expect("tempdir");
     // One segment only: measured, but far under min_reference_rows.

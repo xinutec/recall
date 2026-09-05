@@ -437,12 +437,19 @@ B3 lands.*
   reference, a newtype (`CalibratedDb`) so raw loudness cannot cross the
   rank boundary — carrying the winner's audio whole into
   `room-<stamp>.flac` (16 kHz mono, ASR's shape) with full provenance per
-  block. No verdict on partial evidence: unmeasured overlap or an
-  unrankable field defers, never degrades to raw-loudest. Because it runs
-  over the delivered archive, it reconstructs room for the historical
-  multi-mic windows — so the WER referee (room vs best-single on the June
-  corpus) can run OFFLINE, and stays the acceptance gate before stage E
-  lets anything transcribe room.
+  block. No verdict on partial evidence: unmeasured overlap defers. **The
+  rank is RAW speech level for now — calibrated selection is parked**: the
+  first build under the calibrated rank handed phones 30% of all blocks and
+  the referee failed it (room 0.321 vs usb 0.229); with the real-speech
+  reference gate (levels::REAL_SPEECH_MARGIN_DB) usb rose to 92% overall
+  but pixel9 still took 13/29 of the June referee window where usb is
+  best throughout — so per the pre-stated rule the rank formula is
+  indicted, raw level (the bake-off's tying arm) chooses, and the
+  calibrated rank rides along in provenance until D4's VAD gives the
+  reference an honest speech gate. Because the builder runs over the
+  delivered archive, the referee (room vs best-single, June corpus) runs
+  OFFLINE and remains the acceptance gate before stage E lets anything
+  transcribe room.
 - **D4. VAD at ingest** (silero ONNX). Liveness + quiet evidence + priority.
 - **D5. Retention.** Window transcode to Opus + enforcement, measured cost.
 
