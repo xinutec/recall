@@ -109,6 +109,10 @@ cross-correlates with its reference clip at zero lag, peak r 0.92-0.98.
 | fused, phase from the reference | 0.348 |
 | fused, phase from the per-bin SNR argmax | 0.437 |
 
+And on a second corpus of 40 corrections covered by `pixel9`, fusing the two
+phones with each other: `pixel9` alone 0.367, fused 0.354 (p = 0.77, no
+effect).
+
 Fusion is worse, and not by accident: 14 cases worse against 4 better (exact
 sign test p = 0.03). **The gate fails.** The denoising precedent held — a
 signal that looks better by construction reached the model and hurt it.
@@ -131,15 +135,35 @@ Two findings worth keeping:
   byte-identical. Any numeric stage whose output moves when only the optimiser
   changed is deciding something discontinuously.
 
-Why fusion loses here is not yet measured, but the candidates are ordered: the
-condenser mic's noise floor sits ~28 dB below the phones', so SNR weighting
-mixes a much worse signal into an already-good one; the phones' AGC and noise
-suppression are non-linear, so their magnitudes do not linearly combine; and a
-magnitude-from-many, phase-from-one spectrum is not a consistent STFT, so
-overlap-add re-introduces error. The next experiment is therefore not a better
-weighting but a narrower question: does fusion ever win a *block*, and which?
-If it wins only where two mics are comparable, `room` should fuse there and
-carry the best single source everywhere else.
+The obvious explanation — that fusion fails where alignment is poor — is
+**refuted**. Splitting the 38 cases by how well the admitted phones correlated
+with the reference in their block separates nothing: the cases fusion won
+average peak r 0.782, the ones it lost 0.765, the ties 0.761, and both phones
+were admitted in all 38. Fusion loses where alignment is excellent, so a
+stricter admission gate would not have saved it.
+
+What remains, unmeasured and in this order: the condenser mic's noise floor
+sits ~28 dB below the phones', so SNR weighting mixes a much worse signal into
+an already-good one; the phones' AGC and noise suppression are non-linear, so
+their magnitudes do not linearly combine; and a magnitude-from-many,
+phase-from-one spectrum is not a consistent STFT, so overlap-add re-introduces
+error. That discriminator has now run. Fusing the two phones *with each other*,
+excluding the condenser — the combiner's best case, two comparable mics — is a
+null result: 40 corrections with a covering `pixel9` segment, median WER 0.367
+for `pixel9` alone against 0.354 fused, 5 cases better and 7 worse, sign test
+p = 0.77.
+
+So the combiner is not destructive; it simply extracts nothing. Two mics of
+equal quality fuse to no measurable gain, and a good mic fused with worse ones
+is dragged down (p = 0.03). Taken together those bound the technique: SNR-
+weighted magnitude combination is not how multiple microphones become a better
+transcript, and no reweighting is worth trying before something changes the
+terms. The remaining honest routes for the extra microphones are (a) choosing
+between them per block rather than mixing, which is also the whole capacity
+win; (b) genuinely coherent combination, which needs the sub-sample GCC-PHAT
+tier and phase-intact PCM at ingest, neither of which this offline instrument
+had; and (c) spending them on *spatial features* for diarization (stage 4)
+rather than on signal enhancement at all.
 
 ## Deployment notes
 
