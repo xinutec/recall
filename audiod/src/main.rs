@@ -7,7 +7,9 @@
 //!       still runs the Python capture agent until the flip)
 //!   audiod upload  --root <archive> --url <recalld base> [--token-file <path>]
 //!       one store-and-forward delivery pass (docs/architecture.md, stage B):
-//!       closed segments → recalld, sha-256 receipts verified, state recorded
+//!       closed segments → recalld, sha-256 receipts verified, state recorded.
+//!       The token comes from `--token-file` or the `RECALL_INGEST_TOKEN` env var
+//!       (the launchd agent sources it from .env — never the nix store)
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -79,11 +81,14 @@ fn main() -> ExitCode {
             let Some(url) = url else {
                 return usage();
             };
-            // The token rides a file, never argv: argv is world-readable in
-            // `ps`, and the fleet's secrets stay out of the nix store the
-            // same way.
+            // The token rides a file or the environment, never argv: argv is
+            // world-readable in `ps`, and the fleet's secrets stay out of the
+            // nix store the same way (.env, sourced by the agent wrapper).
             let token = match token_file {
-                None => None,
+                None => std::env::var("RECALL_INGEST_TOKEN")
+                    .ok()
+                    .map(|t| t.trim().to_owned())
+                    .filter(|t| !t.is_empty()),
                 Some(path) => match std::fs::read_to_string(&path) {
                     Ok(text) => Some(text.trim().to_owned()),
                     Err(err) => {

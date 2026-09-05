@@ -58,6 +58,8 @@ let
 
   out = "/Volumes/Backup/recall";
   fleet = "http://10.100.0.2:8000";
+  # recalld's ingest plane on the same host (docs/architecture.md, stage A).
+  ingest = "http://10.100.0.2:8001";
   logs = "/Users/pippijn/Library/Logs/recall";
 
   # The ML stack (mlx-whisper, pyannote, torch) as a STORE PATH, built from uv.lock's
@@ -329,6 +331,45 @@ in
       RunAtLoad = true;
       StartInterval = 300;
       LowPriorityIO = true;
+    };
+  };
+
+  # Store-and-forward delivery (docs/architecture.md, stage B): every closed
+  # segment to recalld on Isis, sha-256 receipt verified against a local
+  # re-hash before it is recorded delivered. A timer like recall-sync; each
+  # pass is bounded (--max) and resumes from upload-state.sqlite, so the
+  # historical backfill proceeds in bites and a killed pass costs nothing.
+  # Reads RECALL_INGEST_TOKEN (the custodial `*` grant) from .env — the token
+  # must never enter the store, the standing rule. Nice + LowPriorityIO:
+  # delivery must never compete with the recorder (design.md §7).
+  #
+  # ⚠ NO EVICTION RIDES THIS. The Mac's archive stays the protected master
+  # until stage F; this agent only ever adds copies.
+  launchd.agents."org.xinutec.recall-upload" = daemon {
+    label = "org.xinutec.recall-upload";
+    name = "upload";
+    args = [ ];
+    program = pkgs.writeShellApplication {
+      name = "recall-upload";
+      text = ''
+        ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
+        if [ -r "$ENV_FILE" ]; then
+          set -a
+          # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
+          . "$ENV_FILE"
+          set +a
+        fi
+        exec env RUST_LOG=info ${
+          recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
+        }/bin/audiod upload --root ${out} --url ${ingest} --max 500
+      '';
+    };
+    extra = {
+      KeepAlive = false;
+      RunAtLoad = true;
+      StartInterval = 60;
+      LowPriorityIO = true;
+      Nice = 10;
     };
   };
 

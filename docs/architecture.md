@@ -319,8 +319,9 @@ contract, and what proves it. Every package lands green through the full gate
 
 ### Stage A — recalld ingest plane (additive; touches nothing live)
 
-*A1–A4 built 2026-09-05, plus the Dockerfile half of A5; A5's kubes model
-change and rollout are the open remainder.*
+*Stage A is live 2026-09-05: A1–A4 built and deployed via A5 (the kubes
+model grew a `Sidecar`; the fleet image carries `recalld` and the pod runs
+it beside the api).*
 
 - **A1. Crate + skeleton.** New `recalld/` crate (axum, tokio, rusqlite
   bundled, sha2, tracing), mirroring `audiod/`'s lint posture
@@ -357,8 +358,15 @@ change and rollout are the open remainder.*
 
 ### Stage B — the Mac delivers (audiod upload)
 
-*B1's command and tests built 2026-09-05; its launchd agent, and B2's
-measurement, wait on A5 giving it a server to deliver to.*
+*Live 2026-09-05: A5 deployed (the pod runs recalld beside the api, wg
+hostPort 8001, write gate proven up by a refused wrong-token PUT), B1's
+agent wired, and the first deliveries verified end to end — a blob fetched
+back from Isis hashes identical to the Mac's master. B2's first measurement:
+200 segments in 50.1 s, zero failures, wall time all network wait — ~4
+deliveries/s sequential, ~4.2 Mbit/s effective at the archive's smallest
+segments. That clears continuous capture (~5 segments/min) by ~50x and the
+~2 Mbit/s lossless floor with room; re-measure at FLAC segment sizes when
+B3 lands.*
 
 - **B1. Uploader.** `audiod upload --root <archive> --url <base>`: scan for
   closed segments, deliver oldest-first, verify receipts, record state in an
