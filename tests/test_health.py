@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,6 +19,7 @@ from recall.health import (
     archive_check,
     blanked_check,
     capture_checks,
+    delivery_checks,
     live_check,
     loss_checks,
     mirror_check,
@@ -503,3 +505,120 @@ def test_live_check_reports_a_tier_that_has_never_produced() -> None:
     check = live_check(None, now=now, paused_until=None)
     assert check.verdict == "fail"
     assert "never" in check.observed
+
+
+# --- store-and-forward delivery (docs/architecture.md, stage B4) ---------------------
+
+
+def _delivery_root(tmp_path: Path) -> Path:
+    """An archive root with one source dir; tests place segments and state."""
+    (tmp_path / "usb").mkdir()
+    return tmp_path
+
+
+def _uploaded(root: Path, *names: str) -> None:
+    conn = sqlite3.connect(root / "upload-state.sqlite")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS uploads (filename TEXT PRIMARY KEY,"
+        " source TEXT NOT NULL, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL,"
+        " verified_utc TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS conflicts (filename TEXT PRIMARY KEY,"
+        " source TEXT NOT NULL, sha256 TEXT NOT NULL, noticed_utc TEXT NOT NULL)"
+    )
+    for name in names:
+        conn.execute(
+            "INSERT OR IGNORE INTO uploads"
+            " VALUES (?, 'usb', 'x', 1, '2026-09-05T00:00:00Z')",
+            (name,),
+        )
+    conn.commit()
+    conn.close()
+
+
+def _conflicted(root: Path, name: str) -> None:
+    _uploaded(root)  # ensure schema
+    conn = sqlite3.connect(root / "upload-state.sqlite")
+    conn.execute(
+        "INSERT OR IGNORE INTO conflicts"
+        " VALUES (?, 'usb', 'x', '2026-09-05T00:00:00Z')",
+        (name,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _segment(root: Path, name: str, *, age: timedelta, now: datetime) -> None:
+    path = root / "usb" / name
+    path.write_bytes(b"x")
+    stamp = (now - age).timestamp()
+    os.utime(path, (stamp, stamp))
+
+
+def test_delivery_is_quiet_without_the_uploader(tmp_path: Path) -> None:
+    # No upload-state.sqlite = stage B not deployed here; nothing to grade.
+    now = datetime.now(UTC)
+    assert delivery_checks(_delivery_root(tmp_path), now=now) == []
+
+
+def test_delivery_passes_when_every_closed_segment_is_verified(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    root = _delivery_root(tmp_path)
+    _segment(root, "usb-20260905T120000.opus", age=timedelta(hours=2), now=now)
+    _uploaded(root, "usb-20260905T120000.opus")
+    checks = delivery_checks(root, now=now)
+    lag = next(c for c in checks if c.label == "delivery complete")
+    assert lag.verdict == "pass"
+    assert lag.value == 0.0
+
+
+def test_an_undelivered_backlog_warns_then_fails_by_age(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    root = _delivery_root(tmp_path)
+    _uploaded(root)  # schema only: the uploader exists, has delivered nothing
+    _segment(root, "usb-20260905T120000.opus", age=timedelta(hours=1), now=now)
+    warn = next(
+        c for c in delivery_checks(root, now=now) if c.label == "delivery complete"
+    )
+    assert warn.verdict == "warn"
+    _segment(root, "usb-20260905T110000.opus", age=timedelta(hours=7), now=now)
+    fail = next(
+        c for c in delivery_checks(root, now=now) if c.label == "delivery complete"
+    )
+    assert fail.verdict == "fail"
+    assert fail.value == 2.0
+
+
+def test_the_open_segment_is_not_a_backlog(tmp_path: Path) -> None:
+    # The lexically-newest file with a fresh mtime is ffmpeg's open segment —
+    # the same rule the uploader's scan applies (audiod/src/upload.rs).
+    now = datetime.now(UTC)
+    root = _delivery_root(tmp_path)
+    _uploaded(root)
+    _segment(root, "usb-20260905T120000.opus", age=timedelta(seconds=30), now=now)
+    checks = delivery_checks(root, now=now)
+    assert next(c for c in checks if c.label == "delivery complete").verdict == "pass"
+
+
+def test_a_conflict_warns_without_failing(tmp_path: Path) -> None:
+    # Nothing is lost — the phone/Mac copy is intact — but a person must look:
+    # a 409 means Isis holds DIFFERENT bytes under this name.
+    now = datetime.now(UTC)
+    root = _delivery_root(tmp_path)
+    _conflicted(root, "usb-20260905T120000.opus")
+    conflicts = next(
+        c for c in delivery_checks(root, now=now) if c.label == "no delivery conflicts"
+    )
+    assert conflicts.verdict == "warn"
+    assert "usb-20260905T120000.opus" in conflicts.observed
+
+
+def test_non_segment_files_are_not_counted(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    root = _delivery_root(tmp_path)
+    _uploaded(root)
+    (root / "usb" / "notes.txt").write_bytes(b"x")
+    (root / "ab-compare-x.md").write_bytes(b"x")
+    checks = delivery_checks(root, now=now)
+    assert next(c for c in checks if c.label == "delivery complete").verdict == "pass"

@@ -61,6 +61,7 @@ from recall.health import (
     archive_check,
     blanked_check,
     capture_checks,
+    delivery_checks,
     live_check,
     loss_checks,
     mirror_check,
@@ -1491,6 +1492,8 @@ def _archive_checks(args: argparse.Namespace) -> list[Check]:
     if os.environ.get("RECALL_SYNC_TOKEN"):
         checks.append(mirror_check(unmirrored, slack=_MIRROR_SLACK))
         checks.append(sweep_refusal_check(sweep_refusals))
+    # Quiet until audiod's uploader has run here (stage B): reads its state db.
+    checks.extend(delivery_checks(args.out, now=now))
     checks.append(blanked_check(blanked))
     return checks
 

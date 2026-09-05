@@ -622,3 +622,129 @@ def recorders_on_disk(
             )
         )
     return recorders
+
+
+# --- store-and-forward delivery (docs/architecture.md, stage B4) ---------------------
+
+_DELIVERY_EXTENSIONS = frozenset({"flac", "opus", "ogg", "wav"})
+_DELIVERY_STAMP_LEN = len("YYYYMMDDTHHMMSS")
+_DELIVERY_OPEN_GRACE = timedelta(minutes=3)
+_DELIVERY_WARN = timedelta(minutes=30)
+_DELIVERY_FAIL = timedelta(hours=6)
+_DELIVERY_CONFLICTS_NAMED = 3
+
+
+def _is_segment_of(source: str, filename: str) -> bool:
+    """The delivery grammar — must stay the subset `audiod::upload` ships and
+    recalld's name parser accepts (`<source>-YYYYMMDDTHHMMSS.<ext>`)."""
+    prefix = f"{source}-"
+    if not filename.startswith(prefix):
+        return False
+    rest = filename[len(prefix) :]
+    if "." not in rest:
+        return False
+    stamp, ext = rest.rsplit(".", 1)
+    return (
+        ext in _DELIVERY_EXTENSIONS
+        and len(stamp) == _DELIVERY_STAMP_LEN
+        and stamp[8] == "T"
+        and (stamp[:8] + stamp[9:]).isdigit()
+    )
+
+
+def delivery_checks(out: Path, *, now: datetime) -> list[Check]:
+    """Is the store-and-forward mirror keeping up, and did anything collide?
+
+    Reads `upload-state.sqlite` — audiod's uploader state, the audio-plane side
+    of the filesystem contract — and compares BOTH sides: every grammar-matching
+    file on disk against every verified/conflicted row. A backlog is graded by
+    the age of its OLDEST member (deliveries run oldest-first, so that is how
+    far behind the mirror is); a 409 conflict warns without failing, because
+    nothing was lost — Isis holds different bytes under a name we also hold,
+    and a person has to look.
+
+    Quiet when the uploader has never run here (no state file): a stock
+    deployment without stage B has no mirror to be behind on.
+    """
+    state = out / "upload-state.sqlite"
+    if not state.exists():
+        return []
+    import sqlite3  # noqa: PLC0415 - doctor child only, like repair above
+
+    conn = sqlite3.connect(state)
+    try:
+        handled: set[str] = {
+            row[0] for row in conn.execute("SELECT filename FROM uploads")
+        }
+        conflicts: list[str] = [
+            row[0]
+            for row in conn.execute("SELECT filename FROM conflicts ORDER BY filename")
+        ]
+    finally:
+        conn.close()
+    handled.update(conflicts)
+
+    backlog: list[tuple[str, datetime]] = []
+    for source_dir in sorted(out.iterdir()):
+        if not source_dir.is_dir():
+            continue
+        source = source_dir.name
+        names = sorted(
+            entry.name
+            for entry in source_dir.iterdir()
+            if entry.is_file() and _is_segment_of(source, entry.name)
+        )
+        if not names:
+            continue
+        newest = source_dir / names[-1]
+        newest_mtime = datetime.fromtimestamp(newest.stat().st_mtime, tz=now.tzinfo)
+        if now - newest_mtime < _DELIVERY_OPEN_GRACE:
+            names.pop()  # the segment ffmpeg may still be writing
+        for name in names:
+            if name not in handled:
+                mtime = (source_dir / name).stat().st_mtime
+                backlog.append((name, datetime.fromtimestamp(mtime, tz=now.tzinfo)))
+
+    oldest_age = max((now - mtime for _, mtime in backlog), default=timedelta(0))
+    verdict = "pass"
+    if oldest_age >= _DELIVERY_FAIL:
+        verdict = "fail"
+    elif oldest_age >= _DELIVERY_WARN:
+        verdict = "warn"
+    checks = [
+        Check(
+            section="sync",
+            label="delivery complete",
+            verdict=verdict,
+            observed=(
+                "every closed segment delivered and verified"
+                if not backlog
+                else (
+                    f"{len(backlog)} closed segment(s) undelivered, oldest "
+                    f"{_minutes(oldest_age):.0f}m"
+                )
+            ),
+            expected=f"oldest undelivered < {_minutes(_DELIVERY_WARN):.0f}m",
+            value=float(len(backlog)),
+            unit="segments",
+        )
+    ]
+    named = ", ".join(conflicts[:_DELIVERY_CONFLICTS_NAMED]) + (
+        "…" if len(conflicts) > _DELIVERY_CONFLICTS_NAMED else ""
+    )
+    checks.append(
+        Check(
+            section="sync",
+            label="no delivery conflicts",
+            verdict="pass" if not conflicts else "warn",
+            observed=(
+                "no name held by different bytes"
+                if not conflicts
+                else f"{len(conflicts)} conflict(s) journaled: {named}"
+            ),
+            expected="0 conflicts",
+            value=float(len(conflicts)),
+            unit="conflicts",
+        )
+    )
+    return checks
