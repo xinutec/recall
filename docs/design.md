@@ -93,9 +93,10 @@ raw PCM over TCP to one shared ingest port and are segmented exactly like the US
 mic; the USB mic is the always-on baseline, phones are best-effort. Co-located
 mics hearing the same speech are folded into one *moment* at recall time (best
 source shown, others kept as alternates). Raw per-source audio is retained, so
-richer fusion (SNR-weighted combination, then person-filtered streams) is
-designed in [audio-plane.md](audio-plane.md); its tier-1 alignment is built and
-measured, the fusion itself is gated on a WER bake-off, not yet built.
+a single `room` stream (then person-filtered streams) is designed in
+[audio-plane.md](audio-plane.md); its tier-1 alignment is built and measured.
+SNR-weighted combination was built and measured on 2026-09-05 and did *not*
+clear its WER bake-off, so how `room` is produced is still open.
 Connect/identity/liveness: [devices.md](devices.md).
 > Phone segments are stamped at **capture** time, not arrival: each app announces
 > the epoch of its first PCM byte in the handshake and the server renames that

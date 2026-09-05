@@ -1,11 +1,27 @@
 //! Per-band SNR-weighted fusion: for each time-frequency bin, weight each
 //! aligned source by how far its energy stands above its own noise floor in
-//! that band, and take phase from whichever source stands highest. The
-//! design's magnitude tier (docs/audio-plane.md): immune to phone AGC and
-//! noise suppression, which break linear-mixture assumptions but not "who
-//! hears this sound best".
+//! that band. The design's magnitude tier (docs/audio-plane.md): immune to
+//! phone AGC and noise suppression, which break linear-mixture assumptions
+//! but not "who hears this sound best".
 
 use crate::stft::Spectrum;
+
+/// Which source a fused bin takes its phase from.
+///
+/// The sources are aligned to onset accuracy, not to the sample, so their
+/// phases at one bin carry no common reference. Taking each bin's phase from
+/// whichever source is loudest therefore splices unrelated phases together,
+/// and the donor changes between neighbouring bins and frames: the result is
+/// incoherent, and an argmax that flips on a rounding difference makes it
+/// unstable under recompilation. `Reference` keeps one channel's phase
+/// throughout, leaving the other sources to shape magnitude alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhaseSource {
+    /// Keep the phase of one channel, named by its index in `sources`.
+    Reference(usize),
+    /// Take each bin's phase from the source standing highest above its floor.
+    HighestSnr,
+}
 
 /// Per-bin noise floor of one source: a low quantile of magnitude across the
 /// window's frames. A quantile rather than a minimum, so one dropout frame of
@@ -27,13 +43,17 @@ pub fn noise_floors(frames: &[Spectrum], quantile: f64) -> Vec<f32> {
 }
 
 /// Fuse aligned spectrograms into one. `sources[s]` and `floors[s]` belong to
-/// source `s`; all spectrograms must share frame count and bin count (the
-/// caller aligned and analysed them on one grid). Weight per bin = the
-/// source's SNR (power above its own floor) normalised across sources; phase
-/// = the highest-SNR source's. A bin where every source sits at its floor
-/// fuses to the plain average — silence in, silence out, never a division
-/// blow-up.
-pub fn fuse(sources: &[Vec<Spectrum>], floors: &[Vec<f32>]) -> Vec<Spectrum> {
+/// source `s`; all spectrograms must share frame count and bin count, and a
+/// `PhaseSource::Reference` index must name one of them (the caller aligned
+/// and analysed them on one grid). Weight per bin = the source's SNR (power
+/// above its own floor) normalised across sources. A bin where every source
+/// sits at its floor fuses to the plain average — silence in, silence out,
+/// never a division blow-up.
+pub fn fuse(
+    sources: &[Vec<Spectrum>],
+    floors: &[Vec<f32>],
+    phase_from: PhaseSource,
+) -> Vec<Spectrum> {
     let Some(first) = sources.first() else {
         return Vec::new();
     };
@@ -72,7 +92,11 @@ pub fn fuse(sources: &[Vec<Spectrum>], floors: &[Vec<f32>]) -> Vec<Spectrum> {
                     magnitude += spec[t][k].norm() / sources.len() as f32;
                 }
             }
-            let phase = sources[best.1][t][k];
+            let donor = match phase_from {
+                PhaseSource::Reference(index) => index,
+                PhaseSource::HighestSnr => best.1,
+            };
+            let phase = sources[donor][t][k];
             let unit = if phase.norm() > eps {
                 phase / phase.norm()
             } else {

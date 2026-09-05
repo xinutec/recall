@@ -10,7 +10,7 @@
 use audiod::align::best_lag;
 use audiod::decode::{to_f32, window_pcm};
 use audiod::envelope::rms_buckets_at;
-use audiod::fuse::{fuse, noise_floors};
+use audiod::fuse::{PhaseSource, fuse, noise_floors};
 use audiod::stft::Stft;
 use audiod::wav::write_mono16;
 use chrono::{DateTime, Utc};
@@ -41,6 +41,7 @@ struct Args {
     start: DateTime<Utc>,
     minutes: usize,
     out: PathBuf,
+    phase_from: PhaseSource,
 }
 
 fn parse_args() -> Option<Args> {
@@ -50,6 +51,7 @@ fn parse_args() -> Option<Args> {
     let mut start = None;
     let mut minutes = 10usize;
     let mut out = None;
+    let mut phase_from = PhaseSource::Reference(0);
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let value = args.next()?;
@@ -66,6 +68,13 @@ fn parse_args() -> Option<Args> {
             }
             "--minutes" => minutes = value.parse().ok()?,
             "--out" => out = Some(PathBuf::from(value)),
+            "--phase" => {
+                phase_from = match value.as_str() {
+                    "reference" => PhaseSource::Reference(0),
+                    "highest-snr" => PhaseSource::HighestSnr,
+                    _ => return None,
+                };
+            }
             _ => return None,
         }
     }
@@ -76,6 +85,7 @@ fn parse_args() -> Option<Args> {
         start: start?,
         minutes,
         out: out?,
+        phase_from,
     })
 }
 
@@ -83,7 +93,8 @@ fn main() -> ExitCode {
     let Some(args) = parse_args() else {
         eprintln!(
             "usage: fuse-window --root <archive> --reference <source> --sources <a,b,..> \
-             --start <RFC3339> --minutes <n> --out <wav>"
+             --start <RFC3339> --minutes <n> --out <wav> \
+             [--phase reference|highest-snr]"
         );
         return ExitCode::FAILURE;
     };
@@ -130,7 +141,7 @@ fn main() -> ExitCode {
             .iter()
             .map(|s| noise_floors(s, FLOOR_QUANTILE))
             .collect();
-        fused_out.extend(stft.synthesise(&fuse(&specs, &floors)));
+        fused_out.extend(stft.synthesise(&fuse(&specs, &floors, args.phase_from)));
     }
     if let Err(err) = write_mono16(&args.out, RATE, &fused_out) {
         eprintln!("fuse-window: cannot write {}: {err}", args.out.display());
