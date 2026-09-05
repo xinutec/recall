@@ -84,6 +84,11 @@ jobs:
           # production: transcripts served perfectly, every audio request died.
           docker run --rm xinutec/recall:ci \
             sh -c 'for b in ffmpeg ffprobe sox flac; do command -v "$b" >/dev/null || { echo "missing: $b"; exit 1; }; done'
+          # The second container in the pod (docs/architecture.md, stage A5): a
+          # broken or absent recalld would pass every Python smoke above and
+          # crash-loop only on Isis. Bare argv prints usage — proof it runs at all.
+          docker run --rm xinutec/recall:ci \
+            sh -c 'recalld 2>&1 | grep -q "usage: recalld"'
 
       - uses: docker/build-push-action@v7
         with:
