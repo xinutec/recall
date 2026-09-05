@@ -103,6 +103,13 @@ class StreamService : Service() {
         while (running) {
             var record: AudioRecord? = null
             var socket: Socket? = null
+            // Store-and-forward shadow (docs/architecture.md, stage C1): beside
+            // the live stream, the same PCM lands in closed, capture-stamped
+            // local segments that SegmentUpload delivers with verified
+            // receipts. Per CYCLE, not per service: a segment must never span
+            // a reconnect gap — its name claims its audio is continuous from
+            // the stamp, and the mic really was closed in between.
+            var segments: SegmentWriter? = null
             try {
                 // Connect FIRST, open the mic only on success. The recall host is a
                 // private home-LAN address, reachable only when the phone is on the
@@ -140,6 +147,15 @@ class StreamService : Service() {
                 // The mic opened: clear any earlier failure so a recovered app stops
                 // reporting a fault it no longer has.
                 MicState.setMicOk(true)
+                segments =
+                    getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC)?.let { dir ->
+                        SegmentWriter(
+                            dir,
+                            deviceId,
+                            onFailure = { Log.w(TAG, it) },
+                            onSegmentClosed = { SegmentUpload.enqueue(this) },
+                        ).also { it.start() }
+                    }
                 val out: OutputStream = socket.getOutputStream()
                 // Announce who we are on the shared ingest port, then stream PCM. The
                 // server reads exactly this line, registers us by id, and segments the
@@ -202,6 +218,7 @@ class StreamService : Service() {
                         val n = record.read(chunk, 0, chunk.size)
                         if (n > 0) {
                             spool.offer(chunk, n)
+                            segments?.offer(chunk, n)
                             MicState.setLevel(peakLevel(chunk, n))
                         } else if (n < 0) {
                             throw IllegalStateException("AudioRecord.read returned $n")
@@ -251,6 +268,10 @@ class StreamService : Service() {
                 runCatching { record?.stop() }
                 runCatching { record?.release() }
                 runCatching { socket?.close() }
+                // Close the cycle's segment (the mic is off; the file is
+                // final) and offer the batch for delivery.
+                runCatching { segments?.close() }
+                if (segments != null) SegmentUpload.enqueue(this)
             }
             // No wakelock here: while disconnected the CPU may sleep between
             // attempts (the OS naturally stretches this during doze), so a paused

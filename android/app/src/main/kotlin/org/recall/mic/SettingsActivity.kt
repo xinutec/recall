@@ -47,10 +47,12 @@ class SettingsActivity : ComponentActivity() {
                     initialHost = Prefs.host(this),
                     initialControlHost = Prefs.controlHost(this),
                     initialDeviceToken = Prefs.deviceToken(this),
+                    initialIngestToken = Prefs.ingestToken(this),
                     deviceId = Prefs.deviceId(this),
                     onHostChanged = { Prefs.save(this, it, Prefs.enabled(this)) },
                     onControlHostChanged = { Prefs.saveControlHost(this, it) },
                     onDeviceTokenChanged = { Prefs.saveDeviceToken(this, it) },
+                    onIngestTokenChanged = { Prefs.saveIngestToken(this, it) },
                     onBack = { finish() },
                 )
             }
@@ -64,15 +66,18 @@ fun SettingsScreen(
     initialHost: String,
     initialControlHost: String,
     initialDeviceToken: String,
+    initialIngestToken: String,
     deviceId: String,
     onHostChanged: (String) -> Unit,
     onControlHostChanged: (String) -> Unit,
     onDeviceTokenChanged: (String) -> Unit,
+    onIngestTokenChanged: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     var host by remember { mutableStateOf(initialHost) }
     var controlHost by remember { mutableStateOf(initialControlHost) }
     var deviceToken by remember { mutableStateOf(initialDeviceToken) }
+    var ingestToken by remember { mutableStateOf(initialIngestToken) }
     val running by MicState.running.collectAsStateWithLifecycle()
 
     Scaffold(
@@ -152,6 +157,24 @@ fun SettingsScreen(
                 "Isis requires a sign-in, and a phone can't do one — this is what lets " +
                     "uploads through. Leave it empty for a host with no sign-in. Uploads " +
                     "fail with 401 if it is wrong.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            OutlinedTextField(
+                value = ingestToken,
+                onValueChange = {
+                    ingestToken = it.trim()
+                    onIngestTokenChanged(ingestToken)
+                },
+                label = { Text("segment token") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                "This device's own credential for delivering recorded segments to the " +
+                    "archive. Write-only and pinned to this device — losing the phone " +
+                    "costs nothing but its uploads. Empty sends none.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

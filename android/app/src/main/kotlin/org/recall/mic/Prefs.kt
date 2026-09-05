@@ -21,6 +21,7 @@ object Prefs {
     private const val KEY_CONTROL_HOST = "control_host"
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_DEVICE_TOKEN = "device_token"
+    private const val KEY_INGEST_TOKEN = "ingest_token"
 
     // Legacy key from the manual-device-id version; adopted for source continuity.
     private const val KEY_LEGACY_SOURCE_ID = "source_id"
@@ -31,6 +32,10 @@ object Prefs {
     // out-of-the-box default and existing installs self-heal without reconfiguration.
     // The stream still goes to the recorder [host]; only the API moved here.
     const val DEFAULT_CONTROL_HOST = "10.100.0.2"
+
+    // recalld's ingest plane (recall/docs/architecture.md, stage A): same host as
+    // the control plane, its own port. Not user-set until a reason appears.
+    const val INGEST_BASE = "http://10.100.0.2:8001"
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -61,6 +66,19 @@ object Prefs {
     fun saveDeviceToken(ctx: Context, token: String) {
         prefs(ctx).edit().putString(KEY_DEVICE_TOKEN, token.trim()).apply()
     }
+
+    /** The fourth credential plane's per-device bearer: `PUT` this phone's own
+     * segments to recalld, and nothing else — not read, not another device's
+     * source. Empty = send no header (an open dev server). */
+    fun ingestToken(ctx: Context): String = prefs(ctx).getString(KEY_INGEST_TOKEN, "") ?: ""
+
+    fun saveIngestToken(ctx: Context, token: String) {
+        prefs(ctx).edit().putString(KEY_INGEST_TOKEN, token.trim()).apply()
+    }
+
+    fun ingestBase(
+        @Suppress("UNUSED_PARAMETER") ctx: Context,
+    ): String = INGEST_BASE
 
     /** This device's stable recall source id, announced in the stream handshake.
      * Resolved once and persisted — nothing for the user to set; renamable in the web

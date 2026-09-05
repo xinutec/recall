@@ -389,9 +389,23 @@ B3 lands.*
 
 ### Stage C — phones and geb flip, streaming retires
 
-- **C1. Android store-and-forward.** Record closed FLAC segments (platform
-  encoder), cache, upload, evict per the recorder contract; unmetered-only
-  default. The streaming path stays until C4.
+- **C1. Android store-and-forward.** *Shadow built 2026-09-05:* the mic loop
+  tees into capture-stamped closed segments (`SegmentWriter`/`SegmentStore`,
+  the meeting queue's state-is-a-directory idiom), delivered by
+  `SegmentUpload` with the receipt re-hash rule, unmetered-only, evicting
+  verified-delivered oldest-first under a ~2 GiB ceiling and never anything
+  else. WAV first, deliberately: the protocol is container-agnostic and
+  MediaCodec's FLAC header behaviour gets probed on-device (C1b) rather
+  than assumed. Streaming is untouched; a segment never spans a reconnect
+  gap (the name claims continuity from its stamp).
+  **Open, and Pippijn's: the mic-open gate at the C4 flip.** Today the mic
+  opens only while the stream connects to the Mac — a home-presence proxy.
+  Store-and-forward decouples recording from delivery, so the gate must be
+  chosen: keep Mac-connect (outage still silences phones), gate on home
+  presence (recommended — survives a Mac outage, keeps recording inside
+  the consent boundary), or record whenever unpaused (records outside the
+  house — a widening only he can choose). Shadow behaves identically under
+  all three.
 - **C2. iOS store-and-forward.** Same, AVAudioFile/kAudioFormatFLAC.
 - **C3. geb.** Replace `python -m recall.mic` with `audiod capture` +
   `audiod upload` under systemd via nix.
