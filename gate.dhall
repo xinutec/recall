@@ -116,6 +116,15 @@ in  { name = "recall"
         , argv = G.inDevShell [ "cargo", "fmt", "--all", "--check" ]
         , timeout_s = 300
         }
+      , {-  The same, for the fleet's system-of-record daemon
+            (recalld/, docs/architecture.md).
+        -}
+        G.Check::{
+        , name = "cargo fmt --check (recalld)"
+        , cwd = "recalld"
+        , argv = G.inDevShell [ "cargo", "fmt", "--all", "--check" ]
+        , timeout_s = 300
+        }
       , {-  `.venv` IS a store path, and this row is what makes it one.
 
             It was a directory uv built from the same `uv.lock`, and the check
@@ -230,7 +239,23 @@ in  { name = "recall"
         , argv = G.inDevShell [ "cargo", "test" ]
         , timeout_s = 1800
         }
+      , G.Check::{
+        , name = "cargo clippy (recalld)"
+        , cwd = "recalld"
+        , argv =
+            G.inDevShell
+              [ "cargo", "clippy", "--all-targets", "--", "-D", "warnings" ]
+        , env = G.clippyTarget
+        , timeout_s = 1800
+        }
+      , G.Check::{
+        , name = "cargo test (recalld)"
+        , cwd = "recalld"
+        , argv = G.inDevShell [ "cargo", "test" ]
+        , timeout_s = 1800
+        }
       , G.cargoDoc // { cwd = "audiod" }
+      , G.cargoDoc // { cwd = "recalld" }
       , {-  Unconditional. The script's guard was `[ ! -x
             frontend/node_modules/.bin/eslint ]`, and its own comment says why
             that is not merely a speed-up: a node_modules left behind by npm

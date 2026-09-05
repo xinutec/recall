@@ -5,6 +5,9 @@
 //!   audiod capture --root <archive> --id usb [--device <CoreAudio name>]
 //!       the local-mic capture pipeline (port of `recall record`; deployment
 //!       still runs the Python capture agent until the flip)
+//!   audiod upload  --root <archive> --url <recalld base> [--token-file <path>]
+//!       one store-and-forward delivery pass (docs/architecture.md, stage B):
+//!       closed segments → recalld, sha-256 receipts verified, state recorded
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -12,7 +15,8 @@ use std::process::ExitCode;
 fn usage() -> ExitCode {
     eprintln!(
         "usage: audiod ingest --root <data-root> [--port <port>]\n\
-        \x20      audiod capture --root <data-root> --id <source> [--device <name>] [--seconds <n>]"
+        \x20      audiod capture --root <data-root> --id <source> [--device <name>] [--seconds <n>]\n\
+        \x20      audiod upload --root <data-root> --url <base> [--token-file <path>] [--max <n>]"
     );
     ExitCode::FAILURE
 }
@@ -31,6 +35,9 @@ fn main() -> ExitCode {
     let mut id: Option<String> = None;
     let mut device: Option<String> = None;
     let mut seconds: Option<u64> = None;
+    let mut url: Option<String> = None;
+    let mut token_file: Option<PathBuf> = None;
+    let mut max: usize = 500;
     while let Some(arg) = args.next() {
         let Some(value) = args.next() else {
             return usage();
@@ -43,6 +50,12 @@ fn main() -> ExitCode {
             },
             "--id" => id = Some(value),
             "--device" => device = Some(value),
+            "--url" => url = Some(value),
+            "--token-file" => token_file = Some(PathBuf::from(value)),
+            "--max" => match value.parse() {
+                Ok(parsed) => max = parsed,
+                Err(_) => return usage(),
+            },
             "--seconds" => match value.parse() {
                 Ok(parsed) => seconds = Some(parsed),
                 Err(_) => return usage(),
@@ -61,6 +74,36 @@ fn main() -> ExitCode {
                 return usage();
             };
             audiod::capture_run::serve_paused_aware(&root, &id, device.as_deref(), &config, seconds)
+        }
+        Some("upload") => {
+            let Some(url) = url else {
+                return usage();
+            };
+            // The token rides a file, never argv: argv is world-readable in
+            // `ps`, and the fleet's secrets stay out of the nix store the
+            // same way.
+            let token = match token_file {
+                None => None,
+                Some(path) => match std::fs::read_to_string(&path) {
+                    Ok(text) => Some(text.trim().to_owned()),
+                    Err(err) => {
+                        eprintln!("audiod: cannot read token file {}: {err}", path.display());
+                        return ExitCode::FAILURE;
+                    }
+                },
+            };
+            let summary = audiod::upload::run_pass(&audiod::upload::Config {
+                root,
+                base_url: url,
+                token,
+                max_per_pass: max,
+                open_grace: audiod::upload::OPEN_GRACE,
+            });
+            if summary.failed == 0 {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
         }
         _ => usage(),
     }

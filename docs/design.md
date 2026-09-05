@@ -96,7 +96,9 @@ source shown, others kept as alternates). Raw per-source audio is retained, so
 a single `room` stream (then person-filtered streams) is designed in
 [audio-plane.md](audio-plane.md); its tier-1 alignment is built and measured.
 SNR-weighted combination was built and measured on 2026-09-05 and did *not*
-clear its WER bake-off, so how `room` is produced is still open.
+clear its WER bake-off; calibrated per-block *selection* tied the best
+microphone exactly, and producing `room` that way — on the server, from
+store-and-forward-delivered segments — is decided: [architecture.md](architecture.md).
 Connect/identity/liveness: [devices.md](devices.md).
 > Phone segments are stamped at **capture** time, not arrival: each app announces
 > the epoch of its first PCM byte in the handshake and the server renames that
@@ -240,12 +242,16 @@ capture, ingest and (next) cross-mic fusion — the invariant-heavy half where a
 bug loses audio. The two halves talk only through the filesystem + SQLite, so
 neither depends on the other's runtime. Migration policy: Python code is
 rewritten in Rust **when a task touches it** — then without hesitation, and
-never by sweeping in untouched modules; the model calls stay Python. Stack: SQLite+FTS5, Silero VAD,
+never by sweeping in untouched modules; the model calls stay Python. The
+end-state of that migration is decided and staged in
+[architecture.md](architecture.md): Rust recorders and a Rust system-of-record
+daemon on the fleet, with Python reduced to the model shims and training tools. Stack: SQLite+FTS5, Silero VAD,
 pyannote 3.1, mlx-whisper, Nix devshell + uv venv, launchd services. Engineering
 conventions (strict typing, TDD): [conventions.md](conventions.md).
 
 ## 10. Open questions
 
-Retention (forever vs rolling window); audio scope (all vs speech-padded);
+Retention is **closed** ([architecture.md](architecture.md): Opus forever,
+lossless for a rolling window). Still open: audio scope (all vs speech-padded);
 re-transcription cadence (scheduled vs on-demand). The recall/Q&A LLM is
 Qwen2.5-7B-Instruct (4-bit, mlx-lm) — first pick, revisit as local models move.

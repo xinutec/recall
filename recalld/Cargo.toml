@@ -1,0 +1,50 @@
+# recalld — recall's system-of-record daemon on the fleet (docs/architecture.md).
+#
+# The Rust replacement for the Python fleet tier, built stage by stage. Stage A
+# is the ingest plane: an append-only blob store behind an authenticated HTTP
+# surface, with sha-256 receipts the recorders verify before they will ever
+# evict a local copy. Later stages add VAD, the room builder, the work queue,
+# and finally the browsing API.
+#
+# It shares no code with audiod yet; stage D extracts the DSP both need into a
+# workspace library. What they already share is posture: no unsafe, pedantic
+# clippy, and the same segment-name grammar (`<source>-YYYYMMDDTHHMMSS.<ext>`).
+[package]
+name = "recalld"
+version = "0.1.0"
+edition = "2024"
+
+[lints.rust]
+# Sockets, files and SQL — nothing here needs unsafe, and `forbid` makes
+# adding any a visible edit to this file.
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# A binary plus its own tests, not a published API; `# Errors` sections would
+# document a boundary that does not exist.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+# Bundled so the build needs no system sqlite at link time — the same
+# hermeticity reason audiod gives, doubly so inside the Docker build.
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The atomic-write half of the durability order: stream into a temp file in
+# the same filesystem, fsync, then rename into place — a name never points at
+# partial bytes.
+tempfile = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

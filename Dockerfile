@@ -29,8 +29,29 @@ RUN apt-get update \
 COPY frontend/ ./
 RUN pnpm run build
 
+# --- recalld build ---
+# The Rust system-of-record daemon (docs/architecture.md, stage A). Built here so
+# the one fleet image carries both tiers: the Python api container and the recalld
+# ingest container run from the same image with different commands — one artifact
+# to version, push and roll.
+FROM rust:1-slim-trixie AS recalld
+WORKDIR /build/recalld
+# Manifest + lockfile first: dependency compilation is the slow layer, and this
+# keeps it cached across source-only changes.
+COPY recalld/Cargo.toml recalld/Cargo.lock ./
+RUN mkdir src && echo 'fn main() {}' > src/main.rs \
+    && touch src/lib.rs \
+    && cargo build --release --locked \
+    && rm -rf src
+COPY recalld/src/ src/
+# The dummy build above cached a lib/bin for the same names; touch the sources so
+# cargo sees them as newer and relinks the real ones.
+RUN touch src/lib.rs src/main.rs && cargo build --release --locked
+
 # --- runtime ---
-FROM python:3.12-slim
+# -trixie pinned explicitly: the recalld stage links against this release's glibc,
+# so the two FROMs must name the same Debian rather than drift apart on a float.
+FROM python:3.12-slim-trixie
 # The app shells out to these; a missing one is a 500 at request time, not a boot error,
 # so it hides until someone presses play. `sox` was: the image had ffmpeg only, and every
 # audio request on the fleet died with FileNotFoundError deep in loudness normalisation
@@ -55,6 +76,7 @@ RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin recall
 WORKDIR /app
 COPY src/ /app/src/
 COPY --from=frontend /build/frontend/dist /app/frontend/dist
+COPY --from=recalld /build/recalld/target/release/recalld /usr/local/bin/recalld
 # _REPO in recall.api is three parents up from src/recall/api.py, i.e. /app — so the
 # frontend resolves at /app/frontend/dist/recall-web/browser and PYTHONPATH is /app/src.
 RUN mkdir -p /app/logs && chown -R 1000:1000 /app

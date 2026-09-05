@@ -19,5 +19,6 @@ pub mod segmenter;
 pub mod server;
 pub mod stft;
 pub mod store;
+pub mod upload;
 pub mod wav;
 pub mod wire;

@@ -87,6 +87,22 @@
     {
       "argv": [
         "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "cwd": "recalld",
+      "env": {},
+      "name": "cargo fmt --check (recalld)",
+      "timeout_s": 300
+    },
+    {
+      "argv": [
+        "nix",
         "build",
         "--no-warn-dirty",
         ".#dev-env",
@@ -224,11 +240,63 @@
         "--no-warn-dirty",
         "--command",
         "cargo",
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "recalld",
+      "env": {
+        "CARGO_TARGET_DIR": "target/clippy"
+      },
+      "name": "cargo clippy (recalld)",
+      "timeout_s": 1800
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "cargo",
+        "test"
+      ],
+      "cwd": "recalld",
+      "env": {},
+      "name": "cargo test (recalld)",
+      "timeout_s": 1800
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "cargo",
         "doc",
         "--no-deps",
         "--workspace"
       ],
       "cwd": "audiod",
+      "env": {
+        "RUSTDOCFLAGS": "-D rustdoc::broken_intra_doc_links"
+      },
+      "name": "rustdoc resolves every intra-doc link",
+      "timeout_s": 900
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "cargo",
+        "doc",
+        "--no-deps",
+        "--workspace"
+      ],
+      "cwd": "recalld",
       "env": {
         "RUSTDOCFLAGS": "-D rustdoc::broken_intra_doc_links"
       },

@@ -13,7 +13,7 @@ in the house. Everything stays on-device.
 - **Ingesting discrete meeting recordings (download → ingest → transcribe → clean):** [`docs/meetings.md`](docs/meetings.md)
 - **Meeting recorder in the Android app (record on the phone, upload as a session):** [`docs/meeting-recorder.md`](docs/meeting-recorder.md)
 - **Conventions (strict typing, TDD):** [`docs/conventions.md`](docs/conventions.md)
-- **Proposed store-and-forward capture (open questions, not built):** [`docs/store-and-forward.md`](docs/store-and-forward.md)
+- **Target architecture (store-and-forward, one room stream — decided, being built):** [`docs/architecture.md`](docs/architecture.md)
 
 ## Web app
 
