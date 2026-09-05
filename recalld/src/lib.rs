@@ -12,3 +12,4 @@ pub mod queue;
 pub mod room;
 pub mod store;
 pub mod tokens;
+pub mod vad;

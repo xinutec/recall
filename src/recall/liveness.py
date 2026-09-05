@@ -74,7 +74,22 @@ def source_statuses(
         window = active_window(row.kind, on_fleet=on_fleet)
         active = seen is not None and now - seen < window
         shipped = delivered.get(row.id)
-        if shipped is not None and now - shipped < DELIVERED_ACTIVE_WITHIN:
+        # ⚠ A marker that went stale RECENTLY is a deliberate stop, and that is
+        # NEWER information than a segment captured just before it. Without this,
+        # delivery-proof resurrects a phone the moment its owner stops it:
+        # measured 2026-09-05, pixel9 stayed green for the full five minutes
+        # after stopping, where it used to go idle in twelve seconds. A phone
+        # streams as its PRIMARY path, so its marker falling silent IS the
+        # event; geb's marker is hours stale only because it never streams at
+        # all. How stale is what tells the two apart.
+        stopped_recently = (
+            seen is not None and not active and now - seen < DELIVERED_ACTIVE_WITHIN
+        )
+        if (
+            not stopped_recently
+            and shipped is not None
+            and now - shipped < DELIVERED_ACTIVE_WITHIN
+        ):
             active = True
         # Show whichever evidence is freshest, so a shadow-delivering phone's
         # per-chunk marker is never dragged backwards by its slower shadow.

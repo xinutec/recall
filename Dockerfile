@@ -41,6 +41,14 @@ WORKDIR /build
 # audiocore dependency — audiod rides along as text. Layer caching comes from
 # buildx's registry cache rather than a dummy-source dance, which a workspace
 # would make three times as fiddly for a build measured in low minutes.
+# onnxruntime (pulled in by `ort` for stage D4's silero VAD) is C++, so the link
+# needs libstdc++'s development symlink. `rust:1-slim` ships gcc but not g++, and
+# this fails at LINK time — after the whole workspace has compiled — so it costs a
+# full build to discover. The runtime image already carries libstdc++.so.6, so
+# only the builder needs this.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends g++ \
+    && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY audiocore/ audiocore/
 COPY audiod/ audiod/

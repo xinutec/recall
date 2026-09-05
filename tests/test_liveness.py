@@ -114,3 +114,50 @@ def test_a_streaming_phone_keeps_its_own_fresher_evidence() -> None:
 def test_delivered_is_optional_so_the_mac_path_is_unchanged() -> None:
     last_active = {"usb": NOW - timedelta(seconds=2)}
     assert source_statuses(SOURCES, last_active, NOW)[0].active is True
+
+
+# --- a stop must not be undone by the segment captured just before it --------
+#
+# Shipping delivery-proof (above) fixed geb's false "off" and introduced a false
+# "on" next to it: pixel9 stopped streaming and stayed green for five minutes,
+# measured 2026-09-05 (marker frozen at 20:08:13, last capture 20:07:19, flipped
+# at 20:12:19 exactly). A phone streams as its PRIMARY path, so its marker going
+# stale is the deliberate act; geb's marker is hours stale because it never
+# streams at all. The discriminator is HOW stale.
+
+
+def test_a_phone_that_just_stopped_streaming_goes_idle_despite_a_fresh_delivery() -> (
+    None
+):
+    # pixel9's exact case: stopped ~1 min ago, last segment captured just before.
+    last_active = {"pixel9": NOW - timedelta(minutes=1)}
+    delivered = {"pixel9": NOW - timedelta(minutes=1)}
+    by_id = {
+        s.source_id: s
+        for s in source_statuses(SOURCES, last_active, NOW, delivered=delivered)
+    }
+    assert by_id["pixel9"].active is False
+
+
+def test_a_recorder_that_never_streams_is_still_proved_by_delivery() -> None:
+    # geb: marker frozen hours ago at the C3 cutover, recording perfectly.
+    last_active = {"geb": NOW - timedelta(hours=2)}
+    delivered = {"geb": NOW - timedelta(minutes=1)}
+    assert (
+        source_statuses([GEB], last_active, NOW, delivered=delivered)[0].active is True
+    )
+
+
+def test_a_never_seen_source_is_proved_by_delivery() -> None:
+    # No marker at all — a store-and-forward recorder the stream path never knew.
+    assert source_statuses([GEB], {}, NOW, delivered={"geb": NOW})[0].active is True
+
+
+def test_the_stop_only_outranks_delivery_while_it_is_recent() -> None:
+    # Past the delivered window a stale marker no longer means "just stopped";
+    # it means this source is not using the stream path, so delivery rules again.
+    last_active = {"geb": NOW - timedelta(minutes=6)}
+    delivered = {"geb": NOW - timedelta(seconds=30)}
+    assert (
+        source_statuses([GEB], last_active, NOW, delivered=delivered)[0].active is True
+    )

@@ -55,20 +55,20 @@ def _register_sources_route(
     def _gate_delivered(
         delivered: dict[str, datetime],
         rows: list[SourceRow],
-        usb_recording: bool,
+        capture_running: bool,
     ) -> dict[str, datetime]:
         """Delivered segments prove a recorder is running when nothing streams —
-        but they are up to a segment old, and the local mic's pause must read
-        idle AT ONCE. So the mic keeps its pause gate here too: a paused mic must
-        not be resurrected for five minutes by audio it captured before the
-        pause. Sources that are not devices (room, meetings) never reach this."""
+        but they are up to a segment old, so a PAUSE must discard them outright.
+        Otherwise audio captured in the seconds before the pause keeps a dot
+        green for the whole delivered window, which is the opposite of the
+        promise a pause makes. This applies to EVERY kind, not just the local
+        mic: a pause stops the phones and the machines too, so none of them may
+        be resurrected by what they recorded just before it. Sources that are
+        not devices (room, meetings) never reach this."""
         by_id = {row.id: row for row in rows}
-        return {
-            source: when
-            for source, when in delivered.items()
-            if source in by_id
-            and (by_id[source].kind is SourceKind.TCP_PCM or usb_recording)
-        }
+        if not capture_running:
+            return {}
+        return {source: when for source, when in delivered.items() if source in by_id}
 
     def _local_last_active(
         rows: list[SourceRow], now: datetime, delivered: dict[str, datetime]

@@ -2364,3 +2364,29 @@ def test_a_paused_mic_is_not_resurrected_by_its_own_delivered_segments(
         s["id"]: s for s in TestClient(api.app).get("/api/sources").json()["items"]
     }
     assert items["usb"]["active"] is False
+
+
+def test_a_household_pause_silences_delivered_evidence_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A pause stops every recorder, so segments captured just before it must not
+    # keep any dot green for the delivered window — the same "idle at once"
+    # promise the mic already had, extended to the store-and-forward proof.
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr("recall.capture_control.capture_running", lambda: True)
+    monkeypatch.setattr("recall.capture_control.is_paused", lambda root, now: True)
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.register_source(
+        AudioSource(id="geb", name="geb", kind=SourceKind.TCP_PCM, spec="")
+    )
+    store.close()
+
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        "recall.api_devices.delivered_liveness",
+        lambda: {"geb": now - timedelta(seconds=30)},
+    )
+    items = {
+        s["id"]: s for s in TestClient(api.app).get("/api/sources").json()["items"]
+    }
+    assert items["geb"]["active"] is False

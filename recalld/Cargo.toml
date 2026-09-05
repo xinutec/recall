@@ -51,6 +51,20 @@ serde_json = "1"
 tempfile = "3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# ONNX runtime for the silero VAD (stage D4). Default features are mirrored
+# EXCEPT the TLS backend: `tls-native` pulls openssl-sys, which needs libssl-dev
+# — absent from `rust:1-slim-trixie`, so the Docker stage failed to build while
+# macOS (with openssl to hand) passed happily. rustls needs no system library,
+# so the two environments agree.
+ort = { version = "2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "ndarray",
+    "tracing",
+    "download-binaries",
+    "tls-rustls",
+    "copy-dylibs",
+    "api-27",
+] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
