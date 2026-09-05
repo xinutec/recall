@@ -463,7 +463,19 @@ B3 lands.*
   reference an honest speech gate. Because the builder runs over the
   delivered archive, the referee (room vs best-single, June corpus) runs
   OFFLINE and remains the acceptance gate before stage E lets anything
-  transcribe room.
+  transcribe room. *Confirmation run 2026-09-05, raw rank:* the rebuild
+  swept the June referee window (`Counter({'usb': 29})`), the window
+  assembled 29/30 blocks with the missing minute laid as counted silence,
+  and the referee scored **median WER 0.229 room vs 0.229 usb — the
+  predicted tie, landed exactly**. ⚠ **The tie is TAUTOLOGICAL and must not
+  be read as a quality result**: the room chose usb in every block, so the
+  fused audio IS the usb audio, and 37 of the 38 cases produced BYTE-
+  IDENTICAL transcripts (the 38th differs in text and scores the same).
+  What it does prove is that the store-and-forward path is TRANSPARENT —
+  FLAC block delivery, window reassembly and decode reproduce the archived
+  mic's transcript rather than degrading it. It cannot discriminate the raw
+  rank from any rule that also picks usb; that discrimination needs a
+  window where the best mic CHANGES, which is D4's job to make measurable.
 - **D4. VAD at ingest** (silero ONNX). Liveness + quiet evidence + priority.
 - **D5. Retention.** Window transcode to Opus + enforcement, measured cost.
 
