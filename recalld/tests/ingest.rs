@@ -270,3 +270,42 @@ async fn a_blob_without_a_row_heals_on_redelivery() {
     let (_, listing) = send(&h.app, get("/ingest/v1/segments?source=usb", None)).await;
     assert_eq!(listing["segments"].as_array().expect("array").len(), 1);
 }
+
+// --- liveness for store-and-forward recorders (#1428) ------------------------
+
+#[tokio::test]
+async fn liveness_reports_each_source_newest_capture_time() {
+    let h = harness(Some("* write\n"), Some("read"));
+    // Two sources, delivered out of order — the NEWEST capture must win.
+    for name in [
+        "geb-20260905T100000.opus",
+        "geb-20260905T100200.opus",
+        "geb-20260905T100100.opus",
+    ] {
+        let (status, _) = send(&h.app, put("geb", name, b"a", Some("write"))).await;
+        assert_eq!(status, StatusCode::OK, "{name}");
+    }
+    let (status, _) = send(
+        &h.app,
+        put("usb", "usb-20260905T090000.opus", b"b", Some("write")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = send(&h.app, get("/ingest/v1/liveness", Some("read"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["sources"]["geb"], "2026-09-05T10:02:00Z");
+    assert_eq!(body["sources"]["usb"], "2026-09-05T09:00:00Z");
+    let _ = &h.dir;
+}
+
+#[tokio::test]
+async fn liveness_is_behind_the_read_plane_not_the_write_one() {
+    let h = harness(Some("* write\n"), Some("read"));
+    // A recorder's WRITE token must not open the read side.
+    let (status, _) = send(&h.app, get("/ingest/v1/liveness", Some("write"))).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = send(&h.app, get("/ingest/v1/liveness", None)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let _ = &h.dir;
+}

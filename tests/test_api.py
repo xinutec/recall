@@ -2306,3 +2306,61 @@ def test_an_unparseable_start_time_costs_that_field_not_the_beat(
     assert posted.status_code == 200
     [item] = client.get("/api/devices/heartbeat").json()["items"]
     assert item["startedAt"] is None
+
+
+def test_sources_liveness_sees_a_store_and_forward_recorder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # geb streams to nothing since the C3 cutover, so no .alive marker of its is
+    # ever refreshed again and the panel showed it off while it recorded (#1428).
+    # Its delivered segments are the evidence that does exist.
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr("recall.capture_control.capture_running", lambda: True)
+    monkeypatch.setattr("recall.capture_control.is_paused", lambda root, now: False)
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.register_source(
+        AudioSource(id="geb", name="geb", kind=SourceKind.TCP_PCM, spec="")
+    )
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+    store.close()
+
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        "recall.api_devices.delivered_liveness",
+        lambda: {"geb": now - timedelta(minutes=1)},
+    )
+    items = {
+        s["id"]: s for s in TestClient(api.app).get("/api/sources").json()["items"]
+    }
+    assert items["geb"]["active"] is True
+    # The panel shows the evidence that proved it, not a frozen marker.
+    assert items["geb"]["lastActive"] is not None
+    # usb has no delivery and no marker: unchanged, still idle.
+    assert items["usb"]["active"] is False
+
+
+def test_a_paused_mic_is_not_resurrected_by_its_own_delivered_segments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The pause must read idle AT ONCE. Delivered evidence is up to a segment
+    # old, so audio captured just before the pause must not hold the dot green.
+    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr("recall.capture_control.capture_running", lambda: True)
+    monkeypatch.setattr("recall.capture_control.is_paused", lambda root, now: True)
+    store = Store.open(tmp_path / "recall.sqlite")
+    store.add_source(
+        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
+    )
+    store.close()
+
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        "recall.api_devices.delivered_liveness",
+        lambda: {"usb": now - timedelta(seconds=30)},
+    )
+    items = {
+        s["id"]: s for s in TestClient(api.app).get("/api/sources").json()["items"]
+    }
+    assert items["usb"]["active"] is False

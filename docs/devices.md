@@ -129,18 +129,33 @@ renders it (own device highlighted, "active / Ns ago" per recorder).
 because nobody should speak trusting a dot the audio can't back
 (`audiod::server`).
 
-⚠⚠ **THIS WHOLE MECHANISM IS BLIND TO A STORE-AND-FORWARD RECORDER, and two of
-them are now live.** The marker is refreshed by the server holding a STREAM; a
-recorder that writes closed segments locally and uploads them never opens that
-connection, so it reads **off while it is recording perfectly**. Measured
-2026-09-05: geb showed off in the mic app while `recall-capture` was `active`
-and had delivered 584 segments, newest 2 minutes old (the expected lag — a
-segment must CLOSE before it can upload); the OnePlus was invisible for the
-same reason. This is not a fault in the recorders and stopping one on the
-strength of this dot destroys audio. The fix is #1428: read liveness from
-delivered-segment recency (`max(received_at)` per source in recalld) instead of
-from the stream marker. Until then, verify a store-and-forward recorder by
-ASKING THE INGEST PLANE, never by looking at the panel.
+⚠ **A STORE-AND-FORWARD RECORDER REFRESHES NO MARKER, so the marker is only half
+the answer.** The marker is refreshed by the server holding a STREAM; a recorder
+that writes closed segments locally and uploads them never opens that connection.
+Measured 2026-09-05, the day geb cut over: its marker froze at 17:08:44 UTC, the
+minute it stopped streaming, while `recall-capture` ran and it delivered 584
+segments — **off in the panel, recording perfectly**. The OnePlus was invisible
+for the same reason. The phones were unaffected only because their
+store-and-forward is still a *shadow*: they stream as well, so their markers keep
+being refreshed.
+
+So liveness now takes **either** proof (#1428): the marker, or the newest
+DELIVERED SEGMENT for sources that stream to nothing. recalld serves the second
+on `/ingest/v1/liveness` (`recall.ingest_liveness`), and the windows differ
+because the evidence does — sub-second per chunk for a stream, but once per
+segment for a delivery, which must close and wait out the upload timer
+(`liveness.DELIVERED_ACTIVE_WITHIN`).
+
+⚠ **The delivered time is the segment's CAPTURE time, never its arrival time.** A
+cached backlog draining hours late arrives *now* and would read as recording now
+while proving nothing about now — the OnePlus did exactly that drain the same
+evening. ⚠ **The mic keeps its pause gate against both proofs**, so a pause still
+reads idle at once rather than staying green for a segment's length.
+
+⚠ **Do not stop a recorder on the strength of this dot.** On 2026-09-05, before
+the second proof existed, its false "off" led to a recorder being stopped and two
+minutes of audio deleted. Where the panel and the ingest plane disagree, the
+ingest plane holds the evidence.
 
 ## Aliveness: the app says so, hourly
 

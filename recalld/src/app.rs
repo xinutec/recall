@@ -34,6 +34,7 @@ pub fn router(config: Arc<Config>) -> Router {
             "/ingest/v1/segments/{source}/{filename}",
             put(ingest::put_segment),
         )
+        .route("/ingest/v1/liveness", get(ingest::liveness))
         .route("/ingest/v1/blob/{source}/{filename}", get(ingest::get_blob))
         .route("/work/v1/lease", put(ingest::lease_job))
         .route("/work/v1/jobs/{id}/done", put(ingest::finish_job))

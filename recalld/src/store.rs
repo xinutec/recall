@@ -90,6 +90,16 @@ pub fn lookup(conn: &Connection, filename: &str) -> rusqlite::Result<Option<Row>
 
 /// The read side's listing: everything, one source's, or one source's since
 /// an instant — ordered by capture start so a consumer walks time forward.
+/// Each source's newest CAPTURE time (`start_utc`, taken from the segment name),
+/// deliberately NOT its arrival time: a cached backlog draining hours late
+/// arrives now and would read as "recording now" while proving nothing about
+/// now. Index-served by `segments_source_start`.
+pub fn liveness(conn: &Connection) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT source, MAX(start_utc) FROM segments GROUP BY source")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
+}
+
 pub fn list(
     conn: &Connection,
     source: Option<&str>,

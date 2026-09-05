@@ -27,6 +27,7 @@ use chrono::{SecondsFormat, Utc};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path as FsPath;
 use std::sync::Arc;
@@ -286,6 +287,34 @@ pub async fn list_segments(
         Err(err) => {
             tracing::error!(%err, "listing task failed");
             error(StatusCode::INTERNAL_SERVER_ERROR, "listing failed")
+        }
+    }
+}
+
+/// Liveness for recorders that stream to nothing: each source's newest delivered
+/// segment by CAPTURE time. The `.alive` markers the panel was built on are
+/// refreshed by a STREAM, so a store-and-forward recorder never touches one and
+/// reads dead while recording perfectly (#1428).
+pub async fn liveness(State(config): State<Arc<Config>>, headers: HeaderMap) -> Response {
+    if let Err(refused) = read_auth(&config, &headers) {
+        return refused.into_response();
+    }
+    let handle = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<(String, String)>> {
+        let conn = store::open(&config.root)?;
+        store::liveness(&conn)
+    });
+    match handle.await {
+        Ok(Ok(rows)) => {
+            let sources: BTreeMap<String, String> = rows.into_iter().collect();
+            (StatusCode::OK, axum::Json(json!({ "sources": sources }))).into_response()
+        }
+        Ok(Err(err)) => {
+            tracing::error!(%err, "liveness query failed");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "liveness failed")
+        }
+        Err(err) => {
+            tracing::error!(%err, "liveness task failed");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "liveness failed")
         }
     }
 }

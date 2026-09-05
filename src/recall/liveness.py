@@ -28,6 +28,13 @@ WATCHDOG_ACTIVE_WITHIN = timedelta(seconds=75)
 # local file, so a source's last-proved time reads up to a report-cadence older
 # there. Widen every window by that lag plus margin.
 _FLEET_REPORT_LAG = timedelta(seconds=7)
+# A STORE-AND-FORWARD recorder streams to nothing, so no marker of its is ever
+# refreshed; it proves itself by delivering a closed segment instead. That
+# evidence arrives once per segment, not per chunk: 60 s of audio must CLOSE,
+# then wait up to the 60 s upload timer, then transfer and verify. Five minutes
+# covers that with margin — wide enough not to flap, narrow enough that a dead
+# recorder does not read live for long.
+DELIVERED_ACTIVE_WITHIN = timedelta(minutes=5)
 
 
 def active_window(kind: SourceKind, *, on_fleet: bool) -> timedelta:
@@ -51,12 +58,28 @@ def source_statuses(
     now: datetime,
     *,
     on_fleet: bool = False,
+    delivered: Mapping[str, datetime | None] | None = None,
 ) -> list[SourceStatus]:
-    """Combine registered sources with their last-activity time."""
+    """Combine registered sources with their last-activity time.
+
+    `delivered` carries each source's newest DELIVERED-segment capture time — the
+    second way a recorder can prove itself, and the only way for one that streams
+    to nothing. It must be the segment's CAPTURE time, never its arrival time: a
+    backlog draining hours late arrives now but proves nothing about now.
+    """
+    delivered = delivered or {}
     statuses: list[SourceStatus] = []
     for row in sources:
         seen = last_active.get(row.id)
         window = active_window(row.kind, on_fleet=on_fleet)
         active = seen is not None and now - seen < window
-        statuses.append(SourceStatus(row.id, row.name, row.kind, seen, active))
+        shipped = delivered.get(row.id)
+        if shipped is not None and now - shipped < DELIVERED_ACTIVE_WITHIN:
+            active = True
+        # Show whichever evidence is freshest, so a shadow-delivering phone's
+        # per-chunk marker is never dragged backwards by its slower shadow.
+        proved = [t for t in (seen, shipped) if t is not None]
+        statuses.append(
+            SourceStatus(row.id, row.name, row.kind, max(proved, default=None), active)
+        )
     return statuses

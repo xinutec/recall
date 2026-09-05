@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from recall import capture_control
 from recall.api_models import HeartbeatIn, OutboxIn
 from recall.capture import alive_mtime
+from recall.ingest_liveness import delivered_liveness
 from recall.liveness import source_statuses
 from recall.mic_alive import Beat, read_beats, record_beat
 from recall.outbox import OutboxReport, read_reports, record_report
@@ -51,9 +52,27 @@ def _register_sources_route(
     data_root: Callable[[], Path],
     fleet_capture_state: Callable[[Store, datetime], CaptureOut],
 ) -> None:
+    def _gate_delivered(
+        delivered: dict[str, datetime],
+        rows: list[SourceRow],
+        usb_recording: bool,
+    ) -> dict[str, datetime]:
+        """Delivered segments prove a recorder is running when nothing streams —
+        but they are up to a segment old, and the local mic's pause must read
+        idle AT ONCE. So the mic keeps its pause gate here too: a paused mic must
+        not be resurrected for five minutes by audio it captured before the
+        pause. Sources that are not devices (room, meetings) never reach this."""
+        by_id = {row.id: row for row in rows}
+        return {
+            source: when
+            for source, when in delivered.items()
+            if source in by_id
+            and (by_id[source].kind is SourceKind.TCP_PCM or usb_recording)
+        }
+
     def _local_last_active(
-        rows: list[SourceRow], now: datetime
-    ) -> dict[str, datetime | None]:
+        rows: list[SourceRow], now: datetime, delivered: dict[str, datetime]
+    ) -> tuple[dict[str, datetime | None], dict[str, datetime]]:
         """Liveness on the capturing host (the Mac), from each source's .alive marker —
         refreshed by the ingest pump while a phone streams real signal, and by the
         capture watchdog while the mic's closed segments decode to real audio
@@ -71,11 +90,14 @@ def _register_sources_route(
                 last_active[row.id] = marker
             else:
                 last_active[row.id] = marker if usb_recording else None
-        return last_active
+        return last_active, _gate_delivered(delivered, rows, usb_recording)
 
     def _fleet_last_active(
-        store: Store, rows: list[SourceRow], now: datetime
-    ) -> dict[str, datetime | None]:
+        store: Store,
+        rows: list[SourceRow],
+        now: datetime,
+        delivered: dict[str, datetime],
+    ) -> tuple[dict[str, datetime | None], dict[str, datetime]]:
         """Liveness on the fleet (Isis), which runs no capture or ingest and cannot see
         the Mac's markers. It comes entirely from the Mac's mirror report
         (recall.capture_mirror), which ships every source's .alive freshness — the same
@@ -91,30 +113,45 @@ def _register_sources_route(
                 last_active[row.id] = reported.get(row.id)
             else:
                 last_active[row.id] = reported.get(row.id) if usb_recording else None
-        return last_active
+        return last_active, _gate_delivered(delivered, rows, usb_recording)
 
     @app.get("/api/sources")
     def sources() -> SourcesOut:
-        """Per-recorder liveness for the fleet view: active iff the source's liveness
-        marker — refreshed only on measured audio — is fresh, so a dot means recording,
-        not connected. On the fleet (Isis), which runs no capture, the markers
-        arrive via
-        the Mac's ~5s mirror report; the windows widen to absorb the cadence
-        (recall.liveness.active_window). Uploaded recordings (meetings) are sources but
-        not live devices, so they're excluded — they live in the Sessions view."""
+        """Per-recorder liveness for the fleet view, from TWO kinds of proof.
+
+        A streaming recorder proves itself by its liveness marker — refreshed only
+        on measured audio, so a dot means recording, not connected. On the fleet
+        (Isis), which runs no capture, the markers arrive via the Mac's ~5s mirror
+        report; the windows widen to absorb the cadence
+        (recall.liveness.active_window).
+
+        A STORE-AND-FORWARD recorder streams to nothing, so no marker of its is
+        ever refreshed and the marker view alone reports it dead while it records
+        perfectly (#1428 — geb, after the C3 cutover). It proves itself by
+        DELIVERING a closed segment instead (recall.ingest_liveness), on its own
+        wider window. The mic keeps its pause gate against both, so a pause still
+        reads idle at once.
+
+        Uploaded recordings (meetings) are sources but not live devices, so they're
+        excluded — they live in the Sessions view."""
         now = datetime.now(UTC)
         on_fleet = capture_control.is_fleet()
+        # Best-effort second signal; {} when recalld cannot answer, which leaves
+        # the marker view exactly as it was (recall.ingest_liveness).
+        delivered = delivered_liveness()
         store = store_factory()
         try:
             rows = [r for r in store.source_rows() if r.kind in DEVICE_KINDS]
-            last_active = (
-                _fleet_last_active(store, rows, now)
+            last_active, shipped = (
+                _fleet_last_active(store, rows, now, delivered)
                 if on_fleet
-                else _local_last_active(rows, now)
+                else _local_last_active(rows, now, delivered)
             )
         finally:
             store.close()
-        statuses = source_statuses(rows, last_active, now, on_fleet=on_fleet)
+        statuses = source_statuses(
+            rows, last_active, now, on_fleet=on_fleet, delivered=shipped
+        )
         return {
             "items": [
                 {
