@@ -23,6 +23,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.time.Instant
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 /**
@@ -167,20 +168,37 @@ class StreamService : Service() {
                 // consumer's mood, so capture now hands frames to a bounded spool
                 // (PcmSpool) that never blocks, and a sender thread drains it.
                 val spool = PcmSpool(SPOOL_BYTES)
+                // The sender owns every socket write, and an exception escaping a
+                // bare thread lambda KILLS THE APP (two data_app_crash records on
+                // 2026-09-04, both "Software caused connection abort" at this
+                // write). So nothing may escape: any failure here is flagged, and
+                // the mic loop below turns the flag into the ordinary reconnect
+                // path. The spool keeps absorbing frames during the handover.
+                val senderFailed = AtomicBoolean(false)
                 val sender =
                     thread(name = "mic-sender") {
-                        while (running) {
-                            val pending = spool.drain()
-                            if (pending.isEmpty()) {
-                                Thread.sleep(SENDER_IDLE_MS)
-                            } else {
-                                out.write(pending)
+                        try {
+                            while (running) {
+                                val pending = spool.drain()
+                                if (pending.isEmpty()) {
+                                    Thread.sleep(SENDER_IDLE_MS)
+                                } else {
+                                    out.write(pending)
+                                }
                             }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "sender: stream write failed: ${e.message}")
+                            senderFailed.set(true)
                         }
                     }
                 val chunk = ByteArray(READ_CHUNK_BYTES)
                 try {
                     while (running) {
+                        if (senderFailed.get()) {
+                            // Surface the sender's death HERE, where the catch
+                            // below runs the normal teardown + reconnect + backoff.
+                            error("sender thread lost the connection — reconnecting")
+                        }
                         val n = record.read(chunk, 0, chunk.size)
                         if (n > 0) {
                             spool.offer(chunk, n)
