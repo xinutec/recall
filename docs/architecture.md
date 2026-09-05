@@ -236,9 +236,12 @@ The three existing planes are untouched
 | device upload | `RECALL_DEVICE_TOKEN` | `POST /api/sessions` only |
 | **ingest (new)** | per-device token | `PUT` its **own** source's segments; nothing else — not read, not list, not another device's source |
 
-Tokens live in a file on the PVC (`RECALLD_TOKENS`), one `<source> <token>`
-per line, mounted from the k8s secret — never in the image, never in the nix
-store. Unconfigured = open, the repo's standing inert-unless-configured
+The token table (`RECALLD_INGEST_TOKENS`, or `--tokens <file>` in dev) holds
+one `<source> <token>` per line, supplied from the k8s secret — never in the
+image, never in the nix store. One widening: a `*` line grants a token every
+source, still write-only — the Mac's backfill grant, because its archive
+holds every device's master plus a new source per uploaded meeting, and an
+enumerated list would drift with each one. Devices never get `*`. Unconfigured = open, the repo's standing inert-unless-configured
 pattern, so dev and tests need no ceremony. The read side (listing, blob
 fetch, the queue) takes the Mac's sync token. A phone that can upload still
 cannot read a transcript — the property that motivated the third plane,

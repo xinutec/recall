@@ -35,6 +35,23 @@ fn the_env_carrier_parses_the_same_grammar() {
 }
 
 #[test]
+fn the_custodial_wildcard_opens_every_source_write_only() {
+    // The Mac's backfill grant: its archive holds every device's master plus
+    // a new source per uploaded meeting, so its one token writes any source.
+    // Everything else about the plane is unchanged — an unknown bearer is
+    // still refused.
+    let tokens = load("* mac-token\npixel5 secret-b\n");
+    assert_eq!(tokens.check("usb", "mac-token"), Verdict::Allowed);
+    assert_eq!(
+        tokens.check("meeting-20990101-0000", "mac-token"),
+        Verdict::Allowed
+    );
+    assert_eq!(tokens.check("usb", "nonsense"), Verdict::UnknownToken);
+    // A device token stays pinned to its source even beside a wildcard line.
+    assert_eq!(tokens.check("usb", "secret-b"), Verdict::WrongSource);
+}
+
+#[test]
 fn a_malformed_line_fails_the_load() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("tokens");
