@@ -28,6 +28,8 @@ from datetime import UTC, datetime
 
 import httpx
 
+from recall.liveness import Evidence
+
 _log = logging.getLogger("recall.ingest_liveness")
 
 URL_ENV = "RECALLD_URL"
@@ -51,8 +53,8 @@ def _parse(stamp: str) -> datetime | None:
         return None
 
 
-def delivered_liveness(*, client: httpx.Client | None = None) -> dict[str, datetime]:
-    """Each source's newest delivered-segment CAPTURE time, or {} if unavailable."""
+def delivered_liveness(*, client: httpx.Client | None = None) -> dict[str, Evidence]:
+    """Each source's newest delivered and speech-bearing capture times, or {}."""
     token = os.environ.get(TOKEN_ENV)
     if not token:
         return {}
@@ -77,9 +79,16 @@ def delivered_liveness(*, client: httpx.Client | None = None) -> dict[str, datet
     if not isinstance(sources, dict):
         _log.warning("recalld liveness payload is not a mapping: %r", type(sources))
         return {}
-    out: dict[str, datetime] = {}
-    for source, stamp in sources.items():
-        when = _parse(stamp) if isinstance(stamp, str) else None
-        if when is not None:
-            out[str(source)] = when
+    out: dict[str, Evidence] = {}
+    for source, times in sources.items():
+        if not isinstance(times, dict):
+            continue
+        delivered = _parse_opt(times.get("delivered"))
+        if delivered is None:
+            continue
+        out[str(source)] = Evidence(delivered, _parse_opt(times.get("speech")))
     return out
+
+
+def _parse_opt(value: object) -> datetime | None:
+    return _parse(value) if isinstance(value, str) else None

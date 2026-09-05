@@ -139,12 +139,30 @@ for the same reason. The phones were unaffected only because their
 store-and-forward is still a *shadow*: they stream as well, so their markers keep
 being refreshed.
 
-So liveness now takes **either** proof (#1428): the marker, or the newest
-DELIVERED SEGMENT for sources that stream to nothing. recalld serves the second
-on `/ingest/v1/liveness` (`recall.ingest_liveness`), and the windows differ
-because the evidence does — sub-second per chunk for a stream, but once per
-segment for a delivery, which must close and wait out the upload timer
+So liveness takes **either** proof (#1428): the marker, or the newest DELIVERED
+SEGMENT for sources that stream to nothing. recalld serves the second on
+`/ingest/v1/liveness` (`recall.ingest_liveness`), and the windows differ because
+the evidence does — sub-second per chunk for a stream, but once per segment for a
+delivery, which must close and wait out the upload timer
 (`liveness.DELIVERED_ACTIVE_WITHIN`).
+
+⚠ **AND IT ANSWERS TWO QUESTIONS, NOT ONE.** `/api/sources` carries `active` AND
+`recording`, because they are different and collapsing them is what this whole
+entry is about:
+
+| field | question | signal |
+|---|---|---|
+| `active` | is my voice being captured **audibly**? | speech-gated — a silent room reads inactive ON PURPOSE, so nobody speaks trusting a dot the audio cannot back |
+| `recording` | is this recorder **running**? | delivery recency, whatever was on the segments |
+
+The consent question is the one the dot has always answered. The OPERATIONAL
+question is the one actually asked out loud — "is geb on?", twice in an evening —
+and a speech-gated dot answers it wrongly through any quiet stretch. The mic app
+renders three states from the pair: audible, recording-but-quiet, off. A
+two-state dot has to lie about one of them.
+
+⚠ The two times travel as ONE `liveness.Evidence(delivered, speech)`, so a later
+edit cannot silently drop half the answer and leave the panel confident.
 
 ⚠ **The delivered time is the segment's CAPTURE time, never its arrival time.** A
 cached backlog draining hours late arrives *now* and would read as recording now

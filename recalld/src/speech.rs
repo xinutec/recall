@@ -127,22 +127,40 @@ pub fn latest_speech_utc(conn: &Connection, source: &str) -> rusqlite::Result<Op
     Ok(found)
 }
 
-/// Every source's newest possibly-speech capture time, for the liveness plane.
+/// Every source's newest capture time, in two flavours the panel must not
+/// conflate: what the recorder DELIVERED, and what could be someone TALKING.
 ///
-/// Same rule as [`latest_speech_utc`], grouped: only a segment MEASURED AS
-/// SILENT disqualifies, so a device whose backlog is still unmeasured keeps its
-/// dot rather than being blacked out by a measurement that has not run yet.
+/// They answer different questions. "Is this recorder running?" is operational
+/// and wants delivery. "Is my voice being captured audibly?" is about consent
+/// and wants speech — a dot the audio can back, so a silent room reads idle on
+/// purpose. Serving one number for both is how geb came to read "off" while
+/// recording perfectly (#1428): the panel asked the second question and the
+/// reader wanted the first.
+///
+/// Speech rule: only a segment MEASURED AS SILENT disqualifies. Unmeasured and
+/// undecodable ones still count, because the scanner runs BEHIND live audio and
+/// "not looked at yet" is not evidence of silence.
 ///
 /// # Errors
 /// On database failure.
-pub fn liveness_by_source(conn: &Connection) -> rusqlite::Result<Vec<(String, String)>> {
+pub fn liveness_by_source(conn: &Connection) -> rusqlite::Result<Vec<(String, String, String)>> {
     ensure_schema(conn)?;
     let mut stmt = conn.prepare(
-        "SELECT s.source, MAX(s.start_utc) FROM segments s
+        "SELECT s.source,
+                MAX(s.start_utc),
+                MAX(CASE WHEN p.filename IS NULL OR p.speech_seconds != 0.0
+                         THEN s.start_utc END)
+         FROM segments s
          LEFT JOIN segment_speech p ON p.filename = s.filename
-         WHERE p.filename IS NULL OR p.speech_seconds != 0.0
          GROUP BY s.source",
     )?;
-    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let rows = stmt.query_map([], |r| {
+        let delivered: String = r.get(1)?;
+        // No speech-bearing segment at all: report the empty string rather than
+        // inventing a time, so the caller can tell "nothing heard" from "not
+        // asked". Serde would otherwise need a nullable shape for one case.
+        let speech: Option<String> = r.get(2)?;
+        Ok((r.get(0)?, delivered, speech.unwrap_or_default()))
+    })?;
     rows.collect()
 }

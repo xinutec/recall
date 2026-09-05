@@ -27,6 +27,7 @@ from recall.api_reads import _precise, _tier
 from recall.asr import Word
 from recall.envelope import DEFAULT_EVENT_DB, Measurement
 from recall.ids import AudioSegmentId, TranscriptId
+from recall.liveness import Evidence
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store, TranscriptSegment
 from recall.timeline import Segment
@@ -2327,10 +2328,8 @@ def test_sources_liveness_sees_a_store_and_forward_recorder(
     store.close()
 
     now = datetime.now(UTC)
-    monkeypatch.setattr(
-        "recall.api_devices.delivered_liveness",
-        lambda: {"geb": now - timedelta(minutes=1)},
-    )
+    fresh = Evidence(now - timedelta(minutes=1), now - timedelta(minutes=1))
+    monkeypatch.setattr("recall.api_devices.delivered_liveness", lambda: {"geb": fresh})
     items = {
         s["id"]: s for s in TestClient(api.app).get("/api/sources").json()["items"]
     }
@@ -2356,10 +2355,8 @@ def test_a_paused_mic_is_not_resurrected_by_its_own_delivered_segments(
     store.close()
 
     now = datetime.now(UTC)
-    monkeypatch.setattr(
-        "recall.api_devices.delivered_liveness",
-        lambda: {"usb": now - timedelta(seconds=30)},
-    )
+    fresh = Evidence(now - timedelta(seconds=30), now - timedelta(seconds=30))
+    monkeypatch.setattr("recall.api_devices.delivered_liveness", lambda: {"usb": fresh})
     items = {
         s["id"]: s for s in TestClient(api.app).get("/api/sources").json()["items"]
     }
@@ -2382,10 +2379,8 @@ def test_a_household_pause_silences_delivered_evidence_too(
     store.close()
 
     now = datetime.now(UTC)
-    monkeypatch.setattr(
-        "recall.api_devices.delivered_liveness",
-        lambda: {"geb": now - timedelta(seconds=30)},
-    )
+    fresh = Evidence(now - timedelta(seconds=30), now - timedelta(seconds=30))
+    monkeypatch.setattr("recall.api_devices.delivered_liveness", lambda: {"geb": fresh})
     items = {
         s["id"]: s for s in TestClient(api.app).get("/api/sources").json()["items"]
     }

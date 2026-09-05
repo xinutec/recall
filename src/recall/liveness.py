@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import NamedTuple
 
 from recall.sources import SourceKind, SourceRow
 
@@ -43,6 +44,19 @@ def active_window(kind: SourceKind, *, on_fleet: bool) -> timedelta:
     return base + (_FLEET_REPORT_LAG if on_fleet else timedelta(0))
 
 
+class Evidence(NamedTuple):
+    """What a recorder's DELIVERIES prove, kept as two times because they answer
+    two different questions and collapsing them is the #1428 bug.
+
+    `delivered` — newest segment sent, whatever was on it: "is it running".
+    `speech` — newest segment that could be someone talking: "is my voice being
+    captured audibly". None when nothing audible has been measured.
+    """
+
+    delivered: datetime | None
+    speech: datetime | None
+
+
 @dataclass(frozen=True)
 class SourceStatus:
     source_id: str
@@ -50,6 +64,13 @@ class SourceStatus:
     kind: SourceKind
     last_active: datetime | None
     active: bool
+    #: Is this recorder RUNNING — bytes arriving, whatever is on them? Separate
+    #: from `active` on purpose. `active` is the consent signal ("your voice is
+    #: being captured audibly"), so it goes out in a silent room; `recording` is
+    #: the operational one, and answering the second with the first is how geb
+    #: came to read "off" while recording perfectly (#1428).
+    recording: bool = False
+    last_delivered: datetime | None = None
 
 
 def source_statuses(
@@ -58,22 +79,21 @@ def source_statuses(
     now: datetime,
     *,
     on_fleet: bool = False,
-    delivered: Mapping[str, datetime | None] | None = None,
+    delivered: Mapping[str, Evidence] | None = None,
 ) -> list[SourceStatus]:
     """Combine registered sources with their last-activity time.
 
-    `delivered` carries each source's newest DELIVERED-segment capture time — the
-    second way a recorder can prove itself, and the only way for one that streams
-    to nothing. It must be the segment's CAPTURE time, never its arrival time: a
-    backlog draining hours late arrives now but proves nothing about now.
+    `delivered` carries each source's `Evidence` — the second way a recorder can
+    prove itself, and the only way for one that streams to nothing. Both times
+    must be CAPTURE times, never arrival times: a backlog draining hours late
+    arrives now but proves nothing about now.
     """
     delivered = delivered or {}
     statuses: list[SourceStatus] = []
     for row in sources:
         seen = last_active.get(row.id)
         window = active_window(row.kind, on_fleet=on_fleet)
-        active = seen is not None and now - seen < window
-        shipped = delivered.get(row.id)
+        marker_fresh = seen is not None and now - seen < window
         # ⚠ A marker that went stale RECENTLY is a deliberate stop, and that is
         # NEWER information than a segment captured just before it. Without this,
         # delivery-proof resurrects a phone the moment its owner stops it:
@@ -83,18 +103,36 @@ def source_statuses(
         # event; geb's marker is hours stale only because it never streams at
         # all. How stale is what tells the two apart.
         stopped_recently = (
-            seen is not None and not active and now - seen < DELIVERED_ACTIVE_WITHIN
+            seen is not None
+            and not marker_fresh
+            and now - seen < DELIVERED_ACTIVE_WITHIN
         )
-        if (
-            not stopped_recently
-            and shipped is not None
-            and now - shipped < DELIVERED_ACTIVE_WITHIN
-        ):
-            active = True
-        # Show whichever evidence is freshest, so a shadow-delivering phone's
-        # per-chunk marker is never dragged backwards by its slower shadow.
-        proved = [t for t in (seen, shipped) if t is not None]
+
+        def _fresh(when: datetime | None, *, stopped: bool = stopped_recently) -> bool:
+            return (
+                not stopped
+                and when is not None
+                and now - when < DELIVERED_ACTIVE_WITHIN
+            )
+
+        evidence = delivered.get(row.id)
+        shipped = evidence.delivered if evidence else None
+        heard = evidence.speech if evidence else None
+        recording = marker_fresh or _fresh(shipped)
+        # The marker is itself signal-gated (refreshed only above the silence
+        # floor), so a fresh marker IS evidence of audible speech.
+        active = marker_fresh or _fresh(heard)
+        proved = [t for t in (seen, heard) if t is not None]
+        delivered_at = [t for t in (seen, shipped) if t is not None]
         statuses.append(
-            SourceStatus(row.id, row.name, row.kind, max(proved, default=None), active)
+            SourceStatus(
+                row.id,
+                row.name,
+                row.kind,
+                max(proved, default=None),
+                active,
+                recording,
+                max(delivered_at, default=None),
+            )
         )
     return statuses

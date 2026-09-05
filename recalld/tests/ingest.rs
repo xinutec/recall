@@ -294,8 +294,8 @@ async fn liveness_reports_each_source_newest_capture_time() {
 
     let (status, body) = send(&h.app, get("/ingest/v1/liveness", Some("read"))).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["sources"]["geb"], "2026-09-05T10:02:00Z");
-    assert_eq!(body["sources"]["usb"], "2026-09-05T09:00:00Z");
+    assert_eq!(body["sources"]["geb"]["delivered"], "2026-09-05T10:02:00Z");
+    assert_eq!(body["sources"]["usb"]["delivered"], "2026-09-05T09:00:00Z");
     let _ = &h.dir;
 }
 
@@ -323,7 +323,7 @@ async fn liveness_ignores_a_segment_measured_as_silent() {
     }
     // Unmeasured: the newest still counts.
     let (_, body) = send(&h.app, get("/ingest/v1/liveness", Some("read"))).await;
-    assert_eq!(body["sources"]["geb"], "2026-09-05T10:01:00Z");
+    assert_eq!(body["sources"]["geb"]["speech"], "2026-09-05T10:01:00Z");
 
     // Now record the newest as SILENT; liveness must fall back to the older one.
     let conn = recalld::store::open(h.dir.path()).expect("db");
@@ -339,8 +339,12 @@ async fn liveness_ignores_a_segment_measured_as_silent() {
     let (status, body) = send(&h.app, get("/ingest/v1/liveness", Some("read"))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        body["sources"]["geb"], "2026-09-05T10:00:00Z",
-        "a segment measured as silent must not keep a recorder live"
+        body["sources"]["geb"]["speech"], "2026-09-05T10:00:00Z",
+        "a segment measured as silent must not keep a recorder AUDIBLE"
+    );
+    assert_eq!(
+        body["sources"]["geb"]["delivered"], "2026-09-05T10:01:00Z",
+        "...but it is still RECORDING — the two questions must not collapse"
     );
     let _ = &h.dir;
 }

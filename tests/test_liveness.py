@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from recall.liveness import source_statuses
+from recall.liveness import Evidence, source_statuses
 from recall.sources import SourceKind, SourceRow
 
 NOW = datetime(2026, 6, 22, 12, 0, 0, tzinfo=UTC)
@@ -76,7 +76,9 @@ def test_delivery_proves_recording_when_the_stream_marker_never_refreshes() -> N
     # geb's marker froze the moment it stopped streaming, hours ago.
     last_active = {"geb": NOW - timedelta(hours=2)}
     # ...but a segment it captured a minute ago has landed.
-    delivered = {"geb": NOW - timedelta(minutes=1)}
+    delivered = {
+        "geb": Evidence(NOW - timedelta(minutes=1), NOW - timedelta(minutes=1))
+    }
     status = source_statuses([GEB], last_active, NOW, delivered=delivered)[0]
     assert status.active is True
     # The panel must show the evidence that proved it, not the frozen marker.
@@ -84,7 +86,9 @@ def test_delivery_proves_recording_when_the_stream_marker_never_refreshes() -> N
 
 
 def test_a_recorder_that_stopped_delivering_goes_idle() -> None:
-    delivered = {"geb": NOW - timedelta(minutes=30)}
+    delivered = {
+        "geb": Evidence(NOW - timedelta(minutes=30), NOW - timedelta(minutes=30))
+    }
     status = source_statuses([GEB], {}, NOW, delivered=delivered)[0]
     assert status.active is False
     assert status.last_active == NOW - timedelta(minutes=30)
@@ -94,7 +98,9 @@ def test_the_delivery_window_absorbs_segment_close_plus_upload_timer() -> None:
     # 60s of audio must close, then wait up to the 60s upload timer, then
     # transfer — so a two-minute-old capture is a HEALTHY store-and-forward
     # recorder, while the 5s stream window would call it dead.
-    delivered = {"geb": NOW - timedelta(minutes=2)}
+    delivered = {
+        "geb": Evidence(NOW - timedelta(minutes=2), NOW - timedelta(minutes=2))
+    }
     assert source_statuses([GEB], {}, NOW, delivered=delivered)[0].active is True
 
 
@@ -102,7 +108,9 @@ def test_a_streaming_phone_keeps_its_own_fresher_evidence() -> None:
     # Phones stream AND shadow-deliver; the fresher signal wins, so the shadow
     # never drags a live phone's timestamp backwards.
     last_active = {"pixel9": NOW - timedelta(seconds=2)}
-    delivered = {"pixel9": NOW - timedelta(minutes=2)}
+    delivered = {
+        "pixel9": Evidence(NOW - timedelta(minutes=2), NOW - timedelta(minutes=2))
+    }
     by_id = {
         s.source_id: s
         for s in source_statuses(SOURCES, last_active, NOW, delivered=delivered)
@@ -131,7 +139,9 @@ def test_a_phone_that_just_stopped_streaming_goes_idle_despite_a_fresh_delivery(
 ):
     # pixel9's exact case: stopped ~1 min ago, last segment captured just before.
     last_active = {"pixel9": NOW - timedelta(minutes=1)}
-    delivered = {"pixel9": NOW - timedelta(minutes=1)}
+    delivered = {
+        "pixel9": Evidence(NOW - timedelta(minutes=1), NOW - timedelta(minutes=1))
+    }
     by_id = {
         s.source_id: s
         for s in source_statuses(SOURCES, last_active, NOW, delivered=delivered)
@@ -142,7 +152,9 @@ def test_a_phone_that_just_stopped_streaming_goes_idle_despite_a_fresh_delivery(
 def test_a_recorder_that_never_streams_is_still_proved_by_delivery() -> None:
     # geb: marker frozen hours ago at the C3 cutover, recording perfectly.
     last_active = {"geb": NOW - timedelta(hours=2)}
-    delivered = {"geb": NOW - timedelta(minutes=1)}
+    delivered = {
+        "geb": Evidence(NOW - timedelta(minutes=1), NOW - timedelta(minutes=1))
+    }
     assert (
         source_statuses([GEB], last_active, NOW, delivered=delivered)[0].active is True
     )
@@ -150,14 +162,58 @@ def test_a_recorder_that_never_streams_is_still_proved_by_delivery() -> None:
 
 def test_a_never_seen_source_is_proved_by_delivery() -> None:
     # No marker at all — a store-and-forward recorder the stream path never knew.
-    assert source_statuses([GEB], {}, NOW, delivered={"geb": NOW})[0].active is True
+    assert (
+        source_statuses([GEB], {}, NOW, delivered={"geb": Evidence(NOW, NOW)})[0].active
+        is True
+    )
 
 
 def test_the_stop_only_outranks_delivery_while_it_is_recent() -> None:
     # Past the delivered window a stale marker no longer means "just stopped";
     # it means this source is not using the stream path, so delivery rules again.
     last_active = {"geb": NOW - timedelta(minutes=6)}
-    delivered = {"geb": NOW - timedelta(seconds=30)}
+    delivered = {
+        "geb": Evidence(NOW - timedelta(seconds=30), NOW - timedelta(seconds=30))
+    }
     assert (
         source_statuses([GEB], last_active, NOW, delivered=delivered)[0].active is True
     )
+
+
+# --- two questions, two signals (#1428's second half) ------------------------
+
+
+def test_a_recorder_in_a_silent_room_is_recording_but_not_active() -> None:
+    # The distinction the panel needs. "Active" is the CONSENT signal — your
+    # voice is being captured audibly — so it goes out in a silent room. That is
+    # correct, and it is also exactly the reading that made geb look off while it
+    # was recording perfectly, so the operational answer must be served beside
+    # it rather than instead of it.
+    delivered = {"geb": Evidence(NOW - timedelta(minutes=1), None)}
+    status = source_statuses([GEB], {}, NOW, delivered=delivered)[0]
+    assert status.recording is True
+    assert status.active is False
+    assert status.last_delivered == NOW - timedelta(minutes=1)
+
+
+def test_a_recorder_that_hears_speech_is_both() -> None:
+    delivered = {
+        "geb": Evidence(NOW - timedelta(minutes=1), NOW - timedelta(minutes=1))
+    }
+    status = source_statuses([GEB], {}, NOW, delivered=delivered)[0]
+    assert status.recording is True
+    assert status.active is True
+
+
+def test_a_stopped_recorder_is_neither() -> None:
+    # The stop outranks both kinds of delivered evidence, not just speech.
+    last_active = {"pixel9": NOW - timedelta(minutes=1)}
+    delivered = {
+        "pixel9": Evidence(NOW - timedelta(minutes=1), NOW - timedelta(minutes=1))
+    }
+    by_id = {
+        s.source_id: s
+        for s in source_statuses(SOURCES, last_active, NOW, delivered=delivered)
+    }
+    assert by_id["pixel9"].recording is False
+    assert by_id["pixel9"].active is False

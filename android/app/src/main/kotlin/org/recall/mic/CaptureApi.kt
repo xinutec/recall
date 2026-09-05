@@ -25,13 +25,28 @@ data class CaptureState(
     val stateToken: String? = null,
 )
 
-/** One recorder's liveness for the fleet view (which mics are streaming now). */
+/**
+ * One recorder's liveness for the fleet view, as TWO answers.
+ *
+ * [active] is the CONSENT signal: your voice is being captured audibly. A silent
+ * room reads inactive on purpose — nobody should speak trusting a dot the audio
+ * cannot back.
+ *
+ * [recording] is the OPERATIONAL answer: bytes are arriving, whatever is on
+ * them. Serving only [active] is how geb came to read "off" while recording
+ * perfectly (#1428), because the reader was asking this question instead.
+ *
+ * An older server sends neither field; [recording] then falls back to [active],
+ * which is the pre-#1428 behaviour rather than a claim that nothing is running.
+ */
 data class SourceStatus(
     val id: String,
     val name: String,
     val kind: String,
     val active: Boolean,
     val lastActive: String?,
+    val recording: Boolean,
+    val lastDelivered: String?,
 )
 
 /** Parse `/api/capture`'s JSON. Pure (no I/O), so it's unit-tested. An older server
@@ -72,6 +87,9 @@ fun parseSources(body: String): List<SourceStatus> =
                 kind = o.getString("kind"),
                 active = o.optBoolean("active", false),
                 lastActive = if (o.isNull("lastActive")) null else o.optString("lastActive"),
+                recording = o.optBoolean("recording", o.optBoolean("active", false)),
+                lastDelivered =
+                    if (o.isNull("lastDelivered")) null else o.optString("lastDelivered"),
             )
         }
     }.getOrDefault(emptyList())

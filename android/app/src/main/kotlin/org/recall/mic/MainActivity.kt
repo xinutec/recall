@@ -541,10 +541,23 @@ private fun DevicesPanel(sources: List<SourceStatus>, selfId: String?) {
                             .size(10.dp)
                             .clip(CircleShape)
                             .background(
-                                if (source.active) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                // Three states, because there are three: audible,
+                                // running-but-quiet, and off. A two-state dot has
+                                // to lie about one of them.
+                                when {
+                                    source.active -> {
+                                        MaterialTheme.colorScheme.primary
+                                    }
+
+                                    source.recording -> {
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                                    }
+
+                                    else -> {
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                                            alpha = 0.3f,
+                                        )
+                                    }
                                 },
                             ),
                     )
@@ -573,16 +586,26 @@ private fun DevicesPanel(sources: List<SourceStatus>, selfId: String?) {
 }
 
 /**
- * "active", or how long since a source last PROVED it was recording — for the
- * devices panel. The proof is a stream for a streaming recorder and a delivered
- * segment for a store-and-forward one (#1428), so this must not say "streamed":
- * geb streams to nothing and is live.
+ * What the devices panel says under each recorder, in three states.
+ *
+ * "active" — audible: someone is being recorded speaking. "recording, quiet" —
+ * the machine is running and delivering, but the room is silent. Otherwise, how
+ * long since it last proved anything.
+ *
+ * The middle state is the one that matters: collapsing it into "idle" is what
+ * made geb look broken while it was working, and sent me looking for a bug in
+ * the recorder rather than in the question the panel was answering (#1428).
  */
 private fun activityLabel(source: SourceStatus): String {
     if (source.active) {
         return "active"
     }
-    val iso = source.lastActive ?: return "no signal"
+    // Recording but nobody audible. Saying "idle" here is what sent me hunting a
+    // bug that did not exist: the machine was working, the room was quiet.
+    if (source.recording) {
+        return "recording, quiet"
+    }
+    val iso = source.lastActive ?: source.lastDelivered ?: return "no signal"
     return runCatching {
         val secs =
             Duration.between(OffsetDateTime.parse(iso).toInstant(), Instant.now()).seconds

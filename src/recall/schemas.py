@@ -49,6 +49,12 @@ class SourceStatusOut(TypedDict):
     kind: str
     active: bool
     lastActive: str | None
+    #: Is it RUNNING — bytes arriving, whatever is on them? Distinct from
+    #: `active`, which is the consent signal ("your voice is being captured
+    #: audibly") and therefore goes out in a silent room. Answering the second
+    #: question with the first is how geb read "off" while recording (#1428).
+    recording: bool
+    lastDelivered: str | None
 
 
 class SourcesOut(TypedDict):

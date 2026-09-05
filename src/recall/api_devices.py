@@ -18,7 +18,7 @@ from recall import capture_control
 from recall.api_models import HeartbeatIn, OutboxIn
 from recall.capture import alive_mtime
 from recall.ingest_liveness import delivered_liveness
-from recall.liveness import source_statuses
+from recall.liveness import Evidence, source_statuses
 from recall.mic_alive import Beat, read_beats, record_beat
 from recall.outbox import OutboxReport, read_reports, record_report
 from recall.schemas import (
@@ -53,10 +53,10 @@ def _register_sources_route(
     fleet_capture_state: Callable[[Store, datetime], CaptureOut],
 ) -> None:
     def _gate_delivered(
-        delivered: dict[str, datetime],
+        delivered: dict[str, Evidence],
         rows: list[SourceRow],
         capture_running: bool,
-    ) -> dict[str, datetime]:
+    ) -> dict[str, Evidence]:
         """Delivered segments prove a recorder is running when nothing streams —
         but they are up to a segment old, so a PAUSE must discard them outright.
         Otherwise audio captured in the seconds before the pause keeps a dot
@@ -71,8 +71,8 @@ def _register_sources_route(
         return {source: when for source, when in delivered.items() if source in by_id}
 
     def _local_last_active(
-        rows: list[SourceRow], now: datetime, delivered: dict[str, datetime]
-    ) -> tuple[dict[str, datetime | None], dict[str, datetime]]:
+        rows: list[SourceRow], now: datetime, delivered: dict[str, Evidence]
+    ) -> tuple[dict[str, datetime | None], dict[str, Evidence]]:
         """Liveness on the capturing host (the Mac), from each source's .alive marker —
         refreshed by the ingest pump while a phone streams real signal, and by the
         capture watchdog while the mic's closed segments decode to real audio
@@ -96,8 +96,8 @@ def _register_sources_route(
         store: Store,
         rows: list[SourceRow],
         now: datetime,
-        delivered: dict[str, datetime],
-    ) -> tuple[dict[str, datetime | None], dict[str, datetime]]:
+        delivered: dict[str, Evidence],
+    ) -> tuple[dict[str, datetime | None], dict[str, Evidence]]:
         """Liveness on the fleet (Isis), which runs no capture or ingest and cannot see
         the Mac's markers. It comes entirely from the Mac's mirror report
         (recall.capture_mirror), which ships every source's .alive freshness — the same
@@ -160,6 +160,13 @@ def _register_sources_route(
                     "kind": s.kind.value,
                     "active": s.active,
                     "lastActive": s.last_active.isoformat() if s.last_active else None,
+                    # Separate from `active` on purpose: `active` is the consent
+                    # signal and goes out in a silent room, `recording` answers
+                    # "is this thing on" (#1428).
+                    "recording": s.recording,
+                    "lastDelivered": (
+                        s.last_delivered.isoformat() if s.last_delivered else None
+                    ),
                 }
                 for s in statuses
             ]
