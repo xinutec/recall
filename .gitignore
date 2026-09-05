@@ -16,6 +16,11 @@ build/
 result
 result-*
 
+# rust — the cargo workspace's build output. Absent until the D1 workspace
+# landed, so 462 MB of clippy incremental caches and rustdoc search indexes
+# rode into history before anyone noticed.
+target/
+
 # angular frontend
 frontend/node_modules/
 frontend/dist/
