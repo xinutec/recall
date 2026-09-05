@@ -147,10 +147,22 @@ So per-block selection by speech level is safe: on a window where one mic is
 best throughout, it *is* that mic, at no measured cost, while transcribing one
 stream instead of five. Its value appears only where the best mic changes,
 which this window cannot show — that needs a window recorded while the room
-moved. Its one dependency is per-device gain calibration, since speech level
-is comparable across microphones only after it (`src/recall/calibrate.py`
-already exists for exactly this); here the 21 dB gap is far wider than any
-plausible gain error, so the ordering holds regardless.
+moved. **Its dependency is per-device calibration, and that is not a footnote — it is
+what makes selection mean anything.** `src/recall/calibrate.py` already
+measured the faintest real speech each mic has recorded: usb -50 dB, iphone11
+-57, pixel9 -68, pixel5 -70. So most of the 21 dB by which the condenser leads
+is the *device*, not the distance, and an uncalibrated speech-level rank picks
+it essentially always — selection degenerating into the fixed choice it exists
+to replace. The rank must compare each source against its own reference point
+(its floor ceiling, or its faintest real speech), so the question becomes "how
+well is this mic hearing the speaker, for this mic".
+
+Nor can the existing archive show selection paying off. Both multi-mic windows
+carrying corrections — the 2026-06-23 one used above (38 cases) and a second,
+sparser evening of the same month (8 cases, three segments per source) — have
+the condenser carrying every block. June holds no recorded instance of the room
+moving away from it. That evidence has to come from audio recorded while it
+does, which is what 2026-09-05 onward provides now that all five mics run.
 
 Two findings worth keeping:
 
