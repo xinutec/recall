@@ -494,28 +494,33 @@ B3 lands.*
   spoke" by a sweep. Inference is pinned to one thread — a background
   measurement must not saturate a 4-core box shared with Nextcloud.
 
-  ⚠⚠ **BLOCKED ON HARDWARE, and this is the stage's real problem.** ort's
-  prebuilt ONNX Runtime REQUIRES AVX2. isis (Xeon E3-1225 V2) and amun
-  (E3-1245 V2) are Ivy Bridge, 2012; AVX2 arrived with Haswell in 2013. Calling
-  the model there does not degrade — it raises SIGILL and kills the daemon that
-  IS the system of record. Measured the hard way on 2026-09-05: recalld
-  crash-looped (exit 132, five restarts) and the ingest plane refused
-  connections until the image was pinned back. `vad::cpu_can_run_the_model()`
-  now refuses at startup so the daemon can never be killed by an optional
-  measurement, which makes it SAFE but not DONE — on the current fleet the
-  scanner declines to start and every segment stays unmeasured.
+  ⚠ **The runtime is DLOPENED, not bundled, and that is load-bearing.** ort's
+  prebuilt ONNX Runtime requires AVX2; isis (Xeon E3-1225 V2) and amun
+  (E3-1245 V2) are Ivy Bridge, 2012, and AVX2 arrived with Haswell in 2013.
+  Calling it there did not degrade — it raised SIGILL and killed the daemon that
+  IS the system of record (measured 2026-09-05: recalld crash-looped, exit 132,
+  five restarts, ingest refusing connections until the image was pinned back).
+  The fix is Debian's `libonnxruntime`, built for baseline x86-64: `ort` uses
+  `load-dynamic` at `api-21`, the image installs `libonnxruntime1.21`, and
+  `ORT_DYLIB_PATH` names it by VERSIONED soname so an apt upgrade cannot swap the
+  ABI under a running image. The devshell and the nix check derivation supply the
+  same variable, so local, sandbox and production share one mechanism.
 
-  ⚠ **Building the image on amun proved the LINK, not the RUN**, and amun shares
-  isis's CPU generation, so running the tests there would have caught this
-  before it ever reached production. A build check on a machine that cannot
-  execute the result is not a verification of the result.
+  ⚠ **The session is a process-lifetime singleton that is NEVER DROPPED.** With
+  dynamic loading, ONNX Runtime's destructors run after the library is unloaded:
+  on amun every test PASSED and the binary then died with SIGSEGV on exit. A
+  daemon that segfaults on shutdown is not shippable, and "all assertions green"
+  is not the same as "the process survived".
 
-  THE FORK (needs a decision, not a patch): compile onnxruntime for these CPUs
-  and carry that build, or move speech detection off Isis to the Mac worker
-  where the ML already lives — which is a change to the shape this file argues
-  for, since "VAD at ingest" assumes ingest can run it.
+  ⚠ **Verified by RUNNING on the target, not by building for it.** The first
+  attempt built the image on amun, called Linux proven, and shipped a daemon that
+  crash-looped on isis — amun shares isis's CPU generation, so executing the
+  suite there would have caught it in seconds. It now runs on amun under the
+  exact Debian runtime production uses: 13 tests green, exit 0, and the golden
+  probability trace IDENTICAL to macOS under a different ORT version and
+  architecture, which is what makes that trace worth keeping.
 
-  STILL TO BUILD once that is settled: the wiring — speech into liveness, the
+  STILL TO BUILD: the wiring — speech into liveness, the
   quiet review's evidence, room priority, and the calibrated reference that
   un-parks D3's rank.
 - **D5. Retention.** Window transcode to Opus + enforcement, measured cost.

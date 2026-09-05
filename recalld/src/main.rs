@@ -152,11 +152,11 @@ fn spawn_speech_scanner(root: PathBuf) {
     const BATCH: usize = 40;
     const IDLE: std::time::Duration = std::time::Duration::from_mins(2);
     const BACKOFF: std::time::Duration = std::time::Duration::from_mins(5);
-    if !recalld::vad::cpu_can_run_the_model() {
+    if let Err(err) = recalld::vad::self_test() {
         tracing::warn!(
-            "speech: DISABLED — this cpu lacks avx2 and the prebuilt onnxruntime \
-             would SIGILL. Segments stay unmeasured; D4 needs an onnxruntime \
-             built for this cpu, or the measurement moved off this host."
+            %err,
+            "speech: DISABLED — the ONNX runtime could not run a trial inference. \
+             Segments stay unmeasured until it can; the ingest plane is unaffected."
         );
         return;
     }

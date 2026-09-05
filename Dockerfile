@@ -41,14 +41,6 @@ WORKDIR /build
 # audiocore dependency — audiod rides along as text. Layer caching comes from
 # buildx's registry cache rather than a dummy-source dance, which a workspace
 # would make three times as fiddly for a build measured in low minutes.
-# onnxruntime (pulled in by `ort` for stage D4's silero VAD) is C++, so the link
-# needs libstdc++'s development symlink. `rust:1-slim` ships gcc but not g++, and
-# this fails at LINK time — after the whole workspace has compiled — so it costs a
-# full build to discover. The runtime image already carries libstdc++.so.6, so
-# only the builder needs this.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends g++ \
-    && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY audiocore/ audiocore/
 COPY audiod/ audiod/
@@ -63,8 +55,13 @@ FROM python:3.12-slim-trixie
 # so it hides until someone presses play. `sox` was: the image had ffmpeg only, and every
 # audio request on the fleet died with FileNotFoundError deep in loudness normalisation
 # while the transcripts served perfectly. `flac` decodes the older archive segments.
+# libonnxruntime1.21: recalld's VAD (stage D4) DLOPENS this rather than bundling
+# a runtime. ort's prebuilt binaries require AVX2 and the fleet's servers are Ivy
+# Bridge (2012) — isis crash-looped with SIGILL on them. Debian's build targets
+# baseline x86-64 and runs there (verified by executing silero through it on
+# amun's identical CPU). ORT_DYLIB_PATH below names it.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg sox flac \
+    && apt-get install -y --no-install-recommends ffmpeg sox flac libonnxruntime1.21 \
     && rm -rf /var/lib/apt/lists/*
 # Non-ML runtime deps only (see deploy/k8s/README.md), pinned to the app's floors. A
 # dedicated fleet lockfile would make this reproducible — a follow-up.
@@ -79,6 +76,10 @@ RUN pip install --no-cache-dir \
     "fastapi>=0.136" "uvicorn>=0.49" "pydantic>=2.13" "httpx>=0.28" \
     "python-multipart>=0.0.32" "numpy>=2.1"
 # uid 1000 matches the Deployment's runAsUser + fsGroup.
+# Pinned to the versioned soname on purpose: an unversioned symlink would let an
+# apt upgrade swap the ABI under a running image, and ort asks for API 21.
+ENV ORT_DYLIB_PATH=/usr/lib/x86_64-linux-gnu/libonnxruntime.so.1.21
+
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin recall
 WORKDIR /app
 COPY src/ /app/src/

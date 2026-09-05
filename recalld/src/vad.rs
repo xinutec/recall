@@ -12,6 +12,7 @@
 
 use audiocore::decode;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// What silero was trained on, and what every segment is decoded to.
 pub const RATE: u32 = 16_000;
@@ -63,8 +64,22 @@ impl Region {
 /// pipeline 2 s of model construction for 0.5 s of detection — five hours
 /// instead of one across a cleanup pass — so the type exists to make reuse the
 /// easy path.
+/// ⚠ ONE session for the whole process, and it is NEVER DROPPED.
+///
+/// With `load-dynamic`, ONNX Runtime's own destructors run after the library is
+/// unloaded, and the process dies with SIGSEGV at teardown — measured on amun
+/// 2026-09-05, where every test PASSED and the binary then segfaulted on exit.
+/// A daemon that segfaults on shutdown is not shippable, so the session outlives
+/// everything and the library is never unloaded.
+///
+/// It also buys what the batch loop wanted anyway: the model is constructed once
+/// per process rather than once per batch.
+static SESSION: OnceLock<Mutex<ort::session::Session>> = OnceLock::new();
+
+/// A handle to the process-wide detector. Cheap to create; holding one across a
+/// batch serialises inference, which is what the single-thread policy wants.
 pub struct Detector {
-    session: ort::session::Session,
+    session: MutexGuard<'static, ort::session::Session>,
 }
 
 /// What can go wrong, kept separate from "no speech found" so a broken detector
@@ -73,8 +88,6 @@ pub struct Detector {
 pub enum Error {
     Model(String),
     Undecodable,
-    /// The CPU lacks AVX2, so the prebuilt runtime would SIGILL.
-    Unsupported,
 }
 
 impl std::fmt::Display for Error {
@@ -82,7 +95,6 @@ impl std::fmt::Display for Error {
         match self {
             Self::Model(err) => write!(f, "silero: {err}"),
             Self::Undecodable => write!(f, "segment did not decode"),
-            Self::Unsupported => write!(f, "cpu lacks avx2; prebuilt onnxruntime would SIGILL"),
         }
     }
 }
@@ -97,51 +109,63 @@ pub fn detection_gain(peak: f32) -> f32 {
     (TARGET_PEAK / peak).min(MAX_GAIN)
 }
 
-/// Whether this machine can run the prebuilt ONNX Runtime at all.
+/// One real inference on silence, to prove the whole chain works before the
+/// scanner trusts it: the dynamic library resolved, the API level matched, the
+/// embedded model parsed, and the CPU able to execute what the library emits.
 ///
-/// ⚠ ort's prebuilt binaries REQUIRE AVX2, and the fleet's servers do not have
-/// it: isis and amun are Ivy Bridge Xeons (2012), and AVX2 arrived with Haswell
-/// in 2013. Calling the model there does not fail — it raises SIGILL and takes
-/// the whole daemon down (exit 132, measured on isis 2026-09-05, three restarts
-/// before it was caught). The ingest plane is the system of record, so it must
-/// never be killed by an optional measurement.
+/// ⚠ This REPLACED an AVX2 feature check. That check was a PROXY — it asked
+/// whether one known-bad configuration was present, and it would now answer
+/// wrongly, because Debian's baseline-built libonnxruntime runs perfectly on the
+/// Ivy Bridge servers that ort's AVX2-requiring prebuilt binaries killed. Probing
+/// the actual capability beats probing a symptom of one way to lose it.
 ///
-/// ⚠ Building the image on amun proved the LINK, not the RUN. A build check on a
-/// machine that cannot execute the result is not a verification of the result.
-#[must_use]
-pub fn cpu_can_run_the_model() -> bool {
-    #[cfg(target_arch = "x86_64")]
-    {
-        std::arch::is_x86_feature_detected!("avx2")
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        true
-    }
+/// ⚠ What it CANNOT catch is SIGILL, which kills the process rather than
+/// returning an error. That risk is excluded upstream instead, by loading a
+/// baseline-built runtime (see recalld/Cargo.toml) — not by this check.
+///
+/// # Errors
+/// Whatever prevented the inference, so the caller can log it and stand down
+/// rather than pretend a silent room.
+pub fn self_test() -> Result<(), Error> {
+    let mut detector = Detector::load()?;
+    let quiet = vec![0.0_f32; WINDOW * 2];
+    detector.probabilities(&quiet)?;
+    Ok(())
+}
+
+fn build_session() -> Result<ort::session::Session, Error> {
+    ort::session::Session::builder()
+        .map_err(|e| Error::Model(e.to_string()))?
+        // ⚠ ONE thread, deliberately. onnxruntime defaults to spreading
+        // inference across every core, and this runs as a BACKGROUND scanner on
+        // a 4-core Isis shared with Nextcloud.
+        .with_intra_threads(1)
+        .map_err(|e| Error::Model(e.to_string()))?
+        .with_inter_threads(1)
+        .map_err(|e| Error::Model(e.to_string()))?
+        .commit_from_memory(MODEL)
+        .map_err(|e| Error::Model(e.to_string()))
 }
 
 impl Detector {
     /// # Errors
-    /// If the CPU cannot run the prebuilt runtime (see `cpu_can_run_the_model`),
-    /// or if the embedded network fails to load.
+    /// If the dynamic ONNX Runtime cannot be loaded (wrong API level, library
+    /// absent) or the embedded network fails to parse.
     pub fn load() -> Result<Self, Error> {
-        if !cpu_can_run_the_model() {
-            return Err(Error::Unsupported);
+        // Built fallibly, not via `get_or_init`, so a missing or mismatched
+        // runtime is an ERROR the caller can stand down on rather than a panic
+        // that takes the ingest plane with it.
+        if SESSION.get().is_none() {
+            let _ = SESSION.set(Mutex::new(build_session()?));
         }
-        let session = ort::session::Session::builder()
-            .map_err(|e| Error::Model(e.to_string()))?
-            // ⚠ ONE thread, deliberately. onnxruntime defaults to spreading
-            // inference across every core, and this runs as a BACKGROUND
-            // scanner on a 4-core Isis shared with Nextcloud — a detector that
-            // saturates the box to measure yesterday's audio faster has its
-            // priorities backwards. The work is latency-insensitive by
-            // construction (docs/architecture.md decision 8).
-            .with_intra_threads(1)
-            .map_err(|e| Error::Model(e.to_string()))?
-            .with_inter_threads(1)
-            .map_err(|e| Error::Model(e.to_string()))?
-            .commit_from_memory(super::vad::MODEL)
-            .map_err(|e| Error::Model(e.to_string()))?;
+        let cell = SESSION
+            .get()
+            .ok_or_else(|| Error::Model("session unavailable".to_owned()))?;
+        // Poisoning means a previous inference panicked; the session itself is
+        // still valid, so recover rather than refuse to measure ever again.
+        let session = cell
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(Self { session })
     }
 

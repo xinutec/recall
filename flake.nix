@@ -178,7 +178,14 @@
           # The watchdog tests decode real files through ffmpeg — the same
           # binary the daemon spawns at runtime, so the sandboxed suite
           # exercises the real verdict path, not a stub of it.
-          nativeCheckInputs = [ pkgs.ffmpeg ];
+          # ffmpeg for the decode path; onnxruntime because recalld's VAD now
+          # dlopens the SYSTEM runtime rather than a bundled one (the prebuilt
+          # binaries need AVX2, which the fleet's 2012 Xeons lack).
+          nativeCheckInputs = [
+            pkgs.ffmpeg
+            pkgs.onnxruntime
+          ];
+          ORT_DYLIB_PATH = "${pkgs.onnxruntime}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
         };
 
         # Everything home-manager will actually run, as ONE buildable output: a farm
@@ -274,6 +281,11 @@
             pkgs.rust-analyzer
             pkgs.rustfmt
             pkgs.clippy
+            # recalld's VAD (stage D4) dlopens the ONNX runtime rather than
+            # bundling one — ort's prebuilt binaries need AVX2 and the fleet's
+            # 2012 Xeons lack it, so the daemon uses whatever baseline-built
+            # runtime the host provides. ORT_DYLIB_PATH below points at this one.
+            pkgs.onnxruntime
             # Angular front-end toolchain (Angular 22 needs Node >= 24.15)
             pkgs.nodejs_24
             pkgs.pnpm # the frontend's installer; node ships npm too, ignore it
@@ -282,6 +294,7 @@
           ];
           shellHook = ''
             export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
+            export ORT_DYLIB_PATH="${pkgs.onnxruntime}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}"
             echo "recall devshell — python: $(python --version), mypy: $(mypy --version)" >&2
           '';
         };
