@@ -2,8 +2,9 @@
 //!
 //!   recalld --root <data-root> [--bind 127.0.0.1:8001] [--tokens <file>]
 //!
-//! `RECALLD_READ_TOKEN` (env, optional) gates the read side; the tokens file
-//! gates writes per source. Both unset = open, for dev and tests.
+//! `RECALLD_READ_TOKEN` (env, optional) gates the read side; per-source write
+//! tokens come from `--tokens <file>` or the `RECALLD_INGEST_TOKENS` env var
+//! (same line grammar). Everything unset = open, for dev and tests.
 
 use recalld::app::{Config, DEFAULT_MAX_BODY, router};
 use recalld::tokens::Tokens;
@@ -41,17 +42,24 @@ fn main() -> ExitCode {
     let Some(root) = root else {
         return usage();
     };
-    // A configured-but-unreadable tokens file fails closed at startup: an
+    // A configured-but-unreadable token table fails closed at startup: an
     // open ingest plane must be a choice, never the residue of a typo.
-    let tokens = match tokens_path {
-        None => None,
-        Some(path) => match Tokens::load(&path) {
+    let tokens = match (tokens_path, std::env::var("RECALLD_INGEST_TOKENS")) {
+        (Some(path), _) => match Tokens::load(&path) {
             Ok(tokens) => Some(tokens),
             Err(err) => {
                 eprintln!("recalld: cannot read tokens file {}: {err}", path.display());
                 return ExitCode::FAILURE;
             }
         },
+        (None, Ok(text)) if !text.trim().is_empty() => match Tokens::parse(&text) {
+            Ok(tokens) => Some(tokens),
+            Err(err) => {
+                eprintln!("recalld: RECALLD_INGEST_TOKENS does not parse: {err}");
+                return ExitCode::FAILURE;
+            }
+        },
+        _ => None,
     };
     let read_token = std::env::var("RECALLD_READ_TOKEN")
         .ok()

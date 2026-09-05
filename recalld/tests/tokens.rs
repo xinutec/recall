@@ -26,6 +26,15 @@ fn comments_blanks_and_rotation_pairs_parse() {
 }
 
 #[test]
+fn the_env_carrier_parses_the_same_grammar() {
+    // The fleet supplies the table as an env var from the secret; same lines,
+    // no file.
+    let tokens = Tokens::parse("usb secret-a\npixel5 secret-b\n").expect("parse");
+    assert_eq!(tokens.check("usb", "secret-a"), Verdict::Allowed);
+    assert_eq!(tokens.check("usb", "secret-b"), Verdict::WrongSource);
+}
+
+#[test]
 fn a_malformed_line_fails_the_load() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("tokens");

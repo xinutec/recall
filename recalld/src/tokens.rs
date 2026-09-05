@@ -37,7 +37,13 @@ pub enum Verdict {
 
 impl Tokens {
     pub fn load(path: &Path) -> std::io::Result<Self> {
-        let text = std::fs::read_to_string(path)?;
+        Self::parse(&std::fs::read_to_string(path)?)
+    }
+
+    /// The same grammar from any carrier — the fleet supplies it as an env
+    /// var projected from `recall-secret` (`RECALLD_INGEST_TOKENS`), dev as a
+    /// file, and both stay one parser.
+    pub fn parse(text: &str) -> std::io::Result<Self> {
         let mut by_source: HashMap<String, Vec<[u8; 32]>> = HashMap::new();
         for line in text.lines() {
             let line = line.trim();
