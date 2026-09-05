@@ -93,6 +93,7 @@ fn main() -> ExitCode {
             }
         };
         spawn_level_scanner(config.root.clone());
+        spawn_speech_scanner(config.root.clone());
         spawn_room_builder(config.root.clone());
         tracing::info!(%bind, "recalld: ingest plane listening");
         match axum::serve(listener, router(config)).await {
@@ -128,6 +129,40 @@ fn spawn_level_scanner(root: PathBuf) {
                 }
                 Err(err) => {
                     tracing::error!(%err, "levels: task failed; backing off");
+                    tokio::time::sleep(BACKOFF).await;
+                }
+            }
+        }
+    });
+}
+
+/// Stage D4: the speech scanner — VAD over every delivered segment, so
+/// "active" can mean someone is TALKING rather than bytes arrived, and the
+/// quiet review has evidence before it proposes deleting anything.
+///
+/// A SMALLER batch than the level scanner's: this runs a neural network per
+/// 32 ms window rather than an envelope, and Isis has four cores shared with
+/// Nextcloud. The idle wait is longer for the same reason — speech evidence is
+/// wanted within minutes, never within seconds.
+fn spawn_speech_scanner(root: PathBuf) {
+    const BATCH: usize = 40;
+    const IDLE: std::time::Duration = std::time::Duration::from_mins(2);
+    const BACKOFF: std::time::Duration = std::time::Duration::from_mins(5);
+    tokio::spawn(async move {
+        loop {
+            let batch_root = root.clone();
+            let wrote =
+                tokio::task::spawn_blocking(move || recalld::speech::scan_once(&batch_root, BATCH))
+                    .await;
+            match wrote {
+                Ok(Ok(0)) => tokio::time::sleep(IDLE).await,
+                Ok(Ok(n)) => tracing::info!(measured = n, "speech: batch complete"),
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, "speech: scan failed; backing off");
+                    tokio::time::sleep(BACKOFF).await;
+                }
+                Err(err) => {
+                    tracing::error!(%err, "speech: task failed; backing off");
                     tokio::time::sleep(BACKOFF).await;
                 }
             }
