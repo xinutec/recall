@@ -36,7 +36,7 @@ from recall.asr import (
 )
 from recall.attribution import AttributionReport, context_window
 from recall.beat_relay import serve as serve_beat_relay
-from recall.capture import CaptureConfig, parse_segment_start, segment_glob
+from recall.capture import parse_segment_start, segment_glob
 from recall.cleanup import (
     scan_empty_text,
     scan_foreign_script,
@@ -86,11 +86,9 @@ from recall.redrive import redrive_archive
 from recall.refine import refine_diarized
 from recall.reprocess import reprocess
 from recall.review import apply_correction
-from recall.runner import record
 from recall.sources import DEVICE_KINDS, AudioSource, SourceKind
 from recall.speakerid import pyannote_embed
 from recall.store import AbCompareJob, Store
-from recall.stream_server import serve as serve_ingest
 from recall.summarize import days_needing_summaries, summarize_day
 from recall.timeline import Gap, find_gaps, find_overlaps
 from recall.training import export_corpus
@@ -263,71 +261,6 @@ def _serve_paused_aware(
         note(
             capture_control.CaptureEventKind.PAUSE
         )  # a pause stopped it (not an EOF exit)
-
-
-def _cmd_record(args: argparse.Namespace) -> int:
-    runlog.setup()  # timestamped capture-lifecycle logging to the agent's .err.log
-    source = AudioSource(
-        id=args.id, name=args.id, kind=SourceKind.COREAUDIO, spec=args.device
-    )
-    config = CaptureConfig(
-        sample_rate=args.sample_rate,
-        channels=args.channels,
-        segment_seconds=args.segment_seconds,
-        codec=args.codec,
-        bitrate=args.bitrate,
-    )
-
-    # Authoritative registration: the recording agent knows this is the local mic
-    # (coreaudio), correcting any kind a worker may have guessed from the directory.
-    # Phones self-register as tcp_pcm via the ingest handshake (recall.stream_server).
-    store = Store.open(args.out / "recall.sqlite")
-    try:
-        store.register_source(source)
-    finally:
-        store.close()
-
-    def record_event(
-        kind: capture_control.CaptureEventKind,
-        utc: datetime,
-        detail: str | None = None,
-    ) -> None:
-        # Short-lived connection per transition (a few a day): the durable resume/pause
-        # record the loss check reconciles gaps against. Runs off the recorder's thread.
-        event_store = Store.open(args.out / "recall.sqlite")
-        try:
-            event_store.add_capture_event(
-                kind, utc=utc, source_id=source.id, detail=detail
-            )
-        finally:
-            event_store.close()
-
-    def on_cycled(why: str) -> None:
-        # The watchdog killed a wedged/stalled producer: capture self-healed. Durable,
-        # so the trace shows the cycle — and a cluster of these means a real fault.
-        record_event(
-            capture_control.CaptureEventKind.PRODUCER_CYCLED,
-            datetime.now(UTC),
-            detail=why,
-        )
-
-    def once(should_stop: Callable[[], bool]) -> int:
-        # fanout=True: the segmenter also publishes the best-effort UDP tap
-        # recall-live consumes, so live never opens the device (two clients starve).
-        # watch_dead: a wedged sox read (digital zeros) or a stalled producer gets
-        # cycled — record() returns, and the KeepAlive respawn re-opens the device.
-        return record(
-            source,
-            config,
-            args.out,
-            max_seconds=args.seconds,
-            should_stop=should_stop,
-            fanout=True,
-            watch_dead=True,
-            on_cycled=on_cycled,
-        )
-
-    return _serve_paused_aware(args.out, once, record_event=record_event)
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:
@@ -1075,12 +1008,6 @@ def _cmd_redrive(args: argparse.Namespace) -> int:
     finally:
         store.close()
     print(f"redrive: added {added} re-derived transcript rows")
-    return 0
-
-
-def _cmd_ingest(args: argparse.Namespace) -> int:
-    runlog.setup()  # timestamped connect/disconnect logging to the agent's .err.log
-    serve_ingest(args.out, args.port)
     return 0
 
 
@@ -2144,7 +2071,6 @@ def _cmd_scan_quiet(args: argparse.Namespace) -> int:
 
 
 _COMMANDS = {
-    "record": _cmd_record,
     "sync": _cmd_sync,
     "jobs": _cmd_jobs,
     "pause": _cmd_pause,
@@ -2158,7 +2084,6 @@ _COMMANDS = {
     "transcribe": _cmd_transcribe,
     "reprocess": _cmd_reprocess,
     "worker": _cmd_worker,
-    "ingest": _cmd_ingest,
     "beat-relay": _cmd_beat_relay,
     "live": _cmd_live,
     "compress": _cmd_compress,

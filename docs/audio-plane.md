@@ -55,20 +55,20 @@ tier.
 
 ## The products, in build order
 
-1. **Ingest server** — port of `stream_server.py`, same wire protocol
-   (`src/recall/wire.py` is the shared-facts reference), same archive layout,
-   same pause behaviour, same `capture_events` evidence. **Deployed
-   2026-09-04**: audiod is the live `recall-ingest` agent; the Python server
-   stays in-tree as the rollback. The tier-1 aligner (`align.rs`,
+1. **Ingest server** — same wire protocol (`src/recall/wire.py` +
+   `audiod/tests/handshakes.json` are the shared-facts references), same
+   archive layout, same pause behaviour, same `capture_events` evidence.
+   **Deployed 2026-09-04**; the Python server it ported is deleted — the
+   rollback is git history. The tier-1 aligner (`align.rs`,
    `envelope.rs`, the `align-probe` bin) is also **built and measured**: on
    the pre-epoch-fix June archive every 60 s block anchors at peak r
    0.66–0.94 with sub-second, smoothly drifting offsets.
 2. **USB capture** — `audiod capture`: sox producer, metered pump,
    dead-segment watchdog, pause parking — the port of `recall record`
-   (`runner.py` + `cli._cmd_record`). **Code built**; the deployment flip is
-   deliberately last, because it is the sacred path (requirement #1) and TCC
-   re-prompts on binary change. Replacing sox itself with an in-process
-   CoreAudio read is a later, separate step behind the same watchdog.
+   (now deleted). **Deployed 2026-09-05** during a capture pause; expect the
+   TCC mic prompt at the binary's first device open. Replacing sox itself
+   with an in-process CoreAudio read is a later, separate step behind the
+   same watchdog.
 3. **The fused `room` source** — per ~20 ms STFT frame, per band, weight each
    aligned source by local SNR; write ordinary Opus segments under `room/`.
    The worker then transcribes `room` first and per-source becomes backfill.
@@ -88,9 +88,8 @@ tier.
 The WER bake-off in (3) does not wait for (2): it runs offline over the
 already-recorded archive (magnitude-tier alignment works on decoded Opus), so
 the fusion question is answered before the sacred capture path is touched.
-ffmpeg remains the segmenter child in (1) so rollback output stays directly
-comparable with the Python server's; native Opus encoding arrives with (3),
-which needs the PCM in process anyway.
+ffmpeg remains the segmenter child for now; native Opus encoding arrives
+with (3), which needs the PCM in process anyway.
 
 ## Deployment notes
 

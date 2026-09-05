@@ -1,15 +1,15 @@
 """The device-ingest wire protocol — the few facts both ends must agree on.
 
 Its own module, with **no imports**, because the two ends do not share a runtime.
-The server (`recall.stream_server`) runs inside the full backend; a Linux mic client
-(`recall.mic`) runs on a box that has a bare `python3` and no venv, and must not drag
-the store, pydantic or the ML stack in behind a port number.
+The server is audiod (Rust — `audiod ingest`); a Linux mic client (`recall.mic`)
+runs on a box that has a bare `python3` and no venv, and must not drag the store,
+pydantic or the ML stack in behind a port number.
 
-The phone clients cannot import this at all, so their copies of the same facts
-(`android/.../Handshake.kt`, `ios/Sources/Handshake.swift`) are checked against it by
-`tests/test_mic.py` round-tripping this client's handshake through the server's own
-parser — the drift that would otherwise go unnoticed until a mic silently stopped
-connecting.
+No client can import the server's parser, so the shared contract lives in
+`audiod/tests/handshakes.json`: the canonical line each client emits. audiod's
+`wire_fixture` test asserts the live parser accepts every one; `tests/test_mic.py`
+asserts this client still produces its line byte for byte — the drift that would
+otherwise go unnoticed until a mic silently stopped connecting.
 """
 
 from __future__ import annotations

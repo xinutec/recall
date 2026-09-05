@@ -20,7 +20,6 @@ from recall.llm import (
     LLM_HOST_PORT,
 )
 from recall.paths import default_data_root
-from recall.wire import DEFAULT_INGEST_PORT
 
 _FIX_DELIM = "=>"
 
@@ -40,22 +39,6 @@ def _parse_fix(raw: str) -> tuple[str, str]:
 def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse declarations
     parser = argparse.ArgumentParser(prog="recall")
     sub = parser.add_subparsers(dest="command", required=True)
-
-    rec = sub.add_parser("record", help="capture a source to segment files")
-    rec.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    rec.add_argument("--id", default="usb", help="source id (filesystem-safe)")
-    rec.add_argument(
-        "--device",
-        default="",
-        help="CoreAudio input device name (default: the system default input — "
-        "pin it, or a Bluetooth speaker's hands-free mic can take over)",
-    )
-    rec.add_argument("--seconds", type=int, default=None, help="bounded duration")
-    rec.add_argument("--segment-seconds", type=int, default=60)
-    rec.add_argument("--sample-rate", type=int, default=48000)
-    rec.add_argument("--channels", type=int, default=1)
-    rec.add_argument("--codec", default="libopus")
-    rec.add_argument("--bitrate", default="32k", help="lossy bitrate, e.g. 32k")
 
     ver = sub.add_parser("verify", help="report gaps/overlaps in captured segments")
     ver.add_argument("--out", type=Path, default=default_data_root(), help="data root")
@@ -286,16 +269,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         default=None,
         help="force a full re-derive of one recording (every segment of this source, "
         "regardless of state) through the canonical pipeline, then exit",
-    )
-
-    ing = sub.add_parser(
-        "ingest",
-        help="single-port audio ingest: phones connect to one port and announce "
-        "themselves (replaces a per-device ffmpeg listener each)",
-    )
-    ing.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    ing.add_argument(
-        "--port", type=int, default=DEFAULT_INGEST_PORT, help="listen port"
     )
 
     relay = sub.add_parser(

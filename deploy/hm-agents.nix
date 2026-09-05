@@ -182,8 +182,8 @@ in
   # reachable from Isis under the one-way WireGuard model and need a Mac-initiated job-pull
   # (like capture-mirror) — tracked as Phase 2, not served from the Mac.
 
-  # Single-port audio ingest for the phone mics — audiod (Rust) since 2026-09-04;
-  # the Python server (`recall ingest --out`) remains in-tree as the rollback.
+  # Single-port audio ingest for the phone mics — audiod (Rust) since 2026-09-04.
+  # The Python server was deleted 2026-09-05; the rollback is git history.
   # Same reasoning as capture for the priority class: this holds the phones' live
   # PCM sockets and pumps them into ffmpeg in real time. A throttled reader drops
   # a phone's samples exactly as a throttled sox drops the USB mic's.
@@ -290,7 +290,11 @@ in
   launchd.agents."org.xinutec.recall-capture" = daemon {
     label = "org.xinutec.recall-capture";
     name = "capture";
-    args = [ "record" "--out" out "--id" "usb" "--device" "USB Condenser Microphone" ];
+    args = [ ];
+    program = audiodWrapper {
+      name = "capture";
+      args = [ "capture" "--root" out "--id" "usb" "--device" "USB Condenser Microphone" ];
+    };
     extra = { ProcessType = "Interactive"; };
   };
 

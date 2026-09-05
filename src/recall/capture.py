@@ -6,7 +6,8 @@ fixed-length files — a crash loses at most one segment. Filenames embed a UTC
 start timestamp (ffmpeg is run with TZ=UTC).
 
 Only construction/parsing and the tiny shared file-layout helpers (the liveness
-marker, the segment glob) live here; running the pipe is in recall.runner.
+marker, the segment glob) live here; the capture pipelines themselves are
+audiod's (docs/audio-plane.md).
 """
 
 from __future__ import annotations
@@ -53,9 +54,9 @@ class StreamMeter:
     evidence of what the device actually sent:
     total bytes, peak level, and when the first *audible* sample arrived — in stream
     time, so the phone's wall clock can't confuse it. Chunks need not respect sample
-    boundaries; a half sample carries to the next feed. Shared by both pumps that
-    carry live PCM: the phone ingest (recall.stream_server) and the mic's
-    producer→segmenter pump (recall.runner)."""
+    boundaries; a half sample carries to the next feed. The audiod pumps carry
+    the live PCM now and meter it the same way; this copy still serves the
+    Python-side tools that read PCM (mic client tests, probes)."""
 
     def __init__(self, sample_rate: int, channels: int) -> None:
         self._byte_rate = 2 * sample_rate * channels  # s16 = 2 bytes/sample

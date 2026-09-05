@@ -15,7 +15,7 @@ iPhone's WireGuard was off and `devicectl` kept reaching it over the LAN the who
 time, which is exactly what made it look like an app fault.
 
 WHY IT IS NOT THE INGEST PORT. The obvious home for this is the port the phones
-already talk to, but `stream_server.serve` CLOSES its listener while capture is
+already talk to, but the ingest server CLOSES its listener while capture is
 paused — and a pause is precisely when the heartbeat is the only signal there is.
 A beat receiver has to be independent of the capture lifecycle, so it is its own
 tiny server that runs whatever capture is doing.

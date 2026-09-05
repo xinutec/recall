@@ -1,7 +1,7 @@
 """Whether each mic app is still running — the one thing nothing else could answer.
 
 recall has always had a per-source liveness marker, and it deliberately does not
-mean this. `stream_server` refreshes it only for a chunk whose peak clears
+mean this. the ingest server refreshes it only for a chunk whose peak clears
 SILENCE_PEAK, so "active" means *recording*: a phone streaming digital silence
 reads idle on purpose, because nobody should speak trusting a dot the audio
 cannot back. The cost of that correctness is that a quiet room and a dead app are

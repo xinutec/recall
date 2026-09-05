@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import override
 
 import pytest
@@ -21,7 +22,6 @@ from recall.mic import (
     parse_args,
     post_beat,
 )
-from recall.stream_server import parse_handshake
 from recall.wire import DEFAULT_INGEST_PORT
 
 
@@ -67,16 +67,26 @@ class TestPcmSpool:
 
 
 class TestHandshakeLine:
-    """The server parses this; a drift here is a source that never connects."""
+    """The server parses this; a drift here is a source that never connects.
 
-    def test_round_trips_through_the_servers_own_parser(self) -> None:
-        line = handshake_line("geb", rate=48000, channels=1, epoch=1756900000.25)
-        shake = parse_handshake(line.decode().strip())
-        assert shake is not None
-        assert shake.source_id == "geb"
-        assert shake.sample_rate == 48000
-        assert shake.channels == 1
-        assert shake.epoch == 1756900000.25
+    The server is audiod (Rust), so the round-trip is split across two suites
+    sharing one fixture: audiod/tests/handshakes.json carries the canonical
+    line each client emits, this side asserts our client still PRODUCES its
+    line byte for byte, and audiod's wire_fixture test asserts the live parser
+    ACCEPTS every line with the declared fields."""
+
+    def test_matches_the_canonical_fixture_line(self) -> None:
+        fixture = json.loads(
+            (Path(__file__).parent.parent / "audiod/tests/handshakes.json").read_text()
+        )
+        case = next(c for c in fixture["cases"] if c["client"].startswith("python"))
+        line = handshake_line(
+            case["id"],
+            rate=case["rate"],
+            channels=case["channels"],
+            epoch=case["epoch"],
+        )
+        assert line == case["line"].encode() + b"\n"
 
     def test_is_one_newline_terminated_line(self) -> None:
         line = handshake_line("geb", rate=48000, channels=1, epoch=1.0)

@@ -1,0 +1,25 @@
+{
+  "_comment": "Canonical handshake lines as each client emits them. The Rust suite (wire_fixture.rs) asserts the LIVE parser accepts every one; recall's tests/test_mic.py asserts the Python client still produces its line byte for byte. The Kotlin/Swift lines are copies of what Handshake.kt / Handshake.swift format. Editing a client's line here without both suites green is the drift this file exists to catch.",
+  "cases": [
+    {
+      "client": "python (recall.mic handshake_line)",
+      "line": "{\"id\": \"geb\", \"rate\": 48000, \"channels\": 1, \"epoch\": 1756900000.25}",
+      "id": "geb", "rate": 48000, "channels": 1, "epoch": 1756900000.25
+    },
+    {
+      "client": "android (Handshake.kt)",
+      "line": "{\"id\":\"pixel9\",\"rate\":48000,\"channels\":1,\"epoch\":1756900000.250}",
+      "id": "pixel9", "rate": 48000, "channels": 1, "epoch": 1756900000.25
+    },
+    {
+      "client": "ios (Handshake.swift)",
+      "line": "{\"id\":\"iphone11\",\"rate\":48000,\"channels\":1,\"epoch\":1756900000.250}",
+      "id": "iphone11", "rate": 48000, "channels": 1, "epoch": 1756900000.25
+    },
+    {
+      "client": "pre-epoch app (any)",
+      "line": "{\"id\":\"pixel5\",\"rate\":48000,\"channels\":1}",
+      "id": "pixel5", "rate": 48000, "channels": 1, "epoch": null
+    }
+  ]
+}

@@ -25,8 +25,7 @@ closed segment from arrival time to capture time — so cross-mic timestamps sha
 clock and moment folding lines up. Absent or nonsense (a clock >10 min out), segments
 stay arrival-stamped exactly as before; the shift is only ever backwards, never past
 ffmpeg's open segment.
-The server (`audiod` — Rust, [audio-plane.md](audio-plane.md); `recall.stream_server`
-is the behaviour-identical Python rollback):
+The server (`audiod` — Rust, [audio-plane.md](audio-plane.md)):
 
 1. reads *exactly* the handshake line (byte by byte, so it never consumes any PCM),
 2. **auto-registers** the source by the announced id (a filesystem-safe id = one source
@@ -71,7 +70,7 @@ wrong; the beat lands direct (`viaLan` absent), which is what settled it.
 
 ⚠ **The spool is a backpressure cushion, not a store.** A Linux box has RAM to bank
 hours, but the server rebases a connection's segment names by ONE offset measured at
-its first byte (`audiod::rebase::connection_offset`; same in the rollback), so a replayed backlog would be
+its first byte (`audiod::rebase::connection_offset`), so a replayed backlog would be
 stamped correctly at its head and progressively wrong toward its tail. The client
 therefore **discards while disconnected**, exactly as the phones do. Holding audio
 across a disconnect needs a protocol that times each segment, not a bigger buffer.
@@ -120,7 +119,7 @@ renders it (own device highlighted, "active / Ns ago" per recorder).
 ⚠ **The marker is refreshed only by audio above the silence floor**, so "active" means
 *recording*, not connected — a phone streaming digital silence reads idle on purpose,
 because nobody should speak trusting a dot the audio can't back
-(`audiod::server`; same in the rollback).
+(`audiod::server`).
 
 ## Aliveness: the app says so, hourly
 
@@ -172,7 +171,7 @@ A global pause must stop *all* recording, not just the USB mic. While paused, th
 ingest server **closes its listener** (so connecting phones are refused and back off,
 showing "Recording paused") and **drops any active stream** — its handler finalises the
 current segment on the dropped socket, so no audio is lost. On resume it reopens the
-listener and the phones reconnect. (`audiod::server::serve`; same in the rollback.)
+listener and the phones reconnect. (`audiod::server::serve`.)
 
 One platform nuance: **Android closes its microphone** whenever it can't deliver
 (connect-first, then open the mic), so a pause means the mic is off. **iOS keeps the

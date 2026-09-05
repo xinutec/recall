@@ -24,7 +24,7 @@ ring is full, and never without being counted.
 
 **Why the drain discards while disconnected**, rather than banking a backlog the box
 has ample RAM to hold: the server rebases a connection's segment names by ONE offset,
-measured at its first byte (`stream_server.connection_offset`). A replayed backlog
+measured at its first byte (`audiod::rebase::connection_offset`). A replayed backlog
 would be stamped correctly at its head and increasingly wrong toward its tail, so
 holding audio across a disconnect needs a protocol that times each segment, not a
 bigger buffer here.
