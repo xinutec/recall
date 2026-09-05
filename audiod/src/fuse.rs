@@ -108,3 +108,71 @@ pub fn fuse(
     }
     fused
 }
+
+/// How a block's admitted sources become one signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Combine {
+    /// Mix every admitted source, weighted per bin by SNR.
+    Weighted,
+    /// Carry the single source that hears the block best, and drop the rest.
+    BestSource,
+}
+
+/// How to rank sources against each other when only one may carry a block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceRank {
+    /// The level the source hears speech at. Comparable across microphones
+    /// only after per-device gain calibration, but it is not fooled by noise
+    /// suppression, and it tracks how well the model hears the speaker.
+    SpeechLevel,
+    /// Speech over the source's own floor. **Rewards noise gating**: measured
+    /// on the 2026-06-23 window the phones sit below -70 dB for 90-99% of the
+    /// time because their noise suppression emits near-silence between words,
+    /// which lifts this ratio to 36.5 dB against the condenser's honest 25.9 —
+    /// while the condenser hears the speech itself 21 dB louder.
+    SpeechToFloor,
+}
+
+/// Rank one source over a block from its envelope, in dB; higher carries the
+/// block. Quantiles name what "speech" and "floor" mean here.
+///
+/// Returns [`f32::NEG_INFINITY`] for an empty envelope, so an absent source
+/// never wins a comparison.
+pub fn rank_source(
+    envelope: &[f32],
+    rank: SourceRank,
+    speech_quantile: f64,
+    floor_quantile: f64,
+) -> f32 {
+    if envelope.is_empty() {
+        return f32::NEG_INFINITY;
+    }
+    match rank {
+        SourceRank::SpeechLevel => {
+            let mut sorted = envelope.to_vec();
+            sorted.sort_by(f32::total_cmp);
+            let speech = sorted[((sorted.len() - 1) as f64 * speech_quantile) as usize];
+            20.0 * speech.max(1e-9).log10()
+        }
+        SourceRank::SpeechToFloor => speech_to_floor_db(envelope, speech_quantile, floor_quantile),
+    }
+}
+
+/// A source's speech-to-floor ratio over one block, in dB, from its envelope:
+/// a high quantile (what it hears when someone talks) over a low one (its own
+/// floor). Comparable across microphones of different sensitivity because both
+/// terms scale with gain, so a constant AGC gain cancels.
+///
+/// Returns [`f32::NEG_INFINITY`] for an empty envelope, so an absent source
+/// never wins a comparison.
+pub fn speech_to_floor_db(envelope: &[f32], speech_quantile: f64, floor_quantile: f64) -> f32 {
+    if envelope.is_empty() {
+        return f32::NEG_INFINITY;
+    }
+    let mut sorted = envelope.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let at = |q: f64| sorted[((sorted.len() - 1) as f64 * q) as usize];
+    let speech = at(speech_quantile);
+    let floor = at(floor_quantile).max(1e-9);
+    20.0 * (speech.max(1e-9) / floor).log10()
+}

@@ -1,4 +1,4 @@
-use audiod::fuse::{PhaseSource, fuse, noise_floors};
+use audiod::fuse::{PhaseSource, SourceRank, fuse, noise_floors, rank_source, speech_to_floor_db};
 use audiod::stft::Stft;
 
 /// Two mics hear the same tone; each adds loud noise in its own band. The
@@ -123,5 +123,76 @@ fn the_phase_policies_disagree_when_the_sources_do() {
     assert!(
         difference > 1e-3,
         "the phase policy made no difference at all"
+    );
+}
+
+/// A microphone's speech-to-floor ratio must not depend on its gain: the whole
+/// point is comparing a quiet condenser against a phone running AGC.
+#[test]
+fn speech_to_floor_ignores_a_constant_gain() {
+    let envelope: Vec<f32> = (0..200)
+        .map(|i| if i % 4 == 0 { 0.4 } else { 0.01 })
+        .collect();
+    let loud: Vec<f32> = envelope.iter().map(|v| v * 8.0).collect();
+    let quiet = speech_to_floor_db(&envelope, 0.9, 0.1);
+    let amplified = speech_to_floor_db(&loud, 0.9, 0.1);
+    assert!(
+        (quiet - amplified).abs() < 1e-3,
+        "gain changed the ratio: {quiet} vs {amplified}"
+    );
+    assert!(
+        quiet > 20.0,
+        "a 40x peak-to-floor should read well above 20 dB"
+    );
+}
+
+/// The clean mic must win against one that hears the same speech under noise.
+#[test]
+fn the_cleaner_microphone_wins_the_block() {
+    let clean: Vec<f32> = (0..200)
+        .map(|i| if i % 4 == 0 { 0.4 } else { 0.002 })
+        .collect();
+    let noisy: Vec<f32> = (0..200)
+        .map(|i| if i % 4 == 0 { 0.4 } else { 0.15 })
+        .collect();
+    assert!(
+        speech_to_floor_db(&clean, 0.9, 0.1) > speech_to_floor_db(&noisy, 0.9, 0.1),
+        "the noisy microphone was preferred"
+    );
+}
+
+/// An absent source never wins, so a block with no audio cannot select it.
+#[test]
+fn an_empty_envelope_never_wins() {
+    assert!(speech_to_floor_db(&[], 0.9, 0.1) < speech_to_floor_db(&[0.1, 0.2], 0.9, 0.1));
+}
+
+/// The trap this ranking exists to avoid, measured on the 2026-06-23 window: a
+/// phone running noise suppression emits near-silence between words, so its
+/// speech-to-floor ratio beats a condenser that hears the speech 21 dB louder
+/// but reports honest room tone. Ranking by speech LEVEL must prefer the
+/// condenser; ranking by the ratio picks the phone, which is why that policy
+/// is kept only to be argued against.
+#[test]
+fn noise_suppression_fools_the_ratio_but_not_the_level() {
+    // Condenser: loud speech, audible room tone throughout.
+    let condenser: Vec<f32> = (0..400)
+        .map(|i| if i % 4 == 0 { 0.20 } else { 0.010 })
+        .collect();
+    // Phone: quieter speech, digital silence gated into every gap.
+    let phone: Vec<f32> = (0..400)
+        .map(|i| if i % 4 == 0 { 0.02 } else { 0.000_02 })
+        .collect();
+
+    let level = |e: &[f32]| rank_source(e, SourceRank::SpeechLevel, 0.9, 0.1);
+    let ratio = |e: &[f32]| rank_source(e, SourceRank::SpeechToFloor, 0.9, 0.1);
+
+    assert!(
+        level(&condenser) > level(&phone),
+        "speech level must prefer the microphone that hears the speaker"
+    );
+    assert!(
+        ratio(&phone) > ratio(&condenser),
+        "this test is worthless unless the ratio really does prefer the phone"
     );
 }

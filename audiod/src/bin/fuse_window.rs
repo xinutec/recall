@@ -10,7 +10,7 @@
 use audiod::align::best_lag;
 use audiod::decode::{to_f32, window_pcm};
 use audiod::envelope::rms_buckets_at;
-use audiod::fuse::{PhaseSource, fuse, noise_floors};
+use audiod::fuse::{Combine, PhaseSource, SourceRank, fuse, noise_floors, rank_source};
 use audiod::stft::Stft;
 use audiod::wav::write_mono16;
 use chrono::{DateTime, Utc};
@@ -33,6 +33,8 @@ const MIN_OVERLAP_S: f64 = 20.0;
 const FRAME: usize = 512;
 /// Noise floor = this quantile of per-bin magnitude across a block.
 const FLOOR_QUANTILE: f64 = 0.1;
+/// What a source hears when somebody talks: a high quantile of its envelope.
+const SPEECH_QUANTILE: f64 = 0.9;
 
 struct Args {
     root: PathBuf,
@@ -42,6 +44,8 @@ struct Args {
     minutes: usize,
     out: PathBuf,
     phase_from: PhaseSource,
+    combine: Combine,
+    rank: SourceRank,
 }
 
 fn parse_args() -> Option<Args> {
@@ -52,6 +56,8 @@ fn parse_args() -> Option<Args> {
     let mut minutes = 10usize;
     let mut out = None;
     let mut phase_from = PhaseSource::Reference(0);
+    let mut combine = Combine::Weighted;
+    let mut rank = SourceRank::SpeechLevel;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let value = args.next()?;
@@ -68,6 +74,20 @@ fn parse_args() -> Option<Args> {
             }
             "--minutes" => minutes = value.parse().ok()?,
             "--out" => out = Some(PathBuf::from(value)),
+            "--combine" => {
+                combine = match value.as_str() {
+                    "weighted" => Combine::Weighted,
+                    "best-source" => Combine::BestSource,
+                    _ => return None,
+                };
+            }
+            "--rank" => {
+                rank = match value.as_str() {
+                    "speech-level" => SourceRank::SpeechLevel,
+                    "speech-to-floor" => SourceRank::SpeechToFloor,
+                    _ => return None,
+                };
+            }
             "--phase" => {
                 phase_from = match value.as_str() {
                     "reference" => PhaseSource::Reference(0),
@@ -86,6 +106,8 @@ fn parse_args() -> Option<Args> {
         minutes,
         out: out?,
         phase_from,
+        combine,
+        rank,
     })
 }
 
@@ -94,7 +116,8 @@ fn main() -> ExitCode {
         eprintln!(
             "usage: fuse-window --root <archive> --reference <source> --sources <a,b,..> \
              --start <RFC3339> --minutes <n> --out <wav> \
-             [--phase reference|highest-snr]"
+             [--phase reference|highest-snr] \\
+             [--combine weighted|best-source] [--rank speech-level|speech-to-floor]"
         );
         return ExitCode::FAILURE;
     };
@@ -119,7 +142,7 @@ fn main() -> ExitCode {
         let ref_block = &channels[0][range.clone()];
         let ref_env: Vec<f32> = rms_f32(ref_block);
         // The reference is always in; others join if the audio agrees.
-        let mut specs = vec![stft.analyse(ref_block)];
+        let mut candidates: Vec<(&str, Vec<f32>)> = vec![(&names[0], ref_block.to_vec())];
         for (name, channel) in names[1..].iter().zip(&channels[1..]) {
             let env = rms_f32(&channel[range.clone()]);
             let anchor = best_lag(&ref_env, &env, max_lag, FINE_BUCKET_S, min_overlap);
@@ -134,9 +157,39 @@ fn main() -> ExitCode {
             );
             if admitted {
                 let shift = (offset_s * f64::from(RATE)) as i64;
-                specs.push(stft.analyse(&shifted(channel, range.clone(), shift)));
+                candidates.push((name, shifted(channel, range.clone(), shift)));
             }
         }
+        if args.combine == Combine::BestSource {
+            let best = candidates
+                .iter()
+                .enumerate()
+                .max_by(|a, b| {
+                    rank_source(&rms_f32(&a.1.1), args.rank, SPEECH_QUANTILE, FLOOR_QUANTILE)
+                        .total_cmp(&rank_source(
+                            &rms_f32(&b.1.1),
+                            args.rank,
+                            SPEECH_QUANTILE,
+                            FLOOR_QUANTILE,
+                        ))
+                })
+                .map_or(0, |(index, _)| index);
+            println!(
+                "{block:>5}  -> carries {} ({:.1} dB)",
+                candidates[best].0,
+                rank_source(
+                    &rms_f32(&candidates[best].1),
+                    args.rank,
+                    SPEECH_QUANTILE,
+                    FLOOR_QUANTILE
+                )
+            );
+            candidates = vec![std::mem::take(&mut candidates[best])];
+        }
+        let specs: Vec<_> = candidates
+            .iter()
+            .map(|(_, samples)| stft.analyse(samples))
+            .collect();
         let floors: Vec<Vec<f32>> = specs
             .iter()
             .map(|s| noise_floors(s, FLOOR_QUANTILE))

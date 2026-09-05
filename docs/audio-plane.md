@@ -121,6 +121,37 @@ Read the median, never the mean. The referee is deterministic on 37 of 38
 cases, but one clip hallucinated a loop in one run (WER 111.5, then 1.0 on the
 identical audio next run) and dragged the mean from 0.42 to 3.32 by itself.
 
+Selection was measured on the same corpus and referee, and the control that
+makes all of it believable ran too:
+
+| arm | median WER |
+| --- | --- |
+| `usb` through the whole fusion pipeline (control) | 0.229 |
+| per-block choice, ranked by speech **level** | 0.229 |
+| per-block choice, ranked by speech-to-**floor** | 0.477 |
+
+The control ties the raw archive on 35 of 38 cases (p = 1.0): the STFT,
+the resample and the overlap-add cost nothing measurable, so every loss above
+belongs to the algorithm and not to the plumbing.
+
+**Ranking sources by speech-to-floor picks the worst microphone.** It scored
+0.477 against 0.229 (22 worse, 10 better, p = 0.05) because it carried a phone
+in 26 of 30 blocks. The phones' noise suppression emits near-silence between
+words — measured on this window they sit below -70 dB for 90% (pixel9) and 99%
+(pixel5) of the time, against the condenser's 28% — so their "floor" is not
+room tone and the ratio rewards gating rather than intelligibility. Ranked by
+the level they hear *speech* at, the condenser leads by 21 dB (-48.5 against
+-69.9) and carries all 30 blocks, reproducing the best mic exactly.
+
+So per-block selection by speech level is safe: on a window where one mic is
+best throughout, it *is* that mic, at no measured cost, while transcribing one
+stream instead of five. Its value appears only where the best mic changes,
+which this window cannot show — that needs a window recorded while the room
+moved. Its one dependency is per-device gain calibration, since speech level
+is comparable across microphones only after it (`src/recall/calibrate.py`
+already exists for exactly this); here the 21 dB gap is far wider than any
+plausible gain error, so the ordering holds regardless.
+
 Two findings worth keeping:
 
 - **Per-bin argmax phase selection is not a valid combiner.** Sources aligned
@@ -158,12 +189,13 @@ equal quality fuse to no measurable gain, and a good mic fused with worse ones
 is dragged down (p = 0.03). Taken together those bound the technique: SNR-
 weighted magnitude combination is not how multiple microphones become a better
 transcript, and no reweighting is worth trying before something changes the
-terms. The remaining honest routes for the extra microphones are (a) choosing
-between them per block rather than mixing, which is also the whole capacity
-win; (b) genuinely coherent combination, which needs the sub-sample GCC-PHAT
-tier and phase-intact PCM at ingest, neither of which this offline instrument
-had; and (c) spending them on *spatial features* for diarization (stage 4)
-rather than on signal enhancement at all.
+terms. Route (a) — choosing between the sources per block rather than mixing them —
+is measured above and is the one to build: it takes the capacity win whole and
+costs nothing measurable in quality. What remains open for the extra
+microphones beyond that is (b) genuinely coherent combination, which needs the
+sub-sample GCC-PHAT tier and phase-intact PCM at ingest, neither of which this
+offline instrument had; and (c) spending them on *spatial features* for
+diarization (stage 4) rather than on signal enhancement at all.
 
 ## Deployment notes
 
