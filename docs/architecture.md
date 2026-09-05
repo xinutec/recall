@@ -431,9 +431,18 @@ B3 lands.*
   measurement re-derived continuously from delivery instead of once by
   hand. D3's rank consumes it; uncalibrated rank degenerates to the fixed
   choice ([audio-plane.md](audio-plane.md)).
-- **D3. Room builder.** Align + rank + emit `room` segments and queue rows.
-  Gate: the WER bake-off referee re-run against room vs best-single on new
-  multi-mic audio — room must tie or win, sign test, median.
+- **D3. Room builder.** *Built 2026-09-05, running in shadow:* one settled
+  UTC minute at a time (15 min settling for delivery latency), calibrated
+  per-block selection — each source's block level against its OWN D2
+  reference, a newtype (`CalibratedDb`) so raw loudness cannot cross the
+  rank boundary — carrying the winner's audio whole into
+  `room-<stamp>.flac` (16 kHz mono, ASR's shape) with full provenance per
+  block. No verdict on partial evidence: unmeasured overlap or an
+  unrankable field defers, never degrades to raw-loudest. Because it runs
+  over the delivered archive, it reconstructs room for the historical
+  multi-mic windows — so the WER referee (room vs best-single on the June
+  corpus) can run OFFLINE, and stays the acceptance gate before stage E
+  lets anything transcribe room.
 - **D4. VAD at ingest** (silero ONNX). Liveness + quiet evidence + priority.
 - **D5. Retention.** Window transcode to Opus + enforcement, measured cost.
 

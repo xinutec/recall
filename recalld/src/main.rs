@@ -93,6 +93,7 @@ fn main() -> ExitCode {
             }
         };
         spawn_level_scanner(config.root.clone());
+        spawn_room_builder(config.root.clone());
         tracing::info!(%bind, "recalld: ingest plane listening");
         match axum::serve(listener, router(config)).await {
             Ok(()) => ExitCode::SUCCESS,
@@ -128,6 +129,42 @@ fn spawn_level_scanner(root: PathBuf) {
                 Err(err) => {
                     tracing::error!(%err, "levels: task failed; backing off");
                     tokio::time::sleep(BACKOFF).await;
+                }
+            }
+        }
+    });
+}
+
+/// Stage D3: the room builder — one settled block at a time, calibrated
+/// selection, terminal verdicts only. Chases the level scanner: a block whose
+/// evidence is incomplete defers and returns next pass.
+fn spawn_room_builder(root: PathBuf) {
+    const IDLE: std::time::Duration = std::time::Duration::from_mins(1);
+    tokio::spawn(async move {
+        loop {
+            let pass_root = root.clone();
+            let config = recalld::room::RoomConfig::default();
+            let built = tokio::task::spawn_blocking(move || {
+                recalld::room::build_once(&pass_root, &config, chrono::Utc::now())
+            })
+            .await;
+            match built {
+                Ok(Ok(summary)) if summary.built + summary.silent > 0 => {
+                    tracing::info!(
+                        built = summary.built,
+                        silent = summary.silent,
+                        deferred = summary.deferred,
+                        "room: pass complete"
+                    );
+                }
+                Ok(Ok(_)) => tokio::time::sleep(IDLE).await,
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, "room: pass failed; backing off");
+                    tokio::time::sleep(IDLE).await;
+                }
+                Err(err) => {
+                    tracing::error!(%err, "room: task failed; backing off");
+                    tokio::time::sleep(IDLE).await;
                 }
             }
         }
