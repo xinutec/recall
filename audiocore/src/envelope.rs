@@ -36,3 +36,18 @@ pub fn rms_buckets_at(pcm: &[u8], rate: u32, bucket_s: f64) -> Vec<f32> {
         })
         .collect()
 }
+
+/// The dB level of the envelope's `q`-quantile bucket — the one measurement
+/// stage D's calibration stores per segment: `q = 0.9` is "what this mic
+/// hears when someone talks", `q = 0.1` its floor, the same quantiles the
+/// fusion bake-off ranked with (docs/audio-plane.md). `NEG_INFINITY` for an
+/// empty envelope, so an absent segment never reads as a quiet one.
+pub fn level_quantile_db(envelope: &[f32], q: f64) -> f32 {
+    if envelope.is_empty() {
+        return f32::NEG_INFINITY;
+    }
+    let mut sorted = envelope.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let level = sorted[((sorted.len() - 1) as f64 * q) as usize];
+    20.0 * level.max(1e-9).log10()
+}

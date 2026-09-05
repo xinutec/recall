@@ -92,6 +92,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
+        spawn_level_scanner(config.root.clone());
         tracing::info!(%bind, "recalld: ingest plane listening");
         match axum::serve(listener, router(config)).await {
             Ok(()) => ExitCode::SUCCESS,
@@ -101,4 +102,34 @@ fn main() -> ExitCode {
             }
         }
     })
+}
+
+/// Stage D2: the calibration scanner, measuring levels for every delivered
+/// segment in bounded batches. Off the request path — its ffmpeg children and
+/// sqlite writes ride `spawn_blocking`, and WAL keeps it from ever blocking
+/// an upload.
+fn spawn_level_scanner(root: PathBuf) {
+    const BATCH: usize = 200;
+    const IDLE: std::time::Duration = std::time::Duration::from_secs(30);
+    const BACKOFF: std::time::Duration = std::time::Duration::from_mins(1);
+    tokio::spawn(async move {
+        loop {
+            let batch_root = root.clone();
+            let wrote =
+                tokio::task::spawn_blocking(move || recalld::levels::scan_once(&batch_root, BATCH))
+                    .await;
+            match wrote {
+                Ok(Ok(0)) => tokio::time::sleep(IDLE).await,
+                Ok(Ok(n)) => tracing::info!(measured = n, "levels: batch complete"),
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, "levels: scan failed; backing off");
+                    tokio::time::sleep(BACKOFF).await;
+                }
+                Err(err) => {
+                    tracing::error!(%err, "levels: task failed; backing off");
+                    tokio::time::sleep(BACKOFF).await;
+                }
+            }
+        }
+    });
 }

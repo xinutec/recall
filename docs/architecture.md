@@ -423,10 +423,14 @@ B3 lands.*
   stamp/glob readers). It also bought the test the stub deferred: audiod's
   uploader now proves delivery, the auth gate and the 409 path against the
   REAL recalld router (`audiod/tests/upload_real_server.rs`).
-- **D2. Calibration.** Per-device rolling speech/floor percentiles in
-  recalld, from delivered segments; the rank compares each source against
-  its own reference ([audio-plane.md](audio-plane.md) — uncalibrated rank
-  degenerates to the fixed choice).
+- **D2. Calibration.** *Measuring since 2026-09-05:* recalld's background
+  scanner decodes every delivered segment once (ffmpeg, bounded batches)
+  and stores its speech/floor quantile levels (`segment_levels`); the
+  per-device reference is a QUERY over a source's own recent rows
+  (`levels::speech_reference_db`) — calibrate.py's faintest-speech
+  measurement re-derived continuously from delivery instead of once by
+  hand. D3's rank consumes it; uncalibrated rank degenerates to the fixed
+  choice ([audio-plane.md](audio-plane.md)).
 - **D3. Room builder.** Align + rank + emit `room` segments and queue rows.
   Gate: the WER bake-off referee re-run against room vs best-single on new
   multi-mic audio — room must tie or win, sign test, median.

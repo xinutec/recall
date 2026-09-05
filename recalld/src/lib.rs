@@ -7,5 +7,6 @@
 
 pub mod app;
 pub mod ingest;
+pub mod levels;
 pub mod store;
 pub mod tokens;
