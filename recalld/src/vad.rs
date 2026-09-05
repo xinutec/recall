@@ -101,6 +101,16 @@ impl Detector {
     pub fn load() -> Result<Self, Error> {
         let session = ort::session::Session::builder()
             .map_err(|e| Error::Model(e.to_string()))?
+            // ⚠ ONE thread, deliberately. onnxruntime defaults to spreading
+            // inference across every core, and this runs as a BACKGROUND
+            // scanner on a 4-core Isis shared with Nextcloud — a detector that
+            // saturates the box to measure yesterday's audio faster has its
+            // priorities backwards. The work is latency-insensitive by
+            // construction (docs/architecture.md decision 8).
+            .with_intra_threads(1)
+            .map_err(|e| Error::Model(e.to_string()))?
+            .with_inter_threads(1)
+            .map_err(|e| Error::Model(e.to_string()))?
             .commit_from_memory(super::vad::MODEL)
             .map_err(|e| Error::Model(e.to_string()))?;
         Ok(Self { session })
