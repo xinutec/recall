@@ -109,13 +109,13 @@ cross-correlates with its reference clip at zero lag, peak r 0.92-0.98.
 | fused, phase from the reference | 0.348 |
 | fused, phase from the per-bin SNR argmax | 0.437 |
 
-And on a second corpus of 40 corrections covered by `pixel9`, fusing the two
-phones with each other: `pixel9` alone 0.367, fused 0.354 (p = 0.77, no
-effect).
-
 Fusion is worse, and not by accident: 14 cases worse against 4 better (exact
 sign test p = 0.03). **The gate fails.** The denoising precedent held — a
 signal that looks better by construction reached the model and hurt it.
+
+On a second and independent corpus — 40 corrections covered by `pixel9` —
+fusing the two phones with each other gives `pixel9` alone 0.367 against 0.354
+fused, 5 better and 7 worse, p = 0.77: no effect.
 
 Read the median, never the mean. The referee is deterministic on 37 of 38
 cases, but one clip hallucinated a loop in one run (WER 111.5, then 1.0 on the
@@ -147,8 +147,8 @@ So per-block selection by speech level is safe: on a window where one mic is
 best throughout, it *is* that mic, at no measured cost, while transcribing one
 stream instead of five. Its value appears only where the best mic changes,
 which this window cannot show — that needs a window recorded while the room
-moved. **Its dependency is per-device calibration, and that is not a footnote — it is
-what makes selection mean anything.** `src/recall/calibrate.py` already
+moved. **Its dependency is per-device calibration, and that is not a footnote
+— it is what makes selection mean anything.** `src/recall/calibrate.py` already
 measured the faintest real speech each mic has recorded: usb -50 dB, iphone11
 -57, pixel9 -68, pixel5 -70. So most of the 21 dB by which the condenser leads
 is the *device*, not the distance, and an uncalibrated speech-level rank picks
@@ -201,8 +201,8 @@ equal quality fuse to no measurable gain, and a good mic fused with worse ones
 is dragged down (p = 0.03). Taken together those bound the technique: SNR-
 weighted magnitude combination is not how multiple microphones become a better
 transcript, and no reweighting is worth trying before something changes the
-terms. Route (a) — choosing between the sources per block rather than mixing them —
-is measured above and is the one to build: it takes the capacity win whole and
+terms. Route (a) — choosing between the sources per block rather than mixing
+them — is measured above and is the one to build: it takes the capacity win whole and
 costs nothing measurable in quality. What remains open for the extra
 microphones beyond that is (b) genuinely coherent combination, which needs the
 sub-sample GCC-PHAT tier and phase-intact PCM at ingest, neither of which this
