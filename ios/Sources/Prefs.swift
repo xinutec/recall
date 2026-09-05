@@ -10,6 +10,7 @@ enum Prefs {
         static let port = "port"
         static let enabled = "enabled"
         static let deviceID = "device_id"
+        static let ingestToken = "ingest_token"
     }
 
     /// Isis (the fleet control plane) over WireGuard: a stable address, so it's the
@@ -34,6 +35,17 @@ enum Prefs {
             return h.isEmpty ? defaultControlHost : h
         }
         set { d.set(newValue, forKey: Key.controlHost) }
+    }
+
+    /// recalld's ingest plane (docs/architecture.md): same host as the control
+    /// plane, its own port. Not user-set until a reason appears.
+    static let ingestBase = "http://10.100.0.2:8001"
+
+    /// The fourth credential plane's per-device bearer: `PUT` this phone's own
+    /// segments to recalld, and nothing else. Empty = send no header.
+    static var ingestToken: String {
+        get { d.string(forKey: Key.ingestToken) ?? "" }
+        set { d.set(newValue, forKey: Key.ingestToken) }
     }
 
     /// Shared ingest port (matches the recorder's DEFAULT_INGEST_PORT).

@@ -36,7 +36,17 @@ final class StreamClient {
     private let connectTimeout: UInt64 = 5
     private let reconnectDelayNs: UInt64 = 2_000_000_000
 
-    init(state: MicState) { self.state = state }
+    /// Store-and-forward shadow (docs/architecture.md, stage C2): the same PCM
+    /// lands in capture-stamped local segments delivered with verified
+    /// receipts. Gated on the CONNECTION, exactly like Android's C1: iOS keeps
+    /// this mic hot even while paused (audio discarded by design), and the
+    /// connection is the one signal that means at-home + unpaused + wanted.
+    private let segments = SegmentWriter(source: Prefs.deviceID)
+
+    init(state: MicState) {
+        self.state = state
+        segments.onSegmentClosed = { SegmentUpload.kick() }
+    }
 
     /// Begin capturing (held until `stop()`) and start the connect/stream loop.
     /// Returns false if the mic couldn't be opened, so the caller can reflect that.
@@ -61,6 +71,8 @@ final class StreamClient {
     }
 
     func stop() {
+        segments.closeSegment()
+        SegmentUpload.kick()
         loop?.cancel()
         loop = nil
         watchdog?.cancel()
@@ -93,7 +105,8 @@ final class StreamClient {
                 try? await Task.sleep(nanoseconds: 20_000_000)
                 continue
             }
-            sendIfConnected(pending)
+            let connected = sendIfConnected(pending)
+            if connected { segments.offer(pending) }
             if spool.dropped > 0 {
                 // The phone is the only place that can know audio was lost here,
                 // so it must be visible rather than silently absent.
@@ -120,6 +133,9 @@ final class StreamClient {
                 await set(connected: true, phase: .streaming)
                 await waitUntilClosed(conn)
                 setConnection(nil)
+                // A segment never spans the gap the mic just fell into.
+                segments.closeSegment()
+                SegmentUpload.kick()
                 await set(connected: false, phase: nil)
             }
             if Task.isCancelled { break }
@@ -139,7 +155,8 @@ final class StreamClient {
     // MARK: - connection
 
     /// Forward a captured PCM block if a connection is currently up; otherwise drop it.
-    private func sendIfConnected(_ data: Data) {
+    @discardableResult
+    private func sendIfConnected(_ data: Data) -> Bool {
         connLock.lock()
         let conn = connection
         connLock.unlock()
@@ -151,6 +168,7 @@ final class StreamClient {
             completion: .contentProcessed { [weak conn] err in
                 if err != nil { conn?.cancel() }
             })
+        return conn != nil
     }
 
     private func setConnection(_ conn: NWConnection?) {

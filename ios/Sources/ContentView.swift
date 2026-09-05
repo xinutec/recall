@@ -13,6 +13,7 @@ struct ContentView: View {
 
     @State private var host: String = Prefs.host
     @State private var controlHost: String = Prefs.controlHost
+    @State private var ingestToken: String = Prefs.ingestToken
     private let segments = 24
 
     var body: some View {
@@ -25,6 +26,7 @@ struct ContentView: View {
                     devicesPanel
                     hostField
                     controlHostField
+                    ingestTokenField
                     deviceRow
                     buttons
                 }
@@ -175,6 +177,22 @@ struct ContentView: View {
                 .onChange(of: controlHost) { newValue in
                     Prefs.controlHost = newValue
                     onHostChanged()
+                }
+        }
+    }
+
+    // This device's own delivery credential (docs/architecture.md, the fourth
+    // plane): write-only and pinned to this source — losing the phone costs
+    // nothing but its uploads. Empty sends none.
+    private var ingestTokenField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Segment token").font(.caption).foregroundStyle(.secondary)
+            TextField("", text: $ingestToken)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .onChange(of: ingestToken) { newValue in
+                    Prefs.ingestToken = newValue.trimmingCharacters(in: .whitespaces)
                 }
         }
     }
