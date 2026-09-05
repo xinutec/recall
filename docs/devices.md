@@ -149,8 +149,24 @@ segment for a delivery, which must close and wait out the upload timer
 ⚠ **The delivered time is the segment's CAPTURE time, never its arrival time.** A
 cached backlog draining hours late arrives *now* and would read as recording now
 while proving nothing about now — the OnePlus did exactly that drain the same
-evening. ⚠ **The mic keeps its pause gate against both proofs**, so a pause still
-reads idle at once rather than staying green for a segment's length.
+evening.
+
+⚠ **A RECENTLY-STALE MARKER OUTRANKS DELIVERY**, and that rule was bought the
+hard way: the first version of "either proof" fixed geb's false *off* and
+introduced a false *on* beside it. Pixel 9 was stopped by hand and stayed green
+the full five minutes (marker frozen 20:08:13, last capture 20:07:19, flipped at
+20:12:19 — measured, not estimated), where it used to go idle in twelve seconds.
+A phone streams as its PRIMARY path, so its marker falling silent IS the
+deliberate act and is NEWER information than a segment captured just before it.
+geb's marker is hours stale only because it never streams at all. **How stale is
+what tells the two apart** — inside the delivered window means "just stopped",
+beyond it means "does not use the stream path".
+
+⚠ **A pause discards delivered evidence for EVERY kind**, not just the local mic.
+The mic had that gate from the start; extending the mechanism to phones and
+machines without extending the guard is exactly how the regression above
+happened. A pause stops every recorder, so none of them may be resurrected by
+what they captured in the seconds before it.
 
 ⚠ **Do not stop a recorder on the strength of this dot.** On 2026-09-05, before
 the second proof existed, its false "off" led to a recorder being stopped and two

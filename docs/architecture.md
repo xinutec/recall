@@ -477,6 +477,20 @@ B3 lands.*
   rank from any rule that also picks usb; that discrimination needs a
   window where the best mic CHANGES, which is D4's job to make measurable.
 - **D4. VAD at ingest** (silero ONNX). Liveness + quiet evidence + priority.
+  *Detector built 2026-09-05:* `recalld::vad` runs silero through `ort`, the
+  network EMBEDDED in the binary (`include_bytes!`) so no rollout can forget a
+  model path. Verified on real speech rather than tones — a sine proves nothing
+  about a speech model. ⚠ Three environment gaps that macOS hid, all found by
+  building on amun rather than trusting the laptop: the Linux link needs `g++`
+  (onnxruntime is C++), `ort`'s default `tls-native` drags in openssl that
+  `rust:1-slim` lacks (rustls instead), and silero v5+ prepends 64 samples of
+  CONTEXT — omitting it is accepted silently by the dynamic input shape and
+  returns near-zero probability on obvious speech, which reads as a quiet room
+  rather than a bug. A golden probability trace pins that contract everywhere,
+  because the real-speech fixtures are gitignored (public repo, see #1433).
+  STILL TO BUILD: the ingest scanner and its schema, then the wiring — speech
+  into liveness, the quiet review's evidence, room priority, and the calibrated
+  reference that un-parks D3's rank.
 - **D5. Retention.** Window transcode to Opus + enforcement, measured cost.
 
 ### Stage E — the queue and the runner
