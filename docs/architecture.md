@@ -396,6 +396,9 @@ B3 lands.*
   MediaCodec's FLAC header behaviour gets probed on-device (C1b) rather
   than assumed. Streaming is untouched; a segment never spans a reconnect
   gap (the name claims continuity from its stamp).
+  *Verified end to end 2026-09-05: pixel5's shadow WAVs delivered to Isis
+  under its own token during a live test; per-device tokens live for all
+  four phones.*
   **Open, and Pippijn's: the mic-open gate at the C4 flip.** Today the mic
   opens only while the stream connects to the Mac — a home-presence proxy.
   Store-and-forward decouples recording from delivery, so the gate must be
@@ -404,9 +407,20 @@ B3 lands.*
   the consent boundary), or record whenever unpaused (records outside the
   house — a widening only he can choose). Shadow behaves identically under
   all three.
-- **C2. iOS store-and-forward.** Same, AVAudioFile/kAudioFormatFLAC.
-- **C3. geb.** Replace `python -m recall.mic` with `audiod capture` +
-  `audiod upload` under systemd via nix.
+- **C2. iOS store-and-forward.** *Built and installed 2026-09-05:* the
+  Swift mirror of C1 (SegmentStore/Writer/Upload, WAV first, receipts
+  re-hashed, evict-under-pressure), tee gated on the CONNECTION — on iOS
+  the mic stays hot even while paused, so the connection is the one signal
+  meaning at-home + unpaused. Token provisioned via the app's data
+  container over devicectl.
+- **C3. geb.** *Cut over 2026-09-05* — the LAST Python recorder retired:
+  `audiod capture` (ALSA producer via ffmpeg, geb's own proven device
+  path) + `audiod upload` + `audiod pause-mirror` under systemd
+  (nixos-config `machines/geb/recall-recorder.nix`; audiod pinned by
+  out-link, see the module's bump note). First store-and-forward delivery
+  verified on Isis within a minute of capture. Transitional and accepted:
+  geb no longer beats or streams, so the old liveness reads it stale until
+  the delivery-based liveness lands (see D4/liveness below).
 - **C4. Retire streaming.** After every device has flipped and survived real
   days: delete the TCP ingest path (`audiod::server`, `rebase`,
   `recall.mic`, `beat_relay` LAN fallback if subsumed), and the `.alive`

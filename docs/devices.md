@@ -43,13 +43,12 @@ added freely.
 |---|---|
 | **USB mic** (`recall record`) | local, on the recorder host itself: sox → ffmpeg, no socket and no handshake. Our code is never in this path — a real-time device has no buffer to absorb a stall |
 | **Phones** (the mic apps) | TCP to the ingest port, handshake, raw PCM. They roam, sleep, and need a person to restart them, which is what the apps' bulk is for |
-| **Linux hosts** (`python -m recall.mic`) | the phones' protocol from a box that is always on: ffmpeg opens ALSA and downmixes, `recall.mic` moves bytes to the socket, systemd owns the restart |
+| **Linux hosts** (geb: `audiod capture` + `audiod upload`, since 2026-09-05) | store-and-forward, not streaming ([architecture.md](architecture.md) stage C3): ffmpeg opens ALSA into audiod's segmenter, closed capture-stamped segments deliver to recalld with verified receipts, `audiod pause-mirror` keeps the household pause honoured. The `recall.mic` streaming client this row used to describe is retired |
 
 A Linux mic is the cheapest recorder to add, because most of what makes a phone hard
-is absent: no roaming, no battery, no app lifecycle. What it does share is the
-**spool**: capture hands
-bytes to a bounded, drop-oldest, counted ring and returns immediately, so a stalled
-network can never reach back into the microphone (`recall.mic.PcmSpool`).
+is absent: no roaming, no battery, no app lifecycle. Since the C3 cutover its
+never-block rule is audiod's own (the metered pump and the uploader read only
+closed files), and a network stall costs delivery latency, never audio.
 
 It also shares the **hourly heartbeat**, and the tempting reason to skip it is wrong.
 "A dead unit is a failed systemd service, which the fleet already watches" is true of
