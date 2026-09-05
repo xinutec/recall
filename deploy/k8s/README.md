@@ -21,8 +21,11 @@ hand. Rationale and topology: `docs/isis-migration.md`.
 
 ## What runs here
 
-The **fleet tier only**: FastAPI api + web + the sync ingest, in one light container. No
-ML — the Mac keeps capture, ASR, diarization, and the LLM. So the image needs the non-ML
+The **fleet tier only**, two containers from one image since 2026-09-05: the
+FastAPI api + web + sync ingest, and `recalld` — the Rust ingest plane of
+[architecture.md](../../docs/architecture.md), wg hostPort 8001, gated by the
+`INGEST_TOKENS` key in `recall-secret`. No ML — the Mac keeps capture, ASR,
+diarization, and the LLM. So the image needs the non-ML
 subset of recall's deps (fastapi, pydantic, httpx, sqlite, uvicorn) plus the built Angular
 frontend, and runs `recall api`.
 

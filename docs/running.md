@@ -36,6 +36,7 @@ want while developing.
 | `org.xinutec.recall-refine` | re-derive segments diarized + speaker-split; also drains queued A/B model comparisons | diarize: while capture paused · A/B: any time |
 | `org.xinutec.recall-llm-host` | holds the LLM (one copy for the whole Mac) and generates on `127.0.0.1:8092` | always on; weights loaded on demand, released after 5 min idle |
 | `org.xinutec.recall-sync` | push the archive to Isis (the system of record) — only what changed since the last watermark | timer |
+| `org.xinutec.recall-upload` | store-and-forward delivery: closed segments → recalld on Isis, sha-256 receipts re-hashed before anything counts as delivered ([architecture.md](architecture.md) stage B) | timer |
 | `org.xinutec.recall-capture-mirror` | poll Isis's desired capture state and mirror it onto the local pause file | every ~5 s |
 | `org.xinutec.recall-jobs` | pull Isis-queued work (refine, upload, A/B, sweep) into the Mac's local queues | timer |
 | `org.xinutec.recall-doctor` | run the health checks and report them to fleetwatch | every 5 min |

@@ -378,14 +378,12 @@ B3 lands.*
   the real link (decision-record bandwidth gate). Record findings here.
 - **B3. FLAC on machines.** Flip `audiod capture`'s ffmpeg segment codec to
   FLAC behind a flag; shadow first (`docs/audio-plane.md` cutover rule).
-- **B4. The doctor learns delivery.** Two checks: upload lag (newest closed
-  segment vs newest verified delivery — the mirror falling behind must not
-  be silent), and `conflicts > 0` as a WARN naming the files (a 409 means a
-  name is held by different bytes, which a person must look at; the uploader
-  journals it and stops retrying, so only the doctor makes it visible).
-  Also the completeness comparison, run once the backfill settles: every
-  grammar-matching archive file has a verified row — count both sides, not
-  one (`upload-state.sqlite` vs the scan).
+- **B4. The doctor learns delivery.** *Done 2026-09-05:* `delivery_checks`
+  grades the backlog by its oldest member's age (both sides counted — the
+  disk scan against the state db, so completeness is the same check) and
+  WARNs on any journaled 409, naming the files. Quiet where the uploader
+  has never run. The whole archive backfilled the same day: every
+  grammar-matching segment delivered and verified, zero conflicts.
 
 ### Stage C — phones and geb flip, streaming retires
 

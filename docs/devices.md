@@ -68,6 +68,11 @@ POST in 0.22 s while ICMP to the same address loses 100% of packets, and a bare
 `/dev/tcp` open read as closed. Two cheap probes agreed with each other and were both
 wrong; the beat lands direct (`viaLan` absent), which is what settled it.
 
+> Since 2026-09-05 the Android app also runs the store-and-forward SHADOW
+> ([architecture.md](architecture.md) stage C1): the same PCM lands in closed,
+> capture-stamped local segments delivered to recalld with verified receipts.
+> The stream below is unchanged and remains the live path until stage C4.
+
 ⚠ **The spool is a backpressure cushion, not a store.** A Linux box has RAM to bank
 hours, but the server rebases a connection's segment names by ONE offset measured at
 its first byte (`audiod::rebase::connection_offset`), so a replayed backlog would be

@@ -1,6 +1,9 @@
 # The Mac/Isis split: Isis system-of-record + Mac compute worker
 
-Status: **live since 2026-07-17.** This is the architecture of the running system —
+Status: **live since 2026-07-17; being superseded in stages by
+[architecture.md](architecture.md)** (its A and B are live: recalld runs in the
+pod beside the api, and the Mac delivers its archive to it with verified
+receipts). This is the architecture of the running system —
 why the split exists, how control is inverted across the one-way VPN, and where the
 security boundaries are. The one-shot migration procedure has been removed now that
 it is spent; `git log` has it if you ever need the archaeology.
@@ -132,8 +135,9 @@ like the sync token: with `RECALL_SESSION_SECRET` + `NC_CLIENT_ID` + `NC_CLIENT_
 unset, recall is an open LAN UI (the Mac's local UI, dev, and tests are untouched); the
 Isis pod sets them (from `recall-secret`) and raises the gate.
 
-**Three planes, deliberately split** — because the recording side is driven by devices and
-daemons that cannot do an interactive OAuth login:
+**Four planes, deliberately split** (the fourth added 2026-09-05 with recalld —
+see below) — because the recording side is driven by devices and daemons that
+cannot do an interactive OAuth login:
 
 - **Browsing plane (gated).** The Angular SPA and its read/write `/api/*` routes require a
   valid session; without one they return `401 {"error": "not authenticated"}` and the SPA
@@ -145,6 +149,13 @@ daemons that cannot do an interactive OAuth login:
   state), `/api/sources` (fleet liveness), and — by explicit choice — `/api/capture/pause`
   and `/api/capture/resume`, so the phone keeps its pause button without a login. These
   stay reachable by anything on WG/LAN, which is the same trust boundary they had before.
+- **Ingest plane (credential required, added 2026-09-05).** recalld — the Rust
+  system-of-record daemon of [architecture.md](architecture.md), running beside
+  the api container since stage A went live — serves `PUT /ingest/v1/segments/*`
+  on its own wg-bound hostPort (8001), gated by per-source write-only tokens
+  (`INGEST_TOKENS` in `recall-secret`; a `*` line is the Mac's custodial
+  backfill grant). Write-only is the plane's promise: a recorder that can
+  deliver audio cannot read anything, and its read side takes the sync token.
 - **Device-token plane (credential required, added 2026-08-07).** `POST /api/sessions` —
   and only that — accepts a `RECALL_DEVICE_TOKEN` bearer instead of a session cookie, so
   the Android meeting recorder and share sheet can upload a recording without a login they
