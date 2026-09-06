@@ -15,3 +15,4 @@ pub mod speech;
 pub mod store;
 pub mod tokens;
 pub mod vad;
+pub mod webauth;

@@ -701,6 +701,38 @@ B3 lands.*
   WEAKER door to the household's audio. The port lands behind webauth or not at
   all.
 
+  *webauth ported 2026-09-06:* `recalld::webauth` is the SSO gate — the three
+  planes (browsing gated, recording login-free, device-token), the stateless
+  HMAC-signed cookie, the short-TTL OAuth state, the username allowlist, and
+  inert-unless-configured. 11 tests, each named for the attack it stands against.
+
+  ⚠ **The token format is deliberately IDENTICAL to the Python's, and that is
+  what makes an incremental cutover possible.** Sharing `RECALL_SESSION_SECRET`
+  and the exact `<payload>.<mac>` shape means a cookie minted by the Python OAuth
+  flow verifies in Rust and vice versa, so recalld can be mounted behind the
+  EXISTING sign-in, route-group by route-group, with no second login and no flag
+  day. This is the one place in the rebuild where compatibility is worth keeping,
+  and it is kept for that reason rather than for fidelity's sake. A golden token
+  minted by `recall.webauth` itself is pinned in the tests: if it ever fails to
+  verify, the two halves have stopped recognising each other and incremental
+  cutover is off the table — a much bigger fact than a red test.
+
+  Two things the port improved rather than copied:
+  - **Expiry is enforced inside `verify`**, behind a trait every claim type
+    implements, so a caller cannot be able to forget it. In the Python it is
+    checked in `_verify` too, but nothing stops a new reader of the payload
+    skipping it; here the type system does.
+  - **The device-token compare is constant-time** (HMAC of both sides), where the
+    Python's is a plain equality on a secret.
+
+  ⚠ **STILL TO DO before anything is mounted:** the OAuth *flow* itself
+  (`/auth/login`, `/auth/callback`, the code exchange and the userinfo lookup)
+  and the middleware that applies the gate. The pure half — every decision about
+  who may enter — is done and tested; what remains is the HTTP plumbing around
+  it. ⚠ And a deployment note that is easy to miss: the redirect URI registered
+  on dash names port 8000. Serving the browsing plane from recalld's 8001 needs
+  that client re-registered, or recalld taking over 8000 at the cutover.
+
   *Verified once, against the real archive, then the instrument was dropped:* a
   differential harness asked both implementations the same questions about a
   SNAPSHOT of the 554 MB archive and diffed the JSON — 10 cases over ~30k visible
