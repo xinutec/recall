@@ -727,7 +727,20 @@ B3 lands.*
 
   ⚠ **STILL TO DO before anything is mounted:** the OAuth *flow* itself
   (`/auth/login`, `/auth/callback`, the code exchange and the userinfo lookup)
-  and the middleware that applies the gate. The pure half — every decision about
+  and the middleware that applies the gate.
+
+  *Checked against the running pod, so the next session does not have to guess:*
+  `NC_INTERNAL_URL` is `http://nextcloud-server.nextcloud.svc.cluster.local` —
+  server-to-server OAuth calls go over PLAIN HTTP in-cluster, presenting the
+  public host as `Host:` so Nextcloud's trusted-domain routing treats them like
+  the public request. Only the browser-facing authorize URL is https, and that is
+  a string the browser follows rather than a call recalld makes. So the flow needs
+  no TLS on the deployed path — but the fallback when `NC_INTERNAL_URL` is unset
+  IS https, and the workspace's `ureq` is deliberately `default-features = false`
+  (no TLS; everything else here speaks plain HTTP inside WireGuard). Enable rustls
+  explicitly rather than inheriting that, and ⚠ NOT `tls-native`: ort's default
+  dragged in an openssl `rust:1-slim` does not carry, which cost an image build
+  once already. The pure half — every decision about
   who may enter — is done and tested; what remains is the HTTP plumbing around
   it. ⚠ And a deployment note that is easy to miss: the redirect URI registered
   on dash names port 8000. Serving the browsing plane from recalld's 8001 needs
