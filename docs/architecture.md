@@ -761,7 +761,29 @@ B3 lands.*
   archive in one page, and a browsing route a signed-in person can accidentally
   turn into an archive dump will eventually be turned into one.
 
-  ⚠ **STILL TO DO:** static-frontend serving, then the remaining route groups.
+  *Static serving PORTED but NOT mounted, 2026-09-06:* `recalld::spa` implements
+  the three rules a generic static handler would get wrong, all tested, two of
+  them bought by incidents rather than designed:
+  - an `/api/*` miss is a **404, never the shell** — returning HTML with status
+    200 turns "no such route" into a JSON parse failure far from its cause;
+  - **`index.html` is `no-cache`, hashed bundles are immutable** — the shell names
+    the current bundles, so caching it means a deploy is invisible until a hard
+    refresh, which is the bug that served stale code from isis;
+  - **a request cannot escape the frontend root** — containment is checked on the
+    CANONICALISED path, so `..` and symlinks resolve first. Above `dist/` sit the
+    archive, the database and the token file.
+  Both the traversal guard and the cache rule are mutation-checked.
+
+  ⚠ **Mounting it is what dev-lint stopped**, and the rule was right. Wiring the
+  SPA made recalld a serving ROOT, and `DL-WIRE-ROUTE-DRIFT` resolved its axum
+  table against the frontend's call sites: **26 calls that would miss**, because
+  recalld serves 2 of the ~28 `/api/*` routes the app makes. Serving the UI from
+  here today hands someone a half-working app. Same rule as the read routes
+  waiting for webauth — do not expose a surface that is not ready. `app::router`
+  gains its `frontend` field when the route groups are done, not before.
+
+  ⚠ **STILL TO DO:** the remaining route groups (labels, capture, devices,
+  sessions, audio), then shadow days, then the Python goes.
 
   *Checked against the running pod, so the next session does not have to guess:*
   `NC_INTERNAL_URL` is `http://nextcloud-server.nextcloud.svc.cluster.local` —

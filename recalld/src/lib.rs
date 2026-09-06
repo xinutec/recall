@@ -11,6 +11,7 @@ pub mod levels;
 pub mod queue;
 pub mod reads;
 pub mod room;
+pub mod spa;
 pub mod speech;
 pub mod store;
 pub mod tokens;

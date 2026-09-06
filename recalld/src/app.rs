@@ -79,4 +79,11 @@ pub fn router(config: Arc<Config>) -> Router {
         Some(b) => base.merge(b),
         None => base,
     }
+    // ⚠ The SPA is NOT mounted here. `recalld::spa` is ported and tested, but
+    // recalld serves 2 of the ~28 /api/* routes the app calls, so serving the UI
+    // from here would hand someone a half-working app — dev-lint's
+    // DL-WIRE-ROUTE-DRIFT resolves this route table against the frontend's call
+    // sites and said so, with 26 calls that would miss. Same rule that kept the
+    // read routes off until webauth existed: do not expose a surface that is not
+    // ready. This gains a `frontend` field when the route groups are done.
 }
