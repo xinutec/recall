@@ -1,9 +1,12 @@
 //! Stage F1's read routes, against a database built to hold the cases that
-//! actually bite.
+//! actually bite, plus the mounting rules.
 //!
-//! The differential test against the live Python is `scripts/reads_parity.py` —
-//! it needs the real archive, so it cannot run here. These are the invariants
-//! that must hold everywhere, including on a fresh clone.
+//! These were checked once against the live Python on a snapshot of the real
+//! archive (10 cases, byte identical) and that harness was then retired, because
+//! the product is being rebuilt rather than transported and a byte-parity gate
+//! would fail on the first deliberate improvement — `clamp` below is already one.
+//! What remains here are the invariants that must hold everywhere, including on
+//! a fresh clone.
 
 use recalld::reads;
 use rusqlite::Connection;
@@ -228,4 +231,164 @@ fn an_empty_page_is_not_treated_as_a_full_one() {
     let conn = db();
     let page = reads::timeline(&conn, 0, None).expect("timeline");
     assert!(page.items.is_empty());
+}
+
+// --- mounting: the browsing plane exists only behind the gate ------------------
+
+use axum::body::Body;
+use axum::http::Request;
+use recalld::app::{Config, DEFAULT_MAX_BODY, router};
+use recalld::webauth::{self, COOKIE_NAME, GateState};
+use std::sync::Arc;
+use tower::ServiceExt;
+
+const SECRET: &str = "test-secret-not-a-real-one";
+const NOW: i64 = 1_788_000_000;
+
+fn gate_state() -> GateState {
+    GateState {
+        cfg: Arc::new(webauth::Config {
+            session_secret: SECRET.into(),
+            client_id: "cid".into(),
+            client_secret: "csec".into(),
+            nc_base_url: "https://dash.example.org".into(),
+            nc_internal_url: "https://dash.example.org".into(),
+            redirect_uri: "http://10.100.0.2:8000/auth/callback".into(),
+            allowed_users: std::collections::HashSet::new(),
+            device_token: None,
+        }),
+        now: Arc::new(|| NOW),
+    }
+}
+
+fn app(root: &std::path::Path, webauth: Option<GateState>) -> axum::Router {
+    router(Arc::new(Config {
+        root: root.to_path_buf(),
+        tokens: None,
+        read_token: None,
+        max_body_bytes: DEFAULT_MAX_BODY,
+        webauth,
+    }))
+}
+
+#[tokio::test]
+async fn an_unconfigured_recalld_does_not_serve_transcripts_at_all() {
+    // ⚠ The one place this repo's inert-unless-configured rule is INVERTED, and
+    // the inversion is the point. Everywhere else an absent credential means "run
+    // open", which is right for a LAN-only dev box. These routes serve household
+    // transcripts, so absent must mean the route does not exist — 404, not 200.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let a = app(dir.path(), None);
+    for path in ["/api/timeline", "/api/search?q=x"] {
+        let code = a
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .expect("call")
+            .status();
+        assert_eq!(code, 404, "{path} must not exist without the gate");
+    }
+
+    // The ingest plane is unaffected — it has its own credential and its own rules.
+    let code = a
+        .oneshot(
+            Request::get("/ingest/v1/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("call")
+        .status();
+    assert_eq!(code, 200);
+}
+
+#[tokio::test]
+async fn mounted_transcripts_are_refused_without_a_session_and_served_with_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
+    schema(&conn);
+    turn(&conn, 1, "2026-09-01T10:00:00+00:00", "hello", &[]);
+    drop(conn);
+
+    let a = app(dir.path(), Some(gate_state()));
+
+    // No cookie: the gate refuses before a single row is read.
+    let code = a
+        .clone()
+        .oneshot(Request::get("/api/timeline").body(Body::empty()).unwrap())
+        .await
+        .expect("call")
+        .status();
+    assert_eq!(code, 401);
+
+    // With a valid session the real query runs against the real database.
+    let token = webauth::make_session_cookie(
+        SECRET,
+        &webauth::Session {
+            user_id: "pippijn".into(),
+            display_name: "Pippijn".into(),
+        },
+        NOW,
+    )
+    .expect("sign");
+    let resp = a
+        .oneshot(
+            Request::get("/api/timeline")
+                .header("cookie", format!("{COOKIE_NAME}={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("call");
+    assert_eq!(resp.status(), 200);
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    let page: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(page["items"][0]["text"], "hello");
+}
+
+#[tokio::test]
+async fn a_limit_is_clamped_rather_than_trusted() {
+    // The Python takes it straight from the query string, so ?limit=10000000
+    // asks SQLite for the whole archive in one page. A browsing route a signed-in
+    // person can accidentally turn into an archive dump will eventually be turned
+    // into one, so this port clamps.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
+    schema(&conn);
+    for id in 1..=5 {
+        turn(
+            &conn,
+            id,
+            &format!("2026-09-01T10:00:0{id}+00:00"),
+            "t",
+            &[],
+        );
+    }
+    drop(conn);
+
+    let token = webauth::make_session_cookie(
+        SECRET,
+        &webauth::Session {
+            user_id: "p".into(),
+            display_name: "P".into(),
+        },
+        NOW,
+    )
+    .expect("sign");
+    let resp = app(dir.path(), Some(gate_state()))
+        .oneshot(
+            Request::get("/api/timeline?limit=99999999")
+                .header("cookie", format!("{COOKIE_NAME}={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("call");
+    assert_eq!(
+        resp.status(),
+        200,
+        "a huge limit must still answer, clamped"
+    );
 }

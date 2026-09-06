@@ -2,9 +2,9 @@
 //!
 //! This is the first route group to move, and it is deliberately the read-only
 //! one: a port that can only ever answer questions cannot destroy anything if it
-//! is wrong, and it can be checked against the Python it replaces by asking both
-//! the SAME question about the SAME database and diffing the JSON
-//! (`recalld/tests/reads_parity.rs`). Nothing here writes.
+//! is wrong, and it was checked against the Python it replaces by asking both the
+//! SAME question about the SAME database and diffing the JSON — 10 cases over the
+//! real archive, byte identical. Nothing here writes.
 //!
 //! ⚠ **This reads `recall.sqlite`, NOT `ingest.sqlite`.** The audio plane and the
 //! meaning plane stay split (docs/audio-plane.md): blobs plus `ingest.sqlite` are
@@ -288,4 +288,94 @@ pub fn timeline(conn: &Connection, limit: i64, before: Option<&str>) -> rusqlite
         items: segments.iter().map(to_out).collect(),
         has_more,
     })
+}
+
+// --- the HTTP surface ----------------------------------------------------------
+
+use axum::extract::Query;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
+use std::sync::Arc;
+
+/// What the read routes need: where `recall.sqlite` lives.
+pub struct State {
+    pub root: std::path::PathBuf,
+}
+
+#[derive(Deserialize)]
+pub struct TimelineQuery {
+    #[serde(default = "default_timeline_limit")]
+    limit: i64,
+    before: Option<String>,
+}
+
+const fn default_timeline_limit() -> i64 {
+    200
+}
+
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    q: String,
+    #[serde(default = "default_search_limit")]
+    limit: i64,
+}
+
+const fn default_search_limit() -> i64 {
+    100
+}
+
+/// A limit is clamped rather than trusted.
+///
+/// ⚠ The Python takes it straight from the query string, so `?limit=10000000`
+/// asks `SQLite` for the whole archive in one page. That is not a hole worth
+/// copying: a browsing route that a signed-in person can accidentally turn into
+/// an archive dump will eventually be turned into one.
+fn clamp(limit: i64) -> i64 {
+    limit.clamp(0, 1000)
+}
+
+fn failed(err: &rusqlite::Error) -> Response {
+    tracing::warn!("read query failed: {err}");
+    (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+}
+
+pub async fn timeline_route(
+    axum::extract::State(st): axum::extract::State<Arc<State>>,
+    Query(q): Query<TimelineQuery>,
+) -> Response {
+    let root = st.root.clone();
+    let page = tokio::task::spawn_blocking(move || {
+        let conn = open(&root)?;
+        timeline(&conn, clamp(q.limit), q.before.as_deref())
+    })
+    .await;
+    match page {
+        Ok(Ok(p)) => axum::Json(p).into_response(),
+        Ok(Err(e)) => failed(&e),
+        Err(e) => {
+            tracing::warn!("read task failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
+pub async fn search_route(
+    axum::extract::State(st): axum::extract::State<Arc<State>>,
+    Query(q): Query<SearchQuery>,
+) -> Response {
+    let root = st.root.clone();
+    let hits = tokio::task::spawn_blocking(move || {
+        let conn = open(&root)?;
+        search(&conn, &q.q, clamp(q.limit))
+    })
+    .await;
+    match hits {
+        Ok(Ok(h)) => axum::Json(h).into_response(),
+        Ok(Err(e)) => failed(&e),
+        Err(e) => {
+            tracing::warn!("read task failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
 }

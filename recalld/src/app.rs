@@ -1,9 +1,13 @@
-//! Router assembly: the surface is four routes, and the absence of a fifth is
-//! load-bearing — there is no DELETE anywhere on this plane (docs/architecture.md,
-//! decision 2).
+//! Router assembly. The absence of a DELETE anywhere on the ingest plane is
+//! load-bearing (docs/architecture.md, decision 2).
+//!
+//! Two planes are assembled here and they are gated differently. The ingest and
+//! work surfaces take their own tokens. The BROWSING surface — stage F1's port —
+//! sits behind the Nextcloud SSO gate and is mounted only when that gate is
+//! configured, so a dev or LAN-only recalld is unchanged.
 
-use crate::ingest;
 use crate::tokens::Tokens;
+use crate::{ingest, reads, webauth};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, put};
@@ -23,11 +27,42 @@ pub struct Config {
     /// The read gate (listing, blobs). `None` = open, same pattern.
     pub read_token: Option<String>,
     pub max_body_bytes: usize,
+    /// The browsing plane's SSO gate. `None` = the browsing routes are NOT
+    /// mounted at all.
+    ///
+    /// ⚠ Absent means ABSENT, not open. Everywhere else in this repo an
+    /// unconfigured credential means "inert, run open" — that is right for a
+    /// LAN-only dev box and wrong here, because these routes serve household
+    /// transcripts. An unconfigured recalld must not answer them at all rather
+    /// than answer them to anyone.
+    pub webauth: Option<webauth::GateState>,
+}
+
+/// The browsing plane: stage F1's ported routes, behind the SSO gate.
+///
+/// ⚠ **A cookie is scoped to a HOST, not a port** — which is what makes the
+/// incremental cutover work in practice. recalld answers on `10.100.0.2:8001`
+/// while the Python answers on `:8000`, and a browser sends the same
+/// `recall_session` cookie to both. With the token format kept identical, a
+/// person who signed in through the Python is already signed in here, so a route
+/// group can move between the two without anyone signing in again.
+fn browsing(st: webauth::GateState, root: PathBuf) -> Router {
+    let read = Arc::new(reads::State { root });
+    Router::new()
+        .route("/api/timeline", get(reads::timeline_route))
+        .route("/api/search", get(reads::search_route))
+        .with_state(read)
+        .merge(webauth::routes(st.clone()))
+        .layer(axum::middleware::from_fn_with_state(st, webauth::gate))
 }
 
 pub fn router(config: Arc<Config>) -> Router {
     let limit = config.max_body_bytes;
-    Router::new()
+    let browsing_plane = config
+        .webauth
+        .clone()
+        .map(|st| browsing(st, config.root.clone()));
+    let base = Router::new()
         .route("/ingest/v1/health", get(ingest::health))
         .route("/ingest/v1/segments", get(ingest::list_segments))
         .route(
@@ -39,5 +74,9 @@ pub fn router(config: Arc<Config>) -> Router {
         .route("/work/v1/lease", put(ingest::lease_job))
         .route("/work/v1/jobs/{id}/done", put(ingest::finish_job))
         .layer(DefaultBodyLimit::max(limit))
-        .with_state(config)
+        .with_state(config);
+    match browsing_plane {
+        Some(b) => base.merge(b),
+        None => base,
+    }
 }

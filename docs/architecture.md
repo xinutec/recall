@@ -739,8 +739,29 @@ B3 lands.*
   - **A user outside the allowlist gets 403, not 401.** They ARE signed in, and
     401 would loop them through Nextcloud for ever.
 
-  ⚠ **STILL TO DO before anything is mounted:** wiring these into `app::router`
-  behind the config, and the static-frontend serving.
+  *Mounted 2026-09-06:* `app::router` assembles the browsing plane behind the gate
+  and `/api/timeline` + `/api/search` are served from it.
+
+  ⚠ **Here `None` means ABSENT, not open — the one place this repo's
+  inert-unless-configured rule is deliberately INVERTED.** Everywhere else an
+  unconfigured credential means "run open", which is right for a LAN-only dev box
+  and wrong for routes that serve household transcripts: an unconfigured recalld
+  answers them with 404 rather than answering them to anyone. A test pins it.
+
+  ⚠ **A cookie is scoped to a HOST, not a port**, which is what makes the cutover
+  work in practice rather than only in principle. recalld answers on
+  `10.100.0.2:8001` while the Python answers on `:8000`, and a browser sends the
+  same `recall_session` to both. With the token format identical, a person signed
+  in through the Python is already signed in here — so a route group can move
+  between the two with nobody signing in again, and the dash redirect-URI question
+  only arises when recalld starts serving the sign-in ITSELF.
+
+  One deliberate divergence, the first: **the read routes clamp `limit`** where
+  the Python passes it straight to SQLite. `?limit=10000000` asks for the whole
+  archive in one page, and a browsing route a signed-in person can accidentally
+  turn into an archive dump will eventually be turned into one.
+
+  ⚠ **STILL TO DO:** static-frontend serving, then the remaining route groups.
 
   *Checked against the running pod, so the next session does not have to guess:*
   `NC_INTERNAL_URL` is `http://nextcloud-server.nextcloud.svc.cluster.local` —

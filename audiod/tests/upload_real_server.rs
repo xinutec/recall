@@ -21,6 +21,9 @@ fn serve(server_root: &Path, tokens_text: &str) -> String {
         tokens: Some(Tokens::load(&tokens_path).expect("parse")),
         read_token: None,
         max_body_bytes: 16 * 1024 * 1024,
+        // The uploader speaks to the ingest plane only; the browsing plane is a
+        // different credential and is deliberately absent here.
+        webauth: None,
     });
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
