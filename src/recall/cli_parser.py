@@ -12,7 +12,6 @@ from pathlib import Path
 
 from recall.asr import DEFAULT_MODEL
 from recall.beat_relay import DEFAULT_FLEET_URL, DEFAULT_RELAY_PORT
-from recall.finetune import DEFAULT_BASE_MODEL
 from recall.llm import (
     DEFAULT_IDLE_UNLOAD,
     DEFAULT_LLM,
@@ -61,14 +60,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
 
     rep = sub.add_parser("reprocess", help="re-transcribe with an improved model")
     rep.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    rep.add_argument(
-        "--model", default=DEFAULT_MODEL, help="mlx model, or a LoRA adapter dir"
-    )
-    rep.add_argument(
-        "--base-model",
-        default=DEFAULT_BASE_MODEL,
-        help="base for a LoRA adapter --model (HF id)",
-    )
+    rep.add_argument("--model", default=DEFAULT_MODEL, help="mlx-whisper model")
     rep.add_argument("--max-confidence", type=float, default=None)
 
     wrk = sub.add_parser("worker", help="index + transcribe pending audio (one pass)")
@@ -115,17 +107,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "the committed clip runs anywhere, the household pair only on this Mac",
     )
     sca.add_argument("--model", default=DEFAULT_MODEL, help="mlx-whisper model")
-    sca.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
-
-    smz = sub.add_parser(
-        "summarize",
-        help="generate per-day summaries with the local LLM (recall layer)",
-    )
-    smz.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    smz.add_argument(
-        "--day", help="one day (yyyy-mm-dd); default: all missing complete days"
-    )
-    smz.add_argument("--llm", default=DEFAULT_LLM, help="mlx-lm instruct model")
 
     rpb = sub.add_parser(
         "reprobe",
@@ -221,14 +202,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         help="re-transcribe the archive with the current pipeline (supersedes old)",
     )
     rd.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    rd.add_argument(
-        "--model", default=DEFAULT_MODEL, help="mlx model, or a LoRA adapter dir"
-    )
-    rd.add_argument(
-        "--base-model",
-        default=DEFAULT_BASE_MODEL,
-        help="base for a LoRA adapter --model (HF id)",
-    )
+    rd.add_argument("--model", default=DEFAULT_MODEL, help="mlx-whisper model")
     rd.add_argument(
         "--limit",
         type=int,
@@ -242,14 +216,7 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "by speaker; supersedes the basic turns)",
     )
     ref.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    ref.add_argument(
-        "--model", default=DEFAULT_MODEL, help="mlx model, or a LoRA adapter dir"
-    )
-    ref.add_argument(
-        "--base-model",
-        default=DEFAULT_BASE_MODEL,
-        help="base for a LoRA adapter --model (HF id)",
-    )
+    ref.add_argument("--model", default=DEFAULT_MODEL, help="mlx-whisper model")
     ref.add_argument(
         "--llm", default=DEFAULT_LLM, help="mlx-lm model for the summary drain"
     )
@@ -323,53 +290,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
     api.add_argument("--host", default="0.0.0.0", help="bind address")
     api.add_argument("--port", type=int, default=8000)
 
-    exp = sub.add_parser("export-training", help="export corrections as a dataset")
-    exp.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    exp.add_argument("--dest", type=Path, required=True, help="dataset output dir")
-
-    fit = sub.add_parser("finetune", help="LoRA fine-tune on the corpus (ML env)")
-    fit.add_argument("--manifest", type=Path, required=True, help="manifest.jsonl")
-    fit.add_argument("--dest", type=Path, required=True, help="adapter output dir")
-    fit.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
-    fit.add_argument(
-        "--epochs", type=int, default=12, help="max epochs (early stop ends sooner)"
-    )
-    fit.add_argument(
-        "--lr", type=float, default=1e-4, help="learning rate (recipe: 1e-4)"
-    )
-    fit.add_argument("--lora-rank", type=int, default=16)
-    fit.add_argument(
-        "--eval-holdout",
-        type=float,
-        default=0.15,
-        help="fraction held out for early stopping (0 disables it)",
-    )
-    fit.add_argument("--early-stopping-patience", type=int, default=2)
-
-    pil = sub.add_parser(
-        "finetune-pilot",
-        help="train a LoRA on a split of the corpus and report base-vs-adapter WER",
-    )
-    pil.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    pil.add_argument(
-        "--dest",
-        type=Path,
-        default=None,
-        help="work dir for corpus + adapter (default: <out>/pilot-finetune)",
-    )
-    pil.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
-    pil.add_argument("--epochs", type=int, default=3)
-    pil.add_argument("--lora-rank", type=int, default=16)
-    pil.add_argument(
-        "--holdout", type=float, default=0.2, help="fraction of clips held out"
-    )
-    pil.add_argument(
-        "--no-pause-capture",
-        action="store_true",
-        help="don't pause capture during the run (capture is paused by default so "
-        "the heavy run can't starve the recorder)",
-    )
-
     att = sub.add_parser(
         "score-attribution",
         help="per-word speaker-attribution accuracy vs a corrected recording",
@@ -430,43 +350,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         help="diarize each scored segment together with this many adjacent segments on "
         "each side (never across a recording gap), scoring only the centre — the "
         "opposite of --chop, and the way to test a longer window on live capture",
-    )
-
-    abc = sub.add_parser(
-        "ab-compare",
-        help="compare two ASR models on past audio (non-destructive): per-segment "
-        "text diff + WER vs your corrections",
-    )
-    abc.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    abc.add_argument("--source", required=True, help="source id of the recording")
-    abc.add_argument(
-        "--from", dest="frm", default=None, help="ISO start — restrict to a window"
-    )
-    abc.add_argument("--to", default=None, help="ISO end (with --from)")
-    abc.add_argument(
-        "--model-a",
-        dest="model_a",
-        default=DEFAULT_MODEL,
-        help="old model: mlx id or LoRA adapter dir (default: base)",
-    )
-    abc.add_argument(
-        "--model-b",
-        dest="model_b",
-        required=True,
-        help="new model: mlx id or LoRA adapter dir",
-    )
-    abc.add_argument(
-        "--base-model",
-        default=DEFAULT_BASE_MODEL,
-        help="HF base for whichever model is a LoRA adapter",
-    )
-    abc.add_argument("--limit", type=int, default=100_000)
-    abc.add_argument(
-        "--report",
-        type=Path,
-        default=None,
-        help="write the markdown report here (default <out>/ab-compare-<source>.md; "
-        "a .json is written alongside)",
     )
 
     enr = sub.add_parser("enroll", help="enroll a speaker voiceprint from audio")
@@ -537,14 +420,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
     )
     trace.add_argument(
         "--minutes", type=int, default=30, help="how far back to look (default 30)"
-    )
-
-    sq = sub.add_parser(
-        "scan-quiet", help="measure raw volume + list long total-quiet spans to review"
-    )
-    sq.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    sq.add_argument(
-        "--min-seconds", type=int, default=300, help="shortest quiet span to report"
     )
 
     rt = sub.add_parser(

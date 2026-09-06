@@ -25,7 +25,7 @@ def _result(text: str, language: str) -> AsrResult:
 def _stub(texts: dict[str, str]) -> object:
     """A transcriber answering per-fixture, keyed by the audio file's stem."""
 
-    def build(_model: str, _base: str, *, words: bool) -> object:
+    def build(_model: str, *, words: bool) -> object:
         assert words is False  # plain text pass; word timings not needed
 
         def transcribe(audio: Path) -> AsrResult:

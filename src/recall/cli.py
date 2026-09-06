@@ -44,12 +44,6 @@ from recall.cleanup import (
 from recall.cli_parser import build_parser
 from recall.conversations import segment_conversations
 from recall.diarize import SpeakerTurn, pyannote_diarize
-from recall.finetune import (
-    FinetuneConfig,
-    finetune_lora,
-    transcribe_clips,
-)
-from recall.finetune_pilot import PilotReport, run_pilot
 from recall.fleetwatch import build_report, post_report, read_token
 from recall.health import (
     ALWAYS_ON,
@@ -66,7 +60,6 @@ from recall.health import (
     recorders_on_disk,
     worker_check,
 )
-from recall.hf_asr import is_adapter_dir, make_hf_transcriber
 from recall.identify import identify_segments
 from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.live import run_live
@@ -87,7 +80,6 @@ from recall.sources import DEVICE_KINDS, AudioSource, SourceKind
 from recall.speakerid import pyannote_embed
 from recall.store import Store
 from recall.timeline import Gap, find_gaps, find_overlaps
-from recall.training import export_corpus
 from recall.transcript_view import (
     attribution,
     format_conversations,
@@ -444,23 +436,22 @@ def _cmd_worker(args: argparse.Namespace) -> int:
 
 def _build_transcriber(
     model: str,
-    base_model: str,
     *,
     words: bool,
     store: Store | None = None,
 ) -> Transcriber:
-    """A transcriber for `model`: HF/PEFT when it's a LoRA adapter dir (loaded once),
-    else mlx-whisper. The adapter is the whole point of "deploy a winning fine-tune" —
-    it can't ride the live turbo path, so it lands on these idle-gated passes. `words`
-    requests per-word timings (refine needs them; the other passes don't).
+    """An mlx-whisper transcriber for `model`. `words` requests per-word timings
+    (refine needs them; the other passes do not).
+
+    It used to branch to an HF/PEFT loader when `model` named a LoRA adapter
+    directory, and took a `base_model` for that path. Training was dropped on
+    2026-09-06 (architecture.md, "Scope of the rebuilt product"), so no adapter
+    exists to load and the parameter named a choice that can no longer be made.
 
     With a `store`, each call is biased by the household vocabulary (Whisper's
     initial_prompt, recall.vocabulary) — rebuilt per call, so a term added in the
     UI applies from the very next segment, no restart. The golden gate (score-asr)
-    and A/B runs pass no store: they measure the bare model. (The HF/adapter path
-    doesn't support prompt biasing yet — the adapter is un-deployed.)"""
-    if is_adapter_dir(model):
-        return make_hf_transcriber(model, base_model=base_model, words=words)
+    passes no store: it measures the bare model."""
 
     def mlx(audio: Path) -> AsrResult:
         prompt = build_initial_prompt(store) if store is not None else None
@@ -473,24 +464,13 @@ def _transcriber_for(
     args: argparse.Namespace, *, words: bool, store: Store | None = None
 ) -> Transcriber:
     """The transcriber for an accuracy pass, from `--model`/`--base-model`."""
-    return _build_transcriber(args.model, args.base_model, words=words, store=store)
+    return _build_transcriber(args.model, words=words, store=store)
 
 
 def _result_text(result: AsrResult) -> str:
     """Full text of a transcription (segments joined)."""
     parts = [s.text.strip() for s in result.segments if s.text.strip()]
     return " ".join(parts).strip()
-
-
-def _resolve_model(model: str, data_root: Path) -> str:
-    """Resolve a machine-independent adapter name ("adapter-current") against this
-    machine's data root. A run queued on the fleet crosses the Isis split, so it can't
-    store another machine's absolute path — the relative name resolves where the
-    adapter actually lives. HF model ids and absolute paths pass through untouched."""
-    candidate = data_root / model
-    if not Path(model).is_absolute() and is_adapter_dir(str(candidate)):
-        return str(candidate)
-    return model
 
 
 def _cmd_reprocess(args: argparse.Namespace) -> int:
@@ -658,7 +638,7 @@ def _cmd_score_asr(args: argparse.Namespace) -> int:
     MISSING COMMITTED fixture fails the run: a gate with nothing left to score
     must not report success, which is the failure mode #1433 recorded.
     """
-    transcriber = _build_transcriber(args.model, args.base_model, words=False)
+    transcriber = _build_transcriber(args.model, words=False)
     failed = False
     scored = 0
     for fixture in _GOLDEN_FIXTURES:
@@ -1579,109 +1559,6 @@ def _cmd_identify(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_export_training(args: argparse.Namespace) -> int:
-    store = Store.open(args.out / "recall.sqlite")
-    try:
-        count = export_corpus(store, args.dest)
-    finally:
-        store.close()
-    print(f"exported {count} training examples to {args.dest}")
-    return 0
-
-
-def _cmd_finetune(args: argparse.Namespace) -> int:
-    adapter = finetune_lora(
-        FinetuneConfig(
-            manifest=args.manifest,
-            output_dir=args.dest,
-            base_model=args.base_model,
-            epochs=args.epochs,
-            learning_rate=args.lr,
-            lora_rank=args.lora_rank,
-            eval_holdout=args.eval_holdout,
-            early_stopping_patience=args.early_stopping_patience,
-        )
-    )
-    print(f"saved LoRA adapter to {adapter}")
-    return 0
-
-
-def _print_pilot_report(report: PilotReport) -> None:
-    print()
-    print("================= PILOT RESULT =================")
-    print(f"  train / held-out: {report.train_count} / {report.test_count} clips")
-    print(f"  base    held-out WER: {report.base.wer * 100:5.1f}%")
-    print(f"  adapter held-out WER: {report.adapter.wer * 100:5.1f}%")
-    verdict = (
-        "ADAPTER WINS"
-        if report.adapter_wins
-        else ("tie" if report.delta == 0 else "base wins")
-    )
-    print(f"  delta: {report.delta * 100:+.1f} pts  ->  {verdict}")
-    print("================================================")
-    print()
-    print("per-clip (ref | base | adapter):")
-    for base_clip, adapt_clip in zip(
-        report.base.per_clip, report.adapter.per_clip, strict=True
-    ):
-        print(f"  ref : {base_clip.ref[:72]}")
-        print(f"  base: {base_clip.hyp[:72]}")
-        print(f"  adpt: {adapt_clip.hyp[:72]}")
-        print()
-
-
-def _cmd_finetune_pilot(args: argparse.Namespace) -> int:
-    dest = args.dest or (args.out / "pilot-finetune")
-
-    def transcribe(records: list[dict[str, object]], adapter: Path | None) -> list[str]:
-        return transcribe_clips(
-            records, base_model=args.base_model, adapter_dir=adapter
-        )
-
-    def train(manifest: Path) -> Path:
-        # Tiny batch + accumulation + checkpointing so large-v3 fp32 fits unified
-        # memory (a full batch-8 forward OOMs ~42 GB).
-        return finetune_lora(
-            FinetuneConfig(
-                manifest=manifest,
-                output_dir=dest / "run",
-                base_model=args.base_model,
-                epochs=args.epochs,
-                lora_rank=args.lora_rank,
-                batch_size=1,
-                grad_accum=8,
-                gradient_checkpointing=True,
-            )
-        )
-
-    # Pause capture for the duration: with the recorder stopped there is no
-    # capture buffer for the heavy run to starve, which is the whole cardinal-rule
-    # risk. Resume in finally so a crash can't leave recording off.
-    pause = not args.no_pause_capture
-    if pause:
-        until = capture_control.pause(args.out, datetime.now(UTC))
-        print(f"capture paused until {until:%H:%M:%S} for the pilot run")
-    try:
-        store = Store.open(_db_path(args.out))
-        try:
-            report = run_pilot(
-                store,
-                dest,
-                transcribe=transcribe,
-                train=train,
-                holdout=args.holdout,
-            )
-        finally:
-            store.close()
-    finally:
-        if pause:
-            capture_control.resume(args.out)
-            print("capture resumed")
-
-    _print_pilot_report(report)
-    return 0
-
-
 def _cmd_sync(args: argparse.Namespace) -> int:
     """Push the local archive to the fleet's system of record (the Isis split). The
     token is read from RECALL_SYNC_TOKEN. Imports are lazy so `recall.cli` stays ML- and
@@ -1938,9 +1815,6 @@ _COMMANDS = {
     "scan-wordless": _cmd_scan_wordless,
     "llm-host": _cmd_llm_host,
     "api": _cmd_api,
-    "export-training": _cmd_export_training,
-    "finetune": _cmd_finetune,
-    "finetune-pilot": _cmd_finetune_pilot,
     "score-attribution": _cmd_score_attribution,
     "enroll": _cmd_enroll,
     "identify": _cmd_identify,
