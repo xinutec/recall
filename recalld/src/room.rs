@@ -218,11 +218,13 @@ fn reference_db(
     config: &RoomConfig,
     source: &str,
 ) -> rusqlite::Result<Option<f32>> {
+    // Counted through the SAME gate the reference uses, or the threshold would
+    // admit a source whose reference is then built from nothing.
     let measured: u32 = conn.query_row(
-        "SELECT COUNT(*) FROM segment_levels
-         WHERE source = ?1 AND speech_db > -900.0
-           AND speech_db - floor_db > ?2",
-        (source, levels::REAL_SPEECH_MARGIN_DB),
+        "SELECT COUNT(*) FROM segment_levels l
+         JOIN segment_speech p ON p.filename = l.filename
+         WHERE l.source = ?1 AND l.speech_db > -900.0 AND p.speech_seconds > 0.0",
+        [source],
         |r| r.get(0),
     )?;
     if measured < config.min_reference_rows {
@@ -317,6 +319,11 @@ pub fn build_once(
 ) -> rusqlite::Result<BuildSummary> {
     let conn = store::open(root)?;
     levels::ensure_schema(&conn)?;
+    // ⚠ The reference JOINS segment_speech, and the speech scanner is the only
+    // thing that creates it — and it declines to run where the ONNX runtime is
+    // unavailable. Without this the room builder would fail outright on such a
+    // host, which is far worse than building uncalibrated blocks there.
+    crate::speech::ensure_schema(&conn)?;
     ensure_schema(&conn)?;
     let mut summary = BuildSummary::default();
     for block in candidate_blocks(&conn, config, now)? {
@@ -334,16 +341,37 @@ pub fn build_once(
             summary.silent += 1;
             continue;
         }
-        // RAW speech level, deliberately — the arm the WER bake-off measured
-        // tying best-single exactly. Calibrated selection is PARKED: with the
-        // real-speech reference gate it still handed pixel9 13 of 29 blocks
-        // in the June referee window where usb is best throughout (measured
-        // 2026-09-05, winner census), so until stage D4's VAD gives the
-        // reference an honest speech gate, the calibrated rank is recorded in
-        // provenance but does not choose.
+        // ⚠ EVERY CANDIDATE OR NOTHING. A calibrated level and a raw one are
+        // not the same quantity, so ranking a mix compares nothing — a source
+        // missing its reference would win or lose on which units it happened to
+        // be measured in.
+        //
+        // And the fallback is to DEFER, never to raw loudness. Falling back
+        // would be a verdict on partial evidence, decided by the very rule the
+        // WER referee indicted twice (room 0.321 vs usb 0.229; pixel9 taking
+        // 13 of 29 blocks in a window where usb was best throughout). A
+        // deferred block is retried on a later pass, so waiting costs latency;
+        // choosing wrongly costs the recording.
+        if !audible.iter().all(|c| c.calibrated.is_some()) {
+            let missing: Vec<&str> = audible
+                .iter()
+                .filter(|c| c.calibrated.is_none())
+                .map(|c| c.source.as_str())
+                .collect();
+            // Logged rather than silent: a source that can NEVER earn a
+            // reference would stall its blocks for ever, and that must be
+            // visible as a stall rather than as an empty room stream.
+            tracing::info!(
+                block = %iso(block),
+                unreferenced = ?missing,
+                "room: deferring — some contributors have no reference yet"
+            );
+            summary.deferred += 1;
+            continue;
+        }
         let winner = audible
             .iter()
-            .map(|c| (c, c.speech_db))
+            .filter_map(|c| c.calibrated.map(|cal| (c, cal.0)))
             .max_by(|a, b| a.1.total_cmp(&b.1));
         let Some((winner, _rank)) = winner else {
             summary.deferred += 1;
@@ -385,7 +413,10 @@ pub fn build_once(
             record_verdict(
                 &conn,
                 block,
-                "built",
+                // Which RULE chose is part of the verdict: a later census must
+                // be able to separate calibrated blocks from fallback ones
+                // without re-deriving the reference that existed at the time.
+                "built:calibrated",
                 Some(&winner.source),
                 Some(&filename),
                 &contributors,

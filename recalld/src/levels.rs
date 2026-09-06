@@ -100,18 +100,17 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     Ok(written)
 }
 
-/// A segment feeds its source's reference only when its speech quantile
-/// clears its own floor by this much — the plausibly-REAL-speech proxy until
-/// stage D4's VAD gives the honest gate. Without it a gated phone's quiet
-/// segments drag its reference to the noise gate and its calibrated rank
-/// explodes: the speech-to-floor trap in a new hat, and exactly what the WER
-/// referee caught on 2026-09-05 (room 0.321 vs usb 0.229, pixel9 carrying
-/// 25/29 blocks it had no business carrying).
-pub const REAL_SPEECH_MARGIN_DB: f64 = 12.0;
+// ⚠ HISTORY, so the same mistake is not reinvented: there used to be a
+// REAL_SPEECH_MARGIN_DB here — a segment fed its source's reference when its
+// speech quantile cleared its own floor by 12 dB. That is a LOUDNESS test
+// standing in for a SPEECH test, and it failed as one: the WER referee indicted
+// it twice (room 0.321 vs usb 0.229, then pixel9 taking 13 of 29 blocks in a
+// window where usb was best throughout), which is why the calibrated rank spent
+// stage D3 parked. The gate below asks the detector instead.
 
 /// The per-device reference the rank compares against: the given quantile of
-/// this source's measured speech levels over its most recent `window`
-/// REAL-SPEECH rows. A low quantile (say 0.05) reads as "the faintest real
+/// this source's measured speech levels over its most recent `window` rows that
+/// the VAD says CONTAIN SPEECH. A low quantile (say 0.05) reads as "the faintest real
 /// speech this microphone records" — the calibrate.py measurement, re-derived
 /// continuously from delivery instead of measured once by hand.
 pub fn speech_reference_db(
@@ -121,15 +120,20 @@ pub fn speech_reference_db(
     window: u32,
 ) -> rusqlite::Result<Option<f32>> {
     let levels: Vec<f64> = {
+        // ⚠ Gated on the DETECTOR, not on loudness. The reference means "the
+        // faintest REAL SPEECH this microphone records", and a loudness proxy
+        // for that is what dragged a gated phone's reference down to its noise
+        // floor and made its calibrated rank explode.
         let mut stmt = conn.prepare(
             "SELECT speech_db FROM (
-                 SELECT speech_db FROM segment_levels
-                 WHERE source = ?1 AND speech_db > -900.0
-                   AND speech_db - floor_db > ?3
-                 ORDER BY filename DESC LIMIT ?2
+                 SELECT l.speech_db FROM segment_levels l
+                 JOIN segment_speech p ON p.filename = l.filename
+                 WHERE l.source = ?1 AND l.speech_db > -900.0
+                   AND p.speech_seconds > 0.0
+                 ORDER BY l.filename DESC LIMIT ?2
              )",
         )?;
-        let rows = stmt.query_map((source, window, REAL_SPEECH_MARGIN_DB), |r| r.get(0))?;
+        let rows = stmt.query_map((source, window), |r| r.get(0))?;
         rows.collect::<Result<_, _>>()?
     };
     if levels.is_empty() {

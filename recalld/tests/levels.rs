@@ -113,7 +113,21 @@ fn the_device_reference_is_a_query_over_its_own_rows() {
         );
     }
     scan_once(dir.path(), 100).expect("scan");
+    // The reference is VAD-GATED (stage D4): only segments the detector says
+    // carry speech feed it. These fixtures are bursts of tone, which silero
+    // will not call speech, so the evidence is recorded directly — the point
+    // under test is the QUANTILE over a source's own rows, not the detector.
     let conn = store::open(dir.path()).expect("db");
+    recalld::speech::ensure_schema(&conn).expect("schema");
+    for i in 0..4 {
+        conn.execute(
+            "INSERT OR IGNORE INTO segment_speech
+                 (filename, source, speech_seconds, computed_utc)
+             VALUES (?1, 'usb', 30.0, '2026-09-05T12:00:00Z')",
+            [format!("usb-20260905T12000{i}.wav")],
+        )
+        .expect("speech row");
+    }
     let faintest = speech_reference_db(&conn, "usb", 0.0, 100)
         .expect("query")
         .expect("some");

@@ -77,33 +77,48 @@ fn seed_two_devices(root: &Path) -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
+/// Mark every measured segment as carrying speech.
+///
+/// The reference is VAD-gated (stage D4), and these fixtures are tone bursts
+/// silero will not call speech — so tests about RANKING supply the detector's
+/// evidence directly. Tests about what happens WITHOUT it deliberately skip
+/// this.
+fn seed_speech(root: &Path) {
+    let conn = store::open(root).expect("db");
+    recalld::speech::ensure_schema(&conn).expect("schema");
+    conn.execute(
+        "INSERT OR IGNORE INTO segment_speech (filename, source, speech_seconds, computed_utc)
+         SELECT filename, source, 30.0, '2026-09-05T10:00:00Z' FROM segment_levels",
+        [],
+    )
+    .expect("speech rows");
+}
+
 fn now_after(block: DateTime<Utc>) -> DateTime<Utc> {
     block + Duration::minutes(30)
 }
 
 #[test]
-fn raw_level_chooses_until_calibration_earns_it() {
+fn level_evidence_without_speech_evidence_is_not_enough_to_rank() {
+    // Plenty of LEVEL rows, no SPEECH rows: the reference is VAD-gated, so
+    // nothing is rankable and the block must WAIT rather than be decided by
+    // raw loudness — the rule the WER referee indicted twice.
+    //
+    // Deferral deliberately records NO verdict row: a recorded verdict is
+    // terminal (a_judged_block_is_never_rejudged), so writing one here would
+    // turn "wait for evidence" into "decided on the absence of it".
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
     scan_once(dir.path(), 100).expect("levels");
     let summary = build_once(dir.path(), &config(), now_after(block)).expect("build");
-    assert!(summary.built >= 1, "{summary:?}");
+    assert_eq!(summary.built, 0, "{summary:?}");
+    assert!(summary.deferred > 0, "{summary:?}");
     let conn = store::open(dir.path()).expect("db");
-    let (verdict, winner, contributors): (String, String, String) = conn
-        .query_row(
-            "SELECT verdict, winner, contributors FROM room_blocks WHERE start_utc = ?1",
-            ["2026-09-05T11:00:00Z"],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .expect("block row");
-    assert_eq!(verdict, "built");
-    // Parked calibration: raw level chooses (the bake-off's tying arm), so
-    // the sensitive mic carries the block; `quiet`'s better-for-itself rank
-    // is still RECORDED in provenance for D4 to reclaim.
-    assert_eq!(winner, "loud");
-    // Provenance names both, with their levels and calibrated ranks.
-    assert!(contributors.contains("\"loud\"") && contributors.contains("\"quiet\""));
-    assert!(contributors.contains("calibrated"));
+    assert_eq!(
+        verdict_of(&conn, "2026-09-05T11:00:00Z").expect("q"),
+        None,
+        "a deferred block must stay unjudged so a later pass can build it"
+    );
 }
 
 #[test]
@@ -111,6 +126,7 @@ fn the_room_blob_carries_the_winners_audio() {
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
     scan_once(dir.path(), 100).expect("levels");
+    seed_speech(dir.path());
     build_once(dir.path(), &config(), now_after(block)).expect("build");
     let blob = dir
         .path()
@@ -120,9 +136,12 @@ fn the_room_blob_carries_the_winners_audio() {
     let pcm = audiocore::decode::decode_s16(&blob, 16_000).expect("decodable");
     let envelope = audiocore::envelope::rms_buckets_at(&pcm, 16_000, 0.1);
     let speech = audiocore::envelope::level_quantile_db(&envelope, 0.9);
-    // Raw rank carries `loud` (block amplitude 0.5 → ~-9 dBFS RMS bursts);
-    // `quiet`'s 0.2 would read ~-17. Assert we carried the sensitive mic.
-    assert!(speech > -13.0 && speech < -3.0, "speech {speech} dB");
+    // CALIBRATION carries `quiet` (block amplitude 0.2 → ~-17 dBFS RMS bursts),
+    // not `loud` at 0.5 → ~-9. That inversion IS the feature: `quiet` is hearing
+    // ten times its own normal while `loud` is at its usual level, so the block
+    // belongs to the mic that suddenly hears something. This assertion read
+    // `> -13.0` while the rank was parked on raw loudness (stage D3).
+    assert!(speech > -21.0 && speech < -13.0, "speech {speech} dB");
     // And it registered as a segments row under the room source (the seeded
     // history minutes build their own room blocks too — assert on this one).
     let conn = store::open(dir.path()).expect("db");
@@ -146,12 +165,12 @@ fn no_verdict_on_partial_evidence() {
     assert_eq!(verdict_of(&conn, "2026-09-05T11:00:00Z").expect("q"), None);
     // Once measured, the same pass shape builds it.
     scan_once(dir.path(), 100).expect("levels");
+    seed_speech(dir.path());
     let after = build_once(dir.path(), &config(), now_after(block)).expect("build");
     assert!(after.built >= 1);
 }
 
 #[test]
-#[ignore = "parked with calibrated selection until D4's VAD-gated references"]
 fn no_reference_means_deferred_not_degraded() {
     let dir = tempfile::tempdir().expect("tempdir");
     // One segment only: measured, but far under min_reference_rows.
@@ -188,8 +207,42 @@ fn a_judged_block_is_never_rejudged() {
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
     scan_once(dir.path(), 100).expect("levels");
+    seed_speech(dir.path());
     let first = build_once(dir.path(), &config(), now_after(block)).expect("build");
     let second = build_once(dir.path(), &config(), now_after(block)).expect("build");
     assert!(first.built >= 1);
     assert_eq!(second, BuildSummary::default(), "everything already judged");
+}
+
+#[test]
+fn calibration_chooses_the_device_hearing_best_for_itself() {
+    // The whole point of calibrating (docs/audio-plane.md): `loud` is a
+    // sensitive condenser at its NORMAL level, `quiet` a gated phone at TEN
+    // TIMES its own normal. Absolute level says `loud`; calibration says
+    // `quiet`, because it is the one that suddenly hears something.
+    //
+    // This is what stage D3 parked and stage D4's detector unparks — so the
+    // evidence the reference needs is the DETECTOR's, supplied here directly
+    // because these fixtures are tone bursts silero would not call speech.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let block = seed_two_devices(dir.path());
+    scan_once(dir.path(), 100).expect("levels");
+
+    seed_speech(dir.path());
+
+    let summary = build_once(dir.path(), &config(), now_after(block)).expect("build");
+    assert!(summary.built >= 1, "{summary:?}");
+    let conn = store::open(dir.path()).expect("db");
+    let (verdict, winner): (String, String) = conn
+        .query_row(
+            "SELECT verdict, winner FROM room_blocks WHERE start_utc = ?1",
+            ["2026-09-05T11:00:00Z"],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("block row");
+    assert_eq!(verdict, "built:calibrated", "the rule must be recorded");
+    assert_eq!(
+        winner, "quiet",
+        "calibration must pick the device hearing best FOR ITSELF, not the loudest"
+    );
 }
