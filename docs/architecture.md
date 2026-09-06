@@ -476,6 +476,30 @@ B3 lands.*
   mic's transcript rather than degrading it. It cannot discriminate the raw
   rank from any rule that also picks usb; that discrimination needs a
   window where the best mic CHANGES, which is D4's job to make measurable.
+- **D3 ACCEPTANCE, re-run 2026-09-06 with the VAD-gated reference.** The
+  calibrated rank is UN-PARKED. The June referee window was cleared and rebuilt
+  by the real builder: 29/29 blocks `built:calibrated`, zero deferrals, and
+  **usb won all 29** — where the loudness-proxy reference had given pixel9 13 of
+  them in this same window. The census was the tell that failed this rank twice;
+  it now agrees with the arm the bake-off measured. Median WER 0.229 room vs
+  0.229 usb.
+
+  ⚠ **Still a TIE, not a win, and still tautological**: calibration picked the
+  same winner as raw on every block, so the audio compared is the same audio.
+  Vindicating the rank needs a window where the best microphone CHANGES HANDS —
+  a different corpus, not a different computation. What this run establishes is
+  that calibration no longer DEGRADES, which is what parking was waiting on.
+
+  ⚠⚠ **READ THE MEDIAN, NOT THE MEAN, and the harness prints the mean.** This
+  run's mean was usb 16.449 / room 12.083; last night's, on the SAME usb audio,
+  was 0.666 for both. The control moved by 25x while the median did not move at
+  all. The cause is ASR hallucination loops (#1410): on a one-word utterance the
+  model emits "As to As to As to…" hundreds of times, scoring WER 223. Four of
+  38 cases; excluding them the means are usb 0.347 / room 0.343. The loops are
+  not stable run to run — identical CONTENT through a different encode path
+  (opus slice vs room FLAC) flips them — so any mean over this corpus is a
+  coin-toss statistic and no decision may rest on it.
+
 - **D4. VAD at ingest** (silero ONNX). Liveness + quiet evidence + priority.
   *Detector built 2026-09-05:* `recalld::vad` runs silero through `ort`, the
   network EMBEDDED in the binary (`include_bytes!`) so no rollout can forget a
