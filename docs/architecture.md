@@ -725,9 +725,22 @@ B3 lands.*
   - **The device-token compare is constant-time** (HMAC of both sides), where the
     Python's is a plain equality on a secret.
 
-  ⚠ **STILL TO DO before anything is mounted:** the OAuth *flow* itself
-  (`/auth/login`, `/auth/callback`, the code exchange and the userinfo lookup)
-  and the middleware that applies the gate.
+  *The flow and the gate landed 2026-09-06 too:* `/login`, `/auth/callback`,
+  `/logout`, `/api/me`, and the middleware — 20 tests, the OAuth exchange driven
+  against a REAL stub Nextcloud rather than a mocked client (the likeliest error
+  is the request SHAPE, and a mock would have tested my expectation of it), and
+  the gate driven through a real router. Mutation-checked: opening the gate fails
+  three tests.
+
+  Two properties worth naming, both tested:
+  - **The callback rejects a bad state BEFORE any network call**, so a stranger
+    cannot make this server dial Nextcloud on demand. The test points the config
+    at a dead port, so reaching the network would 502 instead of 403.
+  - **A user outside the allowlist gets 403, not 401.** They ARE signed in, and
+    401 would loop them through Nextcloud for ever.
+
+  ⚠ **STILL TO DO before anything is mounted:** wiring these into `app::router`
+  behind the config, and the static-frontend serving.
 
   *Checked against the running pod, so the next session does not have to guess:*
   `NC_INTERNAL_URL` is `http://nextcloud-server.nextcloud.svc.cluster.local` —

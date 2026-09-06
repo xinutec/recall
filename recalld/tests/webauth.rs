@@ -23,6 +23,7 @@ fn cfg(device_token: Option<&str>) -> Config {
         client_id: "cid".into(),
         client_secret: "csec".into(),
         nc_base_url: "https://dash.example.org".into(),
+        nc_internal_url: "https://dash.example.org".into(),
         redirect_uri: "http://10.100.0.2:8000/auth/callback".into(),
         allowed_users: HashSet::new(),
         device_token: device_token.map(str::to_owned),
@@ -284,4 +285,339 @@ fn a_cookie_minted_by_the_python_verifies_here() {
         ours, PY_COOKIE,
         "the token encoding drifted from the Python's"
     );
+}
+
+// --- the OAuth exchange, against a REAL server ---------------------------------
+//
+// A stub Nextcloud rather than a mocked client: the thing most likely to be wrong
+// in this code is the SHAPE of the request and the response parsing, and a mock
+// that returns what I expect would test my expectation rather than the wire.
+
+use axum::Router;
+use axum::routing::{get, post};
+use recalld::webauth::{AuthError, exchange_code, fetch_userinfo, server_call};
+use std::net::SocketAddr;
+
+/// Serve `routes` on an ephemeral port and return its base URL.
+async fn serve(routes: Router) -> String {
+    let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        axum::serve(listener, routes).await.expect("serve");
+    });
+    format!("http://{addr}")
+}
+
+fn at(base: &str) -> Config {
+    let mut c = cfg(None);
+    base.clone_into(&mut c.nc_base_url);
+    base.clone_into(&mut c.nc_internal_url);
+    c
+}
+
+#[tokio::test]
+async fn a_code_is_exchanged_for_a_token_and_the_user_is_resolved() {
+    let app = Router::new()
+        .route(
+            "/index.php/apps/oauth2/api/v1/token",
+            post(|body: String| async move {
+                // The form must carry every field Nextcloud needs; a missing
+                // client_secret would 400 in production and pass a mock.
+                for field in [
+                    "grant_type=authorization_code",
+                    "code=the-code",
+                    "client_id=cid",
+                    "client_secret=csec",
+                ] {
+                    assert!(body.contains(field), "form missing {field}: {body}");
+                }
+                axum::Json(serde_json::json!({"access_token": "tok-123"}))
+            }),
+        )
+        .route(
+            "/ocs/v2.php/cloud/user",
+            get(|headers: axum::http::HeaderMap| async move {
+                // Both headers are load-bearing: OCS refuses the request without
+                // its own marker, and the bearer is what identifies the user.
+                assert_eq!(headers.get("authorization").unwrap(), "Bearer tok-123");
+                assert_eq!(headers.get("ocs-apirequest").unwrap(), "true");
+                axum::Json(serde_json::json!({
+                    "ocs": {"data": {"id": "pippijn", "displayname": "Pippijn"}}
+                }))
+            }),
+        );
+    let base = serve(app).await;
+    let c = at(&base);
+
+    let token = tokio::task::spawn_blocking({
+        let c = c.clone();
+        move || exchange_code(&c, "the-code")
+    })
+    .await
+    .unwrap()
+    .expect("exchange");
+    assert_eq!(token, "tok-123");
+
+    let session = tokio::task::spawn_blocking(move || fetch_userinfo(&c, &token))
+        .await
+        .unwrap()
+        .expect("userinfo");
+    assert_eq!(session.user_id, "pippijn");
+    assert_eq!(session.display_name, "Pippijn");
+}
+
+#[tokio::test]
+async fn a_response_missing_what_it_must_carry_is_an_error_not_an_empty_identity() {
+    // The failure that matters: silently accepting a blank id would sign someone
+    // in as "" and, with an empty allowlist, let them straight through.
+    let app = Router::new()
+        .route(
+            "/index.php/apps/oauth2/api/v1/token",
+            post(|| async { axum::Json(serde_json::json!({"token_type": "Bearer"})) }),
+        )
+        .route(
+            "/ocs/v2.php/cloud/user",
+            get(|| async { axum::Json(serde_json::json!({"ocs": {"data": {"id": ""}}})) }),
+        );
+    let base = serve(app).await;
+    let c = at(&base);
+
+    let e = tokio::task::spawn_blocking({
+        let c = c.clone();
+        move || exchange_code(&c, "x")
+    })
+    .await
+    .unwrap()
+    .expect_err("must reject a token-less response");
+    assert!(matches!(e, AuthError::Malformed(_)), "{e}");
+
+    let e = tokio::task::spawn_blocking(move || fetch_userinfo(&c, "tok"))
+        .await
+        .unwrap()
+        .expect_err("must reject an id-less response");
+    assert!(matches!(e, AuthError::Malformed(_)), "{e}");
+}
+
+#[tokio::test]
+async fn a_user_with_no_display_name_falls_back_to_their_id() {
+    // A person who can sign in must not be locked out by an empty profile field.
+    let app = Router::new().route(
+        "/ocs/v2.php/cloud/user",
+        get(|| async {
+            axum::Json(serde_json::json!({"ocs": {"data": {"id": "pippijn", "displayname": ""}}}))
+        }),
+    );
+    let base = serve(app).await;
+    let c = at(&base);
+    let s = tokio::task::spawn_blocking(move || fetch_userinfo(&c, "tok"))
+        .await
+        .unwrap()
+        .expect("userinfo");
+    assert_eq!(s.display_name, "pippijn");
+}
+
+#[test]
+fn an_internal_url_is_called_but_the_public_host_is_presented() {
+    // Nextcloud routes on trusted domains, so an in-cluster call must still LOOK
+    // like the public one or it is refused.
+    let mut c = cfg(None);
+    c.nc_base_url = "https://dash.example.org".into();
+    c.nc_internal_url = "http://nextcloud.svc.cluster.local".into();
+    let (url, host) = server_call(&c, "/ocs/v2.php/cloud/user");
+    assert_eq!(
+        url,
+        "http://nextcloud.svc.cluster.local/ocs/v2.php/cloud/user"
+    );
+    assert_eq!(host.as_deref(), Some("dash.example.org"));
+
+    // When they are the same there is nothing to spoof, so no header is set.
+    c.nc_internal_url = c.nc_base_url.clone();
+    let (url, host) = server_call(&c, "/x");
+    assert_eq!(url, "https://dash.example.org/x");
+    assert_eq!(host, None);
+}
+
+// --- the gate, through a real router -------------------------------------------
+
+use axum::body::Body;
+use axum::http::Request;
+use recalld::webauth::{COOKIE_NAME, GateState, gate, routes};
+use std::sync::Arc;
+use tower::ServiceExt;
+
+/// A router with the gate applied over one protected and one open route, so the
+/// middleware is exercised exactly as it will be in the pod.
+fn gated(c: Config) -> Router {
+    let st = GateState {
+        cfg: Arc::new(c),
+        now: Arc::new(|| NOW),
+    };
+    Router::new()
+        .route("/api/timeline", get(|| async { "the archive" }))
+        .route("/api/capture", get(|| async { "pause state" }))
+        .merge(routes(st.clone()))
+        .layer(axum::middleware::from_fn_with_state(st, gate))
+}
+
+async fn status(app: &Router, req: Request<Body>) -> axum::http::StatusCode {
+    app.clone().oneshot(req).await.expect("call").status()
+}
+
+#[tokio::test]
+async fn the_gate_refuses_the_archive_without_a_session_and_lets_the_pause_through() {
+    let app = gated(cfg(None));
+
+    // The property this whole module exists for: a stranger on the VPN cannot
+    // read the household's transcripts.
+    assert_eq!(
+        status(
+            &app,
+            Request::get("/api/timeline").body(Body::empty()).unwrap()
+        )
+        .await,
+        401
+    );
+
+    // ...while the recording plane stays reachable, because a phone cannot log in.
+    assert_eq!(
+        status(
+            &app,
+            Request::get("/api/capture").body(Body::empty()).unwrap()
+        )
+        .await,
+        200
+    );
+
+    // A valid cookie opens the archive.
+    let token = make_session_cookie(SECRET, &session(), NOW).expect("sign");
+    assert_eq!(
+        status(
+            &app,
+            Request::get("/api/timeline")
+                .header("cookie", format!("{COOKIE_NAME}={token}"))
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await,
+        200
+    );
+}
+
+#[tokio::test]
+async fn a_signed_in_user_outside_the_allowlist_is_forbidden_not_unauthenticated() {
+    // 403, not 401: they ARE signed in, and telling them to sign in again would
+    // loop them through Nextcloud for ever.
+    let mut c = cfg(None);
+    c.allowed_users = ["someone-else".to_owned()].into_iter().collect();
+    let token = make_session_cookie(SECRET, &session(), NOW).expect("sign");
+    assert_eq!(
+        status(
+            &gated(c),
+            Request::get("/api/timeline")
+                .header("cookie", format!("{COOKIE_NAME}={token}"))
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await,
+        403
+    );
+}
+
+#[tokio::test]
+async fn a_device_token_opens_its_route_through_the_middleware_and_no_other() {
+    let c = cfg(Some("device-secret"));
+    let st = GateState {
+        cfg: Arc::new(c),
+        now: Arc::new(|| NOW),
+    };
+    let app = Router::new()
+        .route("/api/sessions", post(|| async { "uploaded" }))
+        .route("/api/timeline", get(|| async { "the archive" }))
+        .layer(axum::middleware::from_fn_with_state(st, gate));
+
+    assert_eq!(
+        status(
+            &app,
+            Request::post("/api/sessions")
+                .header("authorization", "Bearer device-secret")
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await,
+        200
+    );
+    // The same credential must NOT read transcripts.
+    assert_eq!(
+        status(
+            &app,
+            Request::get("/api/timeline")
+                .header("authorization", "Bearer device-secret")
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await,
+        401
+    );
+}
+
+#[tokio::test]
+async fn the_callback_rejects_a_forged_state_before_making_any_network_call() {
+    // The config points at a port nothing is listening on, so if the handler
+    // reached the network this would hang or 502 rather than 403 — which is the
+    // point: a stranger must not be able to make this server dial Nextcloud.
+    let mut c = cfg(None);
+    c.nc_internal_url = "http://127.0.0.1:1".into();
+    let app = gated(c);
+
+    assert_eq!(
+        status(
+            &app,
+            Request::get("/auth/callback?code=x&state=forged")
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await,
+        403
+    );
+    // No state at all is the same refusal.
+    assert_eq!(
+        status(
+            &app,
+            Request::get("/auth/callback?code=x")
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await,
+        403
+    );
+}
+
+#[tokio::test]
+async fn login_redirects_to_nextcloud_and_the_cookie_it_later_sets_is_httponly() {
+    let app = gated(cfg(None));
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/login?return_to=/sessions/42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("call");
+    assert_eq!(resp.status(), 302);
+    let location = resp.headers().get("location").unwrap().to_str().unwrap();
+    assert!(location.starts_with("https://dash.example.org/index.php/apps/oauth2/authorize?"));
+    assert!(location.contains("state="));
+
+    // Logout clears the cookie on the same path it was set on, or the browser
+    // keeps the old one and the user cannot sign out.
+    let resp = app
+        .oneshot(Request::post("/logout").body(Body::empty()).unwrap())
+        .await
+        .expect("call");
+    let cookie = resp.headers().get("set-cookie").unwrap().to_str().unwrap();
+    assert!(cookie.contains("Max-Age=0"), "{cookie}");
+    assert!(cookie.contains("Path=/"), "{cookie}");
 }

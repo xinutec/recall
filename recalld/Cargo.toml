@@ -46,6 +46,13 @@ sha2 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
 form_urlencoded = "1"
+# The OAuth code exchange and userinfo lookup. TLS is enabled EXPLICITLY here,
+# unlike audiod's `default-features = false`: production reaches Nextcloud over
+# plain http in-cluster (NC_INTERNAL_URL), but the fallback when that is unset is
+# the public https origin, and a client that silently cannot make that call would
+# be a masking fallback. ⚠ rustls, NOT tls-native — ort's default dragged in an
+# openssl `rust:1-slim` does not carry, which cost an image build once already.
+ureq = { version = "2", features = ["json", "tls"] }
 hex = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde = { version = "1", features = ["derive"] }
@@ -74,5 +81,6 @@ ort = { version = "2.0.0-rc.13", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

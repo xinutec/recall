@@ -238,6 +238,9 @@ pub struct Config {
     pub client_id: String,
     pub client_secret: String,
     pub nc_base_url: String,
+    /// Where server-to-server calls actually go. Defaults to `nc_base_url`; the
+    /// fleet points it at the cluster-local service.
+    pub nc_internal_url: String,
     pub redirect_uri: String,
     /// Empty = any authenticated Nextcloud user. recall holds household and
     /// medical audio, so the fleet sets this and it is single-user by default.
@@ -264,6 +267,12 @@ impl Config {
             client_secret,
             nc_base_url: get("NC_BASE_URL")
                 .unwrap_or_else(|| "https://dash.xinutec.org".to_owned()),
+            nc_internal_url: get("NC_INTERNAL_URL")
+                .map(|u| u.trim_end_matches('/').to_owned())
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| {
+                    get("NC_BASE_URL").unwrap_or_else(|| "https://dash.xinutec.org".to_owned())
+                }),
             redirect_uri: get("NC_REDIRECT_URI")
                 .unwrap_or_else(|| "http://10.100.0.2:8000/auth/callback".to_owned()),
             allowed_users: get("RECALL_ALLOWED_USERS")
@@ -324,4 +333,319 @@ pub fn authorize_url(cfg: &Config, state: &str) -> String {
         .append_pair("state", state)
         .finish();
     format!("{}/index.php/apps/oauth2/authorize?{q}", cfg.nc_base_url)
+}
+
+/// The (url, optional `Host` header) for a SERVER-SIDE Nextcloud call.
+///
+/// ⚠ When the internal URL differs from the public one, the request goes to the
+/// in-cluster address but presents the PUBLIC host as `Host:`, so Nextcloud's
+/// trusted-domain routing treats it exactly like the public request. Production
+/// sets `NC_INTERNAL_URL` to a cluster-local plain-http service, so this is the
+/// deployed path and it carries no TLS.
+#[must_use]
+pub fn server_call(cfg: &Config, path: &str) -> (String, Option<String>) {
+    let url = format!("{}{path}", cfg.nc_internal_url);
+    if cfg.nc_internal_url == cfg.nc_base_url {
+        return (url, None);
+    }
+    let host = cfg
+        .nc_base_url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .map(str::to_owned);
+    (url, host)
+}
+
+/// What can go wrong signing in. Deliberately coarse: the routes turn every
+/// variant into the same 502, because a visitor at the sign-in wall must not
+/// learn which half of the exchange failed.
+#[derive(Debug)]
+pub enum AuthError {
+    Transport(String),
+    Malformed(&'static str),
+}
+
+impl std::fmt::Display for AuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transport(e) => write!(f, "nextcloud call failed: {e}"),
+            Self::Malformed(what) => write!(f, "nextcloud response {what}"),
+        }
+    }
+}
+
+/// Trade the authorization code for an access token.
+pub fn exchange_code(cfg: &Config, code: &str) -> Result<String, AuthError> {
+    let (url, host) = server_call(cfg, "/index.php/apps/oauth2/api/v1/token");
+    let mut req = ureq::post(&url).timeout(std::time::Duration::from_secs(15));
+    if let Some(h) = host.as_deref() {
+        req = req.set("Host", h);
+    }
+    let resp: serde_json::Value = req
+        .send_form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("client_id", &cfg.client_id),
+            ("client_secret", &cfg.client_secret),
+            ("redirect_uri", &cfg.redirect_uri),
+        ])
+        .map_err(|e| AuthError::Transport(e.to_string()))?
+        .into_json()
+        .map_err(|e| AuthError::Transport(e.to_string()))?;
+    match resp.get("access_token").and_then(serde_json::Value::as_str) {
+        Some(t) if !t.is_empty() => Ok(t.to_owned()),
+        _ => Err(AuthError::Malformed("missing access_token")),
+    }
+}
+
+/// Look up who signed in, via the OCS user endpoint.
+///
+/// ⚠ Identity only: the access token is used here ONCE and then dropped. There is
+/// no local user store and nothing else is ever done with it — the signed cookie
+/// carries the identity from here on.
+pub fn fetch_userinfo(cfg: &Config, access_token: &str) -> Result<Session, AuthError> {
+    let (url, host) = server_call(cfg, "/ocs/v2.php/cloud/user?format=json");
+    let mut req = ureq::get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .set("OCS-APIRequest", "true");
+    if let Some(h) = host.as_deref() {
+        req = req.set("Host", h);
+    }
+    let resp: serde_json::Value = req
+        .call()
+        .map_err(|e| AuthError::Transport(e.to_string()))?
+        .into_json()
+        .map_err(|e| AuthError::Transport(e.to_string()))?;
+    let data = resp.get("ocs").and_then(|o| o.get("data"));
+    let uid = data
+        .and_then(|d| d.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or(AuthError::Malformed("missing id"))?;
+    // A missing display name falls back to the id rather than failing: a person
+    // who can sign in must not be locked out by an empty profile field.
+    let name = data
+        .and_then(|d| d.get("displayname"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(uid);
+    Ok(Session {
+        user_id: uid.to_owned(),
+        display_name: name.to_owned(),
+    })
+}
+
+// --- the HTTP surface ----------------------------------------------------------
+
+use axum::extract::{Query, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use std::sync::Arc;
+
+/// The clock, injected so tests are not at the mercy of wall time.
+pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+
+#[derive(Clone)]
+pub struct GateState {
+    pub cfg: Arc<Config>,
+    pub now: Clock,
+}
+
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .find_map(|pair| {
+            let (k, v) = pair.trim().split_once('=')?;
+            (k == name).then(|| v.to_owned())
+        })
+}
+
+/// The gate. Applied to every request; it decides only, and never serves.
+///
+/// ⚠ The device-token check runs ONLY AFTER the cookie fails, so a signed-in
+/// browser is unaffected by whether a device token is configured at all.
+pub async fn gate(
+    State(st): State<GateState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let method = request.method().as_str().to_owned();
+    let path = request.uri().path().to_owned();
+    if !requires_session(&method, &path) {
+        return next.run(request).await;
+    }
+    let headers = request.headers().clone();
+    let now = (st.now)();
+    let cookie = cookie_value(&headers, COOKIE_NAME);
+    let Some(session) = read_session_cookie(&st.cfg.session_secret, cookie.as_deref(), now) else {
+        let auth = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+        if st.cfg.presents_device_token(&method, &path, auth) {
+            return next.run(request).await;
+        }
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "not authenticated"})),
+        )
+            .into_response();
+    };
+    if !st.cfg.permits(&session.user_id) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "not authorised"})),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+#[derive(Deserialize)]
+pub struct LoginQuery {
+    return_to: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct CallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+}
+
+/// The cookie attributes, in one place so login and logout cannot disagree.
+///
+/// ⚠ NOT `Secure`: recall answers over plain http on the `WireGuard` address, and
+/// the network is the real gate. A `Secure` cookie would simply never be sent and
+/// the sign-in would loop. Revisit if it ever gains an https origin.
+fn set_cookie(token: &str) -> String {
+    format!("{COOKIE_NAME}={token}; Max-Age={SESSION_TTL_SECS}; Path=/; HttpOnly; SameSite=Lax")
+}
+
+/// Mount the OAuth flow. Returns None when SSO is not configured, so a dev or
+/// LAN-only deployment is unchanged — the repo's inert-unless-configured rule.
+pub fn routes(st: GateState) -> Router {
+    Router::new()
+        .route(
+            "/login",
+            get(
+                |State(st): State<GateState>, Query(q): Query<LoginQuery>| async move {
+                    match make_state(&st.cfg.session_secret, q.return_to.as_deref(), (st.now)()) {
+                        Some(state) => Redirect(authorize_url(&st.cfg, &state)).into_response(),
+                        None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                    }
+                },
+            ),
+        )
+        .route("/auth/callback", get(callback))
+        .route(
+            "/logout",
+            post(|| async {
+                (
+                    [(
+                        header::SET_COOKIE,
+                        format!("{COOKIE_NAME}=; Max-Age=0; Path=/"),
+                    )],
+                    Redirect("/".to_owned()),
+                )
+                    .into_response()
+            }),
+        )
+        .route("/api/me", get(me))
+        .with_state(st)
+}
+
+/// A 302 to a local path or an absolute URL.
+struct Redirect(String);
+
+impl IntoResponse for Redirect {
+    fn into_response(self) -> Response {
+        (StatusCode::FOUND, [(header::LOCATION, self.0)]).into_response()
+    }
+}
+
+async fn callback(State(st): State<GateState>, Query(q): Query<CallbackQuery>) -> Response {
+    let now = (st.now)();
+    // State first: an expired or forged state is rejected before any network call,
+    // so a stranger cannot make this server talk to Nextcloud on demand.
+    let Some(return_to) = q
+        .state
+        .as_deref()
+        .and_then(|s| read_state(&st.cfg.session_secret, s, now))
+    else {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "invalid or expired login state"})),
+        )
+            .into_response();
+    };
+    let Some(code) = q.code.filter(|c| !c.is_empty()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing authorization code"})),
+        )
+            .into_response();
+    };
+    let cfg = Arc::clone(&st.cfg);
+    let resolved = tokio::task::spawn_blocking(move || {
+        exchange_code(&cfg, &code).and_then(|t| fetch_userinfo(&cfg, &t))
+    })
+    .await;
+    let session = match resolved {
+        Ok(Ok(s)) => s,
+        // One shape for every failure: a visitor at the wall must not learn which
+        // half of the exchange broke.
+        Ok(Err(e)) => {
+            tracing::warn!("nextcloud sign-in failed: {e}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": "sign-in failed"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::warn!("sign-in task failed: {e}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": "sign-in failed"})),
+            )
+                .into_response();
+        }
+    };
+    if !st.cfg.permits(&session.user_id) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "not permitted"})),
+        )
+            .into_response();
+    }
+    let Some(token) = make_session_cookie(&st.cfg.session_secret, &session, now) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    (
+        [(header::SET_COOKIE, set_cookie(&token))],
+        Redirect(return_to),
+    )
+        .into_response()
+}
+
+/// Who is signed in — the SPA's login probe. The gate answers 401 before this
+/// runs when there is no session, so reaching it means one exists.
+async fn me(State(st): State<GateState>, headers: HeaderMap) -> Response {
+    match read_session_cookie(
+        &st.cfg.session_secret,
+        cookie_value(&headers, COOKIE_NAME).as_deref(),
+        (st.now)(),
+    ) {
+        Some(s) => Json(serde_json::json!({
+            "userId": s.user_id, "displayName": s.display_name
+        }))
+        .into_response(),
+        None => StatusCode::UNAUTHORIZED.into_response(),
+    }
 }
