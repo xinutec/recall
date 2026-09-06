@@ -41,10 +41,16 @@ WORKDIR /build
 # audiocore dependency — audiod rides along as text. Layer caching comes from
 # buildx's registry cache rather than a dummy-source dance, which a workspace
 # would make three times as fiddly for a build measured in low minutes.
+# ⚠ EVERY workspace member must be copied, even ones this image never runs:
+# cargo loads the whole graph before it compiles anything, so a missing crate
+# fails with "failed to load manifest for workspace member". The member list
+# lives in THREE places — Cargo.toml, flake.nix's fileset, and here — and the
+# two build ones fail only in CI and the nix sandbox, never on a laptop.
 COPY Cargo.toml Cargo.lock ./
 COPY audiocore/ audiocore/
 COPY audiod/ audiod/
 COPY recalld/ recalld/
+COPY runner/ runner/
 RUN cargo build --release --locked -p recalld
 
 # --- runtime ---

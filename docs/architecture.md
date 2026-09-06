@@ -589,12 +589,40 @@ B3 lands.*
   `PUT /work/v1/jobs/{id}/done`, the sync-token plane), results stored
   opaque until E3 interprets them into turn rows. Long-poll and the resolved
   result-writing are E3's.
-- **E2. Shim protocol + `asr` shim.** JSON-over-stdio contract; the
-  mlx-whisper shim carved out of `recall.asr` with vocabulary biasing kept.
-- **E3. runner.** The Rust poller: newest-first, fetch, shim, push, ack;
-  launchd agent. Runs beside the old worker in shadow on the same audio
-  until outputs agree, then the flip: worker/live retire, per-source
-  transcription becomes backfill jobs.
+- **E2. Shim protocol + `asr` shim.** *Built 2026-09-06:* `recall.shim` is the
+  contract (line-delimited JSON, one job at a time, `hello` answered by the
+  protocol itself so it works even for a shim whose model failed to load), and
+  `recall.shim_asr` wraps mlx-whisper. Errors are RESPONSES: a shim that dies on
+  one bad clip loses weights that cost seconds to load and strands the queue.
+  ⚠ **stdout is the protocol, so nothing else may touch it** — mlx-whisper's
+  dependency prints a huggingface progress bar, and one stray line desyncs the
+  stream SILENTLY. `serve` keeps a private handle on the real stdout and points
+  `sys.stdout` at stderr; a subprocess test pins it.
+  ⚠ **The shim reads no database.** `initial_prompt` (vocabulary biasing) is
+  CARRIED by the caller — fetching it would put a DB handle and a failure mode
+  inside the process whose only job is to run a model, against principle 3.
+- **E3. runner.** *Built 2026-09-06, shadow:* the `runner` crate — lease, fetch
+  the blob, drive the shim over stdio, push, ack. Stateless by construction: no
+  watermark, no outbox, no mirror queue, so killing it costs an expiring lease.
+  A shim REFUSAL is terminal and recorded (the clip is the problem); a TRANSPORT
+  failure says nothing and lets the lease expire (the shim is). Tested against
+  the real recalld router with only the model substituted.
+
+  ⚠ **Running it against the live fleet is what found the silence problem.**
+  Transcribing a silent minute does not return nothing — it returned
+  "Thank you." twice, and another minute came back as 156 segments carrying a
+  150-character run of tildes at 0.19 confidence (#1410). The queue had derived
+  a job for EVERY room segment: 1784 of 4288 were measured silent. Derivation is
+  now gated on D4's speech evidence, same rule as liveness — only MEASURED
+  silence disqualifies.
+
+  STILL OPEN before the flip:
+  - **#1461**, which decides what the room stream should be at all.
+  - **The vocabulary prompt.** The runner sends none, so its transcripts spell
+    household names worse than the old worker's. The shim cannot fetch it by
+    design, so it must be carried — by the runner reading it once, or by the job.
+    Settle it before ~2500 real jobs are transcribed without it.
+  - launchd agent: not yet written; the runner has been run by hand.
 - **E4. Absorb the rest of `/sync/jobs`.** refine (via the `voices` shim),
   ask (via `llm`), ab-compare; retire `recall.jobs`, `sync_push`, outbox,
   capture-mirror (pause intent moves to a recalld long-poll the runner
