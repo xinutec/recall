@@ -196,6 +196,43 @@ The two share a spine (capture -> ASR -> diarize -> attribute -> read) and diffe
 in almost everything else, which is why naming them separates what must be built
 from what merely exists.
 
+#### Use case 2 has no ladder, and its backlog is human, not mechanical
+
+Stages A–F below are entirely about use case 1. Use case 2 was measured against the
+archive on 2026-09-06:
+
+| | measured |
+|---|---|
+| recordings uploaded | 20, roughly weekly, over four months |
+| transcribed | 20 of 20 |
+| **diarized** | **20 of 20 — every one of the 2 222 visible turns carries a cluster** |
+| voices named by a person | 9 sessions; **11 have never been opened and named** |
+| rows kept | 10 593 written → 2 222 visible (the rest are the pre-alignment pass) |
+| corrections made on them | 24 of 468 |
+
+⚠ **`speaker_label` is the HUMAN name, not the machine's answer.** Diarization writes
+`speaker_cluster` (`SPEAKER_00`…); `speaker_label` is filled by the session screen's
+naming strip, where a person names each voice once and the label applies to every turn
+of that voice. Reading a null `speaker_label` as "diarization did not run" inverts the
+finding completely — it says a person has not been here yet, and the machine half is
+done. Both `session_summaries` and `name_voice` document this; the query does not.
+
+So use case 2 has no pipeline defect on the evidence available. Its measured gap is
+**11 meetings awaiting a few minutes each of naming**, which is the same shape as the
+corrections finding below: the machine work is done and the human work stopped. Before
+building anything here, that is the fact to act on, and it needs no code.
+
+What use case 2 does **not** need, and this is worth recording because it looks like it
+should: a role picker. Naming each diarization voice once per session, applied to all
+its turns, with a voiceprint suggestion beside it, is already built and is what the
+session screen is.
+
+⚠ **What is NOT established** is quality: whether those clusters split the doctor from
+the patient correctly, and whether medical terms and proper nouns survive ASR. Nothing
+measures either — `docs/meetings.md` still says a publishable transcript is
+hand-cleaned. That is where a real use-case-2 work package would start, and it needs
+ground truth on a meeting before it can start at all.
+
 ### Training is not a goal
 
 **DECIDED 2026-09-06 by Pippijn: "We don't need to train. We only need to

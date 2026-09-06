@@ -97,6 +97,29 @@ Returns `{session, date, speakers, turns:[{start, speaker, text}]}`. **`--out` m
 point at the data root** or you'll get "no transcript for session" even after a
 successful transcribe.
 
+## How a meeting gets its speakers
+
+Two different things both get called "the speaker", and they live in different
+columns. Confusing them inverts every reading of this path:
+
+- **`speaker_cluster`** — diarization's answer (`SPEAKER_00`, `SPEAKER_01`…). Written
+  by the machine. Measured 2026-09-06: present on every visible turn of all 20
+  uploaded meetings, so this half runs reliably and unattended.
+- **`speaker_label`** — the name a *person* gave that voice, through the session
+  screen's naming strip. One naming applies to every turn of that voice and feeds the
+  voiceprint backfill, so a clinician becomes matchable like any household voice.
+
+⚠ **A null `speaker_label` means nobody has named the voices yet — NOT that
+diarization failed.** On 2026-09-06, 11 of 20 meetings were in that state, and the
+machine had done its part on all of them.
+
+Where diarization actually comes from: `recall worker` runs `--basic` so pyannote
+never competes with live capture; it writes text only. `recall refine` adds the
+speakers, running only while capture is paused, taking never-diarized audio first
+(speech-weighted, #1331). The re-diarize button on the session screen queues an
+explicit request that jumps that queue — for when the first pass split the audio
+wrongly, not as the normal route.
+
 ## 5. Clean & attribute
 
 The raw diarized output is a **rough dump**, not a finished transcript:
