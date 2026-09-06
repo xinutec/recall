@@ -159,6 +159,17 @@ to replace. The rank must compare each source against its own reference point
 (its floor ceiling, or its faintest real speech), so the question becomes "how
 well is this mic hearing the speaker, for this mic".
 
+⚠ **This argument was built and then PARKED, 2026-09-06 — and the sentence
+above about "a window where the best mic changes" is exactly why.** The
+calibrated rank exists, its reference is now gated on a real speech detector
+rather than a loudness proxy, and it is recorded in provenance. It does not
+choose. The two ranks disagree on 48% of blocks and calibration takes almost
+every recent block off the condenser (raw picks usb 72 of 75; calibrated picks
+phones and geb), while the corrections that could judge that are from mid-June,
+before the fleet had enough microphones to disagree — an overlap of 1.7%. So the
+reasoning here stands and remains the plan; what is missing is evidence, not
+argument. See architecture.md's D3 acceptance note and #1461.
+
 Nor can the existing archive show selection paying off. Both multi-mic windows
 carrying corrections — the 2026-06-23 one used above (38 cases) and a second,
 sparser evening of the same month (8 cases, three segments per source) — have
