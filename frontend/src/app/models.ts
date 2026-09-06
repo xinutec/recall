@@ -161,12 +161,6 @@ export interface ConversationPage {
   readonly hasMore: boolean;
 }
 
-export interface TrainQueue {
-  readonly items: readonly Transcript[];
-  readonly corrections: number;
-  readonly bySpeaker: Record<string, number>;
-}
-
 export interface LabelList {
   readonly items: readonly Label[];
   readonly bySpeaker: Record<string, number>;
@@ -250,14 +244,6 @@ export interface AssignSpanRequest {
   readonly name: string;
 }
 
-export interface UnintelligibleRequest {
-  readonly id: number;
-}
-
-export interface UnhideRequest {
-  readonly id: number;
-}
-
 export interface NudgeRequest {
   readonly edge: string;
   readonly delta: number;
@@ -271,18 +257,6 @@ export interface RefineRequest {
 
 export interface ReassignRequest {
   readonly speaker: string;
-}
-
-export interface SplitFragment {
-  readonly start: string;
-  readonly end: string;
-  readonly text: string;
-  readonly speaker?: string | null;
-}
-
-export interface SplitRequest {
-  readonly id: number;
-  readonly fragments: readonly SplitFragment[];
 }
 
 export interface VocabularyRequest {

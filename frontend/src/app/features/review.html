@@ -67,9 +67,6 @@
         }
 
         <div class="actions">
-          @if (t.hidden) {
-            <button matButton (click)="unhide(t)"><mat-icon>restore</mat-icon> Restore</button>
-          }
           <button matButton="filled" [disabled]="!isDirty(t) || isSaving(t)" (click)="save(t)">
             <mat-icon>check</mat-icon>
             {{ isSaving(t) ? 'Saving…' : 'Save correction' }}

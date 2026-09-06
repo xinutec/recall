@@ -16,12 +16,9 @@ import {
   Session,
   SessionRenameRequest,
   SpeakerNames,
-  SplitFragment,
   TurnSpeakerRequest,
   VoiceNameRequest,
-  SplitResult,
   Suggest,
-  TrainQueue,
   TranscriptList,
   VocabularyRequest,
 } from './models';
@@ -73,24 +70,6 @@ export class RecallApi {
       params.set('gap', String(gap));
     }
     return this.http.get<ConversationPage>(`/api/conversations?${params.toString()}`);
-  }
-
-  trainQueue(limit = 40, since?: string, until?: string, order?: string): Observable<TrainQueue> {
-    const params = new URLSearchParams({ limit: String(limit) });
-    if (since) {
-      params.set('since', since);
-    }
-    if (until) {
-      params.set('until', until);
-    }
-    if (order) {
-      params.set('order', order);
-    }
-    return this.http.get<TrainQueue>(`/api/train?${params.toString()}`);
-  }
-
-  unintelligible(id: number): Observable<Ok> {
-    return this.http.post<Ok>('/api/unintelligible', { id });
   }
 
   correct(
@@ -181,14 +160,6 @@ export class RecallApi {
   refineRange(source: string, start: string, end: string): Observable<Ok> {
     const body: RefineRequest = { source, start, end };
     return this.http.post<Ok>('/api/refine', body);
-  }
-
-  split(id: number, fragments: SplitFragment[]): Observable<SplitResult> {
-    return this.http.post<SplitResult>('/api/split', { id, fragments });
-  }
-
-  unhide(id: number): Observable<Ok> {
-    return this.http.post<Ok>('/api/unhide', { id });
   }
 
   /** Upload a conversation recording (e.g. a hospital appointment) as a new session.

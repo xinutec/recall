@@ -265,12 +265,6 @@ class ConversationsOut(TypedDict):
     hasMore: bool
 
 
-class TrainOut(TypedDict):
-    items: list[TranscriptOut]
-    corrections: int
-    bySpeaker: dict[str, int]
-
-
 class CorrectionsOut(TypedDict):
     items: list[LabelOut]
     bySpeaker: dict[str, int]

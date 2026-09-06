@@ -75,16 +75,6 @@ export class Review {
     this.drafts.set(next);
   }
 
-  protected unhide(t: Transcript): void {
-    this.api.unhide(t.id).subscribe({
-      next: () => {
-        this.snack.open('Restored', undefined, { duration: 2000 });
-        this.queue.reload();
-      },
-      error: () => this.snack.open('Could not restore', 'Dismiss', { duration: 4000 }),
-    });
-  }
-
   protected save(t: Transcript): void {
     const text = this.draft(t).trim();
     if (!text || !this.isDirty(t)) {

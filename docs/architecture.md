@@ -280,9 +280,21 @@ which tools were actually used):
 | dropped | evidence |
 |---|---|
 | the `train` bulk-correction queue | one correction screen is enough, and #1461 needs the timeline's window-targeted one, not lowest-confidence-first |
-| span-assign / split | 57 turns across 17 parents, all on a SINGLE day in June, never before or since |
-| manual hide / unhide of a turn | **zero uses, ever** — every one of the ~52k hidden turns was hidden by machine |
+| `/api/split` (per-fragment split) | **no caller in the frontend at all** — already dead code |
+| manual hide / unhide of a turn | 9 uses, ever: 5 through the train screen's "can't make out", 4 hand-hidden. The other ~52k hidden turns were all hidden by machine |
 | the clip-trimmer (boundary nudge) | same family; no use detectable, needed by neither use case |
+
+⚠ **span-assign is HELD OUT of this list, 2026-09-06, and the same measurement is
+why.** Its 57 uses across 17 parents on one June day were *all on a hospital meeting*
+— use case 2, the half Pippijn ranked first. It is the one gesture behind
+reassign/split/merge, i.e. the tool for repairing attribution when diarization merges
+two people into one voice, and #1470 records that meeting attribution quality has
+never been measured. Cutting the repair tool before knowing whether the thing it
+repairs is broken is the wrong order. Revisit once #1470 has ground truth.
+
+⚠ The "zero uses, ever" above was WRONG when first written and is corrected here:
+`can't make out (human)` and hand-authored hide reasons exist in the archive. Nine
+rows does not change the decision — it changes what the decision may claim.
 
 KEPT for the same reason: **453 of 468 corrections set a SPEAKER** and 183
 changed text, so correcting *who spoke* is the job. Hiding a bad CORRECTION stays

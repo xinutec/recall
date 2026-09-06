@@ -105,14 +105,6 @@ class AssignSpanIn(BaseModel):
     name: str
 
 
-class UnintelligibleIn(BaseModel):
-    id: int
-
-
-class UnhideIn(BaseModel):
-    id: int
-
-
 class NudgeIn(BaseModel):
     edge: str  # "start" | "end"
     delta: float  # seconds, signed (negative = earlier, positive = later)
@@ -126,18 +118,6 @@ class RefineRequestIn(BaseModel):
 
 class ReassignIn(BaseModel):
     speaker: str
-
-
-class FragmentIn(BaseModel):
-    start: str
-    end: str
-    text: str
-    speaker: str | None = None
-
-
-class SplitIn(BaseModel):
-    id: int
-    fragments: list[FragmentIn]
 
 
 class VocabularyIn(BaseModel):

@@ -147,116 +147,6 @@ def _seed_candidates(root: Path, count: int) -> Store:
     return store
 
 
-def test_train_ranks_substantial_novel_turns_first(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Best-first order promotes a long, not-yet-labelled turn over a short one
-    and over a phrase already in the corpus — value, not just loudness."""
-    flac = tmp_path / "usb-20260613T120000.flac"
-    make_flac(flac, 30.0)
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(
-        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="usb",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=30),
-            path=str(flac),
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-
-    def turn(text: str, at: float, dur: float) -> int:
-        return store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=at),
-            end=BASE + timedelta(seconds=at + dur),
-            text=text,
-            asr_model="whisper",
-            language="nl",
-            asr_confidence=0.5,
-        )
-
-    long_novel = turn("a full clear sentence worth learning", 0.0, 4.0)
-    short = turn("ja", 6.0, 0.7)
-    already = turn("okay that is fine", 8.0, 4.0)
-    # all equally loud, so only the value score separates them
-    for sid in (long_novel, short, already):
-        store.set_loudness(sid, 0.1)
-    # "okay that is fine" is already in the corpus → a repeat, deprioritised
-    repeat_seg = turn("okay that is fine", 12.0, 1.0)
-    store.add_correction(
-        transcript_segment_id=repeat_seg,
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=12),
-        end=BASE + timedelta(seconds=13),
-        original_text="okay that is fine",
-        corrected_text="okay that is fine",
-        language="nl",
-        created=BASE,
-        speaker="Pippijn",
-    )
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    items = api_labels.train(limit=10)["items"]
-    assert isinstance(items, list)
-    texts = [i["text"] for i in items]
-    assert texts[0] == "a full clear sentence worth learning"
-    # the already-labelled phrase ranks below the long novel one
-    assert texts.index("a full clear sentence worth learning") < texts.index(
-        "okay that is fine"
-    )
-
-
-def test_train_request_path_does_not_decode_audio(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The /api/train request must be a cheap read: loudness is precomputed, never
-    measured (sox decode) per-candidate on the request path. That synchronous
-    decode loop made the endpoint take ~13s for 80 candidates and time out the
-    phone. Guards the 'fast UX, offline precision' contract.
-    """
-    store = _seed_candidates(tmp_path, count=20)
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    calls = 0
-
-    def _counting_speech_level(*_args: object, **_kwargs: object) -> float:
-        nonlocal calls
-        calls += 1
-        return 0.0
-
-    monkeypatch.setattr(loudness, "speech_level", _counting_speech_level)
-
-    result = api_labels.train(limit=40)
-
-    items = result["items"]
-    assert isinstance(items, list)
-    assert items, "should still return the candidates"
-    assert calls == 0, f"request path decoded audio (calls={calls}); must read cache"
-
-
-def test_train_time_order_returns_turns_chronologically(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """order=time reads the window in sequence (oldest first), so a conversation
-    can be followed as it happened rather than by loudness."""
-    store = _seed_candidates(tmp_path, count=5)  # "this is turn 0..4", ascending
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    result = api_labels.train(limit=40, order="time")
-    items = result["items"]
-    assert isinstance(items, list)
-    assert [i["text"] for i in items] == [f"this is turn {i}" for i in range(5)]
-
-
 def test_conversations_groups_turns_by_silence_gaps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -987,7 +877,6 @@ def test_malformed_time_is_a_400_not_a_500(
 
     assert client.get("/api/timeline?before=not-a-time").status_code == 400
     assert client.get("/api/conversations?after=not-a-time").status_code == 400
-    assert client.get("/api/train?since=not-a-time").status_code == 400
     refine = client.post(
         "/api/refine", json={"source": "usb", "start": "not-a-time", "end": "x"}
     )
@@ -1202,61 +1091,6 @@ def _usb_store(tmp_path: Path) -> Store:
         AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
     )
     return store
-
-
-def test_split_rejects_unparseable_fragment_times(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Substituting now() for a missing fragment time would plant today's timestamp
-    # inside an old recording — export_corpus would then slice the wrong audio into
-    # the fine-tune corpus. Malformed times must be a 400, not manufactured data.
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(
-        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="usb",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=60),
-            path="x.flac",
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-    turn_id = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=4),
-        text="hello there world",
-        asr_model="whisper",
-    )
-    store.close()
-
-    client = TestClient(api.app)
-    r = client.post(
-        "/api/split",
-        json={
-            "id": turn_id,
-            "fragments": [
-                {
-                    "start": "not-a-date",
-                    "end": "also-not",
-                    "text": "hello",
-                    "speaker": "A",
-                },
-            ],
-        },
-    )
-    assert r.status_code == 400
-
-    store = Store.open(tmp_path / "recall.sqlite")
-    unchanged = store.get_transcript(turn_id)
-    store.close()
-    assert unchanged is not None
-    assert unchanged.superseded_by is None  # nothing was written
 
 
 def test_vocabulary_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

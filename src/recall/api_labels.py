@@ -22,31 +22,23 @@ from recall.api_models import (
     CorrectIn,
     NudgeIn,
     ReassignIn,
-    SplitIn,
     TurnSpeakerIn,
-    UnhideIn,
-    UnintelligibleIn,
 )
-from recall.api_reads import transcript_out
 from recall.asr import slice_clip
 from recall.conversation import assign_span
 from recall.loudness import normalize_loudness
-from recall.quality import foreign_script_ratio
-from recall.ranking import diversity_factor, normalize_text, training_value
-from recall.review import SpeakerFragment, apply_correction, split_correction
+from recall.review import apply_correction
 from recall.schemas import (
     AssignResultOut,
     CorrectionsOut,
     LabelOut,
     NewIdOut,
-    NewIdsOut,
     OkOut,
     SpeakerNamesOut,
     SuggestOut,
-    TrainOut,
     VoiceSuggestionsOut,
 )
-from recall.store import LabelledFragment, Store, TranscriptSegment
+from recall.store import LabelledFragment, Store
 
 # Train pre-fills "sounds like X" only when the leading candidate's likelihood
 # (softmax over the enrolled people) clears this — a confirmable hint, not a coin
@@ -98,9 +90,6 @@ def register_label_routes(
     _parse_iso_fn = parse_iso
     _require_time_fn = require_time
     _clip_window = clip_window_fn
-    app.get("/api/train")(train)
-    app.post("/api/unintelligible")(unintelligible)
-    app.post("/api/unhide")(unhide)
     app.post("/api/correct")(correct)
     app.post("/api/turn/{segment_id}/speaker")(turn_speaker)
     app.post("/api/turn/{segment_id}/nudge")(turn_nudge)
@@ -112,7 +101,6 @@ def register_label_routes(
     app.post("/api/correction/{correction_id}/speaker")(correction_reassign)
     app.post("/api/correction/{correction_id}/nudge")(correction_nudge)
     app.post("/api/correction/{correction_id}/hide")(correction_hide)
-    app.post("/api/split")(split)
     app.get("/api/suggest/{segment_id}")(suggest)
 
 
@@ -128,103 +116,6 @@ _TRAIN_CANDIDATES = 80
 # the family's own speech is burstier and shorter than a movie's solid dialogue.
 _MEDIA_MAX_GAP_S = 20.0
 _MEDIA_MIN_DURATION_S = 480.0
-
-
-def train(
-    limit: int = 40,
-    since: str | None = None,
-    until: str | None = None,
-    order: str = "loudness",
-) -> TrainOut:
-    """The labeling queue, scoped by `since`/`until` (ISO).
-
-    `order` chooses how turns are ordered: "loudness" (loud/clear first, TV/film
-    deprioritized — the labeling default) or "time" (oldest first, to read a
-    conversation in sequence). `corrections` is the labelled-corpus size (progress).
-    """
-    try:
-        since_cur = _parse_iso(since)
-        until_cur = _parse_iso(until)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    store = _store()
-    try:
-        if order == "time":
-            turns = store.training_queue(
-                min_confidence=_TRAIN_MIN_CONFIDENCE,
-                max_confidence=_TRAIN_MAX_CONFIDENCE,
-                limit=limit,
-                since=since_cur,
-                until=until_cur,
-                order="time",
-            )
-            return {
-                "items": [transcript_out(s) for s in turns],
-                "corrections": store.correction_count(),
-                "bySpeaker": store.corrections_by_speaker(),
-            }
-
-        # "Best first": rank candidates by training value — clear + substantial +
-        # novel, with TV/film pushed below household speech. The clearest turns
-        # (precomputed loudness, filled offline by the worker) form the candidate
-        # pool; the value score then promotes longer, not-yet-labelled speech over
-        # loud one-word fillers, so each label teaches the model as much as
-        # possible. Stays a cheap read + sort.
-        candidates = store.training_queue(
-            min_confidence=_TRAIN_MIN_CONFIDENCE,
-            max_confidence=_TRAIN_MAX_CONFIDENCE,
-            limit=_TRAIN_CANDIDATES,
-            since=since_cur,
-            until=until_cur,
-            order="loudness",
-        )
-        spans = store.media_spans(
-            max_gap_s=_MEDIA_MAX_GAP_S, min_duration_s=_MEDIA_MIN_DURATION_S
-        )
-        labelled = store.corrected_texts()
-
-        def in_media(s: TranscriptSegment) -> bool:
-            return any(start <= s.start < end for start, end in spans)
-
-        def value(s: TranscriptSegment) -> float:
-            return training_value(
-                loudness=s.loudness or 0.0,
-                duration_s=(s.end - s.start).total_seconds(),
-                repeat=normalize_text(s.text) in labelled,
-                diversity=diversity_factor(s.text),
-                foreign=foreign_script_ratio(s.text),
-            )
-
-        scored = [(s, in_media(s), value(s)) for s in candidates]
-        scored.sort(key=lambda t: (t[1], -t[2]))
-        return {
-            "items": [transcript_out(s) for s, _, _ in scored[:limit]],
-            "corrections": store.correction_count(),
-            "bySpeaker": store.corrections_by_speaker(),
-        }
-    finally:
-        store.close()
-
-
-def unintelligible(body: UnintelligibleIn) -> OkOut:
-    """Mark a turn humanly unintelligible: drop it from the queue/timeline (kept,
-    recoverable) and out of the training corpus — its real fix is better capture.
-    """
-    store = _store()
-    try:
-        store.hide(body.id, CANT_MAKE_OUT_REASON)
-        return {"ok": True}
-    finally:
-        store.close()
-
-
-def unhide(body: UnhideIn) -> OkOut:
-    store = _store()
-    try:
-        store.unhide(body.id)
-        return {"ok": True}
-    finally:
-        store.close()
 
 
 def correct(body: CorrectIn) -> NewIdOut:
@@ -392,31 +283,6 @@ def correction_hide(correction_id: int) -> OkOut:
     try:
         store.hide_correction(correction_id, "review")
         return {"ok": True}
-    finally:
-        store.close()
-
-
-def split(body: SplitIn) -> NewIdsOut:
-    """Replace one turn with several single-speaker fragments (per-speaker labels)."""
-    store = _store()
-    try:
-        # _parse_iso raises ValueError on malformed input (-> the 400 below); it
-        # returns None only for a missing value, which is equally a caller error —
-        # NEVER substitute a made-up time: a wrong span would slice wrong audio
-        # into the fine-tune corpus.
-        frags = [
-            SpeakerFragment(
-                start=_require_time(f.start),
-                end=_require_time(f.end),
-                text=f.text,
-                speaker=f.speaker,
-            )
-            for f in body.fragments
-        ]
-        new_ids = split_correction(store, body.id, frags, now=datetime.now(UTC))
-        return {"newIds": new_ids}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
         store.close()
 
