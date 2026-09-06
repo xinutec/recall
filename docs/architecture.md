@@ -889,8 +889,27 @@ B3 lands.*
   waiting for webauth — do not expose a surface that is not ready. `app::router`
   gains its `frontend` field when the route groups are done, not before.
 
+  *Audio ported and mounted 2026-09-07:* `recalld::audio` serves `/api/audio/{id}`
+  and `/api/audio-span` behind the same gate, from the same read-only connection —
+  a clip is a read of the meaning plane plus a read of an audio file, so it could
+  follow the reads without new authority. The window rules are the port's whole
+  content: a rough whole-phrase turn gets a wide context window, a *precise* cutout
+  (diarized, or carrying word timings) gets a tight one, because widening that
+  would pull in the neighbouring speaker and undo the attribution diarization just
+  made. Nine tests pin the arithmetic and that decision; both failure modes are
+  silent, since the wrong clip still plays.
+
+  ⚠ `/api/clip` was NOT ported — it had no caller anywhere, having served the
+  deleted clip-trimmer. Sizing a route group is the cheapest moment to find that.
+
+  ⚠ ffmpeg and sox are now RUNTIME dependencies of recalld, failing at play time
+  rather than at boot. The fleet image already carries them (it once shipped with
+  ffmpeg alone and every audio request died inside loudness normalisation while
+  transcripts served perfectly), and recalld runs from that same image.
+
   ⚠ **STILL TO DO:** the remaining route groups (labels, capture, devices,
-  sessions, audio), then shadow days, then the Python goes.
+  sessions), then shadow days, then the Python goes. Sessions goes LAST while
+  meeting uploads are live.
 
   *Checked against the running pod, so the next session does not have to guess:*
   `NC_INTERNAL_URL` is `http://nextcloud-server.nextcloud.svc.cluster.local` —

@@ -7,7 +7,7 @@
 //! configured, so a dev or LAN-only recalld is unchanged.
 
 use crate::tokens::Tokens;
-use crate::{ingest, reads, webauth};
+use crate::{audio, ingest, reads, webauth};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, put};
@@ -51,6 +51,10 @@ fn browsing(st: webauth::GateState, root: PathBuf) -> Router {
     Router::new()
         .route("/api/timeline", get(reads::timeline_route))
         .route("/api/search", get(reads::search_route))
+        // Playback shares reads' state and its read-only connection: a clip is a
+        // read of the meaning plane plus a read of the audio file.
+        .route("/api/audio/{id}", get(audio::audio_route))
+        .route("/api/audio-span", get(audio::audio_span_route))
         .with_state(read)
         .merge(webauth::routes(st.clone()))
         .layer(axum::middleware::from_fn_with_state(st, webauth::gate))
