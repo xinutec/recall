@@ -167,6 +167,10 @@
               ./audiocore
               ./audiod
               ./recalld
+              # Every workspace MEMBER, or cargo cannot even load the graph:
+              # adding a crate to Cargo.toml and not to this list fails the
+              # sandboxed build with "failed to read runner/Cargo.toml".
+              ./runner
             ];
           };
           cargoLock.lockFile = ./Cargo.lock;
@@ -184,6 +188,11 @@
           nativeCheckInputs = [
             pkgs.ffmpeg
             pkgs.onnxruntime
+            # The runner's tests drive a STUB SHIM — a few lines of python
+            # speaking the real stdio protocol — so the sandbox needs an
+            # interpreter. Substituting only the model is the point: everything
+            # else in that test is the pair that ships.
+            pkgs.python3
           ];
           ORT_DYLIB_PATH = "${pkgs.onnxruntime}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
         };

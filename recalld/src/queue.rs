@@ -50,10 +50,24 @@ fn iso(t: DateTime<Utc>) -> String {
 /// Derive queued jobs for room segments that have none. Idempotent; the
 /// belt that makes a lost enqueue impossible.
 pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
+    // ⚠ A segment MEASURED AS SILENT gets no job. Transcribing silence does not
+    // return nothing — it returns INVENTIONS. Measured 2026-09-06 on the live
+    // queue: a silent minute came back as "Thank you." twice, and another as 156
+    // segments containing a 150-character run of tildes at 0.19 confidence
+    // (#1410). 1784 of 4288 open jobs were silent, so this is 42% of the work
+    // and most of the junk.
+    //
+    // Unmeasured segments still get one, matching the liveness rule: "not looked
+    // at yet" is not evidence of silence, and on a host where the detector
+    // cannot run (no AVX2-capable ONNX runtime) this degrades to the old
+    // behaviour rather than silently producing no work at all.
+    crate::speech::ensure_schema(conn)?;
     let inserted = conn.execute(
         "INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
          SELECT ?1, s.filename, ?2 FROM segments s
+         LEFT JOIN segment_speech p ON p.filename = s.filename
          WHERE s.source = ?3
+           AND (p.filename IS NULL OR p.speech_seconds != 0.0)
            AND NOT EXISTS (SELECT 1 FROM jobs j
                            WHERE j.kind = ?1 AND j.filename = s.filename)",
         (TRANSCRIBE_ROOM, iso(now), ROOM_SOURCE),

@@ -5,4 +5,4 @@
 #   recalld    the fleet's system-of-record daemon on Isis
 [workspace]
 resolver = "3"
-members = ["audiocore", "audiod", "recalld"]
+members = ["audiocore", "audiod", "recalld", "runner"]
