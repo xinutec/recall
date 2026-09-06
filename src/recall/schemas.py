@@ -57,6 +57,14 @@ class SourceStatusOut(TypedDict):
     lastDelivered: str | None
 
 
+class PromptOut(TypedDict):
+    """The household glossary as Whisper's `initial_prompt`, or None when the
+    vocabulary is empty — the runner then sends no biasing rather than an empty
+    string, which Whisper would treat as a prompt of nothing."""
+
+    prompt: str | None
+
+
 class SourcesOut(TypedDict):
     items: list[SourceStatusOut]
 

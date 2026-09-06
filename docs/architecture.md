@@ -399,14 +399,15 @@ B3 lands.*
   *Verified end to end 2026-09-05: pixel5's shadow WAVs delivered to Isis
   under its own token during a live test; per-device tokens live for all
   four phones.*
-  **Open, and Pippijn's: the mic-open gate at the C4 flip.** Today the mic
-  opens only while the stream connects to the Mac — a home-presence proxy.
-  Store-and-forward decouples recording from delivery, so the gate must be
-  chosen: keep Mac-connect (outage still silences phones), gate on home
-  presence (recommended — survives a Mac outage, keeps recording inside
-  the consent boundary), or record whenever unpaused (records outside the
-  house — a widening only he can choose). Shadow behaves identically under
-  all three.
+  **DECIDED 2026-09-06 by Pippijn: RECORD WHENEVER UNPAUSED.** The mic opens
+  whenever capture is not paused, regardless of the Mac or of being at home.
+  The alternatives were keeping Mac-connect (an outage silences every phone,
+  the failure store-and-forward exists to end) and gating on home presence.
+  ⚠ **This deliberately widens capture BEYOND the house** — cafés, other
+  people's homes, other people's conversations — and that is a consent
+  decision, which is why it was his to make and not a default to infer. The
+  pause remains the whole control surface, so it becomes the thing that must
+  always work: everything else can degrade, that cannot.
 - **C2. iOS store-and-forward.** *Built and installed 2026-09-05:* the
   Swift mirror of C1 (SegmentStore/Writer/Upload, WAV first, receipts
   re-hashed, evict-under-pressure), tee gated on the CONNECTION — on iOS

@@ -34,7 +34,7 @@ from pydantic import BaseModel
 from recall import capture_control
 from recall.mic_alive import read_beats
 from recall.outbox import read_reports
-from recall.schemas import HeartbeatsOut, OkOut, OutboxesOut
+from recall.schemas import HeartbeatsOut, OkOut, OutboxesOut, PromptOut
 from recall.sources import AudioSource, SourceKind
 from recall.store import (
     AbCompareJob,
@@ -46,6 +46,7 @@ from recall.store import (
     UploadJob,
 )
 from recall.timeline import Segment
+from recall.vocabulary import build_initial_prompt
 
 SYNC_TOKEN_ENV = "RECALL_SYNC_TOKEN"
 _BEARER = "Bearer "
@@ -595,6 +596,35 @@ def _register_device_routes(
                 for r in reports
             ]
         }
+
+    @app.get("/sync/vocabulary/prompt")
+    def sync_vocabulary_prompt(
+        authorization: str | None = Header(default=None),
+    ) -> PromptOut:
+        """The household glossary as Whisper's `initial_prompt` (#1463).
+
+        On the SYNC plane for the same reason as the two above: the reader is the
+        Mac's runner, and `RECALL_SYNC_TOKEN` is the credential that relationship
+        already has.
+
+        ⚠ The shim that ultimately uses this MUST NOT fetch it itself. A model
+        shim does no I/O beyond its stdio and the audio path it is handed
+        (docs/architecture.md, principle 3 and stage E2), so the prompt is
+        carried: the runner reads it here at startup and passes it on every job.
+        Putting a DB handle inside the model process would couple the Mac worker
+        back to state it is meant to have given up.
+
+        Read at RUNNER STARTUP rather than written onto each job, so a term added
+        in the UI reaches everything transcribed after the next restart — where a
+        prompt pinned onto a job at derivation time never would.
+        """
+        check_token(bearer(authorization), expected)
+        store = store_factory()
+        try:
+            prompt = build_initial_prompt(store)
+        finally:
+            store.close()
+        return {"prompt": prompt}
 
     @app.get("/sync/devices/heartbeats")
     def sync_device_heartbeats(

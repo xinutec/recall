@@ -113,10 +113,12 @@ REQUEST_NAME_MAP = {
 }
 
 # Shapes not emitted to the generated web models: the web app never consumes them
-# (fleet liveness/heartbeat — the Kotlin/Swift mic apps read those).
+# (fleet liveness/heartbeat — the Kotlin/Swift mic apps read those; the
+# vocabulary prompt — the Mac's runner reads it off the SYNC plane, #1463).
 _SKIP = {
     "SourceStatusOut",
     "SourcesOut",
+    "PromptOut",
 }
 
 _HEADER = (

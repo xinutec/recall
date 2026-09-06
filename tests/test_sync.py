@@ -1093,3 +1093,48 @@ def test_batch_push_falls_back_per_segment_against_an_older_fleet(
         assert client._batch_ok is False  # remembered; later flushes skip the probe
         # a second call goes straight to the per-segment route and still works
         assert len(client.push_segments([segs[0]])) == 1
+
+
+def test_the_runner_reads_the_vocabulary_off_the_sync_plane(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#1463: the runner needs Whisper's `initial_prompt`, and the shim must not
+    fetch it — a model process holds no database (stage E2). So it is carried,
+    and the reader is the Mac, which is what puts it on the sync plane.
+    """
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    store = Store.open(db)
+    store.add_vocabulary_term("Pippijn")
+    store.add_vocabulary_term("Xinutec")
+    store.close()
+
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+    client = TestClient(app)
+
+    assert client.get("/sync/vocabulary/prompt").status_code == 401
+    ok = client.get(
+        "/sync/vocabulary/prompt", headers={"Authorization": "Bearer secret"}
+    )
+    assert ok.status_code == 200
+    prompt = ok.json()["prompt"]
+    assert "Pippijn" in prompt
+    assert "Xinutec" in prompt
+
+
+def test_an_empty_vocabulary_is_no_biasing_rather_than_an_empty_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # None means "send no initial_prompt". An empty STRING would be a prompt of
+    # nothing, which is a different instruction to the model.
+    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
+    db = tmp_path / "recall.sqlite"
+    Store.open(db).close()
+    app = FastAPI()
+    register_sync_routes(app, lambda: Store.open(db), tmp_path)
+    ok = TestClient(app).get(
+        "/sync/vocabulary/prompt", headers={"Authorization": "Bearer secret"}
+    )
+    assert ok.status_code == 200
+    assert ok.json()["prompt"] is None

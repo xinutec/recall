@@ -10,7 +10,7 @@
 //! anyone reads. The flip — retiring the old worker — waits on the referee
 //! (#1461), which cannot yet say which room stream is better.
 
-use runner::client::{Client, Job};
+use runner::client::{self, Client, Job};
 use runner::shim::{self, Shim};
 use std::path::Path;
 use std::time::Duration;
@@ -20,6 +20,7 @@ const BACKOFF: Duration = Duration::from_mins(1);
 
 struct Config {
     base: String,
+    api: String,
     token: String,
     program: String,
     args: Vec<String>,
@@ -28,7 +29,7 @@ struct Config {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: runner --url <recalld> [--shim <program> [args...]] [--once]\n\
+        "usage: runner --url <recalld> [--api <recall api>] [--shim <program> [args...]] [--once]\n\
          \n\
          RECALL_SYNC_TOKEN must be set: the runner reads blobs and the queue,\n\
          which is the read plane, never a device token."
@@ -38,6 +39,7 @@ fn usage() -> ! {
 
 fn parse_args() -> Config {
     let mut base = "http://10.100.0.2:8001".to_owned();
+    let mut api = "http://10.100.0.2:8000".to_owned();
     let mut program = "python".to_owned();
     let mut args = vec!["-m".to_owned(), "recall.shim_asr".to_owned()];
     let mut once = false;
@@ -45,6 +47,7 @@ fn parse_args() -> Config {
     while let Some(arg) = cli.next() {
         match arg.as_str() {
             "--url" => base = cli.next().unwrap_or_else(|| usage()),
+            "--api" => api = cli.next().unwrap_or_else(|| usage()),
             "--once" => once = true,
             "--shim" => {
                 program = cli.next().unwrap_or_else(|| usage());
@@ -58,6 +61,7 @@ fn parse_args() -> Config {
     };
     Config {
         base,
+        api,
         token,
         program,
         args,
@@ -70,6 +74,7 @@ fn one(
     client: &Client,
     shim: &mut Shim,
     scratch: &Path,
+    prompt: Option<&str>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let Some(job) = client.lease()? else {
         return Ok(false);
@@ -78,7 +83,7 @@ fn one(
     tracing::info!(id, %kind, %filename, "leased");
     let clip = scratch.join(&filename);
     client.fetch_blob("room", &filename, &clip)?;
-    let outcome = shim.transcribe(&clip, None, None);
+    let outcome = shim.transcribe(&clip, None, prompt);
     // The scratch copy is the runner's only state, and it is gone either way.
     let _ = std::fs::remove_file(&clip);
     match outcome {
@@ -122,6 +127,23 @@ fn main() {
         tracing::error!(%err, "cannot make a scratch directory");
         std::process::exit(1);
     }
+    // ⚠ FATAL if unreachable, deliberately. Transcribing without the biasing the
+    // vocabulary was built for produces a corpus that has to be redone, and
+    // re-transcription is the cost #1388 exists to reduce. An EMPTY vocabulary
+    // is fine — that is `None`, and means no biasing rather than a failure.
+    let prompt = match client::fetch_prompt(&config.api, &config.token) {
+        Ok(prompt) => {
+            tracing::info!(
+                terms = prompt.as_deref().map_or(0, |p| p.split(',').count()),
+                "vocabulary loaded"
+            );
+            prompt
+        }
+        Err(err) => {
+            tracing::error!(%err, api = %config.api, "cannot read the vocabulary; refusing to transcribe unbiased");
+            std::process::exit(1);
+        }
+    };
     let mut shim = match Shim::spawn(&config.program, &config.args) {
         Ok(shim) => shim,
         Err(err) => {
@@ -131,7 +153,7 @@ fn main() {
     };
     tracing::info!(url = %config.base, shim = %config.program, "runner: polling");
     loop {
-        match one(&client, &mut shim, &scratch) {
+        match one(&client, &mut shim, &scratch, prompt.as_deref()) {
             // ⚠ `--once` means ONE JOB, not "until the queue empties". It read
             // the latter on 2026-09-06 and chewed through six live jobs during
             // what was meant to be a single end-to-end check.
