@@ -148,3 +148,44 @@ fn model_and_prompt_reach_the_shim_when_given() {
     assert_eq!(echoed["initial_prompt"], "Pippijn, Kat");
     assert_eq!(echoed["words"], true);
 }
+
+#[test]
+fn the_vocabulary_prompt_is_read_and_an_empty_one_is_no_biasing() {
+    // #1463: the runner carries the prompt because the shim may not fetch it.
+    // An EMPTY vocabulary must read as None — "send no initial_prompt" — rather
+    // than as an empty string, which would be an instruction to the model.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime.block_on(async move {
+            let app = axum::Router::new()
+                .route(
+                    "/sync/vocabulary/prompt",
+                    axum::routing::get(|| async {
+                        axum::Json(serde_json::json!({"prompt": "Pippijn, Kat"}))
+                    }),
+                )
+                .route(
+                    "/empty/sync/vocabulary/prompt",
+                    axum::routing::get(|| async {
+                        axum::Json(serde_json::json!({"prompt": null}))
+                    }),
+                );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            tx.send(listener.local_addr().expect("addr")).expect("send");
+            axum::serve(listener, app).await.expect("serve");
+        });
+    });
+    let base = format!("http://{}", rx.recv().expect("addr"));
+
+    let prompt = runner::client::fetch_prompt(&base, "any").expect("fetch");
+    assert_eq!(prompt.as_deref(), Some("Pippijn, Kat"));
+
+    let empty = runner::client::fetch_prompt(&format!("{base}/empty"), "any").expect("fetch");
+    assert_eq!(
+        empty, None,
+        "an empty vocabulary is NO biasing, not an empty prompt"
+    );
+}
