@@ -41,7 +41,6 @@ from recall.store import (
     AskRequest,
     RefineRequest,
     Store,
-    SweepTombstone,
     TranscriptSegment,
     UploadJob,
 )
@@ -100,8 +99,9 @@ class JobOut(BaseModel):
     title, and the probed stream shape (so no re-probe). `type="ab-compare"`: id is the
     fleet's run id, start/end are None for a whole-recording run, and the ab-only
     fields carry the two models plus the fleet's current status (so the Mac only
-    reports "running" once). `type="sweep"`: id is a tombstone id, and source+start
-    name the deliberately-deleted segment the Mac must remove from its own archive.
+    reports "running" once). There is no sweep type: a quiet-review deletion removes
+    the fleet's own copy and leaves a tombstone that refuses a re-push, but it never
+    asks a recorder to destroy anything (docs/architecture.md, "Deletion authority").
     Fields outside a job's type are None, and an older fleet simply never sends
     them."""
 
@@ -354,15 +354,6 @@ def _ab_job_of(run: AbCompareJob) -> JobOut:
 def _ask_job_of(req: AskRequest) -> JobOut:
     # source is unused for ask (not recording-scoped); the prompt is the whole payload.
     return JobOut(id=req.id, type="ask", source="", prompt=req.prompt)
-
-
-def _sweep_job_of(tomb: SweepTombstone) -> JobOut:
-    return JobOut(
-        id=tomb.id,
-        type="sweep",
-        source=tomb.source,
-        start=tomb.start.isoformat(),
-    )
 
 
 def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentStoredOut:
@@ -871,11 +862,6 @@ def _register_job_routes(
                     _ab_job_of(r)
                     for r in store.unfinished_ab_compare_runs(limit=remaining)
                 ]
-            remaining = limit - len(jobs)
-            if remaining > 0:
-                jobs += [
-                    _sweep_job_of(t) for t in store.pending_sweeps(limit=remaining)
-                ]
             return jobs
         finally:
             store.close()
@@ -895,10 +881,6 @@ def _register_job_routes(
                 # "Done" for an upload = the Mac holds it and will ASR it; the row is
                 # marked processed so pending_upload_jobs stops serving it.
                 store.mark_transcribed(job_id)
-            elif type == "sweep":
-                # The Mac confirmed its master-archive copy of the deleted segment
-                # is gone; both machines have now converged.
-                store.mark_sweep_done(job_id)
             elif type == "refine":
                 store.mark_refine_request_done(job_id)
             else:

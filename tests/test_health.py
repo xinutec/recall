@@ -24,7 +24,6 @@ from recall.health import (
     loss_checks,
     mirror_check,
     recorders_on_disk,
-    sweep_refusal_check,
     worker_check,
 )
 from recall.heartbeat import Beat
@@ -239,24 +238,6 @@ def test_mirror_check_passes_only_when_the_fleet_holds_everything() -> None:
     stalled = mirror_check(3, slack=timedelta(hours=1))
     assert stalled.verdict == "fail"
     assert "3" in stalled.observed
-
-
-def test_sweep_refusal_check_warns_without_failing_when_a_sweep_was_refused() -> None:
-    # A refusal means the Mac KEPT audio a fleet sweep tried to delete — the master
-    # archive held. So it warns (the alarm that the guard fired), never fails (the
-    # data was not lost). Zero refusals is the healthy steady state.
-    ok = sweep_refusal_check(0)
-    assert (ok.section, ok.verdict) == ("sync", "pass")
-    tampered = sweep_refusal_check(2)
-    assert tampered.verdict == "warn"
-    assert "2" in tampered.observed
-
-
-# --- the worker's pulse --------------------------------------------------------------
-#
-# The worker prints only when a pass writes transcript rows, so a quiet house and a
-# wedged pipeline leave the same empty log — `worker.out.log` was three days old while
-# an hour of captured audio went unindexed (#709).
 
 
 def _pass(*, ago: timedelta, took: float | None = 0.4, rows: int = 0) -> Beat:

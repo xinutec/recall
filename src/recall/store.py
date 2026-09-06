@@ -42,8 +42,6 @@ from recall.store_models import (
     SegmentVolume,
     SessionSummary,
     SourceCoverage,
-    SweepEvidence,
-    SweepTombstone,
     TranscriptSegment,
     UploadJob,
     VocabularyTerm,
@@ -77,8 +75,6 @@ __all__ = [
     "SessionSummary",
     "SourceCoverage",
     "Store",
-    "SweepEvidence",
-    "SweepTombstone",
     "TranscriptSegment",
     "UploadJob",
     "VocabularyTerm",
@@ -742,9 +738,9 @@ class Store:
 
     def _tombstone(self, source_id: str, start_utc: str) -> None:
         """Journal one deliberate segment deletion by cross-machine identity, inside
-        the caller's transaction — the record the Mac's sweep pull is served from, and
-        the veto that stops a later push resurrecting the segment. OR IGNORE: deleting
-        twice is one fact."""
+        the caller's transaction — the veto that stops a later push resurrecting the
+        segment. It is a record, never an order: nothing serves it to a recorder.
+        OR IGNORE: deleting twice is one fact."""
         self._conn.execute(
             "INSERT OR IGNORE INTO deleted_segments "
             "(source_id, start_utc, deleted_utc) VALUES (?, ?, ?)",
@@ -1495,86 +1491,18 @@ class Store:
         ).fetchone()
         return AudioSegmentId(int(row["id"])) if row else None
 
-    def sweep_evidence(self, source: str, start: datetime) -> SweepEvidence | None:
-        """What this Mac's own database knows about the segment a fleet tombstone
-        names — the ground it stands on to decide whether to honour the sweep. None =
-        already swept or never held here (either way the sweep has converged).
-
-        Carries the source kind, the Mac's own VAD verdict (`speech_s`), and whether a
-        current, visible turn survives — the same three signals the local quiet review
-        used to justify the deletion in the first place, so the Mac can re-derive that
-        justification instead of trusting the fleet's word for it."""
-        row = self._conn.execute(
-            """SELECT a.id, a.speech_s, s.kind,
-                      EXISTS (SELECT 1 FROM transcript_segments t
-                              WHERE t.audio_segment_id = a.id
-                                AND t.superseded_by IS NULL
-                                AND t.hidden_reason IS NULL) AS has_speech
-               FROM audio_segments a JOIN sources s ON s.id = a.source_id
-               WHERE a.source_id = ? AND a.start_utc = ?""",
-            (source, start.isoformat()),
-        ).fetchone()
-        if row is None:
-            return None
-        return SweepEvidence(
-            audio_id=AudioSegmentId(int(row["id"])),
-            kind=SourceKind(str(row["kind"])),
-            speech_s=None if row["speech_s"] is None else float(row["speech_s"]),
-            has_speech=bool(row["has_speech"]),
-        )
-
-    def record_sweep_refusal(self, source: str, start: datetime, reason: str) -> None:
-        """Journal a fleet sweep the Mac declined to apply — the segment's audio is
-        kept, and the doctor reports the count so a run of refusals surfaces as a
-        tamper signal rather than silently accreting. OR IGNORE: the first refusal of
-        an identity is the fact; re-serving the same tombstone doesn't multiply it."""
-        self._conn.execute(
-            "INSERT OR IGNORE INTO sweep_refusals "
-            "(source_id, start_utc, refused_utc, reason) VALUES (?, ?, ?, ?)",
-            (source, start.isoformat(), datetime.now(UTC).isoformat(), reason),
-        )
-        self._commit()
-
-    def sweep_refusal_count(self) -> int:
-        """How many distinct fleet sweeps the Mac has declined — the doctor's tamper
-        gauge. A healthy split holds this at 0: every legitimate quiet-review deletion
-        is of audio the Mac also measured speechless, so it passes the local check."""
-        row = self._conn.execute("SELECT count(*) AS n FROM sweep_refusals").fetchone()
-        return int(row["n"])
-
     def is_tombstoned(self, source: str, start: datetime) -> bool:
         """Whether this identity was deliberately deleted here — the veto that stops
-        a later sync push resurrecting a swept segment on the fleet."""
+        a later sync push resurrecting it on the fleet.
+
+        This is the whole of what a deletion travels as now. It refuses a re-push; it
+        does not ask the Mac to delete its own copy, and there is no job that does
+        (docs/architecture.md, "Deletion authority")."""
         row = self._conn.execute(
             "SELECT 1 FROM deleted_segments WHERE source_id = ? AND start_utc = ?",
             (source, start.isoformat()),
         ).fetchone()
         return row is not None
-
-    def pending_sweeps(self, *, limit: int = 100) -> list[SweepTombstone]:
-        """Tombstones the Mac has not yet applied to its master archive, oldest-first
-        — served over /sync/jobs as type="sweep"."""
-        rows = self._conn.execute(
-            "SELECT id, source_id, start_utc FROM deleted_segments "
-            "WHERE swept_utc IS NULL ORDER BY id LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [
-            SweepTombstone(
-                id=int(r["id"]),
-                source=str(r["source_id"]),
-                start=datetime.fromisoformat(r["start_utc"]),
-            )
-            for r in rows
-        ]
-
-    def mark_sweep_done(self, tombstone_id: int) -> None:
-        """The Mac confirmed its copy is gone; stop serving this tombstone."""
-        self._conn.execute(
-            "UPDATE deleted_segments SET swept_utc = ? WHERE id = ?",
-            (datetime.now(UTC).isoformat(), tombstone_id),
-        )
-        self._commit()
 
     def add_ab_compare_run(  # noqa: PLR0913 - source + window + the two models
         self,

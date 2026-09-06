@@ -66,7 +66,6 @@ from recall.health import (
     loss_checks,
     mirror_check,
     recorders_on_disk,
-    sweep_refusal_check,
     worker_check,
 )
 from recall.hf_asr import is_adapter_dir, make_hf_transcriber
@@ -1542,7 +1541,6 @@ def _archive_checks(args: argparse.Namespace) -> list[Check]:
         unmirrored = len(
             store.unmirrored_segments(limit=10_000, older_than=now - _MIRROR_SLACK)
         )
-        sweep_refusals = store.sweep_refusal_count()
         # repair's own lens, not raw segments_showing_no_turns: VAD-silent segments
         # and evidence-hidden turns are correctly empty and must not page anyone.
         from recall.repair import find_blanked  # noqa: PLC0415 - archive child only
@@ -1568,7 +1566,6 @@ def _archive_checks(args: argparse.Namespace) -> list[Check]:
     # stock LAN-only deployment has no fleet to be incomplete against.
     if os.environ.get("RECALL_SYNC_TOKEN"):
         checks.append(mirror_check(unmirrored, slack=_MIRROR_SLACK))
-        checks.append(sweep_refusal_check(sweep_refusals))
     # Quiet until audiod's uploader has run here (stage B): reads its state db.
     checks.extend(delivery_checks(args.out, now=now))
     checks.append(blanked_check(blanked))

@@ -325,24 +325,33 @@ confirmed on Isis reach the Mac?":
   on neither*, and the doctor asserts it (`mirror_check`: unmirrored-beyond-slack =
   FAIL, same class as a stalled backup).
 
-**Sweep is a request, not an order — the Mac protects itself from Isis (2026-07-16).**
-The one-way VPN exists so a compromised Isis cannot reach the Mac; the deletion pull
-above quietly broke that — an attacker with the sync token (or Isis itself) could
-write tombstones and the Mac would obediently hard-delete its master archive. Fixed by
-making a sweep *conditional on the Mac's own evidence*: `_apply_sweep` reads
-`sweep_evidence` (the segment's kind, the Mac's own VAD `speech_s`, and whether a
-visible turn survives) and honours the tombstone only when all three say speechless
-idle capture — the same bar the local quiet review clears before deleting. Any other
-tombstone is **refused**: the audio is kept, the refusal journaled in `sweep_refusals`,
-and the doctor surfaces the count (`sweep_refusal_check`: >0 = WARN, the alarm that the
-guard fired — never FAIL, because nothing was lost). The job is still acked either way,
-so there's no re-serve loop; Isis's own tombstone stops the kept segment being
-re-mirrored. Consequence, blessed: deleting a *speech-bearing* session from Isis's UI
-no longer cascades to the Mac (Isis drops its copy and the tombstone blocks re-sync,
-but the Mac keeps its master copy) — deliberate removal of real speech is now a
-Mac-local act, which is exactly what "protected master archive" means. The worst a
-hostile Isis can command is the deletion of audio the Mac already measured as an empty
-room, with odin's restic history behind even that.
+**Sweep was a request, not an order — and since 2026-09-06 there is no request
+either.** The one-way VPN exists so a compromised Isis cannot reach the Mac; the
+deletion pull above quietly broke that — an attacker with the sync token (or Isis
+itself) could write tombstones and the Mac would obediently hard-delete its master
+archive. That was first fixed by making a sweep *conditional on the Mac's own
+evidence*: the Mac honoured a tombstone only when its own VAD, the source kind and the
+surviving turns all said speechless idle capture, refused anything else, journaled the
+refusal, and showed the count to the doctor as a tamper alarm.
+
+The guard was right and is now **gone with the channel it policed**, which is the
+better shape and the one [architecture.md](architecture.md) specifies: no network path
+deletes anything on a recorder. `/sync/jobs` no longer serves `type="sweep"`, the Mac
+has no code that applies one, and `sweep_refusals` is dropped (schema v43). What
+remains is the tombstone itself — a **record, not an order**: it refuses a later push
+that would resurrect the segment on the fleet, and commands nothing.
+
+The evidence for removing rather than keeping it: in the channel's whole life it
+carried **one** sweep, out of 11,225 segments, and the veto refused that one. An entire
+mechanism — a table, a doctor check, a refusal journal, an evidence query and the job
+type — existed for a single event it correctly declined.
+
+Consequence, blessed and unchanged in direction: deleting anything from Isis's UI no
+longer touches the Mac. Isis drops its copy, the tombstone blocks re-sync, and the Mac
+keeps its master copy — so the only remaining risk direction is that the Mac accumulates
+speechless capture Isis has swept, which costs disk and never audio. Deliberate removal
+from the master archive is a Mac-local act, which is exactly what "protected master
+archive" means. Requirement #1 is completeness, so keeping more is the safe error.
 
 (The capture-mirror transport was upgraded to long-poll 2026-07-16 — intent in ~RTT —
 so the "replace the transport" follow-up is closed; the break-glass CLI still covers an
@@ -374,5 +383,7 @@ Authority is split the way the machines are: the fleet is authoritative for huma
 (it is the only UI), the Mac for ML output. A pulled label is applied as given — unlike
 a *deletion*, there is no independent local evidence to check a name against, and a name
 is reversible (rename; `prune_stale_voiceprints` re-derives enrolment) where a delete is
-not. So the sweep veto stays the security boundary; labels are trusted metadata.
+not. That asymmetry is why labels could always be trusted metadata; the deletion side it
+was contrasted against no longer exists at all (see the sweep entry above), so the
+boundary is now simply that nothing on the network can destroy audio here.
 

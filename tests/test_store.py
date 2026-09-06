@@ -2114,25 +2114,20 @@ def test_settings_roundtrip_and_overwrite() -> None:
 
 
 def test_a_hard_delete_journals_a_tombstone() -> None:
-    # The deletion must cross the Isis split: the tombstone is what the Mac's sweep
-    # pull is served from, and the veto that stops a later push resurrecting it.
+    # The tombstone is the whole of what a deletion travels as now: the veto that
+    # stops a later push resurrecting it. It is a record, not an order — nothing
+    # serves it to a recorder (docs/architecture.md, "Deletion authority").
     store = Store.memory()
     store.add_source(_source())
     audio_id = store.add_audio_segment(_segment())
 
     assert store.is_tombstoned("usb", BASE) is False
     store.delete_audio_segments([audio_id])
-
     assert store.is_tombstoned("usb", BASE) is True
-    (tomb,) = store.pending_sweeps()
-    assert (tomb.source, tomb.start) == ("usb", BASE)
+
     # deleting twice is one fact, not two tombstones
     store.delete_audio_segments([audio_id])
-    assert len(store.pending_sweeps()) == 1
-
-    store.mark_sweep_done(tomb.id)
-    assert store.pending_sweeps() == []
-    assert store.is_tombstoned("usb", BASE) is True  # the veto outlives the sweep
+    assert store.is_tombstoned("usb", BASE) is True
 
 
 def test_deleting_a_source_journals_every_segment() -> None:
@@ -2154,7 +2149,8 @@ def test_deleting_a_source_journals_every_segment() -> None:
             )
         )
     store.delete_source("meeting-1")
-    assert len(store.pending_sweeps()) == 2
+    assert store.is_tombstoned("meeting-1", BASE) is True
+    assert store.is_tombstoned("meeting-1", BASE + timedelta(seconds=60)) is True
 
 
 def test_unmirrored_segments_are_the_processed_unstamped_ones() -> None:
@@ -2182,56 +2178,6 @@ def test_audio_segment_id_at_resolves_the_cross_machine_identity() -> None:
     audio_id = store.add_audio_segment(_segment())
     assert store.audio_segment_id_at("usb", BASE) == audio_id
     assert store.audio_segment_id_at("usb", BASE + timedelta(seconds=1)) is None
-
-
-def test_sweep_evidence_reports_the_macs_own_verdict_on_a_segment() -> None:
-    # The Mac decides whether to honour a fleet sweep from its OWN database, not the
-    # fleet's word: kind, its VAD verdict, and whether a visible turn survives.
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-
-    # Never measured, no turn: kind is captured, but speech_s is still unknown here.
-    e = store.sweep_evidence("usb", BASE)
-    assert e is not None
-    assert e.audio_id == audio_id
-    assert e.kind == SourceKind.COREAUDIO
-    assert e.speech_s is None
-    assert e.has_speech is False
-
-    # Scored speechless: now the sweep bar is cleared.
-    store.set_audio_analysis(audio_id, speech_s=0.0, structure=None)
-    e = store.sweep_evidence("usb", BASE)
-    assert e is not None and e.speech_s == 0.0
-
-    # A surviving turn flips has_speech, however quiet the mean looked.
-    store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=1),
-        text="not idle after all",
-        asr_model="m",
-    )
-    e = store.sweep_evidence("usb", BASE)
-    assert e is not None and e.has_speech is True
-
-
-def test_sweep_evidence_is_none_when_the_segment_is_not_held() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    store.add_audio_segment(_segment())
-    assert store.sweep_evidence("usb", BASE + timedelta(seconds=1)) is None
-
-
-def test_sweep_refusals_are_journaled_once_per_identity_and_counted() -> None:
-    # The doctor's tamper gauge: a refused fleet sweep is kept audio, recorded so it
-    # surfaces; re-serving the same tombstone must not multiply the count.
-    store = Store.memory()
-    assert store.sweep_refusal_count() == 0
-    store.record_sweep_refusal("usb", BASE, "the Mac's VAD measured 4.2s of speech")
-    store.record_sweep_refusal("usb", BASE, "re-served next pass")  # same identity
-    store.record_sweep_refusal("usb", BASE + timedelta(seconds=60), "another")
-    assert store.sweep_refusal_count() == 2
 
 
 def test_register_source_corrects_a_guessed_kind_but_keeps_a_human_name() -> None:

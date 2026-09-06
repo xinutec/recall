@@ -15,15 +15,16 @@ The Mac POLLS those queues (`GET /sync/jobs`) and brings each job home:
   `ab_compare_runs` queue (stamped with the fleet's run id), where the refine daemon
   executes it; each later pass relays the lifecycle back — "running" once started,
   then the report (or error) itself, which is what retires the run on the fleet.
-- **sweep** — a segment deliberately deleted on Isis (a human-confirmed quiet span).
-  A sweep is a *request*, not an order: the Mac holds the protected master archive, so
-  it applies the deletion only when its OWN evidence agrees the audio is speechless
-  idle capture (`speech_s == 0`, no surviving turn, a captured kind). Anything else it
-  refuses and keeps, recording the refusal for the doctor. So a compromised Isis can,
-  at worst, command the removal of audio the Mac itself already scored empty — never
-  real speech, which stays deletable only from this trusted machine.
+There is deliberately NO **sweep** job. Isis used to serve its quiet-review deletions
+as jobs the Mac applied to its master archive, guarded by a veto that honoured one only
+when the Mac's own VAD agreed the audio was speechless. The guard was correct and the
+channel is now gone instead: no network path deletes anything here
+(docs/architecture.md, "Deletion authority"). A quiet-review deletion removes Isis's
+copy and is recorded as a tombstone, which still refuses a later re-push of that
+identity — but it commands nothing. Removing audio from this archive is a Mac-local
+act. In its whole life the channel carried ONE sweep, and the veto refused it.
 
-Refine, upload, and sweep jobs are marked done on Isis only after the local hand-off,
+Refine and upload jobs are marked done on Isis only after the local hand-off,
 so a crash re-serves them (harmlessly: every step is idempotent) rather than dropping
 them; an ab-compare run is retired by its result landing, never by an acknowledgement.
 Control inverts to a Mac-initiated poll for the same reason capture_mirror does.
@@ -44,8 +45,8 @@ from pathlib import Path
 from typing import Protocol
 
 from recall.ids import AudioSegmentId
-from recall.sources import SWEEPABLE_KINDS, AudioSource, SourceKind
-from recall.store_models import AbCompareJob, AskRequestStatus, SweepEvidence
+from recall.sources import AudioSource, SourceKind
+from recall.store_models import AbCompareJob, AskRequestStatus
 from recall.timeline import Segment
 
 _log = logging.getLogger("recall.jobs")
@@ -57,7 +58,6 @@ _REFINE = "refine"
 _UPLOAD = "upload"
 _AB_COMPARE = "ab-compare"
 _ASK = "ask"
-_SWEEP = "sweep"
 
 
 class _Job(Protocol):
@@ -143,10 +143,6 @@ class _LocalStore(Protocol):
         fleet_id: int | None = None,
     ) -> int: ...
     def ab_compare_run_by_fleet_id(self, fleet_id: int) -> AbCompareJob | None: ...
-    def sweep_evidence(self, source: str, start: datetime) -> SweepEvidence | None: ...
-    def record_sweep_refusal(
-        self, source: str, start: datetime, reason: str
-    ) -> None: ...
     def delete_audio_segments(
         self, audio_ids: Sequence[AudioSegmentId]
     ) -> list[str]: ...
@@ -274,65 +270,6 @@ def _bridge_ab_compare(store: _LocalStore, client: _JobClient, job: _Job) -> boo
     return False  # adopted and awaiting the local daemon — nothing to relay yet
 
 
-def _sweep_refusal(evidence: SweepEvidence) -> str | None:
-    """Why the Mac must NOT honour this sweep, or None if it may. The Mac is the
-    protected master archive: a fleet tombstone only earns a deletion when the Mac's
-    own evidence agrees the audio is speechless idle capture — the same bar the quiet
-    review clears before deleting. So a compromised Isis can, at worst, command the
-    removal of audio the Mac itself already scored empty; it can never reach real
-    speech, which stays deletable only from the trusted machine."""
-    if evidence.kind not in SWEEPABLE_KINDS:
-        return f"kind {evidence.kind.value} is never swept (uploaded speech)"
-    if evidence.has_speech:
-        return "a visible turn stands on it"
-    if evidence.speech_s is None:
-        return "the Mac has not measured it speechless yet"
-    if evidence.speech_s > 0.0:
-        return f"the Mac's VAD measured {evidence.speech_s:.1f}s of speech"
-    return None
-
-
-def _apply_sweep(store: _LocalStore, job: _Job) -> None:
-    """Apply a fleet tombstone to this Mac's master archive — but only when the Mac's
-    own database independently justifies it (see `_sweep_refusal`). Identity is
-    (source, start), the same key the push dedupes on.
-
-    Not found locally = already swept or never held; converged. Justified = the same
-    hard delete the local quiet review would do (rows + file), which also journals the
-    Mac's own tombstone so the deletion is now anchored here too. Refused = the audio
-    is KEPT and the refusal recorded for the doctor; a hostile Isis cannot turn a
-    sweep into destruction of real speech. Either way the job is acked by the caller:
-    Isis's own tombstone stops a refused segment being resurrected by a later push, so
-    there's no re-serve loop to keep open."""
-    if job.start is None:
-        raise ValueError(f"sweep job #{job.id} is missing its identity")
-    start = datetime.fromisoformat(job.start)
-    evidence = store.sweep_evidence(job.source, start)
-    if evidence is None:
-        return
-    reason = _sweep_refusal(evidence)
-    if reason is not None:
-        store.record_sweep_refusal(job.source, start, reason)
-        _log.warning(
-            "sweep REFUSED for %s @ %s (fleet tombstone #%s): %s; keeping the "
-            "master copy — real speech is deletable only from this machine",
-            job.source,
-            job.start,
-            job.id,
-            reason,
-        )
-        return
-    paths = store.delete_audio_segments([evidence.audio_id])
-    for p in paths:
-        Path(p).unlink(missing_ok=True)
-    _log.info(
-        "sweep: removed %s @ %s from the master archive (fleet tombstone #%s)",
-        job.source,
-        job.start,
-        job.id,
-    )
-
-
 def run_jobs_once(
     store: _LocalStore, client: _JobClient, *, data_root: Path, limit: int = 50
 ) -> int:
@@ -357,8 +294,6 @@ def run_jobs_once(
                 )
             elif job.type == _UPLOAD:
                 _pull_upload(store, client, data_root, job)
-            elif job.type == _SWEEP:
-                _apply_sweep(store, job)
             elif job.type == _ASK:
                 # A relay, not a hand-off: the job retires when its answer lands, so
                 # there is no mark_done here.

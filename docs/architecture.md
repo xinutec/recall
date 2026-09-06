@@ -88,7 +88,8 @@ The ten questions the proposal had to answer, decided 2026-09-05.
    exactly the audio experiments would run on. The upload protocol itself is
    container-agnostic (the filename carries the extension): a recorder flips
    to FLAC when its capture path does, and delivers what it has meanwhile.
-2. **The sweep veto's job moves to eviction rules + the backup chain.** See
+2. **The sweep veto's job moved to eviction rules + the backup chain** (done
+   2026-09-06: the deletion-order channel is deleted, not merely vetoed). See
    "Deletion authority" below. The short form: a receipt triggers nothing; only
    local cache pressure deletes; the ingest plane has no delete endpoint; Isis's
    copy is behind odin's nightly restic and the Mac's off-site copy of it.
@@ -275,9 +276,11 @@ estimates, to be measured in their stages, with the room builder's measured
 
 ## Deletion authority — what replaces the sweep veto
 
-The fleet's threat model is destruction, not observation. Today the Mac's
-master archive refuses destructive orders from Isis (the sweep veto,
-[isis-migration.md](isis-migration.md)). Isis-as-master redistributes that
+The fleet's threat model is destruction, not observation. The Mac's master
+archive used to refuse destructive orders from Isis (the sweep veto,
+[isis-migration.md](isis-migration.md)); since 2026-09-06 it receives none,
+because the channel was removed rather than guarded — the veto, its refusal
+journal and its doctor check went with it. Isis-as-master redistributes that
 protection rather than dropping it:
 
 - **No network path deletes.** The ingest plane is append-only; recalld

@@ -524,4 +524,19 @@ _MIGRATIONS: tuple[str, ...] = (
         PRIMARY KEY (source_id, name)
     );
     """,
+    # v43 — the sweep-veto journal, dropped with the channel it policed. Isis used to
+    # serve its quiet-review deletions as jobs the Mac applied to the master archive;
+    # this table recorded the ones the Mac refused because its own VAD had measured
+    # speech. The guard was right, and removing the CHANNEL is better than keeping a
+    # guard on it: no network path deletes anything here now (docs/architecture.md,
+    # "Deletion authority"). In its whole life the channel carried one sweep and the
+    # veto refused it, so there is nothing to preserve. `deleted_segments` STAYS — a
+    # tombstone still refuses a re-push, which is a record, not an order.
+    # `swept_utc` goes with them: it recorded "the Mac confirmed its copy is gone",
+    # which is not a fact anything can establish or needs now. What is left on
+    # `deleted_segments` is identity — the veto against a re-push.
+    """
+    DROP TABLE IF EXISTS sweep_refusals;
+    ALTER TABLE deleted_segments DROP COLUMN swept_utc;
+    """,
 )

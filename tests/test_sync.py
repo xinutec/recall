@@ -933,29 +933,6 @@ def _clip(root: Path) -> Path:
     return clip
 
 
-def test_a_deletion_is_served_as_a_sweep_job_until_acknowledged(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # The full relay: a hard delete on the fleet journals a tombstone, /sync/jobs
-    # serves it to the Mac, and the typed acknowledgement retires it.
-    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
-    db = tmp_path / "recall.sqlite"
-    app = FastAPI()
-    register_sync_routes(app, lambda: Store.open(db), tmp_path)
-
-    with TestClient(app) as transport:
-        client = SyncClient("http://fleet", "secret", client=transport)
-        stored = client.push_segment(_segment(n_turns=1))
-        store = Store.open(db)
-        store.delete_audio_segments([AudioSegmentId(stored.audio_segment_id)])
-        store.close()
-
-        (job,) = client.poll_jobs()
-        assert (job.type, job.source, job.start) == ("sweep", "usb", BASE.isoformat())
-        client.mark_done(job.id, job_type="sweep")
-        assert client.poll_jobs() == []
-
-
 def test_the_mac_reads_the_phones_outboxes_off_the_sync_plane(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
