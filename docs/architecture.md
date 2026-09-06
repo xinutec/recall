@@ -136,6 +136,68 @@ The ten questions the proposal had to answer, decided 2026-09-05.
     not a pause button). A stolen recorder can append audio and do nothing
     else, and is revoked individually.
 
+## What must survive — and what is therefore disposable
+
+**DECIDED 2026-09-06 by Pippijn: only the RECORDING has to survive. All
+processing may be changed at will; the product is being REBUILT, not
+transported, and the result does not have to be identical to today's.**
+
+That single sentence changes the shape of every stage below it, so read it
+before the ladder. It replaces "port the Python faithfully" with "keep the
+audio, rebuild the rest", and the difference is most of the remaining work.
+
+**Not re-derivable — these are the system of record:**
+
+| what | rows (2026-09-06) | why it cannot be recomputed |
+|---|---|---|
+| the audio itself | 11 920 segments | requirement #1; a gap is the worst failure |
+| human corrections | 468 | a person listened and typed; the fine-tune corpus and enrolment seed |
+| enrolled speakers + voiceprints | 9 / 958 | seeded from corrections and confirmed turns |
+| vocabulary terms | 5 | hand-managed proper nouns |
+
+⚠ Corrections are NOT "the recording", and they are kept anyway. They are the
+other human input in the system, they cost real time, and #1461 is blocked on
+making more of them. Treat the pair — audio plus what a person said about it —
+as the thing that survives.
+
+**Everything else is a derived view and may be dropped or recomputed:**
+82 235 transcript rows, of which **52 423 are hidden and 11 163 superseded —
+64% is invisible weight** carried by every query, every migration and every
+port; plus 45 639 embeddings, 19 tables and 43 migrations of accreted schema.
+
+Consequences, and they are large:
+
+- **The browsing tier is REBUILT, not ported.** The 8 968 lines of `api_*`,
+  `store`, `store_schema`, `schemas` and `webauth` do not need a faithful
+  translation; recalld gets a clean schema of a handful of tables and the
+  current view, and the history stays behind in the old database.
+- **Byte-parity with the Python stops being a goal.** A parity gate would fail
+  on the first deliberate improvement. The read port was verified against the
+  real archive once (see F1) and the harness was then retired on purpose.
+- **A cut feature needs no port at all.** The fastest route to less Python is
+  deleting surfaces the product no longer has, not translating them.
+
+### Scope of the rebuilt product
+
+**DECIDED 2026-09-06 by Pippijn.** KEPT: the core memory aid — timeline,
+search, playback, correction, speaker attribution — plus **meetings/sessions
+upload** (the Android recorder and its device-token plane).
+
+CUT: **Ask** (LLM Q&A over the archive), **day summaries**, **Compare / A-B**,
+and the **quiet-review** operator surface.
+
+⚠ **Cutting Ask MUST NOT take `llm-host` with it.** The one-holder daemon
+(`recall.llmhost`, 127.0.0.1:8092) is also the model holder for a DIFFERENT
+project — `life/tools/emotion_worker.py` addresses it directly over loopback.
+Deleting it would break life silently, from a change made in this repo for
+unrelated reasons. The daemon and its launchd agent stay; what goes is recall's
+own consumption of it.
+
+⚠ Cutting the quiet review does not mean junk returns to the read path. Under a
+rebuilt schema the sweeps become a filter at derivation time rather than a
+`hidden_reason` column plus a review UI — which is also why 52 423 hidden rows
+need not travel.
+
 ## Components
 
 ### Recorders
@@ -624,6 +686,39 @@ B3 lands.*
   HMAC-signed cookie), static frontend serving; regenerate the Angular
   contract from the Rust types; retire `recall api` and the Python fleet
   image tier.
+
+  *Reads ported 2026-09-06, NOT MOUNTED:* `recalld::reads` serves the
+  `/api/search` and `/api/timeline` shapes from `recall.sqlite`, opened
+  READ-ONLY — recalld does not own the meaning plane and must not be able to
+  write it. Reads went first because a route group that only answers questions
+  cannot destroy anything if it is wrong, and because two implementations of one
+  contract can be DIFFED.
+
+  ⚠ **It is deliberately not on the router yet, and that is a security
+  decision, not an omission.** The browsing plane's promise is a Nextcloud
+  sign-in plus a user allowlist; recalld's read side takes the sync token.
+  Mounting transcripts on recalld before webauth is ported would open a SECOND,
+  WEAKER door to the household's audio. The port lands behind webauth or not at
+  all.
+
+  *Verified once, against the real archive, then the instrument was dropped:* a
+  differential harness asked both implementations the same questions about a
+  SNAPSHOT of the 554 MB archive and diffed the JSON — 10 cases over ~30k visible
+  turns, byte identical. It is not kept, because as of 2026-09-06 the product is
+  being REBUILT rather than transported (see "What must survive" above) and a
+  byte-parity gate would fail on the first deliberate improvement. Two findings
+  from building it are worth more than the harness was:
+  - ⚠ **A live archive cannot be diffed.** Pointed at the real file it reported
+    a difference that was not one: Python read a turn with no speaker, the
+    identify pass wrote a guess onto it, and the second reader saw the guess.
+    Four daemons write that database. Any A/B over it must snapshot first — the
+    same rule the v43 migration test follows.
+  - ⚠ **A case set is only as good as the ROWS IT REACHES.** The first eight
+    cases passed a mutation they should have failed — a confirmed speaker
+    keeping its score, a real contract break — because human labels live in July
+    and August while those cases sampled the newest pages. 555 visible turns
+    carry both a label and a score and not one was being looked at.
+
 - **F2. The Mac joins the recorder contract fully.** Eviction enabled at a
   generous ceiling; the "master archive" title passes to Isis + the backup
   chain, deliberately and last.

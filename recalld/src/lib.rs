@@ -9,6 +9,7 @@ pub mod app;
 pub mod ingest;
 pub mod levels;
 pub mod queue;
+pub mod reads;
 pub mod room;
 pub mod speech;
 pub mod store;
