@@ -213,17 +213,6 @@ describe('Session', () => {
     expect(c.playing()).toBeNull();
   });
 
-  it('nudgeTurn posts the boundary move, then replays the re-sliced clip', async () => {
-    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
-    const { c, ctrl } = await setup([said(1, 'A', 'Pippijn')]);
-    c.selected.set(1);
-    c.nudgeTurn('end', 0.1);
-    const req = ctrl.expectOne('/api/turn/1/nudge');
-    expect(req.request.body).toEqual({ edge: 'end', delta: 0.1 });
-    req.flush({ ok: true });
-    expect(c.playing()).toBe('turn'); // replays so you hear the trimmed clip
-  });
-
   it('stops playback when the view is destroyed (audio must not outlive navigation)', async () => {
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockReturnValue(undefined);

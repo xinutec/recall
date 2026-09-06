@@ -193,16 +193,6 @@
     color: var(--mat-sys-on-surface-variant);
   }
 
-  // Trim controls (nudge a split boundary by ear), set off from the speaker actions.
-  .trim {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.1rem;
-    margin-inline-start: 0.4rem;
-    padding-inline-start: 0.4rem;
-    border-inline-start: 1px solid var(--mat-sys-outline-variant);
-  }
-
   // Introduce a speaker not yet in this session (e.g. a third person) — type a new
   // name (or pick a known one via the datalist) and Enter to assign.
   .new-name {

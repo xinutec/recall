@@ -24,6 +24,18 @@
         <span>{{ item.label }}</span>
       </a>
     }
+    @if (handset()) {
+      <!-- On a phone the stamp lives here, not in a footer: the footer sits in the
+           scrolled column and the bottom nav is fixed over its last 57px, so any
+           page whose content happens to end in that band draws the stamp behind
+           the nav. A menu is an overlay opened deliberately, so it cannot collide. -->
+      <div class="version menu-version" [title]="builtAt">
+        build {{ build.sha }}
+        @if (builtAt) {
+          · {{ builtAt }}
+        }
+      </div>
+    }
   </mat-menu>
   <a routerLink="/" class="brand">
     <mat-icon>graphic_eq</mat-icon>
@@ -103,12 +115,14 @@
 
 <main class="content" [class.with-bottom-nav]="handset()">
   <router-outlet />
-  <footer class="version" [title]="builtAt">
-    build {{ build.sha }}
-    @if (builtAt) {
-      · {{ builtAt }}
-    }
-  </footer>
+  @if (!handset()) {
+    <footer class="version" [title]="builtAt">
+      build {{ build.sha }}
+      @if (builtAt) {
+        · {{ builtAt }}
+      }
+    </footer>
+  }
 </main>
 
 @if (handset()) {

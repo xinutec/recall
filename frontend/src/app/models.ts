@@ -244,11 +244,6 @@ export interface AssignSpanRequest {
   readonly name: string;
 }
 
-export interface NudgeRequest {
-  readonly edge: string;
-  readonly delta: number;
-}
-
 export interface RefineRequest {
   readonly source: string;
   readonly start: string;

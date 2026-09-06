@@ -221,39 +221,8 @@
     <p class="text">
       <span class="t" [attr.data-id]="t.id" [attr.data-source]="t.source">{{ t.text }}</span>
     </p>
-    @if (isPlayed(t) || isTrimming(t)) {
+    @if (isPlayed(t)) {
       <audio controls autoplay preload="none" [src]="audioSrc(t)"></audio>
-    }
-    @if (isTrimming(t)) {
-      <div class="trim" role="toolbar">
-        <span class="hint">start</span>
-        <button matIconButton aria-label="start 0.5s earlier" (click)="nudgeTurn(t, 'start', -0.5)">
-          <mat-icon>keyboard_double_arrow_left</mat-icon>
-        </button>
-        <button matIconButton aria-label="start 0.1s earlier" (click)="nudgeTurn(t, 'start', -0.1)">
-          <mat-icon>chevron_left</mat-icon>
-        </button>
-        <button matIconButton aria-label="start 0.1s later" (click)="nudgeTurn(t, 'start', 0.1)">
-          <mat-icon>chevron_right</mat-icon>
-        </button>
-        <button matIconButton aria-label="start 0.5s later" (click)="nudgeTurn(t, 'start', 0.5)">
-          <mat-icon>keyboard_double_arrow_right</mat-icon>
-        </button>
-        <span class="hint">end</span>
-        <button matIconButton aria-label="end 0.5s earlier" (click)="nudgeTurn(t, 'end', -0.5)">
-          <mat-icon>keyboard_double_arrow_left</mat-icon>
-        </button>
-        <button matIconButton aria-label="end 0.1s earlier" (click)="nudgeTurn(t, 'end', -0.1)">
-          <mat-icon>chevron_left</mat-icon>
-        </button>
-        <button matIconButton aria-label="end 0.1s later" (click)="nudgeTurn(t, 'end', 0.1)">
-          <mat-icon>chevron_right</mat-icon>
-        </button>
-        <button matIconButton aria-label="end 0.5s later" (click)="nudgeTurn(t, 'end', 0.5)">
-          <mat-icon>keyboard_double_arrow_right</mat-icon>
-        </button>
-        <button matButton (click)="stopTrim()">Done</button>
-      </div>
     }
   </article>
 </ng-template>
@@ -270,12 +239,6 @@
 
 <mat-menu #actionsMenu>
   <ng-template matMenuContent let-t="t">
-    <button mat-menu-item (click)="startTrim(t)">
-      <mat-icon>content_cut</mat-icon> Trim audio
-    </button>
-    <a mat-menu-item [routerLink]="['/train']" [queryParams]="{ id: t.id }">
-      <mat-icon>tune</mat-icon> Label in Train
-    </a>
     <a mat-menu-item [routerLink]="['/review']" [queryParams]="{ ids: t.id }">
       <mat-icon>link</mat-icon> Open · copy link
     </a>

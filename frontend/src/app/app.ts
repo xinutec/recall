@@ -70,7 +70,6 @@ export class App {
   protected readonly nav: readonly NavItem[] = [
     { path: '/', label: 'Timeline', icon: 'forum', exact: true },
     { path: '/sessions', label: 'Sessions', icon: 'event', exact: false },
-    { path: '/train', label: 'Train', icon: 'school', exact: false },
     { path: '/search', label: 'Search', icon: 'search', exact: false },
   ];
 

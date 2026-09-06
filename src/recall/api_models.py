@@ -105,11 +105,6 @@ class AssignSpanIn(BaseModel):
     name: str
 
 
-class NudgeIn(BaseModel):
-    edge: str  # "start" | "end"
-    delta: float  # seconds, signed (negative = earlier, positive = later)
-
-
 class RefineRequestIn(BaseModel):
     source: str
     start: str  # ISO 8601

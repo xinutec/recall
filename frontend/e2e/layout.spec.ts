@@ -136,11 +136,6 @@ test('finalizing banner keeps its icon whole', async ({ page }, testInfo) => {
 
 const LONG = 'a considerably longer stretch of household conversation that would overflow a phone column if the layout ever stopped wrapping it correctly';
 
-const trainItems = {
-  items: [turn(11, 'Pippijn', 'SPEAKER_01', LONG), turn(12, 'Alex', 'SPEAKER_02', 'Short.')],
-  corrections: 468,
-};
-
 const reviewItems = { items: [turn(21, 'Pippijn', 'SPEAKER_01', LONG)] };
 
 const searchItems = { items: [turn(31, 'Alex', 'SPEAKER_02', LONG)] };
@@ -178,7 +173,6 @@ const sessionsList = {
 
 
 const screenMocks: Record<string, unknown> = {
-  '/api/train': trainItems,
   '/api/review': reviewItems,
   '/api/search': searchItems,
   '/api/corrections': correctionsList,
@@ -194,7 +188,6 @@ const screens: { path: string; anchor: string }[] = [
   { path: '/', anchor: '.turns' },
   { path: '/search', anchor: '.search-field' },
   { path: '/review', anchor: '.page' },
-  { path: '/train', anchor: '.page' },
   { path: '/labels', anchor: '.vocab' },
   { path: '/sessions', anchor: '.page' },
 ];

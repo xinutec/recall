@@ -77,13 +77,16 @@ describe('App', () => {
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('.brand')?.textContent).toContain('recall');
     const links = [...el.querySelectorAll('.links a')];
-    expect(links.length).toBe(4);
+    expect(links.length).toBe(3);
     const navText = el.querySelector('.links')?.textContent ?? '';
-    for (const label of ['Timeline', 'Sessions', 'Train', 'Search']) {
+    for (const label of ['Timeline', 'Sessions', 'Search']) {
       expect(navText).toContain(label);
     }
-    // Ask and Compare were cut with the product's scope (architecture.md).
+    // Ask, Compare and Train were cut with the product's scope (architecture.md).
+    // A tab outliving its route is silent: the router falls through to '' and the
+    // page just looks wrong, so name each cut one here.
     expect(navText).not.toContain('Ask');
+    expect(navText).not.toContain('Train');
   });
 
   it('hamburger menu holds the secondary pages (Labels)', async () => {
@@ -104,6 +107,11 @@ describe('App', () => {
   it('shows the build stamp so a stale cache is visible at a glance', async () => {
     const { fixture } = setup();
     await fixture.whenStable();
+    // Desktop width here (jsdom does not match the handset breakpoint), so the stamp
+    // is the page footer. On a phone it moves into the overflow menu instead: the
+    // fixed bottom nav is drawn over the end of the scrolled column, so any page
+    // ending in that band drew the stamp behind it. The layout harness caught that,
+    // not this test — geometry is not something jsdom can see.
     const footer = (fixture.nativeElement as HTMLElement).querySelector('.version');
     expect(footer?.textContent).toContain(BUILD_INFO.sha);
   });

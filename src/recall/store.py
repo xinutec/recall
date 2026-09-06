@@ -19,14 +19,13 @@ import json
 import sqlite3
 from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
 
 from recall.asr import Word
 from recall.capture_control import CaptureEventKind
 from recall.ids import AudioSegmentId, CorrectionId, SpeakerId, TranscriptId
-from recall.ranking import normalize_text
 from recall.sources import AudioSource, SourceKind, SourceRow
 from recall.store_models import (
     CaptureEvent,
@@ -111,9 +110,9 @@ RECONCILED_MARKER = "live-reconciled"
 def human_correction_provenance(original_id: int) -> str:
     """Provenance stamped on the human turn that replaces `original_id`.
 
-    Written by review.apply_correction and MATCHED by set_correction_speaker /
-    nudge_correction to find that live turn again — one function, so the writer
-    and the matchers can never drift apart.
+    Written by review.apply_correction and MATCHED by set_correction_speaker to
+    find that live turn again — one function, so the writer and the matcher can
+    never drift apart.
     """
     return f"human correction of #{original_id}"
 
@@ -1389,42 +1388,6 @@ class Store:
         ).fetchone()
         return row is not None
 
-    def media_spans(
-        self, *, max_gap_s: float, min_duration_s: float
-    ) -> list[tuple[datetime, datetime]]:
-        """Long, dense runs of back-to-back turns — likely TV/film, not the family.
-
-        A run is consecutive current turns with gaps <= max_gap_s; runs lasting
-        >= min_duration_s are returned. Used to deprioritise media in the labeling
-        queue (a 2-hour movie is one span; real conversation is burstier/shorter).
-        """
-        rows = self._conn.execute(
-            """SELECT start_utc, end_utc FROM transcript_segments
-               WHERE superseded_by IS NULL AND hidden_reason IS NULL
-               ORDER BY start_utc"""
-        ).fetchall()
-        spans: list[tuple[datetime, datetime]] = []
-        run_start: datetime | None = None
-        run_end: datetime | None = None
-        for r in rows:
-            s = datetime.fromisoformat(r["start_utc"])
-            e = datetime.fromisoformat(r["end_utc"])
-            if run_start is None or run_end is None:
-                run_start, run_end = s, e
-            elif (s - run_end).total_seconds() <= max_gap_s:
-                run_end = max(run_end, e)
-            else:
-                if (run_end - run_start).total_seconds() >= min_duration_s:
-                    spans.append((run_start, run_end))
-                run_start, run_end = s, e
-        if (
-            run_start is not None
-            and run_end is not None
-            and (run_end - run_start).total_seconds() >= min_duration_s
-        ):
-            spans.append((run_start, run_end))
-        return spans
-
     def record_split(self, old_id: int, new_ids: list[int]) -> None:
         """Replace one turn with several derived ones (split into speakers).
 
@@ -1968,56 +1931,6 @@ class Store:
         ).fetchone()
         return None if row is None else _row_to_segment(row)
 
-    def training_queue(  # noqa: PLR0913 - filter band + window + ordering knobs
-        self,
-        *,
-        min_confidence: float,
-        max_confidence: float,
-        limit: int = 40,
-        since: datetime | None = None,
-        until: datetime | None = None,
-        order: str = "loudness",
-    ) -> list[TranscriptSegment]:
-        """Audible-but-uncertain machine turns for labeling, within a confidence
-        band (above `min_confidence`, below `max_confidence`; NULL excluded) and an
-        optional [`since`, `until`) time window.
-
-        `order` picks how the cap selects candidates — "loudness" (loudest/clearest
-        first; the labeling default, so a busy window's clear audio isn't crowded
-        out by merely-confident quiet turns) or "time" (oldest first, to read a
-        conversation in sequence). Unmeasured loudness sorts last, then confidence.
-        """
-        sql = [
-            "SELECT * FROM transcript_segments",
-            "WHERE superseded_by IS NULL AND hidden_reason IS NULL",
-            "AND asr_model != ? AND audio_segment_id IS NOT NULL",
-            "AND asr_confidence IS NOT NULL",
-            "AND asr_confidence >= ? AND asr_confidence < ?",
-            # No backchannels: sub-2s or few-word turns are poor ASR training
-            # labels (padded to Whisper's 30s window they teach early-EOS), so
-            # the labeling queue doesn't offer them. Word count approximated by
-            # space count; still correctable from the timeline/session views.
-            "AND (julianday(end_utc) - julianday(start_utc)) * 86400 >= 2.0",
-            "AND length(text) - length(replace(text, ' ', '')) >= 3",
-        ]
-        params: list[str | float | int] = [HUMAN_MODEL, min_confidence, max_confidence]
-        if since is not None:
-            sql.append("AND start_utc >= ?")
-            params.append(since.isoformat())
-        if until is not None:
-            sql.append("AND start_utc < ?")
-            params.append(until.isoformat())
-        if order == "time":
-            sql.append("ORDER BY start_utc ASC LIMIT ?")
-        else:
-            sql.append(
-                "ORDER BY (loudness IS NULL), loudness DESC, "
-                "asr_confidence DESC, start_utc DESC LIMIT ?"
-            )
-        params.append(limit)
-        rows = self._conn.execute(" ".join(sql), params).fetchall()
-        return [_row_to_segment(row) for row in rows]
-
     def set_loudness(self, segment_id: int, value: float) -> None:
         """Persist a turn's measured loudness (speech_level) so the labeling queue
         can rank by it without re-decoding the audio on the request path.
@@ -2198,45 +2111,6 @@ class Store:
         self._conn.execute(
             "UPDATE transcript_segments SET speaker_label = ? WHERE id = ?",
             (name, segment_id),
-        )
-        self._commit()
-
-    def nudge_turn(self, segment_id: int, edge: str, delta: float) -> None:
-        """Move one edge ('start'/'end') of a turn by `delta` seconds (signed), clamped
-        to the audio segment and a 0.1s minimum span — hand-tune a split boundary by ear
-        when the aligner's cut is slightly off. Playback follows the span, so the bubble
-        then plays exactly the trimmed audio.
-        """
-        turn = self.get_transcript(segment_id)
-        if turn is None or turn.audio_segment_id is None:
-            return
-        seg = self.audio_segment(turn.audio_segment_id)
-        if seg is None:
-            return
-        min_span = timedelta(seconds=0.1)
-        start, end = turn.start, turn.end
-        shift = timedelta(seconds=delta)
-        if edge == "start":
-            start = max(seg.start, min(turn.start + shift, end - min_span))
-        elif edge == "end":
-            end = min(seg.end, max(turn.end + shift, start + min_span))
-        else:
-            return
-        # Word timings are stored relative to the turn START, so a start trim
-        # shifts every word by the trim; words that fall outside the new span are
-        # dropped (their audio is no longer part of the turn) and boundary words
-        # are clipped. Without this, every later audio-exact split and tight
-        # playback would be off by exactly the trim.
-        words = _rebase_word_timings(
-            turn.word_timings,
-            shift=(turn.start - start).total_seconds(),
-            duration=(end - start).total_seconds(),
-        )
-        self._conn.execute(
-            """UPDATE transcript_segments
-               SET start_utc = ?, end_utc = ?, word_timings = ?
-               WHERE id = ?""",
-            (start.isoformat(), end.isoformat(), _dump_word_timings(words), segment_id),
         )
         self._commit()
 
@@ -2439,15 +2313,6 @@ class Store:
             "SELECT count(*) AS n FROM corrections WHERE hidden_reason IS NULL"
         ).fetchone()
         return int(row["n"])
-
-    def corrected_texts(self) -> set[str]:
-        """Normalised texts already in the corpus — the labelling queue uses this
-        to deprioritise re-labelling a phrase that's already been taught.
-        """
-        rows = self._conn.execute(
-            "SELECT corrected_text FROM corrections WHERE hidden_reason IS NULL"
-        ).fetchall()
-        return {normalize_text(str(r["corrected_text"])) for r in rows}
 
     def corrections_by_speaker(self) -> dict[str, int]:
         """How many labelled fragments exist per speaker (untagged under "").
@@ -2719,47 +2584,6 @@ class Store:
                     human_correction_provenance(int(row["transcript_segment_id"])),
                     HUMAN_MODEL,
                 ),
-            )
-        self._conn.execute(
-            "DELETE FROM speaker_embeddings WHERE source_correction_id = ?",
-            (correction_id,),
-        )
-        self._commit()
-
-    def nudge_correction(self, correction_id: int, edge: str, delta: float) -> None:
-        """Move one boundary of a label by `delta` seconds (signed) — clamped to
-        the audio segment and a 0.1s minimum span. Updates the corpus pair, the
-        live segment, and drops the voiceprint so it re-enrols from the new span.
-        """
-        frag = self.get_correction(correction_id)
-        if frag is None or frag.audio_segment_id is None:
-            return
-        seg = self.audio_segment(frag.audio_segment_id)
-        if seg is None:
-            return
-        min_span = timedelta(seconds=0.1)
-        start, end = frag.start, frag.end
-        shift = timedelta(seconds=delta)
-        if edge == "start":
-            start = max(seg.start, min(frag.start + shift, end - min_span))
-        elif edge == "end":
-            end = min(seg.end, max(frag.end + shift, start + min_span))
-        else:
-            return
-        self._conn.execute(
-            "UPDATE corrections SET start_utc = ?, end_utc = ? WHERE id = ?",
-            (start.isoformat(), end.isoformat(), correction_id),
-        )
-        row = self._conn.execute(
-            "SELECT transcript_segment_id FROM corrections WHERE id = ?",
-            (correction_id,),
-        ).fetchone()
-        if row is not None:
-            prov = human_correction_provenance(int(row["transcript_segment_id"]))
-            self._conn.execute(
-                """UPDATE transcript_segments SET start_utc = ?, end_utc = ?
-                   WHERE provenance = ? AND asr_model = ? AND superseded_by IS NULL""",
-                (start.isoformat(), end.isoformat(), prov, HUMAN_MODEL),
             )
         self._conn.execute(
             "DELETE FROM speaker_embeddings WHERE source_correction_id = ?",

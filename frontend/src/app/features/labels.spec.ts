@@ -88,28 +88,6 @@ describe('Labels', () => {
     expect(c.audioSrc(label)).toBe('/api/correction/5/audio?context=true');
   });
 
-  it('nudging a boundary calls the API and re-fetches the clip', () => {
-    const nudgeCorrection = vi.fn(() => of({ ok: true }));
-    TestBed.configureTestingModule({
-      providers: [
-        provideZonelessChangeDetection(),
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        { provide: Router, useValue: { navigate: vi.fn() } },
-        { provide: ActivatedRoute, useValue: {} },
-        { provide: RecallApi, useValue: { nudgeCorrection } },
-        { provide: MatSnackBar, useValue: { open: vi.fn() } },
-      ],
-    });
-    const fixture = TestBed.createComponent(Labels);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const c = fixture.componentInstance as any;
-    const label = { audioUrl: '/api/correction/9/audio' };
-    c.nudge(9, 'start', -0.1); // widen: start earlier
-    expect(nudgeCorrection).toHaveBeenCalledWith(9, 'start', -0.1);
-    expect(c.audioSrc(label)).toBe('/api/correction/9/audio?v=1'); // cache-bust → re-fetch
-  });
-
   it('reports a failed re-tag via the snackbar (not silently)', () => {
     const open = vi.fn();
     const reassignCorrection = vi.fn(() => throwError(() => new Error('nope')));

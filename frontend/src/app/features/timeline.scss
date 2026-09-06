@@ -290,21 +290,6 @@ audio {
   padding: 0.1rem 0.25rem 0.3rem;
 }
 
-// Per-turn trim row (nudge the audio boundary by ear), under the player.
-.trim {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.1rem;
-  margin-top: 0.25rem;
-
-  .hint {
-    font: var(--mat-sys-body-small);
-    color: var(--mat-sys-on-surface-variant);
-    margin-inline: 0.2rem;
-  }
-}
-
 // Sticky bar that opens when a phrase is selected — split it onto another speaker.
 .assign-bar {
   position: sticky;

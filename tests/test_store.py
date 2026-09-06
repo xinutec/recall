@@ -654,76 +654,6 @@ def test_recent_transcripts_excludes_superseded() -> None:
     assert [r.text for r in store.recent_transcripts()] == ["new"]
 
 
-def test_training_queue_is_an_audible_band_clearest_first() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-
-    def turn(conf: float | None, text: str) -> int:
-        # 3s / 4 words: clear of the backchannel filter — the band is the point.
-        return store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE,
-            end=BASE + timedelta(seconds=3),
-            text=text,
-            asr_model="v1",
-            asr_confidence=conf,
-        )
-
-    turn(0.10, "unintelligible far field mumble")  # below floor -> excluded
-    turn(0.50, "uncertain mid band turn")  # in band
-    turn(0.80, "fairly clear spoken sentence")  # in band
-    turn(0.97, "near certain crisp words")  # above ceiling -> excluded
-    turn(None, "no confidence at all")  # NULL -> excluded
-
-    rows = store.training_queue(min_confidence=0.35, max_confidence=0.9, limit=10)
-    # only the band, clearest first
-    assert [r.text for r in rows] == [
-        "fairly clear spoken sentence",
-        "uncertain mid band turn",
-    ]
-
-
-def test_training_queue_loudness_order_beats_confidence() -> None:
-    # The candidate cap must not let confidence smuggle out loud turns: a loud but
-    # low-confidence turn should rank ABOVE a quiet high-confidence one.
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-
-    def turn(conf: float, text: str, at: float) -> int:
-        # 3s / 4+ words: clear of the backchannel filter — ordering is the point.
-        return store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=at),
-            end=BASE + timedelta(seconds=at + 3),
-            text=text,
-            asr_model="v1",
-            asr_confidence=conf,
-        )
-
-    quiet_confident = turn(0.90, "quiet but very confident", 10.0)
-    loud_unsure = turn(0.50, "loud but quite unsure", 20.0)
-    store.set_loudness(quiet_confident, 0.02)
-    store.set_loudness(loud_unsure, 0.40)
-
-    loud = store.training_queue(
-        min_confidence=0.30, max_confidence=0.95, limit=10, order="loudness"
-    )
-    assert [r.text for r in loud] == [
-        "loud but quite unsure",
-        "quiet but very confident",
-    ]
-
-    chrono = store.training_queue(
-        min_confidence=0.30, max_confidence=0.95, limit=10, order="time"
-    )
-    assert [r.text for r in chrono] == [
-        "quiet but very confident",
-        "loud but quite unsure",
-    ]
-
-
 def test_corrections_by_speaker_counts_each_voice() -> None:
     # The labelling UI needs per-voice counts to keep the corpus balanced across
     # the three speakers; untagged corrections fall under "".
@@ -804,69 +734,6 @@ def test_review_list_reassign_and_hide_corrections() -> None:
     assert cid_a not in {f.correction_id for f in store.list_corrections()}
 
 
-def test_nudge_correction_span_extends_and_clamps() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment(dur_s=60.0))  # BASE .. BASE+60s
-    seg = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=10),
-        end=BASE + timedelta(seconds=11),
-        text="x",
-        asr_model="v1",
-        asr_confidence=0.5,
-    )
-    cid = store.add_correction(
-        transcript_segment_id=seg,
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=10),
-        end=BASE + timedelta(seconds=11),
-        original_text="x",
-        corrected_text="hi",
-        language="nl",
-        created=BASE,
-        speaker="Carol",
-    )
-
-    store.nudge_correction(cid, "start", -0.5)  # start 0.5s earlier (widen)
-    store.nudge_correction(cid, "end", 0.5)  # end 0.5s later (widen)
-    frag = store.get_correction(cid)
-    assert frag is not None
-    assert (frag.start - BASE).total_seconds() == 9.5
-    assert (frag.end - BASE).total_seconds() == 11.5
-
-    store.nudge_correction(cid, "start", -100)  # can't go before the audio start
-    frag = store.get_correction(cid)
-    assert frag is not None
-    assert frag.start == BASE  # clamped to the segment start
-
-
-def test_nudge_turn_moves_one_edge_clamped() -> None:
-    # Hand-tune a split boundary by ear: move start/end, clamped to the audio segment
-    # and a 0.1s minimum span.
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment(dur_s=100.0))
-    tid = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=10),
-        end=BASE + timedelta(seconds=12),
-        text="x",
-        asr_model="diarized",
-    )
-    store.nudge_turn(tid, "start", -0.5)  # pull the start 0.5s earlier
-    t = store.get_transcript(tid)
-    assert t is not None
-    assert t.start == BASE + timedelta(seconds=9.5)
-    assert t.end == BASE + timedelta(seconds=12)
-    store.nudge_turn(tid, "end", 0.5)  # push the end 0.5s later
-    t = store.get_transcript(tid)
-    assert t is not None and t.end == BASE + timedelta(seconds=12.5)
-    store.nudge_turn(tid, "start", 100)  # would cross the end — clamped to min span
-    t = store.get_transcript(tid)
-    assert t is not None and t.end - t.start == timedelta(seconds=0.1)
-
-
 def test_voiceprint_queue_offers_human_labelled_turns_gated() -> None:
     # Voiceprints derive from current human-labelled turns (speaker_label = a real
     # name), covering session-view assigns, not just text corrections. Each is offered
@@ -934,33 +801,6 @@ def test_prune_retires_replaced_and_stale_voiceprints() -> None:
     assert set(profiles) == {"Alice", "Dana"}
     # Legacy Alice retired; one turn-sourced print left.
     assert len(profiles["Alice"]) == 1
-
-
-def test_media_spans_finds_long_dense_runs() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment(dur_s=2000.0))
-
-    def turn(at: float, dur: float = 2.0) -> None:
-        store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=at),
-            end=BASE + timedelta(seconds=at + dur),
-            text="x",
-            asr_model="v1",
-        )
-
-    # a 10-minute dense run (back-to-back every 3s) = media
-    for i in range(200):
-        turn(i * 3.0)
-    # a short isolated conversation later (gap > max_gap, short) = not media
-    turn(2000.0)
-    turn(2010.0)
-
-    spans = store.media_spans(max_gap_s=20.0, min_duration_s=480.0)
-    assert len(spans) == 1
-    start, end = spans[0]
-    assert (end - start).total_seconds() >= 480.0
 
 
 def test_add_source_is_idempotent() -> None:
@@ -1618,83 +1458,6 @@ def test_audio_segments_in_range_returns_only_overlapping() -> None:
     assert set(got) == {a, b}
 
 
-def test_nudge_turn_rebases_word_timings_with_the_start_edge() -> None:
-    # Word timings are stored relative to the turn START. Trimming the start edge
-    # moves that base — without re-basing, every later audio-exact split and tight
-    # playback is off by exactly the trim.
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    tid = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=10),
-        end=BASE + timedelta(seconds=13),
-        text="one two three",
-        asr_model="m",
-        word_timings=[
-            Word(0.0, 1.0, " one", 1.0),
-            Word(1.0, 2.0, " two", 1.0),
-            Word(2.0, 3.0, " three", 1.0),
-        ],
-    )
-
-    store.nudge_turn(tid, "start", 1.5)  # start moves +1.5s (into "two")
-
-    seg = store.get_transcript(tid)
-    assert seg is not None
-    assert seg.word_timings is not None
-    # " one" is entirely before the new start -> dropped; " two" is clipped to the
-    # new base; " three" shifts by -1.5.
-    assert [w.text for w in seg.word_timings] == [" two", " three"]
-    spans = [(w.start, w.end) for w in seg.word_timings]
-    assert spans == [(0.0, 0.5), (0.5, 1.5)]
-
-
-def test_nudge_turn_end_trim_drops_words_beyond_the_new_end() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    tid = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=10),
-        end=BASE + timedelta(seconds=13),
-        text="one two three",
-        asr_model="m",
-        word_timings=[
-            Word(0.0, 1.0, " one", 1.0),
-            Word(1.0, 2.0, " two", 1.0),
-            Word(2.0, 3.0, " three", 1.0),
-        ],
-    )
-
-    store.nudge_turn(tid, "end", -1.5)  # end moves -1.5s (into "two")
-
-    seg = store.get_transcript(tid)
-    assert seg is not None
-    assert seg.word_timings is not None
-    assert [w.text for w in seg.word_timings] == [" one", " two"]
-    spans = [(w.start, w.end) for w in seg.word_timings]
-    assert spans == [(0.0, 1.0), (1.0, 1.5)]  # " two" clipped at the new end
-
-
-def test_nudge_turn_without_word_timings_still_moves_the_edge() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    tid = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=10),
-        end=BASE + timedelta(seconds=13),
-        text="x",
-        asr_model="m",
-    )
-    store.nudge_turn(tid, "start", 1.0)
-    seg = store.get_transcript(tid)
-    assert seg is not None
-    assert seg.start == BASE + timedelta(seconds=11)
-    assert seg.word_timings is None
-
-
 def test_file_backed_store_uses_wal(tmp_path: Path) -> None:
     # WAL lets the six concurrent agents read while one writes; the default
     # rollback journal made readers block on every writer commit.
@@ -1784,34 +1547,6 @@ def test_migration_backfills_correction_audio_confidence(tmp_path: Path) -> None
     ).fetchone()
     store.close()
     assert row[0] == 0.42
-
-
-def test_training_queue_skips_backchannels() -> None:
-    # Labeling effort should go to contentful turns: sub-2s or few-word turns are
-    # not offered by the queue (they're poor ASR training data). They stay fully
-    # correctable from the timeline/session views.
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-
-    def turn(at: float, dur: float, text: str) -> int:
-        seg_id = store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=at),
-            end=BASE + timedelta(seconds=at + dur),
-            text=text,
-            asr_model="whisper",
-            asr_confidence=0.5,
-        )
-        store.set_loudness(seg_id, 0.05)
-        return seg_id
-
-    turn(0, 1.2, "Yeah okay good sure")  # too short
-    turn(5, 4.0, "Yes. No.")  # too few words
-    keeper = turn(10, 4.0, "the plumber is coming on Thursday")
-
-    queued = store.training_queue(min_confidence=0.3, max_confidence=0.9)
-    assert [t.id for t in queued] == [keeper]
 
 
 def test_delete_source_removes_all_derived_rows_and_returns_paths() -> None:

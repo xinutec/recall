@@ -183,6 +183,13 @@
   font-variant-numeric: tabular-nums;
   opacity: 0.4;
   user-select: text;
+
+  // Inside the overflow menu it is a caption, not a page footer.
+  &.menu-version {
+    margin-block-start: 0;
+    padding: 0.5rem 1rem;
+    white-space: nowrap;
+  }
 }
 
 // Material 3 bottom navigation bar (no shipped component yet — minimal markup).

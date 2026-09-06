@@ -367,30 +367,10 @@ export class Session implements OnDestroy {
     });
   }
 
-  // Bumped after each boundary nudge so the <audio> re-fetches the (now re-sliced) clip
-  // — same turn id, different span, so the URL must change to dodge the cache.
-  private nudgeVersion = 0;
-
   /** Play / stop the tapped turn — hear who said it before assigning. */
   protected playSelected(): void {
     const id = this.selected();
-    if (id !== null) this.play('turn', `/api/audio/${id}?v=${this.nudgeVersion}`);
-  }
-
-  /** Hand-tune the selected turn's boundary by ear: move an edge, then replay so you
-   * hear the trimmed clip. Whisper gives the first cut; this nudges it ±0.1s. */
-  protected nudgeTurn(edge: 'start' | 'end', delta: number): void {
-    const id = this.selected();
-    if (id === null) return;
-    this.api.nudgeTurn(id, edge, delta).subscribe({
-      next: () => {
-        this.nudgeVersion++;
-        this.data.reload();
-        this.playing.set(null); // don't toggle-pause — start the new clip fresh
-        this.playSelected();
-      },
-      error: () => this.fail(),
-    });
+    if (id !== null) this.play('turn', `/api/audio/${id}`);
   }
 
   // Which turn is being text-edited (null = none) — fixing the *words*, a separate

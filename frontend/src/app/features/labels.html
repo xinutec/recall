@@ -93,42 +93,6 @@
         </div>
         <p class="text">{{ label.text }}</p>
         <audio controls preload="none" [src]="audioSrc(label)"></audio>
-        <div class="trim">
-          <span class="lbl">Start</span>
-          <button
-            matIconButton
-            (click)="nudge(label.id, 'start', -0.1)"
-            matTooltip="start earlier"
-            aria-label="start earlier"
-          >
-            <mat-icon>chevron_left</mat-icon>
-          </button>
-          <button
-            matIconButton
-            (click)="nudge(label.id, 'start', 0.1)"
-            matTooltip="start later"
-            aria-label="start later"
-          >
-            <mat-icon>chevron_right</mat-icon>
-          </button>
-          <span class="lbl">End</span>
-          <button
-            matIconButton
-            (click)="nudge(label.id, 'end', -0.1)"
-            matTooltip="end earlier"
-            aria-label="end earlier"
-          >
-            <mat-icon>chevron_left</mat-icon>
-          </button>
-          <button
-            matIconButton
-            (click)="nudge(label.id, 'end', 0.1)"
-            matTooltip="end later"
-            aria-label="end later"
-          >
-            <mat-icon>chevron_right</mat-icon>
-          </button>
-        </div>
         <div class="actions">
           <span class="lbl">Re-tag:</span>
           @for (name of speakers(); track name) {

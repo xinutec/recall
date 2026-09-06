@@ -412,9 +412,6 @@ def test_backfill_loudness_fills_the_cache_offline(tmp_path: Path) -> None:
     measured = loudness.backfill_loudness(store)
     assert measured == 5
     assert store.segments_missing_loudness() == []
-    # Every turn now has a cached loudness (the 440Hz tone is audible → > 0).
-    queued = store.training_queue(min_confidence=0.3, max_confidence=0.95, limit=40)
-    assert all(s.loudness is not None for s in queued)
     store.close()
 
 
@@ -818,72 +815,6 @@ def test_session_transcript_endpoint_exports_clean_coalesced(
     assert [t["speaker"] for t in out["turns"]] == ["Pippijn", "Dr. Adams"]
     assert out["turns"][0]["text"] == "Hi. Yes."
     assert out["date"] == out["turns"][0]["start"]
-
-
-def test_turn_nudge_route_reads_a_json_body_and_moves_the_edge(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Regression: POST /api/turn/{id}/nudge must read {edge,delta} as a JSON *body*. A
-    forward-ref ordering bug (NudgeIn defined after the route, under
-    `from __future__ import annotations`) once made FastAPI treat `body` as a query
-    param → 422. Exercised over HTTP because that resolution only happens there."""
-    flac = tmp_path / "usb-20260613T120000.flac"
-    make_flac(flac, 30.0)
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(
-        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="usb",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=30),
-            path=str(flac),
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-    turn_id = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=5),
-        end=BASE + timedelta(seconds=7),
-        text="Ja.",
-        asr_model="whisper",
-        language="nl",
-        asr_confidence=0.5,
-    )
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    client = TestClient(api.app)
-    r = client.post(f"/api/turn/{turn_id}/nudge", json={"edge": "start", "delta": -1.0})
-    assert r.status_code == 200  # body read as JSON, not demanded as a query param
-
-    store = Store.open(tmp_path / "recall.sqlite")
-    moved = next(t for t in store.session_turns("usb") if t.id == turn_id)
-    store.close()
-    assert moved.start == BASE + timedelta(seconds=4)  # start pulled 1s earlier
-
-
-def test_malformed_time_is_a_400_not_a_500(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # A bad ISO time is a client mistake: every endpoint that parses one must
-    # answer 400, never let the ValueError escape as a 500. (Guarded by
-    # dev-lint's DL-FASTAPI-UNGUARDED-PARSE.)
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-    client = TestClient(api.app)
-
-    assert client.get("/api/timeline?before=not-a-time").status_code == 400
-    assert client.get("/api/conversations?after=not-a-time").status_code == 400
-    refine = client.post(
-        "/api/refine", json={"source": "usb", "start": "not-a-time", "end": "x"}
-    )
-    assert refine.status_code == 400
-
-
-# --- meeting upload + management (Sessions page) --------------------------------
 
 
 def _upload_meeting(

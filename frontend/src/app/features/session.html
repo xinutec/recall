@@ -180,22 +180,6 @@
         <button matButton (click)="editText()">
           <mat-icon>edit</mat-icon> Fix words
         </button>
-        <span class="trim">
-          <span class="hint">trim start</span>
-          <button matIconButton (click)="nudgeTurn('start', -0.1)" aria-label="start earlier">
-            <mat-icon>chevron_left</mat-icon>
-          </button>
-          <button matIconButton (click)="nudgeTurn('start', 0.1)" aria-label="start later">
-            <mat-icon>chevron_right</mat-icon>
-          </button>
-          <span class="hint">end</span>
-          <button matIconButton (click)="nudgeTurn('end', -0.1)" aria-label="end earlier">
-            <mat-icon>chevron_left</mat-icon>
-          </button>
-          <button matIconButton (click)="nudgeTurn('end', 0.1)" aria-label="end later">
-            <mat-icon>chevron_right</mat-icon>
-          </button>
-        </span>
       </div>
     }
   } @else {

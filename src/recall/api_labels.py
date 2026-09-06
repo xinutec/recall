@@ -20,7 +20,6 @@ from fastapi.responses import Response
 from recall.api_models import (
     AssignSpanIn,
     CorrectIn,
-    NudgeIn,
     ReassignIn,
     TurnSpeakerIn,
 )
@@ -92,14 +91,12 @@ def register_label_routes(
     _clip_window = clip_window_fn
     app.post("/api/correct")(correct)
     app.post("/api/turn/{segment_id}/speaker")(turn_speaker)
-    app.post("/api/turn/{segment_id}/nudge")(turn_nudge)
     app.post("/api/sessions/{source}/assign")(assign)
     app.get("/api/sessions/{source}/voices")(voice_suggestions)
     app.get("/api/speakers")(speakers)
     app.get("/api/corrections")(corrections)
     app.get("/api/correction/{correction_id}/audio")(correction_audio)
     app.post("/api/correction/{correction_id}/speaker")(correction_reassign)
-    app.post("/api/correction/{correction_id}/nudge")(correction_nudge)
     app.post("/api/correction/{correction_id}/hide")(correction_hide)
     app.get("/api/suggest/{segment_id}")(suggest)
 
@@ -145,17 +142,6 @@ def turn_speaker(segment_id: int, body: TurnSpeakerIn) -> OkOut:
     store = _store()
     try:
         store.set_turn_speaker(segment_id, name)
-    finally:
-        store.close()
-    return {"ok": True}
-
-
-def turn_nudge(segment_id: int, body: NudgeIn) -> OkOut:
-    """Move one edge of a turn by ear — hand-tune a split boundary when the aligner's
-    cut is slightly off, so the bubble plays exactly its words."""
-    store = _store()
-    try:
-        store.nudge_turn(segment_id, body.edge, body.delta)
     finally:
         store.close()
     return {"ok": True}
@@ -262,16 +248,6 @@ def correction_reassign(correction_id: int, body: ReassignIn) -> OkOut:
     store = _store()
     try:
         store.set_correction_speaker(correction_id, body.speaker)
-        return {"ok": True}
-    finally:
-        store.close()
-
-
-def correction_nudge(correction_id: int, body: NudgeIn) -> OkOut:
-    """Move one boundary of a label (fix a cut that's too tight or too loose)."""
-    store = _store()
-    try:
-        store.nudge_correction(correction_id, body.edge, body.delta)
         return {"ok": True}
     finally:
         store.close()

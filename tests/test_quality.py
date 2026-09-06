@@ -44,3 +44,13 @@ def test_foreign_script_ratio() -> None:
     assert foreign_script_ratio("おやすみなさい") == 1.0
     assert foreign_script_ratio("En dan lees je het morgen") == 0.0
     assert foreign_script_ratio("café crème, oké hè") == 0.0  # Latin accents
+
+
+def test_foreign_script_ratio_mixed_is_the_fraction() -> None:
+    # one Latin + one Hiragana letter -> 1/2 non-Latin.
+    assert foreign_script_ratio("aあ") == pytest.approx(0.5)
+
+
+def test_foreign_script_ratio_no_letters_is_zero() -> None:
+    # Digits/punctuation only: no letters, so nothing foreign (and no divide-by-zero).
+    assert foreign_script_ratio("123 ... !?") == 0.0

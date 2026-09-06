@@ -99,26 +99,8 @@ export class Labels {
     this.context.set(on);
   }
 
-  // Bumped after a nudge so the <audio> re-fetches the (now different) span.
-  private readonly audioVersion = signal(0);
   protected audioSrc(label: Label): string {
-    const parts: string[] = [];
-    if (this.context()) {
-      parts.push('context=true');
-    }
-    if (this.audioVersion() > 0) {
-      parts.push(`v=${this.audioVersion()}`);
-    }
-    return parts.length ? `${label.audioUrl}?${parts.join('&')}` : label.audioUrl;
-  }
-
-  /** Move a boundary by `delta` seconds (negative = earlier, positive = later).
-   * Widen a too-tight cut: start −, end +. Tighten: start +, end −. */
-  protected nudge(id: number, edge: 'start' | 'end', delta: number): void {
-    this.api.nudgeCorrection(id, edge, delta).subscribe({
-      next: () => this.audioVersion.update((v) => v + 1),
-      error: () => this.snack.open('Could not adjust the clip', 'Dismiss', { duration: 4000 }),
-    });
+    return this.context() ? `${label.audioUrl}?context=true` : label.audioUrl;
   }
 
   protected pick(speaker: string): void {

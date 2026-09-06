@@ -60,7 +60,6 @@ function setup(
   const correct = opts.correct ?? vi.fn(() => of({ newId: 9 }));
   const speakers = vi.fn(() => of({ names: ['Alice', 'Bob', 'Carol', 'Pippijn'] }));
   const assignSpan = vi.fn(() => of({ touched: 1 }));
-  const nudgeTurn = vi.fn(() => of({ ok: true }));
   const refineRange = vi.fn(() => of({ ok: true }));
   TestBed.configureTestingModule({
     providers: [
@@ -72,7 +71,6 @@ function setup(
           correct,
           speakers,
           assignSpan,
-          nudgeTurn,
           refineRange,
         },
       },
@@ -95,7 +93,6 @@ function setup(
     correct,
     open,
     assignSpan,
-    nudgeTurn,
     refineRange,
   };
 }
@@ -363,19 +360,6 @@ describe('Timeline', () => {
     expect(assignSpan).not.toHaveBeenCalled();
   });
 
-  it('trims a turn boundary by ear: posts the nudge and re-fetches the clip', () => {
-    const { c, nudgeTurn } = setup();
-    const t = { id: 40022, audioUrl: '/api/audio/40022', text: 'Ja.' };
-    c.startTrim(t);
-    expect(c.isTrimming(t)).toBe(true);
-    const before = c.audioSrc(t); // cache-busted while trimming
-    c.nudgeTurn(t, 'start', -0.1);
-    expect(nudgeTurn).toHaveBeenCalledWith(40022, 'start', -0.1);
-    expect(c.audioSrc(t)).not.toBe(before); // version bumped → re-fetch the re-sliced clip
-    c.stopTrim();
-    expect(c.isTrimming(t)).toBe(false);
-    expect(c.audioSrc(t)).toBe('/api/audio/40022'); // plain url once done
-  });
 });
 
 describe('continuationTurnIds', () => {

@@ -27,8 +27,8 @@ import { dayKey, dayLabel, formatConfidence, timeOfDay } from '../format';
 /** Turn ids that continue the previous turn's *confirmed* speaker within `maxGapS` — a
  * run of consecutive same-speaker fragments whose repeated speaker header we suppress so
  * they read as one block. Only confirmed speakers coalesce; unknown turns never do (two
- * adjacent unknowns aren't necessarily the same person). A negative gap (overlap from an
- * independent-edge trim) still counts as continuing. */
+ * adjacent unknowns aren't necessarily the same person). A negative gap (turns that
+ * overlap, which alignment can produce) still counts as continuing. */
 export function continuationTurnIds(
   ordered: readonly {
     id: number;
@@ -111,11 +111,6 @@ export class Timeline {
   protected readonly spanText = signal('');
   protected readonly spanSource = signal<string | null>(null);
   protected readonly assigning = signal(false);
-
-  // Trim one turn's audio boundary by ear. `trimVersion` cache-busts the <audio> so a
-  // nudge re-fetches the re-sliced clip (the turn id is unchanged, its span isn't).
-  protected readonly trimming = signal<number | null>(null);
-  protected readonly trimVersion = signal(0);
 
   /** URL cursor: the oldest conversation start loaded so far (absent = latest only).
    * withComponentInputBinding passes undefined when the param is absent —
@@ -469,36 +464,8 @@ export class Timeline {
     this.played.update((s) => new Set(s).add(t.id));
   }
 
-  protected isTrimming(t: Transcript): boolean {
-    return this.trimming() === t.id;
-  }
-
-  /** Audio URL for a turn — cache-busted while trimming so each nudge re-fetches the
-   * re-sliced clip (the turn id is unchanged, but its span isn't). */
   protected audioSrc(t: Transcript): string {
-    return this.isTrimming(t) ? `${t.audioUrl}?v=${this.trimVersion()}` : t.audioUrl;
-  }
-
-  protected startTrim(t: Transcript): void {
-    this.trimming.set(t.id);
-    this.play(t); // render the <audio> so the current cut is audible
-  }
-
-  protected stopTrim(): void {
-    this.trimming.set(null);
-  }
-
-  /** Move one edge of a turn ±delta by ear, then replay the re-sliced clip. Hand-tune a
-   * boundary the (char-estimated, word-timing-less) split got wrong. */
-  protected nudgeTurn(t: Transcript, edge: 'start' | 'end', delta: number): void {
-    this.api.nudgeTurn(t.id, edge, delta).subscribe({
-      next: () => {
-        this.play(t);
-        this.trimVersion.update((v) => v + 1);
-      },
-      error: () =>
-        this.snack.open('Could not move the boundary', 'Dismiss', { duration: 4000 }),
-    });
+    return t.audioUrl;
   }
 
   /** How many mics caught this moment — drives the "N mics" corroboration badge. */

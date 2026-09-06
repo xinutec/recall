@@ -10,7 +10,6 @@ import {
   ConversationPage,
   CorrectRequest,
   CorrectResult,
-  NudgeRequest,
   Ok,
   RefineRequest,
   Session,
@@ -141,18 +140,6 @@ export class RecallApi {
   /** Soft-remove a bad label from the corpus. */
   hideCorrection(id: number): Observable<Ok> {
     return this.http.post<Ok>(`/api/correction/${id}/hide`, {});
-  }
-
-  /** Move one boundary of a label (fix a too-tight/too-loose cut). */
-  nudgeCorrection(id: number, edge: 'start' | 'end', delta: number): Observable<Ok> {
-    const body: NudgeRequest = { edge, delta };
-    return this.http.post<Ok>(`/api/correction/${id}/nudge`, body);
-  }
-
-  /** Move one edge of a turn by ear (hand-tune a split boundary the aligner got wrong). */
-  nudgeTurn(id: number, edge: 'start' | 'end', delta: number): Observable<Ok> {
-    const body: NudgeRequest = { edge, delta };
-    return this.http.post<Ok>(`/api/turn/${id}/nudge`, body);
   }
 
   /** Queue an on-demand diarize-refine of [start, end) of a recording (the idle daemon
