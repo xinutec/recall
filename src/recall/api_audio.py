@@ -1,5 +1,5 @@
-"""The audio-serving HTTP surface: per-turn playback, bubble spans, and the
-trimmer clip — plus `clip_window`, the padding rule they all share.
+"""The audio-serving HTTP surface: per-turn playback and bubble spans — plus
+`clip_window`, the padding rule they share.
 
 Slice 9 of api.py's decomposition (#1342). Module-level handlers (audio_span
 is called directly by tests), registrar-set store factory.
@@ -44,7 +44,6 @@ def register_audio_routes(app: FastAPI, *, store_factory: Callable[[], Store]) -
     _store_factory = store_factory
     app.get("/api/audio/{transcript_id}")(audio)
     app.get("/api/audio-span")(audio_span)
-    app.get("/api/clip/{transcript_id}")(clip)
 
 
 def clip_window(
@@ -127,39 +126,5 @@ def audio_span(from_id: int, to_id: int) -> Response:
             norm = Path(tmp) / "clip-norm.wav"
             normalize_loudness(clip, norm)
             return Response(content=norm.read_bytes(), media_type="audio/wav")
-    finally:
-        store.close()
-
-
-def clip(transcript_id: int, lead: float = 1.5, tail: float = 1.5) -> Response:
-    """A turn's audio with `lead`/`tail` seconds of context — for the trimmer.
-
-    The `X-Lead` header gives the actual seconds of lead included (clamped at the
-    file start), so the UI can map a position in this clip back to absolute time.
-    """
-    store = _store()
-    try:
-        segment = store.get_transcript(transcript_id)
-        if segment is None or segment.audio_segment_id is None:
-            raise HTTPException(status_code=404, detail="no audio")
-        ref = store.audio_segment_ref(segment.audio_segment_id)
-        if ref is None:
-            raise HTTPException(status_code=404, detail="no audio")
-        path, audio_start = ref
-        turn_start = (segment.start - audio_start).total_seconds()
-        turn_end = (segment.end - audio_start).total_seconds()
-        win_start = max(0.0, turn_start - lead)
-        actual_lead = turn_start - win_start
-        with tempfile.TemporaryDirectory() as tmp:
-            raw = Path(tmp) / "clip.wav"
-            out = Path(tmp) / "clip-norm.wav"
-            slice_clip(Path(path), raw, win_start, turn_end + tail)
-            normalize_loudness(raw, out)
-            data = out.read_bytes()
-        return Response(
-            content=data,
-            media_type="audio/wav",
-            headers={"X-Lead": f"{actual_lead:.3f}"},
-        )
     finally:
         store.close()
