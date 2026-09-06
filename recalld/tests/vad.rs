@@ -79,11 +79,12 @@ fn a_blip_shorter_than_the_minimum_is_not_a_region() {
     assert_eq!(regions_from_probabilities(&probs), vec![]);
 }
 
-/// ⚠ THE FIXTURE-BACKED TESTS ABOVE CANNOT RUN EVERYWHERE. `recall` is a PUBLIC
-/// repo and `.gitignore` refuses audio outright, so the speech fixtures are on
-/// this Mac and in no clone, sandbox or CI runner. They skip where the file is
-/// absent — which means the real-speech coverage is LOCAL ONLY, and something
-/// that runs everywhere has to pin the model's input contract instead.
+/// ⚠ The DIALOGUE fixtures above are recordings of real people and cannot be
+/// committed to a public repo, so those tests skip where the files are absent.
+/// The test below uses `public-domain-en.flac`, which IS committed — a reading
+/// of Emily Dickinson, public domain worldwide, with its provenance in
+/// `tests/fixtures/speech/README.md` — so real speech is covered everywhere as
+/// well as here (#1433).
 ///
 /// This is that guard. The probabilities are a golden trace over deterministic
 /// pseudo-noise, and they are sensitive to the exact bug that cost an hour:
@@ -109,4 +110,20 @@ fn the_model_input_contract_is_pinned_by_a_golden_trace() {
             probs[i]
         );
     }
+}
+
+#[test]
+fn committed_public_domain_speech_is_detected_everywhere() {
+    // The point of committing a clip: this runs in CI, in the nix sandbox and on
+    // a fresh clone, where the household recordings cannot go. 48 s of read
+    // poetry with real pauses between stanzas — so it exercises both halves,
+    // speech and the silence around it.
+    let mut detector = Detector::load().expect("model");
+    let path = Path::new("../tests/fixtures/speech/public-domain-en.flac");
+    assert!(path.exists(), "the committed fixture must not vanish");
+    let seconds = detector.speech_seconds(path).expect("detect");
+    assert!(
+        seconds > 25.0 && seconds < 48.0,
+        "speech seconds {seconds} outside the plausible band for a 48 s reading"
+    );
 }

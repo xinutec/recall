@@ -33,6 +33,11 @@ logs/
 *.wav
 *.flac
 *.opus
+# ...except the one licence-clean clip the tests may actually ship with. A
+# public repo cannot carry recordings of real people, but it must carry
+# SOMETHING, or checks that read like repo-wide guarantees quietly do nothing on
+# a fresh clone (#1433). See tests/fixtures/speech/README.md.
+!tests/fixtures/speech/public-domain-en.flac
 *.sqlite
 *.sqlite3
 *.db
