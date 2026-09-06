@@ -19,12 +19,10 @@ from recall.api_audio import clip_window, register_audio_routes
 from recall.api_capture import fleet_capture_state, register_capture_routes
 from recall.api_client_reports import register_client_report_routes
 from recall.api_devices import register_device_routes
-from recall.api_experiments import register_experiment_routes
 from recall.api_labels import register_label_routes
-from recall.api_quiet import register_quiet_routes
 from recall.api_reads import register_read_routes
-from recall.api_recall import register_recall_routes
 from recall.api_sessions import register_session_routes
+from recall.api_work import register_work_routes
 from recall.paths import default_data_root
 from recall.store import (
     Store,
@@ -106,19 +104,7 @@ register_label_routes(
     clip_window_fn=clip_window,
 )
 register_audio_routes(app, store_factory=_store)
-register_recall_routes(
-    app,
-    store_factory=_store,
-    # a lambda, deliberately: _require_time is defined further down this module
-    require_time=lambda value: _require_time(value),  # noqa: PLW0108 - forward ref
-)
-register_experiment_routes(
-    app,
-    store_factory=_store,
-    require_time=_require_time,
-    parse_iso=_parse_iso,
-)
-register_quiet_routes(app, store_factory=_store, require_time=_require_time)
+register_work_routes(app, store_factory=_store, require_time=_require_time)
 
 
 def _frontend_file(rel: str) -> Path | None:

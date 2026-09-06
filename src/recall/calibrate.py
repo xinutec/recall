@@ -39,7 +39,7 @@ from recall.store import Store
 
 # Which segments to *sample* when learning a mic's floor: a mean this quiet is very
 # probably the mic idling, and idling is what the floor is made of. A sampling rule, not
-# a verdict — nothing is judged empty by its mean (see `recall.quiet`), and a mic quiet
+# a verdict — nothing is judged empty by its mean, and a mic quiet
 # enough that few of its minutes clear this bar simply calibrates from fewer of them.
 IDLE_SAMPLE_MAX_DB = -60.0
 # The floor's crest ceiling. Above its 99.9th percentile a bucket is not idle mic noise.

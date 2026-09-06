@@ -1,7 +1,7 @@
 """The device-status HTTP surface: source liveness, heartbeats, outboxes.
 
 Slice 2 of api.py's decomposition (#1342), same register pattern as
-api_quiet/sync: dependencies are passed in — `data_root` as a getter because
+api_work/sync: dependencies are passed in — `data_root` as a getter because
 the tests monkeypatch `api.DATA_ROOT`, and `fleet_capture_state` injected so
 this module stays independent of the capture family it would otherwise import.
 """

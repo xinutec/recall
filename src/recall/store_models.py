@@ -202,35 +202,6 @@ class RefineRequest:
 
 
 @dataclass(frozen=True)
-class AskRequest:
-    """A queued "Ask the archive" job: a self-contained grounded `prompt` (built on the
-    fleet from retrieved turns) the Mac's LLM generates an answer for. `sources` are the
-    fleet turn ids the retrieval cited, carried through for the answer's citations."""
-
-    id: int
-    question: str
-    prompt: str
-    sources: tuple[int, ...]
-
-
-@dataclass(frozen=True)
-class AskRequestStatus:
-    """The current state of an ask job: the answer once the Mac has generated it (or an
-    `error`), else pending. `sources` are the turn ids to cite. `prompt` lets the Mac's
-    relay confirm an adopted row still matches the job (a reused fleet id must not relay
-    a stale answer)."""
-
-    id: int
-    question: str
-    prompt: str
-    sources: tuple[int, ...]
-    answer: str | None
-    error: str | None
-    done: bool
-    created: datetime
-
-
-@dataclass(frozen=True)
 class UploadJob:
     """An uploaded session segment awaiting the Mac's ASR (the fleet has no ML).
 
@@ -246,18 +217,6 @@ class UploadJob:
     end: datetime
     sample_rate: int
     channels: int
-
-
-@dataclass(frozen=True)
-class LiveSummary:
-    """The running day's provisional summary, stamped with the day-state
-    watermark it saw — fresh iff that still matches Store.day_watermark."""
-
-    day: str
-    text: str
-    model: str
-    watermark: str
-    generated_utc: str
 
 
 @dataclass(frozen=True)

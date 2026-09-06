@@ -21,7 +21,6 @@ from recall.cli_parser import build_parser
 from recall.ids import AudioSegmentId
 from recall.jobs import run_jobs_once
 from recall.sources import AudioSource, SourceKind
-from recall.store_models import AbCompareJob, AskRequestStatus
 from recall.timeline import Segment
 
 
@@ -70,9 +69,6 @@ class _FakeClient:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"opus-bytes")
 
-    def mark_ab_compare_running(self, run_id: int) -> None:
-        self.ab_running.append(run_id)
-
     def push_ab_compare_result(  # noqa: PLR0913 - mirrors the SyncClient signature
         self,
         run_id: int,
@@ -95,38 +91,13 @@ class _FakeStore:
         self.refines: list[tuple[str, datetime, datetime]] = []
         self.sources: list[AudioSource] = []
         self.segments: list[Segment] = []
-        self.ab_added: list[tuple[str, int | None]] = []
-        self.ab_local: dict[int, AbCompareJob] = {}  # fleet_id -> local mirror
         # audio id -> paths its deletion frees
         self.freed: dict[int, list[str]] = {}
         self.deleted: list[list[int]] = []
-        self.ask_added: list[tuple[str, int | None]] = []  # (prompt, fleet_id)
-        self.ask_local: dict[int, AskRequestStatus] = {}  # fleet_id -> local status
-        self.ask_deleted: list[int] = []  # local ids the relay discarded as stale
 
     def add_refine_request(self, source: str, start: datetime, end: datetime) -> int:
         self.refines.append((source, start, end))
         return len(self.refines)
-
-    def add_ask_request(
-        self,
-        question: str,
-        prompt: str,
-        sources: Sequence[int],
-        *,
-        fleet_id: int | None = None,
-    ) -> int:
-        self.ask_added.append((prompt, fleet_id))
-        return len(self.ask_added)
-
-    def ask_request_by_fleet_id(self, fleet_id: int) -> AskRequestStatus | None:
-        return self.ask_local.get(fleet_id)
-
-    def delete_ask_request(self, request_id: int) -> None:
-        self.ask_deleted.append(request_id)
-        for fid, st in list(self.ask_local.items()):
-            if st.id == request_id:
-                del self.ask_local[fid]
 
     def add_source(self, source: AudioSource) -> None:
         self.sources.append(source)
@@ -139,23 +110,6 @@ class _FakeStore:
     def add_audio_segment(self, segment: Segment) -> int:
         self.segments.append(segment)
         return len(self.segments)
-
-    def add_ab_compare_run(  # noqa: PLR0913 - mirrors the Store signature
-        self,
-        source: str,
-        start: datetime | None,
-        end: datetime | None,
-        *,
-        model_a: str,
-        model_b: str,
-        base_model: str,
-        fleet_id: int | None = None,
-    ) -> int:
-        self.ab_added.append((source, fleet_id))
-        return len(self.ab_added)
-
-    def ab_compare_run_by_fleet_id(self, fleet_id: int) -> AbCompareJob | None:
-        return self.ab_local.get(fleet_id)
 
     def delete_audio_segments(self, audio_ids: Sequence[AudioSegmentId]) -> list[str]:
         self.deleted.append([int(a) for a in audio_ids])
@@ -328,194 +282,6 @@ def test_marks_done_only_after_the_local_enqueue(tmp_path: Path) -> None:
 
     run_jobs_once(_OrderStore(), _OrderClient([_job(3)]), data_root=tmp_path)
     assert order == ["enqueue", "done"]
-
-
-def _ask_job(job_id: int = 31, *, prompt: str = "PROMPT") -> _Job:
-    return _Job(job_id, "ask", "", None, None, prompt=prompt)
-
-
-def _local_ask(
-    *,
-    done: bool,
-    answer: str | None = None,
-    error: str | None = None,
-    prompt: str = "PROMPT",  # matches _ask_job's default prompt
-) -> AskRequestStatus:
-    return AskRequestStatus(
-        id=1,
-        question="",
-        prompt=prompt,
-        sources=(),
-        answer=answer,
-        error=error,
-        done=done,
-        created=datetime(2026, 7, 18, tzinfo=UTC),
-    )
-
-
-def test_an_unseen_ask_job_is_adopted_locally_and_never_acknowledged(
-    tmp_path: Path,
-) -> None:
-    # Like A/B compare: the ask lands in the local queue (stamped with the fleet's id)
-    # for the refine daemon's LLM, and the fleet keeps serving it — only the answer
-    # landing retires it, so no mark_done ever fires and generation never happens here.
-    client = _FakeClient([_ask_job(31, prompt="Answer this.")])
-    store = _FakeStore()
-    handed = run_jobs_once(store, client, data_root=tmp_path)
-    assert handed == 1
-    assert store.ask_added == [("Answer this.", 31)]  # prompt adopted under fleet id 31
-    assert client.done == []
-    assert client.ask_results == []
-
-
-def test_an_adopted_ask_job_still_pending_relays_nothing(tmp_path: Path) -> None:
-    client = _FakeClient([_ask_job(31)])
-    store = _FakeStore()
-    store.ask_local[31] = _local_ask(done=False)
-    handed = run_jobs_once(store, client, data_root=tmp_path)
-    assert handed == 0
-    assert store.ask_added == []  # already adopted — not re-added
-    assert client.ask_results == []
-
-
-def test_a_finished_ask_job_pushes_the_answer_back(tmp_path: Path) -> None:
-    client = _FakeClient([_ask_job(31)])
-    store = _FakeStore()
-    store.ask_local[31] = _local_ask(done=True, answer="It was Tuesday.")
-    handed = run_jobs_once(store, client, data_root=tmp_path)
-    assert handed == 1
-    assert client.ask_results == [(31, {"answer": "It was Tuesday.", "error": None})]
-    assert client.done == []  # the answer landing retires it, not an acknowledgement
-
-
-def test_a_failed_ask_job_pushes_the_error_back(tmp_path: Path) -> None:
-    client = _FakeClient([_ask_job(31)])
-    store = _FakeStore()
-    store.ask_local[31] = _local_ask(done=True, error="model failed to load")
-    run_jobs_once(store, client, data_root=tmp_path)
-    assert client.ask_results == [
-        (31, {"answer": None, "error": "model failed to load"})
-    ]
-
-
-def test_a_reused_fleet_id_with_a_new_prompt_discards_the_stale_answer(
-    tmp_path: Path,
-) -> None:
-    # Fleet ask ids can be reused (after a manual row delete). If the adopted local copy
-    # for that id belongs to a DIFFERENT question, relaying its answer would return a
-    # stale/wrong answer (the "pong for a real question" bug). The relay must detect the
-    # prompt mismatch, discard the stale copy, and re-adopt for the real prompt.
-    client = _FakeClient([_ask_job(1, prompt="REAL: when did I meet the dentist?")])
-    store = _FakeStore()
-    store.ask_local[1] = _local_ask(
-        done=True, answer="pong", prompt="STALE synthetic: reply pong"
-    )
-    handed = run_jobs_once(store, client, data_root=tmp_path)
-    assert handed == 1
-    assert store.ask_deleted == [1]  # the stale adopted copy was dropped
-    assert store.ask_added == [("REAL: when did I meet the dentist?", 1)]  # re-adopted
-    assert client.ask_results == []  # and the stale "pong" was NOT relayed
-
-
-def _ab_job(job_id: int = 21, *, status: str = "queued") -> _Job:
-    return _Job(
-        job_id,
-        "ab-compare",
-        "meeting-20240102-1033",
-        None,  # whole recording
-        None,
-        model_a="mlx-community/whisper-large-v3-turbo",
-        model_b="adapter-current",
-        base_model="openai/whisper-large-v3",
-        status=status,
-    )
-
-
-def _local_run(status: str, *, error: str | None = None) -> AbCompareJob:
-    return AbCompareJob(
-        id=1,
-        source="meeting-20240102-1033",
-        start=None,
-        end=None,
-        model_a="mlx-community/whisper-large-v3-turbo",
-        model_b="adapter-current",
-        base_model="openai/whisper-large-v3",
-        status=status,
-        created=datetime(2026, 7, 16, tzinfo=UTC),
-        started=None,
-        done=None,
-        error=error,
-        result_json='{"n": 1}' if status == "done" else None,
-        mean_wer_a=0.2 if status == "done" else None,
-        mean_wer_b=0.25 if status == "done" else None,
-        n_corrections=3 if status == "done" else None,
-        n_segments=1 if status == "done" else None,
-        n_changed=1 if status == "done" else None,
-    )
-
-
-def test_an_unseen_ab_run_is_adopted_locally_and_never_acknowledged(
-    tmp_path: Path,
-) -> None:
-    # Adoption is not completion: the run lands in the local queue (stamped with the
-    # fleet's id) for the refine daemon, and the fleet keeps serving it — only the
-    # result landing retires it, so no mark_done may ever fire for this type.
-    client = _FakeClient([_ab_job(21)])
-    store = _FakeStore()
-    handed = run_jobs_once(store, client, data_root=tmp_path)
-    assert handed == 1
-    assert store.ab_added == [("meeting-20240102-1033", 21)]
-    assert client.done == []
-    assert client.ab_results == []
-
-
-def test_an_adopted_ab_run_still_pending_locally_relays_nothing(
-    tmp_path: Path,
-) -> None:
-    client = _FakeClient([_ab_job(21)])
-    store = _FakeStore()
-    store.ab_local[21] = _local_run("queued")
-    handed = run_jobs_once(store, client, data_root=tmp_path)
-    assert handed == 0
-    assert store.ab_added == []  # not adopted twice
-    assert client.ab_running == []
-    assert client.ab_results == []
-
-
-def test_a_locally_running_ab_run_is_reported_once(tmp_path: Path) -> None:
-    # "Running" is relayed only while the fleet still says queued, so the call
-    # happens once, not every 60s pass.
-    store = _FakeStore()
-    store.ab_local[21] = _local_run("running")
-    client = _FakeClient([_ab_job(21, status="queued")])
-    assert run_jobs_once(store, client, data_root=tmp_path) == 1
-    assert client.ab_running == [21]
-
-    quiet = _FakeClient([_ab_job(21, status="running")])
-    assert run_jobs_once(store, quiet, data_root=tmp_path) == 0
-    assert quiet.ab_running == []
-
-
-def test_a_finished_ab_run_pushes_its_report_back(tmp_path: Path) -> None:
-    client = _FakeClient([_ab_job(21, status="running")])
-    store = _FakeStore()
-    store.ab_local[21] = _local_run("done")
-    assert run_jobs_once(store, client, data_root=tmp_path) == 1
-    ((run_id, pushed),) = client.ab_results
-    assert run_id == 21
-    assert pushed["result_json"] == '{"n": 1}'
-    assert pushed["error"] is None
-    assert client.done == []  # retirement is the result itself, not an ack
-
-
-def test_a_failed_ab_run_pushes_its_error_back(tmp_path: Path) -> None:
-    client = _FakeClient([_ab_job(21, status="running")])
-    store = _FakeStore()
-    store.ab_local[21] = _local_run("error", error="no audio for source")
-    assert run_jobs_once(store, client, data_root=tmp_path) == 1
-    ((run_id, pushed),) = client.ab_results
-    assert run_id == 21
-    assert pushed["error"] == "no audio for source"
 
 
 def test_parser_wires_jobs() -> None:

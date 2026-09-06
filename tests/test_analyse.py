@@ -10,7 +10,6 @@ import pytest
 from recall.analyse import analyse_segments
 from recall.envelope import encode_envelope
 from recall.ids import AudioSegmentId
-from recall.quiet import quiet_spans
 from recall.sources import SWEEPABLE_KINDS, AudioSource, SourceKind
 from recall.store import Store
 from recall.timeline import Segment
@@ -49,43 +48,6 @@ def _store(n: int) -> tuple[Store, list[int]]:
 
 def _silent(_path: Path) -> list[SpeechRegion]:
     return []
-
-
-def test_a_segment_the_detector_hears_speech_in_is_never_swept() -> None:
-    """The failure this whole veto exists for.
-
-    On the real archive a reprocessing pass hides the turns it replaces, so a minute of
-    far-field Dutch ("ik moet niet zeggen", "zelfs op de vorm van 60-70 minuten") was
-    left carrying no *visible* turn at all — and the transcript veto, which counts
-    visible turns, saw an empty minute. Bookkeeping about a transcript is not evidence
-    about audio. The detector hears the audio.
-    """
-    store, ids = _store(13)
-
-    def vad(path: Path) -> list[SpeechRegion]:
-        # One segment holds quiet speech. Nothing about its volume says so.
-        if path.name == "seg006.opus":
-            return [SpeechRegion(start=12.0, end=20.2)]
-        return []
-
-    assert analyse_segments(store, vad=vad) == 13
-
-    spans = quiet_spans(store, min_duration_s=300.0)
-    swept = {int(a) for span in spans for a in span.audio_ids}
-    assert ids[6] not in swept  # the speech survives...
-    assert len(spans) == 2  # ...and it splits the quiet either side of it
-
-
-def test_a_segment_nobody_has_listened_to_is_never_swept() -> None:
-    # Unheard is unknown, and unknown is never the safest thing to delete. The span only
-    # appears once the detector has cleared its audio.
-    store, _ = _store(10)
-    assert quiet_spans(store, min_duration_s=300.0) == []
-
-    analyse_segments(store, vad=_silent)
-    spans = quiet_spans(store, min_duration_s=300.0)
-    assert len(spans) == 1
-    assert len(spans[0].audio_ids) == 10
 
 
 def test_the_detector_is_not_run_twice_on_the_same_segment() -> None:

@@ -178,62 +178,14 @@ def test_rollback_recovers_a_connection_wedged_by_a_failed_write(
     a._conn.rollback()  # the other writer releases the lock
 
     # Another connection commits a NEW row while b is wedged.
-    a.add_ask_request("q", "p", [])
+    a.add_refine_request("usb", BASE, BASE + timedelta(seconds=60))
 
     b.rollback()  # recover
     recovered = b._conn.in_transaction
     assert not recovered
-    assert len(b.pending_ask_requests(limit=10)) == 1  # b now sees the fresh row
+    assert len(b.pending_refine_requests(limit=10)) == 1  # b sees the fresh row
     a.close()
     b.close()
-
-
-def test_ask_request_queue_roundtrips_and_retires_on_answer() -> None:
-    # The fleet enqueues an ask job (question + grounded prompt + cited turn ids); it's
-    # pending until the Mac lands an answer, which retires it and resolves the UI poll.
-    store = Store.memory()
-    rid = store.add_ask_request("when did we discuss recipes?", "PROMPT TEXT", [7, 9])
-
-    pend = store.pending_ask_requests(limit=10)
-    assert [p.id for p in pend] == [rid]
-    assert pend[0].prompt == "PROMPT TEXT"
-    assert pend[0].sources == (7, 9)  # cited turn ids carried through
-
-    before = store.get_ask_request(rid)
-    assert before is not None and not before.done and before.answer is None
-
-    store.save_ask_answer(rid, "We talked about recipes on Tuesday.")
-    assert store.pending_ask_requests(limit=10) == []  # retired
-    after = store.get_ask_request(rid)
-    assert after is not None and after.done
-    assert after.answer == "We talked about recipes on Tuesday."
-    assert after.sources == (7, 9)
-    assert after.error is None
-
-
-def test_ask_request_error_retires_the_job() -> None:
-    # A generation failure retires the job with an error the UI can show, rather than
-    # leaving it pending forever.
-    store = Store.memory()
-    rid = store.add_ask_request("q", "p", [])
-    store.mark_ask_error(rid, "model failed to load")
-    assert store.pending_ask_requests(limit=10) == []
-    got = store.get_ask_request(rid)
-    assert got is not None and got.done and got.error == "model failed to load"
-    assert got.answer is None
-
-
-def test_ask_request_adopted_by_fleet_id_for_the_relay() -> None:
-    # The Mac adopts a fleet-origin ask job under the fleet's id (like A/B compare), so
-    # the jobs relay can look it up and push the answer back to the right fleet row.
-    store = Store.memory()
-    local = store.add_ask_request("q", "p", [3], fleet_id=42)
-    assert store.ask_request_by_fleet_id(42) is not None
-    assert store.ask_request_by_fleet_id(42).id == local  # type: ignore[union-attr]
-    assert store.ask_request_by_fleet_id(999) is None  # unknown fleet id
-    store.save_ask_answer(local, "answer")
-    adopted = store.ask_request_by_fleet_id(42)
-    assert adopted is not None and adopted.done and adopted.answer == "answer"
 
 
 def test_search_finds_inserted_text() -> None:
@@ -1654,81 +1606,6 @@ def test_refine_request_queue_roundtrip() -> None:
     assert store.pending_refine_requests() == []
 
 
-def test_ab_compare_run_queue_lifecycle() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    run_id = store.add_ab_compare_run(
-        "usb",
-        None,
-        None,
-        model_a="turbo",
-        model_b="adapter",
-        base_model="large-v3",
-    )
-
-    # Queued: shows in pending and the list, status 'queued', no result yet.
-    pending = store.pending_ab_compare_runs()
-    assert [r.id for r in pending] == [run_id]
-    job = pending[0]
-    assert job.source == "usb"
-    assert (job.start, job.end) == (None, None)
-    assert (job.model_a, job.model_b) == ("turbo", "adapter")
-    assert job.base_model == "large-v3"
-    assert job.status == "queued"
-    assert job.mean_wer_a is None and job.result_json is None
-
-    # Running: removed from the pending queue.
-    store.mark_ab_compare_running(run_id)
-    assert store.pending_ab_compare_runs() == []
-    assert store.get_ab_compare_run(run_id).status == "running"  # type: ignore[union-attr]
-
-    # Done: result_json + denormalized summary stored; list omits the heavy json.
-    store.save_ab_compare_result(
-        run_id,
-        result_json='{"hello": "world"}',
-        mean_wer_a=0.21,
-        mean_wer_b=0.25,
-        n_corrections=16,
-        n_segments=1,
-        n_changed=1,
-    )
-    full = store.get_ab_compare_run(run_id)
-    assert full is not None
-    assert full.status == "done"
-    assert full.result_json == '{"hello": "world"}'
-    assert (full.mean_wer_a, full.mean_wer_b) == (0.21, 0.25)
-    assert (full.n_corrections, full.n_segments, full.n_changed) == (16, 1, 1)
-    listed = store.list_ab_compare_runs()
-    assert [r.id for r in listed] == [run_id]
-    assert listed[0].result_json is None  # list view omits the large payload
-    assert listed[0].mean_wer_b == 0.25
-
-
-def test_ab_compare_run_window_and_error() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    window_end = BASE + timedelta(minutes=5)
-    run_id = store.add_ab_compare_run(
-        "usb",
-        BASE,
-        window_end,
-        model_a="a",
-        model_b="b",
-        base_model="base",
-    )
-    job = store.get_ab_compare_run(run_id)
-    assert job is not None
-    assert (job.start, job.end) == (BASE, window_end)
-
-    store.mark_ab_compare_error(run_id, "boom")
-    failed = store.get_ab_compare_run(run_id)
-    assert failed is not None
-    assert failed.status == "error"
-    assert failed.error == "boom"
-    assert store.pending_ab_compare_runs() == []
-    assert store.get_ab_compare_run(9999) is None
-
-
 def test_audio_segments_in_range_returns_only_overlapping() -> None:
     store = Store.memory()
     store.add_source(_source())
@@ -1860,43 +1737,6 @@ def test_migrate_retries_when_another_process_won_the_race(tmp_path: Path) -> No
     loser.close()
 
 
-def test_day_summaries_round_trip_and_track_missing_days() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,  # 2026-06-13
-        end=BASE + timedelta(seconds=2),
-        text="something was said",
-        asr_model="m",
-    )
-
-    # A day with visible turns and no summary is missing; hidden-only days are not.
-    assert store.days_missing_summaries(limit=10) == ["2026-06-13"]
-
-    store.set_day_summary("2026-06-13", "A quiet day at home.", model="test-llm")
-    assert store.get_day_summary("2026-06-13") == "A quiet day at home."
-    assert store.days_missing_summaries(limit=10) == []
-
-    # Regenerating overwrites (summaries are derived views, like transcripts).
-    store.set_day_summary("2026-06-13", "Rewritten.", model="test-llm")
-    assert store.get_day_summary("2026-06-13") == "Rewritten."
-    assert store.get_day_summary("2026-01-01") is None
-
-
-def test_recent_day_summaries_lists_newest_first() -> None:
-    store = Store.memory()
-    store.set_day_summary("2026-06-13", "first", model="m")
-    store.set_day_summary("2026-06-15", "third", model="m")
-    store.set_day_summary("2026-06-14", "second", model="m")
-    got = store.recent_day_summaries(limit=2)
-    assert [(d, t) for d, t, _ in got] == [
-        ("2026-06-15", "third"),
-        ("2026-06-14", "second"),
-    ]
-
-
 def test_vocabulary_terms_round_trip() -> None:
     store = Store.memory()
     a = store.add_vocabulary_term("Zutphen")
@@ -2024,36 +1864,6 @@ def test_delete_source_removes_all_derived_rows_and_returns_paths() -> None:
     # a global voiceprint/speaker registry is untouched by a session delete
     conn = store._conn
     assert conn.execute("SELECT COUNT(*) FROM corrections").fetchone()[0] == 0
-
-
-def test_live_summary_roundtrip_keyed_by_watermark() -> None:
-    """The 'today so far' cache: one row, stamped with the day-state watermark it
-    saw, so a request can tell fresh from stale without generating."""
-    store = Store.memory()
-    assert store.get_live_summary("2026-06-13") is None
-
-    store.set_live_summary("2026-06-13", "Quiet morning.", model="m", watermark="a")
-    row = store.get_live_summary("2026-06-13")
-    assert row is not None
-    assert row.text == "Quiet morning."
-    assert row.watermark == "a"
-    assert row.generated_utc  # stamped, so the UI can show "as of HH:MM"
-
-    # Regeneration replaces the row (it's a cache, not a history).
-    store.set_live_summary("2026-06-13", "Busy afternoon.", model="m", watermark="b")
-    row = store.get_live_summary("2026-06-13")
-    assert row is not None
-    assert (row.text, row.watermark) == ("Busy afternoon.", "b")
-
-
-def test_live_summary_keeps_only_the_current_day() -> None:
-    """At UTC midnight the day key moves on; writing the new day evicts the old
-    row so the table stays a single-purpose one-row cache."""
-    store = Store.memory()
-    store.set_live_summary("2026-06-13", "old day", model="m", watermark="a")
-    store.set_live_summary("2026-06-14", "new day", model="m", watermark="b")
-    assert store.get_live_summary("2026-06-13") is None
-    assert store.get_live_summary("2026-06-14") is not None
 
 
 def test_day_watermark_moves_on_every_visible_change() -> None:

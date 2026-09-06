@@ -44,30 +44,6 @@
     </mat-card-content>
   </mat-card>
 
-  <mat-card appearance="outlined" class="vocab">
-    <mat-card-header>
-      <mat-card-title>Model context</mat-card-title>
-      <mat-card-subtitle>
-        Background facts given to the model when it summarises or answers —
-        who lives here, pronouns, recurring places. Applies from the next
-        summary/answer.
-      </mat-card-subtitle>
-    </mat-card-header>
-    <mat-card-content>
-      <mat-form-field appearance="outline" class="context-field" subscriptSizing="dynamic">
-        <mat-label>Facts, one per line</mat-label>
-        <textarea
-          matInput
-          rows="4"
-          [value]="contextText()"
-          (input)="contextDraft.set($any($event.target).value)"
-        ></textarea>
-      </mat-form-field>
-      <button matButton="filled" (click)="saveContext()" [disabled]="!contextDirty()">
-        Save
-      </button>
-    </mat-card-content>
-  </mat-card>
 
   <div class="filter">
     <mat-chip-set>

@@ -179,16 +179,6 @@ def test_a_mirrored_segment_whose_file_vanished_does_not_wedge_the_queue(
     assert sync_push(store, client) == 0  # and never retried
 
 
-def test_push_sends_day_summaries() -> None:
-    store = Store.memory()
-    store.set_day_summary("2026-07-11", "a quiet day", model="qwen")
-    client = FakeClient()
-    sync_push(store, client)
-    assert [(s.day, s.text) for s in client.summaries] == [
-        ("2026-07-11", "a quiet day")
-    ]
-
-
 def _add_live(store: Store, at_s: float, text: str) -> int:
     return store.add_transcript_segment(
         audio_segment_id=None,

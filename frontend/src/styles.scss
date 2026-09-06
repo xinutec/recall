@@ -66,8 +66,7 @@ body {
 // met the Timeline label). Global on purpose: screens share the failure, so
 // they share the rule rather than each rediscovering it.
 .with-bottom-nav {
-  .page,
-  .cleanup {
+  .page {
     padding-block-end: var(--bottom-nav-reserve);
   }
 

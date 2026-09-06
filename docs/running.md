@@ -33,12 +33,12 @@ want while developing.
 | `org.xinutec.recall-worker` | index + transcribe new segments (whole-clip; diarization is the refine agent's job) | continuous |
 | `org.xinutec.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
 | `org.xinutec.recall-beat-relay` | accept a mic app's heartbeat on the LAN (port 8000) and forward it to Isis, for a phone whose VPN is down | always on |
-| `org.xinutec.recall-refine` | re-derive segments diarized + speaker-split; also drains queued A/B model comparisons | diarize: while capture paused · A/B: any time |
-| `org.xinutec.recall-llm-host` | holds the LLM (one copy for the whole Mac) and generates on `127.0.0.1:8092` | always on; weights loaded on demand, released after 5 min idle |
+| `org.xinutec.recall-refine` | re-derive segments diarized + speaker-split | while capture paused |
+| `org.xinutec.recall-llm-host` | holds the LLM for the whole Mac on `127.0.0.1:8092` — kept for *life*, not for recall (see below) | always on; weights loaded on demand, released after 5 min idle |
 | `org.xinutec.recall-sync` | push the archive to Isis (the system of record) — only what changed since the last watermark | timer |
 | `org.xinutec.recall-upload` | store-and-forward delivery: closed segments → recalld on Isis, sha-256 receipts re-hashed before anything counts as delivered ([architecture.md](architecture.md) stage B) | timer |
 | `org.xinutec.recall-capture-mirror` | poll Isis's desired capture state and mirror it onto the local pause file | every ~5 s |
-| `org.xinutec.recall-jobs` | pull Isis-queued work (refine, upload, A/B, sweep) into the Mac's local queues | timer |
+| `org.xinutec.recall-jobs` | pull Isis-queued work (refine, upload) into the Mac's local queues | timer |
 | `org.xinutec.recall-doctor` | run the health checks and report them to fleetwatch | every 5 min |
 
 There is deliberately **no `recall-api` agent**: the Mac serves no UI or control plane
@@ -225,30 +225,21 @@ transcripts in the **Review** screen (accumulates training data), then:
 ./scripts/recall.sh transcript --out /Volumes/Backup/recall   # list / read sessions — see review.md
 ```
 
-## Recall layer (summaries + Ask)
+## llm-host — the model holder (recall no longer asks it anything)
 
-The refine daemon writes one summary per finished day (`day_summaries`; local
-LLM via mlx-lm, model in `recall.llm.DEFAULT_LLM`). The web app's **Ask** page
-answers questions grounded in FTS-retrieved turns, cited; backfill or redo a day
-by hand:
+**Ask and day summaries were CUT on 2026-09-06** with the product's scope
+([architecture.md](architecture.md), "Scope of the rebuilt product"), so recall
+generates no text of its own any more.
 
-```sh
-./scripts/recall.sh summarize --out /Volumes/Backup/recall [--day 2026-06-28]
-```
-
-Neither loads the model itself. The weights live in **`recall-llm-host`**
-(`src/recall/llmhost.py`) — one process for the whole Mac, so recall and life's
-emotion worker cannot each hold their own ~4.3 GB copy — and everything else is
-an HTTP client (`recall.llm.make_generator`). It loads on the first request and
-lets go after five idle minutes, so an unused day costs nothing and a first
-request after a lull pays ~60s. Nothing falls back to loading in-process: with
-the agent down, generation fails loudly (`LlmHostUnavailable`) rather than
-quietly re-creating the second copy.
+⚠ **The holder itself STAYS, and deleting it would break a different project.**
+`recall-llm-host` (`src/recall/llmhost.py`, `127.0.0.1:8092`) is the one process
+on this Mac that owns the ~4.3 GB of LLM weights, and *life*'s emotion worker
+addresses it directly over loopback. It is recall's agent by history, not by
+ownership.
 
 ```sh
 curl -s localhost:8092/health            # which model is resident, and how idle
 ./scripts/recall.sh llm-host --idle-unload 60   # run one by hand (agent stopped)
-RECALL_LLM_HOST= ./scripts/recall.sh summarize  # deliberate in-process load
 ```
 
 ## Vocabulary (proper nouns)

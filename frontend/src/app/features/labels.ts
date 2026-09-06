@@ -11,7 +11,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatSnackBar } from '@angular/material/snack-bar';
 
-import { HouseholdContext, Label, LabelList, VocabularyList } from '../models';
+import { Label, LabelList, VocabularyList } from '../models';
 import { RecallApi } from '../recall-api';
 import { formatClock } from '../format';
 
@@ -69,32 +69,6 @@ export class Labels {
     });
   }
 
-  // Household context: background facts handed to the LLM with every summary /
-  // ask prompt (pronouns, who lives here, recurring places). Data, not code —
-  // curated here alongside the vocabulary. Editable copy seeded from the server
-  // value once loaded; Save is enabled only when it differs.
-  private readonly storedContext = httpResource<HouseholdContext>(() => '/api/context');
-  protected readonly contextDraft = signal<string | null>(null);
-  protected readonly contextText = computed(
-    () => this.contextDraft() ?? this.storedContext.value()?.text ?? '',
-  );
-  protected readonly contextDirty = computed(
-    () => this.contextDraft() !== null && this.contextDraft() !== this.storedContext.value()?.text,
-  );
-
-  protected saveContext(): void {
-    const text = this.contextText().trim();
-    this.api.setContext(text).subscribe({
-      next: () => {
-        this.contextDraft.set(null);
-        this.storedContext.reload();
-        this.snack.open('Context saved — applies from the next summary/answer', undefined, {
-          duration: 3000,
-        });
-      },
-      error: () => this.snack.open('Could not save the context', 'Dismiss', { duration: 4000 }),
-    });
-  }
 
   /** URL drives the filter (bookmarkable, e.g. linked from the Train balance).
    * withComponentInputBinding passes undefined when the param is absent —

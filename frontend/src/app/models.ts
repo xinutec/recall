@@ -120,57 +120,10 @@ export interface Ok {
   readonly ok: boolean;
 }
 
-export interface QuietSpan {
-  readonly source: string;
-  readonly start: string;
-  readonly end: string;
-  readonly durationS: number;
-  readonly audioIds: readonly number[];
-  readonly soundSeconds: number;
-  readonly loudestDb: number | null;
-  readonly marginDb: number | null;
-  readonly silent: boolean;
-  readonly structure: number | null;
-}
-
-export interface QuietSpanList {
-  readonly items: readonly QuietSpan[];
-}
-
-export interface QuietScan {
-  readonly running: boolean;
-  readonly measured: number;
-  readonly total: number;
-  readonly analysed: number;
-  readonly toAnalyse: number;
-}
-
-export interface QuietDeleted {
-  readonly deleted: number;
-  readonly freedBytes: number;
-}
-
-export interface EnvelopeSegment {
-  readonly audioId: number;
-  readonly start: string;
-  readonly end: string;
-  readonly meanDb: number | null;
-}
-
 export interface SoundEvent {
   readonly start: string;
   readonly end: string;
   readonly peakDb: number;
-}
-
-export interface Envelope {
-  readonly start: string;
-  readonly end: string;
-  readonly bucketS: number;
-  readonly thresholdDb: number;
-  readonly points: readonly (number | null)[];
-  readonly segments: readonly EnvelopeSegment[];
-  readonly events: readonly SoundEvent[];
 }
 
 export interface SpeakerNames {
@@ -192,36 +145,6 @@ export interface VocabularyTerm {
 
 export interface VocabularyList {
   readonly items: readonly VocabularyTerm[];
-}
-
-export interface DaySummary {
-  readonly day: string;
-  readonly text: string;
-  readonly model: string;
-}
-
-export interface DaySummaryList {
-  readonly items: readonly DaySummary[];
-}
-
-export interface HouseholdContext {
-  readonly text: string;
-}
-
-export interface TodaySummary {
-  readonly day: string;
-  readonly text: string | null;
-  readonly generatedAt: string | null;
-  readonly upToDate: boolean;
-  readonly pending: boolean;
-}
-
-export interface AskAnswer {
-  readonly status: 'done' | 'pending' | 'error';
-  readonly id: number | null;
-  readonly answer: string | null;
-  readonly sources: readonly Transcript[];
-  readonly error: string | null;
 }
 
 export interface TranscriptList {
@@ -264,50 +187,6 @@ export interface Around {
 
 export interface Suggest {
   readonly speaker: string | null;
-}
-
-export interface AbCompareScore {
-  readonly correctionId: number;
-  readonly truth: string;
-  readonly textA: string;
-  readonly textB: string;
-  readonly werA: number;
-  readonly werB: number;
-  readonly audioUrl: string;
-}
-
-export interface AbCompareSegmentDiff {
-  readonly audioId: number;
-  readonly start: string;
-  readonly changed: boolean;
-  readonly textA: string;
-  readonly textB: string;
-}
-
-export interface AbCompareRunSummary {
-  readonly id: number;
-  readonly source: string;
-  readonly modelA: string;
-  readonly modelB: string;
-  readonly baseModel: string;
-  readonly status: 'queued' | 'running' | 'done' | 'error';
-  readonly created: string;
-  readonly meanWerA: number | null;
-  readonly meanWerB: number | null;
-  readonly nCorrections: number | null;
-  readonly nSegments: number | null;
-  readonly nChanged: number | null;
-  readonly error: string | null;
-}
-
-export interface AbCompareRunList {
-  readonly items: readonly AbCompareRunSummary[];
-}
-
-export interface AbCompareRun {
-  readonly summary: AbCompareRunSummary;
-  readonly scores: readonly AbCompareScore[];
-  readonly segmentDiffs: readonly AbCompareSegmentDiff[];
 }
 
 // ---- request bodies (POST payloads) ----
@@ -390,15 +269,6 @@ export interface RefineRequest {
   readonly end: string;
 }
 
-export interface AbCompareStartRequest {
-  readonly source: string;
-  readonly from?: string | null;
-  readonly to?: string | null;
-  readonly modelA?: string | null;
-  readonly modelB?: string | null;
-  readonly baseModel?: string | null;
-}
-
 export interface ReassignRequest {
   readonly speaker: string;
 }
@@ -415,22 +285,10 @@ export interface SplitRequest {
   readonly fragments: readonly SplitFragment[];
 }
 
-export interface AskRequest {
-  readonly question: string;
-}
-
-export interface QuietDeleteRequest {
-  readonly audioIds: readonly number[];
-}
-
 export interface VocabularyRequest {
   readonly term: string;
 }
 
 export interface SessionRenameRequest {
   readonly title: string;
-}
-
-export interface ContextRequest {
-  readonly text: string;
 }

@@ -19,9 +19,9 @@ from dataclasses import dataclass
 
 from recall.analyse import analyse_segments
 from recall.calibrate import calibrate
-from recall.quiet import scan_segments
 from recall.sources import SWEEPABLE_KINDS
 from recall.store import Store
+from recall.volumes import scan_segments
 
 
 @dataclass(frozen=True)

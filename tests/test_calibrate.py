@@ -14,10 +14,10 @@ from recall.calibrate import (
     event_threshold,
 )
 from recall.envelope import DEFAULT_EVENT_DB, Measurement, encode_envelope
-from recall.quiet import scan_segments
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
 from recall.timeline import Segment
+from recall.volumes import scan_segments
 
 BASE = datetime(2026, 7, 12, 9, 0, 0, tzinfo=UTC)
 
@@ -131,7 +131,7 @@ def test_calibration_is_measured_and_stored_per_source(
         floor = -62.0 if "/usb/" in str(path) else -77.0
         return Measurement(mean_db=floor - 5, buckets=(floor - 8,) * 597 + (floor,) * 3)
 
-    monkeypatch.setattr("recall.quiet.measure", measure)
+    monkeypatch.setattr("recall.volumes.measure", measure)
     scan_segments(store)
 
     results = {c.source_id: c for c in calibrate(store)}

@@ -77,16 +77,16 @@ describe('App', () => {
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('.brand')?.textContent).toContain('recall');
     const links = [...el.querySelectorAll('.links a')];
-    expect(links.length).toBe(5);
+    expect(links.length).toBe(4);
     const navText = el.querySelector('.links')?.textContent ?? '';
-    for (const label of ['Timeline', 'Sessions', 'Train', 'Search', 'Ask']) {
+    for (const label of ['Timeline', 'Sessions', 'Train', 'Search']) {
       expect(navText).toContain(label);
     }
-    // Secondary pages live in the hamburger menu, not the nav.
-    expect(navText).not.toContain('Compare');
+    // Ask and Compare were cut with the product's scope (architecture.md).
+    expect(navText).not.toContain('Ask');
   });
 
-  it('hamburger menu holds the secondary pages (Compare, Labels)', async () => {
+  it('hamburger menu holds the secondary pages (Labels)', async () => {
     const { fixture } = setup();
     await fixture.whenStable();
     const el = fixture.nativeElement as HTMLElement;
@@ -97,8 +97,8 @@ describe('App', () => {
     // mat-menu renders into the CDK overlay, outside the component element.
     const items = [...document.querySelectorAll('.cdk-overlay-container [mat-menu-item]')];
     const texts = items.map((i) => i.textContent ?? '');
-    expect(texts.some((t) => t.includes('Compare'))).toBe(true);
     expect(texts.some((t) => t.includes('Labels'))).toBe(true);
+    expect(texts.some((t) => t.includes('Compare'))).toBe(false);
   });
 
   it('shows the build stamp so a stale cache is visible at a glance', async () => {

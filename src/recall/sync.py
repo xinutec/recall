@@ -37,8 +37,6 @@ from recall.outbox import read_reports
 from recall.schemas import HeartbeatsOut, OkOut, OutboxesOut, PromptOut
 from recall.sources import AudioSource, SourceKind
 from recall.store import (
-    AbCompareJob,
-    AskRequest,
     RefineRequest,
     Store,
     TranscriptSegment,
@@ -335,25 +333,6 @@ def _upload_job_of(job: UploadJob) -> JobOut:
         sample_rate=job.sample_rate,
         channels=job.channels,
     )
-
-
-def _ab_job_of(run: AbCompareJob) -> JobOut:
-    return JobOut(
-        id=run.id,
-        type="ab-compare",
-        source=run.source,
-        start=run.start.isoformat() if run.start else None,
-        end=run.end.isoformat() if run.end else None,
-        model_a=run.model_a,
-        model_b=run.model_b,
-        base_model=run.base_model,
-        status=run.status,
-    )
-
-
-def _ask_job_of(req: AskRequest) -> JobOut:
-    # source is unused for ask (not recording-scoped); the prompt is the whole payload.
-    return JobOut(id=req.id, type="ask", source="", prompt=req.prompt)
 
 
 def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentStoredOut:
@@ -734,96 +713,11 @@ def register_sync_routes(
         finally:
             store.close()
 
-    @app.post("/sync/summaries")
-    def sync_summaries(
-        body: SummaryIn, authorization: str | None = Header(default=None)
-    ) -> OkOut:
-        check_token(bearer(authorization), expected)
-        store = store_factory()
-        try:
-            # Keyed on the day (PK) — an upsert, so re-pushing a regenerated summary
-            # just replaces it. The Mac owns the LLM; the fleet serves the result.
-            store.set_day_summary(body.day, body.text, model=body.model)
-        finally:
-            store.close()
-        return {"ok": True}
-
     _register_live_route(app, store_factory, expected)
     _register_capture_route(app, store_factory, expected)
     _register_job_routes(app, store_factory, expected)
-    _register_ab_compare_routes(app, store_factory, expected)
 
     return True
-
-
-def _register_ab_compare_routes(
-    app: FastAPI, store_factory: Callable[[], Store], expected: str
-) -> None:
-    """The A/B lifecycle relay (its own helper so register_sync_routes stays under the
-    statement budget): the Mac reports a fleet-queued run's progress and, when its
-    local daemon finishes, lands the result — which is what retires the run."""
-
-    @app.post("/sync/ab-compare/{run_id}/running")
-    def sync_ab_running(
-        run_id: int, authorization: str | None = Header(default=None)
-    ) -> OkOut:
-        check_token(bearer(authorization), expected)
-        store = store_factory()
-        try:
-            store.mark_ab_compare_running(run_id)
-        finally:
-            store.close()
-        return {"ok": True}
-
-    @app.post("/sync/ask/{request_id}/result")
-    def sync_ask_result(
-        request_id: int,
-        body: AskResultIn,
-        authorization: str | None = Header(default=None),
-    ) -> OkOut:
-        check_token(bearer(authorization), expected)
-        store = store_factory()
-        try:
-            if body.error is not None:
-                store.mark_ask_error(request_id, body.error)
-            elif body.answer is not None:
-                store.save_ask_answer(request_id, body.answer)
-            else:
-                raise HTTPException(
-                    status_code=400, detail="neither an answer nor an error"
-                )
-        finally:
-            store.close()
-        return {"ok": True}
-
-    @app.post("/sync/ab-compare/{run_id}/result")
-    def sync_ab_result(
-        run_id: int,
-        body: AbResultIn,
-        authorization: str | None = Header(default=None),
-    ) -> OkOut:
-        check_token(bearer(authorization), expected)
-        store = store_factory()
-        try:
-            if body.error is not None:
-                store.mark_ab_compare_error(run_id, body.error)
-            elif body.resultJson is not None:
-                store.save_ab_compare_result(
-                    run_id,
-                    result_json=body.resultJson,
-                    mean_wer_a=body.meanWerA,
-                    mean_wer_b=body.meanWerB,
-                    n_corrections=body.nCorrections,
-                    n_segments=body.nSegments,
-                    n_changed=body.nChanged,
-                )
-            else:
-                raise HTTPException(
-                    status_code=400, detail="neither a result nor an error"
-                )
-        finally:
-            store.close()
-        return {"ok": True}
 
 
 def _register_job_routes(
@@ -840,27 +734,15 @@ def _register_job_routes(
         check_token(bearer(authorization), expected)
         store = store_factory()
         try:
-            # Ask jobs first — a human is waiting on the answer. Then interactive
-            # refines; uploads and A/B runs fill what's left of the batch. Ask and A/B
-            # runs stay served until their result lands — the push-back is what retires
-            # them, not an acknowledgement.
-            jobs = [_ask_job_of(a) for a in store.pending_ask_requests(limit=limit)]
-            remaining = limit - len(jobs)
-            if remaining > 0:
-                jobs += [
-                    _job_of(r) for r in store.pending_refine_requests(limit=remaining)
-                ]
+            # Interactive refines first, then uploaded sessions. Ask and A/B
+            # relays used to share this queue and were cut with their features
+            # (architecture.md, "Scope of the rebuilt product").
+            jobs = [_job_of(r) for r in store.pending_refine_requests(limit=limit)]
             remaining = limit - len(jobs)
             if remaining > 0:
                 jobs += [
                     _upload_job_of(u)
                     for u in store.pending_upload_jobs(limit=remaining)
-                ]
-            remaining = limit - len(jobs)
-            if remaining > 0:
-                jobs += [
-                    _ab_job_of(r)
-                    for r in store.unfinished_ab_compare_runs(limit=remaining)
                 ]
             return jobs
         finally:

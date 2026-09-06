@@ -72,14 +72,11 @@ export class App {
     { path: '/sessions', label: 'Sessions', icon: 'event', exact: false },
     { path: '/train', label: 'Train', icon: 'school', exact: false },
     { path: '/search', label: 'Search', icon: 'search', exact: false },
-    { path: '/ask', label: 'Ask', icon: 'question_answer', exact: false },
   ];
 
   /** Secondary pages — in the hamburger menu, keeping the nav to five slots. */
   protected readonly more: readonly NavItem[] = [
-    { path: '/compare', label: 'Compare', icon: 'difference', exact: false },
     { path: '/labels', label: 'Labels', icon: 'label', exact: false },
-    { path: '/cleanup', label: 'Cleanup', icon: 'delete_sweep', exact: false },
   ];
 
   // Capture (whole-house recording) state, so it can be paused while working in

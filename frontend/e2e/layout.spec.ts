@@ -174,49 +174,8 @@ const sessionsList = {
   ],
 };
 
-const quietSpans = {
-  items: [
-    {
-      source: 'usb',
-      start: '2026-01-15T02:00:00Z',
-      end: '2026-01-15T04:10:00Z',
-      durationS: 7800,
-      audioIds: [1, 2, 3],
-      soundSeconds: 4.2,
-      loudestDb: -51.5,
-      marginDb: 6.1,
-      silent: false,
-      structure: 0.4,
-    },
-  ],
-};
 
-const abRuns = {
-  items: [
-    {
-      id: 1,
-      source: 'meeting-20260115-0935',
-      modelA: 'mlx-community/whisper-large-v3-turbo',
-      modelB: 'adapter-current',
-      baseModel: 'mlx-community/whisper-large-v3',
-      status: 'done',
-      created: '2026-01-15T09:00:00Z',
-      meanWerA: 0.121,
-      meanWerB: 0.098,
-      nCorrections: 20,
-      nSegments: 64,
-      nChanged: 12,
-      error: null,
-    },
-  ],
-};
 
-const summariesOut = {
-  items: [
-    { day: '2026-01-15', text: LONG, model: 'qwen' },
-    { day: '2026-01-14', text: 'A quieter day.', model: 'qwen' },
-  ],
-};
 
 const screenMocks: Record<string, unknown> = {
   '/api/train': trainItems,
@@ -224,10 +183,7 @@ const screenMocks: Record<string, unknown> = {
   '/api/search': searchItems,
   '/api/corrections': correctionsList,
   '/api/sessions': sessionsList,
-  '/api/quiet/spans': quietSpans,
   '/api/quiet/scan': { running: false, measured: 10, total: 10, analysed: 10, toAnalyse: 10 },
-  '/api/ab-compare': abRuns,
-  '/api/summaries': summariesOut,
   '/api/vocabulary': { items: [{ id: 1, term: 'vorasidenib' }] },
   '/api/context': { text: 'A household context paragraph.' },
   '/api/capture': { running: true, desiredRunning: true, settled: true, micReachable: true, pausedUntil: null, desiredPausedUntil: null, stateToken: 'x' },
@@ -237,13 +193,10 @@ const screenMocks: Record<string, unknown> = {
 const screens: { path: string; anchor: string }[] = [
   { path: '/', anchor: '.turns' },
   { path: '/search', anchor: '.search-field' },
-  { path: '/ask', anchor: '.question' },
   { path: '/review', anchor: '.page' },
   { path: '/train', anchor: '.page' },
   { path: '/labels', anchor: '.vocab' },
-  { path: '/cleanup', anchor: '.cleanup' },
   { path: '/sessions', anchor: '.page' },
-  { path: '/compare', anchor: '.page' },
 ];
 
 for (const { path, anchor } of screens) {

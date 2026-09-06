@@ -29,14 +29,10 @@ from recall.ids import AudioSegmentId, CorrectionId, SpeakerId, TranscriptId
 from recall.ranking import normalize_text
 from recall.sources import AudioSource, SourceKind, SourceRow
 from recall.store_models import (
-    AbCompareJob,
-    AskRequest,
-    AskRequestStatus,
     CaptureEvent,
     ClusterNaming,
     Correction,
     LabelledFragment,
-    LiveSummary,
     PendingVoiceprint,
     RefineRequest,
     SegmentVolume,
@@ -61,14 +57,10 @@ __all__ = [
     "REPROCESSED_MARKER",
     "SCHEMA_VERSION",
     "_MIGRATIONS",
-    "AbCompareJob",
-    "AskRequest",
-    "AskRequestStatus",
     "CaptureEvent",
     "ClusterNaming",
     "Correction",
     "LabelledFragment",
-    "LiveSummary",
     "PendingVoiceprint",
     "RefineRequest",
     "SegmentVolume",
@@ -341,9 +333,6 @@ class Store:
                 )
             self._conn.execute(
                 "DELETE FROM refine_requests WHERE source_id = ?", (source_id,)
-            )
-            self._conn.execute(
-                "DELETE FROM ab_compare_runs WHERE source_id = ?", (source_id,)
             )
             self._conn.execute(
                 "DELETE FROM audio_segments WHERE source_id = ?", (source_id,)
@@ -656,7 +645,7 @@ class Store:
         turn behind — human or machine. A turn that stands is speech we chose to keep,
         and the audio under it is not idle noise however quiet its 60-second mean looks.
 
-        `loud_fraction` is left None here and filled in by `recall.quiet`: measuring it
+        `loud_fraction` is left None here: measuring it
         needs the mic's calibrated threshold and a decode of the stored envelope, and
         the capture agent must be able to import this module without the ML stack.
         """
@@ -1322,110 +1311,6 @@ class Store:
         )
         self._commit()
 
-    def add_ask_request(
-        self,
-        question: str,
-        prompt: str,
-        sources: Sequence[int],
-        *,
-        fleet_id: int | None = None,
-    ) -> int:
-        """Queue an "Ask the archive" job. `prompt` is the self-contained grounded
-        prompt (built here from retrieved turns) the Mac's LLM answers; `sources` are
-        the turn ids the answer cites. `fleet_id` set = the Mac adopting a fleet job
-        (see the A/B-compare relay); NULL = a fleet-origin request. Returns the id."""
-        cursor = self._conn.execute(
-            "INSERT INTO ask_requests "
-            "(fleet_id, question, prompt, sources, created_utc) VALUES (?, ?, ?, ?, ?)",
-            (
-                fleet_id,
-                question,
-                prompt,
-                json.dumps(list(sources)),
-                datetime.now(UTC).isoformat(),
-            ),
-        )
-        self._commit()
-        return int(cursor.lastrowid or 0)
-
-    def pending_ask_requests(self, *, limit: int = 100) -> list[AskRequest]:
-        """Ask jobs not yet answered (no answer or error landed), oldest-first — served
-        to the Mac over /sync/jobs, and drained by the Mac's refine daemon locally."""
-        rows = self._conn.execute(
-            "SELECT id, question, prompt, sources FROM ask_requests "
-            "WHERE done_utc IS NULL ORDER BY id LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [
-            AskRequest(
-                id=int(r["id"]),
-                question=str(r["question"]),
-                prompt=str(r["prompt"]),
-                sources=tuple(json.loads(r["sources"])),
-            )
-            for r in rows
-        ]
-
-    def get_ask_request(self, request_id: int) -> AskRequestStatus | None:
-        """The current state of one ask job, for the UI poll — the answer once the Mac
-        has generated it (or the error), else pending (`done=False`)."""
-        return self._ask_status_row(
-            "SELECT id, question, prompt, sources, answer, error, done_utc, "
-            "created_utc FROM ask_requests WHERE id = ?",
-            (request_id,),
-        )
-
-    def ask_request_by_fleet_id(self, fleet_id: int) -> AskRequestStatus | None:
-        """The Mac's adopted copy of a fleet ask job — the relay reads its status to
-        decide whether the answer (or error) is ready to push back."""
-        return self._ask_status_row(
-            "SELECT id, question, prompt, sources, answer, error, done_utc, "
-            "created_utc FROM ask_requests WHERE fleet_id = ?",
-            (fleet_id,),
-        )
-
-    def _ask_status_row(
-        self, sql: str, params: tuple[object, ...]
-    ) -> AskRequestStatus | None:
-        row = self._conn.execute(sql, params).fetchone()
-        if row is None:
-            return None
-        return AskRequestStatus(
-            id=int(row["id"]),
-            question=str(row["question"]),
-            prompt=str(row["prompt"]),
-            sources=tuple(json.loads(row["sources"])),
-            answer=row["answer"],
-            error=row["error"],
-            done=row["done_utc"] is not None,
-            created=datetime.fromisoformat(row["created_utc"]),
-        )
-
-    def delete_ask_request(self, request_id: int) -> None:
-        """Drop an ask row — used by the relay to discard a stale adopted copy when a
-        reused fleet id no longer matches the job's prompt."""
-        self._conn.execute("DELETE FROM ask_requests WHERE id = ?", (request_id,))
-        self._commit()
-
-    def save_ask_answer(self, request_id: int, answer: str) -> None:
-        """Land a generated answer and retire the job (done), so /sync/jobs stops
-        serving it and the UI poll resolves."""
-        self._conn.execute(
-            "UPDATE ask_requests SET answer = ?, error = NULL, done_utc = ? "
-            "WHERE id = ?",
-            (answer, datetime.now(UTC).isoformat(), request_id),
-        )
-        self._commit()
-
-    def mark_ask_error(self, request_id: int, error: str) -> None:
-        """Retire an ask job with an error (generation failed) — the UI shows it rather
-        than spinning forever."""
-        self._conn.execute(
-            "UPDATE ask_requests SET error = ?, done_utc = ? WHERE id = ?",
-            (error, datetime.now(UTC).isoformat(), request_id),
-        )
-        self._commit()
-
     def pending_upload_jobs(self, *, limit: int = 100) -> list[UploadJob]:
         """Uploaded-session segments not yet through ASR, oldest-first — the fleet-side
         upload queue served to the Mac (which holds the ML). Derived from the segment
@@ -1503,136 +1388,6 @@ class Store:
             (source, start.isoformat()),
         ).fetchone()
         return row is not None
-
-    def add_ab_compare_run(  # noqa: PLR0913 - source + window + the two models
-        self,
-        source: str,
-        start: datetime | None,
-        end: datetime | None,
-        *,
-        model_a: str,
-        model_b: str,
-        base_model: str,
-        fleet_id: int | None = None,
-    ) -> int:
-        """Queue an A/B comparison of `model_a` vs `model_b` over `source` (the whole
-        recording, or [start, end) if given). The runner drains it. Returns the id.
-        `fleet_id` marks a run mirrored from the fleet's queue (the Isis split), so
-        its result can be pushed back to that row."""
-        if start is not None:
-            _require_aware(start, "start")
-        if end is not None:
-            _require_aware(end, "end")
-        cursor = self._conn.execute(
-            "INSERT INTO ab_compare_runs "
-            "(source_id, start_utc, end_utc, model_a, model_b, base_model, status, "
-            "created_utc, fleet_id) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
-            (
-                source,
-                start.isoformat() if start else None,
-                end.isoformat() if end else None,
-                model_a,
-                model_b,
-                base_model,
-                datetime.now(UTC).isoformat(),
-                fleet_id,
-            ),
-        )
-        self._commit()
-        return int(cursor.lastrowid or 0)
-
-    def pending_ab_compare_runs(self, *, limit: int = 100) -> list[AbCompareJob]:
-        """Queued runs not yet started, oldest-first (without result_json)."""
-        rows = self._conn.execute(
-            f"SELECT {_AB_COMPARE_COLS} FROM ab_compare_runs "
-            "WHERE status = 'queued' ORDER BY id LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [_row_to_ab_compare_job(r, with_result=False) for r in rows]
-
-    def unfinished_ab_compare_runs(self, *, limit: int = 100) -> list[AbCompareJob]:
-        """Runs still awaiting a result (queued or running), oldest-first — what the
-        fleet serves to the Mac across the split. Running rows stay served so a Mac
-        that lost its local mirror re-adopts them instead of wedging them forever."""
-        rows = self._conn.execute(
-            f"SELECT {_AB_COMPARE_COLS} FROM ab_compare_runs "
-            "WHERE status IN ('queued', 'running') ORDER BY id LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [_row_to_ab_compare_job(r, with_result=False) for r in rows]
-
-    def ab_compare_run_by_fleet_id(self, fleet_id: int) -> AbCompareJob | None:
-        """The local mirror of a fleet-queued run (with its result_json, for the
-        push-back), or None if this Mac has not adopted it yet."""
-        row = self._conn.execute(
-            f"SELECT {_AB_COMPARE_COLS}, result_json FROM ab_compare_runs "
-            "WHERE fleet_id = ?",
-            (fleet_id,),
-        ).fetchone()
-        return _row_to_ab_compare_job(row, with_result=True) if row else None
-
-    def list_ab_compare_runs(self, *, limit: int = 100) -> list[AbCompareJob]:
-        """All comparison runs, newest-first, without the (large) result_json."""
-        rows = self._conn.execute(
-            f"SELECT {_AB_COMPARE_COLS} FROM ab_compare_runs ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [_row_to_ab_compare_job(r, with_result=False) for r in rows]
-
-    def get_ab_compare_run(self, run_id: int) -> AbCompareJob | None:
-        """One comparison run including its result_json, or None if unknown."""
-        row = self._conn.execute(
-            f"SELECT {_AB_COMPARE_COLS}, result_json FROM ab_compare_runs WHERE id = ?",
-            (run_id,),
-        ).fetchone()
-        return _row_to_ab_compare_job(row, with_result=True) if row else None
-
-    def mark_ab_compare_running(self, run_id: int) -> None:
-        """Mark a run started, so a second runner won't pick it up."""
-        self._conn.execute(
-            "UPDATE ab_compare_runs SET status = 'running', started_utc = ? "
-            "WHERE id = ?",
-            (datetime.now(UTC).isoformat(), run_id),
-        )
-        self._commit()
-
-    def save_ab_compare_result(  # noqa: PLR0913 - the report's denormalized summary
-        self,
-        run_id: int,
-        *,
-        result_json: str,
-        mean_wer_a: float | None,
-        mean_wer_b: float | None,
-        n_corrections: int,
-        n_segments: int,
-        n_changed: int,
-    ) -> None:
-        """Store a finished run's report + denormalized summary; mark it done."""
-        self._conn.execute(
-            "UPDATE ab_compare_runs SET status = 'done', done_utc = ?, "
-            "result_json = ?, mean_wer_a = ?, mean_wer_b = ?, n_corrections = ?, "
-            "n_segments = ?, n_changed = ? WHERE id = ?",
-            (
-                datetime.now(UTC).isoformat(),
-                result_json,
-                mean_wer_a,
-                mean_wer_b,
-                n_corrections,
-                n_segments,
-                n_changed,
-                run_id,
-            ),
-        )
-        self._commit()
-
-    def mark_ab_compare_error(self, run_id: int, message: str) -> None:
-        """Mark a run failed with `message`, so it isn't retried; the UI shows it."""
-        self._conn.execute(
-            "UPDATE ab_compare_runs SET status = 'error', done_utc = ?, error = ? "
-            "WHERE id = ?",
-            (datetime.now(UTC).isoformat(), message, run_id),
-        )
-        self._commit()
 
     def media_spans(
         self, *, max_gap_s: float, min_duration_s: float
@@ -1968,32 +1723,6 @@ class Store:
         self._conn.execute("DELETE FROM vocabulary WHERE id = ?", (term_id,))
         self._commit()
 
-    def set_day_summary(self, day: str, text: str, *, model: str) -> None:
-        """Store (or re-derive) one day's summary — a derived view, so overwrite."""
-        self._conn.execute(
-            """INSERT INTO day_summaries (day, text, model, created_utc)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(day) DO UPDATE
-               SET text = excluded.text, model = excluded.model,
-                   created_utc = excluded.created_utc""",
-            (day, text, model, datetime.now(UTC).isoformat()),
-        )
-        self._commit()
-
-    def get_day_summary(self, day: str) -> str | None:
-        row = self._conn.execute(
-            "SELECT text FROM day_summaries WHERE day = ?", (day,)
-        ).fetchone()
-        return None if row is None else str(row["text"])
-
-    def recent_day_summaries(self, *, limit: int = 7) -> list[tuple[str, str, str]]:
-        """Newest-first (day, text, model) — the Ask page's recent-days digest."""
-        rows = self._conn.execute(
-            "SELECT day, text, model FROM day_summaries ORDER BY day DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [(str(r["day"]), str(r["text"]), str(r["model"])) for r in rows]
-
     def get_setting(self, key: str) -> str | None:
         """A free-form setting, or None when unset/blank (callers `if value:`)."""
         row = self._conn.execute(
@@ -2009,39 +1738,6 @@ class Store:
             (key, value),
         )
         self._commit()
-
-    def set_live_summary(
-        self, day: str, text: str, *, model: str, watermark: str
-    ) -> None:
-        """Cache the running day's provisional summary. One-row cache: writing a
-        new day evicts any older one (the day rolled over; the settled summary in
-        day_summaries takes it from there)."""
-        self._conn.execute("DELETE FROM live_summaries WHERE day != ?", (day,))
-        self._conn.execute(
-            """INSERT INTO live_summaries
-               (day, text, model, watermark, generated_utc)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(day) DO UPDATE
-               SET text = excluded.text, model = excluded.model,
-                   watermark = excluded.watermark,
-                   generated_utc = excluded.generated_utc""",
-            (day, text, model, watermark, datetime.now(UTC).isoformat()),
-        )
-        self._commit()
-
-    def get_live_summary(self, day: str) -> LiveSummary | None:
-        row = self._conn.execute(
-            "SELECT * FROM live_summaries WHERE day = ?", (day,)
-        ).fetchone()
-        if row is None:
-            return None
-        return LiveSummary(
-            day=str(row["day"]),
-            text=str(row["text"]),
-            model=str(row["model"]),
-            watermark=str(row["watermark"]),
-            generated_utc=str(row["generated_utc"]),
-        )
 
     def day_watermark(self, day: str) -> str | None:
         """A fingerprint of the day's visible-turn state — the live summary's
@@ -2062,19 +1758,6 @@ class Store:
             return None
         state = "\n".join(f"{r['id']}={r['label']}" for r in rows)
         return hashlib.sha256(state.encode()).hexdigest()[:16]
-
-    def days_missing_summaries(self, *, limit: int = 30) -> list[str]:
-        """Days (UTC, yyyy-mm-dd) that have visible turns but no summary yet —
-        the work-list the idle summariser drains, oldest first."""
-        rows = self._conn.execute(
-            """SELECT DISTINCT substr(start_utc, 1, 10) AS day
-               FROM transcript_segments
-               WHERE superseded_by IS NULL AND hidden_reason IS NULL
-                 AND day NOT IN (SELECT day FROM day_summaries)
-               ORDER BY day LIMIT ?""",
-            (limit,),
-        ).fetchall()
-        return [str(r["day"]) for r in rows]
 
     def short_audio_segments(
         self, *, max_seconds: float
@@ -3195,35 +2878,3 @@ def _opt_dt(value: str | int | float | None) -> datetime | None:
 
 def _opt_int(value: str | int | float | None) -> int | None:
     return None if value is None else int(value)
-
-
-# The ab_compare_runs columns common to every read (result_json is appended only by
-# get_ab_compare_run, which sets with_result=True).
-_AB_COMPARE_COLS = (
-    "id, source_id, start_utc, end_utc, model_a, model_b, base_model, status, "
-    "created_utc, started_utc, done_utc, error, mean_wer_a, mean_wer_b, "
-    "n_corrections, n_segments, n_changed"
-)
-
-
-def _row_to_ab_compare_job(row: sqlite3.Row, *, with_result: bool) -> AbCompareJob:
-    return AbCompareJob(
-        id=int(row["id"]),
-        source=str(row["source_id"]),
-        start=_opt_dt(row["start_utc"]),
-        end=_opt_dt(row["end_utc"]),
-        model_a=str(row["model_a"]),
-        model_b=str(row["model_b"]),
-        base_model=str(row["base_model"]),
-        status=str(row["status"]),
-        created=datetime.fromisoformat(str(row["created_utc"])),
-        started=_opt_dt(row["started_utc"]),
-        done=_opt_dt(row["done_utc"]),
-        error=_opt_str(row["error"]),
-        result_json=_opt_str(row["result_json"]) if with_result else None,
-        mean_wer_a=_opt_float(row["mean_wer_a"]),
-        mean_wer_b=_opt_float(row["mean_wer_b"]),
-        n_corrections=_opt_int(row["n_corrections"]),
-        n_segments=_opt_int(row["n_segments"]),
-        n_changed=_opt_int(row["n_changed"]),
-    )

@@ -12,7 +12,6 @@ import argparse
 import json
 import logging
 import os
-import sqlite3
 import sys
 import threading
 import time
@@ -26,7 +25,6 @@ from pathlib import Path
 
 import recall
 from recall import bounded, capture_control, heartbeat, runlog
-from recall.abcompare import Report, compare_models, render_json, render_markdown
 from recall.asr import (
     AsrResult,
     Transcriber,
@@ -72,7 +70,6 @@ from recall.hf_asr import is_adapter_dir, make_hf_transcriber
 from recall.identify import identify_segments
 from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.live import run_live
-from recall.llm import Generator, make_generator
 from recall.logrotate import rotate_logs
 from recall.loss import uncovered_loss
 from recall.loudness import backfill_loudness
@@ -88,8 +85,7 @@ from recall.reprocess import reprocess
 from recall.review import apply_correction
 from recall.sources import DEVICE_KINDS, AudioSource, SourceKind
 from recall.speakerid import pyannote_embed
-from recall.store import AbCompareJob, Store
-from recall.summarize import days_needing_summaries, summarize_day
+from recall.store import Store
 from recall.timeline import Gap, find_gaps, find_overlaps
 from recall.training import export_corpus
 from recall.transcript_view import (
@@ -497,132 +493,6 @@ def _resolve_model(model: str, data_root: Path) -> str:
     return model
 
 
-def _run_ab_compare(  # noqa: PLR0913 - selection window + the two models + naming
-    store: Store,
-    *,
-    source: str,
-    frm: datetime | None,
-    to: datetime | None,
-    model_a: str,
-    model_b: str,
-    base_model: str,
-    data_root: Path,
-    work_dir: Path,
-    limit: int = 100_000,
-) -> Report:
-    """Build both real transcribers, pick the audio (whole source or [frm, to)), and
-    run the non-destructive comparison. Shared by the CLI and the queued-job runner.
-    Raises ValueError if the window is half-given or selects no audio."""
-    if frm is not None or to is not None:
-        if frm is None or to is None:
-            raise ValueError("pass from and to together")
-        audio_ids = store.audio_segments_in_range(source, frm, to, limit=limit)
-    else:
-        audio_ids = store.audio_segments_for_source(source, limit=limit)
-    if not audio_ids:
-        raise ValueError(f"no audio for source {source!r} in that range")
-    tr_a = _build_transcriber(
-        _resolve_model(model_a, data_root), base_model, words=False
-    )
-    tr_b = _build_transcriber(
-        _resolve_model(model_b, data_root), base_model, words=False
-    )
-    return compare_models(
-        store,
-        lambda p: _result_text(tr_a(p)),
-        lambda p: _result_text(tr_b(p)),
-        audio_ids=audio_ids,
-        work_dir=work_dir,
-        model_a=model_a,
-        model_b=model_b,
-    )
-
-
-def _process_ab_compare_job(
-    store: Store, job: AbCompareJob, runner: Callable[[AbCompareJob], Report]
-) -> None:
-    """Run one queued A/B job via `runner` and persist the outcome: mark it running,
-    then save the report (with denormalized summary) or record the error. The runner
-    is injected so the persistence logic is unit-testable without any model."""
-    store.mark_ab_compare_running(job.id)
-    try:
-        report = runner(job)
-    except Exception as exc:  # any failure is recorded, never crashes the daemon
-        store.mark_ab_compare_error(job.id, str(exc))
-        print(f"ab-compare: run #{job.id} failed: {exc}")
-        return
-    store.save_ab_compare_result(
-        job.id,
-        result_json=render_json(report),
-        mean_wer_a=report.mean_wer_a,
-        mean_wer_b=report.mean_wer_b,
-        n_corrections=len(report.correction_scores),
-        n_segments=report.n_segments,
-        n_changed=report.n_changed,
-    )
-    print(
-        f"ab-compare: run #{job.id} done — A {report.mean_wer_a} B {report.mean_wer_b}"
-    )
-
-
-def _drain_ab_compare(store: Store, *, data_root: Path, work_dir: Path) -> bool:
-    """Run one queued A/B comparison if any is pending; return whether it did. Each job
-    carries its own models, so the runner builds them per job. Pause-independent — the
-    refine daemon calls this every loop regardless of capture state."""
-    pending = store.pending_ab_compare_runs(limit=1)
-    if not pending:
-        return False
-    job = pending[0]
-    _process_ab_compare_job(
-        store,
-        job,
-        lambda j: _run_ab_compare(
-            store,
-            source=j.source,
-            frm=j.start,
-            to=j.end,
-            model_a=j.model_a,
-            model_b=j.model_b,
-            base_model=j.base_model,
-            data_root=data_root,
-            work_dir=work_dir,
-        ),
-    )
-    return True
-
-
-def _cmd_ab_compare(args: argparse.Namespace) -> int:
-    """Run two models over a past recording (or a window of it) and report a
-    per-segment text diff + WER against your corrections — without touching the
-    store. See recall.abcompare."""
-    store = Store.open(args.out / "recall.sqlite")
-    try:
-        report = _run_ab_compare(
-            store,
-            source=args.source,
-            frm=datetime.fromisoformat(args.frm) if args.frm else None,
-            to=datetime.fromisoformat(args.to) if args.to else None,
-            model_a=args.model_a,
-            model_b=args.model_b,
-            base_model=args.base_model,
-            data_root=args.out,
-            work_dir=args.out / "work",
-            limit=args.limit,
-        )
-    except ValueError as exc:
-        print(f"ab-compare: {exc}")
-        return 1
-    finally:
-        store.close()
-    md = render_markdown(report)
-    report_path = args.report or (args.out / f"ab-compare-{args.source}.md")
-    report_path.write_text(md)
-    report_path.with_suffix(".json").write_text(render_json(report))
-    print(md)
-    print(f"\n(written to {report_path} and {report_path.with_suffix('.json')})")
-    return 0
-
-
 def _cmd_reprocess(args: argparse.Namespace) -> int:
     store = Store.open(args.out / "recall.sqlite")
     try:
@@ -827,85 +697,6 @@ def _cmd_score_asr(args: argparse.Namespace) -> int:
         )
         return 1
     print(f"score-asr: ok (model {args.model}, {scored} fixture(s) scored)")
-    return 0
-
-
-def _drain_ask_requests(
-    store: Store, *, llm_model: str, cache: list[Generator]
-) -> bool:
-    """Answer ONE queued "Ask the archive" job with the local LLM — the fleet has none,
-    so it queued the (self-contained, already-retrieved) prompt for this Mac to generate
-    and push back. Pause-independent: a human is waiting. Generation happens in the
-    llm-host (recall.llmhost), which owns the weights; `cache` holds the generator,
-    shared with the day-summaries. Never runs on the fleet (no MLX there); generation
-    failures are recorded on the job so the UI shows them, not the daemon."""
-    if capture_control.is_fleet():
-        return False
-    pending = store.pending_ask_requests(limit=1)
-    if not pending:
-        return False
-    job = pending[0]
-    if not cache:
-        cache.append(make_generator(llm_model))
-    try:
-        answer = cache[0](job.prompt).strip()
-    except Exception as exc:  # generation itself failed → terminal error for the UI
-        store.rollback()
-        store.mark_ask_error(job.id, f"generation failed: {exc}")
-        print(f"refine: ask #{job.id} generation failed: {exc}", flush=True)
-        return True
-    try:
-        store.save_ask_answer(job.id, answer)
-        print(f"refine: answered ask #{job.id}", flush=True)
-    except sqlite3.OperationalError as exc:
-        # DB busy — don't burn the answer on a terminal error; clear the aborted write
-        # and leave the job pending so the next pass retries the save (regeneration is
-        # cheap now the model is warm). The fleet's timeout is the ultimate backstop.
-        store.rollback()
-        print(f"refine: ask #{job.id} save deferred (store busy): {exc}", flush=True)
-    return True
-
-
-def _drain_day_summaries(
-    store: Store, *, llm_model: str, cache: list[Generator]
-) -> bool:
-    """Summarise ONE missing complete day (the recall layer generates itself in
-    the refine daemon — no separate agent). Not idle-gated: a ~20s generation
-    doesn't starve capture. Generation happens in the llm-host, which loads the
-    weights on the first ask and releases them when they go unused, so a daemon
-    with nothing to summarise never costs any memory. Returns whether a day was done."""
-    days = days_needing_summaries(store, now=datetime.now(UTC))
-    if not days:
-        return False
-    if not cache:
-        cache.append(make_generator(llm_model))
-    summarize_day(store, cache[0], days[0], model_name=llm_model)
-    print(f"refine: summarized {days[0]}", flush=True)
-    return True
-
-
-def _cmd_summarize(args: argparse.Namespace) -> int:
-    """Generate per-day summaries with the local LLM — one day, or every missing
-    complete day. Loads the model once."""
-    store = Store.open(_db_path(args.out))
-    try:
-        days = (
-            [args.day]
-            if args.day
-            else days_needing_summaries(store, now=datetime.now(UTC))
-        )
-        if not days:
-            print("summarize: nothing missing")
-            return 0
-        generator = make_generator(args.llm)
-        for day in days:
-            text = summarize_day(store, generator, day, model_name=args.llm)
-            if text is None:
-                print(f"summarize: {day} has no visible turns - skipped")
-            else:
-                print(f"summarize: {day} ({len(text)} chars)")
-    finally:
-        store.close()
     return 0
 
 
@@ -1119,7 +910,7 @@ def _refine_one_source(
     return 0
 
 
-def _cmd_refine(args: argparse.Namespace) -> int:  # noqa: PLR0915 - daemon dispatch loop
+def _cmd_refine(args: argparse.Namespace) -> int:
     """Diarize-refine the archive, but only while capture is idle (paused) so the
     heavy pyannote pass never competes with live recording. Runs as a daemon by
     default; --max-segments N does a bounded run (one segment at a time, re-checking
@@ -1175,7 +966,6 @@ def _cmd_refine(args: argparse.Namespace) -> int:  # noqa: PLR0915 - daemon disp
         return added, len(ids)
 
     segments = turns = 0
-    summarizer: list[Generator] = []  # lazy one-slot cache for the summary drain
     try:
         while args.max_segments == 0 or segments < args.max_segments:
             now = datetime.now(UTC)
@@ -1186,17 +976,10 @@ def _cmd_refine(args: argparse.Namespace) -> int:  # noqa: PLR0915 - daemon disp
             # hung Ask). Rolling back is a no-op when nothing is open.
             store.rollback()
             try:
-                # Ask jobs first — a human is waiting — then A/B comparisons and
-                # day-summaries. All run regardless of pause (read-only generation, no
-                # token), so they never wait for an idle window.
-                if _drain_ask_requests(store, llm_model=args.llm, cache=summarizer):
-                    continue
-                if _drain_ab_compare(
-                    store, data_root=args.out, work_dir=args.out / "work"
-                ):
-                    continue
-                if _drain_day_summaries(store, llm_model=args.llm, cache=summarizer):
-                    continue
+                # Ask, A/B comparison and day-summaries used to be drained here.
+                # All three were cut with the product's scope (architecture.md);
+                # what is left is the diarizing refine pass this daemon is named
+                # for, which stays idle-gated so it never competes with capture.
                 idle = diarize_enabled and capture_control.is_paused(args.out, now)
                 if idle and store.pending_refine_requests(limit=1):
                     added, n = refine_request_one()  # on-demand requests first
@@ -2123,30 +1906,6 @@ def _cmd_repair_transcripts(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_scan_quiet(args: argparse.Namespace) -> int:
-    """Measure each capture segment's raw volume (cached, resumable) and list the long
-    total-quiet spans — candidates for the cleanup UI to review and delete."""
-    from recall.quiet import quiet_spans, scan_segments  # noqa: PLC0415
-
-    store = Store.open(args.out / "recall.sqlite")
-    try:
-        measured = 0
-        while (n := scan_segments(store)) > 0:
-            measured += n
-            print(f"scan-quiet: measured {measured} segments...", flush=True)
-        spans = quiet_spans(store, min_duration_s=float(args.min_seconds))
-        for span in spans:
-            print(
-                f"  {span.start:%Y-%m-%d %H:%M} .. {span.end:%H:%M}  "
-                f"{span.duration_s / 60:5.0f} min  ({len(span.audio_ids)} segments)"
-            )
-        total_h = sum(s.duration_s for s in spans) / 3600
-        print(f"scan-quiet: {len(spans)} quiet span(s), {total_h:.1f}h total")
-    finally:
-        store.close()
-    return 0
-
-
 _COMMANDS = {
     "sync": _cmd_sync,
     "jobs": _cmd_jobs,
@@ -2154,7 +1913,6 @@ _COMMANDS = {
     "resume": _cmd_resume,
     "capture-mirror": _cmd_capture_mirror,
     "capture-trace": _cmd_capture_trace,
-    "scan-quiet": _cmd_scan_quiet,
     "repair-transcripts": _cmd_repair_transcripts,
     "verify": _cmd_verify,
     "index": _cmd_index,
@@ -2165,7 +1923,6 @@ _COMMANDS = {
     "live": _cmd_live,
     "compress": _cmd_compress,
     "score-asr": _cmd_score_asr,
-    "summarize": _cmd_summarize,
     "reprobe": _cmd_reprobe,
     "coverage": _cmd_coverage,
     "search": _cmd_search,
@@ -2185,7 +1942,6 @@ _COMMANDS = {
     "finetune": _cmd_finetune,
     "finetune-pilot": _cmd_finetune_pilot,
     "score-attribution": _cmd_score_attribution,
-    "ab-compare": _cmd_ab_compare,
     "enroll": _cmd_enroll,
     "identify": _cmd_identify,
 }

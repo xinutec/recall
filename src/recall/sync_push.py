@@ -190,8 +190,6 @@ def sync_push(store: Store, client: PushTarget) -> int:
         _stage_one(store, client, batch, audio_id)
     batch.flush()
     pushed = batch.pushed
-    for day, text, model in store.recent_day_summaries(limit=_SUMMARY_PUSH_LIMIT):
-        client.push_summary(SummaryIn(day=day, text=text, model=model))
     if high > watermark:
         store.set_setting(WATERMARK_KEY, str(high))
     return pushed

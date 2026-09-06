@@ -6,7 +6,7 @@ logic — mirroring ``recall.schemas`` (the response shapes) and ``store_models`
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class ClientLog(BaseModel):
@@ -124,20 +124,6 @@ class RefineRequestIn(BaseModel):
     end: str  # ISO 8601
 
 
-class AbCompareStartIn(BaseModel):
-    """Start an A/B comparison. Models default to the deployed pairing — the live
-    stock model vs the fine-tuned adapter on its base — so the common case is one
-    click; advanced callers can override any of the three. `from`/`to` (ISO) restrict
-    it to a window; omit both for the whole recording."""
-
-    source: str
-    frm: str | None = Field(default=None, alias="from")
-    to: str | None = None
-    modelA: str | None = None
-    modelB: str | None = None
-    baseModel: str | None = None
-
-
 class ReassignIn(BaseModel):
     speaker: str
 
@@ -154,21 +140,9 @@ class SplitIn(BaseModel):
     fragments: list[FragmentIn]
 
 
-class AskIn(BaseModel):
-    question: str
-
-
-class QuietDeleteIn(BaseModel):
-    audioIds: list[int]  # the capture segments of a confirmed quiet span, to delete
-
-
 class VocabularyIn(BaseModel):
     term: str
 
 
 class SessionRenameIn(BaseModel):
     title: str
-
-
-class ContextIn(BaseModel):
-    text: str

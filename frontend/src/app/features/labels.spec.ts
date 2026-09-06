@@ -88,16 +88,6 @@ describe('Labels', () => {
     expect(c.audioSrc(label)).toBe('/api/correction/5/audio?context=true');
   });
 
-  it('saving the household context sends the trimmed draft to the API', () => {
-    const { c, setContext } = setup();
-    c.contextDraft.set('  Rufus is the family dog.  ');
-    expect(c.contextDirty()).toBe(true); // differs from the (unloaded) stored value
-
-    c.saveContext();
-    expect(setContext).toHaveBeenCalledWith('Rufus is the family dog.');
-    expect(c.contextDraft()).toBeNull(); // editor re-synced to the stored value
-  });
-
   it('nudging a boundary calls the API and re-fetches the clip', () => {
     const nudgeCorrection = vi.fn(() => of({ ok: true }));
     TestBed.configureTestingModule({

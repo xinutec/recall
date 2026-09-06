@@ -539,4 +539,19 @@ _MIGRATIONS: tuple[str, ...] = (
     DROP TABLE IF EXISTS sweep_refusals;
     ALTER TABLE deleted_segments DROP COLUMN swept_utc;
     """,
+    # v44 — the tables of four features cut from the product on 2026-09-06 (Ask,
+    # day summaries, Compare/A-B, and the quiet review's live summaries). See
+    # architecture.md, "Scope of the rebuilt product".
+    #
+    # ⚠ These hold GENERATED text, not recordings and not human input: answers the
+    # LLM wrote, summaries it wrote, and the reports of model comparisons. Every
+    # one is re-derivable from audio the archive still holds, which is the whole
+    # basis on which the scope was cut. Nothing a person typed is touched here —
+    # `corrections`, `speakers`, `speaker_embeddings` and `vocabulary` all stay.
+    """
+    DROP TABLE IF EXISTS ask_requests;
+    DROP TABLE IF EXISTS ab_compare_runs;
+    DROP TABLE IF EXISTS day_summaries;
+    DROP TABLE IF EXISTS live_summaries;
+    """,
 )

@@ -215,87 +215,12 @@ class OkOut(TypedDict):
     ok: bool
 
 
-class QuietSpanOut(TypedDict):
-    """A long total-quiet span proposed for deletion (the cleanup UI). Always one
-    source: several mics record the same room, and a span is one mic hearing nothing."""
-
-    source: str
-    start: str  # ISO-8601
-    end: str
-    durationS: float
-    audioIds: list[int]
-    # How empty it actually is — the evidence the list is ranked by, shown so the
-    # ranking can be checked, not trusted. `silent` means nothing in the span rose
-    # above this microphone's own floor: an empty room, the safest thing to delete.
-    # `marginDb` is how far the loudest moment rose above that floor (negative = never).
-    soundSeconds: float
-    loudestDb: float | None
-    marginDb: float | None
-    silent: bool
-    # How far the span departs from its mic's idle noise — what the list is ranked by.
-    # Separates an empty room from one with somebody moving about in it, which loudness
-    # cannot: a creak and a word can be equally loud.
-    structure: float | None
-
-
-class QuietSpansOut(TypedDict):
-    items: list[QuietSpanOut]
-
-
-class QuietScanOut(TypedDict):
-    """The archive-measuring scan — a background job on the server, watched by the
-    page (it outlives the tab, so progress is reported, not accumulated client-side).
-
-    Two passes. `measured` is the cheap sweep (volume + waveform, ffmpeg). `analysed` is
-    the speech detector listening to the candidates that turned up — slower, and the
-    veto
-    a deletion rests on: a span is only offered once its audio has actually been heard.
-    """
-
-    running: bool
-    measured: int  # segments measured so far — durable, so this only ever goes up
-    total: int
-    analysed: int
-    toAnalyse: int
-
-
-class QuietDeletedOut(TypedDict):
-    deleted: int
-    freedBytes: int
-
-
-class EnvelopeSegmentOut(TypedDict):
-    """One capture segment inside an envelope window — the unit of play and delete."""
-
-    audioId: int
-    start: str  # ISO-8601
-    end: str
-    meanDb: float | None  # the cached per-minute volume; None until scanned
-
-
 class SoundEventOut(TypedDict):
     """One audible thing inside the window — what the reviewer is asked to listen to."""
 
     start: str  # ISO-8601
     end: str
     peakDb: float
-
-
-class EnvelopeOut(TypedDict):
-    """A window of capture as a waveform: one peak dB per bucket, None where no audio
-    exists (a gap, not silence). `points[i]` covers start + i * bucketS."""
-
-    start: str  # ISO-8601
-    end: str
-    bucketS: float
-    # The quiet threshold — drawn as the line a span is judged against, so what broke
-    # the silence is visible rather than asserted.
-    thresholdDb: float
-    points: list[float | None]
-    segments: list[EnvelopeSegmentOut]
-    # Every sound above the threshold, so a 0.7-second bump in a 15-minute span can be
-    # stepped through and heard rather than hunted for by eye.
-    events: list[SoundEventOut]
 
 
 class SpeakerNamesOut(TypedDict):
@@ -319,53 +244,7 @@ class VocabularyOut(TypedDict):
     items: list[VocabularyTermOut]
 
 
-class DaySummaryOut(TypedDict):
-    """One day's generated summary (the recall layer)."""
-
-    day: str  # yyyy-mm-dd (UTC grouping)
-    text: str
-    model: str  # which local LLM wrote it
-
-
-class DaySummariesOut(TypedDict):
-    items: list[DaySummaryOut]
-
-
-class ContextOut(TypedDict):
-    """The household context — background facts given to the LLM prompts."""
-
-    text: str  # empty when unset
-
-
-class TodaySummaryOut(TypedDict):
-    """The running day's so-far summary (stale-while-revalidate: text may lag
-    the newest turns; upToDate/pending say whether a refresh is under way)."""
-
-    day: str  # yyyy-mm-dd (UTC)
-    text: str | None  # null = nothing recorded yet / first generation in flight
-    generatedAt: str | None  # when the text was generated ("as of HH:MM")
-    upToDate: bool  # text reflects the day's newest turn
-    pending: bool  # a background regeneration is running
-
-
-# A Literal (not str) so mypy checks every returned status and the generated TS is a
-# union, not `string` — same rule as Tier / AbCompareStatus above.
 AskStatus = Literal["done", "pending", "error"]
-
-
-class AskOut(TypedDict):
-    """A grounded answer over the archive. `status`: "done" (answer ready — or null
-    when retrieval found no evidence, so the UI says so instead of letting a model
-    improvise), "pending" (queued for the Mac's LLM — poll GET /api/ask/{id}), or
-    "error". `id` is the poll id while pending, else null. `sources` are the cited
-    turns (deep links), shown even while pending. `error` carries a failure, else null.
-    """
-
-    status: AskStatus
-    id: int | None
-    answer: str | None
-    sources: list[TranscriptOut]
-    error: str | None
 
 
 class ItemsOut(TypedDict):
@@ -416,59 +295,3 @@ class SuggestOut(TypedDict):
 
 # A/B model comparison — its lifecycle status (queued -> running -> done|error).
 AbCompareStatus = Literal["queued", "running", "done", "error"]
-
-
-class AbCompareScoreOut(TypedDict):
-    """One human-corrected span: each model's text + WER against your ground truth,
-    and the audio of that span so you can listen and judge."""
-
-    correctionId: int
-    truth: str
-    textA: str
-    textB: str
-    werA: float
-    werB: float
-    audioUrl: str
-
-
-class AbCompareSegmentDiffOut(TypedDict):
-    """One whole-segment transcription as each model produced it (the wide text diff
-    — where a model truncates or drifts over a long span shows here)."""
-
-    audioId: int
-    start: str
-    changed: bool
-    textA: str
-    textB: str
-
-
-class AbCompareRunSummaryOut(TypedDict):
-    """One A/B run as the list renders it — params, status, and (once done) the
-    headline mean-WER numbers; no per-span detail."""
-
-    id: int
-    source: str
-    modelA: str
-    modelB: str
-    baseModel: str
-    status: AbCompareStatus
-    created: str
-    meanWerA: float | None
-    meanWerB: float | None
-    nCorrections: int | None
-    nSegments: int | None
-    nChanged: int | None
-    error: str | None
-
-
-class AbCompareRunsOut(TypedDict):
-    items: list[AbCompareRunSummaryOut]
-
-
-class AbCompareRunOut(TypedDict):
-    """A run's full detail: its summary plus the per-span WER evidence and the
-    whole-segment diffs (empty lists until the run finishes)."""
-
-    summary: AbCompareRunSummaryOut
-    scores: list[AbCompareScoreOut]
-    segmentDiffs: list[AbCompareSegmentDiffOut]

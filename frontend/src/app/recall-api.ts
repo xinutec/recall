@@ -3,24 +3,15 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
 import {
-  AbCompareStartRequest,
   Around,
-  AskAnswer,
-  AskRequest,
   AssignResult,
   AssignSpanRequest,
   CaptureState,
-  ContextRequest,
   ConversationPage,
   CorrectRequest,
   CorrectResult,
-  Envelope,
   NudgeRequest,
   Ok,
-  QuietDeleted,
-  QuietDeleteRequest,
-  QuietScan,
-  QuietSpanList,
   RefineRequest,
   Session,
   SessionRenameRequest,
@@ -52,56 +43,6 @@ export class RecallApi {
   capture(known = '', waitS = 0): Observable<CaptureState> {
     const query = waitS > 0 ? `?wait=${waitS}&known=${encodeURIComponent(known)}` : '';
     return this.http.get<CaptureState>(`/api/capture${query}`);
-  }
-
-  /** Measure one batch of segments' raw volume; call until `measured` is 0. */
-  /** Start measuring the archive. The work runs on the server and outlives the page, so
-   * this returns immediately; watch it with `quietScanProgress`. */
-  quietScan(): Observable<QuietScan> {
-    return this.http.post<QuietScan>('/api/quiet/scan', {});
-  }
-
-  quietScanProgress(): Observable<QuietScan> {
-    return this.http.get<QuietScan>('/api/quiet/scan');
-  }
-
-  quietScanStop(): Observable<QuietScan> {
-    return this.http.post<QuietScan>('/api/quiet/scan/stop', {});
-  }
-
-  /** The long total-quiet spans proposed for deletion. */
-  quietSpans(minSeconds: number): Observable<QuietSpanList> {
-    return this.http.get<QuietSpanList>(`/api/quiet/spans?min_seconds=${minSeconds}`);
-  }
-
-  /** Play URL for a capture segment's raw audio (to confirm a span is quiet). */
-  quietAudioUrl(audioId: number): string {
-    return `/api/quiet/audio/${audioId}`;
-  }
-
-  /**
-   * The waveform of one source over a window — what a span is judged from: is it dead
-   * air all the way through, and what broke the quiet at its edges. Ask for a window
-   * wider than the span to see the sounds that ended it.
-   */
-  quietEnvelope(
-    source: string,
-    start: Date,
-    end: Date,
-    maxPoints: number,
-  ): Observable<Envelope> {
-    const query = new URLSearchParams({
-      source,
-      start: start.toISOString(),
-      end: end.toISOString(),
-      max_points: String(maxPoints),
-    });
-    return this.http.get<Envelope>(`/api/quiet/envelope?${query}`);
-  }
-
-  /** Hard-delete a confirmed quiet span (its segments + the Opus files). */
-  quietDelete(body: QuietDeleteRequest): Observable<QuietDeleted> {
-    return this.http.post<QuietDeleted>('/api/quiet/delete', body);
   }
 
   pauseCapture(): Observable<CaptureState> {
@@ -192,19 +133,6 @@ export class RecallApi {
     return this.http.delete<Ok>(`/api/vocabulary/${id}`);
   }
 
-  /** Ask the archive a question — grounded retrieval here, generation on the Mac's LLM.
-   * Returns 'done' inline (Mac) or 'pending' with a poll id (fleet: Isis has no LLM, so
-   * the Mac answers async — poll askStatus). */
-  ask(question: string): Observable<AskAnswer> {
-    const body: AskRequest = { question };
-    return this.http.post<AskAnswer>('/api/ask', body);
-  }
-
-  /** Poll a pending ask job until it resolves (fleet path). */
-  askStatus(id: number): Observable<AskAnswer> {
-    return this.http.get<AskAnswer>(`/api/ask/${id}`);
-  }
-
   /** Assign one turn to a person (display label only; `name` may be brand-new). */
   setTurnSpeaker(id: number, name: string): Observable<Ok> {
     const body: TurnSpeakerRequest = { name };
@@ -263,11 +191,6 @@ export class RecallApi {
     return this.http.post<Ok>('/api/unhide', { id });
   }
 
-  /** Queue a non-destructive A/B comparison; the daemon runs it. Returns its id. */
-  startAbCompare(body: AbCompareStartRequest): Observable<CorrectResult> {
-    return this.http.post<CorrectResult>('/api/ab-compare', body);
-  }
-
   /** Upload a conversation recording (e.g. a hospital appointment) as a new session.
    * `start` is the recording's local start (ISO 8601); `title` optional. The file's
    * container is kept as-is — the backend probes the real content. */
@@ -293,9 +216,4 @@ export class RecallApi {
     return this.http.post<Ok>(`/api/sessions/${encodeURIComponent(source)}/rediarize`, {});
   }
 
-  /** Replace the household context (background facts given to the LLM). */
-  setContext(text: string): Observable<Ok> {
-    const body: ContextRequest = { text };
-    return this.http.put<Ok>('/api/context', body);
-  }
 }
