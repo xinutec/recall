@@ -40,7 +40,7 @@ phones (Kotlin/Swift)      geb + machines (audiod)      Mac USB mic (audiod)
  ┌─ Isis — recalld (Rust): the system of record ──────────────────────────┐
  │  ingest plane: append-only blob store + ingest.sqlite   (no delete     │
  │  VAD at ingest → speech evidence, liveness               endpoint      │
- │  room builder: tier-1 align + calibrated selection       exists)       │
+ │  room builder: tier-1 align + raw selection [1]          exists)       │
  │  work queue → jobs out, results in                                     │
  │  [stage F] absorbs the browsing API + webauth + Angular UI             │
  └──────────────┬──────────────────────────────▲──────────────────────────┘
@@ -49,6 +49,9 @@ phones (Kotlin/Swift)      geb + machines (audiod)      Mac USB mic (audiod)
  Mac = stateless GPU worker: `runner` (Rust) polling the queue, driving
  three Python model shims — mlx-whisper, pyannote, mlx-lm. Nothing stateful.
 ```
+
+[1] Calibrated selection is built and PARKED — see D3 below. The rank is
+    recorded in provenance; raw level chooses.
 
 Principles, each argued in the decision record:
 
@@ -446,37 +449,19 @@ B3 lands.*
   measurement re-derived continuously from delivery instead of once by
   hand. D3's rank consumes it; uncalibrated rank degenerates to the fixed
   choice ([audio-plane.md](audio-plane.md)).
-- **D3. Room builder.** *Built 2026-09-05, running in shadow:* one settled
-  UTC minute at a time (15 min settling for delivery latency), calibrated
-  per-block selection — each source's block level against its OWN D2
-  reference, a newtype (`CalibratedDb`) so raw loudness cannot cross the
-  rank boundary — carrying the winner's audio whole into
-  `room-<stamp>.flac` (16 kHz mono, ASR's shape) with full provenance per
-  block. No verdict on partial evidence: unmeasured overlap defers. **The
-  rank is RAW speech level for now — calibrated selection is parked**: the
-  first build under the calibrated rank handed phones 30% of all blocks and
-  the referee failed it (room 0.321 vs usb 0.229); with the real-speech
-  reference gate (levels::REAL_SPEECH_MARGIN_DB) usb rose to 92% overall
-  but pixel9 still took 13/29 of the June referee window where usb is
-  best throughout — so per the pre-stated rule the rank formula is
-  indicted, raw level (the bake-off's tying arm) chooses, and the
-  calibrated rank rides along in provenance until D4's VAD gives the
-  reference an honest speech gate. Because the builder runs over the
-  delivered archive, the referee (room vs best-single, June corpus) runs
-  OFFLINE and remains the acceptance gate before stage E lets anything
-  transcribe room. *Confirmation run 2026-09-05, raw rank:* the rebuild
-  swept the June referee window (`Counter({'usb': 29})`), the window
-  assembled 29/30 blocks with the missing minute laid as counted silence,
-  and the referee scored **median WER 0.229 room vs 0.229 usb — the
-  predicted tie, landed exactly**. ⚠ **The tie is TAUTOLOGICAL and must not
-  be read as a quality result**: the room chose usb in every block, so the
-  fused audio IS the usb audio, and 37 of the 38 cases produced BYTE-
-  IDENTICAL transcripts (the 38th differs in text and scores the same).
-  What it does prove is that the store-and-forward path is TRANSPARENT —
-  FLAC block delivery, window reassembly and decode reproduce the archived
-  mic's transcript rather than degrading it. It cannot discriminate the raw
-  rank from any rule that also picks usb; that discrimination needs a
-  window where the best mic CHANGES, which is D4's job to make measurable.
+- **D3. Room builder.** *Built 2026-09-05, running in shadow:* one settled UTC
+  minute at a time (15 min settling for delivery latency), the winner's audio
+  carried whole into `room-<stamp>.flac` (16 kHz mono, ASR's shape) with full
+  provenance per block. No verdict on partial evidence: unmeasured overlap
+  defers. `CalibratedDb` is a newtype so a raw level cannot cross the rank
+  boundary by accident. **Raw speech level chooses; the calibrated rank is
+  recorded in provenance and parked** — see the acceptance note below for why,
+  which is now a statement about the CORPUS rather than about the rank.
+
+  Because the builder runs over the delivered archive, the referee (room vs
+  best-single) runs OFFLINE and is the acceptance gate before stage E transcribes
+  room.
+
 - **D3 NOT ACCEPTED — calibrated selection RE-PARKED 2026-09-06, and this time
   the reason is the corpus, not the rank.** The reference is now VAD-gated
   (stage D4's detector rather than a loudness proxy), which is a real

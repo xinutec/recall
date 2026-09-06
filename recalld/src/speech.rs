@@ -5,10 +5,14 @@
 //! talking, which is a different question and the one three consumers actually
 //! want. Liveness wants "someone is speaking" rather than "bytes arrived". The
 //! quiet review wants evidence before it proposes deleting anything. The room
-//! builder wants to prioritise blocks that carry speech. And D3's calibrated
-//! rank is PARKED until its reference can be built from real speech instead of
-//! `levels::REAL_SPEECH_MARGIN_DB`, which is a loudness proxy standing in for
-//! exactly this measurement.
+//! builder wants to prioritise blocks that carry speech. And the queue refuses
+//! to transcribe a segment measured silent, because asking a model about
+//! silence returns inventions rather than nothing (#1410).
+//!
+//! ⚠ It was also meant to un-park D3's calibrated rank, and it did give that
+//! reference an honest speech gate — but the rank stayed parked for a different
+//! reason: no corpus can test it (#1461). Speech evidence was necessary and not
+//! sufficient.
 //!
 //! Same discipline as the level scanner it mirrors — bounded batches, one row
 //! per blob ever, a segment's speech being a fact about its bytes — with one

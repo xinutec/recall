@@ -160,6 +160,43 @@ yields the moment it resumes; newest-first, resumable. Needs `HF_TOKEN`.
 ./scripts/recall.sh search "coffee" --out /Volumes/Backup/recall
 ```
 
+## runner + shims (stage E3, SHADOW — nothing reads its output yet)
+
+The Rust `runner` is the Mac's whole job orchestration in the target
+architecture: lease a job from recalld, fetch the blob, drive a model shim over
+stdio, push the result, ack. It holds no state — no watermark, no outbox — so
+killing it costs an expiring lease and nothing else.
+
+⚠ **It runs BESIDE the worker above, not instead of it.** Results are stored
+opaque and nothing interprets them into turn rows, so a transcript you read is
+still the worker's. The flip waits on #1461 (which room stream is better) — see
+[architecture.md](architecture.md).
+
+```sh
+# one job, then stop — the shape to use when checking it by hand
+RECALL_SYNC_TOKEN=… PYTHONPATH=src ./target/release/runner \
+  --url http://10.100.0.2:8001 --api http://10.100.0.2:8000 --once \
+  --shim .venv/bin/python -m recall.shim_asr
+
+# drop --once to poll continuously
+```
+
+It reads the household vocabulary from `--api` at startup and passes it as
+Whisper's `initial_prompt` on every job. ⚠ **If that read fails the runner
+exits** rather than transcribing unbiased: a corpus without the biasing it was
+built for has to be redone (#1463).
+
+A shim is drivable by hand, which is the fastest way to tell a model problem
+from a protocol one:
+
+```sh
+echo '{"id":"1","op":"transcribe","audio":"tests/fixtures/speech/public-domain-en.flac"}' \
+  | PYTHONPATH=src .venv/bin/python -m recall.shim_asr
+```
+
+⚠ **Its stdout is the protocol.** Model chatter goes to stderr on purpose; a
+stray line on stdout would desync the stream silently.
+
 ## One-time: HuggingFace (diarization + embeddings are gated)
 
 1. Free account at <https://huggingface.co>; accept the terms on each model page:
