@@ -341,37 +341,33 @@ pub fn build_once(
             summary.silent += 1;
             continue;
         }
-        // ⚠ EVERY CANDIDATE OR NOTHING. A calibrated level and a raw one are
-        // not the same quantity, so ranking a mix compares nothing — a source
-        // missing its reference would win or lose on which units it happened to
-        // be measured in.
+        // ⚠ RAW LEVEL CHOOSES, and calibration stays in provenance. This was
+        // un-parked on 2026-09-06 and re-parked the same hour, by measurement:
         //
-        // And the fallback is to DEFER, never to raw loudness. Falling back
-        // would be a verdict on partial evidence, decided by the very rule the
-        // WER referee indicted twice (room 0.321 vs usb 0.229; pixel9 taking
-        // 13 of 29 blocks in a window where usb was best throughout). A
-        // deferred block is retried on a later pass, so waiting costs latency;
-        // choosing wrongly costs the recording.
-        if !audible.iter().all(|c| c.calibrated.is_some()) {
-            let missing: Vec<&str> = audible
-                .iter()
-                .filter(|c| c.calibrated.is_none())
-                .map(|c| c.source.as_str())
-                .collect();
-            // Logged rather than silent: a source that can NEVER earn a
-            // reference would stall its blocks for ever, and that must be
-            // visible as a stall rather than as an empty room stream.
-            tracing::info!(
-                block = %iso(block),
-                unreferenced = ?missing,
-                "room: deferring — some contributors have no reference yet"
-            );
-            summary.deferred += 1;
-            continue;
-        }
+        //   - The two ranks DISAGREE on 1290 of 2664 rankable blocks (48%), and
+        //     the flips are systematic — usb -> iphone11 448, usb -> pixel5 281,
+        //     usb -> geb 242, usb -> pixel9 238. Calibration moves blocks off
+        //     the condenser onto phones.
+        //   - The referee CANNOT test that. Ground truth is mid-June (328 of 468
+        //     corrections fall on 14-16 June); the disagreements are September
+        //     (1127 of 1290). They overlap on 8 minutes — 1.7%. The corrections
+        //     predate the multi-device fleet, so there were barely two mics to
+        //     disagree about when they were made.
+        //   - The June window that DID pass is therefore no evidence: usb wins
+        //     there under both ranks, so it compares identical audio.
+        //
+        // Raw has MEASURED parity with best-single (median WER 0.229, twice).
+        // Calibration has no measurement anywhere it differs. Running the
+        // untested rule by default would be a verdict on partial evidence — the
+        // rule this file already refuses for a single block, applied to half of
+        // them. Nothing consumes room yet, so this costs nothing and keeps the
+        // provenance needed to decide later.
+        //
+        // TO UNPARK: ground truth on SEPTEMBER minutes where the ranks differ
+        // (see the census above), then the referee on that window.
         let winner = audible
             .iter()
-            .filter_map(|c| c.calibrated.map(|cal| (c, cal.0)))
+            .map(|c| (c, c.speech_db))
             .max_by(|a, b| a.1.total_cmp(&b.1));
         let Some((winner, _rank)) = winner else {
             summary.deferred += 1;
@@ -416,7 +412,7 @@ pub fn build_once(
                 // Which RULE chose is part of the verdict: a later census must
                 // be able to separate calibrated blocks from fallback ones
                 // without re-deriving the reference that existed at the time.
-                "built:calibrated",
+                "built:raw",
                 Some(&winner.source),
                 Some(&filename),
                 &contributors,

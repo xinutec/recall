@@ -476,29 +476,44 @@ B3 lands.*
   mic's transcript rather than degrading it. It cannot discriminate the raw
   rank from any rule that also picks usb; that discrimination needs a
   window where the best mic CHANGES, which is D4's job to make measurable.
-- **D3 ACCEPTANCE, re-run 2026-09-06 with the VAD-gated reference.** The
-  calibrated rank is UN-PARKED. The June referee window was cleared and rebuilt
-  by the real builder: 29/29 blocks `built:calibrated`, zero deferrals, and
-  **usb won all 29** — where the loudness-proxy reference had given pixel9 13 of
-  them in this same window. The census was the tell that failed this rank twice;
-  it now agrees with the arm the bake-off measured. Median WER 0.229 room vs
-  0.229 usb.
+- **D3 NOT ACCEPTED — calibrated selection RE-PARKED 2026-09-06, and this time
+  the reason is the corpus, not the rank.** The reference is now VAD-gated
+  (stage D4's detector rather than a loudness proxy), which is a real
+  improvement and is kept. What is NOT kept is letting it choose.
 
-  ⚠ **Still a TIE, not a win, and still tautological**: calibration picked the
-  same winner as raw on every block, so the audio compared is the same audio.
-  Vindicating the rank needs a window where the best microphone CHANGES HANDS —
-  a different corpus, not a different computation. What this run establishes is
-  that calibration no longer DEGRADES, which is what parking was waiting on.
+  The June window passed: cleared and rebuilt by the real builder, 29/29
+  `built:calibrated`, zero deferrals, usb winning all 29, median WER 0.229 both
+  arms. But that window compares IDENTICAL AUDIO — usb wins there under both
+  ranks — so it was never evidence, exactly as it had been flagged.
+
+  ⚠ **Where the ranks DO differ, the corpus cannot test them at all.** Census
+  over the whole archive: they disagree on **1290 of 2664 rankable blocks
+  (48%)**, systematically moving blocks off the condenser onto phones (usb ->
+  iphone11 448, usb -> pixel5 281, usb -> geb 242, usb -> pixel9 238). Ground
+  truth is mid-June — 328 of 468 corrections fall on 14-16 June — while the
+  disagreements are September (1127 of 1290). **They overlap on 8 minutes:
+  1.7%.** That is structural, not sampling: the corrections predate the
+  multi-device fleet, so there were barely two microphones to disagree about
+  when they were made.
+
+  Raw has MEASURED parity with best-single (median 0.229, twice). Calibration
+  has no measurement anywhere it differs. Shipping it would be a verdict on
+  partial evidence — the thing the builder already refuses for a single block —
+  applied to half of them. Nothing consumes room yet, so parking costs nothing.
+
+  **TO DECIDE IT:** ground truth on SEPTEMBER minutes where the ranks differ,
+  then the referee on that window. The census names the densest hours
+  (2026-09-02T19, 2026-09-03T19, 2026-09-04T20). This is a DATA task, not a code
+  one, and it is what #1388's quality half now waits on.
 
   ⚠⚠ **READ THE MEDIAN, NOT THE MEAN, and the harness prints the mean.** This
-  run's mean was usb 16.449 / room 12.083; last night's, on the SAME usb audio,
-  was 0.666 for both. The control moved by 25x while the median did not move at
-  all. The cause is ASR hallucination loops (#1410): on a one-word utterance the
-  model emits "As to As to As to…" hundreds of times, scoring WER 223. Four of
-  38 cases; excluding them the means are usb 0.347 / room 0.343. The loops are
-  not stable run to run — identical CONTENT through a different encode path
-  (opus slice vs room FLAC) flips them — so any mean over this corpus is a
-  coin-toss statistic and no decision may rest on it.
+  run's mean was usb 16.449 / room 12.083; the previous night's, on the SAME usb
+  audio, was 0.666 for both. The control moved 25x while the median did not move
+  at all. The cause is ASR hallucination loops (#1410): on a one-word utterance
+  the model emits "As to As to As to…" hundreds of times, scoring WER 223. Four
+  of 38 cases; excluding them the means are usb 0.347 / room 0.343. The loops
+  are not stable run to run — identical CONTENT through a different encode path
+  flips them — so no decision may rest on a mean over this corpus.
 
 - **D4. VAD at ingest** (silero ONNX). Liveness + quiet evidence + priority.
   *Detector built 2026-09-05:* `recalld::vad` runs silero through `ort`, the

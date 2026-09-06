@@ -99,6 +99,7 @@ fn now_after(block: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 #[test]
+#[ignore = "re-parked 2026-09-06 with calibrated selection — see room.rs"]
 fn level_evidence_without_speech_evidence_is_not_enough_to_rank() {
     // Plenty of LEVEL rows, no SPEECH rows: the reference is VAD-gated, so
     // nothing is rankable and the block must WAIT rather than be decided by
@@ -136,12 +137,10 @@ fn the_room_blob_carries_the_winners_audio() {
     let pcm = audiocore::decode::decode_s16(&blob, 16_000).expect("decodable");
     let envelope = audiocore::envelope::rms_buckets_at(&pcm, 16_000, 0.1);
     let speech = audiocore::envelope::level_quantile_db(&envelope, 0.9);
-    // CALIBRATION carries `quiet` (block amplitude 0.2 → ~-17 dBFS RMS bursts),
-    // not `loud` at 0.5 → ~-9. That inversion IS the feature: `quiet` is hearing
-    // ten times its own normal while `loud` is at its usual level, so the block
-    // belongs to the mic that suddenly hears something. This assertion read
-    // `> -13.0` while the rank was parked on raw loudness (stage D3).
-    assert!(speech > -21.0 && speech < -13.0, "speech {speech} dB");
+    // Raw rank carries `loud` (block amplitude 0.5 → ~-9 dBFS RMS bursts);
+    // `quiet`'s 0.2 would read ~-17. Calibration would invert this — and is
+    // re-parked, so the sensitive mic carries the block.
+    assert!(speech > -13.0 && speech < -3.0, "speech {speech} dB");
     // And it registered as a segments row under the room source (the seeded
     // history minutes build their own room blocks too — assert on this one).
     let conn = store::open(dir.path()).expect("db");
@@ -171,6 +170,8 @@ fn no_verdict_on_partial_evidence() {
 }
 
 #[test]
+#[ignore = "re-parked 2026-09-06: the corpus cannot test calibrated selection \
+            (48% divergence, 1.7% ground-truth overlap) — see room.rs"]
 fn no_reference_means_deferred_not_degraded() {
     let dir = tempfile::tempdir().expect("tempdir");
     // One segment only: measured, but far under min_reference_rows.
@@ -215,6 +216,7 @@ fn a_judged_block_is_never_rejudged() {
 }
 
 #[test]
+#[ignore = "re-parked 2026-09-06: calibration is recorded, not obeyed — see room.rs"]
 fn calibration_chooses_the_device_hearing_best_for_itself() {
     // The whole point of calibrating (docs/audio-plane.md): `loud` is a
     // sensitive condenser at its NORMAL level, `quiet` a gated phone at TEN
