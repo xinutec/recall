@@ -151,7 +151,7 @@ audio, rebuild the rest", and the difference is most of the remaining work.
 | what | rows (2026-09-06) | why it cannot be recomputed |
 |---|---|---|
 | the audio itself | 11 920 segments | requirement #1; a gap is the worst failure |
-| human corrections | 468 | a person listened and typed; the fine-tune corpus and enrolment seed |
+| human corrections | 468 | a person listened and typed; the enrolment seed, and the only human input besides the audio |
 | enrolled speakers + voiceprints | 9 / 958 | seeded from corrections and confirmed turns |
 | vocabulary terms | 5 | hand-managed proper nouns |
 
@@ -177,6 +177,45 @@ Consequences, and they are large:
 - **A cut feature needs no port at all.** The fastest route to less Python is
   deleting surfaces the product no longer has, not translating them.
 
+### What recall is FOR — two use cases, and nothing else
+
+**DECIDED 2026-09-06 by Pippijn.** The product serves exactly two situations.
+Anything that serves neither is not a feature, it is weight.
+
+1. **The home room, recorded by several microphones at once.** Continuous
+   household capture, multiple mics hearing the same speech, turned into a
+   searchable attributed record. This is what the room-stream question (#1388,
+   #1461) is *about*: several recordings of one room have to become one
+   transcript.
+2. **A single recording of a meeting with doctors, in hospital.** One file from
+   the phone, uploaded, transcribed and diarized, read back as a clean
+   attributed transcript — who said what in an appointment. Not continuous, not
+   multi-mic, and the accuracy that matters is proper nouns and medical terms.
+
+The two share a spine (capture -> ASR -> diarize -> attribute -> read) and differ
+in almost everything else, which is why naming them separates what must be built
+from what merely exists.
+
+### Training is not a goal
+
+**DECIDED 2026-09-06 by Pippijn: "We don't need to train. We only need to
+correct. What we train from that, we can decide later."**
+
+So the LoRA toolchain is deleted (`finetune`, `training`, `hf_asr`, `evaluate`,
+`finetune_pilot` — 925 lines), and with it the export/pilot/fine-tune commands
+and the adapter branch in the transcriber.
+
+⚠ **ENROLMENT IS NOT TRAINING, and it stays.** Labelling a voice attaches a name
+to a voiceprint; that is how attribution works, it is requirement #3, and it is
+what separates the doctor from the patient in use case 2. `identify` and `embed`
+were checked and are independent of the deleted cluster. Corrections keep
+feeding voiceprints — what went is the LoRA machinery, which `design.md` already
+recorded as un-deployed since 2026-07-11.
+
+⚠ **Corrections are still collected, and are still not re-derivable.** They are
+the human half of the system of record ("What must survive" above). What changed
+is what we do with them: attribution now, training maybe later.
+
 ### Scope of the rebuilt product
 
 **DECIDED 2026-09-06 by Pippijn.** KEPT: the core memory aid — timeline,
@@ -197,6 +236,25 @@ own consumption of it.
 rebuilt schema the sweeps become a filter at derivation time rather than a
 `hidden_reason` column plus a review UI — which is also why 52 423 hidden rows
 need not travel.
+
+**Dropped 2026-09-06, from measured use rather than taste** (the archive records
+which tools were actually used):
+
+| dropped | evidence |
+|---|---|
+| the `train` bulk-correction queue | one correction screen is enough, and #1461 needs the timeline's window-targeted one, not lowest-confidence-first |
+| span-assign / split | 57 turns across 17 parents, all on a SINGLE day in June, never before or since |
+| manual hide / unhide of a turn | **zero uses, ever** — every one of the ~52k hidden turns was hidden by machine |
+| the clip-trimmer (boundary nudge) | same family; no use detectable, needed by neither use case |
+
+KEPT for the same reason: **453 of 468 corrections set a SPEAKER** and 183
+changed text, so correcting *who spoke* is the job. Hiding a bad CORRECTION stays
+(13 real uses) — a mistaken correction otherwise poisons enrolment.
+
+⚠ **And the finding that outranks the list**: corrections ran 456 in June, 12 in
+July, and NONE since. See #1467 — whether the review UI is the reason is unknown
+and unmeasurable from the archive, and it decides whether #1461 is even the right
+next task.
 
 ## Components
 

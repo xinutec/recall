@@ -271,16 +271,10 @@ table in `cli.py`), so they have equal detection power rather than an equal
 number. Regenerate the fixtures only deliberately — a new `say` voice moves the
 baseline underneath the threshold.
 
-## Fine-tune (and prove it helps)
+## Fine-tuning — CUT
 
-Once corrections accumulate, fine-tune Whisper on the household's voices and
-**measure** it before trusting it:
-
-```sh
-./scripts/recall.sh finetune-pilot --out /Volumes/Backup/recall
-```
-
-Holds out ~20%, trains on the rest, reports base-vs-adapter WER on the held-out
-clips — only a held-out win counts. Heavy (~25–45 min), pauses capture+live for
-the run. **Deploying a winning adapter is a follow-up** (worker uses mlx-whisper,
-the LoRA is HF/PEFT). Method + measured baselines: [pipeline.md §5](pipeline.md).
+Training was dropped on 2026-09-06 (architecture.md, "Training is not a goal"),
+and `finetune`, `finetune-pilot` and `export-training` no longer exist. What is
+kept is **enrolment**, which is not training: labelling a voice attaches a name
+to a voiceprint, and that is how attribution works. Corrections are still
+collected — see "Enrol the household" above.

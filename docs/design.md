@@ -58,7 +58,7 @@ fix efficiently.
 | Vocab biasing (`initial_prompt` + names) | trivial | proper nouns | **built** |
 | Diarization + speaker enrolment | low | attribution | **built** |
 | Post-correction dictionary | low | systematic errors | **refuted 2026-09-02** |
-| LoRA fine-tune on corrections | high | accent/acoustic residue | trained, **not deployed** (`adapter-20260708b`) |
+| LoRA fine-tune on corrections | high | accent/acoustic residue | **CUT 2026-09-06** — the toolchain is deleted; see architecture.md, "Training is not a goal" |
 
 "Training on the actual people" is delivered mainly by **enrolment** (lightweight
 voiceprints), not retraining. The LoRA retrain is the heavy lever, and **nothing runs
@@ -171,7 +171,8 @@ displayed confidence is a softmax "this person vs the others," not raw cosine.
   reference voiceprints; a voiceprint can be seeded from a human correction or,
   since v16, taken directly from a confirmed transcript segment.
 - `corrections(…, original_text, corrected_text, speaker, audio_confidence,
-  hidden_reason)` — human ground truth: the fine-tune corpus and enrolment seed.
+  hidden_reason)` — human ground truth: the enrolment seed, and the only human
+  input besides the audio itself that cannot be re-derived.
 - `transcript_embeddings(segment_id, vector)` — each turn's cached voiceprint, so
   a guess re-matches against current voiceprints without re-embedding.
 - `transcript_fts` — FTS5 over `text`. Audio referenced by path (immutable);
@@ -205,7 +206,9 @@ regenerable. Outputs are **versioned, never overwritten**: each carries its mode
 (live → worker → diarized refine → human correction). Re-derivation is a **full
 recompute over whole segments**, never an incremental patch (reproducibility).
 Low-confidence is surfaced for review and **weighted, never silently dropped.**
-Corrections are training fuel — text into the ASR corpus, speaker into voiceprints.
+Corrections feed ENROLMENT — the speaker goes into voiceprints, which is how
+attribution works. (They fed a fine-tune corpus too until training was cut on
+2026-09-06; see architecture.md, "Training is not a goal".)
 
 ## 7. Service & resilience
 

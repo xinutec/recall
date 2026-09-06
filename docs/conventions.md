@@ -69,6 +69,27 @@ The web app in `frontend/` is Angular 22, kept on the most modern footing:
 - `ChangeDetectionStrategy.OnPush` on components; prefer `readonly` and precise
   interfaces in `models.ts` over loose shapes.
 
+## Reading the real archive
+
+⚠ **`Store.open()` RUNS MIGRATIONS. It is not a read.**
+
+On 2026-09-06 a harness written to *read* `/Volumes/Backup/recall/recall.sqlite`
+called `Store.open()` on it and silently migrated production to a new schema,
+while the deployed agents still ran the previous revision. The doctor's archive
+check failed for hours on `no such table: sweep_refusals`, and the skew was
+primed to widen — the deployed code referenced five tables the new migrations
+drop, so the next working-tree command would have taken four more out from under
+running agents.
+
+So, for anything that only needs to look:
+
+- open read-only — `sqlite3.connect("file:...?mode=ro", uri=True)` — not `Store`;
+- to compare implementations or test a migration, work on a **snapshot**
+  (`sqlite3.backup()`), never the live file. Four daemons write that database, so
+  a moving target cannot be diffed either way;
+- if a migration must be exercised, run it against a `.backup` copy and check the
+  row counts of everything human-authored before believing it.
+
 ## Verify cycle
 
 Before considering a unit of work done, run **`nix run ../dev-lint#gate -- . gate.json`**

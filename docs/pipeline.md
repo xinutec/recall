@@ -4,7 +4,13 @@ The worker side: turning retained raw audio into attributed, searchable
 transcripts — and how the system starts imperfect and improves without ever
 committing to a result.
 
-## 1. The trainable stack
+## 1. The model stack
+
+⚠ **This section was called "The trainable stack" and the framing is retired.**
+Training was cut on 2026-09-06 (architecture.md, "Training is not a goal"): the
+LoRA toolchain is deleted and no adapter is loaded anywhere. What remains true is
+the stack itself and, crucially, **enrolment** — which is not training and is how
+attribution works. Read the "Training" column below as history.
 
 No single "trainable algorithm" — a stack of models, of which only two benefit
 from training on *this household's people*, both fed by the same growing pool of
@@ -336,7 +342,19 @@ Two lessons the numbers carry, both costlier to relearn than to read:
   asking *which recordings are bad and what they have in common* — mic, room, number of
   speakers — rather than by changing the assignment rule for all of them.
 
-## 5. Continual improvement
+## 5. Continual improvement — the LoRA half is CUT
+
+⚠ **Everything below about fine-tuning describes deleted code** (`recall
+finetune`, `finetune-pilot`, `export-training`, `recall.hf_asr`), cut 2026-09-06.
+It is kept, not deleted, because the MEASUREMENTS are the expensive part and they
+remain true: a small corpus overfits and loses; the pilot passed while the
+adapter regressed in production; the language-prefix bug corrupted Whisper's
+language head. If training is ever revisited, this is the record of what it cost
+last time.
+
+What still runs from this section: corrections are collected, they supersede
+turns, they enrol voices, and re-derivation is a full recompute over whole
+segments.
 
 Raw audio is retained, so every transcript/attribution is a **derived view**,
 regenerable. Never commit: each output stores its model + confidence and is
