@@ -710,37 +710,114 @@ def _cmd_compress(args: argparse.Namespace) -> int:
     return 0
 
 
-# Golden ASR gate. One fixture per household language (a mixed-language segment
-# trips Whisper's one-language-per-segment detection — the documented
-# code-switching weakness, not a regression signal). Measured baselines with
-# large-v3-turbo on the committed fixtures (2026-07-02): en 0.012, nl 0.000 —
-# 0.15 carries honest headroom for decoder/runtime updates while still catching
-# a real regression (the adapter's real-audio regression was ~0.05 absolute).
-_GOLDEN_WER_THRESHOLD = 0.15
 _GOLDEN_FIXTURE = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "speech"
-_GOLDEN_LANGUAGES = ("en", "nl")
+
+
+@dataclass(frozen=True)
+class _GoldenFixture:
+    """One clip in the golden ASR gate, and whether a fresh clone has it.
+
+    Each clip is single-language by construction: a mixed-language one trips
+    Whisper's one-language-per-segment detection, which is the documented
+    code-switching weakness rather than a regression signal. Several clips may
+    share a language — two do — and that is coverage, not duplication.
+    """
+
+    audio: str
+    reference: str
+    language: str
+    threshold: float
+    committed: bool
+
+
+# `committed` is the property #1433 was about, not a convenience flag: the gate
+# advertised a "committed speech fixture" for months while its audio existed on
+# one Mac, so it could not run on a clone, in CI, or in a nix sandbox. The gate
+# must therefore be honest about running on a subset, per fixture.
+#
+# The dialogue pair is absent from a clone because .gitignore's blanket *.flac
+# swallowed it, against the stated intent of the script that generates it
+# (scripts/gen-speech-fixture.sh, which calls them committed). It is machine-read
+# invented dialogue, not anyone's voice.
+#
+# Thresholds are per fixture, and each is set from ITS OWN measured baseline
+# rather than copied, because the references differ in exactness and one number
+# would silently import the loosest denominator. Measured 2026-09-06 with
+# large-v3-turbo, three identical runs each (the decode is deterministic here, so
+# headroom is for a runtime/decoder change, not for run-to-run noise):
+#   - dialogue-en 0.0123, dialogue-nl 0.0000 — exact references.
+#   - public-domain-en 0.0426 — the CANONICAL poem plus the LibriVox preamble,
+#     NOT a transcription of this reading, so the reader's own deviations sit in
+#     the baseline permanently (see the fixture README).
+# Each threshold is baseline + ~0.05, so all three trip on a regression the size
+# of the adapter's real-audio one (~0.05 absolute) — equal DETECTION POWER, not
+# an equal number. These are DRIFT bounds; none is evidence about absolute
+# transcription quality. If a legitimate runtime update trips one, re-baseline it
+# deliberately rather than widening it reflexively.
+_GOLDEN_FIXTURES = (
+    _GoldenFixture(
+        audio="public-domain-en.flac",
+        reference="public-domain-en.txt",
+        language="en",
+        threshold=0.09,
+        committed=True,
+    ),
+    _GoldenFixture(
+        audio="dialogue-en.flac",
+        reference="reference-en.txt",
+        language="en",
+        threshold=0.06,
+        committed=False,
+    ),
+    _GoldenFixture(
+        audio="dialogue-nl.flac",
+        reference="reference-nl.txt",
+        language="nl",
+        threshold=0.05,
+        committed=False,
+    ),
+)
 
 
 def _cmd_score_asr(args: argparse.Namespace) -> int:
-    """Transcribe the committed speech fixtures with the REAL ASR stack and score
-    WER against their references — the regression net under the model/decoder
-    seams (unit tests stub the ASR). On-demand, not part of verify: it loads the
-    model.
+    """Transcribe the golden speech fixtures with the REAL ASR stack and score WER
+    against their references — the regression net under the model/decoder seams
+    (unit tests stub the ASR). On-demand, not part of verify: it loads the model.
+
+    Scores every fixture whose audio is present, so a clone gets the committed
+    English clip and this Mac additionally gets the household dialogue pair. A
+    MISSING COMMITTED fixture fails the run: a gate with nothing left to score
+    must not report success, which is the failure mode #1433 recorded.
     """
     transcriber = _build_transcriber(args.model, args.base_model, words=False)
     failed = False
-    for lang in _GOLDEN_LANGUAGES:
-        reference = (_GOLDEN_FIXTURE / f"reference-{lang}.txt").read_text()
-        result = transcriber(_GOLDEN_FIXTURE / f"dialogue-{lang}.flac")
+    scored = 0
+    for fixture in _GOLDEN_FIXTURES:
+        audio = _GOLDEN_FIXTURE / fixture.audio
+        if not audio.exists():
+            if fixture.committed:
+                failed = True
+                print(f"score-asr: MISSING committed fixture {fixture.audio}")
+            else:
+                print(
+                    f"score-asr: skipping {fixture.audio} (local-only, absent here) "
+                    f"— language {fixture.language} unscored by it"
+                )
+            continue
+        reference = (_GOLDEN_FIXTURE / fixture.reference).read_text()
+        result = transcriber(audio)
         hypothesis = _result_text(result)
         wer = word_error_rate(reference, hypothesis)
         detected = result.language
-        lang_note = "" if detected == lang else f" (detected language: {detected}!)"
-        print(
-            f"score-asr[{lang}]: WER {wer:.3f} vs threshold "
-            f"{_GOLDEN_WER_THRESHOLD}{lang_note}"
+        lang_note = (
+            "" if detected == fixture.language else f" (detected language: {detected}!)"
         )
-        if wer > _GOLDEN_WER_THRESHOLD or detected != lang:
+        print(
+            f"score-asr[{fixture.audio}]: WER {wer:.3f} vs threshold "
+            f"{fixture.threshold}{lang_note}"
+        )
+        scored += 1
+        if wer > fixture.threshold or detected != fixture.language:
             failed = True
             print(f"--- reference ---\n{reference}")
             print(f"--- hypothesis ---\n{hypothesis}")
@@ -750,7 +827,7 @@ def _cmd_score_asr(args: argparse.Namespace) -> int:
             "the model/decoder change"
         )
         return 1
-    print(f"score-asr: ok (model {args.model})")
+    print(f"score-asr: ok (model {args.model}, {scored} fixture(s) scored)")
     return 0
 
 

@@ -118,7 +118,9 @@ fn a_source_with_only_silence_has_no_latest_speech() {
 fn real_speech_is_measured_and_becomes_the_source_latest_speech() {
     let fixture = Path::new("../tests/fixtures/speech/dialogue-en.flac");
     if !fixture.exists() {
-        eprintln!("skipping: speech fixture absent (public repo carries no audio)");
+        // Absent by accident, not by policy: .gitignore's blanket *.flac took a
+        // fixture the generator script calls committed (#1433).
+        eprintln!("skipping: speech fixture absent");
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");

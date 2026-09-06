@@ -26,12 +26,23 @@ A reader's small deviations therefore show up as a little WER. That is fine for
 a DRIFT check, which asks whether the number MOVED, not whether it is zero; it
 would not be fine for an absolute quality claim, so do not make one from it.
 
-## `dialogue-*.flac` — NOT committed, local only
+## `dialogue-*.flac` — machine-read, absent from a clone by accident
 
-Recordings of real people in this household. `.gitignore` refuses `*.flac` under
-"NEVER commit audio or transcripts", and that rule is right: this repository is
-public. The reference transcripts beside them ARE committed, which is what made
-their absence easy to miss — `score-asr` advertised a "committed speech fixture"
-for months while the audio existed on exactly one Mac (#1433).
+⚠ **These are NOT recordings of anyone.** They are macOS `say` reading INVENTED
+lines — plants, a plumber, a bakery — rendered by `scripts/gen-speech-fixture.sh`
+and fully regenerable from it. Two English voices and one Dutch, stitched with
+0.8 s gaps into the shape of a captured segment (48 kHz mono).
 
-Tests that need real household speech skip when these are absent, and say so.
+An earlier version of this file called them "recordings of real people in this
+household". That was wrong, and it mattered: it made the absence look deliberate
+and correct, when in fact `.gitignore`'s blanket `*.flac` swallowed fixtures the
+generator's own header calls committed. The reference transcripts beside them ARE
+committed, which is what made the gap easy to miss — `score-asr` advertised a
+"committed speech fixture" for months while the audio existed on one Mac (#1433).
+
+They are the better ASR drift instrument of the two kinds here, because their
+references are EXACT rather than approximate: measured 2026-09-06 with
+large-v3-turbo, en 0.0123 and nl 0.0000, against 0.0426 for the reading above.
+They also carry the only Dutch in the gate.
+
+Tests that need them skip when they are absent, and say so.

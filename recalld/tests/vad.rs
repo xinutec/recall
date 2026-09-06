@@ -1,7 +1,9 @@
 //! Speech detection (stage D4) through the public API.
 //!
-//! The speech fixtures are REAL recordings: silero is trained on speech and a
-//! sine wave proves nothing about it in either direction.
+//! The fixtures are speech, not tones: silero is trained on speech and a sine
+//! wave proves nothing about it in either direction. Two kinds, deliberately —
+//! `public-domain-en` is a human reading, `dialogue-*` is machine-read invented
+//! text (see tests/fixtures/speech/README.md).
 
 use recalld::vad::{Detector, RATE, detection_gain, regions_from_probabilities};
 use std::path::Path;
@@ -20,7 +22,8 @@ fn real_speech_is_mostly_speech() {
     let mut d = Detector::load().expect("model");
     let path = Path::new("../tests/fixtures/speech/dialogue-en.flac");
     if !path.exists() {
-        // Deliberate: a public repo carries no audio. See the golden trace below.
+        // Not deliberate: .gitignore's blanket *.flac swallowed it (#1433). The
+        // golden trace below is what covers the model when this is missing.
         eprintln!("skipping real_speech_is_mostly_speech: fixture absent");
         return;
     }
@@ -38,7 +41,8 @@ fn a_second_language_is_not_a_special_case() {
     let mut d = Detector::load().expect("model");
     let path = Path::new("../tests/fixtures/speech/dialogue-nl.flac");
     if !path.exists() {
-        // Deliberate: a public repo carries no audio. See the golden trace below.
+        // Not deliberate: .gitignore's blanket *.flac swallowed it (#1433). This
+        // is the ONLY Dutch coverage in the suite, so a clone loses it entirely.
         eprintln!("skipping a_second_language_is_not_a_special_case: fixture absent");
         return;
     }
@@ -79,12 +83,12 @@ fn a_blip_shorter_than_the_minimum_is_not_a_region() {
     assert_eq!(regions_from_probabilities(&probs), vec![]);
 }
 
-/// ⚠ The DIALOGUE fixtures above are recordings of real people and cannot be
-/// committed to a public repo, so those tests skip where the files are absent.
-/// The test below uses `public-domain-en.flac`, which IS committed — a reading
-/// of Emily Dickinson, public domain worldwide, with its provenance in
-/// `tests/fixtures/speech/README.md` — so real speech is covered everywhere as
-/// well as here (#1433).
+/// ⚠ The DIALOGUE fixtures above are absent from a fresh clone — swallowed by
+/// .gitignore's blanket `*.flac` — so those tests skip there. The test below
+/// uses `public-domain-en.flac`, which IS committed: a reading of Emily
+/// Dickinson, public domain worldwide, provenance in
+/// `tests/fixtures/speech/README.md`. A HUMAN voice is covered everywhere, which
+/// machine-read dialogue would not give on its own (#1433).
 ///
 /// This is that guard. The probabilities are a golden trace over deterministic
 /// pseudo-noise, and they are sensitive to the exact bug that cost an hour:
@@ -115,9 +119,9 @@ fn the_model_input_contract_is_pinned_by_a_golden_trace() {
 #[test]
 fn committed_public_domain_speech_is_detected_everywhere() {
     // The point of committing a clip: this runs in CI, in the nix sandbox and on
-    // a fresh clone, where the household recordings cannot go. 48 s of read
-    // poetry with real pauses between stanzas — so it exercises both halves,
-    // speech and the silence around it.
+    // a fresh clone. 48 s of read poetry with real pauses between stanzas — so
+    // it exercises both halves, speech and the silence around it, on a human
+    // voice rather than a synthesised one.
     let mut detector = Detector::load().expect("model");
     let path = Path::new("../tests/fixtures/speech/public-domain-en.flac");
     assert!(path.exists(), "the committed fixture must not vanish");

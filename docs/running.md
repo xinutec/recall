@@ -264,11 +264,21 @@ included automatically). The cheap proper-noun lever; no training involved.
 ./scripts/recall.sh score-asr    # transcribe tests/fixtures/speech with the real model
 ```
 
-Fails if WER on the committed synthetic-speech fixtures (`say`-generated, one per
-household language — PII-free by construction) drifts past its threshold, or if
-the language is mis-detected. The regression net under the model/decoder seams;
-on-demand (loads the model), not part of verify. Regenerate the fixtures only
-deliberately: `scripts/gen-speech-fixture.sh`.
+Fails if WER drifts past a fixture's threshold, or if the language is
+mis-detected. The regression net under the model/decoder seams; on-demand (loads
+the model), not part of verify.
+
+It scores every fixture PRESENT and names the ones it skipped, because they do
+not all travel: `public-domain-en.flac` is committed and runs on any clone, while
+the `dialogue-{en,nl}` pair — macOS `say` reading invented lines, regenerable
+with `scripts/gen-speech-fixture.sh` — is absent from a clone, which is #1433 and
+is why the Dutch check is local-only for now. A run that finds NO committed
+fixture fails rather than reporting success on nothing.
+
+Thresholds are per fixture and set from each one's own measured baseline (see the
+table in `cli.py`), so they have equal detection power rather than an equal
+number. Regenerate the fixtures only deliberately — a new `say` voice moves the
+baseline underneath the threshold.
 
 ## Fine-tune (and prove it helps)
 

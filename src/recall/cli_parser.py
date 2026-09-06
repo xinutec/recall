@@ -110,8 +110,9 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
 
     sca = sub.add_parser(
         "score-asr",
-        help="transcribe the committed speech fixture (tests/fixtures/speech) with "
-        "the real ASR stack and fail if WER drifts past the golden threshold",
+        help="transcribe the golden speech fixtures present in tests/fixtures/speech "
+        "with the real ASR stack and fail if WER drifts past each one's threshold; "
+        "the committed clip runs anywhere, the household pair only on this Mac",
     )
     sca.add_argument("--model", default=DEFAULT_MODEL, help="mlx-whisper model")
     sca.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
