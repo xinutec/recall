@@ -6,6 +6,7 @@
 //! queue, and the browsing API.
 
 pub mod app;
+pub mod assign;
 pub mod audio;
 pub mod conversations;
 pub mod ingest;

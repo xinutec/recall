@@ -8,8 +8,8 @@
 
 use crate::tokens::Tokens;
 use crate::{
-    audio, conversations, ingest, labels, labels_write, proxy, reads, reports, sessions, spa,
-    webauth, work,
+    assign, audio, conversations, ingest, labels, labels_write, proxy, reads, reports, sessions,
+    spa, webauth, work,
 };
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -113,6 +113,7 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
             "/api/correction/{id}/hide",
             post(labels_write::correction_hide_route),
         )
+        .route("/api/sessions/{source}/assign", post(assign::assign_route))
         .route("/api/sessions", get(sessions::sessions_route))
         .route("/api/sessions/{source}", patch(sessions::rename_route))
         .route(

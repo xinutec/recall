@@ -56,7 +56,13 @@ ureq = { version = "2", features = ["json", "tls"] }
 hex = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# ⚠ `float_roundtrip` is not optional here. Without it serde_json's parser is not
+# correctly rounded: it reads the stored word timing 1.7599999999999953 as
+# ...951, one ulp low, where Rust's own str::parse and Python both give the exact
+# value. Word timings decide where a split lands, and a value that does not
+# round-trip means a turn rewritten by recalld no longer matches the one Python
+# wrote from the same blob.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 # The atomic-write half of the durability order: stream into a temp file in
 # the same filesystem, fsync, then rename into place — a name never points at
 # partial bytes.
