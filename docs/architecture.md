@@ -989,30 +989,91 @@ B3 lands.*
     and serves before its upstream is ready; expected, and worth knowing so a
     handful of failures right after a deploy is not mistaken for a fault.
 
-  ⚠ **NOTHING PYTHON IS DELETED YET, on purpose.** `design.md §9` says a path dies
-  only after its Rust replacement has survived REAL DAYS, and the hour above is
-  the argument for that rule rather than against it. Ready when the soak is:
-  `api_client_reports.py` (115) and `api_work.py` (88) are fully superseded and
-  unreachable; `api_audio.py` (130) needs `clip_window` rehomed first, since
-  `api_labels` still imports it for a correction-audio handler that is itself
-  already ported.
+  **Where the port stands, 2026-09-07 — 10 Python `/api` registrations left.**
+  Re-derive rather than trusting the number, and derive it the way it was
+  derived here — from the LIVE app, not by grepping for route strings:
 
-  **Where the port stands, 2026-09-07 — 15 of 34 routes.** Counted from the
-  Python's own `app.<verb>("/api/...")` registrations, not from memory; re-derive
-  it that way rather than trusting this number.
+      .venv/bin/python -c "from recall.api import app; \
+        print(sorted({(m, r.path) for r in app.routes \
+                      for m in getattr(r, 'methods', []) \
+                      if str(getattr(r,'path','')).startswith('/api/')}))"
+
+  ⚠ A grep undercounts. It sees a path once where two methods are registered on
+  it — `/api/sessions` is both the list (recalld's) and the upload (Python's) —
+  and it counts strings that are not routes at all, such as webauth's
+  device-exempt entry for `/api/log`, whose route no longer exists.
+
+  Eight modules are gone: `api_reads`, `api_audio`, `api_work`,
+  `api_client_reports`, `api_labels`, plus `seed`, `scan_job` and `context` as
+  dead. The whole browsing and labelling surface — reads, playback, the work
+  queue, client reports, uploaded meetings, the corrections corpus and the span
+  assign — is recalld's.
 
   | group | state |
   |---|---|
-  | reads | timeline, search, transcripts, review — DONE. `conversations` remains, and it is the big one: moment folding across microphones (`conversations`/`moments`/`attribution`, ~880 lines of pure logic). #1388's room stream makes each moment single-source, so consider whether it wants porting or re-deriving. |
+  | reads | DONE, including `conversations`, which was the one with logic rather than a query. |
   | audio | DONE. `/api/clip` deleted rather than ported — no caller. |
   | work | DONE (vocabulary, refine) — recalld's first writes. |
   | client reports | DONE. |
-  | labels | READ half done (speakers, corrections, correction audio). The WRITES are held: they supersede turns in the corrections table, which is not re-derivable. `/api/suggest` + `/voices` held pending the product question on voiceprint suggestions. |
+  | labels | DONE — correct, turn speaker, correction reassign/hide, span assign. `/api/suggest` and `/voices` were CUT, not ported: voiceprint name suggestions are gone by product decision. |
+  | sessions | list, rename, re-diarize, voice naming and the transcript export are DONE. The UPLOAD and the DELETE stay: delete removes turns, audio rows AND files from disk, the one irreversible operation here. |
   | capture | NOT STARTED, and deliberately: the settled/transitioning state machine, the `stateToken` long-poll and the pause-origin audit. The pause is the one thing that must always work (C1), so this one is not a solo port. |
   | devices | NOT STARTED. `/api/sources` carries a two-mode liveness model (Mac-local vs fleet). Only the FLEET branch matters in recalld — the local branch exists for `recall api` run by hand on the Mac, which no agent does. |
-  | sessions | LAST, on purpose, while meeting uploads are live. |
 
-  ⚠ **STILL TO DO after those:** shadow days, then the Python goes.
+  ⚠ **A partially ported PATH needs `method_not_allowed_fallback`.** axum matches
+  the path and THEN the method, so with `GET /api/sessions` mounted and no POST,
+  a POST is answered 405 by recalld and never reaches the proxy. Porting the list
+  would have silently broken meeting uploads with the fallback sitting right
+  there. Note what this implies: a proxied method miss does NOT pass recalld's
+  gate — it goes upstream unauthenticated and PYTHON's gate refuses it. Python's
+  gate is load-bearing, not redundant.
+
+  ⚠ **A route can end up served by NOBODY, and both test suites stay green.**
+  `/api/correct` was deleted from the Python in the same change that ported it,
+  and the Rust handler was written, tested and never mounted. recalld's tests
+  call the function directly (a route test needs the gate mounted), the Python
+  suite cannot miss a route it no longer has, and the differential drives the
+  function rather than the server. `tests/test_route_coverage.py` now unions the
+  axum and FastAPI tables against the frontend's call sites. dev-lint's
+  DL-WIRE-ROUTE-DRIFT cannot do this and should not try: it resolves recalld's
+  table alone, which is right for a finished port and wrong mid-strangler, where
+  "absent from the axum table" legitimately means "Python still serves it".
+
+  ⚠ **Verify a ported WRITE with a write.** The `/api/correct` break survived a
+  deploy check that probed only reads.
+
+  *What the differential harnesses caught, kept because the classes recur:*
+  - **Timestamps must be passed through, not re-formatted.** chrono trims a
+    trailing-zero fraction where Python's `isoformat` writes six digits, and
+    these columns are compared and ORDERED as text.
+  - **Character indexing, not byte.** The Python indexes text by code point and
+    the frontend counts UTF-16 units; Rust's `&str` indexes by byte, so the span
+    assign's arithmetic on an accented word cuts wrong and PANICS. Half this
+    archive is Dutch.
+  - **`serde_json`'s float parser does not round-trip** without the
+    `float_roundtrip` feature: it read a stored word timing one ulp low. That
+    applies to every float recalld reads from JSON.
+  - **`json.dumps` escapes non-ASCII and `timedelta` splits whole seconds off
+    before rounding.** Both cosmetic; matched so a later check does not report
+    drift that is not drift.
+  - **The search index is maintained by the WRITER, not a trigger.** A ported
+    write that forgets `transcript_fts` fails nothing loudly and makes its rows
+    unsearchable.
+
+  ⚠ **STILL TO DO:** the recording plane (capture, devices), the two
+  irreversible session operations, and then the Mac side — which is where the
+  remaining Python actually lives.
+
+  ⚠ **The API was never the bulk, so "nearly done" is true of it and false of
+  the repo.** Measured 2026-09-07: `find src scripts -name '*.py' | xargs wc -l`
+  gives ~20k against ~35k of Rust, and the whole serving tier was about 5% of
+  that Python. What remains splits four ways: the Mac's capture/worker/sync
+  (~3.2k, portable, `audiod` already covers part), `store.py` + `store_schema.py`
+  (~3.3k, the god object of #1340 — Rust already reads and writes this database
+  directly, so it is duplication rather than a dependency), `cli.py` +
+  `cli_parser.py` (~2.3k, 40 subcommands whose deadness CANNOT be measured
+  statically because they are typed at a terminal), and the ML shims (~1.5k),
+  which stay Python by §9 and are the intended floor.
 
   *Checked against the running pod, so the next session does not have to guess:*
   `NC_INTERNAL_URL` is `http://nextcloud-server.nextcloud.svc.cluster.local` —
