@@ -69,8 +69,8 @@ Principles, each argued in the decision record:
    Isis; nothing ever initiates toward the Mac.
 5. **The ingest plane is append-only.** There is no delete on any network
    surface; destruction stays an operator act, behind the backup chain.
-6. **Python survives only where a model is called.** Three shims and the
-   training tools; everything else has a named retirement stage.
+6. **Python survives only where a model is called.** Three shims, plus `wer`
+   and the golden ASR check; everything else has a named retirement stage.
 
 ## Decision record
 
@@ -1044,37 +1044,43 @@ B3 lands.*
   ⚠ **Verify a ported WRITE with a write.** The `/api/correct` break survived a
   deploy check that probed only reads.
 
-  *What the differential harnesses caught, kept because the classes recur:*
-  - **Timestamps must be passed through, not re-formatted.** chrono trims a
-    trailing-zero fraction where Python's `isoformat` writes six digits, and
-    these columns are compared and ORDERED as text.
-  - **Character indexing, not byte.** The Python indexes text by code point and
-    the frontend counts UTF-16 units; Rust's `&str` indexes by byte, so the span
-    assign's arithmetic on an accented word cuts wrong and PANICS. Half this
-    archive is Dutch.
-  - **`serde_json`'s float parser does not round-trip** without the
-    `float_roundtrip` feature: it read a stored word timing one ulp low. That
-    applies to every float recalld reads from JSON.
-  - **`json.dumps` escapes non-ASCII and `timedelta` splits whole seconds off
-    before rounding.** Both cosmetic; matched so a later check does not report
-    drift that is not drift.
-  - **The search index is maintained by the WRITER, not a trigger.** A ported
-    write that forgets `transcript_fts` fails nothing loudly and makes its rows
-    unsearchable.
-  - **A meeting's id is its LOCAL start, and local is Europe/London** — not the
-    pod's UTC. Deriving it from the container clock renames every summer
-    recording by an hour and it stops matching the directory the worker found.
-  - **`serde_json`'s Map sorts keys** where a Python dict preserves insertion
-    order (`preserve_order`), and **`json.dumps` escapes non-ASCII**. Both change
-    stored TEXT without changing meaning, which is what makes a later check
-    report drift that is not drift.
-  - **A guard calibrated to a moment rots.** The route-coverage check asserted
-    the FastAPI scan saw more than five routes and failed the moment the port
-    passed it. Guard the half that is parsed from TEXT; the half that reads a
-    live object is allowed to reach zero.
+  *What the differential harnesses caught, kept because the classes recur. Each
+  is argued where it bites; this is the index, not the explanation.*
 
-  ⚠ **STILL TO DO:** the recording plane (capture, devices), the two
-  irreversible session operations, and then the Mac side — which is where the
+  Three that CORRUPT, and would not have been found by reading:
+  - **Character indexing, not byte** (`assign.rs`). Python indexes text by code
+    point and the frontend counts UTF-16 units; Rust's `&str` indexes by byte, so
+    a cut inside an accented word lands wrong and PANICS. Half this archive is
+    Dutch.
+  - **Timestamps are passed through, never re-formatted** (`instant.rs`). These
+    columns are compared and ORDERED as text, so a re-spelling silently moves a
+    row to another page.
+  - **A meeting's id is its LOCAL start** (`upload.rs`), and local is
+    Europe/London, not the pod's UTC — deriving it from the container clock
+    renames every summer recording by an hour.
+
+  One that goes QUIET rather than wrong:
+  - **The search index is maintained by the WRITER, not a trigger.** A ported
+    write that forgets `transcript_fts` fails nothing and makes its rows
+    unfindable by the thing they are most likely looked up with.
+
+  Three about matching Python's stored SPELLING (`pyjson.rs`, `instant.rs`), which
+  changes no meaning and is matched anyway, so a later check cannot report drift
+  that is not drift: `serde_json` writes no space after `,` and `:` and sorts
+  object keys where a dict preserves insertion order (`preserve_order`);
+  `json.dumps` escapes non-ASCII; `timedelta` splits whole seconds off before
+  rounding half-to-even.
+
+  And one that is not about Python at all:
+  - **`serde_json`'s float parser does not round-trip** without
+    `float_roundtrip` — it read a stored word timing one ulp low. That applies to
+    every float recalld reads from JSON, not only these.
+  - **A guard calibrated to a moment rots.** The route-coverage check asserted
+    the FastAPI scan saw more than five routes, and failed the moment the port
+    passed it. Guard the half parsed from TEXT; the half that reads a live object
+    is allowed to reach zero.
+
+  ⚠ **STILL TO DO:** capture — and then the Mac side, which is where the
   remaining Python actually lives.
 
   ⚠ **The API was never the bulk, so "nearly done" is true of it and false of
@@ -1129,13 +1135,22 @@ B3 lands.*
 
 ## What stays Python, and what dies when
 
-The floor, permanent: the three model shims (mlx-whisper, pyannote, mlx-lm)
-and the training/evaluation toolchain (finetune, pilot, export, wer, golden
-checks) — Python because the models are Python, per
-[design.md §9](design.md).
+The floor, permanent: the three model shims (mlx-whisper, pyannote, mlx-lm) —
+Python because the models are Python, per [design.md §9](design.md). Plus what
+is left of the evaluation side: `wer` and the golden ASR check
+(`tests/test_cli_score_asr.py`).
+
+⚠ This used to name `finetune`, `pilot` and `export` in that floor. They were
+deleted with the LoRA toolchain ("Training is not a goal" above) and the floor
+went on describing them as permanent. A floor is the thing that does not move,
+so a deleted module standing in one is the worst place for the claim to rot.
 
 Everything else in `src/recall/` retires with its stage: the mic/streaming
 client and relay with C4; worker, live, sync-push, outbox, jobs and
-capture-mirror with E3–E4; the API modules, store, webauth and schemas with
-F1. The authoritative list is `ls src/recall` against this ladder, not a
-table copied here; when a stage lands, its deletions land in the same change.
+capture-mirror with E3–E4; store, webauth and schemas with the rest of F1. The
+authoritative list is `ls src/recall` against this ladder, not a table copied
+here; when a stage lands, its deletions land in the same change.
+
+The API modules are already off it — nine went on 2026-09-07 and what is left is
+`api.py` plus `api_capture`, `api_devices` and `api_models`, holding four routes
+between them.

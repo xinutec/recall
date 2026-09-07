@@ -88,8 +88,10 @@ integrity-checked SQLite snapshot from inside the Isis pod plus an rsync of the 
 PVC (`nixos-config machines/odin/backup-prepare.sh`), so every recording is protected
 server-to-server. The Mac keeps the protected master archive on this volume and pushes
 it to Isis (`recall-sync`); it runs no backup agent of its own. The training corpora
-(`finetune-corpus`, `pilot-*`) live only here and are deliberately not backed up — they
-are derived from the archive + corrections and can be regenerated.
+(`finetune-corpus`, `pilot-*`) live only here and are deliberately not backed up.
+⚠ They can no longer be REGENERATED, which is why that is no longer the reason:
+the toolchain that made them was deleted when training was cut. They are
+leftovers of it, kept only because deleting data is a deliberate act.
 
 > **macOS mic permission is per-agent:** capture and live each need their own
 > grant. If an err log shows `Out:0`, allow the prompt (or System Settings →
