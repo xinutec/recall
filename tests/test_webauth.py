@@ -437,9 +437,10 @@ def test_callback_signs_in_allowed_user_and_unlocks_browsing(
 
     # The cookie the client now holds unlocks the browsing plane.
     assert client.get("/api/transcripts").status_code == 200
-    me = client.get("/api/me")
-    assert me.status_code == 200
-    assert me.json() == {"userId": "pippijn", "displayName": "Pippijn"}
+    # ⚠ /api/me is NOT asserted here any more: recalld serves it, and its own
+    # gate answers before the proxy is reached. Python's copy was unreachable in
+    # production and is gone. The identity it returned is pinned by recalld's
+    # webauth tests, against the same cookie this flow issues.
 
 
 def test_callback_refuses_a_user_off_the_allowlist(

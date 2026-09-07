@@ -621,3 +621,43 @@ async fn login_redirects_to_nextcloud_and_the_cookie_it_later_sets_is_httponly()
     assert!(cookie.contains("Max-Age=0"), "{cookie}");
     assert!(cookie.contains("Path=/"), "{cookie}");
 }
+
+/// ⚠ `/api/me` is the SPA's login probe and recalld is its ONLY implementation —
+/// the Python's copy was unreachable behind the proxy and has been deleted. The
+/// shape is what the app reads to decide it is signed in, so it is pinned here
+/// rather than left to the route existing.
+#[tokio::test]
+async fn me_answers_with_the_identity_the_cookie_carries() {
+    let app = gated(cfg(None));
+    let token = make_session_cookie(SECRET, &session(), NOW).expect("sign");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get("/api/me")
+                .header("cookie", format!("{COOKIE_NAME}={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("call");
+
+    assert_eq!(response.status(), 200);
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(json["userId"], session().user_id);
+    assert_eq!(json["displayName"], session().display_name);
+}
+
+#[tokio::test]
+async fn me_without_a_session_is_refused_rather_than_anonymous() {
+    // An empty identity would read to the SPA as "signed in as nobody".
+    let app = gated(cfg(None));
+
+    assert_eq!(
+        status(&app, Request::get("/api/me").body(Body::empty()).unwrap()).await,
+        401
+    );
+}

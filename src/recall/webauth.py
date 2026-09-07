@@ -515,14 +515,4 @@ def register_web_auth(app: FastAPI, config: WebAuthConfig | None = None) -> bool
         resp.delete_cookie(COOKIE_NAME, path="/")
         return resp
 
-    @app.get("/api/me")
-    def me(request: Request) -> JSONResponse:
-        """Who is signed in — the SPA's login probe. The gate returns 401 before this
-        runs when there's no session, so reaching it means a valid session exists."""
-        session = read_session_cookie(cfg, request.cookies.get(COOKIE_NAME), _now())
-        assert session is not None  # the gate guarantees a session on /api/*
-        return JSONResponse(
-            {"userId": session.user_id, "displayName": session.display_name}
-        )
-
     return True
