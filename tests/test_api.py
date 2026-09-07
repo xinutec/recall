@@ -376,91 +376,22 @@ def test_a_local_pause_records_who_asked(
     assert "192.168.1.42" in events[0].detail
 
 
-def test_name_voice_endpoint_labels_a_whole_session_voice(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(
-        AudioSource(id="meeting-x", name="Meeting", kind=SourceKind.UPLOAD, spec="")
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="meeting-x",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=10),
-            path="x",
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-    ids = [
-        store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=i),
-            end=BASE + timedelta(seconds=i + 1),
-            text=f"t{i}",
-            asr_model="diarized",
-            speaker_cluster=c,
-        )
-        for i, c in enumerate(["SPEAKER_00", "SPEAKER_01"])
-    ]
-    store.close()
+def _sessions_via_store(tmp_path: Path) -> list[dict[str, object]]:
+    """What the sessions list would show, read from the store.
 
-    TestClient(api.app).post(
-        "/api/sessions/meeting-x/voice",
-        json={"cluster": "SPEAKER_01", "name": "Dr Lee"},
-    )
-
+    ⚠ Deliberately not `GET /api/sessions`: that route is recalld's now. These
+    tests cover the upload and the delete, which are still Python's, so they must
+    verify through the database both halves share rather than through a route
+    this process no longer serves.
+    """
     store = Store.open(tmp_path / "recall.sqlite")
     try:
-        named = store.get_transcript(ids[1])
-        other = store.get_transcript(ids[0])
-        assert named is not None and named.speaker_label == "Dr Lee"
-        assert other is not None and other.speaker_label is None  # untouched
+        return [
+            {"id": sid, "title": name, "turnCount": turns}
+            for sid, name, _start, _end, turns, _speakers in store.session_summaries()
+        ]
     finally:
         store.close()
-
-
-def test_session_transcript_endpoint_exports_clean_coalesced(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(AudioSource(id="m", name="M", kind=SourceKind.UPLOAD, spec=""))
-    audio = store.add_audio_segment(
-        Segment(
-            source_id="m",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(minutes=5),
-            path="x",
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-    for i, (text, label) in enumerate(
-        [("Hi.", "Pippijn"), ("Yes.", "Pippijn"), ("OK.", "Dr. Adams")]
-    ):
-        store.add_transcript_segment(
-            audio_segment_id=audio,
-            start=BASE + timedelta(seconds=i * 10),
-            end=BASE + timedelta(seconds=i * 10 + 5),
-            text=text,
-            asr_model="diarized",
-            speaker_label=label,
-            speaker_cluster="C",
-        )
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    out = TestClient(api.app).get("/api/sessions/m/transcript").json()
-    assert out["session"] == "m"
-    assert out["speakers"] == ["Pippijn", "Dr. Adams"]
-    # consecutive same-speaker turns are one bubble; current/corrected state only
-    assert [t["speaker"] for t in out["turns"]] == ["Pippijn", "Dr. Adams"]
-    assert out["turns"][0]["text"] == "Hi. Yes."
-    assert out["date"] == out["turns"][0]["start"]
 
 
 def _upload_meeting(
@@ -510,7 +441,7 @@ def test_upload_corrects_a_kind_the_worker_already_guessed(
     )
 
     assert created["id"] == "meeting-20260703-1420"  # same id the worker had claimed
-    listed = client.get("/api/sessions").json()["items"]
+    listed = _sessions_via_store(tmp_path)
     assert [i["id"] for i in listed] == ["meeting-20260703-1420"]
     assert listed[0]["title"] == "Dr Lee RT"  # placeholder name replaced, too
 
@@ -535,7 +466,7 @@ def test_create_session_stores_the_mp3_and_lists_it_immediately(
     stored = list((tmp_path / str(sid)).glob("*.mp3"))
     assert len(stored) == 1  # container preserved, streamed to its own dir
 
-    listed = client.get("/api/sessions").json()["items"]
+    listed = _sessions_via_store(tmp_path)
     row = next(i for i in listed if i["id"] == sid)
     assert row["title"] == "Dr Lee RT"
     assert (
@@ -551,7 +482,7 @@ def test_create_session_defaults_title_and_rejects_unknown_container(
 
     # No title → a sensible default from the local time.
     created = _upload_meeting(client, tmp_path, start="2026-07-03T14:20:00+01:00")
-    listed = client.get("/api/sessions").json()["items"]
+    listed = _sessions_via_store(tmp_path)
     row = next(i for i in listed if i["id"] == created["id"])
     assert row["title"] == "Meeting 2026-07-03 14:20"
 
@@ -562,20 +493,6 @@ def test_create_session_defaults_title_and_rejects_unknown_container(
             "/api/sessions", files={"audio": ("note.txt", fh, "text/plain")}
         )
     assert bad.status_code == 400
-
-
-def test_rename_session_changes_the_displayed_title(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-    client = TestClient(api.app)
-    sid = _upload_meeting(client, tmp_path)["id"]
-
-    r = client.patch(f"/api/sessions/{sid}", json={"title": "Neuro-oncology clinic"})
-    assert r.status_code == 200
-
-    listed = client.get("/api/sessions").json()["items"]
-    assert next(i for i in listed if i["id"] == sid)["title"] == "Neuro-oncology clinic"
 
 
 def test_delete_session_removes_it_and_unlinks_the_audio(
@@ -590,7 +507,7 @@ def test_delete_session_removes_it_and_unlinks_the_audio(
     r = client.delete(f"/api/sessions/{sid}")
     assert r.status_code == 200
 
-    listed = client.get("/api/sessions").json()["items"]
+    listed = _sessions_via_store(tmp_path)
     assert all(i["id"] != sid for i in listed)
     assert not session_dir.exists()  # files gone, not just DB rows
 
@@ -613,25 +530,6 @@ def test_delete_refuses_to_touch_household_capture(
     store = Store.open(tmp_path / "recall.sqlite")
     assert store.source_kind("usb") == SourceKind.COREAUDIO  # untouched
     store.close()
-
-
-def test_rediarize_queues_an_idle_refine_over_the_whole_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Re-diarize doesn't run pyannote inline (that would starve capture); it queues a
-    refine request the idle daemon drains, spanning the session's full extent."""
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-    client = TestClient(api.app)
-    sid = _upload_meeting(client, tmp_path, start="2026-07-03T14:20:00+01:00")["id"]
-
-    r = client.post(f"/api/sessions/{sid}/rediarize")
-    assert r.status_code == 200
-
-    store = Store.open(tmp_path / "recall.sqlite")
-    pending = store.pending_refine_requests()
-    store.close()
-    assert len(pending) == 1
-    assert pending[0].source == sid
 
 
 def _usb_store(tmp_path: Path) -> Store:

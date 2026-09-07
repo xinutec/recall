@@ -17,13 +17,11 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
-from recall.api_models import SessionRenameIn, VoiceNameIn
 from recall.probe import probe_media
-from recall.schemas import OkOut, SessionOut, SessionsOut, TranscriptExportOut
+from recall.schemas import OkOut, SessionOut
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
 from recall.timeline import Segment
-from recall.transcript_view import clean_transcript
 
 _MEETING_ZONE = ZoneInfo("Europe/London")
 # Containers a conversation recording might arrive in (phone voice memos are m4a;
@@ -43,7 +41,6 @@ def register_session_routes(
     """Mount /api/sessions*. Dependencies injected as in every slice."""
     _register_list_and_upload(app, store_factory, data_root, require_time)
     _register_session_management(app, store_factory, data_root)
-    _register_voice_route(app, store_factory)
 
 
 def _register_list_and_upload(
@@ -52,30 +49,6 @@ def _register_list_and_upload(
     data_root: Callable[[], Path],
     require_time: Callable[[str | None], datetime],
 ) -> None:
-    @app.get("/api/sessions")
-    def sessions() -> SessionsOut:
-        """Discrete uploaded recordings (e.g. doctor meetings) as a dated list to
-        browse;
-        each one opens in the timeline filtered to that session."""
-        store = store_factory()
-        try:
-            rows = store.session_summaries()
-        finally:
-            store.close()
-        return {
-            "items": [
-                {
-                    "id": sid,
-                    "title": name,
-                    "start": start,
-                    "end": end,
-                    "turnCount": turns,
-                    "speakers": sorted(speakers.split(",")) if speakers else [],
-                }
-                for sid, name, start, end, turns, speakers in rows
-            ]
-        }
-
     @app.post("/api/sessions")
     def create_session(
         audio: UploadFile = File(...),
@@ -162,20 +135,6 @@ def _register_session_management(
         if kind != SourceKind.UPLOAD:
             raise HTTPException(status_code=400, detail="not an uploaded session")
 
-    @app.patch("/api/sessions/{source}")
-    def rename_session(source: str, body: SessionRenameIn) -> OkOut:
-        """Rename an uploaded session (its list title)."""
-        title = body.title.strip()
-        if not title:
-            raise HTTPException(status_code=400, detail="title required")
-        store = store_factory()
-        try:
-            _require_upload(store, source)
-            store.rename_source(source, title)
-        finally:
-            store.close()
-        return {"ok": True}
-
     @app.delete("/api/sessions/{source}")
     def delete_session(source: str) -> OkOut:
         """Delete an uploaded session — its turns, audio segments, queued work, and
@@ -194,55 +153,3 @@ def _register_session_management(
         if parent.is_dir():
             shutil.rmtree(parent, ignore_errors=True)
         return {"ok": True}
-
-    @app.post("/api/sessions/{source}/rediarize")
-    def rediarize_session(source: str) -> OkOut:
-        """Re-derive who-said-what for a whole session. Queues an idle-gated refine
-        (never
-        runs pyannote inline — that would starve live capture), spanning the full
-        recording.
-        """
-        store = store_factory()
-        try:
-            _require_upload(store, source)
-            span = store.source_span(source)
-            if span is None:
-                raise HTTPException(status_code=400, detail="session has no audio")
-            store.add_refine_request(source, span[0], span[1])
-        finally:
-            store.close()
-        return {"ok": True}
-
-
-def _register_voice_route(app: FastAPI, store_factory: Callable[[], Store]) -> None:
-    @app.post("/api/sessions/{source}/voice")
-    def name_voice(source: str, body: VoiceNameIn) -> OkOut:
-        """Human-name a diarization voice across a session — labels every turn of that
-        voice at once. Writes no correction, but the label feeds the voiceprint backfill
-        (`speaker_label` is its work-list), so the named voice becomes matchable — a
-        meeting's clinician is enrolled like any household voice."""
-        name = (body.name or "").strip() or None
-        store = store_factory()
-        try:
-            store.name_voice(source, body.cluster, name)
-        finally:
-            store.close()
-        return {"ok": True}
-
-    @app.get("/api/sessions/{source}/transcript")
-    def session_transcript(source: str) -> TranscriptExportOut:
-        """A session's clean, finalised transcript for export to a doc/website:
-        consecutive
-        same-speaker turns merged into one bubble, each with its local start time and
-        the
-        display speaker; current/corrected state only; deterministic. Identical
-        to the
-        CLI's
-        `transcript --json`. Meant to render into a marker-delimited section of
-        a markdown
-        page, re-run on demand without touching the manually-maintained parts."""
-        store = store_factory()
-        try:
-            return clean_transcript(source, store.session_turns(source))
-        finally:
-            store.close()

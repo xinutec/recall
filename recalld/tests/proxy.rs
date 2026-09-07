@@ -34,6 +34,10 @@ async fn upstream_server() -> (String, Arc<AtomicUsize>) {
             }),
         )
         .route(
+            "/api/sessions",
+            post(|| async { ([("x-from", "python")], "uploaded") }),
+        )
+        .route(
             "/api/echo",
             post(|body: String| async move { format!("got:{body}") }),
         )
@@ -57,6 +61,45 @@ async fn upstream_server() -> (String, Arc<AtomicUsize>) {
 
 async fn recalld_with(upstream: Option<String>) -> String {
     recalld_with_frontend(upstream, None).await
+}
+
+/// recalld with the browsing plane MOUNTED, which is how it runs on the fleet.
+/// Without a gate configured the ported routes do not exist at all, so a test of
+/// how they interact with the proxy would be testing an empty router.
+async fn recalld_gated(upstream: Option<String>) -> String {
+    let dir = tempfile::tempdir().expect("tmp");
+    let root = dir.path().to_path_buf();
+    std::mem::forget(dir);
+    recalld::store::open(&root).expect("ingest db");
+    let config = Arc::new(Config {
+        root,
+        tokens: None,
+        read_token: None,
+        max_body_bytes: DEFAULT_MAX_BODY,
+        webauth: Some(recalld::webauth::GateState {
+            cfg: Arc::new(recalld::webauth::Config {
+                session_secret: "test-secret-not-a-real-one".into(),
+                client_id: "cid".into(),
+                client_secret: "csec".into(),
+                nc_base_url: "https://dash.example.org".into(),
+                nc_internal_url: "https://dash.example.org".into(),
+                redirect_uri: "http://127.0.0.1/auth/callback".into(),
+                allowed_users: std::collections::HashSet::new(),
+                device_token: None,
+            }),
+            now: Arc::new(|| 1_788_000_000),
+        }),
+        upstream: upstream.map(|base| Upstream { base }),
+        frontend: None,
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind recalld");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router(config)).await;
+    });
+    format!("http://{addr}")
 }
 
 async fn recalld_with_frontend(
@@ -323,4 +366,84 @@ async fn an_app_route_still_renders_the_shell() {
     .expect("task");
 
     assert!(body.starts_with("<!doctype html>"), "got {body}");
+}
+
+/// ⚠ **A half-ported PATH is the trap this guards.** axum matches on the path
+/// first: with `GET /api/sessions` mounted and no POST, a POST to it is answered
+/// 405 by recalld and NEVER reaches the fallback — so the upload would have
+/// stopped working the moment the list was ported, with the proxy sitting right
+/// there. `method_not_allowed_fallback` is what makes owning half a path safe.
+///
+/// This runs with the browsing plane MOUNTED, because that is the only shape
+/// where the collision exists. Every earlier proxy test ran with `webauth: None`
+/// and could not have caught it — the same blind spot that let `/sync/*` reach
+/// the fleet.
+#[tokio::test]
+async fn a_method_recalld_does_not_serve_falls_through_to_the_upstream() {
+    let (upstream, _hits) = upstream_server().await;
+    let base = recalld_gated(Some(upstream)).await;
+
+    // POST /api/sessions is the upload, still Python's. GET is recalld's.
+    let resp = tokio::task::spawn_blocking(move || {
+        ureq::post(&format!("{base}/api/sessions"))
+            .send_string("{}")
+            .map_err(Box::new)
+    })
+    .await
+    .expect("task")
+    .expect("call");
+
+    assert_eq!(resp.status(), 200, "not a 405 from recalld");
+    assert_eq!(
+        resp.header("x-from"),
+        Some("python"),
+        "and it must be the UPSTREAM that answered"
+    );
+}
+
+#[tokio::test]
+async fn a_method_miss_is_refused_when_there_is_nothing_to_fall_through_to() {
+    // With no upstream the request is refused rather than answered, which is the
+    // point. It is a 401 and not a 405 because the gate runs first here: with
+    // nothing to forward to, "you are not signed in" is decided before "that
+    // method is not mounted". Either is an honest refusal; what matters is that
+    // no unported write is quietly accepted.
+    let base = recalld_gated(None).await;
+
+    let code = tokio::task::spawn_blocking(move || {
+        match ureq::post(&format!("{base}/api/sessions")).send_string("{}") {
+            Ok(resp) => resp.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(other) => panic!("transport: {other}"),
+        }
+    })
+    .await
+    .expect("task");
+
+    assert_eq!(code, 401);
+}
+
+/// ⚠ A proxied method-miss does NOT pass recalld's gate — it is handed to the
+/// upstream unauthenticated, and PYTHON's gate is what refuses it. That is the
+/// documented split (both halves validate the same cookie with the same secret),
+/// but it is worth pinning: if Python's gate were ever removed on the assumption
+/// that recalld already checked, this path would be open.
+#[tokio::test]
+async fn a_proxied_method_miss_is_gated_by_the_upstream_not_by_recalld() {
+    let (upstream, _hits) = upstream_server().await;
+    let base = recalld_gated(Some(upstream)).await;
+
+    let resp = tokio::task::spawn_blocking(move || {
+        ureq::post(&format!("{base}/api/sessions"))
+            .send_string("{}")
+            .map_err(Box::new)
+    })
+    .await
+    .expect("task")
+    .expect("call");
+
+    // The stub upstream has no gate, so it answers — which is exactly the point:
+    // recalld did not check, so the upstream must.
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.header("x-from"), Some("python"));
 }

@@ -17,6 +17,7 @@ pub mod reads;
 pub mod reports;
 pub mod room;
 pub mod route;
+pub mod sessions;
 pub mod spa;
 pub mod speech;
 pub mod store;

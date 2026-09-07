@@ -7,10 +7,12 @@
 //! configured, so a dev or LAN-only recalld is unchanged.
 
 use crate::tokens::Tokens;
-use crate::{audio, conversations, ingest, labels, proxy, reads, reports, spa, webauth, work};
+use crate::{
+    audio, conversations, ingest, labels, proxy, reads, reports, sessions, spa, webauth, work,
+};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -91,6 +93,24 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
             "/api/correction/{id}/audio",
             get(labels::correction_audio_route),
         )
+        // Uploaded meetings. ⚠ The upload (POST /api/sessions) and the delete
+        // are NOT here and stay with Python; `router` forwards an unmatched
+        // METHOD on a matched path to the upstream, which is what makes owning
+        // half of a path safe.
+        .route("/api/sessions", get(sessions::sessions_route))
+        .route("/api/sessions/{source}", patch(sessions::rename_route))
+        .route(
+            "/api/sessions/{source}/rediarize",
+            post(sessions::rediarize_route),
+        )
+        .route(
+            "/api/sessions/{source}/voice",
+            post(sessions::name_voice_route),
+        )
+        .route(
+            "/api/sessions/{source}/transcript",
+            get(sessions::transcript_route),
+        )
         .with_state(read)
         // Client reports carry their own state (a log path), not the database's.
         .merge(
@@ -153,25 +173,40 @@ pub fn router(config: Arc<Config>) -> Router {
     match (upstream, frontend) {
         (None, None) => merged,
         (Some(up), None) => {
-            merged.fallback(move |req: axum::extract::Request| proxy::forward(up.clone(), req))
+            let by_method = up.clone();
+            merged
+                .method_not_allowed_fallback(move |req: axum::extract::Request| {
+                    proxy::forward(by_method.clone(), req)
+                })
+                .fallback(move |req: axum::extract::Request| proxy::forward(up.clone(), req))
         }
         (None, Some(fe)) => merged.fallback(move |uri: axum::http::Uri| {
             spa::serve(axum::extract::State(fe.clone()), uri)
         }),
-        (Some(up), Some(fe)) => merged.fallback(move |req: axum::extract::Request| {
-            let up = up.clone();
-            let fe = fe.clone();
-            async move {
-                if UPSTREAM_PREFIXES
-                    .iter()
-                    .any(|p| req.uri().path().starts_with(p))
-                {
-                    proxy::forward(up, req).await
-                } else {
-                    spa::serve(axum::extract::State(fe), req.uri().clone()).await
+        (Some(up), Some(fe)) => merged
+            .method_not_allowed_fallback({
+                // ⚠ Without this a PARTIALLY ported path is a dead end: axum
+                // matches the path, finds no handler for the method and answers
+                // 405 rather than falling through. GET /api/sessions is ours and
+                // POST /api/sessions is still Python's, so the upload would have
+                // stopped working the moment the read was ported.
+                let up = up.clone();
+                move |req: axum::extract::Request| proxy::forward(up.clone(), req)
+            })
+            .fallback(move |req: axum::extract::Request| {
+                let up = up.clone();
+                let fe = fe.clone();
+                async move {
+                    if UPSTREAM_PREFIXES
+                        .iter()
+                        .any(|p| req.uri().path().starts_with(p))
+                    {
+                        proxy::forward(up, req).await
+                    } else {
+                        spa::serve(axum::extract::State(fe), req.uri().clone()).await
+                    }
                 }
-            }
-        }),
+            }),
     }
     // ⚠ The SPA is NOT mounted here. `recalld::spa` is ported and tested, but
     // recalld serves 2 of the ~28 /api/* routes the app calls, so serving the UI
