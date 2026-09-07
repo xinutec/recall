@@ -18,7 +18,6 @@ from fastapi.responses import FileResponse
 from recall.api_capture import fleet_capture_state, register_capture_routes
 from recall.api_devices import register_device_routes
 from recall.api_labels import register_label_routes
-from recall.api_reads import register_read_routes
 from recall.api_sessions import register_session_routes
 from recall.paths import default_data_root
 from recall.store import (
@@ -56,9 +55,6 @@ register_sync_routes(app, _store, DATA_ROOT)
 # LAN-only UI stays open; only the Isis fleet pod, where the secret lives, raises the
 # wall. The recording plane (/sync/* and the iOS mic app's capture endpoints) is exempt.
 register_web_auth(app)
-
-
-register_read_routes(app, store_factory=_store, parse_iso=lambda v: _parse_iso(v))  # noqa: PLW0108 - forward ref
 
 
 register_capture_routes(app, store_factory=_store, data_root=lambda: DATA_ROOT)

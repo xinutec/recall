@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -15,12 +14,9 @@ from recall import (
     api,
     api_capture,
     api_labels,
-    api_reads,
     capture_control,
     loudness,
 )
-from recall.api_reads import _precise, _tier
-from recall.asr import Word
 from recall.ids import AudioSegmentId, TranscriptId
 from recall.liveness import Evidence
 from recall.sources import AudioSource, SourceKind
@@ -71,26 +67,6 @@ def _seg(asr_model: str, provenance: str | None = None) -> TranscriptSegment:
     )
 
 
-def test_tier_classifies_by_model_and_provenance() -> None:
-    assert _tier(_seg("human")) == "corrected"
-    assert _tier(_seg("live")) == "live"
-    assert _tier(_seg("mlx-whisper", "diarized (mlx-whisper)")) == "diarized"
-    assert _tier(_seg("mlx-whisper", "mlx-whisper")) == "transcribed"
-
-
-def test_precise_plays_tight_for_diarized_or_word_timed_turns() -> None:
-    # A diarized turn and any turn carrying word timings (e.g. a span-assign split) are
-    # precise cutouts → played tight. A plain transcribed phrase gets the wide window.
-    diarized = _seg("mlx-whisper", "diarized (mlx-whisper)")
-    basic = _seg("mlx-whisper", "mlx-whisper")
-    split = replace(
-        basic, provenance="split of #5", word_timings=(Word(0.0, 0.5, "a", 1.0),)
-    )
-    assert _precise(diarized) is True
-    assert _precise(split) is True  # word timings → tight, exact
-    assert _precise(basic) is False  # rough phrase → wide context window
-
-
 def _seed_candidates(root: Path, count: int) -> Store:
     """A DB with `count` labelling candidates (machine turns, mid confidence)."""
     flac = root / "usb-20260613T120000.flac"
@@ -122,119 +98,6 @@ def _seed_candidates(root: Path, count: int) -> Store:
             asr_confidence=0.5,
         )
     return store
-
-
-def test_conversations_groups_turns_by_silence_gaps(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The /api/conversations endpoint windows recent turns and breaks them into
-    conversations on silence, carrying each turn plus a summary for the card."""
-    flac = tmp_path / "usb-20260613T120000.flac"
-    make_flac(flac, 30.0)
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(
-        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="usb",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(hours=1),
-            path=str(flac),
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-
-    def turn(text: str, at: float, dur: float, speaker: str | None) -> None:
-        store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=at),
-            end=BASE + timedelta(seconds=at + dur),
-            text=text,
-            asr_model="whisper",
-            language="nl",
-            asr_confidence=0.9,
-            speaker_label=speaker,
-        )
-
-    # Conversation 1: a tight exchange. Conversation 2: after a 10-minute silence.
-    turn("Carol, is dit dringend?", 0, 2, "Carol")
-    turn("Nee hoor.", 4, 2, "Alice")
-    turn("Echt waar?", 700, 2, "Carol")
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    result = api_reads.conversations(limit=200)
-    items = result["items"]
-    assert isinstance(items, list)
-    assert len(items) == 2  # the 10-minute gap split them
-
-    first = items[0]
-    assert first["turnCount"] == 2
-    assert first["speakers"] == ["Carol", "Alice"]
-    assert first["preview"] == "Carol, is dit dringend?"
-    # One mic, so each turn is its own moment (nothing to fold); the spine is the
-    # turn, no alternates.
-    assert [m["primary"][0]["text"] for m in first["moments"]] == [
-        "Carol, is dit dringend?",
-        "Nee hoor.",
-    ]
-    assert all(m["alternates"] == [] for m in first["moments"])
-    assert items[1]["turnCount"] == 1
-
-
-def test_folded_moment_shows_strongest_colocated_guess(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A folded moment keeps the cleaner *transcription* as the spine, but shows the
-    most confident attribution among the co-located mics — the same speech, so the
-    spine mic's weaker guess isn't the one displayed."""
-    store = Store.open(tmp_path / "recall.sqlite")
-    for sid in ("usb", "pixel9"):
-        store.add_source(
-            AudioSource(id=sid, name=sid, kind=SourceKind.COREAUDIO, spec="")
-        )
-
-    def add(sid: str, text: str, asr_conf: float) -> int:
-        audio = store.add_audio_segment(
-            Segment(
-                source_id=sid,
-                sequence=0,
-                start=BASE,
-                end=BASE + timedelta(seconds=5),
-                path=f"{sid}.flac",
-                sample_rate=48000,
-                channels=1,
-            )
-        )
-        return store.add_transcript_segment(
-            audio_segment_id=audio,
-            start=BASE,
-            end=BASE + timedelta(seconds=3),
-            text=text,
-            asr_model="whisper",
-            language="en",
-            asr_confidence=asr_conf,
-        )
-
-    usb = add("usb", "air con usb", 0.9)  # cleaner transcription -> the spine
-    pix = add("pixel9", "air con pixel", 0.5)  # weaker text, stronger voiceprint
-    store.set_speaker_guess(usb, "Pippijn", 0.40)
-    store.set_speaker_guess(pix, "Pippijn", 0.80)
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    moments = api_reads.conversations(limit=200)["items"][0]["moments"]
-    assert len(moments) == 1
-    primary = moments[0]["primary"]
-    assert [p["text"] for p in primary] == ["air con usb"]  # the cleaner-mic spine
-    assert primary[0]["speaker"] == "Pippijn"
-    # The spine mic guessed 0.40, but the co-located mic heard the same speech at 0.80
-    # — that's the guess shown on the spine turn.
-    assert primary[0]["speakerConfidence"] == 0.80
-    assert moments[0]["alternates"][0]["speakerConfidence"] == 0.80
 
 
 def test_suggest_reads_the_cached_guess_above_threshold(
@@ -278,48 +141,6 @@ def test_suggest_reads_the_cached_guess_above_threshold(
 
     assert api_labels.suggest(confident)["speaker"] == "Alice"
     assert api_labels.suggest(weak)["speaker"] is None  # below the pre-fill bar
-
-
-def test_conversations_gap_param_is_tunable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A larger gap merges turns a smaller one would split (calibration knob)."""
-    flac = tmp_path / "usb-20260613T120000.flac"
-    make_flac(flac, 30.0)
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(
-        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="usb",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(hours=1),
-            path=str(flac),
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-    for at in (0.0, 100.0):  # two turns 100 seconds apart
-        store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=at),
-            end=BASE + timedelta(seconds=at + 1),
-            text="x",
-            asr_model="whisper",
-            language="nl",
-            asr_confidence=0.9,
-        )
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    split = api_reads.conversations(limit=10, gap=60.0)["items"]
-    merged = api_reads.conversations(limit=10, gap=200.0)["items"]
-    assert isinstance(split, list)
-    assert isinstance(merged, list)
-    assert len(split) == 2
-    assert len(merged) == 1
 
 
 def test_backfill_loudness_fills_the_cache_offline(tmp_path: Path) -> None:
