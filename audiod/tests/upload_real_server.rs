@@ -24,6 +24,8 @@ fn serve(server_root: &Path, tokens_text: &str) -> String {
         // The uploader speaks to the ingest plane only; the browsing plane is a
         // different credential and is deliberately absent here.
         webauth: None,
+        upstream: None,
+        frontend: None,
     });
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {

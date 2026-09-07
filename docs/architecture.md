@@ -907,6 +907,55 @@ B3 lands.*
   ffmpeg alone and every audio request died inside loudness normalisation while
   transcripts served perfectly), and recalld runs from that same image.
 
+  *The strangler fallback, 2026-09-07 — the change that makes Python deletable
+  INCREMENTALLY.* Until now the cutover was all-or-nothing, and that is worth
+  naming because it silently governed the whole migration: the browser talks to
+  whichever host served the page, so a route ported to recalld changed nothing
+  while Python served the app. "Port a group, delete its module" — the only way
+  this finishes — was impossible, and every ported group was dead weight until
+  the last one landed.
+
+  `recalld::proxy` is the fix: recalld becomes the front door and forwards
+  anything it has not ported to the Python beside it in the pod. It is a
+  FALLBACK, never an override — it runs only where recalld's own router had no
+  match, so a ported route always wins and a half-ported group cannot keep
+  silently answering from the old tier. Eight tests, driven against a REAL
+  upstream server rather than a mocked client, because the likeliest error in a
+  proxy is the request SHAPE and a mock tests one's expectation of it.
+
+  Two properties worth naming, both tested:
+  - **The session cookie crosses verbatim.** Otherwise ported routes work while
+    proxied ones 401 — a split brain that reads as a webauth bug.
+  - **A dead upstream is a 502, never an empty 200.** Mid-migration that is the
+    whole diagnosis: "the Python half is down" versus "that route legitimately
+    has nothing", and reading the second for the first sends someone hunting a
+    data bug that does not exist.
+
+  **THE PORT ARRANGEMENT, and why nothing external moves.** recalld `--bind`
+  now REPEATS, and takes BOTH 8001 (what recorders already push to) and 8000
+  (what the browser and the registered OAuth redirect already use); the Python
+  api moves to a pod-internal 8002 and recalld proxies to it. The hostPort DNATs
+  into the pod's shared network namespace, so which container binds 8000 is not
+  something Kubernetes polices — which means no recorder is reconfigured, no
+  redirect URI is re-registered, and no bookmark changes. The kubes model holds
+  one port per container by design and does NOT need changing for this.
+
+  ⚠ **The workload probe must change WITH it, or it lies.** It is `Tcp { port }`
+  on 8000. After the swap that port is recalld's, so the probe passes whenever
+  recalld is up — including with the Python container dead and every unported
+  route 502ing. Kubernetes would call the pod healthy while most of the app was
+  broken. Replace it with an HTTP probe through recalld to a PROXIED route:
+  `/api/capture` is Python's and is deliberately login-free, so one request
+  proves recalld is up, the proxy works, and Python is alive — strictly more than
+  the TCP check ever proved.
+
+  ⚠ **The config change and the image are COUPLED, so they ship together.**
+  `--upstream`, `--frontend` and the repeated `--bind` exist only in a freshly
+  built binary; landing the kubes change first would leave a deploy that starts a
+  recalld which rejects its own arguments. The kubes edit is therefore NOT made
+  ahead of time — it is made at cutover, against an image that already carries
+  these flags.
+
   ⚠ **STILL TO DO:** the remaining route groups (labels, capture, devices,
   sessions), then shadow days, then the Python goes. Sessions goes LAST while
   meeting uploads are live.

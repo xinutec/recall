@@ -32,6 +32,8 @@ fn harness(tokens: Option<&str>, read_token: Option<&str>) -> Harness {
         read_token: read_token.map(str::to_owned),
         max_body_bytes: 1024 * 1024,
         webauth: None,
+        upstream: None,
+        frontend: None,
     }));
     Harness { app, dir }
 }

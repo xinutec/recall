@@ -1,6 +1,14 @@
 //! recalld — see lib.rs and docs/architecture.md.
 //!
-//!   recalld --root <data-root> [--bind 127.0.0.1:8001] [--tokens <file>]
+//!   recalld --root <data-root> [--bind <addr:port>]... [--tokens <file>]
+//!           [--upstream <url>] [--frontend <dir>]
+//!
+//! `--bind` REPEATS. The fleet gives recalld both the ingest port recorders
+//! already push to and the port the browser already uses, so neither the
+//! recorders nor the registered OAuth redirect has to move for recalld to become
+//! the front door. `--upstream` is the Python API beside it in the pod, which
+//! serves whatever recalld has not ported yet; `--frontend` is the built Angular
+//! app.
 //!
 //! `RECALLD_READ_TOKEN` (env, optional) gates the read side; per-source write
 //! tokens come from `--tokens <file>` or the `RECALLD_INGEST_TOKENS` env var
@@ -13,8 +21,51 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 fn usage() -> ExitCode {
-    eprintln!("usage: recalld --root <data-root> [--bind <addr:port>] [--tokens <file>]");
+    eprintln!(
+        "usage: recalld --root <data-root> [--bind <addr:port>]... [--tokens <file>] \
+         [--upstream <url>] [--frontend <dir>]"
+    );
     ExitCode::FAILURE
+}
+
+/// Everything the command line says, or `None` if it does not parse.
+struct Args {
+    root: PathBuf,
+    binds: Vec<String>,
+    tokens_path: Option<PathBuf>,
+    upstream: Option<String>,
+    frontend: Option<PathBuf>,
+}
+
+fn parse_args() -> Option<Args> {
+    let mut args = std::env::args().skip(1);
+    let mut root: Option<PathBuf> = None;
+    let mut binds: Vec<String> = Vec::new();
+    let mut tokens_path: Option<PathBuf> = None;
+    let mut upstream: Option<String> = None;
+    let mut frontend: Option<PathBuf> = None;
+    while let Some(arg) = args.next() {
+        let value = args.next()?;
+        match arg.as_str() {
+            "--root" => root = Some(PathBuf::from(value)),
+            "--bind" => binds.push(value),
+            "--tokens" => tokens_path = Some(PathBuf::from(value)),
+            "--upstream" => upstream = Some(value),
+            "--frontend" => frontend = Some(PathBuf::from(value)),
+            _ => return None,
+        }
+    }
+    let root = root?;
+    if binds.is_empty() {
+        binds.push(String::from("127.0.0.1:8001"));
+    }
+    Some(Args {
+        root,
+        binds,
+        tokens_path,
+        upstream,
+        frontend,
+    })
 }
 
 fn main() -> ExitCode {
@@ -24,22 +75,14 @@ fn main() -> ExitCode {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    let mut args = std::env::args().skip(1);
-    let mut root: Option<PathBuf> = None;
-    let mut bind = String::from("127.0.0.1:8001");
-    let mut tokens_path: Option<PathBuf> = None;
-    while let Some(arg) = args.next() {
-        let Some(value) = args.next() else {
-            return usage();
-        };
-        match arg.as_str() {
-            "--root" => root = Some(PathBuf::from(value)),
-            "--bind" => bind = value,
-            "--tokens" => tokens_path = Some(PathBuf::from(value)),
-            _ => return usage(),
-        }
-    }
-    let Some(root) = root else {
+    let Some(Args {
+        root,
+        binds,
+        tokens_path,
+        upstream,
+        frontend,
+    }) = parse_args()
+    else {
         return usage();
     };
     // A configured-but-unreadable token table fails closed at startup: an
@@ -89,6 +132,8 @@ fn main() -> ExitCode {
         read_token,
         max_body_bytes: DEFAULT_MAX_BODY,
         webauth,
+        upstream: upstream.map(|base| recalld::proxy::Upstream { base }),
+        frontend,
     });
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
@@ -98,25 +143,55 @@ fn main() -> ExitCode {
         }
     };
     runtime.block_on(async move {
-        let listener = match tokio::net::TcpListener::bind(&bind).await {
-            Ok(listener) => listener,
-            Err(err) => {
-                eprintln!("recalld: cannot bind {bind}: {err}");
-                return ExitCode::FAILURE;
-            }
+        let Some(listeners) = bind_all(&binds).await else {
+            return ExitCode::FAILURE;
         };
         spawn_level_scanner(config.root.clone());
         spawn_speech_scanner(config.root.clone());
         spawn_room_builder(config.root.clone());
-        tracing::info!(%bind, "recalld: ingest plane listening");
-        match axum::serve(listener, router(config)).await {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(err) => {
+        let app = router(config);
+        let mut serving = tokio::task::JoinSet::new();
+        for listener in listeners {
+            let addr = listener.local_addr().ok();
+            tracing::info!(?addr, "recalld: listening");
+            let app = app.clone();
+            serving.spawn(async move { axum::serve(listener, app).await });
+        }
+        // The FIRST listener to stop decides the exit: if one port dies the daemon
+        // is half-serving, which is the state that hides a fault. Better to exit
+        // and be restarted whole.
+        match serving.join_next().await {
+            Some(Ok(Ok(()))) => ExitCode::SUCCESS,
+            Some(Ok(Err(err))) => {
                 eprintln!("recalld: serve: {err}");
                 ExitCode::FAILURE
             }
+            Some(Err(err)) => {
+                eprintln!("recalld: serve task failed: {err}");
+                ExitCode::FAILURE
+            }
+            None => ExitCode::FAILURE,
         }
     })
+}
+
+/// Bind every address BEFORE serving any.
+///
+/// ⚠ A half-bound daemon — answering recorders but not the browser, or the
+/// reverse — is worse than one that refuses to start, because it looks healthy
+/// from whichever side you happen to check.
+async fn bind_all(binds: &[String]) -> Option<Vec<tokio::net::TcpListener>> {
+    let mut listeners = Vec::new();
+    for addr in binds {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => listeners.push(listener),
+            Err(err) => {
+                eprintln!("recalld: cannot bind {addr}: {err}");
+                return None;
+            }
+        }
+    }
+    Some(listeners)
 }
 
 /// Stage D2: the calibration scanner, measuring levels for every delivered

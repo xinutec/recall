@@ -7,10 +7,10 @@
 //! configured, so a dev or LAN-only recalld is unchanged.
 
 use crate::tokens::Tokens;
-use crate::{audio, ingest, reads, webauth};
+use crate::{audio, ingest, proxy, reads, spa, webauth, work};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{get, put};
+use axum::routing::{delete, get, post, put};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -36,6 +36,13 @@ pub struct Config {
     /// transcripts. An unconfigured recalld must not answer them at all rather
     /// than answer them to anyone.
     pub webauth: Option<webauth::GateState>,
+    /// Where routes recalld does not serve yet are forwarded. `None` = a miss is
+    /// a 404. See `proxy`: this is what lets Python be deleted one group at a
+    /// time instead of all at once.
+    pub upstream: Option<proxy::Upstream>,
+    /// The built Angular app. `None` = not served (the default, and what every
+    /// test and dev run uses).
+    pub frontend: Option<PathBuf>,
 }
 
 /// The browsing plane: stage F1's ported routes, behind the SSO gate.
@@ -55,6 +62,17 @@ fn browsing(st: webauth::GateState, root: PathBuf) -> Router {
         // read of the meaning plane plus a read of the audio file.
         .route("/api/audio/{id}", get(audio::audio_route))
         .route("/api/audio-span", get(audio::audio_span_route))
+        // The first WRITE routes here. See `work`'s module note: reads keep the
+        // read-only handle, writes take their own connection.
+        .route(
+            "/api/vocabulary",
+            get(work::vocabulary_route).post(work::vocabulary_add_route),
+        )
+        .route(
+            "/api/vocabulary/{id}",
+            delete(work::vocabulary_delete_route),
+        )
+        .route("/api/refine", post(work::refine_route))
         .with_state(read)
         .merge(webauth::routes(st.clone()))
         .layer(axum::middleware::from_fn_with_state(st, webauth::gate))
@@ -62,6 +80,8 @@ fn browsing(st: webauth::GateState, root: PathBuf) -> Router {
 
 pub fn router(config: Arc<Config>) -> Router {
     let limit = config.max_body_bytes;
+    let upstream = config.upstream.clone();
+    let frontend = config.frontend.clone();
     let browsing_plane = config
         .webauth
         .clone()
@@ -79,9 +99,38 @@ pub fn router(config: Arc<Config>) -> Router {
         .route("/work/v1/jobs/{id}/done", put(ingest::finish_job))
         .layer(DefaultBodyLimit::max(limit))
         .with_state(config);
-    match browsing_plane {
+    let merged = match browsing_plane {
         Some(b) => base.merge(b),
         None => base,
+    };
+    // ⚠ Order matters and is the safety property: `fallback` runs ONLY where
+    // nothing above matched, so a ported route always beats both the proxy and
+    // the shell. A half-ported group can never silently keep serving the old
+    // answer, and a typo'd path cannot shadow a real handler.
+    //
+    // Below that one rule decides between the two fallbacks: an `/api/*` miss is
+    // Python's (it still owns those groups), anything else is the app shell's, so
+    // a deep link like /sessions/meeting-x renders rather than 404ing.
+    let frontend = frontend.map(|root| Arc::new(spa::Frontend { root }));
+    match (upstream, frontend) {
+        (None, None) => merged,
+        (Some(up), None) => {
+            merged.fallback(move |req: axum::extract::Request| proxy::forward(up.clone(), req))
+        }
+        (None, Some(fe)) => merged.fallback(move |uri: axum::http::Uri| {
+            spa::serve(axum::extract::State(fe.clone()), uri)
+        }),
+        (Some(up), Some(fe)) => merged.fallback(move |req: axum::extract::Request| {
+            let up = up.clone();
+            let fe = fe.clone();
+            async move {
+                if req.uri().path().starts_with("/api/") {
+                    proxy::forward(up, req).await
+                } else {
+                    spa::serve(axum::extract::State(fe), req.uri().clone()).await
+                }
+            }
+        }),
     }
     // ⚠ The SPA is NOT mounted here. `recalld::spa` is ported and tested, but
     // recalld serves 2 of the ~28 /api/* routes the app calls, so serving the UI

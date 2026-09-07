@@ -11,7 +11,7 @@ import it back under its old private name until they move.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
 
@@ -23,7 +23,6 @@ from recall.conversations import (
 from recall.moments import Moment, best_colocated_guess, cluster_moments
 from recall.review import review_queue
 from recall.schemas import (
-    AroundOut,
     ConversationOut,
     ConversationsOut,
     ItemsOut,
@@ -69,7 +68,6 @@ def register_read_routes(
     app.get("/api/conversations")(conversations)
     app.get("/api/transcripts")(transcripts)
     app.get("/api/review")(review)
-    app.get("/api/around/{transcript_id}")(around)
 
 
 def _tier(segment: TranscriptSegment) -> Tier:
@@ -263,25 +261,5 @@ def review(limit: int = 50) -> ItemsOut:
     store = _store()
     try:
         return {"items": [transcript_out(s) for s in review_queue(store, limit=limit)]}
-    finally:
-        store.close()
-
-
-def around(transcript_id: int, n: int = 2) -> AroundOut:
-    """The `n` current turns just before and after one — context for labeling."""
-    store = _store()
-    try:
-        target = store.get_transcript(transcript_id)
-        if target is None:
-            raise HTTPException(status_code=404, detail="no such turn")
-        window = timedelta(minutes=2)
-        nearby = store.segments_in_range(target.start - window, target.end + window)
-        idx = next((i for i, s in enumerate(nearby) if s.id == transcript_id), None)
-        if idx is None:
-            return {"before": [], "after": []}
-        return {
-            "before": [transcript_out(s) for s in nearby[max(0, idx - n) : idx]],
-            "after": [transcript_out(s) for s in nearby[idx + 1 : idx + 1 + n]],
-        }
     finally:
         store.close()

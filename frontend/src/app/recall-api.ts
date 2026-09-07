@@ -3,7 +3,6 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
 import {
-  Around,
   AssignResult,
   AssignSpanRequest,
   CaptureState,
@@ -18,7 +17,6 @@ import {
   TurnSpeakerRequest,
   VoiceNameRequest,
   Suggest,
-  TranscriptList,
   VocabularyRequest,
 } from './models';
 
@@ -80,16 +78,6 @@ export class RecallApi {
     return this.http.post<CorrectResult>('/api/correct', body);
   }
 
-  around(id: number): Observable<Around> {
-    return this.http.get<Around>(`/api/around/${id}`);
-  }
-
-  /** Specific turns by id (comma-separated) — backs labelling one turn in Train. */
-  transcripts(ids: string): Observable<TranscriptList> {
-    return this.http.get<TranscriptList>(`/api/transcripts?ids=${encodeURIComponent(ids)}`);
-  }
-
-  /** Best-matching enrolled name for a turn (or null) — the "sounds like X" hint. */
   suggest(id: number): Observable<Suggest> {
     return this.http.get<Suggest>(`/api/suggest/${id}`);
   }

@@ -174,11 +174,6 @@ export interface SplitResult {
   readonly newIds: readonly number[];
 }
 
-export interface Around {
-  readonly before: readonly Transcript[];
-  readonly after: readonly Transcript[];
-}
-
 export interface Suggest {
   readonly speaker: string | null;
 }

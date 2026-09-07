@@ -278,11 +278,6 @@ class NewIdsOut(TypedDict):
     newIds: list[int]
 
 
-class AroundOut(TypedDict):
-    before: list[TranscriptOut]
-    after: list[TranscriptOut]
-
-
 class SuggestOut(TypedDict):
     speaker: str | None
 

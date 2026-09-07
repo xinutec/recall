@@ -1,0 +1,248 @@
+//! The strangler fallback (stage F1).
+//!
+//! Driven against a REAL upstream server rather than a mocked client: the
+//! likeliest error in a proxy is the request or response SHAPE — a header copied
+//! that should not be, a status flattened, a body truncated — and a mock would
+//! test my expectation of that shape instead of the shape itself. The same
+//! reasoning as the OAuth exchange in `webauth`.
+
+use axum::Router;
+use axum::routing::{get, post};
+use recalld::app::{Config, DEFAULT_MAX_BODY, router};
+use recalld::proxy::{Upstream, forwarded_headers, target};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// A stand-in for the Python API: echoes what it was asked, so the test can
+/// assert on what actually crossed the hop.
+async fn upstream_server() -> (String, Arc<AtomicUsize>) {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = hits.clone();
+    let app = Router::new()
+        .route(
+            "/api/legacy",
+            get(move |headers: axum::http::HeaderMap| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    let cookie = headers
+                        .get("cookie")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("-")
+                        .to_string();
+                    ([("x-from", "python")], format!("legacy cookie={cookie}"))
+                }
+            }),
+        )
+        .route(
+            "/api/echo",
+            post(|body: String| async move { format!("got:{body}") }),
+        )
+        .route(
+            "/api/teapot",
+            get(|| async { (axum::http::StatusCode::IM_A_TEAPOT, "short and stout") }),
+        )
+        .route(
+            "/api/query",
+            get(|uri: axum::http::Uri| async move { uri.query().unwrap_or("none").to_string() }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://{addr}"), hits)
+}
+
+async fn recalld_with(upstream: Option<String>) -> String {
+    let dir = tempfile::tempdir().expect("tmp");
+    let root = dir.path().to_path_buf();
+    std::mem::forget(dir); // the server outlives this fn; the tmpdir must too
+    recalld::store::open(&root).expect("ingest db");
+    let config = Arc::new(Config {
+        root,
+        tokens: None,
+        read_token: None,
+        max_body_bytes: DEFAULT_MAX_BODY,
+        webauth: None,
+        upstream: upstream.map(|base| Upstream { base }),
+        frontend: None,
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind recalld");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router(config)).await;
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn an_unported_route_is_answered_by_the_upstream() {
+    let (up, hits) = upstream_server().await;
+    let base = recalld_with(Some(up)).await;
+
+    let resp = tokio::task::spawn_blocking(move || {
+        ureq::get(&format!("{base}/api/legacy"))
+            .set("Cookie", "recall_session=abc.def")
+            .call()
+            .map_err(Box::new)
+    })
+    .await
+    .expect("task")
+    .expect("call");
+
+    assert_eq!(resp.status(), 200);
+    // ⚠ The session cookie must cross the hop verbatim, or Python cannot tell who
+    // is asking and every proxied route 401s while the ported ones work — a split
+    // brain that would look like a webauth bug.
+    assert_eq!(
+        resp.into_string().expect("body"),
+        "legacy cookie=recall_session=abc.def"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_route_recalld_serves_is_never_proxied() {
+    // ⚠ The safety property. `/ingest/v1/health` is recalld's own; if the fallback
+    // could shadow it, a ported group would keep silently answering from Python
+    // and the migration would appear to work while changing nothing.
+    let (up, hits) = upstream_server().await;
+    let base = recalld_with(Some(up)).await;
+
+    let resp = tokio::task::spawn_blocking(move || {
+        ureq::get(&format!("{base}/ingest/v1/health"))
+            .call()
+            .map_err(Box::new)
+    })
+    .await
+    .expect("task")
+    .expect("call");
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "must not reach the upstream"
+    );
+}
+
+#[tokio::test]
+async fn the_upstreams_status_is_relayed_not_flattened() {
+    // ureq treats 4xx/5xx as an error type. Reading that as "the proxy failed"
+    // would turn every legitimate 404 from Python into a 502 from here, and a
+    // missing session would read as a broken deployment.
+    let (up, _) = upstream_server().await;
+    let base = recalld_with(Some(up)).await;
+
+    let status = tokio::task::spawn_blocking(move || {
+        match ureq::get(&format!("{base}/api/teapot")).call() {
+            Ok(r) => r.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(e) => panic!("transport: {e}"),
+        }
+    })
+    .await
+    .expect("task");
+
+    assert_eq!(status, 418);
+}
+
+#[tokio::test]
+async fn a_request_body_and_query_survive_the_hop() {
+    let (up, _) = upstream_server().await;
+    let base = recalld_with(Some(up)).await;
+    let b = base.clone();
+
+    let echoed = tokio::task::spawn_blocking(move || {
+        ureq::post(&format!("{b}/api/echo"))
+            .send_string("hello")
+            .expect("post")
+            .into_string()
+            .expect("body")
+    })
+    .await
+    .expect("task");
+    assert_eq!(echoed, "got:hello");
+
+    let query = tokio::task::spawn_blocking(move || {
+        ureq::get(&format!("{base}/api/query?limit=5&before=x"))
+            .call()
+            .expect("get")
+            .into_string()
+            .expect("body")
+    })
+    .await
+    .expect("task");
+    assert_eq!(query, "limit=5&before=x");
+}
+
+#[tokio::test]
+async fn without_an_upstream_a_miss_is_an_honest_404() {
+    // The default everywhere except the fleet: no upstream configured, so an
+    // unknown route is absent rather than silently forwarded somewhere.
+    let base = recalld_with(None).await;
+
+    let status = tokio::task::spawn_blocking(move || {
+        match ureq::get(&format!("{base}/api/legacy")).call() {
+            Ok(r) => r.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(e) => panic!("transport: {e}"),
+        }
+    })
+    .await
+    .expect("task");
+
+    assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn a_dead_upstream_is_a_502_not_an_empty_success() {
+    // ⚠ During the migration this distinction is the whole diagnosis: "the Python
+    // half is down" versus "that route legitimately has nothing". An empty 200
+    // would send someone hunting a data bug that does not exist.
+    let base = recalld_with(Some("http://127.0.0.1:1".to_string())).await;
+
+    let status = tokio::task::spawn_blocking(move || {
+        match ureq::get(&format!("{base}/api/legacy")).call() {
+            Ok(r) => r.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(e) => panic!("transport: {e}"),
+        }
+    })
+    .await
+    .expect("task");
+
+    assert_eq!(status, 502);
+}
+
+#[test]
+fn hop_by_hop_headers_do_not_cross() {
+    // Host is the one that bites: forwarded, it makes the upstream answer for
+    // recalld's name, which breaks any host-based routing in front of it.
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("host", "recall.xinutec.org".parse().expect("host"));
+    headers.insert("cookie", "recall_session=x".parse().expect("cookie"));
+    headers.insert("connection", "keep-alive".parse().expect("conn"));
+    headers.insert("content-length", "17".parse().expect("len"));
+
+    let sent = forwarded_headers(&headers);
+    let names: Vec<_> = sent.iter().map(|(n, _)| n.as_str()).collect();
+
+    assert_eq!(names, vec!["cookie"]);
+}
+
+#[test]
+fn the_target_url_keeps_the_path_and_query_verbatim() {
+    assert_eq!(
+        target("http://127.0.0.1:8002", "/api/timeline", Some("limit=5")),
+        "http://127.0.0.1:8002/api/timeline?limit=5"
+    );
+    assert_eq!(
+        target("http://127.0.0.1:8002/", "/api/x", None),
+        "http://127.0.0.1:8002/api/x"
+    );
+}

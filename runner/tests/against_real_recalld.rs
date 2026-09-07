@@ -21,6 +21,8 @@ fn serve(root: &Path) -> String {
         max_body_bytes: 16 * 1024 * 1024,
         // The runner uses the work plane only; the browsing plane is absent here.
         webauth: None,
+        upstream: None,
+        frontend: None,
     });
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
