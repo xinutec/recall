@@ -983,8 +983,8 @@ B3 lands.*
     and serves before its upstream is ready; expected, and worth knowing so a
     handful of failures right after a deploy is not mistaken for a fault.
 
-  **Where the port stands, 2026-09-07 — 4 Python `/api` registrations left, and
-  they are all the capture family.**
+  **Where the port stands: everything but CAPTURE is recalld's.** That is the
+  durable statement; the count behind it changes with every group that moves.
   Re-derive rather than trusting the number, and derive it the way it was
   derived here — from the LIVE app, not by grepping for route strings:
 
@@ -998,12 +998,12 @@ B3 lands.*
   and it counts strings that are not routes at all, such as webauth's
   device-exempt entry for `/api/log`, whose route no longer exists.
 
-  Nine modules are gone: `api_reads`, `api_audio`, `api_work`,
-  `api_client_reports`, `api_labels`, `api_sessions`, plus `seed`, `scan_job`
-  and `context` as dead. Everything except capture is recalld's — reads,
-  playback, the work queue, client reports, uploaded meetings including their
-  upload and delete, the corrections corpus, the span assign, and the recorders'
-  heartbeats and outboxes.
+  The api modules that served a ported group were DELETED with it, not left
+  inert — that is the rule the strangler exists to make possible, and `ls
+  src/recall/api*` is the list. What moved: reads, playback, the work queue,
+  client reports, uploaded meetings including their upload and delete, the
+  corrections corpus, the span assign, and the recorders' heartbeats and
+  outboxes.
 
   | group | state |
   |---|---|
@@ -1146,5 +1146,5 @@ authoritative list is `ls src/recall` against this ladder, not a table copied
 here; when a stage lands, its deletions land in the same change.
 
 The API modules are already off it — nine went on 2026-09-07 and what is left is
-`api.py` plus `api_capture`, `api_devices` and `api_models`, holding four routes
-between them.
+`api.py` plus `api_capture`, `api_devices` and `api_models` — the capture family
+and the shared assembly.
