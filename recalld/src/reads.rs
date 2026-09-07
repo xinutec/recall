@@ -70,22 +70,22 @@ pub struct PageOut {
 }
 
 /// The raw columns a turn is built from, before the display rules are applied.
-struct Segment {
-    id: i64,
-    start_utc: String,
-    end_utc: String,
-    text: String,
-    language: Option<String>,
-    asr_confidence: Option<f64>,
-    loudness: Option<f64>,
-    asr_model: Option<String>,
-    speaker_label: Option<String>,
-    speaker_guess: Option<String>,
-    speaker_score: Option<f64>,
-    speaker_cluster: Option<String>,
-    provenance: Option<String>,
-    hidden_reason: Option<String>,
-    source_id: Option<String>,
+pub struct Segment {
+    pub id: i64,
+    pub start_utc: String,
+    pub end_utc: String,
+    pub text: String,
+    pub language: Option<String>,
+    pub asr_confidence: Option<f64>,
+    pub loudness: Option<f64>,
+    pub asr_model: Option<String>,
+    pub speaker_label: Option<String>,
+    pub speaker_guess: Option<String>,
+    pub speaker_score: Option<f64>,
+    pub speaker_cluster: Option<String>,
+    pub provenance: Option<String>,
+    pub hidden_reason: Option<String>,
+    pub source_id: Option<String>,
 }
 
 impl Segment {
@@ -134,9 +134,25 @@ impl Segment {
 /// otherwise show the best auto guess WITH its strength, so the UI can render
 /// "Alice 31%" rather than hiding a weak-but-useful guess as "unknown".
 fn to_out(segment: &Segment) -> TranscriptOut {
+    to_out_with(segment, None)
+}
+
+/// The turn as the app consumes it, optionally overriding the auto guess.
+///
+/// ⚠ The override exists for folded moments only. A spine is chosen for the
+/// cleanest TRANSCRIPTION, which says nothing about attribution — the strongest
+/// voiceprint match for the same words may sit on another mic's version. A human
+/// label still wins over both: `confirmed` is checked first, so an override can
+/// never overwrite a name a person gave.
+pub fn to_out_with(
+    segment: &Segment,
+    guess: Option<(Option<String>, Option<f64>)>,
+) -> TranscriptOut {
     let confirmed = segment.speaker_label.is_some();
     let (speaker, speaker_confidence) = if confirmed {
         (segment.speaker_label.clone(), None)
+    } else if let Some((name, score)) = guess {
+        (name, score)
     } else {
         (segment.speaker_guess.clone(), segment.speaker_score)
     };
@@ -171,7 +187,7 @@ fn to_out(segment: &Segment) -> TranscriptOut {
 /// test compares these strings against the live Python on the real archive, so a
 /// row that ever breaks the assumption shows up as a diff rather than as a
 /// subtly wrong timestamp in the UI.
-fn iso(stored: &str) -> String {
+pub fn iso(stored: &str) -> String {
     stored.to_owned()
 }
 
@@ -310,35 +326,64 @@ pub fn review(conn: &Connection, max_confidence: f64, limit: i64) -> rusqlite::R
 /// recording the same speech, and corrections — so a page that cut a tie group in
 /// half would make the next strict-`<` page skip the group's remainder silently.
 /// That is why `hasMore` is `len >= limit` and not `len == limit`.
-pub fn timeline(conn: &Connection, limit: i64, before: Option<&str>) -> rusqlite::Result<PageOut> {
-    let (sql, rows) = match before {
-        Some(cursor) => (
-            format!(
-                "{SELECT_VISIBLE} AND t.start_utc < ?1 ORDER BY t.start_utc DESC, t.id DESC LIMIT ?2"
-            ),
-            Some(cursor.to_owned()),
-        ),
-        None => (
-            format!("{SELECT_VISIBLE} ORDER BY t.start_utc DESC, t.id DESC LIMIT ?1"),
-            None,
-        ),
+/// Which slice of the stream to read, mirroring `store.recent_transcripts`.
+///
+/// ⚠ `before` and `after` are not symmetric. `before` takes the newest page
+/// OLDER than the cursor and reads newest-first; `after` takes the oldest page
+/// NEWER than it and reads oldest-first, so a forward page is contiguous with
+/// what the caller already holds rather than a jump.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Window<'a> {
+    pub before: Option<&'a str>,
+    pub after: Option<&'a str>,
+    pub source: Option<&'a str>,
+}
+
+/// Current, visible turns for one page, including the boundary instant's ties.
+///
+/// ⚠ **A full page extends PAST `limit`, on purpose.** The cursor on the wire is
+/// a bare start time and turns share one constantly — co-located mics, and
+/// corrections that inherit their turn's span. A page cut mid-group would make
+/// the next strict-`<` page skip the group's remainder silently, so the boundary
+/// instant is completed before returning. That is why callers test
+/// `len >= limit` for has-more rather than `==`.
+pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result<Vec<Segment>> {
+    let mut filters = String::new();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(source) = window.source {
+        filters.push_str(" AND a.source_id = ?");
+        params.push(Box::new(source.to_owned()));
+    }
+    if let Some(before) = window.before {
+        filters.push_str(" AND t.start_utc < ?");
+        params.push(Box::new(before.to_owned()));
+    }
+    if let Some(after) = window.after {
+        filters.push_str(" AND t.start_utc > ?");
+        params.push(Box::new(after.to_owned()));
+    }
+    // Forward paging reads oldest-first; every other case newest-first. The id
+    // tiebreak makes same-instant order deterministic, and matches the tie pass.
+    let order = if window.after.is_some() {
+        "ASC"
+    } else {
+        "DESC"
     };
+
+    let sql =
+        format!("{SELECT_VISIBLE}{filters} ORDER BY t.start_utc {order}, t.id {order} LIMIT ?");
+    let mut page_params = borrowed(&params);
+    let limit_box: Box<dyn rusqlite::ToSql> = Box::new(limit);
+    page_params.push(limit_box.as_ref());
     let mut stmt = conn.prepare(&sql)?;
-    let mut segments: Vec<Segment> = match &rows {
-        Some(cursor) => stmt
-            .query_map((cursor, limit), Segment::from_row)?
-            .collect::<rusqlite::Result<_>>()?,
-        None => stmt
-            .query_map((limit,), Segment::from_row)?
-            .collect::<rusqlite::Result<_>>()?,
-    };
+    let mut segments: Vec<Segment> = stmt
+        .query_map(page_params.as_slice(), Segment::from_row)?
+        .collect::<rusqlite::Result<_>>()?;
 
     // `!is_empty()` mirrors Python's `if rows and ...`: at limit 0 an empty page
     // must not trigger a tie pass with no boundary.
     let full_page = !segments.is_empty() && i64::try_from(segments.len()).is_ok_and(|n| n == limit);
     if full_page {
-        // Pull in the boundary instant's remaining ties. They satisfy the
-        // `before` bound by definition, having the boundary's own time.
         let boundary = segments
             .last()
             .map(|s| s.start_utc.clone())
@@ -350,21 +395,37 @@ pub fn timeline(conn: &Connection, limit: i64, before: Option<&str>) -> rusqlite
             .collect();
         let marks = vec!["?"; seen.len()].join(",");
         let tie_sql = format!(
-            "{SELECT_VISIBLE} AND t.start_utc = ? AND t.id NOT IN ({marks}) ORDER BY t.id DESC"
+            "{SELECT_VISIBLE}{filters} AND t.start_utc = ? AND t.id NOT IN ({marks}) \
+             ORDER BY t.id {order}"
         );
-        let mut tie_stmt = conn.prepare(&tie_sql)?;
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(boundary)];
+        let mut tie_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        tie_params.push(Box::new(boundary));
         for id in &seen {
-            params.push(Box::new(*id));
+            tie_params.push(Box::new(*id));
         }
-        let refs: Vec<&dyn rusqlite::ToSql> =
-            params.iter().map(std::convert::AsRef::as_ref).collect();
-        let ties = tie_stmt.query_map(refs.as_slice(), Segment::from_row)?;
-        for tie in ties {
+        let mut refs = borrowed(&params);
+        refs.extend(tie_params.iter().map(std::convert::AsRef::as_ref));
+        let mut tie_stmt = conn.prepare(&tie_sql)?;
+        for tie in tie_stmt.query_map(refs.as_slice(), Segment::from_row)? {
             segments.push(tie?);
         }
     }
+    Ok(segments)
+}
 
+fn borrowed(params: &[Box<dyn rusqlite::ToSql>]) -> Vec<&dyn rusqlite::ToSql> {
+    params.iter().map(std::convert::AsRef::as_ref).collect()
+}
+
+pub fn timeline(conn: &Connection, limit: i64, before: Option<&str>) -> rusqlite::Result<PageOut> {
+    let mut segments = recent(
+        conn,
+        limit,
+        Window {
+            before,
+            ..Window::default()
+        },
+    )?;
     let has_more = i64::try_from(segments.len()).is_ok_and(|n| n >= limit);
     // Newest-first from the DB; reverse so the page reads top-to-bottom in
     // conversation order.

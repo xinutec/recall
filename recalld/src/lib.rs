@@ -7,6 +7,7 @@
 
 pub mod app;
 pub mod audio;
+pub mod conversations;
 pub mod ingest;
 pub mod labels;
 pub mod levels;
