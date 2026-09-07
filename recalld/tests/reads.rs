@@ -394,3 +394,122 @@ async fn a_limit_is_clamped_rather_than_trusted() {
         "a huge limit must still answer, clamped"
     );
 }
+
+#[test]
+fn a_deep_link_resolves_to_the_turn_as_it_reads_now() {
+    // ⚠ A link points at the id it was made from. If that turn has since been
+    // corrected, showing the ORIGINAL means an old link shows text that is no
+    // longer true — and the correction, which is the human half of the system of
+    // record, is invisible to whoever followed the link.
+    let conn = Connection::open_in_memory().expect("open");
+    schema(&conn);
+    turn(&conn, 1, "2026-06-14T18:00:00+00:00", "hird a noise", &[]);
+    turn(&conn, 2, "2026-06-14T18:00:00+00:00", "heard a noise", &[]);
+    conn.execute(
+        "UPDATE transcript_segments SET superseded_by = 2 WHERE id = 1",
+        (),
+    )
+    .expect("supersede");
+
+    let out = reads::current_version(&conn, 1)
+        .expect("query")
+        .expect("found");
+
+    assert_eq!(out.id, 2);
+    assert_eq!(out.text, "heard a noise");
+}
+
+#[test]
+fn a_supersede_cycle_is_reported_absent_rather_than_hanging() {
+    // ⚠ `superseded_by` is written by several passes. One bad chain would spin a
+    // request thread forever — a hang, which is far worse to diagnose than a 404.
+    let conn = Connection::open_in_memory().expect("open");
+    schema(&conn);
+    turn(&conn, 1, "2026-06-14T18:00:00+00:00", "a", &[]);
+    turn(&conn, 2, "2026-06-14T18:00:01+00:00", "b", &[]);
+    conn.execute(
+        "UPDATE transcript_segments SET superseded_by = 2 WHERE id = 1",
+        (),
+    )
+    .expect("a->b");
+    conn.execute(
+        "UPDATE transcript_segments SET superseded_by = 1 WHERE id = 2",
+        (),
+    )
+    .expect("b->a");
+
+    assert_eq!(reads::current_version(&conn, 1).expect("query"), None);
+}
+
+#[test]
+fn several_ids_that_now_resolve_to_one_turn_appear_once() {
+    // Two fragments merged by a correction: a link naming both must not render
+    // the same sentence twice, which would read as two separate utterances.
+    let conn = Connection::open_in_memory().expect("open");
+    schema(&conn);
+    turn(&conn, 1, "2026-06-14T18:00:00+00:00", "old a", &[]);
+    turn(&conn, 2, "2026-06-14T18:00:01+00:00", "old b", &[]);
+    turn(&conn, 3, "2026-06-14T18:00:00+00:00", "merged", &[]);
+    conn.execute(
+        "UPDATE transcript_segments SET superseded_by = 3 WHERE id IN (1, 2)",
+        (),
+    )
+    .expect("merge");
+
+    let out = reads::transcripts(&conn, &[1, 2]).expect("query");
+
+    assert_eq!(out.items.len(), 1);
+    assert_eq!(out.items[0].text, "merged");
+}
+
+#[test]
+fn the_review_queue_puts_unscored_turns_first() {
+    // ⚠ NULL confidence is the MOST suspect, not the least — nobody has ever
+    // scored it. A plain ORDER BY that sorts nulls last buries exactly the turns
+    // the queue exists to surface.
+    let conn = Connection::open_in_memory().expect("open");
+    schema(&conn);
+    turn(
+        &conn,
+        1,
+        "2026-06-14T18:00:00+00:00",
+        "scored high",
+        &[("asr_confidence", "0.8")],
+    );
+    turn(&conn, 2, "2026-06-14T18:00:01+00:00", "never scored", &[]);
+    turn(
+        &conn,
+        3,
+        "2026-06-14T18:00:02+00:00",
+        "scored low",
+        &[("asr_confidence", "0.2")],
+    );
+
+    let items = reads::review(&conn, 0.9, 50).expect("query").items;
+
+    assert_eq!(
+        items.iter().map(|i| i.id).collect::<Vec<_>>(),
+        vec![2, 3, 1],
+        "unscored, then least confident"
+    );
+}
+
+#[test]
+fn a_confident_turn_stays_out_of_the_review_queue() {
+    let conn = Connection::open_in_memory().expect("open");
+    schema(&conn);
+    turn(
+        &conn,
+        1,
+        "2026-06-14T18:00:00+00:00",
+        "sure",
+        &[("asr_confidence", "0.95")],
+    );
+
+    assert!(
+        reads::review(&conn, 0.9, 50)
+            .expect("query")
+            .items
+            .is_empty()
+    );
+}

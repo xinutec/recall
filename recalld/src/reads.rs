@@ -18,7 +18,7 @@
 //! looks like it wants tidying here is load-bearing until F1 regenerates the
 //! frontend's typed contract from these structs.
 
-use rusqlite::{Connection, Row};
+use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
@@ -218,6 +218,91 @@ pub fn search(conn: &Connection, query: &str, limit: i64) -> rusqlite::Result<It
     Ok(ItemsOut { items })
 }
 
+/// The live version of a turn, following the supersede chain.
+///
+/// ⚠ **A deep link points at the id it was made from, which may since have been
+/// corrected or reprocessed.** Resolving to the current version is what makes an
+/// old link show the text that is true now rather than the text that was true
+/// when somebody copied the URL.
+///
+/// ⚠ **The `seen` set is a CYCLE GUARD, not tidiness.** `superseded_by` is
+/// written by several passes; one bad chain would spin this loop forever on a
+/// request thread, which is a hang rather than an error.
+pub fn current_version(conn: &Connection, id: i64) -> rusqlite::Result<Option<TranscriptOut>> {
+    // The chain is walked with a scalar query rather than by widening `Segment`:
+    // every other query here filters `superseded_by IS NULL`, so carrying the
+    // column on the shared row type would add a field that is always NULL
+    // everywhere else it is used.
+    let mut seen = std::collections::HashSet::new();
+    let mut at = id;
+    loop {
+        if !seen.insert(at) {
+            return Ok(None); // a cycle: report absent rather than spin
+        }
+        let next: Option<Option<i64>> = conn
+            .query_row(
+                "SELECT superseded_by FROM transcript_segments WHERE id = ?1",
+                [at],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match next {
+            None => return Ok(None), // no such turn
+            Some(None) => break,     // `at` is the live one
+            Some(Some(newer)) => at = newer,
+        }
+    }
+    let mut stmt = conn.prepare(
+        "SELECT t.*, a.source_id FROM transcript_segments t \
+         LEFT JOIN audio_segments a ON a.id = t.audio_segment_id WHERE t.id = ?1",
+    )?;
+    let mut rows = stmt.query([at])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    Ok(Some(to_out(&Segment::from_row(row)?)))
+}
+
+/// Specific turns by id, resolved to their live versions, in the order asked.
+///
+/// ⚠ Deduped: several requested ids can resolve to the SAME live turn once one
+/// superseded another, and showing it twice would read as two separate things
+/// having been said.
+pub fn transcripts(conn: &Connection, ids: &[i64]) -> rusqlite::Result<ItemsOut> {
+    let mut items = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for id in ids {
+        if let Some(out) = current_version(conn, *id)?
+            && seen.insert(out.id)
+        {
+            items.push(out);
+        }
+    }
+    Ok(ItemsOut { items })
+}
+
+/// The review queue: current turns most in need of a human, least confident first.
+///
+/// ⚠ **NULL confidence sorts FIRST** — unknown is the most suspect, not the least.
+/// Sorting it last (which is what a plain `ORDER BY` does in some engines) would
+/// bury exactly the turns nobody has ever scored.
+pub fn review(conn: &Connection, max_confidence: f64, limit: i64) -> rusqlite::Result<ItemsOut> {
+    let mut stmt = conn.prepare(
+        "SELECT t.*, a.source_id FROM transcript_segments t \
+         LEFT JOIN audio_segments a ON a.id = t.audio_segment_id \
+         WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL \
+           AND (t.asr_confidence IS NULL OR t.asr_confidence < ?1) \
+         ORDER BY t.asr_confidence IS NOT NULL, t.asr_confidence ASC, t.start_utc \
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map((max_confidence, limit), Segment::from_row)?;
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(to_out(&row?));
+    }
+    Ok(ItemsOut { items })
+}
+
 /// One page of the timeline, older than `before` (or the newest page).
 ///
 /// ⚠ **A full page is EXTENDED past `limit` to include every turn tied with its
@@ -355,6 +440,67 @@ pub async fn timeline_route(
         Ok(Err(e)) => failed(&e),
         Err(e) => {
             tracing::warn!("read task failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TranscriptsQuery {
+    ids: String,
+}
+
+#[derive(Deserialize)]
+pub struct ReviewQuery {
+    #[serde(default = "default_review_limit")]
+    limit: i64,
+}
+
+const fn default_review_limit() -> i64 {
+    50
+}
+
+/// Turns most in need of a human are those the model was least sure of.
+const REVIEW_MAX_CONFIDENCE: f64 = 0.9;
+
+pub async fn transcripts_route(
+    axum::extract::State(st): axum::extract::State<Arc<State>>,
+    Query(q): Query<TranscriptsQuery>,
+) -> Response {
+    // ⚠ A non-integer id is a 400, never a silently dropped one: the caller asked
+    // for a specific set of fragments, and quietly returning fewer would read as
+    // "those turns are gone".
+    let mut ids = Vec::new();
+    for piece in q.ids.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        match piece.parse::<i64>() {
+            Ok(id) => ids.push(id),
+            Err(_) => return (StatusCode::BAD_REQUEST, "ids must be integers").into_response(),
+        }
+    }
+    let root = st.root.clone();
+    match tokio::task::spawn_blocking(move || transcripts(&open(&root)?, &ids)).await {
+        Ok(Ok(items)) => axum::Json(items).into_response(),
+        Ok(Err(e)) => failed(&e),
+        Err(e) => {
+            tracing::warn!("transcripts task failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
+pub async fn review_route(
+    axum::extract::State(st): axum::extract::State<Arc<State>>,
+    Query(q): Query<ReviewQuery>,
+) -> Response {
+    let root = st.root.clone();
+    let limit = clamp(q.limit);
+    match tokio::task::spawn_blocking(move || review(&open(&root)?, REVIEW_MAX_CONFIDENCE, limit))
+        .await
+    {
+        Ok(Ok(items)) => axum::Json(items).into_response(),
+        Ok(Err(e)) => failed(&e),
+        Err(e) => {
+            tracing::warn!("review task failed: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
         }
     }
