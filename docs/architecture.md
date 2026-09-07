@@ -794,19 +794,17 @@ B3 lands.*
   contract from the Rust types; retire `recall api` and the Python fleet
   image tier.
 
-  *Reads ported 2026-09-06, NOT MOUNTED:* `recalld::reads` serves the
-  `/api/search` and `/api/timeline` shapes from `recall.sqlite`, opened
-  READ-ONLY — recalld does not own the meaning plane and must not be able to
-  write it. Reads went first because a route group that only answers questions
+  *Reads first, 2026-09-06:* `recalld::reads` serves them from `recall.sqlite`
+  opened READ-ONLY — recalld does not own the meaning plane and must not be able
+  to write it. Reads went first because a route group that only answers questions
   cannot destroy anything if it is wrong, and because two implementations of one
   contract can be DIFFED.
 
-  ⚠ **It is deliberately not on the router yet, and that is a security
-  decision, not an omission.** The browsing plane's promise is a Nextcloud
-  sign-in plus a user allowlist; recalld's read side takes the sync token.
-  Mounting transcripts on recalld before webauth is ported would open a SECOND,
-  WEAKER door to the household's audio. The port lands behind webauth or not at
-  all.
+  ⚠ **They stayed OFF the router until webauth was ported**, and the rule
+  generalises: the browsing plane's promise is a Nextcloud sign-in plus a user
+  allowlist, so mounting transcripts behind anything weaker — recalld's read side
+  takes the sync token — opens a SECOND, WEAKER door to the household's audio. A
+  port lands behind the gate or not at all.
 
   *webauth ported 2026-09-06:* `recalld::webauth` is the SSO gate — the three
   planes (browsing gated, recording login-free, device-token), the stateless
@@ -868,7 +866,7 @@ B3 lands.*
   archive in one page, and a browsing route a signed-in person can accidentally
   turn into an archive dump will eventually be turned into one.
 
-  *Static serving PORTED but NOT mounted, 2026-09-06:* `recalld::spa` implements
+  *Static serving, 2026-09-06:* `recalld::spa` implements
   the three rules a generic static handler would get wrong, all tested, two of
   them bought by incidents rather than designed:
   - an `/api/*` miss is a **404, never the shell** — returning HTML with status
@@ -881,13 +879,14 @@ B3 lands.*
     archive, the database and the token file.
   Both the traversal guard and the cache rule are mutation-checked.
 
-  ⚠ **Mounting it is what dev-lint stopped**, and the rule was right. Wiring the
-  SPA made recalld a serving ROOT, and `DL-WIRE-ROUTE-DRIFT` resolved its axum
-  table against the frontend's call sites: **26 calls that would miss**, because
-  recalld serves 2 of the ~28 `/api/*` routes the app makes. Serving the UI from
-  here today hands someone a half-working app. Same rule as the read routes
-  waiting for webauth — do not expose a surface that is not ready. `app::router`
-  gains its `frontend` field when the route groups are done, not before.
+  ⚠ **Mounting it was blocked for a day by dev-lint, and the rule was right.**
+  Wiring the SPA made recalld a serving ROOT, so `DL-WIRE-ROUTE-DRIFT` resolved
+  its axum table against the frontend's call sites and found **26 calls that would
+  miss** — recalld then served 2 of the ~28 `/api/*` routes the app makes, and
+  serving the UI would have handed someone a half-working app. It was mounted at
+  the cutover, once the proxy could answer for everything not yet ported. The rule
+  generalises: do not expose a surface that is not ready, and a lint that can see
+  the whole surface is how you find out that it is not.
 
   *Audio ported and mounted 2026-09-07:* `recalld::audio` serves `/api/audio/{id}`
   and `/api/audio-span` behind the same gate, from the same read-only connection —
@@ -940,23 +939,18 @@ B3 lands.*
   redirect URI is re-registered, and no bookmark changes. The kubes model holds
   one port per container by design and does NOT need changing for this.
 
-  ⚠ **The container ROLES swap with it, and the probe is why.** Today the api is
-  the main container (workload `port` 8000, `Tcp` probe) and recalld is a sidecar
-  (8001, its own HTTP probe). After the cutover recalld binds 8000, so the
-  workload probe would test recalld while nominally belonging to the api — it
-  would pass with the Python container dead and every unported route 502ing, and
-  Kubernetes would call the pod healthy while most of the app was broken.
+  ⚠ **EACH CONTAINER PROBES ITSELF, and that is the whole of it.** The api probes
+  `/api/capture` on 8002, recalld probes `/ingest/v1/health` on 8001. The danger a
+  shared probe carries is that it passes while the thing it names is dead — a
+  probe on 8000 nominally belonging to the api would test recalld, and the pod
+  would read healthy with Python down and every unported route 502ing.
 
-  So recalld becomes the MAIN container (8000, HTTP probe on a route it serves
-  natively) and the Python api becomes the sidecar (8002, its own HTTP probe on
-  `/api/capture` — login-free, so a probe can reach it). That is also just true:
-  recalld is the front door from the cutover on, and a model that says otherwise
-  is a name outliving its thing.
-
-  ⚠ An earlier draft of this note proposed probing Python THROUGH the proxy
-  instead. That fails as soon as recalld ports the probed route — the probe would
-  silently stop testing Python and start testing recalld twice. Each container
-  probes itself.
+  ⚠ Two drafts of this note were wrong before the deploy settled it. One proposed
+  probing Python THROUGH the proxy, which stops testing Python the moment recalld
+  ports the probed route. The other had the container ROLES swapping — recalld
+  becoming the main container. Neither was needed: which container binds 8000 is
+  not something Kubernetes polices, so the roles stayed as they were and only the
+  probes had to be honest.
 
   ⚠ **The config change and the image are COUPLED, so they ship together.**
   `--upstream`, `--frontend` and the repeated `--bind` exist only in a freshly
