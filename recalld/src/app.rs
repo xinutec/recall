@@ -8,7 +8,8 @@
 
 use crate::tokens::Tokens;
 use crate::{
-    audio, conversations, ingest, labels, proxy, reads, reports, sessions, spa, webauth, work,
+    audio, conversations, ingest, labels, labels_write, proxy, reads, reports, sessions, spa,
+    webauth, work,
 };
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -97,6 +98,20 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
         // are NOT here and stay with Python; `router` forwards an unmatched
         // METHOD on a matched path to the upstream, which is what makes owning
         // half of a path safe.
+        // The labelling WRITES. These reach the corrections corpus, the one
+        // thing here that is not re-derivable from audio.
+        .route(
+            "/api/turn/{id}/speaker",
+            post(labels_write::turn_speaker_route),
+        )
+        .route(
+            "/api/correction/{id}/speaker",
+            post(labels_write::correction_reassign_route),
+        )
+        .route(
+            "/api/correction/{id}/hide",
+            post(labels_write::correction_hide_route),
+        )
         .route("/api/sessions", get(sessions::sessions_route))
         .route("/api/sessions/{source}", patch(sessions::rename_route))
         .route(

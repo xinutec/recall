@@ -16,16 +16,10 @@ from fastapi import FastAPI, HTTPException
 
 from recall.api_models import (
     AssignSpanIn,
-    CorrectIn,
-    ReassignIn,
-    TurnSpeakerIn,
 )
 from recall.conversation import assign_span
-from recall.review import apply_correction
 from recall.schemas import (
     AssignResultOut,
-    NewIdOut,
-    OkOut,
     SuggestOut,
     VoiceSuggestionsOut,
 )
@@ -67,12 +61,8 @@ def register_label_routes(
     _store_factory = store_factory
     _parse_iso_fn = parse_iso
     _require_time_fn = require_time
-    app.post("/api/correct")(correct)
-    app.post("/api/turn/{segment_id}/speaker")(turn_speaker)
     app.post("/api/sessions/{source}/assign")(assign)
     app.get("/api/sessions/{source}/voices")(voice_suggestions)
-    app.post("/api/correction/{correction_id}/speaker")(correction_reassign)
-    app.post("/api/correction/{correction_id}/hide")(correction_hide)
     app.get("/api/suggest/{segment_id}")(suggest)
 
 
@@ -88,38 +78,6 @@ _TRAIN_CANDIDATES = 80
 # the family's own speech is burstier and shorter than a movie's solid dialogue.
 _MEDIA_MAX_GAP_S = 20.0
 _MEDIA_MIN_DURATION_S = 480.0
-
-
-def correct(body: CorrectIn) -> NewIdOut:
-    store = _store()
-    try:
-        new_id = apply_correction(
-            store,
-            body.id,
-            body.text,
-            now=datetime.now(UTC),
-            speaker=body.speaker,
-            start=_parse_iso(body.start),
-            end=_parse_iso(body.end),
-            language=body.language,
-        )
-        return {"newId": new_id}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    finally:
-        store.close()
-
-
-def turn_speaker(segment_id: int, body: TurnSpeakerIn) -> OkOut:
-    """Reassign a single turn to a voice (or clear it) — for the spots diarization
-    split onto the wrong speaker. Display label only."""
-    name = (body.name or "").strip() or None
-    store = _store()
-    try:
-        store.set_turn_speaker(segment_id, name)
-    finally:
-        store.close()
-    return {"ok": True}
 
 
 def assign(source: str, body: AssignSpanIn) -> AssignResultOut:
@@ -149,26 +107,6 @@ def voice_suggestions(source: str) -> VoiceSuggestionsOut:
     store = _store()
     try:
         return {"suggestions": store.session_voice_suggestions(source)}
-    finally:
-        store.close()
-
-
-def correction_reassign(correction_id: int, body: ReassignIn) -> OkOut:
-    """Fix a mis-tagged label's voice (and its voiceprint + timeline segment)."""
-    store = _store()
-    try:
-        store.set_correction_speaker(correction_id, body.speaker)
-        return {"ok": True}
-    finally:
-        store.close()
-
-
-def correction_hide(correction_id: int) -> OkOut:
-    """Soft-remove a bad label from the corpus, counts, and its voiceprint."""
-    store = _store()
-    try:
-        store.hide_correction(correction_id, "review")
-        return {"ok": True}
     finally:
         store.close()
 

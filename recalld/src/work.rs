@@ -160,10 +160,12 @@ struct NewId {
 ///
 /// ⚠ Manufacturing a time for a malformed one would queue a refine over the wrong
 /// stretch of audio — silently, since the request would succeed.
+///
+/// ⚠ Spelled by [`crate::instant`], not by chrono's default. This used to
+/// convert to UTC and let chrono trim the fraction, which stored a different
+/// text for the same moment than every row the Python wrote.
 fn instant(value: &str) -> Option<String> {
-    chrono::DateTime::parse_from_rfc3339(value)
-        .ok()
-        .map(|t| t.with_timezone(&chrono::Utc).to_rfc3339())
+    crate::instant::python_isoformat(value)
 }
 
 pub async fn vocabulary_route(State(st): State<Arc<reads::State>>) -> Response {
