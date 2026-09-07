@@ -8,8 +8,8 @@
 
 use crate::tokens::Tokens;
 use crate::{
-    assign, audio, conversations, ingest, labels, labels_write, proxy, reads, reports, sessions,
-    spa, webauth, work,
+    assign, audio, conversations, devices, ingest, labels, labels_write, proxy, reads, reports,
+    sessions, spa, webauth, work,
 };
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -100,6 +100,16 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
         // half of a path safe.
         // The labelling WRITES. These reach the corrections corpus, the one
         // thing here that is not re-derivable from audio.
+        // The recorders' own status: heartbeats and upload outboxes. ⚠ These are
+        // device-exempt in the gate — see `webauth::DEVICE_EXEMPT`.
+        .route(
+            "/api/devices/heartbeat",
+            get(devices::heartbeat_get_route).post(devices::heartbeat_post_route),
+        )
+        .route(
+            "/api/devices/outbox",
+            get(devices::outbox_get_route).post(devices::outbox_post_route),
+        )
         .route("/api/correct", post(labels_write::correct_route))
         .route(
             "/api/turn/{id}/speaker",

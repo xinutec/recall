@@ -62,7 +62,11 @@ serde = { version = "1", features = ["derive"] }
 # value. Word timings decide where a split lands, and a value that does not
 # round-trip means a turn rewritten by recalld no longer matches the one Python
 # wrote from the same blob.
-serde_json = { version = "1", features = ["float_roundtrip"] }
+# ⚠ `preserve_order` too: serde_json's Map is a BTreeMap by default, so it writes
+# object keys ALPHABETICALLY where a Python dict preserves insertion order. Both
+# implementations write the device-status settings blobs, and a reordered object
+# is a different text for the same value.
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 # The atomic-write half of the durability order: stream into a temp file in
 # the same filesystem, fsync, then rename into place — a name never points at
 # partial bytes.
