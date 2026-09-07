@@ -8,6 +8,32 @@ import kotlinx.coroutines.flow.asStateFlow
 // Shared tag for UI-state-change logging; filter with `adb logcat -s recall-ui:I`.
 const val UI_LOG = "recall-ui"
 
+/** Mic-init failure — distinct so the status can't blame the network for it. */
+internal class MicUnavailableException(
+    message: String,
+) : Exception(message)
+
+/**
+ * What a FAILED streaming attempt says about the microphone.
+ *
+ * Only a mic failure says anything about the mic. Anything else — a refused
+ * connect, a dropped socket — means the attempt never got as far as opening it,
+ * and reports nothing either way.
+ *
+ * ⚠ This used to be `e !is MicUnavailableException`, which read a network failure
+ * as PROOF THE MIC IS FINE and cleared a real fault. The order is what makes that
+ * wrong: the socket connects BEFORE the mic opens, so during a household pause —
+ * when the host's listener is closed — every attempt fails on the connect, and a
+ * phone whose microphone was genuinely broken kept reporting micOk=true. That is
+ * exactly what happened for nine hours on 2026-09-06: the app retried every two
+ * seconds, could not open AudioRecord, and the fleet check built to catch a dead
+ * mic (#887) called it healthy throughout.
+ *
+ * `true` is only ever written where the mic ACTUALLY OPENED.
+ */
+internal fun micOkAfter(previous: Boolean, failure: Throwable): Boolean =
+    if (failure is MicUnavailableException) false else previous
+
 /**
  * Live streaming state published by [StreamService] and observed by the UI. Same
  * process, so this is just shared in-memory state (StateFlow is thread-safe) — no

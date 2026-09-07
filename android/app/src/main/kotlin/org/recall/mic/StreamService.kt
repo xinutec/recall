@@ -237,7 +237,7 @@ class StreamService : Service() {
                 // without touching the notification (a zombie must not re-post one
                 // after Stop) and without a pointless network call.
                 if (!running) break
-                MicState.setMicOk(e !is MicUnavailableException)
+                MicState.setMicOk(micOkAfter(MicState.micOk.value, e))
                 if (e is MicUnavailableException) {
                     // Blaming the network would send whoever reads it debugging the
                     // wrong thing — the connect succeeded; the microphone didn't.
@@ -349,11 +349,6 @@ class StreamService : Service() {
             "could not initialise AudioRecord (permission revoked / mic held elsewhere?)",
         )
     }
-
-    /** Mic-init failure — distinct so the status can't blame the network for it. */
-    private class MicUnavailableException(
-        message: String,
-    ) : Exception(message)
 
     /**
      * Enter the foreground with the microphone type. Returns false if the OS
