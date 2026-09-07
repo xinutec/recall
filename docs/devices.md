@@ -216,14 +216,23 @@ state worth catching bright green.
 | Auth | **none**, deliberately. The mic app has never held a token, and a beat that could 401 would report a credential mistake as dead hardware (`webauth._DEVICE_EXEMPT`) |
 | Carries | `startedAt` (a restart between beats is what "it goes down now and then" looks like from here), `streaming`, `charging`, `micOk`, app + version |
 | Retries | a failed beat comes back in a minute, doubling to the hourly cadence (#886) — an app that came up while the network was still settling used to wait a full hour |
-| Stored | one settings row, capped and evicted by age (`recall.mic_alive`) — last-known status, no history, no migration |
+| Stored | one settings row (`recalld::devices`) — last-known status, no history, no migration. Capped at 16 devices, aged out after 30 days, and forgettable with an authenticated `DELETE /api/devices/heartbeat/{device}` (#1408) |
 | Graded | not here. The Mac reads `/sync/devices/heartbeats` and `xinutec-infra/mac-mini/recall_mics.py` decides what is too long, beside the rest of the fleetwatch thresholds |
 
 `streaming` and `charging` are carried but **never graded**: every honest app reports
-`streaming: false` while the household is paused, and a carried phone is off charge all
-day. They say what the app was doing when the beats stopped. `micOk` **is** graded — it
+`streaming: false` while the household is paused, a carried phone is off charge all day,
+and a room phone gets switched off on purpose — Pippijn silences the pixel9 to type on
+it. They say what the app was doing when the beats stopped. `micOk` **is** graded — it
 is a fault, not a mode: the app kept running but the audio engine would not open, which
 used to show up as silence and is now named (#887).
+
+⚠ **`micOk` lied for nine hours on 2026-09-06 and the fix is not installed on the
+phones yet.** A failed attempt set it from `e !is MicUnavailableException`, so any
+NON-mic failure wrote `micOk=true` — and the socket connects before the mic opens, so
+during a pause every attempt failed on the connect and kept clearing a genuine fault.
+Corrected 2026-09-07 (`MicState.micOkAfter`): a failure that never reached the
+microphone reports nothing about it, and `true` is written only where it opened. Until
+the apps are rebuilt and installed, a beat's `micOk` is still the old rule's answer.
 
 ### The LAN fallback
 
