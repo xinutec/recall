@@ -12,13 +12,19 @@
 //! own times are kept only where they say something about the phone
 //! (`startedAt`, `oldestQueuedAt`).
 //!
+//! ⚠ **A GET is the reachability probe; a POST costs a row.** The write endpoints
+//! are unauthenticated, so the obvious way to ask "can this phone reach the
+//! control plane?" is to POST a beat — and that leaves a device in the list that
+//! has three times needed sqlite3 by hand to remove (#1408). A GET on the same
+//! path answers reachability with a 401 and writes nothing. Use that.
+//!
 //! ⚠ **Stored as one JSON value per key in `settings`**, rewritten whole. That is
 //! a read-modify-write, so two beats arriving together can lose one — which is
 //! how the Python has always worked and is acceptable for an hourly status that
 //! is rewritten wholesale.
 
 use crate::instant;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +42,15 @@ const MAX_REASON_LEN: usize = 200;
 /// setting that had to be removed by hand with sqlite3 inside the pod; the cap
 /// turns that from surgery into eviction.
 const MAX_DEVICES: usize = 16;
+
+/// How long a silent device stays in the list.
+///
+/// ⚠ A phone that has not beaten in a month is not a device any more, and this
+/// list is "last-known status", not a registry. The COUNT cap alone never
+/// removes anything while fewer than `MAX_DEVICES` exist, which is why a single
+/// stray row has twice needed sqlite3 by hand inside the pod (#1408) — three
+/// times, counting the probe that prompted this.
+const MAX_AGE_DAYS: i64 = 30;
 
 /// Truncate by CHARACTER, as Python's `value[:n]` does.
 ///
@@ -203,6 +218,32 @@ fn one_report(device: &str, raw: &serde_json::Value) -> Option<Report> {
     })
 }
 
+/// Forget one device's row.
+///
+/// ⚠ **The supported way to undo a stray write** (#1408). The POST endpoints are
+/// unauthenticated by design, so anyone on the VPN can create a row; removing one
+/// has until now meant sqlite3 inside the pod, three times. This is gated — a
+/// person signs in to forget a device — because it is the only operation here
+/// that destroys a reading rather than replacing it.
+///
+/// Returns whether the device was there.
+pub fn forget(conn: &Connection, key: &str, device: &str) -> rusqlite::Result<bool> {
+    let mut map = stored_map(conn, key)?;
+    if map.remove(device).is_none() {
+        return Ok(false);
+    }
+    set_setting(
+        conn,
+        key,
+        &crate::pyjson::dump(&serde_json::Value::Object(map)),
+    )?;
+    Ok(true)
+}
+
+/// The two keys a device may be forgotten from.
+pub const BEATS: &str = BEATS_KEY;
+pub const REPORTS: &str = REPORTS_KEY;
+
 /// Every app's last beat, oldest device id first. Never fails on a bad entry.
 pub fn read_beats(conn: &Connection) -> rusqlite::Result<Vec<Beat>> {
     let map = stored_map(conn, BEATS_KEY)?;
@@ -231,7 +272,23 @@ pub fn read_reports(conn: &Connection) -> rusqlite::Result<Vec<Report>> {
 /// which is what makes a malformed row self-clearing rather than permanent.
 fn evicted(
     mut entries: serde_json::Map<String, serde_json::Value>,
+    now: DateTime<Utc>,
 ) -> serde_json::Map<String, serde_json::Value> {
+    // Age first, so a device that aged out does not occupy one of the slots the
+    // count cap is deciding between.
+    let cutoff = now - chrono::Duration::days(MAX_AGE_DAYS);
+    entries.retain(|_, value| {
+        value
+            .as_object()
+            .and_then(|o| o.get("at"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+            // ⚠ An entry whose `at` will not parse is KEPT here and left to the
+            // count cap, which already sorts it oldest. Dropping it on a failed
+            // parse would make an unreadable row vanish on the next write, and
+            // an unreadable row is worth seeing.
+            .is_none_or(|at| at.with_timezone(&Utc) >= cutoff)
+    });
     if entries.len() <= MAX_DEVICES {
         return entries;
     }
@@ -263,7 +320,7 @@ fn evicted(
 }
 
 /// Store this app's beat, replacing whatever it said before.
-pub fn record_beat(conn: &Connection, beat: &Beat) -> rusqlite::Result<()> {
+pub fn record_beat(conn: &Connection, beat: &Beat, now: DateTime<Utc>) -> rusqlite::Result<()> {
     let mut map = stored_map(conn, BEATS_KEY)?;
     map.insert(
         clip(&beat.device, MAX_DEVICE_LEN),
@@ -281,16 +338,20 @@ pub fn record_beat(conn: &Connection, beat: &Beat) -> rusqlite::Result<()> {
     set_setting(
         conn,
         BEATS_KEY,
-        &crate::pyjson::dump(&serde_json::Value::Object(evicted(map))),
+        &crate::pyjson::dump(&serde_json::Value::Object(evicted(map, now))),
     )
 }
 
 /// Store this phone's report, replacing whatever it said before.
 ///
-/// ⚠ No eviction here, unlike the beats — mirroring the Python rather than
-/// improving on it. That asymmetry is #1408, and fixing it belongs with that
-/// issue rather than smuggled into a port.
-pub fn record_report(conn: &Connection, report: &Report) -> rusqlite::Result<()> {
+/// ⚠ Evicted on the same terms as the beats. The Python capped only the beats,
+/// and the row that needed sqlite3 by hand in 2026-08-10 was an OUTBOX row — the
+/// asymmetry was the bug, not a design (#1408).
+pub fn record_report(
+    conn: &Connection,
+    report: &Report,
+    now: DateTime<Utc>,
+) -> rusqlite::Result<()> {
     let mut map = stored_map(conn, REPORTS_KEY)?;
     map.insert(
         clip(&report.device, MAX_DEVICE_LEN),
@@ -305,7 +366,7 @@ pub fn record_report(conn: &Connection, report: &Report) -> rusqlite::Result<()>
     set_setting(
         conn,
         REPORTS_KEY,
-        &crate::pyjson::dump(&serde_json::Value::Object(map)),
+        &crate::pyjson::dump(&serde_json::Value::Object(evicted(map, now))),
     )
 }
 
@@ -314,7 +375,8 @@ pub fn record_report(conn: &Connection, report: &Report) -> rusqlite::Result<()>
 use crate::{reads, route, work};
 use axum::Json;
 use axum::extract::State;
-use axum::response::Response;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
 /// ⚠ **Every field but `device` is OPTIONAL, and that is the whole design.** An
@@ -421,7 +483,7 @@ pub async fn heartbeat_post_route(
         at,
     };
     match route::blocking("heartbeat", move || {
-        record_beat(&work::open_write(&root)?, &beat)
+        record_beat(&work::open_write(&root)?, &beat, Utc::now())
     })
     .await
     {
@@ -447,7 +509,7 @@ pub async fn outbox_post_route(
         at,
     };
     match route::blocking("outbox report", move || {
-        record_report(&work::open_write(&root)?, &report)
+        record_report(&work::open_write(&root)?, &report, Utc::now())
     })
     .await
     {
@@ -499,4 +561,43 @@ pub async fn outbox_get_route(State(st): State<Arc<reads::State>>) -> Response {
         })
     })
     .await
+}
+
+/// Forget one device's heartbeat.
+///
+/// ⚠ Gated, unlike the POST beside it. A phone cannot sign in, so it writes
+/// without one; forgetting is a person's act and the only one here that destroys
+/// a reading rather than replacing it.
+pub async fn heartbeat_forget_route(
+    State(st): State<Arc<reads::State>>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+) -> Response {
+    forget_route(st, BEATS, device, "forget heartbeat").await
+}
+
+pub async fn outbox_forget_route(
+    State(st): State<Arc<reads::State>>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+) -> Response {
+    forget_route(st, REPORTS, device, "forget outbox").await
+}
+
+async fn forget_route(
+    st: Arc<reads::State>,
+    key: &'static str,
+    device: String,
+    what: &'static str,
+) -> Response {
+    let root = st.root.clone();
+    match route::blocking(what, move || {
+        forget(&work::open_write(&root)?, key, &device)
+    })
+    .await
+    {
+        // 404 for a device that was not there, so a typo reads as a typo rather
+        // than as a successful removal of nothing.
+        Ok(true) => route::ack(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no such device").into_response(),
+        Err(response) => response,
+    }
 }

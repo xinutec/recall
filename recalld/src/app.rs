@@ -107,8 +107,16 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
             get(devices::heartbeat_get_route).post(devices::heartbeat_post_route),
         )
         .route(
+            "/api/devices/heartbeat/{device}",
+            delete(devices::heartbeat_forget_route),
+        )
+        .route(
             "/api/devices/outbox",
             get(devices::outbox_get_route).post(devices::outbox_post_route),
+        )
+        .route(
+            "/api/devices/outbox/{device}",
+            delete(devices::outbox_forget_route),
         )
         .route("/api/correct", post(labels_write::correct_route))
         .route(

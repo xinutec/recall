@@ -1,8 +1,18 @@
 //! What the recorders say about themselves. Status, never control: a phone on an
 //! older build must cost its own line and nothing else.
 
-use recalld::devices::{Beat, Report, read_beats, read_reports, record_beat, record_report};
+use recalld::devices::{
+    BEATS, Beat, REPORTS, Report, forget, read_beats, read_reports, record_beat, record_report,
+};
 use rusqlite::Connection;
+
+/// The clock the fixtures are written against. Fixed, so an age-eviction rule
+/// cannot make a test's outcome depend on the day it runs.
+fn now() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339("2026-09-07T12:00:00+00:00")
+        .expect("iso")
+        .with_timezone(&chrono::Utc)
+}
 
 fn db() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
@@ -47,8 +57,18 @@ fn stored(conn: &Connection, key: &str) -> String {
 fn a_beat_round_trips_and_replaces_the_previous_one() {
     let conn = db();
 
-    record_beat(&conn, &beat("pixel9-aabbccdd", "2026-09-07T09:00:00+00:00")).expect("first");
-    record_beat(&conn, &beat("pixel9-aabbccdd", "2026-09-07T10:00:00+00:00")).expect("second");
+    record_beat(
+        &conn,
+        &beat("pixel9-aabbccdd", "2026-09-07T09:00:00+00:00"),
+        now(),
+    )
+    .expect("first");
+    record_beat(
+        &conn,
+        &beat("pixel9-aabbccdd", "2026-09-07T10:00:00+00:00"),
+        now(),
+    )
+    .expect("second");
 
     let beats = read_beats(&conn).expect("read");
     assert_eq!(beats.len(), 1, "rewritten whole, not appended");
@@ -61,7 +81,7 @@ fn a_beat_round_trips_and_replaces_the_previous_one() {
 fn beats_read_back_sorted_by_device_id() {
     let conn = db();
     for device in ["zz-phone", "aa-phone", "mm-phone"] {
-        record_beat(&conn, &beat(device, "2026-09-07T09:00:00+00:00")).expect("beat");
+        record_beat(&conn, &beat(device, "2026-09-07T09:00:00+00:00"), now()).expect("beat");
     }
 
     let devices: Vec<String> = read_beats(&conn)
@@ -78,7 +98,12 @@ fn a_malformed_entry_costs_that_device_its_line_and_no_more() {
     // ⚠ This is read on a health endpoint's request path. One phone on a broken
     // build must not blank the whole answer.
     let conn = db();
-    record_beat(&conn, &beat("good-phone", "2026-09-07T09:00:00+00:00")).expect("beat");
+    record_beat(
+        &conn,
+        &beat("good-phone", "2026-09-07T09:00:00+00:00"),
+        now(),
+    )
+    .expect("beat");
     let mut map: serde_json::Value =
         serde_json::from_str(&stored(&conn, "device_mic_heartbeats")).expect("json");
     map["broken-phone"] = serde_json::json!({"app": "x"}); // no `at`
@@ -120,6 +145,7 @@ fn a_flood_of_devices_evicts_the_least_recently_heard() {
                 &format!("phone-{i:02}"),
                 &format!("2026-09-07T{i:02}:00:00+00:00"),
             ),
+            now(),
         )
         .expect("beat");
     }
@@ -147,6 +173,7 @@ fn an_entry_that_cannot_be_read_is_evicted_before_a_readable_one() {
                 &format!("phone-{i:02}"),
                 &format!("2026-09-07T{i:02}:00:00+00:00"),
             ),
+            now(),
         )
         .expect("beat");
     }
@@ -159,7 +186,7 @@ fn an_entry_that_cannot_be_read_is_evicted_before_a_readable_one() {
     )
     .expect("write");
 
-    record_beat(&conn, &beat("phone-99", "2026-09-07T23:00:00+00:00")).expect("beat");
+    record_beat(&conn, &beat("phone-99", "2026-09-07T23:00:00+00:00"), now()).expect("beat");
 
     let raw = stored(&conn, "device_mic_heartbeats");
     assert!(
@@ -170,19 +197,112 @@ fn an_entry_that_cannot_be_read_is_evicted_before_a_readable_one() {
 }
 
 #[test]
-fn the_outbox_is_not_capped_matching_the_python() {
-    // ⚠ Deliberately mirrored rather than improved: the asymmetry with beats is a
-    // known issue, and fixing it belongs with that issue rather than smuggled in.
+fn the_outbox_is_capped_like_the_beats_are() {
+    // ⚠ This test used to assert the OPPOSITE, on the grounds that the Python
+    // capped only the beats and a port should mirror rather than improve. That
+    // was right for the port and wrong as a resting place: the row that needed
+    // sqlite3 by hand inside the pod in 2026-08-10 was an OUTBOX row. The
+    // asymmetry was the bug (#1408).
     let conn = db();
     for i in 0..20 {
         record_report(
             &conn,
-            &report(&format!("phone-{i:02}"), "2026-09-07T09:00:00+00:00"),
+            &report(
+                &format!("phone-{i:02}"),
+                &format!("2026-09-07T{i:02}:00:00+00:00"),
+            ),
+            now(),
         )
         .expect("report");
     }
 
-    assert_eq!(read_reports(&conn).expect("read").len(), 20);
+    assert_eq!(read_reports(&conn).expect("read").len(), 16);
+}
+
+#[test]
+fn a_device_silent_for_a_month_ages_out() {
+    // ⚠ The COUNT cap alone never removes anything while fewer than sixteen
+    // devices exist, which is why one stray row survived two attempts to be rid
+    // of it. A phone that has not beaten in a month is not a device any more.
+    let conn = db();
+    record_beat(&conn, &beat("current", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
+    record_beat(&conn, &beat("ancient", "2026-06-01T09:00:00+00:00"), now()).expect("beat");
+
+    // Any write re-evaluates the list.
+    record_beat(&conn, &beat("current", "2026-09-07T10:00:00+00:00"), now()).expect("beat");
+
+    let devices: Vec<String> = read_beats(&conn)
+        .expect("read")
+        .into_iter()
+        .map(|b| b.device)
+        .collect();
+    assert_eq!(devices, ["current"], "the month-old row is gone");
+}
+
+#[test]
+fn an_unreadable_row_is_not_aged_out_on_a_failed_parse() {
+    // ⚠ It has no usable `at`, so age cannot judge it — and making it VANISH on
+    // the next write would hide a row worth seeing. The count cap already sorts
+    // it oldest, which is the right way for it to go.
+    let conn = db();
+    record_beat(&conn, &beat("good", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
+    let mut map: serde_json::Value =
+        serde_json::from_str(&stored(&conn, "device_mic_heartbeats")).expect("json");
+    map["broken"] = serde_json::json!({"app": "x", "at": "not a time", "streaming": true});
+    conn.execute(
+        "UPDATE settings SET value = ?1 WHERE key = 'device_mic_heartbeats'",
+        [map.to_string()],
+    )
+    .expect("write");
+
+    record_beat(&conn, &beat("good", "2026-09-07T10:00:00+00:00"), now()).expect("beat");
+
+    assert!(
+        stored(&conn, "device_mic_heartbeats").contains("broken"),
+        "the unreadable row must survive to be noticed"
+    );
+}
+
+#[test]
+fn a_device_can_be_forgotten_and_forgetting_an_absent_one_says_so() {
+    // ⚠ The supported way to undo a stray write. Before this, removing one row
+    // meant sqlite3 inside the pod — three times (#1408), the last of them mine.
+    let conn = db();
+    record_beat(
+        &conn,
+        &beat("real-phone", "2026-09-07T09:00:00+00:00"),
+        now(),
+    )
+    .expect("beat");
+    record_beat(&conn, &beat("zz-probe", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
+
+    assert!(forget(&conn, BEATS, "zz-probe").expect("forget"));
+    assert!(!forget(&conn, BEATS, "never-existed").expect("forget"));
+
+    let devices: Vec<String> = read_beats(&conn)
+        .expect("read")
+        .into_iter()
+        .map(|b| b.device)
+        .collect();
+    assert_eq!(devices, ["real-phone"]);
+}
+
+#[test]
+fn forgetting_an_outbox_row_leaves_the_beat_alone() {
+    // They are separate keys and a device may legitimately be in one and not the
+    // other; forgetting one must not silently drop the other.
+    let conn = db();
+    record_beat(&conn, &beat("p", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
+    record_report(&conn, &report("p", "2026-09-07T09:00:00+00:00"), now()).expect("report");
+
+    assert!(forget(&conn, REPORTS, "p").expect("forget"));
+
+    assert!(read_reports(&conn).expect("read").is_empty());
+    assert_eq!(
+        read_beats(&conn).expect("read").len(),
+        1,
+        "the beat survives"
+    );
 }
 
 #[test]
@@ -192,7 +312,7 @@ fn a_long_device_name_is_truncated_by_character_not_byte() {
     let conn = db();
     let long: String = "é".repeat(100);
 
-    record_beat(&conn, &beat(&long, "2026-09-07T09:00:00+00:00")).expect("beat");
+    record_beat(&conn, &beat(&long, "2026-09-07T09:00:00+00:00"), now()).expect("beat");
 
     let beats = read_beats(&conn).expect("read");
     assert_eq!(beats[0].device.chars().count(), 64);
@@ -205,6 +325,7 @@ fn a_report_round_trips_with_its_reason_and_counts() {
     record_report(
         &conn,
         &report("pixel9-aabbccdd", "2026-09-07T09:00:00+00:00"),
+        now(),
     )
     .expect("report");
 
@@ -226,7 +347,7 @@ fn the_stored_json_is_spelled_the_way_python_writes_it() {
     let mut r = report("phone", "2026-09-07T09:00:00+00:00");
     r.reason = Some("kon niet uploaden — geërfde fout".into());
 
-    record_report(&conn, &r).expect("report");
+    record_report(&conn, &r, now()).expect("report");
 
     let raw = stored(&conn, "device_outbox_reports");
     assert!(raw.contains("\", \""), "a space after the comma: {raw}");
@@ -245,7 +366,7 @@ fn a_beat_with_no_optional_flags_keeps_them_absent_rather_than_false() {
     b.via_lan = None;
     b.started_at = None;
 
-    record_beat(&conn, &b).expect("beat");
+    record_beat(&conn, &b, now()).expect("beat");
 
     let beats = read_beats(&conn).expect("read");
     assert_eq!(beats[0].charging, None);
@@ -265,6 +386,21 @@ use tower::ServiceExt;
 
 const NOW: i64 = 1_788_000_000;
 
+const SECRET: &str = "test-secret-not-a-real-one";
+
+/// The cookie a signed-in browser holds.
+fn cookie() -> String {
+    let session = recalld::webauth::Session {
+        user_id: "pippijn".into(),
+        display_name: "Pippijn".into(),
+    };
+    format!(
+        "{}={}",
+        recalld::webauth::COOKIE_NAME,
+        recalld::webauth::make_session_cookie(SECRET, &session, NOW).expect("sign")
+    )
+}
+
 fn gated(root: &std::path::Path) -> axum::Router {
     router(Arc::new(Config {
         root: root.to_path_buf(),
@@ -273,7 +409,7 @@ fn gated(root: &std::path::Path) -> axum::Router {
         max_body_bytes: DEFAULT_MAX_BODY,
         webauth: Some(GateState {
             cfg: Arc::new(webauth::Config {
-                session_secret: "test-secret-not-a-real-one".into(),
+                session_secret: SECRET.into(),
                 client_id: "cid".into(),
                 client_secret: "csec".into(),
                 nc_base_url: "https://dash.example.org".into(),
@@ -475,4 +611,78 @@ async fn an_outbox_report_carrying_only_a_device_id_is_accepted() {
     let reports = read_reports(&conn).expect("read");
     assert_eq!(reports[0].queued, 0);
     assert_eq!(reports[0].failing, 0);
+}
+
+#[tokio::test]
+async fn forgetting_a_device_needs_a_session_unlike_writing_one() {
+    // ⚠ The POST is open because a phone cannot sign in. Forgetting is a
+    // person's act and the only one here that DESTROYS a reading rather than
+    // replacing it, so it is gated — otherwise anyone on the VPN could erase the
+    // evidence that a recorder had stopped.
+    let dir = scratch();
+    let app = gated(dir.path());
+
+    let code = app
+        .oneshot(
+            Request::delete("/api/devices/heartbeat/pixel9")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("call")
+        .status();
+
+    assert_eq!(code, 401);
+}
+
+#[tokio::test]
+async fn forgetting_a_device_that_is_not_there_is_a_404_not_a_quiet_success() {
+    let dir = scratch();
+    let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
+    record_beat(&conn, &beat("real", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
+    drop(conn);
+
+    let app = gated(dir.path());
+    let code = app
+        .oneshot(
+            Request::delete("/api/devices/heartbeat/typo")
+                .header("cookie", cookie())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("call")
+        .status();
+
+    assert_eq!(code, 404, "a typo must read as a typo");
+}
+
+#[tokio::test]
+async fn a_signed_in_person_can_forget_a_stray_row() {
+    let dir = scratch();
+    let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
+    record_beat(&conn, &beat("real", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
+    record_beat(&conn, &beat("zz-probe", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
+    drop(conn);
+
+    let app = gated(dir.path());
+    let code = app
+        .oneshot(
+            Request::delete("/api/devices/heartbeat/zz-probe")
+                .header("cookie", cookie())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("call")
+        .status();
+
+    assert_eq!(code, 200);
+    let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
+    let devices: Vec<String> = read_beats(&conn)
+        .expect("read")
+        .into_iter()
+        .map(|b| b.device)
+        .collect();
+    assert_eq!(devices, ["real"], "no sqlite3 in the pod required");
 }
