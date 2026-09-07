@@ -9,13 +9,10 @@ audio-serving family.
 
 from __future__ import annotations
 
-import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
 
 from recall.api_models import (
     AssignSpanIn,
@@ -23,34 +20,24 @@ from recall.api_models import (
     ReassignIn,
     TurnSpeakerIn,
 )
-from recall.asr import slice_clip
 from recall.conversation import assign_span
-from recall.loudness import normalize_loudness
 from recall.review import apply_correction
 from recall.schemas import (
     AssignResultOut,
-    CorrectionsOut,
-    LabelOut,
     NewIdOut,
     OkOut,
-    SpeakerNamesOut,
     SuggestOut,
     VoiceSuggestionsOut,
 )
-from recall.store import LabelledFragment, Store
+from recall.store import Store
 
 # Train pre-fills "sounds like X" only when the leading candidate's likelihood
 # (softmax over the enrolled people) clears this — a confirmable hint, not a coin
 # flip. The timeline still shows every guess with its %.
 _SUGGEST_MIN_PROB = 0.4
-# Playback context for a labelled clip (mirrors the audio family's pads).
-_AUDIO_PAD_S = 1.5
-_AUDIO_MIN_S = 5.0
-
 _store_factory: Callable[[], Store] | None = None
 _parse_iso_fn: Callable[[str | None], datetime | None] | None = None
 _require_time_fn: Callable[[str | None], datetime] | None = None
-_clip_window: Callable[..., tuple[float, float]] | None = None
 
 
 def _store() -> Store:
@@ -68,34 +55,22 @@ def _require_time(value: str | None) -> datetime:
     return _require_time_fn(value)
 
 
-def clip_window(
-    start: float, end: float, *, pad: float, minimum: float
-) -> tuple[float, float]:
-    assert _clip_window is not None
-    return _clip_window(start, end, pad=pad, minimum=minimum)
-
-
 def register_label_routes(
     app: FastAPI,
     *,
     store_factory: Callable[[], Store],
     parse_iso: Callable[[str | None], datetime | None],
     require_time: Callable[[str | None], datetime],
-    clip_window_fn: Callable[..., tuple[float, float]],
 ) -> None:
     """Mount the labelling surface. Dependencies land in module state."""
-    global _store_factory, _parse_iso_fn, _require_time_fn, _clip_window  # noqa: PLW0603
+    global _store_factory, _parse_iso_fn, _require_time_fn  # noqa: PLW0603
     _store_factory = store_factory
     _parse_iso_fn = parse_iso
     _require_time_fn = require_time
-    _clip_window = clip_window_fn
     app.post("/api/correct")(correct)
     app.post("/api/turn/{segment_id}/speaker")(turn_speaker)
     app.post("/api/sessions/{source}/assign")(assign)
     app.get("/api/sessions/{source}/voices")(voice_suggestions)
-    app.get("/api/speakers")(speakers)
-    app.get("/api/corrections")(corrections)
-    app.get("/api/correction/{correction_id}/audio")(correction_audio)
     app.post("/api/correction/{correction_id}/speaker")(correction_reassign)
     app.post("/api/correction/{correction_id}/hide")(correction_hide)
     app.get("/api/suggest/{segment_id}")(suggest)
@@ -174,71 +149,6 @@ def voice_suggestions(source: str) -> VoiceSuggestionsOut:
     store = _store()
     try:
         return {"suggestions": store.session_voice_suggestions(source)}
-    finally:
-        store.close()
-
-
-def speakers() -> SpeakerNamesOut:
-    """Known speaker names (enrolled voices + assigned labels) for autocompleting the
-    voice naming, so the same person is spelled the same across sessions."""
-    store = _store()
-    try:
-        return {"names": store.known_speaker_names()}
-    finally:
-        store.close()
-
-
-def _label(f: LabelledFragment) -> LabelOut:
-    return {
-        "id": f.correction_id,
-        "text": f.text,
-        "speaker": f.speaker,
-        "language": f.language,
-        "start": f.start.isoformat(),
-        "audioUrl": f"/api/correction/{f.correction_id}/audio",
-    }
-
-
-def corrections(speaker: str | None = None, limit: int = 200) -> CorrectionsOut:
-    """The labelled fragments for review/audit, newest first, optionally one voice."""
-    store = _store()
-    try:
-        items = store.list_corrections(speaker=speaker, limit=limit)
-        return {
-            "items": [_label(f) for f in items],
-            "bySpeaker": store.corrections_by_speaker(),
-        }
-    finally:
-        store.close()
-
-
-def correction_audio(correction_id: int, context: bool = False) -> Response:
-    """The labelled clip's audio. By default plays the *exact* trimmed span (to
-    audit the cut); `context=true` adds the usual lead-in/-out for easy listening.
-    """
-    store = _store()
-    try:
-        frag = store.get_correction(correction_id)
-        if frag is None or frag.audio_segment_id is None:
-            raise HTTPException(status_code=404, detail="no audio")
-        ref = store.audio_segment_ref(frag.audio_segment_id)
-        if ref is None:
-            raise HTTPException(status_code=404, detail="no audio")
-        path, audio_start = ref
-        raw_start = (frag.start - audio_start).total_seconds()
-        raw_end = (frag.end - audio_start).total_seconds()
-        if context:
-            rel_start, rel_end = clip_window(
-                raw_start, raw_end, pad=_AUDIO_PAD_S, minimum=_AUDIO_MIN_S
-            )
-        else:
-            rel_start, rel_end = max(0.0, raw_start), raw_end
-        with tempfile.TemporaryDirectory() as tmp:
-            clip = Path(tmp) / "clip.wav"
-            slice_clip(Path(path), clip, rel_start, rel_end)
-            norm = Path(tmp) / "clip-norm.wav"
-            normalize_loudness(clip, norm)
-            return Response(content=norm.read_bytes(), media_type="audio/wav")
     finally:
         store.close()
 

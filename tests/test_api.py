@@ -7,20 +7,18 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 from conftest import make_flac, make_mp3
 from recall import (
     api,
-    api_audio,
     api_capture,
     api_labels,
     api_reads,
     capture_control,
     loudness,
 )
-from recall.api_audio import clip_window
 from recall.api_reads import _precise, _tier
 from recall.asr import Word
 from recall.ids import AudioSegmentId, TranscriptId
@@ -91,27 +89,6 @@ def test_precise_plays_tight_for_diarized_or_word_timed_turns() -> None:
     assert _precise(diarized) is True
     assert _precise(split) is True  # word timings → tight, exact
     assert _precise(basic) is False  # rough phrase → wide context window
-
-
-def test_clip_window_tight_for_a_cutout() -> None:
-    # A diarized cutout is played tight: just the span + a small safety pad.
-    assert clip_window(10.0, 12.0, pad=0.2, minimum=0.0) == (9.8, 12.2)
-
-
-def test_clip_window_pads_a_long_phrase() -> None:
-    # A comfortably long phrase just gets the context pad on each side.
-    assert clip_window(10.0, 30.0, pad=1.5, minimum=5.0) == (8.5, 31.5)
-
-
-def test_clip_window_expands_short_phrase_to_minimum() -> None:
-    # A 1s phrase padded to 4s is still under the floor → centred 5s window.
-    assert clip_window(10.0, 11.0, pad=1.5, minimum=5.0) == (8.0, 13.0)
-
-
-def test_clip_window_clamps_start_at_zero() -> None:
-    start, end = clip_window(0.2, 0.5, pad=1.5, minimum=5.0)
-    assert start == 0.0
-    assert end > 0.0
 
 
 def _seed_candidates(root: Path, count: int) -> Store:
@@ -258,63 +235,6 @@ def test_folded_moment_shows_strongest_colocated_guess(
     # — that's the guess shown on the spine turn.
     assert primary[0]["speakerConfidence"] == 0.80
     assert moments[0]["alternates"][0]["speakerConfidence"] == 0.80
-
-
-def test_transcript_exposes_confirmed_vs_guessed_speaker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A human label is authoritative (confirmed, no probability); a machine turn
-    shows its best auto guess with the match strength."""
-    flac = tmp_path / "usb-20260613T120000.flac"
-    make_flac(flac, 30.0)
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(
-        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="usb",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=30),
-            path=str(flac),
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-    store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=1),
-        text="confirmed",
-        asr_model="human",
-        speaker_label="Carol",
-    )
-    guessed = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=2),
-        end=BASE + timedelta(seconds=3),
-        text="guessed",
-        asr_model="whisper",
-        asr_confidence=0.5,
-    )
-    store.set_speaker_guess(guessed, "Alice", 0.31)
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    items = api_reads.timeline(limit=10)["items"]
-    assert isinstance(items, list)
-    by_text = {i["text"]: i for i in items}
-
-    c = by_text["confirmed"]
-    assert c["speaker"] == "Carol"
-    assert c["speakerConfirmed"] is True
-    assert c["speakerConfidence"] is None  # confirmed: no probability shown
-
-    g = by_text["guessed"]
-    assert g["speaker"] == "Alice"
-    assert g["speakerConfirmed"] is False
-    assert g["speakerConfidence"] == 0.31  # the match strength
 
 
 def test_suggest_reads_the_cached_guess_above_threshold(
@@ -682,101 +602,6 @@ def test_name_voice_endpoint_labels_a_whole_session_voice(
         store.close()
 
 
-def test_audio_span_returns_one_clip_for_a_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A joined bubble plays one continuous clip across all its turns, not just the
-    first — the full span from the first turn's start to the last turn's end."""
-    flac = tmp_path / "m-20260613T120000.flac"
-    make_flac(flac, 10.0)
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(AudioSource(id="m", name="m", kind=SourceKind.UPLOAD, spec=""))
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="m",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=10),
-            path=str(flac),
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-    a = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=1),
-        end=BASE + timedelta(seconds=2),
-        text="one",
-        asr_model="diarized",
-    )
-    b = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=2),
-        end=BASE + timedelta(seconds=4),
-        text="two",
-        asr_model="diarized",
-    )
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    resp = api_audio.audio_span(from_id=int(a), to_id=int(b))
-    assert resp.media_type == "audio/wav"
-    assert len(resp.body) > 1000  # real audio for the whole 1s to 4s span
-
-
-def test_audio_span_rejects_a_span_across_recordings(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    flac1 = tmp_path / "m-20260613T120000.flac"
-    flac2 = tmp_path / "m-20260613T120010.flac"
-    make_flac(flac1, 5.0)
-    make_flac(flac2, 5.0)
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(AudioSource(id="m", name="m", kind=SourceKind.UPLOAD, spec=""))
-    aid1 = store.add_audio_segment(
-        Segment(
-            source_id="m",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=5),
-            path=str(flac1),
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-    aid2 = store.add_audio_segment(
-        Segment(
-            source_id="m",
-            sequence=1,
-            start=BASE + timedelta(seconds=10),
-            end=BASE + timedelta(seconds=15),
-            path=str(flac2),
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-    a = store.add_transcript_segment(
-        audio_segment_id=aid1,
-        start=BASE,
-        end=BASE + timedelta(seconds=1),
-        text="one",
-        asr_model="diarized",
-    )
-    b = store.add_transcript_segment(
-        audio_segment_id=aid2,
-        start=BASE + timedelta(seconds=10),
-        end=BASE + timedelta(seconds=11),
-        text="two",
-        asr_model="diarized",
-    )
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    with pytest.raises(HTTPException) as exc:
-        api_audio.audio_span(from_id=int(a), to_id=int(b))
-    assert exc.value.status_code == 400
-
-
 def test_session_transcript_endpoint_exports_clean_coalesced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -988,60 +813,12 @@ def test_rediarize_queues_an_idle_refine_over_the_whole_session(
     assert pending[0].source == sid
 
 
-def test_refine_route_enqueues_a_request(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """POST /api/refine queues an on-demand refine the idle daemon will pick up."""
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(
-        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
-    )
-    store.close()
-
-    client = TestClient(api.app)
-    r = client.post(
-        "/api/refine",
-        json={
-            "source": "usb",
-            "start": BASE.isoformat(),
-            "end": (BASE + timedelta(minutes=5)).isoformat(),
-        },
-    )
-    assert r.status_code == 200
-
-    store = Store.open(tmp_path / "recall.sqlite")
-    pending = store.pending_refine_requests()
-    store.close()
-    assert [(p.source, p.start) for p in pending] == [("usb", BASE)]
-
-
 def _usb_store(tmp_path: Path) -> Store:
     store = Store.open(tmp_path / "recall.sqlite")
     store.add_source(
         AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
     )
     return store
-
-
-def test_vocabulary_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-    Store.open(tmp_path / "recall.sqlite").close()
-    client = TestClient(api.app)
-
-    new_id = client.post("/api/vocabulary", json={"term": " EGA wing "}).json()["newId"]
-    client.post("/api/vocabulary", json={"term": "vorasidenib"})
-    listed = client.get("/api/vocabulary").json()["items"]
-    assert [t["term"] for t in listed] == ["EGA wing", "vorasidenib"]
-
-    assert client.post("/api/vocabulary", json={"term": "  "}).status_code == 400
-    assert client.delete(f"/api/vocabulary/{new_id}").json() == {"ok": True}
-    assert [t["term"] for t in client.get("/api/vocabulary").json()["items"]] == [
-        "vorasidenib"
-    ]
-
-
-# --- "today so far" live summary ------------------------------------------------
 
 
 def _seed_today(tmp_path: Path, texts: list[str]) -> None:

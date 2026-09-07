@@ -21,13 +21,10 @@ from recall.conversations import (
     segment_conversations,
 )
 from recall.moments import Moment, best_colocated_guess, cluster_moments
-from recall.review import review_queue
 from recall.schemas import (
     ConversationOut,
     ConversationsOut,
-    ItemsOut,
     MomentOut,
-    PageOut,
     Tier,
     TranscriptOut,
 )
@@ -63,11 +60,7 @@ def register_read_routes(
     global _store_factory, _parse_iso_fn  # noqa: PLW0603 - the registrar's one job
     _store_factory = store_factory
     _parse_iso_fn = parse_iso
-    app.get("/api/search")(search)
-    app.get("/api/timeline")(timeline)
     app.get("/api/conversations")(conversations)
-    app.get("/api/transcripts")(transcripts)
-    app.get("/api/review")(review)
 
 
 def _tier(segment: TranscriptSegment) -> Tier:
@@ -126,31 +119,6 @@ def transcript_out(
         "source": segment.source_id,
         "cluster": segment.speaker_cluster,
     }
-
-
-def search(q: str, limit: int = 100) -> ItemsOut:
-    store = _store()
-    try:
-        return {"items": [transcript_out(s) for s in store.search(q, limit=limit)]}
-    finally:
-        store.close()
-
-
-def timeline(limit: int = 200, before: str | None = None) -> PageOut:
-    try:
-        cursor = _parse_iso(before)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    store = _store()
-    try:
-        rows = store.recent_transcripts(limit=limit, before=cursor)
-        # Newest-first from the DB; reverse so the page reads top-to-bottom in
-        # conversation order. `hasMore` drives the "load older" cursor. >=, not ==:
-        # a page extends past `limit` when its boundary has same-instant ties.
-        items = [transcript_out(s) for s in reversed(rows)]
-        return {"items": items, "hasMore": len(rows) >= limit}
-    finally:
-        store.close()
 
 
 _PREVIEW_MIN_CONFIDENCE = 0.5
@@ -227,39 +195,5 @@ def conversations(
             # >=, not ==: a page extends past `limit` on same-instant boundary ties.
             "hasMore": len(rows) >= limit,
         }
-    finally:
-        store.close()
-
-
-def transcripts(ids: str) -> ItemsOut:
-    """Fetch specific turns by id (comma-separated), in the requested order.
-
-    Backs deep links to a hand-picked set of fragments for listening/correcting.
-    """
-    try:
-        wanted = [int(piece) for piece in ids.split(",") if piece.strip()]
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="ids must be integers") from exc
-    store = _store()
-    try:
-        # Resolve to the live version so a corrected/reprocessed fragment shows
-        # its current text, not the stale original the link pointed at. Dedupe
-        # in case several requested ids now resolve to the same turn.
-        items: list[TranscriptOut] = []
-        seen: set[int] = set()
-        for tid in wanted:
-            seg = store.current_version(tid)
-            if seg is not None and seg.id not in seen:
-                seen.add(seg.id)
-                items.append(transcript_out(seg))
-        return {"items": items}
-    finally:
-        store.close()
-
-
-def review(limit: int = 50) -> ItemsOut:
-    store = _store()
-    try:
-        return {"items": [transcript_out(s) for s in review_queue(store, limit=limit)]}
     finally:
         store.close()

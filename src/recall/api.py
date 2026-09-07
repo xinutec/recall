@@ -15,14 +15,11 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from recall.api_audio import clip_window, register_audio_routes
 from recall.api_capture import fleet_capture_state, register_capture_routes
-from recall.api_client_reports import register_client_report_routes
 from recall.api_devices import register_device_routes
 from recall.api_labels import register_label_routes
 from recall.api_reads import register_read_routes
 from recall.api_sessions import register_session_routes
-from recall.api_work import register_work_routes
 from recall.paths import default_data_root
 from recall.store import (
     Store,
@@ -62,7 +59,6 @@ register_web_auth(app)
 
 
 register_read_routes(app, store_factory=_store, parse_iso=lambda v: _parse_iso(v))  # noqa: PLW0108 - forward ref
-register_client_report_routes(app, client_log_path=_REPO / "logs" / "client.log")
 
 
 register_capture_routes(app, store_factory=_store, data_root=lambda: DATA_ROOT)
@@ -101,10 +97,7 @@ register_label_routes(
     store_factory=_store,
     parse_iso=_parse_iso,
     require_time=_require_time,
-    clip_window_fn=clip_window,
 )
-register_audio_routes(app, store_factory=_store)
-register_work_routes(app, store_factory=_store, require_time=_require_time)
 
 
 def _frontend_file(rel: str) -> Path | None:
