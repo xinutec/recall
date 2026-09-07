@@ -940,14 +940,23 @@ B3 lands.*
   redirect URI is re-registered, and no bookmark changes. The kubes model holds
   one port per container by design and does NOT need changing for this.
 
-  ⚠ **The workload probe must change WITH it, or it lies.** It is `Tcp { port }`
-  on 8000. After the swap that port is recalld's, so the probe passes whenever
-  recalld is up — including with the Python container dead and every unported
-  route 502ing. Kubernetes would call the pod healthy while most of the app was
-  broken. Replace it with an HTTP probe through recalld to a PROXIED route:
-  `/api/capture` is Python's and is deliberately login-free, so one request
-  proves recalld is up, the proxy works, and Python is alive — strictly more than
-  the TCP check ever proved.
+  ⚠ **The container ROLES swap with it, and the probe is why.** Today the api is
+  the main container (workload `port` 8000, `Tcp` probe) and recalld is a sidecar
+  (8001, its own HTTP probe). After the cutover recalld binds 8000, so the
+  workload probe would test recalld while nominally belonging to the api — it
+  would pass with the Python container dead and every unported route 502ing, and
+  Kubernetes would call the pod healthy while most of the app was broken.
+
+  So recalld becomes the MAIN container (8000, HTTP probe on a route it serves
+  natively) and the Python api becomes the sidecar (8002, its own HTTP probe on
+  `/api/capture` — login-free, so a probe can reach it). That is also just true:
+  recalld is the front door from the cutover on, and a model that says otherwise
+  is a name outliving its thing.
+
+  ⚠ An earlier draft of this note proposed probing Python THROUGH the proxy
+  instead. That fails as soon as recalld ports the probed route — the probe would
+  silently stop testing Python and start testing recalld twice. Each container
+  probes itself.
 
   ⚠ **The config change and the image are COUPLED, so they ship together.**
   `--upstream`, `--frontend` and the repeated `--bind` exist only in a freshly

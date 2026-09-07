@@ -7,7 +7,7 @@
 //! configured, so a dev or LAN-only recalld is unchanged.
 
 use crate::tokens::Tokens;
-use crate::{audio, ingest, proxy, reads, reports, spa, webauth, work};
+use crate::{audio, ingest, labels, proxy, reads, reports, spa, webauth, work};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post, put};
@@ -73,6 +73,14 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
             delete(work::vocabulary_delete_route),
         )
         .route("/api/refine", post(work::refine_route))
+        // The labelling surface's READ half; its writes touch the system of
+        // record and move in their own change (see `labels`).
+        .route("/api/speakers", get(labels::speakers_route))
+        .route("/api/corrections", get(labels::corrections_route))
+        .route(
+            "/api/correction/{id}/audio",
+            get(labels::correction_audio_route),
+        )
         .with_state(read)
         // Client reports carry their own state (a log path), not the database's.
         .merge(

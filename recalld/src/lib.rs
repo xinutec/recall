@@ -8,6 +8,7 @@
 pub mod app;
 pub mod audio;
 pub mod ingest;
+pub mod labels;
 pub mod levels;
 pub mod proxy;
 pub mod queue;
