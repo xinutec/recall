@@ -463,7 +463,7 @@ def _build_transcriber(
 def _transcriber_for(
     args: argparse.Namespace, *, words: bool, store: Store | None = None
 ) -> Transcriber:
-    """The transcriber for an accuracy pass, from `--model`/`--base-model`."""
+    """The transcriber for an accuracy pass, from `--model`."""
     return _build_transcriber(args.model, words=words, store=store)
 
 

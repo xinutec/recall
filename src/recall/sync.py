@@ -112,13 +112,6 @@ class JobOut(BaseModel):
     title: str | None = None
     sample_rate: int | None = None
     channels: int | None = None
-    model_a: str | None = None
-    model_b: str | None = None
-    base_model: str | None = None
-    status: str | None = None
-    # ask-only payload: the self-contained grounded prompt the Mac's LLM answers. id is
-    # the fleet's ask-request id; the answer is pushed back via /sync/ask/{id}/result.
-    prompt: str | None = None
 
 
 class AudioStoredOut(BaseModel):
@@ -839,14 +832,6 @@ class SyncClient:
         )
         resp.raise_for_status()
 
-    def mark_ab_compare_running(self, run_id: int) -> None:
-        """Tell the fleet its queued A/B run is now executing on this Mac, so the
-        Compare page shows honest progress."""
-        resp = self._client.post(
-            f"{self._base}/sync/ab-compare/{run_id}/running", headers=self._headers
-        )
-        resp.raise_for_status()
-
     def push_ask_result(
         self, request_id: int, *, answer: str | None = None, error: str | None = None
     ) -> None:
@@ -855,36 +840,6 @@ class SyncClient:
         body = AskResultIn(answer=answer, error=error)
         resp = self._client.post(
             f"{self._base}/sync/ask/{request_id}/result",
-            json=body.model_dump(),
-            headers=self._headers,
-        )
-        resp.raise_for_status()
-
-    def push_ab_compare_result(  # noqa: PLR0913 - the report's denormalized summary
-        self,
-        run_id: int,
-        *,
-        error: str | None = None,
-        result_json: str | None = None,
-        mean_wer_a: float | None = None,
-        mean_wer_b: float | None = None,
-        n_corrections: int = 0,
-        n_segments: int = 0,
-        n_changed: int = 0,
-    ) -> None:
-        """Land a fleet-queued A/B run's outcome (report or error) on the fleet —
-        this is what retires the run from /sync/jobs, so it's safe to re-push."""
-        body = AbResultIn(
-            error=error,
-            resultJson=result_json,
-            meanWerA=mean_wer_a,
-            meanWerB=mean_wer_b,
-            nCorrections=n_corrections,
-            nSegments=n_segments,
-            nChanged=n_changed,
-        )
-        resp = self._client.post(
-            f"{self._base}/sync/ab-compare/{run_id}/result",
             json=body.model_dump(),
             headers=self._headers,
         )

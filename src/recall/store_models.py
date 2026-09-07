@@ -217,32 +217,3 @@ class UploadJob:
     end: datetime
     sample_rate: int
     channels: int
-
-
-@dataclass(frozen=True)
-class AbCompareJob:
-    """One A/B model-comparison run: its parameters, status, and (once done) result.
-
-    `start`/`end` are None for the whole recording. The `mean_wer_*`/`n_*` summary
-    and `result_json` are populated only when `status == "done"`; `list_…` returns
-    rows without the (large) `result_json`, `get_…` includes it.
-    """
-
-    id: int
-    source: str
-    start: datetime | None
-    end: datetime | None
-    model_a: str
-    model_b: str
-    base_model: str
-    status: str
-    created: datetime
-    started: datetime | None
-    done: datetime | None
-    error: str | None
-    result_json: str | None
-    mean_wer_a: float | None
-    mean_wer_b: float | None
-    n_corrections: int | None
-    n_segments: int | None
-    n_changed: int | None

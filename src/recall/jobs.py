@@ -67,12 +67,6 @@ class _Job(Protocol):
     title: str | None
     sample_rate: int | None
     channels: int | None
-    # ab-compare-only payload: the two models and the fleet's current run status.
-    model_a: str | None
-    model_b: str | None
-    base_model: str | None
-    status: str | None
-    prompt: str | None
 
 
 class _JobClient(Protocol):

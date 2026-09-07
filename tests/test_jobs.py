@@ -35,11 +35,6 @@ class _Job:
     title: str | None = None
     sample_rate: int | None = None
     channels: int | None = None
-    model_a: str | None = None
-    model_b: str | None = None
-    base_model: str | None = None
-    status: str | None = None
-    prompt: str | None = None
 
 
 class _FakeClient:
@@ -50,7 +45,6 @@ class _FakeClient:
         self.done: list[tuple[int, str]] = []
         self.fetched: list[tuple[str, str, Path]] = []
         self.ab_running: list[int] = []
-        self.ab_results: list[tuple[int, dict[str, object]]] = []
         self.ask_results: list[tuple[int, dict[str, str | None]]] = []
 
     def poll_jobs(self, *, limit: int = 50) -> list[_Job]:
@@ -68,20 +62,6 @@ class _FakeClient:
         self.fetched.append((source, name, dest))
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"opus-bytes")
-
-    def push_ab_compare_result(  # noqa: PLR0913 - mirrors the SyncClient signature
-        self,
-        run_id: int,
-        *,
-        error: str | None = None,
-        result_json: str | None = None,
-        mean_wer_a: float | None = None,
-        mean_wer_b: float | None = None,
-        n_corrections: int = 0,
-        n_segments: int = 0,
-        n_changed: int = 0,
-    ) -> None:
-        self.ab_results.append((run_id, {"error": error, "result_json": result_json}))
 
 
 class _FakeStore:
