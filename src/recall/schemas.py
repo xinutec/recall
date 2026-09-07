@@ -231,10 +231,6 @@ class AssignResultOut(TypedDict):
     touched: int  # turns touched by a span assign (reassign / split / merge)
 
 
-class VoiceSuggestionsOut(TypedDict):
-    suggestions: dict[str, str]  # {cluster: suggested name} from voiceprints
-
-
 class VocabularyTermOut(TypedDict):
     id: int
     term: str
@@ -276,10 +272,6 @@ class NewIdOut(TypedDict):
 
 class NewIdsOut(TypedDict):
     newIds: list[int]
-
-
-class SuggestOut(TypedDict):
-    speaker: str | None
 
 
 # A/B model comparison — its lifecycle status (queued -> running -> done|error).

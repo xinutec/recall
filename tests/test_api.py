@@ -13,7 +13,6 @@ from conftest import make_flac, make_mp3
 from recall import (
     api,
     api_capture,
-    api_labels,
     capture_control,
     loudness,
 )
@@ -98,49 +97,6 @@ def _seed_candidates(root: Path, count: int) -> Store:
             asr_confidence=0.5,
         )
     return store
-
-
-def test_suggest_reads_the_cached_guess_above_threshold(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The Train 'sounds like X' hint reads the cached guess (kept fresh by the
-    worker), so it agrees with the timeline — and only pre-fills a confident one."""
-    store = Store.open(tmp_path / "recall.sqlite")
-    store.add_source(
-        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="usb",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=2),
-            path="x.flac",
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-    confident = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=1),
-        text="hi",
-        asr_model="whisper",
-    )
-    store.set_speaker_guess(confident, "Alice", 0.82)  # clear leading likelihood
-    weak = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=1),
-        end=BASE + timedelta(seconds=2),
-        text="ho",
-        asr_model="whisper",
-    )
-    store.set_speaker_guess(weak, "Carol", 0.33)  # a toss-up — don't pre-fill
-    store.close()
-    monkeypatch.setattr(api, "DATA_ROOT", tmp_path)
-
-    assert api_labels.suggest(confident)["speaker"] == "Alice"
-    assert api_labels.suggest(weak)["speaker"] is None  # below the pre-fill bar
 
 
 def test_backfill_loudness_fills_the_cache_offline(tmp_path: Path) -> None:

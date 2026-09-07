@@ -16,7 +16,6 @@ import {
   SpeakerNames,
   TurnSpeakerRequest,
   VoiceNameRequest,
-  Suggest,
   VocabularyRequest,
 } from './models';
 
@@ -25,7 +24,7 @@ import {
  *
  * Reactive reads (status / search / review) are done with `httpResource` in the
  * components that own their query signals; this service holds the mutations
- * (correct / suggest / upload) and the audio-clip URL helper.
+ * (correct / upload) and the audio-clip URL helper.
  */
 @Injectable({ providedIn: 'root' })
 export class RecallApi {
@@ -78,9 +77,6 @@ export class RecallApi {
     return this.http.post<CorrectResult>('/api/correct', body);
   }
 
-  suggest(id: number): Observable<Suggest> {
-    return this.http.get<Suggest>(`/api/suggest/${id}`);
-  }
 
   /** The household roster — enrolled voices + assigned labels — for the quick-pick
    * speaker chips. Names live in runtime enrolment data, never hard-coded here. */

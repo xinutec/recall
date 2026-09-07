@@ -55,19 +55,10 @@
                 matInput
                 list="known-speakers"
                 [ngModel]="v.name ?? ''"
-                [placeholder]="v.suggested ? v.suggested + '?' : 'who?'"
+                placeholder="who?"
                 (change)="nameVoice(v.cluster, $any($event.target).value)"
               />
             </mat-form-field>
-            @if (v.suggested && !v.name) {
-              <button
-                matIconButton
-                (click)="nameVoice(v.cluster, v.suggested)"
-                [attr.aria-label]="'use ' + v.suggested"
-              >
-                <mat-icon>check</mat-icon>
-              </button>
-            }
           </div>
         }
       </div>

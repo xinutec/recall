@@ -1381,46 +1381,6 @@ def test_known_speaker_names_unions_enrolled_and_assigned_labels() -> None:
     assert "SPEAKER_01" not in names  # raw diarization clusters excluded
 
 
-def test_session_voice_suggestions_separates_by_confidence_not_plurality() -> None:
-    # BOTH clusters' plurality guess is the same household name (a visitor's voice
-    # false-matching it), but only the genuine cluster is confident + unanimous. The
-    # mixed, low-score cluster (the visitor) gets no suggestion — named by hand.
-    store = Store.memory()
-    store.add_source(
-        AudioSource(id="meeting-x", name="M", kind=SourceKind.UPLOAD, spec="")
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="meeting-x",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=60),
-            path="x",
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-
-    def turn(i: int, cluster: str) -> int:
-        return store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=i),
-            end=BASE + timedelta(seconds=i + 1),
-            text=f"t{i}",
-            asr_model="diarized",
-            speaker_cluster=cluster,
-        )
-
-    for i in range(3):  # the real voice: unanimous, high score
-        store.set_speaker_guess(turn(i, "SPEAKER_01"), "Pippijn", 0.85)
-    for i, (nm, sc) in enumerate(  # the visitor: plurality Pippijn but mixed + weak
-        [("Pippijn", 0.40), ("Alice", 0.35), ("Pippijn", 0.42)], start=10
-    ):
-        store.set_speaker_guess(turn(i, "SPEAKER_00"), nm, sc)
-
-    assert store.session_voice_suggestions("meeting-x") == {"SPEAKER_01": "Pippijn"}
-
-
 def _seg_at(start_s: float, dur_s: float, path: str) -> Segment:
     start = BASE + timedelta(seconds=start_s)
     return Segment(

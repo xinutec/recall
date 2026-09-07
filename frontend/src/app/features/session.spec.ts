@@ -74,7 +74,6 @@ async function setup(turns: Transcript[] = [], known: string[] = []) {
   fixture.detectChanges(); // fire the three httpResources
   ctrl.match((r) => r.url.includes('/api/conversations')).forEach((r) => r.flush(pageOf(turns)));
   ctrl.match((r) => r.url.includes('/api/speakers')).forEach((r) => r.flush({ names: known }));
-  ctrl.match((r) => r.url.includes('/voices')).forEach((r) => r.flush({ suggestions: {} }));
   await fixture.whenStable();
   fixture.detectChanges();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -17,7 +17,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatSnackBar } from '@angular/material/snack-bar';
 
-import { ConversationPage, SpeakerNames, Transcript, VoiceSuggestions } from '../models';
+import { ConversationPage, SpeakerNames, Transcript } from '../models';
 import { RecallApi } from '../recall-api';
 import { resolveSelection, SpanSel } from '../selection-span';
 import { TranscriptCard } from '../shared/transcript-card';
@@ -31,7 +31,6 @@ interface Voice {
   readonly turns: number;
   readonly sample: string; // a representative snippet, so you can tell who this voice is
   readonly sampleUrl: string; // and hear it
-  readonly suggested: string | null; // voiceprint-based name suggestion, if confident
 }
 
 /** Consecutive turns by one speaker, read as a single paragraph. The underlying turns
@@ -81,13 +80,6 @@ export class Session implements OnDestroy {
   private readonly speakerNames = httpResource<SpeakerNames>(() => '/api/speakers');
   protected readonly knownNames = computed(() => this.speakerNames.value()?.names ?? []);
 
-  // Auto-suggested name per voice (cluster) from voiceprint guesses — the enrolled
-  // household member is identified for us; the clinician is named by hand.
-  private readonly suggestions = httpResource<VoiceSuggestions>(
-    () => `/api/sessions/${this.id()}/voices`,
-  );
-  private readonly voiceSuggestions = computed(() => this.suggestions.value()?.suggestions ?? {});
-
   protected readonly conversations = computed(() => this.data.value()?.items ?? []);
   protected readonly start = computed(() => this.conversations()[0]?.start ?? null);
   protected readonly empty = computed(
@@ -107,8 +99,8 @@ export class Session implements OnDestroy {
   );
   protected readonly ready = computed(() => this.turns().length > 0 && !this.finalizing());
 
-  // The distinct voices, biggest first, each with the name most of its turns carry,
-  // a representative sample turn to identify it by, and a voiceprint-based suggestion.
+  // The distinct voices, biggest first, each with the name most of its turns carry
+  // and a representative sample turn to identify it by.
   protected readonly voices = computed<Voice[]>(() => {
     interface Acc { counts: Map<string, number>; turns: Transcript[] }
     const byCluster = new Map<string, Acc>();
@@ -124,7 +116,6 @@ export class Session implements OnDestroy {
         e.counts.set(t.speaker, (e.counts.get(t.speaker) ?? 0) + 1);
       }
     }
-    const suggested = this.voiceSuggestions();
     return [...byCluster.entries()]
       .sort((a, b) => b[1].turns.length - a[1].turns.length)
       .map(([cluster, e]) => {
@@ -148,7 +139,6 @@ export class Session implements OnDestroy {
           turns: e.turns.length,
           sample: sample?.text ?? '',
           sampleUrl: sample?.audioUrl ?? '',
-          suggested: suggested[cluster] ?? null,
         };
       });
   });

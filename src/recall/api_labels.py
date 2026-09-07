@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 
 from recall.api_models import (
     AssignSpanIn,
@@ -20,15 +20,12 @@ from recall.api_models import (
 from recall.conversation import assign_span
 from recall.schemas import (
     AssignResultOut,
-    SuggestOut,
-    VoiceSuggestionsOut,
 )
 from recall.store import Store
 
 # Train pre-fills "sounds like X" only when the leading candidate's likelihood
 # (softmax over the enrolled people) clears this — a confirmable hint, not a coin
 # flip. The timeline still shows every guess with its %.
-_SUGGEST_MIN_PROB = 0.4
 _store_factory: Callable[[], Store] | None = None
 _parse_iso_fn: Callable[[str | None], datetime | None] | None = None
 _require_time_fn: Callable[[str | None], datetime] | None = None
@@ -62,8 +59,6 @@ def register_label_routes(
     _parse_iso_fn = parse_iso
     _require_time_fn = require_time
     app.post("/api/sessions/{source}/assign")(assign)
-    app.get("/api/sessions/{source}/voices")(voice_suggestions)
-    app.get("/api/suggest/{segment_id}")(suggest)
 
 
 CANT_MAKE_OUT_REASON = "can't make out (human)"
@@ -98,34 +93,3 @@ def assign(source: str, body: AssignSpanIn) -> AssignResultOut:
     finally:
         store.close()
     return {"touched": touched}
-
-
-def voice_suggestions(source: str) -> VoiceSuggestionsOut:
-    """Auto-suggested name per diarization voice in a session, from cached voiceprint
-    guesses — so an enrolled household member is identified for you (the clinician you
-    name by hand). `{cluster: name}`, only the confident, unambiguous ones."""
-    store = _store()
-    try:
-        return {"suggestions": store.session_voice_suggestions(source)}
-    finally:
-        store.close()
-
-
-def suggest(segment_id: int) -> SuggestOut:
-    """Best-matching enrolled name for a turn (or null) — powers the labelling
-    "sounds like X" hint. Reads the cached guess (kept fresh by the worker's
-    re-match against current voiceprints), so it agrees with the timeline and
-    needs no live embedding. Returns the name only when the match is confident
-    enough to pre-fill (a confirmable hint), else null.
-    """
-    store = _store()
-    try:
-        segment = store.get_transcript(segment_id)
-        if segment is None:
-            raise HTTPException(status_code=404, detail="unknown segment")
-        # speaker_score is now a softmax likelihood across the enrolled people; only
-        # pre-fill when the leading candidate is clearly ahead (a confirmable hint).
-        confident = (segment.speaker_score or 0.0) >= _SUGGEST_MIN_PROB
-        return {"speaker": segment.speaker_guess if confident else None}
-    finally:
-        store.close()

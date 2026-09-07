@@ -2061,50 +2061,6 @@ class Store:
             for (src, cl), name in dominant.items()
         ]
 
-    def session_voice_suggestions(
-        self, source_id: str, *, min_score: float = 0.6
-    ) -> dict[str, str]:
-        """Suggest a name for each diarization voice in a session from its turns' cached
-        voiceprint guesses. A cluster whose turns consistently match one enrolled voice
-        gets that name; each name goes to its single best-matching cluster (so a
-        clinician's weak false-matches can't claim a household name), and clusters below
-        `min_score` get no suggestion — named by hand. Returns {cluster: name}.
-        """
-        rows = self._conn.execute(
-            "SELECT ts.speaker_cluster cl, ts.speaker_guess g, ts.speaker_score s "
-            "FROM transcript_segments ts "
-            "JOIN audio_segments a ON a.id = ts.audio_segment_id "
-            "WHERE a.source_id = ? AND ts.speaker_cluster IS NOT NULL "
-            "AND ts.speaker_guess IS NOT NULL AND ts.superseded_by IS NULL "
-            "AND ts.hidden_reason IS NULL",
-            (source_id,),
-        ).fetchall()
-
-        # Per cluster: its dominant guess and the mean score of the turns that made it.
-        by_cluster: dict[str, list[tuple[str, float]]] = {}
-        for row in rows:
-            by_cluster.setdefault(row["cl"], []).append((row["g"], row["s"] or 0.0))
-
-        candidates: list[tuple[float, str, str]] = []  # (confidence, cluster, name)
-        for cluster, guesses in by_cluster.items():
-            counts: dict[str, int] = {}
-            for guess, _ in guesses:
-                counts[guess] = counts.get(guess, 0) + 1
-            name = max(counts, key=lambda k: counts[k])
-            scores = [s for g, s in guesses if g == name]
-            conf = sum(scores) / len(scores) if scores else 0.0
-            candidates.append((conf, cluster, name))
-
-        # Greedy by confidence: each name and each cluster assigned at most once.
-        candidates.sort(reverse=True)
-        assigned: dict[str, str] = {}
-        taken: set[str] = set()
-        for conf, cluster, name in candidates:
-            if conf >= min_score and name not in taken and cluster not in assigned:
-                assigned[cluster] = name
-                taken.add(name)
-        return assigned
-
     def set_turn_speaker(self, segment_id: int, name: str | None) -> None:
         """Set/clear the human speaker label on one turn — reassign a mis-diarized turn
         to the right voice. Display label only (no correction/voiceprint)."""

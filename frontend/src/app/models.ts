@@ -134,10 +134,6 @@ export interface AssignResult {
   readonly touched: number;
 }
 
-export interface VoiceSuggestions {
-  readonly suggestions: Record<string, string>;
-}
-
 export interface VocabularyTerm {
   readonly id: number;
   readonly term: string;
@@ -172,10 +168,6 @@ export interface CorrectResult {
 
 export interface SplitResult {
   readonly newIds: readonly number[];
-}
-
-export interface Suggest {
-  readonly speaker: string | null;
 }
 
 // ---- request bodies (POST payloads) ----
