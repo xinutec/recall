@@ -90,8 +90,21 @@ def test_every_api_route_the_app_calls_is_served_by_somebody() -> None:
     )
 
 
-def test_the_router_scan_sees_the_routes_it_is_meant_to() -> None:
-    """A guard on the guard: if either parser silently matched nothing, the
-    coverage test above would pass by finding no orphans in an empty set."""
+def test_the_axum_route_scan_still_matches_something() -> None:
+    """A guard on the guard: a regex that silently matched nothing would make the
+    coverage test above pass by finding no orphans in an empty set.
+
+    ⚠ Only the axum half is guarded, and only this half needs it. It is parsed
+    from TEXT, so a change to how routes are written — a macro, a different
+    builder — makes it match nothing while still looking healthy. The FastAPI
+    half reads `app.routes` off the live object: it cannot silently mismatch, and
+    it is ALLOWED to reach zero, because zero is where the port is going.
+
+    ⚠ This once asserted the Python half saw more than five routes. That was a
+    snapshot of an afternoon, not a property, and it failed the moment the port
+    passed it — a guard that has to be edited every time the thing it guards
+    makes progress is measuring the wrong thing.
+    """
     assert len(_recalld_routes()) > 10, "the axum route scan has drifted"
-    assert len(_python_routes()) > 5, "the FastAPI route scan has drifted"
+    # A route every version of this router has served, as a canary for the shape.
+    assert "/api/timeline" in _recalld_routes(), "the axum scan lost a known route"

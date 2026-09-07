@@ -989,7 +989,8 @@ B3 lands.*
     and serves before its upstream is ready; expected, and worth knowing so a
     handful of failures right after a deploy is not mistaken for a fault.
 
-  **Where the port stands, 2026-09-07 — 10 Python `/api` registrations left.**
+  **Where the port stands, 2026-09-07 — 4 Python `/api` registrations left, and
+  they are all the capture family.**
   Re-derive rather than trusting the number, and derive it the way it was
   derived here — from the LIVE app, not by grepping for route strings:
 
@@ -1003,11 +1004,12 @@ B3 lands.*
   and it counts strings that are not routes at all, such as webauth's
   device-exempt entry for `/api/log`, whose route no longer exists.
 
-  Eight modules are gone: `api_reads`, `api_audio`, `api_work`,
-  `api_client_reports`, `api_labels`, plus `seed`, `scan_job` and `context` as
-  dead. The whole browsing and labelling surface — reads, playback, the work
-  queue, client reports, uploaded meetings, the corrections corpus and the span
-  assign — is recalld's.
+  Nine modules are gone: `api_reads`, `api_audio`, `api_work`,
+  `api_client_reports`, `api_labels`, `api_sessions`, plus `seed`, `scan_job`
+  and `context` as dead. Everything except capture is recalld's — reads,
+  playback, the work queue, client reports, uploaded meetings including their
+  upload and delete, the corrections corpus, the span assign, and the recorders'
+  heartbeats and outboxes.
 
   | group | state |
   |---|---|
@@ -1016,9 +1018,9 @@ B3 lands.*
   | work | DONE (vocabulary, refine) — recalld's first writes. |
   | client reports | DONE. |
   | labels | DONE — correct, turn speaker, correction reassign/hide, span assign. `/api/suggest` and `/voices` were CUT, not ported: voiceprint name suggestions are gone by product decision. |
-  | sessions | list, rename, re-diarize, voice naming and the transcript export are DONE. The UPLOAD and the DELETE stay: delete removes turns, audio rows AND files from disk, the one irreversible operation here. |
+  | sessions | DONE, including the upload and the delete. ⚠ The delete is the one irreversible operation here and is guarded to UPLOAD sources: the household archive must never be reachable through a path meant for meetings. Every deleted segment is TOMBSTONED in the same transaction, or the Mac's next refine push resurrects the session. |
+  | devices | heartbeats and outboxes are DONE. `/api/sources` is NOT: it reads the two-mode liveness model (Mac-local vs fleet) and takes `fleet_capture_state`, so it moves with the capture family or not at all. |
   | capture | NOT STARTED, and deliberately: the settled/transitioning state machine, the `stateToken` long-poll and the pause-origin audit. The pause is the one thing that must always work (C1), so this one is not a solo port. |
-  | devices | NOT STARTED. `/api/sources` carries a two-mode liveness model (Mac-local vs fleet). Only the FLEET branch matters in recalld — the local branch exists for `recall api` run by hand on the Mac, which no agent does. |
 
   ⚠ **A partially ported PATH needs `method_not_allowed_fallback`.** axum matches
   the path and THEN the method, so with `GET /api/sessions` mounted and no POST,
@@ -1059,6 +1061,17 @@ B3 lands.*
   - **The search index is maintained by the WRITER, not a trigger.** A ported
     write that forgets `transcript_fts` fails nothing loudly and makes its rows
     unsearchable.
+  - **A meeting's id is its LOCAL start, and local is Europe/London** — not the
+    pod's UTC. Deriving it from the container clock renames every summer
+    recording by an hour and it stops matching the directory the worker found.
+  - **`serde_json`'s Map sorts keys** where a Python dict preserves insertion
+    order (`preserve_order`), and **`json.dumps` escapes non-ASCII**. Both change
+    stored TEXT without changing meaning, which is what makes a later check
+    report drift that is not drift.
+  - **A guard calibrated to a moment rots.** The route-coverage check asserted
+    the FastAPI scan saw more than five routes and failed the moment the port
+    passed it. Guard the half that is parsed from TEXT; the half that reads a
+    live object is allowed to reach zero.
 
   ⚠ **STILL TO DO:** the recording plane (capture, devices), the two
   irreversible session operations, and then the Mac side — which is where the

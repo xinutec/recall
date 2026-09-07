@@ -17,7 +17,6 @@ from fastapi.responses import FileResponse
 
 from recall.api_capture import fleet_capture_state, register_capture_routes
 from recall.api_devices import register_device_routes
-from recall.api_sessions import register_session_routes
 from recall.paths import default_data_root
 from recall.store import (
     Store,
@@ -62,13 +61,6 @@ register_device_routes(
     store_factory=_store,
     data_root=lambda: DATA_ROOT,
     fleet_capture_state=fleet_capture_state,
-)
-register_session_routes(
-    app,
-    store_factory=_store,
-    data_root=lambda: DATA_ROOT,
-    # a lambda, deliberately: _require_time is defined further down this module
-    require_time=lambda value: _require_time(value),  # noqa: PLW0108 - forward ref
 )
 
 

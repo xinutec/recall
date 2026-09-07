@@ -34,8 +34,8 @@ async fn upstream_server() -> (String, Arc<AtomicUsize>) {
             }),
         )
         .route(
-            "/api/sessions",
-            post(|| async { ([("x-from", "python")], "uploaded") }),
+            "/api/timeline",
+            post(|| async { ([("x-from", "python")], "a method recalld does not serve") }),
         )
         .route(
             "/api/echo",
@@ -383,9 +383,13 @@ async fn a_method_recalld_does_not_serve_falls_through_to_the_upstream() {
     let (upstream, _hits) = upstream_server().await;
     let base = recalld_gated(Some(upstream)).await;
 
-    // POST /api/sessions is the upload, still Python's. GET is recalld's.
+    // ⚠ `/api/timeline` is recalld's GET and always will be, so a POST to it is
+    // permanently a method miss. This deliberately does NOT use a route that is
+    // mid-port: the first version used POST /api/sessions, which stopped being a
+    // miss the day the upload moved, and the test failed for a reason that had
+    // nothing to do with what it checks.
     let resp = tokio::task::spawn_blocking(move || {
-        ureq::post(&format!("{base}/api/sessions"))
+        ureq::post(&format!("{base}/api/timeline"))
             .send_string("{}")
             .map_err(Box::new)
     })
@@ -411,7 +415,7 @@ async fn a_method_miss_is_refused_when_there_is_nothing_to_fall_through_to() {
     let base = recalld_gated(None).await;
 
     let code = tokio::task::spawn_blocking(move || {
-        match ureq::post(&format!("{base}/api/sessions")).send_string("{}") {
+        match ureq::post(&format!("{base}/api/timeline")).send_string("{}") {
             Ok(resp) => resp.status(),
             Err(ureq::Error::Status(code, _)) => code,
             Err(other) => panic!("transport: {other}"),
@@ -434,7 +438,7 @@ async fn a_proxied_method_miss_is_gated_by_the_upstream_not_by_recalld() {
     let base = recalld_gated(Some(upstream)).await;
 
     let resp = tokio::task::spawn_blocking(move || {
-        ureq::post(&format!("{base}/api/sessions"))
+        ureq::post(&format!("{base}/api/timeline"))
             .send_string("{}")
             .map_err(Box::new)
     })

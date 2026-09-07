@@ -397,3 +397,104 @@ pub async fn transcript_route(
     })
     .await
 }
+
+// --- deleting a session ------------------------------------------------------
+
+/// Delete an uploaded session and everything derived from it, returning the audio
+/// file paths for the caller to unlink.
+///
+/// ⚠ **The one irreversible operation in this product.** Everything else hides,
+/// supersedes or re-derives; this removes rows and the caller then removes files.
+/// It is guarded to UPLOAD sources by [`require_upload`] and must stay that way:
+/// the continuous household capture is append-only and must never be reachable
+/// through a path meant for meetings.
+///
+/// ⚠ **Every deletion is TOMBSTONED**, inside the same transaction. Without that
+/// the Mac's next refine push would resurrect the session here — the journal is
+/// the veto that makes a deletion cross the machine split. It is a record, never
+/// an order: nothing serves it to a recorder.
+///
+/// ⚠ `transcript_fts` is deliberately NOT cleaned. It is a contentless FTS5 table
+/// with no per-row delete, and a search rowid whose segment row is gone simply
+/// resolves to nothing.
+pub fn delete_session(
+    conn: &mut Connection,
+    source: &str,
+    now: &str,
+) -> Result<Vec<String>, SessionError> {
+    require_upload(conn, source)?;
+    let tx = conn.transaction()?;
+    let segments: Vec<(i64, String, String)> = {
+        let mut stmt =
+            tx.prepare("SELECT id, path, start_utc FROM audio_segments WHERE source_id = ?1")?;
+        let rows = stmt.query_map([source], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for (_, _, start_utc) in &segments {
+        tx.execute(
+            "INSERT OR IGNORE INTO deleted_segments (source_id, start_utc, deleted_utc) \
+             VALUES (?1, ?2, ?3)",
+            (source, start_utc, now),
+        )?;
+    }
+    for (audio_id, _, _) in &segments {
+        let turn_ids: Vec<i64> = {
+            let mut stmt =
+                tx.prepare("SELECT id FROM transcript_segments WHERE audio_segment_id = ?1")?;
+            let rows = stmt.query_map([audio_id], |r| r.get(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for turn_id in turn_ids {
+            tx.execute(
+                "DELETE FROM transcript_embeddings WHERE segment_id = ?1",
+                [turn_id],
+            )?;
+            tx.execute(
+                "DELETE FROM transcript_lineage WHERE derived_id = ?1 OR source_id = ?1",
+                [turn_id],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM corrections WHERE audio_segment_id = ?1",
+            [audio_id],
+        )?;
+        tx.execute(
+            "DELETE FROM transcript_segments WHERE audio_segment_id = ?1",
+            [audio_id],
+        )?;
+    }
+    tx.execute("DELETE FROM refine_requests WHERE source_id = ?1", [source])?;
+    tx.execute("DELETE FROM audio_segments WHERE source_id = ?1", [source])?;
+    tx.execute("DELETE FROM sources WHERE id = ?1", [source])?;
+    tx.commit()?;
+    Ok(segments.into_iter().map(|(_, path, _)| path).collect())
+}
+
+pub async fn delete_route(
+    State(st): State<Arc<reads::State>>,
+    Path(source): Path<String>,
+) -> Response {
+    let root = st.root.clone();
+    let now = chrono::Utc::now().to_rfc3339();
+    let done = tokio::task::spawn_blocking(move || -> Result<(), SessionError> {
+        let paths = {
+            let mut conn = work::open_write(&root)?;
+            delete_session(&mut conn, &source, &now)?
+        };
+        // ⚠ Files AFTER the transaction commits. Unlinking first would destroy
+        // audio that a rolled-back delete still points at.
+        for path in paths {
+            let _ = std::fs::remove_file(&path);
+        }
+        let dir = root.join(&source);
+        if dir.is_dir() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        Ok(())
+    });
+    match done.await {
+        Ok(Ok(())) => route::ack(),
+        Ok(Err(err)) => err.into_response("session delete"),
+        Err(err) => route::faulted("session delete task", &err),
+    }
+}

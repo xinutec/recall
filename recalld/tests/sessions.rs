@@ -478,3 +478,195 @@ fn the_export_date_is_the_first_bubble_start() {
 
     assert_eq!(out.date.as_deref(), Some(out.turns[0].start.as_str()));
 }
+
+// --- deleting ----------------------------------------------------------------
+
+use recalld::sessions::delete_session;
+
+/// The full cascade's tables, copied from `store_schema` rather than invented —
+/// a delete that silently missed a table would pass against a schema that lacks
+/// it.
+fn delete_db() -> Connection {
+    let conn = Connection::open_in_memory().expect("open");
+    conn.execute_batch(
+        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
+         CREATE TABLE audio_segments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL,
+            path TEXT NOT NULL, start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
+            UNIQUE (source_id, start_utc));
+         CREATE TABLE transcript_segments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, audio_segment_id INTEGER,
+            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
+            speaker_label TEXT, speaker_cluster TEXT, superseded_by INTEGER,
+            hidden_reason TEXT);
+         CREATE TABLE transcript_embeddings (segment_id INTEGER, vec BLOB);
+         CREATE TABLE transcript_lineage (derived_id INTEGER, source_id INTEGER);
+         CREATE TABLE corrections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, audio_segment_id INTEGER,
+            transcript_segment_id INTEGER, corrected_text TEXT);
+         CREATE TABLE refine_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL,
+            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, created_utc TEXT NOT NULL);
+         CREATE TABLE deleted_segments (
+            source_id TEXT NOT NULL, start_utc TEXT NOT NULL, deleted_utc TEXT NOT NULL,
+            UNIQUE (source_id, start_utc));",
+    )
+    .expect("schema");
+    conn
+}
+
+fn populate(conn: &Connection, source: &str, kind: &str) -> i64 {
+    conn.execute(
+        "INSERT INTO sources (id, name, kind) VALUES (?1, ?1, ?2)",
+        (source, kind),
+    )
+    .expect("source");
+    conn.execute(
+        "INSERT INTO audio_segments (source_id, path, start_utc, end_utc)
+         VALUES (?1, ?2, '2026-07-03T09:50:00+00:00', '2026-07-03T10:20:00+00:00')",
+        (source, format!("/data/{source}/clip.flac")),
+    )
+    .expect("segment");
+    let audio_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc, text)
+         VALUES (?1, '2026-07-03T09:51:00+00:00', '2026-07-03T09:51:05+00:00', 'hello')",
+        [audio_id],
+    )
+    .expect("turn");
+    let turn_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO transcript_embeddings (segment_id) VALUES (?1)",
+        [turn_id],
+    )
+    .expect("embedding");
+    conn.execute(
+        "INSERT INTO transcript_lineage (derived_id, source_id) VALUES (?1, 99)",
+        [turn_id],
+    )
+    .expect("lineage");
+    conn.execute(
+        "INSERT INTO corrections (audio_segment_id, transcript_segment_id, corrected_text)
+         VALUES (?1, ?2, 'fixed')",
+        (audio_id, turn_id),
+    )
+    .expect("correction");
+    conn.execute(
+        "INSERT INTO refine_requests (source_id, start_utc, end_utc, created_utc)
+         VALUES (?1, '2026-07-03T09:50:00+00:00', '2026-07-03T10:20:00+00:00', 'x')",
+        [source],
+    )
+    .expect("refine");
+    audio_id
+}
+
+fn count(conn: &Connection, table: &str) -> i64 {
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .expect("count")
+}
+
+#[test]
+fn deleting_the_household_archive_is_refused_and_removes_nothing() {
+    // ⚠ THE GUARD THAT MATTERS. The continuous capture is append-only and must
+    // never be reachable through a path meant for meetings. If this ever passes,
+    // the household archive is one HTTP call from gone.
+    let mut conn = delete_db();
+    populate(&conn, "usb", "coreaudio");
+
+    let err = delete_session(&mut conn, "usb", NOW).expect_err("must refuse");
+
+    assert!(matches!(err, SessionError::NotAnUpload), "got {err:?}");
+    assert_eq!(count(&conn, "sources"), 1);
+    assert_eq!(count(&conn, "audio_segments"), 1);
+    assert_eq!(count(&conn, "transcript_segments"), 1);
+    assert_eq!(count(&conn, "deleted_segments"), 0, "not even tombstoned");
+}
+
+#[test]
+fn deleting_a_meeting_removes_every_derived_row_and_returns_its_files() {
+    let mut conn = delete_db();
+    populate(&conn, "meeting-1", "upload");
+
+    let paths = delete_session(&mut conn, "meeting-1", NOW).expect("deleted");
+
+    assert_eq!(paths, vec!["/data/meeting-1/clip.flac".to_owned()]);
+    for table in [
+        "sources",
+        "audio_segments",
+        "transcript_segments",
+        "transcript_embeddings",
+        "transcript_lineage",
+        "corrections",
+        "refine_requests",
+    ] {
+        assert_eq!(count(&conn, table), 0, "{table} still has rows");
+    }
+}
+
+#[test]
+fn a_deletion_is_tombstoned_so_a_later_push_cannot_resurrect_it() {
+    // ⚠ Without the journal the Mac's next refine push re-creates the session
+    // here, and a deletion that undoes itself is worse than none.
+    let mut conn = delete_db();
+    populate(&conn, "meeting-1", "upload");
+
+    delete_session(&mut conn, "meeting-1", NOW).expect("deleted");
+
+    let (source, start): (String, String) = conn
+        .query_row(
+            "SELECT source_id, start_utc FROM deleted_segments",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("tombstone");
+    assert_eq!(source, "meeting-1");
+    assert_eq!(start, "2026-07-03T09:50:00+00:00");
+}
+
+#[test]
+fn deleting_one_meeting_leaves_another_untouched() {
+    let mut conn = delete_db();
+    populate(&conn, "meeting-1", "upload");
+    populate(&conn, "meeting-2", "upload");
+
+    delete_session(&mut conn, "meeting-1", NOW).expect("deleted");
+
+    assert_eq!(count(&conn, "sources"), 1);
+    assert_eq!(count(&conn, "transcript_segments"), 1);
+    let left: String = conn
+        .query_row("SELECT id FROM sources", [], |r| r.get(0))
+        .expect("row");
+    assert_eq!(left, "meeting-2");
+}
+
+#[test]
+fn deleting_a_session_that_does_not_exist_is_a_miss_not_a_wipe() {
+    let mut conn = delete_db();
+    populate(&conn, "meeting-1", "upload");
+
+    let err = delete_session(&mut conn, "meeting-nope", NOW).expect_err("must fail");
+
+    assert!(matches!(err, SessionError::Missing), "got {err:?}");
+    assert_eq!(count(&conn, "sources"), 1);
+}
+
+#[test]
+fn a_failed_delete_leaves_the_session_whole() {
+    // ⚠ Atomic or nothing: a half-deleted session is turns with no source, which
+    // no view can render and no path can clean up.
+    let mut conn = delete_db();
+    populate(&conn, "meeting-1", "upload");
+    conn.execute("DROP TABLE refine_requests", [])
+        .expect("drop");
+
+    let failed = delete_session(&mut conn, "meeting-1", NOW);
+
+    assert!(failed.is_err());
+    assert_eq!(count(&conn, "sources"), 1, "rolled back");
+    assert_eq!(count(&conn, "transcript_segments"), 1);
+    assert_eq!(
+        count(&conn, "deleted_segments"),
+        0,
+        "including the tombstone"
+    );
+}

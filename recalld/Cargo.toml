@@ -35,7 +35,7 @@ cast_sign_loss = "allow"
 
 [dependencies]
 audiocore = { path = "../audiocore" }
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 # Bundled so the build needs no system sqlite at link time — the same
 # hermeticity reason audiod gives, doubly so inside the Docker build.
@@ -55,6 +55,11 @@ form_urlencoded = "1"
 ureq = { version = "2", features = ["json", "tls"] }
 hex = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# ⚠ A meeting's id is its LOCAL start (`meeting-20260703-0950`), and local means
+# Europe/London, not the container's clock — which is UTC. Deriving the id in UTC
+# would shift it by an hour all summer and mint a different id for the same
+# recording, so it would no longer match the directory the worker discovered.
+chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 # ⚠ `float_roundtrip` is not optional here. Without it serde_json's parser is not
 # correctly rounded: it reads the stored word timing 1.7599999999999953 as
