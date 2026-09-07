@@ -56,6 +56,13 @@ async fn upstream_server() -> (String, Arc<AtomicUsize>) {
 }
 
 async fn recalld_with(upstream: Option<String>) -> String {
+    recalld_with_frontend(upstream, None).await
+}
+
+async fn recalld_with_frontend(
+    upstream: Option<String>,
+    frontend: Option<std::path::PathBuf>,
+) -> String {
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path().to_path_buf();
     std::mem::forget(dir); // the server outlives this fn; the tmpdir must too
@@ -67,7 +74,7 @@ async fn recalld_with(upstream: Option<String>) -> String {
         max_body_bytes: DEFAULT_MAX_BODY,
         webauth: None,
         upstream: upstream.map(|base| Upstream { base }),
-        frontend: None,
+        frontend,
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -245,4 +252,75 @@ fn the_target_url_keeps_the_path_and_query_verbatim() {
         target("http://127.0.0.1:8002/", "/api/x", None),
         "http://127.0.0.1:8002/api/x"
     );
+}
+
+#[tokio::test]
+async fn a_sync_path_is_proxied_and_never_answered_with_the_app_shell() {
+    // ⚠ THE REGRESSION THAT BROKE THE FLEET, 2026-09-07. The fallback sent
+    // `/api/*` to the proxy and EVERYTHING ELSE to the shell — but Python owns
+    // `/sync/*` too, so the Mac's sync and jobs agents received index.html with
+    // a 200 and died on `JSONDecodeError: Expecting value: line 1 column 1`.
+    // The Mac could not push its archive or pull uploaded sessions, and the
+    // status said success.
+    //
+    // Serving a frontend here is what makes this testable at all: with no
+    // frontend configured everything falls through to the proxy and the bug
+    // cannot reproduce, which is exactly why it reached production.
+    let (up, hits) = upstream_server().await;
+    let dir = tempfile::tempdir().expect("tmp");
+    std::fs::write(
+        dir.path().join("index.html"),
+        "<!doctype html><html></html>",
+    )
+    .expect("shell");
+    let base = recalld_with_frontend(Some(up), Some(dir.path().to_path_buf())).await;
+
+    let body = tokio::task::spawn_blocking(move || {
+        ureq::get(&format!("{base}/sync/legacy"))
+            .call()
+            .map_err(Box::new)
+    })
+    .await
+    .expect("task");
+
+    // The upstream has no /sync/legacy, so it answers 404 — an HONEST miss.
+    // Before the fix this was a 200 carrying HTML.
+    match body {
+        Err(boxed) => match *boxed {
+            ureq::Error::Status(code, _) => assert_eq!(code, 404),
+            ureq::Error::Transport(e) => panic!("transport: {e}"),
+        },
+        Ok(r) => panic!("expected a proxied 404, got {} ", r.status()),
+    }
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "no /api hit; it went to /sync"
+    );
+}
+
+#[tokio::test]
+async fn an_app_route_still_renders_the_shell() {
+    // The other half of the same rule: a deep link is the frontend's, not the
+    // upstream's, or every bookmarked session 404s.
+    let (up, _) = upstream_server().await;
+    let dir = tempfile::tempdir().expect("tmp");
+    std::fs::write(
+        dir.path().join("index.html"),
+        "<!doctype html><html></html>",
+    )
+    .expect("shell");
+    let base = recalld_with_frontend(Some(up), Some(dir.path().to_path_buf())).await;
+
+    let body = tokio::task::spawn_blocking(move || {
+        ureq::get(&format!("{base}/sessions/meeting-x"))
+            .call()
+            .expect("call")
+            .into_string()
+            .expect("body")
+    })
+    .await
+    .expect("task");
+
+    assert!(body.starts_with("<!doctype html>"), "got {body}");
 }

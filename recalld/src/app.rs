@@ -45,6 +45,10 @@ pub struct Config {
     pub frontend: Option<PathBuf>,
 }
 
+/// Path prefixes the Python upstream owns. A request under one of these is
+/// PROXIED rather than answered with the app shell.
+pub const UPSTREAM_PREFIXES: &[&str] = &["/api/", "/sync/"];
+
 /// The browsing plane: stage F1's ported routes, behind the SSO gate.
 ///
 /// ⚠ **A cookie is scoped to a HOST, not a port** — which is what makes the
@@ -125,9 +129,22 @@ pub fn router(config: Arc<Config>) -> Router {
     // the shell. A half-ported group can never silently keep serving the old
     // answer, and a typo'd path cannot shadow a real handler.
     //
-    // Below that one rule decides between the two fallbacks: an `/api/*` miss is
-    // Python's (it still owns those groups), anything else is the app shell's, so
-    // a deep link like /sessions/meeting-x renders rather than 404ing.
+    // Below that one rule decides between the two fallbacks: a path under a
+    // prefix the UPSTREAM owns goes to the proxy, anything else is the app
+    // shell's, so a deep link like /sessions/meeting-x renders rather than
+    // 404ing.
+    //
+    // ⚠ `/sync/` is in that list because leaving it out BROKE THE FLEET on
+    // 2026-09-07. The rule was `/api/*` to the proxy and everything else to the
+    // shell — but Python owns `/sync/*` too, so the Mac's sync and jobs agents
+    // received index.html with a 200 and died on `JSONDecodeError: Expecting
+    // value: line 1 column 1`, unable to push the archive or pull uploaded
+    // sessions. That is precisely the failure `crate::spa` documents and guards
+    // for `/api/*`: HTML with a 200 turns "no such route" into a parse failure
+    // far from its cause.
+    //
+    // ⚠ ADDING A SERVER PREFIX MEANS ADDING IT HERE. The shell is the default,
+    // so anything omitted is silently answered with HTML rather than refused.
     let frontend = frontend.map(|root| Arc::new(spa::Frontend { root }));
     match (upstream, frontend) {
         (None, None) => merged,
@@ -141,7 +158,10 @@ pub fn router(config: Arc<Config>) -> Router {
             let up = up.clone();
             let fe = fe.clone();
             async move {
-                if req.uri().path().starts_with("/api/") {
+                if UPSTREAM_PREFIXES
+                    .iter()
+                    .any(|p| req.uri().path().starts_with(p))
+                {
                     proxy::forward(up, req).await
                 } else {
                     spa::serve(axum::extract::State(fe), req.uri().clone()).await
