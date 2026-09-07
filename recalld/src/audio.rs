@@ -175,7 +175,7 @@ pub enum SpanError {
 
 // --- HTTP ------------------------------------------------------------------
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
@@ -187,103 +187,108 @@ pub struct SpanQuery {
     to_id: i64,
 }
 
-fn wav(bytes: Vec<u8>) -> Response {
-    ([(header::CONTENT_TYPE, "audio/wav")], bytes).into_response()
+/// Why a clip could not be produced.
+///
+/// ⚠ **Errors as data, not as pre-rendered responses.** The picker used to
+/// return a `Box<Response>`, which meant a database query decided an HTTP status
+/// from inside a `SQLite` closure, and every caller had to box a fat value to
+/// say "the query failed". The status belongs at the edge; this is what the
+/// picker actually knows.
+#[derive(Debug)]
+pub enum ClipError {
+    /// The lookup failed. Nothing is known about whether audio exists.
+    Db(rusqlite::Error),
+    /// Both turns exist, but they are not one stretch of one recording.
+    CrossesRecordings,
+}
+
+impl From<rusqlite::Error> for ClipError {
+    fn from(err: rusqlite::Error) -> Self {
+        Self::Db(err)
+    }
+}
+
+/// Render `[start, end)` of one recording as a WAV response.
+///
+/// ⚠ Private, and reached only through [`render_blocking`], because it shells
+/// out to ffmpeg and sox. A caller on the request thread stalls every other
+/// browsing request — and the recorders' ingest, which shares this runtime —
+/// for the length of a clip. Making that mistake possible cost nothing to
+/// prevent: nobody outside needs to render without first picking.
+fn clip(path: &Path, start: f64, end: f64) -> Response {
+    match render(path, start, end) {
+        Ok(bytes) => ([(header::CONTENT_TYPE, "audio/wav")], bytes).into_response(),
+        Err(err) => crate::route::faulted("clip render", &err),
+    }
 }
 
 fn no_audio() -> Response {
     (StatusCode::NOT_FOUND, "no audio").into_response()
 }
 
-/// ⚠ Rendering shells out to ffmpeg and sox, so it runs on the blocking pool.
-/// On the request thread it would stall every other browsing request for the
-/// length of a clip.
-/// The picker's error is boxed: a `Response` is a fat value, and clippy is right
-/// that returning one by value in an `Err` makes every `Ok` pay for it.
-type Picked = Result<Option<(PathBuf, f64, f64)>, Box<Response>>;
+pub type Picked = Result<Option<(PathBuf, f64, f64)>, ClipError>;
 
-fn render_blocking(root: &Path, pick: impl FnOnce(&Connection) -> Picked) -> Response {
+/// Open the read-only connection, pick a window, render it — the whole of what
+/// an audio route does, and the only place [`clip`] may be called from.
+///
+/// ⚠ Must run on the blocking pool; see [`clip`].
+pub fn render_blocking(root: &Path, pick: impl FnOnce(&Connection) -> Picked) -> Response {
     let conn = match crate::reads::open(root) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("audio open failed: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response();
-        }
+        Ok(conn) => conn,
+        Err(err) => return crate::route::faulted("audio open", &err),
     };
     match pick(&conn) {
-        Err(resp) => *resp,
+        Err(ClipError::Db(err)) => crate::route::faulted("audio query", &err),
+        // 400, not 404: both turns exist, they just are not one clip. The UI
+        // reads this as "fall back to per-turn play", where a 404 would read as
+        // "this bubble has no audio at all".
+        Err(ClipError::CrossesRecordings) => {
+            (StatusCode::BAD_REQUEST, "span crosses recordings").into_response()
+        }
         Ok(None) => no_audio(),
-        Ok(Some((path, start, end))) => match render(&path, start, end) {
-            Ok(bytes) => wav(bytes),
-            Err(e) => {
-                tracing::warn!("clip render failed: {e}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "clip failed").into_response()
-            }
-        },
+        Ok(Some((path, start, end))) => clip(&path, start, end),
     }
 }
 
 pub async fn audio_route(
-    axum::extract::State(st): axum::extract::State<Arc<crate::reads::State>>,
+    State(st): State<Arc<crate::reads::State>>,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Response {
     let root = st.root.clone();
-    match tokio::task::spawn_blocking(move || {
+    let rendered = tokio::task::spawn_blocking(move || {
         render_blocking(&root, |conn| {
-            let p = placement(conn, id).map_err(|e| {
-                tracing::warn!("audio query failed: {e}");
-                Box::new((StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response())
-            })?;
-            Ok(p.map(|p| {
-                let (s, e) = window_for(&p);
-                (p.path.clone(), s, e)
+            Ok(placement(conn, id)?.map(|p| {
+                let (start, end) = window_for(&p);
+                (p.path.clone(), start, end)
             }))
         })
-    })
-    .await
-    {
-        Ok(resp) => resp,
-        Err(e) => {
-            tracing::warn!("audio task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "clip failed").into_response()
-        }
+    });
+    match rendered.await {
+        Ok(response) => response,
+        Err(err) => crate::route::faulted("audio task", &err),
     }
 }
 
 pub async fn audio_span_route(
-    axum::extract::State(st): axum::extract::State<Arc<crate::reads::State>>,
+    State(st): State<Arc<crate::reads::State>>,
     Query(q): Query<SpanQuery>,
 ) -> Response {
     let root = st.root.clone();
-    match tokio::task::spawn_blocking(move || {
+    let rendered = tokio::task::spawn_blocking(move || {
         render_blocking(&root, |conn| {
-            let fail = |e: rusqlite::Error| {
-                tracing::warn!("audio span query failed: {e}");
-                Box::new((StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response())
-            };
-            let (Some(first), Some(last)) = (
-                placement(conn, q.from_id).map_err(fail)?,
-                placement(conn, q.to_id).map_err(fail)?,
-            ) else {
+            let (Some(first), Some(last)) =
+                (placement(conn, q.from_id)?, placement(conn, q.to_id)?)
+            else {
                 return Ok(None);
             };
             match span_window(&first, &last) {
-                // 400, not 404: both turns exist, they just are not one clip. The
-                // UI reads this as "fall back to per-turn play", where a 404 would
-                // read as "this bubble has no audio at all".
-                Err(SpanError::CrossesRecordings) => Err(Box::new(
-                    (StatusCode::BAD_REQUEST, "span crosses recordings").into_response(),
-                )),
-                Ok((s, e)) => Ok(Some((first.path.clone(), s, e))),
+                Err(SpanError::CrossesRecordings) => Err(ClipError::CrossesRecordings),
+                Ok((start, end)) => Ok(Some((first.path.clone(), start, end))),
             }
         })
-    })
-    .await
-    {
-        Ok(resp) => resp,
-        Err(e) => {
-            tracing::warn!("audio span task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "clip failed").into_response()
-        }
+    });
+    match rendered.await {
+        Ok(response) => response,
+        Err(err) => crate::route::faulted("audio span task", &err),
     }
 }

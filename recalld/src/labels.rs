@@ -19,10 +19,9 @@
 
 use crate::audio::{self, clip_window};
 use crate::reads;
-use axum::Json;
-use axum::extract::Query;
-use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use crate::route;
+use axum::extract::{Query, State};
+use axum::response::Response;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -186,77 +185,52 @@ pub struct AudioQuery {
     context: bool,
 }
 
-fn read_failed(err: &rusqlite::Error) -> Response {
-    tracing::warn!("labels read failed: {err}");
-    (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
-}
-
-pub async fn speakers_route(
-    axum::extract::State(st): axum::extract::State<Arc<reads::State>>,
-) -> Response {
+pub async fn speakers_route(State(st): State<Arc<reads::State>>) -> Response {
     let root = st.root.clone();
-    match tokio::task::spawn_blocking(move || known_speaker_names(&reads::open(&root)?)).await {
-        Ok(Ok(names)) => Json(names).into_response(),
-        Ok(Err(e)) => read_failed(&e),
-        Err(e) => {
-            tracing::warn!("speakers task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
-        }
-    }
+    route::json("speakers", move || {
+        known_speaker_names(&reads::open(&root)?)
+    })
+    .await
 }
 
 pub async fn corrections_route(
-    axum::extract::State(st): axum::extract::State<Arc<reads::State>>,
+    State(st): State<Arc<reads::State>>,
     Query(q): Query<CorrectionsQuery>,
 ) -> Response {
     let root = st.root.clone();
     let limit = q.limit.clamp(0, 1000);
-    match tokio::task::spawn_blocking(move || {
+    route::json("corrections", move || {
         let conn = reads::open(&root)?;
-        Ok::<_, rusqlite::Error>(CorrectionsOut {
+        Ok(CorrectionsOut {
             items: list_corrections(&conn, q.speaker.as_deref(), limit)?,
             by_speaker: corrections_by_speaker(&conn)?,
         })
     })
     .await
-    {
-        Ok(Ok(out)) => Json(out).into_response(),
-        Ok(Err(e)) => read_failed(&e),
-        Err(e) => {
-            tracing::warn!("corrections task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
-        }
-    }
 }
 
 pub async fn correction_audio_route(
-    axum::extract::State(st): axum::extract::State<Arc<reads::State>>,
+    State(st): State<Arc<reads::State>>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     Query(q): Query<AudioQuery>,
 ) -> Response {
     let root = st.root.clone();
-    match tokio::task::spawn_blocking(move || {
-        let conn = reads::open(&root)?;
-        let Some((path, start_s, end_s)) = correction_placement(&conn, id)? else {
-            return Ok(None);
-        };
-        let (start, end) = correction_window(start_s, end_s, q.context);
-        Ok::<_, rusqlite::Error>(Some((path, start, end)))
-    })
-    .await
-    {
-        Ok(Ok(None)) => (StatusCode::NOT_FOUND, "no audio").into_response(),
-        Ok(Ok(Some((path, start, end)))) => match audio::render(&path, start, end) {
-            Ok(bytes) => ([(header::CONTENT_TYPE, "audio/wav")], bytes).into_response(),
-            Err(e) => {
-                tracing::warn!("correction clip failed: {e}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "clip failed").into_response()
-            }
-        },
-        Ok(Err(e)) => read_failed(&e),
-        Err(e) => {
-            tracing::warn!("correction audio task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "clip failed").into_response()
-        }
+    // ⚠ The render must happen INSIDE the blocking task, not after awaiting it:
+    // it shells out to ffmpeg, and on the runtime thread that stalls every other
+    // request for the length of the clip. Going through `render_blocking` also
+    // makes this behave exactly like the other two clip routes.
+    let rendered = tokio::task::spawn_blocking(move || {
+        audio::render_blocking(&root, |conn| {
+            Ok(
+                correction_placement(conn, id)?.map(|(path, start_s, end_s)| {
+                    let (start, end) = correction_window(start_s, end_s, q.context);
+                    (path, start, end)
+                }),
+            )
+        })
+    });
+    match rendered.await {
+        Ok(response) => response,
+        Err(err) => route::faulted("correction audio task", &err),
     }
 }

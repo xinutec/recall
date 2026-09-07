@@ -377,6 +377,7 @@ pub fn timeline(conn: &Connection, limit: i64, before: Option<&str>) -> rusqlite
 
 // --- the HTTP surface ----------------------------------------------------------
 
+use crate::route;
 use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -420,29 +421,15 @@ fn clamp(limit: i64) -> i64 {
     limit.clamp(0, 1000)
 }
 
-fn failed(err: &rusqlite::Error) -> Response {
-    tracing::warn!("read query failed: {err}");
-    (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
-}
-
 pub async fn timeline_route(
     axum::extract::State(st): axum::extract::State<Arc<State>>,
     Query(q): Query<TimelineQuery>,
 ) -> Response {
     let root = st.root.clone();
-    let page = tokio::task::spawn_blocking(move || {
-        let conn = open(&root)?;
-        timeline(&conn, clamp(q.limit), q.before.as_deref())
+    route::json("timeline", move || {
+        timeline(&open(&root)?, clamp(q.limit), q.before.as_deref())
     })
-    .await;
-    match page {
-        Ok(Ok(p)) => axum::Json(p).into_response(),
-        Ok(Err(e)) => failed(&e),
-        Err(e) => {
-            tracing::warn!("read task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
-        }
-    }
+    .await
 }
 
 #[derive(Deserialize)]
@@ -478,14 +465,7 @@ pub async fn transcripts_route(
         }
     }
     let root = st.root.clone();
-    match tokio::task::spawn_blocking(move || transcripts(&open(&root)?, &ids)).await {
-        Ok(Ok(items)) => axum::Json(items).into_response(),
-        Ok(Err(e)) => failed(&e),
-        Err(e) => {
-            tracing::warn!("transcripts task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
-        }
-    }
+    route::json("transcripts", move || transcripts(&open(&root)?, &ids)).await
 }
 
 pub async fn review_route(
@@ -494,16 +474,10 @@ pub async fn review_route(
 ) -> Response {
     let root = st.root.clone();
     let limit = clamp(q.limit);
-    match tokio::task::spawn_blocking(move || review(&open(&root)?, REVIEW_MAX_CONFIDENCE, limit))
-        .await
-    {
-        Ok(Ok(items)) => axum::Json(items).into_response(),
-        Ok(Err(e)) => failed(&e),
-        Err(e) => {
-            tracing::warn!("review task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
-        }
-    }
+    route::json("review", move || {
+        review(&open(&root)?, REVIEW_MAX_CONFIDENCE, limit)
+    })
+    .await
 }
 
 pub async fn search_route(
@@ -511,17 +485,8 @@ pub async fn search_route(
     Query(q): Query<SearchQuery>,
 ) -> Response {
     let root = st.root.clone();
-    let hits = tokio::task::spawn_blocking(move || {
-        let conn = open(&root)?;
-        search(&conn, &q.q, clamp(q.limit))
+    route::json("search", move || {
+        search(&open(&root)?, &q.q, clamp(q.limit))
     })
-    .await;
-    match hits {
-        Ok(Ok(h)) => axum::Json(h).into_response(),
-        Ok(Err(e)) => failed(&e),
-        Err(e) => {
-            tracing::warn!("read task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
-        }
-    }
+    .await
 }

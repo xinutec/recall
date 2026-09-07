@@ -71,9 +71,30 @@ fn a_blank_term_is_refused_rather_than_stored() {
     // fragment and could never be found again to delete.
     let conn = db();
 
-    assert_eq!(work::add_term(&conn, "   ", NOW), Err(TermError::Blank));
-    assert_eq!(work::add_term(&conn, "", NOW), Err(TermError::Blank));
+    assert!(matches!(
+        work::add_term(&conn, "   ", NOW),
+        Err(TermError::Blank)
+    ));
+    assert!(matches!(
+        work::add_term(&conn, "", NOW),
+        Err(TermError::Blank)
+    ));
     assert!(work::vocabulary(&conn).expect("list").items.is_empty());
+}
+
+#[test]
+fn a_database_failure_is_not_reported_as_a_blank_term() {
+    // ⚠ These two used to be the SAME value, and the route turned that value
+    // into a 400 saying the term was blank. A user shown that message retypes a
+    // term that was never the problem, while an unwritable `recall.sqlite` goes
+    // uninvestigated because nobody investigates a 400. The distinction has to
+    // survive in the type, not in a log line.
+    let conn = Connection::open_in_memory().expect("open");
+    // No schema: every write fails at the table that is not there.
+
+    let err = work::add_term(&conn, "vorasidenib", NOW).expect_err("no vocabulary table");
+
+    assert!(matches!(err, TermError::Db(_)), "got {err:?}");
 }
 
 #[test]

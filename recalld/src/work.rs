@@ -22,8 +22,9 @@
 //! and runs no ML inline; the idle-gated daemon executes it so the heavy pass
 //! stays off live capture.
 
-use crate::reads;
+use crate::{reads, route};
 use axum::Json;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use rusqlite::Connection;
@@ -70,10 +71,25 @@ pub fn vocabulary(conn: &Connection) -> rusqlite::Result<VocabularyOut> {
     })
 }
 
-/// Why a term was refused.
-#[derive(Debug, PartialEq, Eq)]
+/// Why a term was not added.
+///
+/// ⚠ **A blank term and a broken database are not the same answer.** Collapsing
+/// them — which this did — told the user "vocabulary term must not be blank",
+/// with a 400, when the truth was a locked or unwritable `recall.sqlite`. The
+/// caller then retypes a term that was never the problem, and the real fault is
+/// invisible because a 400 is not a fault anyone investigates.
+#[derive(Debug)]
 pub enum TermError {
+    /// Nothing but whitespace was sent.
     Blank,
+    /// The database refused the write.
+    Db(rusqlite::Error),
+}
+
+impl From<rusqlite::Error> for TermError {
+    fn from(err: rusqlite::Error) -> Self {
+        Self::Db(err)
+    }
 }
 
 /// Add a term, returning the id — the existing one if it is already there.
@@ -91,14 +107,12 @@ pub fn add_term(conn: &Connection, term: &str, now: &str) -> Result<i64, TermErr
     conn.execute(
         "INSERT INTO vocabulary (term, created_utc) VALUES (?1, ?2) ON CONFLICT(term) DO NOTHING",
         (cleaned, now),
-    )
-    .map_err(|_| TermError::Blank)?;
-    conn.query_row(
+    )?;
+    Ok(conn.query_row(
         "SELECT id FROM vocabulary WHERE term = ?1",
         [cleaned],
         |r| r.get(0),
-    )
-    .map_err(|_| TermError::Blank)
+    )?)
 }
 
 pub fn delete_term(conn: &Connection, id: i64) -> rusqlite::Result<()> {
@@ -142,20 +156,6 @@ struct NewId {
     new_id: i64,
 }
 
-#[derive(Serialize)]
-struct Ok_ {
-    ok: bool,
-}
-
-fn ok() -> Response {
-    Json(Ok_ { ok: true }).into_response()
-}
-
-fn oops(context: &str, err: &rusqlite::Error) -> Response {
-    tracing::warn!("{context} failed: {err}");
-    (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
-}
-
 /// An ISO-8601 instant, or a 400. Never a substituted "now".
 ///
 /// ⚠ Manufacturing a time for a malformed one would queue a refine over the wrong
@@ -166,69 +166,47 @@ fn instant(value: &str) -> Option<String> {
         .map(|t| t.with_timezone(&chrono::Utc).to_rfc3339())
 }
 
-pub async fn vocabulary_route(
-    axum::extract::State(st): axum::extract::State<Arc<reads::State>>,
-) -> Response {
+pub async fn vocabulary_route(State(st): State<Arc<reads::State>>) -> Response {
     let root = st.root.clone();
-    match tokio::task::spawn_blocking(move || vocabulary(&reads::open(&root)?)).await {
-        Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(e)) => oops("vocabulary read", &e),
-        Err(e) => {
-            tracing::warn!("vocabulary task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
-        }
-    }
+    route::json("vocabulary", move || vocabulary(&reads::open(&root)?)).await
 }
 
 pub async fn vocabulary_add_route(
-    axum::extract::State(st): axum::extract::State<Arc<reads::State>>,
+    State(st): State<Arc<reads::State>>,
     Json(body): Json<TermIn>,
 ) -> Response {
     let root = st.root.clone();
     let now = chrono::Utc::now().to_rfc3339();
-    match tokio::task::spawn_blocking(move || {
-        let conn = open_write(&root).map_err(|e| format!("open: {e}"))?;
-        add_term(&conn, &body.term, &now).map_err(|_| "blank".to_string())
-    })
-    .await
-    {
+    let added =
+        tokio::task::spawn_blocking(move || add_term(&open_write(&root)?, &body.term, &now));
+    match added.await {
         Ok(Ok(id)) => Json(NewId { new_id: id }).into_response(),
-        Ok(Err(why)) if why == "blank" => {
+        // The only answer the caller can act on: they sent whitespace.
+        Ok(Err(TermError::Blank)) => {
             (StatusCode::BAD_REQUEST, "vocabulary term must not be blank").into_response()
         }
-        Ok(Err(why)) => {
-            tracing::warn!("vocabulary add failed: {why}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
-        }
-        Err(e) => {
-            tracing::warn!("vocabulary add task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
-        }
+        Ok(Err(TermError::Db(err))) => route::faulted("vocabulary add", &err),
+        Err(err) => route::faulted("vocabulary add task", &err),
     }
 }
 
 pub async fn vocabulary_delete_route(
-    axum::extract::State(st): axum::extract::State<Arc<reads::State>>,
+    State(st): State<Arc<reads::State>>,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Response {
     let root = st.root.clone();
-    match tokio::task::spawn_blocking(move || {
-        let conn = open_write(&root)?;
-        delete_term(&conn, id)
+    match route::blocking("vocabulary delete", move || {
+        delete_term(&open_write(&root)?, id)
     })
     .await
     {
-        Ok(Ok(())) => ok(),
-        Ok(Err(e)) => oops("vocabulary delete", &e),
-        Err(e) => {
-            tracing::warn!("vocabulary delete task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
-        }
+        Ok(()) => route::ack(),
+        Err(response) => response,
     }
 }
 
 pub async fn refine_route(
-    axum::extract::State(st): axum::extract::State<Arc<reads::State>>,
+    State(st): State<Arc<reads::State>>,
     Json(body): Json<RefineIn>,
 ) -> Response {
     let (Some(start), Some(end)) = (instant(&body.start), instant(&body.end)) else {
@@ -236,17 +214,12 @@ pub async fn refine_route(
     };
     let root = st.root.clone();
     let now = chrono::Utc::now().to_rfc3339();
-    match tokio::task::spawn_blocking(move || {
-        let conn = open_write(&root)?;
-        add_refine_request(&conn, &body.source, &start, &end, &now)
+    match route::blocking("refine enqueue", move || {
+        add_refine_request(&open_write(&root)?, &body.source, &start, &end, &now)
     })
     .await
     {
-        Ok(Ok(_)) => ok(),
-        Ok(Err(e)) => oops("refine enqueue", &e),
-        Err(e) => {
-            tracing::warn!("refine task failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
-        }
+        Ok(_) => route::ack(),
+        Err(response) => response,
     }
 }
