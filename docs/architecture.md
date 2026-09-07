@@ -961,9 +961,41 @@ B3 lands.*
   ⚠ **The config change and the image are COUPLED, so they ship together.**
   `--upstream`, `--frontend` and the repeated `--bind` exist only in a freshly
   built binary; landing the kubes change first would leave a deploy that starts a
-  recalld which rejects its own arguments. The kubes edit is therefore NOT made
-  ahead of time — it is made at cutover, against an image that already carries
-  these flags.
+  recalld which rejects its own arguments.
+
+  **CUT OVER 2026-09-07, and it is live.** recalld serves the app, its own 15
+  ported routes and the recorders' ingest; the Python api answers the rest behind
+  it on pod-internal 8002. Nothing external moved.
+
+  Three things that only running it revealed:
+
+  - ⚠ **The first deploy reached NONE of the Rust.** recalld mounts its browsing
+    plane only when webauth is configured, and the sidecar had only its ingest
+    tokens — so `webauth = None`, which means ABSENT rather than open, and every
+    ported route fell through to the proxy. The app worked perfectly and not one
+    line of the port was exercised. Found by asking WHICH CONTAINER logged the
+    request, not by trusting a 200. The keys now come from the same
+    `recall-secret` the api reads, which makes the session secret identical by
+    construction rather than by remembering.
+  - ⚠ **It broke the fleet for about an hour.** The fallback sent `/api/*` to the
+    proxy and everything else to the app shell — but Python owns `/sync/*` too,
+    so the Mac's sync and jobs agents got `index.html` with a 200 and died on
+    `JSONDecodeError`. No archive push, no session pulls, every status green.
+    Mitigated by dropping `--frontend` (config only, no image), fixed in
+    `proxy::UPSTREAM_PREFIXES`, restored. The regression test only reproduces
+    WITH a frontend configured — every prior proxy test ran without one, which is
+    exactly why it escaped.
+  - Three proxy 502s in the 286 ms before the api finished booting. recalld binds
+    and serves before its upstream is ready; expected, and worth knowing so a
+    handful of failures right after a deploy is not mistaken for a fault.
+
+  ⚠ **NOTHING PYTHON IS DELETED YET, on purpose.** `design.md §9` says a path dies
+  only after its Rust replacement has survived REAL DAYS, and the hour above is
+  the argument for that rule rather than against it. Ready when the soak is:
+  `api_client_reports.py` (115) and `api_work.py` (88) are fully superseded and
+  unreachable; `api_audio.py` (130) needs `clip_window` rehomed first, since
+  `api_labels` still imports it for a correction-audio handler that is itself
+  already ported.
 
   **Where the port stands, 2026-09-07 — 15 of 34 routes.** Counted from the
   Python's own `app.<verb>("/api/...")` registrations, not from memory; re-derive
