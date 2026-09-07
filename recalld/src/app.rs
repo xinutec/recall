@@ -100,6 +100,7 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
         // half of a path safe.
         // The labelling WRITES. These reach the corrections corpus, the one
         // thing here that is not re-derivable from audio.
+        .route("/api/correct", post(labels_write::correct_route))
         .route(
             "/api/turn/{id}/speaker",
             post(labels_write::turn_speaker_route),
