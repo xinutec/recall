@@ -965,9 +965,22 @@ B3 lands.*
   ahead of time — it is made at cutover, against an image that already carries
   these flags.
 
-  ⚠ **STILL TO DO:** the remaining route groups (labels, capture, devices,
-  sessions), then shadow days, then the Python goes. Sessions goes LAST while
-  meeting uploads are live.
+  **Where the port stands, 2026-09-07 — 15 of 34 routes.** Counted from the
+  Python's own `app.<verb>("/api/...")` registrations, not from memory; re-derive
+  it that way rather than trusting this number.
+
+  | group | state |
+  |---|---|
+  | reads | timeline, search, transcripts, review — DONE. `conversations` remains, and it is the big one: moment folding across microphones (`conversations`/`moments`/`attribution`, ~880 lines of pure logic). #1388's room stream makes each moment single-source, so consider whether it wants porting or re-deriving. |
+  | audio | DONE. `/api/clip` deleted rather than ported — no caller. |
+  | work | DONE (vocabulary, refine) — recalld's first writes. |
+  | client reports | DONE. |
+  | labels | READ half done (speakers, corrections, correction audio). The WRITES are held: they supersede turns in the corrections table, which is not re-derivable. `/api/suggest` + `/voices` held pending the product question on voiceprint suggestions. |
+  | capture | NOT STARTED, and deliberately: the settled/transitioning state machine, the `stateToken` long-poll and the pause-origin audit. The pause is the one thing that must always work (C1), so this one is not a solo port. |
+  | devices | NOT STARTED. `/api/sources` carries a two-mode liveness model (Mac-local vs fleet). Only the FLEET branch matters in recalld — the local branch exists for `recall api` run by hand on the Mac, which no agent does. |
+  | sessions | LAST, on purpose, while meeting uploads are live. |
+
+  ⚠ **STILL TO DO after those:** shadow days, then the Python goes.
 
   *Checked against the running pod, so the next session does not have to guess:*
   `NC_INTERNAL_URL` is `http://nextcloud-server.nextcloud.svc.cluster.local` —
