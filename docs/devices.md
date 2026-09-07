@@ -11,8 +11,8 @@ Every networked recorder connects to **one** TCP port, served by a single host a
 
 ```
 audiod --root <archive>       # the recall-ingest agent: one server on DEFAULT_INGEST_PORT (9999)
-recall record --id usb        # the USB mic: sox -d, local, no port, no handshake
-python -m recall.mic --id geb # a Linux host's own mic: same handshake as the phones
+audiod capture --id usb       # the USB mic: sox -d, local, no port, no handshake
+audiod capture + upload       # a Linux host's own mic (geb): store-and-forward, not streaming
 ```
 
 A phone runs the recall-mic app and opens a plain TCP connection to the host's ingest
@@ -41,7 +41,7 @@ added freely.
 
 | | how the audio reaches the segmenter |
 |---|---|
-| **USB mic** (`recall record`) | local, on the recorder host itself: sox → ffmpeg, no socket and no handshake. Our code is never in this path — a real-time device has no buffer to absorb a stall |
+| **USB mic** (`audiod capture`, since 2026-09-05) | local, on the recorder host itself: sox → ffmpeg, no socket and no handshake. Our code is never in this path — a real-time device has no buffer to absorb a stall. It ported `recall record`, which is deleted |
 | **Phones** (the mic apps) | TCP to the ingest port, handshake, raw PCM. They roam, sleep, and need a person to restart them, which is what the apps' bulk is for |
 | **Linux hosts** (geb: `audiod capture` + `audiod upload`, since 2026-09-05) | store-and-forward, not streaming ([architecture.md](architecture.md) stage C3): ffmpeg opens ALSA into audiod's segmenter, closed capture-stamped segments deliver to recalld with verified receipts, `audiod pause-mirror` keeps the household pause honoured. The `recall.mic` streaming client this row used to describe is retired |
 

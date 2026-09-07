@@ -149,8 +149,7 @@ old turn, nothing is deleted) and a re-derivation pass never overwrites it.
   action that queues an on-demand diarize-refine of that stretch. It's processed by the
   idle-gated refine daemon (so the heavy pass stays off live capture), which re-derives
   those segments — better transcription + re-split speakers — superseding the machine
-  turns; your corrections are untouched. To re-derive with a fine-tuned adapter, the
-  refine daemon must be pointed at it (`--model <adapter> --base-model …`).
+  turns; your corrections are untouched.
 
 ## What to trust (and what not to)
 

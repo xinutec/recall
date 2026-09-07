@@ -363,7 +363,7 @@ regenerable. Never commit: each output stores its model + confidence and is
 everywhere — low-confidence is surfaced for review and **weighted, never
 dropped.**
 
-### The implemented loop
+### The loop as it was, when it ran
 
 1. **Collect** — the review UI surfaces the lowest-confidence transcripts; each
    fix supersedes the turn and records a labelled pair in `corrections`.
