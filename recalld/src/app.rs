@@ -7,7 +7,7 @@
 //! configured, so a dev or LAN-only recalld is unchanged.
 
 use crate::tokens::Tokens;
-use crate::{audio, ingest, proxy, reads, spa, webauth, work};
+use crate::{audio, ingest, proxy, reads, reports, spa, webauth, work};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post, put};
@@ -53,7 +53,7 @@ pub struct Config {
 /// `recall_session` cookie to both. With the token format kept identical, a
 /// person who signed in through the Python is already signed in here, so a route
 /// group can move between the two without anyone signing in again.
-fn browsing(st: webauth::GateState, root: PathBuf) -> Router {
+fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router {
     let read = Arc::new(reads::State { root });
     Router::new()
         .route("/api/timeline", get(reads::timeline_route))
@@ -74,6 +74,13 @@ fn browsing(st: webauth::GateState, root: PathBuf) -> Router {
         )
         .route("/api/refine", post(work::refine_route))
         .with_state(read)
+        // Client reports carry their own state (a log path), not the database's.
+        .merge(
+            Router::new()
+                .route("/api/log", post(reports::log_route))
+                .with_state(Arc::new(reports::Reports { log_path })),
+        )
+        .route("/api/telemetry", post(reports::telemetry_route))
         .merge(webauth::routes(st.clone()))
         .layer(axum::middleware::from_fn_with_state(st, webauth::gate))
 }
@@ -85,7 +92,7 @@ pub fn router(config: Arc<Config>) -> Router {
     let browsing_plane = config
         .webauth
         .clone()
-        .map(|st| browsing(st, config.root.clone()));
+        .map(|st| browsing(st, config.root.clone(), config.root.join("logs/client.log")));
     let base = Router::new()
         .route("/ingest/v1/health", get(ingest::health))
         .route("/ingest/v1/segments", get(ingest::list_segments))

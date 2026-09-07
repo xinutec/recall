@@ -25,10 +25,15 @@ class TelemetryEvent(BaseModel):
     server's receive time cannot order the events inside it and the client's can.
     """
 
+    # ⚠ No defaults: `Telemetry.enqueue` sends all four fields on every event
+    # (`{kind, path, label, at: Date.now()}`), with `label` null for a nav rather
+    # than absent. Defaults here described a client that does not exist, and the
+    # generated TypeScript inherited that fiction — dev-lint's mirror check
+    # caught the drift against the Rust port on 2026-09-07.
     kind: str
     path: str
-    label: str | None = None
-    at: int = 0
+    label: str | None
+    at: int
 
 
 class OutboxIn(BaseModel):

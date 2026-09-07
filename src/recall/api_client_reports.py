@@ -46,6 +46,34 @@ def _one_line(label: str, max_len: int) -> str:
     return " ".join(unbroken.split())[:max_len]
 
 
+def log_line(stamp: str, body: ClientLog) -> str:
+    """One flattened log line for a browser-side report.
+
+    ⚠ EVERY client-supplied field goes through `_one_line`, not just the label.
+    This route is LOGIN-FREE by design (webauth's exempt set: "usable from the
+    sign-in wall"), so anyone already on the tunnel can post to it — and until
+    2026-09-07 `level`, `url` and `message` were written STRAIGHT into the line
+    while the guard written for exactly this was applied only to telemetry. A
+    newline in any of them forged whole log lines, including further
+    `client-event` lines attributed to someone else. Found while porting this
+    module to Rust.
+
+    Only the first line of a stack is kept, so one browser error cannot become a
+    hundred log lines.
+    """
+    parts = [
+        stamp,
+        f"[{_one_line(body.level, _MAX_LABEL)}]",
+        _one_line(body.url or "-", _MAX_LABEL),
+        _one_line(body.message, _MAX_LABEL * 4),
+    ]
+    line = " ".join(parts)
+    if body.stack:
+        first = body.stack.splitlines()[0] if body.stack.splitlines() else ""
+        line += f"\n    {_one_line(first, _MAX_LABEL * 4)}"
+    return line
+
+
 def register_client_report_routes(app: FastAPI, *, client_log_path: Path) -> None:
     """Mount /api/log + /api/telemetry."""
 
@@ -53,13 +81,10 @@ def register_client_report_routes(app: FastAPI, *, client_log_path: Path) -> Non
     def client_log(body: ClientLog) -> OkOut:
         """Record a browser-side error/event to logs/client.log (the phone has
         no console you can read)."""
-        stamp = datetime.now(UTC).isoformat(timespec="seconds")
-        parts = [stamp, f"[{body.level}]", body.url or "-", body.message]
-        if body.stack:
-            parts.append(f"\n    {body.stack.splitlines()[0]}")
+        line = log_line(datetime.now(UTC).isoformat(timespec="seconds"), body)
         client_log_path.parent.mkdir(parents=True, exist_ok=True)
         with client_log_path.open("a") as fh:
-            fh.write(" ".join(parts) + "\n")
+            fh.write(line + "\n")
         return {"ok": True}
 
     @app.post("/api/telemetry")

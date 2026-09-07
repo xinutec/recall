@@ -12,6 +12,7 @@ pub mod levels;
 pub mod proxy;
 pub mod queue;
 pub mod reads;
+pub mod reports;
 pub mod room;
 pub mod spa;
 pub mod speech;

@@ -190,8 +190,8 @@ export interface ClientLogRequest {
 export interface TelemetryEvent {
   readonly kind: string;
   readonly path: string;
-  readonly label?: string | null;
-  readonly at?: number;
+  readonly label: string | null;
+  readonly at: number;
 }
 
 export interface DeviceOutboxRequest {

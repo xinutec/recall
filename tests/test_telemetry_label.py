@@ -8,7 +8,8 @@ be.
 
 from __future__ import annotations
 
-from recall.api_client_reports import _one_line
+from recall.api_client_reports import _one_line, log_line
+from recall.api_models import ClientLog
 
 
 def test_a_label_cannot_forge_a_log_line() -> None:
@@ -47,3 +48,42 @@ def test_a_bidi_override_cannot_disguise_what_the_line_says() -> None:
     flat = _one_line("Save\u202e\u202dDelete", 160)
     assert "\u202e" not in flat
     assert flat == "Save Delete"
+
+
+def test_client_log_fields_cannot_forge_a_line() -> None:
+    """⚠ `/api/log` is LOGIN-FREE by design (webauth's exempt set: "usable from the
+    sign-in wall"), so anyone already on the tunnel can post to it. It wrote
+    `level`, `url` and `message` STRAIGHT into the line while `_one_line` — the
+    guard written for exactly this — was applied only to telemetry's label.
+
+    A newline in any of those forges whole log lines, including further
+    `client-event` lines attributed to someone else, and the log stops being
+    evidence. Found while porting this module to Rust (2026-09-07).
+    """
+    hostile = ClientLog(
+        level="error\nforged",
+        url="/x\nclient-event kind=forged",
+        message="boom\nclient-event kind=alsoforged",
+    )
+
+    line = log_line("2026-09-07T09:00:00+00:00", hostile)
+
+    assert "\n" not in line, f"forged extra lines: {line!r}"
+    assert "forged" in line  # the text survives, flattened
+
+
+def test_only_the_first_stack_line_is_kept() -> None:
+    # A browser stack is dozens of frames; writing all of them turns one error
+    # into a hundred log lines.
+    entry = ClientLog(
+        level="error",
+        url="/x",
+        message="boom",
+        stack="at foo (main.js:1)\nat bar (main.js:2)\nat baz (main.js:3)",
+    )
+
+    line = log_line("2026-09-07T09:00:00+00:00", entry)
+
+    assert line.count("\n") == 1
+    assert "at foo (main.js:1)" in line
+    assert "at bar" not in line
