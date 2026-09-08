@@ -171,6 +171,30 @@ let
       '';
     };
 
+  # The speech scanner (audiod speech). Needs TWO things on top of the plain
+  # audiod wrapper, and both were learnt by the scanner failing without them:
+  #
+  #   ffmpeg  — audiocore's decode shells out to it, so without it EVERY segment
+  #             "fails to decode". agent-tools carries it.
+  #   ORT_DYLIB_PATH — ort dlopens the ONNX runtime by name, and macOS has no
+  #             system libonnxruntime at all. Taken from RECALL's nixpkgs, which
+  #             is the one the test suite runs silero through; naming the
+  #             host's would hand the agent a runtime nothing here has tested.
+  speechWrapper = { name, args }:
+    pkgs.writeShellApplication {
+      name = "recall-${name}";
+      runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
+      text = ''
+        exec env RUST_LOG=info \
+          ORT_DYLIB_PATH=${
+            recall.packages.${pkgs.stdenv.hostPlatform.system}.onnxruntime
+          }/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary} \
+          ${
+            recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
+          }/bin/audiod ${lib.escapeShellArgs args}
+      '';
+    };
+
   # A KeepAlive recall daemon at background priority. `extra` adds per-agent keys.
   # `program` overrides the python wrapper for agents that are not `recall <args>`.
   daemon = { label, name, python ? devPython, args, extra ? { }, program ? null }:
@@ -361,6 +385,36 @@ in
       RunAtLoad = true;
       StartInterval = 300;
       LowPriorityIO = true;
+    };
+  };
+
+  # How much of each archived segment is SPEECH — the evidence the quiet review
+  # needs before it may propose deleting anything, and the thing that tells a
+  # broken microphone from a quiet room (#1485 was found by its first pass).
+  #
+  # ⚠ It runs on the MAC, not against Isis, because deletion authority is
+  # Mac-local (docs/architecture.md, "Deletion authority") and because the fleet
+  # cannot answer for everything: 730 of 14,777 segments have never been
+  # delivered, and those are the least replicated audio in the house.
+  #
+  # Bounded and low priority: this decodes audio on the machine that is also
+  # recording, and delivery must never compete with the recorder (design.md §7).
+  # ~0.5 s per segment measured, so 120 a pass is about a minute of CPU every
+  # five — a 13k backlog drains over a day or so, behind live capture.
+  launchd.agents."org.xinutec.recall-speech" = daemon {
+    label = "org.xinutec.recall-speech";
+    name = "speech";
+    args = [ ];
+    program = speechWrapper {
+      name = "speech";
+      args = [ "speech" "--root" out "--max" "120" ];
+    };
+    extra = {
+      KeepAlive = false;
+      RunAtLoad = true;
+      StartInterval = 300;
+      LowPriorityIO = true;
+      Nice = 10;
     };
   };
 

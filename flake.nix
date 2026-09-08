@@ -233,6 +233,7 @@
                 dev-python = devPython;
                 agent-tools = agentTools;
                 audiod = audiodPkg;
+                onnxruntime = pkgs.onnxruntime;
               };
             };
           in
