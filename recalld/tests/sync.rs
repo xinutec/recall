@@ -447,3 +447,54 @@ async fn a_long_poll_hangs_while_the_intent_is_unchanged_and_wakes_on_a_pause() 
         started.elapsed()
     );
 }
+
+// --- lock contention ---------------------------------------------------------
+
+/// ⚠ Written from a production failure. Within ten minutes of `/sync/capture`
+/// cutting over on 2026-09-08, one mirror handshake in 116 answered 500 with
+/// `database is locked` — where the Python it replaced had served 104,482 of
+/// them without one. The cause was not the route: `work::open_write` gave up
+/// after 5 s where the Python's `Store` waits 30, and the shorter side decides.
+///
+/// This asserts the WAIT, not the number, by holding the write lock for longer
+/// than the old timeout and requiring the handshake to succeed anyway.
+#[tokio::test]
+async fn a_writer_holding_the_lock_delays_the_handshake_rather_than_failing_it() {
+    let (dir, addr) = serve(Some("sekrit")).await;
+    let root = dir.path().to_path_buf();
+
+    // A second writer takes the lock and keeps it past the old 5 s timeout.
+    let held = std::time::Duration::from_secs(7);
+    let holder = tokio::task::spawn_blocking({
+        let root = root.clone();
+        move || {
+            let conn = recalld::work::open_write(&root).expect("db");
+            conn.execute_batch("BEGIN IMMEDIATE; INSERT INTO settings VALUES ('held','1')")
+                .expect("take the lock");
+            std::thread::sleep(held);
+            conn.execute_batch("COMMIT").expect("release");
+        }
+    });
+    // Let the holder actually acquire it before the handshake starts.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let started = std::time::Instant::now();
+    let (status, _) = post(
+        &addr,
+        Some("sekrit"),
+        serde_json::json!({"running": true, "pausedUntil": null}),
+    )
+    .await;
+    let waited = started.elapsed();
+    holder.await.expect("holder finished");
+
+    assert_eq!(
+        status, 200,
+        "contention must delay the report, never drop it"
+    );
+    assert!(
+        waited > std::time::Duration::from_secs(5),
+        "it answered in {waited:?} — it cannot have waited out a lock held for {held:?}, \
+         so this test is no longer exercising contention"
+    );
+}

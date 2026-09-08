@@ -1132,6 +1132,21 @@ B3 lands.*
     roll-forward rolls to. Here the rollback IS removing the env var, which
     unmounts the Rust and sends `/sync/capture` back through the proxy — so
     deleting the Python would delete the rollback itself.
+  - ⚠ **The port inherited the route and not the TIMEOUT, and that showed within
+    ten minutes.** One handshake in 116 came back 500 — `database is locked` —
+    where the Python had served 104,482 of them without a single one.
+    `work::open_write` waited 5 s; the Python's `Store` sets `PRAGMA busy_timeout
+    = 30000`, and against a contended file the shorter side decides. The doc
+    comment on `open_write` had already described this exact failure ("a writer
+    that failed instead of waiting would turn ordinary contention into a 500") —
+    the intent was ported and the number was not.
+
+    Two general things worth carrying. **A shared database makes the other
+    implementation's PRAGMAs part of the contract**, as much as its JSON
+    separators are; a port that matches the bytes and not the waits is not
+    finished. And **one failure in 116 is only visible against a baseline** —
+    what made it a bug rather than noise was the 104,482 clean requests before
+    it, so the count came from the log, not from an impression.
 
   ⚠ **A partially ported PATH needs `method_not_allowed_fallback`.** axum matches
   the path and THEN the method, so with `GET /api/sessions` mounted and no POST,
