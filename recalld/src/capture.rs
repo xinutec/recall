@@ -301,12 +301,23 @@ pub fn record_control_origin(
 
 // --- the HTTP surface -------------------------------------------------------
 
-use crate::reads::State as ReadState;
 use crate::route;
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use std::sync::Arc;
+
+/// What the capture ROUTES need — distinct from [`CaptureState`], which is what
+/// they SERVE.
+///
+/// Its own type rather than a wider [`crate::reads::State`]: the read routes
+/// must not be handed a gate config they have no business reading, and capture
+/// is the one family that needs it — to say WHO pressed the button, on a plane
+/// that deliberately does not require a login.
+pub struct Control {
+    pub root: std::path::PathBuf,
+    pub webauth: Option<Arc<crate::webauth::Config>>,
+}
 
 /// Never hold a request past this — proxies and thread pools need a horizon.
 const WAIT_CAP: std::time::Duration = std::time::Duration::from_secs(25);
@@ -336,7 +347,7 @@ pub struct StatusQuery {
 /// pacing. Answering immediately would not break correctness, it would turn
 /// every recorder in the house into a 5-second poller.
 pub async fn status_route(
-    State(st): State<Arc<ReadState>>,
+    State(st): State<Arc<Control>>,
     Query(q): Query<StatusQuery>,
 ) -> Response {
     let root = st.root.clone();
@@ -364,4 +375,129 @@ pub async fn status_route(
         // side.
         tokio::time::sleep(WAIT_SLICE.min(deadline - std::time::Instant::now())).await;
     }
+}
+
+/// How long a pause lasts when the caller does not say. The UI always sends a
+/// number; this is the bound for anything that does not.
+#[derive(Deserialize)]
+pub struct PauseQuery {
+    pub minutes: Option<i64>,
+}
+
+/// The request fields the audit needs, lifted out of the extractors so the
+/// handlers stay readable and the descriptor stays testable.
+struct Asker {
+    method: String,
+    path: String,
+    cookie: Option<String>,
+    authorization: Option<String>,
+    host: Option<String>,
+}
+
+impl Asker {
+    fn from(parts: &axum::http::request::Parts, host: Option<String>) -> Self {
+        let header = |name: &str| {
+            parts
+                .headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(ToOwned::to_owned)
+        };
+        Self {
+            method: parts.method.as_str().to_owned(),
+            path: parts.uri.path().to_owned(),
+            cookie: header("cookie"),
+            authorization: header("authorization"),
+            host,
+        }
+    }
+
+    fn describe(&self, cfg: Option<&crate::webauth::Config>, now: i64) -> String {
+        crate::webauth::request_origin(
+            cfg,
+            &self.method,
+            &self.path,
+            self.cookie.as_deref(),
+            self.authorization.as_deref(),
+            now,
+            self.host.as_deref(),
+        )
+    }
+}
+
+/// Record who asked, without ever being able to refuse the action.
+///
+/// ⚠ Best-effort BY CONTRACT. Silencing a household's microphone must not
+/// depend on a bookkeeping write succeeding, so a failure here is logged and
+/// swallowed — the control action has already happened.
+fn audit(conn: &Connection, verb: &str, origin: &str) {
+    if let Err(err) = record_control_origin(conn, chrono::Utc::now(), verb, origin) {
+        tracing::warn!("could not record capture-control origin ({verb}): {err}");
+    }
+}
+
+/// `POST /api/capture/pause` — stop capture so the room can be worked in.
+///
+/// ⚠ This records INTENT. Isis runs no capture agent, so the press does not
+/// silence anything by itself: the Mac's mirror polls the intent, applies it to
+/// the local pause file every recorder self-gates on, and reports back. The
+/// answer therefore comes back UNSETTLED, and that is the truth rather than a
+/// delay — a pause nobody has confirmed is not yet a pause.
+pub async fn pause_route(
+    State(st): State<Arc<Control>>,
+    Query(q): Query<PauseQuery>,
+    request: axum::extract::Request,
+) -> Response {
+    control(st, Intent::Pause { minutes: q.minutes }, request).await
+}
+
+/// `POST /api/capture/resume` — start capture again now.
+pub async fn resume_route(
+    State(st): State<Arc<Control>>,
+    request: axum::extract::Request,
+) -> Response {
+    control(st, Intent::Resume, request).await
+}
+
+/// What the caller asked for. An enum rather than nested options because the
+/// three cases read as three different things: resume, pause for the full
+/// bound, pause for a stated number of minutes.
+enum Intent {
+    Resume,
+    Pause { minutes: Option<i64> },
+}
+
+async fn control(st: Arc<Control>, intent: Intent, request: axum::extract::Request) -> Response {
+    let (parts, _) = request.into_parts();
+    let host = parts
+        .extensions
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0.ip().to_string());
+    let asker = Asker::from(&parts, host);
+    let cfg = st.webauth.clone();
+    let root = st.root.clone();
+
+    route::json("capture-control", move || {
+        let conn = crate::work::open_write(&root)?;
+        let now = chrono::Utc::now();
+        let verb = match intent {
+            Intent::Pause { minutes } => {
+                intent_pause(&conn, now, minutes)?;
+                "pause"
+            }
+            Intent::Resume => {
+                intent_resume(&conn)?;
+                "resume"
+            }
+        };
+        // AFTER the action, never before: the audit annotates a decision that
+        // has already been taken, and must not be able to prevent it.
+        audit(
+            &conn,
+            verb,
+            &asker.describe(cfg.as_deref(), now.timestamp()),
+        );
+        fleet_capture_state(&conn, now)
+    })
+    .await
 }

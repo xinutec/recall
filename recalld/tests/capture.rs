@@ -391,3 +391,52 @@ fn a_pause_elapsing_changes_the_fingerprint_with_nobody_pressing_anything() {
     assert_ne!(during.state_token, after.state_token);
     assert!(after.desired_running, "an elapsed pause reads as running");
 }
+
+// --- the audit descriptor ---------------------------------------------------
+
+use recalld::webauth::request_origin;
+
+#[test]
+fn with_no_gate_configured_only_the_peer_is_known() {
+    // The Mac, dev, a LAN-only deployment: there is no plane, so claiming one
+    // would be an invention. It still names the host, which is the whole
+    // answer to "was that pause mine?" on a single-household network.
+    assert_eq!(
+        request_origin(
+            None,
+            "POST",
+            "/api/capture/pause",
+            None,
+            None,
+            0,
+            Some("10.0.0.5")
+        ),
+        "no-auth 10.0.0.5"
+    );
+}
+
+#[test]
+fn an_unknown_peer_is_named_rather_than_left_blank() {
+    assert_eq!(
+        request_origin(None, "POST", "/api/capture/pause", None, None, 0, None),
+        "no-auth unknown-host"
+    );
+}
+
+#[test]
+fn the_audit_write_cannot_refuse_the_control_action() {
+    // ⚠ The property, not the mechanism: silencing a household's microphone must
+    // not depend on a bookkeeping write. Here the events table does not exist at
+    // all, which is the harshest version of a failing audit — and the intent is
+    // still recorded and readable afterwards.
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        .unwrap();
+    let iso = intent_pause(&conn, at(0), Some(30)).unwrap();
+    assert!(record_control_origin(&conn, at(0), "pause", "anon 10.0.0.5").is_err());
+    assert_eq!(
+        intent_until(&conn, at(0)).unwrap().as_deref(),
+        Some(iso.as_str()),
+        "the pause survived its own audit failing"
+    );
+}

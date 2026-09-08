@@ -134,6 +134,40 @@ pub fn accepts_device_token(method: &str, path: &str) -> bool {
 /// ⚠ Anything that could leave the origin (`//host`, a scheme) collapses to `/`,
 /// so a crafted `?return_to=` cannot turn signing in into an open redirect.
 #[must_use]
+/// A short, durable descriptor of WHO asked for a capture-control action — the
+/// answer to "was that pause mine?" (#1347).
+///
+/// Capture-control paths are login-free on the recording plane, so the request
+/// carries no identity the gate enforced. This reconstructs what the gate WOULD
+/// have found: the signed-in user if a valid cookie is present, else the
+/// device-token plane if a token was accepted on this route, else an anonymous
+/// peer. With auth off (Mac, dev, LAN-only) there is no plane at all, so only
+/// the peer address is known.
+///
+/// ⚠ Pure and TOTAL: it reads what the request already carried and cannot fail.
+/// Annotating a pause must never be able to break the pause.
+pub fn request_origin(
+    cfg: Option<&Config>,
+    method: &str,
+    path: &str,
+    cookie: Option<&str>,
+    authorization: Option<&str>,
+    now: i64,
+    client_host: Option<&str>,
+) -> String {
+    let host = client_host.unwrap_or("unknown-host");
+    let Some(cfg) = cfg else {
+        return format!("no-auth {host}");
+    };
+    if let Some(session) = read_session_cookie(&cfg.session_secret, cookie, now) {
+        return format!("user {} {host}", session.user_id);
+    }
+    if cfg.presents_device_token(method, path, authorization) {
+        return format!("device-token {host}");
+    }
+    format!("anon {host}")
+}
+
 pub fn validate_return_to(raw: Option<&str>) -> String {
     match raw {
         Some(r) if r.starts_with('/') && !r.starts_with("//") => r.to_owned(),
