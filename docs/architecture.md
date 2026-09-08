@@ -1014,7 +1014,36 @@ B3 lands.*
   | labels | DONE — correct, turn speaker, correction reassign/hide, span assign. `/api/suggest` and `/voices` were CUT, not ported: voiceprint name suggestions are gone by product decision. |
   | sessions | DONE, including the upload and the delete. ⚠ The delete is the one irreversible operation here and is guarded to UPLOAD sources: the household archive must never be reachable through a path meant for meetings. Every deleted segment is TOMBSTONED in the same transaction, or the Mac's next refine push resurrects the session. |
   | devices | heartbeats and outboxes are DONE. `/api/sources` is NOT: it reads the two-mode liveness model (Mac-local vs fleet) and takes `fleet_capture_state`, so it moves with the capture family or not at all. |
-  | capture | NOT STARTED, and deliberately: the settled/transitioning state machine, the `stateToken` long-poll and the pause-origin audit. The pause is the one thing that must always work (C1), so this one is not a solo port. |
+  | capture | DONE 2026-09-08 — status, pause, resume, mounted as ONE group. Splitting the household's control across two languages is the one place a strangler seam is not worth having. |
+
+  *The capture cutover, 2026-09-08, and what it cost to do safely:*
+
+  - ⚠ **The `stateToken` is a hash of the state's JSON**, so it needs Python's
+    separators, sorted keys and `null` — and getting it wrong does not fail, it
+    silently turns every client's long-poll into a busy poll. It was pinned
+    against PRODUCTION rather than against a reading of the code: two of the
+    three test vectors are tokens the live fleet served that day, one paused and
+    one running.
+  - ⚠ **The long-poll re-derives on a slice rather than parking on a notify**,
+    which is a deliberate divergence. A notify works in the Python because ONE
+    process serves every request; during a cutover the writer may be the other
+    tier, whose notify this process cannot receive. And a pause ELAPSING has no
+    writer at all, so nothing could ever notify it.
+  - ⚠ **The intent keeps its stored SPELLING.** `settled` compares it to the
+    Mac's echo by string equality, so re-deriving the timestamp — writing
+    `...22.000000+00:00` where Python writes `...22+00:00` — makes a correctly
+    applied pause read as transitioning for ever. Caught by a test, not by review.
+  - ⚠ **The routes are on the DEVICE-EXEMPT plane** (`webauth::DEVICE_EXEMPT`):
+    the mic apps poll `/api/capture` and press pause with no credential at all.
+    A gate that demanded a session here would stop every phone's pause button.
+  - **Verified by asking WHICH container answered**, with a still-proxied route
+    as the control — `server: uvicorn` present on `/sync/*`, absent on
+    `/api/capture` — and then by pressing pause and watching the file appear on
+    the Mac. A 200 proves nothing here: recalld records INTENT, and the Mac's
+    mirror is what actually silences the microphones.
+  - **`api_capture.py` was NOT deleted with it.** Fleet images are `:latest`
+    only, so a rollback IS a roll-forward; the old implementation is what a
+    roll-forward rolls to.
 
   ⚠ **A partially ported PATH needs `method_not_allowed_fallback`.** axum matches
   the path and THEN the method, so with `GET /api/sessions` mounted and no POST,
@@ -1145,6 +1174,16 @@ capture-mirror with E3–E4; store, webauth and schemas with the rest of F1. The
 authoritative list is `ls src/recall` against this ladder, not a table copied
 here; when a stage lands, its deletions land in the same change.
 
-The API modules are already off it — nine went on 2026-09-07 and what is left is
-`api.py` plus `api_capture`, `api_devices` and `api_models` — the capture family
-and the shared assembly.
+The API modules are already off it — nine went on 2026-09-07, and `health`,
+`fleetwatch`, `bounded` and `loss` followed on 2026-09-08 with the doctor (its
+own Rust crate, `doctor/`). What is left under `/api` is `api.py` plus
+`api_capture`, `api_devices` and `api_models`.
+
+⚠ **`api_capture` is now DEAD CODE that is deliberately still there.** recalld
+serves all three capture routes since 2026-09-08, so nothing reaches it — but
+fleet images are `:latest` only, which makes a rollback a roll-forward, and this
+is what a roll-forward would roll to. Delete it once the Rust path has survived
+real days, the same rule `recall-mic.nix` got on geb.
+
+`/api/sources` is the remaining live route of that family, and it is why
+`api_devices` cannot go yet.
