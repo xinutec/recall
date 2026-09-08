@@ -226,20 +226,34 @@ it. They say what the app was doing when the beats stopped. `micOk` **is** grade
 is a fault, not a mode: the app kept running but the audio engine would not open, which
 used to show up as silence and is now named (#887).
 
-**The three recorders answer `micOk` from three different questions**, and only the
-Android one is a continuous reading:
+**Only the phones beat at all, and only Android reads `micOk` continuously:**
 
 | Recorder | Where `micOk` comes from | What it can miss |
 | --- | --- | --- |
 | Android (`MicState.micOkAfter`) | every open attempt; a failure that never reached the microphone leaves it unchanged | — |
 | iOS (`RecallMicApp`) | the return of `client.start()`, once | a mic that dies after a good start still reads `true` |
-| geb (`mic.py`) | `not capture_ended` — the capture process's stdout ending | — |
+| audiod recorders (geb) | **nothing — audiod sends no heartbeat** | see below |
 
 The Android rule was wrong until 2026-09-07 and **lied for nine hours on 2026-09-06**:
 a failed attempt set it from `e !is MicUnavailableException`, so any NON-mic failure
 wrote `micOk=true`. The socket connects before the mic opens, so during a pause every
 attempt failed on the connect and kept clearing a genuine fault. The fix is installed —
 a phone carrying it reports `version=0.11` or later in its beat.
+
+⚠ **geb's heartbeat died at the stage-C3 cutover, and `geb alive` has been red
+ever since.** The streaming client beat hourly; `audiod` does not beat at all,
+so geb's last heartbeat is from 2026-09-05. `recall_mics.py` grades beat AGE, so
+it is correct that nothing is arriving and wrong about what that means: geb
+records perfectly and delivered right up to the pause on 2026-09-07, in step
+with every other source. It is a false alarm that cannot go green by itself —
+the "cry-wolf that gets a check muted" that collector's own comments warn about.
+
+The liveness that IS true already exists: recalld's `/ingest/v1/liveness` carries
+`delivered` and `speech` per source, and the sources panel takes EITHER proof for
+exactly this reason (#1428, "a store-and-forward recorder refreshes no marker"
+above). The heartbeat collector never got that fix, because when #1428 landed geb
+was the only recorder that had stopped streaming and it was thought of as a UI
+problem.
 
 ### The LAN fallback
 
