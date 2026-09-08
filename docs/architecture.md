@@ -999,16 +999,31 @@ B3 lands.*
   and it counts strings that are not routes at all, such as webauth's
   device-exempt entry for `/api/log`, whose route no longer exists.
 
-  That command answers for `/api/*` only. For the whole front door — both planes
-  at once, and from the OUTSIDE, which is the only view that knows what is
-  actually mounted rather than what is written — ask which tier answers:
+  That command answers for `/api/*` only. For the front door as a whole, ask from
+  the OUTSIDE which tier answered — `server: uvicorn` means Python did, through
+  the proxy; recalld sets no `server` header at all:
 
-      for p in /api/capture /api/sources /sync/capture /sync/segments; do
+      for p in /api/capture /api/sources; do
         curl -so /dev/null -D - "http://10.100.0.2:8000$p" \
           | grep -iE '^(HTTP|server:)' | tr -d '\r' | paste -sd' ' -
       done
 
-  `server: uvicorn` means Python answered through the proxy; recalld sets none.
+  ⚠ **That GET probe is USELESS on `/sync/*`, and reads as a confident wrong
+  answer.** Those routes are POST-only, so a GET never reaches one: it falls past
+  them to the api's SPA catch-all, which returns `index.html` with a 200 and
+  `server: uvicorn`. It says "Python answers" before a cutover and after it, for
+  the same reason both times, and the reason is not the one being asked about.
+
+  Probe that plane in its real request shape instead — a POST, with a
+  deliberately WRONG token. Both tiers reject it identically and BEFORE any
+  write, so this changes nothing and still names the answerer:
+
+      curl -si -X POST -H 'Authorization: Bearer not-the-token' \
+        -H 'Content-Type: application/json' -d '{"running":true,"pausedUntil":null}' \
+        http://10.100.0.2:8000/sync/capture | grep -iE '^(HTTP|server:)'
+
+  Python answers `401` with `server: uvicorn` and a `{"detail": ...}` body;
+  recalld answers `401` with no `server` header and a plain-text one.
 
   The api modules that served a ported group were DELETED with it, not left
   inert — that is the rule the strangler exists to make possible, and `ls
