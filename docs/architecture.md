@@ -1179,6 +1179,14 @@ The API modules are already off it — nine went on 2026-09-07, and `health`,
 own Rust crate, `doctor/`). What is left under `/api` is `api.py` plus
 `api_capture`, `api_devices` and `api_models`.
 
+⚠ **`recall.analyse` and `recall.spectrum` are unreachable as of 2026-09-08.**
+The speech detector moved to `audiod speech`, using `audiocore::vad` — the same
+silero recalld runs, so the Mac and the fleet cannot disagree about what counts
+as speech. It had been dead in practice since 2026-07-12: its only trigger was a
+cleanup-scan page, so it was on-demand code that stopped being demanded, and
+`scan_job.py` was deleted with the F1 session routes before anyone noticed the
+output still had readers. They come out once the Rust agent has run unattended.
+
 ⚠ **`api_capture` is now DEAD CODE that is deliberately still there.** recalld
 serves all three capture routes since 2026-09-08, so nothing reaches it — but
 fleet images are `:latest` only, which makes a rollback a roll-forward, and this

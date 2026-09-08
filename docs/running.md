@@ -39,7 +39,8 @@ want while developing.
 | `org.xinutec.recall-upload` | store-and-forward delivery: closed segments → recalld on Isis, sha-256 receipts re-hashed before anything counts as delivered ([architecture.md](architecture.md) stage B) | timer |
 | `org.xinutec.recall-capture-mirror` | poll Isis's desired capture state and mirror it onto the local pause file | every ~5 s |
 | `org.xinutec.recall-jobs` | pull Isis-queued work (refine, upload) into the Mac's local queues | timer |
-| `org.xinutec.recall-doctor` | run the health checks and report them to fleetwatch | every 5 min |
+| `org.xinutec.recall-doctor` | run the health checks and report them to fleetwatch (Rust, `doctor/`) | every 5 min |
+| `org.xinutec.recall-speech` | measure how much of each archived segment is SPEECH — the evidence the quiet review needs before it may propose deleting anything (Rust, `audiod speech`) | every 5 min |
 
 There is deliberately **no `recall-api` agent**: the Mac serves no UI or control plane
 (see the Isis split below). The last four are inert until `RECALL_SYNC_TOKEN` is set.
@@ -57,6 +58,32 @@ a process in uninterruptible disk wait cannot be killed until its I/O completes,
 so leaving it is the only way for the doctor to come back at all. It exits by
 itself when the volume does. Do not go hunting it — go and find what owns the
 disk queue.
+
+### Speech is measured HERE, not on Isis
+
+`recall-speech` decodes every archived segment once and records how many seconds
+of it are speech. Two consumers need that: the quiet review may not propose
+deleting a segment without it, and it is the only signal that tells a broken
+microphone from a quiet room.
+
+⚠ **It runs on the Mac deliberately**, though recalld measures the same thing on
+Isis. Removing audio from this archive is a Mac-local act
+([architecture.md](architecture.md), "Deletion authority"), and a guard that had
+to fetch its evidence over the network would either block cleanup whenever the
+fleet is unreachable or — worse — proceed without it. The fleet also cannot
+answer for everything: measured 2026-09-08, 730 of 14,777 segments had never
+been delivered, and those are the least replicated audio in the house.
+
+⚠ **It is the SAME detector, not an equivalent one** (`audiocore::vad`, shared
+with recalld). Two detectors disagreeing about what counts as speech is not a
+discrepancy to reconcile later: one of the two answers is a licence to delete
+audio somebody was talking in.
+
+⚠ **A pass that fails ENTIRELY writes nothing.** `speech_s` is never revisited
+once set, so a bad pass is permanent — and the two ways it went wrong while
+being built were both this process, not the audio: segments ffmpeg had not
+finished writing, and ffmpeg missing from PATH altogether. A broken file among
+good ones is believable; every file broken is the instrument.
 
 ### The worker leaves a pulse
 
