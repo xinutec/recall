@@ -226,13 +226,20 @@ it. They say what the app was doing when the beats stopped. `micOk` **is** grade
 is a fault, not a mode: the app kept running but the audio engine would not open, which
 used to show up as silence and is now named (#887).
 
-⚠ **`micOk` lied for nine hours on 2026-09-06 and the fix is not installed on the
-phones yet.** A failed attempt set it from `e !is MicUnavailableException`, so any
-NON-mic failure wrote `micOk=true` — and the socket connects before the mic opens, so
-during a pause every attempt failed on the connect and kept clearing a genuine fault.
-Corrected 2026-09-07 (`MicState.micOkAfter`): a failure that never reached the
-microphone reports nothing about it, and `true` is written only where it opened. Until
-the apps are rebuilt and installed, a beat's `micOk` is still the old rule's answer.
+**The three recorders answer `micOk` from three different questions**, and only the
+Android one is a continuous reading:
+
+| Recorder | Where `micOk` comes from | What it can miss |
+| --- | --- | --- |
+| Android (`MicState.micOkAfter`) | every open attempt; a failure that never reached the microphone leaves it unchanged | — |
+| iOS (`RecallMicApp`) | the return of `client.start()`, once | a mic that dies after a good start still reads `true` |
+| geb (`mic.py`) | `not capture_ended` — the capture process's stdout ending | — |
+
+The Android rule was wrong until 2026-09-07 and **lied for nine hours on 2026-09-06**:
+a failed attempt set it from `e !is MicUnavailableException`, so any NON-mic failure
+wrote `micOk=true`. The socket connects before the mic opens, so during a pause every
+attempt failed on the connect and kept clearing a genuine fault. The fix is installed —
+a phone carrying it reports `version=0.11` or later in its beat.
 
 ### The LAN fallback
 
