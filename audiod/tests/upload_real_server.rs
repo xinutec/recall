@@ -24,6 +24,7 @@ fn serve(server_root: &Path, tokens_text: &str) -> String {
         // The uploader speaks to the ingest plane only; the browsing plane is a
         // different credential and is deliberately absent here.
         webauth: None,
+        sync_token: None,
         upstream: None,
         frontend: None,
     });

@@ -89,6 +89,7 @@ async fn recalld_gated(upstream: Option<String>) -> String {
             }),
             now: Arc::new(|| 1_788_000_000),
         }),
+        sync_token: None,
         upstream: upstream.map(|base| Upstream { base }),
         frontend: None,
     });
@@ -116,6 +117,7 @@ async fn recalld_with_frontend(
         read_token: None,
         max_body_bytes: DEFAULT_MAX_BODY,
         webauth: None,
+        sync_token: None,
         upstream: upstream.map(|base| Upstream { base }),
         frontend,
     });

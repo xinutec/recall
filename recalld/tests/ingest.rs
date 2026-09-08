@@ -32,6 +32,7 @@ fn harness(tokens: Option<&str>, read_token: Option<&str>) -> Harness {
         read_token: read_token.map(str::to_owned),
         max_body_bytes: 1024 * 1024,
         webauth: None,
+        sync_token: None,
         upstream: None,
         frontend: None,
     }));

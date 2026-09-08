@@ -983,8 +983,9 @@ B3 lands.*
     and serves before its upstream is ready; expected, and worth knowing so a
     handful of failures right after a deploy is not mistaken for a fault.
 
-  **Where the port stands: everything but CAPTURE is recalld's.** That is the
-  durable statement; the count behind it changes with every group that moves.
+  **Where the port stands: on `/api/*`, everything but `/api/sources` is
+  recalld's; on `/sync/*`, only the capture handshake is.** That is the durable
+  statement; the count behind it changes with every group that moves.
   Re-derive rather than trusting the number, and derive it the way it was
   derived here — from the LIVE app, not by grepping for route strings:
 
@@ -997,6 +998,17 @@ B3 lands.*
   it — `/api/sessions` is both the list (recalld's) and the upload (Python's) —
   and it counts strings that are not routes at all, such as webauth's
   device-exempt entry for `/api/log`, whose route no longer exists.
+
+  That command answers for `/api/*` only. For the whole front door — both planes
+  at once, and from the OUTSIDE, which is the only view that knows what is
+  actually mounted rather than what is written — ask which tier answers:
+
+      for p in /api/capture /api/sources /sync/capture /sync/segments; do
+        curl -so /dev/null -D - "http://10.100.0.2:8000$p" \
+          | grep -iE '^(HTTP|server:)' | tr -d '\r' | paste -sd' ' -
+      done
+
+  `server: uvicorn` means Python answered through the proxy; recalld sets none.
 
   The api modules that served a ported group were DELETED with it, not left
   inert — that is the rule the strangler exists to make possible, and `ls
@@ -1015,6 +1027,7 @@ B3 lands.*
   | sessions | DONE, including the upload and the delete. ⚠ The delete is the one irreversible operation here and is guarded to UPLOAD sources: the household archive must never be reachable through a path meant for meetings. Every deleted segment is TOMBSTONED in the same transaction, or the Mac's next refine push resurrects the session. |
   | devices | heartbeats and outboxes are DONE. `/api/sources` is NOT: it reads the two-mode liveness model (Mac-local vs fleet) and takes `fleet_capture_state`, so it moves with the capture family or not at all. |
   | capture | DONE 2026-09-08 — status, pause, resume, mounted as ONE group. Splitting the household's control across two languages is the one place a strangler seam is not worth having. |
+  | sync | `/sync/capture` DONE 2026-09-08. The other twelve routes are Python's: jobs, labels, the audio blob push and fetch, the segment push and its batch, live turns, and the device/vocabulary reads. |
 
   *The capture cutover, 2026-09-08, and what it cost to do safely:*
 
@@ -1044,6 +1057,37 @@ B3 lands.*
   - **`api_capture.py` was NOT deleted with it.** Fleet images are `:latest`
     only, so a rollback IS a roll-forward; the old implementation is what a
     roll-forward rolls to.
+
+  *The first `/sync/*` route, 2026-09-08 — the plane the one-way peer dials in on:*
+
+  - **`POST /sync/capture` moved with the capture family, and belongs to it.** It
+    is the same state under a different door: Isis records intent and cannot dial
+    the Mac, so the Mac's mirror POSTs what it applied and reads back what the
+    fleet wants, in one round trip. Leaving it on the Python would have split the
+    household's capture control across two languages after all.
+  - ⚠ **Mounting is gated on `RECALL_SYNC_TOKEN` being in recalld's OWN
+    environment**, and absent means the routes are not mounted at all — so
+    `/sync/*` keeps reaching Python. That makes shipping the code and cutting
+    over to it two separate acts, and makes the rollback a one-line env change
+    rather than an image build. Same secret as the api's, same `SYNC_TOKEN` key
+    of `recall-secret`; recalld already read it under another name
+    (`RECALLD_READ_TOKEN`), which is not a reason to conflate two gates.
+  - **Parity was established by RUNNING the Python, not by reading it.** Its
+    `record_reported` was called directly for three argument sets and its four
+    settings writes diffed against the Rust's; then the route itself was served
+    in-process and its status and body compared for the authorised, missing,
+    wrong, non-bearer and bad-liveness cases. Both agree, and the expected values
+    in `recalld/tests/sync.rs` are the Python's output rather than the Rust's.
+  - ⚠ **`json.dumps` preserves the Mac's key ORDER where `serde_json` sorts.**
+    `capture_reported_source_liveness` is written by both tiers, so a reordered
+    object is a second spelling of one value in one column — which is what makes
+    a later parity check report drift that is not drift. `preserve_order` is on
+    for this, and the test pins the Mac's order rather than the alphabetical one.
+  - **The long-poll costs up to one 2 s slice** where the Python woke in ~RTT, for
+    the reason the capture cutover gives above. `GET /api/capture` already ships
+    that to every phone in the house, so it is consistency rather than a new
+    regression — but an in-process notify layered ON TOP of the slice would buy
+    back both, and both routes now have their writer in the same process.
 
   ⚠ **A partially ported PATH needs `method_not_allowed_fallback`.** axum matches
   the path and THEN the method, so with `GET /api/sessions` mounted and no POST,

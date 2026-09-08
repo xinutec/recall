@@ -27,6 +27,7 @@ pub mod sessions;
 pub mod spa;
 pub mod speech;
 pub mod store;
+pub mod sync;
 pub mod tokens;
 pub mod upload;
 pub mod webauth;

@@ -23,6 +23,10 @@ const INTENT_KEY: &str = "capture_intent";
 const REPORTED_RUNNING_KEY: &str = "capture_reported_running";
 const REPORTED_PAUSED_KEY: &str = "capture_reported_paused_until";
 const REPORTED_AT_KEY: &str = "capture_reported_at";
+/// Each source's last-proved-recording time, as the Mac last reported it — a
+/// JSON object of `source_id` to ISO instant. The fleet has no liveness markers
+/// of its own, so this is the only thing `/api/sources` can say about a mic.
+const REPORTED_LIVENESS_KEY: &str = "capture_reported_source_liveness";
 
 /// How recent the Mac's report must be to be believed. Past this the Mac has
 /// stopped reporting and the caller shows intent instead, with
@@ -171,6 +175,38 @@ pub fn reported_state(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result
         running: running == "1",
         paused_until: setting(conn, REPORTED_PAUSED_KEY)?.filter(|s| !s.is_empty()),
     }))
+}
+
+/// Record what the Mac says it currently has applied, so the fleet's status can
+/// report reality rather than only what was asked for.
+///
+/// ⚠ `paused_until` is stored VERBATIM, not re-spelled. The Mac echoes back the
+/// exact intent string it read, and [`fleet_capture_state`] decides `settled` by
+/// comparing the two as strings — so normalising here would make a settled pause
+/// read as forever-pending.
+///
+/// ⚠ Writing `REPORTED_AT_KEY` is what makes the other three believable: every
+/// reader gates on its freshness, so a report that lands without it reads as a
+/// Mac that has stopped checking in.
+pub fn record_reported(
+    conn: &Connection,
+    now: DateTime<Utc>,
+    running: bool,
+    paused_until: Option<&str>,
+    source_liveness: &serde_json::Map<String, serde_json::Value>,
+) -> rusqlite::Result<()> {
+    set_setting(conn, REPORTED_RUNNING_KEY, if running { "1" } else { "0" })?;
+    set_setting(conn, REPORTED_PAUSED_KEY, paused_until.unwrap_or(""))?;
+    set_setting(
+        conn,
+        REPORTED_AT_KEY,
+        &crate::instant::python_isoformat_utc(now),
+    )?;
+    set_setting(
+        conn,
+        REPORTED_LIVENESS_KEY,
+        &crate::pyjson::dump(source_liveness),
+    )
 }
 
 /// The fleet's view: intent, plus the Mac's confirmation of it.

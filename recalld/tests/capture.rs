@@ -487,6 +487,7 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
             }),
             now: std::sync::Arc::new(|| 1_788_000_000),
         }),
+        sync_token: None,
         upstream: None,
         frontend: None,
     }));

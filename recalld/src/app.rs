@@ -9,7 +9,7 @@
 use crate::tokens::Tokens;
 use crate::{
     assign, audio, capture, conversations, devices, ingest, labels, labels_write, proxy, reads,
-    reports, sessions, spa, upload, webauth, work,
+    reports, sessions, spa, sync, upload, webauth, work,
 };
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -39,6 +39,15 @@ pub struct Config {
     /// transcripts. An unconfigured recalld must not answer them at all rather
     /// than answer them to anyone.
     pub webauth: Option<webauth::GateState>,
+    /// The Mac→fleet sync plane's shared secret. `None` = those routes are NOT
+    /// mounted, so `/sync/*` keeps falling through to the Python upstream.
+    ///
+    /// ⚠ Absent means ABSENT here too, for the browsing plane's reason: these
+    /// routes carry the household's capture control and the archive's contents,
+    /// and an unconfigured recalld must not answer them open. It also makes the
+    /// cutover a one-line env change rather than a redeploy — and its rollback
+    /// the same change back.
+    pub sync_token: Option<String>,
     /// Where routes recalld does not serve yet are forwarded. `None` = a miss is
     /// a 404. See `proxy`: this is what lets Python be deleted one group at a
     /// time instead of all at once.
@@ -189,6 +198,12 @@ pub fn router(config: Arc<Config>) -> Router {
         .webauth
         .clone()
         .map(|st| browsing(st, config.root.clone(), config.root.join("logs/client.log")));
+    let sync_gate = config.sync_token.clone().map(|expected| {
+        Arc::new(sync::Gate {
+            expected,
+            root: config.root.clone(),
+        })
+    });
     let base = Router::new()
         .route("/ingest/v1/health", get(ingest::health))
         .route("/ingest/v1/segments", get(ingest::list_segments))
@@ -205,6 +220,10 @@ pub fn router(config: Arc<Config>) -> Router {
     let merged = match browsing_plane {
         Some(b) => base.merge(b),
         None => base,
+    };
+    let merged = match sync_gate {
+        Some(gate) => merged.merge(sync::routes(gate)),
+        None => merged,
     };
     // ⚠ Order matters and is the safety property: `fallback` runs ONLY where
     // nothing above matched, so a ported route always beats both the proxy and

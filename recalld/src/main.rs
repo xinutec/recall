@@ -13,6 +13,10 @@
 //! `RECALLD_READ_TOKEN` (env, optional) gates the read side; per-source write
 //! tokens come from `--tokens <file>` or the `RECALLD_INGEST_TOKENS` env var
 //! (same line grammar). Everything unset = open, for dev and tests.
+//!
+//! `RECALL_SYNC_TOKEN` (env, optional) is different: it does not open or close a
+//! gate, it decides whether the `/sync/*` routes are MOUNTED at all. Unset, they
+//! stay with the Python upstream.
 
 use recalld::app::{Config, DEFAULT_MAX_BODY, router};
 use recalld::tokens::Tokens;
@@ -132,6 +136,12 @@ fn main() -> ExitCode {
     let read_token = std::env::var("RECALLD_READ_TOKEN")
         .ok()
         .filter(|t| !t.is_empty());
+    // The Mac→fleet sync plane. Unset = the routes are not mounted and `/sync/*`
+    // still reaches the Python upstream, which is what makes shipping this code
+    // and CUTTING OVER to it two separate acts.
+    let sync_token = std::env::var("RECALL_SYNC_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty());
     if let Err(err) = recalld::store::open(&root) {
         eprintln!(
             "recalld: cannot open {}/ingest.sqlite: {err}",
@@ -157,6 +167,7 @@ fn main() -> ExitCode {
         read_token,
         max_body_bytes: DEFAULT_MAX_BODY,
         webauth,
+        sync_token,
         upstream: upstream.map(|base| recalld::proxy::Upstream { base }),
         frontend,
     });
