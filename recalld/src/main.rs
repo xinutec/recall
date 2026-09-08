@@ -68,6 +68,31 @@ fn parse_args() -> Option<Args> {
     })
 }
 
+/// Serve one bound listener, WITH connect info.
+///
+/// ⚠ The connect info is not decoration. The capture-control audit answers "was
+/// that pause mine?" on a plane that deliberately carries no credential, so the
+/// peer address is the ONLY identifying thing there is. Without it the extension
+/// is absent and every pause is recorded against `unknown-host`.
+///
+/// recalld sees the REAL client here, which the Python never could: it sits
+/// behind this proxy and only ever saw 127.0.0.1 (#1473).
+fn serve_one(
+    serving: &mut tokio::task::JoinSet<std::io::Result<()>>,
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+) {
+    let addr = listener.local_addr().ok();
+    tracing::info!(?addr, "recalld: listening");
+    serving.spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+    });
+}
+
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -152,10 +177,7 @@ fn main() -> ExitCode {
         let app = router(config);
         let mut serving = tokio::task::JoinSet::new();
         for listener in listeners {
-            let addr = listener.local_addr().ok();
-            tracing::info!(?addr, "recalld: listening");
-            let app = app.clone();
-            serving.spawn(async move { axum::serve(listener, app).await });
+            serve_one(&mut serving, listener, app.clone());
         }
         // The FIRST listener to stop decides the exit: if one port dies the daemon
         // is half-serving, which is the state that hides a fault. Better to exit
