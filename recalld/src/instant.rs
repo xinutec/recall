@@ -33,7 +33,11 @@ pub fn python_isoformat(value: &str) -> Option<String> {
     Some(parsed.to_rfc3339_opts(format, false))
 }
 
-fn parse(value: &str) -> Option<DateTime<FixedOffset>> {
+/// Parse an instant the way `datetime.fromisoformat` does. Public because a
+/// caller that must COMPARE two stored timestamps needs the instant, while one
+/// that must re-emit one needs [`python_isoformat`] — and doing the second by
+/// hand is how a spelling drifts.
+pub fn parse(value: &str) -> Option<DateTime<FixedOffset>> {
     if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
         return Some(parsed);
     }
