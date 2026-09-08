@@ -1104,6 +1104,35 @@ B3 lands.*
     regression — but an in-process notify layered ON TOP of the slice would buy
     back both, and both routes now have their writer in the same process.
 
+  **CUT OVER 2026-09-08, and it is live.** `RECALL_SYNC_TOKEN` went into recalld's
+  container and the Mac's mirror has been handshaking with the Rust since. What
+  the cutover cost and how it was checked:
+
+  - **The rollout cost ~40 s of failed handshakes** — five 502s while the api
+    container was still booting behind the proxy, then connection-refused, then
+    twenty consecutive 200s. The mirror logged each one and retried, which is what
+    `run_loop` promises ("a blip must never wedge the mic"). Worth expecting
+    rather than diagnosing next time.
+  - ⚠ **`/api/sources` is the check that only a live deploy can make.** recalld
+    now WRITES `capture_reported_source_liveness` and the Python api READS it, so
+    that column crosses the tier boundary every mirror pass. A separator or key
+    order this end could not parse the other would return `{}`, and every source
+    would show `lastActive: null` — a total loss of the liveness signal that no
+    test on either side would catch. All six sources came through the cutover
+    byte-identical to their pre-deploy values.
+  - ⚠ **The mirror's 5 s cadence cannot tell you the hang works.** Its loop sleeps
+    `interval - elapsed`, so a hang that returns instantly and one that holds the
+    full wait both produce a 5 s period. Measured instead against the read-only
+    twin, `GET /api/capture?wait=&known=`, which shares the mechanism and writes
+    nothing: `wait=4` held 4.06 s and `wait=8` held 8.13 s, while a stale `known`
+    returned in 0.05 s. Both halves are needed — a hang that never returns early
+    is as wrong as one that never hangs.
+  - **The Python route is NOT deleted, and the reason is stronger than
+    `api_capture.py`'s.** There the old implementation was merely what a
+    roll-forward rolls to. Here the rollback IS removing the env var, which
+    unmounts the Rust and sends `/sync/capture` back through the proxy — so
+    deleting the Python would delete the rollback itself.
+
   ⚠ **A partially ported PATH needs `method_not_allowed_fallback`.** axum matches
   the path and THEN the method, so with `GET /api/sessions` mounted and no POST,
   a POST is answered 405 by recalld and never reaches the proxy. Porting the list
