@@ -47,8 +47,15 @@ WORKDIR /build
 # lives in THREE places — Cargo.toml, flake.nix's fileset, and here — and the
 # two build ones fail only in CI and the nix sandbox, never on a laptop.
 COPY Cargo.toml Cargo.lock ./
+# ⚠ EVERY workspace MEMBER, or cargo cannot even load the graph — it fails with
+# a bare "No such file or directory" naming nothing. Only recalld is built here,
+# which makes it tempting to copy only what it needs; adding a crate to
+# Cargo.toml and not to this list broke four consecutive image builds on
+# 2026-09-08 before anyone looked, because the commit gate does not build this
+# image. flake.nix carries the same list and the same warning.
 COPY audiocore/ audiocore/
 COPY audiod/ audiod/
+COPY doctor/ doctor/
 COPY recalld/ recalld/
 COPY runner/ runner/
 RUN cargo build --release --locked -p recalld
