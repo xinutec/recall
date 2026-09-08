@@ -248,12 +248,16 @@ records perfectly and delivered right up to the pause on 2026-09-07, in step
 with every other source. It is a false alarm that cannot go green by itself —
 the "cry-wolf that gets a check muted" that collector's own comments warn about.
 
+This was FORESEEN, not missed: [architecture.md](architecture.md) stage C3 calls
+it "transitional and accepted — geb no longer beats or streams, so the old
+liveness reads it stale until the delivery-based liveness lands". What the
+measurement adds is that "stale" undersells it; the line is red every hour.
+
 The liveness that IS true already exists: recalld's `/ingest/v1/liveness` carries
 `delivered` and `speech` per source, and the sources panel takes EITHER proof for
 exactly this reason (#1428, "a store-and-forward recorder refreshes no marker"
-above). The heartbeat collector never got that fix, because when #1428 landed geb
-was the only recorder that had stopped streaming and it was thought of as a UI
-problem.
+above). The heartbeat collector lives in another repo and never got that rule
+(#1481).
 
 ### The LAN fallback
 
