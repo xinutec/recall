@@ -214,3 +214,154 @@ pub fn fleet_capture_state(
     }
     .stamped())
 }
+
+/// A pause is BOUNDED, always. The household's control is "stop recording",
+/// never "stop recording indefinitely" — a pause that outlives everyone's memory
+/// of setting it is how a week of the archive goes missing without anyone
+/// deciding to lose it.
+fn max_pause() -> Duration {
+    Duration::hours(24)
+}
+
+/// When a pause starting at `now` must end, clamped to [`max_pause`].
+///
+/// A negative or absent `minutes` is not an error: `None` means "the full
+/// bound", and a negative one clamps to zero rather than minting a pause that
+/// has already elapsed.
+pub fn compute_resume_by(now: DateTime<Utc>, minutes: Option<i64>) -> DateTime<Utc> {
+    let span = match minutes {
+        None => max_pause(),
+        Some(m) => Duration::minutes(m).min(max_pause()),
+    };
+    now + span.max(Duration::zero())
+}
+
+fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [key, value],
+    )?;
+    Ok(())
+}
+
+/// Record a bounded pause as the fleet's DESIRED state, and return its resume-by
+/// in the spelling that will be stored and compared.
+///
+/// ⚠ This is intent, not actuation. Isis runs no capture agent: the Mac's mirror
+/// polls this and applies it, then reports back — which is why
+/// [`fleet_capture_state`] serves confirmed and desired separately instead of
+/// pretending the press already took effect.
+pub fn intent_pause(
+    conn: &Connection,
+    now: DateTime<Utc>,
+    minutes: Option<i64>,
+) -> rusqlite::Result<String> {
+    let until = compute_resume_by(now, minutes);
+    let iso = crate::instant::python_isoformat_utc(until);
+    set_setting(conn, INTENT_KEY, &iso)?;
+    Ok(iso)
+}
+
+/// Record "run" as the fleet's desired state.
+///
+/// ⚠ Written as EMPTY rather than deleted, so a resume is a value the mirror can
+/// read and act on. A missing row and a cleared one already mean the same thing
+/// to [`intent_until`]; keeping the row means a reader never has to tell "never
+/// paused" from "resumed".
+pub fn intent_resume(conn: &Connection) -> rusqlite::Result<()> {
+    set_setting(conn, INTENT_KEY, "")
+}
+
+/// Append the audit record of WHO asked for a pause or resume.
+///
+/// Capture control is login-free on the recording plane, so the agent's own
+/// PAUSE/RESUME event cannot name a caller; this carries the request's origin
+/// descriptor instead.
+///
+/// ⚠ Best-effort by contract: the caller must not let a failed audit fail the
+/// control action. Silencing a household's microphone must never depend on a
+/// bookkeeping write succeeding.
+pub fn record_control_origin(
+    conn: &Connection,
+    now: DateTime<Utc>,
+    verb: &str,
+    origin: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO capture_events (utc, kind, source_id, detail) VALUES (?1, ?2, NULL, ?3)",
+        rusqlite::params![
+            crate::instant::python_isoformat_utc(now),
+            "control_request",
+            format!("{verb} — {origin}"),
+        ],
+    )?;
+    Ok(())
+}
+
+// --- the HTTP surface -------------------------------------------------------
+
+use crate::reads::State as ReadState;
+use crate::route;
+use axum::extract::{Query, State};
+use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
+use std::sync::Arc;
+
+/// Never hold a request past this — proxies and thread pools need a horizon.
+const WAIT_CAP: std::time::Duration = std::time::Duration::from_secs(25);
+/// Re-derive the state this often while hanging. Transitions with NO notify —
+/// a pause elapsing, a report ageing out of freshness, a break-glass CLI pause
+/// writing the file directly — surface within one slice rather than never.
+const WAIT_SLICE: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[derive(Deserialize)]
+pub struct StatusQuery {
+    /// Seconds to long-poll. Absent or 0 answers at once, which is what an
+    /// older client that does not know about hanging expects.
+    #[serde(default)]
+    pub wait: f64,
+    /// The `stateToken` the caller last saw. The request hangs while the state
+    /// still fingerprints to this.
+    #[serde(default)]
+    pub known: String,
+}
+
+/// `GET /api/capture` — is the household being recorded, and if paused, until
+/// when.
+///
+/// ⚠ The long-poll is what makes a press propagate in ~RTT instead of a poll
+/// interval, and it is load-bearing for the Mac's mirror: that exchange hangs
+/// here while its intent is unchanged, so the hang doubles as the mirror's
+/// pacing. Answering immediately would not break correctness, it would turn
+/// every recorder in the house into a 5-second poller.
+pub async fn status_route(
+    State(st): State<Arc<ReadState>>,
+    Query(q): Query<StatusQuery>,
+) -> Response {
+    let root = st.root.clone();
+    let wait = q.wait.clamp(0.0, WAIT_CAP.as_secs_f64());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(wait);
+
+    loop {
+        let root = root.clone();
+        let state = match route::blocking("capture", move || {
+            fleet_capture_state(&crate::work::open_write(&root)?, chrono::Utc::now())
+        })
+        .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
+        };
+        if state.state_token != q.known || std::time::Instant::now() >= deadline {
+            return axum::Json(state).into_response();
+        }
+        // ⚠ Sleep rather than wait on a condition variable. The Python parks on
+        // an in-process notify, which works because ONE process serves every
+        // request; here the writer may be the Python tier during the cutover,
+        // and a notify it cannot send would hang this until the cap. Polling a
+        // 2s slice costs one cheap read and cannot miss a change from either
+        // side.
+        tokio::time::sleep(WAIT_SLICE.min(deadline - std::time::Instant::now())).await;
+    }
+}

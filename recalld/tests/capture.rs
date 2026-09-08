@@ -233,3 +233,161 @@ fn a_confirmed_resume_is_settled_without_comparing_deadlines() {
     assert!(state.settled);
     assert!(state.running);
 }
+
+// --- the write half: intent, and the audit of who asked ---------------------
+
+use recalld::capture::{compute_resume_by, intent_pause, intent_resume, record_control_origin};
+
+fn writable() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         CREATE TABLE capture_events (
+             id INTEGER PRIMARY KEY, utc TEXT NOT NULL, kind TEXT NOT NULL,
+             source_id TEXT, detail TEXT);",
+    )
+    .unwrap();
+    conn
+}
+
+#[test]
+fn a_pause_is_always_bounded() {
+    // The household's control is "stop recording", never "stop indefinitely".
+    // A pause that outlives everyone's memory of setting it is how a week of
+    // the archive goes missing without anyone deciding to lose it.
+    let now = at(0);
+    assert_eq!(
+        compute_resume_by(now, None),
+        now + chrono::Duration::hours(24)
+    );
+    // A request longer than the bound is CLAMPED, not honoured.
+    assert_eq!(
+        compute_resume_by(now, Some(60 * 48)),
+        now + chrono::Duration::hours(24)
+    );
+    assert_eq!(
+        compute_resume_by(now, Some(30)),
+        now + chrono::Duration::minutes(30)
+    );
+}
+
+#[test]
+fn a_negative_pause_clamps_to_now_rather_than_minting_an_elapsed_one() {
+    let now = at(0);
+    assert_eq!(compute_resume_by(now, Some(-5)), now);
+}
+
+#[test]
+fn pausing_then_resuming_round_trips_through_the_settings_row() {
+    let conn = writable();
+    let iso = intent_pause(&conn, at(0), Some(30)).unwrap();
+    // What was stored is what a reader gets back, spelled the same way — the
+    // Mac compares this string by equality when it confirms.
+    assert_eq!(
+        intent_until(&conn, at(0)).unwrap().as_deref(),
+        Some(iso.as_str())
+    );
+
+    intent_resume(&conn).unwrap();
+    assert_eq!(intent_until(&conn, at(0)).unwrap(), None);
+}
+
+#[test]
+fn a_resume_leaves_a_row_rather_than_deleting_it() {
+    // A missing row and a cleared one mean the same thing to a reader, but the
+    // mirror polls this value: keeping it means "resumed" is something it can
+    // read, not an absence it has to infer.
+    let conn = writable();
+    intent_pause(&conn, at(0), Some(30)).unwrap();
+    intent_resume(&conn).unwrap();
+    let raw: String = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key='capture_intent'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(raw, "");
+}
+
+#[test]
+fn a_fresh_pause_reads_as_unsettled_until_the_mac_confirms() {
+    // End to end over the two halves: the press moves desired only, and the UI
+    // shows "Pausing…" rather than claiming a pause that has not taken effect.
+    let conn = writable();
+    intent_pause(&conn, at(0), Some(30)).unwrap();
+    let state = fleet_capture_state(&conn, at(0)).unwrap();
+    assert!(!state.desired_running);
+    assert!(!state.settled);
+    // Nothing has been heard from the Mac at all, so say so.
+    assert!(!state.mic_reachable);
+}
+
+#[test]
+fn the_audit_names_the_verb_and_the_origin() {
+    let conn = writable();
+    record_control_origin(&conn, at(0), "pause", "session:someone").unwrap();
+    let (kind, detail): (String, String) = conn
+        .query_row("SELECT kind, detail FROM capture_events", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(kind, "control_request");
+    assert_eq!(detail, "pause — session:someone");
+}
+
+#[test]
+fn a_whole_second_pause_is_spelled_without_a_fraction() {
+    // ⚠ Regression guard. Formatting with a fixed precision wrote
+    // `...22.000000+00:00` where Python writes `...22+00:00` — the same moment,
+    // different TEXT. `settled` compares the intent to the Mac's echo by string
+    // equality, so the mismatch would leave a correctly-applied pause reading as
+    // transitioning for ever.
+    let conn = writable();
+    let iso = intent_pause(&conn, at(0), Some(30)).unwrap();
+    assert!(!iso.contains(".000000"), "{iso}");
+    assert!(iso.ends_with("+00:00"), "{iso}");
+    // And a sub-second instant keeps its six digits, as Python does.
+    let sub = DateTime::from_timestamp(1_788_894_682, 164_504_000).unwrap();
+    let iso = intent_pause(&conn, sub, Some(0)).unwrap();
+    assert!(iso.contains(".164504"), "{iso}");
+}
+
+// --- the long-poll's own contract -------------------------------------------
+
+#[test]
+fn an_unchanged_state_fingerprints_the_same_twice() {
+    // The whole long-poll rests on this: the token is a pure function of the
+    // state, so "unchanged" is the server's judgement and not a guess. If it
+    // varied per call — a timestamp, a map iteration order — every hang would
+    // return instantly and every recorder in the house would become a poller.
+    let conn = writable();
+    intent_pause(&conn, at(0), Some(30)).unwrap();
+    let a = fleet_capture_state(&conn, at(1)).unwrap();
+    let b = fleet_capture_state(&conn, at(2)).unwrap();
+    assert_eq!(a.state_token, b.state_token);
+}
+
+#[test]
+fn a_press_changes_the_fingerprint_so_a_hanging_poll_wakes() {
+    let conn = writable();
+    intent_resume(&conn).unwrap();
+    let running = fleet_capture_state(&conn, at(0)).unwrap();
+    intent_pause(&conn, at(0), Some(30)).unwrap();
+    let paused = fleet_capture_state(&conn, at(0)).unwrap();
+    assert_ne!(running.state_token, paused.state_token);
+}
+
+#[test]
+fn a_pause_elapsing_changes_the_fingerprint_with_nobody_pressing_anything() {
+    // ⚠ The transition with NO notify behind it. Nothing writes when a pause
+    // reaches its deadline, so a long-poll parked on a condition variable would
+    // never wake — which is why the handler re-derives on a slice rather than
+    // waiting to be told.
+    let conn = writable();
+    intent_pause(&conn, at(0), Some(30)).unwrap();
+    let during = fleet_capture_state(&conn, at(60)).unwrap();
+    let after = fleet_capture_state(&conn, at(60 * 31)).unwrap();
+    assert_ne!(during.state_token, after.state_token);
+    assert!(after.desired_running, "an elapsed pause reads as running");
+}

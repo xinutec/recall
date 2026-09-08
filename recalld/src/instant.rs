@@ -21,6 +21,22 @@
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 
+/// Spell a UTC instant the way `datetime.isoformat()` would.
+///
+/// ⚠ The fraction is OMITTED when zero and six digits when not — the same rule
+/// [`python_isoformat`] applies to a string. Formatting by hand with a fixed
+/// precision is how the two spellings diverge: `...22.000000+00:00` and
+/// `...22+00:00` are the same moment and different TEXT, and the capture
+/// intent is compared as text by the Mac when it confirms a pause.
+pub fn python_isoformat_utc(when: DateTime<Utc>) -> String {
+    let format = if when.timestamp_subsec_micros() == 0 {
+        SecondsFormat::Secs
+    } else {
+        SecondsFormat::Micros
+    };
+    when.to_rfc3339_opts(format, false)
+}
+
 /// Re-spell an ISO-8601 instant the way `datetime.isoformat()` would, or `None`
 /// if it does not parse.
 pub fn python_isoformat(value: &str) -> Option<String> {
