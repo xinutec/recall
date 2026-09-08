@@ -175,7 +175,23 @@ in  { name = "recall"
             Regenerate with `.venv/bin/python scripts/gen_models.py --write`.
             The .venv interpreter, because it imports pydantic.
         -}
+        {-  ⚠ THE ONLY CHECK HERE THAT GUARDS THE DEPLOY PATH ITSELF. A crate
+            added to Cargo.toml but not to the Dockerfile makes the image build
+            fail — cargo cannot load the workspace graph without every member —
+            and because fleet images are :latest only, a rollback IS a
+            roll-forward. So that mistake does not stale one image, it makes the
+            whole fleet undeployable, including in an emergency. It happened on
+            2026-09-08 and all 31 checks passed, because none of them builds the
+            image. Text against text on purpose: building it here would add
+            minutes to every commit for no extra coverage.
+        -}
         G.Check::{
+        , name = "every Rust workspace member reaches the Dockerfile and flake"
+        , argv =
+            G.inDevShell [ "python", "scripts/check_workspace_members.py" ]
+        , timeout_s = 60
+        }
+      , G.Check::{
         , name = "contract: frontend models.ts is generated from the API shapes"
         , argv =
             G.inDevShell [ ".venv/bin/python", "scripts/gen_models.py", "--check" ]

@@ -130,6 +130,20 @@
         "develop",
         "--no-warn-dirty",
         "--command",
+        "python",
+        "scripts/check_workspace_members.py"
+      ],
+      "cwd": ".",
+      "env": {},
+      "name": "every Rust workspace member reaches the Dockerfile and flake",
+      "timeout_s": 60
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
         ".venv/bin/python",
         "scripts/gen_models.py",
         "--check"
