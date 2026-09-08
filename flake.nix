@@ -271,6 +271,13 @@
         packages.dev-env = devEnv;
         packages.dev-python = devPython;
         packages.agent-tools = agentTools;
+        # ⚠ The ONNX runtime the speech agent must dlopen, exported so
+        # home-manager reaches the SAME one this flake's tests run silero
+        # through. It is not enough to hand it to the internal `.#agents`
+        # attrset: home-manager imports deploy/hm-agents.nix against these
+        # PUBLIC outputs, so `nix build .#agents` can pass while the real
+        # switch fails on a missing attribute — which is exactly what happened.
+        packages.onnxruntime = pkgs.onnxruntime;
         packages.agents = deployedAgents;
 
         devShells.android = androidPkgs.mkShell {
