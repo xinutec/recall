@@ -440,3 +440,112 @@ fn the_audit_write_cannot_refuse_the_control_action() {
         "the pause survived its own audit failing"
     );
 }
+
+// --- the routes are MOUNTED, not merely written ------------------------------
+
+/// ⚠ This test exists because of a real incident. On 2026-09-07 `/api/correct`
+/// was written, tested, and its Python counterpart deleted in the same change —
+/// and the route was never added to the router. Both suites were green and the
+/// endpoint was served by NOBODY for a deploy. A handler with passing unit tests
+/// says nothing about whether anything can reach it.
+#[tokio::test]
+async fn the_capture_routes_are_reachable_through_the_real_router() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let root = dir.path().to_path_buf();
+    recalld::store::open(&root).expect("ingest db");
+    // The meaning plane the capture state lives in.
+    let conn = recalld::work::open_write(&root).expect("recall db");
+    conn.execute_batch(
+        "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         CREATE TABLE capture_events (
+             id INTEGER PRIMARY KEY, utc TEXT NOT NULL, kind TEXT NOT NULL,
+             source_id TEXT, detail TEXT);",
+    )
+    .expect("schema");
+    drop(conn);
+
+    let app = recalld::app::router(std::sync::Arc::new(recalld::app::Config {
+        root,
+        tokens: None,
+        read_token: None,
+        max_body_bytes: recalld::app::DEFAULT_MAX_BODY,
+        // ⚠ NOT None. `webauth: None` means the browsing plane is ABSENT, not
+        // open — the deliberate inversion of this repo's inert-unless-configured
+        // rule, so that an unconfigured recalld cannot serve household
+        // transcripts to anyone who can reach the port. A test that passed None
+        // would be asserting against a router with no capture routes in it.
+        webauth: Some(recalld::webauth::GateState {
+            cfg: std::sync::Arc::new(recalld::webauth::Config {
+                session_secret: "test-secret-not-a-real-one".into(),
+                client_id: "cid".into(),
+                client_secret: "csec".into(),
+                nc_base_url: "https://dash.example.org".into(),
+                nc_internal_url: "https://dash.example.org".into(),
+                redirect_uri: "http://127.0.0.1/auth/callback".into(),
+                allowed_users: std::collections::HashSet::new(),
+                device_token: None,
+            }),
+            now: std::sync::Arc::new(|| 1_788_000_000),
+        }),
+        upstream: None,
+        frontend: None,
+    }));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    // NO session cookie, deliberately: GET /api/capture is on the device-exempt
+    // plane because the mic apps long-poll it with no credential at all. If this
+    // ever needs a login, every recorder in the house stops learning about pauses.
+    let body = tokio::task::spawn_blocking(move || {
+        ureq::get(&format!("http://{addr}/api/capture"))
+            .call()
+            .expect("the route is mounted AND ungated")
+            .into_string()
+            .expect("a body")
+    })
+    .await
+    .expect("task");
+
+    // Not just "something answered": the SHAPE of the capture contract.
+    let state: serde_json::Value = serde_json::from_str(&body).expect("json");
+    for field in [
+        "running",
+        "pausedUntil",
+        "desiredRunning",
+        "desiredPausedUntil",
+        "settled",
+        "micReachable",
+        "stateToken",
+    ] {
+        assert!(state.get(field).is_some(), "missing {field} in {state}");
+    }
+    assert_eq!(
+        state["stateToken"].as_str().map(str::len),
+        Some(12),
+        "the fingerprint every client long-polls on"
+    );
+}
+
+#[tokio::test]
+async fn pausing_through_the_real_router_needs_no_login() {
+    // ⚠ The property that keeps the house controllable. The mic apps' pause and
+    // resume buttons carry NO credential — login-free by choice — so if the gate
+    // ever starts demanding a session here, every phone's pause button stops
+    // working and the only way to silence the room is the web UI.
+    for (method, path) in [
+        ("GET", "/api/capture"),
+        ("POST", "/api/capture/pause"),
+        ("POST", "/api/capture/resume"),
+    ] {
+        assert!(
+            !recalld::webauth::requires_session(method, path),
+            "{method} {path} must stay on the device-exempt plane"
+        );
+    }
+}

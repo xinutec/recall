@@ -8,8 +8,8 @@
 
 use crate::tokens::Tokens;
 use crate::{
-    assign, audio, conversations, devices, ingest, labels, labels_write, proxy, reads, reports,
-    sessions, spa, upload, webauth, work,
+    assign, audio, capture, conversations, devices, ingest, labels, labels_write, proxy, reads,
+    reports, sessions, spa, upload, webauth, work,
 };
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -61,6 +61,7 @@ pub const UPSTREAM_PREFIXES: &[&str] = &["/api/", "/sync/"];
 /// person who signed in through the Python is already signed in here, so a route
 /// group can move between the two without anyone signing in again.
 fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router {
+    let capture_root = root.clone();
     let read = Arc::new(reads::State { root });
     Router::new()
         .route("/api/timeline", get(reads::timeline_route))
@@ -153,6 +154,22 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
             get(sessions::transcript_route),
         )
         .with_state(read)
+        // ⚠ THE HOUSEHOLD'S PAUSE CONTROL. Its own state because it is the one
+        // family that needs the gate config — to record WHO pressed the button
+        // on a plane that deliberately requires no login. Mounted as a group:
+        // splitting status from pause/resume across two languages would leave
+        // the control half-ported, which is the one place a strangler seam is
+        // not worth having.
+        .merge(
+            Router::new()
+                .route("/api/capture", get(capture::status_route))
+                .route("/api/capture/pause", post(capture::pause_route))
+                .route("/api/capture/resume", post(capture::resume_route))
+                .with_state(Arc::new(capture::Control {
+                    root: capture_root,
+                    webauth: Some(st.cfg.clone()),
+                })),
+        )
         // Client reports carry their own state (a log path), not the database's.
         .merge(
             Router::new()
