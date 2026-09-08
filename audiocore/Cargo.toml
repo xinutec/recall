@@ -28,3 +28,24 @@ must_use_candidate = "allow"
 # The one FFT implementation to trust — same reasoning as audiod's original.
 rustfft = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# ONNX runtime for the silero VAD, loaded DYNAMICALLY from the system library
+# rather than ort's prebuilt binaries.
+#
+# ⚠ ort's prebuilt ONNX Runtime REQUIRES AVX2, and the fleet's servers are Ivy
+# Bridge (2012) — isis crash-looped with SIGILL when it first ran there. Debian's
+# libonnxruntime is built for baseline x86-64 and runs on those CPUs, so the
+# daemon dlopens that instead. `api-21` matches Debian trixie's 1.21; asking for
+# a newer API than the library provides fails at load.
+#
+# It lives HERE rather than in recalld because the Mac needs the SAME detector:
+# a Mac-local speech measurement and the fleet's must agree by construction, or
+# one can call a segment silent while the other hears speech — and one of those
+# two answers is a licence to delete audio.
+ort = { version = "2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "ndarray",
+    "tracing",
+    "load-dynamic",
+    "api-21",
+] }
+

@@ -10,7 +10,7 @@
 //! 512-sample windows of 16 kHz mono and carries a state tensor between them,
 //! so the caller must not reorder or skip windows.
 
-use audiocore::decode;
+use crate::decode;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 

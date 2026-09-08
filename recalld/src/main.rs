@@ -262,7 +262,7 @@ fn spawn_speech_scanner(root: PathBuf) {
     const BATCH: usize = 40;
     const IDLE: std::time::Duration = std::time::Duration::from_mins(2);
     const BACKOFF: std::time::Duration = std::time::Duration::from_mins(5);
-    if let Err(err) = recalld::vad::self_test() {
+    if let Err(err) = audiocore::vad::self_test() {
         tracing::warn!(
             %err,
             "speech: DISABLED — the ONNX runtime could not run a trial inference. \

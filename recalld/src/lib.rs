@@ -29,6 +29,5 @@ pub mod speech;
 pub mod store;
 pub mod tokens;
 pub mod upload;
-pub mod vad;
 pub mod webauth;
 pub mod work;

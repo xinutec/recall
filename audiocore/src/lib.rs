@@ -10,4 +10,5 @@ pub mod envelope;
 pub mod fuse;
 pub mod names;
 pub mod stft;
+pub mod vad;
 pub mod wav;

@@ -5,7 +5,7 @@
 //! `public-domain-en` is a human reading, `dialogue-*` is machine-read invented
 //! text (see tests/fixtures/speech/README.md).
 
-use recalld::vad::{Detector, RATE, detection_gain, regions_from_probabilities};
+use audiocore::vad::{Detector, RATE, detection_gain, regions_from_probabilities};
 use std::path::Path;
 
 #[test]

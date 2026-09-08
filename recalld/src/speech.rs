@@ -26,7 +26,7 @@
 //! newest-first priority the work queue takes (stage E1).
 
 use crate::store;
-use crate::vad::Detector;
+use audiocore::vad::Detector;
 use rusqlite::Connection;
 use std::path::Path;
 
