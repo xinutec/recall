@@ -170,12 +170,19 @@
               # Every workspace MEMBER, or cargo cannot even load the graph:
               # adding a crate to Cargo.toml and not to this list fails the
               # sandboxed build with "failed to read runner/Cargo.toml".
+              ./doctor
               ./runner
               # The one licence-clean speech clip (#1433). This entry was removed
               # on 2026-09-05 as pointless — every fixture was gitignored audio,
               # so nothing could arrive — and is back because one CAN now, which
               # is the whole reason for committing it.
               ./tests/fixtures/speech
+              # The worker/doctor contract, held in one file because its two
+              # halves are now in different languages: the Python worker test
+              # asserts the real worker writes these keys, the doctor's test
+              # parses them. The sandbox has no `tests/` beyond what is named
+              # here, so leaving it out fails the build rather than the test.
+              ./tests/fixtures/worker-heartbeat.json
             ];
           };
           cargoLock.lockFile = ./Cargo.lock;

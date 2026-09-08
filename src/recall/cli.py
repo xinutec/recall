@@ -9,22 +9,18 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
-import sys
 import threading
 import time
 import traceback
-import urllib.error
 from collections.abc import Callable
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-import recall
-from recall import bounded, capture_control, heartbeat, runlog
+from recall import capture_control, heartbeat, runlog
 from recall.asr import (
     AsrResult,
     Transcriber,
@@ -44,27 +40,10 @@ from recall.cleanup import (
 from recall.cli_parser import build_parser
 from recall.conversations import segment_conversations
 from recall.diarize import SpeakerTurn, pyannote_diarize
-from recall.fleetwatch import build_report, post_report, read_token
-from recall.health import (
-    ALWAYS_ON,
-    ARCHIVE_BOUND,
-    Check,
-    agent_checks,
-    archive_check,
-    blanked_check,
-    capture_checks,
-    delivery_checks,
-    live_check,
-    loss_checks,
-    mirror_check,
-    recorders_on_disk,
-    worker_check,
-)
 from recall.identify import identify_segments
 from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.live import run_live
 from recall.logrotate import rotate_logs
-from recall.loss import uncovered_loss
 from recall.loudness import backfill_loudness
 from recall.maintenance import (
     compress_to_opus,
@@ -76,10 +55,10 @@ from recall.redrive import redrive_archive
 from recall.refine import refine_diarized
 from recall.reprocess import reprocess
 from recall.review import apply_correction
-from recall.sources import DEVICE_KINDS, AudioSource, SourceKind
+from recall.sources import AudioSource, SourceKind
 from recall.speakerid import pyannote_embed
 from recall.store import Store
-from recall.timeline import Gap, find_gaps, find_overlaps
+from recall.timeline import find_gaps, find_overlaps
 from recall.transcript_view import (
     attribution,
     format_conversations,
@@ -1229,241 +1208,6 @@ def _print_attribution(
     print("  words taken, by true speaker: " + ", ".join(f"{k} {v}" for k, v in worst))
 
 
-# In-flight slack for the fleet-mirror check: the sync timer runs every 120s and the
-# mirror-completion queue drains 500 a pass, so anything processed an hour ago and
-# still unpushed means the push has actually stopped.
-_MIRROR_SLACK = timedelta(hours=1)
-# How far back the speech-loss reconciliation looks, and the smallest uncovered
-# active-capture stretch it will call loss — below this is the boundary slop of a pause
-# recorded a beat after the last segment, not real lost speech.
-_LOSS_WINDOW = timedelta(hours=48)
-_LOSS_MIN = timedelta(minutes=2)
-# The store always trails a running capture: an in-progress segment (up to 60s) plus
-# the worker's min-age guard (120s) plus its pass cadence. Coverage inside this
-# trailing stretch is unknowable, so the reconciler never judges it.
-_LOSS_SETTLE = timedelta(minutes=10)
-
-
-def _speech_loss(
-    store: Store, sources: list[tuple[str, SourceKind]], *, now: datetime
-) -> tuple[list[Gap], dict[str, int]]:
-    """Reconcile the always-on mic's recorded coverage against the pause/resume events
-    over the recent window: uncovered active stretches (capture active, no audio) + the
-    dead windows *per device* — telling a deliberate pause from lost speech
-    (recall.loss), and one broken microphone from a broken house (recall.health)."""
-    since = now - _LOSS_WINDOW
-    events = store.capture_events_since(since)
-    dead: dict[str, int] = {}
-    for event in store.capture_events_since(
-        since, kinds=(capture_control.CaptureEventKind.DEAD_WINDOW,)
-    ):
-        # source_id is nullable in the schema. Loss the archive cannot attribute is
-        # still loss, so it gets its own bucket instead of being dropped.
-        source_id = event.source_id or "unattributed"
-        dead[source_id] = dead.get(source_id, 0) + 1
-    losses: list[Gap] = []
-    for source_id, kind in sources:
-        if kind is not ALWAYS_ON:
-            continue
-        intervals = store.audio_segment_intervals(source_id, since=since)
-        losses.extend(
-            uncovered_loss(
-                intervals,
-                events,
-                source_id,
-                now=now,
-                min_loss=_LOSS_MIN,
-                settle=_LOSS_SETTLE,
-            )
-        )
-    return losses, dead
-
-
-def _archive_checks(args: argparse.Namespace) -> list[Check]:
-    """Every check that has to READ the archive volume. Runs in the child process.
-
-    Split out of `_cmd_doctor` for one reason: all of this can block indefinitely.
-    The store queries, the segment stat walk and the pause marker all live on
-    `/Volumes/Backup`, and on 2026-08-10 all three were in uninterruptible disk
-    wait at once. Keeping them behind one function keeps the boundary honest —
-    if a check belongs here it is unsafe to run in the reporting process.
-    """
-    now = datetime.now(UTC)
-    store = Store.open(_db_path(args.out))
-    try:
-        # Registered recorders, not whatever directories exist: a mic the household
-        # actually uses is one the archive knows about. Devices only — an imported
-        # meeting is a source but has no recorder that could stop or lose speech, and
-        # a row per meeting would bury the four microphones that matter.
-        sources = [
-            (row.id, row.kind)
-            for row in store.source_rows()
-            if row.kind in DEVICE_KINDS
-        ]
-        losses, dead_windows = _speech_loss(store, sources, now=now)
-        unmirrored = len(
-            store.unmirrored_segments(limit=10_000, older_than=now - _MIRROR_SLACK)
-        )
-        # repair's own lens, not raw segments_showing_no_turns: VAD-silent segments
-        # and evidence-hidden turns are correctly empty and must not page anyone.
-        from recall.repair import find_blanked  # noqa: PLC0415 - archive child only
-
-        blanked = len(find_blanked(store))
-        newest_live = store.newest_live_turn()
-    finally:
-        store.close()
-
-    checks = [
-        *capture_checks(
-            recorders_on_disk(args.out, sources, now=now),
-            now=now,
-            paused_until=capture_control.paused_until(args.out),
-        ),
-        *loss_checks(losses, dead_windows, sources, window=_LOSS_WINDOW),
-        worker_check(heartbeat.read(args.out), now=now),
-        live_check(
-            newest_live, now=now, paused_until=capture_control.paused_until(args.out)
-        ),
-    ]
-    # The fleet mirror only exists when the split is on (RECALL_SYNC_TOKEN set); a
-    # stock LAN-only deployment has no fleet to be incomplete against.
-    if os.environ.get("RECALL_SYNC_TOKEN"):
-        checks.append(mirror_check(unmirrored, slack=_MIRROR_SLACK))
-    # Quiet until audiod's uploader has run here (stage B): reads its state db.
-    checks.extend(delivery_checks(args.out, now=now))
-    checks.append(blanked_check(blanked))
-    return checks
-
-
-def _same_recall_env() -> dict[str, str]:
-    """Make the child import the same recall this process did.
-
-    The child starts in `/` rather than the parent's working directory — a wedged
-    cwd would hang it before it ran a line — so it cannot find a source checkout
-    the way the parent did. Without this, one doctor run can be two builds: the
-    parent from a checkout and the child from the installed wheel, which is a
-    difference that shows up as an argparse error rather than as itself.
-    """
-    root = str(Path(recall.__file__).resolve().parent.parent)
-    existing = os.environ.get("PYTHONPATH")
-    return {
-        **os.environ,
-        "PYTHONPATH": root if not existing else f"{root}{os.pathsep}{existing}",
-    }
-
-
-def _read_archive_checks(args: argparse.Namespace) -> tuple[list[Check], Check]:
-    """Ask a child process for the archive's checks, and give up on it if it hangs.
-
-    Returns what it managed to say plus the verdict on the asking itself, which
-    is reported whether or not the archive answered — that check IS the finding
-    when it did not.
-    """
-    answer = bounded.run(
-        [sys.executable, "-m", "recall", "doctor", "--out", str(args.out), "--collect"],
-        timeout_s=ARCHIVE_BOUND.total_seconds(),
-        env=_same_recall_env(),
-    )
-    if answer.stdout is None:
-        print(
-            f"doctor: the archive did not answer in "
-            f"{ARCHIVE_BOUND.total_seconds():.0f}s — abandoned pid {answer.pid} "
-            f"(it is in uninterruptible disk wait; it exits when the volume does)",
-            file=sys.stderr,
-        )
-        return [], archive_check(None)
-    if answer.returncode != 0:
-        reason = (answer.stderr or "the archive read failed").strip()
-        last = reason.splitlines()[-1] if reason else "the archive read failed"
-        return [], archive_check(answer.seconds, detail=last)
-    try:
-        report = json.loads(answer.stdout)
-        checks = [Check(**row) for row in report["checks"]]
-        seconds = float(report["seconds"])
-    except (json.JSONDecodeError, LookupError, TypeError, ValueError):
-        return [], archive_check(answer.seconds, detail="unreadable archive report")
-    return checks, archive_check(seconds)
-
-
-def _cmd_doctor(args: argparse.Namespace) -> int:
-    """Is recall working? Agents loaded, archive mirrored — and, above all, is the
-    recording actually recording.
-
-    That last one was missing, and its absence cost real memory: capture crash-looped on
-    22 June, recorded nothing for ninety minutes, and was found three weeks later by
-    diffing the filesystem by hand. launchd restarts capture when it dies, so a
-    persistent fault becomes a loop, and a loop looks exactly like a quiet house.
-
-    `--post` sends the verdicts to fleetwatch, where they sit beside the rest of the
-    fleet's health. That is what makes this a monitor rather than a command nobody runs:
-    fleetwatch renders a producer that has *stopped reporting* as failed, so the case
-    "the Mac is dead" needs no detector here — not reporting is the report.
-
-    ⚠ **This process must never read the archive volume itself.** Everything that
-    does is in `_archive_checks`, behind a child process this one abandons if it
-    hangs (`recall.bounded`). On 2026-08-10 the doctor sat in uninterruptible
-    disk wait for over an hour — with `KeepAlive = false` and a 300s
-    `StartInterval`, launchd starts no further run while one is stuck, so a
-    single wedged doctor silenced every doctor after it. What is left here reads
-    launchd and `~/.config`, both on the boot disk.
-    """
-    now = datetime.now(UTC)
-    if args.collect:
-        # The child times ITSELF, so the figure that reaches fleetwatch is the
-        # archive read rather than a second interpreter's startup — about 1.3s of
-        # imports, which would swamp the reading it is meant to trend.
-        started = time.monotonic()
-        checks = _archive_checks(args)
-        print(
-            json.dumps(
-                {
-                    "seconds": time.monotonic() - started,
-                    "checks": [asdict(check) for check in checks],
-                }
-            )
-        )
-        return 0
-
-    archive, reachable = _read_archive_checks(args)
-    checks = [reachable, *archive, *agent_checks(capture_control.agent_health())]
-
-    for check in checks:
-        mark = {"pass": "ok", "warn": "WARN", "fail": "FAIL", "skip": "--"}[
-            check.verdict
-        ]
-        print(f"  [{mark:>4}] {check.section}/{check.label}: {check.observed}")
-
-    if args.post:
-        _report_to_fleetwatch(checks, now)
-
-    failed = [c for c in checks if c.verdict == "fail"]
-    if failed:
-        print(f"doctor: {len(failed)} check(s) FAILED")
-        return 1
-    print("doctor: healthy")
-    return 0
-
-
-def _report_to_fleetwatch(checks: list[Check], now: datetime) -> None:
-    """Send the verdicts on. An unreachable monitor is not a broken recording: say so
-    and carry on, because the missing report is already visible at the other end as
-    staleness. Failing the health check because the *health reporting* failed would
-    be the tail wagging the dog."""
-    token = read_token()
-    if token is None:
-        print(
-            "doctor: no fleetwatch token — put the ingest token in "
-            "~/.config/fleetwatch/token (see the fleetwatch README)",
-            file=sys.stderr,
-        )
-        return
-    try:
-        status = post_report(build_report(checks, now=now), token=token)
-        print(f"doctor: reported to fleetwatch ({status})")
-    except (urllib.error.URLError, TimeoutError, OSError) as err:
-        print(f"doctor: could not reach fleetwatch: {err}", file=sys.stderr)
-
-
 def _cmd_scan_loops(args: argparse.Namespace) -> int:
     store = Store.open(args.out / "recall.sqlite")
     try:
@@ -1808,7 +1552,6 @@ _COMMANDS = {
     "correct": _cmd_correct,
     "redrive": _cmd_redrive,
     "refine": _cmd_refine,
-    "doctor": _cmd_doctor,
     "scan-hallucinations": _cmd_scan_hallucinations,
     "scan-loops": _cmd_scan_loops,
     "scan-foreign-script": _cmd_scan_foreign_script,

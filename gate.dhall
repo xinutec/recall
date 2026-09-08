@@ -236,7 +236,9 @@ in  { name = "recall"
         }
       , G.cargoDoc // { cwd = "audiocore" }
       , G.cargoDoc // { cwd = "audiod" }
+      , G.cargoDoc // { cwd = "doctor" }
       , G.cargoDoc // { cwd = "recalld" }
+      , G.cargoDoc // { cwd = "runner" }
       , {-  Unconditional. The script's guard was `[ ! -x
             frontend/node_modules/.bin/eslint ]`, and its own comment says why
             that is not merely a speed-up: a node_modules left behind by npm

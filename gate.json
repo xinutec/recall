@@ -266,7 +266,43 @@
         "--no-deps",
         "--workspace"
       ],
+      "cwd": "doctor",
+      "env": {
+        "RUSTDOCFLAGS": "-D rustdoc::broken_intra_doc_links"
+      },
+      "name": "rustdoc resolves every intra-doc link",
+      "timeout_s": 900
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "cargo",
+        "doc",
+        "--no-deps",
+        "--workspace"
+      ],
       "cwd": "recalld",
+      "env": {
+        "RUSTDOCFLAGS": "-D rustdoc::broken_intra_doc_links"
+      },
+      "name": "rustdoc resolves every intra-doc link",
+      "timeout_s": 900
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
+        "cargo",
+        "doc",
+        "--no-deps",
+        "--workspace"
+      ],
+      "cwd": "runner",
       "env": {
         "RUSTDOCFLAGS": "-D rustdoc::broken_intra_doc_links"
       },

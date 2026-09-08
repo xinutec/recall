@@ -8,11 +8,17 @@ quiet house (#709).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
 from pathlib import Path
 
 from recall import cli, heartbeat
-from recall.health import worker_check
+
+# The doctor that grades this pulse is Rust now (doctor/src/capture.rs), so the
+# two halves of the contract cannot be checked in one process. This fixture is
+# the shared copy: written in the shape `recall.heartbeat.write` produces, and
+# deserialized by the Rust `Beat` in doctor/src/archive.rs's own test. A field
+# renamed on either side fails on both.
+FIXTURE = Path(__file__).parent / "fixtures" / "worker-heartbeat.json"
 
 
 def test_a_pass_that_found_nothing_still_leaves_a_pulse(tmp_path: Path) -> None:
@@ -29,13 +35,22 @@ def test_a_pass_that_found_nothing_still_leaves_a_pulse(tmp_path: Path) -> None:
     assert beat.started <= beat.finished
 
 
-def test_the_pulse_a_real_pass_leaves_reads_as_healthy(tmp_path: Path) -> None:
+def test_the_pulse_a_real_pass_leaves_is_the_shape_the_doctor_reads(
+    tmp_path: Path,
+) -> None:
     """End to end: what the worker writes is what the doctor grades.
 
-    The two halves are in different modules and were written apart, so a field
+    The two halves are in different LANGUAGES and were written apart, so a field
     the check reads and the worker never sets would show up as a permanently
-    failing pipeline rather than as a bug.
+    failing pipeline rather than as a bug. The fixture is the one copy of the
+    contract; the Rust side parses the same file.
     """
     cli.main(["worker", "--out", str(tmp_path), "--basic"])
-    check = worker_check(heartbeat.read(tmp_path), now=datetime.now(UTC))
-    assert check.verdict == "pass", check.observed
+    written = json.loads(heartbeat.path(tmp_path).read_text())
+    contract = json.loads(FIXTURE.read_text())
+    assert written.keys() == contract.keys()
+    # `finished` is nullable and everything else is not: a pass that stopped
+    # returning is the distinction the doctor grades on.
+    assert written["finished"] is not None
+    assert isinstance(written["rows"], int)
+    assert isinstance(written["seconds"], float)

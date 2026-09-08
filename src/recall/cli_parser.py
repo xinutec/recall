@@ -251,25 +251,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "--fleet-url", default=DEFAULT_FLEET_URL, help="where to forward beats"
     )
 
-    doc = sub.add_parser(
-        "doctor",
-        help="is recall working? (recording, agents, backup) — --post reports to "
-        "fleetwatch",
-    )
-    doc.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    doc.add_argument(
-        "--post",
-        action="store_true",
-        help="send the verdicts to fleetwatch (needs ~/.config/fleetwatch/token)",
-    )
-    doc.add_argument(
-        "--collect",
-        action="store_true",
-        help="internal: emit only the archive-reading checks, as JSON. The doctor "
-        "runs itself this way in a child process it can abandon, so a wedged "
-        "volume is reported rather than joined (recall.bounded)",
-    )
-
     lmh = sub.add_parser(
         "llm-host",
         help="hold the LLM in ONE process and serve generation on localhost "

@@ -148,6 +148,29 @@ let
       '';
     };
 
+  # The Rust health agent (doctor/). Sources .env, unlike audiodWrapper: the
+  # presence of RECALL_SYNC_TOKEN is what tells the doctor this machine is half
+  # of the Isis split, and so whether the fleet-mirror check applies at all. It
+  # needs no agent-tools — the doctor spawns only ITSELF, as the bounded child
+  # that reads the archive.
+  doctorWrapper = { name, args }:
+    pkgs.writeShellApplication {
+      name = "recall-${name}";
+      text = ''
+        ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
+        if [ -r "$ENV_FILE" ]; then
+          set -a
+          # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
+          . "$ENV_FILE"
+          set +a
+        fi
+
+        exec ${
+          recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
+        }/bin/doctor ${lib.escapeShellArgs args}
+      '';
+    };
+
   # A KeepAlive recall daemon at background priority. `extra` adds per-agent keys.
   # `program` overrides the python wrapper for agents that are not `recall <args>`.
   daemon = { label, name, python ? devPython, args, extra ? { }, program ? null }:
@@ -317,15 +340,22 @@ in
   # launchd restarts capture when it dies, so a persistent fault becomes a loop —
   # and a loop looks exactly like a quiet house.
   #
-  # The interval MUST match recall.fleetwatch.INTERVAL_S (300): fleetwatch derives
-  # staleness from the cadence the report declares, and a producer that stops
-  # reporting renders as failed. That is the point — this agent dying, or the Mac
-  # dying, is itself the alarm. Nothing here has to detect it.
+  # The interval MUST match the doctor's declared INTERVAL_S (300): fleetwatch
+  # derives staleness from the cadence the report declares, and a producer that
+  # stops reporting renders as failed. That is the point — this agent dying, or
+  # the Mac dying, is itself the alarm. Nothing here has to detect it.
+  #
+  # ⚠ `KeepAlive = false` with a 300s interval is why the doctor reads the
+  # archive in a child it can abandon: launchd starts no further run while one
+  # is stuck, so a single wedged doctor silences every doctor after it.
   launchd.agents."org.xinutec.recall-doctor" = daemon {
     label = "org.xinutec.recall-doctor";
     name = "doctor";
-    python = venvPython;
-    args = [ "doctor" "--out" out "--post" ];
+    args = [ ];
+    program = doctorWrapper {
+      name = "doctor";
+      args = [ "--out" out "--post" ];
+    };
     extra = {
       KeepAlive = false;
       RunAtLoad = true;

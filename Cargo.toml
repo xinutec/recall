@@ -1,8 +1,13 @@
 # The recall Rust workspace (docs/architecture.md, stage D1): one lockfile,
-# one target dir, three crates —
+# one target dir. The members are the list below, not this comment — a crate
+# added without touching the prose is exactly how a "three crates" header
+# outlives its fourth.
+#
 #   audiocore  the shared DSP + segment-grammar library
 #   audiod     the Mac's audio plane (capture, ingest, upload)
+#   doctor     the Mac's health agent, reporting to fleetwatch
 #   recalld    the fleet's system-of-record daemon on Isis
+#   runner     the Mac's job orchestration against recalld's queue
 [workspace]
 resolver = "3"
-members = ["audiocore", "audiod", "recalld", "runner"]
+members = ["audiocore", "audiod", "doctor", "recalld", "runner"]

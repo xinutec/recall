@@ -14,7 +14,8 @@ finish — which makes "when did a pass last complete" the whole question, and o
 It lives in the archive root rather than off it, deliberately: a heartbeat that
 kept ticking while the archive was unreachable would be worse than none, since
 the thing it certifies is work done *on* that archive. When the volume is
-unreadable the doctor says so directly (`recall.bounded`, `health.archive_check`)
+unreadable the doctor says so directly (it reads this in a child process it
+can abandon; see the `doctor` crate)
 and this check is not the one to duplicate it.
 """
 

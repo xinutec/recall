@@ -1,0 +1,48 @@
+# doctor — "is recall working?", in Rust.
+#
+# The Mac's health agent: are the microphones still writing audio, is the
+# worker turning, is the archive readable at all, are the launchd agents
+# loaded — and the verdicts posted to fleetwatch, where the rest of the
+# fleet's health lives.
+#
+# Its own crate rather than a subcommand of audiod, because it spans both
+# planes: audiod's lib doc names the doctor as an OUTSIDE consumer of the
+# filesystem contract, and this reads the meaning plane (recall.sqlite) too.
+[package]
+name = "doctor"
+version = "0.1.0"
+edition = "2024"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Every cast here is a duration in minutes or seconds on its way into a
+# human-readable string or a fleetwatch `value`. None is near a precision limit.
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# ⚠ TLS is NOT inherited. The workspace's other ureq users are
+# `default-features = false` on purpose — everything they talk to is plain HTTP
+# inside WireGuard. fleetwatch is on the public internet over https, so rustls
+# is enabled HERE and nowhere else. Not `tls-native`: that drags in an openssl
+# the deploy image does not carry.
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+# Ageing a segment file is how the delivery backlog is exercised at all: the
+# check grades by mtime, so a test that cannot set one tests nothing.
+filetime = "0.2"

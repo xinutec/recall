@@ -46,13 +46,13 @@ There is deliberately **no `recall-api` agent**: the Mac serves no UI or control
 
 ### The doctor runs itself twice, and that is on purpose
 
-`recall doctor` starts a child — `python -m recall doctor --collect` — that does
-every read of `/Volumes/Backup` and prints its checks as JSON, and a parent that
-reports them while touching only launchd and `~/.config`. If the child does not
-answer within 60 seconds the parent **abandons it** and reports
+`doctor` starts a child — itself, with `--collect` — that does every read of
+`/Volumes/Backup` and prints its checks as JSON, and a parent that reports them
+while touching only launchd and `~/.config`. If the child does not answer within
+60 seconds the parent **abandons it** and reports
 `archive/archive answers: no answer in 60s`, naming the abandoned pid on stderr.
 
-So a stray `recall doctor --collect` in `ps`, in `U` state, is the system working:
+So a stray `doctor --collect` in `ps`, in `U` state, is the system working:
 a process in uninterruptible disk wait cannot be killed until its I/O completes,
 so leaving it is the only way for the doctor to come back at all. It exits by
 itself when the volume does. Do not go hunting it — go and find what owns the

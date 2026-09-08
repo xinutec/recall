@@ -119,7 +119,7 @@ class CaptureEventKind(StrEnum):
     PRODUCER_CYCLED = "producer_cycled"
     # Who asked for a pause/resume, recorded at the API boundary — capture-control is
     # login-free on the recording plane, so the durable PAUSE/RESUME the agent writes
-    # cannot name the caller. AUDIT ONLY: the loss reconciler (recall.loss) and
+    # cannot name the caller. AUDIT ONLY: the loss reconciler (the `doctor` crate) and
     # `_pause_explains` (recall.worker) key on PAUSE/RESUME exactly and never see this,
     # so it annotates "was that pause mine?" without touching gap detection. detail
     # carries the verb + the request_origin descriptor (recall.webauth).
