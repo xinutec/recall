@@ -14,6 +14,15 @@ use crate::decode;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+/// Recorded when the audio could not be decoded at all. Negative seconds are
+/// impossible, which is the point: **"we could not look" must never be stored
+/// as the 0.0 that means "nobody spoke"**. A sweep that cannot tell those apart
+/// deletes audio it never examined.
+///
+/// It lives with the detector rather than with either store, because every
+/// writer of a speech measurement needs the same way to say it.
+pub const UNKNOWN_SECONDS: f64 = -1.0;
+
 /// What silero was trained on, and what every segment is decoded to.
 pub const RATE: u32 = 16_000;
 /// The window the 16 kHz model expects. Not a tunable: the graph is shaped for it.

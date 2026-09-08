@@ -30,11 +30,7 @@ use audiocore::vad::Detector;
 use rusqlite::Connection;
 use std::path::Path;
 
-/// Recorded when the blob could not be decoded at all. Negative seconds are
-/// impossible, which is the point: "we could not look" must never be stored as
-/// the 0.0 that means "nobody spoke". A sweep that cannot tell those apart
-/// deletes audio it never examined.
-pub const UNKNOWN_SECONDS: f64 = -1.0;
+pub use audiocore::vad::UNKNOWN_SECONDS;
 
 pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(

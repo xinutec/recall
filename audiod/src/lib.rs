@@ -14,6 +14,7 @@ pub mod pause_mirror;
 pub mod rebase;
 pub mod segmenter;
 pub mod server;
+pub mod speech_scan;
 pub mod store;
 pub mod upload;
 pub mod wire;

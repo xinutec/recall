@@ -105,7 +105,33 @@ fn main() -> ExitCode {
             };
             run_upload(root, url, token_file, max)
         }
+        Some("speech") => run_speech(&root, max),
         _ => usage(),
+    }
+}
+
+/// The speech arm: one bounded pass of the archive's unmeasured segments.
+///
+/// ⚠ Bounded on purpose, and low priority in the agent that drives it. This
+/// decodes audio, and the machine it runs on is also recording: delivery must
+/// never compete with the recorder (design.md §7). A 13k-segment backlog is
+/// meant to drain over days behind live capture, not in one greedy pass.
+fn run_speech(root: &std::path::Path, max: usize) -> ExitCode {
+    match audiod::speech_scan::run(root, max) {
+        Ok(pass) => {
+            let left = audiod::speech_scan::remaining(root).unwrap_or(-1);
+            tracing::info!(
+                measured = pass.measured,
+                unreadable = pass.unreadable,
+                remaining = left,
+                "speech: pass complete"
+            );
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("audiod speech: {err}");
+            ExitCode::FAILURE
+        }
     }
 }
 
