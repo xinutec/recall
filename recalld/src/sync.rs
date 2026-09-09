@@ -14,7 +14,7 @@
 //! carries no session.
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -262,6 +262,85 @@ pub async fn outbox_route(State(st): State<Arc<Gate>>, headers: axum::http::Head
     gated_read(&st, &headers, "sync outboxes", crate::devices::reports_out).await
 }
 
+/// How many jobs the Mac asks for. Defaulted so a client that omits it gets what
+/// the Python gave it.
+#[derive(Deserialize)]
+pub struct JobsQuery {
+    #[serde(default = "default_job_limit")]
+    pub limit: i64,
+}
+
+const fn default_job_limit() -> i64 {
+    50
+}
+
+/// `GET /sync/jobs` — what the fleet wants the Mac to do.
+pub async fn jobs_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<JobsQuery>,
+) -> Response {
+    let limit = q.limit;
+    gated_read(&st, &headers, "sync jobs", move |conn| {
+        crate::work::pending_jobs(conn, limit)
+    })
+    .await
+}
+
+/// Which id space `job_id` belongs to. Defaulted to `refine`, so a Mac too old
+/// to send it acknowledges refines exactly as it always did.
+#[derive(Deserialize)]
+pub struct DoneQuery {
+    #[serde(default = "default_job_type")]
+    pub r#type: String,
+}
+
+fn default_job_type() -> String {
+    "refine".to_owned()
+}
+
+/// `POST /sync/jobs/{id}/done` — the Mac has taken the job.
+///
+/// ⚠ "Done" means DIFFERENT things per type and neither is "transcribed". For a
+/// refine it is processed; for an upload it means the Mac now HOLDS the audio and
+/// will ASR it, so the row stops being served. Conflating them would either
+/// re-serve work already taken or retire work never done.
+pub async fn job_done_route(
+    State(st): State<Arc<Gate>>,
+    axum::extract::Path(job_id): axum::extract::Path<i64>,
+    Query(q): Query<DoneQuery>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Err(refusal) = check(bearer(presented), &st.expected) {
+        return refusal.into_response();
+    }
+    let kind = q.r#type;
+    if kind != "refine" && kind != "upload" {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("unknown job type {kind:?}"),
+        )
+            .into_response();
+    }
+    let root = st.root.clone();
+    match crate::route::blocking("sync job done", move || {
+        let conn = crate::work::open_write(&root)?;
+        if kind == "upload" {
+            crate::work::mark_transcribed(&conn, job_id)
+        } else {
+            crate::work::mark_refine_done(&conn, job_id, chrono::Utc::now())
+        }
+    })
+    .await
+    {
+        Ok(()) => crate::route::ack(),
+        Err(response) => response,
+    }
+}
+
 /// The glossary prompt's wire shape. `null` when nothing is enrolled.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct PromptOut {
@@ -283,5 +362,7 @@ pub fn routes(gate: Arc<Gate>) -> Router {
             axum::routing::get(heartbeats_route),
         )
         .route("/sync/devices/outbox", axum::routing::get(outbox_route))
+        .route("/sync/jobs", axum::routing::get(jobs_route))
+        .route("/sync/jobs/{job_id}/done", post(job_done_route))
         .with_state(gate)
 }

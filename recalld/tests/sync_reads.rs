@@ -182,3 +182,123 @@ fn the_label_wire_shape_is_snake_case() {
         r#"[{"source_id":"usb","cluster":"c1","name":"Pippijn"}]"#
     );
 }
+
+// --- the job queue -----------------------------------------------------------
+
+use recalld::work::{mark_refine_done, mark_transcribed, pending_jobs};
+
+fn queue_store() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
+         CREATE TABLE refine_requests (
+             id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL,
+             start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
+             created_utc TEXT NOT NULL, done_utc TEXT);
+         CREATE TABLE audio_segments (
+             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
+             start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
+             sample_rate INTEGER NOT NULL, channels INTEGER NOT NULL,
+             transcribed_utc TEXT);",
+    )
+    .expect("schema");
+    conn.execute_batch(
+        "INSERT INTO sources VALUES ('up','A Meeting','upload'), ('usb','usb','coreaudio');
+         INSERT INTO refine_requests (source_id,start_utc,end_utc,created_utc)
+           VALUES ('usb','2026-09-01T10:00:00+00:00','2026-09-01T10:05:00+00:00','2026-09-01T10:00:00+00:00');
+         INSERT INTO refine_requests (source_id,start_utc,end_utc,created_utc,done_utc)
+           VALUES ('usb','2026-09-01T11:00:00+00:00','2026-09-01T11:05:00+00:00','2026-09-01T11:00:00+00:00','2026-09-01T12:00:00+00:00');
+         INSERT INTO audio_segments (id,source_id,path,start_utc,end_utc,sample_rate,channels)
+           VALUES (1,'up','/deep/nested/dir/clip-0.flac','2026-09-02T09:00:00+00:00','2026-09-02T09:10:00+00:00',48000,1),
+                  (2,'up','/deep/nested/dir/clip-1.flac','2026-09-02T08:00:00+00:00','2026-09-02T08:10:00+00:00',48000,1);",
+    )
+    .expect("fixture");
+    conn
+}
+
+/// ⚠ The expected payload is the PYTHON's — `_job_of` / `_upload_job_of` were run
+/// on exactly these rows on 2026-09-09 and printed it.
+///
+/// Four rules ride on this one assertion, and each was a chance to diverge:
+/// refines come FIRST, a done refine is absent, uploads order by START TIME (so
+/// id 2 precedes id 1 here), and `file` is the BASENAME of a nested path.
+#[test]
+fn the_job_queue_matches_what_the_python_served() {
+    let conn = queue_store();
+
+    let jobs = pending_jobs(&conn, 50).unwrap();
+    let json = serde_json::to_value(&jobs).unwrap();
+
+    assert_eq!(
+        json,
+        serde_json::json!([
+            {"id":1,"type":"refine","source":"usb",
+             "start":"2026-09-01T10:00:00+00:00","end":"2026-09-01T10:05:00+00:00",
+             "file":null,"title":null,"sample_rate":null,"channels":null},
+            {"id":2,"type":"upload","source":"up",
+             "start":"2026-09-02T08:00:00+00:00","end":"2026-09-02T08:10:00+00:00",
+             "file":"clip-1.flac","title":"A Meeting","sample_rate":48000,"channels":1},
+            {"id":1,"type":"upload","source":"up",
+             "start":"2026-09-02T09:00:00+00:00","end":"2026-09-02T09:10:00+00:00",
+             "file":"clip-0.flac","title":"A Meeting","sample_rate":48000,"channels":1},
+        ])
+    );
+}
+
+/// ⚠ The two queues share ONE limit and refines take it first — a backlog of
+/// uploads must never starve a refine somebody is waiting on in the UI.
+#[test]
+fn refines_take_the_limit_before_uploads_do() {
+    let conn = queue_store();
+
+    let jobs = pending_jobs(&conn, 1).unwrap();
+
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(
+        jobs[0].r#type, "refine",
+        "the refine must win the only slot"
+    );
+}
+
+/// ⚠ `transcribed_utc` takes the segment's own `end_utc`, NOT the current time.
+/// The column reads as "the recording this covers ended then", so anything
+/// ordering or ageing by it stays on the RECORDING's clock. Writing `now` makes a
+/// months-old backlog look like it was all recorded the day it drained.
+#[test]
+fn retiring_an_upload_stamps_the_recordings_end_not_the_clock() {
+    let conn = queue_store();
+
+    mark_transcribed(&conn, 1).unwrap();
+
+    let (end, transcribed): (String, String) = conn
+        .query_row(
+            "SELECT end_utc, transcribed_utc FROM audio_segments WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(transcribed, end);
+    assert_eq!(transcribed, "2026-09-02T09:10:00+00:00");
+    // And it leaves the queue.
+    assert!(
+        !pending_jobs(&conn, 50)
+            .unwrap()
+            .iter()
+            .any(|j| j.r#type == "upload" && j.id == 1)
+    );
+}
+
+#[test]
+fn retiring_a_refine_removes_it_from_the_queue() {
+    let conn = queue_store();
+    let at = chrono::DateTime::from_timestamp(1_788_998_400, 0).unwrap();
+
+    mark_refine_done(&conn, 1, at).unwrap();
+
+    assert!(
+        !pending_jobs(&conn, 50)
+            .unwrap()
+            .iter()
+            .any(|j| j.r#type == "refine")
+    );
+}

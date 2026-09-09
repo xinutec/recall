@@ -69,51 +69,6 @@ def _seed(path: Path) -> None:
     store.close()
 
 
-def test_poll_and_done_roundtrip(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
-    db = tmp_path / "recall.sqlite"
-    _seed(db)
-
-    app = FastAPI()
-    assert register_sync_routes(app, lambda: Store.open(db), tmp_path) is True
-    client = TestClient(app)
-
-    # the gate: no token, no jobs
-    assert client.get("/sync/jobs").status_code == 401
-
-    auth = {"Authorization": "Bearer secret"}
-    jobs = client.get("/sync/jobs", headers=auth).json()
-    assert len(jobs) == 1
-    assert jobs[0]["type"] == "refine"
-    assert jobs[0]["source"] == "usb"
-
-    # finishing the job removes it from the queue
-    assert (
-        client.post(f"/sync/jobs/{jobs[0]['id']}/done", headers=auth).status_code == 200
-    )
-    assert client.get("/sync/jobs", headers=auth).json() == []
-
-
-def test_sync_client_polls_and_marks_done_over_the_transport(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # Drive the real SyncClient against the app's test transport — proving the Mac-side
-    # client and the fleet-side routes agree on the wire contract.
-    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
-    db = tmp_path / "recall.sqlite"
-    _seed(db)
-    app = FastAPI()
-    register_sync_routes(app, lambda: Store.open(db), tmp_path)
-
-    with TestClient(app) as transport:
-        client = SyncClient("http://fleet", "secret", client=transport)
-        jobs = client.poll_jobs()
-        assert [j.type for j in jobs] == ["refine"]
-        client.mark_done(jobs[0].id)
-
-
 def test_capture_exchange_reports_state_and_returns_intent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -164,7 +119,6 @@ def test_capture_exchange_reports_state_and_returns_intent(
             "pixel9": datetime.fromisoformat(alive)
         }
         store.close()
-        assert client.poll_jobs() == []
 
 
 def test_audio_push_stores_once_and_is_idempotent(
@@ -564,34 +518,6 @@ def _seed_upload(db: Path, archive: Path) -> Path:
     )
     store.close()
     return blob
-
-
-def test_an_untranscribed_upload_is_served_as_a_job_until_acknowledged(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # The upload queue is derived from the rows create_session wrote — nothing
-    # enqueues, so nothing can forget to. Done = mark_transcribed, so the ack and the
-    # eventual turn push both retire it.
-    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
-    db = tmp_path / "recall.sqlite"
-    archive = tmp_path / "archive"
-    _seed_upload(db, archive)
-    app = FastAPI()
-    register_sync_routes(app, lambda: Store.open(db), archive)
-    client = TestClient(app)
-    auth = {"Authorization": "Bearer secret"}
-
-    (job,) = client.get("/sync/jobs", headers=auth).json()
-    assert job["type"] == "upload"
-    assert job["source"] == "meeting-20260716-1400"
-    assert job["file"] == "meeting-20260716-1400-20260716T130000.m4a"
-    assert job["title"] == "Neurology follow-up"
-    assert (job["sample_rate"], job["channels"]) == (48000, 1)
-    assert job["start"] == BASE.isoformat()
-
-    done = client.post(f"/sync/jobs/{job['id']}/done?type=upload", headers=auth)
-    assert done.status_code == 200
-    assert client.get("/sync/jobs", headers=auth).json() == []
 
 
 def test_the_mac_fetches_the_upload_blob_over_the_wire(

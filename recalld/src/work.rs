@@ -27,6 +27,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -238,4 +239,119 @@ pub async fn refine_route(
         Ok(_) => route::ack(),
         Err(response) => response,
     }
+}
+
+// --- the Mac-initiated job queue (`/sync/jobs`) -------------------------------
+
+/// A unit of work the fleet hands the Mac, which holds the ML and the mic.
+///
+/// ⚠ The wire names are `snake_case` — `sample_rate`, not `sampleRate`. The Python
+/// model declares them bare and the Mac parses them bare.
+///
+/// Fields outside a job's own type are `None` and are omitted by neither side:
+/// an older fleet simply never sends them.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct JobOut {
+    pub id: i64,
+    /// `refine` — `id` is a refine-request id. `upload` — `id` is the fleet's
+    /// audio-segment id, and the upload-only fields carry what the Mac needs to
+    /// bring the session home without re-probing it.
+    pub r#type: String,
+    pub source: String,
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub file: Option<String>,
+    pub title: Option<String>,
+    pub sample_rate: Option<i64>,
+    pub channels: Option<i64>,
+}
+
+/// The queue the Mac polls: interactive refines first, then uploaded sessions.
+///
+/// ⚠ The two share ONE limit and refines take it first. A backlog of uploads
+/// must not starve a refine somebody is waiting on in the UI.
+pub fn pending_jobs(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<JobOut>> {
+    let mut jobs = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT id, source_id, start_utc, end_utc FROM refine_requests \
+         WHERE done_utc IS NULL ORDER BY id LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([limit], |r| {
+        Ok(JobOut {
+            id: r.get(0)?,
+            r#type: "refine".to_owned(),
+            source: r.get(1)?,
+            start: r.get::<_, Option<String>>(2)?,
+            end: r.get::<_, Option<String>>(3)?,
+            file: None,
+            title: None,
+            sample_rate: None,
+            channels: None,
+        })
+    })?;
+    for row in rows {
+        jobs.push(row?);
+    }
+
+    let remaining = limit - i64::try_from(jobs.len()).unwrap_or(limit);
+    if remaining <= 0 {
+        return Ok(jobs);
+    }
+    // Derived from the segment rows themselves, so nothing has to remember to
+    // enqueue; `done` is `mark_transcribed`.
+    let mut stmt = conn.prepare(
+        "SELECT a.id, a.source_id, s.name, a.path, a.start_utc, a.end_utc, \
+                a.sample_rate, a.channels \
+         FROM audio_segments a JOIN sources s ON s.id = a.source_id \
+         WHERE s.kind = 'upload' AND a.transcribed_utc IS NULL \
+         ORDER BY a.start_utc LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([remaining], |r| {
+        let path: String = r.get(3)?;
+        Ok(JobOut {
+            id: r.get(0)?,
+            r#type: "upload".to_owned(),
+            source: r.get(1)?,
+            start: r.get::<_, Option<String>>(4)?,
+            end: r.get::<_, Option<String>>(5)?,
+            // The BASENAME, not the stored path: the Mac fetches it by name
+            // through /sync/audio/file, which refuses a path component.
+            file: Some(
+                std::path::Path::new(&path)
+                    .file_name()
+                    .map_or(path.clone(), |n| n.to_string_lossy().into_owned()),
+            ),
+            title: r.get::<_, Option<String>>(2)?,
+            sample_rate: r.get::<_, Option<i64>>(6)?,
+            channels: r.get::<_, Option<i64>>(7)?,
+        })
+    })?;
+    for row in rows {
+        jobs.push(row?);
+    }
+    Ok(jobs)
+}
+
+/// Retire a refine request.
+pub fn mark_refine_done(conn: &Connection, id: i64, now: DateTime<Utc>) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE refine_requests SET done_utc = ?1 WHERE id = ?2",
+        rusqlite::params![crate::instant::python_isoformat_utc(now), id],
+    )?;
+    Ok(())
+}
+
+/// Retire an uploaded segment: the Mac holds it and will transcribe it.
+///
+/// ⚠ **`transcribed_utc` is set to the segment's own `end_utc`, NOT to now.**
+/// That is deliberate and load-bearing: the column reads as "the recording this
+/// covers ended then", so anything ordering or ageing by it stays on the
+/// RECORDING's clock rather than on when a machine got round to it. Writing
+/// `now` here makes a months-old backlog look like it was all recorded today.
+pub fn mark_transcribed(conn: &Connection, audio_segment_id: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE audio_segments SET transcribed_utc = end_utc WHERE id = ?1",
+        [audio_segment_id],
+    )?;
+    Ok(())
 }

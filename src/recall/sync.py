@@ -32,7 +32,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from recall import capture_control
-from recall.schemas import OkOut
 from recall.sources import AudioSource, SourceKind
 from recall.store import (
     RefineRequest,
@@ -590,63 +589,8 @@ def register_sync_routes(
 
     _register_live_route(app, store_factory, expected)
     _register_capture_route(app, store_factory, expected)
-    _register_job_routes(app, store_factory, expected)
 
     return True
-
-
-def _register_job_routes(
-    app: FastAPI, store_factory: Callable[[], Store], expected: str
-) -> None:
-    """The Mac-initiated job queue (its own helper so register_sync_routes stays under
-    the statement budget): refine requests and uploaded-session pulls, plus the typed
-    acknowledgement that retires each."""
-
-    @app.get("/sync/jobs")
-    def sync_jobs(
-        authorization: str | None = Header(default=None), limit: int = 50
-    ) -> list[JobOut]:
-        check_token(bearer(authorization), expected)
-        store = store_factory()
-        try:
-            # Interactive refines first, then uploaded sessions. Ask and A/B
-            # relays used to share this queue and were cut with their features
-            # (architecture.md, "Scope of the rebuilt product").
-            jobs = [_job_of(r) for r in store.pending_refine_requests(limit=limit)]
-            remaining = limit - len(jobs)
-            if remaining > 0:
-                jobs += [
-                    _upload_job_of(u)
-                    for u in store.pending_upload_jobs(limit=remaining)
-                ]
-            return jobs
-        finally:
-            store.close()
-
-    @app.post("/sync/jobs/{job_id}/done")
-    def sync_job_done(
-        job_id: int,
-        type: str = "refine",
-        authorization: str | None = Header(default=None),
-    ) -> OkOut:
-        # `type` names the id space (refine-request vs audio-segment id) — see JobOut.
-        # Defaulted so an older Mac keeps acknowledging refines exactly as before.
-        check_token(bearer(authorization), expected)
-        store = store_factory()
-        try:
-            if type == "upload":
-                # "Done" for an upload = the Mac holds it and will ASR it; the row is
-                # marked processed so pending_upload_jobs stops serving it.
-                store.mark_transcribed(job_id)
-            elif type == "refine":
-                store.mark_refine_request_done(job_id)
-            else:
-                raise HTTPException(
-                    status_code=400, detail=f"unknown job type {type!r}"
-                )
-        finally:
-            store.close()
-        return {"ok": True}
 
 
 class SyncClient:
