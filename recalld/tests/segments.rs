@@ -9,7 +9,13 @@ fn store() -> (tempfile::TempDir, Connection) {
     let dir = tempfile::tempdir().expect("tmp");
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
-        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, spec TEXT);
+        // ⚠ THE REAL SCHEMA, copied from the fleet's own sqlite_master. An
+        // invented one is why the first deploy of this route 500'd on every push
+        // with "table sources has no column named spec": the test had a column
+        // the database does not, taken from the Python DATACLASS rather than the
+        // table. A fixture that mirrors the wiring tests its own copy.
+        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+             port INTEGER, event_db REAL, noise_shape BLOB);
          CREATE TABLE audio_segments (
              id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
              start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
@@ -322,7 +328,14 @@ fn a_changed_kind_reaches_the_fleet_rather_than_sticking_at_the_first_one() {
         })
         .unwrap();
     assert_eq!(kind, "tcp_pcm", "the fleet kept the first kind it was told");
-    assert_eq!(name, "Renamed");
+    // ⚠ The NAME is NOT taken from the sender. It is overwritten only while the
+    // stored name is still the placeholder (equal to the id), so a name a person
+    // set on the fleet survives every later push. Asserting "Renamed" here — as
+    // this test first did — asserts a silent rename of somebody's title.
+    assert_eq!(
+        name, "USB mic",
+        "a sync push renamed a source the fleet had named"
+    );
 }
 
 /// The voiceprint guess rides along because the fleet has no ML to recompute it.

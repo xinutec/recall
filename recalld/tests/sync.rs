@@ -799,8 +799,12 @@ fn a_segment(text: &str) -> serde_json::Value {
 fn seed_meaning_schema(root: &std::path::Path) {
     let conn = recalld::work::open_write(root).expect("db");
     conn.execute_batch(
+        // ⚠ THE REAL SCHEMA. An invented `spec` column here — taken from the
+        // Python DATACLASS, which has one, rather than the table, which does not
+        // — is why every real push 500'd for fifteen minutes on 2026-09-09.
         "CREATE TABLE IF NOT EXISTS sources (
-             id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, spec TEXT);
+             id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+             port INTEGER, event_db REAL, noise_shape BLOB);
          CREATE TABLE IF NOT EXISTS audio_segments (
              id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
              start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, sample_rate INTEGER NOT NULL,

@@ -576,13 +576,27 @@ pub fn ingest_segment(
         });
     }
 
-    // The SENDER owns the kind: the Mac runs the capture agents and the upload
+    // The SENDER owns the KIND: the Mac runs the capture agents and the upload
     // path, so it is the machine that can know. An upsert rather than
     // insert-or-ignore, so a correction there reaches here — otherwise the fleet
     // keeps the first kind it was ever told and the two databases disagree for good.
+    //
+    // ⚠ **The NAME is not the sender's, and the CASE is why.** It is overwritten
+    // only when the stored name is still the placeholder (equal to the id); a name
+    // a person set on the fleet survives every later push. Writing
+    // `name = excluded.name` here silently renames whatever somebody titled, on
+    // the next sync pass, with nothing recording that it happened.
+    //
+    // ⚠ `port` is NULL because the sync path builds its source with an empty
+    // spec, so the Python's derived `port` is None too. There is no `spec`
+    // column on this table — the dataclass has one, the schema does not.
     conn.execute(
-        "INSERT INTO sources (id, name, kind, spec) VALUES (?1, ?2, ?3, '') \
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, kind = excluded.kind",
+        "INSERT INTO sources (id, name, kind, port) VALUES (?1, ?2, ?3, NULL) \
+         ON CONFLICT(id) DO UPDATE SET \
+             kind = excluded.kind, \
+             port = excluded.port, \
+             name = CASE WHEN sources.name = sources.id \
+                         THEN excluded.name ELSE sources.name END",
         rusqlite::params![body.source_id, body.source_name, body.kind],
     )?;
 
