@@ -518,49 +518,58 @@ pub async fn outbox_post_route(
     }
 }
 
+/// The heartbeats as the wire carries them.
+///
+/// ⚠ Shared by TWO planes on purpose. The browsing tier reads this at
+/// `/api/devices/heartbeat` and the Mac reads the identical bytes at
+/// `/sync/devices/heartbeats` — same reader, same shape, different credential.
+/// Two copies of this mapping would be two places for a field to drift, and the
+/// Mac would learn about it by silently losing one.
+pub fn beats_out(conn: &Connection) -> rusqlite::Result<BeatsOut> {
+    Ok(BeatsOut {
+        items: read_beats(conn)?
+            .into_iter()
+            .map(|b| BeatOut {
+                device: b.device,
+                app: b.app,
+                version: b.version,
+                started_at: b.started_at,
+                streaming: b.streaming,
+                charging: b.charging,
+                mic_ok: b.mic_ok,
+                via_lan: b.via_lan,
+                at: b.at,
+            })
+            .collect(),
+    })
+}
+
+/// The outbox reports as the wire carries them. Shared by both planes — see
+/// [`beats_out`].
+pub fn reports_out(conn: &Connection) -> rusqlite::Result<ReportsOut> {
+    Ok(ReportsOut {
+        items: read_reports(conn)?
+            .into_iter()
+            .map(|r| ReportOut {
+                device: r.device,
+                queued: r.queued,
+                oldest_queued_at: r.oldest_queued_at,
+                failing: r.failing,
+                reason: r.reason,
+                at: r.at,
+            })
+            .collect(),
+    })
+}
+
 pub async fn heartbeat_get_route(State(st): State<Arc<reads::State>>) -> Response {
     let root = st.root.clone();
-    route::json("heartbeats", move || {
-        let beats = read_beats(&reads::open(&root)?)?;
-        Ok(BeatsOut {
-            items: beats
-                .into_iter()
-                .map(|b| BeatOut {
-                    device: b.device,
-                    app: b.app,
-                    version: b.version,
-                    started_at: b.started_at,
-                    streaming: b.streaming,
-                    charging: b.charging,
-                    mic_ok: b.mic_ok,
-                    via_lan: b.via_lan,
-                    at: b.at,
-                })
-                .collect(),
-        })
-    })
-    .await
+    route::json("heartbeats", move || beats_out(&reads::open(&root)?)).await
 }
 
 pub async fn outbox_get_route(State(st): State<Arc<reads::State>>) -> Response {
     let root = st.root.clone();
-    route::json("outboxes", move || {
-        let reports = read_reports(&reads::open(&root)?)?;
-        Ok(ReportsOut {
-            items: reports
-                .into_iter()
-                .map(|r| ReportOut {
-                    device: r.device,
-                    queued: r.queued,
-                    oldest_queued_at: r.oldest_queued_at,
-                    failing: r.failing,
-                    reason: r.reason,
-                    at: r.at,
-                })
-                .collect(),
-        })
-    })
-    .await
+    route::json("outboxes", move || reports_out(&reads::open(&root)?)).await
 }
 
 /// Forget one device's heartbeat.

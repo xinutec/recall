@@ -192,10 +192,96 @@ pub async fn capture_route(
     axum::Json(reply).into_response()
 }
 
+/// Authorise, then answer a read from the meaning database.
+///
+/// Every read route on this plane is the same three steps — check the bearer,
+/// open the store off the request thread, serialise — and writing them out per
+/// route is four places for one of them to drift.
+async fn gated_read<T, F>(
+    st: &Arc<Gate>,
+    headers: &axum::http::HeaderMap,
+    what: &'static str,
+    read: F,
+) -> Response
+where
+    F: FnOnce(&rusqlite::Connection) -> rusqlite::Result<T> + Send + 'static,
+    T: serde::Serialize + Send + 'static,
+{
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Err(refusal) = check(bearer(presented), &st.expected) {
+        return refusal.into_response();
+    }
+    let root = st.root.clone();
+    crate::route::json(what, move || read(&crate::reads::open(&root)?)).await
+}
+
+/// `GET /sync/labels` — the human voice-namings, fleet→Mac.
+///
+/// ⚠ This is the Mac's ONLY path to the names. The UI lives on the fleet, so a
+/// person naming a voice there reaches the master archive and the voiceprint
+/// enrolment through here or not at all.
+pub async fn labels_route(State(st): State<Arc<Gate>>, headers: axum::http::HeaderMap) -> Response {
+    gated_read(&st, &headers, "sync labels", crate::labels::cluster_namings).await
+}
+
+/// `GET /sync/vocabulary/prompt` — the household glossary as an ASR prompt.
+///
+/// ⚠ Read at RUNNER STARTUP, never fetched by the model shim itself: a shim does
+/// no I/O beyond its stdio and the audio path it is handed, so the prompt is
+/// carried to it. Putting a database handle inside the model process would couple
+/// the worker back to state it is meant to have given up.
+pub async fn vocabulary_prompt_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    gated_read(&st, &headers, "sync vocabulary prompt", |conn| {
+        Ok(PromptOut {
+            prompt: crate::labels::initial_prompt(conn)?,
+        })
+    })
+    .await
+}
+
+/// `GET /sync/devices/heartbeats` — when each mic app last said it was running.
+///
+/// ⚠ On the SYNC plane because the READER is the Mac. The apps' own
+/// `POST /api/devices/heartbeat` stays unauthenticated, which is the credential
+/// THEY have; this side carries the one the Mac already holds. Neither gains
+/// anything it did not need.
+pub async fn heartbeats_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    gated_read(&st, &headers, "sync heartbeats", crate::devices::beats_out).await
+}
+
+/// `GET /sync/devices/outbox` — what each phone last said it was still holding.
+pub async fn outbox_route(State(st): State<Arc<Gate>>, headers: axum::http::HeaderMap) -> Response {
+    gated_read(&st, &headers, "sync outboxes", crate::devices::reports_out).await
+}
+
+/// The glossary prompt's wire shape. `null` when nothing is enrolled.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct PromptOut {
+    pub prompt: Option<String>,
+}
+
 /// The sync plane's routes. Mounted only where a token is configured — see
 /// [`Gate`].
 pub fn routes(gate: Arc<Gate>) -> Router {
     Router::new()
         .route("/sync/capture", post(capture_route))
+        .route("/sync/labels", axum::routing::get(labels_route))
+        .route(
+            "/sync/vocabulary/prompt",
+            axum::routing::get(vocabulary_prompt_route),
+        )
+        .route(
+            "/sync/devices/heartbeats",
+            axum::routing::get(heartbeats_route),
+        )
+        .route("/sync/devices/outbox", axum::routing::get(outbox_route))
         .with_state(gate)
 }

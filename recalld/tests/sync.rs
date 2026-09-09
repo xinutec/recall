@@ -498,3 +498,78 @@ async fn a_writer_holding_the_lock_delays_the_handshake_rather_than_failing_it()
          so this test is no longer exercising contention"
     );
 }
+
+// --- the read routes ---------------------------------------------------------
+
+/// `GET` one of the sync plane's read routes.
+async fn get(addr: &str, path: &str, token: Option<&str>) -> (u16, String) {
+    let url = format!("http://{addr}{path}");
+    let token = token.map(ToOwned::to_owned);
+    tokio::task::spawn_blocking(move || {
+        let mut req = ureq::get(&url);
+        if let Some(token) = token {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+        match req.call() {
+            Ok(res) => (res.status(), res.into_string().unwrap_or_default()),
+            Err(ureq::Error::Status(code, res)) => (code, res.into_string().unwrap_or_default()),
+            Err(err) => panic!("transport: {err}"),
+        }
+    })
+    .await
+    .expect("request")
+}
+
+/// ⚠ Every read route, checked for REACH and for its GATE in one pass — the
+/// `/api/correct` incident was a handler that was written, tested, and mounted
+/// nowhere, and an ungated one here would hand the household's names and its
+/// glossary to anything that can reach the port.
+#[tokio::test]
+async fn every_sync_read_route_is_mounted_and_gated() {
+    let (dir, addr) = serve(Some("sekrit")).await;
+    let conn = recalld::work::open_write(dir.path()).expect("db");
+    // ⚠ NOT `.ok()`. These routes answer 200 with an empty body when their tables
+    // are missing, so a swallowed setup failure would leave every assertion below
+    // passing for the wrong reason — the exact shape this test exists to catch.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS speakers (
+             id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+         CREATE TABLE IF NOT EXISTS vocabulary (
+             id INTEGER PRIMARY KEY, term TEXT NOT NULL UNIQUE, created_utc TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS audio_segments (
+             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS transcript_segments (
+             id INTEGER PRIMARY KEY, audio_segment_id INTEGER, speaker_label TEXT,
+             speaker_cluster TEXT, superseded_by INTEGER, hidden_reason TEXT);",
+    )
+    .expect("the meaning-plane schema these reads need");
+    drop(conn);
+
+    for path in [
+        "/sync/labels",
+        "/sync/vocabulary/prompt",
+        "/sync/devices/heartbeats",
+        "/sync/devices/outbox",
+    ] {
+        let (ok, body) = get(&addr, path, Some("sekrit")).await;
+        assert_eq!(ok, 200, "{path} must be MOUNTED: {body}");
+
+        for bad in [None, Some("wrong")] {
+            let (refused, _) = get(&addr, path, bad).await;
+            assert_eq!(refused, 401, "{path} must be GATED (token {bad:?})");
+        }
+    }
+}
+
+/// Without a token the whole plane is absent, not open — the same inversion the
+/// capture handshake makes, and for the same reason: these carry the household's
+/// names.
+#[tokio::test]
+async fn the_read_routes_are_absent_when_no_token_is_configured() {
+    let (_dir, addr) = serve(None).await;
+
+    for path in ["/sync/labels", "/sync/vocabulary/prompt"] {
+        let (status, _) = get(&addr, path, Some("sekrit")).await;
+        assert_eq!(status, 404, "{path} must not answer at all");
+    }
+}

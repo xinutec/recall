@@ -185,6 +185,105 @@ pub struct AudioQuery {
     context: bool,
 }
 
+/// Whisper reserves 224 tokens for the prompt; stay comfortably under it so the
+/// bias list can never crowd out real left-context.
+const MAX_PROMPT_CHARS: usize = 600;
+
+/// One human naming of a voice, as the fleet→Mac label channel carries it.
+///
+/// ⚠ The field names are `snake_case` ON THE WIRE — no camelCase rename. The
+/// Python model declares them bare and the Mac's client parses them bare, so
+/// tidying this into `sourceId` would silently drop every label at the Mac.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct ClusterNaming {
+    pub source_id: String,
+    pub cluster: String,
+    pub name: String,
+}
+
+/// Every human naming of a voice — the whole set, so a missed pass self-heals
+/// and the Mac has a diff baseline.
+///
+/// ⚠ A cluster is ONE voice, so when a few of its turns were individually
+/// reassigned the cluster's DOMINANT (most-turns) label wins. Ties break on the
+/// label text, and the row order is the payload's order — both are load-bearing
+/// for a stable payload, not incidental.
+pub fn cluster_namings(conn: &Connection) -> rusqlite::Result<Vec<ClusterNaming>> {
+    let mut stmt = conn.prepare(
+        "SELECT a.source_id src, ts.speaker_cluster cl, ts.speaker_label lbl, COUNT(*) n \
+         FROM transcript_segments ts \
+         JOIN audio_segments a ON a.id = ts.audio_segment_id \
+         WHERE ts.speaker_label IS NOT NULL AND ts.speaker_cluster IS NOT NULL \
+           AND ts.superseded_by IS NULL AND ts.hidden_reason IS NULL \
+         GROUP BY a.source_id, ts.speaker_cluster, ts.speaker_label \
+         ORDER BY a.source_id, ts.speaker_cluster, n DESC, ts.speaker_label",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
+    })?;
+    // The FIRST row per (source, cluster) is its highest-count label; later rows
+    // for the same pair are the minority relabels and are dropped.
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for row in rows {
+        let (source_id, cluster, name) = row?;
+        if seen.insert((source_id.clone(), cluster.clone())) {
+            out.push(ClusterNaming {
+                source_id,
+                cluster,
+                name,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The household glossary as Whisper's `initial_prompt`, or `None` when empty.
+///
+/// Enrolled speaker names first (short, highest value), then the explicit
+/// vocabulary, as a plain comma list — Whisper only needs to SEE the tokens.
+///
+/// ⚠ The length rule BREAKS, it does not skip. Once one term would take the
+/// prompt past the cap the list ends there, so the result is always a prefix.
+/// Skipping the long one and carrying on would silently reorder what the model
+/// is biased toward, and would make the prompt depend on which terms happen to
+/// be long rather than on their priority.
+pub fn initial_prompt(conn: &Connection) -> rusqlite::Result<Option<String>> {
+    let mut ordered: Vec<String> = known_speaker_names(conn)?.names;
+    ordered.extend(
+        crate::work::vocabulary(conn)?
+            .items
+            .into_iter()
+            .map(|t| t.term),
+    );
+
+    let mut seen = std::collections::HashSet::new();
+    let mut prompt = String::new();
+    for term in ordered {
+        if !seen.insert(term.clone()) {
+            continue;
+        }
+        let extended = if prompt.is_empty() {
+            term
+        } else {
+            format!("{prompt}, {term}")
+        };
+        if extended.chars().count() > MAX_PROMPT_CHARS {
+            break;
+        }
+        prompt = extended;
+    }
+    Ok(if prompt.is_empty() {
+        None
+    } else {
+        Some(prompt)
+    })
+}
+
 pub async fn speakers_route(State(st): State<Arc<reads::State>>) -> Response {
     let root = st.root.clone();
     route::json("speakers", move || {
