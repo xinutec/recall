@@ -397,6 +397,20 @@ pub struct SegmentsStoredOut {
     pub results: Vec<crate::work::SegmentStoredOut>,
 }
 
+/// Refuse a `kind` no [`crate::sources::SourceKind`] names.
+///
+/// ⚠ **Not merely a rejected request.** The sources upsert sets
+/// `kind = excluded.kind`, so an unknown kind does not just store wrongly — it
+/// OVERWRITES a good kind on a source that already exists, and
+/// `sources::active_window` grades liveness off that column. The Python answered
+/// 400 here; the first port took the field as a plain `String` and wrote it.
+///
+/// The body is plain text where the Python's is a JSON `detail`. Nothing reads
+/// it — the client raises on the status — so this is parity on the STATUS only.
+fn bad_kind(kind: &str) -> Response {
+    (StatusCode::BAD_REQUEST, format!("bad kind {kind:?}")).into_response()
+}
+
 /// `POST /sync/segments` — the Mac's transcripts reach the fleet here.
 pub async fn segments_route(
     State(st): State<Arc<Gate>>,
@@ -412,6 +426,9 @@ pub async fn segments_route(
     let Ok(seg) = serde_json::from_slice::<crate::work::SegmentIn>(&body) else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "bad segment").into_response();
     };
+    if crate::sources::SourceKind::parse(&seg.kind).is_none() {
+        return bad_kind(&seg.kind);
+    }
     let root = st.root.clone();
     match crate::route::blocking("sync segments", move || {
         let mut conn = crate::work::open_write(&root)?;
@@ -447,17 +464,26 @@ pub async fn segments_batch_route(
         return (StatusCode::UNPROCESSABLE_ENTITY, "bad segment batch").into_response();
     };
     let root = st.root.clone();
+    // ⚠ The kind is checked HERE, per item and in order, rather than over the
+    // whole batch up front. The Python ingests sequentially and lets an item
+    // failure fail the request, so the items before the bad one are already
+    // committed when the 400 lands. Hoisting the check would be tidier and would
+    // quietly change what a poisoned batch leaves behind.
     match crate::route::blocking("sync segments batch", move || {
         let mut conn = crate::work::open_write(&root)?;
         let mut results = Vec::with_capacity(batch.segments.len());
         for seg in &batch.segments {
+            if crate::sources::SourceKind::parse(&seg.kind).is_none() {
+                return Ok(Err(seg.kind.clone()));
+            }
             results.push(crate::work::ingest_segment(&mut conn, seg, &root)?);
         }
-        Ok(SegmentsStoredOut { results })
+        Ok(Ok(SegmentsStoredOut { results }))
     })
     .await
     {
-        Ok(out) => axum::Json(out).into_response(),
+        Ok(Ok(out)) => axum::Json(out).into_response(),
+        Ok(Err(kind)) => bad_kind(&kind),
         Err(response) => response,
     }
 }

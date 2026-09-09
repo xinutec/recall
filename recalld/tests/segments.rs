@@ -5,16 +5,16 @@
 use recalld::work::{SegmentIn, SegmentStoredOut, TurnIn, ingest_segment};
 use rusqlite::Connection;
 
-fn store() -> (tempfile::TempDir, Connection) {
-    let dir = tempfile::tempdir().expect("tmp");
-    let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(
-        // ⚠ THE REAL SCHEMA, copied from the fleet's own sqlite_master. An
-        // invented one is why the first deploy of this route 500'd on every push
-        // with "table sources has no column named spec": the test had a column
-        // the database does not, taken from the Python DATACLASS rather than the
-        // table. A fixture that mirrors the wiring tests its own copy.
-        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+/// ⚠ THE REAL SCHEMA, copied from the fleet's own `sqlite_master`. An invented
+/// one is why the first deploy of this route 500'd on every push with "table
+/// sources has no column named spec": the test had a column the database does
+/// not, taken from the Python DATACLASS rather than the table. A fixture that
+/// mirrors the wiring tests its own copy.
+///
+/// One constant, because the route tests below need the same tables: a second
+/// copy is a second thing to correct when the fleet's schema moves.
+const SCHEMA: &str =
+    "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
              port INTEGER, event_db REAL, noise_shape BLOB);
          CREATE TABLE audio_segments (
              id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
@@ -32,9 +32,12 @@ fn store() -> (tempfile::TempDir, Connection) {
              id INTEGER PRIMARY KEY, audio_segment_id INTEGER NOT NULL,
              start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
              corrected_text TEXT NOT NULL, language TEXT);
-         CREATE TABLE deleted_segments (source_id TEXT NOT NULL, start_utc TEXT NOT NULL);",
-    )
-    .expect("schema");
+         CREATE TABLE deleted_segments (source_id TEXT NOT NULL, start_utc TEXT NOT NULL);";
+
+fn store() -> (tempfile::TempDir, Connection) {
+    let dir = tempfile::tempdir().expect("tmp");
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(SCHEMA).expect("schema");
     (dir, conn)
 }
 
@@ -378,4 +381,181 @@ fn a_pushed_turn_is_searchable() {
         )
         .unwrap();
     assert_eq!(found, 1);
+}
+
+// --- the routes themselves ---------------------------------------------------
+//
+// ⚠ Everything above tests `ingest_segment`. These test the ROUTES, and they
+// exist because /sync/segments/batch — which carries ONE HUNDRED PERCENT of the
+// real push traffic, the single route gets none — had no direct test at all
+// until the Python it replaced was read line by line before deletion.
+
+/// Mount the real router over a database with the real schema, and serve it.
+async fn serve() -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().expect("tmp");
+    let root = dir.path().to_path_buf();
+    recalld::store::open(&root).expect("ingest db");
+    let conn = recalld::work::open_write(&root).expect("recall db");
+    conn.execute_batch(SCHEMA).expect("schema");
+    drop(conn);
+
+    let app = recalld::app::router(std::sync::Arc::new(recalld::app::Config {
+        root,
+        tokens: None,
+        read_token: None,
+        max_body_bytes: recalld::app::DEFAULT_MAX_BODY,
+        webauth: None,
+        sync_token: Some("sekrit".to_owned()),
+        upstream: None,
+        frontend: None,
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr").to_string();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (dir, addr)
+}
+
+async fn post_json(addr: &str, path: &str, body: serde_json::Value) -> (u16, String) {
+    let url = format!("http://{addr}{path}");
+    tokio::task::spawn_blocking(move || {
+        match ureq::post(&url)
+            .set("Authorization", "Bearer sekrit")
+            .send_json(body)
+        {
+            Ok(res) => (res.status(), res.into_string().unwrap_or_default()),
+            Err(ureq::Error::Status(code, res)) => (code, res.into_string().unwrap_or_default()),
+            Err(err) => panic!("transport: {err}"),
+        }
+    })
+    .await
+    .expect("request")
+}
+
+fn wire(seg: &SegmentIn) -> serde_json::Value {
+    serde_json::json!({
+        "source_id": seg.source_id, "source_name": seg.source_name, "kind": seg.kind,
+        "path": seg.path, "start": seg.start, "end": seg.end,
+        "sample_rate": seg.sample_rate, "channels": seg.channels,
+        "turns": seg.turns.iter().map(|t| serde_json::json!({
+            "start": t.start, "end": t.end, "text": t.text, "asr_model": t.asr_model,
+            "language": t.language, "asr_confidence": t.asr_confidence,
+            "speaker_cluster": t.speaker_cluster, "speaker_guess": t.speaker_guess,
+            "speaker_score": t.speaker_score, "provenance": t.provenance,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn stored_kind(root: &std::path::Path) -> Option<String> {
+    let conn = recalld::work::open_write(root).expect("db");
+    conn.query_row("SELECT kind FROM sources WHERE id = 'usb'", [], |r| {
+        r.get::<_, String>(0)
+    })
+    .ok()
+}
+
+/// ⚠ **A parity divergence found by reading the Python before deleting it.** The
+/// Python answers 400 for a `kind` no `SourceKind` names; the port took it as a
+/// plain `String` and wrote it. That matters more than a rejected request: the
+/// sources upsert sets `kind = excluded.kind`, so one bad value does not just
+/// store wrongly, it OVERWRITES a good kind on an existing source — and
+/// `sources::active_window` grades liveness off that column.
+#[tokio::test]
+async fn a_kind_the_fleet_does_not_know_is_refused_rather_than_written() {
+    let (dir, addr) = serve().await;
+    let mut seg = segment(vec![turn("00:00", "00:05", "hello")]);
+    seg.kind = "not-a-kind".to_owned();
+
+    let (status, _) = post_json(&addr, "/sync/segments", wire(&seg)).await;
+
+    assert_eq!(status, 400, "the Python refuses this kind with a 400");
+    assert_eq!(
+        stored_kind(dir.path()),
+        None,
+        "a refused push must not have written the source row"
+    );
+}
+
+/// The other half of the same rule: the six kinds the fleet DOES name must still
+/// pass. A check that refuses everything would satisfy the test above.
+#[tokio::test]
+async fn every_kind_the_fleet_names_is_still_accepted() {
+    let (_dir, addr) = serve().await;
+    for (i, kind) in [
+        "coreaudio",
+        "lavfi",
+        "rtsp",
+        "tcp_pcm",
+        "upload",
+        "discovered",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut seg = segment(vec![turn("00:00", "00:05", "hello")]);
+        seg.source_id = format!("src{i}");
+        seg.kind = kind.to_owned();
+        let (status, body) = post_json(&addr, "/sync/segments", wire(&seg)).await;
+        assert_eq!(status, 200, "kind {kind} was refused: {body}");
+    }
+}
+
+/// The batch route's first direct test: many segments, one round trip.
+#[tokio::test]
+async fn a_batch_stores_many_segments_in_one_request() {
+    let (dir, addr) = serve().await;
+    let mut a = segment(vec![turn("00:00", "00:05", "first")]);
+    a.start = "2026-09-09T10:00:00+00:00".to_owned();
+    let mut b = segment(vec![turn("01:00", "01:05", "second")]);
+    b.start = "2026-09-09T10:02:00+00:00".to_owned();
+    b.end = "2026-09-09T10:03:00+00:00".to_owned();
+
+    let (status, body) = post_json(
+        &addr,
+        "/sync/segments/batch",
+        serde_json::json!({"segments": [wire(&a), wire(&b)]}),
+    )
+    .await;
+
+    assert_eq!(status, 200, "{body}");
+    let conn = recalld::work::open_write(dir.path()).expect("db");
+    assert_eq!(
+        visible(&conn),
+        vec!["first".to_owned(), "second".to_owned()],
+        "both segments in the batch must be stored"
+    );
+}
+
+/// ⚠ Parity on the FAILURE shape, not just the success one. The Python ingests a
+/// batch sequentially and lets an item failure fail the whole request — so the
+/// items BEFORE the bad one are already written when the 400 lands. Validating
+/// the whole batch up front would be tidier and would not match: the Mac's
+/// retry is what makes either safe, and only one of them is what happens today.
+#[tokio::test]
+async fn a_bad_kind_in_a_batch_fails_it_after_the_earlier_items_are_written() {
+    let (dir, addr) = serve().await;
+    let good = segment(vec![turn("00:00", "00:05", "first")]);
+    let mut bad = segment(vec![turn("01:00", "01:05", "second")]);
+    bad.source_id = "other".to_owned();
+    bad.start = "2026-09-09T10:02:00+00:00".to_owned();
+    bad.end = "2026-09-09T10:03:00+00:00".to_owned();
+    bad.kind = "not-a-kind".to_owned();
+
+    let (status, _) = post_json(
+        &addr,
+        "/sync/segments/batch",
+        serde_json::json!({"segments": [wire(&good), wire(&bad)]}),
+    )
+    .await;
+
+    assert_eq!(status, 400, "one bad item fails the whole request");
+    let conn = recalld::work::open_write(dir.path()).expect("db");
+    assert_eq!(
+        visible(&conn),
+        vec!["first".to_owned()],
+        "the item before the bad one was already committed, as in the Python"
+    );
 }
