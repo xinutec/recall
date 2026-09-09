@@ -985,9 +985,12 @@ B3 lands.*
 
   **Where the port stands: EVERY route on both planes is recalld's** — all of
   `/api/*` and all thirteen of `/sync/*`, since 2026-09-09. The Python answers
-  nothing a client reaches; what remains of it is the SPA catch-all and the
-  segment routes kept as the rollback. That is the durable statement; the count
-  behind it changes with every group that moves.
+  nothing a client reaches. What is still REGISTERED in it is more than that,
+  and the difference has bitten twice: the SPA catch-all, the three sync routes
+  kept as the rollback, `/login`, `/auth/callback`, `/logout`, **and the three
+  `/api/capture*` routes** — which are also what the Python container's liveness
+  and readiness probes hit. That is the durable statement; the count behind it
+  changes with every group that moves.
   Re-derive rather than trusting the number, and derive it the way it was
   derived here — from the LIVE app, not by grepping for route strings:
 
@@ -996,10 +999,14 @@ B3 lands.*
                       for m in getattr(r, 'methods', []) \
                       if str(getattr(r,'path','')).startswith('/api/')}))"
 
-  ⚠ A grep undercounts. It sees a path once where two methods are registered on
-  it — `/api/sessions` is both the list (recalld's) and the upload (Python's) —
-  and it counts strings that are not routes at all, such as webauth's
-  device-exempt entry for `/api/log`, whose route no longer exists.
+  ⚠ A grep undercounts, and one way it does is invisible. It sees a path once
+  where two methods are registered on it — `/api/sessions` is both the list
+  (recalld's) and the upload (Python's) — and it counts strings that are not
+  routes at all, such as webauth's device-exempt entry for `/api/log`, whose
+  route no longer exists. ⚠ **Worst: a route registered by CALL has no decorator
+  to find.** `api_capture.py` mounts with `app.get("/api/capture")(capture_status)`,
+  so `grep '@app\.'` reports zero `/api` routes where three are live. That grep
+  is what produced the false "zero remain" in recall #1342. Ask `app.routes`.
 
   That command answers for `/api/*` only. For the front door as a whole, ask from
   the OUTSIDE which tier answered — `server: uvicorn` means Python did, through
@@ -1010,11 +1017,23 @@ B3 lands.*
           | grep -iE '^(HTTP|server:)' | tr -d '\r' | paste -sd' ' -
       done
 
-  ⚠ **That GET probe is USELESS on `/sync/*`, and reads as a confident wrong
-  answer.** Those routes are POST-only, so a GET never reaches one: it falls past
-  them to the api's SPA catch-all, which returns `index.html` with a 200 and
-  `server: uvicorn`. It says "Python answers" before a cutover and after it, for
-  the same reason both times, and the reason is not the one being asked about.
+  ⚠ **That GET probe is USELESS on any POST-only path, and reads as a confident
+  wrong answer.** `/sync/*` and `/logout` are POST-only, so a GET never reaches
+  one: it falls past them to the api's SPA catch-all, which returns `index.html`
+  with a 200 and `server: uvicorn`. It says "Python answers" before a cutover and
+  after it, for the same reason both times, and the reason is not the one being
+  asked about. `POST /logout` answers 302 with no `server` header — recalld's.
+
+  ⚠⚠ **DO NOT reach for the wrong-shaped-request trick on a CONTROL route.** The
+  advice below — send the real method with a deliberately bad payload — is safe
+  on `/sync/*` because the token check refuses before any write. It is NOT safe
+  on `/api/capture/pause`, which is DEVICE-EXEMPT (no token to get wrong) and
+  takes its duration from a QUERY parameter, so a JSON body is ignored and the
+  call succeeds with the default 24h bound. Doing this on 2026-09-09 extended the
+  household's pause from 11:56Z to 21:17Z — recording that Pippijn expected back
+  at midday would not have returned until evening. The pause is his. Read
+  `GET /api/capture`; never POST to the control routes to find out who serves
+  them. Which tier owns them is answerable from `app.routes` instead.
 
   Probe that plane in its real request shape instead — a POST, with a
   deliberately WRONG token. Both tiers reject it identically and BEFORE any
