@@ -300,6 +300,8 @@ def _cmd_transcribe(args: argparse.Namespace) -> int:
 
 
 def _cmd_worker(args: argparse.Namespace) -> int:
+    runlog.setup()  # UTC-stamped logging for the archive pass
+
     def transcriber(audio: Path) -> AsrResult:
         # A short-lived connection just to read the vocabulary (the pass's own
         # store is per-pass and single-thread); rebuilt per segment so new terms
@@ -481,21 +483,41 @@ def _live_sync_loop(
     from recall.sync import SyncClient  # noqa: PLC0415 - lazy: pulls the web framework
     from recall.sync_push import push_live_turns  # noqa: PLC0415
 
-    client = SyncClient(url, token)
-    store = Store.open(out / "recall.sqlite")
+    log = logging.getLogger("recall.live")
+    # ⚠ SETUP IS INSIDE THE GUARD, not before it. Opening the store touches
+    # /Volumes/Backup, which intermittently stops answering (#1412) — and this
+    # runs on a DAEMON thread, so an exception here used to escape as a bare
+    # traceback, kill the thread, and leave the live agent running happily with
+    # its instant feed silently off until the next restart. The loop below was
+    # already guarded ("a push must never crash the live agent"); the two lines
+    # that reach the disk were the ones outside it.
+    try:
+        client = SyncClient(url, token)
+        store = Store.open(out / "recall.sqlite")
+    except Exception:
+        log.exception("live-sync: could not start — instant feed is OFF until restart")
+        return
     try:
         while not stop.wait(interval):
             try:
                 push_live_turns(store, client)
             except Exception:  # best-effort; a push must never crash the live agent
-                logging.getLogger("recall.live").warning(
-                    "live-sync: push failed (will retry)", exc_info=True
-                )
+                log.warning("live-sync: push failed (will retry)", exc_info=True)
     finally:
         store.close()
 
 
 def _cmd_live(args: argparse.Namespace) -> int:
+    # ⚠ TIMESTAMPS, without which this agent's failures cannot be diagnosed at all.
+    # Measured 2026-09-09: live is silent while the microphone it reads hears speech
+    # for a quarter of all recording time (#1383), and `live.err.log` holds 562
+    # `PermissionError: /Volumes/Backup`, 562 `FileNotFoundError` and 417
+    # `httpx.ConnectError` — none of which can be lined up against a single stall,
+    # because the file carries raw stderr and no clock. Every other long-running
+    # agent already calls this; live was the one that did not, which is precisely
+    # why its stalls stayed inferable rather than measurable.
+    runlog.setup()
+
     # Push the instant feed to the fleet on its own thread when the split is configured
     # (a fleet URL + token); LAN-only deployments leave --fleet-url empty and are
     # untouched. The thread never shares the VAD loop's store or timing.
@@ -875,6 +897,7 @@ def _cmd_refine(args: argparse.Namespace) -> int:
     The daemon also drains queued A/B model comparisons (`recall ab-compare` from the
     web UI). Those are operator-chosen and read-only, so they run regardless of the
     pause state and need no HF_TOKEN — diarization is what's gated, not comparison."""
+    runlog.setup()  # UTC-stamped logging for the refine pass
     diarize_enabled = bool(os.environ.get("HF_TOKEN"))
     store = Store.open(args.out / "recall.sqlite")
 
@@ -1254,6 +1277,7 @@ def _cmd_scan_hallucinations(args: argparse.Namespace) -> int:
 def _cmd_llm_host(args: argparse.Namespace) -> int:
     """Hold the LLM for everyone who wants it (recall.llmhost). The module is
     imported lazily: it pulls in the web stack, and it is Mac-only."""
+    runlog.setup()  # UTC-stamped logging for the LLM host
     from recall.llmhost import serve  # noqa: PLC0415 - keeps the web stack local
 
     logging.basicConfig(
@@ -1304,6 +1328,7 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     """Push the local archive to the fleet's system of record (the Isis split). The
     token is read from RECALL_SYNC_TOKEN. Imports are lazy so `recall.cli` stays ML- and
     framework-free for the capture agents (recall.sync drags in the web framework)."""
+    runlog.setup()  # UTC-stamped logging for the fleet sync pass
     token = os.environ.get("RECALL_SYNC_TOKEN")
     if not token:
         print("sync needs RECALL_SYNC_TOKEN")
@@ -1313,6 +1338,7 @@ def _cmd_sync(args: argparse.Namespace) -> int:
 
     store = Store.open(args.out / "recall.sqlite")
     client = SyncClient(args.url, token)
+    started = time.monotonic()
     try:
         pushed = sync_push(store, client)
         # Reverse leg: bring the fleet's human voice-namings home. The UI is on the
@@ -1321,8 +1347,17 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         named = pull_labels(store, client)
     finally:
         store.close()
-    print(
-        f"sync: pushed {pushed} segment(s), pulled {named} voice-naming(s) — {args.url}"
+    # ⚠ LOGGED, not printed, and with its DURATION — both were missing and both
+    # were load-bearing. `sync.out.log` carried no clock at all, so a pass could
+    # be counted but never timed: #1346 asks for a before/after on a real deep
+    # catch-up (passes of 36-81 and 500 segments are both in the record) and the
+    # measurement was unrecoverable from 33,501 lines of undated output.
+    logging.getLogger("recall.sync").info(
+        "sync: pushed %d segment(s), pulled %d voice-naming(s) in %.1fs — %s",
+        pushed,
+        named,
+        time.monotonic() - started,
+        args.url,
     )
     return 0
 
@@ -1334,6 +1369,7 @@ def _cmd_jobs(args: argparse.Namespace) -> int:
     them; results sync back on their own). The Mac holds the ML and mic; the fleet
     holds only the UI. Token is RECALL_SYNC_TOKEN. Imports are lazy so recall.cli stays
     framework-free for the capture agents (recall.sync pulls the web framework)."""
+    runlog.setup()  # UTC-stamped logging for the job runner
     token = os.environ.get("RECALL_SYNC_TOKEN")
     if not token:
         print("jobs needs RECALL_SYNC_TOKEN")

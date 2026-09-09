@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import queue
 import subprocess
@@ -11,7 +12,11 @@ import time
 import wave
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
+import pytest
+
+from recall import cli
 from recall.live import (
     _stop_producer,
     drain_to_queue,
@@ -205,3 +210,38 @@ def test_every_utterance_is_transcribed_when_nothing_fails() -> None:
     q.put(None)
     drain_utterances(q, lambda pcm, _start: seen.append(pcm))
     assert seen == [b"one", b"two", b"three"]
+
+
+def test_live_sync_thread_survives_an_unreachable_archive_at_startup(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """⚠ A daemon thread that dies in SETUP takes the instant feed with it, silently.
+
+    `_live_sync_loop` guards its push loop — "a push must never crash the live
+    agent" — but opened its store and built its client BEFORE that guard. Those
+    two lines touch /Volumes/Backup, which intermittently stops answering
+    (#1412), so a blip at startup escaped as a bare traceback on a daemon thread:
+    the live agent went on transcribing while its push to the fleet was off until
+    the next restart, and the log carried no timestamped line saying so.
+
+    Fails without the fix by raising out of the thread instead of logging.
+    """
+    unreachable = tmp_path / "gone" / "recall.sqlite"
+
+    def explode(*_args: object, **_kwargs: object) -> object:
+        raise PermissionError(13, "Permission denied", "/Volumes/Backup")
+
+    stop = threading.Event()
+    stop.set()  # the loop must not run even if setup somehow succeeds
+    with (
+        caplog.at_level(logging.ERROR),
+        mock.patch("recall.cli.Store.open", side_effect=explode),
+    ):
+        # Must RETURN, not raise: the thread has to end deliberately.
+        cli._live_sync_loop(
+            unreachable.parent, "http://fleet.invalid", "tok", 0.01, stop
+        )
+
+    assert any("instant feed is OFF" in r.message for r in caplog.records), (
+        "a thread that quietly stops pushing must say so in the log"
+    )
