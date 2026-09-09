@@ -983,8 +983,10 @@ B3 lands.*
     and serves before its upstream is ready; expected, and worth knowing so a
     handful of failures right after a deploy is not mistaken for a fault.
 
-  **Where the port stands: EVERY `/api/*` route is recalld's; on `/sync/*`,
-  only the capture handshake is.** That is the durable statement; the count
+  **Where the port stands: EVERY route on both planes is recalld's** — all of
+  `/api/*` and all thirteen of `/sync/*`, since 2026-09-09. The Python answers
+  nothing a client reaches; what remains of it is the SPA catch-all and the
+  segment routes kept as the rollback. That is the durable statement; the count
   behind it changes with every group that moves.
   Re-derive rather than trusting the number, and derive it the way it was
   derived here — from the LIVE app, not by grepping for route strings:
@@ -1042,7 +1044,37 @@ B3 lands.*
   | sessions | DONE, including the upload and the delete. ⚠ The delete is the one irreversible operation here and is guarded to UPLOAD sources: the household archive must never be reachable through a path meant for meetings. Every deleted segment is TOMBSTONED in the same transaction, or the Mac's next refine push resurrects the session. |
   | devices | DONE — heartbeats, outboxes, and `/api/sources` 2026-09-09. The last one waited on the capture family, which it reads `fleet_capture_state` from. |
   | capture | DONE 2026-09-08 — status, pause, resume, mounted as ONE group. Splitting the household's control across two languages is the one place a strangler seam is not worth having. |
-  | sync | `/sync/capture` DONE 2026-09-08. The other twelve routes are Python's: jobs, labels, the audio blob push and fetch, the segment push and its batch, live turns, and the device/vocabulary reads. |
+  | sync | DONE 2026-09-09 — all thirteen. capture, labels, vocabulary, the two device reads, the job queue and its ack, live turns, the audio blob push and its two fetches, the segment push and its batch. |
+
+  *The segment push, 2026-09-09 — the last route, and the one that taught the
+  most:*
+
+  - ⚠ **A FIXTURE BUILT FROM THE DATACLASS, NOT THE TABLE.** `CREATE TABLE
+    sources` was written with a `spec` column because the Python's `AudioSource`
+    has one. The real table does not — it is `(id, name, kind, port, event_db,
+    noise_shape)`. Ten tests passed against a database that does not exist, and
+    every real push answered 500 for forty minutes. **Copy a test schema from
+    `sqlite_master`, never from the model beside it.**
+  - ⚠ **And the invented schema HID a silent one.** The Python's upsert reads
+    `name = CASE WHEN sources.name = sources.id THEN excluded.name ELSE
+    sources.name END`: a name a PERSON set on the fleet survives every later
+    push, and only a placeholder equal to the id is replaced. The port wrote
+    `name = excluded.name`, which renames whatever somebody titled on the next
+    sync pass — and the test asserted that wrong behaviour outright. The crash
+    was loud and cost forty minutes; this would have been silent and cost the
+    source names.
+  - ⚠ **AN ABLATION THAT DOES NOT VERIFY ITS EDIT TESTS NOTHING.** The first
+    attempt to disprove that rename rule PASSED, because the `perl` substitution
+    silently matched nothing — which reads exactly like "the rule does not
+    matter". Re-run through a replace that asserts its pattern count, it failed
+    as it should. Every ablation here now edits through a checked replace.
+  - **The five rules, each with an ablation that fails one test:** the tombstone
+    veto; the path re-homing; live reconciliation running BEFORE the no-op check;
+    the sorted-tuple no-op; and the human-correction skip. The last is the only
+    one whose failure destroys data rather than reporting it.
+  - **What actually caught all of it was deploying and watching**, not the suite.
+    The Mac's retry semantics are why forty minutes of 500s cost nothing: a
+    transport failure aborts the pass before the watermark advances.
 
   *`/api/sources`, 2026-09-09 — the last `/api` route, and a deletion rather than
   a move:*
