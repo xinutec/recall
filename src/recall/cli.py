@@ -543,30 +543,36 @@ _GOLDEN_FIXTURE = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "
 
 @dataclass(frozen=True)
 class _GoldenFixture:
-    """One clip in the golden ASR gate, and whether a fresh clone has it.
+    """One clip in the golden ASR gate.
 
     Each clip is single-language by construction: a mixed-language one trips
     Whisper's one-language-per-segment detection, which is the documented
     code-switching weakness rather than a regression signal. Several clips may
     share a language — two do — and that is coverage, not duplication.
+
+    ⚠ There is no `committed` flag any more. Every clip here ships with the repo
+    (2026-09-09), so a missing one is a FAULT rather than a fresh clone's normal
+    state — and that is the safer default for whatever is added next: an absent
+    fixture fails loudly instead of quietly narrowing what the gate covers, which
+    is the whole of #1433.
     """
 
     audio: str
     reference: str
     language: str
     threshold: float
-    committed: bool
 
 
-# `committed` is the property #1433 was about, not a convenience flag: the gate
-# advertised a "committed speech fixture" for months while its audio existed on
-# one Mac, so it could not run on a clone, in CI, or in a nix sandbox. The gate
-# must therefore be honest about running on a subset, per fixture.
+# ⚠ EVERY fixture here ships with the repo, and #1433 is why that is worth
+# stating. The gate advertised a "committed speech fixture" for months while its
+# audio existed on ONE Mac, so it could not run on a clone, in CI, or in a nix
+# sandbox — a check that read as a repo-wide guarantee and was not one.
 #
-# The dialogue pair is absent from a clone because .gitignore's blanket *.flac
-# swallowed it, against the stated intent of the script that generates it
-# (scripts/gen-speech-fixture.sh, which calls them committed). It is machine-read
-# invented dialogue, not anyone's voice.
+# The dialogue pair is macOS `say` reading INVENTED lines (plants, a plumber, a
+# bakery), rendered by scripts/gen-speech-fixture.sh. It is nobody's voice and
+# says nothing about this household, which is what made committing it safe for a
+# public repo; the blanket *.flac ignore that had swallowed it was narrowed on
+# 2026-09-09. It carries the only Dutch in the gate.
 #
 # Thresholds are per fixture, and each is set from ITS OWN measured baseline
 # rather than copied, because the references differ in exactness and one number
@@ -588,21 +594,18 @@ _GOLDEN_FIXTURES = (
         reference="public-domain-en.txt",
         language="en",
         threshold=0.09,
-        committed=True,
     ),
     _GoldenFixture(
         audio="dialogue-en.flac",
         reference="reference-en.txt",
         language="en",
         threshold=0.06,
-        committed=False,
     ),
     _GoldenFixture(
         audio="dialogue-nl.flac",
         reference="reference-nl.txt",
         language="nl",
         threshold=0.05,
-        committed=False,
     ),
 )
 
@@ -612,10 +615,10 @@ def _cmd_score_asr(args: argparse.Namespace) -> int:
     against their references — the regression net under the model/decoder seams
     (unit tests stub the ASR). On-demand, not part of verify: it loads the model.
 
-    Scores every fixture whose audio is present, so a clone gets the committed
-    English clip and this Mac additionally gets the household dialogue pair. A
-    MISSING COMMITTED fixture fails the run: a gate with nothing left to score
-    must not report success, which is the failure mode #1433 recorded.
+    Scores every fixture, and every fixture ships with the repo — so a clone
+    scores exactly what this machine does, Dutch included. A MISSING fixture
+    fails the run rather than being skipped: a gate with less to score than it
+    claims must not report success, which is the failure mode #1433 recorded.
     """
     transcriber = _build_transcriber(args.model, words=False)
     failed = False
@@ -623,14 +626,8 @@ def _cmd_score_asr(args: argparse.Namespace) -> int:
     for fixture in _GOLDEN_FIXTURES:
         audio = _GOLDEN_FIXTURE / fixture.audio
         if not audio.exists():
-            if fixture.committed:
-                failed = True
-                print(f"score-asr: MISSING committed fixture {fixture.audio}")
-            else:
-                print(
-                    f"score-asr: skipping {fixture.audio} (local-only, absent here) "
-                    f"— language {fixture.language} unscored by it"
-                )
+            failed = True
+            print(f"score-asr: MISSING fixture {fixture.audio}")
             continue
         reference = (_GOLDEN_FIXTURE / fixture.reference).read_text()
         result = transcriber(audio)

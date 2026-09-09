@@ -288,12 +288,14 @@ Fails if WER drifts past a fixture's threshold, or if the language is
 mis-detected. The regression net under the model/decoder seams; on-demand (loads
 the model), not part of verify.
 
-It scores every fixture PRESENT and names the ones it skipped, because they do
-not all travel: `public-domain-en.flac` is committed and runs on any clone, while
-the `dialogue-{en,nl}` pair — macOS `say` reading invented lines, regenerable
-with `scripts/gen-speech-fixture.sh` — is absent from a clone, which is #1433 and
-is why the Dutch check is local-only for now. A run that finds NO committed
-fixture fails rather than reporting success on nothing.
+All three fixtures are committed, so it scores three on any clone — including
+the Dutch one. `public-domain-en.flac` is a licence-clean reading; the
+`dialogue-{en,nl}` pair is macOS `say` reading invented lines, regenerable with
+`scripts/gen-speech-fixture.sh`. The pair was absent from a clone until
+2026-09-09, when the blanket `*.flac` ignore that swallowed it was narrowed
+(#1433) — that is why the code still speaks of fixtures that may be missing. A
+missing one now FAILS rather than being skipped, and a run that finds none fails
+rather than reporting success on nothing.
 
 Thresholds are per fixture and set from each one's own measured baseline (see the
 table in `cli.py`), so they have equal detection power rather than an equal

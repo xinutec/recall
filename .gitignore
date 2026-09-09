@@ -33,11 +33,27 @@ logs/
 *.wav
 *.flac
 *.opus
-# ...except the one licence-clean clip the tests may actually ship with. A
-# public repo cannot carry recordings of real people, but it must carry
-# SOMETHING, or checks that read like repo-wide guarantees quietly do nothing on
-# a fresh clone (#1433). See tests/fixtures/speech/README.md.
+# ...except the clips the tests may actually ship with. A public repo cannot
+# carry recordings of real people, but it must carry SOMETHING, or checks that
+# read like repo-wide guarantees quietly do nothing on a fresh clone (#1433).
+# See tests/fixtures/speech/README.md.
+#
+# ⚠ These three negations are the WHOLE exception and they are named one by one
+# on purpose. A pattern here (`!tests/fixtures/speech/*.flac`) would silently
+# adopt whatever lands in that directory next, which is exactly how household
+# audio would reach a public repo. Adding a fourth is a decision, not a tidy-up.
 !tests/fixtures/speech/public-domain-en.flac
+# Synthetic speech: macOS `say` reading INVENTED lines (plants, a plumber, a
+# bakery) rendered by the committed scripts/gen-speech-fixture.sh, so they are
+# PII-free by construction — nobody's voice, nothing about this household. They
+# carry the only Dutch in the gate, and they score 0.0123 / 0.0000 WER against
+# exact references where the public-domain reading scores 0.0426, which makes
+# them the better drift instrument. Regenerating them in CI is not an option:
+# `say` is macOS-only and CI runs Ubuntu, so committing is the only way a clone
+# can run the Dutch ASR check and the Dutch VAD test. Committed 2026-09-09 on
+# Pippijn's explicit go-ahead, the blunt no-audio rule above being his to waive.
+!tests/fixtures/speech/dialogue-en.flac
+!tests/fixtures/speech/dialogue-nl.flac
 *.sqlite
 *.sqlite3
 *.db

@@ -70,24 +70,33 @@ def test_score_asr_fails_when_wer_drifts(
     assert "FAIL" in capsys.readouterr().out
 
 
-def test_every_fixture_marked_committed_really_ships() -> None:
-    """`committed=True` has to mean the file is there, or the flag is decoration.
+def test_every_fixture_really_ships() -> None:
+    """A listed fixture has to be there, or the table is decoration.
 
-    Deliberately NOT a claim that every household language is covered: `nl` lives
-    only in the local-only pair today (#1433), and a test named for coverage it
-    does not check is the same defect as a gate advertising a fixture it does not
-    have.
+    This is the check that would have caught #1433 on the day it appeared: the
+    gate named a fixture whose audio lived on one Mac, so it read as a repo-wide
+    guarantee for months while covering less than it said.
     """
-    assert any(f.committed for f in cli._GOLDEN_FIXTURES), (
-        "no fixture is committed — the gate cannot run on a clone"
-    )
+    assert cli._GOLDEN_FIXTURES, "no fixtures — the gate cannot run at all"
     for fixture in cli._GOLDEN_FIXTURES:
-        if fixture.committed:
-            assert (cli._GOLDEN_FIXTURE / fixture.audio).exists(), fixture.audio
-            assert (cli._GOLDEN_FIXTURE / fixture.reference).exists(), fixture.reference
+        assert (cli._GOLDEN_FIXTURE / fixture.audio).exists(), fixture.audio
+        assert (cli._GOLDEN_FIXTURE / fixture.reference).exists(), fixture.reference
 
 
-def test_a_missing_committed_fixture_fails_rather_than_passing_vacuously(
+def test_both_household_languages_are_scored_on_any_clone() -> None:
+    """⚠ Dutch coverage is the REASON the dialogue pair was committed (2026-09-09).
+
+    It could not be claimed before: `nl` lived only in a local-only fixture, so
+    this assertion would have passed on one Mac and failed on every clone. If a
+    future change makes a fixture local again, this fails and says why.
+    """
+    languages = {f.language for f in cli._GOLDEN_FIXTURES}
+    assert {"en", "nl"} <= languages, (
+        f"the household speaks en and nl; the gate scores {sorted(languages)}"
+    )
+
+
+def test_a_missing_fixture_fails_rather_than_passing_vacuously(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
@@ -96,39 +105,10 @@ def test_a_missing_committed_fixture_fails_rather_than_passing_vacuously(
 
     The whole defect behind #1433 was a check that read as repo-wide while its
     audio existed on one machine. Scoring "every fixture that happens to be
-    present" reproduces exactly that if the committed one goes missing too.
+    present" reproduces exactly that the moment one goes missing.
     """
     monkeypatch.setattr(cli, "_GOLDEN_FIXTURE", tmp_path)
     monkeypatch.setattr(cli, "_build_transcriber", _stub({}))
     assert cli.main(["score-asr"]) == 1
     out = capsys.readouterr().out
     assert "missing" in out.lower()
-
-
-def test_absent_local_only_fixtures_are_named_not_silently_skipped(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
-    """On a fresh clone the private fixtures are absent; the run says so.
-
-    A skip nobody prints is how the gate came to advertise coverage it did not
-    have.
-    """
-    committed = [f for f in cli._GOLDEN_FIXTURES if f.committed]
-    optional = [f for f in cli._GOLDEN_FIXTURES if not f.committed]
-    assert optional, "nothing to skip — this test no longer measures anything"
-    for fixture in committed:
-        (tmp_path / fixture.audio).write_bytes(b"")
-        (tmp_path / fixture.reference).write_text(
-            (cli._GOLDEN_FIXTURE / fixture.reference).read_text()
-        )
-    references = {
-        Path(f.audio).stem: (tmp_path / f.reference).read_text() for f in committed
-    }
-    monkeypatch.setattr(cli, "_GOLDEN_FIXTURE", tmp_path)
-    monkeypatch.setattr(cli, "_build_transcriber", _stub(references))
-    assert cli.main(["score-asr"]) == 0
-    out = capsys.readouterr().out
-    for fixture in optional:
-        assert fixture.audio in out

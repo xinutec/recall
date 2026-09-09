@@ -26,7 +26,7 @@ A reader's small deviations therefore show up as a little WER. That is fine for
 a DRIFT check, which asks whether the number MOVED, not whether it is zero; it
 would not be fine for an absolute quality claim, so do not make one from it.
 
-## `dialogue-*.flac` — machine-read, absent from a clone by accident
+## `dialogue-*.flac` — machine-read, and committed since 2026-09-09
 
 ⚠ **These are NOT recordings of anyone.** They are macOS `say` reading INVENTED
 lines — plants, a plumber, a bakery — rendered by `scripts/gen-speech-fixture.sh`
@@ -36,7 +36,9 @@ and fully regenerable from it. Two English voices and one Dutch, stitched with
 An earlier version of this file called them "recordings of real people in this
 household". That was wrong, and it mattered: it made the absence look deliberate
 and correct, when in fact `.gitignore`'s blanket `*.flac` swallowed fixtures the
-generator's own header calls committed. The reference transcripts beside them ARE
+generator's own header calls committed. The ignore was narrowed on 2026-09-09 and
+they now travel with the repo, so the Dutch ASR check and the Dutch VAD test run
+on any clone. The reference transcripts beside them ARE
 committed, which is what made the gap easy to miss — `score-asr` advertised a
 "committed speech fixture" for months while the audio existed on one Mac (#1433).
 
