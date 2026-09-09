@@ -121,26 +121,6 @@ def test_capture_exchange_reports_state_and_returns_intent(
         store.close()
 
 
-def test_audio_push_stores_once_and_is_idempotent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
-    archive = tmp_path / "archive"
-    app = FastAPI()
-    register_sync_routes(app, Store.memory, archive)
-
-    clip = tmp_path / "clip.opus"
-    clip.write_bytes(b"opus-bytes")
-
-    with TestClient(app) as transport:
-        client = SyncClient("http://fleet", "secret", client=transport)
-        assert client.push_audio("usb", "seg-0001.opus", clip) is True  # newly stored
-        landed = archive / "usb" / "seg-0001.opus"
-        assert landed.read_bytes() == b"opus-bytes"
-        # re-push of the immutable archive is a no-op, not an overwrite
-        assert client.push_audio("usb", "seg-0001.opus", clip) is False
-
-
 def _segment(
     source: str = "usb", n_turns: int = 2, path: str | None = None
 ) -> SegmentIn:
@@ -258,36 +238,6 @@ def test_segment_push_rejects_a_bad_source_kind(
         "/sync/segments",
         json=seg.model_dump(),
         headers={"Authorization": "Bearer secret"},
-    )
-    assert resp.status_code == 400
-
-
-def test_audio_push_requires_the_token(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
-    app = FastAPI()
-    register_sync_routes(app, Store.memory, tmp_path)
-    resp = TestClient(app).post(
-        "/sync/audio",
-        data={"source": "usb", "name": "x.opus"},
-        files={"file": ("x", b"z")},
-    )
-    assert resp.status_code == 401
-
-
-def test_audio_push_rejects_path_traversal(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
-    app = FastAPI()
-    register_sync_routes(app, Store.memory, tmp_path)
-    auth = {"Authorization": "Bearer secret"}
-    resp = TestClient(app).post(
-        "/sync/audio",
-        data={"source": "../escape", "name": "x.opus"},
-        files={"file": ("x", b"z")},
-        headers=auth,
     )
     assert resp.status_code == 400
 
@@ -511,49 +461,6 @@ def _seed_upload(db: Path, archive: Path) -> Path:
     return blob
 
 
-def test_the_mac_fetches_the_upload_blob_over_the_wire(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # SyncClient.fetch_audio against the real route: bytes land at dest, the .part
-    # temp is gone, and a job with no blob on the fleet 404s instead of writing junk.
-    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
-    db = tmp_path / "recall.sqlite"
-    archive = tmp_path / "archive"
-    _seed_upload(db, archive)
-    app = FastAPI()
-    register_sync_routes(app, lambda: Store.open(db), archive)
-
-    with TestClient(app) as transport:
-        client = SyncClient("http://fleet", "secret", client=transport)
-        dest = tmp_path / "mac" / "meeting-20260716-1400" / "blob.m4a"
-        client.fetch_audio(
-            "meeting-20260716-1400", "meeting-20260716-1400-20260716T130000.m4a", dest
-        )
-        assert dest.read_bytes() == b"m4a-bytes"
-        assert list(dest.parent.glob(".*.part")) == []
-
-        with pytest.raises(HTTPStatusError):
-            client.fetch_audio(
-                "meeting-20260716-1400", "no-such-file.m4a", tmp_path / "mac" / "x.m4a"
-            )
-
-
-def test_the_blob_download_is_token_gated_and_traversal_proof(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
-    archive = tmp_path / "archive"
-    app = FastAPI()
-    register_sync_routes(app, Store.memory, archive)
-    client = TestClient(app)
-
-    params = {"source": "usb", "name": "seg.opus"}
-    assert client.get("/sync/audio/file", params=params).status_code == 401
-    auth = {"Authorization": "Bearer secret"}
-    evil = {"source": "..", "name": "recall.sqlite"}
-    assert client.get("/sync/audio/file", params=evil, headers=auth).status_code == 400
-
-
 def test_a_tombstoned_identity_is_refused_not_resurrected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -574,7 +481,12 @@ def test_a_tombstoned_identity_is_refused_not_resurrected(
         store.delete_audio_segments([AudioSegmentId(first.audio_segment_id)])
         store.close()
 
-        client.push_audio("usb", "seg.opus", _clip(tmp_path))  # the racing blob
+        # Placed directly, not via POST /sync/audio: that route is recalld's now
+        # (2026-09-09). What this test is ABOUT is the segment push refusing a
+        # tombstoned identity and cleaning the blob up, and that is still Python.
+        racing = archive / "usb" / "seg.opus"
+        racing.parent.mkdir(parents=True, exist_ok=True)
+        racing.write_bytes(_clip(tmp_path).read_bytes())
         again = client.push_segment(_segment(n_turns=1))
         assert again.tombstoned is True
         assert again.turns_written == 0

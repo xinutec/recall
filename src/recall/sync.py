@@ -20,15 +20,13 @@ from __future__ import annotations
 
 import hmac
 import os
-import shutil
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 from recall import capture_control
@@ -475,45 +473,6 @@ def register_sync_routes(
     expected = sync_token()
     if not expected:
         return False
-
-    @app.post("/sync/audio")
-    def sync_audio(
-        source: str = Form(...),
-        name: str = Form(...),
-        file: UploadFile = File(...),
-        authorization: str | None = Header(default=None),
-    ) -> AudioStoredOut:
-        check_token(bearer(authorization), expected)
-        dest_dir = data_root / _safe_component(source)
-        dest = dest_dir / _safe_component(name)
-        # The archive is immutable (append-only, same path = same content), so an
-        # existing file is never overwritten — the push is idempotent and safe to retry.
-        if dest.exists():
-            return AudioStoredOut(stored=False)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        with dest.open("wb") as fh:
-            shutil.copyfileobj(file.file, fh)
-        return AudioStoredOut(stored=True)
-
-    @app.get("/sync/audio")
-    def sync_audio_present(
-        source: str, name: str, authorization: str | None = Header(default=None)
-    ) -> AudioPresentOut:
-        check_token(bearer(authorization), expected)
-        dest = data_root / _safe_component(source) / _safe_component(name)
-        return AudioPresentOut(present=dest.exists())
-
-    @app.get("/sync/audio/file")
-    def sync_audio_file(
-        source: str, name: str, authorization: str | None = Header(default=None)
-    ) -> FileResponse:
-        # The reverse of the push: the Mac fetches a blob the fleet holds and it
-        # doesn't — an uploaded session it must transcribe (see JobOut type="upload").
-        check_token(bearer(authorization), expected)
-        path = data_root / _safe_component(source) / _safe_component(name)
-        if not path.is_file():
-            raise HTTPException(status_code=404, detail="no such audio")
-        return FileResponse(path)
 
     @app.post("/sync/segments")
     def sync_segments(

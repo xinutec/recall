@@ -435,3 +435,56 @@ fn an_unparseable_time_costs_that_turn_and_no_other() {
         .unwrap();
     assert_eq!(text, "kept");
 }
+
+// --- the audio blob plane ----------------------------------------------------
+
+use recalld::sync::safe_component;
+
+/// ⚠ THE path-traversal guard. The Mac is authenticated, but a compromised token
+/// must not become an arbitrary file write anywhere on the fleet's disk.
+#[test]
+fn a_component_that_could_escape_the_archive_is_refused() {
+    for hostile in [
+        "",          // would collapse the path
+        "..",        // the parent
+        "../etc",    // the classic
+        "a/../../b", // .. anywhere, not just at the start
+        "a/b",       // a separator makes it two components
+        "a\\b",      // and the Windows one, which some filesystems honour
+        ".hidden",   // a leading dot lands a push as a dotfile
+        ".",
+    ] {
+        assert_eq!(safe_component(hostile), None, "accepted {hostile:?}");
+    }
+}
+
+/// ⚠ And it must accept what actually flows, or the sync stops. These are real
+/// names from the archive.
+#[test]
+fn the_names_the_mac_really_pushes_are_accepted() {
+    for real in [
+        "usb-20260613T170653.opus",
+        "meeting-20260520-1901-20260520T180121.mp3",
+        "pixel9-20260903T110000.flac",
+        "usb",
+        "meeting-20260520-1901",
+    ] {
+        assert_eq!(safe_component(real), Some(real), "refused {real:?}");
+    }
+}
+
+/// ⚠ **This is why the guard is `safe_component` and NOT
+/// `audiocore::names::parse`.** That grammar accepts only flac/opus/ogg/wav, and
+/// every uploaded meeting is `.mp3` — so the stricter check would refuse every
+/// meeting audio push with a 400 the Mac would retry for ever, and the meeting
+/// half of the product would stop syncing without one error that named the cause.
+#[test]
+fn the_strict_segment_grammar_would_refuse_a_real_meeting_file() {
+    let meeting = "meeting-20260520-1901-20260520T180121.mp3";
+
+    assert!(
+        audiocore::names::parse("meeting-20260520-1901", meeting).is_err(),
+        "if this now PASSES, the extension set grew and this note needs revisiting"
+    );
+    assert_eq!(safe_component(meeting), Some(meeting));
+}

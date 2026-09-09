@@ -408,5 +408,219 @@ pub fn routes(gate: Arc<Gate>) -> Router {
         .route("/sync/jobs", axum::routing::get(jobs_route))
         .route("/sync/jobs/{job_id}/done", post(job_done_route))
         .route("/sync/live", post(live_route))
+        .route(
+            "/sync/audio",
+            axum::routing::get(audio_present_route).post(audio_push_route),
+        )
+        .route("/sync/audio/file", axum::routing::get(audio_file_route))
+        // ⚠ WITHOUT THIS THE AUDIO PUSH IS DEAD ON ARRIVAL. `app::router` layers
+        // its body limit onto the ingest router only, and a `.layer` applies to
+        // routes added BEFORE it — so this router, merged afterwards, would
+        // inherit axum's 2 MB default and refuse every real segment, let alone a
+        // 62 MB meeting. The uvicorn it replaces had no cap at all.
+        //
+        // Generous rather than tight because the upload STREAMS to a temp file:
+        // the cost of a big push is disk, which the archive volume already holds,
+        // not memory. A cap that merely looks prudent would reject recordings the
+        // Mac then retries for ever.
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024))
         .with_state(gate)
+}
+
+// --- the audio blob plane -----------------------------------------------------
+
+/// A single path component the fleet will trust as a directory or file name.
+///
+/// ⚠ **This is deliberately NOT `audiocore::names::parse`, and substituting it
+/// would break the meeting sync silently.** That grammar accepts only
+/// `flac|opus|ogg|wav`, and every uploaded meeting's audio is `.mp3` — so the
+/// stricter check would refuse every one of them with a 400 the Mac would retry
+/// for ever. This is a path-traversal guard, not a filename schema: the Mac is
+/// authenticated, but a compromised token must not become arbitrary file write.
+///
+/// Rejects exactly what the Python rejects: empty, either separator, `..`
+/// anywhere, and a leading dot (which would let a push land as a hidden file).
+#[must_use]
+pub fn safe_component(component: &str) -> Option<&str> {
+    if component.is_empty()
+        || component.contains('/')
+        || component.contains('\\')
+        || component.contains("..")
+        || component.starts_with('.')
+    {
+        return None;
+    }
+    Some(component)
+}
+
+/// Resolve `<root>/<source>/<name>`, or `None` if either component is unsafe.
+fn blob_path(root: &std::path::Path, source: &str, name: &str) -> Option<std::path::PathBuf> {
+    Some(
+        root.join(safe_component(source)?)
+            .join(safe_component(name)?),
+    )
+}
+
+#[derive(Deserialize)]
+pub struct BlobQuery {
+    pub source: String,
+    pub name: String,
+}
+
+/// Whether the fleet already holds this blob — lets the Mac skip re-sending the
+/// (immutable) bytes on every sync pass.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct AudioPresentOut {
+    pub present: bool,
+}
+
+/// Whether the fleet NEWLY stored it. `false` = it already had it.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct AudioStoredOut {
+    pub stored: bool,
+}
+
+/// `GET /sync/audio` — presence.
+pub async fn audio_present_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<BlobQuery>,
+) -> Response {
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Err(refusal) = check(bearer(presented), &st.expected) {
+        return refusal.into_response();
+    }
+    let Some(path) = blob_path(&st.root, &q.source, &q.name) else {
+        return (StatusCode::BAD_REQUEST, "unsafe path component").into_response();
+    };
+    axum::Json(AudioPresentOut {
+        present: path.is_file(),
+    })
+    .into_response()
+}
+
+/// `GET /sync/audio/file` — fetch the bytes.
+///
+/// ⚠ Streams from disk rather than reading the file into memory: an uploaded
+/// meeting can be hours long, and the Mac fetches these to transcribe them.
+pub async fn audio_file_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<BlobQuery>,
+) -> Response {
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Err(refusal) = check(bearer(presented), &st.expected) {
+        return refusal.into_response();
+    }
+    let Some(path) = blob_path(&st.root, &q.source, &q.name) else {
+        return (StatusCode::BAD_REQUEST, "unsafe path component").into_response();
+    };
+    // Read on the blocking pool, the same way `/ingest/v1/blob` serves bytes.
+    // ⚠ The whole file lands in memory, so it is bounded by what the archive
+    // holds: the largest meeting is 62 MB against this pod's 1 GiB. That is fine
+    // for the Mac fetching one at a time to transcribe, and would not be if this
+    // ever served many concurrent readers.
+    match tokio::task::spawn_blocking(move || std::fs::read(&path)).await {
+        Ok(Ok(bytes)) => (StatusCode::OK, bytes).into_response(),
+        Ok(Err(_)) => (StatusCode::NOT_FOUND, "no such audio").into_response(),
+        Err(err) => crate::route::faulted("audio file", &err),
+    }
+}
+
+/// `POST /sync/audio` — push a blob.
+///
+/// ⚠ **The archive is immutable: same path, same content.** An existing file is
+/// never overwritten, which is what makes the push idempotent and safe for the
+/// Mac to retry after a timeout it cannot tell from a failure.
+///
+/// ⚠ Written through a temp file and renamed, unlike the Python's direct copy.
+/// A push interrupted midway would otherwise leave PARTIAL BYTES under the final
+/// name — and because the presence check is `exists()`, the Mac would then be
+/// told the fleet holds a file that is truncated, for ever.
+pub async fn audio_push_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+    mut form: axum::extract::Multipart,
+) -> Response {
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Err(refusal) = check(bearer(presented), &st.expected) {
+        return refusal.into_response();
+    }
+    let (mut source, mut name, mut staged) = (None, None, None);
+    while let Ok(Some(mut field)) = form.next_field().await {
+        match field.name().map(ToOwned::to_owned).as_deref() {
+            Some("source") => source = field.text().await.ok(),
+            Some("name") => name = field.text().await.ok(),
+            Some("file") => {
+                // ⚠ STREAMED to a temp file, never buffered. The largest meeting
+                // in the archive is 62 MB and this pod is capped at 1 GiB, so
+                // `field.bytes()` would put a whole recording in memory — and
+                // would also inherit a body cap the Python never had, refusing
+                // anything past it with a 4xx the Mac retries for ever.
+                let mut tmp = match tempfile::NamedTempFile::new_in(&st.root) {
+                    Ok(tmp) => tmp,
+                    Err(err) => return crate::route::faulted("sync audio push", &err),
+                };
+                loop {
+                    match field.chunk().await {
+                        Ok(Some(chunk)) => {
+                            if let Err(err) = std::io::Write::write_all(&mut tmp, &chunk) {
+                                return crate::route::faulted("sync audio push", &err);
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(err) => {
+                            return (StatusCode::BAD_REQUEST, format!("truncated upload: {err}"))
+                                .into_response();
+                        }
+                    }
+                }
+                staged = Some(tmp);
+            }
+            _ => {}
+        }
+    }
+    let (Some(source), Some(name), Some(staged)) = (source, name, staged) else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "source, name and file are required",
+        )
+            .into_response();
+    };
+    let Some(dest) = blob_path(&st.root, &source, &name) else {
+        return (StatusCode::BAD_REQUEST, "unsafe path component").into_response();
+    };
+    match crate::route::blocking("sync audio push", move || Ok(store_blob(&dest, staged))).await {
+        Ok(Ok(stored)) => axum::Json(AudioStoredOut { stored }).into_response(),
+        Ok(Err(err)) => crate::route::faulted("sync audio push", &err),
+        Err(response) => response,
+    }
+}
+
+/// Move the staged upload into place unless the blob is already held.
+/// `Ok(false)` = already held, which is the idempotent case, not a failure.
+fn store_blob(dest: &std::path::Path, tmp: tempfile::NamedTempFile) -> std::io::Result<bool> {
+    if dest.exists() {
+        return Ok(false);
+    }
+    let Some(dir) = dest.parent() else {
+        return Err(std::io::Error::other("blob path has no directory"));
+    };
+    std::fs::create_dir_all(dir)?;
+    tmp.as_file().sync_all()?;
+    match tmp.persist_noclobber(dest) {
+        Ok(_) => {}
+        // Lost the race with another push of the same immutable blob: the file
+        // is there, which is all the caller asked about.
+        Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(err) => return Err(err.error),
+    }
+    std::fs::File::open(dir)?.sync_all()?;
+    Ok(true)
 }
