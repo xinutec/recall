@@ -33,6 +33,13 @@ allowBuilds:
 # vestigial scaffold — it is not, and this is why.
 #
 # Both match `tasks` and `home` exactly. Two spellings of one constraint drift.
+#
+# browserslist and fast-uri: the same shape again, found 2026-09-09 while reading
+# Dependabot. Both are transitive under @angular/build and vitest, neither ships
+# in the browser bundle, and nothing in the tree asks for the patched version —
+# so, as above, only a floor moves them.
 overrides:
   esbuild: ^0.28.1
   "@babel/core": ^7.29.6
+  browserslist: ^4.28.7
+  fast-uri: ^3.1.6
