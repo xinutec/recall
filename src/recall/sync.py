@@ -422,47 +422,6 @@ def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentSt
     return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=written)
 
 
-def _ingest_live(store: Store, body: LiveTurnsIn) -> LiveStoredOut:
-    """Persist pushed live turns on the fleet — audio-less provisional transcripts shown
-    instantly while the archive pass catches up. Idempotent: a turn already present (a
-    retry, or one the archive already reconciled) is skipped, so a re-push never
-    duplicates a turn or resurrects a hidden one."""
-    stored = 0
-    for turn in body.turns:
-        start = datetime.fromisoformat(turn.start)
-        if store.live_turn_present(start, turn.text):
-            continue
-        store.add_transcript_segment(
-            audio_segment_id=None,
-            start=start,
-            end=datetime.fromisoformat(turn.end),
-            text=turn.text,
-            asr_model=turn.asr_model,
-            language=turn.language,
-        )
-        stored += 1
-    return LiveStoredOut(stored=stored)
-
-
-def _register_live_route(
-    app: FastAPI, store_factory: Callable[[], Store], expected: str
-) -> None:
-    """The instant-feed ingest route (its own helper so register_sync_routes stays under
-    the statement budget). The Mac pushes provisional live turns here; they show at once
-    and are reconciled when the archive segment spanning them arrives."""
-
-    @app.post("/sync/live")
-    def sync_live(
-        body: LiveTurnsIn, authorization: str | None = Header(default=None)
-    ) -> LiveStoredOut:
-        check_token(bearer(authorization), expected)
-        store = store_factory()
-        try:
-            return _ingest_live(store, body)
-        finally:
-            store.close()
-
-
 def _register_capture_route(
     app: FastAPI, store_factory: Callable[[], Store], expected: str
 ) -> None:
@@ -587,7 +546,6 @@ def register_sync_routes(
         finally:
             store.close()
 
-    _register_live_route(app, store_factory, expected)
     _register_capture_route(app, store_factory, expected)
 
     return True

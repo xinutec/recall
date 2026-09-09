@@ -341,6 +341,49 @@ pub async fn job_done_route(
     }
 }
 
+/// A batch of provisional live turns from the Mac.
+#[derive(Deserialize)]
+pub struct LiveTurnsIn {
+    pub turns: Vec<crate::work::LiveTurn>,
+}
+
+/// How many were NEWLY stored — present ones are skipped, not counted.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct LiveStoredOut {
+    pub stored: usize,
+}
+
+/// `POST /sync/live` — the instant feed.
+///
+/// ⚠ Best-effort by design, and that is what makes it safe to be lossy: the
+/// archive segment push carries these turns again regardless, so a dropped live
+/// push only delays the instant feed and never loses a word.
+pub async fn live_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Err(refusal) = check(bearer(presented), &st.expected) {
+        return refusal.into_response();
+    }
+    let Ok(body) = serde_json::from_slice::<LiveTurnsIn>(&body) else {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "bad live turns").into_response();
+    };
+    let root = st.root.clone();
+    match crate::route::blocking("sync live", move || {
+        let mut conn = crate::work::open_write(&root)?;
+        crate::work::ingest_live(&mut conn, &body.turns)
+    })
+    .await
+    {
+        Ok(stored) => axum::Json(LiveStoredOut { stored }).into_response(),
+        Err(response) => response,
+    }
+}
+
 /// The glossary prompt's wire shape. `null` when nothing is enrolled.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct PromptOut {
@@ -364,5 +407,6 @@ pub fn routes(gate: Arc<Gate>) -> Router {
         .route("/sync/devices/outbox", axum::routing::get(outbox_route))
         .route("/sync/jobs", axum::routing::get(jobs_route))
         .route("/sync/jobs/{job_id}/done", post(job_done_route))
+        .route("/sync/live", post(live_route))
         .with_state(gate)
 }

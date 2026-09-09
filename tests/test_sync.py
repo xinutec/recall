@@ -379,26 +379,6 @@ def _live_turn(at_s: float, text: str) -> TurnIn:
     )
 
 
-def test_live_push_stores_turns_then_is_idempotent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv(SYNC_TOKEN_ENV, "secret")
-    db = tmp_path / "recall.sqlite"
-    app = FastAPI()
-    register_sync_routes(app, lambda: Store.open(db), tmp_path)
-
-    with TestClient(app) as transport:
-        client = SyncClient("http://fleet", "secret", client=transport)
-        assert client.push_live([_live_turn(1, "one"), _live_turn(2, "two")]) == 2
-        # a retry of the same batch stores nothing new — never duplicated on the feed
-        assert client.push_live([_live_turn(1, "one"), _live_turn(2, "two")]) == 0
-
-    store = Store.open(db)
-    visible = store.visible_live_turns_since(0)
-    store.close()
-    assert sorted(t.text for t in visible) == ["one", "two"]
-
-
 def test_a_segment_reconciles_the_live_turns_it_covers(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -409,14 +389,25 @@ def test_a_segment_reconciles_the_live_turns_it_covers(
     app = FastAPI()
     register_sync_routes(app, lambda: Store.open(db), tmp_path)
 
+    # Seeded through the store, not POST /sync/live: that route is recalld's now
+    # (2026-09-09). What this test is ABOUT is the segment push reconciling live
+    # turns away, and that is still Python.
+    store = Store.open(db)
+    for offset, text in ((3, "provisional"), (99, "much later")):
+        turn = _live_turn(offset, text)
+        store.add_transcript_segment(
+            audio_segment_id=None,
+            start=datetime.fromisoformat(turn.start),
+            end=datetime.fromisoformat(turn.end),
+            text=turn.text,
+            asr_model=turn.asr_model,
+            language=turn.language,
+        )
+    assert len(store.visible_live_turns_since(0)) == 2
+    store.close()
+
     with TestClient(app) as transport:
         client = SyncClient("http://fleet", "secret", client=transport)
-        client.push_live([_live_turn(3, "provisional")])  # inside the segment's span
-        client.push_live([_live_turn(99, "much later")])  # outside it
-        store = Store.open(db)
-        assert len(store.visible_live_turns_since(0)) == 2
-        store.close()
-
         client.push_segment(_segment(n_turns=1))  # covers BASE .. BASE+30s
 
     store = Store.open(db)

@@ -302,3 +302,136 @@ fn retiring_a_refine_removes_it_from_the_queue() {
             .any(|j| j.r#type == "refine")
     );
 }
+
+// --- the instant feed --------------------------------------------------------
+
+use recalld::work::{LiveTurn, ingest_live};
+
+fn live_store() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE transcript_segments (
+             id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
+             start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
+             language TEXT, asr_model TEXT NOT NULL,
+             superseded_by INTEGER, hidden_reason TEXT);
+         CREATE VIRTUAL TABLE transcript_fts USING fts5(text, content='');",
+    )
+    .expect("schema");
+    conn
+}
+
+fn a_turn(start: &str, text: &str) -> LiveTurn {
+    LiveTurn {
+        start: start.to_owned(),
+        end: "2026-09-09T10:00:05+00:00".to_owned(),
+        text: text.to_owned(),
+        asr_model: "live".to_owned(),
+        language: Some("en".to_owned()),
+    }
+}
+
+/// ⚠ The search index has NO trigger behind it — `transcript_fts` is a
+/// contentless FTS5 table the writer fills by hand. Forgetting it fails nothing
+/// and makes every live turn unfindable by search, which is exactly what a live
+/// turn is most likely to be looked up by.
+#[test]
+fn a_stored_live_turn_is_searchable() {
+    let mut conn = live_store();
+
+    let stored = ingest_live(
+        &mut conn,
+        &[a_turn("2026-09-09T10:00:00+00:00", "hello there")],
+    )
+    .unwrap();
+
+    assert_eq!(stored, 1);
+    let found: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM transcript_fts WHERE transcript_fts MATCH 'hello'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(found, 1, "the turn exists but cannot be searched for");
+}
+
+/// ⚠ A re-push must never duplicate a turn NOR resurrect one the archive has
+/// already reconciled to hidden.
+#[test]
+fn a_repushed_turn_is_skipped_even_once_hidden() {
+    let mut conn = live_store();
+    let turns = [a_turn("2026-09-09T10:00:00+00:00", "same words")];
+
+    assert_eq!(ingest_live(&mut conn, &turns).unwrap(), 1);
+    assert_eq!(
+        ingest_live(&mut conn, &turns).unwrap(),
+        0,
+        "a retry duplicated it"
+    );
+
+    // The archive reconciles it away; a later retry must still not bring it back.
+    conn.execute(
+        "UPDATE transcript_segments SET hidden_reason = 'reconciled'",
+        [],
+    )
+    .unwrap();
+
+    assert_eq!(
+        ingest_live(&mut conn, &turns).unwrap(),
+        0,
+        "a hidden turn was resurrected"
+    );
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM transcript_segments", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(total, 1);
+}
+
+/// ⚠ The stored spelling is what the presence check compares. A turn re-spelled
+/// on the way in would never match its own earlier copy, and every retry would
+/// insert again — the duplicate-forever bug.
+#[test]
+fn a_z_suffixed_time_matches_the_offset_spelling_it_was_stored_as() {
+    let mut conn = live_store();
+
+    assert_eq!(
+        ingest_live(&mut conn, &[a_turn("2026-09-09T10:00:00+00:00", "x")]).unwrap(),
+        1
+    );
+    // The same instant, spelled the other way round.
+    assert_eq!(
+        ingest_live(&mut conn, &[a_turn("2026-09-09T10:00:00Z", "x")]).unwrap(),
+        0
+    );
+
+    let stored: String = conn
+        .query_row("SELECT start_utc FROM transcript_segments", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        stored, "2026-09-09T10:00:00+00:00",
+        "Z must be stored as +00:00"
+    );
+}
+
+#[test]
+fn an_unparseable_time_costs_that_turn_and_no_other() {
+    let mut conn = live_store();
+
+    let stored = ingest_live(
+        &mut conn,
+        &[
+            a_turn("not a time", "dropped"),
+            a_turn("2026-09-09T10:00:00+00:00", "kept"),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(stored, 1, "one bad turn must not cost the batch");
+    let text: String = conn
+        .query_row("SELECT text FROM transcript_segments", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(text, "kept");
+}

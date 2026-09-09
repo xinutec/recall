@@ -28,7 +28,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -354,4 +354,73 @@ pub fn mark_transcribed(conn: &Connection, audio_segment_id: i64) -> rusqlite::R
         [audio_segment_id],
     )?;
     Ok(())
+}
+
+// --- the instant feed (`POST /sync/live`) -------------------------------------
+
+/// One provisional live turn the Mac pushes for the fleet's instant feed.
+#[derive(Debug, Deserialize)]
+pub struct LiveTurn {
+    pub start: String,
+    pub end: String,
+    pub text: String,
+    pub asr_model: String,
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+/// Persist pushed live turns — audio-less provisional transcripts shown at once
+/// while the archive pass catches up, then reconciled when the segment spanning
+/// them arrives.
+///
+/// ⚠ **Idempotent by (model, start, text).** A retried push, or one the archive
+/// has already reconciled to hidden, is SKIPPED — so a re-push never duplicates a
+/// turn and never resurrects a hidden one. The presence check deliberately asks
+/// for the literal `live` model rather than the turn's own, matching the Python:
+/// the feed is what is being deduplicated, not whatever produced it.
+///
+/// ⚠ **The search index is maintained in CODE.** `transcript_fts` is a
+/// contentless FTS5 table with no trigger behind it; forgetting the second insert
+/// fails nothing and quietly makes every live turn unfindable by search.
+///
+/// One transaction per turn, so a turn and its index row land together or not at
+/// all — a half-written pair would be a turn that exists and cannot be found.
+pub fn ingest_live(conn: &mut Connection, turns: &[LiveTurn]) -> rusqlite::Result<usize> {
+    let mut stored = 0;
+    for turn in turns {
+        // The stored spelling, so the presence check and the insert agree. A
+        // turn re-spelled on the way in would never match its own earlier copy.
+        let Some(start) = crate::instant::python_isoformat(&turn.start) else {
+            continue;
+        };
+        let Some(end) = crate::instant::python_isoformat(&turn.end) else {
+            continue;
+        };
+        let present: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM transcript_segments \
+                 WHERE asr_model = 'live' AND start_utc = ?1 AND text = ?2 LIMIT 1",
+                rusqlite::params![start, turn.text],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if present.is_some() {
+            continue;
+        }
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO transcript_segments \
+             (audio_segment_id, start_utc, end_utc, text, language, asr_model) \
+             VALUES (NULL, ?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![start, end, turn.text, turn.language, turn.asr_model],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
+            rusqlite::params![id, turn.text],
+        )?;
+        tx.commit()?;
+        stored += 1;
+    }
+    Ok(stored)
 }
