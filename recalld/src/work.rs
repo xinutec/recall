@@ -424,3 +424,304 @@ pub fn ingest_live(conn: &mut Connection, turns: &[LiveTurn]) -> rusqlite::Resul
     }
     Ok(stored)
 }
+
+// --- the segment push (`POST /sync/segments`) ---------------------------------
+
+/// The machine turns' identity, for the no-op check. Sorted, so the comparison
+/// is order-independent — a re-push that reorders turns is still a re-push.
+fn turn_keys(
+    mut keys: Vec<(String, String, String, String)>,
+) -> Vec<(String, String, String, String)> {
+    keys.sort();
+    keys
+}
+
+/// One transcript turn the Mac computed for a segment.
+#[derive(Debug, Deserialize)]
+pub struct TurnIn {
+    pub start: String,
+    pub end: String,
+    pub text: String,
+    pub asr_model: String,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub asr_confidence: Option<f64>,
+    #[serde(default)]
+    pub speaker_cluster: Option<String>,
+    /// The Mac's voiceprint guess. Display-only, and carried because the fleet
+    /// has no ML to recompute it.
+    #[serde(default)]
+    pub speaker_guess: Option<String>,
+    #[serde(default)]
+    pub speaker_score: Option<f64>,
+    #[serde(default)]
+    pub provenance: Option<String>,
+}
+
+/// A processed segment the Mac pushes, with the turns transcribed from it.
+#[derive(Debug, Deserialize)]
+pub struct SegmentIn {
+    pub source_id: String,
+    pub source_name: String,
+    pub kind: String,
+    pub path: String,
+    pub start: String,
+    pub end: String,
+    pub sample_rate: i64,
+    pub channels: i64,
+    pub turns: Vec<TurnIn>,
+}
+
+/// What the fleet did with it.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct SegmentStoredOut {
+    pub audio_segment_id: i64,
+    pub turns_written: usize,
+    /// The push was REFUSED because this identity was deliberately deleted here.
+    /// `audio_segment_id` is 0 then, and the Mac must not retry.
+    pub tombstoned: bool,
+}
+
+/// Whether this identity was deliberately deleted on the fleet.
+///
+/// ⚠ **The veto that stops a sync push resurrecting a human deletion.** Without
+/// it the mirror-completion pass, or a refine minting new turns for a deleted
+/// session, quietly brings back what somebody explicitly removed. It refuses a
+/// re-push; it does NOT ask the Mac to delete its copy, and no job does
+/// (docs/architecture.md, "Deletion authority").
+pub fn is_tombstoned(conn: &Connection, source: &str, start: &str) -> rusqlite::Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM deleted_segments WHERE source_id = ?1 AND start_utc = ?2",
+            rusqlite::params![source, start],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some())
+}
+
+/// Human corrections whose audio span overlaps `[start, end)` in this file.
+///
+/// ⚠ **This is what makes human ground truth survive a re-segmentation.** The
+/// overlap is by AUDIO TIME, not by turn identity, so a correction outlives a
+/// pass that moves the turn boundaries underneath it.
+pub fn human_corrections_overlapping(
+    conn: &Connection,
+    audio_segment_id: i64,
+    start: &str,
+    end: &str,
+) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT start_utc, end_utc FROM corrections \
+         WHERE audio_segment_id = ?1 AND start_utc < ?2 AND end_utc > ?3 \
+         ORDER BY start_utc",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![audio_segment_id, end, start], |r| {
+        Ok((r.get(0)?, r.get(1)?))
+    })?;
+    rows.collect()
+}
+
+/// Persist a pushed segment, reconciling across the split.
+///
+/// The fleet is the system of record: a newer machine pass SUPERSEDES the old
+/// machine turns, while human edits made on the fleet are authoritative and
+/// preserved. An identical re-push is a no-op, so it never churns.
+///
+/// ⚠ **Rule 1 — a tombstoned identity is REFUSED, never re-stored**, and any blob
+/// a racing audio push landed first is removed with it.
+///
+/// ⚠ **Rule 2 — the path is RE-HOMED.** The sender's `path` is absolute on the
+/// machine that recorded it (`/Volumes/Backup/recall/...` on the Mac). Storing it
+/// verbatim gave the fleet a database describing a filesystem it cannot see: the
+/// transcripts read perfectly and every play button 404s, silently, for ever.
+/// Only the FILENAME survives the trip, and it is checked — an authenticated Mac
+/// is still hostile input if the token ever leaks.
+///
+/// ⚠ **Rule 3 — live turns are reconciled on EVERY ingest, before the no-op
+/// check**, so a live turn that arrived after the segment was first stored is
+/// still swapped for the archive version rather than shown beside it.
+///
+/// ⚠ **Rule 4 — an identical re-push writes nothing.** The comparison is over
+/// sorted (start, end, text, model) tuples, so it is order-independent.
+///
+/// ⚠ **Rule 5 — a turn overlapping a HUMAN CORRECTION is skipped.** This is the
+/// one rule here whose failure destroys data rather than merely misreporting it:
+/// without it the next machine pass overwrites somebody's typed ground truth, the
+/// push returns 200, and nothing anywhere records that it happened.
+pub fn ingest_segment(
+    conn: &mut Connection,
+    body: &SegmentIn,
+    root: &std::path::Path,
+) -> rusqlite::Result<SegmentStoredOut> {
+    let start = crate::instant::python_isoformat(&body.start).unwrap_or_else(|| body.start.clone());
+    let end = crate::instant::python_isoformat(&body.end).unwrap_or_else(|| body.end.clone());
+
+    let filename = std::path::Path::new(&body.path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let blob = crate::sync::safe_component(&body.source_id)
+        .and_then(|src| crate::sync::safe_component(&filename).map(|n| root.join(src).join(n)));
+
+    if is_tombstoned(conn, &body.source_id, &start)? {
+        if let Some(blob) = &blob {
+            let _ = std::fs::remove_file(blob);
+        }
+        return Ok(SegmentStoredOut {
+            audio_segment_id: 0,
+            turns_written: 0,
+            tombstoned: true,
+        });
+    }
+
+    // The SENDER owns the kind: the Mac runs the capture agents and the upload
+    // path, so it is the machine that can know. An upsert rather than
+    // insert-or-ignore, so a correction there reaches here — otherwise the fleet
+    // keeps the first kind it was ever told and the two databases disagree for good.
+    conn.execute(
+        "INSERT INTO sources (id, name, kind, spec) VALUES (?1, ?2, ?3, '') \
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, kind = excluded.kind",
+        rusqlite::params![body.source_id, body.source_name, body.kind],
+    )?;
+
+    let path = blob
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    conn.execute(
+        "INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+         ON CONFLICT(source_id, start_utc) DO UPDATE SET path = excluded.path",
+        rusqlite::params![
+            body.source_id,
+            path,
+            start,
+            end,
+            body.sample_rate,
+            body.channels
+        ],
+    )?;
+    let audio_id: i64 = conn.query_row(
+        "SELECT id FROM audio_segments WHERE source_id = ?1 AND start_utc = ?2",
+        rusqlite::params![body.source_id, start],
+        |r| r.get(0),
+    )?;
+
+    // Rule 3: before the no-op check, deliberately.
+    conn.execute(
+        "UPDATE transcript_segments SET hidden_reason = 'live-reconciled' \
+         WHERE asr_model = 'live' AND superseded_by IS NULL AND hidden_reason IS NULL \
+           AND start_utc >= ?1 AND start_utc < ?2",
+        rusqlite::params![start, end],
+    )?;
+    mark_transcribed(conn, audio_id)?;
+
+    let mut stmt = conn.prepare(
+        "SELECT start_utc, end_utc, text, asr_model FROM transcript_segments \
+         WHERE audio_segment_id = ?1 AND superseded_by IS NULL AND hidden_reason IS NULL \
+           AND asr_model != 'human' ORDER BY start_utc",
+    )?;
+    let current = turn_keys(
+        stmt.query_map([audio_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?,
+    );
+    drop(stmt);
+    let incoming = turn_keys(
+        body.turns
+            .iter()
+            .map(|t| {
+                (
+                    crate::instant::python_isoformat(&t.start).unwrap_or_else(|| t.start.clone()),
+                    crate::instant::python_isoformat(&t.end).unwrap_or_else(|| t.end.clone()),
+                    t.text.clone(),
+                    t.asr_model.clone(),
+                )
+            })
+            .collect(),
+    );
+    if current == incoming {
+        return Ok(SegmentStoredOut {
+            audio_segment_id: audio_id,
+            turns_written: 0,
+            tombstoned: false,
+        });
+    }
+
+    let written = write_turns(conn, audio_id, &body.turns, &start, &end)?;
+    Ok(SegmentStoredOut {
+        audio_segment_id: audio_id,
+        turns_written: written,
+        tombstoned: false,
+    })
+}
+
+/// Supersede this segment's machine turns and write the pushed ones, skipping any
+/// that overlap a human correction.
+///
+/// ⚠ One transaction: the supersede and the replacements land together or not at
+/// all. A half-applied pass would leave a segment with its old turns hidden and
+/// no new ones — a stretch of the archive that silently reads as silence.
+fn write_turns(
+    conn: &mut Connection,
+    audio_id: i64,
+    turns: &[TurnIn],
+    start: &str,
+    end: &str,
+) -> rusqlite::Result<usize> {
+    let human = human_corrections_overlapping(conn, audio_id, start, end)?;
+    let mut written = 0;
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE transcript_segments SET hidden_reason = 'superseded by sync push' \
+         WHERE audio_segment_id = ?1 AND superseded_by IS NULL AND hidden_reason IS NULL \
+           AND asr_model != 'human'",
+        [audio_id],
+    )?;
+    for turn in turns {
+        let t_start =
+            crate::instant::python_isoformat(&turn.start).unwrap_or_else(|| turn.start.clone());
+        let t_end = crate::instant::python_isoformat(&turn.end).unwrap_or_else(|| turn.end.clone());
+        // Rule 5. Strict overlap, matching the Python: touching spans do not
+        // collide, but any true overlap defers to the human.
+        if human.iter().any(|(c_start, c_end)| {
+            c_start.as_str() < t_end.as_str() && c_end.as_str() > t_start.as_str()
+        }) {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO transcript_segments \
+             (audio_segment_id, start_utc, end_utc, text, language, asr_confidence, \
+              asr_model, speaker_cluster, provenance) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                audio_id,
+                t_start,
+                t_end,
+                turn.text,
+                turn.language,
+                turn.asr_confidence,
+                turn.asr_model,
+                turn.speaker_cluster,
+                turn.provenance
+            ],
+        )?;
+        let turn_id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
+            rusqlite::params![turn_id, turn.text],
+        )?;
+        if let (Some(guess), Some(score)) = (&turn.speaker_guess, turn.speaker_score) {
+            tx.execute(
+                "UPDATE transcript_segments SET speaker_guess = ?1, speaker_score = ?2 \
+                 WHERE id = ?3",
+                rusqlite::params![guess, score, turn_id],
+            )?;
+        }
+        written += 1;
+    }
+    tx.commit()?;
+    Ok(written)
+}

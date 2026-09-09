@@ -384,6 +384,84 @@ pub async fn live_route(
     }
 }
 
+/// A catch-up's worth of segments in one request — the same items the single
+/// push takes. Blobs still travel separately.
+#[derive(Deserialize)]
+pub struct SegmentBatchIn {
+    pub segments: Vec<crate::work::SegmentIn>,
+}
+
+/// One result per pushed segment, ALIGNED BY INDEX with the request.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct SegmentsStoredOut {
+    pub results: Vec<crate::work::SegmentStoredOut>,
+}
+
+/// `POST /sync/segments` — the Mac's transcripts reach the fleet here.
+pub async fn segments_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Err(refusal) = check(bearer(presented), &st.expected) {
+        return refusal.into_response();
+    }
+    let Ok(seg) = serde_json::from_slice::<crate::work::SegmentIn>(&body) else {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "bad segment").into_response();
+    };
+    let root = st.root.clone();
+    match crate::route::blocking("sync segments", move || {
+        let mut conn = crate::work::open_write(&root)?;
+        crate::work::ingest_segment(&mut conn, &seg, &root)
+    })
+    .await
+    {
+        Ok(out) => axum::Json(out).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// `POST /sync/segments/batch` — the same, many at a time (#1346).
+///
+/// ⚠ **Items are processed SEQUENTIALLY and a failure aborts the rest**, which
+/// preserves the semantics the Mac's pusher is built on: it marks each id pushed
+/// only after the chunk is acknowledged, and a transport failure must abort the
+/// pass BEFORE the watermark advances so the failed segments retry next cycle.
+/// Answering partial success would advance the watermark past segments that never
+/// landed.
+pub async fn segments_batch_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Err(refusal) = check(bearer(presented), &st.expected) {
+        return refusal.into_response();
+    }
+    let Ok(batch) = serde_json::from_slice::<SegmentBatchIn>(&body) else {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "bad segment batch").into_response();
+    };
+    let root = st.root.clone();
+    match crate::route::blocking("sync segments batch", move || {
+        let mut conn = crate::work::open_write(&root)?;
+        let mut results = Vec::with_capacity(batch.segments.len());
+        for seg in &batch.segments {
+            results.push(crate::work::ingest_segment(&mut conn, seg, &root)?);
+        }
+        Ok(SegmentsStoredOut { results })
+    })
+    .await
+    {
+        Ok(out) => axum::Json(out).into_response(),
+        Err(response) => response,
+    }
+}
+
 /// The glossary prompt's wire shape. `null` when nothing is enrolled.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct PromptOut {
@@ -413,6 +491,8 @@ pub fn routes(gate: Arc<Gate>) -> Router {
             axum::routing::get(audio_present_route).post(audio_push_route),
         )
         .route("/sync/audio/file", axum::routing::get(audio_file_route))
+        .route("/sync/segments", post(segments_route))
+        .route("/sync/segments/batch", post(segments_batch_route))
         // ⚠ WITHOUT THIS THE AUDIO PUSH IS DEAD ON ARRIVAL. `app::router` layers
         // its body limit onto the ingest router only, and a `.layer` applies to
         // routes added BEFORE it — so this router, merged afterwards, would

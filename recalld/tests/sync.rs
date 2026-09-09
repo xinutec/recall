@@ -758,3 +758,129 @@ async fn the_audio_routes_are_gated() {
         401
     );
 }
+
+// --- the segment push, through the real router --------------------------------
+
+async fn post_json(
+    addr: &str,
+    path: &str,
+    token: Option<&str>,
+    body: serde_json::Value,
+) -> (u16, String) {
+    let url = format!("http://{addr}{path}");
+    let token = token.map(ToOwned::to_owned);
+    tokio::task::spawn_blocking(move || {
+        let mut req = ureq::post(&url);
+        if let Some(t) = token {
+            req = req.set("Authorization", &format!("Bearer {t}"));
+        }
+        match req.send_json(body) {
+            Ok(r) => (r.status(), r.into_string().unwrap_or_default()),
+            Err(ureq::Error::Status(c, r)) => (c, r.into_string().unwrap_or_default()),
+            Err(err) => panic!("transport: {err}"),
+        }
+    })
+    .await
+    .expect("request")
+}
+
+fn a_segment(text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "source_id": "usb", "source_name": "USB mic", "kind": "coreaudio",
+        "path": "/Volumes/Backup/recall/usb/usb-20260909T100000.opus",
+        "start": "2026-09-09T10:00:00+00:00", "end": "2026-09-09T10:01:00+00:00",
+        "sample_rate": 48000, "channels": 1,
+        "turns": [{"start":"2026-09-09T10:00:00+00:00","end":"2026-09-09T10:00:10+00:00",
+                   "text": text, "asr_model":"turbo","language":"en"}]
+    })
+}
+
+/// The meaning-plane schema the segment push writes into.
+fn seed_meaning_schema(root: &std::path::Path) {
+    let conn = recalld::work::open_write(root).expect("db");
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS sources (
+             id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, spec TEXT);
+         CREATE TABLE IF NOT EXISTS audio_segments (
+             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
+             start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, sample_rate INTEGER NOT NULL,
+             channels INTEGER NOT NULL, transcribed_utc TEXT, UNIQUE (source_id, start_utc));
+         CREATE TABLE IF NOT EXISTS transcript_segments (
+             id INTEGER PRIMARY KEY, audio_segment_id INTEGER, start_utc TEXT NOT NULL,
+             end_utc TEXT NOT NULL, text TEXT NOT NULL, language TEXT, asr_confidence REAL,
+             asr_model TEXT NOT NULL, speaker_cluster TEXT, speaker_guess TEXT,
+             speaker_score REAL, provenance TEXT, superseded_by INTEGER, hidden_reason TEXT);
+         CREATE VIRTUAL TABLE IF NOT EXISTS transcript_fts USING fts5(text, content='');
+         CREATE TABLE IF NOT EXISTS corrections (
+             id INTEGER PRIMARY KEY, audio_segment_id INTEGER NOT NULL, start_utc TEXT NOT NULL,
+             end_utc TEXT NOT NULL, corrected_text TEXT NOT NULL, language TEXT);
+         CREATE TABLE IF NOT EXISTS deleted_segments (
+             source_id TEXT NOT NULL, start_utc TEXT NOT NULL);",
+    )
+    .expect("schema");
+}
+
+#[tokio::test]
+async fn the_segment_routes_are_mounted_and_gated() {
+    let (dir, addr) = serve(Some("sekrit")).await;
+    seed_meaning_schema(dir.path());
+
+    let (ok, body) = post_json(&addr, "/sync/segments", Some("sekrit"), a_segment("hello")).await;
+    assert_eq!(ok, 200, "the single push is not mounted: {body}");
+    let out: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(out["turns_written"], 1);
+    assert_eq!(out["tombstoned"], false);
+    assert!(out["audio_segment_id"].as_i64().unwrap() > 0);
+
+    for bad in [None, Some("wrong")] {
+        assert_eq!(
+            post_json(&addr, "/sync/segments", bad, a_segment("x"))
+                .await
+                .0,
+            401
+        );
+        assert_eq!(
+            post_json(
+                &addr,
+                "/sync/segments/batch",
+                bad,
+                serde_json::json!({"segments":[]})
+            )
+            .await
+            .0,
+            401
+        );
+    }
+}
+
+/// ⚠ Results are ALIGNED BY INDEX with the request — the Mac marks each id
+/// pushed by position, so a reordered or short result list would advance the
+/// watermark past segments that never landed.
+#[tokio::test]
+async fn the_batch_returns_one_result_per_segment_in_order() {
+    let (dir, addr) = serve(Some("sekrit")).await;
+    seed_meaning_schema(dir.path());
+
+    let mut second = a_segment("second");
+    second["start"] = serde_json::json!("2026-09-09T10:02:00+00:00");
+    second["end"] = serde_json::json!("2026-09-09T10:03:00+00:00");
+    second["path"] = serde_json::json!("/Volumes/Backup/recall/usb/usb-20260909T100200.opus");
+
+    let (status, body) = post_json(
+        &addr,
+        "/sync/segments/batch",
+        Some("sekrit"),
+        serde_json::json!({"segments": [a_segment("first"), second]}),
+    )
+    .await;
+
+    assert_eq!(status, 200, "{body}");
+    let out: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let results = out["results"].as_array().expect("results");
+    assert_eq!(results.len(), 2, "one result per segment, aligned by index");
+    assert!(results.iter().all(|r| r["turns_written"] == 1));
+    assert_ne!(
+        results[0]["audio_segment_id"], results[1]["audio_segment_id"],
+        "two distinct segments collapsed into one row"
+    );
+}
