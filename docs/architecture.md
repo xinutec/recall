@@ -983,9 +983,9 @@ B3 lands.*
     and serves before its upstream is ready; expected, and worth knowing so a
     handful of failures right after a deploy is not mistaken for a fault.
 
-  **Where the port stands: on `/api/*`, everything but `/api/sources` is
-  recalld's; on `/sync/*`, only the capture handshake is.** That is the durable
-  statement; the count behind it changes with every group that moves.
+  **Where the port stands: EVERY `/api/*` route is recalld's; on `/sync/*`,
+  only the capture handshake is.** That is the durable statement; the count
+  behind it changes with every group that moves.
   Re-derive rather than trusting the number, and derive it the way it was
   derived here — from the LIVE app, not by grepping for route strings:
 
@@ -1040,9 +1040,38 @@ B3 lands.*
   | client reports | DONE. |
   | labels | DONE — correct, turn speaker, correction reassign/hide, span assign. `/api/suggest` and `/voices` were CUT, not ported: voiceprint name suggestions are gone by product decision. |
   | sessions | DONE, including the upload and the delete. ⚠ The delete is the one irreversible operation here and is guarded to UPLOAD sources: the household archive must never be reachable through a path meant for meetings. Every deleted segment is TOMBSTONED in the same transaction, or the Mac's next refine push resurrects the session. |
-  | devices | heartbeats and outboxes are DONE. `/api/sources` is NOT: it reads the two-mode liveness model (Mac-local vs fleet) and takes `fleet_capture_state`, so it moves with the capture family or not at all. |
+  | devices | DONE — heartbeats, outboxes, and `/api/sources` 2026-09-09. The last one waited on the capture family, which it reads `fleet_capture_state` from. |
   | capture | DONE 2026-09-08 — status, pause, resume, mounted as ONE group. Splitting the household's control across two languages is the one place a strangler seam is not worth having. |
   | sync | `/sync/capture` DONE 2026-09-08. The other twelve routes are Python's: jobs, labels, the audio blob push and fetch, the segment push and its batch, live turns, and the device/vocabulary reads. |
+
+  *`/api/sources`, 2026-09-09 — the last `/api` route, and a deletion rather than
+  a move:*
+
+  - **621 lines of Python went with it**: `api_devices.py`, `liveness.py`,
+    `ingest_liveness.py` and `tests/test_liveness.py`, plus five route tests in
+    `test_api.py`. `schemas.py`'s `SourcesOut` STAYS — `gen_models.py` renders the
+    frontend's TypeScript from it, so it is the wire contract, not the route.
+  - ⚠ **The Mac-local branch was CUT, not ported, and that is not a capability
+    loss.** `_local_last_active` read `.alive` files directly and only ran when
+    the api was served on the Mac. It never is: `deploy/hm-agents.nix` says so in
+    as many words — "NO recall-api here — the Mac serves no UI or control plane
+    (the Isis split)" — and no launchd agent serves one. recalld runs only on the
+    fleet, so implementing only the fleet branch is correct rather than partial.
+  - **The HTTP hop disappeared.** The Python fetched delivery evidence from
+    recalld's own `/ingest/v1/liveness` — a loopback request with a bearer token
+    and a 1.5 s timeout, made from inside a UI poll. On this side it is a query
+    against the same file. What survives is its best-effort contract: an
+    unreadable ingest database means "no extra evidence", never an error page.
+  - **Parity by generating the test from the Python.** `source_statuses` is pure
+    on both sides, so the same eleven-case matrix was run through
+    `recall.liveness` and its answers — 33 rows — became the expected table in
+    `recalld/tests/sources.rs`. Ablating `stopped_recently` fails exactly the case
+    built for it, so the table is not decorative.
+  - ⚠ **`stopped_recently` is the rule worth reading twice.** A marker that went
+    stale RECENTLY beats delivery evidence, because a deliberate stop is newer
+    information than a segment captured just before it. Without it a phone stays
+    green for five minutes after its owner stops it (measured on pixel9,
+    2026-09-05, where it used to go idle in twelve seconds).
 
   *The capture cutover, 2026-09-08, and what it cost to do safely:*
 

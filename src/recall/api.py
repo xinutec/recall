@@ -15,8 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from recall.api_capture import fleet_capture_state, register_capture_routes
-from recall.api_devices import register_device_routes
+from recall.api_capture import register_capture_routes
 from recall.paths import default_data_root
 from recall.store import (
     Store,
@@ -56,12 +55,6 @@ register_web_auth(app)
 
 
 register_capture_routes(app, store_factory=_store, data_root=lambda: DATA_ROOT)
-register_device_routes(
-    app,
-    store_factory=_store,
-    data_root=lambda: DATA_ROOT,
-    fleet_capture_state=fleet_capture_state,
-)
 
 
 def _parse_iso(value: str | None) -> datetime | None:

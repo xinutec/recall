@@ -9,7 +9,7 @@
 use crate::tokens::Tokens;
 use crate::{
     assign, audio, capture, conversations, devices, ingest, labels, labels_write, proxy, reads,
-    reports, sessions, spa, sync, upload, webauth, work,
+    reports, sessions, sources, spa, sync, upload, webauth, work,
 };
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -74,6 +74,10 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
     let read = Arc::new(reads::State { root });
     Router::new()
         .route("/api/timeline", get(reads::timeline_route))
+        // ⚠ DEVICE-EXEMPT (webauth::DEVICE_EXEMPT). The mic apps poll this
+        // to show the household who is recording, and they carry no session
+        // at all — a gate here would blank the panel on every phone.
+        .route("/api/sources", get(sources::sources_route))
         .route("/api/search", get(reads::search_route))
         .route("/api/transcripts", get(reads::transcripts_route))
         .route("/api/review", get(reads::review_route))

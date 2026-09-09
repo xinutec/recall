@@ -209,6 +209,46 @@ pub fn record_reported(
     )
 }
 
+/// Each source's last-proved-recording time as the Mac last reported it, or
+/// `None` when the Mac has stopped checking in.
+///
+/// ⚠ Behind the SAME freshness gate as [`reported_state`], and that is the
+/// point: the fleet runs no capture and has no liveness markers of its own, so
+/// a stale report must read as "we cannot see" rather than as the last thing we
+/// happened to hear. `None` and an empty map mean different things — the first
+/// is a Mac that has gone quiet, the second a Mac reporting no live sources.
+///
+/// A malformed entry is DROPPED, not fatal: this is best-effort status, not
+/// control, and one unparseable timestamp must not blank the whole panel.
+pub fn reported_source_liveness(
+    conn: &Connection,
+    now: DateTime<Utc>,
+) -> rusqlite::Result<Option<std::collections::HashMap<String, DateTime<Utc>>>> {
+    let Some(at) = setting(conn, REPORTED_AT_KEY)?.filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let Some(at) = crate::instant::parse(&at) else {
+        return Ok(None);
+    };
+    if now - at.with_timezone(&Utc) > report_fresh() {
+        return Ok(None);
+    }
+    let Some(raw) = setting(conn, REPORTED_LIVENESS_KEY)?.filter(|s| !s.is_empty()) else {
+        return Ok(Some(std::collections::HashMap::new()));
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw)
+    else {
+        return Ok(Some(std::collections::HashMap::new()));
+    };
+    let mut out = std::collections::HashMap::new();
+    for (source, value) in parsed {
+        if let Some(when) = value.as_str().and_then(crate::instant::parse) {
+            out.insert(source, when.with_timezone(&Utc));
+        }
+    }
+    Ok(Some(out))
+}
+
 /// The fleet's view: intent, plus the Mac's confirmation of it.
 pub fn fleet_capture_state(
     conn: &Connection,
