@@ -418,6 +418,60 @@ in
     };
   };
 
+  # The room transcription runner (docs/architecture.md, stage E3). Leases a
+  # room block from recalld, drives the `asr` shim over stdio, pushes the result,
+  # acks. Stateless: no watermark, no outbox, no mirror queue, so killing it
+  # costs an expiring lease and nothing else.
+  #
+  # ⚠ KeepAlive, NOT a StartInterval timer, and the shim is why: it holds the
+  # whisper weights for the life of the process, which is the whole reason the
+  # protocol exists. A periodic agent would reload them every pass and pay that
+  # cost per job instead of per boot. The runner has its own idle sleep and
+  # backoff, and respawns a dead shim itself.
+  #
+  # ⚠ It REFUSES TO START without the vocabulary — deliberately, in the runner
+  # rather than here. Transcribing without the biasing the vocabulary was built
+  # for produces a corpus that has to be redone, and re-transcription is the cost
+  # #1388 exists to reduce. An empty vocabulary is fine; an unreachable one is not.
+  #
+  # ⚠ What this does NOT do, which is what makes deploying it safe: results are
+  # stored OPAQUE in ingest.sqlite's job rows. Nothing becomes a visible turn
+  # until the results-to-turns step lands, so starting this changes no transcript
+  # anybody reads. It transcribes the 2,539 queued blocks and stops.
+  #
+  # Nice + LowPriorityIO: transcription must never compete with the recorder
+  # (design.md §7), and this one holds a GPU.
+  launchd.agents."org.xinutec.recall-runner" = daemon {
+    label = "org.xinutec.recall-runner";
+    name = "runner";
+    args = [ ];
+    program = pkgs.writeShellApplication {
+      name = "recall-runner";
+      runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
+      text = ''
+        # RECALL_SYNC_TOKEN lives in .env and must never enter the store.
+        ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
+        if [ -r "$ENV_FILE" ]; then
+          set -a
+          # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
+          . "$ENV_FILE"
+          set +a
+        fi
+
+        exec env RUST_LOG=info \
+          ${
+            recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
+          }/bin/runner --shim ${venvPython} -m recall.shim_asr
+      '';
+    };
+    extra = {
+      KeepAlive = true;
+      RunAtLoad = true;
+      LowPriorityIO = true;
+      Nice = 10;
+    };
+  };
+
   # Store-and-forward delivery (docs/architecture.md, stage B): every closed
   # segment to recalld on Isis, sha-256 receipt verified against a local
   # re-hash before it is recorded delivered. A timer like recall-sync; each
