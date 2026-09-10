@@ -269,18 +269,6 @@ class Store:
             spec="",
         )
 
-    def source_span(self, source_id: str) -> tuple[datetime, datetime] | None:
-        """The [first-start, last-end) covered by a source's audio, or None if it has
-        no segments — for queuing a whole-session refine."""
-        row = self._conn.execute(
-            "SELECT MIN(start_utc) AS s, MAX(end_utc) AS e FROM audio_segments "
-            "WHERE source_id = ?",
-            (source_id,),
-        ).fetchone()
-        if row is None or row["s"] is None:
-            return None
-        return datetime.fromisoformat(row["s"]), datetime.fromisoformat(row["e"])
-
     def rename_source(self, source_id: str, name: str) -> None:
         """Rename a source (the sessions list's display title)."""
         self._conn.execute(
@@ -374,17 +362,6 @@ class Store:
         ).fetchall()
         return [(AudioSegmentId(int(r["id"])), str(r["path"])) for r in rows]
 
-    def measured_counts(self, *, kinds: Collection[SourceKind]) -> tuple[int, int]:
-        """(measured, total) sweepable segments — the cleanup scan's progress."""
-        placeholders = ",".join("?" * len(kinds))
-        row = self._conn.execute(
-            "SELECT count(a.envelope) AS done, count(*) AS total FROM audio_segments a "
-            "JOIN sources s ON s.id = a.source_id "
-            f"WHERE s.kind IN ({placeholders})",
-            tuple(k.value for k in kinds),
-        ).fetchone()
-        return int(row["done"]), int(row["total"])
-
     def sweepable_source_ids(self) -> list[str]:
         """The continuously-recording sources — the ones a cleanup can act on, and so
         the ones worth measuring a sound threshold for."""
@@ -472,25 +449,6 @@ class Store:
         )
         self._commit()
 
-    def analysed_counts(self, *, kinds: Collection[SourceKind]) -> tuple[int, int]:
-        """(analysed, total) of the segments a cleanup could act on — how far the speech
-        detector has got. The same population `audio_segments_to_analyse` draws from, so
-        the progress bar counts what is actually queued."""
-        placeholders = ",".join("?" * len(kinds))
-        row = self._conn.execute(
-            "SELECT count(a.speech_s) AS done, count(*) AS total FROM audio_segments a "
-            "JOIN sources s ON s.id = a.source_id "
-            f"WHERE s.kind IN ({placeholders}) "
-            "AND a.mean_volume IS NOT NULL "
-            "AND a.transcribed_utc IS NOT NULL "
-            "AND NOT EXISTS (SELECT 1 FROM transcript_segments t "
-            "                WHERE t.audio_segment_id = a.id "
-            "                  AND t.superseded_by IS NULL "
-            "                  AND t.hidden_reason IS NULL)",
-            (*[k.value for k in kinds],),
-        ).fetchone()
-        return int(row["done"]), int(row["total"])
-
     def idle_segment_paths(
         self, source_id: str, *, quiet_below_db: float, limit: int = 24
     ) -> list[str]:
@@ -507,22 +465,6 @@ class Store:
             (source_id, quiet_below_db, limit),
         ).fetchall()
         return [str(r["path"]) for r in rows]
-
-    def span_structure(self, audio_ids: Sequence[AudioSegmentId]) -> float | None:
-        """The most unusual moment across a span: the highest `structure` any of its
-        segments reached. Max, not mean — a span with one cough in it is a span with a
-        cough in it, and averaging that over an hour of nothing would hide it."""
-        if not audio_ids:
-            return None
-        placeholders = ",".join("?" * len(audio_ids))
-        row = self._conn.execute(
-            "SELECT max(structure) AS peak FROM audio_segments "
-            f"WHERE id IN ({placeholders})",
-            tuple(int(a) for a in audio_ids),
-        ).fetchone()
-        if row is None or row["peak"] is None:
-            return None
-        return float(row["peak"])
 
     def segments_showing_no_turns(
         self,
@@ -615,22 +557,6 @@ class Store:
             return None
         return float(row["event_db"])
 
-    def audio_envelopes(
-        self, audio_ids: Sequence[AudioSegmentId]
-    ) -> dict[AudioSegmentId, bytes]:
-        """The stored envelopes of `audio_ids` — the review reads these instead of
-        decoding. Segments measured before envelopes were kept are simply absent, and
-        the caller decodes those (see recall.envelope.segment_envelope)."""
-        if not audio_ids:
-            return {}
-        placeholders = ",".join("?" * len(audio_ids))
-        rows = self._conn.execute(
-            f"SELECT id, envelope FROM audio_segments WHERE id IN ({placeholders}) "
-            "AND envelope IS NOT NULL",
-            tuple(int(a) for a in audio_ids),
-        ).fetchall()
-        return {AudioSegmentId(int(r["id"])): bytes(r["envelope"]) for r in rows}
-
     def audio_segment_volumes(
         self, *, kinds: Collection[SourceKind]
     ) -> list[SegmentVolume]:
@@ -675,54 +601,6 @@ class Store:
             )
             for r in rows
         ]
-
-    def audio_segments_between(
-        self, source_id: str, start: datetime, end: datetime
-    ) -> list[tuple[AudioSegmentId, str, datetime, datetime, float | None]]:
-        """(id, path, start, end, mean_volume) of one source's capture segments
-        overlapping [start, end), in time order — the input to the envelope the cleanup
-        review draws. One source, because a waveform mixing two mics would show sound
-        the span under review does not contain. Overlapping, not contained, so the
-        segments at a span's edges (the ones that ended the quiet) are included."""
-        _require_aware(start, "start")
-        _require_aware(end, "end")
-        rows = self._conn.execute(
-            "SELECT id, path, start_utc, end_utc, mean_volume FROM audio_segments "
-            "WHERE source_id = ? AND start_utc < ? AND end_utc > ? ORDER BY start_utc",
-            (source_id, end.isoformat(), start.isoformat()),
-        ).fetchall()
-        return [
-            (
-                AudioSegmentId(int(r["id"])),
-                str(r["path"]),
-                datetime.fromisoformat(r["start_utc"]),
-                datetime.fromisoformat(r["end_utc"]),
-                None if r["mean_volume"] is None else float(r["mean_volume"]),
-            )
-            for r in rows
-        ]
-
-    def audio_segment_bounds(
-        self, audio_ids: Sequence[AudioSegmentId]
-    ) -> tuple[str, datetime, datetime] | None:
-        """(source, first start, last end) of these segments — what a delete is about to
-        destroy, in the terms a person would recognise it by. None if none of them exist
-        (a duplicate request for a span that has already gone)."""
-        if not audio_ids:
-            return None
-        placeholders = ",".join("?" * len(audio_ids))
-        row = self._conn.execute(
-            f"""SELECT source_id, MIN(start_utc) AS first, MAX(end_utc) AS last
-                  FROM audio_segments WHERE id IN ({placeholders})""",
-            tuple(int(a) for a in audio_ids),
-        ).fetchone()
-        if row is None or row["first"] is None:
-            return None
-        return (
-            str(row["source_id"]),
-            datetime.fromisoformat(row["first"]),
-            datetime.fromisoformat(row["last"]),
-        )
 
     def _tombstone(self, source_id: str, start_utc: str) -> None:
         """Journal one deliberate segment deletion by cross-machine identity, inside
@@ -958,21 +836,6 @@ class Store:
         )
         self._commit()
 
-    def claim_hidden(self, transcript_id: int, reason: str) -> bool:
-        """Hide a turn only if it's still current — a single atomic statement, so when
-        the same turn is split concurrently (an impatient double-tap) exactly one
-        caller wins. Returns True if this call hid it, False if it was already
-        hidden/superseded (a concurrent split got there first; this caller must not
-        also split it).
-        """
-        cursor = self._conn.execute(
-            "UPDATE transcript_segments SET hidden_reason = ? "
-            "WHERE id = ? AND hidden_reason IS NULL AND superseded_by IS NULL",
-            (reason, transcript_id),
-        )
-        self._commit()
-        return cursor.rowcount == 1
-
     def unhide(self, transcript_id: int) -> None:
         """Restore a soft-hidden turn (recover a false-positive hide)."""
         self._conn.execute(
@@ -980,16 +843,6 @@ class Store:
             (transcript_id,),
         )
         self._commit()
-
-    def unhide_all(self, reason: str) -> int:
-        """Restore every turn hidden with `reason` (reset a scan). Returns count."""
-        cursor = self._conn.execute(
-            "UPDATE transcript_segments SET hidden_reason = NULL "
-            "WHERE hidden_reason = ?",
-            (reason,),
-        )
-        self._commit()
-        return cursor.rowcount
 
     def frequent_machine_texts(self, *, min_count: int) -> set[str]:
         """Machine-turn texts that recur at least `min_count` times.
@@ -1309,33 +1162,6 @@ class Store:
             (datetime.now(UTC).isoformat(), request_id),
         )
         self._commit()
-
-    def pending_upload_jobs(self, *, limit: int = 100) -> list[UploadJob]:
-        """Uploaded-session segments not yet through ASR, oldest-first — the fleet-side
-        upload queue served to the Mac (which holds the ML). Derived from the segment
-        rows themselves, so nothing has to remember to enqueue; done = mark_transcribed.
-        """
-        rows = self._conn.execute(
-            "SELECT a.id, a.source_id, s.name, a.path, a.start_utc, a.end_utc, "
-            "a.sample_rate, a.channels "
-            "FROM audio_segments a JOIN sources s ON s.id = a.source_id "
-            "WHERE s.kind = ? AND a.transcribed_utc IS NULL "
-            "ORDER BY a.start_utc LIMIT ?",
-            (SourceKind.UPLOAD.value, limit),
-        ).fetchall()
-        return [
-            UploadJob(
-                audio_id=int(r["id"]),
-                source=str(r["source_id"]),
-                title=str(r["name"]),
-                file=Path(str(r["path"])).name,
-                start=datetime.fromisoformat(r["start_utc"]),
-                end=datetime.fromisoformat(r["end_utc"]),
-                sample_rate=int(r["sample_rate"]),
-                channels=int(r["channels"]),
-            )
-            for r in rows
-        ]
 
     def unmirrored_segments(
         self, *, limit: int = 500, older_than: datetime | None = None
@@ -1868,21 +1694,6 @@ class Store:
             if r["secs"] and float(r["secs"]) > 0
         }
 
-    def newest_live_turn(self) -> datetime | None:
-        """When the live tier last produced a turn, or None if it never has.
-
-        The doctor's evidence that live is PRODUCING rather than merely running
-        (#1383). Deliberately ignores hidden_reason: a live turn the archive has
-        since reconciled still proves live was working when it wrote it."""
-        row = self._conn.execute(
-            "SELECT max(start_utc) AS newest FROM transcript_segments "
-            "WHERE asr_model = ?",
-            (LIVE_MODEL,),
-        ).fetchone()
-        if row is None or row["newest"] is None:
-            return None
-        return datetime.fromisoformat(str(row["newest"]))
-
     def visible_live_turns_since(
         self, watermark: int, *, limit: int = 500
     ) -> list[TranscriptSegment]:
@@ -1913,17 +1724,6 @@ class Store:
         )
         self._commit()
         return cursor.rowcount
-
-    def live_turn_present(self, start: datetime, text: str) -> bool:
-        """Whether a live turn with this start+text already exists (in any state). The
-        fleet ingest is idempotent: a retried push never duplicates a turn, nor
-        resurrects one the archive already reconciled to hidden."""
-        row = self._conn.execute(
-            "SELECT 1 FROM transcript_segments "
-            "WHERE asr_model = ? AND start_utc = ? AND text = ? LIMIT 1",
-            (LIVE_MODEL, start.isoformat(), text),
-        ).fetchone()
-        return row is not None
 
     def get_transcript(self, segment_id: int) -> TranscriptSegment | None:
         row = self._conn.execute(
@@ -2082,19 +1882,6 @@ class Store:
             "ORDER BY name COLLATE NOCASE"
         ).fetchall()
         return [r[0] for r in rows if r[0]]
-
-    def session_turn_ids(self, source_id: str) -> list[int]:
-        """The current (visible) turns of a session in time order — the sequence a span
-        assignment walks across."""
-        rows = self._conn.execute(
-            """SELECT ts.id FROM transcript_segments ts
-               JOIN audio_segments a ON a.id = ts.audio_segment_id
-               WHERE a.source_id = ? AND ts.superseded_by IS NULL
-                 AND ts.hidden_reason IS NULL
-               ORDER BY ts.start_utc""",
-            (source_id,),
-        ).fetchall()
-        return [int(r["id"]) for r in rows]
 
     def session_turns(self, source_id: str) -> list[TranscriptSegment]:
         """Every current turn of a session, oldest first — the whole call, for reading
@@ -2454,26 +2241,6 @@ class Store:
             profiles.setdefault(str(row["name"]), []).append(vector)
         return profiles
 
-    def corrections(self) -> list[Correction]:
-        """All recorded corrections — the labelled fine-tuning corpus."""
-        rows = self._conn.execute(
-            """SELECT id, audio_segment_id, start_utc, end_utc, corrected_text,
-                      language, speaker
-               FROM corrections WHERE hidden_reason IS NULL ORDER BY id"""
-        ).fetchall()
-        return [
-            Correction(
-                id=CorrectionId(int(row["id"])),
-                audio_segment_id=_opt_audio_id(row["audio_segment_id"]),
-                start=datetime.fromisoformat(row["start_utc"]),
-                end=datetime.fromisoformat(row["end_utc"]),
-                corrected_text=str(row["corrected_text"]),
-                language=_opt_str(row["language"]),
-                speaker=_opt_str(row["speaker"]),
-            )
-            for row in rows
-        ]
-
     def list_corrections(
         self, *, speaker: str | None = None, limit: int = 200
     ) -> list[LabelledFragment]:
@@ -2501,24 +2268,6 @@ class Store:
             )
             for row in rows
         ]
-
-    def get_correction(self, correction_id: int) -> LabelledFragment | None:
-        row = self._conn.execute(
-            "SELECT id, audio_segment_id, start_utc, end_utc, corrected_text, "
-            "speaker, language FROM corrections WHERE id = ?",
-            (correction_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return LabelledFragment(
-            correction_id=CorrectionId(int(row["id"])),
-            audio_segment_id=_opt_audio_id(row["audio_segment_id"]),
-            start=datetime.fromisoformat(row["start_utc"]),
-            end=datetime.fromisoformat(row["end_utc"]),
-            text=str(row["corrected_text"]),
-            speaker=_opt_str(row["speaker"]),
-            language=_opt_str(row["language"]),
-        )
 
     def set_correction_speaker(self, correction_id: int, speaker: str) -> None:
         """Re-assign a label's voice: update the corpus pair, the live segment, and
