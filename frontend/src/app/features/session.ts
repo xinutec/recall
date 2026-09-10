@@ -13,6 +13,7 @@ import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatSnackBar } from '@angular/material/snack-bar';
@@ -57,6 +58,7 @@ interface Run {
     MatProgressBarModule,
     MatFormFieldModule,
     MatInputModule,
+    MatSlideToggleModule,
     TranscriptCard,
   ],
   templateUrl: './session.html',
@@ -246,12 +248,23 @@ export class Session implements OnDestroy {
     this.playing.set(key);
   }
 
+  // Denoise clips before playing (deep-filter server-side) — the #1522
+  // listen-test winner. Off by default: it costs a few seconds per clip.
+  // Voice samples stay raw, as does labelling: there, fidelity is the point.
+  protected readonly enhance = signal(false);
+
+  /** The playback URL, with the denoise flag when it's switched on. */
+  private audioUrl(base: string): string {
+    if (!this.enhance()) return base;
+    return `${base}${base.includes('?') ? '&' : '?'}enhance=true`;
+  }
+
   /** Play / stop a whole speaker bubble — one continuous clip across all its turns
    * (their full span), not just the first. */
   protected togglePlay(run: Run): void {
     const turns = run.turns;
     const url = `/api/audio-span?from_id=${turns[0].id}&to_id=${turns[turns.length - 1].id}`;
-    this.play(`run:${run.key}`, url);
+    this.play(`run:${run.key}`, this.audioUrl(url));
   }
 
   /** Play / stop a voice's sample clip from the cast. */
@@ -360,7 +373,7 @@ export class Session implements OnDestroy {
   /** Play / stop the tapped turn — hear who said it before assigning. */
   protected playSelected(): void {
     const id = this.selected();
-    if (id !== null) this.play('turn', `/api/audio/${id}`);
+    if (id !== null) this.play('turn', this.audioUrl(`/api/audio/${id}`));
   }
 
   // Which turn is being text-edited (null = none) — fixing the *words*, a separate

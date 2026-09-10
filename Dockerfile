@@ -76,6 +76,15 @@ FROM python:3.12-slim-trixie
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg sox flac libonnxruntime1.21 \
     && rm -rf /var/lib/apt/lists/*
+# deep-filter denoises playback clips on demand (audio.rs, `enhance=true`) — the
+# #1522 listen-test winner. The release binary is static musl with tract
+# inference (pure Rust): no AVX2, which matters because the fleet is Ivy Bridge
+# and ort's prebuilt binaries already SIGILLed here once (above). Verified on
+# isis 2026-09-10: runs, 10 s of speech in 3.5 s, 57 MB peak.
+ADD --checksum=sha256:70775e251eee44c0f2451a1e833326cf8bcbbe304d3e7cd12851e6fce72ef7da \
+    --chmod=755 \
+    https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/deep-filter-0.5.6-x86_64-unknown-linux-musl \
+    /usr/local/bin/deep-filter
 # Non-ML runtime deps only (see deploy/k8s/README.md), pinned to the app's floors. A
 # dedicated fleet lockfile would make this reproducible — a follow-up.
 #

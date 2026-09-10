@@ -6,6 +6,14 @@
     } @else {
       <h2>Session</h2>
     }
+    <mat-slide-toggle
+      class="enhance"
+      [checked]="enhance()"
+      (change)="enhance.set($event.checked)"
+      title="Denoise clips before playing — takes a few seconds per clip"
+    >
+      Clear audio
+    </mat-slide-toggle>
   </header>
 
   @if (data.isLoading()) {

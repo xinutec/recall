@@ -9,8 +9,9 @@
 //! reaching for the volume. The archived audio is never touched; only the
 //! transient clip is. Both binaries are the ones the segmenters already use.
 //!
-//! ⚠ **Those two binaries are a RUNTIME dependency of recalld now, and a missing
-//! one fails at play time rather than at boot.** The fleet image installs
+//! ⚠ **Those binaries — and `deep-filter` for `enhance=true` — are a RUNTIME
+//! dependency of recalld now, and a missing one fails at play time rather than
+//! at boot.** The fleet image installs
 //! `ffmpeg sox flac` for exactly this reason and says so: it once shipped with
 //! ffmpeg alone, and every audio request on the fleet died inside loudness
 //! normalisation while the transcripts served perfectly — a fault that hides
@@ -114,12 +115,23 @@ pub fn placement(conn: &Connection, transcript_id: i64) -> rusqlite::Result<Opti
     }))
 }
 
-/// Slice `[start, end]` out of `src` and peak-normalise it, returning WAV bytes.
+/// Slice `[start, end]` out of `src`, optionally denoise, and peak-normalise it,
+/// returning WAV bytes.
 ///
-/// ⚠ Two processes, not one: ffmpeg cuts, sox normalises. Keeping sox's `norm -1`
-/// rather than reaching for an ffmpeg filter keeps playback loudness identical to
-/// what the Python served, which is a thing a person would notice change.
-pub fn render(src: &Path, start: f64, end: f64) -> std::io::Result<Vec<u8>> {
+/// ⚠ Separate processes, not one: ffmpeg cuts, sox normalises. Keeping sox's
+/// `norm -1` rather than reaching for an ffmpeg filter keeps playback loudness
+/// identical to what the Python served, which is a thing a person would notice
+/// change.
+///
+/// The `enhance` stage sits between them: `deep-filter` (`DeepFilterNet`, tract
+/// inference — pure Rust, so no AVX2, which the Ivy Bridge fleet lacks) writes
+/// its output under the input's own name in `-o`'s directory, hence the
+/// subdirectory. `-D` compensates the model's lookahead so timestamps stay
+/// aligned with the raw clip. Measured on isis 2026-09-10: 10 s of speech in
+/// 3.5 s, 57 MB peak — an opt-in wait, which is why the flag defaults off.
+/// Chosen over stitching mics in the #1522 listen test ("no noise, clear
+/// voices"); see docs/architecture.md.
+pub fn render(src: &Path, start: f64, end: f64, enhance: bool) -> std::io::Result<Vec<u8>> {
     let dir = tempfile::tempdir()?;
     let cut = dir.path().join("clip.wav");
     let norm = dir.path().join("clip-norm.wav");
@@ -132,8 +144,24 @@ pub fn render(src: &Path, start: f64, end: f64) -> std::io::Result<Vec<u8>> {
     if !sliced.success() {
         return Err(std::io::Error::other("ffmpeg slice failed"));
     }
+    let feed = if enhance {
+        let denoised_dir = dir.path().join("df");
+        std::fs::create_dir(&denoised_dir)?;
+        let denoised = Command::new("deep-filter")
+            .arg("-D")
+            .arg("-o")
+            .arg(&denoised_dir)
+            .arg(&cut)
+            .status()?;
+        if !denoised.success() {
+            return Err(std::io::Error::other("deep-filter failed"));
+        }
+        denoised_dir.join("clip.wav")
+    } else {
+        cut
+    };
     let normalised = Command::new("sox")
-        .arg(&cut)
+        .arg(&feed)
         .arg(&norm)
         .args(["norm", "-1"])
         .status()?;
@@ -185,6 +213,17 @@ use std::sync::Arc;
 pub struct SpanQuery {
     from_id: i64,
     to_id: i64,
+    /// Denoise before normalising — costs seconds of wait; see [`render`].
+    #[serde(default)]
+    enhance: bool,
+}
+
+/// Query for the single-turn route, which takes its id from the path.
+#[derive(Deserialize)]
+pub struct AudioQuery {
+    /// Denoise before normalising — costs seconds of wait; see [`render`].
+    #[serde(default)]
+    enhance: bool,
 }
 
 /// Why a clip could not be produced.
@@ -215,8 +254,8 @@ impl From<rusqlite::Error> for ClipError {
 /// browsing request — and the recorders' ingest, which shares this runtime —
 /// for the length of a clip. Making that mistake possible cost nothing to
 /// prevent: nobody outside needs to render without first picking.
-fn clip(path: &Path, start: f64, end: f64) -> Response {
-    match render(path, start, end) {
+fn clip(path: &Path, start: f64, end: f64, enhance: bool) -> Response {
+    match render(path, start, end, enhance) {
         Ok(bytes) => ([(header::CONTENT_TYPE, "audio/wav")], bytes).into_response(),
         Err(err) => crate::route::faulted("clip render", &err),
     }
@@ -232,7 +271,11 @@ pub type Picked = Result<Option<(PathBuf, f64, f64)>, ClipError>;
 /// an audio route does, and the only place [`clip`] may be called from.
 ///
 /// ⚠ Must run on the blocking pool; see [`clip`].
-pub fn render_blocking(root: &Path, pick: impl FnOnce(&Connection) -> Picked) -> Response {
+pub fn render_blocking(
+    root: &Path,
+    enhance: bool,
+    pick: impl FnOnce(&Connection) -> Picked,
+) -> Response {
     let conn = match crate::reads::open(root) {
         Ok(conn) => conn,
         Err(err) => return crate::route::faulted("audio open", &err),
@@ -246,17 +289,18 @@ pub fn render_blocking(root: &Path, pick: impl FnOnce(&Connection) -> Picked) ->
             (StatusCode::BAD_REQUEST, "span crosses recordings").into_response()
         }
         Ok(None) => no_audio(),
-        Ok(Some((path, start, end))) => clip(&path, start, end),
+        Ok(Some((path, start, end))) => clip(&path, start, end, enhance),
     }
 }
 
 pub async fn audio_route(
     State(st): State<Arc<crate::reads::State>>,
     axum::extract::Path(id): axum::extract::Path<i64>,
+    Query(q): Query<AudioQuery>,
 ) -> Response {
     let root = st.root.clone();
     let rendered = tokio::task::spawn_blocking(move || {
-        render_blocking(&root, |conn| {
+        render_blocking(&root, q.enhance, |conn| {
             Ok(placement(conn, id)?.map(|p| {
                 let (start, end) = window_for(&p);
                 (p.path.clone(), start, end)
@@ -275,7 +319,7 @@ pub async fn audio_span_route(
 ) -> Response {
     let root = st.root.clone();
     let rendered = tokio::task::spawn_blocking(move || {
-        render_blocking(&root, |conn| {
+        render_blocking(&root, q.enhance, |conn| {
             let (Some(first), Some(last)) =
                 (placement(conn, q.from_id)?, placement(conn, q.to_id)?)
             else {

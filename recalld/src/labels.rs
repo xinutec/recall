@@ -319,7 +319,9 @@ pub async fn correction_audio_route(
     // request for the length of the clip. Going through `render_blocking` also
     // makes this behave exactly like the other two clip routes.
     let rendered = tokio::task::spawn_blocking(move || {
-        audio::render_blocking(&root, |conn| {
+        // Labelling wants the recording as it is — fidelity is the thing being
+        // judged — so no enhance option here.
+        audio::render_blocking(&root, false, |conn| {
             Ok(
                 correction_placement(conn, id)?.map(|(path, start_s, end_s)| {
                     let (start, end) = correction_window(start_s, end_s, q.context);
