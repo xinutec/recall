@@ -24,6 +24,16 @@ Three measured facts force it; none of them is a preference.
   "What the gate measured"). Selection needs no phase and near-zero CPU — so
   the room stream can be produced on Isis, and the Mac shrinks to a stateless
   GPU worker.
+- **Enhance the selected mic; do not stitch mics.** The #1522 listen test
+  (2026-09-04 dinner, five mics, judged by ear 2026-09-10): the best single
+  microphone was the clearest version of every minute tried, and that mic
+  through DeepFilterNet was better still — "no noise, clear voices" from
+  21 kbps Opus, so the lossy archive IS salvageable to pleasant audio.
+  Per-bin selection across mics sounded fine but never beat the best mic, and
+  one device whose own noise suppression had gutted its stream poisoned every
+  mix it entered while topping every floor-based ranking (#1526) — a defect
+  no metric caught and the ear caught in seconds. Enhancement is
+  phase-free, CPU-cheap, and composes with per-block selection (#1388).
 - **Streaming PCM discards on disconnect, by design** ([devices.md](devices.md)):
   the server rebases a connection by one offset measured at its first byte, so
   a replayed backlog would drift. Requirement #1 is completeness; the fix named
