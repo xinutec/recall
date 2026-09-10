@@ -19,6 +19,7 @@ pub mod blanked;
 pub mod bounded;
 pub mod capture;
 pub mod check;
+pub mod deaf;
 pub mod delivery;
 pub mod fleetwatch;
 pub mod instant;

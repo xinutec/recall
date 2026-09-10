@@ -36,6 +36,18 @@ pub fn mirror_slack() -> Duration {
 pub fn loss_window() -> Duration {
     Duration::hours(48)
 }
+/// How far back the deaf-microphone comparison looks.
+///
+/// ⚠ **A long window hides the thing it is looking for.** The comparison only
+/// speaks when peers heard a CONVERSATION, and a rate averaged over a night of
+/// sleep falls below that: measured on the real archive, the same microphones
+/// read 31-40 s/min over the fifteen minutes of an actual conversation and
+/// 9-10 s/min once eight hours of quiet were folded in. Half an hour is long
+/// enough to contain talking and short enough not to dilute it away.
+pub fn deaf_window() -> Duration {
+    Duration::minutes(30)
+}
+
 /// The smallest uncovered active-capture stretch that counts as loss — below
 /// this is the boundary slop of a pause recorded a beat after the last segment,
 /// not real lost speech.
@@ -421,6 +433,7 @@ pub fn archive_checks(
     let (losses, dead_windows) = speech_loss(&conn, &sources, now)?;
     let unmirrored = unmirrored_count(&conn, now - mirror_slack(), 10_000)?;
     let blanked = blanked_segments(&conn)?;
+    let heard = crate::deaf::heard_between(&conn, &sources, now - deaf_window(), now)?;
     let newest_live = newest_live_turn(&conn)?;
     drop(conn);
 
@@ -436,6 +449,7 @@ pub fn archive_checks(
         &sources,
         loss_window(),
     ));
+    checks.push(crate::deaf::deaf_check(&heard));
     checks.push(capture::worker_check(
         beat.as_ref(),
         now,
