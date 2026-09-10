@@ -99,14 +99,32 @@ pub const DEAF_PER_MIN: f64 = 0.5;
 /// Peers that must have heard a conversation before any source is accused.
 pub const MIN_PEERS: usize = 2;
 
-/// Audio a source must have delivered in the window before its rate is used.
+/// Audio a source must have delivered in the window before its rate is used —
+/// one complete 60-second segment.
 ///
-/// ⚠ The residual assumption, stated because it is not eliminated: the recorders
-/// run continuously while capture is active, so delivering three minutes inside
-/// one short window means they heard the same stretch of room. A source that
-/// delivered ONLY during a genuinely quiet patch would read as deaf. That is why
-/// the verdict is a WARN naming what to check, not a FAIL.
-pub const MIN_DELIVERED_S: f64 = 180.0;
+/// ⚠ **This was 180 s and it was wrong, shown by the case the check exists for.**
+/// Measured 2026-09-10 20:35Z, Pippijn alone reading a known script: every mic
+/// delivered ONE segment, four heard 21-25 s of him, pixel5 heard nothing and
+/// produced no turns. The check SKIPPED — "only 0 source(s) delivered enough
+/// audio to compare" — because sixty seconds is not a hundred and eighty.
+///
+/// What the floor guards against is a source that delivered only during a quiet
+/// patch, so its zero says nothing about the microphone. That risk is absent
+/// when several peers each heard twenty seconds over the SAME minute: the
+/// protection that matters is peer agreement, and it is enforced separately by
+/// [`MIN_PEERS`] and [`CONVERSATION_PER_MIN`]. This floor only has to establish
+/// that the source was listening long enough to have heard something.
+///
+/// ⚠ **55 and not 60, because a real segment is not 60 seconds.** Measured on the
+/// same archive: the phones close at **59.993 s** and only the Mac's own capture
+/// hits 60.000. A floor set at the nominal length excluded all four phones and
+/// left the check saying "only 1 source delivered enough audio" — the SECOND
+/// time this bound hid the case it exists for, and the first fixture missed it
+/// because it used the nominal 60.0 rather than the measured 59.993.
+///
+/// ⚠ It still refuses half a segment — a source cut off by a pause or starting
+/// mid-minute is genuinely too little to convict on, and a test pins that.
+pub const MIN_DELIVERED_S: f64 = 55.0;
 
 /// Name the sources that delivered audio containing no speech while at least
 /// [`MIN_PEERS`] others heard a conversation over the same minutes.

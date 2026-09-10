@@ -123,20 +123,6 @@ fn the_macs_own_mic_going_silent_is_caught_the_same_way() {
     assert!(check.observed.contains("usb"), "{}", check.observed);
 }
 
-/// Too little audio to say anything. One minute is a coincidence, not a
-/// measurement.
-#[test]
-fn too_few_shared_minutes_says_nothing_rather_than_guessing() {
-    let check = deaf_check(&[
-        Heard::new("usb", 60.0, 54.0),
-        Heard::new("iphone11", 60.0, 53.0),
-        Heard::new("oneplus6t", 60.0, 43.0),
-        Heard::new("pixel5", 60.0, 0.0),
-    ]);
-
-    assert_eq!(check.verdict, Verdict::Skip);
-}
-
 /// The label is the trend identity and must not carry the source name — a check
 /// whose label changes when the culprit changes has no trend at all.
 #[test]
@@ -152,4 +138,58 @@ fn the_label_is_stable_whichever_mic_is_deaf() {
     assert_eq!(a.label, b.label);
     assert_eq!(a.verdict, Verdict::Warn);
     assert_eq!(b.verdict, Verdict::Warn);
+}
+
+/// ⚠ **THE LIVE CASE, and the check could not see it.** Measured 2026-09-10
+/// 20:35Z with Pippijn alone in the house reading a known script: every mic
+/// delivered ONE 60-second segment, four heard 21-25 s of him, and pixel5 heard
+/// nothing and produced no turns. That is exactly what this check exists to
+/// name — and it skipped, because `MIN_DELIVERED_S` was 180 s and one segment is
+/// sixty.
+///
+/// The 180 was a guess made without data. What it guards against is a source
+/// that delivered only during a quiet patch, so its zero means nothing — and
+/// that risk is ABSENT when four peers each heard twenty seconds over the very
+/// same minute. The protection that matters is peer agreement, not duration, so
+/// the floor is now one complete segment: enough to have heard something.
+///
+/// ⚠ Not lowered to make a test pass. Lowered because a real case showed the
+/// bound excluding evidence that was already decisive.
+#[test]
+fn the_real_2026_09_10_measurement_names_pixel5() {
+    // speech seconds within a single 60 s segment, straight off the archive.
+    let heard = vec![
+        // ⚠ 59.993, the MEASURED duration — not the nominal 60.0. The phones
+        // close a few milliseconds short and only the Mac's capture hits 60.000,
+        // so a fixture using the round number tests a segment that never exists
+        // and hides a floor set at exactly 60.
+        Heard::new("iphone11", 59.993, 25.3),
+        Heard::new("oneplus6t", 59.993, 22.8),
+        Heard::new("pixel9", 59.993, 21.8),
+        Heard::new("usb", 60.0, 20.9),
+        Heard::new("pixel5", 59.993, 0.0),
+    ];
+
+    let check = deaf_check(&heard);
+
+    assert_eq!(check.verdict, Verdict::Warn, "{}", check.observed);
+    assert!(check.observed.contains("pixel5"), "{}", check.observed);
+    for peer in ["usb", "iphone11", "oneplus6t", "pixel9"] {
+        assert!(!check.observed.contains(peer), "{}", check.observed);
+    }
+}
+
+/// ⚠ The floor still has to REFUSE something, or lowering it was just deleting a
+/// guard. Half a segment — a source that started mid-minute or was cut off by a
+/// pause — is still too little to convict on.
+#[test]
+fn half_a_segment_is_still_too_little_to_judge() {
+    let check = deaf_check(&[
+        Heard::new("iphone11", 30.0, 12.0),
+        Heard::new("oneplus6t", 30.0, 11.0),
+        Heard::new("usb", 30.0, 10.0),
+        Heard::new("pixel5", 30.0, 0.0),
+    ]);
+
+    assert_eq!(check.verdict, Verdict::Skip, "{}", check.observed);
 }
