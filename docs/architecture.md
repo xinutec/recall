@@ -76,10 +76,24 @@ Principles, each argued in the decision record:
 
 The ten questions the proposal had to answer, decided 2026-09-05.
 
-1. **Format — FLAC on the wire; lossless rolling window; Opus tail.**
-   Recorders deliver FLAC (mono, native rate). Isis keeps lossless for a
-   rolling window (~30 days at current volume — set by measured disk, see
-   Storage below) and transcodes the tail to Opus 32k, kept forever.
+1. **Format — FLAC on the wire; LOSSLESS FOREVER (revised 2026-09-10).**
+   Recorders deliver FLAC (mono, native rate) and Isis keeps it. The Opus tail
+   stands as a convenience copy, not as what the lossless decays into.
+
+   ⚠ **This supersedes the ~30-day rolling window #1425 decided.** Pippijn's
+   call, 2026-09-10, with the cost stated and accepted: fusion and high-quality
+   voice audio are the GOAL, not a possible later experiment, so the audio the
+   goal needs cannot be on a timer. Silence filtering is the intended way to
+   claw space back later.
+
+   ⚠ **And most of that clawing-back is free the moment delivery is really
+   FLAC.** Measured 2026-09-10: the phones currently send **WAV** — every
+   segment is exactly 5,760,044 bytes, 60 s of 48 kHz/16-bit mono, whatever it
+   contains. FLAC of the same audio is lossless and content-sensitive: the room
+   stream (16 kHz, built from these very sources) runs **78 KB for a quiet
+   minute against 509 KB for a talkative one**. So near-silence already costs
+   almost nothing in FLAC, and the planned silence filter is a second-order win
+   on top of a first-order one nobody has taken.
    *Why:* selection needs no phase, but the spatial/TDOA tier is the one
    unmeasured lever on the worst measured quality problem — attribution near a
    speaker change ([pipeline.md §4](pipeline.md)), evidence one microphone
@@ -426,9 +440,18 @@ Measured 2026-09-05, method noted so the numbers can be re-derived rather than
 trusted: five sources produced 104 MB Opus in 2 h 22 min (`du` over the source
 dirs), so continuous capture is ~1 GB/day compressed; lossless mono at native
 rates is an order of magnitude more, ~20 GB/day. Isis has 1.1 T free (`df` on
-the PVC's filesystem). A ~30-day lossless window is therefore ~600 GB — inside
-the budget with headroom, and the knob to turn first if it tightens. The Opus
-tail at ~1 GB/day is years per terabyte; retention of the tail is *forever*.
+the PVC's filesystem). That figure was the basis for the ~30-day window, which is
+**withdrawn (2026-09-10): lossless is kept forever.**
+
+⚠ Re-measured 2026-09-10, and the shape of the bill has changed because the
+recorders send WAV rather than FLAC. Three phones deliver lossless today
+(pixel5, oneplus6t, pixel9 — 3,794 segments); `iphone11` and `usb` do not, and
+`usb` is the condenser that leads the others by 21 dB, so it is the one most
+worth having. At WAV's flat 5.76 MB/min, three phones recording ~12 h/day is
+~12.8 GB/day, and Isis's 969 GB free is about seventy days. As FLAC the same
+audio is several times smaller and silence is nearly free, which is what makes
+"forever" a disk purchase rather than a wall. **Encoding the delivered WAV to
+FLAC is therefore the first storage work, and it costs no quality at all.**
 
 Bandwidth is the one unmeasured prerequisite: lossless delivery sustains
 ~2 Mbit/s aggregate from the house to Isis. Stage B's acceptance includes
