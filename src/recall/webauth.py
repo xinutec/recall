@@ -114,7 +114,7 @@ _DEVICE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         # any device id, so this can be made to look healthier than it is. It cannot
         # be made to look worse (a beat only ever refreshes), it grants no read, no
         # audio and no archive, and the device list is capped and evicted by age so a
-        # flood is bounded (recall.mic_alive.MAX_DEVICES).
+        # flood is bounded (recalld::devices::MAX_DEVICES).
         ("POST", "/api/devices/heartbeat"),
     }
 )

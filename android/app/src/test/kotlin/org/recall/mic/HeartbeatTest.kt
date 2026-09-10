@@ -47,7 +47,7 @@ class HeartbeatTest {
 
     @Test
     fun `the cadence matches what the grader was told to expect`() {
-        // recall.mic_alive.BEAT_EVERY_MINUTES is 60 and the fleetwatch thresholds are
+        // recalld::devices::BEAT_EVERY_MINUTES is 60 and the fleetwatch thresholds are
         // written as multiples of it. Drifting apart here would quietly leave every
         // threshold describing a cadence nothing sends.
         assertEquals(60L, Heartbeat.EVERY_MINUTES)

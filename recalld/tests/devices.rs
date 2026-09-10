@@ -687,3 +687,23 @@ async fn a_signed_in_person_can_forget_a_stray_row() {
         .collect();
     assert_eq!(devices, ["real"], "no sqlite3 in the pod required");
 }
+
+/// ⚠ **A cross-repo contract, pinned where it is declared.** Two other repos are
+/// built to this number and name it in their own comments — the Android mic app
+/// (`Heartbeat.EVERY_MINUTES`, asserted in `HeartbeatTest`) and the fleetwatch
+/// thresholds in `xinutec-infra/mac-mini/recall_mics.py`. It lived in
+/// `recall.mic_alive` until that module was deleted (#1496); the module could go
+/// because nothing imported it, but the VALUE could not, because two things
+/// outside this repo agree with it and neither can see a Python file that no
+/// longer exists.
+///
+/// This asserts the canonical side. The Android side asserts its own copy, so a
+/// change to either fails a suite rather than drifting quietly.
+#[test]
+fn the_beat_cadence_is_the_one_the_phones_and_fleetwatch_were_built_to() {
+    assert_eq!(
+        recalld::devices::BEAT_EVERY_MINUTES,
+        60,
+        "changing this needs Heartbeat.EVERY_MINUTES and recall_mics.py changed with it"
+    );
+}

@@ -128,7 +128,7 @@ final class HeartbeatTests: XCTestCase {
     }
 
     func testTheCadenceMatchesWhatTheGraderWasToldToExpect() {
-        // recall.mic_alive.BEAT_EVERY_MINUTES is 60; the fleetwatch thresholds are
+        // recalld::devices::BEAT_EVERY_MINUTES is 60; the fleetwatch thresholds are
         // written as multiples of it. Drifting apart here would silently make every
         // threshold describe a cadence nothing sends.
         XCTAssertEqual(Heartbeat.every, 3600)

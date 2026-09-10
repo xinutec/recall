@@ -30,7 +30,7 @@ enum Heartbeat {
     private static let timeout: TimeInterval = 8
 
     /// How often to beat. The grader's thresholds are expressed in multiples of this
-    /// (recall.mic_alive.BEAT_EVERY_MINUTES), so the two cannot drift apart silently.
+    /// (recalld::devices::BEAT_EVERY_MINUTES), so the two cannot drift apart silently.
     static let every: TimeInterval = 60 * 60
 
     /// First retry after a beat that did not land. Doubles per consecutive failure up

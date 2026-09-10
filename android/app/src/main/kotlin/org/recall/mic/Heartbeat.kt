@@ -40,7 +40,7 @@ object Heartbeat {
 
     /**
      * How often to beat. The grader's thresholds are written as multiples of this
-     * (`recall.mic_alive.BEAT_EVERY_MINUTES`), so the two cannot drift apart silently.
+     * (`recalld::devices::BEAT_EVERY_MINUTES`), so the two cannot drift apart silently.
      */
     const val EVERY_MINUTES = 60L
 

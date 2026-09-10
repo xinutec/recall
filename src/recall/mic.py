@@ -122,7 +122,7 @@ class PcmSpool:
             return out
 
 
-# Hourly, matching `mic_alive.BEAT_EVERY_MINUTES`. The fleet's thresholds are
+# Hourly, matching `recalld::devices::BEAT_EVERY_MINUTES`. The fleet's thresholds are
 # written as multiples of that constant, so the two must not drift.
 BEAT_EVERY_S = 3600
 # A first beat that failed comes back in a minute, doubling to the hourly cadence.

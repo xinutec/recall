@@ -37,6 +37,23 @@ const MAX_DEVICE_LEN: usize = 64;
 const MAX_TEXT_LEN: usize = 64;
 const MAX_REASON_LEN: usize = 200;
 
+/// How often an app is asked to beat.
+///
+/// ⚠ **This is the canonical declaration, and two other repos CITE it by name.**
+/// It moved here from `recall.mic_alive.BEAT_EVERY_MINUTES` when that module was
+/// deleted (#1496): recalld owns the beats, so the cadence belongs beside the
+/// caps that bound them. The other two are pinned to this value and say so:
+///
+///   - `Heartbeat.EVERY_MINUTES` — the Android mic app, asserted in `HeartbeatTest`
+///   - `xinutec-infra/mac-mini/recall_mics.py` — the fleetwatch thresholds
+///
+/// ⚠ Everything downstream is expressed in MULTIPLES of this, so changing the
+/// cadence does not silently leave a threshold describing the old one. It is
+/// deliberately NOT what `MAX_AGE_DAYS` is built from — thirty days is a policy
+/// about when a silent phone stops being a device, not a count of missed beats,
+/// and tying them would make a cadence change silently rewrite a retention rule.
+pub const BEAT_EVERY_MINUTES: i64 = 60;
+
 /// ⚠ The write endpoint is unauthenticated, so the number of devices is
 /// client-controlled. A single test post once put a stray row into the fleet's
 /// setting that had to be removed by hand with sqlite3 inside the pod; the cap
