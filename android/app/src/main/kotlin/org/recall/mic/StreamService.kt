@@ -144,6 +144,11 @@ class StreamService : Service() {
                 // inferred from a socket, which races a parking listener on pause.
                 record = openRecord(bufSize)
                 record.startRecording()
+                // ⚠ Announce the hold, so a deliberate meeting recording waits for
+                // this loop to let go rather than racing it (#1472). stopService is
+                // async: `running` clears first and the release below happens only on
+                // this thread's next pass.
+                MicHandover.acquired()
                 // The mic opened: clear any earlier failure so a recovered app stops
                 // reporting a fault it no longer has.
                 MicState.setMicOk(true)
@@ -267,6 +272,9 @@ class StreamService : Service() {
                 releaseWakeLock()
                 runCatching { record?.stop() }
                 runCatching { record?.release() }
+                // The microphone is genuinely free from here — announced AFTER the
+                // release, never before it, or the waiter is told a lie.
+                MicHandover.released()
                 runCatching { socket?.close() }
                 // Close the cycle's segment (the mic is off; the file is
                 // final) and offer the batch for delivery.

@@ -96,6 +96,14 @@ class MeetingService : Service() {
         // also the record of whether to put the stream back afterwards — a field would
         // not survive this service being killed.
         StreamService.stop(this)
+        // ⚠ stopService is ASYNC. onDestroy clears `running`, and only on its next
+        // pass does the capture thread reach the finally that releases the
+        // AudioRecord — so opening a MediaRecorder here raced a mic we still held,
+        // both sources failed, and the user was told to check permissions (#1472).
+        // Bounded, because a capture thread wedged on a dead socket must not hang a
+        // recording somebody deliberately pressed: on a timeout we still TRY, and
+        // say something true if it fails.
+        val handedOver = MicHandover.awaitRelease(MicHandover.HANDOVER_MS)
 
         val start = Instant.now()
         val file =
@@ -106,7 +114,7 @@ class MeetingService : Service() {
                 ?: openRecorder(file, MediaRecorder.AudioSource.MIC)
         if (started == null) {
             MeetingQueue.discard(file)
-            MeetingState.setError("Microphone unavailable — check permission / other apps.")
+            MeetingState.setError(MicHandover.failureMessage(handedOver))
             restoreStream()
             stopSelf()
             return
