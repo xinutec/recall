@@ -654,86 +654,6 @@ def test_recent_transcripts_excludes_superseded() -> None:
     assert [r.text for r in store.recent_transcripts()] == ["new"]
 
 
-def test_corrections_by_speaker_counts_each_voice() -> None:
-    # The labelling UI needs per-voice counts to keep the corpus balanced across
-    # the three speakers; untagged corrections fall under "".
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-
-    def labelled(text: str, speaker: str | None) -> None:
-        seg = store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE,
-            end=BASE + timedelta(seconds=1),
-            text="x",
-            asr_model="v1",
-            asr_confidence=0.5,
-        )
-        store.add_correction(
-            transcript_segment_id=seg,
-            audio_segment_id=audio_id,
-            start=BASE,
-            end=BASE + timedelta(seconds=1),
-            original_text="x",
-            corrected_text=text,
-            language="nl",
-            created=BASE,
-            speaker=speaker,
-        )
-
-    labelled("a", "Alice")
-    labelled("b", "Alice")
-    labelled("c", "Carol")
-    labelled("d", None)
-
-    assert store.corrections_by_speaker() == {"Alice": 2, "Carol": 1, "": 1}
-
-
-def test_review_list_reassign_and_hide_corrections() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-
-    def label(text: str, speaker: str) -> int:
-        seg = store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE,
-            end=BASE + timedelta(seconds=1),
-            text="x",
-            asr_model="v1",
-            asr_confidence=0.5,
-        )
-        return store.add_correction(
-            transcript_segment_id=seg,
-            audio_segment_id=audio_id,
-            start=BASE,
-            end=BASE + timedelta(seconds=1),
-            original_text="x",
-            corrected_text=text,
-            language="nl",
-            created=BASE,
-            speaker=speaker,
-        )
-
-    label("hoi", "Carol")
-    cid_a = label("daag", "Alice")
-
-    # list, filtered by voice
-    assert {f.speaker for f in store.list_corrections()} == {"Carol", "Alice"}
-    assert [f.text for f in store.list_corrections(speaker="Carol")] == ["hoi"]
-
-    # re-assign moves the count
-    carol = store.list_corrections(speaker="Carol")[0]
-    store.set_correction_speaker(carol.correction_id, "Alice")
-    assert store.corrections_by_speaker() == {"Alice": 2}
-
-    # hide removes it from corpus, counts, and the review list
-    store.hide_correction(cid_a, "wrong")
-    assert store.correction_count() == 1
-    assert cid_a not in {f.correction_id for f in store.list_corrections()}
-
-
 def test_voiceprint_queue_offers_human_labelled_turns_gated() -> None:
     # Voiceprints derive from current human-labelled turns (speaker_label = a real
     # name), covering session-view assigns, not just text corrections. Each is offered
@@ -1460,22 +1380,6 @@ def test_migrate_retries_when_another_process_won_the_race(tmp_path: Path) -> No
     loser.close()
 
 
-def test_vocabulary_terms_round_trip() -> None:
-    store = Store.memory()
-    a = store.add_vocabulary_term("Zutphen")
-    store.add_vocabulary_term("EGA wing")
-    store.add_vocabulary_term("Zutphen")  # duplicate is a no-op, not a second row
-    assert [t.term for t in store.vocabulary_terms()] == ["EGA wing", "Zutphen"]
-    store.delete_vocabulary_term(a)
-    assert [t.term for t in store.vocabulary_terms()] == ["EGA wing"]
-
-
-def test_vocabulary_rejects_blank_terms() -> None:
-    store = Store.memory()
-    with pytest.raises(ValueError, match="blank"):
-        store.add_vocabulary_term("   ")
-
-
 def test_migration_backfills_correction_audio_confidence(tmp_path: Path) -> None:
     """Corrections predating the audio_confidence column get it from their
     original turn, so quality-weighting has something to weight for old data."""
@@ -1559,49 +1463,6 @@ def test_delete_source_removes_all_derived_rows_and_returns_paths() -> None:
     # a global voiceprint/speaker registry is untouched by a session delete
     conn = store._conn
     assert conn.execute("SELECT COUNT(*) FROM corrections").fetchone()[0] == 0
-
-
-def test_day_watermark_moves_on_every_visible_change() -> None:
-    """The watermark must change whenever a regenerated summary could differ:
-    a new turn, a HIDDEN turn, and — the bug that motivated it — a SPEAKER LABEL
-    edit (labels update rows in place, so a max-id watermark missed them and
-    annotation never reached the summary)."""
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    assert store.day_watermark("2026-06-13") is None
-
-    first = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=2),
-        text="hello there everyone",
-        asr_model="whisper",
-    )
-    w1 = store.day_watermark("2026-06-13")
-    assert w1 is not None
-    assert store.day_watermark("2026-06-14") is None  # other days unaffected
-
-    store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=5),
-        end=BASE + timedelta(seconds=8),
-        text="more words arrived",
-        asr_model="whisper",
-    )
-    w2 = store.day_watermark("2026-06-13")
-    assert w2 != w1  # new turn moves it
-
-    store.set_turn_speaker(first, "Alice")
-    w3 = store.day_watermark("2026-06-13")
-    assert w3 != w2  # labelling moves it (rows change in place, ids don't)
-
-    store.set_turn_speaker(first, "Bob")
-    w4 = store.day_watermark("2026-06-13")
-    assert w4 != w3  # RE-labelling moves it too (same count, different name)
-
-    store.hide(first, "junk")
-    assert store.day_watermark("2026-06-13") != w4  # hiding moves it
 
 
 def test_settings_roundtrip_and_overwrite() -> None:

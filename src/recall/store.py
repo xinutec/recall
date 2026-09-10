@@ -14,7 +14,6 @@ Search and time-range queries return only *current* (non-superseded) segments.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from collections.abc import Collection, Iterator, Sequence
@@ -1485,32 +1484,11 @@ class Store:
         )
         self._commit()
 
-    def add_vocabulary_term(self, term: str) -> int:
-        """Add a term to the household vocabulary (idempotent by exact term)."""
-        cleaned = term.strip()
-        if not cleaned:
-            msg = "vocabulary term must not be blank"
-            raise ValueError(msg)
-        self._conn.execute(
-            """INSERT INTO vocabulary (term, created_utc) VALUES (?, ?)
-               ON CONFLICT(term) DO NOTHING""",
-            (cleaned, datetime.now(UTC).isoformat()),
-        )
-        self._commit()
-        row = self._conn.execute(
-            "SELECT id FROM vocabulary WHERE term = ?", (cleaned,)
-        ).fetchone()
-        return int(row["id"])
-
     def vocabulary_terms(self) -> list[VocabularyTerm]:
         rows = self._conn.execute(
             "SELECT id, term FROM vocabulary ORDER BY term COLLATE NOCASE"
         ).fetchall()
         return [VocabularyTerm(id=int(r["id"]), term=str(r["term"])) for r in rows]
-
-    def delete_vocabulary_term(self, term_id: int) -> None:
-        self._conn.execute("DELETE FROM vocabulary WHERE id = ?", (term_id,))
-        self._commit()
 
     def get_setting(self, key: str) -> str | None:
         """A free-form setting, or None when unset/blank (callers `if value:`)."""
@@ -1527,26 +1505,6 @@ class Store:
             (key, value),
         )
         self._commit()
-
-    def day_watermark(self, day: str) -> str | None:
-        """A fingerprint of the day's visible-turn state — the live summary's
-        freshness key, or None when the day has no visible turns. Hashes the
-        (id, speaker label) pairs, so it moves on anything that could change a
-        regenerated summary: new turns, hides/supersedes, and speaker-label
-        edits — labels change rows in place, so the max-id watermark this
-        replaces never moved and human annotation couldn't reach the summary."""
-        rows = self._conn.execute(
-            """SELECT id, COALESCE(speaker_label, '') AS label
-               FROM transcript_segments
-               WHERE superseded_by IS NULL AND hidden_reason IS NULL
-                 AND substr(start_utc, 1, 10) = ?
-               ORDER BY id""",
-            (day,),
-        ).fetchall()
-        if not rows:
-            return None
-        state = "\n".join(f"{r['id']}={r['label']}" for r in rows)
-        return hashlib.sha256(state.encode()).hexdigest()[:16]
 
     def short_audio_segments(
         self, *, max_seconds: float
@@ -2057,16 +2015,6 @@ class Store:
         ).fetchone()
         return int(row["n"])
 
-    def corrections_by_speaker(self) -> dict[str, int]:
-        """How many labelled fragments exist per speaker (untagged under "").
-        Drives the labeling UI's balance display so no one voice is starved.
-        """
-        rows = self._conn.execute(
-            "SELECT COALESCE(speaker, '') AS s, count(*) AS n FROM corrections "
-            "WHERE hidden_reason IS NULL GROUP BY COALESCE(speaker, '')"
-        ).fetchall()
-        return {str(r["s"]): int(r["n"]) for r in rows}
-
     def _count(self, sql: str) -> int:
         return int(self._conn.execute(sql).fetchone()["n"])
 
@@ -2240,73 +2188,6 @@ class Store:
             vector = [float(x) for x in json.loads(row["vector"])]
             profiles.setdefault(str(row["name"]), []).append(vector)
         return profiles
-
-    def list_corrections(
-        self, *, speaker: str | None = None, limit: int = 200
-    ) -> list[LabelledFragment]:
-        """Human labels for review, newest first, optionally for one voice."""
-        sql = [
-            "SELECT id, audio_segment_id, start_utc, end_utc, corrected_text,",
-            "speaker, language FROM corrections WHERE hidden_reason IS NULL",
-        ]
-        params: list[str | int] = []
-        if speaker is not None:
-            sql.append("AND speaker = ?")
-            params.append(speaker)
-        sql.append("ORDER BY id DESC LIMIT ?")
-        params.append(limit)
-        rows = self._conn.execute(" ".join(sql), params).fetchall()
-        return [
-            LabelledFragment(
-                correction_id=CorrectionId(int(row["id"])),
-                audio_segment_id=_opt_audio_id(row["audio_segment_id"]),
-                start=datetime.fromisoformat(row["start_utc"]),
-                end=datetime.fromisoformat(row["end_utc"]),
-                text=str(row["corrected_text"]),
-                speaker=_opt_str(row["speaker"]),
-                language=_opt_str(row["language"]),
-            )
-            for row in rows
-        ]
-
-    def set_correction_speaker(self, correction_id: int, speaker: str) -> None:
-        """Re-assign a label's voice: update the corpus pair, the live segment, and
-        drop its voiceprint so the backfill re-enrols the clip under the new name.
-        """
-        row = self._conn.execute(
-            "SELECT transcript_segment_id FROM corrections WHERE id = ?",
-            (correction_id,),
-        ).fetchone()
-        self._conn.execute(
-            "UPDATE corrections SET speaker = ? WHERE id = ?", (speaker, correction_id)
-        )
-        if row is not None:
-            self._conn.execute(
-                """UPDATE transcript_segments SET speaker_label = ?
-                   WHERE provenance = ? AND asr_model = ? AND superseded_by IS NULL""",
-                (
-                    speaker,
-                    human_correction_provenance(int(row["transcript_segment_id"])),
-                    HUMAN_MODEL,
-                ),
-            )
-        self._conn.execute(
-            "DELETE FROM speaker_embeddings WHERE source_correction_id = ?",
-            (correction_id,),
-        )
-        self._commit()
-
-    def hide_correction(self, correction_id: int, reason: str) -> None:
-        """Soft-remove a bad label from the corpus/counts and drop its voiceprint."""
-        self._conn.execute(
-            "UPDATE corrections SET hidden_reason = ? WHERE id = ?",
-            (reason, correction_id),
-        )
-        self._conn.execute(
-            "DELETE FROM speaker_embeddings WHERE source_correction_id = ?",
-            (correction_id,),
-        )
-        self._commit()
 
 
 def _opt_float(value: str | int | float | None) -> float | None:
