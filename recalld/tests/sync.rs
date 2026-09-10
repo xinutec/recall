@@ -441,9 +441,14 @@ async fn a_long_poll_hangs_while_the_intent_is_unchanged_and_wakes_on_a_pause() 
         format!(r#"{{"pausedUntil":"{intent}"}}"#),
         "the hang must return the NEW intent, not the one it started with"
     );
+    // ⚠ **This bound is the measurement, not a formality** (#1490). Before the
+    // notify this route slept a full 2 s slice, so a press landing 300 ms in was
+    // not seen for ~1.7 s more; with the writer in this process it now wakes in
+    // ~RTT. 500 ms fails on the slice and passes on the notify, which is exactly
+    // the difference the fix exists to make.
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
-        "woke after {:?}, which is not ~one slice",
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "woke {:?} after the press — that is a slice, not a notify",
         started.elapsed()
     );
 }

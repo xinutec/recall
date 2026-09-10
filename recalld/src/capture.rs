@@ -336,6 +336,7 @@ pub fn intent_pause(
     let until = compute_resume_by(now, minutes);
     let iso = crate::instant::python_isoformat_utc(until);
     set_setting(conn, INTENT_KEY, &iso)?;
+    notify_intent_changed();
     Ok(iso)
 }
 
@@ -346,7 +347,9 @@ pub fn intent_pause(
 /// to [`intent_until`]; keeping the row means a reader never has to tell "never
 /// paused" from "resumed".
 pub fn intent_resume(conn: &Connection) -> rusqlite::Result<()> {
-    set_setting(conn, INTENT_KEY, "")
+    set_setting(conn, INTENT_KEY, "")?;
+    notify_intent_changed();
+    Ok(())
 }
 
 /// Append the audit record of WHO asked for a pause or resume.
@@ -395,6 +398,42 @@ pub struct Control {
     pub webauth: Option<Arc<crate::webauth::Config>>,
 }
 
+/// The process-global "capture intent changed" signal.
+///
+/// ⚠ **A `watch` channel rather than a bare `Notify`, and the difference is the
+/// lost wakeup.** `Notify::notify_waiters` only wakes whoever is ALREADY parked,
+/// so a press landing between deriving the state and starting the wait is missed
+/// and costs a whole slice — which is the delay this exists to remove. A `watch`
+/// receiver remembers the version it last saw, so a change between
+/// [`intent_watch`] and [`wait_intent_changed`] returns immediately. Subscribe
+/// BEFORE the derive and the gap cannot open.
+static INTENT_CHANGED: std::sync::LazyLock<tokio::sync::watch::Sender<u64>> =
+    std::sync::LazyLock::new(|| tokio::sync::watch::channel(0).0);
+
+/// Subscribe before deriving state; hand the result to [`wait_intent_changed`].
+#[must_use]
+pub fn intent_watch() -> tokio::sync::watch::Receiver<u64> {
+    INTENT_CHANGED.subscribe()
+}
+
+/// Announce that the capture intent moved. Called by every in-process writer.
+pub fn notify_intent_changed() {
+    INTENT_CHANGED.send_modify(|v| *v = v.wrapping_add(1));
+}
+
+/// Park until the intent changes or `slice` elapses. `true` means a change.
+///
+/// ⚠ The timeout is NOT a fallback, it is the correctness floor. A pause
+/// ELAPSING has no writer — its deadline just passes — and a break-glass CLI
+/// pause writes the settings row from another process entirely. Neither can
+/// signal this one, so the caller must still re-derive on the slice.
+pub async fn wait_intent_changed(
+    mut watcher: tokio::sync::watch::Receiver<u64>,
+    slice: std::time::Duration,
+) -> bool {
+    tokio::time::timeout(slice, watcher.changed()).await.is_ok()
+}
+
 /// Never hold a request past this — proxies and thread pools need a horizon.
 const WAIT_CAP: std::time::Duration = std::time::Duration::from_secs(25);
 /// Re-derive the state this often while hanging. Transitions with NO notify —
@@ -431,6 +470,11 @@ pub async fn status_route(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(wait);
 
     loop {
+        // ⚠ SUBSCRIBE BEFORE DERIVING. A press landing between the read below and
+        // the wait at the bottom is the lost wakeup, and holding the receiver
+        // across both is what closes it: the watch remembers the version this
+        // receiver last saw, so such a change returns from the wait at once.
+        let watcher = intent_watch();
         let root = root.clone();
         let state = match route::blocking("capture", move || {
             fleet_capture_state(&crate::work::open_write(&root)?, chrono::Utc::now())
@@ -443,13 +487,15 @@ pub async fn status_route(
         if state.state_token != q.known || std::time::Instant::now() >= deadline {
             return axum::Json(state).into_response();
         }
-        // ⚠ Sleep rather than wait on a condition variable. The Python parks on
-        // an in-process notify, which works because ONE process serves every
-        // request; here the writer may be the Python tier during the cutover,
-        // and a notify it cannot send would hang this until the cap. Polling a
-        // 2s slice costs one cheap read and cannot miss a change from either
-        // side.
-        tokio::time::sleep(WAIT_SLICE.min(deadline - std::time::Instant::now())).await;
+        // Notify for the fast path, slice as the floor. The writers are all in
+        // this process now, so a press wakes this in ~RTT — but a pause ELAPSING
+        // and a break-glass CLI pause have no writer that could signal, so the
+        // timeout still has to re-derive.
+        wait_intent_changed(
+            watcher,
+            WAIT_SLICE.min(deadline - std::time::Instant::now()),
+        )
+        .await;
     }
 }
 

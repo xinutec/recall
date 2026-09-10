@@ -550,3 +550,92 @@ async fn pausing_through_the_real_router_needs_no_login() {
         );
     }
 }
+
+// --- the notify, and the slice that must survive it -------------------------
+
+/// ⚠ **A press must reach the recorders in ~RTT, not in up to a slice.** The
+/// Python each of these replaced parks on an in-process notify; the port polled a
+/// 2 s slice because during the cutover the writer might be the Python tier in
+/// the other container, which cannot signal this process. Both `/api/capture`
+/// writers are recalld's now, so the writer and both readers share a process.
+#[tokio::test]
+async fn a_press_wakes_a_waiting_poll_without_paying_a_slice() {
+    let watcher = recalld::capture::intent_watch();
+    let started = std::time::Instant::now();
+
+    let waiter = tokio::spawn(async move {
+        recalld::capture::wait_intent_changed(watcher, std::time::Duration::from_secs(5)).await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    recalld::capture::notify_intent_changed();
+
+    let woke = waiter.await.expect("waiter finished");
+    assert!(woke, "the wait must report a change, not a timeout");
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "woke after {:?}, which is a slice rather than a notify",
+        started.elapsed()
+    );
+}
+
+/// ⚠ **THE LOST WAKEUP, and it is the bug this would otherwise introduce.** An
+/// intent change landing BETWEEN deriving the state and starting the wait must
+/// not be missed — otherwise the press that arrives at exactly the wrong moment
+/// is delayed a whole slice, which is the very thing being fixed. Subscribing
+/// before the derive is what closes it.
+#[tokio::test]
+async fn a_change_landing_before_the_wait_starts_is_not_missed() {
+    // ⚠ A LOCAL channel, because the real signal is process-global and a
+    // neighbouring test's press would wake this one — letting it pass for a
+    // reason that has nothing to do with the property under test. Caught exactly
+    // that way while ablating: this test stayed green with the memory removed.
+    let (tx, rx) = tokio::sync::watch::channel(0u64);
+
+    // Subscribe FIRST, then the press lands here — while a real handler would be
+    // deriving state. That is the window the lost wakeup lives in.
+    let watcher = rx;
+    tx.send_modify(|v| *v = v.wrapping_add(1));
+
+    let started = std::time::Instant::now();
+    let woke =
+        recalld::capture::wait_intent_changed(watcher, std::time::Duration::from_secs(5)).await;
+
+    assert!(
+        woke,
+        "a change before the wait must return at once, not time out"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(200),
+        "waited {:?} for a change that had already happened",
+        started.elapsed()
+    );
+}
+
+/// ⚠ **THE CORRECTNESS FLOOR THE NOTIFY MUST NOT REPLACE.** Two transitions have
+/// no writer that could ever signal: a pause ELAPSING, whose deadline simply
+/// passes, and a break-glass CLI pause writing from another process. So the wait
+/// must still time out on its slice and let the caller re-derive — a notify-only
+/// wait would hang until the cap and never see either.
+#[tokio::test]
+async fn a_transition_with_no_writer_still_surfaces_on_the_slice() {
+    // ⚠ A LOCAL channel, not `intent_watch()`. The signal is process-global —
+    // correctly, there is one household intent — so a neighbouring test pressing
+    // pause wakes this one and it passes for the wrong reason. What is under test
+    // here is the TIMEOUT, so it gets a sender nobody else holds.
+    let (_tx, rx) = tokio::sync::watch::channel(0u64);
+    let watcher = rx;
+    let started = std::time::Instant::now();
+
+    let woke =
+        recalld::capture::wait_intent_changed(watcher, std::time::Duration::from_millis(150)).await;
+
+    assert!(
+        !woke,
+        "nothing wrote, so this is a timeout and not a change"
+    );
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(150),
+        "returned early at {:?} — the slice is the floor",
+        started.elapsed()
+    );
+}

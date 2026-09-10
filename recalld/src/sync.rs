@@ -139,6 +139,10 @@ pub async fn capture_route(
 
     let root = st.root.clone();
     let reported = body.paused_until.clone();
+    // ⚠ SUBSCRIBE BEFORE THE FIRST DERIVE, and re-subscribe before each later
+    // one: a press landing between a derive and the wait that follows it is the
+    // lost wakeup, and holding a receiver across both is what closes it.
+    let mut watcher = crate::capture::intent_watch();
     let mut reply = match crate::route::blocking("sync capture", move || {
         let conn = crate::work::open_write(&root)?;
         let now = chrono::Utc::now();
@@ -166,18 +170,14 @@ pub async fn capture_route(
         if now >= deadline {
             break;
         }
-        // ⚠ Sleep rather than park on a notify, for the reason
-        // `capture::status_route` gives at length: a pause reaching its deadline
-        // has no writer to signal at all, and a break-glass CLI pause writes the
-        // row from another process entirely.
-        //
-        // The cost is real and worth naming: the Python this replaces parks on
-        // an in-process notify, so a press reached the Mac in ~RTT and here it
-        // takes up to one slice. That is the same trade `GET /api/capture`
-        // already ships to every phone in the house, so this is consistency
-        // rather than a new regression — but a notify ON TOP of the slice would
-        // buy back both, and is worth doing for both routes at once.
-        tokio::time::sleep(WAIT_SLICE.min(deadline - now)).await;
+        // Notify for the fast path, slice as the floor — the same shape
+        // `capture::status_route` uses, and for the reason it gives at length: a
+        // pause reaching its deadline has NO writer to signal, and a break-glass
+        // CLI pause writes the row from another process entirely. So the timeout
+        // still has to re-derive; what the notify removes is the up-to-a-slice
+        // delay on a press, which is the household's privacy control.
+        crate::capture::wait_intent_changed(watcher, WAIT_SLICE.min(deadline - now)).await;
+        watcher = crate::capture::intent_watch();
         let root = st.root.clone();
         reply = match crate::route::blocking("sync capture intent", move || {
             crate::capture::intent_until(&crate::work::open_write(&root)?, chrono::Utc::now())
