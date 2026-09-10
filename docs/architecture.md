@@ -1360,15 +1360,28 @@ here; when a stage lands, its deletions land in the same change.
 The API modules are already off it — nine went on 2026-09-07, and `health`,
 `fleetwatch`, `bounded` and `loss` followed on 2026-09-08 with the doctor (its
 own Rust crate, `doctor/`). What is left under `/api` is `api.py` plus
-`api_capture`, `api_devices` and `api_models`.
+`api_capture` and `api_models`; `api_devices` was deleted on 2026-09-09.
 
-⚠ **`recall.analyse` and `recall.spectrum` are unreachable as of 2026-09-08.**
-The speech detector moved to `audiod speech`, using `audiocore::vad` — the same
-silero recalld runs, so the Mac and the fleet cannot disagree about what counts
-as speech. It had been dead in practice since 2026-07-12: its only trigger was a
-cleanup-scan page, so it was on-demand code that stopped being demanded, and
+⚠ **`recall.analyse` is GONE (2026-09-10); `recall.spectrum` STAYS.** The speech
+detector moved to `audiod speech`, using `audiocore::vad` — the same silero
+recalld runs, so the Mac and the fleet cannot disagree about what counts as
+speech. analyse had been dead in practice since 2026-07-12: its only trigger was
+a cleanup-scan page, so it was on-demand code that stopped being demanded, and
 `scan_job.py` was deleted with the F1 session routes before anyone noticed the
-output still had readers. They come out once the Rust agent has run unattended.
+output still had readers. It came out once the Rust agent had run unattended —
+16,828 segments measured, the whole archive.
+
+⚠ **This paragraph used to say spectrum went too, and it cannot: `calibrate`
+imports `band_shapes`, `encode_shape` and `fingerprint` from it.** Deleting it
+broke the calibrate test on import, which is the only reason anyone found out —
+so the pairing was asserted here before it was checked. `calibrate` survives as
+the only writer of `sources.event_db`, the per-device reference D2/D3 rank
+against, so its dependency survives with it.
+
+⚠ One consequence, stated rather than left to be discovered: `sources.noise_shape`
+is now WRITE-ONLY. `calibrate` writes it and analyse was its only reader. Column
+and writer are kept because D2's calibration is the thing likely to want a
+per-mic spectral reference again.
 
 ⚠ **`api_capture` is now DEAD CODE that is deliberately still there.** recalld
 serves all three capture routes since 2026-09-08, so nothing reaches it — but
@@ -1376,5 +1389,7 @@ fleet images are `:latest` only, which makes a rollback a roll-forward, and this
 is what a roll-forward would roll to. Delete it once the Rust path has survived
 real days, the same rule `recall-mic.nix` got on geb.
 
-`/api/sources` is the remaining live route of that family, and it is why
-`api_devices` cannot go yet.
+⚠ `/api/sources` is served by RECALLD as of 2026-09-09 — verified from outside,
+where it answers with no `server` header while the Python sets `server: uvicorn`.
+This paragraph used to say it was the last live Python route of that family and
+the reason `api_devices` could not go; `api_devices` went the same day.

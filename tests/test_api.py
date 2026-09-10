@@ -20,7 +20,6 @@ from recall.ids import AudioSegmentId, TranscriptId
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store, TranscriptSegment
 from recall.timeline import Segment
-from recall.vad import SpeechRegion
 
 BASE = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
 
@@ -284,29 +283,6 @@ def _seed_today(tmp_path: Path, texts: list[str]) -> None:
             speaker_label="Alice",
         )
     store.close()
-
-
-def _deaf(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A speech detector that hears nothing — Silero is a real model, these are not real
-    files, and what is under test here is the plumbing, not the detector."""
-    monkeypatch.setattr(
-        "recall.analyse.silero_speech_regions", lambda _p: list[SpeechRegion]()
-    )
-
-
-def _await_scan(client: TestClient, timeout_s: float = 10.0) -> dict[str, object]:
-    """Start the background scan and wait for it to finish, as the page's poll does.
-
-    The scan also runs the speech detector over its candidates (recall.analyse); tests
-    stub that out with `_deaf` — Silero is a real model and these are not real files.
-    """
-    scan: dict[str, object] = client.post("/api/quiet/scan").json()
-    deadline = time.monotonic() + timeout_s
-    while scan["running"] and time.monotonic() < deadline:
-        time.sleep(0.01)
-        scan = client.get("/api/quiet/scan").json()
-    assert not scan["running"], f"scan did not finish in {timeout_s}s: {scan}"
-    return scan
 
 
 def test_capture_pause_on_the_fleet_records_intent_not_the_local_file(

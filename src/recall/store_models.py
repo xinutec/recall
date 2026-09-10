@@ -177,7 +177,8 @@ class SegmentVolume:
     transcribed: bool
     has_speech: bool
     # The speech detector's verdict: seconds of speech here, None if nobody has
-    # listened yet. This is the veto (recall.analyse). The transcript could not be: a
+    # listened yet. This was the veto (recall.analyse, deleted 2026-09-10 —
+    # the detector is `audiod speech` now). The transcript could not be: a
     # reprocessing pass hides the turns it replaces, and a minute of real Dutch was
     # left carrying no visible turn. None is *unknown*, and unknown is never swept.
     speech_s: float | None

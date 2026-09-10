@@ -526,7 +526,13 @@ class Store:
         return [(TranscriptId(int(r["id"])), str(r["text"])) for r in rows]
 
     def set_source_noise_shape(self, source_id: str, shape: bytes) -> None:
-        """Store a microphone's idle-noise fingerprint (see recall.spectrum)."""
+        """Store a microphone's idle-noise fingerprint (see recall.spectrum).
+
+        ⚠ WRITE-ONLY as of 2026-09-10. `recall.analyse` was its only reader and
+        was deleted when the speech detector moved to `audiod speech`;
+        `calibrate` still writes it and nothing consumes it. The column and its
+        writer are kept because #1388's D2 calibration is the one thing likely to
+        want a per-mic spectral reference again."""
         self._conn.execute(
             "UPDATE sources SET noise_shape = ? WHERE id = ?", (shape, source_id)
         )
