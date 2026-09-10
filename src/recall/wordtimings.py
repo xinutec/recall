@@ -37,7 +37,7 @@ def align_text_to_audio(text: str, asr_words: Sequence[Word]) -> list[Word]:
     """Word timings for `text`, aligned to `asr_words` (the same audio's word ASR).
 
     Returns one `Word` per whitespace token of `text`, each with a leading space so the
-    joined words reconstruct `text` (the format `recall.conversation._recut` reads).
+    joined words reconstruct `text` (the format `recalld::assign::pieces_of` reads).
     Empty if either input is empty.
     """
     tokens = text.split()

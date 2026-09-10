@@ -514,3 +514,41 @@ fn a_turn_from_another_session_is_refused_rather_than_split() {
     assert_eq!(touched, 0);
     assert_eq!(current(&conn)[0].2, None, "untouched");
 }
+
+/// ⚠ **The estimate, when there is nothing better than one.** A turn with no
+/// word timings still has to place its cut somewhere, and the rule is
+/// proportional by CHARACTER across the turn's span. The Python asserted this
+/// arithmetic directly (`test_split_without_word_timings_interpolates_by_char`);
+/// nothing on this side did, so the port carried the code and not the check —
+/// every other `start` assertion here either uses word timings or pins an edge.
+///
+/// It matters because the estimate is what the player seeks to. A port that
+/// silently fell back to the turn's own start would put every piece of every
+/// untimed turn at the same moment, and the text would still look right.
+#[test]
+fn without_word_timings_a_cut_is_placed_proportionally_by_character() {
+    let text = "a list of errands and we want to";
+    let t = turn(text, None);
+    // ⚠ The standalone word, not the "and" inside "errands" — `find("and")`
+    // returns 13, which is mid-word, and the cut then SNAPS to the boundary at 9.
+    // Asserting the unsnapped offset is how this test was wrong the first time.
+    let cut = text.find(" and ").expect("offset") + 1;
+
+    let pieces = pieces_of(&t, &[cut], &[None, Some("Dr Lee".into())]);
+
+    // The turn spans at(0)..at(10), so the second piece starts a tenth of a
+    // second per percent of the way through the text.
+    let span = 10.0;
+    let frac = cut as f64 / text.chars().count() as f64;
+    let expected = t.start + Duration::microseconds((span * frac * 1_000_000.0) as i64);
+
+    assert_eq!(pieces[0].start, t.start, "the first piece keeps the edge");
+    assert_eq!(
+        pieces[1].start, expected,
+        "the cut lands proportionally through the span, not at the turn's start"
+    );
+    assert!(
+        pieces[1].start > t.start && pieces[1].start < t.end,
+        "the estimate must fall strictly inside the turn"
+    );
+}
