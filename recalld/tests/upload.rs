@@ -456,3 +456,144 @@ async fn an_unsupported_container_is_refused_before_it_is_written() {
 
     assert_eq!(response.status(), 400);
 }
+
+// --- the autumn clock change ------------------------------------------------
+
+/// ⚠ **Two recordings became one, and nothing errored** (#1476). A meeting's id
+/// is its LOCAL start, and on the night the clocks go back the local hour
+/// 01:00–02:00 happens TWICE, so two different UTC instants derive one id:
+///
+///     2026-10-25T00:30:00Z  ->  local 01:30 BST
+///     2026-10-25T01:30:00Z  ->  local 01:30 GMT
+///
+/// The second upload then registered the id the first already held (an UPSERT,
+/// not a refusal), its segment landed under the same source because the start
+/// times differ, and its audio was written into the first meeting's directory.
+/// One session, two recordings, no error anywhere.
+#[test]
+fn the_two_local_half_past_ones_on_the_autumn_change_are_different_meetings() {
+    let first = "2026-10-25T00:30:00Z".parse().expect("first");
+    let second = "2026-10-25T01:30:00Z".parse().expect("second");
+
+    let (id_a, title_a) = meeting_id(first);
+    let (id_b, title_b) = meeting_id(second);
+
+    assert_ne!(id_a, id_b, "an hour apart must not be one meeting");
+    assert_ne!(title_a, title_b, "two sessions must not read identically");
+}
+
+/// ⚠ The fix must not RENAME anything that already exists. The first occurrence
+/// is the one every earlier meeting is spelled like, so it keeps the plain id;
+/// only the repeat of the hour is marked.
+#[test]
+fn the_first_pass_through_the_repeated_hour_keeps_the_plain_id() {
+    let first = "2026-10-25T00:30:00Z".parse().expect("first");
+
+    let (id, title) = meeting_id(first);
+
+    assert_eq!(id, "meeting-20261025-0130");
+    assert_eq!(title, "Meeting 2026-10-25 01:30");
+}
+
+/// The second carries the zone it actually happened in, which is the one piece
+/// of information that tells the two apart to a person reading a list.
+#[test]
+fn the_second_pass_is_marked_with_the_zone_it_happened_in() {
+    let second = "2026-10-25T01:30:00Z".parse().expect("second");
+
+    let (id, title) = meeting_id(second);
+
+    assert!(id.starts_with("meeting-20261025-0130"), "{id}");
+    assert!(id.ends_with("-gmt"), "the repeat is marked: {id}");
+    assert!(title.contains("GMT"), "{title}");
+}
+
+/// ⚠ Idempotence is what makes this safe to deploy: the SAME recording uploaded
+/// twice must still land on one id, or a re-upload mints a second session.
+#[test]
+fn the_same_instant_always_derives_the_same_id() {
+    let at = "2026-10-25T01:30:00Z".parse().expect("at");
+
+    assert_eq!(meeting_id(at), meeting_id(at));
+}
+
+/// The spring edge needs no marking and must not get any: the skipped local hour
+/// is the local time of no instant at all, so no id is derivable twice.
+#[test]
+fn the_spring_change_needs_no_marker_because_no_id_repeats() {
+    for utc in [
+        "2026-03-29T00:30:00Z",
+        "2026-03-29T01:30:00Z",
+        "2026-03-29T02:30:00Z",
+    ] {
+        let (id, _) = meeting_id(utc.parse().expect("utc"));
+        assert!(!id.ends_with("-gmt"), "{utc} was marked: {id}");
+    }
+}
+
+/// ⚠ The control. An ordinary winter meeting is ALSO in GMT, and marking those
+/// would rename every meeting between November and March.
+#[test]
+fn an_ordinary_gmt_meeting_is_not_marked() {
+    let (id, title) = meeting_id("2026-12-01T01:30:00Z".parse().expect("winter"));
+
+    assert_eq!(
+        id, "meeting-20261201-0130",
+        "only the AMBIGUOUS hour is marked"
+    );
+    assert_eq!(title, "Meeting 2026-12-01 01:30");
+}
+
+/// ⚠ **The harm end to end, not just the id.** The id being distinct is only
+/// half of #1476: what the bug actually did was land BOTH recordings under one
+/// source and write the second's audio into the first's directory. This walks
+/// the real path — derive, place, register — for two uploads an hour apart in
+/// the repeated hour, and asserts they stay two meetings with two files.
+#[test]
+fn two_uploads_in_the_repeated_hour_stay_two_sessions_with_two_files() {
+    let conn = db();
+    let root = std::path::Path::new("/data");
+    let first = at("2026-10-25T00:30:00+00:00");
+    let second = at("2026-10-25T01:30:00+00:00");
+
+    let mut paths = Vec::new();
+    for started in [first, second] {
+        let (id, title) = meeting_id(started);
+        let path = stored_path(root, &id, started, ".mp3");
+        register(&conn, &id, &title, &path, started, MEDIA).expect("registered");
+        paths.push(path);
+    }
+
+    let sources: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sources WHERE kind='upload'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count sources");
+    assert_eq!(sources, 2, "an hour apart is two meetings, not one");
+
+    // The directory is the source id, so a shared id meant a shared directory.
+    let dirs: std::collections::BTreeSet<_> =
+        paths.iter().map(|p| p.parent().expect("dir")).collect();
+    assert_eq!(
+        dirs.len(),
+        2,
+        "each meeting owns its own directory: {paths:?}"
+    );
+
+    // And neither session ends up holding the other's audio.
+    for (id, want) in [
+        ("meeting-20261025-0130", 1_i64),
+        ("meeting-20261025-0130-gmt", 1_i64),
+    ] {
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM audio_segments WHERE source_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .expect("count segments");
+        assert_eq!(n, want, "{id} should hold exactly its own recording");
+    }
+}

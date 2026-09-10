@@ -147,24 +147,60 @@ pub fn suffix_of(filename: &str) -> String {
 /// mint a different id for the same recording.
 pub fn meeting_id(started: DateTime<Utc>) -> (String, String) {
     let local = started.with_timezone(&London);
+    // ⚠ **The autumn clock change makes a local time ambiguous, and the id is
+    // local** (#1476). On the night the clocks go back, 01:00-02:00 happens
+    // TWICE, so 00:30Z and 01:30Z both read as 01:30 and derived ONE id. The
+    // second upload then registered the id the first already held — an UPSERT,
+    // not a refusal — its segment landed under the same source because the start
+    // times differ, and its audio was written into the first meeting's
+    // directory. Two recordings became one session and nothing errored.
+    //
+    // Marking the REPEAT rather than rebasing to UTC is the fix that costs
+    // nothing: the id stays the local time a person reads, every meeting that
+    // already exists keeps its spelling, and only the second pass through a
+    // repeated hour gains a marker. Deriving it from the instant rather than
+    // from the database also keeps it idempotent — the same recording uploaded
+    // twice still lands on one id, where a collision check would mint a second.
+    let marker = repeated_hour_marker(started, &local);
     (
         format!(
-            "meeting-{:04}{:02}{:02}-{:02}{:02}",
+            "meeting-{:04}{:02}{:02}-{:02}{:02}{}",
             local.year(),
             local.month(),
             local.day(),
             local.hour(),
-            local.minute()
+            local.minute(),
+            marker
+                .as_ref()
+                .map_or(String::new(), |z| format!("-{}", z.to_lowercase()))
         ),
         format!(
-            "Meeting {:04}-{:02}-{:02} {:02}:{:02}",
+            "Meeting {:04}-{:02}-{:02} {:02}:{:02}{}",
             local.year(),
             local.month(),
             local.day(),
             local.hour(),
-            local.minute()
+            local.minute(),
+            marker.as_ref().map_or(String::new(), |z| format!(" {z}"))
         ),
     )
+}
+
+/// The zone abbreviation, but ONLY for the second pass through a repeated local
+/// hour — otherwise `None`.
+///
+/// ⚠ The control that matters is an ordinary winter meeting: it is in GMT too,
+/// and marking every GMT meeting would rename everything from November to March.
+/// What distinguishes the repeat is that its local time maps back to TWO
+/// instants, and this one is the later of them.
+fn repeated_hour_marker(started: DateTime<Utc>, local: &DateTime<chrono_tz::Tz>) -> Option<String> {
+    use chrono::offset::LocalResult;
+    match London.from_local_datetime(&local.naive_local()) {
+        LocalResult::Ambiguous(_, latest) if latest.with_timezone(&Utc) == started => {
+            Some(local.format("%Z").to_string())
+        }
+        _ => None,
+    }
 }
 
 /// Where the uploaded file lands: its own directory under the data root.
