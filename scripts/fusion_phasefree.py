@@ -131,8 +131,9 @@ def speech_snr_db(x: NDArray[np.float32]) -> float:
     _, _, spec = stft(x, fs=RATE, nperseg=NFFT, noverlap=NFFT - HOP)
     lo, hi = int(300 * NFFT / RATE), int(4000 * NFFT / RATE)
     band = np.abs(spec[lo:hi]).mean(axis=0)
-    floor = np.percentile(band, FLOOR_PCT)
-    active = np.percentile(band, 90.0)
+    alive = band > 1e-4 * band.max()
+    floor = float(np.percentile(band[alive], FLOOR_PCT)) if alive.any() else 1e-12
+    active = float(np.percentile(band, 90.0))
     return float(20 * np.log10(active / max(floor, 1e-12)))
 
 
@@ -152,9 +153,14 @@ def per_bin_select(
         _, _, spec = stft(tracks[name], fs=RATE, nperseg=NFFT, noverlap=NFFT - HOP)
         specs.append(spec)
     mags = np.stack([np.abs(s) for s in specs])
-    floors = np.percentile(mags, FLOOR_PCT, axis=2, keepdims=True)
-    snr = mags / np.maximum(floors, 1e-12)
-    winner = np.argmax(snr, axis=0)
+    # Equalise by each mic's speech-ACTIVE level, then select on absolute
+    # magnitude. A floor-based ratio is refuted for this fleet: a phone-side
+    # denoiser (geb, Sep 4) scrubs its own floor to near zero and wins every
+    # bin with an unintelligible stream — twice, v1 and the gate-proof v2
+    # floor both. The 95th percentile is made of real signal, which a
+    # denoiser cannot inflate, and its scrubbed zeros can never win a bin.
+    level = np.percentile(mags, 95.0, axis=(1, 2), keepdims=True)
+    winner = np.argmax(mags / np.maximum(level, 1e-12), axis=0)
     stacked = np.stack(specs)
     selected = np.take_along_axis(stacked, winner[None], axis=0)[0]
     _, out = istft(selected, fs=RATE, nperseg=NFFT, noverlap=NFFT - HOP)
