@@ -20,7 +20,7 @@ use std::process::ExitCode;
 fn usage() -> ExitCode {
     eprintln!(
         "usage: audiod ingest --root <data-root> [--port <port>]\n\
-        \x20      audiod capture --root <data-root> --id <source> [--device <name>] [--seconds <n>]\n\
+        \x20      audiod capture --root <data-root> --id <source> [--device <name>] [--seconds <n>] [--codec opus|flac]\n\
         \x20      audiod upload --root <data-root> --url <base> [--token-file <path>] [--max <n>]"
     );
     ExitCode::FAILURE
@@ -44,6 +44,7 @@ fn main() -> ExitCode {
     let mut producer = audiod::capture_run::Producer::Sox;
     let mut token_file: Option<PathBuf> = None;
     let mut max: usize = 500;
+    let mut codec = audiod::segmenter::CaptureConfig::default().codec;
     while let Some(arg) = args.next() {
         let Some(value) = args.next() else {
             return usage();
@@ -71,13 +72,34 @@ fn main() -> ExitCode {
                 Ok(parsed) => seconds = Some(parsed),
                 Err(_) => return usage(),
             },
+            // ⚠ Lossless is the prerequisite for COMBINING microphones, not a
+            // quality preference. Opus at 32 kbps is transparent to an ear and
+            // destructive to phase — it codes what you notice rather than the
+            // waveform — so two Opus streams of one room cannot be summed
+            // coherently however well they are aligned.
+            "--codec" => match value.as_str() {
+                "opus" => codec = audiod::segmenter::Codec::Libopus,
+                "flac" => codec = audiod::segmenter::Codec::Flac,
+                _ => return usage(),
+            },
             _ => return usage(),
         }
     }
     let Some(root) = root else {
         return usage();
     };
-    let config = audiod::segmenter::CaptureConfig::default();
+    let config = audiod::segmenter::CaptureConfig {
+        codec,
+        // A bitrate is meaningless for a lossless codec, and ffmpeg would carry
+        // the default 32k straight into a `-b:a` nothing reads.
+        bitrate: match codec {
+            audiod::segmenter::Codec::Libopus | audiod::segmenter::Codec::Aac => {
+                audiod::segmenter::CaptureConfig::default().bitrate
+            }
+            _ => None,
+        },
+        ..audiod::segmenter::CaptureConfig::default()
+    };
     match mode.as_deref() {
         Some("ingest") => audiod::server::serve(&root, port, &config),
         Some("capture") => {

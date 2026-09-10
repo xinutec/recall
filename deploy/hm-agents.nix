@@ -342,7 +342,19 @@ in
     args = [ ];
     program = audiodWrapper {
       name = "capture";
-      args = [ "capture" "--root" out "--id" "usb" "--device" "USB Condenser Microphone" ];
+      # ⚠ FLAC, not Opus, from 2026-09-10. The condenser leads every other
+      # microphone in the house by 21 dB by speech level, so it is the one any
+      # combination of microphones wants most — and Opus at 32 kbps is
+      # transparent to an ear but destructive to PHASE, coding what you notice
+      # rather than the waveform. Two Opus streams of one room cannot be summed
+      # coherently however well they are aligned, which is what bounded the
+      # fusion bakeoff (fused 0.348 WER against 0.229 for this mic alone).
+      #
+      # Lossless costs disk and that is now the accepted trade: retention is
+      # FOREVER (docs/architecture.md, revised 2026-09-10). FLAC is
+      # content-sensitive, so a quiet minute costs a fraction of a loud one —
+      # the room stream runs 78 KB quiet against 509 KB talkative.
+      args = [ "capture" "--root" out "--id" "usb" "--device" "USB Condenser Microphone" "--codec" "flac" ];
     };
     extra = { ProcessType = "Interactive"; };
   };
