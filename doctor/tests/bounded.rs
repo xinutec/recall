@@ -41,11 +41,20 @@ fn a_slow_child_is_abandoned_rather_than_waited_for() {
 
 #[test]
 fn a_child_that_fills_stderr_does_not_deadlock_the_reader() {
-    // Far past a 64 KiB pipe buffer on either stream. Reading only one
-    // would block forever here.
-    let (program, args) = sh("for i in $(seq 1 400); do \
-               head -c 1024 /dev/zero | tr '\\0' 'x'; \
-               head -c 1024 /dev/zero | tr '\\0' 'y' >&2; \
+    // Far past a 64 KiB pipe buffer on either stream, interleaved, so a reader
+    // draining only one blocks the child on the other. Every chunk here is
+    // ALONE bigger than the buffer, so the property does not rest on the total.
+    //
+    // ⚠ **Four iterations, not four hundred** (#1480). This wrote the same
+    // 409,600 bytes in 1024-byte chunks, which spawned 1,600 processes inside a
+    // 30 s bound — and on 2026-09-10 that bound blew inside `nix build`, where
+    // the whole workspace's tests run at once: `stdout` came back None, meaning
+    // the run timed out rather than deadlocked. The flake was the SPAWN COUNT,
+    // not the thing under test. Shrink the count, never the timeout: raising the
+    // bound would have hidden a real deadlock behind a longer wait.
+    let (program, args) = sh("for i in 1 2 3 4; do \
+               head -c 102400 /dev/zero | tr '\\0' 'x'; \
+               head -c 102400 /dev/zero | tr '\\0' 'y' >&2; \
              done");
     let answer = run(&program, &args, Duration::from_secs(30), &[]).unwrap();
     assert_eq!(answer.stdout.map(|s| s.len()), Some(409_600));

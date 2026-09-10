@@ -13,6 +13,28 @@ use recalld::proxy::{Upstream, forwarded_headers, target};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Turn a ureq result into a response, naming WHICH failure happened.
+///
+/// ⚠ **The instrument this test needed before any fix** (#1480). `proxy::forward`
+/// answers 502 with three different bodies — `upstream unreachable` (ureq could
+/// not talk to the stub), `proxy failed` (the `spawn_blocking` join died) and
+/// `upstream body failed` (the relay could not read the body). They point at
+/// three different causes, and a bare `.expect("call")` prints only the status
+/// line, so an intermittent 502 in the gate could not say which it was. It is a
+/// LOAD flake — the same derivation hash failed and then passed minutes later —
+/// and knowing which of the three fires is what tells load from breakage.
+fn answered(result: Result<ureq::Response, Box<ureq::Error>>) -> ureq::Response {
+    result.unwrap_or_else(|err| match *err {
+        ureq::Error::Status(status, resp) => {
+            let body = resp
+                .into_string()
+                .unwrap_or_else(|e| format!("<unreadable: {e}>"));
+            panic!("upstream answered {status}: {body:?}");
+        }
+        ureq::Error::Transport(t) => panic!("transport, never reached the proxy: {t}"),
+    })
+}
+
 /// A stand-in for the Python API: echoes what it was asked, so the test can
 /// assert on what actually crossed the hop.
 async fn upstream_server() -> (String, Arc<AtomicUsize>) {
@@ -143,8 +165,8 @@ async fn an_unported_route_is_answered_by_the_upstream() {
             .map_err(Box::new)
     })
     .await
-    .expect("task")
-    .expect("call");
+    .expect("task");
+    let resp = answered(resp);
 
     assert_eq!(resp.status(), 200);
     // ⚠ The session cookie must cross the hop verbatim, or Python cannot tell who
@@ -171,8 +193,8 @@ async fn a_route_recalld_serves_is_never_proxied() {
             .map_err(Box::new)
     })
     .await
-    .expect("task")
-    .expect("call");
+    .expect("task");
+    let resp = answered(resp);
 
     assert_eq!(resp.status(), 200);
     assert_eq!(
@@ -358,11 +380,13 @@ async fn an_app_route_still_renders_the_shell() {
     let base = recalld_with_frontend(Some(up), Some(dir.path().to_path_buf())).await;
 
     let body = tokio::task::spawn_blocking(move || {
-        ureq::get(&format!("{base}/sessions/meeting-x"))
-            .call()
-            .expect("call")
-            .into_string()
-            .expect("body")
+        answered(
+            ureq::get(&format!("{base}/sessions/meeting-x"))
+                .call()
+                .map_err(Box::new),
+        )
+        .into_string()
+        .expect("body")
     })
     .await
     .expect("task");
@@ -396,8 +420,8 @@ async fn a_method_recalld_does_not_serve_falls_through_to_the_upstream() {
             .map_err(Box::new)
     })
     .await
-    .expect("task")
-    .expect("call");
+    .expect("task");
+    let resp = answered(resp);
 
     assert_eq!(resp.status(), 200, "not a 405 from recalld");
     assert_eq!(
@@ -445,8 +469,8 @@ async fn a_proxied_method_miss_is_gated_by_the_upstream_not_by_recalld() {
             .map_err(Box::new)
     })
     .await
-    .expect("task")
-    .expect("call");
+    .expect("task");
+    let resp = answered(resp);
 
     // The stub upstream has no gate, so it answers — which is exactly the point:
     // recalld did not check, so the upstream must.
