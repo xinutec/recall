@@ -133,9 +133,15 @@ leftovers of it, kept only because deleting data is a deliberate act.
 > runs, segments are written, and every one of them is silent — measured
 > 2026-09-10, a granted mic read mean −47.7 dB where a denied one reads −inf.
 > So nothing appears in any err log: look at the LEVELS, never for a message —
-> `doctor --out <archive root> --collect` prints them as JSON, or read
-> `mean_volume` off the newest `audio_segments` rows. Grant it in System
+> `doctor --out <archive root> --collect` prints them as JSON. Grant it in System
 > Settings → Privacy → Microphone, then `kickstart -k`.
+>
+> ⚠ **Do NOT read `mean_volume` off `audio_segments`: it is WRITE-DEAD.** Measured
+> 2026-09-11 — zero of September's segments carry one, and the last real
+> `envelope` was written 2026-07-12T15:50:27, when D2 moved level measurement into
+> recalld's scanner and both columns were left behind. A NULL there reads exactly
+> like a quiet mic, which is the failure this paragraph exists to catch. The live
+> evidence is `segment_levels` in recalld's `ingest.sqlite`.
 
 ## Web app (Isis, `:8000`)
 
@@ -209,10 +215,15 @@ architecture: lease a job from recalld, fetch the blob, drive a model shim over
 stdio, push the result, ack. It holds no state — no watermark, no outbox — so
 killing it costs an expiring lease and nothing else.
 
-⚠ **It runs BESIDE the worker above, not instead of it.** Results are stored
-opaque and nothing interprets them into turn rows, so a transcript you read is
-still the worker's. The flip waits on #1461 (which room stream is better) — see
-[architecture.md](architecture.md).
+⚠ **It runs BESIDE the worker above, not instead of it**, and a transcript you
+read is still the worker's. The interpreter and the write path now exist
+(`room_turns`), but the writer is OFF: switched on 2026-09-12 and switched off the
+same evening, because its turns measured WORSE than the per-mic ones they hid —
+22% repetition loops against 0%, and a Dutch household reported as mostly English.
+What it wrote was reversed.
+
+It does NOT wait on #1461. The open question is whether #1410's read-path filters
+close that gap, or whether the room audio is genuinely worse — see #1388.
 
 ```sh
 # one job, then stop — the shape to use when checking it by hand

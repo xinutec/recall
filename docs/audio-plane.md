@@ -80,11 +80,20 @@ tier.
    transcription, not five) also makes non-turbo `large-v3` — the open
    better-on-Dutch lever in [pipeline.md §2](pipeline.md) — affordable on the
    room stream; the A/B harness to decide that already exists.
-   **How `room` is produced is now an open question: SNR-weighted fusion was
-   measured and FAILED its gate** (see "What the gate measured" below). The
-   capacity win does not depend on fusion — it depends on transcribing one
-   stream instead of five, and the best-measured single stream currently beats
-   every fusion we have built.
+   **How `room` is produced was decided 2026-09-05 and is BUILT: per-block
+   selection by raw speech level.** SNR-weighted fusion was measured and FAILED
+   its gate (see "What the gate measured" below); the capacity win never depended
+   on it, only on transcribing one stream instead of five. D3 has produced 5,644
+   blocks.
+
+   ⚠ **Transcribing that stream is a separate verdict, and the first one was
+   NEGATIVE.** Written as turns on 2026-09-12, the room text measured worse than
+   the per-mic turns it replaced over the same minutes — 22% repetition loops
+   against 0%, and a Dutch household reported as mostly English. Reversed, writer
+   off. Whether #1410's read-path filters close that gap (the per-mic corpus is
+   swept of exactly these; the room turns were raw) or the audio is genuinely
+   worse is #1388's next experiment. A stream that is cheaper to transcribe is
+   not yet a stream worth reading.
 4. **Spatial features** — per-frame TDOA/level vectors across devices as
    sidecar files: a position fingerprint that separates same-voice/different-
    seat where voiceprints confuse, feeding diarization as a third view, and
@@ -170,6 +179,12 @@ phones and geb), while the corrections that could judge that are from mid-June,
 before the fleet had enough microphones to disagree — an overlap of 1.7%. So the
 reasoning here stands and remains the plan; what is missing is evidence, not
 argument. See architecture.md's D3 acceptance note and #1461.
+
+⚠ Added 2026-09-12: there is now evidence of a different kind. Selection was
+never what stopped stage E — the room stream was transcribed and written without
+this labelling, and it was its TEXT that failed. #1461 buys the choice between
+raw and calibrated ranks, which matters only if the audio turns out to be the
+problem rather than the raw output.
 
 Nor can the existing archive show selection paying off. Both multi-mic windows
 carrying corrections — the 2026-06-23 one used above (38 cases) and a second,

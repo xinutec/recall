@@ -178,10 +178,17 @@ displayed confidence is a softmax "this person vs the others," not raw cosine.
 - `transcript_fts` — FTS5 over `text`. Audio referenced by path (immutable);
   transcripts are re-derivable, audio is the source of truth.
 
-**5.7 Recall.** Angular + FastAPI web app on one origin (`:8000`): timeline,
+**5.7 Recall.** An Angular app and its API on one origin (`:8000`): timeline,
 full-text search with playback, review/correct queue, phone-as-mic recording, and
 speaker labelling that enrols voices as they're confirmed (there is no separate
 enrol screen — labelling *is* enrolment; §5.5).
+
+⚠ Said "Angular + FastAPI" until 2026-09-12. The fleet tier is `recalld`, Rust,
+one container serving both the app and the recorders' ingest; the Python API
+container was dropped after a pod lifetime in which it answered 7,053 requests
+and every one was its own kubelet probe. FastAPI survives in the repo — `llmhost`
+is one — so the convention in [conventions.md](conventions.md) about typed
+libraries still applies.
 
 ⚠ **Day summaries and Ask were CUT on 2026-09-06** with the product's scope
 ([architecture.md](architecture.md)). Requirement #4 below still names them as a

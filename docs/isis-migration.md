@@ -150,8 +150,9 @@ cannot do an interactive OAuth login:
   and `/api/capture/resume`, so the phone keeps its pause button without a login. These
   stay reachable by anything on WG/LAN, which is the same trust boundary they had before.
 - **Ingest plane (credential required, added 2026-09-05).** recalld — the Rust
-  system-of-record daemon of [architecture.md](architecture.md), running beside
-  the api container since stage A went live — serves `PUT /ingest/v1/segments/*`
+  system-of-record daemon of [architecture.md](architecture.md), which ran beside
+  the api container from stage A until it replaced it outright on 2026-09-12 —
+  serves `PUT /ingest/v1/segments/*`
   on its own wg-bound hostPort (8001), gated by per-source write-only tokens
   (`INGEST_TOKENS` in `recall-secret`; a `*` line is the Mac's custodial
   backfill grant). Write-only is the plane's promise: a recorder that can
