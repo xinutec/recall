@@ -1030,10 +1030,12 @@ B3 lands.*
   **THE PORT ARRANGEMENT, and why nothing external moves.** recalld `--bind`
   now REPEATS, and takes BOTH 8001 (what recorders already push to) and 8000
   (what the browser and the registered OAuth redirect already use); the Python
-  api moves to a pod-internal 8002 and recalld proxies to it. The hostPort DNATs
+  api moved to a pod-internal 8002 and recalld proxied to it. The hostPort DNATs
   into the pod's shared network namespace, so which container binds 8000 is not
   something Kubernetes polices — which means no recorder is reconfigured, no
-  redirect URI is re-registered, and no bookmark changes. The kubes model holds
+  redirect URI is re-registered, and no bookmark changes. ⚠ That indirection is
+  gone as of 2026-09-12: with one container, the one that DECLARES a port is the
+  one that binds it, and `Reach.WireGuard` carries the second in `alsoPublish`. The kubes model holds
   one port per container by design and does NOT need changing for this.
 
   ⚠ **EACH CONTAINER PROBES ITSELF, and that is the whole of it.** The api probes
@@ -1054,9 +1056,11 @@ B3 lands.*
   built binary; landing the kubes change first would leave a deploy that starts a
   recalld which rejects its own arguments.
 
-  **CUT OVER 2026-09-07, and it is live.** recalld serves the app, its own 15
-  ported routes and the recorders' ingest; the Python api answers the rest behind
-  it on pod-internal 8002. Nothing external moved.
+  **CUT OVER 2026-09-07, COMPLETED 2026-09-12.** recalld served the app, its own
+  ported routes and the recorders' ingest while the Python api answered the rest
+  behind it on pod-internal 8002. That second container is now GONE — one
+  container, both ports, no proxy and no upstream. Nothing external moved at
+  either step, which was the point of doing it in two.
 
   Three things that only running it revealed:
 
@@ -1480,25 +1484,24 @@ is now WRITE-ONLY. `calibrate` writes it and analyse was its only reader. Column
 and writer are kept because D2's calibration is the thing likely to want a
 per-mic spectral reference again.
 
-⚠ **MEASURED 2026-09-11: the Python tier serves NOTHING but its own liveness
-probe.** Over the whole life of the running pod (started 2026-09-10T22:36Z), its
-container logged 7,053 requests — every one of them `GET /api/capture` from
-10.42.0.1, the kubelet — plus eight probes typed by hand during this check.
-No UI traffic, no device traffic, no sync push reached it.
+⚠ **THE PYTHON CONTAINER IS GONE (2026-09-12).** The fleet pod runs ONE
+container, `recalld`, binding 8000 and 8001 itself. What decided it: over a whole
+pod lifetime the Python tier logged 7,053 requests and every one was its own
+kubelet probe — no UI, no device, no sync push. It declared no `/api/*` route at
+all, only sync (recalld was already the front door), capture (dead since
+2026-09-08), webauth (recalld has its own) and an SPA fallback.
 
-Read it with its caveat: capture was PAUSED for that whole window, so the phones
-were not pushing, and the UI was barely used. What the number DOES settle is that
-the proxy fall-through is not carrying hidden work — anything unmatched by
-recalld would appear here, and the only things that did were typed on purpose.
-`api.py` declares no `/api/*` route at all; it registers sync (recalld is the
-front door), capture (dead, below), webauth (recalld has its own) and an SPA
-fallback (`spa.rs`). Re-check after capture resumes; that is #1500's gate anyway.
+⚠ **Dropping it meant dropping `--upstream`, which needed a code change first.**
+With a frontend and no upstream, recalld's fallback was the SPA, so
+`/sync/anything-unmatched` answered index.html with a 200 — how the Mac's sync
+and jobs agents died on 2026-09-07. An unmatched path under `/api/` or `/sync/`
+is now 404 (`45f9a40`). Verified in production after the cutover: both doors 200,
+two unmatched paths 404 with no app-shell markers, `/timeline` still the app.
 
-⚠ **`api_capture` is now DEAD CODE that is deliberately still there.** recalld
-serves all three capture routes since 2026-09-08, so nothing reaches it — but
-fleet images are `:latest` only, which makes a rollback a roll-forward, and this
-is what a roll-forward would roll to. Delete it once the Rust path has survived
-real days, the same rule `recall-mic.nix` got on geb.
+So `api.py`, `api_capture`, `webauth` and `sync`'s server half are now
+unreachable — nothing runs them. Their deletion is bookkeeping, not a cutover.
+⚠ `api_models` is NOT in that set: the frontend contract is generated from it, so
+it goes when that generator is repointed at the Rust types.
 
 ⚠ `/api/sources` is served by RECALLD as of 2026-09-09 — verified from outside,
 where it answers with no `server` header while the Python sets `server: uvicorn`.
