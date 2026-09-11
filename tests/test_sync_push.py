@@ -12,7 +12,7 @@ import pytest
 
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
-from recall.sync import LabelOut, SegmentIn, SegmentStoredOut, SummaryIn, TurnIn
+from recall.sync import LabelOut, SegmentIn, SegmentStoredOut, TurnIn
 from recall.sync_push import pull_labels, push_live_turns, sync_push
 from recall.timeline import Segment
 
@@ -26,7 +26,6 @@ class FakeClient:
         self.present: set[tuple[str, str]] = set()
         self.audio_pushed: list[tuple[str, str]] = []
         self.segments: list[SegmentIn] = []
-        self.summaries: list[SummaryIn] = []
         self.live: list[TurnIn] = []
         # What the fleet would return on GET /sync/labels.
         self.labels: list[LabelOut] = []
@@ -51,9 +50,6 @@ class FakeClient:
             msg = "fleet unreachable mid-batch"
             raise ConnectionError(msg)
         return [self.push_segment(s) for s in segments]
-
-    def push_summary(self, summary: SummaryIn) -> None:
-        self.summaries.append(summary)
 
     def push_live(self, turns: list[TurnIn]) -> int:
         self.live.extend(turns)

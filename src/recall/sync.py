@@ -188,14 +188,6 @@ class SegmentsStoredOut(BaseModel):
     results: list[SegmentStoredOut]
 
 
-class SummaryIn(BaseModel):
-    """A settled day-summary the Mac's LLM generated, for the fleet's Ask page."""
-
-    day: str  # YYYY-MM-DD
-    text: str
-    model: str
-
-
 class LiveTurnsIn(BaseModel):
     """A batch of provisional live turns the Mac pushes for the fleet's instant feed.
     Audio-less and time-anchored — shown at once, then reconciled (hidden) when the
@@ -608,15 +600,6 @@ class SyncClient:
                 ]
             self._batch_ok = False  # an older fleet; don't re-probe every pass
         return [self.push_segment(s) for s in segments]
-
-    def push_summary(self, summary: SummaryIn) -> None:
-        """Push a settled day-summary to the fleet (upsert by day, so idempotent)."""
-        resp = self._client.post(
-            f"{self._base}/sync/summaries",
-            json=summary.model_dump(),
-            headers=self._headers,
-        )
-        resp.raise_for_status()
 
     def push_live(self, turns: list[TurnIn]) -> int:
         """Push a batch of provisional live turns to the fleet's instant feed.

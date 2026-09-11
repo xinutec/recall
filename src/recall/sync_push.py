@@ -2,8 +2,8 @@
 `docs/isis-migration.md`).
 
 Runs on the Mac (the compute node). The Mac is a one-way WireGuard peer, so it
-*initiates* everything: it pushes new and re-derived segments (audio + turns) and
-settled day-summaries to the fleet's system of record. Idempotent throughout — the
+*initiates* everything: it pushes new and re-derived segments (audio + turns) to the
+fleet's system of record. Idempotent throughout — the
 fleet no-ops an unchanged push — with a transcript-id watermark, so each pass only
 touches what changed since the last one: new segments AND refine re-derivations (which
 mint new turn ids), never the whole archive. The audio blob is uploaded only when the
@@ -32,7 +32,7 @@ import httpx
 
 from recall.ids import AudioSegmentId
 from recall.store import Store, TranscriptSegment
-from recall.sync import LabelOut, SegmentIn, SegmentStoredOut, SummaryIn, TurnIn
+from recall.sync import LabelOut, SegmentIn, SegmentStoredOut, TurnIn
 from recall.timeline import Segment
 
 _log = logging.getLogger("recall.sync_push")
@@ -57,7 +57,6 @@ class PushTarget(Protocol):
     def push_audio(self, source: str, name: str, local_path: Path) -> bool: ...
     def push_segment(self, segment: SegmentIn) -> SegmentStoredOut: ...
     def push_segments(self, segments: list[SegmentIn]) -> list[SegmentStoredOut]: ...
-    def push_summary(self, summary: SummaryIn) -> None: ...
     def push_live(self, turns: list[TurnIn]) -> int: ...
     def fetch_labels(self) -> list[LabelOut]: ...
 
