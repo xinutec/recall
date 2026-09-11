@@ -13,6 +13,7 @@ use crate::{
 };
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
+use axum::response::IntoResponse;
 use axum::routing::{delete, get, patch, post, put};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -264,8 +265,33 @@ pub fn router(config: Arc<Config>) -> Router {
                 })
                 .fallback(move |req: axum::extract::Request| proxy::forward(up.clone(), req))
         }
-        (None, Some(fe)) => merged.fallback(move |uri: axum::http::Uri| {
-            spa::serve(axum::extract::State(fe.clone()), uri)
+        // ⚠ **NO UPSTREAM: an unmatched API path is 404, NEVER the app shell.**
+        // With a frontend mounted and nothing behind it, a bare SPA fallback
+        // answers `/sync/anything` with index.html and a 200 — and that exact
+        // shape already broke this fleet once: on 2026-09-07 the Mac's sync and
+        // jobs agents received index.html, parsed it as JSON, and died. The
+        // mitigation then was to drop `--frontend`; the fix is to say what an
+        // unmatched API path IS.
+        //
+        // This arm becomes the live one when the Python container is dropped
+        // (#1500), so it stops being a corner case and starts being the
+        // configuration.
+        (None, Some(fe)) => merged.fallback(move |req: axum::extract::Request| {
+            let fe = fe.clone();
+            async move {
+                if UPSTREAM_PREFIXES
+                    .iter()
+                    .any(|p| req.uri().path().starts_with(p))
+                {
+                    (
+                        axum::http::StatusCode::NOT_FOUND,
+                        "no such route (no upstream configured)",
+                    )
+                        .into_response()
+                } else {
+                    spa::serve(axum::extract::State(fe), req.uri().clone()).await
+                }
+            }
         }),
         (Some(up), Some(fe)) => merged
             .method_not_allowed_fallback({

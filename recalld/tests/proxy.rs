@@ -505,3 +505,55 @@ async fn a_proxied_method_miss_is_gated_by_the_upstream_not_by_recalld() {
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.header("x-from"), Some("python"));
 }
+
+/// ⚠ **A frontend AND no upstream: an unmatched API path is 404, never the app
+/// shell.** This is the configuration the fleet takes when the Python container
+/// is dropped (#1500), and the failure it prevents already happened: on
+/// 2026-09-07 `/sync/*` fell into the SPA fallback, the Mac's sync and jobs
+/// agents received index.html with a 200, and died parsing it as JSON. The
+/// mitigation then was to drop `--frontend`. The fix is to say what an unmatched
+/// API path IS.
+///
+/// The existing `without_an_upstream_a_miss_is_an_honest_404` covers the same
+/// arm WITHOUT a frontend, which is a different code path — with no frontend
+/// there is no shell to be served by mistake.
+#[tokio::test]
+async fn with_a_frontend_and_no_upstream_an_api_miss_is_still_404() {
+    let dir = tempfile::tempdir().expect("tmp");
+    std::fs::write(dir.path().join("index.html"), "<!doctype html><app-root>").expect("index");
+    let base = recalld_with_frontend(None, Some(dir.path().to_path_buf())).await;
+
+    for path in ["/sync/segments", "/api/legacy"] {
+        let url = format!("{base}{path}");
+        let (status, body) = tokio::task::spawn_blocking(move || match agent().get(&url).call() {
+            Ok(r) => (r.status(), r.into_string().unwrap_or_default()),
+            Err(ureq::Error::Status(code, r)) => (code, r.into_string().unwrap_or_default()),
+            Err(e) => panic!("transport: {e}"),
+        })
+        .await
+        .expect("task");
+        assert_eq!(status, 404, "{path} was answered {status}: {body}");
+        assert!(
+            !body.contains("app-root"),
+            "{path} was answered with the app SHELL — the 2026-09-07 failure"
+        );
+    }
+
+    // The shell is still served where it belongs, or this would be a regression
+    // dressed as a fix.
+    let url = format!("{base}/timeline");
+    let body = tokio::task::spawn_blocking(move || {
+        agent()
+            .get(&url)
+            .call()
+            .expect("spa")
+            .into_string()
+            .expect("body")
+    })
+    .await
+    .expect("task");
+    assert!(
+        body.contains("app-root"),
+        "a UI route must still get the app"
+    );
+}
