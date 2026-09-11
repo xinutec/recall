@@ -559,3 +559,90 @@ async fn a_bad_kind_in_a_batch_fails_it_after_the_earlier_items_are_written() {
         "the item before the bad one was already committed, as in the Python"
     );
 }
+
+// --- RULE 6: a token is not a licence to write anywhere ----------------------
+
+/// The Mac is authenticated, so this is not about who is calling — it is about
+/// what a STOLEN token can reach. Re-homing makes the answer structural rather
+/// than vigilant: only the basename survives, so a hostile path has no directory
+/// left in it to point outside the archive with.
+///
+/// ⚠ Ported from Python's `test_a_pushed_path_can_never_escape_the_fleet_archive`,
+/// which had no Rust counterpart while the Rust was the one serving the route.
+/// `ingest_segment` does call `safe_component`, so the behaviour was there and
+/// only the proof was missing — and #1500 will not delete a Python test whose
+/// rule nothing else pins.
+#[test]
+fn a_hostile_path_cannot_escape_the_archive_because_only_its_basename_survives() {
+    let (dir, mut conn) = store();
+    let mut seg = segment(vec![turn("00:00", "00:10", "x")]);
+    seg.path = "/etc/../../root/.ssh/authorized_keys".to_owned();
+
+    let stored = ingest_segment(&mut conn, &seg, dir.path());
+
+    // Either refused outright, or re-homed — never a write outside the archive.
+    if stored.is_ok() {
+        let path: String = conn
+            .query_row("SELECT path FROM audio_segments", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            std::path::Path::new(&path).starts_with(dir.path()),
+            "escaped the archive: {path}"
+        );
+        assert!(!path.contains(".."), "a traversal survived: {path}");
+    }
+}
+
+/// A basename of `..` is not a name at all. Refused outright rather than
+/// sanitised into something plausible: a push the fleet cannot make sense of is
+/// an error, and inventing a filename for it would store audio under a name the
+/// Mac will never ask for again.
+///
+/// ⚠ Ported from Python's `test_a_filename_that_is_not_a_filename_is_refused`.
+#[test]
+fn a_filename_that_is_not_a_filename_is_refused_rather_than_repaired() {
+    let (dir, mut conn) = store();
+    let mut seg = segment(vec![turn("00:00", "00:10", "x")]);
+    seg.path = "/archive/usb/..".to_owned();
+
+    let stored = ingest_segment(&mut conn, &seg, dir.path());
+
+    assert!(stored.is_err(), "a nameless push was accepted");
+    let rows: i64 = conn
+        .query_row("SELECT count(*) FROM audio_segments", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 0, "a refused push still wrote a row");
+}
+
+/// ⚠ **The sharp end of the same bug: a malformed push BLANKS a good path.**
+/// The insert is an upsert on `(source_id, start_utc)` with
+/// `DO UPDATE SET path = excluded.path`, so a second push of the same identity
+/// carrying an unusable path replaces a working pointer with an empty string —
+/// 200 OK, nothing logged, and the audio is unreachable from the row that is
+/// supposed to find it.
+#[test]
+fn a_malformed_repush_cannot_blank_the_path_of_a_segment_already_stored() {
+    let (dir, mut conn) = store();
+    push(
+        &mut conn,
+        dir.path(),
+        &segment(vec![turn("00:00", "00:10", "x")]),
+    );
+    let good: String = conn
+        .query_row("SELECT path FROM audio_segments", [], |r| r.get(0))
+        .unwrap();
+    assert!(
+        !good.is_empty(),
+        "precondition: the first push stored a path"
+    );
+
+    // Same identity, unusable path.
+    let mut bad = segment(vec![turn("00:00", "00:10", "x")]);
+    bad.path = "/archive/usb/..".to_owned();
+    let _ = ingest_segment(&mut conn, &bad, dir.path());
+
+    let after: String = conn
+        .query_row("SELECT path FROM audio_segments", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(after, good, "a malformed repush blanked a stored path");
+}

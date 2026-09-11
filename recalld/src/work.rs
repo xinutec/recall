@@ -562,13 +562,25 @@ pub fn ingest_segment(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let blob = crate::sync::safe_component(&body.source_id)
-        .and_then(|src| crate::sync::safe_component(&filename).map(|n| root.join(src).join(n)));
+    let Some(blob) = crate::sync::safe_component(&body.source_id)
+        .and_then(|src| crate::sync::safe_component(&filename).map(|n| root.join(src).join(n)))
+    else {
+        // ⚠ **REFUSED, not stored with an empty path.** This used to
+        // `unwrap_or_default()` into `""` and insert anyway, which is worse than
+        // it sounds twice over: the row names audio nothing can open, and the
+        // insert is an UPSERT on `(source_id, start_utc)`, so a second push of
+        // an identity already stored REPLACED a working pointer with the empty
+        // string — 200 OK, nothing logged, the audio unreachable from the row
+        // meant to find it. Python refuses the same push (`test_a_filename_that
+        // _is_not_a_filename_is_refused`); the Rust accepted it, and the missing
+        // test is how that survived the cutover (#1500).
+        return Err(rusqlite::Error::InvalidPath(std::path::PathBuf::from(
+            &body.path,
+        )));
+    };
 
     if is_tombstoned(conn, &body.source_id, &start)? {
-        if let Some(blob) = &blob {
-            let _ = std::fs::remove_file(blob);
-        }
+        let _ = std::fs::remove_file(&blob);
         return Ok(SegmentStoredOut {
             audio_segment_id: 0,
             turns_written: 0,
@@ -600,9 +612,7 @@ pub fn ingest_segment(
         rusqlite::params![body.source_id, body.source_name, body.kind],
     )?;
 
-    let path = blob
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let path = blob.to_string_lossy().into_owned();
     conn.execute(
         "INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
