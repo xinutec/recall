@@ -111,3 +111,91 @@ pub fn interpret(block_start: DateTime<Utc>, stored: &str) -> Result<Vec<RoomTur
     }
     Ok(turns)
 }
+
+/// A machine turn already standing on this block's minute, per microphone.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Standing {
+    pub id: i64,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+}
+
+/// A span a person has corrected. The one thing in this archive that is not
+/// re-derivable from audio.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Corrected {
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+}
+
+/// What a write would do, decided before anything is written.
+#[derive(Debug, Default, PartialEq)]
+pub struct Plan {
+    /// Room turns to insert.
+    pub insert: Vec<RoomTurn>,
+    /// Per-mic turn ids to hide, because a written room turn covers them.
+    pub hide: Vec<i64>,
+    /// Room turns declined, and why. Recorded rather than dropped silently:
+    /// a refusal nobody can read is indistinguishable from a bug.
+    pub refused: Vec<String>,
+}
+
+fn overlaps(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)) -> bool {
+    a.0 < b.1 && a.1 > b.0
+}
+
+/// Decide the write for one block. Pure, so the rules below are testable without
+/// a database — they are the rules that can destroy a person's typed words.
+///
+/// 1. **A room turn overlapping a corrected span is REFUSED.** The human's text
+///    stands; a machine pass does not get to restate it.
+/// 2. **A per-mic turn overlapping a corrected span is NEVER hidden**, even when
+///    a room turn covers it. Hiding is not deleting, but `hidden` is not
+///    `absent` either: the row stays in `transcript_fts`, stays counted, and
+///    stays visible to supersession.
+/// 3. Only a per-mic turn actually covered by an INSERTED room turn is hidden.
+/// 4. ⚠ **If nothing will be inserted, nothing is hidden.** This is `refine`'s
+///    lesson one stage later: applying the filters AFTER hiding blanked 132
+///    segments of real household conversation, including a minute of Dutch about
+///    writing things down to remember them. A pass replaces a transcript or it
+///    keeps it. It never empties one.
+#[must_use]
+pub fn plan(room: Vec<RoomTurn>, standing: &[Standing], human: &[Corrected]) -> Plan {
+    let hits_human = |span: (DateTime<Utc>, DateTime<Utc>)| {
+        human.iter().any(|c| overlaps(span, (c.start, c.end)))
+    };
+
+    let mut out = Plan::default();
+    for turn in room {
+        if hits_human((turn.start, turn.end)) {
+            out.refused.push(format!(
+                "human-corrected span {}..{} — the person's text stands",
+                turn.start.to_rfc3339(),
+                turn.end.to_rfc3339()
+            ));
+            continue;
+        }
+        out.insert.push(turn);
+    }
+
+    // Rule 4: no insert, no hide. Checked before the hide set is built at all,
+    // so there is no path where a filter empties the insert list afterwards.
+    if out.insert.is_empty() {
+        return out;
+    }
+
+    for candidate in standing {
+        let span = (candidate.start, candidate.end);
+        if hits_human(span) {
+            continue; // rule 2
+        }
+        if out
+            .insert
+            .iter()
+            .any(|written| overlaps(span, (written.start, written.end)))
+        {
+            out.hide.push(candidate.id);
+        }
+    }
+    out
+}

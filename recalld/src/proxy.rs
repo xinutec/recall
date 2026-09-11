@@ -57,6 +57,30 @@ pub struct Upstream {
     pub base: String,
 }
 
+/// The agent every forward uses.
+///
+/// ⚠ **NOT `ureq::request`, and that was a real 502 rather than a style point.**
+/// The free functions use ureq's GLOBAL agent, whose connection pool is shared
+/// process-wide. A pooled socket the upstream has already closed is handed back
+/// on the next forward, and the failure lands where the body is read — the
+/// proxy answers `502 upstream body failed` having reached a dead connection.
+///
+/// #1480 chased exactly this shape as an intermittent GATE failure and fixed it
+/// in `tests/proxy.rs` on 2026-09-11, which made the tests stop flaking and left
+/// the same bug in the code they test. It surfaced again the same day, under
+/// load, in the workspace run — and said so precisely, because `answered`
+/// distinguishes the three 502 bodies.
+///
+/// `max_idle_connections(0)` removes reuse entirely. That would be a real cost on
+/// a hot path and is free here: measured 2026-09-11, the upstream this forwards
+/// to serves nothing but its own liveness probe.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .max_idle_connections(0)
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .build()
+}
+
 /// Build the upstream URL for a request: base + path + query, unchanged.
 #[must_use]
 pub fn target(base: &str, path: &str, query: Option<&str>) -> String {
@@ -125,7 +149,7 @@ pub async fn forward(up: Upstream, req: Request) -> Response {
     // Boxed: a `ureq::Response` in an `Err` is a fat variant, and clippy is right
     // that every `Ok` would otherwise pay for it.
     let sent = tokio::task::spawn_blocking(move || {
-        let mut req = ureq::request(method.as_str(), &url);
+        let mut req = agent().request(method.as_str(), &url);
         for (name, value) in headers {
             req = req.set(&name, &value);
         }

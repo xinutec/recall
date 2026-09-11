@@ -175,3 +175,168 @@ fn block_start_from(filename: &str) -> Option<chrono::DateTime<Utc>> {
         .ok()
         .map(|n| n.and_utc())
 }
+
+// ---- the write plan: the rules that can destroy a person's typed words ----
+
+use recalld::room_turns::{Corrected, Standing, plan};
+
+fn t(s: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .expect("time")
+        .with_timezone(&chrono::Utc)
+}
+
+fn room_turn(start: &str, end: &str, text: &str) -> recalld::room_turns::RoomTurn {
+    recalld::room_turns::RoomTurn {
+        start: t(start),
+        end: t(end),
+        text: text.to_owned(),
+        language: Some("nl".to_owned()),
+        confidence: Some(0.9),
+        word_timings: None,
+    }
+}
+
+const A: &str = "2026-09-11T10:00:00Z";
+const B: &str = "2026-09-11T10:00:10Z";
+const C: &str = "2026-09-11T10:00:20Z";
+const D: &str = "2026-09-11T10:00:30Z";
+
+#[test]
+fn a_room_turn_over_a_corrected_span_is_refused_with_a_reason() {
+    // The human's text stands. A machine pass does not get to restate it.
+    let out = plan(
+        vec![room_turn(A, B, "what the model heard")],
+        &[],
+        &[Corrected {
+            start: t(A),
+            end: t(B),
+        }],
+    );
+    assert!(out.insert.is_empty(), "{:?}", out.insert);
+    assert_eq!(out.refused.len(), 1);
+    assert!(
+        out.refused[0].contains("human-corrected"),
+        "{:?}",
+        out.refused
+    );
+}
+
+#[test]
+fn a_corrected_per_mic_turn_is_never_hidden_even_when_covered() {
+    // Hiding is not deleting — but `hidden` is not `absent` either: the row
+    // stays in transcript_fts, stays counted, stays visible to supersession.
+    //
+    // ⚠ The geometry here is deliberate, and the first draft of this test got it
+    // wrong. Rule 2 is only REACHABLE when a standing turn overlaps a correction
+    // while the room turn covering it does NOT — otherwise rule 1 refuses the
+    // room turn first and rule 4 hides nothing, which is a different (also
+    // correct) path. So:
+    //
+    //     correction   A......B
+    //     standing 1   A..............C     <- overlaps the correction
+    //     standing 2              C......D
+    //     room turn           B...........D <- covers both, touches no correction
+    let out = plan(
+        vec![room_turn(B, D, "the room")],
+        &[
+            Standing {
+                id: 1,
+                start: t(A),
+                end: t(C),
+            }, // a human corrected part of this
+            Standing {
+                id: 2,
+                start: t(C),
+                end: t(D),
+            }, // plain machine turn
+        ],
+        &[Corrected {
+            start: t(A),
+            end: t(B),
+        }],
+    );
+    assert_eq!(out.insert.len(), 1, "the room turn misses the correction");
+    assert_eq!(out.hide, vec![2], "the partly-corrected turn must survive");
+}
+
+#[test]
+fn nothing_inserted_means_nothing_hidden() {
+    // refine's lesson one stage later: applying the filters AFTER hiding blanked
+    // 132 segments of real conversation. A pass replaces a transcript or keeps
+    // it — it never empties one.
+    let out = plan(
+        vec![room_turn(A, B, "refused")],
+        &[Standing {
+            id: 1,
+            start: t(A),
+            end: t(B),
+        }],
+        &[Corrected {
+            start: t(A),
+            end: t(B),
+        }],
+    );
+    assert!(out.insert.is_empty());
+    assert!(
+        out.hide.is_empty(),
+        "hiding with nothing to put in its place empties the minute"
+    );
+}
+
+#[test]
+fn an_uncovered_per_mic_turn_is_left_alone() {
+    // Only what a WRITTEN room turn actually covers is hidden.
+    let out = plan(
+        vec![room_turn(A, B, "the room")],
+        &[Standing {
+            id: 9,
+            start: t(C),
+            end: t(D),
+        }],
+        &[],
+    );
+    assert_eq!(out.insert.len(), 1);
+    assert!(
+        out.hide.is_empty(),
+        "a turn outside the room turn's span stays"
+    );
+}
+
+#[test]
+fn the_ordinary_case_writes_and_hides() {
+    let out = plan(
+        vec![room_turn(A, D, "the whole minute")],
+        &[
+            Standing {
+                id: 1,
+                start: t(A),
+                end: t(B),
+            },
+            Standing {
+                id: 2,
+                start: t(C),
+                end: t(D),
+            },
+        ],
+        &[],
+    );
+    assert_eq!(out.insert.len(), 1);
+    assert_eq!(out.hide, vec![1, 2]);
+    assert!(out.refused.is_empty());
+}
+
+#[test]
+fn a_touching_boundary_does_not_count_as_overlap() {
+    // Half-open spans: a turn ending exactly where a correction begins does not
+    // hit it. Without this every adjacent turn would be treated as corrected.
+    let out = plan(
+        vec![room_turn(A, B, "before the correction")],
+        &[],
+        &[Corrected {
+            start: t(B),
+            end: t(C),
+        }],
+    );
+    assert_eq!(out.insert.len(), 1, "{:?}", out.refused);
+}
