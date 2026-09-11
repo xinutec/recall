@@ -463,6 +463,24 @@ audio is several times smaller and silence is nearly free, which is what makes
 "forever" a disk purchase rather than a wall. **Encoding the delivered WAV to
 FLAC is therefore the first storage work, and it costs no quality at all.**
 
+⚠ **The Mac's own archive was the half nobody had looked at, and it was still
+lossy — a day after the decision.** Measured 2026-09-11: every network-mic
+segment at rest was `.opus`, because the phones stream raw PCM to `audiod
+ingest` and the segmenter took its DEFAULT codec, which was Opus. The
+condenser had been switched by hand the night before, which is precisely why
+nothing looked wrong. Fixed at the default rather than per agent
+(`audiod/src/segmenter.rs`), so a recorder cannot be lossy by omission; the
+explicit `--codec flac` on the condenser agent came back out, because carrying
+it on one agent is what made the others look deliberate.
+
+  The cost, from the only true-lossless minutes in the archive (3 condenser
+  segments, 48 kHz mono — thin, so treat as an order of magnitude): **0.57 MB
+  for a quiet minute, 1.5 MB for a talkative one**, against Opus's flat
+  ~0.17 MB. Four network mics recording most of a day therefore land in the
+  low single GB/day. The backup volume has 939 GB free against a 12 GB
+  archive, so the horizon is months, not weeks — and silence filtering is what
+  extends it, never re-encoding.
+
 Bandwidth is the one unmeasured prerequisite: lossless delivery sustains
 ~2 Mbit/s aggregate from the house to Isis. Stage B's acceptance includes
 measuring the real sustained rate; if the uplink cannot carry lossless, the

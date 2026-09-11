@@ -342,19 +342,14 @@ in
     args = [ ];
     program = audiodWrapper {
       name = "capture";
-      # ⚠ FLAC, not Opus, from 2026-09-10. The condenser leads every other
-      # microphone in the house by 21 dB by speech level, so it is the one any
-      # combination of microphones wants most — and Opus at 32 kbps is
-      # transparent to an ear but destructive to PHASE, coding what you notice
-      # rather than the waveform. Two Opus streams of one room cannot be summed
-      # coherently however well they are aligned, which is what bounded the
-      # fusion bakeoff (fused 0.348 WER against 0.229 for this mic alone).
-      #
-      # Lossless costs disk and that is now the accepted trade: retention is
-      # FOREVER (docs/architecture.md, revised 2026-09-10). FLAC is
-      # content-sensitive, so a quiet minute costs a fraction of a loud one —
-      # the room stream runs 78 KB quiet against 509 KB talkative.
-      args = [ "capture" "--root" out "--id" "usb" "--device" "USB Condenser Microphone" "--codec" "flac" ];
+      # ⚠ No `--codec` here, and that is deliberate: lossless is audiod's
+      # DEFAULT since 2026-09-11, so every recorder gets it without a flag.
+      # Carrying it explicitly on this one agent read as "the condenser is
+      # special", which is how the phones stayed Opus for a day after the
+      # decision — `audiod ingest` (below) simply took the default nobody had
+      # revisited. The reasoning lives with the default, in
+      # audiod/src/segmenter.rs; the retention side is docs/architecture.md.
+      args = [ "capture" "--root" out "--id" "usb" "--device" "USB Condenser Microphone" ];
     };
     extra = { ProcessType = "Interactive"; };
   };

@@ -33,6 +33,22 @@ impl Codec {
         }
     }
 
+    /// The bitrate to ask ffmpeg for, or `None` when the codec is lossless and
+    /// a bitrate would be meaningless.
+    ///
+    /// ⚠ The codec OWNS this, rather than the caller pairing the two, because
+    /// the pair can be wrong in a way nothing downstream can see: `-b:a 32k`
+    /// alongside `-c:a flac` is accepted and ignored by ffmpeg, so a lossless
+    /// capture configured by hand would look configured and be fine, while the
+    /// reverse — a lossy codec whose bitrate went missing — would quietly
+    /// re-encode the household at a default nobody chose.
+    pub fn default_bitrate(self) -> Option<&'static str> {
+        match self {
+            Codec::Libopus | Codec::Aac => Some("32k"),
+            Codec::Flac | Codec::PcmS16le | Codec::PcmS24le => None,
+        }
+    }
+
     /// Container file extension for segment files in this codec.
     pub fn container_ext(self) -> &'static str {
         match self {
@@ -44,8 +60,19 @@ impl Codec {
     }
 }
 
-/// Capture parameters. Defaults to Opus at 32 kbps voip — perceptually
-/// transparent for speech; see `capture.CaptureConfig` for the reasoning.
+/// Capture parameters. Defaults to FLAC: lossless, because the archive keeps
+/// what the microphones heard.
+///
+/// ⚠ **The default carries the retention decision, and it used to carry the
+/// opposite one.** Opus at 32 kbps is perceptually transparent for speech, and
+/// on that reasoning it was the default from the beginning — but it destroys
+/// PHASE, so two recorders' streams of one room can never be combined
+/// (docs/architecture.md). The cost of that default was invisible and
+/// irreversible: measured 2026-09-11, every phone segment in the archive is
+/// `.opus` even though the phones stream raw PCM and the fleet had already
+/// decided on lossless — because `audiod ingest` took the default and nobody
+/// passed a flag. A lossy default is the wrong shape for an archive nobody can
+/// re-record; a source that wants Opus now has to say so.
 #[derive(Debug, Clone)]
 pub struct CaptureConfig {
     pub sample_rate: u32,
@@ -65,8 +92,8 @@ impl Default for CaptureConfig {
             sample_rate: crate::wire::SAMPLE_RATE,
             channels: 1,
             segment_seconds: 60,
-            codec: Codec::Libopus,
-            bitrate: Some("32k".into()),
+            codec: Codec::Flac,
+            bitrate: Codec::Flac.default_bitrate().map(Into::into),
             loglevel: "warning".into(),
             program: "ffmpeg".into(),
         }

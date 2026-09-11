@@ -1,11 +1,43 @@
 use audiod::segmenter::{CaptureConfig, Codec, build_segment_argv, segment_output_pattern};
 use std::path::PathBuf;
 
+/// The default is the retention decision, and it is the thing an archive can
+/// never take back: a source that takes the default and records lossy has lost
+/// the phase information for good. Measured 2026-09-11, that is not
+/// hypothetical — every phone segment in the archive was `.opus` because
+/// `audiod ingest` took a lossy default while the fleet had already decided on
+/// lossless.
 #[test]
-fn default_argv_matches_the_python_segmenter() {
-    // The golden shape build_segment_argv produces in capture.py — byte for
-    // byte, because the shadow comparison depends on identical encodes.
+fn the_default_is_lossless_because_a_wrong_default_cannot_be_taken_back() {
     let config = CaptureConfig::default();
+
+    assert_eq!(config.codec, Codec::Flac);
+    assert_eq!(config.bitrate, None);
+    assert_eq!(config.codec.container_ext(), "flac");
+}
+
+/// Each codec owns its bitrate so the pair cannot disagree: ffmpeg ACCEPTS
+/// `-b:a 32k` next to `-c:a flac` and ignores it, so a mismatched pair looks
+/// configured and is silently meaningless.
+#[test]
+fn a_lossless_codec_asks_for_no_bitrate_and_a_lossy_one_does() {
+    assert_eq!(Codec::Flac.default_bitrate(), None);
+    assert_eq!(Codec::PcmS16le.default_bitrate(), None);
+    assert_eq!(Codec::Libopus.default_bitrate(), Some("32k"));
+    assert_eq!(Codec::Aac.default_bitrate(), Some("32k"));
+}
+
+#[test]
+fn opus_argv_matches_the_python_segmenter() {
+    // The golden shape build_segment_argv produces in capture.py — byte for
+    // byte, because the shadow comparison depends on identical encodes. Opus is
+    // named explicitly now that it is no longer the default; the parity this
+    // pins is the Opus encode's, and it outlives which codec is default.
+    let config = CaptureConfig {
+        codec: Codec::Libopus,
+        bitrate: Codec::Libopus.default_bitrate().map(Into::into),
+        ..CaptureConfig::default()
+    };
     let argv = build_segment_argv(&config, "/data/p/p-%Y%m%dT%H%M%S.opus", false);
     assert_eq!(
         argv,

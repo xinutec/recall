@@ -9,7 +9,6 @@ from pathlib import Path
 
 from recall.ids import AudioSegmentId
 from recall.maintenance import (
-    compress_to_opus,
     reprobe_short_segments,
 )
 from recall.sources import AudioSource, SourceKind
@@ -108,62 +107,3 @@ def test_reprobe_skips_fresh_and_missing_files(tmp_path: Path) -> None:
     _add(store, audio_dir / "usb-20260613T120100.flac", seconds=1.0, at=60.0)
 
     assert reprobe_short_segments(store, now=time.time()) == 0
-
-
-def test_compress_replaces_flac_and_relinks(tmp_path: Path) -> None:
-    audio_dir = tmp_path / "usb"
-    audio_dir.mkdir()
-    flac = audio_dir / "usb-20260613T120000.flac"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:sample_rate=48000",
-            "-t",
-            "2",
-            "-ac",
-            "1",
-            "-c:a",
-            "flac",
-            str(flac),
-        ],
-        check=True,
-    )
-
-    store = Store.memory()
-    store.add_source(
-        AudioSource(id="usb", name="usb", kind=SourceKind.COREAUDIO, spec="")
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="usb",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=2),
-            path=str(flac),
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-
-    count, reclaimed = compress_to_opus(store)
-
-    assert count == 1
-    opus = flac.with_suffix(".opus")
-    assert opus.exists()
-    assert not flac.exists()  # original removed
-    assert reclaimed > 0  # opus is smaller
-
-    # the store now points at the .opus file
-    ref = store.audio_segment_ref(audio_id)
-    assert ref is not None
-    assert ref[0].endswith(".opus")
-
-    # already-opus segments are skipped on a second pass
-    again, _ = compress_to_opus(store)
-    assert again == 0

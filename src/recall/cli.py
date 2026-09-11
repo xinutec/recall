@@ -46,7 +46,6 @@ from recall.live import run_live
 from recall.logrotate import rotate_logs
 from recall.loudness import backfill_loudness
 from recall.maintenance import (
-    compress_to_opus,
     reprobe_short_segments,
 )
 from recall.moments import cluster_moments
@@ -548,16 +547,6 @@ def _cmd_live(args: argparse.Namespace) -> int:
         stop.set()
         if sync_thread is not None:
             sync_thread.join(timeout=5)
-
-
-def _cmd_compress(args: argparse.Namespace) -> int:
-    store = Store.open(args.out / "recall.sqlite")
-    try:
-        count, reclaimed = compress_to_opus(store, bitrate=args.bitrate)
-    finally:
-        store.close()
-    print(f"compressed {count} segments, reclaimed {reclaimed // 1024 // 1024} MB")
-    return 0
 
 
 _GOLDEN_FIXTURE = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "speech"
@@ -1575,7 +1564,6 @@ _COMMANDS = {
     "worker": _cmd_worker,
     "beat-relay": _cmd_beat_relay,
     "live": _cmd_live,
-    "compress": _cmd_compress,
     "score-asr": _cmd_score_asr,
     "reprobe": _cmd_reprobe,
     "coverage": _cmd_coverage,

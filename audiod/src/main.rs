@@ -90,14 +90,7 @@ fn main() -> ExitCode {
     };
     let config = audiod::segmenter::CaptureConfig {
         codec,
-        // A bitrate is meaningless for a lossless codec, and ffmpeg would carry
-        // the default 32k straight into a `-b:a` nothing reads.
-        bitrate: match codec {
-            audiod::segmenter::Codec::Libopus | audiod::segmenter::Codec::Aac => {
-                audiod::segmenter::CaptureConfig::default().bitrate
-            }
-            _ => None,
-        },
+        bitrate: codec.default_bitrate().map(Into::into),
         ..audiod::segmenter::CaptureConfig::default()
     };
     match mode.as_deref() {

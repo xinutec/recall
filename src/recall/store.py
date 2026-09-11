@@ -1959,14 +1959,6 @@ class Store:
         ).fetchall()
         return {str(row["name"]) for row in rows}
 
-    def relink_audio_segment(self, audio_segment_id: int, new_path: str) -> None:
-        """Re-point a segment at a new file (e.g. after transcoding FLAC->Opus)."""
-        self._conn.execute(
-            "UPDATE audio_segments SET path = ? WHERE id = ?",
-            (new_path, audio_segment_id),
-        )
-        self._commit()
-
     def audio_segment_ref(
         self, audio_segment_id: AudioSegmentId
     ) -> tuple[str, datetime] | None:

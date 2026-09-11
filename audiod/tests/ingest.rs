@@ -12,15 +12,21 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
-/// A segmenter stand-in: ignores the ffmpeg argv, writes its stdin to a
-/// realistically named segment file under the source directory (the last argv
-/// element is the output pattern, exactly as ffmpeg receives it).
+/// A segmenter stand-in: ignores the ffmpeg argv except the output pattern
+/// (the last element, exactly as ffmpeg receives it), and writes its stdin to a
+/// realistically named segment file under the source directory.
+///
+/// ⚠ It takes the EXTENSION from that pattern rather than hard-coding one, so
+/// the test reads the extension the configured codec actually asked for. It did
+/// hard-code `.opus`, which kept passing unchanged when the default codec
+/// flipped to FLAC — a stub that names the file itself cannot notice that the
+/// archive's naming contract moved.
 fn stub_segmenter(dir: &Path) -> String {
     let path = dir.join("stub-segmenter.sh");
     std::fs::write(
         &path,
         "#!/bin/sh\nfor last in \"$@\"; do :; done\n\
-         exec cat > \"$(dirname \"$last\")/pixel9-20260904T190000.opus\"\n",
+         exec cat > \"$(dirname \"$last\")/pixel9-20260904T190000.${last##*.}\"\n",
     )
     .unwrap();
     let mut perms = std::fs::metadata(&path).unwrap().permissions();
@@ -62,7 +68,7 @@ fn a_connection_lands_audio_liveness_and_evidence() {
     server.join().unwrap();
 
     // The PCM reached the segmenter byte for byte.
-    let segment = root.path().join("pixel9/pixel9-20260904T190000.opus");
+    let segment = root.path().join("pixel9/pixel9-20260904T190000.flac");
     assert_eq!(std::fs::read(segment).unwrap(), pcm);
     // Audible signal refreshed the liveness marker.
     assert!(root.path().join("pixel9/.alive").exists());

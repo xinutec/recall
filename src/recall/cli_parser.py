@@ -96,10 +96,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         help="how often to push new live turns to the fleet, seconds (default 3)",
     )
 
-    cmp = sub.add_parser("compress", help="transcode existing segments to Opus")
-    cmp.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    cmp.add_argument("--bitrate", default="32k")
-
     sca = sub.add_parser(
         "score-asr",
         help="transcribe the golden speech fixtures present in tests/fixtures/speech "
