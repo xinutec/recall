@@ -38,8 +38,24 @@ allowBuilds:
 # Dependabot. Both are transitive under @angular/build and vitest, neither ships
 # in the browser bundle, and nothing in the tree asks for the patched version —
 # so, as above, only a floor moves them.
+#
+# hono: five advisories, the worst medium (toSSG writing outside its output
+# directory; a query parser that reads past the URL fragment, so a cache key and
+# a proxy can disagree; memo() retaining SSR output across requests). It arrives
+# transitively under @hono/node-server, which asks for `^4` and is satisfied by
+# the vulnerable 4.13.1 — a floor is the only thing that moves it. Dev-time
+# only: nothing here serves HTTP in production.
+#
+# ⚠ These were found 2026-09-11 by checking each Dependabot alert's version
+# range against the version pnpm actually installed. Do not read the alert list
+# and stop: every alert names `frontend/package-lock.json`, deleted five weeks
+# ago, and that stale path made the whole list look ignorable while three of
+# them were real (#1505). vitest and @vitest/mocker were the other two, and they
+# needed no floor — `^4.1.9` already admitted the fix, so `pnpm update` moved
+# them.
 overrides:
   esbuild: ^0.28.1
   "@babel/core": ^7.29.6
   browserslist: ^4.28.7
   fast-uri: ^3.1.6
+  hono: ^4.13.5
