@@ -20,7 +20,7 @@ use std::process::ExitCode;
 fn usage() -> ExitCode {
     eprintln!(
         "usage: audiod ingest --root <data-root> [--port <port>]\n\
-        \x20      audiod capture --root <data-root> --id <source> [--device <name>] [--seconds <n>] [--codec opus|flac]\n\
+        \x20      audiod capture-mirror --root <data-root> --url <base> [--once]\n\x20      audiod capture --root <data-root> --id <source> [--device <name>] [--seconds <n>] [--codec opus|flac]\n\
         \x20      audiod upload --root <data-root> --url <base> [--token-file <path>] [--max <n>]"
     );
     ExitCode::FAILURE
@@ -45,7 +45,14 @@ fn main() -> ExitCode {
     let mut token_file: Option<PathBuf> = None;
     let mut max: usize = 500;
     let mut codec = audiod::segmenter::CaptureConfig::default().codec;
+    let mut once = false;
     while let Some(arg) = args.next() {
+        // ⚠ Handled BEFORE the value fetch: every other flag takes one, and a
+        // bare `--once` would otherwise swallow the next argument.
+        if arg == "--once" {
+            once = true;
+            continue;
+        }
         let Some(value) = args.next() else {
             return usage();
         };
@@ -114,6 +121,13 @@ fn main() -> ExitCode {
             };
             audiod::pause_mirror::run(&root, &url)
         }
+        // The MAC's mirror: reports what it applied, then long-polls for intent.
+        // Distinct from `pause-mirror` (geb) because reporting is the difference
+        // — the fleet has no other way to know a pause took hold.
+        Some("capture-mirror") => match url {
+            None => usage(),
+            Some(url) => run_capture_mirror(&root, &url, token_file, once),
+        },
         Some("upload") => {
             let Some(url) = url else {
                 return usage();
@@ -153,6 +167,38 @@ fn run_speech(root: &std::path::Path, max: usize) -> ExitCode {
 /// The upload arm: resolve the token (file or env — never argv, which is
 /// world-readable in `ps`; the fleet's secrets stay out of the nix store the
 /// same way) and run one bounded pass.
+/// The Mac's capture mirror: report what was applied, long-poll for intent.
+///
+/// The token is the SYNC plane's, not the ingest one: `/sync/capture` is a
+/// control-plane exchange, and the mirror presents the same credential
+/// `recall.sync` did.
+fn run_capture_mirror(
+    root: &std::path::Path,
+    url: &str,
+    token_file: Option<PathBuf>,
+    once: bool,
+) -> ExitCode {
+    let token = match token_file {
+        None => std::env::var("RECALL_SYNC_TOKEN").unwrap_or_default(),
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(text) => text.trim().to_owned(),
+            Err(err) => {
+                eprintln!("audiod: cannot read token file {}: {err}", path.display());
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+    if token.is_empty() {
+        eprintln!("audiod: capture-mirror needs RECALL_SYNC_TOKEN or --token-file");
+        return ExitCode::FAILURE;
+    }
+    let interval = std::time::Duration::from_secs(5);
+    if once {
+        return audiod::pause_mirror::exchange_once(root, url, &token, interval);
+    }
+    audiod::pause_mirror::run_exchange(root, url, &token, interval)
+}
+
 fn run_upload(root: PathBuf, url: String, token_file: Option<PathBuf>, max: usize) -> ExitCode {
     let token = match token_file {
         None => std::env::var("RECALL_INGEST_TOKEN")
