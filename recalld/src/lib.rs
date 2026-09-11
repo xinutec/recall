@@ -22,6 +22,7 @@ pub mod queue;
 pub mod reads;
 pub mod reports;
 pub mod room;
+pub mod room_turns;
 pub mod route;
 pub mod sessions;
 pub mod sources;

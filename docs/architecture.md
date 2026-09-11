@@ -830,12 +830,36 @@ B3 lands.*
   silence disqualifies.
 
   STILL OPEN before the flip:
-  - **#1461**, which decides what the room stream should be at all.
-  - **The vocabulary prompt.** The runner sends none, so its transcripts spell
-    household names worse than the old worker's. The shim cannot fetch it by
-    design, so it must be carried — by the runner reading it once, or by the job.
-    Settle it before ~2500 real jobs are transcribed without it.
-  - launchd agent: not yet written; the runner has been run by hand.
+  - **#1461**, which decides what the room stream should be at all. This is now
+    the ONLY one, and it needs labelling time rather than code.
+
+  Two items that stood here were already DONE and were still being read as work
+  (corrected 2026-09-11 by checking the code and the live agents, not this file):
+  - *The vocabulary prompt* — the runner fetches it once at startup and is
+    deliberately FATAL if it cannot (`main.rs`: "refusing to transcribe
+    unbiased"). It logs `vocabulary loaded terms=14`. The warning to settle it
+    "before ~2500 real jobs" never came due.
+  - *The launchd agent* — `org.xinutec.recall-runner` exists and runs.
+
+- **E3a. Results → turns.** *Interpreter built 2026-09-11; NOTHING IS WRITTEN.*
+  `room_turns::interpret` turns one stored job result into the turns it implies:
+  offsets against the block's own start (from the filename, the naming
+  contract), text trimmed, language and confidence carried, word timings
+  verbatim-or-absent, and a turn with no word in it DROPPED — the #1410 rule one
+  stage later, for blocks whose silence nobody had measured.
+
+  ⚠ **Measured over the real queue 2026-09-11: 656 stored results → 5,301 turns
+  from 656 blocks, 0 refused, 0 unreadable, 0 filenames off the contract.** The
+  GPU time is already spent and the transcripts are unreachable; `queue::done`
+  stores them and nothing in either language reads them.
+
+  ⚠ **The WRITE is a separate decision and is deliberately not taken.** Room
+  turns are gated on #1461 accepting the selection they came from, and an
+  unvalidated transcript in the system of record is not undone by deleting a
+  row. Writing them HIDDEN was considered and rejected: hidden is not absent —
+  the row is still in `transcript_fts` (maintained in code here, not by a
+  trigger), still counted, and still seen by supersession, which is the
+  machinery whose failure overwrites a person's typed correction.
 - **E4. Absorb the rest of `/sync/jobs`.** refine (via the `voices` shim),
   ask (via `llm`), ab-compare; retire `recall.jobs`, `sync_push`, outbox,
   capture-mirror (pause intent moves to a recalld long-poll the runner
