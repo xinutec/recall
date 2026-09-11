@@ -185,6 +185,7 @@ fn main() -> ExitCode {
         spawn_level_scanner(config.root.clone());
         spawn_speech_scanner(config.root.clone());
         spawn_room_builder(config.root.clone());
+        spawn_room_registrar(config.root.clone());
         let app = router(config);
         let mut serving = tokio::task::JoinSet::new();
         for listener in listeners {
@@ -306,6 +307,38 @@ fn spawn_speech_scanner(root: PathBuf) {
 /// Stage D3: the room builder — one settled block at a time, calibrated
 /// selection, terminal verdicts only. Chases the level scanner: a block whose
 /// evidence is incomplete defers and returns next pass.
+/// Register built room blocks in the meaning plane, so their turns have audio.
+///
+/// Its own loop rather than a step inside the builder's, because it spans BOTH
+/// planes — `segments` in `ingest.sqlite` and `audio_segments` in
+/// `recall.sqlite` — and the builder deliberately touches only its own.
+///
+/// Idempotent, so the first pass after a deploy backfills every block ever built
+/// and each later pass costs one indexed scan. No IDLE branch: there is nothing
+/// to back off from, and a pass that inserts nothing is the normal case.
+fn spawn_room_registrar(root: PathBuf) {
+    const EVERY: std::time::Duration = std::time::Duration::from_mins(5);
+    tokio::spawn(async move {
+        loop {
+            let pass_root = root.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                let ingest = recalld::store::open(&pass_root)?;
+                let meaning = recalld::work::open_write(&pass_root)?;
+                let room_dir = recalld::store::source_dir(&pass_root, recalld::room::ROOM_SOURCE);
+                recalld::room_turns::register_blocks(&meaning, &ingest, &room_dir)
+            })
+            .await;
+            match done {
+                Ok(Ok(0)) => {}
+                Ok(Ok(added)) => tracing::info!(added, "room: blocks registered for playback"),
+                Ok(Err(err)) => tracing::warn!(%err, "room register: pass failed"),
+                Err(err) => tracing::error!(%err, "room register: task failed"),
+            }
+            tokio::time::sleep(EVERY).await;
+        }
+    });
+}
+
 fn spawn_room_builder(root: PathBuf) {
     const IDLE: std::time::Duration = std::time::Duration::from_mins(1);
     tokio::spawn(async move {

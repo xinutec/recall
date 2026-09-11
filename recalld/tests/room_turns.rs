@@ -488,3 +488,13 @@ fn a_block_off_the_grid_is_skipped_not_guessed() {
         0
     );
 }
+
+#[test]
+fn a_blob_lives_under_root_ingest_source_not_root_source() {
+    // The bug this pins was real: a registrar used `<root>/<source>/` and would
+    // have recorded every room block with a path to a directory that does not
+    // exist. Verified against the fleet at the time — `/data/ingest/room/` holds
+    // the blocks and `/data/room` is absent.
+    let dir = recalld::store::source_dir(std::path::Path::new("/data"), "room");
+    assert_eq!(dir, std::path::Path::new("/data/ingest/room"));
+}

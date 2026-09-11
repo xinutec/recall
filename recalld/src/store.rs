@@ -28,6 +28,18 @@ pub struct Row {
     pub sent_utc: Option<String>,
 }
 
+/// Where a source's delivered blobs live: `<root>/ingest/<source>/`.
+///
+/// ⚠ **One function because the shape was written out FOUR times**, and the
+/// fourth got it wrong: a 2026-09-11 room registrar used `<root>/<source>/` and
+/// would have recorded 5,646 blocks with a path to a directory that does not
+/// exist — unplayable audio, which is the exact failure that registration exists
+/// to prevent. Nothing type-checks a `join`, so the only defence is having one.
+#[must_use]
+pub fn source_dir(root: &std::path::Path, source: &str) -> std::path::PathBuf {
+    root.join("ingest").join(source)
+}
+
 pub fn open(root: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(root.join("ingest.sqlite"))?;
     conn.busy_timeout(Duration::from_secs(5))?;

@@ -139,7 +139,7 @@ fn store_segment(
             return error(StatusCode::INTERNAL_SERVER_ERROR, "bookkeeping unavailable");
         }
     }
-    let dir = config.root.join("ingest").join(&name.source);
+    let dir = store::source_dir(&config.root, &name.source);
     let dest = dir.join(filename);
     let written = write_blob(&config.root, &dir, &dest, body);
     match written {
@@ -349,7 +349,7 @@ pub async fn get_blob(
     if let Err(refused) = read_auth(&config, &headers) {
         return refused.into_response();
     }
-    let path = config.root.join("ingest").join(&source).join(&filename);
+    let path = store::source_dir(&config.root, &source).join(&filename);
     let handle = tokio::task::spawn_blocking(move || std::fs::read(path));
     match handle.await {
         Ok(Ok(bytes)) => (
