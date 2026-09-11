@@ -196,28 +196,6 @@ class SummaryIn(BaseModel):
     model: str
 
 
-class AskResultIn(BaseModel):
-    """The outcome of a fleet-queued ask job the Mac's LLM generated: the answer text,
-    or an error message. Landing it retires the job from /sync/jobs."""
-
-    answer: str | None = None
-    error: str | None = None
-
-
-class AbResultIn(BaseModel):
-    """The outcome of a fleet-queued A/B run the Mac executed: either the report
-    (resultJson + its denormalized summary) or an error message. Landing it is what
-    retires the run from /sync/jobs."""
-
-    error: str | None = None
-    resultJson: str | None = None
-    meanWerA: float | None = None
-    meanWerB: float | None = None
-    nCorrections: int = 0
-    nSegments: int = 0
-    nChanged: int = 0
-
-
 class LiveTurnsIn(BaseModel):
     """A batch of provisional live turns the Mac pushes for the fleet's instant feed.
     Audio-less and time-anchored — shown at once, then reconciled (hidden) when the
@@ -553,19 +531,6 @@ class SyncClient:
         resp = self._client.post(
             f"{self._base}/sync/jobs/{job_id}/done",
             params={"type": job_type},
-            headers=self._headers,
-        )
-        resp.raise_for_status()
-
-    def push_ask_result(
-        self, request_id: int, *, answer: str | None = None, error: str | None = None
-    ) -> None:
-        """Land a fleet-queued ask job's outcome (the generated answer or an error) on
-        the fleet — this retires it from /sync/jobs and resolves the UI poll."""
-        body = AskResultIn(answer=answer, error=error)
-        resp = self._client.post(
-            f"{self._base}/sync/ask/{request_id}/result",
-            json=body.model_dump(),
             headers=self._headers,
         )
         resp.raise_for_status()

@@ -45,18 +45,12 @@ class _FakeClient:
         self.done: list[tuple[int, str]] = []
         self.fetched: list[tuple[str, str, Path]] = []
         self.ab_running: list[int] = []
-        self.ask_results: list[tuple[int, dict[str, str | None]]] = []
 
     def poll_jobs(self, *, limit: int = 50) -> list[_Job]:
         return list(self._jobs)
 
     def mark_done(self, job_id: int, *, job_type: str = "refine") -> None:
         self.done.append((job_id, job_type))
-
-    def push_ask_result(
-        self, request_id: int, *, answer: str | None = None, error: str | None = None
-    ) -> None:
-        self.ask_results.append((request_id, {"answer": answer, "error": error}))
 
     def fetch_audio(self, source: str, name: str, dest: Path) -> None:
         self.fetched.append((source, name, dest))

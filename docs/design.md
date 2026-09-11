@@ -191,12 +191,20 @@ weights for a *different* project (life's emotion suggestions); recall simply
 stopped asking it anything.
 
 **5.8 One model, one holder.** Every process that wants generated text asks
-`llm-host` over loopback (`recall.llm.make_generator`); it loads on demand,
+`llm-host` over loopback; it loads on demand,
 serves one request at a time (one GPU), and releases the weights after five idle
 minutes. Cross-machine work does not change shape: the fleet still cannot reach
 this Mac (one-way WireGuard — see [`isis-migration.md`](isis-migration.md)), so
 anything running there queues work the Mac pulls — the holder
 sits behind that, not in front of it.
+
+⚠ **recall's own client half is GONE (2026-09-11), and 5.8 named it until then.**
+`make_generator`, `make_http_generator` and `generate_via_host` had no caller
+left in this repo — §5.7 above already recorded that recall stopped asking, but
+the function stayed cited here as the way every process reaches the holder. The
+one live client is life's `tools/emotion_worker.py`, which speaks the HTTP
+itself. What survives in `recall.llm` is what the HOLDER needs: `load_mlx_chat`,
+`ChatModel`, the prefix cache and the bind constants.
 
 ## 6. Continual improvement
 

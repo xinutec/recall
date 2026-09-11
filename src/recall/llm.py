@@ -18,12 +18,9 @@ string, which means "load it in this process".
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -58,22 +55,10 @@ PREFIX_CACHE_TTL_SECS = 2 * 24 * 3600  # prune a cache untouched for two days
 # from a prompt the caller already holds, and the interface IS the boundary.
 LLM_HOST_BIND = "127.0.0.1"
 LLM_HOST_PORT = 8092
-DEFAULT_LLM_HOST = f"http://{LLM_HOST_BIND}:{LLM_HOST_PORT}"
 
 # Five minutes of quiet and the weights go back: long enough to keep a run of
 # requests warm, short enough that an unused evening costs nothing.
 DEFAULT_IDLE_UNLOAD = 300.0
-
-# A cold load is ~60s, a long answer tens of seconds more, and the holder
-# serialises callers so a request can queue behind one. Generous enough that a
-# legitimately slow answer is never cut off, finite so a wedge is still noticed.
-HOST_TIMEOUT_SECONDS = 600.0
-
-
-class Generator(Protocol):
-    """Anything that turns a prompt into generated text."""
-
-    def __call__(self, prompt: str, /) -> str: ...
 
 
 class ChatModel(Protocol):
@@ -81,15 +66,6 @@ class ChatModel(Protocol):
     message, a user message, and a token bound chosen by the call site."""
 
     def __call__(self, *, system: str | None, prompt: str, max_tokens: int) -> str: ...
-
-
-class LlmHostUnavailable(RuntimeError):
-    """The holder could not be reached, or refused the request.
-
-    Fatal by design rather than falling back to an in-process load: the fallback
-    would silently re-create the second copy of the weights this arrangement
-    exists to prevent.
-    """
 
 
 def load_mlx_chat(model: str = DEFAULT_LLM) -> ChatModel:
@@ -219,79 +195,3 @@ def _prune_prefix_caches() -> None:
                 f.unlink(missing_ok=True)
         except OSError:  # a file vanishing under us is fine — it is gone
             pass
-
-
-def make_mlx_generator(model: str = DEFAULT_LLM) -> Generator:
-    """A prompt-only Generator backed by a model loaded into THIS process.
-
-    Only the holder should normally call this (see the module docstring); other
-    call sites go through `make_generator`.
-    """
-    chat = load_mlx_chat(model)
-
-    def run(prompt: str, /) -> str:
-        return chat(system=None, prompt=prompt, max_tokens=MAX_TOKENS)
-
-    return run
-
-
-def generate_via_host(
-    prompt: str,
-    *,
-    base_url: str = DEFAULT_LLM_HOST,
-    system: str | None = None,
-    model: str = DEFAULT_LLM,
-    max_tokens: int = MAX_TOKENS,
-) -> str:
-    """Ask the holder to generate. Raises `LlmHostUnavailable` if it cannot."""
-    body: dict[str, Any] = {
-        "prompt": prompt,
-        "system": system,
-        "model": model,
-        "max_tokens": max_tokens,
-    }
-    request = urllib.request.Request(
-        f"{base_url.rstrip('/')}/generate",
-        data=json.dumps(body).encode(),
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=HOST_TIMEOUT_SECONDS) as response:
-            payload = json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(errors="replace")[:500]
-        raise LlmHostUnavailable(
-            f"llm-host returned HTTP {exc.code}: {detail}"
-        ) from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise LlmHostUnavailable(
-            f"no llm-host at {base_url} ({exc}) - "
-            "is org.xinutec.recall-llm-host running?"
-        ) from exc
-    text: str = payload["text"]
-    return text
-
-
-def make_http_generator(
-    base_url: str = DEFAULT_LLM_HOST, model: str = DEFAULT_LLM
-) -> Generator:
-    """A Generator that generates in the holder process instead of this one."""
-
-    def run(prompt: str, /) -> str:
-        return generate_via_host(prompt, base_url=base_url, model=model)
-
-    return run
-
-
-def make_generator(model: str = DEFAULT_LLM) -> Generator:
-    """The Generator every caller outside the holder should use.
-
-    Points at the holder by default. `RECALL_LLM_HOST=""` means "load it here" —
-    the escape hatch for a machine with no holder agent. Any other value is a
-    base URL.
-    """
-    host = os.environ.get("RECALL_LLM_HOST", DEFAULT_LLM_HOST)
-    if not host:
-        return make_mlx_generator(model)
-    return make_http_generator(host, model)

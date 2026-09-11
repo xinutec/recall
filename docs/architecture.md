@@ -861,9 +861,27 @@ B3 lands.*
   trigger), still counted, and still seen by supersession, which is the
   machinery whose failure overwrites a person's typed correction.
 - **E4. Absorb the rest of `/sync/jobs`.** refine (via the `voices` shim),
-  ask (via `llm`), ab-compare; retire `recall.jobs`, `sync_push`, outbox,
+  ab-compare; retire `recall.jobs`, `sync_push`, outbox,
   capture-mirror (pause intent moves to a recalld long-poll the runner
   mirrors — same edge-trigger semantics).
+
+  *Started 2026-09-11:* `recall.shim_voices` (diarize + embed behind the `asr`
+  stdio protocol), the `diarize-room` job kind — derived from a transcribe job
+  that SUCCEEDED, since diarization alone attributes nothing and a refused clip
+  is a clip, not a transcript — a `lease` that takes the kinds the CALLER can do,
+  and `recalld::align` (`recall.align` ported, proved against a 120-case
+  differential corpus). All shadow: no `voices` runner is deployed.
+
+  ⚠ **This line used to say "ask (via `llm`)" and there is no ask.** Checked
+  2026-09-11: no `/api/ask` route, nothing in the Angular app, and
+  `push_ask_result` POSTed to `/sync/ask/{id}/result` — a route no server in
+  this repo serves. `AskResultIn`, `AbResultIn` and the whole client half of
+  `recall.llm` went with it. The holder stays: `life` is a live client of it.
+
+  ⚠ **Porting `refine.py`'s per-segment WRITE is work stage E deletes.** #1388
+  is "ONE stream transcribed instead of five", with per-mic turns hidden once a
+  room turn covers them. What survives is the diarization and alignment above —
+  the room stream needs both. The write does not.
 
 ### Stage F — recalld absorbs the browsing tier; the Mac lets go
 
