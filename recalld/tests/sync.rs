@@ -5,6 +5,23 @@ use recalld::capture::{intent_pause, record_reported, reported_state};
 use recalld::sync::{IntentOut, bearer, check};
 use rusqlite::Connection;
 
+/// A one-shot HTTP agent: **no connection pooling**.
+///
+/// ⚠ `ureq::get`/`ureq::post` use ureq's GLOBAL agent, whose pool is shared by
+/// every test in the binary — and the tests run in parallel against
+/// short-lived per-test servers. When one test's server drops a socket another
+/// test is returning to the pool, ureq panics inside the return path:
+///
+///     returning stream to pool: Os { code: 22, kind: InvalidInput }
+///
+/// That is the intermittent gate failure #1480 has been chasing: it needs two
+/// tests' sockets to overlap, so it fires under load and never in a rerun. A
+/// fresh agent with no idle connections removes the shared pool, and with it
+/// the entire class — there is no socket to hand back.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new().max_idle_connections(0).build()
+}
+
 fn at(offset_s: i64) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(1_788_894_682 + offset_s, 0).expect("a real instant")
 }
@@ -244,7 +261,7 @@ async fn post(addr: &str, token: Option<&str>, body: serde_json::Value) -> (u16,
     let url = format!("http://{addr}/sync/capture");
     let token = token.map(ToOwned::to_owned);
     tokio::task::spawn_blocking(move || {
-        let mut req = ureq::post(&url);
+        let mut req = agent().post(&url);
         if let Some(token) = token {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
@@ -511,7 +528,7 @@ async fn get(addr: &str, path: &str, token: Option<&str>) -> (u16, String) {
     let url = format!("http://{addr}{path}");
     let token = token.map(ToOwned::to_owned);
     tokio::task::spawn_blocking(move || {
-        let mut req = ureq::get(&url);
+        let mut req = agent().get(&url);
         if let Some(token) = token {
             req = req.set("Authorization", &format!("Bearer {token}"));
         }
@@ -610,7 +627,8 @@ async fn push_blob(
         body.extend_from_slice(&bytes);
         body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
 
-        let res = ureq::post(&url)
+        let res = agent()
+            .post(&url)
             .set("Authorization", &format!("Bearer {token}"))
             .set(
                 "Content-Type",
@@ -775,7 +793,7 @@ async fn post_json(
     let url = format!("http://{addr}{path}");
     let token = token.map(ToOwned::to_owned);
     tokio::task::spawn_blocking(move || {
-        let mut req = ureq::post(&url);
+        let mut req = agent().post(&url);
         if let Some(t) = token {
             req = req.set("Authorization", &format!("Bearer {t}"));
         }
@@ -891,5 +909,53 @@ async fn the_batch_returns_one_result_per_segment_in_order() {
     assert_ne!(
         results[0]["audio_segment_id"], results[1]["audio_segment_id"],
         "two distinct segments collapsed into one row"
+    );
+}
+
+/// ⚠ **The third long-poll path, and the one neither language pinned.** The two
+/// above cover "the intent already differs, return at once" and "hang, then wake
+/// on a press". Nothing covered the wait simply ELAPSING with nothing to report,
+/// which is what happens on most passes in a quiet house — the mirror polls,
+/// nobody touches capture, and the route must come back with the unchanged
+/// intent rather than hang to the cap or error.
+///
+/// Python bounds this with `_INTENT_WAIT_CAP_S`/`_INTENT_WAIT_SLICE_S` and the
+/// Rust with `WAIT_CAP`/`WAIT_SLICE`; a divergence here would show up as the
+/// Mac's capture mirror stalling for 25 s a pass instead of its own interval,
+/// which reads as a slow network rather than as a bug (#1500).
+#[tokio::test]
+async fn a_wait_that_elapses_with_no_change_returns_the_intent_it_started_with() {
+    let (dir, addr) = serve(Some("sekrit")).await;
+    let conn = recalld::work::open_write(dir.path()).expect("db");
+    let intent = intent_pause(&conn, chrono::Utc::now(), Some(30)).unwrap();
+    drop(conn);
+
+    // `knownIntent` EQUALS what is stored, so there is nothing to report and the
+    // route hangs until the wait runs out.
+    let started = std::time::Instant::now();
+    let (status, body) = post(
+        &addr,
+        Some("sekrit"),
+        serde_json::json!({
+            "running": false, "pausedUntil": intent,
+            "wait": 1, "knownIntent": intent,
+        }),
+    )
+    .await;
+    let held = started.elapsed();
+
+    assert_eq!(status, 200);
+    assert_eq!(
+        body,
+        format!(r#"{{"pausedUntil":"{intent}"}}"#),
+        "the unchanged intent must still come back"
+    );
+    assert!(
+        held >= std::time::Duration::from_millis(500),
+        "returned in {held:?} — it did not wait at all, so the hang is not real"
+    );
+    assert!(
+        held < std::time::Duration::from_secs(10),
+        "held for {held:?} — the wait is not bounded by what the caller asked for"
     );
 }

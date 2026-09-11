@@ -5,6 +5,23 @@
 use recalld::work::{SegmentIn, SegmentStoredOut, TurnIn, ingest_segment};
 use rusqlite::Connection;
 
+/// A one-shot HTTP agent: **no connection pooling**.
+///
+/// ⚠ `ureq::get`/`ureq::post` use ureq's GLOBAL agent, whose pool is shared by
+/// every test in the binary — and the tests run in parallel against
+/// short-lived per-test servers. When one test's server drops a socket another
+/// test is returning to the pool, ureq panics inside the return path:
+///
+///     returning stream to pool: Os { code: 22, kind: InvalidInput }
+///
+/// That is the intermittent gate failure #1480 has been chasing: it needs two
+/// tests' sockets to overlap, so it fires under load and never in a rerun. A
+/// fresh agent with no idle connections removes the shared pool, and with it
+/// the entire class — there is no socket to hand back.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new().max_idle_connections(0).build()
+}
+
 /// ⚠ THE REAL SCHEMA, copied from the fleet's own `sqlite_master`. An invented
 /// one is why the first deploy of this route 500'd on every push with "table
 /// sources has no column named spec": the test had a column the database does
@@ -422,7 +439,8 @@ async fn serve() -> (tempfile::TempDir, String) {
 async fn post_json(addr: &str, path: &str, body: serde_json::Value) -> (u16, String) {
     let url = format!("http://{addr}{path}");
     tokio::task::spawn_blocking(move || {
-        match ureq::post(&url)
+        match agent()
+            .post(&url)
             .set("Authorization", "Bearer sekrit")
             .send_json(body)
         {

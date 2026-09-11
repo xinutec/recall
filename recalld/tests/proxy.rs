@@ -13,6 +13,23 @@ use recalld::proxy::{Upstream, forwarded_headers, target};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// A one-shot HTTP agent: **no connection pooling**.
+///
+/// ⚠ `ureq::get`/`ureq::post` use ureq's GLOBAL agent, whose pool is shared by
+/// every test in the binary — and the tests run in parallel against
+/// short-lived per-test servers. When one test's server drops a socket another
+/// test is returning to the pool, ureq panics inside the return path:
+///
+///     returning stream to pool: Os { code: 22, kind: InvalidInput }
+///
+/// That is the intermittent gate failure #1480 has been chasing: it needs two
+/// tests' sockets to overlap, so it fires under load and never in a rerun. A
+/// fresh agent with no idle connections removes the shared pool, and with it
+/// the entire class — there is no socket to hand back.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new().max_idle_connections(0).build()
+}
+
 /// Turn a ureq result into a response, naming WHICH failure happened.
 ///
 /// ⚠ **The instrument this test needed before any fix** (#1480). `proxy::forward`
@@ -159,7 +176,8 @@ async fn an_unported_route_is_answered_by_the_upstream() {
     let base = recalld_with(Some(up)).await;
 
     let resp = tokio::task::spawn_blocking(move || {
-        ureq::get(&format!("{base}/api/legacy"))
+        agent()
+            .get(&format!("{base}/api/legacy"))
             .set("Cookie", "recall_session=abc.def")
             .call()
             .map_err(Box::new)
@@ -188,7 +206,8 @@ async fn a_route_recalld_serves_is_never_proxied() {
     let base = recalld_with(Some(up)).await;
 
     let resp = tokio::task::spawn_blocking(move || {
-        ureq::get(&format!("{base}/ingest/v1/health"))
+        agent()
+            .get(&format!("{base}/ingest/v1/health"))
             .call()
             .map_err(Box::new)
     })
@@ -213,7 +232,7 @@ async fn the_upstreams_status_is_relayed_not_flattened() {
     let base = recalld_with(Some(up)).await;
 
     let status = tokio::task::spawn_blocking(move || {
-        match ureq::get(&format!("{base}/api/teapot")).call() {
+        match agent().get(&format!("{base}/api/teapot")).call() {
             Ok(r) => r.status(),
             Err(ureq::Error::Status(code, _)) => code,
             Err(e) => panic!("transport: {e}"),
@@ -232,7 +251,8 @@ async fn a_request_body_and_query_survive_the_hop() {
     let b = base.clone();
 
     let echoed = tokio::task::spawn_blocking(move || {
-        ureq::post(&format!("{b}/api/echo"))
+        agent()
+            .post(&format!("{b}/api/echo"))
             .send_string("hello")
             .expect("post")
             .into_string()
@@ -243,7 +263,8 @@ async fn a_request_body_and_query_survive_the_hop() {
     assert_eq!(echoed, "got:hello");
 
     let query = tokio::task::spawn_blocking(move || {
-        ureq::get(&format!("{base}/api/query?limit=5&before=x"))
+        agent()
+            .get(&format!("{base}/api/query?limit=5&before=x"))
             .call()
             .expect("get")
             .into_string()
@@ -261,7 +282,7 @@ async fn without_an_upstream_a_miss_is_an_honest_404() {
     let base = recalld_with(None).await;
 
     let status = tokio::task::spawn_blocking(move || {
-        match ureq::get(&format!("{base}/api/legacy")).call() {
+        match agent().get(&format!("{base}/api/legacy")).call() {
             Ok(r) => r.status(),
             Err(ureq::Error::Status(code, _)) => code,
             Err(e) => panic!("transport: {e}"),
@@ -281,7 +302,7 @@ async fn a_dead_upstream_is_a_502_not_an_empty_success() {
     let base = recalld_with(Some("http://127.0.0.1:1".to_string())).await;
 
     let status = tokio::task::spawn_blocking(move || {
-        match ureq::get(&format!("{base}/api/legacy")).call() {
+        match agent().get(&format!("{base}/api/legacy")).call() {
             Ok(r) => r.status(),
             Err(ureq::Error::Status(code, _)) => code,
             Err(e) => panic!("transport: {e}"),
@@ -343,7 +364,8 @@ async fn a_sync_path_is_proxied_and_never_answered_with_the_app_shell() {
     let base = recalld_with_frontend(Some(up), Some(dir.path().to_path_buf())).await;
 
     let body = tokio::task::spawn_blocking(move || {
-        ureq::get(&format!("{base}/sync/legacy"))
+        agent()
+            .get(&format!("{base}/sync/legacy"))
             .call()
             .map_err(Box::new)
     })
@@ -381,7 +403,8 @@ async fn an_app_route_still_renders_the_shell() {
 
     let body = tokio::task::spawn_blocking(move || {
         answered(
-            ureq::get(&format!("{base}/sessions/meeting-x"))
+            agent()
+                .get(&format!("{base}/sessions/meeting-x"))
                 .call()
                 .map_err(Box::new),
         )
@@ -415,7 +438,8 @@ async fn a_method_recalld_does_not_serve_falls_through_to_the_upstream() {
     // miss the day the upload moved, and the test failed for a reason that had
     // nothing to do with what it checks.
     let resp = tokio::task::spawn_blocking(move || {
-        ureq::post(&format!("{base}/api/timeline"))
+        agent()
+            .post(&format!("{base}/api/timeline"))
             .send_string("{}")
             .map_err(Box::new)
     })
@@ -441,7 +465,10 @@ async fn a_method_miss_is_refused_when_there_is_nothing_to_fall_through_to() {
     let base = recalld_gated(None).await;
 
     let code = tokio::task::spawn_blocking(move || {
-        match ureq::post(&format!("{base}/api/timeline")).send_string("{}") {
+        match agent()
+            .post(&format!("{base}/api/timeline"))
+            .send_string("{}")
+        {
             Ok(resp) => resp.status(),
             Err(ureq::Error::Status(code, _)) => code,
             Err(other) => panic!("transport: {other}"),
@@ -464,7 +491,8 @@ async fn a_proxied_method_miss_is_gated_by_the_upstream_not_by_recalld() {
     let base = recalld_gated(Some(upstream)).await;
 
     let resp = tokio::task::spawn_blocking(move || {
-        ureq::post(&format!("{base}/api/timeline"))
+        agent()
+            .post(&format!("{base}/api/timeline"))
             .send_string("{}")
             .map_err(Box::new)
     })

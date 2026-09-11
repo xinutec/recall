@@ -6,6 +6,23 @@ use recalld::sources::{
 };
 use std::collections::HashMap;
 
+/// A one-shot HTTP agent: **no connection pooling**.
+///
+/// ⚠ `ureq::get`/`ureq::post` use ureq's GLOBAL agent, whose pool is shared by
+/// every test in the binary — and the tests run in parallel against
+/// short-lived per-test servers. When one test's server drops a socket another
+/// test is returning to the pool, ureq panics inside the return path:
+///
+///     returning stream to pool: Os { code: 22, kind: InvalidInput }
+///
+/// That is the intermittent gate failure #1480 has been chasing: it needs two
+/// tests' sockets to overlap, so it fires under load and never in a rerun. A
+/// fresh agent with no idle connections removes the shared pool, and with it
+/// the entire class — there is no socket to hand back.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new().max_idle_connections(0).build()
+}
+
 fn now() -> DateTime<Utc> {
     // 2026-09-09T12:00:00Z — the instant the Python case matrix was generated at.
     DateTime::from_timestamp(1_788_998_400, 0).expect("a real instant")
@@ -456,7 +473,8 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
 
     // NO session cookie, deliberately.
     let body = tokio::task::spawn_blocking(move || {
-        ureq::get(&format!("http://{addr}/api/sources"))
+        agent()
+            .get(&format!("http://{addr}/api/sources"))
             .call()
             .expect("the route is mounted AND ungated")
             .into_string()
