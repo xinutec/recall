@@ -273,3 +273,230 @@ pub fn register_blocks(
     }
     Ok(added)
 }
+
+/// Marks a per-mic turn hidden because a room turn now covers its minute.
+///
+/// A reason, not a flag: `hidden_reason` is what a reader sees when asking why a
+/// turn vanished, and "the room stream covers this" is recoverable information
+/// where a bare `1` is not.
+pub const COVERED_BY_ROOM: &str = "covered by the room stream";
+
+/// Apply a [`Plan`] to one block. ONE transaction: the turns, their search-index
+/// rows and the hides land together or not at all.
+///
+/// ⚠ **The search index is maintained in CODE, not by a trigger.**
+/// `transcript_fts` is contentless FTS5 that the writer inserts into by hand
+/// (`labels_write` says the same, and says it because forgetting it fails
+/// nothing — it just makes the text unfindable by the one route most likely to
+/// look for it).
+///
+/// ⚠ **Idempotent by REFUSING, not by overwriting.** A block whose audio segment
+/// already carries turns is left entirely alone: a second pass must never mint
+/// duplicates, and must never "fix" a minute a person has since edited. The
+/// caller gets `Ok(0)`.
+///
+/// # Errors
+/// If the transaction cannot be taken or any statement fails. Nothing is left
+/// half-applied.
+pub fn write_block(
+    conn: &mut rusqlite::Connection,
+    audio_segment_id: i64,
+    plan: &Plan,
+    model: &str,
+    now: &str,
+) -> rusqlite::Result<usize> {
+    if plan.insert.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.transaction()?;
+    let already: i64 = tx.query_row(
+        "SELECT count(*) FROM transcript_segments WHERE audio_segment_id = ?1",
+        [audio_segment_id],
+        |row| row.get(0),
+    )?;
+    if already > 0 {
+        return Ok(0);
+    }
+    let mut written = 0;
+    for turn in &plan.insert {
+        tx.execute(
+            "INSERT INTO transcript_segments
+                 (audio_segment_id, start_utc, end_utc, text, language,
+                  language_confidence, asr_confidence, asr_model, provenance,
+                  word_timings, created_utc)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                audio_segment_id,
+                turn.start.to_rfc3339_opts(SecondsFormat::Micros, false),
+                turn.end.to_rfc3339_opts(SecondsFormat::Micros, false),
+                turn.text,
+                turn.language,
+                turn.confidence,
+                model,
+                ROOM_PROVENANCE,
+                turn.word_timings,
+                now,
+            ],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
+            (id, &turn.text),
+        )?;
+        written += 1;
+    }
+    for hidden in &plan.hide {
+        tx.execute(
+            "UPDATE transcript_segments SET hidden_reason = ?1
+             WHERE id = ?2 AND hidden_reason IS NULL",
+            (COVERED_BY_ROOM, hidden),
+        )?;
+    }
+    tx.commit()?;
+    Ok(written)
+}
+
+/// What a room turn says about where it came from.
+pub const ROOM_PROVENANCE: &str = "room";
+
+/// What one pass did, so a log line can be specific about a write that touches
+/// the system of record.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Pass {
+    pub blocks: usize,
+    pub turns: usize,
+    pub hidden: usize,
+    pub refused: usize,
+    pub barren: usize,
+}
+
+/// Turn stored job results into visible turns, one block at a time.
+///
+/// The whole chain: a done `transcribe-room` job → [`interpret`] → the standing
+/// per-mic turns and the corrections that overlap the block's minute → [`plan`]
+/// → [`write_block`].
+///
+/// ⚠ **Bounded by `limit` on purpose.** This is the first thing in the stage that
+/// changes a transcript anybody reads, and a pass that ran away would do it 894
+/// times before anyone looked. Small batches, many passes.
+///
+/// # Errors
+/// If either database refuses. A block that cannot be interpreted is counted and
+/// skipped, never fatal: one unreadable result must not stop the queue draining.
+pub fn write_pass(
+    meaning: &mut rusqlite::Connection,
+    ingest: &rusqlite::Connection,
+    model: &str,
+    now: &str,
+    limit: usize,
+) -> rusqlite::Result<Pass> {
+    let mut stmt = ingest.prepare(
+        "SELECT j.filename, j.result FROM jobs j
+         WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
+         ORDER BY j.filename DESC LIMIT ?2",
+    )?;
+    let jobs: Vec<(String, String)> = stmt
+        .query_map(
+            rusqlite::params![crate::queue::TRANSCRIBE_ROOM, limit],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?
+        .collect::<Result<_, _>>()?;
+
+    let mut pass = Pass::default();
+    for (filename, result) in jobs {
+        let Some(block_start) = audiocore::names::parse_segment_start(&filename) else {
+            pass.barren += 1;
+            continue;
+        };
+        // The block's own audio segment. Absent means the registrar has not run
+        // for it yet — a reason to wait, never to write a turn with no audio.
+        let Ok(audio_id) = meaning.query_row(
+            "SELECT id FROM audio_segments WHERE source_id = ?1 AND start_utc LIKE ?2",
+            rusqlite::params![
+                crate::room::ROOM_SOURCE,
+                format!("{}%", block_start.format("%Y-%m-%dT%H:%M:%S"))
+            ],
+            |r| r.get::<_, i64>(0),
+        ) else {
+            pass.barren += 1;
+            continue;
+        };
+        let Ok(turns) = interpret(block_start, &result) else {
+            pass.barren += 1;
+            continue;
+        };
+        let block_end = block_start + Duration::seconds(crate::room::BLOCK_S);
+        let standing = standing_between(meaning, block_start, block_end)?;
+        let human = corrected_between(meaning, block_start, block_end)?;
+        let decided = plan(turns, &standing, &human);
+        pass.refused += decided.refused.len();
+        pass.hidden += decided.hide.len();
+        pass.turns += write_block(meaning, audio_id, &decided, model, now)?;
+        pass.blocks += 1;
+    }
+    Ok(pass)
+}
+
+/// The per-mic machine turns standing on a span. Room turns are excluded: this
+/// asks what the MICROPHONES said, and a previous room turn is not that.
+fn standing_between(
+    conn: &rusqlite::Connection,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> rusqlite::Result<Vec<Standing>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.start_utc, t.end_utc FROM transcript_segments t
+         JOIN audio_segments a ON a.id = t.audio_segment_id
+         WHERE a.source_id != ?1 AND t.hidden_reason IS NULL
+           AND t.superseded_by IS NULL
+           AND t.start_utc < ?3 AND t.end_utc > ?2",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![
+            crate::room::ROOM_SOURCE,
+            start.to_rfc3339_opts(SecondsFormat::Micros, false),
+            end.to_rfc3339_opts(SecondsFormat::Micros, false),
+        ],
+        |r| {
+            Ok(Standing {
+                id: r.get(0)?,
+                start: parse_stamp(&r.get::<_, String>(1)?),
+                end: parse_stamp(&r.get::<_, String>(2)?),
+            })
+        },
+    )?;
+    rows.collect()
+}
+
+/// The spans a person has corrected. Read WIDE and filtered in `plan` rather than
+/// trusted to SQL: this is the set whose loss is permanent.
+fn corrected_between(
+    conn: &rusqlite::Connection,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> rusqlite::Result<Vec<Corrected>> {
+    let mut stmt = conn.prepare(
+        "SELECT start_utc, end_utc FROM corrections
+         WHERE start_utc < ?2 AND end_utc > ?1",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![
+            start.to_rfc3339_opts(SecondsFormat::Micros, false),
+            end.to_rfc3339_opts(SecondsFormat::Micros, false),
+        ],
+        |r| {
+            Ok(Corrected {
+                start: parse_stamp(&r.get::<_, String>(0)?),
+                end: parse_stamp(&r.get::<_, String>(1)?),
+            })
+        },
+    )?;
+    rows.collect()
+}
+
+/// An unparseable stamp becomes the far past, which makes it overlap nothing it
+/// should not — a correction that cannot be read must not silently widen into a
+/// veto over the whole archive, nor vanish into one that protects nothing.
+fn parse_stamp(raw: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(raw).map_or(DateTime::<Utc>::MIN_UTC, |t| t.with_timezone(&Utc))
+}

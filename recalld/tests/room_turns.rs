@@ -498,3 +498,127 @@ fn a_blob_lives_under_root_ingest_source_not_root_source() {
     let dir = recalld::store::source_dir(std::path::Path::new("/data"), "room");
     assert_eq!(dir, std::path::Path::new("/data/ingest/room"));
 }
+
+// ---- the write itself ----
+
+use recalld::room_turns::{COVERED_BY_ROOM, write_block};
+
+fn meaning_with_turns() -> rusqlite::Connection {
+    let conn = rusqlite::Connection::open_in_memory().expect("db");
+    conn.execute_batch(
+        "CREATE TABLE audio_segments (id INTEGER PRIMARY KEY);
+         CREATE TABLE transcript_segments (
+             id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
+             start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
+             language TEXT, language_confidence REAL, asr_confidence REAL,
+             asr_model TEXT NOT NULL, provenance TEXT, hidden_reason TEXT,
+             word_timings TEXT, created_utc TEXT);
+         CREATE VIRTUAL TABLE transcript_fts USING fts5(text, content='');
+         INSERT INTO audio_segments (id) VALUES (7);",
+    )
+    .expect("schema");
+    conn
+}
+
+fn a_plan() -> recalld::room_turns::Plan {
+    recalld::room_turns::Plan {
+        insert: vec![room_turn(A, B, "wat zei je")],
+        hide: vec![],
+        refused: vec![],
+    }
+}
+
+#[test]
+fn a_written_turn_is_findable_by_search() {
+    // The FTS index is maintained in CODE. Forgetting it fails nothing and makes
+    // the text unfindable by the one route most likely to look for it.
+    let mut conn = meaning_with_turns();
+    assert_eq!(
+        write_block(&mut conn, 7, &a_plan(), "whisper", "2026-09-11T10:00:00Z").expect("write"),
+        1
+    );
+    let hits: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM transcript_fts WHERE transcript_fts MATCH 'zei'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("search");
+    assert_eq!(hits, 1, "a room turn must be searchable");
+}
+
+#[test]
+fn a_second_pass_refuses_rather_than_duplicating() {
+    // Idempotent by REFUSING, not overwriting: a re-run must never mint
+    // duplicates, and must never "fix" a minute a person has since edited.
+    let mut conn = meaning_with_turns();
+    let plan = a_plan();
+    assert_eq!(
+        write_block(&mut conn, 7, &plan, "whisper", "t").expect("first"),
+        1
+    );
+    assert_eq!(
+        write_block(&mut conn, 7, &plan, "whisper", "t").expect("again"),
+        0
+    );
+    let n: i64 = conn
+        .query_row("SELECT count(*) FROM transcript_segments", [], |r| r.get(0))
+        .expect("count");
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn hiding_names_a_reason_a_reader_can_act_on() {
+    let mut conn = meaning_with_turns();
+    conn.execute(
+        "INSERT INTO transcript_segments (id, audio_segment_id, start_utc, end_utc, text, asr_model)
+         VALUES (99, 3, ?1, ?2, 'per-mic text', 'whisper')",
+        (A, B),
+    )
+    .expect("existing");
+    let plan = recalld::room_turns::Plan {
+        insert: vec![room_turn(A, B, "the room heard this")],
+        hide: vec![99],
+        refused: vec![],
+    };
+    write_block(&mut conn, 7, &plan, "whisper", "t").expect("write");
+    let reason: String = conn
+        .query_row(
+            "SELECT hidden_reason FROM transcript_segments WHERE id = 99",
+            [],
+            |r| r.get(0),
+        )
+        .expect("hidden");
+    assert_eq!(reason, COVERED_BY_ROOM);
+}
+
+#[test]
+fn an_empty_plan_writes_nothing_and_hides_nothing() {
+    let mut conn = meaning_with_turns();
+    conn.execute(
+        "INSERT INTO transcript_segments (id, audio_segment_id, start_utc, end_utc, text, asr_model)
+         VALUES (99, 3, ?1, ?2, 'per-mic text', 'whisper')",
+        (A, B),
+    )
+    .expect("existing");
+    let empty = recalld::room_turns::Plan {
+        insert: vec![],
+        hide: vec![99],
+        refused: vec![],
+    };
+    assert_eq!(
+        write_block(&mut conn, 7, &empty, "whisper", "t").expect("write"),
+        0
+    );
+    let reason: Option<String> = conn
+        .query_row(
+            "SELECT hidden_reason FROM transcript_segments WHERE id = 99",
+            [],
+            |r| r.get(0),
+        )
+        .expect("row");
+    assert!(
+        reason.is_none(),
+        "a hide with nothing to replace it empties the minute"
+    );
+}
