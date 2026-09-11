@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import IO, Protocol
 
 from recall.asr import DEFAULT_MODEL, mlx_transcribe, scratch_wav
+from recall.paths import require_archive
 from recall.quality import is_repetition_loop
 from recall.sources import live_input_argv
 from recall.store import LIVE_MODEL, Store
@@ -156,7 +157,14 @@ def run_live(  # noqa: PLR0915, PLR0912 - cohesive streaming loop
     import torch  # noqa: PLC0415
     from silero_vad import VADIterator, load_silero_vad  # noqa: PLC0415
 
-    work_dir.mkdir(parents=True, exist_ok=True)
+    # ⚠ `parents=True` here asked macOS to create /Volumes/Backup — the
+    # MOUNTPOINT — whenever the disk was away: 562 PermissionErrors in
+    # live.err.log, and EPERM was the only thing stopping live from writing the
+    # household onto the boot disk under a directory the real volume then
+    # shadows on remount. The archive is required, never built
+    # (`recall.paths.require_archive`); only the scratch dir INSIDE it is made.
+    require_archive(work_dir.parent)
+    work_dir.mkdir(exist_ok=True)
     vad = VADIterator(load_silero_vad(), sampling_rate=_SAMPLE_RATE)
 
     utterances: queue.Queue[tuple[bytes, datetime] | None] = queue.Queue()

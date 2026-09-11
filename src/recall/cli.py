@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 import threading
 import time
 import traceback
@@ -49,6 +50,7 @@ from recall.maintenance import (
     reprobe_short_segments,
 )
 from recall.moments import cluster_moments
+from recall.paths import ArchiveAway, require_archive
 from recall.probe import probe_media, scan_segments
 from recall.redrive import redrive_archive
 from recall.refine import refine_diarized
@@ -1591,4 +1593,17 @@ def main(argv: list[str] | None = None) -> int:
     # the worker being alive (its loop still rotates during long uptimes). Cheap:
     # only acts on logs over the cap.
     rotate_logs(_LOG_DIR)
+    # ⚠ ONE check, at the only place every subcommand passes through, rather than
+    # 24 guards at the 24 `mkdir(parents=True)` call sites downstream. A command
+    # whose archive is not mounted cannot do anything useful, and the alternative
+    # is what live.py did: build the path with parents and ask macOS to create
+    # the MOUNTPOINT (562 crashes; see `recall.paths.require_archive` for why the
+    # crash was the LUCKY outcome).
+    out = getattr(args, "out", None)
+    if out is not None:
+        try:
+            require_archive(out)
+        except ArchiveAway as err:
+            print(err, file=sys.stderr)
+            return 1
     return _COMMANDS[args.command](args)
