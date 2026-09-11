@@ -60,6 +60,50 @@ def tuned_parameters(
     return tuned
 
 
+#: Loaded pipelines, keyed by model AND tuning. Keyed on the tuning too because
+#: `instantiate` MUTATES the pipeline: a cache keyed on the model alone would hand
+#: a later default-parameter call whatever the last tuned call left behind, and the
+#: default path is production. Two tunings cost two pipelines, which is the honest
+#: price of asking for two.
+_PIPELINE_CACHE: dict[tuple[str, float | None, int | None], object] = {}
+
+
+def _pipeline(
+    model: str,
+    token: str | None,
+    threshold: float | None,
+    min_cluster_size: int | None,
+) -> object:
+    """Load (once per process) the diarization pipeline. Heavy + gated.
+
+    Mirrors `speakerid._inference`. Without this every call paid the load again —
+    seconds of weights per segment, which is the bill the shim architecture
+    (docs/architecture.md, stage E2) exists to stop paying. It did not matter while
+    the caller was a one-shot CLI pass; it matters as soon as a long-lived shim is
+    the caller.
+    """
+    key = (model, threshold, min_cluster_size)
+    cached = _PIPELINE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    from pyannote.audio import Pipeline  # noqa: PLC0415 - lazy heavy/gated dep
+
+    pipeline = Pipeline.from_pretrained(model, token=token)
+    if pipeline is None:
+        msg = f"could not load diarization pipeline {model!r} (HF token/terms?)"
+        raise RuntimeError(msg)
+    if threshold is not None or min_cluster_size is not None:
+        pipeline.instantiate(
+            tuned_parameters(
+                pipeline.parameters(instantiated=True),
+                threshold=threshold,
+                min_cluster_size=min_cluster_size,
+            )
+        )
+    _PIPELINE_CACHE[key] = pipeline
+    return pipeline
+
+
 def pyannote_diarize(
     audio: Path,
     *,
@@ -88,30 +132,20 @@ def pyannote_diarize(
     same segment to 2).
     """
     import torch  # noqa: PLC0415 - heavy
-    from pyannote.audio import Pipeline  # noqa: PLC0415 - lazy heavy/gated dep
 
     from recall.asr import decode_pcm_f32  # noqa: PLC0415 - heavy/optional path
 
     token = hf_token or os.environ.get("HF_TOKEN")
-    pipeline = Pipeline.from_pretrained(model, token=token)
-    if pipeline is None:
-        msg = f"could not load diarization pipeline {model!r} (HF token/terms?)"
-        raise RuntimeError(msg)
-    if clustering_threshold is not None or min_cluster_size is not None:
-        pipeline.instantiate(
-            tuned_parameters(
-                pipeline.parameters(instantiated=True),
-                threshold=clustering_threshold,
-                min_cluster_size=min_cluster_size,
-            )
-        )
+    pipeline = _pipeline(model, token, clustering_threshold, min_cluster_size)
     # pyannote 4.x decodes files via torchcodec, which won't load on this torch
     # stack; hand it an ffmpeg-decoded in-memory waveform instead, like the
     # embedding path does (recall.speakerid._decode_mono).
     rate = 16000
     samples = decode_pcm_f32(audio, sample_rate=rate).copy()
     waveform = torch.from_numpy(samples).unsqueeze(0)
-    result = pipeline({"waveform": waveform, "sample_rate": rate})
+    # pyannote is untyped, so the cached pipeline arrives here as an `object` and
+    # calling it needs the same ignore `speakerid.pyannote_embed` uses.
+    result = pipeline({"waveform": waveform, "sample_rate": rate})  # type: ignore[operator]
     # pyannote 4.x returns a DiarizeOutput; its exclusive (non-overlapping)
     # diarization is the clean one for per-turn transcript attribution. Older
     # pyannote returns an Annotation directly.
