@@ -500,3 +500,10 @@ fn corrected_between(
 fn parse_stamp(raw: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(raw).map_or(DateTime::<Utc>::MIN_UTC, |t| t.with_timezone(&Utc))
 }
+
+/// What a room turn records as its model.
+///
+/// The `asr` shim's default, named here rather than threaded from the job: the
+/// queue does not yet carry a model field, and a turn claiming a model it was not
+/// produced by is worse than one naming the only model that runs.
+pub const ROOM_MODEL: &str = "mlx-whisper/large-v3-turbo (room)";

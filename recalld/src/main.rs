@@ -186,6 +186,7 @@ fn main() -> ExitCode {
         spawn_speech_scanner(config.root.clone());
         spawn_room_builder(config.root.clone());
         spawn_room_registrar(config.root.clone());
+        spawn_room_turn_writer(config.root.clone());
         let app = router(config);
         let mut serving = tokio::task::JoinSet::new();
         for listener in listeners {
@@ -307,6 +308,68 @@ fn spawn_speech_scanner(root: PathBuf) {
 /// Stage D3: the room builder — one settled block at a time, calibrated
 /// selection, terminal verdicts only. Chases the level scanner: a block whose
 /// evidence is incomplete defers and returns next pass.
+/// Stage E3a: turn stored room results into turns people actually read.
+///
+/// ⚠ **THE FIRST LOOP HERE THAT CHANGES A TRANSCRIPT SOMEBODY READS.** Everything
+/// above it derives, measures or registers. This one writes room turns and hides
+/// the per-mic turns they cover — measured 2026-09-11 before it was switched on:
+/// 933 transcribed blocks against 25,349 visible per-mic turns in the same span.
+/// That ratio IS the point (four or five microphones transcribing one minute,
+/// #1388), and it is still thousands of rows changing state.
+///
+/// ⚠ **HOW TO PUT IT BACK, in one statement.** Hiding is not deleting:
+///
+/// ```sql
+/// UPDATE transcript_segments SET hidden_reason = NULL
+///  WHERE hidden_reason = 'covered by the room stream';
+/// DELETE FROM transcript_segments WHERE provenance = 'room';
+/// ```
+///
+/// Written here rather than in a task because the person who needs it will be
+/// reading this file, not searching for the note.
+///
+/// A SMALL batch on a slow cadence, deliberately: the queue drains over hours
+/// instead of minutes, so a bad verdict is noticed while it is dozens of blocks
+/// rather than nine hundred.
+fn spawn_room_turn_writer(root: PathBuf) {
+    const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
+    const BATCH: usize = 20;
+    tokio::spawn(async move {
+        loop {
+            let pass_root = root.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                let ingest = recalld::store::open(&pass_root)?;
+                let mut meaning = recalld::work::open_write(&pass_root)?;
+                let now = chrono::Utc::now().to_rfc3339();
+                recalld::room_turns::write_pass(
+                    &mut meaning,
+                    &ingest,
+                    recalld::room_turns::ROOM_MODEL,
+                    &now,
+                    BATCH,
+                )
+            })
+            .await;
+            match done {
+                Ok(Ok(pass)) if pass.turns + pass.hidden + pass.refused > 0 => {
+                    tracing::info!(
+                        blocks = pass.blocks,
+                        turns = pass.turns,
+                        hidden = pass.hidden,
+                        refused = pass.refused,
+                        barren = pass.barren,
+                        "room turns: written"
+                    );
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => tracing::warn!(%err, "room turns: pass failed"),
+                Err(err) => tracing::error!(%err, "room turns: task failed"),
+            }
+            tokio::time::sleep(EVERY).await;
+        }
+    });
+}
+
 /// Register built room blocks in the meaning plane, so their turns have audio.
 ///
 /// Its own loop rather than a step inside the builder's, because it spans BOTH
