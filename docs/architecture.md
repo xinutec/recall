@@ -1480,6 +1480,20 @@ is now WRITE-ONLY. `calibrate` writes it and analyse was its only reader. Column
 and writer are kept because D2's calibration is the thing likely to want a
 per-mic spectral reference again.
 
+⚠ **MEASURED 2026-09-11: the Python tier serves NOTHING but its own liveness
+probe.** Over the whole life of the running pod (started 2026-09-10T22:36Z), its
+container logged 7,053 requests — every one of them `GET /api/capture` from
+10.42.0.1, the kubelet — plus eight probes typed by hand during this check.
+No UI traffic, no device traffic, no sync push reached it.
+
+Read it with its caveat: capture was PAUSED for that whole window, so the phones
+were not pushing, and the UI was barely used. What the number DOES settle is that
+the proxy fall-through is not carrying hidden work — anything unmatched by
+recalld would appear here, and the only things that did were typed on purpose.
+`api.py` declares no `/api/*` route at all; it registers sync (recalld is the
+front door), capture (dead, below), webauth (recalld has its own) and an SPA
+fallback (`spa.rs`). Re-check after capture resumes; that is #1500's gate anyway.
+
 ⚠ **`api_capture` is now DEAD CODE that is deliberately still there.** recalld
 serves all three capture routes since 2026-09-08, so nothing reaches it — but
 fleet images are `:latest` only, which makes a rollback a roll-forward, and this

@@ -108,10 +108,13 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
             "/api/correction/{id}/audio",
             get(labels::correction_audio_route),
         )
-        // Uploaded meetings. ⚠ The upload (POST /api/sessions) and the delete
-        // are NOT here and stay with Python; `router` forwards an unmatched
-        // METHOD on a matched path to the upstream, which is what makes owning
-        // half of a path safe.
+        // Uploaded meetings. ⚠ This note used to say the upload and the delete
+        // stayed with Python. They did not: `POST /api/sessions` is
+        // `upload::create_session_route` below and the delete is
+        // `sessions::delete_route`, and there is no Python handler for either —
+        // checked 2026-09-11, the Python tier declares no `/api/*` route at all.
+        // The method fallthrough in `router` is still right for any path that IS
+        // half-ported; it just no longer has this example.
         // The labelling WRITES. These reach the corrections corpus, the one
         // thing here that is not re-derivable from audio.
         // The recorders' own status: heartbeats and upload outboxes. ⚠ These are
@@ -268,9 +271,10 @@ pub fn router(config: Arc<Config>) -> Router {
             .method_not_allowed_fallback({
                 // ⚠ Without this a PARTIALLY ported path is a dead end: axum
                 // matches the path, finds no handler for the method and answers
-                // 405 rather than falling through. GET /api/sessions is ours and
-                // POST /api/sessions is still Python's, so the upload would have
-                // stopped working the moment the read was ported.
+                // 405 rather than falling through — so a path whose GET is ours
+                // and whose POST is upstream would lose the POST the moment the
+                // read was ported. `/api/sessions` was that example until both
+                // halves landed here; the guard stays for the next one.
                 let up = up.clone();
                 move |req: axum::extract::Request| proxy::forward(up.clone(), req)
             })
