@@ -252,6 +252,64 @@ pub fn newest_live_turn(conn: &Connection) -> rusqlite::Result<Option<DateTime<U
     Ok(newest.as_deref().and_then(crate::instant::parse))
 }
 
+/// What the device recorders delivered in `[since, until)`, and how much of it
+/// the speech scanner has measured — the evidence [`crate::capture::live_check`]
+/// needs to tell a quiet house from a broken live tier.
+///
+/// ⚠ Delivered and scanned are counted in ONE pass over the same rows, so they
+/// cannot disagree about which segments were in the window. Counting them
+/// separately would let a segment land between the two queries and read as
+/// delivered-but-unscanned forever.
+pub fn window_audio(
+    conn: &Connection,
+    sources: &[(String, crate::source::SourceKind)],
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> rusqlite::Result<crate::capture::WindowAudio> {
+    let mut out = crate::capture::WindowAudio {
+        delivered_s: 0.0,
+        scanned_s: 0.0,
+        speech_s: 0.0,
+    };
+    for (source, kind) in sources {
+        if !kind.is_device() {
+            continue;
+        }
+        let mut stmt = conn.prepare(
+            "SELECT start_utc, end_utc, speech_s FROM audio_segments
+             WHERE source_id = ?1 AND start_utc >= ?2 AND start_utc < ?3",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![source, python_iso(since), python_iso(until)],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<f64>>(2)?,
+                ))
+            },
+        )?;
+        for row in rows {
+            let (start, end, speech) = row?;
+            let (Some(start), Some(end)) =
+                (crate::instant::parse(&start), crate::instant::parse(&end))
+            else {
+                continue;
+            };
+            let seconds = (end - start).num_milliseconds() as f64 / 1000.0;
+            if seconds <= 0.0 {
+                continue;
+            }
+            out.delivered_s += seconds;
+            if let Some(speech) = speech {
+                out.scanned_s += seconds;
+                out.speech_s += speech;
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Capture events at or after `since`, oldest-first.
 pub fn capture_events_since(
     conn: &Connection,
@@ -435,6 +493,7 @@ pub fn archive_checks(
     let blanked = blanked_segments(&conn)?;
     let heard = crate::deaf::heard_between(&conn, &sources, now - deaf_window(), now)?;
     let newest_live = newest_live_turn(&conn)?;
+    let live_window = window_audio(&conn, &sources, now - capture::live_quiet(), now)?;
     drop(conn);
 
     let paused_until = crate::agents::paused_until(root);
@@ -461,6 +520,7 @@ pub fn archive_checks(
         now,
         paused_until,
         capture::live_quiet(),
+        live_window,
     ));
     // The fleet mirror only exists when the split is on (RECALL_SYNC_TOKEN
     // set); a stock LAN-only deployment has no fleet to be incomplete against.

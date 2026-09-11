@@ -4,8 +4,8 @@
 use chrono::{DateTime, Duration, Utc};
 use doctor::archive::{self, archive_check, blanked_check, mirror_check};
 use doctor::capture::{
-    Beat, Recorder, agent_checks, capture_checks, live_check, live_quiet, silent_after,
-    worker_check, worker_slow, worker_stopped,
+    Beat, Recorder, WindowAudio, agent_checks, capture_checks, live_check, live_quiet,
+    silent_after, worker_check, worker_slow, worker_stopped,
 };
 use doctor::check::{Verdict, worst};
 use doctor::source::SourceKind;
@@ -144,23 +144,108 @@ fn live_is_graded_on_what_it_produced_not_on_being_up() {
     // tier that answers "what did they just say" wrote nothing for 40 minutes.
     let now = at(60);
     assert_eq!(
-        live_check(Some(at(59)), now, None, live_quiet()).verdict,
+        live_check(Some(at(59)), now, None, live_quiet(), TALKING).verdict,
         Verdict::Pass
     );
     assert_eq!(
-        live_check(Some(at(0)), now, None, live_quiet()).verdict,
+        live_check(Some(at(0)), now, None, live_quiet(), TALKING).verdict,
         Verdict::Fail
     );
     assert_eq!(
-        live_check(None, now, None, live_quiet()).verdict,
+        live_check(None, now, None, live_quiet(), TALKING).verdict,
         Verdict::Fail
     );
     // A pause skips: nothing is recorded, so nothing should be transcribed.
     assert_eq!(
-        live_check(Some(at(0)), now, Some(at(120)), live_quiet()).verdict,
+        live_check(Some(at(0)), now, Some(at(120)), live_quiet(), TALKING).verdict,
         Verdict::Skip
     );
 }
+
+/// Measured 2026-09-09 over 55.8 active hours: `live_check` was red for 36% of
+/// them, and 4.7 of the 20.2 red hours were a quiet house rather than a fault.
+/// Blaming live for the household's silence is what teaches a person to ignore
+/// it, and #1383's real stalls are the 15.5 h that remain.
+#[test]
+fn a_quiet_house_is_not_a_live_fault_but_an_unscanned_one_is_not_quiet() {
+    let now = at(60);
+    let stale = Some(at(0));
+
+    // Nobody spoke: there was nothing for live to write.
+    assert_eq!(
+        live_check(stale, now, None, live_quiet(), SILENT).verdict,
+        Verdict::Skip
+    );
+    // People were audibly talking and live wrote nothing. This is the alarm the
+    // check exists for.
+    assert_eq!(
+        live_check(stale, now, None, live_quiet(), TALKING).verdict,
+        Verdict::Fail
+    );
+
+    // ⚠ The trap: `speech_s` is filled by a scanner on its own cadence, so a
+    // window can read "no speech" simply because nothing in it has been
+    // measured yet. Absence of measurement is NOT absence of speech, and
+    // skipping on it would silence the check exactly when the archive fell
+    // behind — the failure most likely to accompany a live stall.
+    assert_eq!(
+        live_check(stale, now, None, live_quiet(), UNSCANNED).verdict,
+        Verdict::Fail
+    );
+    // Half-scanned is not enough to certify quiet either.
+    assert_eq!(
+        live_check(stale, now, None, live_quiet(), HALF_SCANNED_SILENT).verdict,
+        Verdict::Fail
+    );
+
+    // Nothing was delivered at all: capture's own checks grade that, and live
+    // failing too would be the same outage counted twice.
+    assert_eq!(
+        live_check(stale, now, None, live_quiet(), NO_AUDIO).verdict,
+        Verdict::Skip
+    );
+    // A tier that has never produced a turn is still a fault while people talk,
+    // and still not one in a silent house.
+    assert_eq!(
+        live_check(None, now, None, live_quiet(), TALKING).verdict,
+        Verdict::Fail
+    );
+    assert_eq!(
+        live_check(None, now, None, live_quiet(), SILENT).verdict,
+        Verdict::Skip
+    );
+}
+
+/// 20 minutes of delivered audio, all scanned, full of speech.
+const TALKING: WindowAudio = WindowAudio {
+    delivered_s: 1200.0,
+    scanned_s: 1200.0,
+    speech_s: 300.0,
+};
+/// The same window, scanned, with nothing said in it.
+const SILENT: WindowAudio = WindowAudio {
+    delivered_s: 1200.0,
+    scanned_s: 1200.0,
+    speech_s: 0.0,
+};
+/// Audio arrived and none of it has been measured yet.
+const UNSCANNED: WindowAudio = WindowAudio {
+    delivered_s: 1200.0,
+    scanned_s: 0.0,
+    speech_s: 0.0,
+};
+/// Half measured and quiet so far — not enough to call the window quiet.
+const HALF_SCANNED_SILENT: WindowAudio = WindowAudio {
+    delivered_s: 1200.0,
+    scanned_s: 500.0,
+    speech_s: 0.0,
+};
+/// No recorder delivered anything.
+const NO_AUDIO: WindowAudio = WindowAudio {
+    delivered_s: 0.0,
+    scanned_s: 0.0,
+    speech_s: 0.0,
+};
 
 #[test]
 fn a_worker_that_never_ran_is_a_fault() {

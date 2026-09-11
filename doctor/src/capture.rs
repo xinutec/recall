@@ -216,6 +216,50 @@ pub fn live_quiet() -> Duration {
     Duration::minutes(20)
 }
 
+/// What the recorders delivered in the live tier's own window, and how much of
+/// it the speech scanner has actually measured.
+///
+/// ⚠ **`scanned_s` is separate from `delivered_s` on purpose.** `speech_s` is
+/// filled by `audiod speech` on its own cadence, so a window reads "no speech"
+/// both when the house was quiet and when nothing in it has been scanned yet.
+/// Collapsing those two would silence [`live_check`] exactly when the archive
+/// fell behind — which is the condition most likely to accompany a live stall,
+/// so the check would go quiet precisely when it was needed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowAudio {
+    /// Seconds of audio any device source delivered inside the window.
+    pub delivered_s: f64,
+    /// Seconds of that audio carrying a `speech_s` measurement.
+    pub scanned_s: f64,
+    /// Seconds of speech found within the scanned part.
+    pub speech_s: f64,
+}
+
+/// How much of a window must be scanned before "nobody spoke" is believable.
+/// Below this the window is unmeasured, not quiet.
+const SCANNED_ENOUGH: f64 = 0.75;
+
+/// Speech in the window that a spurious VAD blip could not account for. A real
+/// exchange in a 20-minute window runs to minutes; this floor only keeps a
+/// stray second or two from indicting the live tier.
+const SPOKE_AT_ALL_S: f64 = 5.0;
+
+impl WindowAudio {
+    /// Did the household audibly say something live should have transcribed?
+    ///
+    /// `None` when the window cannot answer — nothing scanned, or too little of
+    /// it — which callers must treat as "cannot certify quiet", never as quiet.
+    fn spoke(self) -> Option<bool> {
+        if self.delivered_s <= 0.0 {
+            return Some(false);
+        }
+        if self.scanned_s < self.delivered_s * SCANNED_ENOUGH {
+            return None;
+        }
+        Some(self.speech_s >= SPOKE_AT_ALL_S)
+    }
+}
+
 /// Is live transcription still PRODUCING, or has it merely stayed alive?
 ///
 /// ⚠ **Process existence proved nothing here**, which is the whole reason for
@@ -231,11 +275,19 @@ pub fn live_quiet() -> Duration {
 /// rather than asking the recorder how it feels. A deliberate pause skips
 /// (nothing is being recorded, so nothing should be transcribed), matching
 /// capture's rule.
+///
+/// ⚠ **`recent` is what stops this check being ignorable.** Measured 2026-09-09
+/// over 55.8 active hours: it was red for 36% of them, and 4.7 of those 20.2
+/// red hours were simply a quiet house. A check that blames the tier for the
+/// household's silence teaches a person to stop reading it, and the 15.5 h that
+/// remain are real (#1383). So silence SKIPS — but only when the window was
+/// measured well enough to say so; see [`WindowAudio`].
 pub fn live_check(
     newest_turn: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
     paused_until: Option<DateTime<Utc>>,
     quiet: Duration,
+    recent: WindowAudio,
 ) -> Check {
     let expected = format!(
         "a live turn within {:.0} min",
@@ -249,6 +301,28 @@ pub fn live_check(
             "live transcription",
             Verdict::Skip,
             format!("paused until {}", to_the_minute(until)),
+            expected,
+        )
+        .build();
+    }
+    // Nothing was said, and the window is measured well enough to know it.
+    if recent.spoke() == Some(false) {
+        let why = if recent.delivered_s <= 0.0 {
+            // Capture's own checks grade a recorder that delivered nothing;
+            // failing here too would count one outage twice.
+            "no audio delivered in the window".to_owned()
+        } else {
+            format!(
+                "no speech in the last {:.0} min ({:.0} min of audio scanned)",
+                quiet.num_seconds() as f64 / 60.0,
+                recent.scanned_s / 60.0,
+            )
+        };
+        return check(
+            "capture",
+            "live transcription",
+            Verdict::Skip,
+            why,
             expected,
         )
         .build();
