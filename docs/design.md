@@ -256,7 +256,7 @@ conventions (strict typing, TDD): [conventions.md](conventions.md).
 
 ## 10. Open questions
 
-Retention is **closed** ([architecture.md](architecture.md): Opus forever,
-lossless for a rolling window). Still open: audio scope (all vs speech-padded);
-re-transcription cadence (scheduled vs on-demand). The recall/Q&A LLM is
+Retention is **closed** ([architecture.md](architecture.md): lossless, forever
+— the rolling window was withdrawn 2026-09-10). Still open: audio scope (all vs
+speech-padded); re-transcription cadence (scheduled vs on-demand). The recall/Q&A LLM is
 Qwen2.5-7B-Instruct (4-bit, mlx-lm) — first pick, revisit as local models move.

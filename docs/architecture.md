@@ -141,8 +141,12 @@ The ten questions the proposal had to answer, decided 2026-09-05.
 6. **The USB mic path keeps our code out of capture.** The uploader reads
    *closed* files from disk; sox → ffmpeg stays exactly as deployed. Machines
    flip to FLAC by changing the ffmpeg segment codec, nothing else.
-7. **Retention: Opus forever, lossless windowed.** ~1 GB/day Opus is years per
-   terabyte; design.md §10's open question is closed by this file.
+7. **Retention: lossless, forever.** Pippijn's call 2026-09-10, cost stated and
+   accepted — fusion and high-quality voice audio are the GOAL, so the audio
+   they need cannot be on a timer. Silence filtering is how space comes back,
+   never re-encoding. Superseding a decision means grepping for its other
+   spellings: this line said "Opus forever, lossless windowed" for a day after
+   the section below was rewritten, so the file contradicted itself.
 8. **Live survives, structurally simplified.** The runner takes the *newest*
    room segment first, backfill fills the rest; live and worker become one
    path. The latency floor is segment length + upload + poll (~2 min today) —

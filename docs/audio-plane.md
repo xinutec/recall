@@ -23,11 +23,12 @@ mics up: 75 segment-minutes reached the archive while 9 were transcribed.)
 Transcribing the room once instead of five times (#1388) is what recovers that
 budget, and it needs a single `room` stream — by choosing between the sources,
 by combining them, or both. Whichever wins, it must be decided where all five
-exist in phase-intact form, which today is only in RAM at ingest: the archive
-is Opus 32 kbps voip, which does not preserve phase. The store-and-forward
-architecture ([architecture.md](architecture.md)) dissolves that constraint —
-recorders deliver lossless segments and a rolling window of them sits on the
-server's disk — which is what moves the `room` question there.
+exist in phase-intact form. That was once only in RAM at ingest, because the
+archive was Opus 32 kbps voip, which does not preserve phase. **Lossless is the
+segmenter's default from 2026-09-11**, so every network mic is phase-intact at
+rest and kept forever ([architecture.md](architecture.md)); `iphone11` is the
+one still-lossy source, at its own end. The Opus era stays un-fusable — that is
+an information fact, not a precision one (#1522).
 
 The streams are not peers (the best mic's noise floor measured ~28 dB below the
 worst's), and the phones apply their own AGC/noise suppression, which is
