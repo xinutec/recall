@@ -186,7 +186,25 @@ fn main() -> ExitCode {
         spawn_speech_scanner(config.root.clone());
         spawn_room_builder(config.root.clone());
         spawn_room_registrar(config.root.clone());
-        spawn_room_turn_writer(config.root.clone());
+        // ⚠ **OFF since 2026-09-11, MEASURED.** Its first 20 blocks produced turns
+        // materially worse than the per-mic transcripts they hid, over the same
+        // minutes:
+        //
+        //     repetition loops   room 16/73 (22%)   per-mic 0/160 (0%)
+        //     median confidence  room 0.509         per-mic 0.683
+        //     median chars/turn  room 20            per-mic 45
+        //     languages          room en 56, nl 10  per-mic nl 111, en 45
+        //
+        // The language row is the finding: the microphones hear a DUTCH
+        // household and the room stream reports mostly English, which is
+        // Whisper's known failure on degraded audio — default to English and
+        // invent. Whether the fault is the room AUDIO or the missing read-path
+        // filters (#1410 sweeps the per-mic corpus of exactly these; the room
+        // output was written raw) is the next question, and it is not answerable
+        // by leaving this on.
+        //
+        // Re-enable only with that answered and a fresh comparison in hand.
+        // spawn_room_turn_writer(config.root.clone());
         let app = router(config);
         let mut serving = tokio::task::JoinSet::new();
         for listener in listeners {
@@ -331,6 +349,10 @@ fn spawn_speech_scanner(root: PathBuf) {
 /// A SMALL batch on a slow cadence, deliberately: the queue drains over hours
 /// instead of minutes, so a bad verdict is noticed while it is dozens of blocks
 /// rather than nine hundred.
+#[expect(
+    dead_code,
+    reason = "off since 2026-09-11 pending the quality answer above; kept whole so re-enabling is one line, not a rewrite"
+)]
 fn spawn_room_turn_writer(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
     const BATCH: usize = 20;
