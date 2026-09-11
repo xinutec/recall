@@ -63,13 +63,20 @@ impl Client {
         req.set("authorization", &format!("Bearer {}", self.token))
     }
 
-    /// Take the next job, or `None` when the queue is empty.
+    /// Take the next job of a kind this runner can do, or `None` when there is
+    /// none.
+    ///
+    /// ⚠ `kinds` is sent EXPLICITLY even though recalld defaults to
+    /// `transcribe-room` when it is absent. That default exists so a runner
+    /// deployed before the parameter keeps working; relying on it here would
+    /// make a `voices` runner's correctness depend on which side deployed first.
     ///
     /// # Errors
     /// If recalld is unreachable or answers something unreadable.
-    pub fn lease(&self) -> Result<Option<Job>, Error> {
+    pub fn lease(&self, kinds: &[&str]) -> Result<Option<Job>, Error> {
+        let url = format!("{}/work/v1/lease?kinds={}", self.base, kinds.join(","));
         let response = self
-            .auth(self.agent.put(&format!("{}/work/v1/lease", self.base)))
+            .auth(self.agent.put(&url))
             .call()
             .map_err(|e| Error::Http(e.to_string()))?;
         let body: LeaseBody = serde_json::from_reader(response.into_reader())

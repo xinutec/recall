@@ -372,13 +372,50 @@ pub async fn get_blob(
     }
 }
 
-/// Stage E1: lease the newest available job. The runner's plane is the sync
-/// token's — same trust as reading blobs, which the job points at.
-pub async fn lease_job(State(config): State<Arc<Config>>, headers: HeaderMap) -> Response {
+/// What a runner says it can do (`?kinds=transcribe-room,diarize-room`).
+#[derive(Debug, Deserialize, Default)]
+pub struct LeaseQuery {
+    kinds: Option<String>,
+}
+
+impl LeaseQuery {
+    /// The kinds to offer.
+    ///
+    /// ⚠ **Absent means `transcribe-room` ALONE, and deliberately not "all".**
+    /// A runner that predates this parameter holds exactly one shim's weights —
+    /// `asr` — so "all" would hand the deployed runner a `diarize-room` it can
+    /// only fail, burning the job's attempts against a process that can never do
+    /// it. The permissive default is the one that breaks during a rollout, and
+    /// recalld and the runner deploy from different machines.
+    fn kinds(&self) -> Vec<String> {
+        match self.kinds.as_deref() {
+            None => vec![crate::queue::TRANSCRIBE_ROOM.to_owned()],
+            Some(list) => list
+                .split(',')
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .map(ToOwned::to_owned)
+                .collect(),
+        }
+    }
+}
+
+/// Stage E1: lease the newest available job of a kind the caller can do. The
+/// runner's plane is the sync token's — same trust as reading blobs, which the
+/// job points at.
+pub async fn lease_job(
+    State(config): State<Arc<Config>>,
+    Query(query): Query<LeaseQuery>,
+    headers: HeaderMap,
+) -> Response {
     if let Err(refused) = read_auth(&config, &headers) {
         return refused.into_response();
     }
-    let handle = tokio::task::spawn_blocking(move || crate::queue::lease(&config.root, Utc::now()));
+    let kinds = query.kinds();
+    let handle = tokio::task::spawn_blocking(move || {
+        let borrowed: Vec<&str> = kinds.iter().map(String::as_str).collect();
+        crate::queue::lease(&config.root, Utc::now(), &borrowed)
+    });
     match handle.await {
         Ok(Ok(Some(job))) => (StatusCode::OK, axum::Json(json!({ "job": job }))).into_response(),
         Ok(Ok(None)) => (StatusCode::OK, axum::Json(json!({ "job": null }))).into_response(),

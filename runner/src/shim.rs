@@ -120,6 +120,35 @@ impl Shim {
             .unwrap_or(serde_json::Value::Null))
     }
 
+    /// Ask the shim what it is. Answered by the protocol itself, so it works
+    /// even for a shim whose model failed to load (`recall.shim`) — which is
+    /// what makes it safe to use for capability discovery at startup.
+    ///
+    /// # Errors
+    /// Whatever `request` reports, or `Protocol` if the answer has no name.
+    pub fn hello(&mut self) -> Result<String, Error> {
+        let answer = self.request("hello", &serde_json::json!({}))?;
+        answer
+            .get("shim")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| Error::Protocol("hello did not name the shim".to_owned()))
+    }
+
+    /// Diarize one clip — who spoke when, as clip-relative spans.
+    ///
+    /// # Errors
+    /// Whatever `request` reports.
+    pub fn diarize(&mut self, audio: &Path) -> Result<serde_json::Value, Error> {
+        // No tuning passed: the shipped pyannote parameters are what the whole
+        // archive was diarized with, and a runner is not the place to diverge
+        // from that quietly.
+        self.request(
+            "diarize",
+            &serde_json::json!({ "audio": audio.to_string_lossy() }),
+        )
+    }
+
     /// Transcribe one clip.
     ///
     /// # Errors

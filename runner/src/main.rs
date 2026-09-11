@@ -18,6 +18,21 @@ use std::time::Duration;
 const IDLE: Duration = Duration::from_secs(20);
 const BACKOFF: Duration = Duration::from_mins(1);
 
+/// What each shim can be given. The shim NAMES ITSELF over the protocol
+/// (`hello`), so this is discovered at startup rather than inferred from argv —
+/// a runner pointed at the wrong module would otherwise lease work confidently
+/// and fail every job of it.
+///
+/// An unknown name is FATAL. Guessing "it is probably asr" is how a `voices`
+/// process ends up holding transcription jobs it can only refuse.
+fn kinds_for(shim_name: &str) -> Option<&'static [&'static str]> {
+    match shim_name {
+        "asr" => Some(&["transcribe-room"]),
+        "voices" => Some(&["diarize-room"]),
+        _ => None,
+    }
+}
+
 struct Config {
     base: String,
     api: String,
@@ -73,17 +88,27 @@ fn parse_args() -> Config {
 fn one(
     client: &Client,
     shim: &mut Shim,
+    kinds: &[&str],
     scratch: &Path,
     prompt: Option<&str>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let Some(job) = client.lease()? else {
+    let Some(job) = client.lease(kinds)? else {
         return Ok(false);
     };
     let Job { id, kind, filename } = job;
     tracing::info!(id, %kind, %filename, "leased");
     let clip = scratch.join(&filename);
     client.fetch_blob("room", &filename, &clip)?;
-    let outcome = shim.transcribe(&clip, None, prompt);
+    // Only kinds this runner asked for can arrive; anything else is recalld
+    // offering work the lease filter should have withheld, and saying so is
+    // better than transcribing a diarization job by accident.
+    let outcome = match kind.as_str() {
+        "transcribe-room" => shim.transcribe(&clip, None, prompt),
+        "diarize-room" => shim.diarize(&clip),
+        other => Err(shim::Error::Refused(format!(
+            "runner cannot do job kind {other}"
+        ))),
+    };
     // The scratch copy is the runner's only state, and it is gone either way.
     let _ = std::fs::remove_file(&clip);
     match outcome {
@@ -127,23 +152,6 @@ fn main() {
         tracing::error!(%err, "cannot make a scratch directory");
         std::process::exit(1);
     }
-    // ⚠ FATAL if unreachable, deliberately. Transcribing without the biasing the
-    // vocabulary was built for produces a corpus that has to be redone, and
-    // re-transcription is the cost #1388 exists to reduce. An EMPTY vocabulary
-    // is fine — that is `None`, and means no biasing rather than a failure.
-    let prompt = match client::fetch_prompt(&config.api, &config.token) {
-        Ok(prompt) => {
-            tracing::info!(
-                terms = prompt.as_deref().map_or(0, |p| p.split(',').count()),
-                "vocabulary loaded"
-            );
-            prompt
-        }
-        Err(err) => {
-            tracing::error!(%err, api = %config.api, "cannot read the vocabulary; refusing to transcribe unbiased");
-            std::process::exit(1);
-        }
-    };
     let mut shim = match Shim::spawn(&config.program, &config.args) {
         Ok(shim) => shim,
         Err(err) => {
@@ -151,9 +159,44 @@ fn main() {
             std::process::exit(1);
         }
     };
-    tracing::info!(url = %config.base, shim = %config.program, "runner: polling");
+    let name = match shim.hello() {
+        Ok(name) => name,
+        Err(err) => {
+            tracing::error!(%err, "the shim did not answer hello");
+            std::process::exit(1);
+        }
+    };
+    let Some(kinds) = kinds_for(&name) else {
+        tracing::error!(shim = %name, "unknown shim; refusing to guess what it can do");
+        std::process::exit(1);
+    };
+    // ⚠ FATAL if unreachable, deliberately — but only for a runner that will
+    // TRANSCRIBE. Transcribing without the biasing the vocabulary was built for
+    // produces a corpus that has to be redone, and re-transcription is the cost
+    // #1388 exists to reduce. An EMPTY vocabulary is fine — that is `None`, and
+    // means no biasing rather than a failure. Diarization has no use for it, and
+    // making a `voices` runner die on an unreachable fleet would be a dependency
+    // it does not have.
+    let prompt = if kinds.contains(&"transcribe-room") {
+        match client::fetch_prompt(&config.api, &config.token) {
+            Ok(prompt) => {
+                tracing::info!(
+                    terms = prompt.as_deref().map_or(0, |p| p.split(',').count()),
+                    "vocabulary loaded"
+                );
+                prompt
+            }
+            Err(err) => {
+                tracing::error!(%err, api = %config.api, "cannot read the vocabulary; refusing to transcribe unbiased");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+    tracing::info!(url = %config.base, shim = %name, kinds = ?kinds, "runner: polling");
     loop {
-        match one(&client, &mut shim, &scratch, prompt.as_deref()) {
+        match one(&client, &mut shim, kinds, &scratch, prompt.as_deref()) {
             // ⚠ `--once` means ONE JOB, not "until the queue empties". It read
             // the latter on 2026-09-06 and chewed through six live jobs during
             // what was meant to be a single end-to-end check.

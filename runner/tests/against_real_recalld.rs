@@ -88,7 +88,10 @@ fn a_job_is_leased_transcribed_and_acked() {
     );
     let mut shim = Shim::spawn(&program, &args).expect("shim");
 
-    let job = client.lease().expect("lease").expect("a job");
+    let job = client
+        .lease(&["transcribe-room"])
+        .expect("lease")
+        .expect("a job");
     assert_eq!(job.kind, "transcribe-room");
     assert_eq!(job.filename, "room-20260906T100000.flac");
 
@@ -104,7 +107,12 @@ fn a_job_is_leased_transcribed_and_acked() {
 
     client.finish(job.id, &result.to_string()).expect("finish");
     // Retiring is terminal: the queue must not hand the same job out again.
-    assert!(client.lease().expect("second lease").is_none());
+    assert!(
+        client
+            .lease(&["transcribe-room"])
+            .expect("second lease")
+            .is_none()
+    );
 }
 
 #[test]
