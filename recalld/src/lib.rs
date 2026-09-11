@@ -5,6 +5,7 @@
 //! separate credential. Later stages add VAD, the room builder, the work
 //! queue, and the browsing API.
 
+pub mod align;
 pub mod app;
 pub mod assign;
 pub mod audio;
