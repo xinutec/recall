@@ -340,3 +340,151 @@ fn a_touching_boundary_does_not_count_as_overlap() {
     );
     assert_eq!(out.insert.len(), 1, "{:?}", out.refused);
 }
+
+// ---- registering built blocks in the meaning plane ----
+
+use recalld::room_turns::{ROOM_CHANNELS, ROOM_RATE, register_blocks};
+
+/// The two planes, as two connections — which is what they are in production.
+fn two_planes() -> (rusqlite::Connection, rusqlite::Connection) {
+    let meaning = rusqlite::Connection::open_in_memory().expect("meaning");
+    meaning
+        .execute_batch(
+            "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
+             CREATE TABLE audio_segments (
+                 id INTEGER PRIMARY KEY,
+                 source_id TEXT NOT NULL REFERENCES sources(id),
+                 path TEXT NOT NULL, start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
+                 sample_rate INTEGER NOT NULL, channels INTEGER NOT NULL,
+                 UNIQUE (source_id, start_utc));",
+        )
+        .expect("meaning schema");
+    let ingest = rusqlite::Connection::open_in_memory().expect("ingest");
+    ingest
+        .execute_batch(
+            "CREATE TABLE segments (filename TEXT PRIMARY KEY, source TEXT NOT NULL,
+                 start_utc TEXT NOT NULL, bytes INTEGER NOT NULL, sha256 TEXT NOT NULL,
+                 received_utc TEXT NOT NULL, sent_utc TEXT);",
+        )
+        .expect("ingest schema");
+    (meaning, ingest)
+}
+
+fn ingest_block(ingest: &rusqlite::Connection, source: &str, filename: &str, start: &str) {
+    ingest
+        .execute(
+            "INSERT INTO segments (filename, source, start_utc, bytes, sha256, received_utc)
+             VALUES (?1, ?2, ?3, 1, 'x', '2026-09-11T00:00:00+00:00')",
+            (filename, source, start),
+        )
+        .expect("segment");
+}
+
+#[test]
+fn a_block_is_registered_with_the_builders_own_shape() {
+    let (meaning, ingest) = two_planes();
+    ingest_block(
+        &ingest,
+        "room",
+        "room-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+    );
+    let n = register_blocks(&meaning, &ingest, std::path::Path::new("/data/ingest/room"))
+        .expect("register");
+    assert_eq!(n, 1);
+
+    let (path, start, end, rate, channels): (String, String, String, i64, i64) = meaning
+        .query_row(
+            "SELECT path, start_utc, end_utc, sample_rate, channels FROM audio_segments",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .expect("row");
+    assert_eq!(path, "/data/ingest/room/room-20260911T100000.flac");
+    assert!(start.starts_with("2026-09-11T10:00:00"), "{start}");
+    // Exactly one minute: the builder works a UTC-aligned grid, so this is the one
+    // duration that may be asserted rather than measured.
+    assert!(end.starts_with("2026-09-11T10:01:00"), "{end}");
+    assert_eq!(rate, ROOM_RATE);
+    assert_eq!(channels, ROOM_CHANNELS);
+}
+
+#[test]
+fn the_room_source_is_registered_as_derived_not_as_a_microphone() {
+    // `deaf`, the liveness view and the sources panel all ask `is_device()`. A
+    // derived stream registered as a device would be health-checked as a mic that
+    // has no recorder, and would double-count the microphone it carried.
+    let (meaning, ingest) = two_planes();
+    ingest_block(
+        &ingest,
+        "room",
+        "room-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+    );
+    register_blocks(&meaning, &ingest, std::path::Path::new("/x")).expect("register");
+    let kind: String = meaning
+        .query_row("SELECT kind FROM sources WHERE id = 'room'", [], |r| {
+            r.get(0)
+        })
+        .expect("source");
+    assert_eq!(kind, "derived");
+}
+
+#[test]
+fn the_backfill_is_idempotent_and_meant_to_be_rerun() {
+    let (meaning, ingest) = two_planes();
+    ingest_block(
+        &ingest,
+        "room",
+        "room-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+    );
+    let dir = std::path::Path::new("/x");
+    assert_eq!(register_blocks(&meaning, &ingest, dir).expect("first"), 1);
+    assert_eq!(register_blocks(&meaning, &ingest, dir).expect("again"), 0);
+    let n: i64 = meaning
+        .query_row("SELECT count(*) FROM audio_segments", [], |r| r.get(0))
+        .expect("count");
+    assert_eq!(n, 1, "a rerun must not duplicate a block");
+}
+
+#[test]
+fn only_room_blocks_are_registered() {
+    // The microphones' own segments arrive by push from the Mac's archive. This
+    // must never mint a second row for one of them.
+    let (meaning, ingest) = two_planes();
+    ingest_block(
+        &ingest,
+        "usb",
+        "usb-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+    );
+    ingest_block(
+        &ingest,
+        "room",
+        "room-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+    );
+    assert_eq!(
+        register_blocks(&meaning, &ingest, std::path::Path::new("/x")).expect("n"),
+        1
+    );
+    let sources: Vec<String> = meaning
+        .prepare("SELECT DISTINCT source_id FROM audio_segments")
+        .expect("prep")
+        .query_map([], |r| r.get(0))
+        .expect("q")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(sources, vec!["room".to_owned()]);
+}
+
+#[test]
+fn a_block_off_the_grid_is_skipped_not_guessed() {
+    let (meaning, ingest) = two_planes();
+    ingest_block(&ingest, "room", "room-bad.flac", "not-a-time");
+    assert_eq!(
+        register_blocks(&meaning, &ingest, std::path::Path::new("/x")).expect("n"),
+        0
+    );
+}

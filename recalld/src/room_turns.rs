@@ -18,7 +18,7 @@
 //! the machinery whose failure overwrites a person's typed correction. A second
 //! writer into that span is not a small thing to guess at.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::Deserialize;
 
 /// One turn a room block's transcript implies, in the archive's own terms.
@@ -198,4 +198,78 @@ pub fn plan(room: Vec<RoomTurn>, standing: &[Standing], human: &[Corrected]) -> 
         }
     }
     out
+}
+
+/// The room stream's shape, taken from the builder's own encode (`-ar 16000 -ac 1`)
+/// rather than assumed: these become `audio_segments.sample_rate`/`channels`, and a
+/// wrong pair there would make every room clip play at the wrong speed.
+pub const ROOM_RATE: i64 = 16_000;
+pub const ROOM_CHANNELS: i64 = 1;
+
+/// Register built room blocks in the MEANING plane, so their turns have audio.
+///
+/// ⚠ **Why this has to exist at all.** `transcript_segments.audio_segment_id` is
+/// nullable, so room turns could be written with no audio attached — and they
+/// must not be. That id is what `/api/audio/{id}` plays a turn from, so every
+/// room turn would be text nobody can listen to, in a product whose whole point
+/// is going back to what was said.
+///
+/// ⚠ **A NEW CLASS OF ROW: isis-only.** Every other `audio_segments` row arrived
+/// by push from the Mac's master archive. The room stream is BUILT here and the
+/// Mac never sees it, so these rows have no counterpart there and must not be
+/// expected to.
+///
+/// Idempotent by the table's own `UNIQUE (source_id, start_utc)` — the whole
+/// backfill can be re-run, and is meant to be.
+///
+/// # Errors
+/// If either database refuses the read or the write.
+pub fn register_blocks(
+    meaning: &rusqlite::Connection,
+    ingest: &rusqlite::Connection,
+    room_dir: &std::path::Path,
+) -> rusqlite::Result<usize> {
+    // The FK target. `derived` is not a device: it has no recorder to be deaf, no
+    // `.alive` marker, and it inherits whichever microphone's audio won the minute.
+    meaning.execute(
+        "INSERT OR IGNORE INTO sources (id, name, kind) VALUES (?1, ?2, 'derived')",
+        (crate::room::ROOM_SOURCE, "Room"),
+    )?;
+
+    let mut stmt = ingest
+        .prepare("SELECT filename, start_utc FROM segments WHERE source = ?1 ORDER BY start_utc")?;
+    let rows = stmt.query_map([crate::room::ROOM_SOURCE], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    let mut added = 0;
+    for row in rows {
+        let (filename, start_raw) = row?;
+        let Ok(start) = DateTime::parse_from_rfc3339(&start_raw) else {
+            // A block whose stamp will not parse cannot get an honest end time.
+            // Skipped rather than guessed: the grid is the contract, and a row
+            // that is off it is a finding, not something to round.
+            tracing::warn!(%filename, %start_raw, "room register: unparseable start");
+            continue;
+        };
+        let start = start.with_timezone(&Utc);
+        // Exactly one minute, because the builder works a UTC-ALIGNED GRID
+        // (`room::BLOCK_S`) rather than cutting variable segments. This is the one
+        // place a duration may be asserted instead of measured.
+        let end = start + Duration::seconds(crate::room::BLOCK_S);
+        added += meaning.execute(
+            "INSERT OR IGNORE INTO audio_segments
+                 (source_id, path, start_utc, end_utc, sample_rate, channels)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                crate::room::ROOM_SOURCE,
+                room_dir.join(&filename).to_string_lossy(),
+                start.to_rfc3339_opts(SecondsFormat::Micros, false),
+                end.to_rfc3339_opts(SecondsFormat::Micros, false),
+                ROOM_RATE,
+                ROOM_CHANNELS,
+            ],
+        )?;
+    }
+    Ok(added)
 }

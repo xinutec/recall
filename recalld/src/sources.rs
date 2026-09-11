@@ -26,6 +26,15 @@ pub enum SourceKind {
     TcpPcm,
     Upload,
     Discovered,
+    /// A stream this system BUILT rather than recorded: the room stream, one
+    /// settled minute at a time from whichever microphone won it (stage D3).
+    ///
+    /// Not a device, and the distinction is load-bearing: `deaf`, the liveness
+    /// view and the sources panel all ask `is_device()`, and a derived stream
+    /// has no recorder to be deaf, no `.alive` marker, and no phone to blame.
+    /// It inherits whichever microphone's audio it carried, so measuring it as a
+    /// microphone would double-count the one that was already measured.
+    Derived,
 }
 
 impl SourceKind {
@@ -38,6 +47,7 @@ impl SourceKind {
             "tcp_pcm" => Self::TcpPcm,
             "upload" => Self::Upload,
             "discovered" => Self::Discovered,
+            "derived" => Self::Derived,
             _ => return None,
         })
     }
@@ -51,6 +61,7 @@ impl SourceKind {
             Self::TcpPcm => "tcp_pcm",
             Self::Upload => "upload",
             Self::Discovered => "discovered",
+            Self::Derived => "derived",
         }
     }
 
@@ -64,7 +75,7 @@ impl SourceKind {
     /// set then.
     #[must_use]
     pub fn is_device(self) -> bool {
-        !matches!(self, Self::Upload | Self::Discovered)
+        !matches!(self, Self::Upload | Self::Discovered | Self::Derived)
     }
 }
 

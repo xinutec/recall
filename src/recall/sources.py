@@ -56,6 +56,17 @@ class SourceKind(Enum):
     # that had stopped, and sweepable. Whoever actually knows (the capture agent, the
     # ingest handshake, an upload) corrects it via `Store.register_source`.
     DISCOVERED = "discovered"
+    # A stream this system BUILT rather than recorded: the room stream, one settled
+    # minute at a time from whichever microphone won it (stage D3). Not a device —
+    # it has no recorder to be deaf, no `.alive` marker and no phone to blame, and
+    # it inherits the audio of whichever mic it carried, so measuring it as a
+    # microphone double-counts the one already measured.
+    #
+    # ⚠ Added here as well as in recalld AND doctor, which each hold their own copy
+    # of this enum. `sources.rs` fails LOUD on a kind it cannot parse (`/api/sources`
+    # errors outright), so a variant added to one copy and not the others is not a
+    # cosmetic drift — it is an outage in whichever reader was missed.
+    DERIVED = "derived"
 
 
 # Kinds the quiet review may delete and a fleet sweep may target: everything recall
@@ -67,6 +78,18 @@ SWEEPABLE_KINDS: frozenset[SourceKind] = frozenset(SourceKind) - {
     # DISCOVERED means "we don't know what this is", and deletion is irreversible:
     # anything we can't positively identify as our own capture stays.
     SourceKind.DISCOVERED,
+    # ⚠ DERIVED is excluded DELIBERATELY, and the shape of this set is why it had
+    # to be said out loud: it is a NEGATION, so adding a variant to the enum
+    # silently makes that variant sweepable. The room stream was added on
+    # 2026-09-11 and would have become deletable by the quiet review in the same
+    # commit that registered it.
+    #
+    # A derived stream's deletion policy belongs to its SOURCES, not to itself:
+    # deleting a room block while keeping the per-mic audio it was built from
+    # loses a transcript's audio while keeping the material that made it, which is
+    # incoherent. Whether the room stream should ever be swept is a real question
+    # and it is not this change's to answer.
+    SourceKind.DERIVED,
 }
 
 # Kinds with a live recorder behind them — a device that can stall, die, or be carried
