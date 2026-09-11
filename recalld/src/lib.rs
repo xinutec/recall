@@ -17,6 +17,7 @@ pub mod instant;
 pub mod labels;
 pub mod labels_write;
 pub mod levels;
+pub mod processed;
 pub mod proxy;
 pub mod pyjson;
 pub mod queue;
