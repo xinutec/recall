@@ -1,0 +1,27 @@
+# Dependabot has never read this repo's real lockfile.
+#
+# ⚠ Every alert on this repo names `frontend/package-lock.json`, which was
+# DELETED in ff62852 when the frontend moved to pnpm. The dependency graph kept
+# a snapshot of it and keeps matching new advisories against that snapshot — 23
+# open alerts on 2026-09-09 became 28 by 2026-09-11, one of them minted hours
+# before it was read. So this is not staleness that ages out, and it is why
+# there is now a file here: nothing had ever told Dependabot where to look.
+#
+# ⚠ Do NOT read that alert list as noise because the path is dead. Checked
+# 2026-09-11, seven of the ten alerted packages were already patched and three
+# were REAL and current (hono, vitest, @vitest/mocker). The only trustworthy
+# check is each alert's vulnerable range against the version pnpm actually
+# installed — see #1505.
+#
+# The `npm` ecosystem is the right one for pnpm; GitHub parses pnpm-lock.yaml
+# under that name. `open-pull-requests-limit: 0` keeps the security ALERTS while
+# refusing the version-bump PRs: this repo carries its floors deliberately in
+# frontend/pnpm-workspace.yaml, with an argued reason per entry, and a bot
+# raising PRs against them would fight that file every week.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0

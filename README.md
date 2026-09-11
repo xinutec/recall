@@ -37,8 +37,8 @@ Frontend (Angular 22, in `frontend/`):
 
 ```sh
 ./scripts/recall-build-frontend.sh           # build into dist/ (served by the API)
-nix develop --command bash -c 'cd frontend && npx ng serve'   # dev, proxies /api -> :8000
-nix develop --command bash -c 'cd frontend && npx ng test --watch=false'
+nix develop --command bash -c 'cd frontend && pnpm start'             # dev, proxies /api -> :8000
+nix develop --command bash -c 'cd frontend && pnpm test --watch=false'
 ```
 
 ML deps (mlx-whisper, pyannote) live in `.venv`, which is a **symlink into the

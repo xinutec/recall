@@ -119,8 +119,11 @@ without moving the data.
 The ingest server holds the connection, so *recording* liveness is **direct**. While a
 device streams, the server refreshes a per-source marker file (`<source>/.alive`); the
 `/api/sources` endpoint reads its freshness into a per-recorder active/idle status. The
-USB mic is known directly (`capture_running()` and not paused); the source kind
-(`tcp_pcm` vs `coreaudio`) picks the path. Uploaded recordings (meetings) are sources
+USB mic goes through the same marker, refreshed by the capture watchdog when a closed
+segment decodes to real audio — **"active" means measurably RECORDING, never merely
+connected**, so a phone streaming digital silence reads idle. (It was once known
+directly from `capture_running()` and the pause file; that is `api_capture.py`, and
+recalld has served this route since the cutover.) Uploaded recordings (meetings) are sources
 too, but they're excluded — they aren't live devices. The mic apps' Devices panel
 renders it (own device highlighted, "active / Ns ago" per recorder).
 

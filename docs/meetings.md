@@ -140,8 +140,11 @@ is deterministic and can be re-pulled cleanly (that's what the
 
 ## Gotchas
 
-- `transcribe --id` needs the source **ingested first** (step 2) — it transcribes a
-  known source, it does not import a file.
+- `transcribe --id` transcribes audio that is already in the data root, but it
+  registers an unknown id as **DISCOVERED**, not as a microphone
+  (`_source_found_on_disk`). That is why the session never appears in the list —
+  and the kind is deliberate: guessing `coreaudio` once filed a copied-in meeting
+  as a mic, which made it SWEEPABLE. Ingest properly (step 2) to get a session.
 - `--out` on both `transcribe` and `transcript` must be the **data root**, not the
   incoming dir.
 - Heavy diarization competes with GPU-bound training — see

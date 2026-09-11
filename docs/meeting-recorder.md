@@ -152,7 +152,10 @@ the drawer, so the daily screen is status and Start/Stop rather than a form. Tes
 the pure parts — file naming, start recovery, listing, approval, the row labels — as
 `ShareUpload`'s time helpers were covered before.
 
-Server: the device-token plane (below); nothing else.
+Server: the device-token plane (below), with one deliberate exception —
+`POST /api/devices/outbox` is login-free, because it reports what a phone could
+NOT upload using the same credential it uploads with. Gating it would 401 the
+report about a bad token, which is the fault it exists to catch.
 
 ## Authenticating the upload
 

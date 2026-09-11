@@ -43,7 +43,11 @@ want while developing.
 | `org.xinutec.recall-speech` | measure how much of each archived segment is SPEECH — the evidence the quiet review needs before it may propose deleting anything (Rust, `audiod speech`) | every 5 min |
 
 There is deliberately **no `recall-api` agent**: the Mac serves no UI or control plane
-(see the Isis split below). The last four are inert until `RECALL_SYNC_TOKEN` is set.
+(see the Isis split below). `recall-sync`, `recall-jobs` and
+`recall-capture-mirror` are inert until `RECALL_SYNC_TOKEN` is set; the other
+credential-carrying agents use their own — `recall-upload` takes
+`RECALL_INGEST_TOKEN`, `recall-doctor` the fleetwatch token, and `recall-speech`
+needs none. Named rather than counted: the table's order is not a contract.
 
 ### The doctor runs itself twice, and that is on purpose
 
@@ -120,9 +124,18 @@ it to Isis (`recall-sync`); it runs no backup agent of its own. The training cor
 the toolchain that made them was deleted when training was cut. They are
 leftovers of it, kept only because deleting data is a deliberate act.
 
-> **macOS mic permission is per-agent:** capture and live each need their own
-> grant. If an err log shows `Out:0`, allow the prompt (or System Settings →
-> Privacy → Microphone) and `kickstart -k`.
+> **Only capture needs the mic grant.** `live` never opens the device — it
+> subscribes to the UDP tap capture publishes, and its `--device` argument is
+> vestigial (`live.py`, `sources.live_input_argv`), because two CoreAudio
+> clients on one device starve each other.
+>
+> ⚠ **A denied grant is DIGITAL SILENCE, not an error.** The agent starts, sox
+> runs, segments are written, and every one of them is silent — measured
+> 2026-09-10, a granted mic read mean −47.7 dB where a denied one reads −inf.
+> So nothing appears in any err log: look at the LEVELS, never for a message —
+> `doctor --out <archive root> --collect` prints them as JSON, or read
+> `mean_volume` off the newest `audio_segments` rows. Grant it in System
+> Settings → Privacy → Microphone, then `kickstart -k`.
 
 ## Web app (Isis, `:8000`)
 
@@ -137,19 +150,19 @@ so push to `main` (CI builds `xinutec/recall:latest`) then roll Isis with
 
 ```sh
 ./scripts/recall-build-frontend.sh    # build into dist/ (what the image does; also for a local check)
-nix develop --command bash -c 'cd frontend && npx ng serve'   # dev: hot reload, proxies /api
+nix develop --command bash -c 'cd frontend && pnpm start'     # dev: hot reload, proxies /api
 ```
 
 ## Capture & verify
 
 USB mic → `/Volumes/Backup/recall/`, gap-free, auto-restarts.
 
-Capture and live both pin the mic with `--device "USB Condenser Microphone"`
-(`deploy/hm-agents.nix`). Never record from the
+Capture pins the mic with `--device "USB Condenser Microphone"`
+(`deploy/hm-agents.nix`); live takes no device at all. Never record from the
 *default* input: macOS re-points it at whatever connects, e.g. a Bluetooth
 speaker's hands-free mic — which then chimes into call mode and records at
 telephone quality. A renamed/missing device makes sox fail hard and the agent
-crash-loop (visible in `logs/capture.err.log`) rather than silently recording
+crash-loop (visible in `~/Library/Logs/recall/capture.err.log`) rather than silently recording
 from the wrong mic.
 
 ```sh
