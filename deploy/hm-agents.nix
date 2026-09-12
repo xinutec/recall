@@ -560,10 +560,32 @@ in
   # dial this one-way peer, so control is inverted to a Mac-initiated poll and a pause
   # pressed on the VPN UI takes hold within seconds. Lightweight — an HTTP round trip,
   # no ML. Inert until RECALL_SYNC_TOKEN is set in .env.
+  #
+  # ⚠ **This is the household's pause control**, so it is the one agent where a
+  # port is not a drive-by. `audiod pause-mirror` is edge-triggered on the same
+  # `capture_intent_mirrored` marker the Python wrote, which is what makes the
+  # swap a swap rather than a restart from zero: whichever binary runs, it reads
+  # the state the other left. Sources .env for RECALL_SYNC_TOKEN the way
+  # recall-upload does — audiodWrapper deliberately does not, because the ingest
+  # path holds no secrets and this path does.
   launchd.agents."org.xinutec.recall-capture-mirror" = daemon {
     label = "org.xinutec.recall-capture-mirror";
     name = "capture-mirror";
-    python = venvPython;
-    args = [ "capture-mirror" "--url" fleet "--out" out "--loop" "--interval" "5" ];
+    args = [ ];
+    program = pkgs.writeShellApplication {
+      name = "recall-capture-mirror";
+      text = ''
+        ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
+        if [ -r "$ENV_FILE" ]; then
+          set -a
+          # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
+          . "$ENV_FILE"
+          set +a
+        fi
+        exec env RUST_LOG=info ${
+          recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
+        }/bin/audiod capture-mirror --root ${out} --url ${fleet}
+      '';
+    };
   };
 }

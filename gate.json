@@ -8,6 +8,7 @@
         "--command",
         "scripts/check-pii.sh"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "check-pii (no personal terms in tracked files)",
@@ -22,6 +23,7 @@
         "ruff",
         "check"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "ruff check (lint)",
@@ -37,6 +39,7 @@
         "format",
         "--check"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "ruff format --check (formatting)",
@@ -63,6 +66,7 @@
         "ios/Sources",
         "ios/Tests"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "swift-format lint --strict (ios)",
@@ -79,6 +83,7 @@
         "--all",
         "--check"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "cargo fmt --check (workspace)",
@@ -93,6 +98,7 @@
         "--out-link",
         ".venv"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "the venv is a store path (nix builds it, uv does not)",
@@ -106,6 +112,7 @@
         "--no-link",
         ".#agents"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "the launchd agents build (what home-manager deploys)",
@@ -119,6 +126,7 @@
         "--command",
         "mypy"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "mypy --strict (types)",
@@ -133,6 +141,7 @@
         "python",
         "scripts/check_workspace_members.py"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "every Rust workspace member reaches the Dockerfile and flake",
@@ -148,6 +157,7 @@
         "scripts/gen_models.py",
         "--check"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "contract: frontend models.ts is generated from the API shapes",
@@ -163,6 +173,7 @@
         "-c",
         "import recall.cli"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "capture-agent import surface (devshell python, no ML deps)",
@@ -178,6 +189,7 @@
         "-m",
         "pytest"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "pytest (backend)",
@@ -197,6 +209,7 @@
         "-D",
         "warnings"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {
         "CARGO_TARGET_DIR": "target/clippy"
@@ -214,6 +227,7 @@
         "test",
         "--workspace"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "cargo test (workspace)",
@@ -230,6 +244,7 @@
         "--no-deps",
         "--workspace"
       ],
+      "artifacts": [],
       "cwd": "audiocore",
       "env": {
         "RUSTDOCFLAGS": "-D rustdoc::broken_intra_doc_links"
@@ -248,6 +263,7 @@
         "--no-deps",
         "--workspace"
       ],
+      "artifacts": [],
       "cwd": "audiod",
       "env": {
         "RUSTDOCFLAGS": "-D rustdoc::broken_intra_doc_links"
@@ -266,6 +282,7 @@
         "--no-deps",
         "--workspace"
       ],
+      "artifacts": [],
       "cwd": "doctor",
       "env": {
         "RUSTDOCFLAGS": "-D rustdoc::broken_intra_doc_links"
@@ -284,6 +301,7 @@
         "--no-deps",
         "--workspace"
       ],
+      "artifacts": [],
       "cwd": "recalld",
       "env": {
         "RUSTDOCFLAGS": "-D rustdoc::broken_intra_doc_links"
@@ -302,6 +320,7 @@
         "--no-deps",
         "--workspace"
       ],
+      "artifacts": [],
       "cwd": "runner",
       "env": {
         "RUSTDOCFLAGS": "-D rustdoc::broken_intra_doc_links"
@@ -319,6 +338,7 @@
         "install",
         "--frozen-lockfile"
       ],
+      "artifacts": [],
       "cwd": "frontend",
       "env": {
         "CI": "true"
@@ -336,6 +356,7 @@
         "run",
         "lint"
       ],
+      "artifacts": [],
       "cwd": "frontend",
       "env": {
         "CI": "true"
@@ -353,6 +374,7 @@
         "run",
         "typecheck:e2e"
       ],
+      "artifacts": [],
       "cwd": "frontend",
       "env": {
         "CI": "true"
@@ -378,6 +400,7 @@
         "build",
         "--output-path=dist/.verify-build"
       ],
+      "artifacts": [],
       "cwd": "frontend",
       "env": {
         "CI": "true"
@@ -392,6 +415,7 @@
         "public/.",
         "dist/.verify-build/browser/"
       ],
+      "artifacts": [],
       "cwd": "frontend",
       "env": {},
       "name": "restore public/ assets into the scratch build",
@@ -407,6 +431,7 @@
         "run",
         "e2e"
       ],
+      "artifacts": [],
       "cwd": "frontend",
       "env": {
         "CI": "true",
@@ -425,6 +450,7 @@
         "test",
         "--watch=false"
       ],
+      "artifacts": [],
       "cwd": "frontend",
       "env": {
         "CI": "true",
@@ -443,6 +469,7 @@
         "ktlint",
         "app/src/**/*.kt"
       ],
+      "artifacts": [],
       "cwd": "android",
       "env": {},
       "name": "ktlint (android/)",
@@ -459,6 +486,7 @@
         "--console=plain",
         ":app:assembleDebug"
       ],
+      "artifacts": [],
       "cwd": "android",
       "env": {},
       "name": "android :app assembleDebug",
@@ -475,6 +503,7 @@
         "--console=plain",
         ":app:testDebugUnitTest"
       ],
+      "artifacts": [],
       "cwd": "android",
       "env": {},
       "name": "android :app unit tests",
@@ -488,6 +517,7 @@
         "--",
         "."
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "dev-lint",
@@ -503,6 +533,7 @@
         "gate.dhall",
         "gate.json"
       ],
+      "artifacts": [],
       "cwd": ".",
       "env": {},
       "name": "the table matches its Dhall",
