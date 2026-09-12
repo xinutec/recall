@@ -19,6 +19,19 @@ pub const TRANSCRIBE_ROOM: &str = "transcribe-room";
 /// Stage E4: who spoke when, over a block whose words already exist. The
 /// `voices` shim answers it (`recall.shim_voices`); ask/ab-compare follow.
 pub const DIARIZE_ROOM: &str = "diarize-room";
+/// One MICROPHONE's segment, transcribed by the same `asr` shim as a room block.
+///
+/// ⚠ **This is the orchestration port, not the room stream.** `worker.py` does
+/// exactly this today — pick a segment, drive the model, write the turns — and
+/// the runner already does that shape for room blocks. Same audio, same model,
+/// same GPU; only the process holding the loop changes. So it carries none of
+/// the room stream's open quality question, and does not wait on it.
+///
+/// ⚠ It does not fix throughput either. Measured 2026-09-12: 14,078 of 22,312
+/// per-mic segments on Isis have no turns, so the Mac is 63% behind on its own
+/// archive. The runner inherits that backlog at the same rate — one stream
+/// instead of five (#1388) is the only thing that changes the arithmetic.
+pub const TRANSCRIBE_SEGMENT: &str = "transcribe-segment";
 const LEASE_TTL_S: i64 = 10 * 60;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -76,6 +89,83 @@ pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<us
         (TRANSCRIBE_ROOM, iso(now), ROOM_SOURCE),
     )?;
     Ok(inserted + derive_diarize_jobs(conn, now)?)
+}
+
+/// Derive a transcribe job for each microphone segment that has NO TURNS YET.
+///
+/// ⚠ **Two planes, and the join key is the FILENAME.** The segment rows live in
+/// `ingest.sqlite` and the turns in `recall.sqlite`, and the obvious join —
+/// `start_utc` to `start_utc` — silently matches NOTHING: the ingest plane
+/// writes `2026-06-13T17:06:53Z` and the meaning plane
+/// `2026-06-13T17:06:53+00:00`. Same instant, different spelling, compared as
+/// TEXT. That cost a measurement here before it was noticed, because the answer
+/// it returned was a confident zero rather than an error.
+///
+/// ⚠ **Bounded, and deliberately.** 14,078 segments were untranscribed when this
+/// was written; deriving them all at once would queue days of GPU work in one
+/// statement, competing with the room stream and with capture. `limit` is what
+/// makes turning this on reversible.
+///
+/// # Errors
+/// If either database refuses.
+pub fn derive_segment_jobs(
+    ingest: &Connection,
+    meaning: &Connection,
+    now: DateTime<Utc>,
+    limit: usize,
+) -> rusqlite::Result<usize> {
+    // The silence table is this function's dependency too, not only
+    // `derive_jobs`'s — transcribing a measured-silent clip returns INVENTIONS,
+    // not nothing (#1410), and that rule is not room-specific.
+    crate::speech::ensure_schema(ingest)?;
+    // The filenames that already have turns, as basenames. Read from the meaning
+    // plane in one pass rather than joined per row — a correlated LIKE over both
+    // tables is a full scan of each, and on the live fleet it ran for ten
+    // minutes before it was killed.
+    let mut have: std::collections::HashSet<String> = std::collections::HashSet::new();
+    {
+        let mut stmt = meaning.prepare(
+            "SELECT DISTINCT a.path FROM audio_segments a
+             JOIN transcript_segments t ON t.audio_segment_id = a.id
+             WHERE a.source_id != ?1",
+        )?;
+        let rows = stmt.query_map([ROOM_SOURCE], |r| r.get::<_, String>(0))?;
+        for path in rows {
+            let path = path?;
+            if let Some(name) = path.rsplit('/').next() {
+                have.insert(name.to_owned());
+            }
+        }
+    }
+
+    let candidates: Vec<String> = {
+        let mut stmt = ingest.prepare(
+            "SELECT s.filename FROM segments s
+             LEFT JOIN segment_speech p ON p.filename = s.filename
+             WHERE s.source != ?1
+               AND (p.filename IS NULL OR p.speech_seconds != 0.0)
+               AND NOT EXISTS (SELECT 1 FROM jobs j
+                               WHERE j.kind = ?2 AND j.filename = s.filename)
+             ORDER BY s.start_utc DESC",
+        )?;
+        let rows = stmt.query_map((ROOM_SOURCE, TRANSCRIBE_SEGMENT), |r| r.get(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+
+    let mut inserted = 0;
+    for filename in candidates {
+        if inserted >= limit {
+            break;
+        }
+        if have.contains(&filename) {
+            continue;
+        }
+        inserted += ingest.execute(
+            "INSERT OR IGNORE INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, ?3)",
+            (TRANSCRIBE_SEGMENT, &filename, iso(now)),
+        )?;
+    }
+    Ok(inserted)
 }
 
 /// Derive a diarization job for every block whose transcription SUCCEEDED.

@@ -215,3 +215,167 @@ fn a_runner_is_never_handed_a_kind_it_cannot_do() {
         .expect("job");
     assert_eq!(both.kind, DIARIZE_ROOM);
 }
+
+// ---- per-mic transcribe jobs: the orchestration port (#1538) ----
+
+use recalld::queue::{TRANSCRIBE_SEGMENT, derive_segment_jobs, ensure_schema};
+
+fn mic_row(root: &std::path::Path, source: &str, stamp: &str) -> String {
+    let name = format!("{source}-{stamp}.opus");
+    let conn = store::open(root).expect("db");
+    store::insert(
+        &conn,
+        &store::Row {
+            source: source.into(),
+            filename: name.clone(),
+            // ⚠ The INGEST plane's spelling: a trailing Z.
+            start_utc: format!(
+                "{}-{}-{}T{}:{}:{}Z",
+                &stamp[0..4],
+                &stamp[4..6],
+                &stamp[6..8],
+                &stamp[9..11],
+                &stamp[11..13],
+                &stamp[13..15]
+            ),
+            bytes: 1,
+            sha256: "x".into(),
+            received_utc: "2026-09-05T00:00:00Z".into(),
+            sent_utc: None,
+        },
+    )
+    .expect("row");
+    name
+}
+
+/// A meaning plane with the shape `derive_segment_jobs` reads.
+fn meaning_plane() -> rusqlite::Connection {
+    let conn = rusqlite::Connection::open_in_memory().expect("mem");
+    conn.execute_batch(
+        "CREATE TABLE audio_segments (
+             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
+             start_utc TEXT NOT NULL);
+         CREATE TABLE transcript_segments (
+             id INTEGER PRIMARY KEY, audio_segment_id INTEGER, text TEXT NOT NULL);",
+    )
+    .expect("schema");
+    conn
+}
+
+/// Register a segment as transcribed, in the MEANING plane's own spellings.
+fn already_transcribed(meaning: &rusqlite::Connection, source: &str, filename: &str, start: &str) {
+    meaning
+        .execute(
+            "INSERT INTO audio_segments (source_id, path, start_utc) VALUES (?1, ?2, ?3)",
+            (source, format!("/data/{source}/{filename}"), start),
+        )
+        .expect("audio");
+    let id = meaning.last_insert_rowid();
+    meaning
+        .execute(
+            "INSERT INTO transcript_segments (audio_segment_id, text) VALUES (?1, 'some words')",
+            [id],
+        )
+        .expect("turn");
+}
+
+#[test]
+fn a_segment_that_already_has_turns_gets_no_job() {
+    // ⚠ THE JOIN KEY IS THE FILENAME, AND THAT IS NOT A STYLE CHOICE. The obvious
+    // join — start_utc to start_utc — matches NOTHING: this ingest row says
+    // `2026-09-05T10:00:00Z` and the meaning row `2026-09-05T10:00:00+00:00`.
+    // Same instant, different spelling, compared as text. It returns a confident
+    // zero rather than an error, which is how it cost a real measurement.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
+    let done_one = mic_row(dir.path(), "usb", "20260905T100000");
+    let todo = mic_row(dir.path(), "usb", "20260905T110000");
+
+    let meaning = meaning_plane();
+    already_transcribed(&meaning, "usb", &done_one, "2026-09-05T10:00:00+00:00");
+
+    let ingest = store::open(dir.path()).expect("db");
+    ensure_schema(&ingest).expect("schema");
+    assert_eq!(
+        derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
+        1,
+        "exactly the untranscribed one"
+    );
+    let queued: String = ingest
+        .query_row(
+            "SELECT filename FROM jobs WHERE kind = ?1",
+            [TRANSCRIBE_SEGMENT],
+            |r| r.get(0),
+        )
+        .expect("job");
+    assert_eq!(
+        queued, todo,
+        "the transcribed segment must not be re-queued"
+    );
+}
+
+#[test]
+fn room_blocks_are_not_derived_as_per_mic_work() {
+    // The room stream has its own kind; deriving both for one blob would
+    // transcribe it twice and pay the GPU bill twice.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
+    room_row(dir.path(), "20260905T100000");
+    let meaning = meaning_plane();
+    let ingest = store::open(dir.path()).expect("db");
+    ensure_schema(&ingest).expect("schema");
+    assert_eq!(
+        derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
+        0
+    );
+}
+
+#[test]
+fn the_derivation_is_bounded_and_newest_first() {
+    // ⚠ 14,078 segments were untranscribed when this was written. Deriving them
+    // all in one statement would queue days of GPU work at once, competing with
+    // the room stream and with capture. The bound is what makes it reversible.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
+    for minute in 0..5 {
+        mic_row(dir.path(), "usb", &format!("20260905T10{minute:02}00"));
+    }
+    let meaning = meaning_plane();
+    let ingest = store::open(dir.path()).expect("db");
+    ensure_schema(&ingest).expect("schema");
+    assert_eq!(
+        derive_segment_jobs(&ingest, &meaning, now, 2).expect("derive"),
+        2,
+        "the limit bounds the work queued"
+    );
+    let newest: String = ingest
+        .query_row(
+            "SELECT filename FROM jobs WHERE kind = ?1 ORDER BY filename DESC LIMIT 1",
+            [TRANSCRIBE_SEGMENT],
+            |r| r.get(0),
+        )
+        .expect("job");
+    assert_eq!(
+        newest, "usb-20260905T100400.opus",
+        "newest first — what they are saying now outranks backfill"
+    );
+}
+
+#[test]
+fn deriving_twice_queues_nothing_new() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
+    mic_row(dir.path(), "usb", "20260905T100000");
+    let meaning = meaning_plane();
+    let ingest = store::open(dir.path()).expect("db");
+    ensure_schema(&ingest).expect("schema");
+    assert_eq!(
+        derive_segment_jobs(&ingest, &meaning, now, 100).expect("a"),
+        1
+    );
+    assert_eq!(
+        derive_segment_jobs(&ingest, &meaning, now, 100).expect("b"),
+        0,
+        "derivation is idempotent — a job already queued is not queued again"
+    );
+}
