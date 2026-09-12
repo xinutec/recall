@@ -11,7 +11,6 @@ import argparse
 from pathlib import Path
 
 from recall.asr import DEFAULT_MODEL
-from recall.beat_relay import DEFAULT_FLEET_URL, DEFAULT_RELAY_PORT
 from recall.llm import (
     DEFAULT_IDLE_UNLOAD,
     DEFAULT_LLM,
@@ -233,18 +232,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         default=None,
         help="force a full re-derive of one recording (every segment of this source, "
         "regardless of state) through the canonical pipeline, then exit",
-    )
-
-    relay = sub.add_parser(
-        "beat-relay",
-        help="LAN fallback for the mic heartbeat: accept a beat on this machine "
-        "and pass it to the fleet, so a phone whose VPN is off still reports",
-    )
-    relay.add_argument(
-        "--port", type=int, default=DEFAULT_RELAY_PORT, help="listen port"
-    )
-    relay.add_argument(
-        "--fleet-url", default=DEFAULT_FLEET_URL, help="where to forward beats"
     )
 
     lmh = sub.add_parser(

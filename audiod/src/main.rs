@@ -21,22 +21,37 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage: audiod ingest --root <data-root> [--port <port>]\n\
         \x20      audiod capture-mirror --root <data-root> --url <base> [--once]\n\x20      audiod capture --root <data-root> --id <source> [--device <name>] [--seconds <n>] [--codec opus|flac]\n\
-        \x20      audiod upload --root <data-root> --url <base> [--token-file <path>] [--max <n>]"
+        \x20      audiod upload --root <data-root> --url <base> [--token-file <path>] [--max <n>]\n\
+        \x20      audiod beat-relay --url <fleet> [--port <port>]"
     );
     ExitCode::FAILURE
 }
 
-fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+/// Everything the command line can say, parsed once.
+struct Args {
+    mode: Option<String>,
+    once: bool,
+    root: Option<PathBuf>,
+    port: Option<u16>,
+    id: Option<String>,
+    device: Option<String>,
+    seconds: Option<u64>,
+    url: Option<String>,
+    producer: audiod::capture_run::Producer,
+    token_file: Option<PathBuf>,
+    max: usize,
+    codec: audiod::segmenter::Codec,
+}
+
+/// Parse argv. `None` means the arguments do not name a run.
+fn parse_args() -> Option<Args> {
     let mut args = std::env::args().skip(1);
     let mode = args.next();
     let mut root: Option<PathBuf> = None;
-    let mut port: u16 = audiod::wire::DEFAULT_INGEST_PORT;
+    // ⚠ Whether --port was GIVEN, not just its value. Two subcommands listen and
+    // their defaults differ (ingest 9999, beat-relay 8000), so a single
+    // pre-seeded default silently hands one of them the other's port.
+    let mut port: Option<u16> = None;
     let mut id: Option<String> = None;
     let mut device: Option<String> = None;
     let mut seconds: Option<u64> = None;
@@ -53,14 +68,13 @@ fn main() -> ExitCode {
             once = true;
             continue;
         }
-        let Some(value) = args.next() else {
-            return usage();
-        };
+        // A flag with no value is not a run; `main` turns None into usage.
+        let value = args.next()?;
         match arg.as_str() {
             "--root" => root = Some(PathBuf::from(value)),
             "--port" => match value.parse() {
-                Ok(parsed) => port = parsed,
-                Err(_) => return usage(),
+                Ok(parsed) => port = Some(parsed),
+                Err(_) => return None,
             },
             "--id" => id = Some(value),
             "--device" => device = Some(value),
@@ -68,16 +82,16 @@ fn main() -> ExitCode {
             "--producer" => match value.as_str() {
                 "sox" => producer = audiod::capture_run::Producer::Sox,
                 "alsa" => producer = audiod::capture_run::Producer::Alsa,
-                _ => return usage(),
+                _ => return None,
             },
             "--token-file" => token_file = Some(PathBuf::from(value)),
             "--max" => match value.parse() {
                 Ok(parsed) => max = parsed,
-                Err(_) => return usage(),
+                Err(_) => return None,
             },
             "--seconds" => match value.parse() {
                 Ok(parsed) => seconds = Some(parsed),
-                Err(_) => return usage(),
+                Err(_) => return None,
             },
             // ⚠ Lossless is the prerequisite for COMBINING microphones, not a
             // quality preference. Opus at 32 kbps is transparent to an ear and
@@ -87,10 +101,55 @@ fn main() -> ExitCode {
             "--codec" => match value.as_str() {
                 "opus" => codec = audiod::segmenter::Codec::Libopus,
                 "flac" => codec = audiod::segmenter::Codec::Flac,
-                _ => return usage(),
+                _ => return None,
             },
-            _ => return usage(),
+            _ => return None,
         }
+    }
+    Some(Args {
+        mode,
+        once,
+        root,
+        port,
+        id,
+        device,
+        seconds,
+        url,
+        producer,
+        token_file,
+        max,
+        codec,
+    })
+}
+
+fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+    let Some(Args {
+        mode,
+        once,
+        root,
+        port,
+        id,
+        device,
+        seconds,
+        url,
+        producer,
+        token_file,
+        max,
+        codec,
+    }) = parse_args()
+    else {
+        return usage();
+    };
+
+    // Above the root check on purpose — see `run_beat_relay`.
+    if mode.as_deref() == Some("beat-relay") {
+        return run_beat_relay(url.as_deref(), port);
     }
     let Some(root) = root else {
         return usage();
@@ -101,7 +160,11 @@ fn main() -> ExitCode {
         ..audiod::segmenter::CaptureConfig::default()
     };
     match mode.as_deref() {
-        Some("ingest") => audiod::server::serve(&root, port, &config),
+        Some("ingest") => audiod::server::serve(
+            &root,
+            port.unwrap_or(audiod::wire::DEFAULT_INGEST_PORT),
+            &config,
+        ),
         Some("capture") => {
             let Some(id) = id else {
                 return usage();
@@ -172,6 +235,26 @@ fn run_speech(root: &std::path::Path, max: usize) -> ExitCode {
 /// The token is the SYNC plane's, not the ingest one: `/sync/capture` is a
 /// control-plane exchange, and the mirror presents the same credential
 /// `recall.sync` did.
+/// The LAN heartbeat fallback: accept a beat, forward it to the fleet, forever.
+///
+/// ⚠ NOT gated on the pause, unlike `ingest` — a pause is exactly when the
+/// heartbeat is the only signal there is.
+///
+/// ⚠ **Dispatched BEFORE the `--root` check, and that is the point rather than
+/// an ordering accident.** The relay forwards and stores nothing, so it has no
+/// data root. Requiring one would say it keeps a local beat store — the very
+/// thing `beat_relay` refuses, because two places disagreeing about which mics
+/// are alive is worse than the bug it fixes.
+fn run_beat_relay(url: Option<&str>, port: Option<u16>) -> ExitCode {
+    let Some(url) = url else {
+        return usage();
+    };
+    let port = port.unwrap_or(audiod::beat_relay::DEFAULT_RELAY_PORT);
+    let err = audiod::beat_relay::serve(port, url);
+    eprintln!("audiod: beat-relay stopped: {err}");
+    ExitCode::FAILURE
+}
+
 fn run_capture_mirror(
     root: &std::path::Path,
     url: &str,

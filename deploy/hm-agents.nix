@@ -247,12 +247,19 @@ in
   # LAN fallback for the mic heartbeat (#888). Independent of the capture agents ON
   # PURPOSE: a household pause closes the ingest listener, and a pause is exactly when
   # the heartbeat is the only signal there is — so a beat receiver that shared that
-  # lifecycle would be shut precisely when it was needed. Devshell python, stdlib only,
-  # so it stays inside the no-ML import surface the gate checks.
+  # lifecycle would be shut precisely when it was needed.
+  #
+  # ⚠ NO `--root`, and that is the point: it FORWARDS and stores nothing. A local
+  # beat store the collector had to merge with the fleet's would let two places
+  # disagree about which mics are alive, which is worse than the bug this fixes.
   launchd.agents."org.xinutec.recall-beat-relay" = daemon {
     label = "org.xinutec.recall-beat-relay";
     name = "beat-relay";
-    args = [ "beat-relay" ];
+    args = [ ];
+    program = audiodWrapper {
+      name = "beat-relay";
+      args = [ "beat-relay" "--url" fleet "--port" "8000" ];
+    };
   };
 
   launchd.agents."org.xinutec.recall-worker" = daemon {

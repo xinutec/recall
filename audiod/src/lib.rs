@@ -7,6 +7,7 @@
 //! the worker, doctor, loss reconciler and sync must not be able to tell
 //! which language wrote a segment.
 
+pub mod beat_relay;
 pub mod capture_run;
 pub mod meter;
 pub mod pause;
