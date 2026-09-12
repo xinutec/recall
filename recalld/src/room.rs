@@ -86,7 +86,20 @@ pub struct Contributor {
     pub speech_db: f32,
     /// `None` = no usable reference yet: present, heard, unrankable.
     pub calibrated: Option<CalibratedDb>,
+    /// Fraction of this source's minute inside a gate (`levels::gated_fraction`).
+    pub gated: f32,
 }
+
+/// Above this, a source spent so much of the minute emitting digital silence
+/// that it is reporting on its own noise suppression, not on the room.
+///
+/// ⚠ **0.20 is measured, not chosen for roundness.** 83 segments, one per source
+/// per day, evenings when the house was occupied: usb, iphone11 and oneplus6t
+/// never reached it at all (0%, across 41 segments), geb's BEST segment was 39%
+/// and its worst 68%, and pixel5/pixel9 sat near zero with tails to 85-99%. The
+/// gap between the cleanest failing case and the dirtiest passing one is wide
+/// enough that the exact figure is not load-bearing (#1526).
+pub const GATED_MAX: f32 = 0.20;
 
 /// What one pass did.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -94,6 +107,9 @@ pub struct BuildSummary {
     pub built: usize,
     pub silent: usize,
     pub deferred: usize,
+    /// Blocks where every audible source was gating. Counted apart from
+    /// `silent`: the room was NOT quiet, the microphones refused to say so.
+    pub gated: usize,
 }
 
 pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -176,36 +192,48 @@ fn block_contributors(
     let from = iso(block - Duration::seconds(BLOCK_S));
     let to = iso(block + Duration::seconds(BLOCK_S));
     let mut stmt = conn.prepare(
-        "SELECT s.source, s.filename, l.speech_db
+        "SELECT s.source, s.filename, l.speech_db, l.gated
          FROM segments s
          LEFT JOIN segment_levels l ON l.filename = s.filename
          WHERE s.source != ?1 AND s.start_utc > ?2 AND s.start_utc < ?3
          ORDER BY s.filename",
     )?;
-    let rows: Vec<(String, String, Option<f64>)> = stmt
+    let rows: Vec<(String, String, Option<f64>, Option<f64>)> = stmt
         .query_map((ROOM_SOURCE, &from, &to), |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         })?
         .collect::<Result<_, _>>()?;
-    let mut per_source: BTreeMap<String, f32> = BTreeMap::new();
-    for (source, _filename, speech_db) in rows {
+    // The loudest reading per source, and the WORST gate reading per source.
+    let mut per_source: BTreeMap<String, (f32, f32)> = BTreeMap::new();
+    for (source, _filename, speech_db, gated) in rows {
         let Some(speech_db) = speech_db else {
             return Ok(None); // unmeasured overlap: no verdict on partial evidence
         };
-        let db = speech_db as f32;
+        // ⚠ Same rule for the gate reading, and for the same reason: a NULL here
+        // is a segment measured before the detector existed, not a segment found
+        // to be clean. Ranking on it would be the partial-evidence verdict this
+        // function already refuses. `levels::scan_once` backfills these.
+        let Some(gated) = gated else {
+            return Ok(None);
+        };
+        let (db, gate) = (speech_db as f32, gated as f32);
         per_source
             .entry(source)
-            .and_modify(|best| *best = best.max(db))
-            .or_insert(db);
+            .and_modify(|(best, worst)| {
+                *best = best.max(db);
+                *worst = worst.max(gate);
+            })
+            .or_insert((db, gate));
     }
     let mut out = Vec::new();
-    for (source, speech_db) in per_source {
+    for (source, (speech_db, gated)) in per_source {
         let calibrated = reference_db(conn, config, &source)?
             .map(|reference| CalibratedDb(speech_db - reference));
         out.push(Contributor {
             source,
             speech_db,
             calibrated,
+            gated,
         });
     }
     Ok(Some(out))
@@ -365,7 +393,31 @@ pub fn build_once(
         //
         // TO UNPARK: ground truth on SEPTEMBER minutes where the ranks differ
         // (see the census above), then the referee on that window.
-        let winner = audible
+        //
+        // ⚠ **GATED SOURCES ARE REMOVED BEFORE THE RANK, NOT PENALISED IN IT.**
+        // A gate makes a source score BETTER here: deleting everything between
+        // words is what produced geb's "52 dB SNR, best in the room" while its
+        // transcripts were unusable. So the rank above does not merely fail to
+        // notice gating — it actively REWARDS it, and geb won 965 of 1,332
+        // transcribed blocks for exactly the reason it should have lost them
+        // (#1526). Any weighting scheme would be arguing with a signal that is
+        // pointing the wrong way; the only safe move is to drop the source.
+        let ungated: Vec<&Contributor> = audible
+            .iter()
+            .copied()
+            .filter(|c| c.gated <= GATED_MAX)
+            .collect();
+        if ungated.is_empty() {
+            // ⚠ Every microphone that heard this minute was gating. There is no
+            // honest room block to build, and picking the least-bad would put a
+            // transcript into the archive that nobody can tell apart from a good
+            // one. The contributors are recorded, so the verdict is re-derivable
+            // if the threshold ever moves.
+            record_verdict(&conn, block, "all-gated", None, None, &contributors)?;
+            summary.gated += 1;
+            continue;
+        }
+        let winner = ungated
             .iter()
             .map(|c| (c, c.speech_db))
             .max_by(|a, b| a.1.total_cmp(&b.1));

@@ -135,9 +135,15 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     ensure_schema(&conn)?;
     let pending: Vec<(String, String)> = {
         let mut stmt = conn.prepare(
+            // ⚠ `gated IS NULL` is in the WHERE, so the scanner BACKFILLS rows
+            // measured before the gate detector existed. Without it every
+            // pre-2026-09-12 row keeps a NULL `gated` forever, the room builder
+            // (which refuses to rank on partial evidence) defers every block
+            // those segments touch, and room building stops dead — a detector
+            // that halts the thing it was meant to improve.
             "SELECT s.filename, s.source FROM segments s
              LEFT JOIN segment_levels l ON l.filename = s.filename
-             WHERE l.filename IS NULL
+             WHERE l.filename IS NULL OR l.gated IS NULL
              ORDER BY s.start_utc, s.filename LIMIT ?1",
         )?;
         let rows = stmt.query_map([batch as u32], |r| Ok((r.get(0)?, r.get(1)?)))?;
@@ -156,8 +162,12 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
             floor_db: f32::NEG_INFINITY,
             gated: 0.0,
         });
+        // ⚠ REPLACE, not IGNORE: a backfill pass revisits a row that already
+        // exists precisely because its `gated` is NULL, and IGNORE would drop
+        // the very measurement the revisit was for — silently, and forever,
+        // since the next pass would find the same row and do the same thing.
         conn.execute(
-            "INSERT OR IGNORE INTO segment_levels
+            "INSERT OR REPLACE INTO segment_levels
                  (filename, source, speech_db, floor_db, gated, computed_utc)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             (

@@ -248,3 +248,151 @@ fn calibration_chooses_the_device_hearing_best_for_itself() {
         "calibration must pick the device hearing best FOR ITSELF, not the loudest"
     );
 }
+
+// ---- gated sources are removed before the rank (#1526) ----
+
+use recalld::room::GATED_MAX;
+
+/// A source that GATES: loud bursts separated by true digital silence, which is
+/// what a conference speakerphone emits and what no analogue front end can.
+fn gated_wav(path: &Path, amplitude: f32, seconds: f32) {
+    let rate = 16_000u32;
+    let samples: Vec<f32> = (0..(seconds * rate as f32) as usize)
+        .map(|i| {
+            // 0.4 s of speech, then 0.6 s of ABSOLUTE zero — the shape measured
+            // off geb: 56% of the minute emitting nothing at all.
+            let phase = i % rate as usize;
+            if phase < (rate as usize * 2) / 5 {
+                amplitude * (2.0 * PI * 330.0 * i as f32 / rate as f32).sin()
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    audiocore::wav::write_mono16(path, rate, &samples).expect("wav");
+}
+
+fn stored_gated(root: &Path, source: &str, stamp: &str, amplitude: f32) {
+    let name = format!("{source}-{stamp}.wav");
+    let dir = root.join("ingest").join(source);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    gated_wav(&dir.join(&name), amplitude, 60.0);
+    let start = DateTime::parse_from_str(&format!("{stamp}+0000"), "%Y%m%dT%H%M%S%z")
+        .expect("stamp")
+        .with_timezone(&Utc);
+    let conn = store::open(root).expect("db");
+    store::insert(
+        &conn,
+        &store::Row {
+            source: source.to_owned(),
+            filename: name,
+            start_utc: start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            bytes: 1,
+            sha256: "x".into(),
+            received_utc: "2026-09-05T00:00:00Z".into(),
+            sent_utc: None,
+        },
+    )
+    .expect("row");
+}
+
+#[test]
+fn the_loudest_source_loses_when_it_is_gating() {
+    // ⚠ THE WHOLE POINT. The gated source is LOUDER — that is what gating does
+    // to a level measurement — so a rank that merely weighted it would still
+    // pick it. It has to be removed from the candidates entirely.
+    let dir = tempfile::tempdir().expect("tmp");
+    let root = dir.path();
+    stored_gated(root, "geb", "20260911T100000", 0.9);
+    stored(root, "usb", "20260911T100000", 0.3);
+    scan_once(root, 100).expect("levels");
+
+    let block = DateTime::parse_from_str("20260911T100000+0000", "%Y%m%dT%H%M%S%z")
+        .expect("stamp")
+        .with_timezone(&Utc);
+    let conn = store::open(root).expect("db");
+    let summary = build_once(root, &config(), now_after(block)).expect("build");
+    assert_eq!(summary.built, 1, "a clean source was available");
+    let winner: String = conn
+        .query_row("SELECT winner FROM room_blocks LIMIT 1", [], |r| r.get(0))
+        .expect("verdict");
+    assert_eq!(
+        winner, "usb",
+        "the quieter UNGATED source must win over the louder gated one"
+    );
+}
+
+#[test]
+fn a_minute_where_every_source_gates_builds_nothing() {
+    // ⚠ Not `silent`, and not least-bad. The room was not quiet — the
+    // microphones refused to say so — and a block built from the least-gated
+    // source would enter the archive indistinguishable from an honest one.
+    let dir = tempfile::tempdir().expect("tmp");
+    let root = dir.path();
+    stored_gated(root, "geb", "20260911T100000", 0.9);
+    stored_gated(root, "pixel5", "20260911T100000", 0.5);
+    scan_once(root, 100).expect("levels");
+
+    let block = DateTime::parse_from_str("20260911T100000+0000", "%Y%m%dT%H%M%S%z")
+        .expect("stamp")
+        .with_timezone(&Utc);
+    let summary = build_once(root, &config(), now_after(block)).expect("build");
+    assert_eq!(summary.built, 0, "nothing honest to build");
+    assert_eq!(summary.gated, 1, "counted as gated, not as silence");
+    let conn = store::open(root).expect("db");
+    let verdict: String = conn
+        .query_row("SELECT verdict FROM room_blocks LIMIT 1", [], |r| r.get(0))
+        .expect("verdict");
+    assert_eq!(verdict, "all-gated");
+}
+
+#[test]
+fn a_segment_measured_before_the_detector_defers_the_block() {
+    // ⚠ NULL `gated` is "never looked at", not "looked at and found clean".
+    // Ranking on it would be the partial-evidence verdict this builder already
+    // refuses for `speech_db`. `scan_once` backfills it.
+    let dir = tempfile::tempdir().expect("tmp");
+    let root = dir.path();
+    stored(root, "usb", "20260911T100000", 0.3);
+    scan_once(root, 100).expect("levels");
+    let conn = store::open(root).expect("db");
+    conn.execute("UPDATE segment_levels SET gated = NULL", [])
+        .expect("blank it");
+
+    let block = DateTime::parse_from_str("20260911T100000+0000", "%Y%m%dT%H%M%S%z")
+        .expect("stamp")
+        .with_timezone(&Utc);
+    let summary = build_once(root, &config(), now_after(block)).expect("build");
+    assert_eq!(
+        summary.built, 0,
+        "an unmeasured gate reading is not evidence"
+    );
+    assert_eq!(summary.deferred, 1);
+}
+
+#[test]
+fn the_backfill_re_measures_a_row_whose_gate_reading_is_missing() {
+    // The other half of the above: a NULL must be fillable, or the builder
+    // defers those blocks forever and room building stops dead.
+    let dir = tempfile::tempdir().expect("tmp");
+    let root = dir.path();
+    stored(root, "usb", "20260911T100000", 0.3);
+    scan_once(root, 100).expect("levels");
+    let conn = store::open(root).expect("db");
+    conn.execute("UPDATE segment_levels SET gated = NULL", [])
+        .expect("blank it");
+
+    assert_eq!(
+        scan_once(root, 100).expect("backfill"),
+        1,
+        "it must revisit"
+    );
+    let gated: Option<f64> = conn
+        .query_row("SELECT gated FROM segment_levels LIMIT 1", [], |r| r.get(0))
+        .expect("row");
+    assert!(gated.is_some(), "the backfill must fill it, not skip it");
+    assert!(
+        gated.expect("some") <= f64::from(GATED_MAX),
+        "a bursting sine is not a gate"
+    );
+}
