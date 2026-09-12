@@ -27,11 +27,35 @@ pub const FLOOR_QUANTILE: f64 = 0.1;
 const BUCKET_S: f64 = 0.1;
 const RATE: u32 = 16_000;
 
+/// A bucket this quiet is not a quiet room — it is a source emitting nothing.
+///
+/// -80 dBFS is three LSB of a 16-bit sample, and a real analogue front end never
+/// gets there: measured 2026-09-12, the USB condenser's quietest 0.1 s over 22
+/// evening segments never reached it once.
+pub const GATE_DB: f32 = -80.0;
+/// How long a silent stretch must be before it counts as a gate closing.
+///
+/// 0.3 s rather than the 0.25 s the investigation used, because this reads the
+/// EXISTING 0.1 s envelope rather than raw samples — three buckets is the nearest
+/// the stored resolution can express, and inventing a second finer pass to hit a
+/// round number would cost a decode per segment for nothing.
+const GATE_MIN_BUCKETS: usize = 3;
+
 /// One segment's measured levels.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Levels {
     pub speech_db: f32,
     pub floor_db: f32,
+    /// Fraction of the segment inside a silent stretch of [`GATE_MIN_BUCKETS`]
+    /// or more — the signature of a source that GATES rather than listens.
+    ///
+    /// ⚠ **This is the one level statistic that must not be read as quality.**
+    /// Gating makes a source score BETTER on speech-vs-floor: removing everything
+    /// between words is what produced geb's "52 dB SNR, best in the room" while
+    /// its transcripts were unusable. A rank built on `speech_db` alone therefore
+    /// PREFERS the microphone most aggressively destroying its own audio, which
+    /// is why geb won 72% of room blocks (#1526).
+    pub gated: f32,
 }
 
 pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -41,6 +65,10 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
              source       TEXT NOT NULL,
              speech_db    REAL NOT NULL,
              floor_db     REAL NOT NULL,
+             -- Added 2026-09-12. NULL means measured before the gate detector
+             -- existed, which is NOT the same as measured-and-found-ungated: a
+             -- reader must treat it as unknown, never as zero.
+             gated        REAL,
              computed_utc TEXT NOT NULL
          );
          CREATE INDEX IF NOT EXISTS segment_levels_source
@@ -56,7 +84,46 @@ pub fn measure(path: &Path) -> Option<Levels> {
     Some(Levels {
         speech_db: level_quantile_db(&envelope, SPEECH_QUANTILE),
         floor_db: level_quantile_db(&envelope, FLOOR_QUANTILE),
+        gated: gated_fraction(&envelope),
     })
+}
+
+/// What fraction of an envelope sits inside a silent RUN, not merely silent.
+///
+/// ⚠ **The run is the whole point.** A quiet room has quiet buckets scattered
+/// through it; a gate produces CONSECUTIVE ones, because it stays shut until it
+/// hears a voice again. Counting quiet buckets alone would flag every calm
+/// evening, which is the false positive that makes a detector unusable.
+#[must_use]
+pub fn gated_fraction(envelope: &[f32]) -> f32 {
+    if envelope.is_empty() {
+        return 0.0;
+    }
+    let mut inside = 0usize;
+    let mut run = 0usize;
+    for &bucket in envelope {
+        if bucket_db(bucket) <= GATE_DB {
+            run += 1;
+        } else {
+            if run >= GATE_MIN_BUCKETS {
+                inside += run;
+            }
+            run = 0;
+        }
+    }
+    if run >= GATE_MIN_BUCKETS {
+        inside += run;
+    }
+    inside as f32 / envelope.len() as f32
+}
+
+/// One bucket's RMS as dBFS. Silence is -inf, which compares below any floor.
+fn bucket_db(rms: f32) -> f32 {
+    if rms <= 0.0 {
+        f32::NEG_INFINITY
+    } else {
+        20.0 * rms.log10()
+    }
 }
 
 /// Measure up to `batch` unmeasured segments, oldest first. Returns how many
@@ -79,19 +146,26 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     let mut written = 0;
     for (filename, source) in pending {
         let path = root.join("ingest").join(&source).join(&filename);
+        // ⚠ A blob that will not decode gets -inf levels and gated = 0.0, and the
+        // zero is the dangerous half: it reads as "measured, not gated" when
+        // nothing was measured at all. The -inf is what marks the row unusable
+        // (`speech_db > -900.0` filters it downstream), so the two fields must be
+        // read TOGETHER — gated alone cannot say whether it was ever looked at.
         let levels = measure(&path).unwrap_or(Levels {
             speech_db: f32::NEG_INFINITY,
             floor_db: f32::NEG_INFINITY,
+            gated: 0.0,
         });
         conn.execute(
             "INSERT OR IGNORE INTO segment_levels
-                 (filename, source, speech_db, floor_db, computed_utc)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+                 (filename, source, speech_db, floor_db, gated, computed_utc)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             (
                 &filename,
                 &source,
                 f64::from(levels.speech_db),
                 f64::from(levels.floor_db),
+                f64::from(levels.gated),
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             ),
         )?;

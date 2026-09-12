@@ -141,3 +141,90 @@ fn the_device_reference_is_a_query_over_its_own_rows() {
         None
     );
 }
+
+// ---- the gate detector (#1526) ----
+
+use recalld::levels::{GATE_DB, gated_fraction};
+
+#[test]
+fn a_calm_room_is_not_a_gate_however_quiet_it_is() {
+    // ⚠ THE FALSE POSITIVE THAT WOULD MAKE THIS UNUSABLE. A quiet evening has
+    // quiet buckets scattered through it; only a gate produces CONSECUTIVE ones,
+    // because it stays shut until it hears a voice. Counting quiet buckets alone
+    // would condemn every calm household.
+    let silent = 0.0;
+    let quiet = 10f32.powf(-40.0 / 20.0); // -40 dBFS: quiet, nowhere near the gate
+    let scattered = vec![
+        quiet, silent, quiet, quiet, silent, quiet, silent, quiet, quiet, quiet,
+    ];
+    assert!(
+        gated_fraction(&scattered).abs() < f32::EPSILON,
+        "single silent buckets between signal are a room, not a gate"
+    );
+}
+
+#[test]
+fn a_run_shorter_than_the_minimum_does_not_count() {
+    let s = 0.0;
+    let loud = 10f32.powf(-20.0 / 20.0);
+    // Two consecutive silent buckets — 0.2 s, under the 0.3 s floor.
+    assert!(gated_fraction(&[loud, s, s, loud, loud]).abs() < f32::EPSILON);
+    // Three — at the floor, so it counts, and it is 3 of 5 buckets.
+    let three = gated_fraction(&[loud, s, s, s, loud]);
+    assert!(
+        (three - 0.6).abs() < 1e-6,
+        "a run at the minimum must count, got {three}"
+    );
+}
+
+#[test]
+fn a_run_at_the_end_of_a_segment_is_not_lost() {
+    // ⚠ The gate closing on the LAST word is the commonest shape, and a loop
+    // that only credits a run when it SEES the run end drops exactly that one.
+    let loud = 10f32.powf(-20.0 / 20.0);
+    let trailing = gated_fraction(&[loud, loud, 0.0, 0.0, 0.0, 0.0]);
+    assert!(
+        (trailing - 4.0 / 6.0).abs() < 1e-6,
+        "a trailing silent run must be counted, got {trailing}"
+    );
+}
+
+#[test]
+fn the_threshold_is_below_anything_a_real_front_end_produces() {
+    // -80 dBFS is three LSB of a 16-bit sample. Measured 2026-09-12 over 22
+    // evening segments, the USB condenser's quietest 0.1 s never reached it.
+    // A bucket just ABOVE the line must not count, or a real mic's floor would.
+    let just_above = 10f32.powf((GATE_DB + 2.0) / 20.0);
+    assert!(gated_fraction(&[just_above; 20]).abs() < f32::EPSILON);
+    let just_below = 10f32.powf((GATE_DB - 2.0) / 20.0);
+    assert!((gated_fraction(&[just_below; 20]) - 1.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn an_empty_envelope_is_not_gated() {
+    // A segment that decoded to nothing must not read as a gated source — that
+    // is a decode failure, and `speech_db` is what marks it (see `scan_once`).
+    assert!(gated_fraction(&[]).abs() < f32::EPSILON);
+}
+
+#[test]
+fn the_scanner_stores_the_gate_measurement() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let root = dir.path();
+    stored_segment(root, "usb", "usb-20260911T100000.wav", 0.2);
+    assert_eq!(scan_once(root, 10).expect("scan"), 1);
+    let conn = store::open(root).expect("db");
+    let gated: Option<f64> = conn
+        .query_row(
+            "SELECT gated FROM segment_levels WHERE source = 'usb'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("row");
+    // A sine at -14 dBFS is never near the gate.
+    let gated = gated.expect("a measured segment must store a number");
+    assert!(
+        gated.abs() < f64::EPSILON,
+        "a sine at -14 dBFS is not gated"
+    );
+}
