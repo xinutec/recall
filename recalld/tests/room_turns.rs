@@ -676,3 +676,230 @@ fn an_empty_plan_writes_nothing_and_hides_nothing() {
         "a hide with nothing to replace it empties the minute"
     );
 }
+
+// ---- the pass's progress ledger ----
+
+use recalld::room_turns::{Pass, ensure_ledger, write_pass};
+
+/// Both planes with enough schema for a real `write_pass`, copied from the
+/// shapes the production code writes rather than from the structs beside it.
+fn planes_for_a_pass() -> (rusqlite::Connection, rusqlite::Connection) {
+    let meaning = rusqlite::Connection::open_in_memory().expect("meaning");
+    meaning
+        .execute_batch(
+            "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
+             CREATE TABLE audio_segments (
+                 id INTEGER PRIMARY KEY,
+                 source_id TEXT NOT NULL, path TEXT NOT NULL,
+                 start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
+                 sample_rate INTEGER NOT NULL, channels INTEGER NOT NULL,
+                 UNIQUE (source_id, start_utc));
+             CREATE TABLE transcript_segments (
+                 id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
+                 start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
+                 language TEXT, language_confidence REAL, asr_confidence REAL,
+                 asr_model TEXT NOT NULL, provenance TEXT, hidden_reason TEXT,
+                 speaker_label TEXT, superseded_by INTEGER,
+                 word_timings TEXT, created_utc TEXT);
+             CREATE VIRTUAL TABLE transcript_fts USING fts5(text, content='');
+             CREATE TABLE corrections (
+                 id INTEGER PRIMARY KEY,
+                 transcript_segment_id INTEGER, audio_segment_id INTEGER,
+                 start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
+                 original_text TEXT NOT NULL, corrected_text TEXT NOT NULL,
+                 language TEXT, created_utc TEXT NOT NULL);",
+        )
+        .expect("meaning schema");
+    let ingest = rusqlite::Connection::open_in_memory().expect("ingest");
+    recalld::queue::ensure_schema(&ingest).expect("jobs");
+    ensure_ledger(&ingest).expect("ledger");
+    (meaning, ingest)
+}
+
+/// A done `transcribe-room` job, and the room block it belongs to.
+fn done_room_job(
+    meaning: &rusqlite::Connection,
+    ingest: &rusqlite::Connection,
+    filename: &str,
+    start_utc: &str,
+    result: &str,
+) {
+    ingest
+        .execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES ('transcribe-room', ?1, 'done', '2026-09-11T00:00:00Z',
+                     '2026-09-11T00:01:00Z', ?2)",
+            (filename, result),
+        )
+        .expect("job");
+    meaning
+        .execute(
+            "INSERT OR IGNORE INTO audio_segments
+                 (source_id, path, start_utc, end_utc, sample_rate, channels)
+             VALUES ('room', '/x', ?1, ?1, 16000, 1)",
+            [start_utc],
+        )
+        .expect("block");
+}
+
+fn a_result(text: &str) -> String {
+    format!(
+        r#"{{"ok": true, "result": {{"language": "nl", "segments": [
+             {{"start": 0.0, "end": 5.0, "text": "{text}", "confidence": 0.9}}]}}}}"#
+    )
+}
+
+#[test]
+fn a_block_that_writes_nothing_is_decided_once_not_every_pass() {
+    // ⚠ THE STARVATION BUG. `ORDER BY filename DESC LIMIT 20` re-examined the
+    // newest twenty blocks every two minutes and refused each time: 49 minutes
+    // of running produced exactly the first pass's 73 turns. A block that writes
+    // nothing leaves no trace in the meaning plane to derive "done" from, so the
+    // ledger is the only thing that can retire it.
+    let (mut meaning, ingest) = planes_for_a_pass();
+    done_room_job(
+        &meaning,
+        &ingest,
+        "room-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+        // A repetition loop: swept by rule 5, so nothing is written.
+        &a_result("momentum momentum momentum momentum"),
+    );
+
+    let first = write_pass(&mut meaning, &ingest, "whisper", "now", 20).expect("first");
+    assert_eq!(first.blocks, 1, "the block is examined once");
+    assert_eq!(first.swept, 1);
+    assert_eq!(first.turns, 0);
+
+    let second = write_pass(&mut meaning, &ingest, "whisper", "now", 20).expect("second");
+    assert_eq!(
+        second,
+        Pass::default(),
+        "a decided block must not be reconsidered — this is the bug the ledger fixes"
+    );
+}
+
+#[test]
+fn a_written_block_is_retired_by_its_turns_and_not_by_the_ledger() {
+    // The asymmetry that makes the 2026-09-11 reversal work: deleting the room
+    // turns is enough to re-enable the block, with nothing else to remember.
+    let (mut meaning, ingest) = planes_for_a_pass();
+    done_room_job(
+        &meaning,
+        &ingest,
+        "room-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+        &a_result("ik denk dat we dat morgen moeten doen"),
+    );
+
+    assert_eq!(
+        write_pass(&mut meaning, &ingest, "whisper", "now", 20)
+            .expect("first")
+            .turns,
+        1
+    );
+    let ledgered: i64 = ingest
+        .query_row("SELECT count(*) FROM room_turn_ledger", [], |r| r.get(0))
+        .expect("ledger");
+    assert_eq!(
+        ledgered, 0,
+        "a written block needs no row; its turns are it"
+    );
+
+    assert_eq!(
+        write_pass(&mut meaning, &ingest, "whisper", "now", 20).expect("second"),
+        Pass::default(),
+        "and it is not rewritten while those turns stand"
+    );
+
+    // The reversal, meaning plane only.
+    meaning
+        .execute(
+            "DELETE FROM transcript_segments WHERE provenance = 'room'",
+            [],
+        )
+        .expect("reverse");
+    assert_eq!(
+        write_pass(&mut meaning, &ingest, "whisper", "now", 20)
+            .expect("after reversal")
+            .turns,
+        1,
+        "deleting the turns must make the block eligible again by itself"
+    );
+}
+
+#[test]
+fn a_block_whose_audio_is_not_registered_yet_comes_back() {
+    // ⚠ The one barren cause that gets NO ledger row. The registrar runs in its
+    // own loop, so a block examined a few seconds too early is not a verdict —
+    // and a row here would retire it for good.
+    let (mut meaning, ingest) = planes_for_a_pass();
+    ingest
+        .execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES ('transcribe-room', 'room-20260911T100000.flac', 'done',
+                     '2026-09-11T00:00:00Z', '2026-09-11T00:01:00Z', ?1)",
+            [a_result("wat zei je")],
+        )
+        .expect("job");
+
+    let early = write_pass(&mut meaning, &ingest, "whisper", "now", 20).expect("early");
+    assert_eq!(early.barren, 1);
+    assert_eq!(early.blocks, 0);
+    let ledgered: i64 = ingest
+        .query_row("SELECT count(*) FROM room_turn_ledger", [], |r| r.get(0))
+        .expect("ledger");
+    assert_eq!(ledgered, 0, "waiting is not deciding");
+
+    // The registrar catches up.
+    meaning
+        .execute(
+            "INSERT INTO audio_segments
+                 (source_id, path, start_utc, end_utc, sample_rate, channels)
+             VALUES ('room', '/x', '2026-09-11T10:00:00+00:00',
+                     '2026-09-11T10:00:00+00:00', 16000, 1)",
+            [],
+        )
+        .expect("block");
+    assert_eq!(
+        write_pass(&mut meaning, &ingest, "whisper", "now", 20)
+            .expect("later")
+            .turns,
+        1,
+        "the block must still be reachable once its audio exists"
+    );
+}
+
+#[test]
+fn the_limit_counts_blocks_decided_not_rows_looked_at() {
+    // ⚠ Why there is no LIMIT in the SQL. With decided blocks ahead of it in
+    // filename order, a query limited to N returns N ineligible rows and the
+    // pass does nothing — forever. `limit` has to bound the WORK, not the read.
+    let (mut meaning, ingest) = planes_for_a_pass();
+    for minute in 0..5 {
+        done_room_job(
+            &meaning,
+            &ingest,
+            &format!("room-20260911T10{minute:02}00.flac"),
+            &format!("2026-09-11T10:{minute:02}:00+00:00"),
+            &a_result("goog goog goog goog goog goog"), // swept: writes nothing
+        );
+    }
+    done_room_job(
+        &meaning,
+        &ingest,
+        "room-20260911T105900.flac",
+        "2026-09-11T10:59:00+00:00",
+        &a_result("dit is echte spraak"),
+    );
+
+    // Retire the five junk blocks first, one pass at a time.
+    for _ in 0..5 {
+        write_pass(&mut meaning, &ingest, "whisper", "now", 1).expect("pass");
+    }
+    let reached = write_pass(&mut meaning, &ingest, "whisper", "now", 1).expect("reach");
+    assert_eq!(
+        reached.turns, 1,
+        "the real block must be reachable past the decided ones"
+    );
+}

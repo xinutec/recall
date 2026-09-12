@@ -335,13 +335,31 @@ fn spawn_speech_scanner(root: PathBuf) {
 /// That ratio IS the point (four or five microphones transcribing one minute,
 /// #1388), and it is still thousands of rows changing state.
 ///
-/// ⚠ **HOW TO PUT IT BACK, in one statement.** Hiding is not deleting:
+/// ⚠ **HOW TO PUT IT BACK. It is TWO PLANES, and one of them is easy to miss.**
+/// Hiding is not deleting, so the meaning plane (`recall.sqlite`) undoes cleanly:
 ///
 /// ```sql
 /// UPDATE transcript_segments SET hidden_reason = NULL
 ///  WHERE hidden_reason = 'covered by the room stream';
 /// DELETE FROM transcript_segments WHERE provenance = 'room';
 /// ```
+///
+/// That restores what anybody reads, and by itself it re-enables every block
+/// whose turns it just deleted — `write_pass` derives "already written" from
+/// those very rows, deliberately, so this much needs no bookkeeping.
+///
+/// ⚠ But the blocks that wrote NOTHING left no rows to delete, so they are held
+/// in a ledger in the INGEST plane (`ingest.sqlite`) instead, and it has to go
+/// too or they stay decided:
+///
+/// ```sql
+/// DELETE FROM room_turn_ledger;
+/// ```
+///
+/// Forget it and the reversal LOOKS complete — the transcripts are back, the
+/// room rows are gone — while every refused or swept block silently never gets
+/// reconsidered. `room_turns::ensure_ledger` carries the same warning from the
+/// other side.
 ///
 /// Written here rather than in a task because the person who needs it will be
 /// reading this file, not searching for the note.

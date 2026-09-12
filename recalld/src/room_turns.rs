@@ -411,6 +411,53 @@ pub struct Pass {
 /// # Errors
 /// If either database refuses. A block that cannot be interpreted is counted and
 /// skipped, never fatal: one unreadable result must not stop the queue draining.
+/// The ledger of blocks a pass has already DECIDED WITHOUT WRITING.
+///
+/// ⚠ **It records only `refused` and `swept`, and that asymmetry is the design.**
+/// A block whose turns were written needs no row — the turns ARE the record, so
+/// `write_pass` derives "already done" by asking the meaning plane. That is what
+/// makes the 2026-09-11 reversal work: deleting the room turns re-enables those
+/// blocks automatically, with no second thing to remember to clear. A block that
+/// wrote NOTHING has no such trace, which is why it needs one — without it,
+/// refused blocks sit at the head of the queue forever and every pass
+/// re-examines them.
+///
+/// ⚠ Lives in the INGEST plane, keyed on `jobs.filename`. `recall.sqlite`'s
+/// schema belongs to `store_schema.py` and its versioned migrations; a second
+/// migrator on that file is not worth a bookkeeping table.
+///
+/// ⚠ **So the reversal is now a TWO-PLANE operation.** See the note on
+/// `spawn_room_turn_writer` in `main.rs`: deleting the room turns is no longer
+/// enough on its own, the ledger rows go too, or the refused blocks stay decided.
+///
+/// # Errors
+/// If the database refuses.
+pub fn ensure_ledger(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS room_turn_ledger (
+             filename    TEXT PRIMARY KEY,
+             outcome     TEXT NOT NULL,
+             decided_utc TEXT NOT NULL
+         );",
+    )
+}
+
+/// A block was decided and wrote nothing. `outcome` is for a person reading the
+/// table later, never branched on.
+fn ledger(
+    conn: &rusqlite::Connection,
+    filename: &str,
+    outcome: &str,
+    now: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO room_turn_ledger (filename, outcome, decided_utc)
+         VALUES (?1, ?2, ?3)",
+        rusqlite::params![filename, outcome, now],
+    )?;
+    Ok(())
+}
+
 pub fn write_pass(
     meaning: &mut rusqlite::Connection,
     ingest: &rusqlite::Connection,
@@ -418,26 +465,46 @@ pub fn write_pass(
     now: &str,
     limit: usize,
 ) -> rusqlite::Result<Pass> {
+    ensure_ledger(ingest)?;
+    // ⚠ NO `LIMIT` in the SQL, and `limit` counts blocks DECIDED rather than
+    // blocks looked at. A limited query returns the same rows every pass when
+    // they are all ineligible — which is the bug this replaces: `ORDER BY
+    // filename DESC LIMIT 20` re-examined the newest twenty blocks every two
+    // minutes and refused each time, so 49 minutes of running produced exactly
+    // the first pass's 73 turns.
+    //
+    // ⚠ ASCENDING, so a backfill drains FORWARD from the oldest undecided block.
+    // Descending means the newest minute is transcribed first and the archive is
+    // never reached.
     let mut stmt = ingest.prepare(
         "SELECT j.filename, j.result FROM jobs j
          WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
-         ORDER BY j.filename DESC LIMIT ?2",
+           AND j.filename NOT IN (SELECT filename FROM room_turn_ledger)
+         ORDER BY j.filename ASC",
     )?;
     let jobs: Vec<(String, String)> = stmt
-        .query_map(
-            rusqlite::params![crate::queue::TRANSCRIBE_ROOM, limit],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?
+        .query_map(rusqlite::params![crate::queue::TRANSCRIBE_ROOM], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
         .collect::<Result<_, _>>()?;
 
     let mut pass = Pass::default();
     for (filename, result) in jobs {
+        if pass.blocks >= limit {
+            break;
+        }
         let Some(block_start) = audiocore::names::parse_segment_start(&filename) else {
+            // Permanent: a name that is not a segment name never becomes one.
             pass.barren += 1;
+            ledger(ingest, &filename, "unnameable", now)?;
             continue;
         };
         // The block's own audio segment. Absent means the registrar has not run
         // for it yet — a reason to wait, never to write a turn with no audio.
+        //
+        // ⚠ **The one barren cause that gets NO ledger row.** It is the only
+        // transient one, and a row here would retire a block permanently for
+        // being examined a few seconds too early.
         let Ok(audio_id) = meaning.query_row(
             "SELECT id FROM audio_segments WHERE source_id = ?1 AND start_utc LIKE ?2",
             rusqlite::params![
@@ -449,8 +516,21 @@ pub fn write_pass(
             pass.barren += 1;
             continue;
         };
+        // Already written. Derived rather than ledgered, so a reversal that
+        // deletes the room turns makes this block eligible again by itself.
+        let written_already: i64 = meaning.query_row(
+            "SELECT count(*) FROM transcript_segments WHERE audio_segment_id = ?1",
+            [audio_id],
+            |r| r.get(0),
+        )?;
+        if written_already > 0 {
+            continue;
+        }
         let Ok(turns) = interpret(block_start, &result) else {
+            // Permanent: the stored result is what the shim sent and will not
+            // change shape on a later pass.
             pass.barren += 1;
+            ledger(ingest, &filename, "unreadable", now)?;
             continue;
         };
         let block_end = block_start + Duration::seconds(crate::room::BLOCK_S);
@@ -460,8 +540,15 @@ pub fn write_pass(
         pass.refused += decided.refused.len();
         pass.swept += decided.swept;
         pass.hidden += decided.hide.len();
-        pass.turns += write_block(meaning, audio_id, &decided, model, now)?;
+        let written = write_block(meaning, audio_id, &decided, model, now)?;
+        pass.turns += written;
         pass.blocks += 1;
+        if written == 0 {
+            // Decided, and left no trace in the meaning plane to derive that
+            // from. Without this row the block is indistinguishable from one
+            // nobody has looked at, and every later pass reaches it first.
+            ledger(ingest, &filename, "nothing-to-write", now)?;
+        }
     }
     Ok(pass)
 }
