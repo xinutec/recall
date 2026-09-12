@@ -402,11 +402,39 @@ pub fn build_once(
         // transcribed blocks for exactly the reason it should have lost them
         // (#1526). Any weighting scheme would be arguing with a signal that is
         // pointing the wrong way; the only safe move is to drop the source.
-        let ungated: Vec<&Contributor> = audible
-            .iter()
-            .copied()
-            .filter(|c| c.gated <= GATED_MAX)
-            .collect();
+        //
+        // ⚠⚠ **THE FILTER IS OFF, 2026-09-12, and the measurement stays.** It was
+        // switched on for about an hour and reverted the same evening when the
+        // backfill produced enough rows to see the fleet-wide distribution.
+        //
+        // Conditioned on the VAD hearing >= 5 s of speech in the minute:
+        //
+        //     source      speaking mins   p50 gated   over 0.20
+        //     geb                    72        49%        100%
+        //     pixel5                494        48%         96%
+        //     pixel9                492        45%         92%
+        //     iphone11              755        24%         56%
+        //     usb                 1,343         0%          0%
+        //
+        // EVERY PHONE GATES DURING SPEECH. That is #1526 part 1 confirmed at
+        // scale — Android and iOS noise suppression — so the rule does not
+        // separate a broken device from a phone behaving normally. It separates
+        // PHONES FROM THE CONDENSER, and applying it makes selection "always
+        // usb": the degenerate fixed choice this whole stage exists to replace.
+        //
+        // ⚠ **And the threshold was calibrated on a DIFFERENT INSTRUMENT than the
+        // one that ships.** 0.20 came from `ffmpeg silencedetect` at sample level
+        // over 83 segments, where iphone11 read 0.00 s of gap in 14 consecutive
+        // files; the stored metric is 0.1 s RMS buckets and reads 56% of that
+        // source's speaking minutes above the line. At 56% base rate, 14 clean in
+        // a row is about 1 in 100,000 — so this is not sampling, the two measures
+        // disagree, and which is right is unresolved. Agreement was checked on
+        // THREE files and that was not enough to carry a threshold.
+        //
+        // TO PUT IT BACK: reconcile the two instruments on one corpus first, then
+        // find a rule that distinguishes destroyed speech from ordinary
+        // suppression — `gated` alone cannot, because all four phones do it.
+        let ungated: Vec<&Contributor> = audible.clone();
         if ungated.is_empty() {
             // ⚠ Every microphone that heard this minute was gating. There is no
             // honest room block to build, and picking the least-bad would put a

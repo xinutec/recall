@@ -297,6 +297,7 @@ fn stored_gated(root: &Path, source: &str, stamp: &str, amplitude: f32) {
 }
 
 #[test]
+#[ignore = "parked 2026-09-12: every phone gates during speech, so the filter separates phones from the condenser rather than broken from working — see room.rs"]
 fn the_loudest_source_loses_when_it_is_gating() {
     // ⚠ THE WHOLE POINT. The gated source is LOUDER — that is what gating does
     // to a level measurement — so a rank that merely weighted it would still
@@ -323,6 +324,7 @@ fn the_loudest_source_loses_when_it_is_gating() {
 }
 
 #[test]
+#[ignore = "parked 2026-09-12: every phone gates during speech, so the filter separates phones from the condenser rather than broken from working — see room.rs"]
 fn a_minute_where_every_source_gates_builds_nothing() {
     // ⚠ Not `silent`, and not least-bad. The room was not quiet — the
     // microphones refused to say so — and a block built from the least-gated
