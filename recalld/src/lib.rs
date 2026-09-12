@@ -20,6 +20,7 @@ pub mod levels;
 pub mod processed;
 pub mod proxy;
 pub mod pyjson;
+pub mod quality;
 pub mod queue;
 pub mod reads;
 pub mod reports;
