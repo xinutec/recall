@@ -39,10 +39,6 @@ and five Kotlin test classes under `app/src/test` that nothing ran. life's gate
 builds its own Android app in THIS repository's `#android` dev shell, so the
 toolchain was proven while the app it belongs to was not.
 
-**The fleet import-surface check is a real file**, `scripts/check_import_surface.py`,
-not a heredoc piped into `.venv/bin/python`. As a heredoc it was invisible to ruff
-and mypy — the two rows immediately above it in the same gate.
-
 `ng build`'s artifact judgement moved to `dev-lint#ng-build`, which keeps the
 scratch `--output-path` (so a verify run can never clobber the bundle
 `recall-build-frontend.sh` serves), keeps the retry for the macOS Piscina teardown
@@ -207,15 +203,6 @@ in  { name = "recall"
         G.Check::{
         , name = "capture-agent import surface (devshell python, no ML deps)"
         , argv = G.inDevShell [ "python", "-c", "import recall.cli" ]
-        , timeout_s = 300
-        }
-      , {-  The other import surface: nothing reachable from recall.api may pull
-            in ML, or the fleet pod CrashLoopBackOffs. See the script.
-        -}
-        G.Check::{
-        , name = "fleet import surface (no ML reachable from recall.api)"
-        , argv =
-            G.inDevShell [ ".venv/bin/python", "scripts/check_import_surface.py" ]
         , timeout_s = 300
         }
       , {-  The .venv interpreter: plain `pytest` is the nix one and cannot

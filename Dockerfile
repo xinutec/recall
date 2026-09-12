@@ -1,12 +1,18 @@
-# recall's fleet image (Isis k3s): api + web + the sync ingest. NO ML — the Mac keeps
-# capture, ASR, diarization, and the LLM — so this is a light FastAPI + SQLite + static
-# frontend. Multi-stage: build the Angular app, then a slim python runtime with only the
-# non-ML deps (empirically fastapi/uvicorn/pydantic/httpx/python-multipart) plus ffmpeg
-# for the playback slicing the api does. Runs as non-root uid 1000, matching
-# deploy/k8s/02-deployment.yaml.
+# recall's fleet image (Isis k3s): the browsing API, the web app and the device ingest,
+# all served by `recalld`. NO ML — the Mac keeps capture, ASR, diarization and the LLM.
 #
-# NOT YET BUILT — there's no container builder on the dev Mac; this is a staged artifact.
-# Build + push `xinutec/recall:latest` from a host with docker/podman (see deploy/k8s/README).
+# ⚠ **No Python, and no interpreter.** Until 2026-09-12 this was a python:3.12 base
+# carrying FastAPI, uvicorn and numpy so `recall.api` could serve the fleet tier; the
+# port to recalld finished and the Deployment stopped naming Python months before the
+# image did. What is left is a Debian base, one static-ish binary, and the media tools
+# recalld shells out to — so the fleet dependency set is now the Rust lockfile and
+# `apt` line below, nothing else.
+#
+# Multi-stage: build the Angular app, build recalld, then assemble. Runs as non-root
+# uid 1000, matching the Deployment's runAsUser + fsGroup.
+#
+# Built and pushed by .github/workflows/build.yml — there's no container builder on the
+# dev Mac.
 
 # --- frontend build ---
 FROM node:24-slim AS frontend
@@ -30,10 +36,9 @@ COPY frontend/ ./
 RUN pnpm run build
 
 # --- recalld build ---
-# The Rust system-of-record daemon (docs/architecture.md, stage A). Built here so
-# the one fleet image carries both tiers: the Python api container and the recalld
-# ingest container run from the same image with different commands — one artifact
-# to version, push and roll.
+# The Rust system-of-record daemon (docs/architecture.md, stage A) — the only
+# program this image exists to run. One binary binds both planes, so the pod is
+# one container and the image is one artifact to version, push and roll.
 FROM rust:1-slim-trixie AS recalld
 WORKDIR /build
 # The whole Rust workspace (stage D1): cargo needs every member's manifest and
@@ -63,7 +68,7 @@ RUN cargo build --release --locked -p recalld
 # --- runtime ---
 # -trixie pinned explicitly: the recalld stage links against this release's glibc,
 # so the two FROMs must name the same Debian rather than drift apart on a float.
-FROM python:3.12-slim-trixie
+FROM debian:trixie-slim
 # The app shells out to these; a missing one is a 500 at request time, not a boot error,
 # so it hides until someone presses play. `sox` was: the image had ffmpeg only, and every
 # audio request on the fleet died with FileNotFoundError deep in loudness normalisation
@@ -85,18 +90,6 @@ ADD --checksum=sha256:70775e251eee44c0f2451a1e833326cf8bcbbe304d3e7cd12851e6fce7
     --chmod=755 \
     https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/deep-filter-0.5.6-x86_64-unknown-linux-musl \
     /usr/local/bin/deep-filter
-# Non-ML runtime deps only (see deploy/k8s/README.md), pinned to the app's floors. A
-# dedicated fleet lockfile would make this reproducible — a follow-up.
-#
-# numpy is here and is NOT a concession on "no ML". It is arithmetic over audio: the
-# envelope (RMS per 0.1s bucket), the spectrum (log-band shapes) and the per-mic
-# threshold calibration. The cleanup review — the page where the household's dead air is
-# actually deleted — runs on those, and the archive it deletes from now lives HERE. The
-# feature has to work where the audio is. What stays on the Mac is the ML proper:
-# mlx-whisper, pyannote, mlx-lm — none of which this image has, or can run.
-RUN pip install --no-cache-dir \
-    "fastapi>=0.136" "uvicorn>=0.49" "pydantic>=2.13" "httpx>=0.28" \
-    "python-multipart>=0.0.32" "numpy>=2.1"
 # uid 1000 matches the Deployment's runAsUser + fsGroup.
 # Pinned to the versioned soname on purpose: an unversioned symlink would let an
 # apt upgrade swap the ABI under a running image, and ort asks for API 21.
@@ -104,15 +97,15 @@ ENV ORT_DYLIB_PATH=/usr/lib/x86_64-linux-gnu/libonnxruntime.so.1.21
 
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin recall
 WORKDIR /app
-COPY src/ /app/src/
 COPY --from=frontend /build/frontend/dist /app/frontend/dist
 COPY --from=recalld /build/target/release/recalld /usr/local/bin/recalld
-# _REPO in recall.api is three parents up from src/recall/api.py, i.e. /app — so the
-# frontend resolves at /app/frontend/dist/recall-web/browser and PYTHONPATH is /app/src.
 RUN mkdir -p /app/logs && chown -R 1000:1000 /app
-ENV PYTHONPATH=/app/src
 USER 1000
-EXPOSE 8000
-# --out binds the data root; `recall api` overwrites RECALL_OUT from it, so pass the flag
-# (a bare RECALL_OUT env would be ignored). The k8s Deployment mounts the PVC at /data.
-CMD ["python", "-m", "recall", "api", "--out", "/data", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8000 8001
+# The Deployment passes its own command (kubes/dhall/apps/recall.dhall) — this is the
+# shape it passes, kept here so `docker run` on the image is the same program the fleet
+# runs rather than a bare shell. `--root` binds the PVC mount; both ports are bound in
+# one process (the browsing plane and the device ingest plane).
+CMD ["recalld", "--root", "/data", \
+     "--bind", "0.0.0.0:8000", "--bind", "0.0.0.0:8001", \
+     "--frontend", "/app/frontend/dist/recall-web/browser"]

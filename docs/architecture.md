@@ -393,10 +393,11 @@ stage. It owns, in build order:
   enforce the window.
 - **Browsing API + webauth + static frontend** (stage F): the FastAPI surface
   ported route-group by route-group; the Angular app unchanged, its typed
-  contract regenerated from Rust types.
+  contract regenerated from Rust types. **DONE 2026-09-12** — the Python is
+  deleted, not merely unreachable, and the image carries no interpreter.
 
-recalld and the existing Python `recall api` run side by side in the pod until
-stage F retires the latter. recalld owns `ingest.sqlite`; `recall.sqlite`
+recalld and the Python `recall api` ran side by side in the pod until stage F
+retired the latter. recalld owns `ingest.sqlite`; `recall.sqlite`
 remains the transcript system of record (shared, WAL, busy-timeout — the same
 multi-process discipline the Mac's own agents use on their copy). The
 audio-plane / meaning-plane split of [audio-plane.md](audio-plane.md) is thereby
@@ -653,9 +654,10 @@ B3 lands.*
   geb no longer beats or streams, so the old liveness reads it stale until
   the delivery-based liveness lands (see D4/liveness below).
 - **C4. Retire streaming.** After every device has flipped and survived real
-  days: delete the TCP ingest path (`audiod::server`, `rebase`,
-  `recall.mic`, `beat_relay` LAN fallback if subsumed), and the `.alive`
-  marker with it. Per-device, one at a time, confirm each records+delivers
+  days: delete the TCP ingest path (`audiod::server`, `rebase`, `beat_relay`
+  LAN fallback if subsumed), and the `.alive` marker with it. `recall.mic` —
+  the Python streaming client for a Linux host — is already gone (2026-09-12):
+  `audiod capture` replaced it on geb and nothing imported it afterwards. Per-device, one at a time, confirm each records+delivers
   before the next ([devices.md](devices.md) update rule).
 
 ### Stage D — the room stream on Isis
@@ -889,7 +891,9 @@ B3 lands.*
   devices, quiet, recall/ask, sessions), webauth (Nextcloud OAuth +
   HMAC-signed cookie), static frontend serving; regenerate the Angular
   contract from the Rust types; retire `recall api` and the Python fleet
-  image tier.
+  image tier. **DONE 2026-09-12**: `api.py`, `api_capture.py`, `webauth.py` and
+  the serving half of `sync.py` are deleted, the `api` subcommand is gone, and
+  the image is a Debian base with no interpreter.
 
   *Reads first, 2026-09-06:* `recalld::reads` serves them from `recall.sqlite`
   opened READ-ONLY — recalld does not own the meaning plane and must not be able
@@ -915,9 +919,14 @@ B3 lands.*
   EXISTING sign-in, route-group by route-group, with no second login and no flag
   day. This is the one place in the rebuild where compatibility is worth keeping,
   and it is kept for that reason rather than for fidelity's sake. A golden token
-  minted by `recall.webauth` itself is pinned in the tests: if it ever fails to
-  verify, the two halves have stopped recognising each other and incremental
-  cutover is off the table — a much bigger fact than a red test.
+  minted by `recall.webauth` itself is pinned in the tests.
+
+  ⚠ **`recall.webauth` is deleted (2026-09-12); the golden token OUTLIVES it.**
+  Its value was never "the two halves agree" — that mattered for the weeks of the
+  cutover and is moot now. What it is today is the only remaining *specimen* of
+  the format: no code can re-mint one, so if a refactor changes what Rust accepts,
+  this fixture is what notices. Do not regenerate it from the Rust — that would
+  make it agree with whatever the code does, which is the one thing it must not.
 
   Two things the port improved rather than copied:
   - **Expiry is enforced inside `verify`**, behind a trait every claim type
@@ -1084,72 +1093,48 @@ B3 lands.*
     and serves before its upstream is ready; expected, and worth knowing so a
     handful of failures right after a deploy is not mistaken for a fault.
 
-  **Where the port stands: EVERY route on both planes is recalld's** — all of
-  `/api/*` and all thirteen of `/sync/*`, since 2026-09-09. The Python answers
-  nothing a client reaches. What is still REGISTERED in it is more than that,
-  and the difference has bitten twice: the SPA catch-all, the three sync routes
-  kept as the rollback, `/login`, `/auth/callback`, `/logout`, **and the three
-  `/api/capture*` routes** — which are also what the Python container's liveness
-  and readiness probes hit. That is the durable statement; the count behind it
-  changes with every group that moves.
-  Re-derive rather than trusting the number, and derive it the way it was
-  derived here — from the LIVE app, not by grepping for route strings:
+  **The port is finished. The Python was deleted on 2026-09-12** — `api.py`,
+  `api_capture.py`, `webauth.py`, the serving half of `sync.py`, the `api`
+  subcommand, and the interpreter in the image. There is no second tier, so
+  "which tier answered" is no longer a question anyone can ask, and the
+  discriminator that answered it (`server: uvicorn` present on a Python reply,
+  absent on recalld's) has nothing left to discriminate.
 
-      .venv/bin/python -c "from recall.api import app; \
-        print(sorted({(m, r.path) for r in app.routes \
-                      for m in getattr(r, 'methods', []) \
-                      if str(getattr(r,'path','')).startswith('/api/')}))"
+  What the strangler taught, and what outlives it:
 
-  ⚠ A grep undercounts, and one way it does is invisible. It sees a path once
-  where two methods are registered on it — `/api/sessions` is both the list
-  (recalld's) and the upload (Python's) — and it counts strings that are not
-  routes at all, such as webauth's device-exempt entry for `/api/log`, whose
-  route no longer exists. ⚠ **Worst: a route registered by CALL has no decorator
-  to find.** `api_capture.py` mounts with `app.get("/api/capture")(capture_status)`,
-  so `grep '@app\.'` reports zero `/api` routes where three are live. That grep
-  is what produced the false "zero remain" in recall #1342. Ask `app.routes`.
+  ⚠ **A route registered by CALL has no decorator to find.** `api_capture.py`
+  mounted with `app.get("/api/capture")(capture_status)`, so `grep '@app\.'`
+  reported zero `/api` routes where three were live — that grep is what produced
+  the false "zero remain" in recall #1342. The general rule: ask the ROUTER, not
+  the source text. In Python that was `app.routes`; in recalld it is the axum
+  table, which `.route("…")` literals do make greppable — a property of this
+  router, not a law, and one a future refactor can take away.
 
-  That command answers for `/api/*` only. For the front door as a whole, ask from
-  the OUTSIDE which tier answered — `server: uvicorn` means Python did, through
-  the proxy; recalld sets no `server` header at all:
+  ⚠ **A grep undercounts invisibly.** It sees a path once where two methods are
+  registered on it, and it counts strings that are not routes at all.
 
-      for p in /api/capture /api/sources; do
-        curl -so /dev/null -D - "http://10.100.0.2:8000$p" \
-          | grep -iE '^(HTTP|server:)' | tr -d '\r' | paste -sd' ' -
-      done
-
-  ⚠ **That GET probe is USELESS on any POST-only path, and reads as a confident
+  ⚠ **A GET probe is USELESS on any POST-only path, and reads as a confident
   wrong answer.** `/sync/*` and `/logout` are POST-only, so a GET never reaches
-  one: it falls past them to the api's SPA catch-all, which returns `index.html`
-  with a 200 and `server: uvicorn`. It says "Python answers" before a cutover and
-  after it, for the same reason both times, and the reason is not the one being
-  asked about. `POST /logout` answers 302 with no `server` header — recalld's.
+  one: it falls past them to the SPA catch-all, which returns `index.html` with a
+  200. The probe then reports on the fallback, not on the route being asked
+  about, and it does so with a success code. **Probe a plane in its real request
+  shape** — the real method, with a deliberately WRONG token, which is refused
+  before any write.
 
-  ⚠⚠ **DO NOT reach for the wrong-shaped-request trick on a CONTROL route.** The
-  advice below — send the real method with a deliberately bad payload — is safe
-  on `/sync/*` because the token check refuses before any write. It is NOT safe
-  on `/api/capture/pause`, which is DEVICE-EXEMPT (no token to get wrong) and
-  takes its duration from a QUERY parameter, so a JSON body is ignored and the
-  call succeeds with the default 24h bound. Doing this on 2026-09-09 extended the
-  household's pause from 11:56Z to 21:17Z — recording that Pippijn expected back
-  at midday would not have returned until evening. The pause is his. Read
-  `GET /api/capture`; never POST to the control routes to find out who serves
-  them. Which tier owns them is answerable from `app.routes` instead.
-
-  Probe that plane in its real request shape instead — a POST, with a
-  deliberately WRONG token. Both tiers reject it identically and BEFORE any
-  write, so this changes nothing and still names the answerer:
-
-      curl -si -X POST -H 'Authorization: Bearer not-the-token' \
-        -H 'Content-Type: application/json' -d '{"running":true,"pausedUntil":null}' \
-        http://10.100.0.2:8000/sync/capture | grep -iE '^(HTTP|server:)'
-
-  Python answers `401` with `server: uvicorn` and a `{"detail": ...}` body;
-  recalld answers `401` with no `server` header and a plain-text one.
+  ⚠⚠ **DO NOT reach for that trick on a CONTROL route.** Sending the real method
+  with a bad payload is safe on `/sync/*` because the token check refuses first.
+  It is NOT safe on `/api/capture/pause`, which is DEVICE-EXEMPT (no token to get
+  wrong) and takes its duration from a QUERY parameter, so a JSON body is ignored
+  and the call SUCCEEDS with the default 24h bound. Doing this on 2026-09-09
+  extended the household's pause from 11:56Z to 21:17Z — recording that Pippijn
+  expected back at midday would not have returned until evening. The pause is
+  his. Read `GET /api/capture`; never POST to a control route to find out
+  anything.
 
   The api modules that served a ported group were DELETED with it, not left
-  inert — that is the rule the strangler exists to make possible, and `ls
-  src/recall/api*` is the list. What moved: reads, playback, the work queue,
+  inert — that is the rule the strangler exists to make possible. The last of
+  them went on 2026-09-12 and there is no `src/recall/api*` left to list. What
+  moved: reads, playback, the work queue,
   client reports, uploaded meetings including their upload and delete, the
   corrections corpus, the span assign, and the recorders' heartbeats and
   outboxes.
@@ -1252,7 +1237,9 @@ B3 lands.*
     mirror is what actually silences the microphones.
   - **`api_capture.py` was NOT deleted with it.** Fleet images are `:latest`
     only, so a rollback IS a roll-forward; the old implementation is what a
-    roll-forward rolls to.
+    roll-forward rolls to. It was kept for that reason until 2026-09-12, when the
+    rollback it backed had been unexercised for four days and the pod had stopped
+    running Python at all.
 
   *The first `/sync/*` route, 2026-09-08 — the plane the one-way peer dials in on:*
 
@@ -1312,7 +1299,10 @@ B3 lands.*
     `api_capture.py`'s.** There the old implementation was merely what a
     roll-forward rolls to. Here the rollback IS removing the env var, which
     unmounts the Rust and sends `/sync/capture` back through the proxy — so
-    deleting the Python would delete the rollback itself.
+    deleting the Python would delete the rollback itself. That held until the
+    proxy itself went (2026-09-12): with no upstream to send anything to,
+    unsetting the variable stopped being a rollback and became an outage, and the
+    Python it protected was deleted the same day.
   - ⚠ **The port inherited the route and not the TIMEOUT, and that showed within
     ten minutes.** One handshake in 116 came back 500 — `database is locked` —
     where the Python had served 104,482 of them without a single one.
@@ -1342,11 +1332,17 @@ B3 lands.*
   and the Rust handler was written, tested and never mounted. recalld's tests
   call the function directly (a route test needs the gate mounted), the Python
   suite cannot miss a route it no longer has, and the differential drives the
-  function rather than the server. `tests/test_route_coverage.py` now unions the
-  axum and FastAPI tables against the frontend's call sites. dev-lint's
-  DL-WIRE-ROUTE-DRIFT cannot do this and should not try: it resolves recalld's
-  table alone, which is right for a finished port and wrong mid-strangler, where
-  "absent from the axum table" legitimately means "Python still serves it".
+  function rather than the server. `tests/test_route_coverage.py` unioned the
+  axum and FastAPI tables against the frontend's call sites for as long as there
+  were two tables. dev-lint's DL-WIRE-ROUTE-DRIFT could not do that and should not
+  have tried: it resolves recalld's table alone, which is wrong mid-strangler,
+  where "absent from the axum table" legitimately means "Python still serves it".
+
+  ⚠ **With the port finished (2026-09-12) the union IS the axum table**, so the
+  bespoke test was deleted and DL-WIRE-ROUTE-DRIFT is the check — the case it was
+  always right for. Verified rather than assumed: it runs over this repo and
+  reports nothing, which is the statement that every `this.http.*` call in the
+  frontend resolves to a mounted route with a matching method.
 
   ⚠ **Verify a ported WRITE with a write.** The `/api/correct` break survived a
   deploy check that probed only reads.
@@ -1458,12 +1454,15 @@ capture-mirror with E3–E4; store, webauth and schemas with the rest of F1. The
 authoritative list is `ls src/recall` against this ladder, not a table copied
 here; when a stage lands, its deletions land in the same change.
 
-The API modules are already off it — nine went on 2026-09-07, and `health`,
+The API modules are already off it — nine went on 2026-09-07, `health`,
 `fleetwatch`, `bounded` and `loss` followed on 2026-09-08 with the doctor (its
-own Rust crate, `doctor/`). What is left under `/api` is `api.py` plus
-`api_capture` and `api_models`; `api_devices` was deleted on 2026-09-09.
+own Rust crate, `doctor/`), `api_devices` on 2026-09-09, and `api.py` +
+`api_capture.py` on 2026-09-12. What is left under `/api` is `api_models.py`,
+which serves no routes: it is the generator input `scripts/gen_models.py` reads
+to write the frontend's TypeScript, and the shapes it declares are what RECALLD
+accepts.
 
-⚠ **`recall.analyse` is GONE (2026-09-10); `recall.spectrum` STAYS.** The speech
+⚠ **`recall.analyse` is GONE (2026-09-10).** The speech
 detector moved to `audiod speech`, using `audiocore::vad` — the same silero
 recalld runs, so the Mac and the fleet cannot disagree about what counts as
 speech. analyse had been dead in practice since 2026-07-12: its only trigger was
@@ -1472,17 +1471,19 @@ a cleanup-scan page, so it was on-demand code that stopped being demanded, and
 output still had readers. It came out once the Rust agent had run unattended —
 16,828 segments measured, the whole archive.
 
-⚠ **This paragraph used to say spectrum went too, and it cannot: `calibrate`
-imports `band_shapes`, `encode_shape` and `fingerprint` from it.** Deleting it
-broke the calibrate test on import, which is the only reason anyone found out —
-so the pairing was asserted here before it was checked. `calibrate` survives as
-the only writer of `sources.event_db`, the per-device reference D2/D3 rank
-against, so its dependency survives with it.
+⚠ **Both went on 2026-09-12, along with `envelope` and `volumes`** — the whole
+per-mic level cluster. `recalld/src/levels.rs` measures it now, and it does not
+keep the answer in a column: the per-device reference D2/D3 rank against is a
+QUERY over one row of level evidence per blob, so there is no number for a
+scanner to fall behind on.
 
-⚠ One consequence, stated rather than left to be discovered: `sources.noise_shape`
-is now WRITE-ONLY. `calibrate` writes it and analyse was its only reader. Column
-and writer are kept because D2's calibration is the thing likely to want a
-per-mic spectral reference again.
+⚠ One consequence, stated rather than left to be discovered: `sources.event_db`
+and `sources.noise_shape` now have **no writer and no reader in either
+language**. The columns and their migrations stay — a migration is history and
+is never edited — but nothing fills them, so any future code reading one gets
+NULL for every source and must treat that as "never measured", not as "silent".
+That is the same trap that made `analyse`'s output outlive its readers, run the
+other way round.
 
 ⚠ **THE PYTHON CONTAINER IS GONE (2026-09-12).** The fleet pod runs ONE
 container, `recalld`, binding 8000 and 8001 itself. What decided it: over a whole

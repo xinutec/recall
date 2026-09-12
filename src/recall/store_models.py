@@ -183,7 +183,7 @@ class SegmentVolume:
     # left carrying no visible turn. None is *unknown*, and unknown is never swept.
     speech_s: float | None
     # How far its most unusual moment departs from this mic's own idle noise. Ranks the
-    # spans; decides nothing (recall.spectrum).
+    # spans; decides nothing. Measured by recalld (recalld/src/levels.rs).
     structure: float | None
     # How much of the segment rose above *this microphone's own* sound threshold — the
     # honest test of an empty room, and the one a 60-second mean cannot do. Measured on

@@ -1278,17 +1278,6 @@ def _cmd_llm_host(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_api(args: argparse.Namespace) -> int:
-    # uvicorn is imported lazily so every other CLI command stays free of the
-    # web stack. RECALL_OUT is read by recall.api at import time.
-    import uvicorn  # noqa: PLC0415 - keep the web stack out of other commands
-
-    runlog.setup()  # timestamped action logging (pause/resume) before uvicorn
-    os.environ["RECALL_OUT"] = str(args.out)
-    uvicorn.run("recall.api:app", host=args.host, port=args.port, log_level="info")
-    return 0
-
-
 def _cmd_enroll(args: argparse.Namespace) -> int:
     embedding = pyannote_embed(args.audio, model=args.model)
     store = Store.open(args.out / "recall.sqlite")
@@ -1580,7 +1569,6 @@ _COMMANDS = {
     "scan-foreign-script": _cmd_scan_foreign_script,
     "scan-wordless": _cmd_scan_wordless,
     "llm-host": _cmd_llm_host,
-    "api": _cmd_api,
     "score-attribution": _cmd_score_attribution,
     "enroll": _cmd_enroll,
     "identify": _cmd_identify,

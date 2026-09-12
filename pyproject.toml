@@ -11,6 +11,10 @@ requires-python = ">=3.12"
 # frozen, complete pin set; this list is the human-readable intent behind it.
 dependencies = [
     "datasets>=5.0",
+    # The LLM host's HTTP surface, and ONLY that: the fleet tier it used to serve
+    # is recalld now, so nothing here answers a browser. `recall llm-host` holds the
+    # mlx-lm weights and lends them over localhost, which is why the web stack is
+    # still a Mac dependency at all.
     "fastapi>=0.136",
     "httpx>=0.28",
     "mlx-lm>=0.31",
@@ -28,7 +32,6 @@ dependencies = [
     "peft>=0.19",
     "pyannote-audio>=4.0",
     "pydantic>=2.13",
-    "python-multipart>=0.0.32",
     "silero-vad>=6.2",
     "torch>=2.12",
     "transformers>=5.12",
@@ -126,16 +129,6 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 # Asserting against literal expected values is the point of a test.
 "tests/**" = ["PLR2004"]
-
-[tool.ruff.lint.flake8-bugbear]
-# FastAPI requires these as argument defaults (File/Form/Depends/Query).
-extend-immutable-calls = [
-  "fastapi.File",
-  "fastapi.Form",
-  "fastapi.Depends",
-  "fastapi.Query",
-  "fastapi.Header",
-]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

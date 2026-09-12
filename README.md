@@ -21,7 +21,7 @@ Open **`http://10.100.0.2:8000`** (Isis, over the VPN, behind a Nextcloud sign-i
 a timeline of the conversation, full-text search with audio playback, a
 review/correct queue, record-from-device (phone as a second mic), and speaker
 labelling that enrols voices as you confirm who spoke. It's an Angular app served
-by FastAPI on one origin, running on Isis — the Mac serves no UI.
+by `recalld` on one origin, running on Isis — the Mac serves no UI.
 See [`docs/running.md`](docs/running.md).
 
 ## Dev

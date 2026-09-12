@@ -262,11 +262,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         help="seconds of quiet before the weights are released",
     )
 
-    api = sub.add_parser("api", help="serve the FastAPI JSON API + Angular app")
-    api.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    api.add_argument("--host", default="0.0.0.0", help="bind address")
-    api.add_argument("--port", type=int, default=8000)
-
     att = sub.add_parser(
         "score-attribution",
         help="per-word speaker-attribution accuracy vs a corrected recording",

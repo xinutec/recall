@@ -43,7 +43,7 @@ added freely.
 |---|---|
 | **USB mic** (`audiod capture`, since 2026-09-05) | local, on the recorder host itself: sox → ffmpeg, no socket and no handshake. Our code is never in this path — a real-time device has no buffer to absorb a stall. It ported `recall record`, which is deleted |
 | **Phones** (the mic apps) | TCP to the ingest port, handshake, raw PCM. They roam, sleep, and need a person to restart them, which is what the apps' bulk is for |
-| **Linux hosts** (geb: `audiod capture` + `audiod upload`, since 2026-09-05) | store-and-forward, not streaming ([architecture.md](architecture.md) stage C3): ffmpeg opens ALSA into audiod's segmenter, closed capture-stamped segments deliver to recalld with verified receipts, `audiod pause-mirror` keeps the household pause honoured. The `recall.mic` streaming client this row used to describe is retired |
+| **Linux hosts** (geb: `audiod capture` + `audiod upload`, since 2026-09-05) | store-and-forward, not streaming ([architecture.md](architecture.md) stage C3): ffmpeg opens ALSA into audiod's segmenter, closed capture-stamped segments deliver to recalld with verified receipts, `audiod pause-mirror` keeps the household pause honoured. The `recall.mic` streaming client this row used to describe was retired here and deleted 2026-09-12 |
 
 A Linux mic is the cheapest recorder to add, because most of what makes a phone hard
 is absent: no roaming, no battery, no app lifecycle. Since the C3 cutover its

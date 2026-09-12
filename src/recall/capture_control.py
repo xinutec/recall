@@ -122,7 +122,7 @@ class CaptureEventKind(StrEnum):
     # cannot name the caller. AUDIT ONLY: the loss reconciler (the `doctor` crate) and
     # `_pause_explains` (recall.worker) key on PAUSE/RESUME exactly and never see this,
     # so it annotates "was that pause mine?" without touching gap detection. detail
-    # carries the verb + the request_origin descriptor (recall.webauth).
+    # carries the verb + the request_origin descriptor (recalld/src/webauth.rs).
     CONTROL_REQUEST = "control_request"
 
 

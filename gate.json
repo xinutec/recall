@@ -175,20 +175,6 @@
         "--no-warn-dirty",
         "--command",
         ".venv/bin/python",
-        "scripts/check_import_surface.py"
-      ],
-      "cwd": ".",
-      "env": {},
-      "name": "fleet import surface (no ML reachable from recall.api)",
-      "timeout_s": 300
-    },
-    {
-      "argv": [
-        "nix",
-        "develop",
-        "--no-warn-dirty",
-        "--command",
-        ".venv/bin/python",
         "-m",
         "pytest"
       ],

@@ -345,64 +345,6 @@ class Store:
         )
         self._commit()
 
-    def audio_segments_unmeasured(
-        self, *, limit: int = 2000, kinds: Collection[SourceKind]
-    ) -> list[tuple[AudioSegmentId, str]]:
-        """(id, path) of segments from sources of `kinds` not yet measured. Keyed on the
-        envelope, not the volume: a segment measured before envelopes were stored still
-        owes us its shape, and the decode that gives us one gives us both."""
-        placeholders = ",".join("?" * len(kinds))
-        rows = self._conn.execute(
-            "SELECT a.id, a.path FROM audio_segments a "
-            "JOIN sources s ON s.id = a.source_id "
-            f"WHERE a.envelope IS NULL AND s.kind IN ({placeholders}) "
-            "ORDER BY a.start_utc LIMIT ?",
-            (*[k.value for k in kinds], limit),
-        ).fetchall()
-        return [(AudioSegmentId(int(r["id"])), str(r["path"])) for r in rows]
-
-    def sweepable_source_ids(self) -> list[str]:
-        """The continuously-recording sources — the ones a cleanup can act on, and so
-        the ones worth measuring a sound threshold for."""
-        rows = self._conn.execute(
-            "SELECT id FROM sources WHERE kind != ? ORDER BY id",
-            (SourceKind.UPLOAD.value,),
-        ).fetchall()
-        return [str(r["id"]) for r in rows]
-
-    def quiet_envelopes(
-        self, source_id: str, *, quiet_below_db: float, limit: int = 400
-    ) -> list[bytes]:
-        """Envelopes of one source's *idle* segments — quiet by volume, and with no
-        turn standing on them. This is the mic breathing and nothing else: the sample
-        its noise floor is measured from (recall.calibrate). The caller supplies the
-        volume that counts as idle: that is detection's policy, not the store's."""
-        rows = self._conn.execute(
-            """SELECT a.envelope FROM audio_segments a
-               WHERE a.source_id = ? AND a.mean_volume <= ? AND a.envelope IS NOT NULL
-                 AND NOT EXISTS (SELECT 1 FROM transcript_segments t
-                                 WHERE t.audio_segment_id = a.id
-                                   AND t.superseded_by IS NULL
-                                   AND t.hidden_reason IS NULL)
-               LIMIT ?""",
-            (source_id, quiet_below_db, limit),
-        ).fetchall()
-        return [bytes(r["envelope"]) for r in rows]
-
-    def speech_envelopes(self, source_id: str, *, limit: int = 400) -> list[bytes]:
-        """Envelopes of one source's segments that produced a turn that still stands —
-        audio known to contain words. Their quietest peak is the floor under which this
-        mic's threshold may never sit, or it would list none of them as sound."""
-        rows = self._conn.execute(
-            """SELECT DISTINCT a.envelope FROM audio_segments a
-               JOIN transcript_segments t ON t.audio_segment_id = a.id
-               WHERE a.source_id = ? AND a.envelope IS NOT NULL
-                 AND t.superseded_by IS NULL AND t.hidden_reason IS NULL
-               LIMIT ?""",
-            (source_id, limit),
-        ).fetchall()
-        return [bytes(r["envelope"]) for r in rows]
-
     def audio_segments_to_analyse(
         self, *, kinds: Collection[SourceKind], limit: int = 200
     ) -> list[tuple[AudioSegmentId, str, str]]:
@@ -447,23 +389,6 @@ class Store:
             (speech_s, structure, int(audio_id)),
         )
         self._commit()
-
-    def idle_segment_paths(
-        self, source_id: str, *, quiet_below_db: float, limit: int = 24
-    ) -> list[str]:
-        """Paths of one source's idle segments — quiet, with no turn standing on them.
-        The sample its noise fingerprint is learned from: this mic, hearing nothing."""
-        rows = self._conn.execute(
-            """SELECT a.path FROM audio_segments a
-               WHERE a.source_id = ? AND a.mean_volume <= ?
-                 AND NOT EXISTS (SELECT 1 FROM transcript_segments t
-                                 WHERE t.audio_segment_id = a.id
-                                   AND t.superseded_by IS NULL
-                                   AND t.hidden_reason IS NULL)
-               ORDER BY a.start_utc LIMIT ?""",
-            (source_id, quiet_below_db, limit),
-        ).fetchall()
-        return [str(r["path"]) for r in rows]
 
     def segments_showing_no_turns(
         self,
@@ -524,43 +449,6 @@ class Store:
             (HUMAN_MODEL,),
         ).fetchall()
         return [(TranscriptId(int(r["id"])), str(r["text"])) for r in rows]
-
-    def set_source_noise_shape(self, source_id: str, shape: bytes) -> None:
-        """Store a microphone's idle-noise fingerprint (see recall.spectrum).
-
-        ⚠ WRITE-ONLY as of 2026-09-10. `recall.analyse` was its only reader and
-        was deleted when the speech detector moved to `audiod speech`;
-        `calibrate` still writes it and nothing consumes it. The column and its
-        writer are kept because #1388's D2 calibration is the one thing likely to
-        want a per-mic spectral reference again."""
-        self._conn.execute(
-            "UPDATE sources SET noise_shape = ? WHERE id = ?", (shape, source_id)
-        )
-        self._commit()
-
-    def source_noise_shape(self, source_id: str) -> bytes | None:
-        row = self._conn.execute(
-            "SELECT noise_shape FROM sources WHERE id = ?", (source_id,)
-        ).fetchone()
-        if row is None or row["noise_shape"] is None:
-            return None
-        return bytes(row["noise_shape"])
-
-    def set_source_event_db(self, source_id: str, event_db: float) -> None:
-        """Record a microphone's measured sound threshold (dBFS)."""
-        self._conn.execute(
-            "UPDATE sources SET event_db = ? WHERE id = ?", (event_db, source_id)
-        )
-        self._commit()
-
-    def source_event_db(self, source_id: str) -> float | None:
-        """A microphone's measured sound threshold, None if it has not been measured."""
-        row = self._conn.execute(
-            "SELECT event_db FROM sources WHERE id = ?", (source_id,)
-        ).fetchone()
-        if row is None or row["event_db"] is None:
-            return None
-        return float(row["event_db"])
 
     def audio_segment_volumes(
         self, *, kinds: Collection[SourceKind]

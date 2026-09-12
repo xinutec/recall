@@ -130,7 +130,7 @@ today and stays so.
 The WG binding is the network gate; on top of it the **human web UI** is gated behind a
 Nextcloud sign-in (`dash.xinutec.org`), so reaching recall over the VPN isn't enough — you
 also have to be a signed-in, allowlisted user. This mirrors health-sync's "Sign in with
-Nextcloud" wall. It lives in `recall.webauth` and is **inert unless configured**, exactly
+Nextcloud" wall. It lives in `recalld/src/webauth.rs` and is **inert unless configured**, exactly
 like the sync token: with `RECALL_SESSION_SECRET` + `NC_CLIENT_ID` + `NC_CLIENT_SECRET`
 unset, recall is an open LAN UI (the Mac's local UI, dev, and tests are untouched); the
 Isis pod sets them (from `recall-secret`) and raises the gate.

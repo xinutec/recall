@@ -376,9 +376,11 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE audio_segments ADD COLUMN envelope BLOB;
     """,
-    # v32 — each microphone's own sound threshold (dBFS), measured from its own audio by
-    # recall.calibrate. The four recorders differ by ~20 dB in both noise floor and the
-    # faintest speech they pick up, so a single constant tuned on the USB mic sat above
+    # v32 — each microphone's own sound threshold (dBFS), measured from its own audio.
+    # recalld measures it now (recalld/src/levels.rs); the Python that filled this
+    # column was deleted 2026-09-12. The four recorders differ by ~20 dB in both noise
+    # floor and the faintest speech they pick up, so a single constant tuned on the
+    # USB mic sat above
     # every word the phones had ever recorded — it would have reported "no sound in this
     # span" over full sentences. NULL = not yet measured; the review falls back to the
     # default until a scan has heard the source enough to say.

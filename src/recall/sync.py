@@ -1,85 +1,31 @@
-"""Mac→fleet sync — the security core of the Isis/Mac split.
+"""Mac→fleet sync — the Mac's client half of the Isis/Mac split.
 
 See `docs/isis-migration.md`. The Mac is a one-way WireGuard peer: it may dial the
 fleet, nothing may dial back. So every exchange is **Mac-initiated** — the Mac POLLS the
 fleet for jobs (it has the ML) and PUSHES results to the fleet's system of record. This
-module is the transport + auth for that inversion.
+module is the transport for that inversion: job poll (refine + uploaded-session pulls),
+audio-blob push and fetch, segment/turns push, live-turn push, and the capture exchange.
 
-It is **inert unless `RECALL_SYNC_TOKEN` is set**: importing it changes nothing, and the
-routes are only registered when a token is configured, so a stock LAN-only deployment
-is untouched. When enabled, the routes are meant to bind to the WireGuard interface only
-— never the shared public ingress, which answers on the public IP regardless of DNS.
+⚠ **The other end of every call here is `recalld`, not this file.** The serving half
+lived alongside the client until 2026-09-12 — the same pydantic models, registered on a
+FastAPI app — and `recalld/src/sync.rs` now answers all of it. Keeping both would mean
+two implementations of one wire contract with nothing holding them level, so the Python
+routes went and the models stayed. What the models describe is therefore what the RUST
+side accepts: change one and `recalld/tests/` is where the disagreement shows up.
 
-The whole Mac→fleet flow is here: job poll (refine + uploaded-session pulls),
-audio-blob push and fetch, segment/turns push (supersede-aware), and day-summary
-push. The auth check and bearer parsing are pure, so
-they're unit-tested; routes and client are exercised against a FastAPI test transport.
+The httpx client is injectable, so the wire contract is testable against a transport.
 """
 
 from __future__ import annotations
 
-import hmac
-import os
-import time
-from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from collections.abc import Mapping
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
-
-from recall import capture_control
-from recall.sources import AudioSource, SourceKind
-from recall.store import (
-    RefineRequest,
-    Store,
-    TranscriptSegment,
-    UploadJob,
-)
-from recall.timeline import Segment
 
 SYNC_TOKEN_ENV = "RECALL_SYNC_TOKEN"
 _BEARER = "Bearer "
-
-
-def _safe_component(component: str) -> str:
-    """A single path component the fleet will trust as a directory/file name. Rejects
-    anything that could escape the archive root (separators, `..`, a hidden dot-file) —
-    the Mac is authenticated, but a compromised token must not become path traversal."""
-    if (
-        not component
-        or "/" in component
-        or "\\" in component
-        or ".." in component
-        or component.startswith(".")
-    ):
-        raise HTTPException(
-            status_code=400, detail=f"unsafe path component: {component!r}"
-        )
-    return component
-
-
-def sync_token() -> str | None:
-    """The secret the Mac presents to the fleet; None when the split is off."""
-    return os.environ.get(SYNC_TOKEN_ENV)
-
-
-def bearer(header: str | None) -> str | None:
-    """The token from an ``Authorization: Bearer <token>`` header, or None."""
-    if header and header.startswith(_BEARER):
-        return header[len(_BEARER) :]
-    return None
-
-
-def check_token(presented: str | None, expected: str | None) -> None:
-    """Authorise a sync request. 503 when the server has no token configured (the split
-    is off — never silently accept), 401 when the header is missing or wrong. Constant-
-    time compare, so a wrong token leaks no timing signal."""
-    if not expected:
-        raise HTTPException(status_code=503, detail="sync not enabled")
-    if not presented or not hmac.compare_digest(presented, expected):
-        raise HTTPException(status_code=401, detail="bad sync token")
 
 
 class JobOut(BaseModel):
@@ -172,28 +118,6 @@ class SegmentStoredOut(BaseModel):
 
     audio_segment_id: int
     turns_written: int
-    tombstoned: bool = False
-
-
-class SegmentBatchIn(BaseModel):
-    """A catch-up's worth of processed segments in one request (#1346) — the same
-    items POST /sync/segments takes one at a time; blobs still travel separately."""
-
-    segments: list[SegmentIn]
-
-
-class SegmentsStoredOut(BaseModel):
-    """One result per pushed segment, aligned by index with the request."""
-
-    results: list[SegmentStoredOut]
-
-
-class LiveTurnsIn(BaseModel):
-    """A batch of provisional live turns the Mac pushes for the fleet's instant feed.
-    Audio-less and time-anchored — shown at once, then reconciled (hidden) when the
-    archive segment spanning them arrives (see `_ingest_segment`)."""
-
-    turns: list[TurnIn]
 
 
 class LiveStoredOut(BaseModel):
@@ -202,282 +126,11 @@ class LiveStoredOut(BaseModel):
     stored: int
 
 
-# /sync/capture long-poll bounds: cap how long the exchange may hang, and re-derive
-# the intent every slice while hanging so a pause elapsing on its own (no POST, no
-# notify) is still caught mid-hang.
-_INTENT_WAIT_CAP_S = 25.0
-_INTENT_WAIT_SLICE_S = 2.0
-
-
-class CaptureAppliedIn(BaseModel):
-    """What the Mac currently has applied to its own capture — reported each mirror pass
-    so the fleet's status reflects reality, not just what was asked for."""
-
-    running: bool
-    pausedUntil: str | None = None  # ISO resume-by, or null when recording
-    # Each source's last-proved-recording ISO time (the .alive freshness the Mac
-    # owns), so /api/sources on the fleet is truthful. Defaulted: an older Mac client
-    # omits it and the fleet just shows no liveness, as before.
-    sourceLiveness: dict[str, str] = {}
-    # Long-poll: with wait > 0, the exchange hangs (up to `wait` seconds) while the
-    # fleet's intent still equals `knownIntent` — the value the Mac last applied
-    # (null = running). A press on any UI wakes it in ~RTT, so intent reaches the
-    # mic near-instantly while the report cadence stays the mirror's interval.
-    # Defaulted: an older Mac short-polls exactly as before.
-    wait: float = 0
-    knownIntent: str | None = None
-
-
 class CaptureIntentOut(BaseModel):
     """The fleet's desired capture state: the resume-by time of a pause, or null to run.
     The Mac mirrors this onto its local pause file."""
 
     pausedUntil: str | None
-
-
-def _incoming_turn_keys(turns: list[TurnIn]) -> list[tuple[str, str, str, str]]:
-    """An order-independent identity for a pushed turn set — to skip a no-op re-push."""
-    return sorted((t.start, t.end, t.text, t.asr_model) for t in turns)
-
-
-def _machine_turn_keys(
-    turns: list[TranscriptSegment],
-) -> list[tuple[str, str, str, str]]:
-    """The same identity for the fleet's current machine turns, to compare against."""
-    return sorted(
-        (t.start.isoformat(), t.end.isoformat(), t.text, t.asr_model) for t in turns
-    )
-
-
-def _capture_exchange(
-    store: Store, body: CaptureAppliedIn, now: datetime
-) -> CaptureIntentOut:
-    """Record the Mac's applied capture state and return the fleet's desired intent —
-    the /sync/capture handshake body, pulled out so the route stays a thin wrapper."""
-    capture_control.record_reported(
-        store,
-        running=body.running,
-        paused_until=body.pausedUntil,
-        now=now,
-        source_liveness=body.sourceLiveness,
-    )
-    # The report just changed what /api/capture serves (confirmed state, freshness):
-    # wake hanging client polls so a settle shows in ~RTT of the mirror's confirmation.
-    capture_control.notify_capture_changed()
-    until = capture_control.intent_until(store, now)
-    return CaptureIntentOut(pausedUntil=until.isoformat() if until else None)
-
-
-def _job_of(req: RefineRequest) -> JobOut:
-    return JobOut(
-        id=req.id,
-        type="refine",
-        source=req.source,
-        start=req.start.isoformat(),
-        end=req.end.isoformat(),
-    )
-
-
-def _upload_job_of(job: UploadJob) -> JobOut:
-    return JobOut(
-        id=job.audio_id,
-        type="upload",
-        source=job.source,
-        start=job.start.isoformat(),
-        end=job.end.isoformat(),
-        file=job.file,
-        title=job.title,
-        sample_rate=job.sample_rate,
-        channels=job.channels,
-    )
-
-
-def _ingest_segment(store: Store, body: SegmentIn, data_root: Path) -> SegmentStoredOut:
-    """Persist a pushed segment, reconciling across the split. The fleet is the system
-    of record: a newer machine pass (worker → refine) SUPERSEDES the old machine turns,
-    while human edits made on the fleet are authoritative and preserved — the same rule
-    refine._replace_turns uses. An identical re-push is a no-op, so it never churns."""
-    try:
-        kind = SourceKind(body.kind)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"bad kind {body.kind!r}") from exc
-    seg_start = datetime.fromisoformat(body.start)
-    seg_end = datetime.fromisoformat(body.end)
-    # A deliberately-deleted identity is refused, not re-stored: without this veto,
-    # the mirror-completion pass (or a refine minting new turns for a deleted
-    # session) would quietly resurrect what a human explicitly removed. Any blob a
-    # racing audio push landed first is cleaned up here too.
-    if store.is_tombstoned(body.source_id, seg_start):
-        blob = (
-            data_root
-            / _safe_component(body.source_id)
-            / _safe_component(Path(body.path).name)
-        )
-        blob.unlink(missing_ok=True)
-        return SegmentStoredOut(audio_segment_id=0, turns_written=0, tombstoned=True)
-    # The sender owns the kind: the Mac runs the capture agents and the upload path, so
-    # it is the machine that can know. Registering (not INSERT OR IGNORE) is what lets a
-    # correction there reach here — otherwise the fleet keeps the first kind it was ever
-    # told and the two databases disagree for good.
-    store.register_source(
-        AudioSource(id=body.source_id, name=body.source_name, kind=kind, spec="")
-    )
-    # Re-home the path. The sender's `path` is absolute on the machine that recorded
-    # it (`/Volumes/Backup/recall/usb/…` on the Mac), and storing it verbatim gave the
-    # fleet a database describing a filesystem it cannot see: the transcripts read
-    # perfectly and every play button 404s, silently, for ever. The blob itself lands
-    # under the fleet's own root (see /sync/audio), so the row must point there too.
-    # The fleet owns its archive layout; only the filename survives the trip — and it
-    # is checked: an authenticated Mac is still hostile input if the token ever leaks.
-    path = (
-        data_root
-        / _safe_component(body.source_id)
-        / _safe_component(Path(body.path).name)
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id=body.source_id,
-            sequence=0,
-            start=seg_start,
-            end=seg_end,
-            path=str(path),
-            sample_rate=body.sample_rate,
-            channels=body.channels,
-        )
-    )
-    # Reconcile the instant feed: this archive segment now covers its span, so any
-    # provisional live turns the fleet is still showing inside it are hidden — the
-    # fleet-side mirror of worker.reconcile_live, so it swaps live for archive instead
-    # of showing both. Runs on every ingest (before the no-op check) so a live turn that
-    # arrived after the segment was first stored is still reconciled.
-    store.hide_live_turns_covered_by(seg_start, seg_end)
-    # A push proves the Mac's ASR has processed this segment — record that on the
-    # fleet's row too. For an uploaded session this is what retires its pending
-    # upload job (the belt to the Mac's explicit job-done call).
-    store.mark_transcribed(int(audio_id))
-    current = _machine_turn_keys(store.visible_machine_turns_for_audio(audio_id))
-    if current == _incoming_turn_keys(body.turns):
-        return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=0)
-    human = store.human_corrections_overlapping(int(audio_id), seg_start, seg_end)
-    written = 0
-    with store.transaction():
-        for old in store.visible_machine_turns_for_audio(audio_id):
-            store.hide(old.id, "superseded by sync push")
-        for turn in body.turns:
-            start = datetime.fromisoformat(turn.start)
-            end = datetime.fromisoformat(turn.end)
-            if any(c.start < end and c.end > start for c in human):
-                continue  # human ground truth already covers this span
-            turn_id = store.add_transcript_segment(
-                audio_segment_id=int(audio_id),
-                start=start,
-                end=end,
-                text=turn.text,
-                asr_model=turn.asr_model,
-                language=turn.language,
-                asr_confidence=turn.asr_confidence,
-                speaker_cluster=turn.speaker_cluster,
-                provenance=turn.provenance,
-            )
-            # The guess is written by a separate ML pass on the Mac, so it isn't an
-            # add_transcript_segment column; set it here so the fleet holds what the
-            # Mac already computed (the fleet has no ML to recompute it).
-            if turn.speaker_guess is not None and turn.speaker_score is not None:
-                store.set_speaker_guess(
-                    int(turn_id), turn.speaker_guess, turn.speaker_score
-                )
-            written += 1
-    return SegmentStoredOut(audio_segment_id=int(audio_id), turns_written=written)
-
-
-def _register_capture_route(
-    app: FastAPI, store_factory: Callable[[], Store], expected: str
-) -> None:
-    """The capture-control inversion route (its own helper so register_sync_routes stays
-    small). The Mac reports its applied state and pulls the fleet's desired intent in
-    one round trip; Isis can't dial the one-way peer, so this Mac-initiated exchange is
-    how a pause pressed on the fleet's UI reaches the mic. See recall.capture_mirror."""
-
-    @app.post("/sync/capture")
-    def sync_capture(
-        body: CaptureAppliedIn, authorization: str | None = Header(default=None)
-    ) -> CaptureIntentOut:
-        check_token(bearer(authorization), expected)
-        store = store_factory()
-        try:
-            reply = _capture_exchange(store, body, datetime.now(UTC))
-        finally:
-            store.close()
-        # Read AFTER the exchange: its own report-notify must not self-wake the
-        # hang, while an intent change racing in right here still returns at once.
-        seen = capture_control.capture_change_version()
-        # Long-poll (see CaptureAppliedIn.wait): the report has landed; now hang
-        # while the intent still equals what the Mac already applied. A pause/resume
-        # POST wakes the wait (the `seen` version closes the lost-wakeup gap); the
-        # slices catch a pause elapsing on its own (intent flips with no POST). The
-        # store is reopened per check, never held hanging.
-        deadline = time.monotonic() + min(body.wait, _INTENT_WAIT_CAP_S)
-        while body.wait > 0 and reply.pausedUntil == body.knownIntent:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            capture_control.wait_capture_changed(
-                min(_INTENT_WAIT_SLICE_S, remaining), seen=seen
-            )
-            seen = capture_control.capture_change_version()
-            store = store_factory()
-            try:
-                until = capture_control.intent_until(store, datetime.now(UTC))
-            finally:
-                store.close()
-            reply = CaptureIntentOut(pausedUntil=until.isoformat() if until else None)
-        return reply
-
-
-def register_sync_routes(
-    app: FastAPI, store_factory: Callable[[], Store], data_root: Path
-) -> bool:
-    """Register the token-gated sync endpoints on `app`, but only when a token is
-    configured — so a stock deployment is unchanged. Returns whether they were added.
-    `data_root` is the archive root the Mac's audio blobs are streamed into."""
-    expected = sync_token()
-    if not expected:
-        return False
-
-    @app.post("/sync/segments")
-    def sync_segments(
-        body: SegmentIn, authorization: str | None = Header(default=None)
-    ) -> SegmentStoredOut:
-        check_token(bearer(authorization), expected)
-        store = store_factory()
-        try:
-            return _ingest_segment(store, body, data_root)
-        finally:
-            store.close()
-
-    @app.post("/sync/segments/batch")
-    def sync_segments_batch(
-        body: SegmentBatchIn, authorization: str | None = Header(default=None)
-    ) -> SegmentsStoredOut:
-        """The batch shape of /sync/segments (#1346): a catch-up pays one
-        round-trip per ~50 segments instead of one each. Items are ingested
-        sequentially on one store; an item failure fails the whole request, which
-        keeps exactly the abort-and-retry liveness the single push has (a
-        poisoned segment already aborted every per-segment pass)."""
-        check_token(bearer(authorization), expected)
-        store = store_factory()
-        try:
-            return SegmentsStoredOut(
-                results=[
-                    _ingest_segment(store, seg, data_root) for seg in body.segments
-                ]
-            )
-        finally:
-            store.close()
-
-    _register_capture_route(app, store_factory, expected)
-
-    return True
 
 
 class SyncClient:

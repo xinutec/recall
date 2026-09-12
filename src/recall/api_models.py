@@ -1,7 +1,10 @@
 """Request body models for the recall API (pydantic).
 
-Split out of ``recall.api`` so the request *shapes* are separate from the route
-logic — mirroring ``recall.schemas`` (the response shapes) and ``store_models``.
+The ROUTES these bodies belong to are `recalld`'s (`recalld/src/`) — this file is
+the generator input for the frontend's TypeScript, not a server. `scripts/gen_models.py`
+reads it alongside ``recall.schemas`` (the response shapes) and writes
+``frontend/src/app/models.ts``, so a shape changed here and not in Rust shows up as a
+type error in the app rather than a silent wire mismatch.
 """
 
 from __future__ import annotations

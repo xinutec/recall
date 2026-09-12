@@ -21,13 +21,15 @@ hand. Rationale and topology: `docs/isis-migration.md`.
 
 ## What runs here
 
-The **fleet tier only**, two containers from one image since 2026-09-05: the
-FastAPI api + web + sync ingest, and `recalld` — the Rust ingest plane of
-[architecture.md](../../docs/architecture.md), wg hostPort 8001, gated by the
-`INGEST_TOKENS` key in `recall-secret`. No ML — the Mac keeps capture, ASR,
-diarization, and the LLM. So the image needs the non-ML
-subset of recall's deps (fastapi, pydantic, httpx, sqlite, uvicorn) plus the built Angular
-frontend, and runs `recall api`.
+The **fleet tier only**: ONE container running `recalld`, which binds the browsing
+API + web app (8000) and the device ingest plane (wg hostPort 8001, gated by the
+`INGEST_TOKENS` key in `recall-secret`) in one process. No ML — the Mac keeps capture,
+ASR, diarization, and the LLM.
+
+⚠ Was two containers from one image, the second a Python `recall api`, from
+2026-09-05 until the port finished on 2026-09-12. The image carries no interpreter
+now: a Debian base, the `recalld` binary, the built Angular frontend, and the media
+tools recalld shells out to (ffmpeg, ffprobe, sox, flac, deep-filter).
 
 Manifests (in `pippijn:code/kubes/recall/k8s/`): `00-namespace`, `01-pvc` (the SQLite DB +
 audio under `/data`), `02-deployment` (hardened: non-root uid 1000, dropped caps,
@@ -38,9 +40,9 @@ read-only rootfs + `/tmp` emptyDir, seccomp, probes, limits), `03-service` (Clus
 
 1. **Image** — DONE. Built and pushed by CI (`.github/workflows/build.yml`, like every
    other app) on push to `main`: `xinutec/recall:latest` is on Docker Hub. Nobody builds
-   it locally. It runs as uid 1000 via `python -m recall api`; the non-ML dep set is
-   validated (`recall.api`/`recall.sync` import with only fastapi/uvicorn/pydantic/httpx/
-   python-multipart).
+   it locally. It runs as uid 1000 via `recalld`, and CI boots the image before
+   publishing: the binary must print its usage, the Angular bundle must be present, and
+   every binary recalld shells out to must resolve.
 2. **Encryption at rest — DEFERRED (future action item, 2026-07-11).** Isis is a single
    unencrypted ext4 disk (no spare partition), so encryption would be a LUKS file-container
    mounted at recall's storage path (nixos-config + activation). Deferred by decision to

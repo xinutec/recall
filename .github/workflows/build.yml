@@ -1,16 +1,17 @@
 ---
 name: build
 
-# recall's FLEET image (api + web + sync ingest, no ML) — build + push
-# xinutec/recall:latest to Docker Hub on push to main, the same way the other web apps
-# do (health/life/coach/fleetwatch each have this workflow). The k8s manifests live in
-# deploy/k8s (and, once deployed, the kubes monorepo); the image tag is the only contract.
+# recall's FLEET image (recalld: browsing API + web + device ingest, no ML) — build +
+# push xinutec/recall:latest to Docker Hub on push to main, the same way the other web
+# apps do (health/life/coach/fleetwatch each have this workflow). The k8s manifests live
+# in deploy/k8s (and, once deployed, the kubes monorepo); the image tag is the only
+# contract.
 #
-# Unlike the pure-Node apps, recall's full gate can't run here: it needs
-# nix + the mlx/pyannote venv, which is Apple-Silicon-only. So CI runs a light lint (ruff,
-# no project deps) and lets the Docker build — which installs and builds the
-# frontend and installs the non-ML python deps — be the real build gate. The full gate
-# (mypy, pytest, dev-lint, frontend) stays local on the Mac before each push.
+# Unlike the pure-Node apps, recall's full gate can't run here: it needs nix + the
+# mlx/pyannote venv, which is Apple-Silicon-only. So CI runs a light lint (ruff, no
+# project deps) and lets the Docker build — which builds the frontend and compiles
+# recalld for x86-64 — be the real build gate. The full gate (mypy, pytest, clippy,
+# dev-lint, frontend) stays local on the Mac before each push.
 
 on:
   push:
@@ -57,10 +58,10 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       # Build it, BOOT it, and only then publish it. Without the smoke step an image
-      # that cannot import its own app still gets tagged :latest and deployed — which
-      # is exactly what happened: a lint fix moved recall.calibrate to a top-level
-      # import, dragging numpy into recall.api's chain, and Isis CrashLoopBackOff'd on
-      # a green build. The Dockerfile's dep set is a claim; running it is the proof.
+      # that cannot run the app still gets tagged :latest and deployed — which is
+      # exactly what happened: a lint fix dragged numpy into the serving chain of the
+      # Python tier this image used to carry, and Isis CrashLoopBackOff'd on a green
+      # build. The Dockerfile's dep set is a claim; running it is the proof.
       - uses: docker/build-push-action@v7
         with:
           context: .
@@ -69,26 +70,23 @@ jobs:
           tags: xinutec/recall:ci
           cache-from: type=registry,ref=xinutec/recall:cache
 
-      - name: smoke — the image can import the app it exists to serve
+      - name: smoke — the image can run the app it exists to serve
         run: |
-          docker run --rm xinutec/recall:ci python -c "
-          import recall.api, recall.sync
-          print('recall.api + recall.sync import on the fleet dep set')
-          "
+          # recalld is the whole program now. A binary that will not start — a
+          # glibc mismatch between the build stage and the runtime base is the way
+          # that happens — crash-loops on Isis and nowhere earlier. Bare argv prints
+          # usage, which is proof it links and runs.
+          docker run --rm xinutec/recall:ci \
+            sh -c 'recalld 2>&1 | grep -q "usage: recalld"'
           # The web UI is half the point of the fleet tier; an image with no bundle is
           # a working API serving 404s.
           docker run --rm xinutec/recall:ci \
             test -f /app/frontend/dist/recall-web/browser/index.html
-          # The binaries the app SHELLS OUT to. Missing one is not a boot failure — it is
+          # The binaries recalld SHELLS OUT to. Missing one is not a boot failure — it is
           # a 500 the first time somebody presses play, which is how `sox` reached
           # production: transcripts served perfectly, every audio request died.
           docker run --rm xinutec/recall:ci \
-            sh -c 'for b in ffmpeg ffprobe sox flac; do command -v "$b" >/dev/null || { echo "missing: $b"; exit 1; }; done'
-          # The second container in the pod (docs/architecture.md, stage A5): a
-          # broken or absent recalld would pass every Python smoke above and
-          # crash-loop only on Isis. Bare argv prints usage — proof it runs at all.
-          docker run --rm xinutec/recall:ci \
-            sh -c 'recalld 2>&1 | grep -q "usage: recalld"'
+            sh -c 'for b in ffmpeg ffprobe sox flac deep-filter; do command -v "$b" >/dev/null || { echo "missing: $b"; exit 1; }; done'
 
       - uses: docker/build-push-action@v7
         with:
