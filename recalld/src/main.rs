@@ -373,12 +373,18 @@ fn spawn_room_turn_writer(root: PathBuf) {
             })
             .await;
             match done {
-                Ok(Ok(pass)) if pass.turns + pass.hidden + pass.refused > 0 => {
+                // ⚠ `swept` is IN this guard, and leaving it out is how the
+                // interesting case goes quiet: a block whose room turns are all
+                // repetition loops writes nothing, hides nothing and refuses
+                // nothing, so without it the one pass that says the room audio
+                // is bad is the one pass that logs no line at all.
+                Ok(Ok(pass)) if pass.turns + pass.hidden + pass.refused + pass.swept > 0 => {
                     tracing::info!(
                         blocks = pass.blocks,
                         turns = pass.turns,
                         hidden = pass.hidden,
                         refused = pass.refused,
+                        swept = pass.swept,
                         barren = pass.barren,
                         "room turns: written"
                     );

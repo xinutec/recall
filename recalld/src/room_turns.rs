@@ -138,6 +138,11 @@ pub struct Plan {
     /// Room turns declined, and why. Recorded rather than dropped silently:
     /// a refusal nobody can read is indistinguishable from a bug.
     pub refused: Vec<String>,
+    /// Room turns the model produced and the quality rules swept — loops and
+    /// wordless text. Counted SEPARATELY from `refused` on purpose: a refusal
+    /// says a person's words are in the way, a sweep says the model failed, and
+    /// a log line that adds them together can report either as the other.
+    pub swept: usize,
 }
 
 fn overlaps(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)) -> bool {
@@ -159,6 +164,20 @@ fn overlaps(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)
 ///    segments of real household conversation, including a minute of Dutch about
 ///    writing things down to remember them. A pass replaces a transcript or it
 ///    keeps it. It never empties one.
+/// 5. **A room turn that is a repetition loop or has no word in it is SWEPT**
+///    before any of the above, so it can neither be written nor hide anything.
+///
+/// ⚠ Rule 5 is placed where it is because of rule 4, not beside it. The whole
+/// point of sweeping here — rather than on the read path, where `recall.cleanup`
+/// sweeps the per-mic corpus — is that a block whose room turns are ALL junk
+/// then inserts nothing, and therefore hides nothing, and the per-mic
+/// transcript of that minute survives untouched. Sweeping after the hide set was
+/// built would be the 132-segment mistake with a different filter.
+///
+/// ⚠ It is also what makes the room-vs-per-mic comparison fair. The 2026-09-11
+/// measurement put 22% repetition loops against the per-mic corpus's 0% — but
+/// that corpus is SWEPT of exactly these and the room turns were written raw, so
+/// the number compared raw to swept rather than room audio to mic audio (#1388).
 #[must_use]
 pub fn plan(room: Vec<RoomTurn>, standing: &[Standing], human: &[Corrected]) -> Plan {
     let hits_human = |span: (DateTime<Utc>, DateTime<Utc>)| {
@@ -167,6 +186,11 @@ pub fn plan(room: Vec<RoomTurn>, standing: &[Standing], human: &[Corrected]) -> 
 
     let mut out = Plan::default();
     for turn in room {
+        if crate::quality::is_repetition_loop(&turn.text) || crate::quality::is_wordless(&turn.text)
+        {
+            out.swept += 1;
+            continue;
+        }
         if hits_human((turn.start, turn.end)) {
             out.refused.push(format!(
                 "human-corrected span {}..{} — the person's text stands",
@@ -368,6 +392,10 @@ pub struct Pass {
     pub hidden: usize,
     pub refused: usize,
     pub barren: usize,
+    /// Room turns the quality rules swept (see [`plan`] rule 5). The number the
+    /// room-vs-per-mic comparison turns on: a pass that sweeps most of what the
+    /// model produced is reporting on the AUDIO, not on the filter.
+    pub swept: usize,
 }
 
 /// Turn stored job results into visible turns, one block at a time.
@@ -430,6 +458,7 @@ pub fn write_pass(
         let human = corrected_between(meaning, block_start, block_end)?;
         let decided = plan(turns, &standing, &human);
         pass.refused += decided.refused.len();
+        pass.swept += decided.swept;
         pass.hidden += decided.hide.len();
         pass.turns += write_block(meaning, audio_id, &decided, model, now)?;
         pass.blocks += 1;

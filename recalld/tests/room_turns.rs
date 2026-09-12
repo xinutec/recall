@@ -285,6 +285,57 @@ fn nothing_inserted_means_nothing_hidden() {
 }
 
 #[test]
+fn a_looping_room_turn_is_swept_and_never_written() {
+    // Rule 5. The 2026-09-11 room measurement was 22% repetition loops; this is
+    // the filter that keeps them out of the system of record, applied where the
+    // write is decided rather than on the read path afterwards.
+    let out = plan(
+        vec![
+            room_turn(A, B, "momentum momentum momentum momentum"),
+            room_turn(C, D, "ik denk dat we dat morgen moeten doen"),
+        ],
+        &[],
+        &[],
+    );
+    assert_eq!(out.swept, 1);
+    assert_eq!(out.insert.len(), 1, "the real sentence survives the sweep");
+    assert_eq!(out.insert[0].text, "ik denk dat we dat morgen moeten doen");
+}
+
+#[test]
+fn a_wordless_room_turn_is_swept_too() {
+    let out = plan(vec![room_turn(A, B, "...")], &[], &[]);
+    assert_eq!(out.swept, 1);
+    assert!(out.insert.is_empty());
+}
+
+#[test]
+fn a_block_that_is_all_loops_hides_nothing() {
+    // ⚠ Rule 5 meeting rule 4, and the reason rule 5 is applied BEFORE the hide
+    // set is built. A minute the room heard as junk must leave the per-mic
+    // transcript of that minute exactly as it was — sweeping afterwards would be
+    // refine's 132 blanked segments with a different filter.
+    let out = plan(
+        vec![
+            room_turn(A, B, "goog goog goog goog goog goog"),
+            room_turn(C, D, "***"),
+        ],
+        &[Standing {
+            id: 1,
+            start: t(A),
+            end: t(D),
+        }],
+        &[],
+    );
+    assert_eq!(out.swept, 2);
+    assert!(out.insert.is_empty());
+    assert!(
+        out.hide.is_empty(),
+        "a swept block must not hide the microphones that did hear the minute"
+    );
+}
+
+#[test]
 fn an_uncovered_per_mic_turn_is_left_alone() {
     // Only what a WRITTEN room turn actually covers is hidden.
     let out = plan(
@@ -525,6 +576,7 @@ fn a_plan() -> recalld::room_turns::Plan {
         insert: vec![room_turn(A, B, "wat zei je")],
         hide: vec![],
         refused: vec![],
+        swept: 0,
     }
 }
 
@@ -580,6 +632,7 @@ fn hiding_names_a_reason_a_reader_can_act_on() {
         insert: vec![room_turn(A, B, "the room heard this")],
         hide: vec![99],
         refused: vec![],
+        swept: 0,
     };
     write_block(&mut conn, 7, &plan, "whisper", "t").expect("write");
     let reason: String = conn
@@ -605,6 +658,7 @@ fn an_empty_plan_writes_nothing_and_hides_nothing() {
         insert: vec![],
         hide: vec![99],
         refused: vec![],
+        swept: 0,
     };
     assert_eq!(
         write_block(&mut conn, 7, &empty, "whisper", "t").expect("write"),
