@@ -73,7 +73,26 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
          );
          CREATE INDEX IF NOT EXISTS segment_levels_source
              ON segment_levels (source, filename);",
-    )
+    )?;
+    add_gated_column(conn)
+}
+
+/// Add `gated` to a table that already exists.
+///
+/// ⚠ **`CREATE TABLE IF NOT EXISTS` DOES NOT ADD A COLUMN.** Every deployment
+/// that ran before 2026-09-12 already has this table, so the column in the
+/// CREATE above reaches new databases only — and the insert names `gated`, so
+/// production would have failed on every segment with `no such column`. Caught
+/// by querying the live fleet, not by the suite: every test builds the table
+/// fresh, which is the one shape that cannot show this.
+fn add_gated_column(conn: &Connection) -> rusqlite::Result<()> {
+    let present: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('segment_levels') WHERE name = 'gated'")?
+        .exists([])?;
+    if present {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE segment_levels ADD COLUMN gated REAL")
 }
 
 /// Decode one blob and measure it — every container through ffmpeg, the one

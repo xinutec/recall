@@ -228,3 +228,60 @@ fn the_scanner_stores_the_gate_measurement() {
         "a sine at -14 dBFS is not gated"
     );
 }
+
+#[test]
+fn a_database_from_before_the_detector_gains_the_column() {
+    // ⚠ THE SHAPE THE WHOLE SUITE WAS BLIND TO. Every other test builds
+    // `segment_levels` fresh, where the column arrives with the CREATE. Production
+    // had the table already, and `CREATE TABLE IF NOT EXISTS` adds nothing to an
+    // existing one — so `gated` was never going to appear there, and the insert
+    // names it. Found by querying the live fleet: `no such column: gated`.
+    let dir = tempfile::tempdir().expect("tmp");
+    let conn = store::open(dir.path()).expect("db");
+    // The schema exactly as it stood before 2026-09-12.
+    conn.execute_batch(
+        "CREATE TABLE segment_levels (
+             filename     TEXT PRIMARY KEY,
+             source       TEXT NOT NULL,
+             speech_db    REAL NOT NULL,
+             floor_db     REAL NOT NULL,
+             computed_utc TEXT NOT NULL
+         );",
+    )
+    .expect("old schema");
+    conn.execute(
+        "INSERT INTO segment_levels VALUES ('usb-old.wav','usb',-20.0,-60.0,'2026-09-01T00:00:00Z')",
+        [],
+    )
+    .expect("a row from before");
+
+    recalld::levels::ensure_schema(&conn).expect("migrate");
+
+    let has: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('segment_levels') WHERE name = 'gated'")
+        .expect("prep")
+        .exists([])
+        .expect("query");
+    assert!(
+        has,
+        "an existing table must GAIN the column, not silently skip it"
+    );
+
+    // The pre-existing row keeps its readings and reads NULL for the new one —
+    // unknown, which is what makes the room builder defer rather than trust it.
+    let (speech, gated): (f64, Option<f64>) = conn
+        .query_row(
+            "SELECT speech_db, gated FROM segment_levels WHERE filename = 'usb-old.wav'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("row survives");
+    assert!(
+        (speech - -20.0).abs() < f64::EPSILON,
+        "the old reading stands"
+    );
+    assert!(gated.is_none(), "not measured is not zero");
+
+    // And running it twice must not fail on the column already being there.
+    recalld::levels::ensure_schema(&conn).expect("idempotent");
+}
