@@ -16,9 +16,7 @@ from pathlib import Path
 import pytest
 
 from recall import capture_control, cli
-from recall.probe import Scan
 from recall.store import Store
-from recall.worker import _clear_dead_stubs
 
 
 def _store(tmp_path: Path) -> Store:
@@ -104,107 +102,6 @@ def test_add_capture_event_rejects_a_naive_timestamp(tmp_path: Path) -> None:
         store.close()
 
 
-def test_clearing_a_dead_stub_records_a_durable_dead_window_then_deletes(
-    tmp_path: Path,
-) -> None:
-    store = _store(tmp_path)
-    try:
-        usb = tmp_path / "usb"
-        usb.mkdir()
-        stub = usb / "usb-20260715T090200.opus"
-        stub.write_bytes(b"")  # a zero-byte tombstone
-        # A NEWER sibling exists, so the stub cannot be the open segment — clearable.
-        (usb / "usb-20260715T090300.opus").write_bytes(b"x")
-        _clear_dead_stubs(Scan(segments=[], empty=[stub], unreadable=[]), store, "usb")
-
-        assert not stub.exists()  # the file is gone...
-        events = store.capture_events_since(datetime(2026, 7, 15, tzinfo=UTC))
-        assert len(events) == 1  # ...but the evidence survives
-        event = events[0]
-        assert event.kind == capture_control.CaptureEventKind.DEAD_WINDOW
-        assert event.source_id == "usb"
-        assert event.detail == "usb-20260715T090200.opus"
-        # timestamped to WHEN capture died (from the filename), not when noticed
-        assert event.utc == datetime(2026, 7, 15, 9, 2, 0, tzinfo=UTC)
-    finally:
-        store.close()
-
-
-def test_the_newest_stub_is_never_touched_it_may_be_the_open_segment(
-    tmp_path: Path,
-) -> None:
-    # ffmpeg writes a segment's bytes only when it CLOSES (rotation or EOF) — measured
-    # live 2026-07-16: the current segment sat at 0 bytes, held open, for 3 minutes
-    # (lsof confirmed the open fd). Unlinking it would send the eventual flush to a
-    # deleted inode: silent, unrecoverable loss. So the newest file of a source is
-    # never cleared, and no dead_window is recorded for it (the verdict isn't in yet).
-    store = _store(tmp_path)
-    try:
-        usb = tmp_path / "usb"
-        usb.mkdir()
-        stub = usb / "usb-20260715T090200.opus"
-        stub.write_bytes(b"")  # zero bytes, but possibly still open by ffmpeg
-        _clear_dead_stubs(Scan(segments=[], empty=[stub], unreadable=[]), store, "usb")
-
-        assert stub.exists()  # left alone
-        assert store.capture_events_since(datetime(2026, 7, 15, tzinfo=UTC)) == []
-    finally:
-        store.close()
-
-
-def test_a_stub_cut_short_by_a_deliberate_pause_is_not_recorded_as_lost_speech(
-    tmp_path: Path,
-) -> None:
-    """Turning capture off mid-segment leaves exactly what a dead device leaves.
-
-    Observed 2026-07-22: capture resumed at 11:19:34, ffmpeg opened its first segment
-    at 11:19:38, and the pause landed 0.4s later. The header-only stub read as a dead
-    window and held the loss check red for 48 hours — over an act the household chose.
-    """
-    store = _store(tmp_path)
-    try:
-        usb = tmp_path / "usb"
-        usb.mkdir()
-        stub = usb / "usb-20260715T090200.opus"
-        stub.write_bytes(b"")
-        (usb / "usb-20260715T090300.opus").write_bytes(b"x")  # newer: stub is clearable
-        store.add_capture_event(
-            capture_control.CaptureEventKind.PAUSE,
-            utc=datetime(2026, 7, 15, 9, 2, 0, 400_000, tzinfo=UTC),
-            source_id="usb",
-        )
-        _clear_dead_stubs(Scan(segments=[], empty=[stub], unreadable=[]), store, "usb")
-
-        assert not stub.exists()  # the empty file still goes...
-        events = store.capture_events_since(datetime(2026, 7, 15, tzinfo=UTC))
-        assert [e.kind for e in events] == ["pause"]  # ...the pause is the whole story
-    finally:
-        store.close()
-
-
-def test_a_pause_long_after_the_stub_does_not_explain_it(tmp_path: Path) -> None:
-    """Only a pause inside the stub's own segment window can have killed it. A pause
-    ten minutes later is a different act, and the dead window is still real loss."""
-    store = _store(tmp_path)
-    try:
-        usb = tmp_path / "usb"
-        usb.mkdir()
-        stub = usb / "usb-20260715T090200.opus"
-        stub.write_bytes(b"")
-        (usb / "usb-20260715T090300.opus").write_bytes(b"x")
-        store.add_capture_event(
-            capture_control.CaptureEventKind.PAUSE,
-            utc=datetime(2026, 7, 15, 9, 12, 0, tzinfo=UTC),
-            source_id="usb",
-        )
-        _clear_dead_stubs(Scan(segments=[], empty=[stub], unreadable=[]), store, "usb")
-
-        events = store.capture_events_since(datetime(2026, 7, 15, tzinfo=UTC))
-        assert [e.kind for e in events] == ["dead_window", "pause"]
-    finally:
-        store.close()
-
-
 def test_the_supervisor_records_a_resume_when_capture_starts(tmp_path: Path) -> None:
     # Not paused (no pause file), so capture starts immediately: it must mark a `resume`
     # — the ground-truth start of an active span the loss check reconciles gaps against.
@@ -222,18 +119,3 @@ def test_the_supervisor_records_a_resume_when_capture_starts(tmp_path: Path) -> 
     assert rc == 0
     assert done.wait(2)  # the event is written on a daemon thread
     assert recorded == [capture_control.CaptureEventKind.RESUME]
-
-
-def test_an_unreadable_stub_is_kept_and_not_recorded_as_dead(tmp_path: Path) -> None:
-    # Non-empty but unreadable may still hold audio: never deleted, never a dead-window.
-    store = _store(tmp_path)
-    try:
-        usb = tmp_path / "usb"
-        usb.mkdir()
-        bad = usb / "usb-20260715T090200.opus"
-        bad.write_bytes(b"not really opus")
-        _clear_dead_stubs(Scan(segments=[], empty=[], unreadable=[bad]), store, "usb")
-        assert bad.exists()  # kept
-        assert store.capture_events_since(datetime(2026, 7, 15, tzinfo=UTC)) == []
-    finally:
-        store.close()

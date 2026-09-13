@@ -62,16 +62,6 @@ def test_transcribe_claims_discovered_for_audio_it_did_not_record(
     assert _kind(tmp_path, MEETING) is SourceKind.DISCOVERED
 
 
-def test_worker_id_branch_agrees_with_the_all_sources_branch(tmp_path: Path) -> None:
-    # `worker` with no --id registers DISCOVERED via process_all; --id must not
-    # disagree with it about the same directory of audio.
-    _audio_dropped_in(tmp_path, MEETING)
-
-    assert cli.main(["worker", "--out", str(tmp_path), "--id", MEETING, "--basic"]) == 0
-
-    assert _kind(tmp_path, MEETING) is SourceKind.DISCOVERED
-
-
 def test_an_indexed_meeting_is_not_deletable_and_is_not_a_microphone(
     tmp_path: Path,
 ) -> None:

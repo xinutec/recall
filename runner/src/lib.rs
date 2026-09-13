@@ -11,4 +11,5 @@
 //! usefully be asked two things at once.
 
 pub mod client;
+pub mod pulse;
 pub mod shim;

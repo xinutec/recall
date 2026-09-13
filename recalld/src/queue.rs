@@ -38,8 +38,17 @@ const LEASE_TTL_S: i64 = 10 * 60;
 pub struct Job {
     pub id: i64,
     pub kind: String,
-    /// The blob to work on, fetchable via `/ingest/v1/blob/room/<filename>`.
+    /// The blob to work on, fetchable via `/ingest/v1/blob/<source>/<filename>`.
     pub filename: String,
+    /// Which recorder it came from — the `<source>` in that URL.
+    ///
+    /// ⚠ **Carried, not derived.** The runner used to hardcode `room`, which was
+    /// true while one kind existed and silently wrong the moment a microphone
+    /// clip could be leased: the fetch would 404 on a path no source owns. It
+    /// cannot be parsed out of the filename either — `meeting-20260907-0905` is
+    /// a real source id and every plausible split of its name is wrong. The
+    /// ingest plane already knows; it says so here.
+    pub source: String,
 }
 
 pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -243,7 +252,7 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Resul
     // one always exists; a job whose blob the ingest plane has forgotten is
     // unleasable, which is the correct reading of "there is nothing to fetch".
     let sql = format!(
-        "SELECT j.id, j.kind, j.filename FROM jobs j
+        "SELECT j.id, j.kind, j.filename, s.source FROM jobs j
          JOIN segments s ON s.filename = j.filename
          WHERE j.state IN ('queued', 'leased')
            AND (j.leased_until IS NULL OR j.leased_until < ?1)
@@ -263,6 +272,7 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Resul
                 id: r.get(0)?,
                 kind: r.get(1)?,
                 filename: r.get(2)?,
+                source: r.get(3)?,
             })
         })
         .optional()?;

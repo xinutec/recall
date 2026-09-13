@@ -262,14 +262,18 @@ in
     };
   };
 
-  launchd.agents."org.xinutec.recall-worker" = daemon {
-    label = "org.xinutec.recall-worker";
-    name = "worker";
-    python = venvPython;
-    args = [ "worker" "--loop" "--basic" "--out" out ];
-    # Heavy continuous loop — yield I/O and CPU to interactive work.
-    extra = { LowPriorityIO = true; Nice = 10; };
-  };
+  # ⚠ **`recall-worker` WAS HERE and is gone (#1538).** It indexed and
+  # transcribed the Mac's own segments; `runner` now leases `transcribe-segment`
+  # from Isis and drives the same shim with the same model, and recalld's
+  # `turns::PER_MIC` pass writes the turns — including the live reconciliation
+  # this agent used to do, which is why that moved in the same commit.
+  #
+  # Nothing replaced its SCAN: it also discovered new source directories and
+  # cleared dead-capture stubs. `audiod capture` registers its own source and
+  # the ingest plane is authoritative for what exists, so the scan had no
+  # remaining reader — but if a phantom source or an uncleared stub shows up,
+  # that is where it came from.
+
 
   # The one process on this Mac that holds the LLM weights (src/recall/llmhost.py).
   # recall's summaries/Ask and life's emotion worker are clients over 127.0.0.1:8092;
@@ -475,7 +479,8 @@ in
         exec env RUST_LOG=info \
           ${
             recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
-          }/bin/runner --shim ${venvPython} -m recall.shim_asr
+          }/bin/runner --pulse ${out}/worker-heartbeat.json \
+            --shim ${venvPython} -m recall.shim_asr
       '';
     };
     extra = {

@@ -1,5 +1,5 @@
 //! The rules that decide what fleetwatch is told: the roll-up, the recording
-//! checks, the worker pulse, the live tier, and the archive's own reachability.
+//! checks, the transcription pulse, the live tier, and the archive's own reachability.
 
 use chrono::{DateTime, Duration, Utc};
 use doctor::archive::{self, archive_check, blanked_check, mirror_check};

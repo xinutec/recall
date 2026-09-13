@@ -571,6 +571,15 @@ fn meaning_with_turns() -> rusqlite::Connection {
     conn
 }
 
+/// The minute the fixture's turns fall in. `write_block` needs the clip's span
+/// to reconcile live turns against it.
+fn a_span() -> (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>) {
+    (
+        "2026-09-11T10:00:00Z".parse().expect("from"),
+        "2026-09-11T10:01:00Z".parse().expect("to"),
+    )
+}
+
 fn a_plan() -> recalld::turns::Plan {
     recalld::turns::Plan {
         insert: vec![room_turn(A, B, "wat zei je")],
@@ -586,7 +595,15 @@ fn a_written_turn_is_findable_by_search() {
     // the text unfindable by the one route most likely to look for it.
     let mut conn = meaning_with_turns();
     assert_eq!(
-        write_block(&mut conn, 7, &a_plan(), &ROOM, "2026-09-11T10:00:00Z").expect("write"),
+        write_block(
+            &mut conn,
+            7,
+            a_span(),
+            &a_plan(),
+            &ROOM,
+            "2026-09-11T10:00:00Z"
+        )
+        .expect("write"),
         1
     );
     let hits: i64 = conn
@@ -606,11 +623,11 @@ fn a_second_pass_refuses_rather_than_duplicating() {
     let mut conn = meaning_with_turns();
     let plan = a_plan();
     assert_eq!(
-        write_block(&mut conn, 7, &plan, &ROOM, "t").expect("first"),
+        write_block(&mut conn, 7, a_span(), &plan, &ROOM, "t").expect("first"),
         1
     );
     assert_eq!(
-        write_block(&mut conn, 7, &plan, &ROOM, "t").expect("again"),
+        write_block(&mut conn, 7, a_span(), &plan, &ROOM, "t").expect("again"),
         0
     );
     let n: i64 = conn
@@ -634,7 +651,7 @@ fn hiding_names_a_reason_a_reader_can_act_on() {
         refused: vec![],
         swept: 0,
     };
-    write_block(&mut conn, 7, &plan, &ROOM, "t").expect("write");
+    write_block(&mut conn, 7, a_span(), &plan, &ROOM, "t").expect("write");
     let reason: String = conn
         .query_row(
             "SELECT hidden_reason FROM transcript_segments WHERE id = 99",
@@ -661,7 +678,7 @@ fn an_empty_plan_writes_nothing_and_hides_nothing() {
         swept: 0,
     };
     assert_eq!(
-        write_block(&mut conn, 7, &empty, &ROOM, "t").expect("write"),
+        write_block(&mut conn, 7, a_span(), &empty, &ROOM, "t").expect("write"),
         0
     );
     let reason: Option<String> = conn
@@ -1512,5 +1529,86 @@ fn a_row_whose_filename_changed_is_still_not_repointed() {
     assert_eq!(
         path, "/data/usb/renamed-by-something-else.flac",
         "the path a turn can already play must stand"
+    );
+}
+
+#[test]
+fn a_per_mic_write_hides_the_live_guess_it_replaces() {
+    // ⚠ WHAT `worker.py::reconcile_live` DID, AND NOBODY ELSE WOULD. A live turn
+    // is a guess made while somebody was still speaking. On the fleet the
+    // archive turn hides it inside `work::store_segment` — the SYNC-PUSH path —
+    // and a runner writing turns directly never goes through it. Without this
+    // the timeline shows the guess and the archive turn side by side, which
+    // reads as the conversation happening twice.
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    done_mic_job(
+        &meaning,
+        &ingest,
+        "usb",
+        "usb-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+        "2026-09-11T10:01:00+00:00",
+        &a_result("dit is echte spraak"),
+    );
+    meaning
+        .execute(
+            "INSERT INTO transcript_segments (id, audio_segment_id, start_utc, end_utc,
+                                              text, asr_model)
+             VALUES (900, NULL, '2026-09-11T10:00:12+00:00', '2026-09-11T10:00:15+00:00',
+                     'dit is ecte spraak', 'live')",
+            [],
+        )
+        .expect("live turn");
+
+    write_pass(&mut meaning, &ingest, &PER_MIC, "now", 20).expect("pass");
+
+    let hidden: Option<String> = meaning
+        .query_row(
+            "SELECT hidden_reason FROM transcript_segments WHERE id = 900",
+            [],
+            |r| r.get(0),
+        )
+        .expect("live turn");
+    assert_eq!(hidden.as_deref(), Some("live-reconciled"));
+}
+
+#[test]
+fn a_live_turn_outside_the_clip_is_left_alone() {
+    // The span is the only thing relating a live turn to a clip — it has no
+    // `audio_segment_id` of its own. A bound that reached past the clip would
+    // hide a guess for a minute nothing has transcribed yet, losing the only
+    // record of it.
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    done_mic_job(
+        &meaning,
+        &ingest,
+        "usb",
+        "usb-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+        "2026-09-11T10:01:00+00:00",
+        &a_result("dit is echte spraak"),
+    );
+    meaning
+        .execute(
+            "INSERT INTO transcript_segments (id, audio_segment_id, start_utc, end_utc,
+                                              text, asr_model)
+             VALUES (901, NULL, '2026-09-11T10:01:30+00:00', '2026-09-11T10:01:33+00:00',
+                     'een latere zin', 'live')",
+            [],
+        )
+        .expect("later live turn");
+
+    write_pass(&mut meaning, &ingest, &PER_MIC, "now", 20).expect("pass");
+
+    let hidden: Option<String> = meaning
+        .query_row(
+            "SELECT hidden_reason FROM transcript_segments WHERE id = 901",
+            [],
+            |r| r.get(0),
+        )
+        .expect("live turn");
+    assert_eq!(
+        hidden, None,
+        "a guess for a minute nobody has transcribed must stand"
     );
 }

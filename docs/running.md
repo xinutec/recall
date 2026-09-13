@@ -89,14 +89,20 @@ being built were both this process, not the audio: segments ffmpeg had not
 finished writing, and ffmpeg missing from PATH altogether. A broken file among
 good ones is believable; every file broken is the instrument.
 
-### The worker leaves a pulse
+### The runner leaves a pulse
 
-`<data root>/worker-heartbeat.json` is stamped at the start and again at the end
-of every worker pass, and the doctor grades its age as `capture/worker pulse`
+`<data root>/worker-heartbeat.json` is stamped after every transcription job the
+`runner` completes, and the doctor grades its age as `capture/transcription
+pulse`
 (warn 30 min, fail 1 h — set from the **cold** first pass, measured at 513 s
 because it loads the speaker-ID models off the spinning disk; steady-state empty
 passes are 17–22 s, and an empty pass is not a fast one since the bounded
-backfills run regardless). The worker's *log* cannot answer this: it prints only
+backfills run regardless).
+
+⚠ **The FILE NAME still says `worker`, and the worker is gone (#1538).** It is
+kept because the doctor, the fleet's history and these thresholds all key on
+that path; renaming it would silently reset the one signal it exists to give.
+The writer is now `runner --pulse`. The *log* cannot answer this: it prints only
 when a pass writes transcript rows, so a quiet house and a wedged pipeline both
 leave an empty `worker.out.log` — on 2026-08-10 that log was three days old while
 an hour of captured audio went unindexed.

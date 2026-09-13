@@ -486,6 +486,14 @@ pub fn register_segments(
 /// where a bare `1` is not.
 pub const COVERED_BY_ROOM: &str = "covered by the room stream";
 
+/// Marks a provisional LIVE turn hidden because the archive pass has reached it.
+///
+/// ⚠ The literal is shared with the Python (`store.RECONCILED_MARKER`) and with
+/// `work::store_segment`. Three writers, one string, and a fourth spelling would
+/// simply make some hidden turns unfindable by whoever goes looking for the
+/// other three.
+pub const LIVE_RECONCILED: &str = "live-reconciled";
+
 /// Apply a [`Plan`] to one block. ONE transaction: the turns, their search-index
 /// rows and the hides land together or not at all.
 ///
@@ -506,6 +514,7 @@ pub const COVERED_BY_ROOM: &str = "covered by the room stream";
 pub fn write_block(
     conn: &mut rusqlite::Connection,
     audio_segment_id: i64,
+    span: (DateTime<Utc>, DateTime<Utc>),
     plan: &Plan,
     stream: &Stream,
     now: &str,
@@ -550,6 +559,25 @@ pub fn write_block(
         )?;
         written += 1;
     }
+    if stream.reconciles_live {
+        // ⚠ The SPAN, not the audio segment. A live turn has no
+        // `audio_segment_id` of its own — it was minted from a stream, not a
+        // file — so the only thing relating it to this clip is the minute it
+        // fell in. Mirrors `work::store_segment`, which does this for the
+        // sync-push path, down to the marker string.
+        let (from, to) = span;
+        tx.execute(
+            "UPDATE transcript_segments SET hidden_reason = ?1
+             WHERE asr_model = 'live' AND superseded_by IS NULL
+               AND hidden_reason IS NULL
+               AND start_utc >= ?2 AND start_utc < ?3",
+            rusqlite::params![
+                LIVE_RECONCILED,
+                from.to_rfc3339_opts(SecondsFormat::Micros, false),
+                to.to_rfc3339_opts(SecondsFormat::Micros, false),
+            ],
+        )?;
+    }
     for hidden in &plan.hide {
         tx.execute(
             "UPDATE transcript_segments SET hidden_reason = ?1
@@ -578,6 +606,19 @@ pub struct Stream<'a> {
     pub provenance: &'a str,
     /// What they record in `asr_model`.
     pub model: &'a str,
+    /// Whether writing turns for a clip also hides the PROVISIONAL LIVE turns
+    /// standing on the same span.
+    ///
+    /// ⚠ **Not the same act as `hides_covered`, and not optional for a stream
+    /// that replaces the archive pass.** A live turn is a guess made while
+    /// somebody was still speaking; the archive turn for that span supersedes
+    /// it, and `worker.py::reconcile_live` has been hiding them on the Mac for
+    /// months. On the fleet the same thing happens in `work::store_segment`,
+    /// which is the SYNC-PUSH path — and a runner writing turns directly never
+    /// goes through it. Without this, the timeline shows the live guess and the
+    /// archive turn side by side, which reads as the conversation happening
+    /// twice.
+    pub reconciles_live: bool,
     /// Whether a written turn HIDES the per-mic turns it covers.
     ///
     /// True for the room stream alone, and it is the whole reason [`plan`]'s
@@ -593,6 +634,10 @@ pub const ROOM: Stream<'static> = Stream {
     kind: crate::queue::TRANSCRIBE_ROOM,
     provenance: "room",
     model: ROOM_MODEL,
+    // The room stream is DERIVED from microphones whose own archive pass already
+    // reconciled the live turns on that minute; doing it again would hide the
+    // same rows for a second reason and make the reversal ambiguous.
+    reconciles_live: false,
     hides_covered: true,
 };
 
@@ -619,6 +664,8 @@ pub const PER_MIC: Stream<'static> = Stream {
     kind: crate::queue::TRANSCRIBE_SEGMENT,
     provenance: "per-mic (runner)",
     model: SHIM_MODEL,
+    // This IS the archive pass now, so it inherits the archive pass's duty.
+    reconciles_live: true,
     hides_covered: false,
 };
 
@@ -818,7 +865,14 @@ pub fn write_pass(
         pass.refused += decided.refused.len();
         pass.swept += decided.swept;
         pass.hidden += decided.hide.len();
-        let written = write_block(meaning, audio_id, &decided, stream, now)?;
+        let written = write_block(
+            meaning,
+            audio_id,
+            (block_start, block_end),
+            &decided,
+            stream,
+            now,
+        )?;
         pass.turns += written;
         pass.blocks += 1;
         if written == 0 {

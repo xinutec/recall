@@ -10,7 +10,9 @@
 //! anyone reads. The flip — retiring the old worker — waits on the referee
 //! (#1461), which cannot yet say which room stream is better.
 
+use chrono::Utc;
 use runner::client::{self, Client, Job};
+use runner::pulse::stamp_pulse;
 use runner::shim::{self, Shim};
 use std::path::Path;
 use std::time::Duration;
@@ -27,17 +29,16 @@ const BACKOFF: Duration = Duration::from_mins(1);
 /// process ends up holding transcription jobs it can only refuse.
 fn kinds_for(shim_name: &str) -> Option<&'static [&'static str]> {
     match shim_name {
-        // ⚠ **`transcribe-segment` is READY and deliberately NOT here.** The
-        // lease orders by capture time across kinds (`queue::lease`), the
-        // registrar has given the clips somewhere to land, and the writer turns
-        // results into turns — the whole path works. What is missing is that
-        // `worker.py` IS STILL RUNNING and transcribing the same clips on the
-        // same GPU. Adding the kind now would not move work to the runner, it
-        // would do all of it twice, and the second copy competes with capture.
+        // ⚠ **THE CUTOVER.** `transcribe-segment` is here and
+        // `org.xinutec.recall-worker` is gone, in the same commit, because they
+        // are one change: both transcribe the same clips with the same model on
+        // the same GPU, and running both would do all of it twice with the
+        // second copy competing with capture.
         //
-        // So this line and stopping `org.xinutec.recall-worker` are ONE change,
-        // and they land together (#1538).
-        "asr" => Some(&["transcribe-room"]),
+        // The lease orders by capture time across kinds (`queue::lease`), so a
+        // room block and a microphone clip from the same minute compete on
+        // equal terms rather than one starving the other.
+        "asr" => Some(&["transcribe-room", "transcribe-segment"]),
         "voices" => Some(&["diarize-room"]),
         _ => None,
     }
@@ -50,6 +51,10 @@ struct Config {
     program: String,
     args: Vec<String>,
     once: bool,
+    /// Where to stamp the archive's pulse — `<archive root>/worker-heartbeat.json`.
+    /// Absent means "do not stamp", which is right for a runner that is not
+    /// beside the archive it would be certifying.
+    pulse: Option<std::path::PathBuf>,
 }
 
 fn usage() -> ! {
@@ -68,12 +73,18 @@ fn parse_args() -> Config {
     let mut program = "python".to_owned();
     let mut args = vec!["-m".to_owned(), "recall.shim_asr".to_owned()];
     let mut once = false;
+    let mut pulse: Option<std::path::PathBuf> = None;
     let mut cli = std::env::args().skip(1);
     while let Some(arg) = cli.next() {
         match arg.as_str() {
             "--url" => base = cli.next().unwrap_or_else(|| usage()),
             "--api" => api = cli.next().unwrap_or_else(|| usage()),
             "--once" => once = true,
+            "--pulse" => {
+                pulse = Some(std::path::PathBuf::from(
+                    cli.next().unwrap_or_else(|| usage()),
+                ));
+            }
             "--shim" => {
                 program = cli.next().unwrap_or_else(|| usage());
                 args = cli.by_ref().collect();
@@ -91,6 +102,7 @@ fn parse_args() -> Config {
         program,
         args,
         once,
+        pulse,
     }
 }
 
@@ -101,19 +113,29 @@ fn one(
     kinds: &[&str],
     scratch: &Path,
     prompt: Option<&str>,
+    pulse: Option<&Path>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
+    let started = Utc::now();
     let Some(job) = client.lease(kinds)? else {
         return Ok(false);
     };
-    let Job { id, kind, filename } = job;
-    tracing::info!(id, %kind, %filename, "leased");
+    let Job {
+        id,
+        kind,
+        filename,
+        source,
+    } = job;
+    tracing::info!(id, %kind, %source, %filename, "leased");
     let clip = scratch.join(&filename);
-    client.fetch_blob("room", &filename, &clip)?;
+    client.fetch_blob(&source, &filename, &clip)?;
     // Only kinds this runner asked for can arrive; anything else is recalld
     // offering work the lease filter should have withheld, and saying so is
     // better than transcribing a diarization job by accident.
     let outcome = match kind.as_str() {
-        "transcribe-room" => shim.transcribe(&clip, None, prompt),
+        // Both transcription kinds are the same work: one clip, one model, one
+        // reply. What differs is which stream's turns it becomes, and that is
+        // recalld's question, not the runner's.
+        "transcribe-room" | "transcribe-segment" => shim.transcribe(&clip, None, prompt),
         "diarize-room" => shim.diarize(&clip),
         other => Err(shim::Error::Refused(format!(
             "runner cannot do job kind {other}"
@@ -123,11 +145,16 @@ fn one(
     let _ = std::fs::remove_file(&clip);
     match outcome {
         Ok(result) => {
+            let rows = result
+                .get("segments")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len);
             client.finish(
                 id,
                 &serde_json::json!({ "ok": true, "result": result }).to_string(),
             )?;
-            tracing::info!(id, "done");
+            tracing::info!(id, rows, "done");
+            stamp_pulse(pulse, started, rows);
             Ok(true)
         }
         // ⚠ A REFUSAL IS TERMINAL, and recorded. The shim answered — the clip is
@@ -140,6 +167,10 @@ fn one(
                 id,
                 &serde_json::json!({ "ok": false, "error": why }).to_string(),
             )?;
+            // A refusal is a completed pass: the runner asked, the shim
+            // answered, the queue moved. The doctor is watching for a STALLED
+            // Mac, and a Mac refusing clips promptly is not that.
+            stamp_pulse(pulse, started, 0);
             Ok(true)
         }
         // Transport failures are the SHIM's problem: say nothing, let the lease
@@ -206,7 +237,14 @@ fn main() {
     };
     tracing::info!(url = %config.base, shim = %name, kinds = ?kinds, "runner: polling");
     loop {
-        match one(&client, &mut shim, kinds, &scratch, prompt.as_deref()) {
+        match one(
+            &client,
+            &mut shim,
+            kinds,
+            &scratch,
+            prompt.as_deref(),
+            config.pulse.as_deref(),
+        ) {
             // ⚠ `--once` means ONE JOB, not "until the queue empties". It read
             // the latter on 2026-09-06 and chewed through six live jobs during
             // what was meant to be a single end-to-end check.

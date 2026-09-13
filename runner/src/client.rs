@@ -9,8 +9,11 @@ use std::path::Path;
 pub struct Job {
     pub id: i64,
     pub kind: String,
-    /// The blob to work on, under the `room` source.
+    /// The blob to work on, under `source`.
     pub filename: String,
+    /// Which recorder it came from. Served by recalld from the ingest plane —
+    /// NEVER guessed here, and never `room` by default.
+    pub source: String,
 }
 
 #[derive(Deserialize)]

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from recall import capture_control, heartbeat, runlog
+from recall import capture_control, runlog
 from recall.asr import (
     AsrResult,
     Transcriber,
@@ -44,7 +44,6 @@ from recall.identify import identify_segments
 from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.live import run_live
 from recall.logrotate import rotate_logs
-from recall.loudness import backfill_loudness
 from recall.maintenance import (
     reprobe_short_segments,
 )
@@ -69,8 +68,6 @@ from recall.transcript_view import (
 from recall.vad import silero_speech_regions
 from recall.vocabulary import build_initial_prompt
 from recall.wer import word_error_rate
-from recall.wordtimings import backfill_word_timings
-from recall.worker import process_all, process_pending, reconcile_live
 
 # Per worker pass, how many turns to measure loudness for. Bounded so the sox
 # decode loop drains the backlog gradually without starving capture.
@@ -296,122 +293,6 @@ def _cmd_transcribe(args: argparse.Namespace) -> int:
     finally:
         store.close()
     print(f"transcribed {len(segments)} segments -> {written} transcript rows")
-    return 0
-
-
-def _cmd_worker(args: argparse.Namespace) -> int:
-    runlog.setup()  # UTC-stamped logging for the archive pass
-
-    def transcriber(audio: Path) -> AsrResult:
-        # A short-lived connection just to read the vocabulary (the pass's own
-        # store is per-pass and single-thread); rebuilt per segment so new terms
-        # apply immediately. connect() skips migrate — the pass migrated already.
-        vocab_store = Store.connect(_db_path(args.out))
-        try:
-            prompt = build_initial_prompt(vocab_store)
-        finally:
-            vocab_store.close()
-        return mlx_transcribe(audio, model=args.model, initial_prompt=prompt)
-
-    # Auto-upgrade to diarized (per-turn language + speakers) when a token is set.
-    use_diarize = not args.basic and bool(os.environ.get("HF_TOKEN"))
-    diarizer = pyannote_diarize if use_diarize else None
-    # VAD gates the basic (no-diarizer) path so silence isn't transcribed.
-    vad = None if diarizer else silero_speech_regions
-    mode = "diarized" if diarizer else "basic+vad"
-
-    def one_pass() -> int:
-        # ⚠ Stamp the START, not just the end. A pass that never returns and a loop
-        # that never starts one look identical from a finish-only heartbeat, and
-        # they point at different things: the first is the archive, the second is
-        # launchd. This is the only proof that a pass happened at all when it found
-        # nothing to do — the worker's log says nothing in that case, which is how
-        # an hour of unindexed audio stayed invisible on 2026-08-10 (#709).
-        started_at = datetime.now(UTC)
-        started_clock = time.monotonic()
-        heartbeat.write(
-            args.out, heartbeat.Beat(started_at, finished=None, seconds=None, rows=0)
-        )
-        # Safety net: if capture was paused and the pause has elapsed, resume it
-        # so recording can never be left off (completeness is the #1 requirement).
-        capture_control.auto_resume_if_expired(args.out, datetime.now(UTC))
-        store = Store.open(args.out / "recall.sqlite")
-        try:
-            if args.id is None:
-                written = process_all(
-                    store,
-                    args.out,
-                    transcriber,
-                    model_name=args.model,
-                    diarizer=diarizer,
-                    vad=vad,
-                    min_age_seconds=args.min_age,
-                )
-            else:
-                source = _source_found_on_disk(args.id)
-                written = process_pending(
-                    store,
-                    args.out,
-                    source,
-                    transcriber,
-                    model_name=args.model,
-                    diarizer=diarizer,
-                    vad=vad,
-                    min_age_seconds=args.min_age,
-                )
-            reconcile_live(store)  # drop live transcripts the archive caught up to
-            # Cache loudness for new turns off the request path (bounded so the
-            # decode loop never competes with capture for long). The labeling
-            # queue ranks by this; until it's filled a turn just sorts last.
-            backfill_loudness(store, limit=_LOUDNESS_BACKFILL_PER_PASS)
-            # Align human-corrected turns to ASR for word timings, so splitting/tight
-            # playback on a correction is audio-exact too (not char-interpolated).
-            backfill_word_timings(
-                store,
-                lambda audio: mlx_transcribe(audio, model=args.model, words=True),
-                work_dir=args.out / "work",
-                limit=_WORD_TIMINGS_BACKFILL_PER_PASS,
-            )
-            # Offline speaker ID: enrol voiceprints from labels, embed turns once,
-            # re-match guesses against current voiceprints (bounded, token-gated).
-            _speaker_id_pass(store, args.out)
-            # Hide the filler this pass just created. Gated on `written` because new
-            # turns are the only way new junk appears, and scheduled HERE because
-            # the lesson of scan-loops and scan-hallucinations is that a cleanup
-            # nobody runs cleans nothing: both have existed for months as hand-only
-            # commands while 214 wordless turns accumulated in the read path.
-            # Cheap in steady state — the wordless check is pure text, and the
-            # foreign-script one decodes audio only for candidates, of which a
-            # swept archive has almost none.
-            if written:
-                scan_empty_text(store)
-                scan_foreign_script(store, silero_speech_regions)
-        finally:
-            store.close()
-        # Only on the way out clean: a pass that raised did not complete, and a
-        # crash-looping worker must keep reading as one whose passes never return
-        # rather than as one ticking over nicely.
-        heartbeat.write(
-            args.out,
-            heartbeat.Beat(
-                started_at,
-                finished=datetime.now(UTC),
-                seconds=time.monotonic() - started_clock,
-                rows=written,
-            ),
-        )
-        return written
-
-    if args.loop:
-        while True:
-            rotate_logs(_LOG_DIR)  # bound the agents' logs; cheap, only acts over-cap
-            written = one_pass()
-            if written:
-                print(f"worker ({mode}): {written} new transcript rows", flush=True)
-            time.sleep(args.interval)
-
-    written = one_pass()
-    print(f"worker ({mode}): {written} new transcript rows")
     return 0
 
 
@@ -1545,7 +1426,6 @@ _COMMANDS = {
     "index": _cmd_index,
     "transcribe": _cmd_transcribe,
     "reprocess": _cmd_reprocess,
-    "worker": _cmd_worker,
     "live": _cmd_live,
     "score-asr": _cmd_score_asr,
     "reprobe": _cmd_reprobe,

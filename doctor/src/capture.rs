@@ -353,7 +353,15 @@ pub fn live_check(
     .build()
 }
 
-/// One pass of the worker, stamped when it began and again when it ended.
+/// One unit of transcription work, stamped when it began and again when it
+/// ended.
+///
+/// ⚠ **Written by `runner`, not by `worker.py`, since 2026-09-13.** The Python
+/// worker that used to stamp this is deleted (#1538); the runner leases a clip
+/// from Isis, drives the same shim with the same model, and stamps the same
+/// file at the same path. The SHAPE is unchanged deliberately — the check below,
+/// its thresholds and the fleet history it is compared against all remain
+/// meaningful only if the file keeps meaning the same thing.
 ///
 /// `finished` is `None` while the pass is still running — the distinction
 /// between "the loop has stopped starting passes" and "a pass has stopped
@@ -413,15 +421,15 @@ pub fn worker_check(
     stopped: Duration,
 ) -> Check {
     let expected = format!(
-        "a pass completed within {:.0} min",
+        "a transcription pass completed within {:.0} min",
         slow.num_seconds() as f64 / 60.0
     );
     let Some(beat) = beat else {
         return check(
             "capture",
-            "worker pulse",
+            "transcription pulse",
             Verdict::Fail,
-            "the worker has never completed a pass",
+            "no transcription pass has ever completed here",
             expected,
         )
         .build();
@@ -450,9 +458,15 @@ pub fn worker_check(
     } else {
         Verdict::Pass
     };
-    check("capture", "worker pulse", verdict, observed, expected)
-        .trend(minutes(since), "min")
-        .build()
+    check(
+        "capture",
+        "transcription pulse",
+        verdict,
+        observed,
+        expected,
+    )
+    .trend(minutes(since), "min")
+    .build()
 }
 
 /// One check per launchd agent. An installed-but-unloaded agent is always a

@@ -62,19 +62,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
     rep.add_argument("--model", default=DEFAULT_MODEL, help="mlx-whisper model")
     rep.add_argument("--max-confidence", type=float, default=None)
 
-    wrk = sub.add_parser("worker", help="index + transcribe pending audio (one pass)")
-    wrk.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    wrk.add_argument("--id", default=None, help="source id (default: all sources)")
-    wrk.add_argument("--model", default=DEFAULT_MODEL, help="mlx-whisper model")
-    wrk.add_argument(
-        "--basic", action="store_true", help="whole-clip (skip diarization)"
-    )
-    wrk.add_argument("--loop", action="store_true", help="run continuously")
-    wrk.add_argument("--interval", type=int, default=10, help="loop poll seconds")
-    wrk.add_argument(
-        "--min-age", type=float, default=30.0, help="skip files newer than this (s)"
-    )
-
     liv = sub.add_parser("live", help="immediate VAD transcription from the mic")
     liv.add_argument("--out", type=Path, default=default_data_root(), help="data root")
     liv.add_argument("--model", default=DEFAULT_MODEL, help="mlx-whisper model")
