@@ -412,6 +412,51 @@ fn wait_grace(child: &mut Child, grace: Duration) {
 /// Park while paused, run while active, re-park when a pause interrupts —
 /// exiting (for the `KeepAlive` respawn) only when a run ends for a non-pause
 /// reason. Durably marks RESUME/PAUSE transitions, best-effort.
+/// How often a store-and-forward recorder says it is alive.
+///
+/// ⚠ **Its heartbeat is NOT its delivery, and conflating them hid a dead
+/// recorder for eight days.** geb's beat sat at 2026-09-05 — the day it stopped
+/// being a streaming client — while the devices list showed it fine, because
+/// LIVENESS there is derived from segments arriving. That masking is the whole
+/// problem: a recorder delivers nothing when it is paused AND when its
+/// microphone is dead, and those must not look alike.
+///
+/// Sixty seconds because that is the segment length: a beat per segment means
+/// "still recording" and a beat without one means "running, but producing
+/// nothing" — which is exactly the state delivery cannot express.
+const BEAT_EVERY: Duration = Duration::from_mins(1);
+
+/// What this recorder tells the fleet about itself.
+///
+/// `streaming` is FALSE by construction — this is the store-and-forward path,
+/// so audio reaches the fleet by upload, never by a live socket. `mic_ok` is
+/// what the last producer start actually did, not a guess: a device that will
+/// not open is the one fact worth beating.
+pub fn beat_body(source_id: &str, mic_ok: bool) -> serde_json::Value {
+    serde_json::json!({
+        "device": source_id,
+        "app": "linux",
+        "version": env!("CARGO_PKG_VERSION"),
+        "streaming": false,
+        "micOk": mic_ok,
+    })
+}
+
+/// Beat until the process ends. Its own thread, so a fleet that stops answering
+/// slows nothing down: the recorder's job is the microphone, and a beat is a
+/// courtesy to whoever is watching.
+fn spawn_beat(source_id: &str, url: &str, mic_ok: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    let source_id = source_id.to_owned();
+    let url = url.to_owned();
+    std::thread::spawn(move || {
+        loop {
+            let ok = mic_ok.load(std::sync::atomic::Ordering::Relaxed);
+            crate::beat_relay::forward(&beat_body(&source_id, ok), &url);
+            std::thread::sleep(BEAT_EVERY);
+        }
+    });
+}
+
 pub fn serve_paused_aware(
     root: &Path,
     source_id: &str,
@@ -419,6 +464,7 @@ pub fn serve_paused_aware(
     producer_kind: Producer,
     config: &CaptureConfig,
     max_seconds: Option<u64>,
+    beat_url: Option<&str>,
 ) -> ! {
     store::register_source_kind(
         root,
@@ -428,12 +474,22 @@ pub fn serve_paused_aware(
             Producer::Alsa => "alsa",
         },
     );
+    // Starts TRUE: nothing has failed yet, and a recorder that beat `micOk:
+    // false` before its first attempt would cry wolf on every restart.
+    let mic_ok = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    if let Some(url) = beat_url {
+        spawn_beat(source_id, url, mic_ok.clone());
+    }
     loop {
         while pause::is_paused(root, Utc::now()) {
             std::thread::sleep(STOP_POLL);
         }
         store::add_capture_event(root, store::KIND_RESUME, Utc::now(), source_id, None);
         let ended = record(root, source_id, device, producer_kind, config, max_seconds);
+        // ⚠ `Ended::Paused` is the ONLY clean end. Anything else means the
+        // producer stopped on its own — a device that would not open, a stream
+        // that died — and that is precisely what the beat exists to carry.
+        mic_ok.store(ended == Ended::Paused, std::sync::atomic::Ordering::Relaxed);
         if ended == Ended::Paused {
             store::add_capture_event(root, store::KIND_PAUSE, Utc::now(), source_id, None);
             continue;

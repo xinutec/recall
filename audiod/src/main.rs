@@ -176,6 +176,7 @@ fn main() -> ExitCode {
                 producer,
                 &config,
                 seconds,
+                url.as_deref(),
             )
         }
         Some("pause-mirror") => {

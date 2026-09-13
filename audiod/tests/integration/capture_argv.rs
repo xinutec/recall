@@ -62,3 +62,37 @@ fn sox_is_untouched_by_this() {
     let at = argv.iter().position(|a| a == "-c").expect("a -c");
     assert_eq!(argv[at + 1], "1");
 }
+
+// ---- the store-and-forward recorder's own heartbeat ----
+
+use audiod::capture_run::beat_body;
+
+#[test]
+fn a_store_and_forward_recorder_beats_that_it_is_not_streaming() {
+    // ⚠ THE EIGHT-DAY LIE. geb's heartbeat sat at 2026-09-05 — the day it
+    // stopped being a streaming client — while the devices list showed it fine,
+    // because liveness there is derived from SEGMENTS ARRIVING. A recorder
+    // delivers nothing when it is paused and nothing when its microphone is
+    // dead, and those two must not look alike.
+    let beat = beat_body("geb", true);
+    assert_eq!(beat["device"], "geb");
+    assert_eq!(beat["app"], "linux");
+    assert_eq!(
+        beat["streaming"], false,
+        "audio reaches the fleet by upload here, never by a live socket"
+    );
+    assert_eq!(beat["micOk"], true);
+    assert!(
+        beat["version"].as_str().is_some_and(|v| !v.is_empty()),
+        "a beat with no version cannot tell a stale recorder from a current one"
+    );
+}
+
+#[test]
+fn a_producer_that_died_beats_mic_ok_false() {
+    // The one fact worth beating: a device that will not open. geb spent an
+    // hour crash-looping on `cannot set channel count to 2` and reported
+    // nothing at all, because delivery was the only channel it had.
+    let beat = beat_body("geb", false);
+    assert_eq!(beat["micOk"], false);
+}
