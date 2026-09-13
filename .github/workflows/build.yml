@@ -20,6 +20,13 @@ on:
       - "**/flake.lock"
   workflow_dispatch: {}
 
+# One build per branch at a time. Pushes here land in bursts, and the image tag
+# is `latest` — two runs racing means the tag ends up at whichever FINISHED
+# last, not whichever commit is newer.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest

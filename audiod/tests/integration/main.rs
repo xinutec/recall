@@ -17,6 +17,7 @@ mod common;
 
 mod beat_relay;
 mod capture;
+mod capture_argv;
 mod ingest;
 mod meter;
 mod pause;

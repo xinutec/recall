@@ -66,10 +66,25 @@ pub fn alsa_argv(
         "error",
         "-f",
         "alsa",
-        "-i",
     ]
     .map(String::from)
     .to_vec();
+    // ⚠ **`-channels` BELONGS BEFORE `-i`, and `-ac` after it is not the same
+    // thing.** Options before `-i` configure the INPUT; after, the output. The
+    // `-ac` below downmixes whatever arrives — but the ALSA demuxer opens the
+    // device at its own default of TWO channels first, and a MONO-only
+    // microphone refuses outright:
+    //
+    //     [in#0] cannot set channel count to 2 (Invalid argument)
+    //     [in#0] Error opening input: Input/output error
+    //
+    // geb crash-looped on exactly that (2026-09-13) the moment its stereo
+    // conference speakerphone was replaced by a mono capsule — four restarts,
+    // four header-only stub files, no audio. Verified on the box: the same
+    // command with `-channels 1` before `-i` returns 95,988 bytes where the
+    // old form returns 0.
+    argv.splice(argv.len().., ["-channels".to_owned(), channels.to_string()]);
+    argv.push("-i".to_owned());
     argv.push(device.unwrap_or("default").to_owned());
     if let Some(seconds) = max_seconds {
         argv.extend(["-t".into(), seconds.to_string()]);
