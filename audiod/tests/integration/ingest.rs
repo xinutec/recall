@@ -3,7 +3,7 @@
 //! accept/pause loop is deliberately not driven here — it is thin, and its
 //! parts (pause file, handshake bounds) have their own tests.
 
-mod common;
+use crate::common;
 
 use audiod::segmenter::CaptureConfig;
 use audiod::server::handle_connection;

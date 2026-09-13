@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use audiod::store::{KIND_INGEST_CONNECT, add_capture_event, register_source};
 use chrono::{TimeZone, Utc};

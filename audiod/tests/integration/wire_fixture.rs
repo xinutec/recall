@@ -9,7 +9,7 @@ use audiod::wire::parse_handshake;
 #[test]
 fn every_client_line_parses_with_its_declared_fields() {
     let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("handshakes.json")).expect("fixture parses");
+        serde_json::from_str(include_str!("../handshakes.json")).expect("fixture parses");
     let cases = fixture["cases"].as_array().expect("cases array");
     assert!(!cases.is_empty());
     for case in cases {

@@ -28,7 +28,7 @@ struct Case {
 #[test]
 fn the_rust_filter_decides_every_body_the_way_the_python_did() {
     let cases: Vec<Case> =
-        serde_json::from_str(include_str!("fixtures/beat-relay-parity.json")).expect("fixture");
+        serde_json::from_str(include_str!("../fixtures/beat-relay-parity.json")).expect("fixture");
     assert!(cases.len() >= 21, "the corpus must not silently shrink");
     let accepted = cases.iter().filter(|c| c.accepted).count();
     assert!(
