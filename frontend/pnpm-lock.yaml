@@ -59,8 +59,8 @@ importers:
         specifier: ^1.61.1
         version: 1.61.1
       '@xinutec/ui-harness':
-        specifier: github:xinutec/ui-harness#5e3cf0a6460068362a2687b2fd8694f75a21e7f8
-        version: https://codeload.github.com/xinutec/ui-harness/tar.gz/5e3cf0a6460068362a2687b2fd8694f75a21e7f8(@playwright/test@1.61.1)
+        specifier: github:xinutec/ui-harness#efe5ee46bd138dee8ee195b7b4925c59d4f5c3d4
+        version: https://codeload.github.com/xinutec/ui-harness/tar.gz/efe5ee46bd138dee8ee195b7b4925c59d4f5c3d4(@playwright/test@1.61.1)
       angular-eslint:
         specifier: ^22.0.0
         version: 22.0.0(@angular/cli@22.0.5(@types/node@24.13.3)(chokidar@5.0.0))(chokidar@5.0.0)(eslint@10.6.0)(typescript-eslint@8.62.1(eslint@10.6.0)(typescript@6.0.3))(typescript@6.0.3)
@@ -1469,8 +1469,8 @@ packages:
   '@vitest/utils@4.1.11':
     resolution: {integrity: sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ==}
 
-  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/5e3cf0a6460068362a2687b2fd8694f75a21e7f8':
-    resolution: {gitHosted: true, integrity: sha512-tIThuq++TsnaCmBTS7h66fkMfJ66d7OdlJ3Zp+Fu5A1zoDSXNj5IBs4H8MVMX42MfuLUsMD8vJoAMahtnxbvAQ==, tarball: https://codeload.github.com/xinutec/ui-harness/tar.gz/5e3cf0a6460068362a2687b2fd8694f75a21e7f8}
+  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/efe5ee46bd138dee8ee195b7b4925c59d4f5c3d4':
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/xinutec/ui-harness/tar.gz/efe5ee46bd138dee8ee195b7b4925c59d4f5c3d4}
     version: 0.1.0
     peerDependencies:
       '@playwright/test': '>=1.61.0'
@@ -4280,7 +4280,7 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
 
-  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/5e3cf0a6460068362a2687b2fd8694f75a21e7f8(@playwright/test@1.61.1)':
+  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/efe5ee46bd138dee8ee195b7b4925c59d4f5c3d4(@playwright/test@1.61.1)':
     dependencies:
       '@types/node': 24.13.3
     optionalDependencies:
