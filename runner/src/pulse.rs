@@ -6,17 +6,10 @@ use std::path::Path;
 /// Stamp the archive's pulse file, which the DOCTOR reads to answer "is this
 /// Mac still turning audio into transcripts?".
 ///
-/// ⚠ **Inherited from `worker.py`, which is gone (#1538).** The worker wrote
-/// `worker-heartbeat.json` at the archive root after every pass, and
-/// `doctor::capture::worker_check` grades the time since one completed. Deleting
-/// the worker without writing this would not have removed the check — it would
-/// have made it fail for ever, which is worse than no check at all.
-///
-/// ⚠ **It lives ON the archive volume, deliberately.** A heartbeat that kept
-/// ticking while the archive was unreachable would certify work it could not
-/// have done (#1412 — that volume intermittently stops answering). If the write
-/// fails, the pulse goes stale and the doctor says so; that is the correct
-/// outcome and why this never returns an error into the job path.
+/// ⚠ It lives ON the archive volume. A heartbeat that kept ticking while the
+/// archive was unreachable would certify work it could not have done (#1412).
+/// A failed write goes stale and the doctor says so, which is why this never
+/// returns an error into the job path.
 ///
 /// `rows` is the number of segments the shim returned, which is what the
 /// worker's own `rows` counted: transcript rows produced by that unit of work.

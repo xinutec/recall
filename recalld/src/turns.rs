@@ -1,9 +1,7 @@
-//! Stage E3's missing half: what a finished transcription job MEANS.
+//! What a finished transcription job MEANS.
 //!
 //! The runner leases a clip, drives the shim, and retires the job with the
-//! shim's reply as opaque JSON (`queue::done`). Measured 2026-09-11: **648 jobs
-//! done, 9.6 MB of results, and not one line of either language reads them** —
-//! the GPU time is spent and the transcripts exist, unreachable.
+//! shim's reply as opaque JSON (`queue::done`). This is what reads it.
 //!
 //! ⚠ **TWO STREAMS, ONE WRITER, and the difference between them is one field.**
 //! A [`Stream`] says which job kind a pass drains, what the rows record as their
@@ -339,40 +337,22 @@ pub struct Registered {
     pub unreadable: usize,
 }
 
-/// Register microphone clips in the MEANING plane, from the INGEST plane.
+/// Register microphone clips in the MEANING plane, from the INGEST plane, so
+/// their turns have somewhere to hang.
 ///
-/// ⚠ **This is `sync_push.py`'s job, done from the other side.** Today the Mac
-/// pushes each processed clip up (`work::store_segment`) and the fleet records
-/// it; every clip the Mac has NOT processed therefore has no row here at all.
-/// Measured 2026-09-13: the ingest plane holds 22,308 microphone clips and the
-/// meaning plane 16,821, so **5,487 clips have nowhere to hang a turn** — and a
-/// transcription job for one of them can only go barren, for ever.
+/// ⚠ The path is the INGEST copy (`<root>/ingest/<source>/`), which is the
+/// complete one; the `<root>/<source>/` mirror is short (#1591). A clip already
+/// registered keeps its path — `INSERT OR IGNORE` on `UNIQUE (source_id,
+/// start_utc)` — so this never repoints a row out from under playable audio.
 ///
-/// ⚠ **The path is the INGEST copy** (`<root>/ingest/<source>/`), not the
-/// mirror `sync_push` writes at `<root>/<source>/`. The two hold the same bytes
-/// in different inodes (#1591) and the ingest one is the COMPLETE copy. Clips
-/// already registered keep whatever path they have — `INSERT OR IGNORE`, and
-/// the table's `UNIQUE (source_id, start_utc)` — so this never repoints a row
-/// out from under a turn somebody can currently play.
+/// ⚠ `end_utc` is DECODED, not assumed: a microphone clip is whatever the
+/// segment muxer closed, and `write_pass` sizes the human-correction window
+/// from this column. Too narrow there overwrites somebody's typed words.
 ///
-/// ⚠ **The DURATION is measured, never assumed.** `end_utc` is what
-/// [`crate::upload::probe`] decodes, because a microphone clip is whatever
-/// ffmpeg's segment muxer closed: capture stopping mid-segment makes short ones
-/// routinely, and `write_pass` reads this column to size the window in which it
-/// looks for a human correction it must not overwrite.
+/// ⚠ An unknown SOURCE waits. `sources.kind` is the sender's to know
+/// (`work::store_segment`), and registering under a guess is permanent.
 ///
-/// ⚠ **AN UNKNOWN SOURCE WAITS, and that is a real gap, not a tidy default.**
-/// `sources.kind` says how a recorder produces PCM, and this side cannot know
-/// it — `work.rs` puts it plainly: *the sender owns the kind*. So a clip whose
-/// source the meaning plane has never heard of is counted and skipped rather
-/// than registered under a guess. Every microphone in the fleet today is
-/// already known, so nothing waits now; a SEVENTH recorder would wait for ever,
-/// and whatever registers it once `sync_push.py` is gone is an open question
-/// this function deliberately does not answer.
-///
-/// Bounded by `limit`, which counts clips REGISTERED: probing decodes the whole
-/// file (~300 ms on isis, measured), so an unbounded first pass would be half an
-/// hour of ffmpeg competing with the room builder and with capture.
+/// `limit` counts clips REGISTERED, because probing decodes the whole file.
 ///
 /// # Errors
 /// If either database refuses.
@@ -684,37 +664,15 @@ pub struct Pass {
     pub swept: usize,
 }
 
-/// Turn stored job results into visible turns, one block at a time.
+/// The ledger of clips a pass DECIDED WITHOUT WRITING, in the ingest plane.
 ///
-/// The whole chain: a done `transcribe-room` job → [`interpret`] → the standing
-/// per-mic turns and the corrections that overlap the block's minute → [`plan`]
-/// → [`write_block`].
+/// ⚠ Only refusals go here. A clip whose turns were written needs no row — the
+/// turns are the record, and `write_pass` derives "already done" from them — so
+/// deleting a stream's turns re-enables its clips by itself. A clip that wrote
+/// NOTHING leaves no such trace, and without a row sits at the head of the
+/// queue for ever.
 ///
-/// ⚠ **Bounded by `limit` on purpose.** This is the first thing in the stage that
-/// changes a transcript anybody reads, and a pass that ran away would do it 894
-/// times before anyone looked. Small batches, many passes.
-///
-/// # Errors
-/// If either database refuses. A block that cannot be interpreted is counted and
-/// skipped, never fatal: one unreadable result must not stop the queue draining.
-/// The ledger of blocks a pass has already DECIDED WITHOUT WRITING.
-///
-/// ⚠ **It records only `refused` and `swept`, and that asymmetry is the design.**
-/// A block whose turns were written needs no row — the turns ARE the record, so
-/// `write_pass` derives "already done" by asking the meaning plane. That is what
-/// makes the 2026-09-11 reversal work: deleting the room turns re-enables those
-/// blocks automatically, with no second thing to remember to clear. A block that
-/// wrote NOTHING has no such trace, which is why it needs one — without it,
-/// refused blocks sit at the head of the queue forever and every pass
-/// re-examines them.
-///
-/// ⚠ Lives in the INGEST plane, keyed on `jobs.filename`. `recall.sqlite`'s
-/// schema belongs to `store_schema.py` and its versioned migrations; a second
-/// migrator on that file is not worth a bookkeeping table.
-///
-/// ⚠ **So the reversal is now a TWO-PLANE operation.** See the note on
-/// `spawn_room_turn_writer` in `main.rs`: deleting the room turns is no longer
-/// enough on its own, the ledger rows go too, or the refused blocks stay decided.
+/// ⚠ Therefore a reversal is TWO planes: the turns, and these rows.
 ///
 /// # Errors
 /// If the database refuses.
@@ -752,6 +710,18 @@ fn ledger(
     Ok(())
 }
 
+/// Turn stored job results into visible turns, one clip at a time:
+/// [`interpret`] → [`plan`] → [`write_block`].
+///
+/// ⚠ `limit` counts clips DECIDED, and the SQL has no `LIMIT`. A limited query
+/// returns the same ineligible rows every pass, which is how an earlier version
+/// re-examined the newest twenty blocks for ever and never advanced.
+///
+/// ⚠ ASCENDING, so a backfill drains forward from the oldest undecided clip.
+///
+/// # Errors
+/// If either database refuses. An uninterpretable result is counted and
+/// skipped — one bad clip must not stop the queue draining.
 pub fn write_pass(
     meaning: &mut rusqlite::Connection,
     ingest: &rusqlite::Connection,

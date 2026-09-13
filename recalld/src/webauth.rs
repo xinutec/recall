@@ -409,10 +409,27 @@ impl std::fmt::Display for AuthError {
     }
 }
 
+/// The agent both Nextcloud calls use.
+///
+/// ⚠ NOT `ureq::get`/`ureq::post`. Those share ONE process-wide connection
+/// pool, and a pooled socket the far end has already closed comes back on the
+/// next call as `Invalid argument (os error 22)` in the status line — a sign-in
+/// that fails for nobody's reason. #1480 established this class and fixed
+/// `proxy.rs`; these two were left on the bare functions.
+///
+/// `max_idle_connections(0)` removes reuse entirely, which is free here: a
+/// sign-in makes two calls and the token is dropped immediately after.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .max_idle_connections(0)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+}
+
 /// Trade the authorization code for an access token.
 pub fn exchange_code(cfg: &Config, code: &str) -> Result<String, AuthError> {
     let (url, host) = server_call(cfg, "/index.php/apps/oauth2/api/v1/token");
-    let mut req = ureq::post(&url).timeout(std::time::Duration::from_secs(15));
+    let mut req = agent().post(&url);
     if let Some(h) = host.as_deref() {
         req = req.set("Host", h);
     }
@@ -440,8 +457,8 @@ pub fn exchange_code(cfg: &Config, code: &str) -> Result<String, AuthError> {
 /// carries the identity from here on.
 pub fn fetch_userinfo(cfg: &Config, access_token: &str) -> Result<Session, AuthError> {
     let (url, host) = server_call(cfg, "/ocs/v2.php/cloud/user?format=json");
-    let mut req = ureq::get(&url)
-        .timeout(std::time::Duration::from_secs(15))
+    let mut req = agent()
+        .get(&url)
         .set("Authorization", &format!("Bearer {access_token}"))
         .set("OCS-APIRequest", "true");
     if let Some(h) = host.as_deref() {

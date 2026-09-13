@@ -364,15 +364,10 @@ fn spawn_speech_scanner(root: PathBuf) {
 /// [`recalld::turns::Stream`] and not a loop:
 ///
 /// - [`recalld::turns::ROOM`] — writes room turns AND HIDES the per-mic turns
-///   they cover. Measured 2026-09-11 before it was switched on: 933 transcribed
-///   blocks against 25,349 visible per-mic turns in the same span. That ratio IS
-///   the point (four or five microphones transcribing one minute, #1388), and it
-///   is still thousands of rows changing state. **Off** pending #1461.
-/// - [`recalld::turns::PER_MIC`] — writes turns for microphone clips that have
-///   NONE. It hides nothing, supersedes nothing and revisits nothing: a clip
-///   that already carries turns is refused by `write_block` before a row is
-///   touched. What it changes is that a gap gets filled, which is why it does
-///   not wait on the room stream's open question.
+///   they cover, thousands of rows at a time. **Off** pending #1461.
+/// - [`recalld::turns::PER_MIC`] — fills gaps only. It hides nothing and
+///   revisits nothing: a clip that already carries turns is refused before a
+///   row is touched.
 ///
 /// ⚠ **HOW TO PUT EITHER BACK. It is TWO PLANES, and one of them is easy to
 /// miss.** Hiding is not deleting, so the meaning plane (`recall.sqlite`) undoes
@@ -459,16 +454,11 @@ fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
 /// would put a scan on the hot path to save a timer. `derive_jobs` (room) is in
 /// `lease` because it is one indexed statement against one database.
 ///
-/// ⚠ **Deriving is free; LEASING is what spends.** A queued job is a row. It
-/// becomes GPU time only when a runner asks for its kind, and today none does —
-/// `runner::kinds_for` hands the `asr` shim `transcribe-room` alone. So this
-/// loop can run from the moment it deploys and change nothing anybody pays for,
-/// which is exactly what makes the next step reversible: the backlog is visible
-/// and counted before a single clip is transcribed.
+/// ⚠ Deriving is free; LEASING is what spends. A queued job is a row until a
+/// runner asks for its kind.
 ///
-/// ⚠ **BOUNDED, and that bound is the throttle.** 14,078 clips had no turns when
-/// this was written. Queuing them all in one statement would make the queue
-/// unreadable and hand a runner days of work the moment it learned the kind.
+/// ⚠ BOUNDED, and that bound is the throttle: queuing the whole backlog in one
+/// statement would hand a runner days of work the moment it learned the kind.
 fn spawn_segment_deriver(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(10);
     const BATCH: usize = 50;
@@ -494,16 +484,11 @@ fn spawn_segment_deriver(root: PathBuf) {
 
 /// Register MICROPHONE clips in the meaning plane, so their turns have audio.
 ///
-/// The room registrar's sibling, and between them they are what `sync_push.py`
-/// does today. Measured 2026-09-13: 5,487 microphone clips sit in the ingest
-/// plane with no `audio_segments` row at all, so a transcription job for any of
-/// them could only ever go barren.
+/// The room registrar's sibling. A clip with no `audio_segments` row can only
+/// ever go barren at the write step, however often it is transcribed.
 ///
-/// ⚠ **Slower than the room's, and bounded tighter, because this one DECODES.**
-/// `upload::probe` reads the whole file to measure its real duration — ~300 ms
-/// per clip on isis, measured on real opus and flac — and it is competing with
-/// the room builder and with capture for the same CPU. 40 clips every 5 minutes
-/// drains the 5,487 in about half a day and is invisible while it does.
+/// ⚠ Bounded tighter than the room's, because this one DECODES: `upload::probe`
+/// reads the whole file, competing with the room builder and with capture.
 ///
 /// ⚠ **HOW TO PUT IT BACK.** Registration alone plays no turn and hides
 /// nothing; what it changes is that a clip becomes ELIGIBLE. Two planes:

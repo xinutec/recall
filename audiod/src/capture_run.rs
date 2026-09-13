@@ -78,11 +78,7 @@ pub fn alsa_argv(
     //     [in#0] cannot set channel count to 2 (Invalid argument)
     //     [in#0] Error opening input: Input/output error
     //
-    // geb crash-looped on exactly that (2026-09-13) the moment its stereo
-    // conference speakerphone was replaced by a mono capsule — four restarts,
-    // four header-only stub files, no audio. Verified on the box: the same
-    // command with `-channels 1` before `-i` returns 95,988 bytes where the
-    // old form returns 0.
+    // A stereo device hides this; a mono one cannot open at all.
     argv.splice(argv.len().., ["-channels".to_owned(), channels.to_string()]);
     argv.push("-i".to_owned());
     argv.push(device.unwrap_or("default").to_owned());

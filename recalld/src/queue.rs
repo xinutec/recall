@@ -102,17 +102,11 @@ pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<us
 
 /// A clip's identity WITHOUT its container: `oneplus6t-20260910T203720`.
 ///
-/// ⚠ **THE SAME RECORDING EXISTS UNDER TWO EXTENSIONS, and comparing whole
-/// filenames misses that.** Measured 2026-09-13 on the live fleet: the ingest
-/// plane holds 22,313 microphone clips under 20,728 distinct stems, and the
-/// meaning plane's path for a clip is routinely the `.opus` mirror while the
-/// ingest copy is `.wav`. Keyed on the filename, 244 of 950 queued jobs — 26%
-/// — were for clips that ALREADY HAD TURNS: each one a full transcription
-/// (~50 s of GPU) whose result `turns::write_block` then correctly refused.
-///
-/// Nothing was corrupted, because that refusal is the design. What was spent
-/// was hours of GPU producing transcripts thrown away, and the only visible
-/// symptom was the queue draining more slowly than it should.
+/// ⚠ THE SAME RECORDING EXISTS UNDER TWO EXTENSIONS — the ingest copy is often
+/// `.wav` where the meaning plane's path is the `.opus` mirror. Comparing whole
+/// filenames therefore misses that a clip already has turns, and derives a job
+/// that costs a full transcription before `turns::write_block` refuses it.
+/// Nothing is corrupted; the queue just drains slower for no reason.
 fn stem(path: &str) -> String {
     let name = path.rsplit('/').next().unwrap_or(path);
     name.rsplit_once('.')
