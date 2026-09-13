@@ -1,16 +1,31 @@
-//! Stage E3's missing half: what a finished `transcribe-room` job MEANS.
+//! Stage E3's missing half: what a finished transcription job MEANS.
 //!
-//! The runner leases a room block, drives the shim, and retires the job with the
+//! The runner leases a clip, drives the shim, and retires the job with the
 //! shim's reply as opaque JSON (`queue::done`). Measured 2026-09-11: **648 jobs
 //! done, 9.6 MB of results, and not one line of either language reads them** —
 //! the GPU time is spent and the transcripts exist, unreachable.
 //!
-//! ⚠ **This module interprets and returns; it does NOT write.** Room turns are
-//! gated on #1461 accepting the selection they came from, and putting
-//! unvalidated transcripts into the system of record is the one thing that
-//! cannot be undone by deleting a row — the archive is what the household said.
-//! So the interpretation is built, tested and runnable against the real results
-//! now, and the write is a separate decision with a separate commit.
+//! ⚠ **TWO STREAMS, ONE WRITER, and the difference between them is one field.**
+//! A [`Stream`] says which job kind a pass drains, what the rows record as their
+//! provenance, and whether a written turn HIDES what it covers. Everything else
+//! — interpreting the shim's reply, refusing a human-corrected span, sweeping
+//! model junk, the transaction — is the same work and is written once.
+//!
+//! - [`ROOM`] drains `transcribe-room`. It is the stream whose SELECTION #1461
+//!   cannot yet referee, and it is the only one that hides anything: a room turn
+//!   standing in for four microphones means those four turns should not also be
+//!   read. **Off** (see `spawn_room_turn_writer`).
+//! - [`PER_MIC`] drains `transcribe-segment`. It hides nothing and replaces
+//!   nothing — it writes the turns for microphone clips that have NONE, which is
+//!   14,078 of 22,312 of them. This is `worker.py`'s loop moved to the runner,
+//!   not a new judgement about audio, so it carries none of the room stream's
+//!   open question.
+//!
+//! ⚠ **The provenance field is the RESTORE, armed before the break.** Every row
+//! either pass writes is deletable by `provenance = '<stream>'` and by nothing
+//! else — which is what made the 2026-09-11 room reversal a one-line `DELETE`
+//! rather than an archaeology problem. A pass that wrote NULL there, matching
+//! the corpus convention, would be a pass nobody can take back.
 //!
 //! ⚠ **"Hidden" was considered and rejected as the safe option.** It is not
 //! absent: a hidden row is still in `transcript_fts` (maintained in CODE here,
@@ -256,8 +271,8 @@ pub fn register_blocks(
     // The FK target. `derived` is not a device: it has no recorder to be deaf, no
     // `.alive` marker, and it inherits whichever microphone's audio won the minute.
     meaning.execute(
-        "INSERT OR IGNORE INTO sources (id, name, kind) VALUES (?1, ?2, 'derived')",
-        (crate::room::ROOM_SOURCE, "Room"),
+        "INSERT OR IGNORE INTO sources (id, name, kind) VALUES (?1, ?2, ?3)",
+        (crate::room::ROOM_SOURCE, "Room", crate::room::ROOM_KIND),
     )?;
 
     let mut stmt = ingest
@@ -326,7 +341,7 @@ pub fn write_block(
     conn: &mut rusqlite::Connection,
     audio_segment_id: i64,
     plan: &Plan,
-    model: &str,
+    stream: &Stream,
     now: &str,
 ) -> rusqlite::Result<usize> {
     if plan.insert.is_empty() {
@@ -356,8 +371,8 @@ pub fn write_block(
                 turn.text,
                 turn.language,
                 turn.confidence,
-                model,
-                ROOM_PROVENANCE,
+                stream.model,
+                stream.provenance,
                 turn.word_timings,
                 now,
             ],
@@ -380,8 +395,66 @@ pub fn write_block(
     Ok(written)
 }
 
-/// What a room turn says about where it came from.
-pub const ROOM_PROVENANCE: &str = "room";
+/// Which transcription stream a pass is draining, and the three things that
+/// differ between them. Everything else in this module is shared.
+///
+/// ⚠ **A `Stream` is the unit of REVERSAL, which is why `provenance` is in it
+/// rather than derived.** `DELETE FROM transcript_segments WHERE provenance =
+/// '<stream>'` must name exactly the rows one pass wrote and no others — a
+/// stream sharing a provenance string with another, or writing NULL like the
+/// corpus convention does, is a stream nobody can take back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stream<'a> {
+    /// The queue job kind whose stored results this pass interprets.
+    pub kind: &'a str,
+    /// What the written rows record in `transcript_segments.provenance` — the
+    /// reversal key, unique per stream.
+    pub provenance: &'a str,
+    /// What they record in `asr_model`.
+    pub model: &'a str,
+    /// Whether a written turn HIDES the per-mic turns it covers.
+    ///
+    /// True for the room stream alone, and it is the whole reason [`plan`]'s
+    /// rules 2, 3 and 4 exist. A per-mic pass writes turns for clips that have
+    /// NONE; there is nothing standing on that minute for it to stand in for,
+    /// and a pass that hid anything would be replacing a transcript rather than
+    /// filling a gap.
+    pub hides_covered: bool,
+}
+
+/// The derived one-microphone-per-minute stream (`transcribe-room`).
+pub const ROOM: Stream<'static> = Stream {
+    kind: crate::queue::TRANSCRIBE_ROOM,
+    provenance: "room",
+    model: ROOM_MODEL,
+    hides_covered: true,
+};
+
+/// What the `asr` shim loads when the caller names no model, spelled the way
+/// `recall.asr.DEFAULT_MODEL` spells it.
+///
+/// ⚠ **One string, two languages, and the queue does not carry a model field.**
+/// The shim is told nothing, so it uses its own default and this side has to
+/// know what that is — which makes the two copies drift silently the day
+/// somebody bumps the Python one. `a_per_mic_turn_names_the_model_the_shim_will
+/// _actually_load` reads `asr.py` and fails on the mismatch; that test is the
+/// only thing holding them together.
+pub const SHIM_MODEL: &str = "mlx-community/whisper-large-v3-turbo";
+
+/// One microphone's own clip (`transcribe-segment`) — `worker.py`'s loop, moved.
+///
+/// ⚠ `model` is the shim's real default, NOT a decorated name like [`ROOM`]'s:
+/// these rows sit in the same per-microphone corpus that `worker.py` has been
+/// writing for months, and a reader filtering on `asr_model` must not see the
+/// archive split in two on the day the orchestrator changed. The provenance
+/// field carries the "who wrote it" question instead, where a reader who is
+/// asking it will look.
+pub const PER_MIC: Stream<'static> = Stream {
+    kind: crate::queue::TRANSCRIBE_SEGMENT,
+    provenance: "per-mic (runner)",
+    model: SHIM_MODEL,
+    hides_covered: false,
+};
 
 /// What one pass did, so a log line can be specific about a write that touches
 /// the system of record.
@@ -434,26 +507,34 @@ pub struct Pass {
 /// If the database refuses.
 pub fn ensure_ledger(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS room_turn_ledger (
-             filename    TEXT PRIMARY KEY,
+        "CREATE TABLE IF NOT EXISTS turn_ledger (
+             kind        TEXT NOT NULL,
+             filename    TEXT NOT NULL,
              outcome     TEXT NOT NULL,
-             decided_utc TEXT NOT NULL
+             decided_utc TEXT NOT NULL,
+             PRIMARY KEY (kind, filename)
          );",
     )
 }
 
-/// A block was decided and wrote nothing. `outcome` is for a person reading the
+/// A clip was decided and wrote nothing. `outcome` is for a person reading the
 /// table later, never branched on.
+///
+/// ⚠ Keyed on (kind, filename), not filename. The two streams reach the SAME
+/// minute by different names today, but a per-mic clip and a room block can
+/// share a filename the moment anything renames either, and a shared key would
+/// let one stream's refusal retire the other's work silently.
 fn ledger(
     conn: &rusqlite::Connection,
+    kind: &str,
     filename: &str,
     outcome: &str,
     now: &str,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO room_turn_ledger (filename, outcome, decided_utc)
-         VALUES (?1, ?2, ?3)",
-        rusqlite::params![filename, outcome, now],
+        "INSERT OR REPLACE INTO turn_ledger (kind, filename, outcome, decided_utc)
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![kind, filename, outcome, now],
     )?;
     Ok(())
 }
@@ -461,7 +542,7 @@ fn ledger(
 pub fn write_pass(
     meaning: &mut rusqlite::Connection,
     ingest: &rusqlite::Connection,
-    model: &str,
+    stream: &Stream,
     now: &str,
     limit: usize,
 ) -> rusqlite::Result<Pass> {
@@ -476,42 +557,54 @@ pub fn write_pass(
     // ⚠ ASCENDING, so a backfill drains FORWARD from the oldest undecided block.
     // Descending means the newest minute is transcribed first and the archive is
     // never reached.
+    //
+    // ⚠ **The source is JOINED from the ingest plane, never parsed out of the
+    // filename.** `<source>-<stamp>.<ext>` looks decomposable until a source is
+    // itself hyphenated and stamped — `meeting-20260907-0905` is a real source
+    // id here — and a split on the wrong hyphen would look up the audio segment
+    // of a source that does not exist and silently find nothing. The ingest
+    // plane already knows who uploaded each blob; ask it.
     let mut stmt = ingest.prepare(
-        "SELECT j.filename, j.result FROM jobs j
+        "SELECT j.filename, j.result, s.source FROM jobs j
+         JOIN segments s ON s.filename = j.filename
          WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
-           AND j.filename NOT IN (SELECT filename FROM room_turn_ledger)
+           AND NOT EXISTS (SELECT 1 FROM turn_ledger l
+                           WHERE l.kind = ?1 AND l.filename = j.filename)
          ORDER BY j.filename ASC",
     )?;
-    let jobs: Vec<(String, String)> = stmt
-        .query_map(rusqlite::params![crate::queue::TRANSCRIBE_ROOM], |r| {
-            Ok((r.get(0)?, r.get(1)?))
+    let jobs: Vec<(String, String, String)> = stmt
+        .query_map(rusqlite::params![stream.kind], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })?
         .collect::<Result<_, _>>()?;
 
     let mut pass = Pass::default();
-    for (filename, result) in jobs {
+    for (filename, result, source) in jobs {
         if pass.blocks >= limit {
             break;
         }
         let Some(block_start) = audiocore::names::parse_segment_start(&filename) else {
             // Permanent: a name that is not a segment name never becomes one.
             pass.barren += 1;
-            ledger(ingest, &filename, "unnameable", now)?;
+            ledger(ingest, stream.kind, &filename, "unnameable", now)?;
             continue;
         };
-        // The block's own audio segment. Absent means the registrar has not run
-        // for it yet — a reason to wait, never to write a turn with no audio.
+        // The clip's own audio segment. Absent means nothing has registered it
+        // in the meaning plane yet — a reason to wait, never to write a turn
+        // with no audio. `audio_segment_id` is what `/api/audio/{id}` plays a
+        // turn from, so a turn without one is text nobody can listen to.
         //
         // ⚠ **The one barren cause that gets NO ledger row.** It is the only
-        // transient one, and a row here would retire a block permanently for
+        // transient one, and a row here would retire a clip permanently for
         // being examined a few seconds too early.
-        let Ok(audio_id) = meaning.query_row(
-            "SELECT id FROM audio_segments WHERE source_id = ?1 AND start_utc LIKE ?2",
+        let Ok((audio_id, end_raw)) = meaning.query_row(
+            "SELECT id, end_utc FROM audio_segments
+             WHERE source_id = ?1 AND start_utc LIKE ?2",
             rusqlite::params![
-                crate::room::ROOM_SOURCE,
+                source,
                 format!("{}%", block_start.format("%Y-%m-%dT%H:%M:%S"))
             ],
-            |r| r.get::<_, i64>(0),
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
         ) else {
             pass.barren += 1;
             continue;
@@ -530,24 +623,43 @@ pub fn write_pass(
             // Permanent: the stored result is what the shim sent and will not
             // change shape on a later pass.
             pass.barren += 1;
-            ledger(ingest, &filename, "unreadable", now)?;
+            ledger(ingest, stream.kind, &filename, "unreadable", now)?;
             continue;
         };
-        let block_end = block_start + Duration::seconds(crate::room::BLOCK_S);
-        let standing = standing_between(meaning, block_start, block_end)?;
+        // ⚠ **The clip's end comes from its own row, not from the room grid.**
+        // A room block is exactly `BLOCK_S` because the builder cuts a UTC-aligned
+        // grid; a microphone clip is whatever ffmpeg's segment muxer closed, and
+        // capture stopping mid-segment makes short ones routinely. Asserting a
+        // minute there would size the human-correction window wrong, and the
+        // direction it errs is the one that matters: a window that ends early
+        // cannot see a correction it is about to overwrite.
+        let Ok(block_end) = DateTime::parse_from_rfc3339(&end_raw) else {
+            pass.barren += 1;
+            ledger(ingest, stream.kind, &filename, "unspanned", now)?;
+            continue;
+        };
+        let block_end = block_end.with_timezone(&Utc);
+        // Read only for the stream that can hide: this is a scan per clip, and
+        // a per-mic pass that collected it would be paying for a list it is
+        // structurally forbidden to act on.
+        let standing = if stream.hides_covered {
+            standing_between(meaning, block_start, block_end)?
+        } else {
+            Vec::new()
+        };
         let human = corrected_between(meaning, block_start, block_end)?;
         let decided = plan(turns, &standing, &human);
         pass.refused += decided.refused.len();
         pass.swept += decided.swept;
         pass.hidden += decided.hide.len();
-        let written = write_block(meaning, audio_id, &decided, model, now)?;
+        let written = write_block(meaning, audio_id, &decided, stream, now)?;
         pass.turns += written;
         pass.blocks += 1;
         if written == 0 {
             // Decided, and left no trace in the meaning plane to derive that
-            // from. Without this row the block is indistinguishable from one
+            // from. Without this row the clip is indistinguishable from one
             // nobody has looked at, and every later pass reaches it first.
-            ledger(ingest, &filename, "nothing-to-write", now)?;
+            ledger(ingest, stream.kind, &filename, "nothing-to-write", now)?;
         }
     }
     Ok(pass)

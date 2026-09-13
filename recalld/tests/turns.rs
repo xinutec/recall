@@ -1,7 +1,7 @@
 //! What a finished room job means — and, just as much, what it does NOT mean.
 
 use chrono::{TimeZone, Utc};
-use recalld::room_turns::{Barren, interpret};
+use recalld::turns::{Barren, interpret};
 
 fn block() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 6, 9, 45, 0).unwrap()
@@ -117,7 +117,7 @@ fn a_result_of_another_shape_names_itself_unreadable_rather_than_guessing() {
 /// it takes locks the fleet is using) and this reports what the interpreter
 /// would produce. It prints COUNTS ONLY — the transcripts are the household's.
 ///
-///     cargo test --test room_turns -- --ignored --nocapture
+///     cargo test --test turns -- --ignored --nocapture
 #[test]
 #[ignore = "needs a copy of the fleet's ingest.sqlite via RECALL_INGEST_DB"]
 fn every_stored_result_interprets_or_names_why_not() {
@@ -178,7 +178,7 @@ fn block_start_from(filename: &str) -> Option<chrono::DateTime<Utc>> {
 
 // ---- the write plan: the rules that can destroy a person's typed words ----
 
-use recalld::room_turns::{Corrected, Standing, plan};
+use recalld::turns::{Corrected, Standing, plan};
 
 fn t(s: &str) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339(s)
@@ -186,8 +186,8 @@ fn t(s: &str) -> chrono::DateTime<chrono::Utc> {
         .with_timezone(&chrono::Utc)
 }
 
-fn room_turn(start: &str, end: &str, text: &str) -> recalld::room_turns::RoomTurn {
-    recalld::room_turns::RoomTurn {
+fn room_turn(start: &str, end: &str, text: &str) -> recalld::turns::RoomTurn {
+    recalld::turns::RoomTurn {
         start: t(start),
         end: t(end),
         text: text.to_owned(),
@@ -394,7 +394,7 @@ fn a_touching_boundary_does_not_count_as_overlap() {
 
 // ---- registering built blocks in the meaning plane ----
 
-use recalld::room_turns::{ROOM_CHANNELS, ROOM_RATE, register_blocks};
+use recalld::turns::{ROOM_CHANNELS, ROOM_RATE, register_blocks};
 
 /// The two planes, as two connections — which is what they are in production.
 fn two_planes() -> (rusqlite::Connection, rusqlite::Connection) {
@@ -552,7 +552,7 @@ fn a_blob_lives_under_root_ingest_source_not_root_source() {
 
 // ---- the write itself ----
 
-use recalld::room_turns::{COVERED_BY_ROOM, write_block};
+use recalld::turns::{COVERED_BY_ROOM, ROOM, write_block};
 
 fn meaning_with_turns() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().expect("db");
@@ -571,8 +571,8 @@ fn meaning_with_turns() -> rusqlite::Connection {
     conn
 }
 
-fn a_plan() -> recalld::room_turns::Plan {
-    recalld::room_turns::Plan {
+fn a_plan() -> recalld::turns::Plan {
+    recalld::turns::Plan {
         insert: vec![room_turn(A, B, "wat zei je")],
         hide: vec![],
         refused: vec![],
@@ -586,7 +586,7 @@ fn a_written_turn_is_findable_by_search() {
     // the text unfindable by the one route most likely to look for it.
     let mut conn = meaning_with_turns();
     assert_eq!(
-        write_block(&mut conn, 7, &a_plan(), "whisper", "2026-09-11T10:00:00Z").expect("write"),
+        write_block(&mut conn, 7, &a_plan(), &ROOM, "2026-09-11T10:00:00Z").expect("write"),
         1
     );
     let hits: i64 = conn
@@ -606,11 +606,11 @@ fn a_second_pass_refuses_rather_than_duplicating() {
     let mut conn = meaning_with_turns();
     let plan = a_plan();
     assert_eq!(
-        write_block(&mut conn, 7, &plan, "whisper", "t").expect("first"),
+        write_block(&mut conn, 7, &plan, &ROOM, "t").expect("first"),
         1
     );
     assert_eq!(
-        write_block(&mut conn, 7, &plan, "whisper", "t").expect("again"),
+        write_block(&mut conn, 7, &plan, &ROOM, "t").expect("again"),
         0
     );
     let n: i64 = conn
@@ -628,13 +628,13 @@ fn hiding_names_a_reason_a_reader_can_act_on() {
         (A, B),
     )
     .expect("existing");
-    let plan = recalld::room_turns::Plan {
+    let plan = recalld::turns::Plan {
         insert: vec![room_turn(A, B, "the room heard this")],
         hide: vec![99],
         refused: vec![],
         swept: 0,
     };
-    write_block(&mut conn, 7, &plan, "whisper", "t").expect("write");
+    write_block(&mut conn, 7, &plan, &ROOM, "t").expect("write");
     let reason: String = conn
         .query_row(
             "SELECT hidden_reason FROM transcript_segments WHERE id = 99",
@@ -654,14 +654,14 @@ fn an_empty_plan_writes_nothing_and_hides_nothing() {
         (A, B),
     )
     .expect("existing");
-    let empty = recalld::room_turns::Plan {
+    let empty = recalld::turns::Plan {
         insert: vec![],
         hide: vec![99],
         refused: vec![],
         swept: 0,
     };
     assert_eq!(
-        write_block(&mut conn, 7, &empty, "whisper", "t").expect("write"),
+        write_block(&mut conn, 7, &empty, &ROOM, "t").expect("write"),
         0
     );
     let reason: Option<String> = conn
@@ -679,11 +679,15 @@ fn an_empty_plan_writes_nothing_and_hides_nothing() {
 
 // ---- the pass's progress ledger ----
 
-use recalld::room_turns::{Pass, ensure_ledger, write_pass};
+use recalld::turns::{PER_MIC, Pass, ensure_ledger, write_pass};
 
 /// Both planes with enough schema for a real `write_pass`, copied from the
 /// shapes the production code writes rather than from the structs beside it.
-fn planes_for_a_pass() -> (rusqlite::Connection, rusqlite::Connection) {
+fn planes_for_a_pass() -> (
+    rusqlite::Connection,
+    rusqlite::Connection,
+    tempfile::TempDir,
+) {
     let meaning = rusqlite::Connection::open_in_memory().expect("meaning");
     meaning
         .execute_batch(
@@ -710,10 +714,15 @@ fn planes_for_a_pass() -> (rusqlite::Connection, rusqlite::Connection) {
                  language TEXT, created_utc TEXT NOT NULL);",
         )
         .expect("meaning schema");
-    let ingest = rusqlite::Connection::open_in_memory().expect("ingest");
+    // ⚠ The ingest plane is opened through `store::open`, not built here from a
+    // copy of its DDL. `write_pass` joins `jobs` to `segments`, and a fixture
+    // that declared its own `segments` would be testing a table production does
+    // not have.
+    let dir = tempfile::tempdir().expect("tmp");
+    let ingest = recalld::store::open(dir.path()).expect("ingest");
     recalld::queue::ensure_schema(&ingest).expect("jobs");
     ensure_ledger(&ingest).expect("ledger");
-    (meaning, ingest)
+    (meaning, ingest, dir)
 }
 
 /// A done `transcribe-room` job, and the room block it belongs to.
@@ -724,22 +733,58 @@ fn done_room_job(
     start_utc: &str,
     result: &str,
 ) {
-    ingest
-        .execute(
-            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
-             VALUES ('transcribe-room', ?1, 'done', '2026-09-11T00:00:00Z',
-                     '2026-09-11T00:01:00Z', ?2)",
-            (filename, result),
-        )
-        .expect("job");
+    done_job(
+        ingest,
+        "transcribe-room",
+        "room",
+        filename,
+        start_utc,
+        result,
+    );
     meaning
         .execute(
             "INSERT OR IGNORE INTO audio_segments
                  (source_id, path, start_utc, end_utc, sample_rate, channels)
-             VALUES ('room', '/x', ?1, ?1, 16000, 1)",
-            [start_utc],
+             VALUES ('room', '/x', ?1, ?2, 16000, 1)",
+            (start_utc, &minute_later(start_utc)),
         )
         .expect("block");
+}
+
+/// A done job AND the ingest-plane segment row it names. Both, because
+/// `write_pass` joins them to learn the SOURCE — a job whose blob the ingest
+/// plane has never heard of is not reachable, which is the real shape: every job
+/// is derived from a `segments` row in the first place.
+fn done_job(
+    ingest: &rusqlite::Connection,
+    kind: &str,
+    source: &str,
+    filename: &str,
+    start_utc: &str,
+    result: &str,
+) {
+    ingest
+        .execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES (?1, ?2, 'done', '2026-09-11T00:00:00Z',
+                     '2026-09-11T00:01:00Z', ?3)",
+            (kind, filename, result),
+        )
+        .expect("job");
+    ingest
+        .execute(
+            "INSERT OR IGNORE INTO segments
+                 (filename, source, start_utc, bytes, sha256, received_utc)
+             VALUES (?1, ?2, ?3, 1, 'x', ?3)",
+            (filename, source, start_utc),
+        )
+        .expect("segment");
+}
+
+/// `start_utc` plus a minute, keeping the archive's own spelling.
+fn minute_later(start_utc: &str) -> String {
+    let start = chrono::DateTime::parse_from_rfc3339(start_utc).expect("start");
+    (start + chrono::Duration::seconds(60)).to_rfc3339_opts(chrono::SecondsFormat::Micros, false)
 }
 
 fn a_result(text: &str) -> String {
@@ -756,7 +801,7 @@ fn a_block_that_writes_nothing_is_decided_once_not_every_pass() {
     // of running produced exactly the first pass's 73 turns. A block that writes
     // nothing leaves no trace in the meaning plane to derive "done" from, so the
     // ledger is the only thing that can retire it.
-    let (mut meaning, ingest) = planes_for_a_pass();
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_room_job(
         &meaning,
         &ingest,
@@ -766,12 +811,12 @@ fn a_block_that_writes_nothing_is_decided_once_not_every_pass() {
         &a_result("momentum momentum momentum momentum"),
     );
 
-    let first = write_pass(&mut meaning, &ingest, "whisper", "now", 20).expect("first");
+    let first = write_pass(&mut meaning, &ingest, &ROOM, "now", 20).expect("first");
     assert_eq!(first.blocks, 1, "the block is examined once");
     assert_eq!(first.swept, 1);
     assert_eq!(first.turns, 0);
 
-    let second = write_pass(&mut meaning, &ingest, "whisper", "now", 20).expect("second");
+    let second = write_pass(&mut meaning, &ingest, &ROOM, "now", 20).expect("second");
     assert_eq!(
         second,
         Pass::default(),
@@ -783,7 +828,7 @@ fn a_block_that_writes_nothing_is_decided_once_not_every_pass() {
 fn a_written_block_is_retired_by_its_turns_and_not_by_the_ledger() {
     // The asymmetry that makes the 2026-09-11 reversal work: deleting the room
     // turns is enough to re-enable the block, with nothing else to remember.
-    let (mut meaning, ingest) = planes_for_a_pass();
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_room_job(
         &meaning,
         &ingest,
@@ -793,13 +838,13 @@ fn a_written_block_is_retired_by_its_turns_and_not_by_the_ledger() {
     );
 
     assert_eq!(
-        write_pass(&mut meaning, &ingest, "whisper", "now", 20)
+        write_pass(&mut meaning, &ingest, &ROOM, "now", 20)
             .expect("first")
             .turns,
         1
     );
     let ledgered: i64 = ingest
-        .query_row("SELECT count(*) FROM room_turn_ledger", [], |r| r.get(0))
+        .query_row("SELECT count(*) FROM turn_ledger", [], |r| r.get(0))
         .expect("ledger");
     assert_eq!(
         ledgered, 0,
@@ -807,7 +852,7 @@ fn a_written_block_is_retired_by_its_turns_and_not_by_the_ledger() {
     );
 
     assert_eq!(
-        write_pass(&mut meaning, &ingest, "whisper", "now", 20).expect("second"),
+        write_pass(&mut meaning, &ingest, &ROOM, "now", 20).expect("second"),
         Pass::default(),
         "and it is not rewritten while those turns stand"
     );
@@ -820,7 +865,7 @@ fn a_written_block_is_retired_by_its_turns_and_not_by_the_ledger() {
         )
         .expect("reverse");
     assert_eq!(
-        write_pass(&mut meaning, &ingest, "whisper", "now", 20)
+        write_pass(&mut meaning, &ingest, &ROOM, "now", 20)
             .expect("after reversal")
             .turns,
         1,
@@ -833,21 +878,21 @@ fn a_block_whose_audio_is_not_registered_yet_comes_back() {
     // ⚠ The one barren cause that gets NO ledger row. The registrar runs in its
     // own loop, so a block examined a few seconds too early is not a verdict —
     // and a row here would retire it for good.
-    let (mut meaning, ingest) = planes_for_a_pass();
-    ingest
-        .execute(
-            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
-             VALUES ('transcribe-room', 'room-20260911T100000.flac', 'done',
-                     '2026-09-11T00:00:00Z', '2026-09-11T00:01:00Z', ?1)",
-            [a_result("wat zei je")],
-        )
-        .expect("job");
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    done_job(
+        &ingest,
+        "transcribe-room",
+        "room",
+        "room-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+        &a_result("wat zei je"),
+    );
 
-    let early = write_pass(&mut meaning, &ingest, "whisper", "now", 20).expect("early");
+    let early = write_pass(&mut meaning, &ingest, &ROOM, "now", 20).expect("early");
     assert_eq!(early.barren, 1);
     assert_eq!(early.blocks, 0);
     let ledgered: i64 = ingest
-        .query_row("SELECT count(*) FROM room_turn_ledger", [], |r| r.get(0))
+        .query_row("SELECT count(*) FROM turn_ledger", [], |r| r.get(0))
         .expect("ledger");
     assert_eq!(ledgered, 0, "waiting is not deciding");
 
@@ -857,12 +902,12 @@ fn a_block_whose_audio_is_not_registered_yet_comes_back() {
             "INSERT INTO audio_segments
                  (source_id, path, start_utc, end_utc, sample_rate, channels)
              VALUES ('room', '/x', '2026-09-11T10:00:00+00:00',
-                     '2026-09-11T10:00:00+00:00', 16000, 1)",
+                     '2026-09-11T10:01:00+00:00', 16000, 1)",
             [],
         )
         .expect("block");
     assert_eq!(
-        write_pass(&mut meaning, &ingest, "whisper", "now", 20)
+        write_pass(&mut meaning, &ingest, &ROOM, "now", 20)
             .expect("later")
             .turns,
         1,
@@ -875,7 +920,7 @@ fn the_limit_counts_blocks_decided_not_rows_looked_at() {
     // ⚠ Why there is no LIMIT in the SQL. With decided blocks ahead of it in
     // filename order, a query limited to N returns N ineligible rows and the
     // pass does nothing — forever. `limit` has to bound the WORK, not the read.
-    let (mut meaning, ingest) = planes_for_a_pass();
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
     for minute in 0..5 {
         done_room_job(
             &meaning,
@@ -895,11 +940,332 @@ fn the_limit_counts_blocks_decided_not_rows_looked_at() {
 
     // Retire the five junk blocks first, one pass at a time.
     for _ in 0..5 {
-        write_pass(&mut meaning, &ingest, "whisper", "now", 1).expect("pass");
+        write_pass(&mut meaning, &ingest, &ROOM, "now", 1).expect("pass");
     }
-    let reached = write_pass(&mut meaning, &ingest, "whisper", "now", 1).expect("reach");
+    let reached = write_pass(&mut meaning, &ingest, &ROOM, "now", 1).expect("reach");
     assert_eq!(
         reached.turns, 1,
         "the real block must be reachable past the decided ones"
+    );
+}
+
+// ---- the per-mic stream ----
+
+/// A microphone clip: the ingest-plane blob, the job, and the meaning-plane row
+/// its turns will hang from. `end_utc` is a real span, because the pass reads it.
+fn done_mic_job(
+    meaning: &rusqlite::Connection,
+    ingest: &rusqlite::Connection,
+    source: &str,
+    filename: &str,
+    start_utc: &str,
+    end_utc: &str,
+    result: &str,
+) {
+    done_job(
+        ingest,
+        "transcribe-segment",
+        source,
+        filename,
+        start_utc,
+        result,
+    );
+    meaning
+        .execute(
+            "INSERT OR IGNORE INTO sources (id, name, kind) VALUES (?1, ?1, 'coreaudio')",
+            [source],
+        )
+        .expect("source");
+    meaning
+        .execute(
+            "INSERT OR IGNORE INTO audio_segments
+                 (source_id, path, start_utc, end_utc, sample_rate, channels)
+             VALUES (?1, '/x', ?2, ?3, 48000, 1)",
+            (source, start_utc, end_utc),
+        )
+        .expect("clip");
+}
+
+#[test]
+fn a_per_mic_pass_writes_its_turns_and_hides_absolutely_nothing() {
+    // ⚠ THE LINE BETWEEN THE TWO STREAMS. A room turn stands IN FOR the
+    // microphones and hides what it covers; a per-mic turn stands for its own
+    // clip and covers nothing. If `hides_covered` ever leaked true here, one
+    // microphone's transcript would start suppressing the others' — which is
+    // the room stream's contested behaviour arriving without the room stream's
+    // decision.
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    done_mic_job(
+        &meaning,
+        &ingest,
+        "usb",
+        "usb-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+        "2026-09-11T10:01:00+00:00",
+        &a_result("we moeten dat morgen opschrijven"),
+    );
+    // Another microphone already transcribed the same minute. Standing, visible.
+    meaning
+        .execute(
+            "INSERT INTO sources (id, name, kind) VALUES ('geb', 'geb', 'tcp_pcm')",
+            [],
+        )
+        .expect("other source");
+    meaning
+        .execute(
+            "INSERT INTO audio_segments (id, source_id, path, start_utc, end_utc,
+                                         sample_rate, channels)
+             VALUES (500, 'geb', '/y', '2026-09-11T10:00:00+00:00',
+                     '2026-09-11T10:01:00+00:00', 48000, 1)",
+            [],
+        )
+        .expect("other clip");
+    meaning
+        .execute(
+            "INSERT INTO transcript_segments (id, audio_segment_id, start_utc, end_utc,
+                                              text, asr_model)
+             VALUES (501, 500, '2026-09-11T10:00:01+00:00', '2026-09-11T10:00:04+00:00',
+                     'we moeten dat morgen opschrijven', 'whisper')",
+            [],
+        )
+        .expect("other turn");
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, "now", 20).expect("pass");
+    assert_eq!(pass.turns, 1);
+    assert_eq!(pass.hidden, 0, "a per-mic turn must hide nothing, ever");
+
+    let still_visible: Option<String> = meaning
+        .query_row(
+            "SELECT hidden_reason FROM transcript_segments WHERE id = 501",
+            [],
+            |r| r.get(0),
+        )
+        .expect("other turn");
+    assert_eq!(still_visible, None);
+}
+
+#[test]
+fn a_per_mic_turn_records_the_provenance_that_takes_it_back_and_the_corpus_model() {
+    // The two halves of the same decision. `asr_model` matches what `worker.py`
+    // has written for months, so the archive does not split in two on the day
+    // the orchestrator changed; `provenance` is unique to this pass, so the
+    // reversal is one DELETE that names its rows and nobody else's.
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    done_mic_job(
+        &meaning,
+        &ingest,
+        "usb",
+        "usb-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+        "2026-09-11T10:01:00+00:00",
+        &a_result("dit is echte spraak"),
+    );
+    write_pass(&mut meaning, &ingest, &PER_MIC, "now", 20).expect("pass");
+
+    let (model, provenance): (String, String) = meaning
+        .query_row(
+            "SELECT asr_model, provenance FROM transcript_segments
+             WHERE provenance IS NOT NULL",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("row");
+    assert_eq!(model, "mlx-community/whisper-large-v3-turbo");
+    assert_eq!(provenance, "per-mic (runner)");
+    assert_ne!(
+        provenance, "room",
+        "the two streams must not share a reversal key"
+    );
+}
+
+#[test]
+fn a_clip_the_mac_already_transcribed_is_left_alone() {
+    // Both orchestrators can be running at once during the cutover, and the
+    // wasted GPU is the acceptable cost. A DUPLICATED transcript is not: it
+    // doubles the conversation for a reader with no way to tell which is which.
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    done_mic_job(
+        &meaning,
+        &ingest,
+        "usb",
+        "usb-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+        "2026-09-11T10:01:00+00:00",
+        &a_result("dit is echte spraak"),
+    );
+    let clip: i64 = meaning
+        .query_row(
+            "SELECT id FROM audio_segments WHERE source_id = 'usb'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("clip");
+    meaning
+        .execute(
+            "INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc,
+                                              text, asr_model)
+             VALUES (?1, '2026-09-11T10:00:01+00:00', '2026-09-11T10:00:04+00:00',
+                     'dit is echte spraak', 'mlx-community/whisper-large-v3-turbo')",
+            [clip],
+        )
+        .expect("mac turn");
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, "now", 20).expect("pass");
+    assert_eq!(pass.turns, 0);
+    let rows: i64 = meaning
+        .query_row(
+            "SELECT count(*) FROM transcript_segments WHERE audio_segment_id = ?1",
+            [clip],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(rows, 1, "the Mac's turn stands alone");
+}
+
+#[test]
+fn a_per_mic_turn_over_a_human_correction_is_refused_like_a_room_turn() {
+    // Rule 1 is not the room stream's rule, it is the ARCHIVE's: the one thing
+    // here that is not re-derivable from audio is what a person typed.
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    done_mic_job(
+        &meaning,
+        &ingest,
+        "usb",
+        "usb-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+        "2026-09-11T10:01:00+00:00",
+        &a_result("dit is echte spraak"),
+    );
+    meaning
+        .execute(
+            "INSERT INTO corrections (start_utc, end_utc, original_text,
+                                      corrected_text, created_utc)
+             VALUES ('2026-09-11T10:00:00+00:00', '2026-09-11T10:00:30+00:00',
+                     'was', 'is', 'now')",
+            [],
+        )
+        .expect("correction");
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, "now", 20).expect("pass");
+    assert_eq!(pass.turns, 0);
+    assert_eq!(pass.refused, 1);
+}
+
+#[test]
+fn the_correction_window_is_the_clips_own_span_not_a_minute() {
+    // ⚠ A microphone clip is whatever ffmpeg's segment muxer closed — capture
+    // stopping mid-segment makes short ones routinely, and a LONG one is what
+    // this guards. Asserting the room's 60s grid here would end the window
+    // early, and a window that ends early cannot see the correction it is about
+    // to overwrite.
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    done_mic_job(
+        &meaning,
+        &ingest,
+        "usb",
+        "usb-20260911T100000.flac",
+        "2026-09-11T10:00:00+00:00",
+        "2026-09-11T10:05:00+00:00", // five minutes, not one
+        r#"{"ok": true, "result": {"language": "nl", "segments": [
+             {"start": 200.0, "end": 210.0, "text": "dit is echte spraak",
+              "confidence": 0.9}]}}"#,
+    );
+    meaning
+        .execute(
+            "INSERT INTO corrections (start_utc, end_utc, original_text,
+                                      corrected_text, created_utc)
+             VALUES ('2026-09-11T10:03:18+00:00', '2026-09-11T10:03:28+00:00',
+                     'was', 'is', 'now')",
+            [],
+        )
+        .expect("correction");
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, "now", 20).expect("pass");
+    assert_eq!(
+        pass.refused, 1,
+        "a correction 3m18s into the clip is inside it, and must be seen"
+    );
+    assert_eq!(pass.turns, 0);
+}
+
+#[test]
+fn the_source_is_read_from_the_ingest_plane_not_split_out_of_the_filename() {
+    // ⚠ `<source>-<stamp>.<ext>` looks decomposable right up until the source is
+    // itself hyphenated and stamped. `meeting-20260907-0905` is a real source id
+    // in this archive, and every plausible split of its filename names a source
+    // that does not exist — so the audio lookup finds nothing and the clip goes
+    // barren forever, silently.
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    done_mic_job(
+        &meaning,
+        &ingest,
+        "meeting-20260907-0905",
+        "meeting-20260907-0905-20260907T090500.opus",
+        "2026-09-07T09:05:00+00:00",
+        "2026-09-07T09:06:00+00:00",
+        &a_result("dit is echte spraak"),
+    );
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, "now", 20).expect("pass");
+    assert_eq!(pass.turns, 1, "the hyphenated source must resolve");
+}
+
+#[test]
+fn one_streams_refusal_does_not_retire_the_others_job() {
+    // The ledger is keyed on (kind, filename). Sharing the key would let a room
+    // block that swept to nothing mark a per-mic clip of the same name decided —
+    // a clip nobody would ever look at again, and no error anywhere.
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    let name = "usb-20260911T100000.flac";
+    done_mic_job(
+        &meaning,
+        &ingest,
+        "usb",
+        name,
+        "2026-09-11T10:00:00+00:00",
+        "2026-09-11T10:01:00+00:00",
+        &a_result("dit is echte spraak"),
+    );
+    // The same filename decided by the OTHER stream, writing nothing.
+    ensure_ledger(&ingest).expect("ledger");
+    ingest
+        .execute(
+            "INSERT INTO turn_ledger (kind, filename, outcome, decided_utc)
+             VALUES ('transcribe-room', ?1, 'nothing-to-write', 'then')",
+            [name],
+        )
+        .expect("other verdict");
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, "now", 20).expect("pass");
+    assert_eq!(pass.turns, 1, "the per-mic job is still its own to decide");
+}
+
+#[test]
+fn a_per_mic_turn_names_the_model_the_shim_will_actually_load() {
+    // ⚠ The queue carries no model field, so the shim uses its own default and
+    // this side has to know what that is. Two copies of one string in two
+    // languages: the day somebody bumps `recall.asr.DEFAULT_MODEL`, every turn
+    // the runner writes starts claiming a model it was not produced by, and
+    // nothing else in either language would say so.
+    //
+    // `asr.py` is the system of record here — it is what the running process
+    // reads — so this test asks IT rather than pinning a literal on both sides.
+    let asr = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/recall/asr.py"),
+    )
+    .expect("asr.py");
+    let line = asr
+        .lines()
+        .find(|l| l.starts_with("DEFAULT_MODEL"))
+        .expect("DEFAULT_MODEL is gone from asr.py — this coupling needs rethinking");
+    let quoted = line
+        .split('"')
+        .nth(1)
+        .expect("DEFAULT_MODEL is no longer a plain string literal");
+    assert_eq!(
+        quoted,
+        recalld::turns::SHIM_MODEL,
+        "recalld records `{}` on every per-mic turn, but the shim loads `{quoted}`",
+        recalld::turns::SHIM_MODEL
     );
 }

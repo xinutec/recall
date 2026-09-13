@@ -183,6 +183,18 @@
               # parses them. The sandbox has no `tests/` beyond what is named
               # here, so leaving it out fails the build rather than the test.
               ./tests/fixtures/worker-heartbeat.json
+              # The ASR model contract, for the same reason one entry up: the
+              # queue carries no model field, so `turns::SHIM_MODEL` has to name
+              # what the shim will load, and `recall.asr.DEFAULT_MODEL` is what
+              # the shim actually reads. A test compares them, and the sandbox
+              # has no `src/` beyond what is named here — so leaving this out
+              # fails the BUILD with a missing file rather than the test with a
+              # mismatch, which is a much worse error to read.
+              #
+              # ⚠ ONE FILE, not `./src`. This is live Python in the Rust build's
+              # inputs: naming the directory would make every Python edit in the
+              # repo rebuild and re-test the whole Rust workspace.
+              ./src/recall/asr.py
             ];
           };
           cargoLock.lockFile = ./Cargo.lock;

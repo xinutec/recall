@@ -171,7 +171,7 @@ fn a_diarize_job_appears_only_once_the_words_exist() {
 #[test]
 fn a_refused_transcription_derives_no_diarization() {
     // A block the ASR refused is a block whose CLIP is the problem
-    // (`room_turns::Barren::Refused`). Handing the same clip to pyannote spends
+    // (`turns::Barren::Refused`). Handing the same clip to pyannote spends
     // GPU to learn that again.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
@@ -252,11 +252,16 @@ fn mic_row(root: &std::path::Path, source: &str, stamp: &str) -> String {
 fn meaning_plane() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().expect("mem");
     conn.execute_batch(
-        "CREATE TABLE audio_segments (
+        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
+         CREATE TABLE audio_segments (
              id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
              start_utc TEXT NOT NULL);
          CREATE TABLE transcript_segments (
-             id INTEGER PRIMARY KEY, audio_segment_id INTEGER, text TEXT NOT NULL);",
+             id INTEGER PRIMARY KEY, audio_segment_id INTEGER, text TEXT NOT NULL);
+         INSERT INTO sources (id, name, kind) VALUES
+             ('usb', 'usb', 'coreaudio'),
+             ('geb', 'geb', 'tcp_pcm'),
+             ('room', 'Room', 'derived');",
     )
     .expect("schema");
     conn
@@ -377,5 +382,62 @@ fn deriving_twice_queues_nothing_new() {
         derive_segment_jobs(&ingest, &meaning, now, 100).expect("b"),
         0,
         "derivation is idempotent — a job already queued is not queued again"
+    );
+}
+
+#[test]
+fn an_uploaded_meeting_gets_no_transcribe_job() {
+    // ⚠ `source != 'room'` is not the same predicate as "a microphone". Uploaded
+    // MEETINGS live in the ingest plane under source ids of their own, and they
+    // reach the archive by a different road — recalld transcribes them on
+    // arrival. Admitting them here would spend GPU re-deriving turns that
+    // already exist, and the clip would then be refused at the write step, so
+    // nothing but the bill would show it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-08T12:00:00Z".parse().expect("t");
+    mic_row(dir.path(), "meeting-20260907-0905", "20260907T090500");
+    mic_row(dir.path(), "usb", "20260907T100000");
+
+    let meaning = meaning_plane();
+    meaning
+        .execute(
+            "INSERT INTO sources (id, name, kind)
+             VALUES ('meeting-20260907-0905', 'Meeting', 'upload')",
+            [],
+        )
+        .expect("meeting source");
+
+    let ingest = store::open(dir.path()).expect("db");
+    ensure_schema(&ingest).expect("schema");
+    assert_eq!(
+        derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
+        1,
+        "the microphone clip, and not the meeting"
+    );
+    let only: String = ingest
+        .query_row(
+            "SELECT filename FROM jobs WHERE kind = ?1",
+            [TRANSCRIBE_SEGMENT],
+            |r| r.get(0),
+        )
+        .expect("job");
+    assert!(only.starts_with("usb-"), "got {only}");
+}
+
+#[test]
+fn a_source_the_meaning_plane_has_never_heard_of_waits() {
+    // Not an error, and not a job either. Nothing could register that clip's
+    // audio, so a job for it could only go barren on every pass — and a barren
+    // clip with no ledger row sits at the head of the queue for ever.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-08T12:00:00Z".parse().expect("t");
+    mic_row(dir.path(), "newmic", "20260907T090500");
+
+    let meaning = meaning_plane();
+    let ingest = store::open(dir.path()).expect("db");
+    ensure_schema(&ingest).expect("schema");
+    assert_eq!(
+        derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
+        0
     );
 }

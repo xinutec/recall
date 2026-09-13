@@ -38,6 +38,10 @@ use std::path::Path;
 
 /// The synthetic source every built block lands under.
 pub const ROOM_SOURCE: &str = "room";
+/// What the meaning plane records as its KIND — how a reader tells it from a
+/// recorder. `derived` is not a device: it has no microphone to be deaf, no
+/// `.alive` marker, and it inherits whichever source won the minute.
+pub const ROOM_KIND: &str = "derived";
 /// The block grid: one minute, UTC-aligned.
 pub const BLOCK_S: i64 = 60;
 /// ASR's input shape — what the room stream exists to feed.

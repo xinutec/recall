@@ -138,9 +138,24 @@ pub fn derive_segment_jobs(
         }
     }
 
-    let candidates: Vec<String> = {
+    // ⚠ **A MICROPHONE, not merely "not the room".** The ingest plane holds
+    // uploaded MEETINGS under source ids of their own (`meeting-20260907-0905`),
+    // and they reach this archive by a different road entirely — recalld
+    // transcribes them on arrival. `source != 'room'` admits every one of them,
+    // and each would be re-transcribed on the GPU to produce turns that already
+    // exist. The meaning plane is the only thing that knows a source's KIND, so
+    // ask it, and let a source it has never heard of wait: nothing could
+    // register that clip's audio either, so a job for it could only go barren.
+    let mics: std::collections::HashSet<String> = {
+        let mut stmt =
+            meaning.prepare("SELECT id FROM sources WHERE kind NOT IN ('upload', ?1)")?;
+        let rows = stmt.query_map([crate::room::ROOM_KIND], |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+
+    let candidates: Vec<(String, String)> = {
         let mut stmt = ingest.prepare(
-            "SELECT s.filename FROM segments s
+            "SELECT s.filename, s.source FROM segments s
              LEFT JOIN segment_speech p ON p.filename = s.filename
              WHERE s.source != ?1
                AND (p.filename IS NULL OR p.speech_seconds != 0.0)
@@ -148,16 +163,18 @@ pub fn derive_segment_jobs(
                                WHERE j.kind = ?2 AND j.filename = s.filename)
              ORDER BY s.start_utc DESC",
         )?;
-        let rows = stmt.query_map((ROOM_SOURCE, TRANSCRIBE_SEGMENT), |r| r.get(0))?;
+        let rows = stmt.query_map((ROOM_SOURCE, TRANSCRIBE_SEGMENT), |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
         rows.collect::<Result<_, _>>()?
     };
 
     let mut inserted = 0;
-    for filename in candidates {
+    for (filename, source) in candidates {
         if inserted >= limit {
             break;
         }
-        if have.contains(&filename) {
+        if have.contains(&filename) || !mics.contains(&source) {
             continue;
         }
         inserted += ingest.execute(
@@ -174,7 +191,7 @@ pub fn derive_segment_jobs(
 /// nothing — it yields `SPEAKER_00` spans, and it is the alignment against words
 /// that makes them turns (`refine.py`, which this replaces, transcribes first for
 /// exactly this reason). And a block the ASR REFUSED is a block whose clip is the
-/// problem (`room_turns::Barren::Refused`); handing the same clip to pyannote
+/// problem (`turns::Barren::Refused`); handing the same clip to pyannote
 /// spends GPU to learn that again.
 ///
 /// Not gated on speech, because `transcribe-room` already is: a block with no

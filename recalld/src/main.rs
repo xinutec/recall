@@ -204,7 +204,21 @@ fn main() -> ExitCode {
         // by leaving this on.
         //
         // Re-enable only with that answered and a fresh comparison in hand.
-        // spawn_room_turn_writer(config.root.clone());
+        // spawn_turn_writer(config.root.clone(), recalld::turns::ROOM);
+        //
+        // The PER-MIC stream is a different decision and is not gated on that
+        // one. It writes turns for microphone clips that have none — 14,078 of
+        // 22,312 of them when this landed — and it neither hides nor supersedes
+        // anything, so the worst case is a transcript where there was silence,
+        // deletable by its provenance. It is the last thing between `worker.py`
+        // and deletion (#1538).
+        //
+        // ⚠ Nothing feeds it until the runner leases `transcribe-segment`, which
+        // is the separate switch: deriving jobs costs nothing, leasing them
+        // spends GPU that the Mac's own worker is still spending on the same
+        // clips. Turning both on at once is how the same minute gets transcribed
+        // twice.
+        spawn_turn_writer(config.root.clone(), recalld::turns::PER_MIC);
         let app = router(config);
         let mut serving = tokio::task::JoinSet::new();
         for listener in listeners {
@@ -326,52 +340,61 @@ fn spawn_speech_scanner(root: PathBuf) {
 /// Stage D3: the room builder — one settled block at a time, calibrated
 /// selection, terminal verdicts only. Chases the level scanner: a block whose
 /// evidence is incomplete defers and returns next pass.
-/// Stage E3a: turn stored room results into turns people actually read.
+/// Stage E3a: turn stored transcription results into turns people actually read.
 ///
 /// ⚠ **THE FIRST LOOP HERE THAT CHANGES A TRANSCRIPT SOMEBODY READS.** Everything
-/// above it derives, measures or registers. This one writes room turns and hides
-/// the per-mic turns they cover — measured 2026-09-11 before it was switched on:
-/// 933 transcribed blocks against 25,349 visible per-mic turns in the same span.
-/// That ratio IS the point (four or five microphones transcribing one minute,
-/// #1388), and it is still thousands of rows changing state.
+/// above it derives, measures or registers.
 ///
-/// ⚠ **HOW TO PUT IT BACK. It is TWO PLANES, and one of them is easy to miss.**
-/// Hiding is not deleting, so the meaning plane (`recall.sqlite`) undoes cleanly:
+/// One function, two callers, because the difference between the streams is a
+/// [`recalld::turns::Stream`] and not a loop:
+///
+/// - [`recalld::turns::ROOM`] — writes room turns AND HIDES the per-mic turns
+///   they cover. Measured 2026-09-11 before it was switched on: 933 transcribed
+///   blocks against 25,349 visible per-mic turns in the same span. That ratio IS
+///   the point (four or five microphones transcribing one minute, #1388), and it
+///   is still thousands of rows changing state. **Off** pending #1461.
+/// - [`recalld::turns::PER_MIC`] — writes turns for microphone clips that have
+///   NONE. It hides nothing, supersedes nothing and revisits nothing: a clip
+///   that already carries turns is refused by `write_block` before a row is
+///   touched. What it changes is that a gap gets filled, which is why it does
+///   not wait on the room stream's open question.
+///
+/// ⚠ **HOW TO PUT EITHER BACK. It is TWO PLANES, and one of them is easy to
+/// miss.** Hiding is not deleting, so the meaning plane (`recall.sqlite`) undoes
+/// cleanly — the provenance string is the stream's, and names its rows alone:
 ///
 /// ```sql
 /// UPDATE transcript_segments SET hidden_reason = NULL
 ///  WHERE hidden_reason = 'covered by the room stream';
 /// DELETE FROM transcript_segments WHERE provenance = 'room';
+/// -- or, for the per-mic stream:
+/// DELETE FROM transcript_segments WHERE provenance = 'per-mic (runner)';
 /// ```
 ///
-/// That restores what anybody reads, and by itself it re-enables every block
+/// That restores what anybody reads, and by itself it re-enables every clip
 /// whose turns it just deleted — `write_pass` derives "already written" from
 /// those very rows, deliberately, so this much needs no bookkeeping.
 ///
-/// ⚠ But the blocks that wrote NOTHING left no rows to delete, so they are held
+/// ⚠ But the clips that wrote NOTHING left no rows to delete, so they are held
 /// in a ledger in the INGEST plane (`ingest.sqlite`) instead, and it has to go
 /// too or they stay decided:
 ///
 /// ```sql
-/// DELETE FROM room_turn_ledger;
+/// DELETE FROM turn_ledger WHERE kind = 'transcribe-room';
 /// ```
 ///
 /// Forget it and the reversal LOOKS complete — the transcripts are back, the
-/// room rows are gone — while every refused or swept block silently never gets
-/// reconsidered. `room_turns::ensure_ledger` carries the same warning from the
+/// stream's rows are gone — while every refused or swept clip silently never
+/// gets reconsidered. `turns::ensure_ledger` carries the same warning from the
 /// other side.
 ///
 /// Written here rather than in a task because the person who needs it will be
 /// reading this file, not searching for the note.
 ///
 /// A SMALL batch on a slow cadence, deliberately: the queue drains over hours
-/// instead of minutes, so a bad verdict is noticed while it is dozens of blocks
+/// instead of minutes, so a bad verdict is noticed while it is dozens of clips
 /// rather than nine hundred.
-#[expect(
-    dead_code,
-    reason = "off since 2026-09-11 pending the quality answer above; kept whole so re-enabling is one line, not a rewrite"
-)]
-fn spawn_room_turn_writer(root: PathBuf) {
+fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
     const BATCH: usize = 20;
     tokio::spawn(async move {
@@ -381,35 +404,32 @@ fn spawn_room_turn_writer(root: PathBuf) {
                 let ingest = recalld::store::open(&pass_root)?;
                 let mut meaning = recalld::work::open_write(&pass_root)?;
                 let now = chrono::Utc::now().to_rfc3339();
-                recalld::room_turns::write_pass(
-                    &mut meaning,
-                    &ingest,
-                    recalld::room_turns::ROOM_MODEL,
-                    &now,
-                    BATCH,
-                )
+                recalld::turns::write_pass(&mut meaning, &ingest, &stream, &now, BATCH)
             })
             .await;
             match done {
                 // ⚠ `swept` is IN this guard, and leaving it out is how the
-                // interesting case goes quiet: a block whose room turns are all
+                // interesting case goes quiet: a clip whose turns are all
                 // repetition loops writes nothing, hides nothing and refuses
-                // nothing, so without it the one pass that says the room audio
-                // is bad is the one pass that logs no line at all.
+                // nothing, so without it the one pass that says the audio is bad
+                // is the one pass that logs no line at all.
                 Ok(Ok(pass)) if pass.turns + pass.hidden + pass.refused + pass.swept > 0 => {
                     tracing::info!(
+                        stream = stream.provenance,
                         blocks = pass.blocks,
                         turns = pass.turns,
                         hidden = pass.hidden,
                         refused = pass.refused,
                         swept = pass.swept,
                         barren = pass.barren,
-                        "room turns: written"
+                        "turns: written"
                     );
                 }
                 Ok(Ok(_)) => {}
-                Ok(Err(err)) => tracing::warn!(%err, "room turns: pass failed"),
-                Err(err) => tracing::error!(%err, "room turns: task failed"),
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, stream = stream.provenance, "turns: pass failed");
+                }
+                Err(err) => tracing::error!(%err, stream = stream.provenance, "turns: task failed"),
             }
             tokio::time::sleep(EVERY).await;
         }
@@ -434,7 +454,7 @@ fn spawn_room_registrar(root: PathBuf) {
                 let ingest = recalld::store::open(&pass_root)?;
                 let meaning = recalld::work::open_write(&pass_root)?;
                 let room_dir = recalld::store::source_dir(&pass_root, recalld::room::ROOM_SOURCE);
-                recalld::room_turns::register_blocks(&meaning, &ingest, &room_dir)
+                recalld::turns::register_blocks(&meaning, &ingest, &room_dir)
             })
             .await;
             match done {
