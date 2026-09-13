@@ -218,7 +218,7 @@ fn a_runner_is_never_handed_a_kind_it_cannot_do() {
 
 // ---- per-mic transcribe jobs: the orchestration port (#1538) ----
 
-use recalld::queue::{TRANSCRIBE_SEGMENT, derive_segment_jobs, ensure_schema};
+use recalld::queue::{self, TRANSCRIBE_SEGMENT, derive_segment_jobs, ensure_schema};
 
 fn mic_row(root: &std::path::Path, source: &str, stamp: &str) -> String {
     let name = format!("{source}-{stamp}.opus");
@@ -439,5 +439,80 @@ fn a_source_the_meaning_plane_has_never_heard_of_waits() {
     assert_eq!(
         derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
         0
+    );
+}
+
+#[test]
+fn a_lease_picks_the_newest_clip_across_sources_not_the_alphabetical_one() {
+    // ⚠ THE STARVATION BUG THIS ORDERING EXISTS TO AVOID. `ORDER BY filename
+    // DESC` is newest-first only while every job is `room-*`. With microphone
+    // clips in the queue it becomes source-alphabetical — `usb-` above `room-`
+    // above `geb-` — so a runner would transcribe every usb clip ever recorded
+    // before geb got one job. Nothing would look like an ordering fault; geb
+    // would simply have no transcripts.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-13T12:00:00Z".parse().expect("t");
+    let ingest = store::open(dir.path()).expect("db");
+    ensure_schema(&ingest).expect("schema");
+
+    // geb is LATER in time and EARLIER in the alphabet — the two orderings
+    // disagree, which is the only case that can tell them apart.
+    for (source, stamp, iso) in [
+        ("usb", "20260913T100000", "2026-09-13T10:00:00Z"),
+        ("geb", "20260913T110000", "2026-09-13T11:00:00Z"),
+    ] {
+        let filename = format!("{source}-{stamp}.opus");
+        store::insert(
+            &ingest,
+            &store::Row {
+                source: source.into(),
+                filename: filename.clone(),
+                start_utc: iso.into(),
+                bytes: 1,
+                sha256: "x".into(),
+                received_utc: iso.into(),
+                sent_utc: None,
+            },
+        )
+        .expect("segment");
+        ingest
+            .execute(
+                "INSERT INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, ?3)",
+                (TRANSCRIBE_SEGMENT, &filename, iso),
+            )
+            .expect("job");
+    }
+
+    let job = queue::lease(dir.path(), now, &[TRANSCRIBE_SEGMENT])
+        .expect("lease")
+        .expect("a job");
+    assert!(
+        job.filename.starts_with("geb-"),
+        "the NEWEST clip must be leased, got {}",
+        job.filename
+    );
+}
+
+#[test]
+fn a_job_whose_blob_the_ingest_plane_has_forgotten_is_not_leasable() {
+    // The join's other edge. A job with no `segments` row names a blob nothing
+    // can fetch, so offering it would spend a runner's lease on work it can
+    // only fail — and the attempts would cycle.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-13T12:00:00Z".parse().expect("t");
+    let ingest = store::open(dir.path()).expect("db");
+    ensure_schema(&ingest).expect("schema");
+    ingest
+        .execute(
+            "INSERT INTO jobs (kind, filename, created_utc)
+             VALUES (?1, 'usb-20260913T100000.opus', '2026-09-13T10:00:00Z')",
+            [TRANSCRIBE_SEGMENT],
+        )
+        .expect("job");
+
+    assert!(
+        queue::lease(dir.path(), now, &[TRANSCRIBE_SEGMENT])
+            .expect("lease")
+            .is_none()
     );
 }

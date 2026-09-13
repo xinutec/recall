@@ -231,13 +231,25 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Resul
         .map(|n| format!("?{n}"))
         .collect::<Vec<_>>()
         .join(", ");
+    // ⚠ **ORDERED BY CAPTURE TIME, JOINED — NOT by filename.** `ORDER BY
+    // filename DESC` is newest-first only while every job is `room-*`. The
+    // moment a second kind arrives it becomes SOURCE-ALPHABETICAL: `usb-` sorts
+    // above `room-`, which sorts above `pixel9-`, `pixel5-`, `oneplus6t-`,
+    // `iphone11-` and `geb-`. A runner would transcribe every usb clip ever
+    // recorded before geb got one job, and the symptom would not look like an
+    // ordering bug — it would look like geb having no transcripts.
+    //
+    // The join is safe because every job is DERIVED from a `segments` row, so
+    // one always exists; a job whose blob the ingest plane has forgotten is
+    // unleasable, which is the correct reading of "there is nothing to fetch".
     let sql = format!(
-        "SELECT id, kind, filename FROM jobs
-         WHERE state IN ('queued', 'leased')
-           AND (leased_until IS NULL OR leased_until < ?1)
-           AND done_utc IS NULL
-           AND kind IN ({places})
-         ORDER BY filename DESC LIMIT 1"
+        "SELECT j.id, j.kind, j.filename FROM jobs j
+         JOIN segments s ON s.filename = j.filename
+         WHERE j.state IN ('queued', 'leased')
+           AND (j.leased_until IS NULL OR j.leased_until < ?1)
+           AND j.done_utc IS NULL
+           AND j.kind IN ({places})
+         ORDER BY s.start_utc DESC, j.filename DESC LIMIT 1"
     );
     let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(kinds.len() + 1);
     let stamp = iso(now);

@@ -27,7 +27,11 @@ const BACKOFF: Duration = Duration::from_mins(1);
 /// process ends up holding transcription jobs it can only refuse.
 fn kinds_for(shim_name: &str) -> Option<&'static [&'static str]> {
     match shim_name {
-        "asr" => Some(&["transcribe-room"]),
+        // ⚠ **Both, and the ORDER here is not the priority.** `queue::lease`
+        // picks the newest job across every kind offered, by capture time, so
+        // a room block and a microphone clip from the same minute compete on
+        // equal terms rather than one starving the other.
+        "asr" => Some(&["transcribe-room", "transcribe-segment"]),
         "voices" => Some(&["diarize-room"]),
         _ => None,
     }
