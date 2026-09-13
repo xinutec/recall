@@ -261,6 +261,15 @@ pub const ROOM_CHANNELS: i64 = 1;
 /// Idempotent by the table's own `UNIQUE (source_id, start_utc)` — the whole
 /// backfill can be re-run, and is meant to be.
 ///
+/// ⚠ **DO NOT "FIX" THE TIMESTAMP SPELLING HERE.** `SecondsFormat::Micros`
+/// writes `...T10:00:00.000000+00:00`, which is not what
+/// [`crate::instant::python_isoformat_utc`] would write and not what
+/// `register_segments` writes — and that inconsistency is CORRECT, because the
+/// idempotency key is compared as TEXT. All 5,645 room rows already carry the
+/// fractional spelling (measured 2026-09-13); changing it would make every one
+/// of them stop matching and the next pass would mint 5,645 duplicates. The two
+/// registrars differ because the rows they are idempotent AGAINST differ.
+///
 /// # Errors
 /// If either database refuses the read or the write.
 pub fn register_blocks(
@@ -311,6 +320,163 @@ pub fn register_blocks(
         )?;
     }
     Ok(added)
+}
+
+/// The job kind the segment registrar records its refusals under. Not a queue
+/// kind — no runner ever leases this — but the ledger is keyed on (kind,
+/// filename) and this pass needs its own half of that key.
+pub const REGISTER_SEGMENT: &str = "register-segment";
+
+/// What one registrar pass did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Registered {
+    /// Clips given an `audio_segments` row, and therefore somewhere to hang a turn.
+    pub added: usize,
+    /// Clips whose SOURCE the meaning plane does not know. Not a fault and not
+    /// a verdict — see the note on `sources` below.
+    pub waiting: usize,
+    /// Clips ffmpeg could not read. Ledgered, so a pass reaches past them.
+    pub unreadable: usize,
+}
+
+/// Register microphone clips in the MEANING plane, from the INGEST plane.
+///
+/// ⚠ **This is `sync_push.py`'s job, done from the other side.** Today the Mac
+/// pushes each processed clip up (`work::store_segment`) and the fleet records
+/// it; every clip the Mac has NOT processed therefore has no row here at all.
+/// Measured 2026-09-13: the ingest plane holds 22,308 microphone clips and the
+/// meaning plane 16,821, so **5,487 clips have nowhere to hang a turn** — and a
+/// transcription job for one of them can only go barren, for ever.
+///
+/// ⚠ **The path is the INGEST copy** (`<root>/ingest/<source>/`), not the
+/// mirror `sync_push` writes at `<root>/<source>/`. The two hold the same bytes
+/// in different inodes (#1591) and the ingest one is the COMPLETE copy. Clips
+/// already registered keep whatever path they have — `INSERT OR IGNORE`, and
+/// the table's `UNIQUE (source_id, start_utc)` — so this never repoints a row
+/// out from under a turn somebody can currently play.
+///
+/// ⚠ **The DURATION is measured, never assumed.** `end_utc` is what
+/// [`crate::upload::probe`] decodes, because a microphone clip is whatever
+/// ffmpeg's segment muxer closed: capture stopping mid-segment makes short ones
+/// routinely, and `write_pass` reads this column to size the window in which it
+/// looks for a human correction it must not overwrite.
+///
+/// ⚠ **AN UNKNOWN SOURCE WAITS, and that is a real gap, not a tidy default.**
+/// `sources.kind` says how a recorder produces PCM, and this side cannot know
+/// it — `work.rs` puts it plainly: *the sender owns the kind*. So a clip whose
+/// source the meaning plane has never heard of is counted and skipped rather
+/// than registered under a guess. Every microphone in the fleet today is
+/// already known, so nothing waits now; a SEVENTH recorder would wait for ever,
+/// and whatever registers it once `sync_push.py` is gone is an open question
+/// this function deliberately does not answer.
+///
+/// Bounded by `limit`, which counts clips REGISTERED: probing decodes the whole
+/// file (~300 ms on isis, measured), so an unbounded first pass would be half an
+/// hour of ffmpeg competing with the room builder and with capture.
+///
+/// # Errors
+/// If either database refuses.
+pub fn register_segments(
+    meaning: &rusqlite::Connection,
+    ingest: &rusqlite::Connection,
+    root: &std::path::Path,
+    now: &str,
+    limit: usize,
+) -> rusqlite::Result<Registered> {
+    ensure_ledger(ingest)?;
+    let mics: std::collections::HashSet<String> = {
+        let mut stmt =
+            meaning.prepare("SELECT id FROM sources WHERE kind NOT IN ('upload', ?1)")?;
+        let rows = stmt.query_map([crate::room::ROOM_KIND], |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    // Registered already, by BASENAME. One pass over the column rather than a
+    // correlated lookup per candidate: the same shape `derive_segment_jobs`
+    // uses, and for the same reason — the correlated form was a full scan of
+    // both tables and ran ten minutes against the live fleet before it was
+    // killed.
+    let have: std::collections::HashSet<String> = {
+        let mut stmt = meaning.prepare("SELECT path FROM audio_segments")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut set = std::collections::HashSet::new();
+        for path in rows {
+            if let Some(name) = path?.rsplit('/').next() {
+                set.insert(name.to_owned());
+            }
+        }
+        set
+    };
+
+    // ⚠ NEWEST FIRST, unlike `write_pass`. This pass has no starvation problem
+    // to avoid — the ledger retires what it cannot read — and the live clip
+    // arriving now must not queue behind 5,487 clips of backfill before anyone
+    // can read what was just said (decision 8).
+    let candidates: Vec<(String, String)> = {
+        let mut stmt = ingest.prepare(
+            "SELECT s.filename, s.source FROM segments s
+             WHERE s.source != ?1
+               AND NOT EXISTS (SELECT 1 FROM pass_ledger l
+                               WHERE l.kind = ?2 AND l.filename = s.filename)
+             ORDER BY s.start_utc DESC",
+        )?;
+        let rows = stmt.query_map((crate::room::ROOM_SOURCE, REGISTER_SEGMENT), |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
+        rows.collect::<Result<_, _>>()?
+    };
+
+    let mut out = Registered::default();
+    for (filename, source) in candidates {
+        if out.added >= limit {
+            break;
+        }
+        if have.contains(&filename) {
+            continue;
+        }
+        if !mics.contains(&source) {
+            out.waiting += 1;
+            continue;
+        }
+        let Some(start) = audiocore::names::parse_segment_start(&filename) else {
+            out.unreadable += 1;
+            ledger(ingest, REGISTER_SEGMENT, &filename, "unnameable", now)?;
+            continue;
+        };
+        let path = crate::store::source_dir(root, &source).join(&filename);
+        let Ok(media) = crate::upload::probe(&path) else {
+            // Permanent as far as this pass is concerned: a header-only
+            // dead-capture tombstone holds no audio and never will. Ledgered so
+            // the next pass reaches PAST it — four of these sit in the archive,
+            // and without a row each would be re-decoded every pass for ever.
+            out.unreadable += 1;
+            ledger(ingest, REGISTER_SEGMENT, &filename, "unreadable", now)?;
+            continue;
+        };
+        let end = start + Duration::microseconds((media.duration_s * 1e6).round() as i64);
+        // ⚠ **`python_isoformat_utc`, NOT `SecondsFormat::Micros`, and the
+        // difference is the idempotency key.** `UNIQUE (source_id, start_utc)`
+        // compares TEXT. Every one of the 16,821 microphone rows already here
+        // was written by the Python and spells a whole second WITHOUT a
+        // fraction; `Micros` would write `...29.000000+00:00`, which is the
+        // same instant, a different string, and therefore no conflict at all —
+        // so a clip the `have` set missed would get a SECOND row rather than
+        // being absorbed. Measured, not assumed: mic rows 16,821/16,821
+        // whole-second, room rows 5,645/5,645 fractional.
+        out.added += meaning.execute(
+            "INSERT OR IGNORE INTO audio_segments
+                 (source_id, path, start_utc, end_utc, sample_rate, channels)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                source,
+                path.to_string_lossy(),
+                crate::instant::python_isoformat_utc(start),
+                crate::instant::python_isoformat_utc(end),
+                media.sample_rate,
+                media.channels,
+            ],
+        )?;
+    }
+    Ok(out)
 }
 
 /// Marks a per-mic turn hidden because a room turn now covers its minute.
@@ -507,7 +673,7 @@ pub struct Pass {
 /// If the database refuses.
 pub fn ensure_ledger(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS turn_ledger (
+        "CREATE TABLE IF NOT EXISTS pass_ledger (
              kind        TEXT NOT NULL,
              filename    TEXT NOT NULL,
              outcome     TEXT NOT NULL,
@@ -520,10 +686,10 @@ pub fn ensure_ledger(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 /// A clip was decided and wrote nothing. `outcome` is for a person reading the
 /// table later, never branched on.
 ///
-/// ⚠ Keyed on (kind, filename), not filename. The two streams reach the SAME
-/// minute by different names today, but a per-mic clip and a room block can
-/// share a filename the moment anything renames either, and a shared key would
-/// let one stream's refusal retire the other's work silently.
+/// ⚠ Keyed on (kind, filename), not filename. Three passes share this table —
+/// the two turn streams and the segment registrar — and they reach the SAME
+/// clip by the same name. A shared key would let one pass's refusal retire
+/// another's work silently, with nothing anywhere saying so.
 fn ledger(
     conn: &rusqlite::Connection,
     kind: &str,
@@ -532,7 +698,7 @@ fn ledger(
     now: &str,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO turn_ledger (kind, filename, outcome, decided_utc)
+        "INSERT OR REPLACE INTO pass_ledger (kind, filename, outcome, decided_utc)
          VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![kind, filename, outcome, now],
     )?;
@@ -568,7 +734,7 @@ pub fn write_pass(
         "SELECT j.filename, j.result, s.source FROM jobs j
          JOIN segments s ON s.filename = j.filename
          WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM turn_ledger l
+           AND NOT EXISTS (SELECT 1 FROM pass_ledger l
                            WHERE l.kind = ?1 AND l.filename = j.filename)
          ORDER BY j.filename ASC",
     )?;

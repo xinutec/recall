@@ -182,43 +182,7 @@ fn main() -> ExitCode {
         let Some(listeners) = bind_all(&binds).await else {
             return ExitCode::FAILURE;
         };
-        spawn_level_scanner(config.root.clone());
-        spawn_speech_scanner(config.root.clone());
-        spawn_room_builder(config.root.clone());
-        spawn_room_registrar(config.root.clone());
-        // ⚠ **OFF since 2026-09-11, MEASURED.** Its first 20 blocks produced turns
-        // materially worse than the per-mic transcripts they hid, over the same
-        // minutes:
-        //
-        //     repetition loops   room 16/73 (22%)   per-mic 0/160 (0%)
-        //     median confidence  room 0.509         per-mic 0.683
-        //     median chars/turn  room 20            per-mic 45
-        //     languages          room en 56, nl 10  per-mic nl 111, en 45
-        //
-        // The language row is the finding: the microphones hear a DUTCH
-        // household and the room stream reports mostly English, which is
-        // Whisper's known failure on degraded audio — default to English and
-        // invent. Whether the fault is the room AUDIO or the missing read-path
-        // filters (#1410 sweeps the per-mic corpus of exactly these; the room
-        // output was written raw) is the next question, and it is not answerable
-        // by leaving this on.
-        //
-        // Re-enable only with that answered and a fresh comparison in hand.
-        // spawn_turn_writer(config.root.clone(), recalld::turns::ROOM);
-        //
-        // The PER-MIC stream is a different decision and is not gated on that
-        // one. It writes turns for microphone clips that have none — 14,078 of
-        // 22,312 of them when this landed — and it neither hides nor supersedes
-        // anything, so the worst case is a transcript where there was silence,
-        // deletable by its provenance. It is the last thing between `worker.py`
-        // and deletion (#1538).
-        //
-        // ⚠ Nothing feeds it until the runner leases `transcribe-segment`, which
-        // is the separate switch: deriving jobs costs nothing, leasing them
-        // spends GPU that the Mac's own worker is still spending on the same
-        // clips. Turning both on at once is how the same minute gets transcribed
-        // twice.
-        spawn_turn_writer(config.root.clone(), recalld::turns::PER_MIC);
+        spawn_background_passes(&config.root);
         let app = router(config);
         let mut serving = tokio::task::JoinSet::new();
         for listener in listeners {
@@ -289,6 +253,57 @@ fn spawn_level_scanner(root: PathBuf) {
             }
         }
     });
+}
+
+/// Start every background pass the daemon runs.
+///
+/// ⚠ **Extracted so the LIST is readable, not merely so `main` is short.** These
+/// loops are what recalld does when nobody is asking it anything — scan, build,
+/// register, derive, write — and WHICH OF THEM ARE ON is the single most
+/// load-bearing fact about a deployed recalld. That belongs on one screen, with
+/// the reasons beside it.
+fn spawn_background_passes(root: &std::path::Path) {
+    let root = root.to_path_buf();
+    let root = &root;
+    spawn_level_scanner(root.clone());
+    spawn_speech_scanner(root.clone());
+    spawn_room_builder(root.clone());
+    spawn_room_registrar(root.clone());
+    // ⚠ **OFF since 2026-09-11, MEASURED.** Its first 20 blocks produced turns
+    // materially worse than the per-mic transcripts they hid, over the same
+    // minutes:
+    //
+    //     repetition loops   room 16/73 (22%)   per-mic 0/160 (0%)
+    //     median confidence  room 0.509         per-mic 0.683
+    //     median chars/turn  room 20            per-mic 45
+    //     languages          room en 56, nl 10  per-mic nl 111, en 45
+    //
+    // The language row is the finding: the microphones hear a DUTCH
+    // household and the room stream reports mostly English, which is
+    // Whisper's known failure on degraded audio — default to English and
+    // invent. Whether the fault is the room AUDIO or the missing read-path
+    // filters (#1410 sweeps the per-mic corpus of exactly these; the room
+    // output was written raw) is the next question, and it is not answerable
+    // by leaving this on.
+    //
+    // Re-enable only with that answered and a fresh comparison in hand.
+    // spawn_turn_writer(root.clone(), recalld::turns::ROOM);
+    //
+    // The PER-MIC stream is a different decision and is not gated on that
+    // one. It writes turns for microphone clips that have none — 14,078 of
+    // 22,312 of them when this landed — and it neither hides nor supersedes
+    // anything, so the worst case is a transcript where there was silence,
+    // deletable by its provenance. It is the last thing between `worker.py`
+    // and deletion (#1538).
+    //
+    // ⚠ Nothing feeds it until the runner leases `transcribe-segment`, which
+    // is the separate switch: deriving jobs costs nothing, leasing them
+    // spends GPU that the Mac's own worker is still spending on the same
+    // clips. Turning both on at once is how the same minute gets transcribed
+    // twice.
+    spawn_turn_writer(root.clone(), recalld::turns::PER_MIC);
+    spawn_segment_registrar(root.clone());
+    spawn_segment_deriver(root.clone());
 }
 
 /// Stage D4: the speech scanner — VAD over every delivered segment, so
@@ -380,7 +395,7 @@ fn spawn_speech_scanner(root: PathBuf) {
 /// too or they stay decided:
 ///
 /// ```sql
-/// DELETE FROM turn_ledger WHERE kind = 'transcribe-room';
+/// DELETE FROM pass_ledger WHERE kind = 'transcribe-room';
 /// ```
 ///
 /// Forget it and the reversal LOOKS complete — the transcripts are back, the
@@ -430,6 +445,107 @@ fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
                     tracing::warn!(%err, stream = stream.provenance, "turns: pass failed");
                 }
                 Err(err) => tracing::error!(%err, stream = stream.provenance, "turns: task failed"),
+            }
+            tokio::time::sleep(EVERY).await;
+        }
+    });
+}
+
+/// Derive `transcribe-segment` jobs for microphone clips that have no turns.
+///
+/// Its own loop rather than a step inside `queue::lease`, and the reason is what
+/// each costs. A lease is a REQUEST — the runner asks every 20 seconds — and
+/// deriving spans both planes and scans the ingest one; paying that per request
+/// would put a scan on the hot path to save a timer. `derive_jobs` (room) is in
+/// `lease` because it is one indexed statement against one database.
+///
+/// ⚠ **Deriving is free; LEASING is what spends.** A queued job is a row. It
+/// becomes GPU time only when a runner asks for its kind, and today none does —
+/// `runner::kinds_for` hands the `asr` shim `transcribe-room` alone. So this
+/// loop can run from the moment it deploys and change nothing anybody pays for,
+/// which is exactly what makes the next step reversible: the backlog is visible
+/// and counted before a single clip is transcribed.
+///
+/// ⚠ **BOUNDED, and that bound is the throttle.** 14,078 clips had no turns when
+/// this was written. Queuing them all in one statement would make the queue
+/// unreadable and hand a runner days of work the moment it learned the kind.
+fn spawn_segment_deriver(root: PathBuf) {
+    const EVERY: std::time::Duration = std::time::Duration::from_mins(10);
+    const BATCH: usize = 50;
+    tokio::spawn(async move {
+        loop {
+            let pass_root = root.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                let ingest = recalld::store::open(&pass_root)?;
+                let meaning = recalld::work::open_write(&pass_root)?;
+                recalld::queue::derive_segment_jobs(&ingest, &meaning, chrono::Utc::now(), BATCH)
+            })
+            .await;
+            match done {
+                Ok(Ok(0)) => {}
+                Ok(Ok(queued)) => tracing::info!(queued, "segments: transcribe jobs derived"),
+                Ok(Err(err)) => tracing::warn!(%err, "segment derive: pass failed"),
+                Err(err) => tracing::error!(%err, "segment derive: task failed"),
+            }
+            tokio::time::sleep(EVERY).await;
+        }
+    });
+}
+
+/// Register MICROPHONE clips in the meaning plane, so their turns have audio.
+///
+/// The room registrar's sibling, and between them they are what `sync_push.py`
+/// does today. Measured 2026-09-13: 5,487 microphone clips sit in the ingest
+/// plane with no `audio_segments` row at all, so a transcription job for any of
+/// them could only ever go barren.
+///
+/// ⚠ **Slower than the room's, and bounded tighter, because this one DECODES.**
+/// `upload::probe` reads the whole file to measure its real duration — ~300 ms
+/// per clip on isis, measured on real opus and flac — and it is competing with
+/// the room builder and with capture for the same CPU. 40 clips every 5 minutes
+/// drains the 5,487 in about half a day and is invisible while it does.
+///
+/// ⚠ **HOW TO PUT IT BACK.** Registration alone plays no turn and hides
+/// nothing; what it changes is that a clip becomes ELIGIBLE. Two planes:
+///
+/// ```sql
+/// DELETE FROM audio_segments WHERE path LIKE '%/ingest/%'
+///   AND id NOT IN (SELECT audio_segment_id FROM transcript_segments
+///                  WHERE audio_segment_id IS NOT NULL);
+/// -- and in ingest.sqlite:
+/// DELETE FROM pass_ledger WHERE kind = 'register-segment';
+/// ```
+///
+/// The `NOT IN` is the whole of it: a row a turn already hangs from must not go,
+/// or the text stays and the audio behind it stops resolving.
+fn spawn_segment_registrar(root: PathBuf) {
+    const EVERY: std::time::Duration = std::time::Duration::from_mins(5);
+    const BATCH: usize = 40;
+    tokio::spawn(async move {
+        loop {
+            let pass_root = root.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                let ingest = recalld::store::open(&pass_root)?;
+                let meaning = recalld::work::open_write(&pass_root)?;
+                let now = chrono::Utc::now().to_rfc3339();
+                recalld::turns::register_segments(&meaning, &ingest, &pass_root, &now, BATCH)
+            })
+            .await;
+            match done {
+                // `waiting` is NOT in this guard. Every microphone is known
+                // today so it is always zero; if a seventh recorder ever
+                // appears it becomes a large constant number, and a line every
+                // five minutes saying so would drown the log rather than inform
+                // it. The count is there for whoever goes looking.
+                Ok(Ok(pass)) if pass.added + pass.unreadable > 0 => tracing::info!(
+                    added = pass.added,
+                    unreadable = pass.unreadable,
+                    waiting = pass.waiting,
+                    "segments: registered for playback"
+                ),
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => tracing::warn!(%err, "segment register: pass failed"),
+                Err(err) => tracing::error!(%err, "segment register: task failed"),
             }
             tokio::time::sleep(EVERY).await;
         }
