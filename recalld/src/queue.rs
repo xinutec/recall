@@ -100,6 +100,26 @@ pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<us
     Ok(inserted + derive_diarize_jobs(conn, now)?)
 }
 
+/// A clip's identity WITHOUT its container: `oneplus6t-20260910T203720`.
+///
+/// ⚠ **THE SAME RECORDING EXISTS UNDER TWO EXTENSIONS, and comparing whole
+/// filenames misses that.** Measured 2026-09-13 on the live fleet: the ingest
+/// plane holds 22,313 microphone clips under 20,728 distinct stems, and the
+/// meaning plane's path for a clip is routinely the `.opus` mirror while the
+/// ingest copy is `.wav`. Keyed on the filename, 244 of 950 queued jobs — 26%
+/// — were for clips that ALREADY HAD TURNS: each one a full transcription
+/// (~50 s of GPU) whose result `turns::write_block` then correctly refused.
+///
+/// Nothing was corrupted, because that refusal is the design. What was spent
+/// was hours of GPU producing transcripts thrown away, and the only visible
+/// symptom was the queue draining more slowly than it should.
+fn stem(path: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.rsplit_once('.')
+        .map_or(name, |(base, _)| base)
+        .to_owned()
+}
+
 /// Derive a transcribe job for each microphone segment that has NO TURNS YET.
 ///
 /// ⚠ **Two planes, and the join key is the FILENAME.** The segment rows live in
@@ -140,10 +160,7 @@ pub fn derive_segment_jobs(
         )?;
         let rows = stmt.query_map([ROOM_SOURCE], |r| r.get::<_, String>(0))?;
         for path in rows {
-            let path = path?;
-            if let Some(name) = path.rsplit('/').next() {
-                have.insert(name.to_owned());
-            }
+            have.insert(stem(&path?));
         }
     }
 
@@ -183,7 +200,7 @@ pub fn derive_segment_jobs(
         if inserted >= limit {
             break;
         }
-        if have.contains(&filename) || !mics.contains(&source) {
+        if have.contains(&stem(&filename)) || !mics.contains(&source) {
             continue;
         }
         inserted += ingest.execute(

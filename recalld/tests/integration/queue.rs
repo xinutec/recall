@@ -516,3 +516,47 @@ fn a_job_whose_blob_the_ingest_plane_has_forgotten_is_not_leasable() {
             .is_none()
     );
 }
+
+#[test]
+fn a_clip_transcribed_under_another_extension_gets_no_second_job() {
+    // ⚠ MEASURED ON THE LIVE FLEET, 2026-09-13. The same recording exists as
+    // `.wav` in the ingest plane and `.opus` in the mirror the meaning plane's
+    // path points at — 22,313 clips under 20,728 stems. Keyed on the whole
+    // filename, 244 of 950 queued jobs were for clips that ALREADY HAD TURNS:
+    // a full transcription each, ~50 s of GPU, refused at the write.
+    //
+    // Nothing was corrupted — that refusal is the design — but the queue drains
+    // slower and the GPU runs hot for transcripts thrown away, and the only
+    // symptom is the absence of progress.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
+    let _ = mic_row(dir.path(), "usb", "20260910T203720");
+
+    let meaning = meaning_plane();
+    // The turns hang off the OPUS row; the ingest copy this test derives from
+    // is the `.opus`-vs-`.wav` pair's other half.
+    meaning
+        .execute(
+            "INSERT INTO audio_segments (source_id, path, start_utc)
+             VALUES ('usb', '/data/usb/usb-20260910T203720.opus',
+                     '2026-09-10T20:37:20+00:00')",
+            [],
+        )
+        .expect("audio");
+    let id = meaning.last_insert_rowid();
+    meaning
+        .execute(
+            "INSERT INTO transcript_segments (audio_segment_id, text)
+             VALUES (?1, 'already transcribed')",
+            [id],
+        )
+        .expect("turn");
+
+    let ingest = store::open(dir.path()).expect("db");
+    ensure_schema(&ingest).expect("schema");
+    assert_eq!(
+        derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
+        0,
+        "the container differs; the recording does not"
+    );
+}
