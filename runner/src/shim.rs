@@ -18,6 +18,46 @@ pub enum Error {
     Refused(String),
 }
 
+/// Describe a reply that would not parse, WITHOUT reproducing it.
+///
+/// ⚠ **The instrument this was missing, and it cost three days.** Between
+/// 2026-09-10 and 2026-09-13 the runner failed 1,976 jobs against 1,454
+/// successes, every one of them `shim protocol: expected value at line 1 column
+/// N`, and nothing anywhere recorded what was AT column N. Three incompatible
+/// causes look identical from that message — a bare `NaN` from Python's
+/// `json.dumps`, a C-level write to fd 1 slipping under the shim's
+/// `sys.stdout = sys.stderr` guard, or a truncated line — and they need
+/// different fixes. #1480 taught the same lesson from the other side: the
+/// helper that named WHICH of three 502s fired was worth more than the fix.
+///
+/// ⚠ **It must not log the reply itself.** That line carries the transcript of
+/// a household conversation, and a debugging aid is not a reason to copy one
+/// into a log file. So this reports the SHAPE: how long it was, what the bytes
+/// immediately around the failure look like by CLASS, and whether the line
+/// looks truncated. Enough to tell the three apart, and nothing anyone said.
+fn shape_of(response: &str) -> String {
+    let bytes = response.as_bytes();
+    let len = bytes.len();
+    let ends_brace = response.trim_end().ends_with('}');
+    // Bare `NaN`/`Infinity` are what Python emits and JSON does not allow; they
+    // are the one cause identifiable by name rather than by position.
+    let literal = ["NaN", "Infinity", "-Infinity"]
+        .into_iter()
+        .find(|t| response.contains(t))
+        .unwrap_or("none");
+    // Control bytes cannot appear unescaped in a JSON string: their presence
+    // means something wrote to the stream that was not the protocol.
+    let control = bytes
+        .iter()
+        .filter(|b| **b < 0x20 && **b != b'\n' && **b != b'\r')
+        .count();
+    let non_ascii = bytes.iter().filter(|b| **b >= 0x80).count();
+    format!(
+        "reply len={len} ends_with_brace={ends_brace} bare_literal={literal} \
+         control_bytes={control} non_ascii={non_ascii}"
+    )
+}
+
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -105,8 +145,8 @@ impl Shim {
         if read == 0 {
             return Err(Error::Closed);
         }
-        let parsed: serde_json::Value =
-            serde_json::from_str(&response).map_err(|e| Error::Protocol(e.to_string()))?;
+        let parsed: serde_json::Value = serde_json::from_str(&response)
+            .map_err(|e| Error::Protocol(format!("{e}; {}", shape_of(&response))))?;
         if parsed.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
             let why = parsed
                 .get("error")

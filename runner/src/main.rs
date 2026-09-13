@@ -27,11 +27,17 @@ const BACKOFF: Duration = Duration::from_mins(1);
 /// process ends up holding transcription jobs it can only refuse.
 fn kinds_for(shim_name: &str) -> Option<&'static [&'static str]> {
     match shim_name {
-        // ⚠ **Both, and the ORDER here is not the priority.** `queue::lease`
-        // picks the newest job across every kind offered, by capture time, so
-        // a room block and a microphone clip from the same minute compete on
-        // equal terms rather than one starving the other.
-        "asr" => Some(&["transcribe-room", "transcribe-segment"]),
+        // ⚠ **`transcribe-segment` is READY and deliberately NOT here.** The
+        // lease orders by capture time across kinds (`queue::lease`), the
+        // registrar has given the clips somewhere to land, and the writer turns
+        // results into turns — the whole path works. What is missing is that
+        // `worker.py` IS STILL RUNNING and transcribing the same clips on the
+        // same GPU. Adding the kind now would not move work to the runner, it
+        // would do all of it twice, and the second copy competes with capture.
+        //
+        // So this line and stopping `org.xinutec.recall-worker` are ONE change,
+        // and they land together (#1538).
+        "asr" => Some(&["transcribe-room"]),
         "voices" => Some(&["diarize-room"]),
         _ => None,
     }

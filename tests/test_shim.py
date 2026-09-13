@@ -114,3 +114,40 @@ def test_stdout_pollution_by_the_model_cannot_corrupt_the_wire() -> None:
     assert len(lines) == 1, f"stdout carried non-protocol lines: {lines}"
     assert json.loads(lines[0]) == {"id": "1", "ok": True, "result": {"done": True}}
     assert "progress: 50%" in proc.stderr
+
+
+def test_a_non_finite_float_never_reaches_the_wire() -> None:
+    """⚠ `json.dumps` writes bare `NaN`, `Infinity` and `-Infinity`, and none of
+    them is JSON. Python reads them back, so a round-trip in this language proves
+    nothing; the runner is Rust and `serde_json` refuses the whole reply with
+    `expected value at line 1 column N` — transcript lost, GPU time spent.
+
+    Whisper returns non-finite `avg_logprob` and word probabilities on degenerate
+    audio, which is what a quiet minute in this archive looks like."""
+    line = ok(
+        "7",
+        {
+            "language": "nl",
+            "segments": [
+                {
+                    "text": "x",
+                    "avg_logprob": float("nan"),
+                    "no_speech_prob": float("inf"),
+                    "confidence": 0.9,
+                    "words": [{"text": "x", "probability": float("-inf")}],
+                }
+            ],
+        },
+    )
+    for literal in ("NaN", "Infinity", "-Infinity"):
+        assert literal not in line, f"{literal} reached the wire: {line}"
+
+    # And the reply is still usable: the finite values survive, the others are
+    # null rather than the job being refused over one bad score.
+    back = json.loads(line)
+    segment = back["result"]["segments"][0]
+    assert segment["avg_logprob"] is None
+    assert segment["no_speech_prob"] is None
+    assert segment["words"][0]["probability"] is None
+    assert segment["confidence"] == 0.9
+    assert back["ok"] is True

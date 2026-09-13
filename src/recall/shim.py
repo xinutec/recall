@@ -21,6 +21,7 @@ instead of a corruption.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import traceback
@@ -63,8 +64,38 @@ def parse_request(line: str) -> tuple[str | None, str | None, JsonDict]:
     )
 
 
+def finite(value: JsonValue) -> JsonValue:
+    """Replace every non-finite float with `None`, recursively.
+
+    ⚠ **`json.dumps` EMITS BARE `NaN`, AND THAT IS NOT JSON.** Python's encoder
+    defaults to `allow_nan=True` and writes `NaN`, `Infinity` and `-Infinity`
+    unquoted. Python reads them back, so a round-trip in this language hides it
+    completely; every other parser rejects them. The runner is Rust, and
+    `serde_json` refuses with `expected value at line 1 column N` — the whole
+    reply lost, the job failed, the GPU time spent.
+
+    Whisper produces these: `avg_logprob` and the per-word probabilities come
+    back non-finite on degenerate audio, which is exactly the quiet, clipped or
+    near-silent minute this archive is full of.
+
+    ⚠ `allow_nan=False` would be the smaller change and the wrong one — it
+    raises, turning a usable transcript into a refused job over one bad
+    confidence score. `None` is the honest value: the model did not produce a
+    number, and every consumer here already takes `Optional`.
+    """
+    if isinstance(value, float):
+        return None if math.isnan(value) or math.isinf(value) else value
+    if isinstance(value, dict):
+        return {k: finite(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [finite(v) for v in value]
+    return value
+
+
 def ok(ident: str | None, result: JsonValue) -> str:
-    return json.dumps({"id": ident, "ok": True, "result": result}, ensure_ascii=False)
+    return json.dumps(
+        {"id": ident, "ok": True, "result": finite(result)}, ensure_ascii=False
+    )
 
 
 def fail(ident: str | None, error: str) -> str:
