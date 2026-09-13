@@ -64,7 +64,7 @@ impl Case {
 
 #[test]
 fn the_rust_quality_rules_match_the_python_ones_case_for_case() {
-    let cases = Case::parse(include_str!("fixtures/quality-parity.json"));
+    let cases = Case::parse(include_str!("../fixtures/quality-parity.json"));
     assert!(cases.len() >= 400, "the corpus must not silently shrink");
     // A corpus that is all one verdict would pass a port that always answers
     // that verdict, which is the failure mode a parity test exists to catch.

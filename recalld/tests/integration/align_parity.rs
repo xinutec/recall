@@ -34,7 +34,7 @@ struct Case {
 
 #[test]
 fn the_rust_alignment_matches_the_python_one_case_for_case() {
-    let raw = include_str!("fixtures/align-parity.json");
+    let raw = include_str!("../fixtures/align-parity.json");
     let cases: Vec<Case> = serde_json::from_str(raw).expect("fixture");
     assert!(cases.len() >= 120, "the corpus must not silently shrink");
     let mut with_output = 0;
