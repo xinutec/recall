@@ -522,12 +522,22 @@ fn spawn_segment_registrar(root: PathBuf) {
                 // appears it becomes a large constant number, and a line every
                 // five minutes saying so would drown the log rather than inform
                 // it. The count is there for whoever goes looking.
-                Ok(Ok(pass)) if pass.added + pass.unreadable > 0 => tracing::info!(
-                    added = pass.added,
-                    unreadable = pass.unreadable,
-                    waiting = pass.waiting,
-                    "segments: registered for playback"
-                ),
+                //
+                // ⚠ `covered` IS in it, and `retired` is not. A covered clip
+                // cost a full decode to discover, so it is worth a line; a
+                // retired one cost a hash lookup. The distinction matters
+                // because `covered` is the counter that would have shown this
+                // pass re-decoding 1,599 clips a day, and nothing did.
+                Ok(Ok(pass)) if pass.added + pass.unreadable + pass.covered > 0 => {
+                    tracing::info!(
+                        added = pass.added,
+                        covered = pass.covered,
+                        retired = pass.retired,
+                        unreadable = pass.unreadable,
+                        waiting = pass.waiting,
+                        "segments: registered for playback"
+                    );
+                }
                 Ok(Ok(_)) => {}
                 Ok(Err(err)) => tracing::warn!(%err, "segment register: pass failed"),
                 Err(err) => tracing::error!(%err, "segment register: task failed"),

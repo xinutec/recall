@@ -1612,3 +1612,94 @@ fn a_live_turn_outside_the_clip_is_left_alone() {
         "a guess for a minute nobody has transcribed must stand"
     );
 }
+
+/// ⚠ **The bug this pins cost real CPU on the live fleet, for a day.**
+/// `register_segments` decodes a clip IN FULL to measure its duration, then
+/// `INSERT OR IGNORE`s on `(source_id, start_utc)`. Where two files share a
+/// minute — the `.wav` beside the `.opus`, 1,599 clips of this archive — the
+/// second insert is ignored, and the first version of this pass wrote no ledger
+/// row for that outcome. So the clip stayed a candidate and was decoded again on
+/// every pass, for ever, achieving nothing. `recalld` was burning a core on it.
+///
+/// A pass must ledger EVERY terminal decision, not only the ones that changed
+/// something. "Nothing to do" is a decision.
+#[test]
+fn a_clip_whose_minute_a_sibling_already_holds_is_retired_not_reconsidered() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let meaning = meaning_for_registration();
+    let ingest = recalld::store::open(dir.path()).expect("ingest");
+
+    // Two files, one minute — the shape the phones actually produce.
+    ingest_blob(dir.path(), "usb", "20260913T100000", 3.0);
+    let twin = twin_blob(dir.path(), "usb", "20260913T100000", 3.0, "wav");
+
+    let first = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("first");
+    assert_eq!(first.added, 1, "one of the two takes the row");
+    assert_eq!(first.covered, 1, "the other is covered by its sibling");
+
+    // BOTH are ledgered, so neither is a candidate again.
+    let ledgered: i64 = ingest
+        .query_row(
+            "SELECT count(*) FROM pass_ledger WHERE kind = ?1",
+            [REGISTER_SEGMENT],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(ledgered, 2, "every terminal decision writes a ledger row");
+    let outcome: String = ingest
+        .query_row(
+            "SELECT outcome FROM pass_ledger WHERE kind = ?1 AND filename = ?2",
+            (REGISTER_SEGMENT, &twin),
+            |r| r.get(0),
+        )
+        .expect("the twin's row");
+    assert_eq!(
+        outcome, "covered-by-sibling",
+        "and it says WHY, not just that"
+    );
+
+    // The second pass must do NOTHING — no probe, no insert, no reconsideration.
+    let second = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("second");
+    assert_eq!(
+        (second.added, second.covered, second.retired),
+        (0, 0, 0),
+        "a decided clip is never looked at again"
+    );
+}
+
+/// A second file for the same minute in another container — what a phone that
+/// uploads both a `.wav` and its transcode leaves behind.
+fn twin_blob(root: &std::path::Path, source: &str, stamp: &str, seconds: f64, ext: &str) -> String {
+    let filename = format!("{source}-{stamp}.{ext}");
+    let dir = recalld::store::source_dir(root, source);
+    let path = dir.join(&filename);
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-nostdin", "-v", "error", "-f", "lavfi", "-i"])
+        .arg(format!("sine=frequency=440:duration={seconds}"))
+        .args(["-ar", "48000", "-ac", "1", "-y"])
+        .arg(&path)
+        .status()
+        .expect("ffmpeg");
+    assert!(status.success(), "ffmpeg could not write the twin");
+    let conn = recalld::store::open(root).expect("ingest");
+    conn.execute(
+        "INSERT OR IGNORE INTO segments
+             (filename, source, start_utc, bytes, sha256, received_utc)
+         VALUES (?1, ?2, ?3, 1, 'x', ?3)",
+        (
+            &filename,
+            source,
+            format!(
+                "{}-{}-{}T{}:{}:{}Z",
+                &stamp[0..4],
+                &stamp[4..6],
+                &stamp[6..8],
+                &stamp[9..11],
+                &stamp[11..13],
+                &stamp[13..15]
+            ),
+        ),
+    )
+    .expect("row");
+    filename
+}

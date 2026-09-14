@@ -331,10 +331,21 @@ pub struct Registered {
     /// Clips given an `audio_segments` row, and therefore somewhere to hang a turn.
     pub added: usize,
     /// Clips whose SOURCE the meaning plane does not know. Not a fault and not
-    /// a verdict — see the note on `sources` below.
+    /// a verdict — see the note on `sources` below. The ONLY non-terminal
+    /// outcome here: everything else is ledgered and never looked at again.
     pub waiting: usize,
     /// Clips ffmpeg could not read. Ledgered, so a pass reaches past them.
     pub unreadable: usize,
+    /// Clips whose minute is ALREADY registered — a sibling file with the same
+    /// `(source_id, start_utc)` holds the row, so the insert was ignored.
+    ///
+    /// ⚠ Not a fault: `.wav` and `.opus` copies of one minute are 1,599 clips
+    /// of the archive (#1591). It is counted separately because "the insert did
+    /// nothing" and "the clip is new" were indistinguishable before, and that
+    /// is what let them be re-decoded for ever.
+    pub covered: usize,
+    /// Clips an earlier pass had already registered, retired cheaply by name.
+    pub retired: usize,
 }
 
 /// Register microphone clips in the MEANING plane, from the INGEST plane, so
@@ -352,7 +363,19 @@ pub struct Registered {
 /// ⚠ An unknown SOURCE waits. `sources.kind` is the sender's to know
 /// (`work::store_segment`), and registering under a guess is permanent.
 ///
-/// `limit` counts clips REGISTERED, because probing decodes the whole file.
+/// `limit` bounds PROBES, because probing decodes the whole file. Cheap terminal
+/// decisions — a clip already registered, a name that will never parse — are not
+/// charged against it, so a backlog of them drains in one pass instead of one
+/// clip per pass.
+///
+/// ⚠ **EVERY terminal outcome is ledgered, and that is the whole of this pass's
+/// correctness.** The candidate query is "not in the ledger"; a decision that
+/// does not write one leaves the clip a candidate for ever. `write_pass` says
+/// the same thing about its own limit, and says it because an earlier version
+/// re-examined the newest twenty blocks for ever and never advanced — this pass
+/// made the identical mistake in a costlier place. Measured 2026-09-14 against
+/// the live fleet: 1,599 clips whose insert was ignored were being decoded in
+/// full on every pass, the `.wav` copies at 48 kHz, achieving nothing.
 ///
 /// # Errors
 /// If either database refuses.
@@ -406,13 +429,30 @@ pub fn register_segments(
     };
 
     let mut out = Registered::default();
+    let mut probes = 0;
     for (filename, source) in candidates {
-        if out.added >= limit {
+        // ⚠ The budget bounds DECODES, and only decodes. A cheap decision that
+        // consumed it would make a backlog of already-registered clips take one
+        // pass each to retire — which is the shape of the bug this pass had.
+        if probes >= limit {
             break;
         }
+        // Already registered, by an earlier pass or by the Python. Terminal, and
+        // it MUST be ledgered: without a row it stays a candidate for ever, and
+        // the only thing standing between it and a full decode is this set.
         if have.contains(&filename) {
+            ledger(
+                ingest,
+                REGISTER_SEGMENT,
+                &filename,
+                "already-registered",
+                now,
+            )?;
+            out.retired += 1;
             continue;
         }
+        // ⚠ NOT ledgered, and the only outcome that is not: the source may be
+        // registered later, and a clip retired here would never come back.
         if !mics.contains(&source) {
             out.waiting += 1;
             continue;
@@ -423,6 +463,7 @@ pub fn register_segments(
             continue;
         };
         let path = crate::store::source_dir(root, &source).join(&filename);
+        probes += 1;
         let Ok(media) = crate::upload::probe(&path) else {
             // Permanent as far as this pass is concerned: a header-only
             // dead-capture tombstone holds no audio and never will. Ledgered so
@@ -442,7 +483,7 @@ pub fn register_segments(
         // so a clip the `have` set missed would get a SECOND row rather than
         // being absorbed. Measured, not assumed: mic rows 16,821/16,821
         // whole-second, room rows 5,645/5,645 fractional.
-        out.added += meaning.execute(
+        let inserted = meaning.execute(
             "INSERT OR IGNORE INTO audio_segments
                  (source_id, path, start_utc, end_utc, sample_rate, channels)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -455,6 +496,23 @@ pub fn register_segments(
                 media.channels,
             ],
         )?;
+        // ⚠ **An IGNORED insert is a DECISION, not a no-op.** A sibling file
+        // holds this minute — the `.wav` beside the `.opus` — so there is
+        // nothing more this pass can do with the clip, and saying so is what
+        // stops it being decoded again on the next one, and the one after.
+        // Counted apart from `added` so the duplicate archive stays visible
+        // rather than hiding inside a success total.
+        if inserted == 1 {
+            out.added += 1;
+        } else {
+            out.covered += 1;
+        }
+        let outcome = if inserted == 1 {
+            "registered"
+        } else {
+            "covered-by-sibling"
+        };
+        ledger(ingest, REGISTER_SEGMENT, &filename, outcome, now)?;
     }
     Ok(out)
 }
