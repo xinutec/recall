@@ -35,11 +35,17 @@ fn agent() -> ureq::Agent {
 /// ⚠ **The instrument this test needed before any fix** (#1480). `proxy::forward`
 /// answers 502 with three different bodies — `upstream unreachable` (ureq could
 /// not talk to the stub), `proxy failed` (the `spawn_blocking` join died) and
-/// `upstream body failed` (the relay could not read the body). They point at
-/// three different causes, and a bare `.expect("call")` prints only the status
-/// line, so an intermittent 502 in the gate could not say which it was. It is a
-/// LOAD flake — the same derivation hash failed and then passed minutes later —
-/// and knowing which of the three fires is what tells load from breakage.
+/// `upstream body failed: <io kind>` (the relay could not read the body). They
+/// point at different causes, and a bare `.expect("call")` prints only the
+/// status line, so an intermittent 502 in the gate could not say which it was.
+///
+/// ⚠ **It was not instrumented ENOUGH, and that cost a second round.** The
+/// 2026-09-14 deadlock fix was real — proved by ablation, 8 MB takes 0.04s where
+/// it used to time out at 30 s — and the symptom came back in the very next
+/// sandbox run. The io error kind was being logged and not returned, so the
+/// panic message still said only `upstream body failed` and still could not
+/// distinguish an EOF from a reset from a timeout. The kind is in the body now.
+/// **A fix that survives its own ablation can still be one of several causes.**
 fn answered(result: Result<ureq::Response, Box<ureq::Error>>) -> ureq::Response {
     result.unwrap_or_else(|err| match *err {
         ureq::Error::Status(status, resp) => {

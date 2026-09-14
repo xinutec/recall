@@ -324,19 +324,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "--url", required=True, help="fleet base URL, e.g. http://10.100.0.2:8000"
     )
 
-    cm = sub.add_parser(
-        "capture-mirror",
-        help="mirror the fleet's pause/resume onto this Mac's mic (Isis split)",
-    )
-    cm.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    cm.add_argument(
-        "--url", required=True, help="fleet base URL, e.g. http://10.100.0.2:8000"
-    )
-    cm.add_argument("--loop", action="store_true", help="poll continuously")
-    cm.add_argument(
-        "--interval", type=float, default=5.0, help="loop poll seconds (default 5)"
-    )
-
     trace = sub.add_parser(
         "capture-trace",
         help="print the merged capture timeline (events + segments) for loss diagnosis",

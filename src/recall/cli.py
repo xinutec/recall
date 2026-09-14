@@ -1129,52 +1129,6 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_capture_mirror(args: argparse.Namespace) -> int:
-    """Mirror the fleet's capture intent onto this Mac's mic (the Isis split). Polls the
-    fleet every --interval seconds and applies pause/resume locally, reporting back what
-    it applied. The token is RECALL_SYNC_TOKEN. Imports are lazy so `recall.cli` stays
-    framework-free for the capture agents (recall.sync drags in the web framework)."""
-    runlog.setup()  # timestamped intent-application logging to the agent's .err.log
-    token = os.environ.get("RECALL_SYNC_TOKEN")
-    if not token:
-        print("capture-mirror needs RECALL_SYNC_TOKEN")
-        return 1
-    import time  # noqa: PLC0415
-
-    from recall.capture_mirror import reconcile_once, run_loop  # noqa: PLC0415
-    from recall.sync import SyncClient  # noqa: PLC0415 - lazy: pulls the web framework
-
-    def note_applied(intent: str) -> None:
-        # The durable "intent-seen" timestamp a resume timeline starts from
-        # (recall capture-trace). Short-lived connection; a few rows a day.
-        store = Store.open(_db_path(args.out))
-        try:
-            store.add_capture_event(
-                capture_control.CaptureEventKind.MIRROR_APPLIED,
-                utc=datetime.now(UTC),
-                detail=intent or "running",
-            )
-        finally:
-            store.close()
-
-    client = SyncClient(args.url, token)
-    if args.loop:
-        run_loop(
-            args.out,
-            client,
-            now=lambda: datetime.now(UTC),
-            sleep=time.sleep,
-            interval=args.interval,
-            on_applied=note_applied,
-        )
-        return 0
-    changed = reconcile_once(
-        args.out, client, now=datetime.now(UTC), on_applied=note_applied
-    )
-    print(f"capture-mirror: {'applied fleet intent' if changed else 'no change'}")
-    return 0
-
-
 def _cmd_capture_trace(args: argparse.Namespace) -> int:
     """One readable, time-ordered trace of what capture did: every capture event
     (mirror applications, resume/pause, phone connects/disconnects with their measured
@@ -1287,7 +1241,6 @@ _COMMANDS = {
     "jobs": _cmd_jobs,
     "pause": _cmd_pause,
     "resume": _cmd_resume,
-    "capture-mirror": _cmd_capture_mirror,
     "capture-trace": _cmd_capture_trace,
     "repair-transcripts": _cmd_repair_transcripts,
     "verify": _cmd_verify,

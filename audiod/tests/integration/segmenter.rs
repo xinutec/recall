@@ -130,3 +130,54 @@ fn the_container_extension_follows_the_codec() {
         "/data/usb/usb-%Y%m%dT%H%M%S.flac"
     );
 }
+
+/// ⚠ **The live tap's contract, and until now it was pinned only in Python.**
+/// `recall-live` reads this socket instead of opening the microphone — two
+/// `CoreAudio` clients on one device starve each other — so these argv positions
+/// are the interface between the recorder and the instant feed, not an
+/// implementation detail of either.
+///
+/// Ported from `tests/test_capture.py::test_build_segment_argv_fanout_appends_
+/// the_live_tap` when the Python segmenter was deleted. Without it, a change
+/// that stopped publishing the tap would break the live tier and fail nothing.
+#[test]
+fn the_live_tap_is_the_second_output_at_the_format_live_reads() {
+    let argv = build_segment_argv(
+        &CaptureConfig::default(),
+        "/data/usb/usb-%Y%m%dT%H%M%S.flac",
+        true,
+    );
+    let pattern = argv
+        .iter()
+        .position(|a| a.contains("usb-%Y"))
+        .expect("the segment output");
+    let udp = argv
+        .iter()
+        .position(|a| a.starts_with("udp://"))
+        .expect("the live tap");
+
+    // SECOND, after the segments: the archive is the reliable output and must
+    // never wait on a droppable one.
+    assert!(udp > pattern, "the tap must follow the segment output");
+    assert!(
+        argv[udp].contains(":9876"),
+        "the tap is {} — runner::live::TAP is the other end",
+        argv[udp]
+    );
+    // The format live decodes without resampling. Read as OUTPUT options, which
+    // is what they are on this side of `-i`.
+    assert_eq!(
+        &argv[udp - 6..udp],
+        ["-ar", "16000", "-ac", "1", "-f", "s16le"]
+    );
+}
+
+#[test]
+fn without_the_tap_there_is_no_udp_output_at_all() {
+    let argv = build_segment_argv(
+        &CaptureConfig::default(),
+        "/data/usb/usb-%Y%m%dT%H%M%S.flac",
+        false,
+    );
+    assert!(!argv.iter().any(|a| a.starts_with("udp://")));
+}

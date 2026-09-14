@@ -120,12 +120,6 @@ class SegmentStoredOut(BaseModel):
     turns_written: int
 
 
-class LiveStoredOut(BaseModel):
-    """How many pushed live turns the fleet newly stored (present ones are skipped)."""
-
-    stored: int
-
-
 class CaptureIntentOut(BaseModel):
     """The fleet's desired capture state: the resume-by time of a pause, or null to run.
     The Mac mirrors this onto its local pause file."""

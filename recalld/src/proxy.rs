@@ -179,9 +179,20 @@ pub async fn forward(up: Upstream, req: Request) -> Response {
             tracing::warn!("proxy upstream unreachable: {e}");
             (StatusCode::BAD_GATEWAY, "upstream unreachable").into_response()
         }
+        // ⚠ The io error KIND rides in the body, not just the log. A gate
+        // failure is read from the test's panic, which prints the response body
+        // and nothing else — so a kind that only reaches `tracing` is a kind
+        // nobody investigating this will ever see. That cost a second round of
+        // this bug: the deadlock fix was real and the symptom came back, and the
+        // 502 still could not say whether it was an EOF, a reset or a timeout.
+        // No household data is in an io error kind.
         Ok(Err(Failed::Body(e))) => {
             tracing::warn!("proxy could not read the upstream body: {e}");
-            (StatusCode::BAD_GATEWAY, "upstream body failed").into_response()
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("upstream body failed: {e}"),
+            )
+                .into_response()
         }
         Err(e) => {
             tracing::warn!("proxy task failed: {e}");

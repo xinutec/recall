@@ -12,15 +12,10 @@ audiod's (docs/audio-plane.md).
 
 from __future__ import annotations
 
-import math
 import re
-from array import array
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
-
-from recall.sources import fanout_output_argv
 
 # ffmpeg -strftime token used in segment filenames, e.g. usb-20260613T140530.flac
 _TS_STRFTIME: Final = "%Y%m%dT%H%M%S"
@@ -49,77 +44,6 @@ _AUDIBLE_FLOOR: Final = 16
 _S16_FULL_SCALE: Final = 32768
 
 
-class StreamMeter:
-    """Measures a raw s16le PCM stream as it is pumped, so a connection leaves
-    evidence of what the device actually sent:
-    total bytes, peak level, and when the first *audible* sample arrived — in stream
-    time, so the phone's wall clock can't confuse it. Chunks need not respect sample
-    boundaries; a half sample carries to the next feed. The audiod pumps carry
-    the live PCM now and meter it the same way; this copy still serves the
-    Python-side tools that read PCM (mic client tests, probes)."""
-
-    def __init__(self, sample_rate: int, channels: int) -> None:
-        self._byte_rate = 2 * sample_rate * channels  # s16 = 2 bytes/sample
-        self._carry = b""
-        self.bytes_total = 0
-        self.peak = 0
-        self.first_audible_byte: int | None = None
-
-    def feed(self, data: bytes) -> int:
-        """Meter one chunk; returns the chunk's own peak |sample| so the caller can
-        act on the instantaneous level (the liveness marker keys off it)."""
-        start = self.bytes_total - len(self._carry)  # stream offset of buf[0]
-        self.bytes_total += len(data)
-        buf = self._carry + data
-        if len(buf) % 2:
-            self._carry = buf[-1:]
-            buf = buf[:-1]
-        else:
-            self._carry = b""
-        if not buf:
-            return 0
-        # array('h') reads native-endian shorts == little-endian s16 on every host
-        # recall runs on (arm64/x86_64).
-        samples = array("h", buf)
-        low, high = min(samples), max(samples)
-        peak = max(high, -low)
-        self.peak = max(self.peak, peak)
-        if self.first_audible_byte is None and peak >= _AUDIBLE_FLOOR:
-            index = next(i for i, s in enumerate(samples) if abs(s) >= _AUDIBLE_FLOOR)
-            self.first_audible_byte = start + 2 * index
-        return peak
-
-    @property
-    def peak_db(self) -> float | None:
-        """Loudest sample seen, in dBFS; None when not one non-zero sample arrived
-        (pure digital zeros — indistinguishable from no capture path at all)."""
-        if self.peak == 0:
-            return None
-        return round(20 * math.log10(self.peak / _S16_FULL_SCALE), 1)
-
-    @property
-    def first_audible_s(self) -> float | None:
-        """Stream-time seconds until the first sample at/above the audible floor;
-        None when the whole stream stayed below it (silence)."""
-        if self.first_audible_byte is None:
-            return None
-        return self.first_audible_byte / self._byte_rate
-
-
-def mark_alive(source_dir: Path) -> None:
-    """Refresh the source's liveness marker — call only on measured signal."""
-    (source_dir / ALIVE_FILE).touch()
-
-
-def alive_mtime(source_dir: Path) -> datetime | None:
-    """When the source last proved it was recording, or None if never/unreadable."""
-    try:
-        mtime = (source_dir / ALIVE_FILE).stat().st_mtime
-    except OSError:
-        return None
-    return datetime.fromtimestamp(mtime, tz=UTC)
-
-
 def segment_glob(source_dir: Path, source_id: str) -> list[Path]:
     """The source's segment files (any state: open, closed, stub), sorted by name —
     which is chronological, because the name embeds the UTC start time."""
@@ -135,81 +59,6 @@ _CODEC_EXT: Final = {
     "opus": "opus",
     "aac": "m4a",
 }
-
-
-def container_ext(codec: str) -> str:
-    """File extension for segment files produced with `codec`."""
-    return _CODEC_EXT.get(codec, "mka")
-
-
-@dataclass(frozen=True)
-class CaptureConfig:
-    """Capture parameters.
-
-    Defaults to Opus at 32 kbps — perceptually transparent for speech and ~11x
-    smaller than lossless FLAC, with identical transcription. Lossless buys
-    nothing for a speech memory aid (Whisper uses 16 kHz mono); the meaningful
-    resolution — what was said, by whom, how it sounded — is fully preserved.
-    """
-
-    sample_rate: int = 48000
-    channels: int = 1
-    segment_seconds: int = 60
-    codec: str = "libopus"
-    bitrate: str | None = "32k"
-    loglevel: str = "warning"
-
-
-def build_segment_argv(
-    config: CaptureConfig, output_pattern: str, *, fanout: bool = False
-) -> list[str]:
-    """ffmpeg argv that reads raw s16le PCM from stdin and writes segment files.
-
-    The producer (recall.sources) supplies the PCM stream on this process's
-    stdin; ffmpeg only segments and encodes — it never touches the device.
-
-    `fanout` appends the best-effort UDP live tap as a second output (see
-    recall.sources.fanout_output_argv), so recall-live never opens the device.
-    """
-    argv = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        config.loglevel,
-        "-f",
-        "s16le",
-        "-ar",
-        str(config.sample_rate),
-        "-ac",
-        str(config.channels),
-        "-i",
-        "-",
-        "-c:a",
-        config.codec,
-    ]
-    if config.bitrate is not None:
-        argv += ["-b:a", config.bitrate]
-    if config.codec == "libopus":
-        argv += ["-application", "voip"]  # voice-optimised
-    argv += [
-        "-f",
-        "segment",
-        "-segment_time",
-        str(config.segment_seconds),
-        "-reset_timestamps",
-        "1",
-        "-strftime",
-        "1",
-        output_pattern,
-    ]
-    if fanout:
-        argv += fanout_output_argv()
-    return argv
-
-
-def segment_output_pattern(directory: str, source_id: str, *, ext: str = "flac") -> str:
-    """ffmpeg output pattern: `<directory>/<source_id>/<source_id>-<ts>.<ext>`."""
-    return f"{directory}/{source_id}/{source_id}-{_TS_STRFTIME}.{ext}"
 
 
 def parse_segment_start(filename: str) -> datetime:

@@ -26,19 +26,13 @@ _SAFE_ID: re.Pattern[str] = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # wedging forever on a quietly-dead socket. 15s tolerates brief Wi-Fi stalls.
 _TCP_READ_TIMEOUT_US: Final = 15_000_000
 
-# The live-feed tap. Only ONE process may hold the CoreAudio device — two clients on one
-# device starve each other (proven 2026-07-15: capture + live both got silence). So the
-# single mic reader (capture) emits a SECOND, best-effort PCM copy on this localhost UDP
-# port, and recall-live reads that, not the device. UDP is fire-and-forget:
-# a full or absent receiver just drops packets, so the tap can NEVER backpressure the
-# archive segmenter (completeness stays the segmenter's alone). 16 kHz mono = live's
-# format, so live needs no resampling.
-FANOUT_HOST: Final = "127.0.0.1"
-FANOUT_PORT: Final = 9876
-FANOUT_SAMPLE_RATE: Final = 16000
-FANOUT_CHANNELS: Final = 1
-# Datagram payload that fits a loopback packet without IP fragmentation.
-_FANOUT_PKT_SIZE: Final = 1316
+# ⚠ The live-feed tap's constants are GONE FROM PYTHON, and both ends are Rust:
+# `audiod::segmenter::FANOUT_URL` publishes it, `runner::live::TAP` reads it. Only
+# one process may hold the CoreAudio device — two clients on one starve each other
+# (proven 2026-07-15: capture and live both got silence) — so the recorder emits a
+# second, droppable UDP copy and the live tier subscribes to that instead. Keeping
+# a third copy of the port here would be a number nothing reads and everything
+# could contradict.
 
 
 class SourceKind(Enum):
@@ -116,26 +110,6 @@ class SourceRow(NamedTuple):
     id: str
     name: str
     kind: SourceKind
-
-
-def fanout_output_argv() -> list[str]:
-    """A second ffmpeg output: the best-effort live tap. The SEGMENTER appends this
-    after its segment output, so its one PCM input feeds both — the archive (reliable)
-    and the live feed (this UDP, droppable). Fire-and-forget, so it can't stall the
-    archive. It lives on the segmenter (not the producer) because the producer is sox,
-    which has no second output — and the segmenter sees the identical byte stream.
-    Unbounded on purpose: the segmenter ends at the producer's EOF, which closes every
-    output, so a bounded record still exits."""
-    url = f"udp://{FANOUT_HOST}:{FANOUT_PORT}?pkt_size={_FANOUT_PKT_SIZE}"
-    return [
-        "-ar",
-        str(FANOUT_SAMPLE_RATE),
-        "-ac",
-        str(FANOUT_CHANNELS),
-        "-f",
-        "s16le",
-        url,
-    ]
 
 
 @dataclass(frozen=True)
