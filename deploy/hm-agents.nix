@@ -33,8 +33,23 @@
 #     the python that holds mlx/pyannote/torch. What DID change (2026-07-31): that
 #     second interpreter is now the uv2nix store env (`nix build .#ml-env`), not the
 #     working tree's `.venv`, so nothing an agent imports lives in $HOME any more.
-#   - `.env` (HF_TOKEN, RECALL_SYNC_TOKEN) is still read at runtime from
-#     ~/Code/recall/.env. Secrets must never enter the store.
+#   - the agent env (HF_TOKEN, RECALL_SYNC_TOKEN, the ingest tokens) is read at
+#     runtime from ~/.config/recall/env, 0600, on the INTERNAL disk. Secrets must
+#     never enter the store.
+#
+#     ⚠ It used to be ~/Code/recall/.env, and that path is a symlink onto
+#     /Volumes/Backup — the external archive volume. A launchd-spawned process
+#     cannot write there ("Operation not permitted") and, on first touch, its
+#     open can HANG rather than fail, waiting on a consent nobody is at the
+#     machine to give. On 2026-09-14 that wedged NINE agents at once, each stuck
+#     in bash sourcing this file; the four that survived were exactly the ones
+#     whose wrappers do not read it. Reproduce the write half with:
+#
+#         launchctl submit -l probe -- /bin/bash -c \
+#           'echo x > /Volumes/Backup/recall/.probe 2>/tmp/probe.err; echo $? >>/tmp/probe.err'
+#
+#     An interactive shell writes there fine, which is why this is invisible
+#     until something runs under launchd.
 #
 # Logs live in ~/Library/Logs/recall, NOT in the repo: launchd opens the stdio
 # paths before any code runs, so a log path inside a checkout that moves takes the
@@ -121,7 +136,7 @@ let
       # recall's own test suite has ever seen.
       runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
       text = ''
-        ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
+        ENV_FILE="''${RECALL_ENV:-$HOME/.config/recall/env}"
         if [ -r "$ENV_FILE" ]; then
           set -a
           # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
@@ -157,7 +172,7 @@ let
     pkgs.writeShellApplication {
       name = "recall-${name}";
       text = ''
-        ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
+        ENV_FILE="''${RECALL_ENV:-$HOME/.config/recall/env}"
         if [ -r "$ENV_FILE" ]; then
           set -a
           # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
@@ -332,7 +347,7 @@ in
       runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
       text = ''
         # RECALL_SYNC_TOKEN lives in .env and must never enter the store.
-        ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
+        ENV_FILE="''${RECALL_ENV:-$HOME/.config/recall/env}"
         if [ -r "$ENV_FILE" ]; then
           set -a
           # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
@@ -496,7 +511,7 @@ in
       runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
       text = ''
         # RECALL_SYNC_TOKEN lives in .env and must never enter the store.
-        ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
+        ENV_FILE="''${RECALL_ENV:-$HOME/.config/recall/env}"
         if [ -r "$ENV_FILE" ]; then
           set -a
           # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
@@ -537,7 +552,7 @@ in
     program = pkgs.writeShellApplication {
       name = "recall-upload";
       text = ''
-        ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
+        ENV_FILE="''${RECALL_ENV:-$HOME/.config/recall/env}"
         if [ -r "$ENV_FILE" ]; then
           set -a
           # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
@@ -615,7 +630,7 @@ in
     program = pkgs.writeShellApplication {
       name = "recall-capture-mirror";
       text = ''
-        ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
+        ENV_FILE="''${RECALL_ENV:-$HOME/.config/recall/env}"
         if [ -r "$ENV_FILE" ]; then
           set -a
           # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file

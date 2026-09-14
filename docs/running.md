@@ -49,6 +49,15 @@ credential-carrying agents use their own — `recall-upload` takes
 `RECALL_INGEST_TOKEN`, `recall-doctor` the fleetwatch token, and `recall-speech`
 needs none. Named rather than counted: the table's order is not a contract.
 
+⚠ **The agents read `~/.config/recall/env`, NOT the repo's `.env`.** Two copies,
+deliberately: `scripts/recall.sh` sources `.env` for interactive work, and that is
+fine because a terminal can reach the archive volume. A launchd agent cannot —
+`~/Code/recall` is a symlink onto `/Volumes/Backup`, an external USB volume that
+macOS denies launchd-spawned processes write access to, and whose first touch can
+HANG an agent outright rather than fail it. On 2026-09-14 that wedged nine agents
+at once, each stuck in `bash` sourcing the old path. Keep the two in step by hand
+when a token changes; `~/.config/recall/env` is 0600 and on the internal disk.
+
 ### The doctor runs itself twice, and that is on purpose
 
 `doctor` starts a child — itself, with `--collect` — that does every read of
