@@ -146,31 +146,42 @@ pub async fn forward(up: Upstream, req: Request) -> Response {
     };
 
     let url = target(&up.base, &path, query.as_deref());
-    // Boxed: a `ureq::Response` in an `Err` is a fat variant, and clippy is right
-    // that every `Ok` would otherwise pay for it.
+    // ⚠ THE WHOLE EXCHANGE IS IN HERE, body included, and that placement is the
+    // fix for a deadlock rather than tidiness. `ureq`'s reader is a blocking
+    // socket read, so reading the body on the async side blocks a runtime
+    // worker for as long as the upstream takes to write. On the fleet's
+    // multi-thread runtime that costs one worker; in the tests, which run a
+    // CURRENT-THREAD runtime with the stub upstream on it, it blocks the very
+    // thread that has to drive the upstream's write — so the read can never
+    // complete and the proxy answers `502 upstream body failed` once the socket
+    // times out. That is the intermittent gate failure #1480 kept re-finding:
+    // a small body is already buffered and reads instantly, so it only fires
+    // when the machine is loaded enough for the write to still be in flight.
     let sent = tokio::task::spawn_blocking(move || {
         let mut req = agent().request(method.as_str(), &url);
         for (name, value) in headers {
             req = req.set(&name, &value);
         }
-        req.send_bytes(&body).map_err(Box::new)
+        match req.send_bytes(&body) {
+            // ureq treats 4xx/5xx as Err(Status): that is the upstream
+            // ANSWERING, so it takes the same path as a 200 — its answer belongs
+            // to the caller unchanged, and a 404 from Python must not become a
+            // 502 from here.
+            Ok(resp) | Err(ureq::Error::Status(_, resp)) => read_fully(resp),
+            Err(e) => Err(Failed::Unreachable(e.to_string())),
+        }
     })
     .await;
 
     match sent {
-        // ureq treats 4xx/5xx as Err(Status): that is the upstream ANSWERING, and
-        // its answer belongs to the caller unchanged — a 404 from Python must not
-        // become a 502 from here.
-        Ok(Ok(resp)) => relay(resp),
-        Ok(Err(boxed)) if matches!(*boxed, ureq::Error::Status(_, _)) => {
-            let ureq::Error::Status(_, resp) = *boxed else {
-                unreachable!("just matched")
-            };
-            relay(resp)
-        }
-        Ok(Err(e)) => {
+        Ok(Ok(relayed)) => relayed.into_response(),
+        Ok(Err(Failed::Unreachable(e))) => {
             tracing::warn!("proxy upstream unreachable: {e}");
             (StatusCode::BAD_GATEWAY, "upstream unreachable").into_response()
+        }
+        Ok(Err(Failed::Body(e))) => {
+            tracing::warn!("proxy could not read the upstream body: {e}");
+            (StatusCode::BAD_GATEWAY, "upstream body failed").into_response()
         }
         Err(e) => {
             tracing::warn!("proxy task failed: {e}");
@@ -179,15 +190,40 @@ pub async fn forward(up: Upstream, req: Request) -> Response {
     }
 }
 
-fn relay(resp: ureq::Response) -> Response {
+/// Why a forward produced no answer. The two are kept apart because they point
+/// at different causes and the 502 bodies name them — see `tests/proxy.rs`,
+/// where telling them apart is what turned an intermittent 502 into a diagnosis.
+enum Failed {
+    Unreachable(String),
+    Body(String),
+}
+
+/// The upstream's answer, entirely read, so nothing about it still needs a
+/// socket.
+struct Relayed {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Vec<u8>,
+}
+
+impl Relayed {
+    fn into_response(self) -> Response {
+        let mut out = (self.status, Body::from(Bytes::from(self.body))).into_response();
+        *out.headers_mut() = self.headers;
+        out
+    }
+}
+
+/// Drain a `ureq` response. Called ONLY from the blocking side.
+fn read_fully(resp: ureq::Response) -> Result<Relayed, Failed> {
     let status = StatusCode::from_u16(resp.status()).unwrap_or(StatusCode::BAD_GATEWAY);
     let headers = response_headers(&resp);
     let mut body = Vec::new();
-    if let Err(e) = std::io::copy(&mut resp.into_reader(), &mut body) {
-        tracing::warn!("proxy could not read the upstream body: {e}");
-        return (StatusCode::BAD_GATEWAY, "upstream body failed").into_response();
-    }
-    let mut out = (status, Body::from(Bytes::from(body))).into_response();
-    *out.headers_mut() = headers;
-    out
+    std::io::copy(&mut resp.into_reader(), &mut body)
+        .map_err(|e| Failed::Body(format!("{} ({e})", e.kind())))?;
+    Ok(Relayed {
+        status,
+        headers,
+        body,
+    })
 }

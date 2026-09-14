@@ -10,6 +10,9 @@ unsafe_code = "forbid"
 pedantic = { level = "warn", priority = -1 }
 
 [dependencies]
+# The silero detector and WAV writing: the live tier must hear exactly what
+# the archive hears, or one of them cuts an utterance the other keeps.
+audiocore = { path = "../audiocore" }
 # Blocking HTTP: the runner does one job at a time by design, so an async
 # runtime would buy nothing and cost a dependency the Mac has to carry.
 ureq = { version = "2", features = ["json"] }
@@ -18,13 +21,17 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
-# ⚠ For ONE thing: stamping the archive pulse the doctor reads, in the spelling
-# the doctor parses (`datetime.isoformat()` — micros, offset, no `Z`). The
-# alternative was hand-formatting `SystemTime`, which is how two spellings of the
-# same instant end up in one system.
+# ⚠ Wall-clock instants in the spelling the rest of the system parses
+# (`datetime.isoformat()` — micros, offset, no `Z`): the archive pulse the doctor
+# reads, and every live turn's start and end. The alternative was hand-formatting
+# `SystemTime`, which is how two spellings of the same instant end up in one
+# system.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
 recalld = { path = "../recalld" }
+# Reading back what the end-to-end test's recalld WROTE. A 200 from the push
+# says stored, not correct; the row is the assertion.
+rusqlite = { version = "0.32", features = ["bundled"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 axum = "0.8"

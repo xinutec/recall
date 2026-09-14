@@ -38,7 +38,6 @@ from recall.timeline import Segment
 _log = logging.getLogger("recall.sync_push")
 
 WATERMARK_KEY = "sync_pushed_max_turn_id"
-LIVE_WATERMARK_KEY = "sync_pushed_max_live_turn_id"
 _SUMMARY_PUSH_LIMIT = 60
 # Mirror-completion pushes per pass. The first passes after the pushed_utc column
 # lands reconcile the whole historical archive (the fleet no-ops what it holds); the
@@ -57,7 +56,6 @@ class PushTarget(Protocol):
     def push_audio(self, source: str, name: str, local_path: Path) -> bool: ...
     def push_segment(self, segment: SegmentIn) -> SegmentStoredOut: ...
     def push_segments(self, segments: list[SegmentIn]) -> list[SegmentStoredOut]: ...
-    def push_live(self, turns: list[TurnIn]) -> int: ...
     def fetch_labels(self) -> list[LabelOut]: ...
 
 
@@ -90,29 +88,6 @@ def _segment_in(
             for t in turns
         ],
     )
-
-
-def _live_turn_in(turn: TranscriptSegment) -> TurnIn:
-    return TurnIn(
-        start=turn.start.isoformat(),
-        end=turn.end.isoformat(),
-        text=turn.text,
-        asr_model=turn.asr_model,
-        language=turn.language,
-    )
-
-
-def push_live_turns(store: Store, client: PushTarget) -> int:
-    """Push new visible live turns to the fleet's instant feed; returns how many were
-    sent. Separate from the segment push and cheap (only unpushed visible live turns,
-    id-watermarked), so it can run on a much shorter cadence to keep the feed live."""
-    watermark = int(store.get_setting(LIVE_WATERMARK_KEY) or 0)
-    turns = store.visible_live_turns_since(watermark)
-    if not turns:
-        return 0
-    client.push_live([_live_turn_in(t) for t in turns])
-    store.set_setting(LIVE_WATERMARK_KEY, str(max(int(t.id) for t in turns)))
-    return len(turns)
 
 
 class _Batch:

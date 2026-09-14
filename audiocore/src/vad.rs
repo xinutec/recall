@@ -26,7 +26,8 @@ pub const UNKNOWN_SECONDS: f64 = -1.0;
 /// What silero was trained on, and what every segment is decoded to.
 pub const RATE: u32 = 16_000;
 /// The window the 16 kHz model expects. Not a tunable: the graph is shaped for it.
-const WINDOW: usize = 512;
+/// Public because a STREAMING caller must cut its reads to exactly this.
+pub const WINDOW: usize = 512;
 /// ⚠ silero v5+ prepends this many samples of the PREVIOUS window, so the model
 /// is fed `CONTEXT + WINDOW`. The ONNX input shape is dynamic, so omitting the
 /// context is accepted silently and simply returns near-zero probability on
@@ -156,6 +157,24 @@ fn build_session() -> Result<ort::session::Session, Error> {
         .map_err(|e| Error::Model(e.to_string()))
 }
 
+/// What one window of inference hands to the next: silero's state tensor and
+/// the 64 samples of context it prepends. A batch pass starts fresh; a live
+/// [`Stream`] keeps one across its whole life, which is the entire difference
+/// between the two.
+struct Carried {
+    state: Vec<f32>,
+    context: Vec<f32>,
+}
+
+impl Carried {
+    fn new() -> Self {
+        Self {
+            state: vec![0.0_f32; 2 * 128],
+            context: vec![0.0_f32; CONTEXT],
+        }
+    }
+}
+
 impl Detector {
     /// # Errors
     /// If the dynamic ONNX Runtime cannot be loaded (wrong API level, library
@@ -188,34 +207,41 @@ impl Detector {
     /// If the network fails.
     pub fn probabilities(&mut self, samples: &[f32]) -> Result<Vec<f32>, Error> {
         let gain = detection_gain(samples.iter().fold(0.0_f32, |m, s| m.max(s.abs())));
-        let mut state = vec![0.0_f32; 2 * 128];
-        let mut context = vec![0.0_f32; CONTEXT];
+        let mut carried = Carried::new();
         let mut out = Vec::with_capacity(samples.len() / WINDOW);
         for chunk in samples.chunks_exact(WINDOW) {
-            let mut framed = Vec::with_capacity(CONTEXT + WINDOW);
-            framed.extend_from_slice(&context);
-            framed.extend(chunk.iter().map(|s| s * gain));
-            context = framed[framed.len() - CONTEXT..].to_vec();
-            let input = ort::value::Tensor::from_array(([1, CONTEXT + WINDOW], framed))
-                .map_err(|e| Error::Model(e.to_string()))?;
-            let state_tensor = ort::value::Tensor::from_array(([2, 1, 128], state.clone()))
-                .map_err(|e| Error::Model(e.to_string()))?;
-            let sr = ort::value::Tensor::from_array(((), vec![i64::from(RATE)]))
-                .map_err(|e| Error::Model(e.to_string()))?;
-            let outputs = self
-                .session
-                .run(ort::inputs!["input" => input, "state" => state_tensor, "sr" => sr])
-                .map_err(|e| Error::Model(e.to_string()))?;
-            let (_, prob) = outputs["output"]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| Error::Model(e.to_string()))?;
-            out.push(prob[0]);
-            let (_, next) = outputs["stateN"]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| Error::Model(e.to_string()))?;
-            state = next.to_vec();
+            out.push(self.window(chunk, gain, &mut carried)?);
         }
         Ok(out)
+    }
+
+    /// One window, with the caller holding the state that crosses windows.
+    /// Both the batch pass above and [`Stream`] go through here, so a live
+    /// utterance and a stored segment are measured by the same inference.
+    fn window(&mut self, chunk: &[f32], gain: f32, carried: &mut Carried) -> Result<f32, Error> {
+        let mut framed = Vec::with_capacity(CONTEXT + WINDOW);
+        framed.extend_from_slice(&carried.context);
+        framed.extend(chunk.iter().map(|s| s * gain));
+        carried.context = framed[framed.len() - CONTEXT..].to_vec();
+        let input = ort::value::Tensor::from_array(([1, CONTEXT + WINDOW], framed))
+            .map_err(|e| Error::Model(e.to_string()))?;
+        let state_tensor = ort::value::Tensor::from_array(([2, 1, 128], carried.state.clone()))
+            .map_err(|e| Error::Model(e.to_string()))?;
+        let sr = ort::value::Tensor::from_array(((), vec![i64::from(RATE)]))
+            .map_err(|e| Error::Model(e.to_string()))?;
+        let outputs = self
+            .session
+            .run(ort::inputs!["input" => input, "state" => state_tensor, "sr" => sr])
+            .map_err(|e| Error::Model(e.to_string()))?;
+        let (_, prob) = outputs["output"]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| Error::Model(e.to_string()))?;
+        let probability = prob[0];
+        let (_, next) = outputs["stateN"]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| Error::Model(e.to_string()))?;
+        carried.state = next.to_vec();
+        Ok(probability)
     }
 
     /// Speech regions in 16 kHz mono samples.
@@ -242,46 +268,177 @@ impl Detector {
     }
 }
 
-/// Hysteresis + duration rules over per-window probabilities. Public because
-/// it is the whole speech/not-speech POLICY — thresholds, the minimum region,
-/// the pause that does not end one — and policy is what a test must pin.
+/// Every speech region in a finished array of probabilities — a whole stored
+/// segment, decided at once. Public because it is the whole speech/not-speech
+/// POLICY seen in one place, and policy is what a test must pin; [`Splitter`]
+/// is where it actually lives.
 #[must_use]
 pub fn regions_from_probabilities(probs: &[f32]) -> Vec<Region> {
-    let window_s = f64::from(WINDOW as u32) / f64::from(RATE);
-    let min_silence_windows = (MIN_SILENCE_MS / 1000.0 / window_s).ceil() as usize;
+    let mut splitter = Splitter::new();
     let mut regions: Vec<Region> = Vec::new();
-    let mut start: Option<usize> = None;
-    let mut quiet_run = 0usize;
-    for (i, &p) in probs.iter().enumerate() {
-        if p >= THRESHOLD {
-            if start.is_none() {
-                start = Some(i);
-            }
-            quiet_run = 0;
-        } else if start.is_some() {
-            if p < EXIT_THRESHOLD {
-                quiet_run += 1;
-            }
-            if quiet_run >= min_silence_windows {
-                let begin = start.take().unwrap_or(i);
-                push_if_long_enough(&mut regions, begin, i + 1 - quiet_run, window_s);
-                quiet_run = 0;
-            }
-        }
+    for &p in probs {
+        regions.extend(splitter.push(p).map(Windows::region));
     }
-    if let Some(begin) = start {
-        push_if_long_enough(&mut regions, begin, probs.len(), window_s);
-    }
+    regions.extend(splitter.flush().map(Windows::region));
     regions
 }
 
-fn push_if_long_enough(regions: &mut Vec<Region>, begin: usize, end: usize, window_s: f64) {
-    let region = Region {
-        start: begin as f64 * window_s,
-        end: end as f64 * window_s,
-    };
-    if region.seconds() * 1000.0 >= MIN_SPEECH_MS {
-        regions.push(region);
+/// A span in WINDOWS — what a streaming caller needs, because it has to slice
+/// the samples it buffered and seconds cannot index a buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Windows {
+    pub first: usize,
+    /// One past the last window, like any Rust range.
+    pub end: usize,
+}
+
+impl Windows {
+    /// The same span in seconds from the start of the stream.
+    #[must_use]
+    pub fn region(self) -> Region {
+        Region {
+            start: self.first as f64 * window_seconds(),
+            end: self.end as f64 * window_seconds(),
+        }
+    }
+}
+
+/// How long one [`WINDOW`] is. Public because a streaming caller measures
+/// everything in windows and has to say the answer in seconds.
+#[must_use]
+pub fn window_seconds() -> f64 {
+    f64::from(WINDOW as u32) / f64::from(RATE)
+}
+
+fn min_silence_windows() -> usize {
+    (MIN_SILENCE_MS / 1000.0 / window_seconds()).ceil() as usize
+}
+
+/// A closed span, or `None` if it was too short to be talking. The one place
+/// `MIN_SPEECH_MS` is applied, so the offline and streaming paths cannot come
+/// to different answers about what counts as a region.
+fn region_if_long_enough(begin: usize, end: usize) -> Option<Windows> {
+    let span = Windows { first: begin, end };
+    (span.region().seconds() * 1000.0 >= MIN_SPEECH_MS).then_some(span)
+}
+
+/// The region policy itself, decided one window at a time.
+///
+/// ⚠ **This is the ONLY implementation.** [`regions_from_probabilities`] is a
+/// fold over it, so the live tier and the archive cannot come to different
+/// answers about where an utterance ended — not because two loops are tested
+/// against each other, but because there is one loop.
+#[derive(Debug, Default)]
+pub struct Splitter {
+    index: usize,
+    start: Option<usize>,
+    quiet_run: usize,
+}
+
+impl Splitter {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed one window's probability. `Some` means a region just CLOSED — the
+    /// caller may now cut those windows out of its buffer and transcribe them.
+    pub fn push(&mut self, probability: f32) -> Option<Windows> {
+        let i = self.index;
+        self.index += 1;
+        if probability >= THRESHOLD {
+            if self.start.is_none() {
+                self.start = Some(i);
+            }
+            self.quiet_run = 0;
+            return None;
+        }
+        let begin = self.start?;
+        if probability < EXIT_THRESHOLD {
+            self.quiet_run += 1;
+        }
+        if self.quiet_run < min_silence_windows() {
+            return None;
+        }
+        self.start = None;
+        let end = i + 1 - self.quiet_run;
+        self.quiet_run = 0;
+        region_if_long_enough(begin, end)
+    }
+
+    /// Close whatever is open because the stream ended. A live agent calls this
+    /// on shutdown so the last sentence is not lost to the exit.
+    pub fn flush(&mut self) -> Option<Windows> {
+        let begin = self.start.take()?;
+        self.quiet_run = 0;
+        region_if_long_enough(begin, self.index)
+    }
+
+    /// Windows fed so far — the caller's clock for what it has buffered.
+    #[must_use]
+    pub const fn windows_seen(&self) -> usize {
+        self.index
+    }
+
+    /// The window an open region started at, if one is open. A live agent needs
+    /// it to bound how long it will wait before cutting a sentence itself.
+    #[must_use]
+    pub const fn open_since(&self) -> Option<usize> {
+        self.start
+    }
+
+    /// Cut an open region at the current window, whatever the probabilities say.
+    /// For the ONE case the hysteresis cannot handle: somebody who has not
+    /// paused long enough to trigger an end, in a tier whose whole promise is
+    /// latency.
+    pub fn cut(&mut self) -> Option<Windows> {
+        let begin = self.start?;
+        self.start = Some(self.index);
+        self.quiet_run = 0;
+        region_if_long_enough(begin, self.index)
+    }
+}
+
+/// A live detector: one window at a time, carrying state across the whole
+/// stream.
+///
+/// ⚠ **The gain is fixed for the life of the stream, and that is the point.**
+/// [`Detector::probabilities`] derives it from the buffer's own peak, which is
+/// right for a stored segment and catastrophic for a stream: normalising each
+/// 32 ms window to its own peak makes room tone as loud as a voice, so a quiet
+/// room reads as continuous speech. The tap this feeds on is the USB mic, whose
+/// level has carried the live tier unamplified for months — pass 1.0.
+pub struct Stream {
+    detector: Detector,
+    carried: Carried,
+    gain: f32,
+}
+
+impl Stream {
+    /// # Errors
+    /// If the ONNX runtime or the embedded network cannot be loaded.
+    pub fn open(gain: f32) -> Result<Self, Error> {
+        Ok(Self {
+            detector: Detector::load()?,
+            carried: Carried::new(),
+            gain,
+        })
+    }
+
+    /// The speech probability of exactly [`WINDOW`] samples.
+    ///
+    /// # Errors
+    /// If the network fails, or the window is the wrong length — which would
+    /// otherwise be fed to a dynamic input shape and answered with a plausible
+    /// number, the failure mode that cost an hour on the context bug.
+    pub fn probability(&mut self, window: &[f32]) -> Result<f32, Error> {
+        if window.len() != WINDOW {
+            return Err(Error::Model(format!(
+                "a window is {WINDOW} samples, not {}",
+                window.len()
+            )));
+        }
+        self.detector.window(window, self.gain, &mut self.carried)
     }
 }
 

@@ -557,3 +557,70 @@ async fn with_a_frontend_and_no_upstream_an_api_miss_is_still_404() {
         "a UI route must still get the app"
     );
 }
+
+/// ⚠ **The runtime must survive a body it cannot read in one go**, and this is a
+/// deadlock test rather than a throughput one.
+///
+/// `ureq`'s reader is a blocking socket read. Reading the upstream's body on the
+/// ASYNC side blocks a runtime worker until the upstream has written all of it —
+/// and the upstream cannot finish writing a body larger than the socket buffer
+/// unless something drives its task. On the fleet's multi-thread runtime that
+/// costs a worker; here, on a current-thread runtime with the stub on it, the
+/// blocked thread IS the driver, so nothing ever completes.
+///
+/// That is the intermittent `502 upstream body failed` #1480 kept re-finding and
+/// diagnosing as load: a small body is already buffered when the read starts, so
+/// it only fired when the machine was busy enough for the write to still be in
+/// flight. A big body makes it fire every time.
+///
+/// ⚠ Not `#[tokio::test]`: the runtime SHAPE is what is under test, and the
+/// assertion has to survive the failure it is looking for. A deadlocked runtime
+/// cannot fire its own timeout — so the deadline is held by a plain thread
+/// outside it, and a hang fails rather than hangs.
+#[test]
+fn a_body_too_big_for_one_write_does_not_deadlock_the_runtime() {
+    const BODY: usize = 8 * 1024 * 1024; // far past any socket buffer // far past any socket buffer
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async move {
+            let app = Router::new().route("/api/legacy", get(|| async { "x".repeat(BODY) }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind upstream");
+            let addr = listener.local_addr().expect("addr");
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+            let base = recalld_with(Some(format!("http://{addr}"))).await;
+            // ⚠ The body is read INSIDE the blocking task, and leaving it out is
+            // how this test first failed against a FIXED proxy: `into_string`
+            // is a blocking socket read, so calling it out here blocks the
+            // driver that has to write recalld's own 8 MB reply — the identical
+            // deadlock, one hop later. Reproducing the class this exactly is
+            // some evidence the class is real.
+            let got = tokio::task::spawn_blocking(move || {
+                let resp = answered(
+                    agent()
+                        .get(&format!("{base}/api/legacy"))
+                        .call()
+                        .map_err(Box::new),
+                );
+                (resp.status(), resp.into_string().map(|b| b.len()))
+            })
+            .await
+            .expect("task");
+            let _ = tx.send(got);
+        });
+    });
+
+    let (status, length) = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("the proxy answered — a timeout here IS the deadlock");
+    assert_eq!(status, 200);
+    assert_eq!(length.expect("a body"), BODY, "the body crossed intact");
+}

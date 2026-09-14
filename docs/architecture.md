@@ -867,6 +867,24 @@ B3 lands.*
   capture-mirror (pause intent moves to a recalld long-poll the runner
   mirrors — same edge-trigger semantics).
 
+  **The live tier is Rust, 2026-09-14.** `recall-live` reads the tap, cuts it
+  with `audiocore::vad` and pushes each utterance to `POST /sync/live`.
+  `live.py`, the `live` subcommand, `sync_push.push_live_turns` and
+  `Store.visible_live_turns_since` are deleted.
+
+  ⚠ **It keeps NO STORE, and that is the whole simplification.** The Python
+  wrote live turns into the Mac's `recall.sqlite` and pushed them from an id
+  watermark on a second thread; both existed because the Mac was once the system
+  of record. It is not, so the push IS the write — no watermark, no second
+  thread, and one less agent touching the volume that stalls (#1412).
+
+  ⚠ **The region policy is now written ONCE.** `vad::Splitter` decides window by
+  window and `regions_from_probabilities` is a fold over it, so live and the
+  archive cannot disagree about where an utterance ended. And a live turn's
+  timestamp is derived BACKWARDS from the moment its region closed, not forwards
+  from a start anchor: the tap is UDP, and counting samples forwards stamps every
+  later turn progressively earlier as datagrams drop.
+
   *Started 2026-09-11:* `recall.shim_voices` (diarize + embed behind the `asr`
   stdio protocol), the `diarize-room` job kind — derived from a transcribe job
   that SUCCEEDED, since diarization alone attributes nothing and a refused clip
@@ -1450,9 +1468,10 @@ so a deleted module standing in one is the worst place for the claim to rot.
 
 Everything else in `src/recall/` retires with its stage: the mic/streaming
 client and relay with C4; worker, live, sync-push, outbox, jobs and
-capture-mirror with E3–E4; store, webauth and schemas with the rest of F1. The
-authoritative list is `ls src/recall` against this ladder, not a table copied
-here; when a stage lands, its deletions land in the same change.
+capture-mirror with E3–E4 (worker went 2026-09-13, live 2026-09-14); store,
+webauth and schemas with the rest of F1. The authoritative list is
+`ls src/recall` against this ladder, not a table copied here; when a stage
+lands, its deletions land in the same change.
 
 The API modules are already off it — nine went on 2026-09-07, `health`,
 `fleetwatch`, `bounded` and `loss` followed on 2026-09-08 with the doctor (its

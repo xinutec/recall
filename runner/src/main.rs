@@ -5,13 +5,14 @@
 //! the queue lives on Isis. Kill it at any moment and the only cost is a lease
 //! that expires.
 //!
-//! ⚠ SHADOW BY CONSTRUCTION. Results are stored opaque by the queue and nothing
-//! interprets them into turn rows yet, so running this changes no transcript
-//! anyone reads. The flip — retiring the old worker — waits on the referee
-//! (#1461), which cannot yet say which room stream is better.
+//! ⚠ **`transcribe-segment` is LIVE: its results become turns** — the per-mic
+//! stream `recalld::turns::PER_MIC` writes, which replaced `worker.py` on
+//! 2026-09-13. `transcribe-room` is not: its results are stored opaque and
+//! nothing interprets them, because the room stream waits on the referee
+//! (#1461), which cannot yet say which stream is better.
 
 use chrono::Utc;
-use runner::client::{self, Client, Job};
+use runner::client::{Client, Job};
 use runner::pulse::stamp_pulse;
 use runner::shim::{self, Shim};
 use std::path::Path;
@@ -219,7 +220,7 @@ fn main() {
     // making a `voices` runner die on an unreachable fleet would be a dependency
     // it does not have.
     let prompt = if kinds.contains(&"transcribe-room") {
-        match client::fetch_prompt(&config.api, &config.token) {
+        match client.prompt(&config.api) {
             Ok(prompt) => {
                 tracing::info!(
                     terms = prompt.as_deref().map_or(0, |p| p.split(',').count()),

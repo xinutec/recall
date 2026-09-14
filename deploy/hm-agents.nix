@@ -43,7 +43,7 @@
 #
 # NOTE: recall-capture opens the microphone. recall-live does NOT — it reads the UDP
 # tap capture publishes, because two CoreAudio clients on one device starve each other
-# (sources.live_input_argv); its `--device` argument is vestigial.
+# (audiod segmenter's fanout; runner::live::TAP is the other end).
 #
 # home-manager writes each plist read-only into ~/Library/LaunchAgents with no
 # native comment, so a provenance `Comment` key points back here. Do NOT
@@ -313,18 +313,46 @@ in
     args = [ "refine" "--out" out ];
   };
 
-  # Mic agent. --device pins the exact CoreAudio input: the system default input
-  # follows whatever connects, e.g. a Bluetooth speaker's hands-free mic.
-  # --fleet-url pushes the instant feed to Isis on a background thread (the Isis split):
-  # the fleet UI shows live turns within seconds, reconciled when the archive segment
-  # lands. Token is RECALL_SYNC_TOKEN (from .env); the push is best-effort and off the
-  # VAD loop, so it never affects capture.
+  # The instant feed — Rust since 2026-09-14. Reads the UDP tap capture
+  # publishes, cuts it at the pauses with the same silero the archive uses,
+  # drives the asr shim, and POSTs each turn to Isis, which shows it within
+  # seconds and hides it once the archive pass reaches that minute.
+  #
+  # ⚠ It holds NO STORE. The Python it replaces wrote live turns into the Mac's
+  # recall.sqlite and pushed them from a watermark on a second thread, because
+  # the Mac was once the system of record. It is not, so the push IS the write.
+  # That is also why there is no --out: this agent touches the archive volume
+  # nowhere, and #1412's stalls cannot reach it.
   launchd.agents."org.xinutec.recall-live" = daemon {
     label = "org.xinutec.recall-live";
     name = "live";
-    python = venvPython;
-    args = [ "live" "--out" out "--device" "USB Condenser Microphone"
-             "--fleet-url" fleet ];
+    args = [ ];
+    program = pkgs.writeShellApplication {
+      name = "recall-live";
+      runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
+      text = ''
+        # RECALL_SYNC_TOKEN lives in .env and must never enter the store.
+        ENV_FILE="''${RECALL_ENV:-$HOME/Code/recall/.env}"
+        if [ -r "$ENV_FILE" ]; then
+          set -a
+          # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
+          . "$ENV_FILE"
+          set +a
+        fi
+
+        # ORT_DYLIB_PATH for the same reason speechWrapper sets it: ort dlopens
+        # the ONNX runtime by name and macOS has no system libonnxruntime, so
+        # without this the detector never loads and the agent exits at once.
+        exec env RUST_LOG=info \
+          ORT_DYLIB_PATH=${
+            recall.packages.${pkgs.stdenv.hostPlatform.system}.onnxruntime
+          }/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary} \
+          ${
+            recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
+          }/bin/recall-live --url ${ingest} --api ${fleet} \
+            --shim ${venvPython} -m recall.shim_asr
+      '';
+    };
   };
 
   # Mic agent — the critical continuous recording stream (USB mic → segments).

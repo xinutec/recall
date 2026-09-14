@@ -1,6 +1,6 @@
 //! Talking to recalld: lease, fetch, ack.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::Path;
 
@@ -119,33 +119,73 @@ impl Client {
         .map_err(|e| Error::Http(e.to_string()))?;
         Ok(())
     }
+
+    /// Push provisional live turns to the instant feed.
+    ///
+    /// ⚠ Lossy on purpose — see `live`'s module note. The caller logs a failure
+    /// and carries on, because the archive push carries these turns again.
+    ///
+    /// # Errors
+    /// If recalld refuses or is unreachable.
+    pub fn push_live(&self, turns: &[LiveTurn]) -> Result<usize, Error> {
+        let response = self
+            .auth(self.agent.post(&format!("{}/sync/live", self.base)))
+            .send_json(serde_json::json!({ "turns": turns }))
+            .map_err(|e| Error::Http(e.to_string()))?;
+        let body: LiveStoredBody = serde_json::from_reader(response.into_reader())
+            .map_err(|e| Error::Body(e.to_string()))?;
+        Ok(body.stored)
+    }
+
+    /// The household glossary, as Whisper's `initial_prompt`.
+    ///
+    /// Lives on the API's SYNC plane rather than recalld's own, because the
+    /// vocabulary is in the MEANING store and recalld owns the audio plane. It
+    /// moves with everything else at stage F.
+    ///
+    /// ⚠ Read ONCE at startup by the runner and carried on every job. The shim
+    /// must not fetch it — a model process holds no database (stage E2) — and
+    /// writing it onto each job at derivation time would pin it, so a name
+    /// learned today would never reach a job queued yesterday.
+    ///
+    /// `Ok(None)` means the vocabulary is EMPTY, which is fine and means "no
+    /// biasing". Failing to reach it is an error. What that costs depends on the
+    /// caller: for the runner it is fatal, because transcribing a corpus
+    /// unbiased produces work that has to be redone; for the live tier it is
+    /// not, because a live turn is superseded within the hour either way.
+    ///
+    /// # Errors
+    /// If the API is unreachable or answers something unreadable.
+    pub fn prompt(&self, api_base: &str) -> Result<Option<String>, Error> {
+        let url = format!("{}/sync/vocabulary/prompt", api_base.trim_end_matches('/'));
+        let response = self
+            .auth(self.agent.get(&url))
+            .call()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        let body: PromptBody = serde_json::from_reader(response.into_reader())
+            .map_err(|e| Error::Body(e.to_string()))?;
+        Ok(body.prompt.filter(|p| !p.trim().is_empty()))
+    }
 }
 
-/// The household glossary, as Whisper's `initial_prompt`.
+/// One provisional turn, exactly as `POST /sync/live` takes it
+/// (`recalld::work::LiveTurn`).
 ///
-/// Lives on the API's SYNC plane rather than recalld, because the vocabulary is
-/// in the MEANING store and recalld owns the audio plane. It moves to recalld
-/// with everything else at stage F.
-///
-/// ⚠ Read ONCE at startup and carried on every job. The shim must not fetch it
-/// — a model process holds no database (stage E2) — and writing it onto each job
-/// at derivation time would pin it, so a name learned today would never reach a
-/// job queued yesterday.
-///
-/// `Ok(None)` means the vocabulary is EMPTY, which is fine and means "no
-/// biasing". Failing to reach it is an error, and the caller should treat it as
-/// fatal: transcribing a corpus without the biasing it was built for produces
-/// work that has to be redone.
-///
-/// # Errors
-/// If the API is unreachable or answers something unreadable.
-pub fn fetch_prompt(api_base: &str, token: &str) -> Result<Option<String>, Error> {
-    let url = format!("{}/sync/vocabulary/prompt", api_base.trim_end_matches('/'));
-    let response = ureq::get(&url)
-        .set("authorization", &format!("Bearer {token}"))
-        .call()
-        .map_err(|e| Error::Http(e.to_string()))?;
-    let body: PromptBody =
-        serde_json::from_reader(response.into_reader()).map_err(|e| Error::Body(e.to_string()))?;
-    Ok(body.prompt.filter(|p| !p.trim().is_empty()))
+/// ⚠ **`snake_case` on the wire, and NOT by omission.** The route was written for
+/// pydantic, which serialises field names as declared, so `asr_model` is the
+/// name the server matches. A `rename_all = "camelCase"` here — the reflex,
+/// since the browsing plane's types all carry one — makes every push a 422 the
+/// agent logs and shrugs at, which is the instant feed off with nothing broken.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LiveTurn {
+    pub start: String,
+    pub end: String,
+    pub text: String,
+    pub asr_model: String,
+    pub language: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LiveStoredBody {
+    stored: usize,
 }

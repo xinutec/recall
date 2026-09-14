@@ -193,10 +193,14 @@ fn the_vocabulary_prompt_is_read_and_an_empty_one_is_no_biasing() {
     });
     let base = format!("http://{}", rx.recv().expect("addr"));
 
-    let prompt = runner::client::fetch_prompt(&base, "any").expect("fetch");
+    let prompt = runner::client::Client::new(&base, "any")
+        .prompt(&base)
+        .expect("fetch");
     assert_eq!(prompt.as_deref(), Some("Pippijn, Kat"));
 
-    let empty = runner::client::fetch_prompt(&format!("{base}/empty"), "any").expect("fetch");
+    let empty = runner::client::Client::new(&base, "any")
+        .prompt(&format!("{base}/empty"))
+        .expect("fetch");
     assert_eq!(
         empty, None,
         "an empty vocabulary is NO biasing, not an empty prompt"

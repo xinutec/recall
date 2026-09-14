@@ -138,34 +138,6 @@ def fanout_output_argv() -> list[str]:
     ]
 
 
-def live_input_argv() -> list[str]:
-    """ffmpeg that reads the best-effort UDP tap capture publishes (FANOUT_*) and sends
-    it to stdout — what recall-live consumes INSTEAD of opening the mic, so only capture
-    holds the device. `overrun_nonfatal` + a fifo keep a burst from killing the reader;
-    the tap is already 16 kHz mono, so this is a pass-through."""
-    url = (
-        f"udp://{FANOUT_HOST}:{FANOUT_PORT}"
-        f"?overrun_nonfatal=1&fifo_size={_FANOUT_PKT_SIZE * 64}"
-    )
-    return [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        "s16le",
-        "-ar",
-        str(FANOUT_SAMPLE_RATE),
-        "-ac",
-        str(FANOUT_CHANNELS),
-        "-i",
-        url,
-        "-f",
-        "s16le",
-        "-",
-    ]
-
-
 @dataclass(frozen=True)
 class AudioSource:
     """A single audio input.

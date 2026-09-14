@@ -488,3 +488,39 @@ fn the_strict_segment_grammar_would_refuse_a_real_meeting_file() {
     );
     assert_eq!(safe_component(meeting), Some(meeting));
 }
+
+/// ⚠ A live turn is short and hard, which is exactly what Whisper loops on. The
+/// filter is here rather than in the pusher because whether a string is a model
+/// artefact is a property of the STRING — so every writer gets the same answer.
+#[test]
+fn a_degenerate_loop_is_not_stored_as_a_live_turn() {
+    let mut conn = live_store();
+
+    assert_eq!(
+        ingest_live(
+            &mut conn,
+            &[a_turn(
+                "2026-09-09T10:00:00+00:00",
+                "goog goog goog goog goog goog"
+            )]
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        ingest_live(&mut conn, &[a_turn("2026-09-09T10:00:01+00:00", "... ***")]).unwrap(),
+        0
+    );
+    // And real speech still lands, so the filter is not simply refusing.
+    assert_eq!(
+        ingest_live(
+            &mut conn,
+            &[a_turn(
+                "2026-09-09T10:00:02+00:00",
+                "we should leave at eight"
+            )]
+        )
+        .unwrap(),
+        1
+    );
+}

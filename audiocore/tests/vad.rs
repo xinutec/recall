@@ -5,7 +5,9 @@
 //! `public-domain-en` is a human reading, `dialogue-*` is machine-read invented
 //! text (see tests/fixtures/speech/README.md).
 
-use audiocore::vad::{Detector, RATE, detection_gain, regions_from_probabilities};
+use audiocore::vad::{
+    Detector, RATE, Splitter, Stream, WINDOW, Windows, detection_gain, regions_from_probabilities,
+};
 use std::path::Path;
 
 #[test]
@@ -130,4 +132,105 @@ fn committed_public_domain_speech_is_detected_everywhere() {
         seconds > 25.0 && seconds < 48.0,
         "speech seconds {seconds} outside the plausible band for a 48 s reading"
     );
+}
+
+// --- the streaming half: what the live tier reads the tap with ---------------
+
+#[test]
+fn a_stream_reproduces_the_batch_probabilities_window_for_window() {
+    // The ONE thing the streaming refactor can break: silero carries a state
+    // tensor and 64 samples of context between windows, and a stream that
+    // resets either still returns plausible numbers — near-zero on obvious
+    // speech, which reads as a quiet room rather than as a bug. Feeding the
+    // same samples both ways is what makes that visible.
+    let samples: Vec<f32> = (0..16_000_u32)
+        .map(|i| {
+            let x = i.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            ((x >> 16) as f32 / 32_768.0) - 1.0
+        })
+        .collect();
+    let batch = Detector::load()
+        .expect("model")
+        .probabilities(&samples)
+        .expect("probabilities");
+    // Gain 1.0 matches what the batch pass derives here: this signal peaks near
+    // full scale, so `detection_gain` leaves it alone.
+    let mut stream = Stream::open(1.0).expect("model");
+    let streamed: Vec<f32> = samples
+        .chunks_exact(WINDOW)
+        .map(|w| stream.probability(w).expect("window"))
+        .collect();
+    assert_eq!(streamed.len(), batch.len());
+    for (i, (got, want)) in streamed.iter().zip(&batch).enumerate() {
+        assert!(
+            (got - want).abs() < 1e-6,
+            "window {i}: streamed {got} != batch {want} — state is not carried"
+        );
+    }
+}
+
+#[test]
+fn a_window_of_the_wrong_length_is_refused_rather_than_answered() {
+    // The model's input shape is dynamic, so a short window is accepted and
+    // answered with a number. Refusing is the only way that stays visible.
+    let mut stream = Stream::open(1.0).expect("model");
+    assert!(stream.probability(&[0.0; WINDOW - 1]).is_err());
+    assert!(stream.probability(&[0.0; WINDOW + 1]).is_err());
+}
+
+#[test]
+fn the_last_sentence_is_not_lost_to_the_exit() {
+    // Speech still open when the stream ends. Without flush a live agent drops
+    // whatever was being said as it shut down.
+    let mut splitter = Splitter::new();
+    for _ in 0..40 {
+        assert_eq!(splitter.push(0.9), None);
+    }
+    assert_eq!(splitter.flush(), Some(Windows { first: 0, end: 40 }));
+    assert_eq!(splitter.flush(), None, "nothing is open twice");
+}
+
+#[test]
+fn an_unbroken_speaker_can_be_cut_and_the_next_window_starts_the_next_span() {
+    // Somebody who never pauses long enough to trigger an end. The hysteresis
+    // cannot close that, and a live tier that waits for it is not live.
+    let mut splitter = Splitter::new();
+    for _ in 0..100 {
+        splitter.push(0.9);
+    }
+    assert_eq!(splitter.open_since(), Some(0));
+    assert_eq!(splitter.cut(), Some(Windows { first: 0, end: 100 }));
+    assert_eq!(
+        splitter.open_since(),
+        Some(100),
+        "the speaker is still talking"
+    );
+    for _ in 0..20 {
+        splitter.push(0.9);
+    }
+    assert_eq!(
+        splitter.flush(),
+        Some(Windows {
+            first: 100,
+            end: 120
+        })
+    );
+}
+
+#[test]
+fn a_cut_with_nobody_talking_is_nothing() {
+    let mut splitter = Splitter::new();
+    for _ in 0..40 {
+        splitter.push(0.0);
+    }
+    assert_eq!(splitter.cut(), None);
+}
+
+#[test]
+fn a_span_in_windows_is_the_same_span_in_seconds() {
+    // 512 samples at 16 kHz is 32 ms. The live agent slices its buffer by
+    // windows and stamps the turn by seconds; they must be the same span.
+    let span = Windows { first: 0, end: 100 };
+    let region = span.region();
+    assert!((region.seconds() - 3.2).abs() < 1e-9);
 }

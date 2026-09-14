@@ -62,26 +62,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
     rep.add_argument("--model", default=DEFAULT_MODEL, help="mlx-whisper model")
     rep.add_argument("--max-confidence", type=float, default=None)
 
-    liv = sub.add_parser("live", help="immediate VAD transcription from the mic")
-    liv.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    liv.add_argument("--model", default=DEFAULT_MODEL, help="mlx-whisper model")
-    liv.add_argument(
-        "--device",
-        default="",
-        help="CoreAudio input device name (default: the system default input)",
-    )
-    liv.add_argument(
-        "--fleet-url",
-        default="",
-        help="fleet base URL to push the instant feed to (Isis split); empty disables",
-    )
-    liv.add_argument(
-        "--live-interval",
-        type=float,
-        default=3.0,
-        help="how often to push new live turns to the fleet, seconds (default 3)",
-    )
-
     sca = sub.add_parser(
         "score-asr",
         help="transcribe the golden speech fixtures present in tests/fixtures/speech "

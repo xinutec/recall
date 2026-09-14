@@ -1093,9 +1093,11 @@ dependencies = [
 name = "runner"
 version = "0.1.0"
 dependencies = [
+ "audiocore",
  "axum",
  "chrono",
  "recalld",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

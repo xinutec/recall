@@ -9,13 +9,12 @@ file (today the only evidence) is deleted.
 
 from __future__ import annotations
 
-import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from recall import capture_control, cli
+from recall import capture_control
 from recall.store import Store
 
 
@@ -100,22 +99,3 @@ def test_add_capture_event_rejects_a_naive_timestamp(tmp_path: Path) -> None:
             )
     finally:
         store.close()
-
-
-def test_the_supervisor_records_a_resume_when_capture_starts(tmp_path: Path) -> None:
-    # Not paused (no pause file), so capture starts immediately: it must mark a `resume`
-    # — the ground-truth start of an active span the loss check reconciles gaps against.
-    recorded: list[str] = []
-    done = threading.Event()
-
-    def record_event(kind: str, utc: datetime) -> None:
-        recorded.append(kind)
-        done.set()
-
-    def run_once(_should_stop: object) -> int:
-        return 0  # producer EOF immediately (a non-pause exit) → return
-
-    rc = cli._serve_paused_aware(tmp_path, run_once, record_event=record_event)
-    assert rc == 0
-    assert done.wait(2)  # the event is written on a daemon thread
-    assert recorded == [capture_control.CaptureEventKind.RESUME]

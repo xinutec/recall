@@ -254,17 +254,6 @@ class SyncClient:
             self._batch_ok = False  # an older fleet; don't re-probe every pass
         return [self.push_segment(s) for s in segments]
 
-    def push_live(self, turns: list[TurnIn]) -> int:
-        """Push a batch of provisional live turns to the fleet's instant feed.
-        Idempotent (the fleet skips ones it has); returns how many were newly stored."""
-        resp = self._client.post(
-            f"{self._base}/sync/live",
-            json={"turns": [t.model_dump() for t in turns]},
-            headers=self._headers,
-        )
-        resp.raise_for_status()
-        return LiveStoredOut.model_validate(resp.json()).stored
-
     def exchange_capture(
         self,
         *,

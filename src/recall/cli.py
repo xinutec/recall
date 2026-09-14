@@ -12,10 +12,8 @@ import argparse
 import logging
 import os
 import sys
-import threading
 import time
 import traceback
-from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -42,7 +40,6 @@ from recall.conversations import segment_conversations
 from recall.diarize import SpeakerTurn, pyannote_diarize
 from recall.identify import identify_segments
 from recall.ingest import ingest_diarized, ingest_transcripts
-from recall.live import run_live
 from recall.logrotate import rotate_logs
 from recall.maintenance import (
     reprobe_short_segments,
@@ -178,55 +175,6 @@ def recording_refusal(out: Path, *, allow: bool) -> str | None:
     )
 
 
-def _serve_paused_aware(
-    out: Path,
-    run_once: Callable[[Callable[[], bool]], int],
-    *,
-    record_event: Callable[[capture_control.CaptureEventKind, datetime], None]
-    | None = None,
-) -> int:
-    """Run a self-gating recording entrypoint: park while paused, run while active,
-    and re-park when a pause interrupts it. `run_once(should_stop)` runs the
-    recording until `should_stop()` (a pause) fires or the producer ends; we exit
-    (letting KeepAlive respawn) only when it ends for a non-pause reason.
-
-    `record_event(kind, utc)` (optional) durably marks the resume/pause transitions —
-    the ground truth of when capture was actually running, which a loss check reconciles
-    against timeline gaps. It runs on a daemon thread and swallows errors, so this
-    bookkeeping can never stall or crash the recorder (completeness beats an audit)."""
-
-    def now() -> datetime:
-        return datetime.now(UTC)
-
-    def paused() -> bool:
-        return capture_control.is_paused(out, now())
-
-    def note(kind: capture_control.CaptureEventKind) -> None:
-        if record_event is None:
-            return
-        stamped = now()
-
-        def write() -> None:
-            try:
-                record_event(kind, stamped)
-            except Exception:
-                logging.getLogger("recall.capture").warning(
-                    "capture-event %r not recorded", kind, exc_info=True
-                )
-
-        threading.Thread(target=write, daemon=True).start()
-
-    while True:
-        capture_control.wait_until_unpaused(out, now=now, sleep=time.sleep)
-        note(capture_control.CaptureEventKind.RESUME)  # capture is becoming active
-        result = run_once(paused)
-        if not paused():
-            return result
-        note(
-            capture_control.CaptureEventKind.PAUSE
-        )  # a pause stopped it (not an EOF exit)
-
-
 def _cmd_verify(args: argparse.Namespace) -> int:
     source_dir = args.out / args.id
     segments = scan_segments(source_dir, args.id)
@@ -349,86 +297,6 @@ def _cmd_reprocess(args: argparse.Namespace) -> int:
         store.close()
     print(f"reprocessed {redone} segments with {args.model}")
     return 0
-
-
-def _live_sync_loop(
-    out: Path, url: str, token: str, interval: float, stop: threading.Event
-) -> None:
-    """Background push of new live turns to the fleet's instant feed, every `interval`s.
-
-    Its own store connection (sqlite is single-thread) and fully off the VAD loop, so a
-    slow or unreachable fleet never touches capture or transcription. Best-effort: a
-    failed push is logged and retried next tick — the archive segment push carries the
-    turns regardless, so a dropped live push only delays the instant feed, never loses.
-    """
-    from recall.sync import SyncClient  # noqa: PLC0415 - lazy: pulls the web framework
-    from recall.sync_push import push_live_turns  # noqa: PLC0415
-
-    log = logging.getLogger("recall.live")
-    # ⚠ SETUP IS INSIDE THE GUARD, not before it. Opening the store touches
-    # /Volumes/Backup, which intermittently stops answering (#1412) — and this
-    # runs on a DAEMON thread, so an exception here used to escape as a bare
-    # traceback, kill the thread, and leave the live agent running happily with
-    # its instant feed silently off until the next restart. The loop below was
-    # already guarded ("a push must never crash the live agent"); the two lines
-    # that reach the disk were the ones outside it.
-    try:
-        client = SyncClient(url, token)
-        store = Store.open(out / "recall.sqlite")
-    except Exception:
-        log.exception("live-sync: could not start — instant feed is OFF until restart")
-        return
-    try:
-        while not stop.wait(interval):
-            try:
-                push_live_turns(store, client)
-            except Exception:  # best-effort; a push must never crash the live agent
-                log.warning("live-sync: push failed (will retry)", exc_info=True)
-    finally:
-        store.close()
-
-
-def _cmd_live(args: argparse.Namespace) -> int:
-    # ⚠ TIMESTAMPS, without which this agent's failures cannot be diagnosed at all.
-    # Measured 2026-09-09: live is silent while the microphone it reads hears speech
-    # for a quarter of all recording time (#1383), and `live.err.log` holds 562
-    # `PermissionError: /Volumes/Backup`, 562 `FileNotFoundError` and 417
-    # `httpx.ConnectError` — none of which can be lined up against a single stall,
-    # because the file carries raw stderr and no clock. Every other long-running
-    # agent already calls this; live was the one that did not, which is precisely
-    # why its stalls stayed inferable rather than measurable.
-    runlog.setup()
-
-    # Push the instant feed to the fleet on its own thread when the split is configured
-    # (a fleet URL + token); LAN-only deployments leave --fleet-url empty and are
-    # untouched. The thread never shares the VAD loop's store or timing.
-    stop = threading.Event()
-    sync_thread: threading.Thread | None = None
-    token = os.environ.get("RECALL_SYNC_TOKEN")
-    if args.fleet_url and token:
-        sync_thread = threading.Thread(
-            target=_live_sync_loop,
-            args=(args.out, args.fleet_url, token, args.live_interval, stop),
-            daemon=True,
-        )
-        sync_thread.start()
-
-    def once(should_stop: Callable[[], bool]) -> int:
-        run_live(
-            args.out / "recall.sqlite",
-            work_dir=args.out / "work",
-            model=args.model,
-            device=args.device,
-            should_stop=should_stop,
-        )
-        return 0
-
-    try:
-        return _serve_paused_aware(args.out, once)
-    finally:
-        stop.set()
-        if sync_thread is not None:
-            sync_thread.join(timeout=5)
 
 
 _GOLDEN_FIXTURE = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "speech"
@@ -1426,7 +1294,6 @@ _COMMANDS = {
     "index": _cmd_index,
     "transcribe": _cmd_transcribe,
     "reprocess": _cmd_reprocess,
-    "live": _cmd_live,
     "score-asr": _cmd_score_asr,
     "reprobe": _cmd_reprobe,
     "coverage": _cmd_coverage,

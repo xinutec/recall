@@ -379,6 +379,12 @@ pub struct LiveTurn {
 /// for the literal `live` model rather than the turn's own, matching the Python:
 /// the feed is what is being deduplicated, not whatever produced it.
 ///
+/// ⚠ **Degenerate text is dropped HERE, not by the pusher.** Whisper loops on
+/// the short, hard clips this tier is made of ("goog goog goog…"), and whether
+/// a string is a model artefact is a property of the string — so it belongs
+/// where the row is written, once, rather than in each agent that might push
+/// one. Dropped turns are not counted as stored.
+///
 /// ⚠ **The search index is maintained in CODE.** `transcript_fts` is a
 /// contentless FTS5 table with no trigger behind it; forgetting the second insert
 /// fails nothing and quietly makes every live turn unfindable by search.
@@ -396,6 +402,10 @@ pub fn ingest_live(conn: &mut Connection, turns: &[LiveTurn]) -> rusqlite::Resul
         let Some(end) = crate::instant::python_isoformat(&turn.end) else {
             continue;
         };
+        if crate::quality::is_repetition_loop(&turn.text) || crate::quality::is_wordless(&turn.text)
+        {
+            continue;
+        }
         let present: Option<i64> = conn
             .query_row(
                 "SELECT 1 FROM transcript_segments \

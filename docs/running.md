@@ -29,8 +29,8 @@ want while developing.
 | agent | does | when |
 |---|---|---|
 | `org.xinutec.recall-capture` | USB mic → gap-free Opus segments | always on |
-| `org.xinutec.recall-live` | VAD → transcribe each utterance (~2–3 s, provisional) | always on |
-| `org.xinutec.recall-worker` | index + transcribe new segments (whole-clip; diarization is the refine agent's job) | continuous |
+| `org.xinutec.recall-live` | the tap → VAD → transcribe each utterance (~2–3 s, provisional) and push it straight to Isis; keeps no store (Rust, `recall-live`) | always on |
+| `org.xinutec.recall-runner` | lease a transcription job from Isis, drive the asr shim, push the turns back (Rust, `runner`) | continuous |
 | `org.xinutec.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
 | `org.xinutec.recall-beat-relay` | accept a mic app's heartbeat on the LAN (port 8000) and forward it to Isis, for a phone whose VPN is down | always on |
 | `org.xinutec.recall-refine` | re-derive segments diarized + speaker-split | while capture paused |
@@ -130,10 +130,10 @@ it to Isis (`recall-sync`); it runs no backup agent of its own. The training cor
 the toolchain that made them was deleted when training was cut. They are
 leftovers of it, kept only because deleting data is a deliberate act.
 
-> **Only capture needs the mic grant.** `live` never opens the device — it
-> subscribes to the UDP tap capture publishes, and its `--device` argument is
-> vestigial (`live.py`, `sources.live_input_argv`), because two CoreAudio
-> clients on one device starve each other.
+> **Only capture needs the mic grant.** `recall-live` never opens the device —
+> it subscribes to the UDP tap capture publishes (`runner::live::TAP`, the other
+> end of audiod's segmenter fanout), because two CoreAudio clients on one device
+> starve each other.
 >
 > ⚠ **A denied grant is DIGITAL SILENCE, not an error.** The agent starts, sox
 > runs, segments are written, and every one of them is silent — measured

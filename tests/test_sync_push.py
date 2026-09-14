@@ -12,8 +12,8 @@ import pytest
 
 from recall.sources import AudioSource, SourceKind
 from recall.store import Store
-from recall.sync import LabelOut, SegmentIn, SegmentStoredOut, TurnIn
-from recall.sync_push import pull_labels, push_live_turns, sync_push
+from recall.sync import LabelOut, SegmentIn, SegmentStoredOut
+from recall.sync_push import pull_labels, sync_push
 from recall.timeline import Segment
 
 BASE = datetime(2026, 7, 11, 12, 0, 0, tzinfo=UTC)
@@ -26,7 +26,6 @@ class FakeClient:
         self.present: set[tuple[str, str]] = set()
         self.audio_pushed: list[tuple[str, str]] = []
         self.segments: list[SegmentIn] = []
-        self.live: list[TurnIn] = []
         # What the fleet would return on GET /sync/labels.
         self.labels: list[LabelOut] = []
         self.batch_calls = 0
@@ -50,10 +49,6 @@ class FakeClient:
             msg = "fleet unreachable mid-batch"
             raise ConnectionError(msg)
         return [self.push_segment(s) for s in segments]
-
-    def push_live(self, turns: list[TurnIn]) -> int:
-        self.live.extend(turns)
-        return len(turns)
 
     def fetch_labels(self) -> list[LabelOut]:
         return list(self.labels)
@@ -175,48 +170,6 @@ def test_a_mirrored_segment_whose_file_vanished_does_not_wedge_the_queue(
     assert sync_push(store, client) == 0  # and never retried
 
 
-def _add_live(store: Store, at_s: float, text: str) -> int:
-    return store.add_transcript_segment(
-        audio_segment_id=None,
-        start=BASE + timedelta(seconds=at_s),
-        end=BASE + timedelta(seconds=at_s + 1),
-        text=text,
-        asr_model="live",
-    )
-
-
-def test_push_live_sends_visible_live_turns_then_is_idempotent() -> None:
-    store = Store.memory()
-    _add_live(store, 1, "hello")
-    _add_live(store, 2, "world")
-    client = FakeClient()
-
-    assert push_live_turns(store, client) == 2
-    assert [t.text for t in client.live] == ["hello", "world"]
-    assert all(t.asr_model == "live" for t in client.live)
-    # Watermark: a second pass with nothing new sends nothing.
-    assert push_live_turns(store, client) == 0
-    assert len(client.live) == 2
-    # A newly-arrived live turn is the only thing the next pass sends.
-    _add_live(store, 3, "again")
-    assert push_live_turns(store, client) == 1
-    assert client.live[-1].text == "again"
-
-
-def test_push_live_skips_reconciled_turns() -> None:
-    # A live turn the archive already reconciled (hidden) is the clean segment's job to
-    # carry; the instant-feed push must not re-send it.
-    store = Store.memory()
-    keep = _add_live(store, 1, "visible")
-    gone = _add_live(store, 2, "reconciled")
-    store.hide(gone, "live-reconciled")
-    client = FakeClient()
-
-    assert push_live_turns(store, client) == 1
-    assert [t.text for t in client.live] == ["visible"]
-    assert keep  # (silence the unused-var check; the visible one is what shipped)
-
-
 def _seed_clustered_turn(store: Store, tmp_path: Path, cluster: str) -> int:
     """Seed one machine turn tagged with a diarization cluster but not yet named — the
     state a freshly-pushed meeting is in on the Mac before its labels come back."""
@@ -285,8 +238,8 @@ class _OldFleetClient(FakeClient):
 
 
 def test_pull_labels_tolerates_a_fleet_without_the_endpoint(tmp_path: Path) -> None:
-    # The Mac runs live source, so pull_labels is active before the fleet is redeployed.
-    # A 404 must not fail the sync pass (the push already ran); it self-heals on deploy.
+    # A 404 must not fail the sync pass (the push already ran); it self-heals
+    # on deploy.
     store = Store.memory()
     _seed_clustered_turn(store, tmp_path, "SPEAKER_00")
     assert pull_labels(store, _OldFleetClient()) == 0

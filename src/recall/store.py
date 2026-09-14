@@ -1477,42 +1477,6 @@ class Store:
         )
     """
 
-    def hide_provisional_covered(self) -> int:
-        """Hide live transcripts a transcribed audio segment actually spans.
-
-        Hidden, not superseded: there is no single archive turn that is "the
-        better version" of a live turn, so a deep-linked live turn must keep
-        resolving to itself. Returns how many were hidden.
-        """
-        cursor = self._conn.execute(
-            f"""UPDATE transcript_segments SET hidden_reason = ?
-               WHERE asr_model = ? AND superseded_by IS NULL
-                 AND hidden_reason IS NULL AND {self._LIVE_COVERED}""",
-            (RECONCILED_MARKER, LIVE_MODEL),
-        )
-        self._commit()
-        return cursor.rowcount
-
-    def restore_uncovered_provisional(self) -> int:
-        """Un-hide live turns reconciled with no covering audio (loss repair).
-
-        The old watermark reconcile hid every live turn before the latest archive
-        transcript — including moments the archive never covered (empty-start
-        segments cleared as dead stubs). Those live turns are the sole record of
-        their moment. Restore any reconciled live turn no transcribed audio segment
-        spans; the predicate is the exact inverse of `hide_provisional_covered`, so a
-        turn a segment does span stays hidden and nothing ever double-shows.
-        Idempotent.
-        """
-        cursor = self._conn.execute(
-            f"""UPDATE transcript_segments SET hidden_reason = NULL
-               WHERE asr_model = ? AND hidden_reason = ?
-                 AND superseded_by IS NULL AND NOT {self._LIVE_COVERED}""",
-            (LIVE_MODEL, RECONCILED_MARKER),
-        )
-        self._commit()
-        return cursor.rowcount
-
     def source_transcription_yield(self, since: datetime) -> dict[str, float]:
         """Characters of surviving transcript per SECOND of audio, by source.
 
@@ -1545,37 +1509,6 @@ class Store:
             for r in rows
             if r["secs"] and float(r["secs"]) > 0
         }
-
-    def visible_live_turns_since(
-        self, watermark: int, *, limit: int = 500
-    ) -> list[TranscriptSegment]:
-        """Current (visible) live turns with id > `watermark`, oldest id first — the
-        fast provisional transcripts the fleet's UI shows before the archive catches up.
-        Reconciled (hidden) live turns are excluded: the clean segment carries their
-        content to the fleet, so re-pushing them would only churn. Bounded, so one push
-        pass is O(new)."""
-        rows = self._conn.execute(
-            """SELECT * FROM transcript_segments
-               WHERE asr_model = ? AND superseded_by IS NULL AND hidden_reason IS NULL
-                 AND id > ?
-               ORDER BY id LIMIT ?""",
-            (LIVE_MODEL, watermark, limit),
-        ).fetchall()
-        return [_row_to_segment(row) for row in rows]
-
-    def hide_live_turns_covered_by(self, seg_start: datetime, seg_end: datetime) -> int:
-        """Hide visible live turns an incoming archive segment spans — the fleet-side
-        mirror of `hide_provisional_covered`, run when a clean segment arrives so the
-        fleet swaps the provisional live turn for the archive version instead of showing
-        both. Same predicate: the live turn's start falls within the segment's span."""
-        cursor = self._conn.execute(
-            """UPDATE transcript_segments SET hidden_reason = ?
-               WHERE asr_model = ? AND superseded_by IS NULL AND hidden_reason IS NULL
-                 AND start_utc >= ? AND start_utc < ?""",
-            (RECONCILED_MARKER, LIVE_MODEL, seg_start.isoformat(), seg_end.isoformat()),
-        )
-        self._commit()
-        return cursor.rowcount
 
     def get_transcript(self, segment_id: int) -> TranscriptSegment | None:
         row = self._conn.execute(

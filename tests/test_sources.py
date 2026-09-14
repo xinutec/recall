@@ -6,20 +6,10 @@ import pytest
 
 from recall.sources import (
     DEVICE_KINDS,
-    FANOUT_PORT,
     SWEEPABLE_KINDS,
     AudioSource,
     SourceKind,
-    live_input_argv,
 )
-
-
-def test_live_input_reads_the_udp_tap() -> None:
-    argv = live_input_argv()
-    assert argv[0] == "ffmpeg"
-    assert "avfoundation" not in argv  # NOT a device client
-    assert argv[argv.index("-i") + 1].startswith(f"udp://127.0.0.1:{FANOUT_PORT}")
-    assert argv[-3:] == ["-f", "s16le", "-"]  # PCM to stdout
 
 
 def test_tcp_pcm_port_is_parsed_from_spec() -> None:
