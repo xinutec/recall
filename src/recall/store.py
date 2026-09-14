@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Collection, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -345,39 +345,6 @@ class Store:
         )
         self._commit()
 
-    def audio_segments_to_analyse(
-        self, *, kinds: Collection[SourceKind], limit: int = 200
-    ) -> list[tuple[AudioSegmentId, str, str]]:
-        """(id, path, source) of the segments a cleanup could act on but has not been
-        listened to: measured, read by ASR, showing no turn — and not yet analysed.
-
-        A segment showing a turn is already vetoed by the transcript and needs no VAD
-        time; everything else is a candidate, *whatever its volume*. This once selected
-        on `mean_volume <= -60` instead, to save the detector a pass over "obviously
-        loud" audio. It saved nothing and cost the truth: a minute above that line was
-        never listened to, so it stayed unknown for ever — and an unknown minute breaks
-        a run. Twelve hours of the archive sat in that band, silently cutting hour-long
-        silences into shards. The cheap filter was buying a wrong answer.
-        """
-        placeholders = ",".join("?" * len(kinds))
-        rows = self._conn.execute(
-            "SELECT a.id, a.path, a.source_id FROM audio_segments a "
-            "JOIN sources s ON s.id = a.source_id "
-            f"WHERE a.speech_s IS NULL AND s.kind IN ({placeholders}) "
-            "AND a.mean_volume IS NOT NULL "
-            "AND a.transcribed_utc IS NOT NULL "
-            "AND NOT EXISTS (SELECT 1 FROM transcript_segments t "
-            "                WHERE t.audio_segment_id = a.id "
-            "                  AND t.superseded_by IS NULL "
-            "                  AND t.hidden_reason IS NULL) "
-            "ORDER BY a.start_utc LIMIT ?",
-            (*[k.value for k in kinds], limit),
-        ).fetchall()
-        return [
-            (AudioSegmentId(int(r["id"])), str(r["path"]), str(r["source_id"]))
-            for r in rows
-        ]
-
     def set_audio_analysis(
         self, audio_id: AudioSegmentId, speech_s: float, structure: float | None
     ) -> None:
@@ -449,51 +416,6 @@ class Store:
             (HUMAN_MODEL,),
         ).fetchall()
         return [(TranscriptId(int(r["id"])), str(r["text"])) for r in rows]
-
-    def audio_segment_volumes(
-        self, *, kinds: Collection[SourceKind]
-    ) -> list[SegmentVolume]:
-        """Every segment of a source in `kinds`, in time order — the input to quiet-span
-        detection.
-
-        Carries three things beyond the volume, because deleting a capture segment also
-        deletes everything derived from it: the source (several mics record the same
-        room at once, so runs must be grouped per source, never across them), whether
-        ASR has examined the segment yet, and whether it left any *current, visible*
-        turn behind — human or machine. A turn that stands is speech we chose to keep,
-        and the audio under it is not idle noise however quiet its 60-second mean looks.
-
-        `loud_fraction` is left None here: measuring it
-        needs the mic's calibrated threshold and a decode of the stored envelope, and
-        the capture agent must be able to import this module without the ML stack.
-        """
-        placeholders = ",".join("?" * len(kinds))
-        rows = self._conn.execute(
-            f"""SELECT a.id, a.source_id, a.start_utc, a.end_utc, a.mean_volume,
-                      a.transcribed_utc, a.speech_s, a.structure,
-                      EXISTS (SELECT 1 FROM transcript_segments t
-                              WHERE t.audio_segment_id = a.id
-                                AND t.superseded_by IS NULL
-                                AND t.hidden_reason IS NULL) AS has_speech
-               FROM audio_segments a JOIN sources s ON s.id = a.source_id
-               WHERE s.kind IN ({placeholders})
-               ORDER BY a.start_utc""",
-            tuple(k.value for k in kinds),
-        ).fetchall()
-        return [
-            SegmentVolume(
-                audio_id=AudioSegmentId(int(r["id"])),
-                source_id=str(r["source_id"]),
-                start=datetime.fromisoformat(r["start_utc"]),
-                end=datetime.fromisoformat(r["end_utc"]),
-                mean_db=None if r["mean_volume"] is None else float(r["mean_volume"]),
-                transcribed=r["transcribed_utc"] is not None,
-                has_speech=bool(r["has_speech"]),
-                speech_s=None if r["speech_s"] is None else float(r["speech_s"]),
-                structure=None if r["structure"] is None else float(r["structure"]),
-            )
-            for r in rows
-        ]
 
     def _tombstone(self, source_id: str, start_utc: str) -> None:
         """Journal one deliberate segment deletion by cross-machine identity, inside
@@ -1477,39 +1399,6 @@ class Store:
         )
     """
 
-    def source_transcription_yield(self, since: datetime) -> dict[str, float]:
-        """Characters of surviving transcript per SECOND of audio, by source.
-
-        How much each microphone actually contributes — the evidence that the mics
-        in a room are not equals (#1388). Measured over recent audio only, so a
-        phone that moves rooms is re-judged rather than held to last month's
-        placement. Segments that yielded nothing count as zero, which is the
-        point: a mic that hears nothing should sort low.
-
-        Per SECOND, not per segment: an uploaded meeting is one hour-long segment
-        while a mic segment is 60s, so per-segment made a meeting score 60,818
-        against a microphone's 120 — a units artefact, not a better recording.
-        Seconds make every source comparable."""
-        rows = self._conn.execute(
-            """SELECT sid, sum(secs) AS secs, sum(chars) AS chars FROM (
-                 SELECT a.source_id AS sid,
-                        (julianday(a.end_utc) - julianday(a.start_utc)) * 86400 AS secs,
-                        coalesce(sum(length(t.text)), 0) AS chars
-                 FROM audio_segments a
-                 LEFT JOIN transcript_segments t
-                   ON t.audio_segment_id = a.id
-                  AND t.hidden_reason IS NULL AND t.superseded_by IS NULL
-                 WHERE a.start_utc >= ? AND a.transcribed_utc IS NOT NULL
-                 GROUP BY a.id
-               ) GROUP BY sid""",
-            (since.isoformat(),),
-        ).fetchall()
-        return {
-            str(r["sid"]): float(r["chars"]) / float(r["secs"])
-            for r in rows
-            if r["secs"] and float(r["secs"]) > 0
-        }
-
     def get_transcript(self, segment_id: int) -> TranscriptSegment | None:
         row = self._conn.execute(
             "SELECT * FROM transcript_segments WHERE id = ?", (segment_id,)
@@ -1525,47 +1414,6 @@ class Store:
             (value, segment_id),
         )
         self._commit()
-
-    def segments_missing_loudness(self, *, limit: int = 200) -> list[TranscriptSegment]:
-        """Current, visible machine turns whose loudness isn't measured yet — the
-        offline backfill's work-list (each one is a sox decode, done off the
-        request path). Newest first, so fresh capture becomes labelable soonest.
-        """
-        rows = self._conn.execute(
-            """SELECT * FROM transcript_segments
-               WHERE loudness IS NULL AND superseded_by IS NULL
-                 AND hidden_reason IS NULL AND asr_model != ?
-                 AND audio_segment_id IS NOT NULL
-               ORDER BY start_utc DESC LIMIT ?""",
-            (HUMAN_MODEL, limit),
-        ).fetchall()
-        return [_row_to_segment(row) for row in rows]
-
-    def set_word_timings(self, segment_id: int, words: Sequence[Word]) -> None:
-        """Persist per-word timings on a turn (e.g. a human turn aligned to ASR), so it
-        can be split/played audio-exactly like a diarized turn."""
-        self._conn.execute(
-            "UPDATE transcript_segments SET word_timings = ? WHERE id = ?",
-            (_dump_word_timings(words), segment_id),
-        )
-        self._commit()
-
-    def human_turns_missing_word_timings(
-        self, *, limit: int = 50
-    ) -> list[TranscriptSegment]:
-        """Current human-corrected turns with audio but no word timings — the backfill's
-        work-list. A correction is typed text, so it carries no timings; aligning it to
-        word-level ASR makes splits/tight playback on it exact too. Newest first.
-        """
-        rows = self._conn.execute(
-            """SELECT * FROM transcript_segments
-               WHERE asr_model = ? AND word_timings IS NULL
-                 AND superseded_by IS NULL AND hidden_reason IS NULL
-                 AND audio_segment_id IS NOT NULL
-               ORDER BY start_utc DESC LIMIT ?""",
-            (HUMAN_MODEL, limit),
-        ).fetchall()
-        return [_row_to_segment(row) for row in rows]
 
     def set_speaker_guess(self, segment_id: int, name: str, score: float) -> None:
         """Persist a turn's best-matching enrolled voice and its match strength.
@@ -1919,7 +1767,16 @@ class Store:
 
         Gated for clip quality: a turn shorter than `min_seconds` or quieter than
         `min_loudness` is skipped (a sliver/near-silent clip enrols a useless print).
-        Unknown loudness (not yet measured) is kept. Gating touches enrolment only — the
+        Unknown loudness (not yet measured) is kept.
+
+        ⚠ **The loudness half of this gate is INERT, and has been since the API
+        moved.** `set_loudness` is the only writer of that column and nothing in
+        production calls it any more — only tests do — so every row reads NULL
+        and the `IS NULL` arm keeps all of them. The default is the right one for
+        "not yet measured", which is exactly why the gate went quiet instead of
+        failing. What still bites is the `min_seconds` half, which is measured.
+        Do not read a passing enrolment as evidence that near-silent clips were
+        excluded. Gating touches enrolment only — the
         turn's text and display label are unaffected. Newest first.
         """
         rows = self._conn.execute(
