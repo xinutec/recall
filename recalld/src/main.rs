@@ -533,6 +533,7 @@ fn spawn_segment_registrar(root: PathBuf) {
                         added = pass.added,
                         covered = pass.covered,
                         retired = pass.retired,
+                        probed = pass.probed,
                         unreadable = pass.unreadable,
                         waiting = pass.waiting,
                         "segments: registered for playback"

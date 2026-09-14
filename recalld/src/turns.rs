@@ -346,6 +346,13 @@ pub struct Registered {
     pub covered: usize,
     /// Clips an earlier pass had already registered, retired cheaply by name.
     pub retired: usize,
+    /// Clips whose file was DECODED — the pass's whole cost, and the only
+    /// counter that can show work being done to no effect.
+    ///
+    /// ⚠ It is here so a test can assert a duplicate costs ZERO of them. That
+    /// is a claim about cost, and a claim about cost that is not measured is
+    /// the reason this pass decoded 1,599 files a day without anyone noticing.
+    pub probed: usize,
 }
 
 /// Register microphone clips in the MEANING plane, from the INGEST plane, so
@@ -398,17 +405,8 @@ pub fn register_segments(
     // uses, and for the same reason — the correlated form was a full scan of
     // both tables and ran ten minutes against the live fleet before it was
     // killed.
-    let have: std::collections::HashSet<String> = {
-        let mut stmt = meaning.prepare("SELECT path FROM audio_segments")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        let mut set = std::collections::HashSet::new();
-        for path in rows {
-            if let Some(name) = path?.rsplit('/').next() {
-                set.insert(name.to_owned());
-            }
-        }
-        set
-    };
+    let have = registered_names(meaning)?;
+    let mut minutes = registered_minutes(meaning)?;
 
     // ⚠ NEWEST FIRST, unlike `write_pass`. This pass has no starvation problem
     // to avoid — the ledger retires what it cannot read — and the live clip
@@ -462,8 +460,23 @@ pub fn register_segments(
             ledger(ingest, REGISTER_SEGMENT, &filename, "unnameable", now)?;
             continue;
         };
+        // A sibling already holds this minute, so the insert below could only be
+        // ignored. Decided WITHOUT decoding: the duration would be discarded.
+        let minute = (source.clone(), crate::instant::python_isoformat_utc(start));
+        if minutes.contains(&minute) {
+            out.covered += 1;
+            ledger(
+                ingest,
+                REGISTER_SEGMENT,
+                &filename,
+                "covered-by-sibling",
+                now,
+            )?;
+            continue;
+        }
         let path = crate::store::source_dir(root, &source).join(&filename);
         probes += 1;
+        out.probed += 1;
         let Ok(media) = crate::upload::probe(&path) else {
             // Permanent as far as this pass is concerned: a header-only
             // dead-capture tombstone holds no audio and never will. Ledgered so
@@ -504,6 +517,13 @@ pub fn register_segments(
         // rather than hiding inside a success total.
         if inserted == 1 {
             out.added += 1;
+            // ⚠ THIS PASS's own work counts. `minutes` is a snapshot taken
+            // before the loop, so without this a clip's sibling a few
+            // candidates later is invisible and pays a full decode — inside the
+            // very pass that just registered the minute. The test measures the
+            // decode count, which is the only reason this was found rather than
+            // reasoned past.
+            minutes.insert(minute);
         } else {
             out.covered += 1;
         }
@@ -515,6 +535,40 @@ pub fn register_segments(
         ledger(ingest, REGISTER_SEGMENT, &filename, outcome, now)?;
     }
     Ok(out)
+}
+
+/// Every registered clip's BASENAME. One pass over the column rather than a
+/// correlated lookup per candidate: the correlated form was a full scan of both
+/// tables and ran ten minutes against the live fleet before it was killed.
+fn registered_names(
+    meaning: &rusqlite::Connection,
+) -> rusqlite::Result<std::collections::HashSet<String>> {
+    let mut stmt = meaning.prepare("SELECT path FROM audio_segments")?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut set = std::collections::HashSet::new();
+    for path in rows {
+        if let Some(name) = path?.rsplit('/').next() {
+            set.insert(name.to_owned());
+        }
+    }
+    Ok(set)
+}
+
+/// Every registered `(source_id, start_utc)` — the MINUTE, not the filename,
+/// and that difference is what makes a duplicate free.
+///
+/// ⚠ [`registered_names`] is keyed on basename, so the `.wav` beside the
+/// `.opus` misses it and reaches the probe, which decodes the WHOLE FILE to
+/// learn a duration the ignored insert then throws away. But a clip's start time
+/// is in its NAME, and `(source_id, start_utc)` is the very key the `UNIQUE`
+/// constraint rejects on — so the answer is knowable before any decoding
+/// happens. 1,599 clips of this archive are such siblings.
+fn registered_minutes(
+    meaning: &rusqlite::Connection,
+) -> rusqlite::Result<std::collections::HashSet<(String, String)>> {
+    let mut stmt = meaning.prepare("SELECT source_id, start_utc FROM audio_segments")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    rows.collect()
 }
 
 /// Marks a per-mic turn hidden because a room turn now covers its minute.

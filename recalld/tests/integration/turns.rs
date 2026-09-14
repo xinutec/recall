@@ -1636,6 +1636,14 @@ fn a_clip_whose_minute_a_sibling_already_holds_is_retired_not_reconsidered() {
     let first = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("first");
     assert_eq!(first.added, 1, "one of the two takes the row");
     assert_eq!(first.covered, 1, "the other is covered by its sibling");
+    // ⚠ THE COST, measured rather than reasoned about. The sibling's start time
+    // is in its NAME and the minute is already registered, so the answer is
+    // knowable without opening the file — and the duration a decode would
+    // yield is exactly what the ignored insert discards.
+    assert_eq!(
+        first.probed, 1,
+        "only the clip that took the row may be decoded; the sibling costs nothing"
+    );
 
     // BOTH are ledgered, so neither is a candidate again.
     let ledgered: i64 = ingest
@@ -1661,9 +1669,9 @@ fn a_clip_whose_minute_a_sibling_already_holds_is_retired_not_reconsidered() {
     // The second pass must do NOTHING — no probe, no insert, no reconsideration.
     let second = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("second");
     assert_eq!(
-        (second.added, second.covered, second.retired),
-        (0, 0, 0),
-        "a decided clip is never looked at again"
+        (second.added, second.covered, second.retired, second.probed),
+        (0, 0, 0, 0),
+        "a decided clip is never looked at again, and nothing is decoded"
     );
 }
 

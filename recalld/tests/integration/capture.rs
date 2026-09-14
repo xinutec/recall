@@ -504,7 +504,13 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
     // plane because the mic apps long-poll it with no credential at all. If this
     // ever needs a login, every recorder in the house stops learning about pauses.
     let body = tokio::task::spawn_blocking(move || {
-        ureq::get(&format!("http://{addr}/api/capture"))
+        // ⚠ NOT `ureq::get`: the free functions share ONE process-wide pool
+        // across every test in this binary, and they run in parallel against
+        // short-lived servers (#1480). The last bare call in this suite.
+        ureq::AgentBuilder::new()
+            .max_idle_connections(0)
+            .build()
+            .get(&format!("http://{addr}/api/capture"))
             .call()
             .expect("the route is mounted AND ungated")
             .into_string()
