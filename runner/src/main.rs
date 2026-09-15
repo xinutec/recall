@@ -146,10 +146,18 @@ fn one(
     let _ = std::fs::remove_file(&clip);
     match outcome {
         Ok(result) => {
-            let rows = result
-                .get("segments")
-                .and_then(serde_json::Value::as_array)
-                .map_or(0, Vec::len);
+            // ⚠ **Each shim names its result differently, and counting only
+            // one spelling makes the other's log line a constant.** `asr`
+            // answers `segments`, `voices` answers `turns` — so a diarize job
+            // logged `rows=0` whether it had found twelve speakers or none,
+            // which is the one thing the line exists to say. Observed on the
+            // first `voices` deploy, 2026-09-15.
+            let rows = ["segments", "turns"]
+                .iter()
+                .filter_map(|key| result.get(*key))
+                .filter_map(serde_json::Value::as_array)
+                .map(Vec::len)
+                .sum::<usize>();
             client.finish(
                 id,
                 &serde_json::json!({ "ok": true, "result": result }).to_string(),
