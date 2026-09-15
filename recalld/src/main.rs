@@ -302,7 +302,26 @@ fn spawn_background_passes(root: &std::path::Path) {
     // clips. Turning both on at once is how the same minute gets transcribed
     // twice.
     spawn_turn_writer(root.clone(), recalld::turns::PER_MIC);
-    spawn_diarized_writer(root.clone());
+    //
+    // ⚠ **OFF, and for the SAME reason `spawn_turn_writer(ROOM)` above is off.**
+    // Turned on 2026-09-15 18:0x and off again at 18:5x, having written 16 turns:
+    // measured in the live timeline, 15 of those 16 OVERLAPPED per-mic turns, 116
+    // of them, so the same speech was showing twice.
+    //
+    // The mistake was reading `derive_diarize_jobs`' note — "refine.py, which this
+    // replaces" — as meaning this pass refines what is already there. It does not.
+    // refine.py diarizes PER-MIC segments; this diarizes ROOM blocks. The room
+    // stream is not live (the writer above is off pending #1461), so there were no
+    // room turns to replace and `decide` correctly took its insert-only path — and
+    // insert-only, for a stream nothing hides the per-mic turns against, is a
+    // SECOND transcript of every minute rather than a better one.
+    //
+    // What it needs before it goes back on is not a fix here: it is #1461 deciding
+    // whether the room stream should be visible at all, and then `hides_covered`
+    // handled the way `turns::ROOM` handles it. The pass itself is tested and
+    // correct; it was pointed at a stream that does not exist yet.
+    //
+    // spawn_diarized_writer(root.clone());
     spawn_segment_registrar(root.clone());
     spawn_segment_deriver(root.clone());
 }
@@ -330,8 +349,9 @@ fn spawn_background_passes(root: &std::path::Path) {
 /// -- blocks eligible again, and doing it first leaves the originals hidden
 /// -- while the pass re-runs.
 /// UPDATE transcript_segments SET hidden_reason = NULL
-///  WHERE hidden_reason LIKE 'diarized (%';
-/// DELETE FROM transcript_segments WHERE provenance LIKE 'diarized-aligned (%';
+///  WHERE hidden_reason = 'diarized (mlx-whisper/large-v3-turbo (room))';
+/// DELETE FROM transcript_segments
+///  WHERE provenance = 'diarized-aligned (mlx-whisper/large-v3-turbo (room))';
 ///
 /// -- ingest plane (ingest.sqlite): the blocks it DECLINED wrote no rows, so
 /// -- only the ledger holds them. Forget this and the reversal looks complete
@@ -339,13 +359,23 @@ fn spawn_background_passes(root: &std::path::Path) {
 /// DELETE FROM pass_ledger WHERE kind = 'diarize-room';
 /// ```
 ///
-/// ⚠ `LIKE 'diarized (%'` and not `= 'diarized'`: both strings carry the model
-/// name, because the same block can be re-derived by a better model later and a
-/// reversal has to be able to name which pass it is undoing.
+/// ⚠ **EXACT equality, NOT `LIKE 'diarized-aligned (%'`.** This file said `LIKE`
+/// until 2026-09-15, and that pattern also matches `diarized-aligned
+/// (mlx-community/whisper-large-v3-turbo)` — which is `refine.py`'s per-mic
+/// output, 24,179 rows of it synced up from the Mac. A reversal run as written
+/// would have deleted this pass's 16 turns and the archive's real diarized
+/// corpus with them. The model name is IN the provenance precisely so a reversal
+/// can name one pass; matching it with a wildcard throws that away.
 ///
 /// A SMALL batch on a slow cadence, for the reason the turn writer has one: the
 /// queue drains over hours, so a bad verdict is noticed while it is dozens of
 /// blocks rather than nine hundred.
+#[expect(
+    dead_code,
+    reason = "the call above is commented out pending #1461, and this is what gets \
+              uncommented. Deleting it to satisfy the lint would mean rewriting the \
+              pass from its tests when the decision lands."
+)]
 fn spawn_diarized_writer(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
     const BATCH: usize = 20;

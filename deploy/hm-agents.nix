@@ -556,6 +556,19 @@ in
   # ⚠ No `--pulse`: the archive heartbeat is the asr runner's claim about
   # transcription throughput, and a second process stamping it would make a
   # stalled transcriber look healthy because diarization was still moving.
+  # ⚠ **NOT STARTED.** `RunAtLoad`/`KeepAlive` are false, so this is defined and
+  # deployable but idle until something drains what it produces.
+  #
+  # It ran for ~50 minutes on 2026-09-15 and did the job correctly — leased,
+  # diarized, pushed, ~50s to 2.5min per block. What was wrong was downstream:
+  # `recalld::diarized`'s writer turned those results into ROOM turns, and the
+  # room stream is gated on #1461, so the timeline showed the same speech twice
+  # (15 of 16 room turns overlapped per-mic turns; 116 of them). The writer is
+  # off; leaving this on would spend the GPU the recorder needs, filling a queue
+  # nobody drains.
+  #
+  # Turn both back on together, in this order: #1461 decides the room stream is
+  # wanted, `diarized` gets its `hides_covered` half, THEN this.
   launchd.agents."org.xinutec.recall-voices" = daemon {
     label = "org.xinutec.recall-voices";
     name = "voices";
@@ -581,8 +594,10 @@ in
       '';
     };
     extra = {
-      KeepAlive = true;
-      RunAtLoad = true;
+      # Both false: see the note above. Start by hand with `launchctl kickstart`
+      # when there is a consumer for what it produces.
+      KeepAlive = false;
+      RunAtLoad = false;
       LowPriorityIO = true;
       # Below recall-runner's 10: the archive pass wins the GPU.
       Nice = 15;
