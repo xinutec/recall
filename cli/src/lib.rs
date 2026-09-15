@@ -17,4 +17,5 @@
 //! [`render`] is pure, so the rules are tested without a fleet.
 
 pub mod api;
+pub mod day;
 pub mod render;

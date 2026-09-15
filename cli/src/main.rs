@@ -9,6 +9,10 @@ use cli::render;
 /// The fleet: the system of record, and the only thing this talks to.
 const DEFAULT_API: &str = "http://10.100.0.2:8000";
 const DEFAULT_LIMIT: i64 = 100;
+/// A conversation breaks after a silence longer than this, matching
+/// `recalld::conversations::DEFAULT_GAP_SECONDS`. Named here rather than left to
+/// the route's default so the value a person sees is the value in this file.
+const DEFAULT_GAP: f64 = 300.0;
 
 fn usage() -> ! {
     eprintln!(
@@ -19,9 +23,13 @@ fn usage() -> ! {
          \x20 show <id> [<id>...]          diagnostic dump of specific turns\n\
          \x20 timeline [--limit N]         the newest turns\n\
          \x20 review [--limit N]           turns the model was least sure of\n\
+         \x20 sessions                     every uploaded session\n\
+         \x20 transcript <session>         one session, read through\n\
+         \x20 day <YYYY-MM-DD> [--conv N]  a day's conversations, or read one\n\
          \x20 sources                      every recorder the fleet knows\n\
          \x20 capture                      whether the recorders are running\n\
-         \x20 correct <id> <text> --apply  replace a turn's text\n\
+         \x20 correct <id> <text> --apply             replace a turn's text\n\
+         \x20 correct --session <id> --fix OLD=>NEW    ...by the words instead\n\
          \n\
          --api defaults to {DEFAULT_API}, the system of record. There is no\n\
          option to read a local database: a second answer nobody can tell from\n\
@@ -48,6 +56,17 @@ fn take_limit(args: &mut Vec<String>) -> i64 {
     value
 }
 
+/// Pull `--flag VALUE` out of the remaining arguments, leaving the rest.
+fn take_value(args: &mut Vec<String>, flag: &str) -> Option<String> {
+    let at = args.iter().position(|a| a == flag)?;
+    let value = args.get(at + 1).cloned();
+    if value.is_none() {
+        usage()
+    }
+    args.drain(at..=at + 1);
+    value
+}
+
 fn take_flag(args: &mut Vec<String>, flag: &str) -> bool {
     let Some(at) = args.iter().position(|a| a == flag) else {
         return false;
@@ -64,6 +83,9 @@ fn run(api: &Api, command: &str, mut args: Vec<String>) -> Result<bool, Error> {
         "show" => show(api, &args),
         "timeline" => timeline(api, &mut args),
         "review" => review(api, &mut args),
+        "sessions" => sessions(api),
+        "transcript" => transcript(api, &args),
+        "day" => day(api, &mut args),
         "sources" => sources(api),
         "capture" => capture(api),
         "correct" => correct(api, &mut args),
@@ -135,6 +157,70 @@ fn review(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
     Ok(true)
 }
 
+fn sessions(api: &Api) -> Result<bool, Error> {
+    let items = api.sessions()?;
+    println!("{}", render::sessions(&items));
+    Ok(!items.is_empty())
+}
+
+fn transcript(api: &Api, args: &[String]) -> Result<bool, Error> {
+    let Some(source) = args.first() else { usage() };
+    let export = api.session_transcript(source)?;
+    if export.turns.is_empty() {
+        println!("no transcript for session {source:?}");
+        return Ok(false);
+    }
+    println!("{}", render::export(&export));
+    Ok(true)
+}
+
+/// A day of the always-on stream: list its conversations, or read one.
+///
+/// ⚠ The window is the LOCAL day, not the UTC one. A person asking for
+/// "yesterday" means the day they lived, and the archive stores UTC — so an
+/// evening conversation would land on the wrong date if the bounds were taken
+/// literally.
+fn day(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
+    let which = take_value(args, "--conv");
+    let limit = take_limit(args);
+    let Some(date) = args.first().cloned() else {
+        usage()
+    };
+    let Some((after, before)) = cli::day::bounds(&date) else {
+        eprintln!("day must be YYYY-MM-DD, 'today' or 'yesterday', not {date:?}");
+        std::process::exit(2)
+    };
+    let found = api.conversations(&after, &before, DEFAULT_GAP, limit)?;
+    if found.items.is_empty() {
+        println!("no conversations on {date}");
+        return Ok(false);
+    }
+    let Some(which) = which else {
+        println!("{}", render::conversations(&date, &found.items));
+        if found.has_more {
+            println!("\n… the page filled; raise --limit to see the rest of the day");
+        }
+        return Ok(true);
+    };
+    let n = if which == "last" {
+        found.items.len()
+    } else if let Ok(n) = which.parse::<usize>() {
+        n
+    } else {
+        eprintln!("--conv must be a number or 'last', not {which:?}");
+        std::process::exit(2)
+    };
+    let Some(conv) = n.checked_sub(1).and_then(|i| found.items.get(i)) else {
+        println!("no conversation {n} on {date} (have {})", found.items.len());
+        return Ok(false);
+    };
+    println!(
+        "{}",
+        render::conversation(&format!("{date} · conversation {n}"), conv)
+    );
+    Ok(true)
+}
+
 fn sources(api: &Api) -> Result<bool, Error> {
     let sources = api.sources()?;
     for source in &sources {
@@ -183,29 +269,109 @@ fn capture(api: &Api) -> Result<bool, Error> {
 /// the change is printed either way: the Python this replaces was dry-run by
 /// default for the same reason, and a correction typed against the wrong id is
 /// not recoverable from the CLI.
+///
+/// Two forms, because the Python had two and dropping one would lose the
+/// usable one:
+///
+///     correct <id> "<the whole corrected line>"
+///     correct --session <id> --fix "OLD=>NEW" [--fix ...]
+///
+/// The second is how a person actually corrects a transcript — by the words
+/// they can see, not by an id they would have to look up first.
 fn correct(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
     let apply = take_flag(args, "--apply");
+    let session = take_value(args, "--session");
+    let mut fixes = Vec::new();
+    while let Some(raw) = take_value(args, "--fix") {
+        let Some((old, new)) = raw.split_once("=>") else {
+            eprintln!("--fix must be OLD=>NEW, not {raw:?}");
+            std::process::exit(2)
+        };
+        fixes.push((old.to_owned(), new.to_owned()));
+    }
+    let outcome = match session {
+        Some(session) => correct_by_substring(api, &session, &fixes, apply),
+        None if fixes.is_empty() => correct_by_id(api, args, apply),
+        // Mixing the forms would mean guessing which the caller meant.
+        None => usage(),
+    }?;
+    if !apply {
+        println!("\nDRY-RUN only — nothing written. Re-run with --apply to commit.");
+    }
+    Ok(outcome)
+}
+
+fn correct_by_id(api: &Api, args: &[String], apply: bool) -> Result<bool, Error> {
     let (Some(id), Some(text)) = (
         args.first().and_then(|a| a.parse::<i64>().ok()),
         args.get(1),
     ) else {
         usage()
     };
-    let before = api.transcripts(&[id])?;
-    let Some(current) = before.first() else {
+    let Some(current) = api.transcripts(&[id])?.into_iter().next() else {
         println!("no turn {id}");
         return Ok(false);
     };
-    println!("#{}  [{}]", current.id, render::who(current));
-    println!("   OLD: {}", current.text);
-    println!("   NEW: {text}");
+    show_change(&current, text);
     if apply {
         let new_id = api.correct(current.id, text)?;
         println!("   -> applied as new turn #{new_id}");
-    } else {
-        println!("\nDRY-RUN only — nothing written. Re-run with --apply to commit.");
     }
     Ok(true)
+}
+
+/// ⚠ **A substring matching more than one turn is SKIPPED, not guessed at.**
+/// This is how the Python behaved and the reason is the corpus: "yes" appears in
+/// a hundred turns, and correcting the wrong one writes a person's words onto
+/// somebody else's sentence, where nothing later can tell it was misplaced.
+fn correct_by_substring(
+    api: &Api,
+    session: &str,
+    fixes: &[(String, String)],
+    apply: bool,
+) -> Result<bool, Error> {
+    if fixes.is_empty() {
+        usage()
+    }
+    let turns = api.source_turns(session, 1000)?;
+    if turns.is_empty() {
+        println!("no current turns for session {session:?}");
+        return Ok(false);
+    }
+    println!(
+        "session {session}: {} turns  ::  mode = {}\n",
+        turns.len(),
+        if apply { "APPLY" } else { "DRY-RUN" }
+    );
+    let mut ok = true;
+    for (old, new) in fixes {
+        let matches: Vec<&cli::api::Turn> = turns
+            .iter()
+            .filter(|t| t.text.contains(old.as_str()))
+            .collect();
+        let [only] = matches.as_slice() else {
+            println!(
+                "!! {old:?} matched {} turn(s) (need exactly 1) -- SKIP\n",
+                matches.len()
+            );
+            ok = false;
+            continue;
+        };
+        let corrected = only.text.replace(old.as_str(), new);
+        show_change(only, &corrected);
+        if apply {
+            let new_id = api.correct(only.id, &corrected)?;
+            println!("   -> applied as new turn #{new_id}");
+        }
+        println!();
+    }
+    Ok(ok)
+}
+
+fn show_change(turn: &cli::api::Turn, corrected: &str) {
+    println!("#{}  [{}]", turn.id, render::who(turn));
+    println!("   OLD: {}", turn.text);
+    println!("   NEW: {corrected}");
 }
 
 fn main() {

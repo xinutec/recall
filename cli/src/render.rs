@@ -7,7 +7,7 @@
 //! transcript, what an unscored guess looks like, and the audibility bands. Each
 //! is stated where it is applied, with the test that pins it.
 
-use crate::api::Turn;
+use crate::api::{Conversation, Export, Session, Turn};
 use chrono::{DateTime, Local};
 
 /// Audibility bands from measured loudness, as the labelling UI draws them
@@ -196,6 +196,119 @@ pub fn transcript(title: &str, turns: &[Turn]) -> String {
     let mut lines = vec![header, String::new()];
     lines.extend(
         turns
+            .iter()
+            .map(|t| format!("[{}] {}: {}", when(&t.start, "%H:%M:%S"), who(t), t.text)),
+    );
+    lines.join("\n")
+}
+
+/// How long a span lasted, in the archive's own shorthand.
+fn duration(start: &str, end: &str) -> String {
+    let Some(seconds) = local(start)
+        .zip(local(end))
+        .map(|(s, e)| (e - s).num_seconds().max(0))
+    else {
+        return "?".to_owned();
+    };
+    let (hours, rest) = (seconds / 3600, seconds % 3600);
+    let (minutes, secs) = (rest / 60, rest % 60);
+    if hours > 0 {
+        format!("{hours}h{minutes:02}m")
+    } else if minutes > 0 {
+        format!("{minutes}m{secs:02}s")
+    } else {
+        format!("{secs}s")
+    }
+}
+
+/// A reviewable index of recorded sessions: id, when, how long, turns, who.
+#[must_use]
+pub fn sessions(items: &[Session]) -> String {
+    if items.is_empty() {
+        return "no sessions recorded".to_owned();
+    }
+    items
+        .iter()
+        .map(|s| {
+            let who = if s.speakers.is_empty() {
+                "unknown".to_owned()
+            } else {
+                s.speakers.join(", ")
+            };
+            format!(
+                "{}  {}  {:>7}  {:>4} turns  {who}",
+                s.id,
+                when(&s.start, "%a %d %b %Y %H:%M"),
+                duration(&s.start, &s.end),
+                s.turn_count,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A session's clean transcript — consecutive same-speaker turns already merged
+/// by the route, so this only lays them out.
+#[must_use]
+pub fn export(export: &Export) -> String {
+    let mut header = format!("# {}", export.session);
+    if let Some(date) = &export.date {
+        header.push_str(&when(date, "  (%a %d %b %Y %H:%M)"));
+    }
+    if !export.speakers.is_empty() {
+        use std::fmt::Write as _;
+        let _ = write!(header, "\n# {}", export.speakers.join(", "));
+    }
+    let mut lines = vec![header, String::new()];
+    lines.extend(
+        export
+            .turns
+            .iter()
+            .map(|b| format!("[{}] {}: {}", when(&b.start, "%H:%M:%S"), b.speaker, b.text)),
+    );
+    lines.join("\n")
+}
+
+/// A day's conversations, numbered so one can be dumped on demand.
+#[must_use]
+pub fn conversations(day: &str, items: &[Conversation]) -> String {
+    if items.is_empty() {
+        return format!("no conversations on {day}");
+    }
+    let mut lines = vec![
+        format!("# {day} — {} conversation(s)", items.len()),
+        String::new(),
+    ];
+    lines.extend(items.iter().enumerate().map(|(i, c)| {
+        format!(
+            "{}. {}-{}  {:>3} turns  {}",
+            i + 1,
+            when(&c.start, "%H:%M"),
+            when(&c.end, "%H:%M"),
+            c.turn_count,
+            c.preview
+        )
+    }));
+    lines.join("\n")
+}
+
+/// One conversation read through.
+///
+/// ⚠ **The PRIMARY turns only.** Capture is always on and every microphone
+/// transcribes the same room, so the raw stream shows each sentence up to four
+/// times; the route has already chosen a spine per moment, and printing the
+/// alternates too would undo that. `recall-cli show <id>` is where a specific
+/// mic's version is looked at.
+#[must_use]
+pub fn conversation(title: &str, conv: &Conversation) -> String {
+    let primary: Vec<&Turn> = conv.moments.iter().flat_map(|m| m.primary.iter()).collect();
+    let mut header = format!("# {title}");
+    if let Some(first) = primary.first() {
+        header.push_str(&when(&first.start, "  (%a %d %b %Y %H:%M)"));
+    }
+    let mut lines = vec![header, String::new()];
+    lines.extend(
+        primary
             .iter()
             .map(|t| format!("[{}] {}: {}", when(&t.start, "%H:%M:%S"), who(t), t.text)),
     );

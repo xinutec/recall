@@ -91,6 +91,75 @@ pub struct Capture {
     pub mic_reachable: bool,
 }
 
+/// One uploaded session, as `/api/sessions` lists it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Session {
+    pub id: String,
+    pub title: String,
+    pub start: String,
+    pub end: String,
+    pub turn_count: i64,
+    /// ⚠ **Human-confirmed names ONLY.** The route excludes voiceprint guesses
+    /// deliberately: on out-of-domain audio a visitor can score 0.95 against an
+    /// enrolled household member, so a name here would assert an attribution
+    /// nobody made.
+    pub speakers: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Sessions {
+    pub items: Vec<Session>,
+}
+
+/// One speaker's run of consecutive turns, merged, as the export sends it.
+#[derive(Debug, Deserialize)]
+pub struct Bubble {
+    pub start: String,
+    pub speaker: String,
+    pub text: String,
+}
+
+/// A session's clean, finalised transcript.
+#[derive(Debug, Deserialize)]
+pub struct Export {
+    pub session: String,
+    pub date: Option<String>,
+    pub speakers: Vec<String>,
+    pub turns: Vec<Bubble>,
+}
+
+/// The several microphones that heard one utterance, folded into one card.
+#[derive(Debug, Deserialize)]
+pub struct Moment {
+    pub start: String,
+    pub end: String,
+    /// The best mic's version — what a reader should read.
+    pub primary: Vec<Turn>,
+    /// The other mics' overlapping versions, for comparison.
+    pub alternates: Vec<Turn>,
+    pub sources: Vec<String>,
+}
+
+/// A run of turns with no long silence in it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Conversation {
+    pub start: String,
+    pub end: String,
+    pub turn_count: usize,
+    pub speakers: Vec<String>,
+    pub preview: String,
+    pub moments: Vec<Moment>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Conversations {
+    pub items: Vec<Conversation>,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewId {
@@ -269,6 +338,75 @@ impl Api {
     /// As [`Api::search`].
     pub fn capture(&self) -> Result<Capture, Error> {
         self.get("/api/capture")
+    }
+
+    /// Every uploaded session, newest first.
+    ///
+    /// # Errors
+    /// As [`Api::search`].
+    pub fn sessions(&self) -> Result<Vec<Session>, Error> {
+        let sessions: Sessions = self.get("/api/sessions")?;
+        Ok(sessions.items)
+    }
+
+    /// One session's clean transcript, consecutive same-speaker turns merged.
+    ///
+    /// # Errors
+    /// As [`Api::search`].
+    pub fn session_transcript(&self, source: &str) -> Result<Export, Error> {
+        self.get(&format!("/api/sessions/{}/transcript", urlencode(source)))
+    }
+
+    /// Every turn one source has, with its id — what a correction needs.
+    ///
+    /// ⚠ **Both `primary` and `alternates` are flattened**, and for a single
+    /// source that is not double-counting: the primary/alternate split ranks the
+    /// several MICROPHONES that heard one moment, so filtering to one source
+    /// leaves at most one of each per moment. Taking only `primary` would hide
+    /// the turns that lost a comparison against a mic the caller did not ask
+    /// about — and a correction that cannot see a turn reports it as absent.
+    ///
+    /// # Errors
+    /// As [`Api::search`].
+    pub fn source_turns(&self, source: &str, limit: i64) -> Result<Vec<Turn>, Error> {
+        let found: Conversations = self.get(&format!(
+            "/api/conversations?source={}&limit={limit}&gap={}",
+            urlencode(source),
+            f64::MAX
+        ))?;
+        let mut turns: Vec<Turn> = found
+            .items
+            .into_iter()
+            .flat_map(|c| c.moments)
+            .flat_map(|m| m.primary.into_iter().chain(m.alternates))
+            .collect();
+        turns.sort_by(|a, b| a.start.cmp(&b.start).then(a.id.cmp(&b.id)));
+        Ok(turns)
+    }
+
+    /// A window of the always-on stream, split at the silences and folded per
+    /// moment.
+    ///
+    /// ⚠ `after` and `before` are REQUIRED here even though the route allows
+    /// neither: without a window this asks for the newest page of the whole
+    /// archive, which is a different question and one `timeline` already
+    /// answers.
+    ///
+    /// # Errors
+    /// As [`Api::search`]. A malformed instant is a 400 from the route, which
+    /// arrives as [`Error::Http`].
+    pub fn conversations(
+        &self,
+        after: &str,
+        before: &str,
+        gap: f64,
+        limit: i64,
+    ) -> Result<Conversations, Error> {
+        self.get(&format!(
+            "/api/conversations?after={}&before={}&gap={gap}&limit={limit}",
+            urlencode(after),
+            urlencode(before)
+        ))
     }
 
     /// Replace a turn's text with a person's own words.

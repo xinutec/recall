@@ -16,7 +16,7 @@ import time
 import traceback
 from contextlib import ExitStack
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from recall import capture_control, runlog
@@ -36,7 +36,6 @@ from recall.cleanup import (
     scan_loops,
 )
 from recall.cli_parser import build_parser
-from recall.conversations import segment_conversations
 from recall.diarize import SpeakerTurn, pyannote_diarize
 from recall.identify import identify_segments
 from recall.ingest import ingest_diarized, ingest_transcripts
@@ -44,24 +43,15 @@ from recall.logrotate import rotate_logs
 from recall.maintenance import (
     reprobe_short_segments,
 )
-from recall.moments import cluster_moments
 from recall.paths import ArchiveAway, require_archive
 from recall.probe import probe_media, scan_segments
 from recall.redrive import redrive_archive
 from recall.refine import refine_diarized
 from recall.reprocess import reprocess
-from recall.review import apply_correction
 from recall.sources import AudioSource, SourceKind
 from recall.speakerid import pyannote_embed
 from recall.store import Store
 from recall.timeline import find_gaps, find_overlaps
-from recall.transcript_view import (
-    attribution,
-    format_conversations,
-    format_sessions,
-    format_transcript,
-    format_turn_details,
-)
 from recall.vad import silero_speech_regions
 from recall.vocabulary import build_initial_prompt
 from recall.wer import word_error_rate
@@ -427,39 +417,6 @@ def _cmd_reprobe(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_search(args: argparse.Namespace) -> int:
-    store = Store.open(_db_path(args.out))
-    try:
-        results = store.search(args.query, limit=args.limit)
-    finally:
-        store.close()
-    if not results:
-        print(f"no matches for {args.query!r}")
-        return 1
-    for segment in results:
-        lang = f" [{segment.language}]" if segment.language else ""
-        src = f" ({segment.source_id})" if segment.source_id else ""
-        who = attribution(segment)
-        # Stored UTC; shown in the local wall-clock the speech happened on, like the
-        # transcript view — so "when" is answerable without converting by hand.
-        local = segment.start.astimezone()
-        print(f"{local:%Y-%m-%d %H:%M:%S}  {who}{lang}{src}  {segment.text}")
-    return 0
-
-
-def _cmd_show(args: argparse.Namespace) -> int:
-    store = Store.open(_db_path(args.out))
-    try:
-        turns = store.turns_by_id(args.ids)
-    finally:
-        store.close()
-    if not turns:
-        print(f"no turns found for {args.ids}")
-        return 1
-    print(format_turn_details(turns))
-    return 0
-
-
 def _cmd_coverage(args: argparse.Namespace) -> int:
     store = Store.open(_db_path(args.out))
     try:
@@ -477,105 +434,6 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
     for c in coverage:
         rec = "recorded" if c.recorded else "silent"
         print(f"  {c.source_id:8} {rec:9} turns={c.turns}")
-    return 0
-
-
-def _cmd_correct(args: argparse.Namespace) -> int:
-    store = Store.open(_db_path(args.out))
-    try:
-        turns = store.session_turns(args.session)
-        if not turns:
-            print(f"no current segments for session {args.session!r}")
-            return 1
-        mode = "APPLY" if args.apply else "DRY-RUN"
-        print(f"session {args.session}: {len(turns)} segments  ::  mode = {mode}\n")
-        ok = True
-        for old, new in args.fix:
-            matches = [t for t in turns if old in t.text]
-            if len(matches) != 1:
-                print(
-                    f"!! {old!r} matched {len(matches)} segment(s) "
-                    f"(need exactly 1) -- SKIP\n"
-                )
-                ok = False
-                continue
-            seg = matches[0]
-            corrected = seg.text.replace(old, new)
-            print(f"#{seg.id}  [{seg.speaker_label}]")
-            print(f"   OLD: {seg.text}")
-            print(f"   NEW: {corrected}")
-            if args.apply:
-                new_id = apply_correction(
-                    store, seg.id, corrected, now=datetime.now(UTC)
-                )
-                print(f"   -> applied as new segment #{new_id}")
-            print()
-    finally:
-        store.close()
-    if not args.apply:
-        print("DRY-RUN only -- nothing written. Re-run with --apply to commit.")
-    return 0 if ok else 1
-
-
-def _day_bounds(day: str) -> tuple[datetime, datetime]:
-    """[start, end) of a local day in UTC. `day` is 'today' or YYYY-MM-DD."""
-    tz = datetime.now().astimezone().tzinfo
-    d = datetime.now(tz).date() if day == "today" else date.fromisoformat(day)
-    start = datetime(d.year, d.month, d.day, tzinfo=tz)
-    return start.astimezone(UTC), (start + timedelta(days=1)).astimezone(UTC)
-
-
-def _cmd_transcript(args: argparse.Namespace) -> int:
-    store = Store.open(_db_path(args.out))
-    try:
-        if args.day:
-            return _transcript_day(store, args)
-        if not args.session:
-            print(format_sessions(store.session_summaries(), as_json=args.json))
-            return 0
-        turns = store.session_turns(args.session)
-        if not turns:
-            print(f"no transcript for session {args.session!r}")
-            return 1
-        print(format_transcript(args.session, turns, as_json=args.json))
-    finally:
-        store.close()
-    return 0
-
-
-def _transcript_day(store: Store, args: argparse.Namespace) -> int:
-    """A day's continuous-capture conversations (split by silence): list them, or with
-    --conv N dump one. Redundant mics are folded to one primary turn per moment."""
-    start, end = _day_bounds(args.day)
-    turns = sorted(
-        store.recent_transcripts(limit=10000, before=end, after=start),
-        key=lambda t: t.start,
-    )
-    convs = segment_conversations(turns)
-    if args.conv is not None:
-        if args.conv == "last":
-            n = len(convs)
-        elif args.conv.lstrip("-").isdigit():
-            n = int(args.conv)
-        else:
-            print(f"--conv must be a number or 'last', not {args.conv!r}")
-            return 1
-        if not 1 <= n <= len(convs):
-            print(f"no conversation {args.conv} on {args.day} (have {len(convs)})")
-            return 1
-        moments = cluster_moments(convs[n - 1].turns)
-        primary = [t for m in moments for t in m.primary]
-        label = f"{args.day} · conversation {n}"
-        print(format_transcript(label, primary, as_json=args.json))
-        return 0
-    rows = []
-    for n, conv in enumerate(convs, 1):
-        moments = cluster_moments(conv.turns)
-        count = sum(len(m.primary) for m in moments)
-        first = moments[0].primary if moments else ()
-        preview = first[0].text[:60] if first else ""
-        rows.append((n, conv.start, conv.end, count, preview))
-    print(format_conversations(args.day, rows, as_json=args.json))
     return 0
 
 
@@ -1250,10 +1108,6 @@ _COMMANDS = {
     "score-asr": _cmd_score_asr,
     "reprobe": _cmd_reprobe,
     "coverage": _cmd_coverage,
-    "search": _cmd_search,
-    "show": _cmd_show,
-    "transcript": _cmd_transcript,
-    "correct": _cmd_correct,
     "redrive": _cmd_redrive,
     "refine": _cmd_refine,
     "scan-hallucinations": _cmd_scan_hallucinations,

@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use recalld::conversations::{
-    DEFAULT_GAP_SECONDS, Turn, best_colocated_guess, cluster_moments, segment_conversations,
+    DEFAULT_GAP_SECONDS, Turn, best_colocated_guess, cluster_moments, fold, segment_conversations,
 };
 
 fn at(seconds: i64) -> DateTime<Utc> {
@@ -258,4 +258,125 @@ fn a_gap_measured_in_fractions_of_a_second_is_respected() {
     // The real gap is 1.5s.
     assert_eq!(segment_conversations(&turns, 1.6), vec![vec![0, 1]]);
     assert_eq!(segment_conversations(&turns, 1.4), vec![vec![0], vec![1]]);
+}
+
+// --- the conversation SUMMARY, which is what a browsing list shows -----------
+//
+// ⚠ These pin `fold`, not `segment_conversations`. Everything above works on
+// turn indices; nothing above ever built a `ConversationOut`, so `turnCount`,
+// `speakers` and `preview` — the three fields the list view is made of — had no
+// test in this language at all. `tests/test_conversations.py` had one, and it
+// was the only thing holding them.
+
+/// A stored row, with everything the summary ignores left empty.
+fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment {
+    recalld::reads::Segment {
+        id,
+        start_utc: at(start).to_rfc3339(),
+        end_utc: at(end).to_rfc3339(),
+        text: text.to_owned(),
+        language: None,
+        asr_confidence: None,
+        loudness: None,
+        asr_model: Some("whisper".to_owned()),
+        speaker_label: None,
+        speaker_guess: None,
+        speaker_score: None,
+        speaker_cluster: None,
+        provenance: None,
+        hidden_reason: None,
+        source_id: Some("usb".to_owned()),
+    }
+}
+
+fn named(mut s: recalld::reads::Segment, who: &str) -> recalld::reads::Segment {
+    s.speaker_label = Some(who.to_owned());
+    s
+}
+
+fn confident(mut s: recalld::reads::Segment, confidence: f64) -> recalld::reads::Segment {
+    s.asr_confidence = Some(confidence);
+    s
+}
+
+#[test]
+fn a_conversation_reports_its_span_its_turn_count_and_its_confirmed_speakers() {
+    let segments = vec![
+        named(segment(1, 0, 2, "first"), "Carol"),
+        named(segment(2, 3, 5, "second"), "Alice"),
+        named(segment(3, 7, 9, "third"), "Carol"),
+        // No confirmed name: counted as a turn, absent from the speaker list.
+        segment(4, 10, 12, "fourth"),
+    ];
+
+    let out = fold(&segments, 60.0, 200);
+
+    assert_eq!(out.items.len(), 1, "one conversation");
+    let conv = &out.items[0];
+    assert_eq!(conv.turn_count, 4);
+    assert_eq!(conv.start, reads_iso(0));
+    assert_eq!(conv.end, reads_iso(12));
+    // Distinct, first-seen order, and nothing for the unnamed turn.
+    assert_eq!(conv.speakers, vec!["Carol".to_owned(), "Alice".to_owned()]);
+}
+
+/// ⚠ The rule `PREVIEW_MIN_CONFIDENCE` exists for: a card is headed by its first
+/// reasonably-confident line, so a low-confidence guess does not become the thing
+/// a person reads first. Untested until now in either direction.
+#[test]
+fn the_preview_skips_a_low_confidence_opening_line() {
+    let segments = vec![
+        confident(segment(1, 0, 2, "mumbled nonsense"), 0.1),
+        confident(segment(2, 3, 5, "the line worth showing"), 0.9),
+    ];
+
+    let out = fold(&segments, 60.0, 200);
+
+    assert_eq!(out.items[0].preview, "the line worth showing");
+}
+
+/// …and the other half of it: when NOTHING clears the bar the card still gets a
+/// heading, because an empty preview reads as an empty conversation.
+#[test]
+fn a_conversation_with_nothing_confident_still_previews_its_first_line() {
+    let segments = vec![
+        confident(segment(1, 0, 2, "mumbled nonsense"), 0.1),
+        confident(segment(2, 3, 5, "more of the same"), 0.2),
+    ];
+
+    let out = fold(&segments, 60.0, 200);
+
+    assert_eq!(out.items[0].preview, "mumbled nonsense");
+}
+
+/// An unscored turn is NOT treated as confident. A NULL confidence is "nobody
+/// measured", and heading a card with it would be the same mistake as heading it
+/// with a 0.1.
+#[test]
+fn an_unscored_line_does_not_clear_the_preview_bar() {
+    let segments = vec![
+        segment(1, 0, 2, "unscored"),
+        confident(segment(2, 3, 5, "scored and good"), 0.9),
+    ];
+
+    let out = fold(&segments, 60.0, 200);
+
+    assert_eq!(out.items[0].preview, "scored and good");
+}
+
+/// The gap is tunable, and the summary splits with it — Python's
+/// `test_threshold_is_tunable`, at the level a caller passing `?gap=` sees.
+#[test]
+fn the_gap_is_tunable_and_the_summary_splits_with_it() {
+    let segments = vec![segment(1, 0, 2, "before"), segment(2, 40, 42, "after")];
+
+    assert_eq!(fold(&segments, 60.0, 200).items.len(), 1, "38s < 60s gap");
+    assert_eq!(fold(&segments, 10.0, 200).items.len(), 2, "38s > 10s gap");
+}
+
+/// The instants are the STORED strings, not re-formatted ones — the same
+/// pass-through `reads::iso` promises, checked where a conversation card reads
+/// it rather than only where a turn does.
+fn reads_iso(seconds: i64) -> String {
+    at(seconds).to_rfc3339()
 }

@@ -5,6 +5,19 @@ A correction does two things at once:
    segment (so search/recall is immediately right), and
 2. records the (audio span -> correct text) pair in `corrections` — the labelled
    corpus a later LoRA fine-tune consumes to improve the model (pipeline.md §6).
+
+
+⚠ **NO PRODUCTION CALLER IN PYTHON any more.** `/api/correct` is recalld's
+(`labels_write::apply_correction`), and `recall-cli correct` goes through it; the
+`recall correct` subcommand that used this was deleted on 2026-09-15. What keeps
+this file alive is `test_refine` and `test_redrive`, which need a human-corrected
+turn in a Python-written store to prove that refine will not overwrite one.
+
+So it goes when THEY go — with `refine` and `redrive` in #1538 — and not before.
+Hand-rolling the supersede-plus-corpus bookkeeping inside those two tests would
+replace a shared implementation with a fixture that encodes what I believe the
+correction path writes, which is the one thing a test about not destroying a
+person's words must not do.
 """
 
 from __future__ import annotations

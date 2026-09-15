@@ -84,7 +84,16 @@ fn archive(root: &Path, text: &str, speaker: Option<&str>, guess: Option<(&str, 
     let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("db");
     conn.execute_batch(
         "CREATE TABLE audio_segments (
-             id INTEGER PRIMARY KEY, source_id TEXT
+             id          INTEGER PRIMARY KEY,
+             source_id   TEXT NOT NULL,
+             path        TEXT NOT NULL,
+             start_utc   TEXT NOT NULL,
+             end_utc     TEXT NOT NULL,
+             sample_rate INTEGER NOT NULL,
+             channels    INTEGER NOT NULL,
+             transcribed_utc TEXT, mean_volume REAL, envelope BLOB,
+             speech_s REAL, structure REAL, pushed_utc TEXT,
+             UNIQUE (source_id, start_utc)
          );
          CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT);
          CREATE TABLE transcript_segments (
@@ -142,7 +151,10 @@ fn archive(root: &Path, text: &str, speaker: Option<&str>, guess: Option<(&str, 
              port INTEGER, event_db REAL, noise_shape BLOB
          );
          INSERT INTO sources (id, name, kind) VALUES ('usb', 'USB mic', 'coreaudio');
-         INSERT INTO audio_segments (id, source_id) VALUES (1, 'usb');",
+         INSERT INTO audio_segments
+             (id, source_id, path, start_utc, end_utc, sample_rate, channels)
+         VALUES (1, 'usb', '/x.flac', '2026-09-10T12:00:00+00:00',
+                 '2026-09-10T12:00:04+00:00', 16000, 1);",
     )
     .expect("schema");
     conn.execute(
@@ -345,4 +357,217 @@ fn a_multi_byte_search_term_survives_the_query_string() {
 
     let hits = api.search("café", 10).expect("search");
     assert_eq!(hits.len(), 1, "an accented term reached the server intact");
+}
+
+/// Make `usb` an UPLOAD source and give it a second turn, so the session
+/// surface has something to list. `/api/sessions` lists uploads only —
+/// always-on recorders are not sessions.
+fn as_upload_session(root: &std::path::Path, title: &str) {
+    let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("db");
+    conn.execute(
+        "UPDATE sources SET kind = 'upload', name = ?1 WHERE id = 'usb'",
+        [title],
+    )
+    .expect("upload kind");
+}
+
+#[test]
+fn an_uploaded_session_is_listed_with_its_turn_count() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(
+        dir.path(),
+        "marmalade on the windowsill",
+        Some("Pippijn"),
+        None,
+    );
+    as_upload_session(dir.path(), "Tuesday call");
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let items = api.sessions().expect("sessions");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, "usb");
+    assert_eq!(items[0].title, "Tuesday call");
+    assert_eq!(items[0].turn_count, 1);
+    assert_eq!(items[0].speakers, vec!["Pippijn".to_owned()]);
+
+    let rendered = render::sessions(&items);
+    assert!(
+        rendered.contains("Tuesday call") || rendered.contains("usb"),
+        "got: {rendered}"
+    );
+    assert!(rendered.contains("1 turns"), "got: {rendered}");
+}
+
+/// ⚠ Only human-confirmed names reach the speaker list. A voiceprint guess must
+/// not, because on out-of-domain audio a visitor scores high against an enrolled
+/// member — the route's rule, checked from the client that displays it.
+#[test]
+fn a_session_does_not_list_a_guessed_speaker_as_a_participant() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(
+        dir.path(),
+        "marmalade on the windowsill",
+        None,
+        Some(("Pippijn", 0.95)),
+    );
+    as_upload_session(dir.path(), "Tuesday call");
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let items = api.sessions().expect("sessions");
+    assert_eq!(
+        items[0].speakers,
+        vec!["unknown".to_owned()],
+        "a 0.95 guess is still nobody's confirmed name"
+    );
+}
+
+#[test]
+fn a_session_transcript_reads_through_with_its_speaker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(
+        dir.path(),
+        "marmalade on the windowsill",
+        Some("Pippijn"),
+        None,
+    );
+    as_upload_session(dir.path(), "Tuesday call");
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let export = api.session_transcript("usb").expect("transcript");
+    assert_eq!(export.session, "usb");
+    assert_eq!(export.turns.len(), 1);
+    assert_eq!(export.turns[0].speaker, "Pippijn");
+
+    let rendered = render::export(&export);
+    assert!(
+        rendered.contains("Pippijn: marmalade on the windowsill"),
+        "got:\n{rendered}"
+    );
+}
+
+/// The day view, through the real folding route: one turn is one conversation,
+/// and the card is headed by it.
+#[test]
+fn a_days_conversations_come_back_folded_and_numbered() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let found = api
+        .conversations(
+            "2026-09-10T00:00:00+00:00",
+            "2026-09-11T00:00:00+00:00",
+            300.0,
+            200,
+        )
+        .expect("conversations");
+    assert_eq!(found.items.len(), 1);
+    assert_eq!(found.items[0].turn_count, 1);
+
+    let listed = render::conversations("2026-09-10", &found.items);
+    assert!(listed.contains("1 conversation(s)"), "got:\n{listed}");
+    assert!(listed.starts_with("# 2026-09-10"), "got:\n{listed}");
+
+    let read = render::conversation("2026-09-10 · conversation 1", &found.items[0]);
+    assert!(read.contains("marmalade on the windowsill"), "got:\n{read}");
+}
+
+/// ⚠ A malformed window is the ROUTE's 400, not a silently dropped filter —
+/// paging on with the bound removed would serve the whole archive as one page.
+#[test]
+fn a_malformed_day_window_is_refused_rather_than_ignored() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let err = api
+        .conversations("not-a-date", "2026-09-11T00:00:00+00:00", 300.0, 200)
+        .expect_err("must refuse");
+    assert!(err.to_string().contains("400"), "got: {err}");
+}
+
+/// Add a second turn to the same source, so a substring can be ambiguous.
+fn second_turn(root: &std::path::Path, text: &str) -> i64 {
+    let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("db");
+    conn.execute(
+        "INSERT INTO transcript_segments
+             (audio_segment_id, start_utc, end_utc, text, language, asr_confidence,
+              asr_model, speaker_cluster, provenance, loudness, created_utc)
+         VALUES (1, '2026-09-10T12:00:10+00:00', '2026-09-10T12:00:14+00:00', ?1,
+                 'en', 0.42, 'whisper', 'SPEAKER_01', 'per-mic', 0.03,
+                 '2026-09-10T12:00:15+00:00')",
+        [text],
+    )
+    .expect("turn");
+    let id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
+        (id, text),
+    )
+    .expect("fts");
+    id
+}
+
+/// The form a person actually uses: correct by the words on screen, not by an
+/// id they would have to look up.
+#[test]
+fn a_correction_can_be_made_by_a_unique_substring_rather_than_an_id() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let id = archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let turns = api.source_turns("usb", 1000).expect("source turns");
+    let found: Vec<_> = turns
+        .iter()
+        .filter(|t| t.text.contains("windowsill"))
+        .collect();
+    assert_eq!(found.len(), 1, "one turn holds the phrase");
+    assert_eq!(found[0].id, id);
+
+    let corrected = found[0].text.replace("windowsill", "window sill");
+    let new_id = api.correct(found[0].id, &corrected).expect("correct");
+    assert_eq!(
+        api.transcripts(&[id]).expect("read back")[0].id,
+        new_id,
+        "the old id answers with its replacement"
+    );
+}
+
+/// ⚠ The rule that protects the corpus: a substring in two turns must not pick
+/// one. Correcting the wrong turn writes a person's words onto somebody else's
+/// sentence, and nothing later can tell.
+#[test]
+fn a_substring_in_two_turns_is_ambiguous_and_must_not_be_guessed_at() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "marmalade on the windowsill", None, None);
+    second_turn(dir.path(), "more marmalade please");
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let turns = api.source_turns("usb", 1000).expect("source turns");
+    let ambiguous: Vec<_> = turns
+        .iter()
+        .filter(|t| t.text.contains("marmalade"))
+        .collect();
+    assert_eq!(ambiguous.len(), 2, "both turns hold it — the CLI must skip");
+}
+
+/// ⚠ `source_turns` must return a turn that LOST a moment comparison, not only
+/// the spine. A correction that cannot see a turn reports it as absent.
+#[test]
+fn every_turn_of_a_source_is_visible_to_a_correction_not_only_the_spine() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first = archive(dir.path(), "marmalade on the windowsill", None, None);
+    let second = second_turn(dir.path(), "and the kettle is on");
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let ids: Vec<i64> = api
+        .source_turns("usb", 1000)
+        .expect("source turns")
+        .iter()
+        .map(|t| t.id)
+        .collect();
+    assert!(
+        ids.contains(&first) && ids.contains(&second),
+        "got: {ids:?}"
+    );
 }

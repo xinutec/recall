@@ -11,17 +11,44 @@ from recall.cli_parser import build_parser
 from recall.paths import FLEET_DATA_ROOT, MAC_DATA_ROOT, default_data_root
 
 
-def test_out_defaults_to_the_mac_archive_not_a_relative_dir(
+def _subparsers() -> dict[str, argparse.ArgumentParser]:
+    """Every subcommand, by name, as the parser holds them.
+
+    ⚠ argparse exposes no public way to walk its subcommands, so this reaches for
+    the one private attribute that has been stable across every 3.x: the
+    `_SubParsersAction` among the parser's actions, and its `choices`. The
+    alternative was parsing `--help`, which is a contract nobody promised either
+    and is harder to read when it breaks.
+    """
+    found: dict[str, argparse.ArgumentParser] = {}
+    for action in build_parser()._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            found.update(action.choices)
+    return found
+
+
+def test_every_out_defaults_to_the_mac_archive_not_a_relative_dir(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A bare `recall transcript` (or doctor) once defaulted --out to ./data — a path on
-    # no machine, so it silently opened an empty db in the cwd and answered about
-    # nothing. The default must be the archive the machine actually keeps.
+    # A bare `recall <cmd>` once defaulted --out to ./data — a path on no machine, so
+    # it silently opened an empty db in the cwd and answered about nothing. The default
+    # must be the archive the machine actually keeps.
+    #
+    # ⚠ Checked over EVERY subcommand rather than one chosen as a specimen. This test
+    # named `transcript` until 2026-09-15, when that subcommand was deleted and took
+    # the whole rule's coverage with it — a rule this broad should not rest on one
+    # command outliving the others.
     monkeypatch.delenv("RECALL_ROLE", raising=False)
     monkeypatch.delenv("RECALL_OUT", raising=False)
-    args = build_parser().parse_args(["transcript", "--day", "today"])
-    assert args.out == MAC_DATA_ROOT
-    assert args.out != Path("data")
+    checked = 0
+    for name, parser in _subparsers().items():
+        defaults = {a.dest: a.default for a in parser._actions if a.dest == "out"}
+        if "out" not in defaults:
+            continue
+        checked += 1
+        assert defaults["out"] == MAC_DATA_ROOT, f"{name} --out"
+        assert defaults["out"] != Path("data"), f"{name} --out"
+    assert checked > 5, f"only {checked} subcommands take --out; the parser moved"
 
 
 def test_default_data_root_follows_the_role() -> None:

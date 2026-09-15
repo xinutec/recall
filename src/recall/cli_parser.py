@@ -77,15 +77,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
     )
     rpb.add_argument("--out", type=Path, default=default_data_root(), help="data root")
 
-    sea = sub.add_parser("search", help="full-text search transcripts")
-    sea.add_argument("query", help="FTS query")
-    sea.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    sea.add_argument("--limit", type=int, default=50)
-
-    sho = sub.add_parser("show", help="inspect specific turns by id (diagnostics)")
-    sho.add_argument("ids", nargs="+", type=int, help="transcript id(s)")
-    sho.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-
     cov = sub.add_parser(
         "coverage", help="which mics recorded vs transcribed a turn's moment"
     )
@@ -94,40 +85,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "--window", type=float, default=10.0, help="seconds of context each side"
     )
     cov.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-
-    tsc = sub.add_parser(
-        "transcript",
-        help="read recorded calls/meetings: list sessions or a day's conversations, "
-        "then dump one",
-    )
-    tsc.add_argument("session", nargs="?", help="session id (omit to list sessions)")
-    tsc.add_argument(
-        "--day", help="instead: a day's conversations — YYYY-MM-DD or 'today'"
-    )
-    tsc.add_argument(
-        "--conv", help="with --day: dump conversation N (a number, or 'last')"
-    )
-    tsc.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    tsc.add_argument("--json", action="store_true", help="machine-readable JSON")
-
-    cor = sub.add_parser(
-        "correct",
-        help="replace unique substrings in a session's turns with human "
-        "corrections (ASR training data); dry-run unless --apply",
-    )
-    cor.add_argument("session", help="session id")
-    cor.add_argument(
-        "--fix",
-        action="append",
-        type=_parse_fix,
-        required=True,
-        metavar="OLD=>NEW",
-        help="replace unique substring OLD with NEW (repeatable)",
-    )
-    cor.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    cor.add_argument(
-        "--apply", action="store_true", help="write the corrections (default: dry-run)"
-    )
 
     scan = sub.add_parser(
         "scan-hallucinations",
