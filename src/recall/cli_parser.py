@@ -38,15 +38,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
     parser = argparse.ArgumentParser(prog="recall")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    ver = sub.add_parser("verify", help="report gaps/overlaps in captured segments")
-    ver.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    ver.add_argument("--id", default="usb", help="source id to verify")
-    ver.add_argument("--tolerance-ms", type=int, default=200)
-
-    idx = sub.add_parser("index", help="ingest captured segment metadata")
-    idx.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    idx.add_argument("--id", default="usb", help="source id to index")
-
     tra = sub.add_parser("transcribe", help="transcribe captured segments")
     tra.add_argument("--out", type=Path, default=default_data_root(), help="data root")
     tra.add_argument("--id", default="usb", help="source id to transcribe")
@@ -76,15 +67,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "repair their recorded duration",
     )
     rpb.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-
-    cov = sub.add_parser(
-        "coverage", help="which mics recorded vs transcribed a turn's moment"
-    )
-    cov.add_argument("id", type=int, help="anchor transcript id")
-    cov.add_argument(
-        "--window", type=float, default=10.0, help="seconds of context each side"
-    )
-    cov.add_argument("--out", type=Path, default=default_data_root(), help="data root")
 
     scan = sub.add_parser(
         "scan-hallucinations",

@@ -51,7 +51,6 @@ from recall.reprocess import reprocess
 from recall.sources import AudioSource, SourceKind
 from recall.speakerid import pyannote_embed
 from recall.store import Store
-from recall.timeline import find_gaps, find_overlaps
 from recall.vad import silero_speech_regions
 from recall.vocabulary import build_initial_prompt
 from recall.wer import word_error_rate
@@ -163,40 +162,6 @@ def recording_refusal(out: Path, *, allow: bool) -> str | None:
         "cost speech (two Whispers starve the recorder). Pause first with "
         "`recall pause --minutes N`, or pass --while-recording to run anyway."
     )
-
-
-def _cmd_verify(args: argparse.Namespace) -> int:
-    source_dir = args.out / args.id
-    segments = scan_segments(source_dir, args.id)
-    tolerance = timedelta(milliseconds=args.tolerance_ms)
-    gaps = find_gaps(segments, tolerance=tolerance)
-    overlaps = find_overlaps(segments, tolerance=tolerance)
-
-    print(f"source {args.id!r}: {len(segments)} segments")
-    if segments:
-        print(f"  span: {segments[0].start} .. {segments[-1].end}")
-    print(f"  overlaps: {len(overlaps)}")
-    if gaps:
-        print(f"  GAPS: {len(gaps)}")
-        for gap in gaps:
-            print(f"    {gap.start} .. {gap.end}  ({gap.duration})")
-        return 1
-    print("  gaps: 0 — continuous coverage ✓")
-    return 0
-
-
-def _cmd_index(args: argparse.Namespace) -> int:
-    source = _source_found_on_disk(args.id)
-    segments = scan_segments(args.out / args.id, args.id)
-    store = Store.open(_db_path(args.out))
-    try:
-        store.add_source(source)
-        for segment in segments:
-            store.add_audio_segment(segment)
-    finally:
-        store.close()
-    print(f"indexed {len(segments)} audio segments for source {args.id!r}")
-    return 0
 
 
 def _cmd_transcribe(args: argparse.Namespace) -> int:
@@ -414,26 +379,6 @@ def _cmd_reprobe(args: argparse.Namespace) -> int:
     finally:
         store.close()
     print(f"reprobe: repaired {repaired} truncated-indexed segments")
-    return 0
-
-
-def _cmd_coverage(args: argparse.Namespace) -> int:
-    store = Store.open(_db_path(args.out))
-    try:
-        anchor = store.turns_by_id([args.id])
-        if not anchor:
-            print(f"no turn {args.id}")
-            return 1
-        turn = anchor[0]
-        pad = timedelta(seconds=args.window)
-        coverage = store.moment_coverage(turn.start - pad, turn.end + pad)
-    finally:
-        store.close()
-    when = turn.start.astimezone()
-    print(f"moment of #{turn.id}  {when:%a %d %b %Y %H:%M:%S} (±{args.window:g}s):")
-    for c in coverage:
-        rec = "recorded" if c.recorded else "silent"
-        print(f"  {c.source_id:8} {rec:9} turns={c.turns}")
     return 0
 
 
@@ -1101,13 +1046,10 @@ _COMMANDS = {
     "resume": _cmd_resume,
     "capture-trace": _cmd_capture_trace,
     "repair-transcripts": _cmd_repair_transcripts,
-    "verify": _cmd_verify,
-    "index": _cmd_index,
     "transcribe": _cmd_transcribe,
     "reprocess": _cmd_reprocess,
     "score-asr": _cmd_score_asr,
     "reprobe": _cmd_reprobe,
-    "coverage": _cmd_coverage,
     "redrive": _cmd_redrive,
     "refine": _cmd_refine,
     "scan-hallucinations": _cmd_scan_hallucinations,
