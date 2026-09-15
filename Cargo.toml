@@ -5,9 +5,10 @@
 #
 #   audiocore  the shared DSP + segment-grammar library
 #   audiod     the Mac's audio plane (capture, ingest, upload)
+#   cli        the archive from a terminal, over the fleet's own API
 #   doctor     the Mac's health agent, reporting to fleetwatch
 #   recalld    the fleet's system-of-record daemon on Isis
 #   runner     the Mac's job orchestration against recalld's queue
 [workspace]
 resolver = "3"
-members = ["audiocore", "audiod", "doctor", "recalld", "runner"]
+members = ["audiocore", "audiod", "cli", "doctor", "recalld", "runner"]

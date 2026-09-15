@@ -172,6 +172,9 @@
               # sandboxed build with "failed to read runner/Cargo.toml".
               ./doctor
               ./runner
+              # The terminal client. Not deployed as an agent, but a workspace
+              # member — cargo cannot load the graph without it.
+              ./cli
               # The one licence-clean speech clip (#1433). This entry was removed
               # on 2026-09-05 as pointless — every fixture was gitignored audio,
               # so nothing could arrive — and is back because one CAN now, which

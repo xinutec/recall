@@ -1,0 +1,348 @@
+//! `recall-cli` against the REAL recalld router, with the SSO gate RAISED.
+//!
+//! ⚠ **The gate is on in every test here, and that is the point.** The browsing
+//! routes serve household transcripts; the reason this crate carries a session
+//! cookie at all is that `recalld::webauth` refuses them without one. A test
+//! suite that booted recalld with `webauth: None` would pass while the shipped
+//! CLI could not read a single turn — which is exactly what the first run
+//! against the live fleet did.
+//!
+//! Everything is real except the archive's contents: recalld's own router, its
+//! own gate, its own `recall.sqlite` reads, and the crate's own client and
+//! rendering. The rows are written straight into a temporary database because
+//! the write path belongs to another tier.
+
+use cli::api::Api;
+use cli::render;
+use recalld::app::{Config as ServerConfig, router};
+use std::collections::HashSet;
+use std::path::Path;
+use std::sync::Arc;
+
+const SECRET: &str = "test-session-secret";
+
+/// A recalld serving `root`, with the browsing gate up. Returns its base URL.
+fn serve(root: &Path) -> String {
+    let webauth = recalld::webauth::GateState {
+        cfg: Arc::new(recalld::webauth::Config {
+            session_secret: SECRET.to_owned(),
+            client_id: "id".to_owned(),
+            client_secret: "secret".to_owned(),
+            nc_base_url: "http://nextcloud.invalid".to_owned(),
+            nc_internal_url: "http://nextcloud.invalid".to_owned(),
+            redirect_uri: "http://recall.invalid/auth/callback".to_owned(),
+            // Empty = any authenticated user, which is what a test needs; the
+            // fleet sets this to one name.
+            allowed_users: HashSet::new(),
+            device_token: None,
+        }),
+        now: Arc::new(|| 1_700_000_000),
+    };
+    let config = Arc::new(ServerConfig {
+        root: root.to_owned(),
+        tokens: None,
+        read_token: None,
+        max_body_bytes: 16 * 1024 * 1024,
+        webauth: Some(webauth),
+        sync_token: None,
+        upstream: None,
+        frontend: None,
+    });
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            tx.send(listener.local_addr().expect("addr")).expect("send");
+            axum::serve(listener, router(config)).await.expect("serve");
+        });
+    });
+    format!("http://{}", rx.recv().expect("addr"))
+}
+
+/// A cookie the gate will accept, minted the way the OAuth callback mints one.
+fn session() -> String {
+    recalld::webauth::make_session_cookie(
+        SECRET,
+        &recalld::webauth::Session {
+            user_id: "pippijn".to_owned(),
+            display_name: "Pippijn".to_owned(),
+        },
+        1_700_000_000,
+    )
+    .expect("cookie")
+}
+
+/// The minimum `recall.sqlite` the read routes need, plus one turn.
+///
+/// The schema is written out rather than imported because this is the PYTHON
+/// tier's schema (`recall.store_schema` owns it) and recalld only reads it. A
+/// column list that drifts from the real one should fail here loudly.
+fn archive(root: &Path, text: &str, speaker: Option<&str>, guess: Option<(&str, f64)>) -> i64 {
+    let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("db");
+    conn.execute_batch(
+        "CREATE TABLE audio_segments (
+             id INTEGER PRIMARY KEY, source_id TEXT
+         );
+         CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT);
+         CREATE TABLE transcript_segments (
+             id                  INTEGER PRIMARY KEY,
+             audio_segment_id    INTEGER REFERENCES audio_segments(id),
+             start_utc           TEXT NOT NULL,
+             end_utc             TEXT NOT NULL,
+             text                TEXT NOT NULL,
+             language            TEXT,
+             language_confidence REAL,
+             asr_confidence      REAL,
+             asr_model           TEXT NOT NULL,
+             speaker_label       TEXT,
+             speaker_id          INTEGER REFERENCES speakers(id),
+             superseded_by       INTEGER REFERENCES transcript_segments(id),
+             created_utc         TEXT,
+             provenance          TEXT,
+             hidden_reason       TEXT,
+             loudness            REAL,
+             speaker_guess       TEXT,
+             speaker_score       REAL,
+             speaker_cluster     TEXT,
+             word_timings        TEXT
+         );
+         CREATE VIRTUAL TABLE transcript_fts USING fts5(text);
+         CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         CREATE TABLE capture_events (
+             id INTEGER PRIMARY KEY, utc TEXT NOT NULL, kind TEXT NOT NULL,
+             source_id TEXT, detail TEXT
+         );
+         CREATE TABLE corrections (
+             id                    INTEGER PRIMARY KEY,
+             transcript_segment_id INTEGER REFERENCES transcript_segments(id),
+             audio_segment_id      INTEGER REFERENCES audio_segments(id),
+             start_utc             TEXT NOT NULL,
+             end_utc               TEXT NOT NULL,
+             original_text         TEXT NOT NULL,
+             corrected_text        TEXT NOT NULL,
+             language              TEXT,
+             created_utc           TEXT NOT NULL,
+             speaker               TEXT,
+             hidden_reason         TEXT,
+             audio_confidence      REAL
+         );
+         CREATE TABLE speaker_embeddings (
+             id          INTEGER PRIMARY KEY,
+             speaker_id  INTEGER NOT NULL REFERENCES speakers(id),
+             vector      TEXT NOT NULL,
+             created_utc TEXT NOT NULL,
+             source_correction_id INTEGER,
+             source_segment_id    INTEGER
+         );
+         CREATE TABLE sources (
+             id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+             port INTEGER, event_db REAL, noise_shape BLOB
+         );
+         INSERT INTO sources (id, name, kind) VALUES ('usb', 'USB mic', 'coreaudio');
+         INSERT INTO audio_segments (id, source_id) VALUES (1, 'usb');",
+    )
+    .expect("schema");
+    conn.execute(
+        "INSERT INTO transcript_segments
+             (audio_segment_id, start_utc, end_utc, text, language, asr_confidence,
+              asr_model, speaker_label, speaker_guess, speaker_score, speaker_cluster,
+              provenance, loudness, created_utc)
+         VALUES (1, '2026-09-10T12:00:00+00:00', '2026-09-10T12:00:04+00:00', ?1,
+                 'en', 0.42, 'whisper', ?2, ?3, ?4, 'SPEAKER_01', 'per-mic', 0.03,
+                 '2026-09-10T12:00:05+00:00')",
+        rusqlite::params![text, speaker, guess.map(|(n, _)| n), guess.map(|(_, s)| s)],
+    )
+    .expect("turn");
+    let id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
+        (id, text),
+    )
+    .expect("fts");
+    id
+}
+
+/// ⚠ The first thing to check, because it is what the live fleet did: without a
+/// session the archive is refused, and the refusal SAYS so rather than dumping a
+/// status code.
+#[test]
+fn without_a_session_the_archive_is_refused_and_the_message_says_what_to_do() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), None);
+
+    let err = api.search("marmalade", 10).expect_err("must refuse");
+    let said = err.to_string();
+    assert!(said.contains("not signed in"), "got: {said}");
+    assert!(said.contains("recall_session"), "got: {said}");
+}
+
+#[test]
+fn a_rejected_session_is_reported_as_rejected_not_as_missing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), Some("not-a-real-token".to_owned()));
+
+    let said = api
+        .search("marmalade", 10)
+        .expect_err("must refuse")
+        .to_string();
+    assert!(said.contains("session rejected"), "got: {said}");
+}
+
+#[test]
+fn a_search_with_a_session_finds_the_turn_and_renders_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let hits = api.search("marmalade", 10).expect("search");
+    assert_eq!(hits.len(), 1, "one turn matches");
+    let line = render::hit(&hits[0]);
+    assert!(line.contains("marmalade on the windowsill"), "got: {line}");
+    assert!(line.contains("[en]"), "the language is shown: {line}");
+    assert!(line.contains("(usb)"), "the source is shown: {line}");
+}
+
+/// The attribution rule, proven against a REAL row rather than a constructed
+/// `Turn`: the unit test fixes the rendering, this fixes that recalld puts the
+/// guess and its score where the rendering looks for them.
+#[test]
+fn an_unconfirmed_guess_arrives_with_its_score_and_is_shown_as_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(
+        dir.path(),
+        "marmalade on the windowsill",
+        None,
+        Some(("Pippijn", 0.76)),
+    );
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let hits = api.search("marmalade", 10).expect("search");
+    assert_eq!(render::attribution(&hits[0]), "Pippijn ~76%");
+    // …and the read-through transcript must NOT assert it.
+    assert_eq!(render::who(&hits[0]), "SPEAKER_01");
+}
+
+#[test]
+fn a_confirmed_name_reaches_both_renderings() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(
+        dir.path(),
+        "marmalade on the windowsill",
+        Some("Pippijn"),
+        Some(("Someone Else", 0.9)),
+    );
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let hits = api.search("marmalade", 10).expect("search");
+    assert_eq!(render::attribution(&hits[0]), "Pippijn");
+    assert_eq!(render::who(&hits[0]), "Pippijn");
+}
+
+#[test]
+fn a_turn_can_be_fetched_by_id_and_dumped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let id = archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let turns = api.transcripts(&[id]).expect("transcripts");
+    assert_eq!(turns.len(), 1);
+    let dump = render::details(&[id], &turns);
+    assert!(dump.contains("status   : visible"), "got:\n{dump}");
+    assert!(dump.contains("src=usb"), "got:\n{dump}");
+    assert!(dump.contains("(quiet)"), "loudness 0.03 is quiet:\n{dump}");
+}
+
+#[test]
+fn the_timeline_answers_with_the_newest_turns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let page = api.timeline(10, None).expect("timeline");
+    assert_eq!(page.items.len(), 1);
+    assert!(!page.has_more);
+}
+
+/// A turn scored 0.42 is under the review threshold, so it is what a human
+/// should look at.
+#[test]
+fn the_review_queue_surfaces_a_low_confidence_turn() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let turns = api.review(10).expect("review");
+    assert_eq!(turns.len(), 1);
+}
+
+/// ⚠ The write, end to end: the correction must reach the corpus AND the old id
+/// must then answer with the new turn. The second half is why `render::details`
+/// prints which id answered — without this assertion the supersession note is
+/// speculation about what the route does.
+#[test]
+fn a_correction_is_applied_and_the_old_id_then_answers_with_the_new_turn() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let id = archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let new_id = api
+        .correct(id, "marmalade on the window sill")
+        .expect("correct");
+    assert_ne!(new_id, id, "a correction is a new turn, never an overwrite");
+
+    let turns = api.transcripts(&[id]).expect("transcripts");
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0].id, new_id,
+        "the old id answers with its replacement"
+    );
+    assert_eq!(turns[0].text, "marmalade on the window sill");
+
+    let dump = render::details(&[id], &turns);
+    assert!(
+        dump.contains(&format!("#{id} was superseded by this")),
+        "got:\n{dump}"
+    );
+}
+
+/// `sources` and `capture` are device-exempt, and a CLI with no session must
+/// still be able to ask them — that is what makes `recall-cli capture` usable
+/// for checking the pause before doing anything else.
+#[test]
+fn capture_and_sources_answer_without_a_session() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), None);
+
+    api.capture().expect("capture answers unauthenticated");
+    api.sources().expect("sources answers unauthenticated");
+}
+
+/// ⚠ The query string is BUILT BY HAND here (`api::urlencode`), so what proves
+/// it is the real router parsing it, not a unit test agreeing with itself. A
+/// space and a multi-byte character are the two cases the household archive
+/// makes routine: search terms are names and phrases.
+#[test]
+fn a_multi_word_search_term_survives_the_query_string() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "marmalade on the windowsill", None, None);
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let hits = api.search("marmalade windowsill", 10).expect("search");
+    assert_eq!(hits.len(), 1, "both words matched the same turn");
+}
+
+#[test]
+fn a_multi_byte_search_term_survives_the_query_string() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "koffie in het café", None, None);
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    let hits = api.search("café", 10).expect("search");
+    assert_eq!(hits.len(), 1, "an accented term reached the server intact");
+}

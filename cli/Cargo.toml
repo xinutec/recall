@@ -1,0 +1,40 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2024"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# The fleet baseline (life is the reference table). `pedantic` does not cover
+# these — they live in clippy's `restriction` group — so a new crate that does
+# not deny them starts outside the ratchet the other five are inside.
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[[bin]]
+name = "recall-cli"
+path = "src/main.rs"
+
+[dependencies]
+# Blocking HTTP, like `runner`: a person typing a command waits for one answer,
+# so an async runtime would buy nothing and cost a dependency.
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Turning the archive's stored UTC into the local wall-clock the speech happened
+# on — the one thing every rendered line here does.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+
+[dev-dependencies]
+# The REAL router, not a stand-in. This crate's whole claim is that it asks the
+# system of record the right questions and reads the answers correctly, and a
+# mock server would encode my belief about both.
+recalld = { path = "../recalld" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+axum = "0.8"
+tempfile = "3"

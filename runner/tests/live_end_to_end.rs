@@ -157,20 +157,36 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
         .spawn()
         .expect("the agent starts");
 
-    // ffmpeg has to be listening before the first datagram: UDP drops what
-    // arrives at a closed socket, and a test that raced would look like a
-    // silent room.
+    // ⚠ **UDP DROPS WHAT ARRIVES AT A CLOSED SOCKET, so a missed burst is a
+    // RACE, not a slow path — and a longer deadline cannot wait for something
+    // that was never sent.** This published ONCE after a flat 2-second sleep. It
+    // passed in 7s on an idle machine and failed inside the gate on 2026-09-15,
+    // burning the whole 30s deadline while another repository's gate ran: by the
+    // time anything was listening the reading was over.
+    //
+    // So the reading is sent AGAIN until a turn appears. That is sound whatever
+    // swallowed the first burst — a late ffmpeg, a stolen port, a stalled spawn
+    // — which a readiness probe is not: binding the port ourselves to see if it
+    // is taken reports "ready" just as confidently when the holder is some other
+    // test's socket. ⚠ The cause of the gate failure is NOT established (#1630);
+    // this makes a single dropped burst survivable, and claims nothing more.
     std::thread::sleep(Duration::from_secs(2));
-    publish(port, &head);
 
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let turns = loop {
-        let turns = live_turns(root);
-        if !turns.is_empty() || Instant::now() > deadline {
-            break turns;
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut turns = Vec::new();
+    while turns.is_empty() && Instant::now() < deadline {
+        publish(port, &head);
+        // The utterance has to be cut, transcribed and pushed after the last
+        // packet lands; poll for that before sending the reading again.
+        let settle = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < settle {
+            turns = live_turns(root);
+            if !turns.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
         }
-        std::thread::sleep(Duration::from_millis(250));
-    };
+    }
     let _ = agent.kill();
     let _ = agent.wait();
     // The tap ffmpeg outlives the SIGKILL above; it exits on its own within the

@@ -63,6 +63,7 @@ COPY audiod/ audiod/
 COPY doctor/ doctor/
 COPY recalld/ recalld/
 COPY runner/ runner/
+COPY cli/ cli/
 RUN cargo build --release --locked -p recalld
 
 # --- runtime ---
