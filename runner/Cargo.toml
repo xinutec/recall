@@ -8,6 +8,13 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# The fleet baseline (docs/standards.md §7; life is the reference table).
+# `pedantic` does not cover these — they live in clippy's `restriction` group —
+# so five recall crates denied none of them. Zero occurrences today, which is
+# what makes this a ratchet rather than a cleanup.
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
 
 [dependencies]
 # The silero detector and WAV writing: the live tier must hear exactly what

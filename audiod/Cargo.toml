@@ -20,6 +20,13 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# The fleet baseline (docs/standards.md §7; life is the reference table).
+# `pedantic` does not cover these — they live in clippy's `restriction` group —
+# so five recall crates denied none of them. Zero occurrences today, which is
+# what makes this a ratchet rather than a cleanup.
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
 # Sample counts, byte offsets and dB conversion move between u64/i64/f64/i32 at
 # a handful of deliberate sites, none near a precision limit (a segment is 60 s
 # of 48 kHz s16). `try_from` ceremony would add noise, not safety.
