@@ -10,6 +10,29 @@ The store is the backbone of the memory aid. It holds:
 - `transcript_fts` — FTS5 full-text index over transcript text.
 
 Search and time-range queries return only *current* (non-superseded) segments.
+
+⚠ **This class is SHRINKING, and what is left is not all live.** The browsing
+reads moved to `recalld` and the terminal to `recall-cli`, so on 2026-09-15 nine
+methods with no production caller were deleted with their tests (`recent_transcripts`,
+`session_summaries`, `supersede_many`, `current_version`, `set_speaker_guess`,
+`mark_unreadable_capture`, `unreadable_capture_names`, `audio_segment_id_at`,
+`_count`). Twelve more have no production caller either and were KEPT, each for a
+reason worth not rediscovering:
+
+- `schema_version` is the only accessor four MIGRATION tests assert through, and
+  the migration machinery is live — `open()` calls `migrate()`.
+- `delete_source`, `delete_audio_segments` and `is_tombstoned` are the local
+  delete path AND its tombstone journal. The capability moved to the fleet; the
+  journal is what stops a deleted identity being resurrected by the next push,
+  so removing the guard along with the caller is how it comes back without it.
+- `memory` and `segments_in_range` are how eleven and seven other test files
+  respectively construct their world.
+- `set_turn_speaker`, `rename_source`, `add_capture_event`, `set_loudness`,
+  `set_audio_analysis`, `set_audio_measurement`, `source_kind`, `sources_of`,
+  `correction_count`, `pending_audio_segments`, `is_diarize_skipped` and
+  `diarize_skip_reason` set up tests for rules that ARE live.
+
+So "no production caller" is where that question starts, not where it ends.
 """
 
 from __future__ import annotations
@@ -501,44 +524,6 @@ class Store:
         )
         self._commit()
 
-    def session_summaries(self) -> list[SessionSummary]:
-        """Per uploaded session (a discrete recording, e.g. a meeting): id, name,
-        span (first segment start → last segment end), visible-turn count, and a CSV
-        of the people heard — for the sessions list. Newest first.
-
-        Only *human-confirmed* speakers are named (a real name in speaker_label);
-        everything else is 'unknown'. Voiceprint *guesses* are deliberately not shown:
-        on out-of-domain audio (a visitor's voice) they match enrolled household
-        members at high confidence — a guest can score 0.95 against a member — so no
-        score floor separates true from false, and a bare name chip would assert a
-        false attribution. Raw 'SPEAKER_nn' cluster tags are never
-        surfaced as people either. Names appear here as they're confirmed in review."""
-        rows = self._conn.execute(
-            """SELECT s.id, s.name,
-                      MIN(a.start_utc), MAX(a.end_utc),
-                      COUNT(t.id),
-                      GROUP_CONCAT(DISTINCT CASE
-                          WHEN t.id IS NULL THEN NULL
-                          WHEN t.speaker_label IS NOT NULL
-                               AND t.speaker_label NOT LIKE 'SPEAKER_%'
-                               THEN t.speaker_label
-                          ELSE 'unknown'
-                      END)
-               FROM sources s
-               JOIN audio_segments a ON a.source_id = s.id
-               LEFT JOIN transcript_segments t
-                      ON t.audio_segment_id = a.id
-                     AND t.superseded_by IS NULL AND t.hidden_reason IS NULL
-               WHERE s.kind = ?
-               GROUP BY s.id
-               ORDER BY MIN(a.start_utc) DESC""",
-            (SourceKind.UPLOAD.value,),
-        ).fetchall()
-        return [
-            SessionSummary(str(r[0]), str(r[1]), str(r[2]), str(r[3]), int(r[4]), r[5])
-            for r in rows
-        ]
-
     def add_audio_segment(self, segment: Segment) -> AudioSegmentId:
         self._conn.execute(
             """INSERT OR IGNORE INTO audio_segments
@@ -618,26 +603,6 @@ class Store:
             "UPDATE transcript_segments SET superseded_by = ? WHERE id = ?",
             (new_id, old_id),
         )
-        self._commit()
-
-    def supersede_many(
-        self, source_ids: list[TranscriptId], new_id: TranscriptId
-    ) -> None:
-        """Replace several turns with one derived turn (e.g. merged fragments).
-
-        Marks each source superseded by `new_id` and records the lineage so the
-        many-to-one derivation is auditable and reversible.
-        """
-        for source_id in source_ids:
-            self._conn.execute(
-                "UPDATE transcript_segments SET superseded_by = ? WHERE id = ?",
-                (new_id, source_id),
-            )
-            self._conn.execute(
-                """INSERT OR IGNORE INTO transcript_lineage (derived_id, source_id)
-                   VALUES (?, ?)""",
-                (new_id, source_id),
-            )
         self._commit()
 
     def hide(self, transcript_id: int, reason: str) -> None:
@@ -1005,17 +970,6 @@ class Store:
         )
         self._commit()
 
-    def audio_segment_id_at(
-        self, source: str, start: datetime
-    ) -> AudioSegmentId | None:
-        """The segment at a cross-machine identity — how the Mac resolves a fleet
-        tombstone against its own archive. None = already swept or never held."""
-        row = self._conn.execute(
-            "SELECT id FROM audio_segments WHERE source_id = ? AND start_utc = ?",
-            (source, start.isoformat()),
-        ).fetchone()
-        return AudioSegmentId(int(row["id"])) if row else None
-
     def is_tombstoned(self, source: str, start: datetime) -> bool:
         """Whether this identity was deliberately deleted here — the veto that stops
         a later sync push resurrecting it on the fleet.
@@ -1057,22 +1011,6 @@ class Store:
             (derived_id,),
         ).fetchall()
         return [int(r["source_id"]) for r in rows]
-
-    def current_version(self, transcript_id: int) -> TranscriptSegment | None:
-        """Follow the supersede chain from `transcript_id` to the live version.
-
-        A deep link to a turn that has since been corrected/reprocessed resolves
-        to the current text, not the stale original.
-        """
-        seg = self.get_transcript(transcript_id)
-        seen = {transcript_id}
-        while seg is not None and seg.superseded_by is not None:
-            nxt = seg.superseded_by
-            if nxt in seen:  # guard against a cycle
-                break
-            seen.add(nxt)
-            seg = self.get_transcript(nxt)
-        return seg
 
     def human_corrections_overlapping(
         self, audio_segment_id: int, start: datetime, end: datetime
@@ -1184,70 +1122,6 @@ class Store:
                ORDER BY start_utc""",
             (start.isoformat(), end.isoformat()),
         ).fetchall()
-        return [_row_to_segment(row) for row in rows]
-
-    def recent_transcripts(
-        self,
-        *,
-        limit: int = 200,
-        before: datetime | None = None,
-        after: datetime | None = None,
-        source: str | None = None,
-    ) -> list[TranscriptSegment]:
-        """Current transcripts, for paging the timeline either direction.
-
-        `before`: the newest `limit` turns older than the cursor (newest-first) —
-        page back. `after`: the oldest `limit` turns newer than the cursor
-        (oldest-first) — page forward, contiguous with what's already loaded.
-        `source`: restrict to one recorder/session (e.g. a meeting upload).
-
-        The cursor on the wire is a bare start time, and turns can share one
-        (co-located mics, corrections), so a full page extends past `limit` to
-        include every turn tied with its boundary — a page that split the group
-        would make the next strict-< page silently skip the group's remainder.
-        Callers therefore treat "page length >= limit" as has-more.
-        """
-        # Join the audio segment's source so the timeline can fold same-moment
-        # turns across mics; LEFT JOIN keeps source-less turns (e.g. corrections
-        # with no audio segment). start_utc is on both tables, so qualify it.
-        select = (
-            "SELECT t.*, a.source_id FROM transcript_segments t "
-            "LEFT JOIN audio_segments a ON t.audio_segment_id = a.id "
-            "WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL"
-        )
-        where = [""]
-        params: list[str | int] = []
-        if source is not None:
-            where.append("AND a.source_id = ?")
-            params.append(source)
-        if before is not None:
-            _require_aware(before, "before")
-            where.append("AND t.start_utc < ?")
-            params.append(before.isoformat())
-        if after is not None:
-            _require_aware(after, "after")
-            where.append("AND t.start_utc > ?")
-            params.append(after.isoformat())
-        # Forward paging takes the page adjacent to the cursor (oldest-first); every
-        # other case is newest-first. The id tiebreak makes same-instant order
-        # deterministic (and matches the tie-extension below).
-        order = "ASC" if after is not None else "DESC"
-        rows = self._conn.execute(
-            f"{select}{' '.join(where)} ORDER BY t.start_utc {order}, t.id {order}"
-            " LIMIT ?",
-            [*params, limit],
-        ).fetchall()
-        if rows and len(rows) == limit:
-            # Full page: pull in the boundary's remaining ties (see docstring). The
-            # ties satisfy the before/after bounds by having the boundary's own time.
-            boundary = rows[-1]["start_utc"]
-            seen = [row["id"] for row in rows if row["start_utc"] == boundary]
-            marks = ",".join("?" * len(seen))
-            rows += self._conn.execute(
-                f"{select}{' '.join(where)} AND t.start_utc = ?"
-                f" AND t.id NOT IN ({marks}) ORDER BY t.id {order}",
-                [*params, boundary, *seen],
-            ).fetchall()
         return [_row_to_segment(row) for row in rows]
 
     def pending_audio_segments(self) -> list[Segment]:
@@ -1412,19 +1286,6 @@ class Store:
         self._conn.execute(
             "UPDATE transcript_segments SET loudness = ? WHERE id = ?",
             (value, segment_id),
-        )
-        self._commit()
-
-    def set_speaker_guess(self, segment_id: int, name: str, score: float) -> None:
-        """Persist a turn's best-matching enrolled voice and its match strength.
-
-        Display-only (the timeline shows "name score%"); never touches the human-
-        confirmed speaker_label.
-        """
-        self._conn.execute(
-            "UPDATE transcript_segments SET speaker_guess = ?, speaker_score = ? "
-            "WHERE id = ?",
-            (name, score, segment_id),
         )
         self._commit()
 
@@ -1607,27 +1468,6 @@ class Store:
         ).fetchall()
         return [(int(row["id"]), str(row["path"])) for row in rows]
 
-    def mark_unreadable_capture(self, source_id: str, name: str) -> bool:
-        """Record a capture file ffprobe can't decode (truncated/corrupt) so the scan
-        stops re-probing it every pass — the file is KEPT (its bytes may still hold
-        audio), just skipped via `known`. Returns True the first time it's recorded (so
-        the caller logs it exactly once), False if already known. See v42."""
-        cursor = self._conn.execute(
-            "INSERT OR IGNORE INTO unreadable_captures (source_id, name, recorded_utc) "
-            "VALUES (?, ?, ?)",
-            (source_id, name, datetime.now(UTC).isoformat()),
-        )
-        self._commit()
-        return cursor.rowcount == 1
-
-    def unreadable_capture_names(self, source_id: str) -> set[str]:
-        """Filenames already recorded unreadable for `source_id` — folded into the
-        scan's `known` set so they're skipped without a re-probe."""
-        rows = self._conn.execute(
-            "SELECT name FROM unreadable_captures WHERE source_id = ?", (source_id,)
-        ).fetchall()
-        return {str(row["name"]) for row in rows}
-
     def audio_segment_ref(
         self, audio_segment_id: AudioSegmentId
     ) -> tuple[str, datetime] | None:
@@ -1681,9 +1521,6 @@ class Store:
             "SELECT count(*) AS n FROM corrections WHERE hidden_reason IS NULL"
         ).fetchone()
         return int(row["n"])
-
-    def _count(self, sql: str) -> int:
-        return int(self._conn.execute(sql).fetchone()["n"])
 
     def source_rows(self) -> list[SourceRow]:
         """Registered sources — for the fleet liveness view. The kind parses through
@@ -1907,8 +1744,8 @@ def _row_to_segment(row: sqlite3.Row) -> TranscriptSegment:
         speaker_guess=_opt_str(row["speaker_guess"]),
         speaker_score=_opt_float(row["speaker_score"]),
         speaker_cluster=_opt_str(row["speaker_cluster"]),
-        # Present only when the query joins it in (e.g. recent_transcripts); other
-        # callers select transcript_segments alone, so default to None.
+        # Present only when the query LEFT JOINs audio_segments in; other callers
+        # select transcript_segments alone, so default to None.
         source_id=(
             # `in` on a sqlite3.Row checks values, not keys, so .keys() is right.
             _opt_str(row["source_id"])

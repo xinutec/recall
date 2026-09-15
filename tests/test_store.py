@@ -139,19 +139,6 @@ def test_diarize_skip_drops_a_segment_from_the_rediarize_picker() -> None:
     assert store.audio_segments_to_rediarize(limit=10) == [audio_id]
 
 
-def test_unreadable_capture_is_recorded_once_and_then_known() -> None:
-    # An unreadable capture file is recorded once (so the caller logs it once) and then
-    # listed as known (so the scan skips re-probing it) — the fix for the re-probe loop.
-    store = Store.memory()
-    assert store.unreadable_capture_names("usb") == set()
-    assert store.mark_unreadable_capture("usb", "usb-20260627T135734.opus") is True
-    assert store.mark_unreadable_capture("usb", "usb-20260627T135734.opus") is False
-    assert store.unreadable_capture_names("usb") == {"usb-20260627T135734.opus"}
-    # scoped per source
-    assert store.mark_unreadable_capture("pixel9", "pixel9-x.opus") is True
-    assert store.unreadable_capture_names("usb") == {"usb-20260627T135734.opus"}
-
-
 def test_rollback_recovers_a_connection_wedged_by_a_failed_write(
     tmp_path: Path,
 ) -> None:
@@ -380,70 +367,6 @@ def test_provenance_and_created_round_trip() -> None:
     assert seg.created == BASE
 
 
-def test_supersede_many_records_lineage() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    frags = [
-        store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=i),
-            end=BASE + timedelta(seconds=i + 1),
-            text=f"frag{i}",
-            asr_model="v1",
-        )
-        for i in range(3)
-    ]
-    merged = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=3),
-        text="frag0 frag1 frag2",
-        asr_model="v2-merge",
-    )
-    store.supersede_many(frags, merged)
-
-    # the fragments drop out of the current view; the merge remains
-    current = store.segments_in_range(BASE, BASE + timedelta(seconds=10))
-    assert [s.id for s in current] == [merged]
-    # lineage is auditable
-    assert store.sources_of(merged) == sorted(frags)
-
-
-def test_current_version_follows_supersede_chain() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    v1 = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=3),
-        text="one",
-        asr_model="v1",
-    )
-    v2 = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=3),
-        text="two",
-        asr_model="v2",
-    )
-    v3 = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=3),
-        text="three",
-        asr_model="human",
-    )
-    store.supersede(v1, v2)
-    store.supersede(v2, v3)
-    # a link to the original resolves to the live version
-    resolved = store.current_version(v1)
-    assert resolved is not None
-    assert resolved.id == v3
-    assert resolved.text == "three"
-
-
 def test_human_corrections_overlapping_by_audio_time() -> None:
     store = Store.memory()
     store.add_source(_source())
@@ -552,106 +475,6 @@ def test_segments_in_range_excludes_superseded() -> None:
         BASE - timedelta(seconds=1), BASE + timedelta(seconds=10)
     )
     assert [r.text for r in rows] == ["new"]
-
-
-def test_recent_transcripts_newest_first_and_paged() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    for i in range(3):
-        store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=i),
-            end=BASE + timedelta(seconds=i + 1),
-            text=f"turn-{i}",
-            asr_model="v1",
-        )
-
-    newest = store.recent_transcripts(limit=2)
-    assert [r.text for r in newest] == ["turn-2", "turn-1"]
-
-    older = store.recent_transcripts(limit=10, before=newest[-1].start)
-    assert [r.text for r in older] == ["turn-0"]
-
-
-def test_recent_transcripts_pages_forward_with_after() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    for i in range(4):
-        store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=i),
-            end=BASE + timedelta(seconds=i + 1),
-            text=f"turn-{i}",
-            asr_model="v1",
-        )
-
-    # forward paging: oldest-first, the page immediately newer than the cursor
-    newer = store.recent_transcripts(limit=2, after=BASE)
-    assert [r.text for r in newer] == ["turn-1", "turn-2"]
-    nextp = store.recent_transcripts(limit=2, after=newer[-1].start)
-    assert [r.text for r in nextp] == ["turn-3"]
-
-
-def test_recent_transcripts_page_never_splits_a_same_timestamp_group() -> None:
-    # Turns can share an exact start (co-located mics, a correction inheriting its
-    # original's time). The paging cursor on the wire is start_utc ALONE, so a page
-    # that cut such a group in half would make the next strict-< page skip the
-    # group's remainder — turns silently missing from the timeline. A full page
-    # therefore extends to swallow its boundary's ties.
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-
-    def add(start: datetime, text: str) -> None:
-        store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=start,
-            end=start + timedelta(seconds=1),
-            text=text,
-            asr_model="v1",
-        )
-
-    add(BASE, "oldest")
-    for i in range(3):  # three turns at the SAME instant
-        add(BASE + timedelta(seconds=10), f"tie-{i}")
-    add(BASE + timedelta(seconds=20), "newest")
-
-    # Newest-first, limit 2: the boundary lands inside the tie group → the page
-    # grows to include all of it.
-    page1 = store.recent_transcripts(limit=2)
-    assert [r.text for r in page1] == ["newest", "tie-2", "tie-1", "tie-0"]
-    page2 = store.recent_transcripts(limit=2, before=page1[-1].start)
-    assert [r.text for r in page2] == ["oldest"]  # nothing skipped, nothing repeated
-
-    # Forward paging, same rule.
-    fwd1 = store.recent_transcripts(limit=2, after=BASE)
-    assert [r.text for r in fwd1] == ["tie-0", "tie-1", "tie-2"]
-    fwd2 = store.recent_transcripts(limit=2, after=fwd1[-1].start)
-    assert [r.text for r in fwd2] == ["newest"]
-
-
-def test_recent_transcripts_excludes_superseded() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    old = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=1),
-        text="old",
-        asr_model="v1",
-    )
-    new = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=1),
-        text="new",
-        asr_model="v2",
-    )
-    store.supersede(old, new)
-    assert [r.text for r in store.recent_transcripts()] == ["new"]
 
 
 def test_voiceprint_queue_offers_human_labelled_turns_gated() -> None:
@@ -1051,65 +874,6 @@ def test_embed_worklist_skips_too_short_clips() -> None:
     assert [s.id for s in store.segments_missing_embedding()] == [good]
 
 
-def test_session_summaries_names_only_confirmed_speakers() -> None:
-    store = Store.memory()
-    store.add_source(
-        AudioSource(id="meeting-x", name="Meeting X", kind=SourceKind.UPLOAD, spec="")
-    )
-    audio_id = store.add_audio_segment(
-        Segment(
-            source_id="meeting-x",
-            sequence=0,
-            start=BASE,
-            end=BASE + timedelta(seconds=10),
-            path="m.mp3",
-            sample_rate=48000,
-            channels=1,
-        )
-    )
-    # A human-confirmed speaker (a real name in speaker_label) — this IS shown.
-    confirmed = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=1),
-        text="hello",
-        asr_model="m",
-    )
-    store._conn.execute(
-        "UPDATE transcript_segments SET speaker_label = 'Pippijn' WHERE id = ?",
-        (confirmed,),
-    )
-    # A confident voiceprint *guess* (Alice at 0.95) — a real false-match shape on a
-    # doctor meeting. It must NOT be named: guesses aren't asserted in the summary.
-    guessed = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=2),
-        end=BASE + timedelta(seconds=3),
-        text="world",
-        asr_model="m",
-    )
-    store.set_speaker_guess(guessed, "Alice", 0.95)
-    # A raw diarization cluster — never surfaced as a person.
-    cluster = store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE + timedelta(seconds=4),
-        end=BASE + timedelta(seconds=5),
-        text="again",
-        asr_model="m",
-    )
-    store._conn.execute(
-        "UPDATE transcript_segments SET speaker_label = 'SPEAKER_01' WHERE id = ?",
-        (cluster,),
-    )
-    store._conn.commit()
-
-    speakers = (store.session_summaries()[0][5] or "").split(",")
-    assert "Pippijn" in speakers  # human-confirmed → named
-    assert "Alice" not in speakers  # a guess, even at 0.95 → never asserted
-    assert "SPEAKER_01" not in speakers  # raw cluster tag → never a person
-    assert "unknown" in speakers  # the guessed + clustered turns read as unknown
-
-
 def test_name_voice_labels_a_whole_cluster_in_a_source() -> None:
     store = Store.memory()
     store.add_source(_source())
@@ -1452,14 +1216,6 @@ def test_unmirrored_segments_are_the_processed_unstamped_ones() -> None:
     # (transcribed_utc is stamped with the segment's end time)
     assert store.unmirrored_segments(older_than=BASE + timedelta(seconds=61)) == []
     assert store.unmirrored_segments(older_than=datetime.now(UTC)) == [processed]
-
-
-def test_audio_segment_id_at_resolves_the_cross_machine_identity() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    assert store.audio_segment_id_at("usb", BASE) == audio_id
-    assert store.audio_segment_id_at("usb", BASE + timedelta(seconds=1)) is None
 
 
 def test_register_source_corrects_a_guessed_kind_but_keeps_a_human_name() -> None:

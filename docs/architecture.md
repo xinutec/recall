@@ -243,7 +243,7 @@ archive on 2026-09-06:
 naming strip, where a person names each voice once and the label applies to every turn
 of that voice. Reading a null `speaker_label` as "diarization did not run" inverts the
 finding completely — it says a person has not been here yet, and the machine half is
-done. Both `session_summaries` and `name_voice` document this; the query does not.
+done. Both `recalld::sessions::sessions` and `name_voice` document this; the query does not.
 
 So use case 2 has no pipeline defect on the evidence available. Its measured gap is
 **11 meetings awaiting a few minutes each of naming**, which is the same shape as the
