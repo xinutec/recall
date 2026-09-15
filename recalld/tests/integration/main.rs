@@ -27,6 +27,7 @@ mod audio;
 mod capture;
 mod conversations;
 mod devices;
+mod diarized;
 mod ingest;
 mod labels;
 mod labels_write;

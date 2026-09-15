@@ -534,6 +534,61 @@ in
     };
   };
 
+  # Stage E4: the `voices` runner — diarization for the room stream.
+  #
+  # Same binary and same loop as recall-runner; only the shim differs, and the
+  # shim NAMES ITSELF over the protocol, so `runner` discovers that this one can
+  # do `diarize-room` rather than being told. Pointing it at the wrong module
+  # would make it lease work it can only refuse, which is why an unknown name is
+  # fatal there.
+  #
+  # ⚠ **A SECOND GPU CONSUMER, and that is the whole risk.** It competes with
+  # the recorder and with the asr runner for the same Metal device. Nice 15 and
+  # LowPriorityIO put it BELOW both: capture must never lose a minute to
+  # diarization, which is re-derivable, and the archive pass earns more per
+  # second of GPU than a speaker split does.
+  #
+  # ⚠ It holds NO store and writes no turns. The result goes back to the queue;
+  # `recalld::diarized` decides what it means and owns the only write —
+  # deliberately, because that write REPLACES a transcript and the guards
+  # against emptying one belong beside the database, not beside the model.
+  #
+  # ⚠ No `--pulse`: the archive heartbeat is the asr runner's claim about
+  # transcription throughput, and a second process stamping it would make a
+  # stalled transcriber look healthy because diarization was still moving.
+  launchd.agents."org.xinutec.recall-voices" = daemon {
+    label = "org.xinutec.recall-voices";
+    name = "voices";
+    args = [ ];
+    program = pkgs.writeShellApplication {
+      name = "recall-voices";
+      runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
+      text = ''
+        # RECALL_SYNC_TOKEN lives in .env and must never enter the store.
+        ENV_FILE="''${RECALL_ENV:-$HOME/.config/recall/env}"
+        if [ -r "$ENV_FILE" ]; then
+          set -a
+          # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
+          . "$ENV_FILE"
+          set +a
+        fi
+
+        exec env RUST_LOG=info \
+          ${
+            recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
+          }/bin/runner \
+            --shim ${venvPython} -m recall.shim_voices
+      '';
+    };
+    extra = {
+      KeepAlive = true;
+      RunAtLoad = true;
+      LowPriorityIO = true;
+      # Below recall-runner's 10: the archive pass wins the GPU.
+      Nice = 15;
+    };
+  };
+
   # Store-and-forward delivery (docs/architecture.md, stage B): every closed
   # segment to recalld on Isis, sha-256 receipt verified against a local
   # re-hash before it is recorded delivered. A timer like recall-sync; each

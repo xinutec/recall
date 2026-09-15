@@ -807,7 +807,11 @@ pub fn ensure_ledger(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 /// the two turn streams and the segment registrar — and they reach the SAME
 /// clip by the same name. A shared key would let one pass's refusal retire
 /// another's work silently, with nothing anywhere saying so.
-fn ledger(
+/// Record a terminal decision about a clip.
+///
+/// # Errors
+/// If the database refuses.
+pub fn ledger(
     conn: &rusqlite::Connection,
     kind: &str,
     filename: &str,

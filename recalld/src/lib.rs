@@ -12,6 +12,7 @@ pub mod audio;
 pub mod capture;
 pub mod conversations;
 pub mod devices;
+pub mod diarized;
 pub mod ingest;
 pub mod instant;
 pub mod labels;

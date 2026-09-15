@@ -302,8 +302,90 @@ fn spawn_background_passes(root: &std::path::Path) {
     // clips. Turning both on at once is how the same minute gets transcribed
     // twice.
     spawn_turn_writer(root.clone(), recalld::turns::PER_MIC);
+    spawn_diarized_writer(root.clone());
     spawn_segment_registrar(root.clone());
     spawn_segment_deriver(root.clone());
+}
+
+/// Stage E4: turn finished `diarize-room` results into speaker-split turns.
+///
+/// ⚠ **THE ONLY LOOP IN THIS DAEMON THAT REPLACES A TRANSCRIPT.** Everything
+/// else derives, registers, or fills a gap; this hides turns somebody can read
+/// and writes over them. `refine.py` — which it replaces — blanked 132 segments
+/// of real household conversation doing exactly this, by applying its filters
+/// AFTER hiding. `diarized::decide` is where that cannot happen: the whole
+/// decision is made on data before a row is touched, and it either replaces or
+/// keeps.
+///
+/// ⚠ **Nothing feeds it until a `voices` runner is deployed.** A diarize job is
+/// derived for every transcribed block, but until something leases them there
+/// are no results and this loop does nothing every two minutes. That is the
+/// intended resting state, and the switch is on the Mac, not here.
+///
+/// ⚠ **HOW TO PUT IT BACK — TWO PLANES, and the hides are the half that matters.**
+///
+/// ```sql
+/// -- meaning plane (recall.sqlite): restore what the pass covered, then drop
+/// -- what it wrote. In this order: the second statement is what makes the
+/// -- blocks eligible again, and doing it first leaves the originals hidden
+/// -- while the pass re-runs.
+/// UPDATE transcript_segments SET hidden_reason = NULL
+///  WHERE hidden_reason LIKE 'diarized (%';
+/// DELETE FROM transcript_segments WHERE provenance LIKE 'diarized-aligned (%';
+///
+/// -- ingest plane (ingest.sqlite): the blocks it DECLINED wrote no rows, so
+/// -- only the ledger holds them. Forget this and the reversal looks complete
+/// -- while every refused block stays decided for ever.
+/// DELETE FROM pass_ledger WHERE kind = 'diarize-room';
+/// ```
+///
+/// ⚠ `LIKE 'diarized (%'` and not `= 'diarized'`: both strings carry the model
+/// name, because the same block can be re-derived by a better model later and a
+/// reversal has to be able to name which pass it is undoing.
+///
+/// A SMALL batch on a slow cadence, for the reason the turn writer has one: the
+/// queue drains over hours, so a bad verdict is noticed while it is dozens of
+/// blocks rather than nine hundred.
+fn spawn_diarized_writer(root: PathBuf) {
+    const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
+    const BATCH: usize = 20;
+    tokio::spawn(async move {
+        loop {
+            let pass_root = root.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                let ingest = recalld::store::open(&pass_root)?;
+                let mut meaning = recalld::work::open_write(&pass_root)?;
+                let now = chrono::Utc::now().to_rfc3339();
+                recalld::diarized::write_pass(
+                    &mut meaning,
+                    &ingest,
+                    recalld::turns::ROOM_MODEL,
+                    &now,
+                    BATCH,
+                )
+            })
+            .await;
+            match done {
+                // ⚠ `kept` is inside the guard, like `swept` next door: a pass
+                // that declines every block is the one most worth seeing, and
+                // without it the interesting case is the silent one.
+                Ok(Ok(pass)) if pass.turns + pass.hidden + pass.kept > 0 => {
+                    tracing::info!(
+                        blocks = pass.blocks,
+                        turns = pass.turns,
+                        hidden = pass.hidden,
+                        kept = pass.kept,
+                        waiting = pass.waiting,
+                        "diarized: written"
+                    );
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => tracing::warn!(%err, "diarized: pass failed"),
+                Err(err) => tracing::error!(%err, "diarized: task failed"),
+            }
+            tokio::time::sleep(EVERY).await;
+        }
+    });
 }
 
 /// Stage D4: the speech scanner — VAD over every delivered segment, so

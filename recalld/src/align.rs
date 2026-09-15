@@ -27,13 +27,33 @@ use std::cmp::Ordering;
 pub const MIN_TURN_S: f64 = 0.5;
 
 /// One word with its timing, as the `asr` shim reports it.
+/// ⚠ **TWO WIRE SPELLINGS, both real.** `shim_asr` sends `text` and
+/// `probability` today; a stored `transcribe-room` result from 2026-09-11
+/// carries mlx-whisper's raw `word` with no probability at all
+/// (`tests/integration/turns.rs` quotes one). Results are STORED, so both eras
+/// sit in the queue and a parser that knows only the current spelling would
+/// align nothing for the older one — silently, because a block with no words
+/// yields no turns and looks exactly like a block with nothing said in it.
+///
+/// So `word` is an alias and the probability defaults, the way
+/// `store._load_word_timings` already substitutes 1.0 for timings that never
+/// stored one.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Word {
     pub start: f64,
     pub end: f64,
     /// Whisper words carry their own leading space; joined verbatim.
+    #[serde(alias = "word")]
     pub text: String,
+    #[serde(default = "unscored")]
     pub probability: f64,
+}
+
+/// What a word with no stored probability is worth. Not zero: an absent score is
+/// "nobody measured", and averaging zeros into a turn's confidence would report
+/// every old-era turn as one the model had no faith in.
+const fn unscored() -> f64 {
+    1.0
 }
 
 /// A contiguous span attributed to one relative speaker, as the `voices` shim
