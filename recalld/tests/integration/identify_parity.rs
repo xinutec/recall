@@ -11,12 +11,6 @@
 //! repository is public and the voiceprints are members of a household, so what
 //! this cannot show is that the two agree on real voices. A differential over the
 //! live archive is the evidence for that.
-//!
-//! What it does reach is every branch that decides an attribution: a person
-//! enrolled five times from different microphones against one enrolled once (the
-//! score is their BEST match, never their mean), a near-tie where the softmax is
-//! the entire answer, a runaway winner, and an embedding of zeros — which silence
-//! produces, and which must not become a NaN that loses every comparison.
 
 use recalld::identify::{Voiceprint, match_one};
 use serde::Deserialize;

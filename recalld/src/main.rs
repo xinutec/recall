@@ -303,28 +303,14 @@ fn spawn_background_passes(root: &std::path::Path) {
     // twice.
     spawn_turn_writer(root.clone(), recalld::turns::PER_MIC);
     //
-    // ⚠ **BOTH DIARIZED WRITERS ARE OFF, for DIFFERENT reasons.**
+    // ⚠ **OFF, and uncommenting this ALONE is a bug.** `recall refine` writes
+    // diarized turns for these same clips. Two writers over one corpus, each
+    // HIDING what the other wrote, is a corpus nobody can reason about — so the
+    // switch is one deploy on both machines: this line AND the removal of
+    // `org.xinutec.recall-refine`, together.
     //
-    // `diarized::ROOM` is off for the same reason `spawn_turn_writer(ROOM)` above
-    // is: the room stream is gated on #1461. It was turned on for 50 minutes on
-    // 2026-09-15 and measured — 15 of the 16 turns it wrote OVERLAPPED per-mic
-    // turns, 116 of them, so the same speech showed twice. There were no room
-    // turns to replace, so `decide` correctly took its insert-only path, and
-    // insert-only for a stream nothing hides against is a second transcript
-    // rather than a better one.
-    //
-    // `diarized::PER_MIC` is the one that actually replaces `refine.py`, and it
-    // is off for a reason that is not about quality at all:
-    //
-    // ⚠ **REFINE MUST STOP IN THE SAME CHANGE.** `recall refine` on the Mac
-    // writes diarized-aligned turns for these very clips. Two writers over one
-    // corpus is the hazard `TRANSCRIBE_SEGMENT` already documents — "turning
-    // both on at once is how the same minute gets transcribed twice" — and here
-    // it is worse, because this pass HIDES what it supersedes. Two passes each
-    // hiding the other's output is a corpus nobody can reason about.
-    //
-    // So the switch is one change on both machines: this line uncommented AND
-    // `org.xinutec.recall-refine` removed, deployed together. Not before.
+    // (`diarized::ROOM` is the other stream and is gated separately; the reason
+    // is on the constant.)
     //
     // spawn_diarized_writer(root.clone(), recalld::diarized::PER_MIC);
     spawn_segment_registrar(root.clone());
@@ -364,13 +350,12 @@ fn spawn_background_passes(root: &std::path::Path) {
 /// DELETE FROM pass_ledger WHERE kind = 'diarize-room';
 /// ```
 ///
-/// ⚠ **EXACT equality, NOT `LIKE 'diarized-aligned (%'`.** This file said `LIKE`
-/// until 2026-09-15, and that pattern also matches `diarized-aligned
-/// (mlx-community/whisper-large-v3-turbo)` — which is `refine.py`'s per-mic
-/// output, 24,179 rows of it synced up from the Mac. A reversal run as written
-/// would have deleted this pass's 16 turns and the archive's real diarized
-/// corpus with them. The model name is IN the provenance precisely so a reversal
-/// can name one pass; matching it with a wildcard throws that away.
+/// ⚠ **EXACT equality, NOT `LIKE 'diarized-aligned (%'`.** That pattern also
+/// matches `diarized-aligned (mlx-community/whisper-large-v3-turbo)` —
+/// `refine.py`'s per-mic output, tens of thousands of rows of it. A reversal
+/// written with a wildcard deletes this pass's turns and the archive's real
+/// diarized corpus together. The model name is IN the provenance precisely so a
+/// reversal can name ONE pass; a wildcard throws that away.
 ///
 /// A SMALL batch on a slow cadence, for the reason the turn writer has one: the
 /// queue drains over hours, so a bad verdict is noticed while it is dozens of

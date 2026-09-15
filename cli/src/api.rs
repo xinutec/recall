@@ -5,8 +5,8 @@
 //! the Mac was the record and has been wrong since Isis became it
 //! (`deploy/hm-agents.nix`: "10.100.0.2:8000 is the system of record"). The
 //! local file still exists and still receives writes from `refine`, so a CLI
-//! reading it answers about a diverging copy — measured 2026-09-15, its newest
-//! turn was five days old. Going through the API cannot diverge by
+//! reading it answers about a copy that is free to diverge, and nothing tells a
+//! reader which one they got. Going through the API cannot diverge by
 //! construction.
 //!
 //! Every type here mirrors `recalld::reads` field for field. They are separate
@@ -54,7 +54,6 @@ pub struct Page {
     pub has_more: bool,
 }
 
-/// One recorder, as `/api/sources` reports it.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Source {
@@ -91,7 +90,6 @@ pub struct Capture {
     pub mic_reachable: bool,
 }
 
-/// One uploaded session, as `/api/sessions` lists it.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Session {
@@ -120,7 +118,6 @@ pub struct Bubble {
     pub text: String,
 }
 
-/// A session's clean, finalised transcript.
 #[derive(Debug, Deserialize)]
 pub struct Export {
     pub session: String,

@@ -559,16 +559,12 @@ in
   # ⚠ **NOT STARTED.** `RunAtLoad`/`KeepAlive` are false, so this is defined and
   # deployable but idle until something drains what it produces.
   #
-  # It ran for ~50 minutes on 2026-09-15 and did the job correctly — leased,
-  # diarized, pushed, ~50s to 2.5min per block. What was wrong was downstream:
-  # `recalld::diarized`'s writer turned those results into ROOM turns, and the
-  # room stream is gated on #1461, so the timeline showed the same speech twice
-  # (15 of 16 room turns overlapped per-mic turns; 116 of them). The writer is
-  # off; leaving this on would spend the GPU the recorder needs, filling a queue
+  # It works — 32 blocks on 2026-09-15, ~50s to 2.5min each. What it lacks is a
+  # consumer: `recalld::diarized`'s writers are both off (the reasons are there),
+  # so leaving this running would spend the GPU the recorder needs to fill a queue
   # nobody drains.
   #
-  # Turn both back on together, in this order: #1461 decides the room stream is
-  # wanted, `diarized` gets its `hides_covered` half, THEN this.
+  # Start it in the same change that starts a writer, never before.
   launchd.agents."org.xinutec.recall-voices" = daemon {
     label = "org.xinutec.recall-voices";
     name = "voices";

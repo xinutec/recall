@@ -155,8 +155,7 @@ fn one(
             // one spelling makes the other's log line a constant.** `asr`
             // answers `segments`, `voices` answers `turns` — so a diarize job
             // logged `rows=0` whether it had found twelve speakers or none,
-            // which is the one thing the line exists to say. Observed on the
-            // first `voices` deploy, 2026-09-15.
+            // which is the one thing the line exists to say.
             let rows = ["segments", "turns"]
                 .iter()
                 .filter_map(|key| result.get(*key))

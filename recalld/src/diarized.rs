@@ -37,7 +37,6 @@ pub const MIN_COVERAGE_RATIO: f64 = 0.5;
 /// swing too wildly in ratio for the bar to mean anything.
 pub const COVERAGE_REF_MIN_CHARS: usize = 200;
 
-/// A machine turn already standing on this block.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Existing {
     pub id: i64,
@@ -58,11 +57,13 @@ pub struct Corrected {
 pub enum Refusal {
     /// The pass produced no turns at all: no words, or no speaker spans.
     NothingAligned,
-    /// It produced turns and every one was a repetition loop or inside a span a
-    /// person has already corrected.
-    AllFiltered { produced: usize },
-    /// It produced far less text than the block already has.
-    Coverage { existing: usize, new: usize },
+    AllFiltered {
+        produced: usize,
+    },
+    Coverage {
+        existing: usize,
+        new: usize,
+    },
 }
 
 impl std::fmt::Display for Refusal {
@@ -83,7 +84,6 @@ impl std::fmt::Display for Refusal {
     }
 }
 
-/// What a diarized pass would do to one block.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Swap {
     /// Hide `hide` and write `insert`, in ONE transaction — a crash between them
@@ -93,7 +93,6 @@ pub enum Swap {
         insert: Vec<AlignedTurn>,
         hide: Vec<i64>,
     },
-    /// Keep what is there. The existing transcript is untouched.
     Keep(Refusal),
 }
 
@@ -120,8 +119,8 @@ fn at(block_start: DateTime<Utc>, offset_s: f64) -> DateTime<Utc> {
 ///    Counting the existing side RAW let a hallucination win by length: a
 ///    Whisper loop is hundreds of characters of nothing, so every honest pass
 ///    measured as "covering too little", the loop was kept, and the block was
-///    marked skipped — garbage preserved, never retried. Measured on the archive
-///    2026-09-02: 10 of 94 guard-skipped segments were held that way.
+///    marked skipped — garbage preserved, never retried. It held roughly one in
+///    ten of the guard-skipped segments that way.
 #[must_use]
 pub fn decide(
     block_start: DateTime<Utc>,
@@ -455,9 +454,16 @@ pub const PER_MIC: Stream<'static> = Stream {
     model: crate::turns::SHIM_MODEL,
 };
 
-/// The derived room stream. ⚠ **Gated on #1461 and its writer is OFF** — see the
-/// note in `main.rs`. Kept because the code is identical and the day the room
-/// stream is wanted, this is what it needs.
+/// The derived room stream. ⚠ **Gated on #1461, and its writer is OFF.**
+///
+/// Its clips carry no turns, so a pass over them ADDS rather than replaces — and
+/// nothing hides the per-mic turns it duplicates. What it produces is therefore a
+/// second transcript of every minute, not a better one; measured on a live
+/// archive, nearly every turn it wrote overlapped a per-mic turn.
+///
+/// The gate is whether the room stream is known to beat the per-mic one at all
+/// (#1461). Kept because the code is identical to [`PER_MIC`]'s, so the day that
+/// is answered, this is what it needs.
 pub const ROOM: Stream<'static> = Stream {
     diarize_kind: crate::queue::DIARIZE_ROOM,
     transcribe_kind: crate::queue::TRANSCRIBE_ROOM,

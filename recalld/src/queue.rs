@@ -36,7 +36,7 @@ pub const TRANSCRIBE_SEGMENT: &str = "transcribe-segment";
 /// exist. The per-mic twin of [`DIARIZE_ROOM`], and the one that actually
 /// replaces `refine.py`.
 ///
-/// ⚠ **The distinction that cost a deploy on 2026-09-15.** `DIARIZE_ROOM`
+/// ⚠ **The distinction, and it is not cosmetic.** `DIARIZE_ROOM`
 /// diarizes the DERIVED room stream, which is gated on #1461 and whose writer is
 /// off — so turning it on writes a second transcript beside the per-mic one
 /// rather than improving anything. `refine.py` has always worked on per-mic

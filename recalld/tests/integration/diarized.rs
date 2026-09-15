@@ -1,9 +1,7 @@
 //! The diarized swap's decision rules — the ones that can empty a recording.
 //!
-//! ⚠ Every case here is a way `refine.py` was once wrong, or a way it was made
-//! right. The headline is `a_pass_that_produces_nothing_usable_keeps_what_is_there`:
-//! applying these filters AFTER hiding blanked 132 segments of real household
-//! conversation, and that is the failure this module exists to make impossible.
+//! ⚠ Every case here is a way `refine.py` was once wrong, so a case that looks
+//! redundant is a guard somebody removed once. `diarized` carries the reasoning.
 
 use chrono::{DateTime, TimeDelta, Utc};
 use recalld::align::{AlignedTurn, Word};

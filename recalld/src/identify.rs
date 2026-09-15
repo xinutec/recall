@@ -6,16 +6,14 @@
 //! not inside the process holding the model weights (`shim_voices` says the same
 //! from its end).
 //!
-//! The rule, in three steps that each matter:
+//! A person's score is the BEST cosine over their enrolled voiceprints, never the
+//! mean: someone recorded on four microphones has four quite different vectors,
+//! and averaging them describes nobody. The best-scoring person is the guess.
 //!
-//! 1. A person may have MANY enrolled voiceprints. Their score is the BEST cosine
-//!    over them, not the mean — a person recorded on four microphones has four
-//!    quite different vectors, and averaging them describes nobody.
-//! 2. The guess is the best-scoring person.
-//! 3. The confidence is a SOFTMAX over the per-person bests, not the raw cosine.
-//!    That is the "vs the others" likelihood: a 0.7 cosine when the runner-up is
-//!    0.68 means very little, and the same 0.7 when the runner-up is 0.2 means a
-//!    great deal. Reporting the raw cosine conflates them.
+//! Its confidence is a SOFTMAX over the per-person bests rather than the raw
+//! cosine — the "vs the others" likelihood. A 0.7 against a 0.68 runner-up and a
+//! 0.7 against a 0.2 mean opposite things, and the raw cosine reports them
+//! identically.
 
 /// Softmax temperature. ⚠ Shared with `recall.identify._SOFTMAX_TEMPERATURE`; the
 /// two spellings of one number, and a test compares them.
