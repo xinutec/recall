@@ -426,6 +426,44 @@ pub fn corrections(
 
 // --- the pass ----------------------------------------------------------------
 
+/// Which stream a diarized pass refines, and the four things that differ between
+/// them. Everything else in this module is shared.
+///
+/// ⚠ **A `Stream` is the unit of REVERSAL**, like `turns::Stream`: `provenance`
+/// must name exactly the rows one pass wrote and no others, or nobody can take
+/// it back. The model name is IN it for that reason — see the reversal block in
+/// `main.rs`, which says why an exact match and not a `LIKE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stream<'a> {
+    /// The queue kind whose stored speaker spans this pass interprets.
+    pub diarize_kind: &'a str,
+    /// The kind whose stored result carries the WORDS to align them against.
+    pub transcribe_kind: &'a str,
+    /// What written rows record in `asr_model`.
+    pub model: &'a str,
+}
+
+/// One MICROPHONE's clip — `refine.py`'s stream, and the one that replaces it.
+///
+/// ⚠ `model` is the shim's own default, NOT a decorated name: these rows join the
+/// same per-microphone corpus `refine.py` has been writing for months, and a
+/// reader filtering on `asr_model` must not see the archive split in two on the
+/// day the orchestrator changed. Provenance carries "who wrote it" instead.
+pub const PER_MIC: Stream<'static> = Stream {
+    diarize_kind: crate::queue::DIARIZE_SEGMENT,
+    transcribe_kind: crate::queue::TRANSCRIBE_SEGMENT,
+    model: crate::turns::SHIM_MODEL,
+};
+
+/// The derived room stream. ⚠ **Gated on #1461 and its writer is OFF** — see the
+/// note in `main.rs`. Kept because the code is identical and the day the room
+/// stream is wanted, this is what it needs.
+pub const ROOM: Stream<'static> = Stream {
+    diarize_kind: crate::queue::DIARIZE_ROOM,
+    transcribe_kind: crate::queue::TRANSCRIBE_ROOM,
+    model: crate::turns::ROOM_MODEL,
+};
+
 /// What one diarized pass did.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Pass {
@@ -459,10 +497,11 @@ pub struct Pass {
 pub fn write_pass(
     meaning: &mut rusqlite::Connection,
     ingest: &rusqlite::Connection,
-    model: &str,
+    stream: &Stream,
     now: &str,
     limit: usize,
 ) -> rusqlite::Result<Pass> {
+    let model = stream.model;
     crate::turns::ensure_ledger(ingest)?;
     // The diarize job and the transcription it aligns against, joined on the
     // filename they share — the words and the speaker spans are two results
@@ -480,12 +519,12 @@ pub fn write_pass(
     )?;
     let jobs: Vec<(String, String, String, String)> = stmt
         .query_map(
-            rusqlite::params![crate::queue::DIARIZE_ROOM, crate::queue::TRANSCRIBE_ROOM],
+            rusqlite::params![stream.diarize_kind, stream.transcribe_kind],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?
         .collect::<Result<_, _>>()?;
 
-    let kind = crate::queue::DIARIZE_ROOM;
+    let kind = stream.diarize_kind;
     let mut pass = Pass::default();
     for (filename, voices, transcription, source) in jobs {
         if pass.blocks >= limit {

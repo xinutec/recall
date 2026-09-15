@@ -303,25 +303,30 @@ fn spawn_background_passes(root: &std::path::Path) {
     // twice.
     spawn_turn_writer(root.clone(), recalld::turns::PER_MIC);
     //
-    // ⚠ **OFF, and for the SAME reason `spawn_turn_writer(ROOM)` above is off.**
-    // Turned on 2026-09-15 18:0x and off again at 18:5x, having written 16 turns:
-    // measured in the live timeline, 15 of those 16 OVERLAPPED per-mic turns, 116
-    // of them, so the same speech was showing twice.
+    // ⚠ **BOTH DIARIZED WRITERS ARE OFF, for DIFFERENT reasons.**
     //
-    // The mistake was reading `derive_diarize_jobs`' note — "refine.py, which this
-    // replaces" — as meaning this pass refines what is already there. It does not.
-    // refine.py diarizes PER-MIC segments; this diarizes ROOM blocks. The room
-    // stream is not live (the writer above is off pending #1461), so there were no
-    // room turns to replace and `decide` correctly took its insert-only path — and
-    // insert-only, for a stream nothing hides the per-mic turns against, is a
-    // SECOND transcript of every minute rather than a better one.
+    // `diarized::ROOM` is off for the same reason `spawn_turn_writer(ROOM)` above
+    // is: the room stream is gated on #1461. It was turned on for 50 minutes on
+    // 2026-09-15 and measured — 15 of the 16 turns it wrote OVERLAPPED per-mic
+    // turns, 116 of them, so the same speech showed twice. There were no room
+    // turns to replace, so `decide` correctly took its insert-only path, and
+    // insert-only for a stream nothing hides against is a second transcript
+    // rather than a better one.
     //
-    // What it needs before it goes back on is not a fix here: it is #1461 deciding
-    // whether the room stream should be visible at all, and then `hides_covered`
-    // handled the way `turns::ROOM` handles it. The pass itself is tested and
-    // correct; it was pointed at a stream that does not exist yet.
+    // `diarized::PER_MIC` is the one that actually replaces `refine.py`, and it
+    // is off for a reason that is not about quality at all:
     //
-    // spawn_diarized_writer(root.clone());
+    // ⚠ **REFINE MUST STOP IN THE SAME CHANGE.** `recall refine` on the Mac
+    // writes diarized-aligned turns for these very clips. Two writers over one
+    // corpus is the hazard `TRANSCRIBE_SEGMENT` already documents — "turning
+    // both on at once is how the same minute gets transcribed twice" — and here
+    // it is worse, because this pass HIDES what it supersedes. Two passes each
+    // hiding the other's output is a corpus nobody can reason about.
+    //
+    // So the switch is one change on both machines: this line uncommented AND
+    // `org.xinutec.recall-refine` removed, deployed together. Not before.
+    //
+    // spawn_diarized_writer(root.clone(), recalld::diarized::PER_MIC);
     spawn_segment_registrar(root.clone());
     spawn_segment_deriver(root.clone());
 }
@@ -376,7 +381,7 @@ fn spawn_background_passes(root: &std::path::Path) {
               uncommented. Deleting it to satisfy the lint would mean rewriting the \
               pass from its tests when the decision lands."
 )]
-fn spawn_diarized_writer(root: PathBuf) {
+fn spawn_diarized_writer(root: PathBuf, stream: recalld::diarized::Stream<'static>) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
     const BATCH: usize = 20;
     tokio::spawn(async move {
@@ -386,13 +391,7 @@ fn spawn_diarized_writer(root: PathBuf) {
                 let ingest = recalld::store::open(&pass_root)?;
                 let mut meaning = recalld::work::open_write(&pass_root)?;
                 let now = chrono::Utc::now().to_rfc3339();
-                recalld::diarized::write_pass(
-                    &mut meaning,
-                    &ingest,
-                    recalld::turns::ROOM_MODEL,
-                    &now,
-                    BATCH,
-                )
+                recalld::diarized::write_pass(&mut meaning, &ingest, &stream, &now, BATCH)
             })
             .await;
             match done {
@@ -406,12 +405,17 @@ fn spawn_diarized_writer(root: PathBuf) {
                         hidden = pass.hidden,
                         kept = pass.kept,
                         waiting = pass.waiting,
+                        stream = stream.diarize_kind,
                         "diarized: written"
                     );
                 }
                 Ok(Ok(_)) => {}
-                Ok(Err(err)) => tracing::warn!(%err, "diarized: pass failed"),
-                Err(err) => tracing::error!(%err, "diarized: task failed"),
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, stream = stream.diarize_kind, "diarized: pass failed");
+                }
+                Err(err) => {
+                    tracing::error!(%err, stream = stream.diarize_kind, "diarized: task failed");
+                }
             }
             tokio::time::sleep(EVERY).await;
         }

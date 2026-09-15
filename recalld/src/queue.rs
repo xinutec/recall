@@ -32,6 +32,17 @@ pub const DIARIZE_ROOM: &str = "diarize-room";
 /// archive. The runner inherits that backlog at the same rate — one stream
 /// instead of five (#1388) is the only thing that changes the arithmetic.
 pub const TRANSCRIBE_SEGMENT: &str = "transcribe-segment";
+/// Stage E4 for ONE MICROPHONE's clip: who spoke when, over words that already
+/// exist. The per-mic twin of [`DIARIZE_ROOM`], and the one that actually
+/// replaces `refine.py`.
+///
+/// ⚠ **The distinction that cost a deploy on 2026-09-15.** `DIARIZE_ROOM`
+/// diarizes the DERIVED room stream, which is gated on #1461 and whose writer is
+/// off — so turning it on writes a second transcript beside the per-mic one
+/// rather than improving anything. `refine.py` has always worked on per-mic
+/// segments, and those already carry turns, so a pass over them REPLACES rather
+/// than adds. Same model, same shim, same code; entirely different consequence.
+pub const DIARIZE_SEGMENT: &str = "diarize-segment";
 const LEASE_TTL_S: i64 = 10 * 60;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -97,7 +108,7 @@ pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<us
                            WHERE j.kind = ?1 AND j.filename = s.filename)",
         (TRANSCRIBE_ROOM, iso(now), ROOM_SOURCE),
     )?;
-    Ok(inserted + derive_diarize_jobs(conn, now)?)
+    Ok(inserted + derive_diarize_jobs(conn, now)? + derive_diarize_segment_jobs(conn, now)?)
 }
 
 /// A clip's identity WITHOUT its container: `oneplus6t-20260910T203720`.
@@ -225,6 +236,22 @@ fn derive_diarize_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Resul
            AND NOT EXISTS (SELECT 1 FROM jobs d
                            WHERE d.kind = ?1 AND d.filename = j.filename)",
         (DIARIZE_ROOM, iso(now), TRANSCRIBE_ROOM),
+    )
+}
+
+/// Derive a per-mic diarization job for every microphone clip whose transcription
+/// SUCCEEDED — the same gate [`derive_diarize_jobs`] applies, for the same two
+/// reasons: diarization alone attributes nothing without words to align against,
+/// and a clip the ASR refused is a clip whose audio is the problem.
+fn derive_diarize_segment_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
+    conn.execute(
+        "INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
+         SELECT ?1, j.filename, ?2 FROM jobs j
+         WHERE j.kind = ?3 AND j.done_utc IS NOT NULL
+           AND json_valid(j.result) AND json_extract(j.result, '$.ok') = 1
+           AND NOT EXISTS (SELECT 1 FROM jobs d
+                           WHERE d.kind = ?1 AND d.filename = j.filename)",
+        (DIARIZE_SEGMENT, iso(now), TRANSCRIBE_SEGMENT),
     )
 }
 

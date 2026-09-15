@@ -40,7 +40,12 @@ fn kinds_for(shim_name: &str) -> Option<&'static [&'static str]> {
         // room block and a microphone clip from the same minute compete on
         // equal terms rather than one starving the other.
         "asr" => Some(&["transcribe-room", "transcribe-segment"]),
-        "voices" => Some(&["diarize-room"]),
+        // ⚠ Both, and `diarize-segment` is the one that matters: it refines
+        // clips that already carry turns, which is what `refine.py` does.
+        // `diarize-room` refines the room stream, which is gated on #1461 — a
+        // runner may hold both because the QUEUE decides which exist, and no
+        // room job is derived while nothing writes room turns.
+        "voices" => Some(&["diarize-segment", "diarize-room"]),
         _ => None,
     }
 }
@@ -137,7 +142,7 @@ fn one(
         // reply. What differs is which stream's turns it becomes, and that is
         // recalld's question, not the runner's.
         "transcribe-room" | "transcribe-segment" => shim.transcribe(&clip, None, prompt),
-        "diarize-room" => shim.diarize(&clip),
+        "diarize-room" | "diarize-segment" => shim.diarize(&clip),
         other => Err(shim::Error::Refused(format!(
             "runner cannot do job kind {other}"
         ))),

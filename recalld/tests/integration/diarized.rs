@@ -328,10 +328,9 @@ fn a_refused_diarization_is_not_mistaken_for_an_empty_one() {
 // recording. Nothing here is mocked: two real SQLite files, the real join across
 // the audio and meaning planes, the real transaction.
 
-use recalld::diarized::write_pass;
+use recalld::diarized::{PER_MIC, ROOM, write_pass};
 use rusqlite::Connection;
 
-const MODEL: &str = "mlx-whisper/large-v3-turbo (room)";
 const NOW: &str = "2026-09-15T18:00:00+00:00";
 const BLOCK: &str = "room-20260906T094500.flac";
 const BLOCK_START: &str = "2026-09-06T09:45:00+00:00";
@@ -425,7 +424,7 @@ fn a_finished_diarization_replaces_the_room_turns_with_speaker_split_ones() {
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
     let old = room_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, MODEL, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
 
     assert_eq!(pass.blocks, 1);
     assert_eq!(pass.turns, 2, "one turn per speaker");
@@ -489,7 +488,7 @@ fn a_decided_block_leaves_a_ledger_row_and_is_not_decided_twice() {
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
     room_turn(&meaning, "een twee");
 
-    write_pass(&mut meaning, &ingest, MODEL, NOW, 10).expect("first");
+    write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("first");
     let outcome: String = ingest
         .query_row(
             "SELECT outcome FROM pass_ledger WHERE kind = ?1 AND filename = ?2",
@@ -501,7 +500,7 @@ fn a_decided_block_leaves_a_ledger_row_and_is_not_decided_twice() {
 
     // ⚠ The cost assertion: a second pass must do NO work. A decision that
     // writes no row is a decision made again for ever.
-    let again = write_pass(&mut meaning, &ingest, MODEL, NOW, 10).expect("second");
+    let again = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("second");
     assert_eq!(again, recalld::diarized::Pass::default());
 }
 
@@ -518,7 +517,7 @@ fn a_block_whose_pass_is_all_junk_keeps_its_transcript_and_is_not_retried() {
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, junk);
     let old = room_turn(&meaning, "a minute of Dutch about writing things down");
 
-    let pass = write_pass(&mut meaning, &ingest, MODEL, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
 
     assert_eq!(pass.turns, 0);
     assert_eq!(pass.hidden, 0);
@@ -560,7 +559,7 @@ fn a_corrected_block_is_left_alone() {
         )
         .expect("correction");
 
-    let pass = write_pass(&mut meaning, &ingest, MODEL, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
 
     assert_eq!(pass.turns, 0);
     assert_eq!(pass.kept, 1);
@@ -585,7 +584,7 @@ fn a_block_with_no_words_yet_waits_and_keeps_no_ledger_row() {
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, no_words);
     room_turn(&meaning, "hello");
 
-    let pass = write_pass(&mut meaning, &ingest, MODEL, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
 
     assert_eq!(pass.waiting, 1);
     assert_eq!(pass.blocks, 0);
@@ -606,7 +605,7 @@ fn a_block_with_no_audio_segment_waits() {
         .expect("unregister");
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
 
-    let pass = write_pass(&mut meaning, &ingest, MODEL, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
 
     assert_eq!(pass.waiting, 1);
     let rows: i64 = ingest
@@ -631,7 +630,171 @@ fn a_diarization_with_no_transcription_is_not_picked_up() {
         )
         .expect("drop the transcription");
 
-    let pass = write_pass(&mut meaning, &ingest, MODEL, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
 
     assert_eq!(pass, recalld::diarized::Pass::default());
+}
+
+// --- the per-mic stream: the one that replaces refine.py ---------------------
+//
+// ⚠ Every test above runs the ROOM stream, where there is nothing to replace.
+// This is the other half and the dangerous one: a microphone clip ALREADY carries
+// turns, so the pass takes its Replace path — hiding what a person can read and
+// writing over it. That is `refine.py`'s semantics, and the reason `decide` has
+// the guards it has.
+
+/// The ingest plane with a per-mic clip and its two finished jobs.
+fn mic_ingest(path: &std::path::Path, voices: &str, transcription: &str) -> Connection {
+    let conn = Connection::open(path.join("ingest.sqlite")).expect("ingest");
+    conn.execute_batch(
+        "CREATE TABLE segments (
+             source TEXT NOT NULL, filename TEXT NOT NULL, start_utc TEXT NOT NULL,
+             bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, received_utc TEXT NOT NULL,
+             sent_utc TEXT, PRIMARY KEY (source, filename)
+         );",
+    )
+    .expect("segments");
+    recalld::queue::ensure_schema(&conn).expect("jobs");
+    conn.execute(
+        "INSERT INTO segments (source, filename, start_utc, bytes, sha256, received_utc)
+         VALUES ('usb', 'usb-20260906T094500.flac', ?1, 1, 'x', ?1)",
+        [BLOCK_START],
+    )
+    .expect("segment");
+    for (kind, result) in [
+        (recalld::queue::TRANSCRIBE_SEGMENT, transcription),
+        (recalld::queue::DIARIZE_SEGMENT, voices),
+    ] {
+        conn.execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES (?1, 'usb-20260906T094500.flac', 'done', ?2, ?2, ?3)",
+            (kind, NOW, result),
+        )
+        .expect("job");
+    }
+    conn
+}
+
+fn mic_meaning(path: &std::path::Path) -> Connection {
+    let conn = meaning_plane(path);
+    conn.execute("UPDATE audio_segments SET source_id = 'usb'", ())
+        .expect("mic source");
+    conn
+}
+
+/// ⚠ **THE POINT OF THE WHOLE PORT.** A microphone clip's existing turn is
+/// superseded by speaker-split ones — exactly what `refine.py` does, on the same
+/// corpus, with the same provenance prefix three other readers test for.
+#[test]
+fn a_microphone_clips_turns_are_replaced_by_speaker_split_ones() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut meaning = mic_meaning(dir.path());
+    let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
+    let old = room_turn(&meaning, "een twee");
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+
+    assert_eq!(pass.turns, 2, "one per speaker");
+    assert_eq!(pass.hidden, 1, "the flat turn is superseded");
+
+    let hidden: Option<String> = meaning
+        .query_row(
+            "SELECT hidden_reason FROM transcript_segments WHERE id = ?1",
+            [old],
+            |r| r.get(0),
+        )
+        .expect("still there");
+    assert!(
+        hidden.is_some_and(|h| h.starts_with("diarized (")),
+        "hidden, not deleted"
+    );
+}
+
+/// ⚠ The per-mic rows join the corpus `refine.py` wrote, so `asr_model` must be
+/// the shim's own name — NOT a decorated one. A reader filtering on the model
+/// must not see the archive split in two on the day the orchestrator changed.
+#[test]
+fn a_per_mic_turn_keeps_the_corpus_model_name_and_is_reversible_by_provenance() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut meaning = mic_meaning(dir.path());
+    let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
+    room_turn(&meaning, "een twee");
+
+    write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+
+    let (model, provenance): (String, String) = meaning
+        .query_row(
+            "SELECT asr_model, provenance FROM transcript_segments
+             WHERE hidden_reason IS NULL AND provenance LIKE 'diarized-aligned%' LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("a written turn");
+    assert_eq!(model, recalld::turns::SHIM_MODEL);
+    assert_eq!(
+        provenance,
+        format!("diarized-aligned ({})", recalld::turns::SHIM_MODEL)
+    );
+}
+
+/// ⚠ **The two streams must not see each other's work.** They share the code, the
+/// shim and the model; if a pass could pick up the other's jobs it would align
+/// one clip's words against another clip's speakers. The ledger is per-kind and
+/// the join is per-kind; this asserts both at once.
+#[test]
+fn the_per_mic_pass_does_not_touch_the_room_streams_jobs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut meaning = meaning_plane(dir.path());
+    let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY); // ROOM jobs only
+    room_turn(&meaning, "een twee");
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+
+    assert_eq!(
+        pass,
+        recalld::diarized::Pass::default(),
+        "room jobs are not per-mic work"
+    );
+}
+
+/// …and the converse, so neither test can pass by the pass simply doing nothing.
+#[test]
+fn the_room_pass_does_not_touch_the_per_mic_streams_jobs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut meaning = mic_meaning(dir.path());
+    let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY); // PER-MIC jobs only
+    room_turn(&meaning, "een twee");
+
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+
+    assert_eq!(pass, recalld::diarized::Pass::default());
+}
+
+/// A stream's provenance must name its own rows alone, or a reversal cannot take
+/// one back without taking the other. This is the property the 2026-09-15 cleanup
+/// depended on, when a `LIKE` pattern would have deleted 26,171 rows of the real
+/// diarized corpus along with 22 of mine.
+#[test]
+fn the_two_streams_write_provenances_that_cannot_match_each_other() {
+    let per_mic = format!("diarized-aligned ({})", PER_MIC.model);
+    let room = format!("diarized-aligned ({})", ROOM.model);
+    assert_ne!(per_mic, room);
+    assert!(!per_mic.starts_with(&room) && !room.starts_with(&per_mic));
+}
+
+/// The kinds a runner may be handed must not overlap between streams either.
+#[test]
+fn the_two_streams_draw_from_different_queue_kinds() {
+    let kinds: Vec<&str> = vec![
+        PER_MIC.diarize_kind,
+        PER_MIC.transcribe_kind,
+        ROOM.diarize_kind,
+        ROOM.transcribe_kind,
+    ];
+    let unique: std::collections::HashSet<&&str> = kinds.iter().collect();
+    assert_eq!(
+        unique.len(),
+        kinds.len(),
+        "a kind is claimed twice: {kinds:?}"
+    );
 }
