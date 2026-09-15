@@ -5,6 +5,7 @@ import { BehaviorSubject, of } from 'rxjs';
 import { vi } from 'vitest';
 
 import { App } from './app';
+import { provideServiceWorker } from '@angular/service-worker';
 import { BUILD_INFO } from './build-info';
 import { RecallApi } from './recall-api';
 import { CaptureState } from './models';
@@ -57,6 +58,10 @@ function setup(initial: CaptureState = cap()) {
       provideZonelessChangeDetection(),
       provideRouter([]),
       { provide: RecallApi, useValue: { capture, pauseCapture, resumeCapture } },
+      // The shell starts the update check, so SwUpdate has to resolve here.
+      // `enabled: false` gives the real class in its disabled state, which is
+      // what a test runner is: no worker registered, no update to activate.
+      provideServiceWorker('ngsw-worker.js', { enabled: false }),
     ],
   });
   const fixture = TestBed.createComponent(App);

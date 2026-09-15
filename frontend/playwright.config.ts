@@ -18,4 +18,29 @@ import harness from './e2e/harness.mjs';
  * kqueue.c:279 abort that spawning the CLI dev server trips. `npm run ui-check`
  * builds first; reuseExistingServer attaches to a server you started yourself.
  */
-export default defineConfig(phoneConfig(harness, devices));
+const base = phoneConfig(harness, devices);
+
+/**
+ * ⚠ **Blocked, or the route mocks stop working.** This suite serves the BUILT
+ * bundle, so as of the ngsw adoption a real service worker registers — and
+ * Playwright's `page.route` does not intercept requests that pass through one.
+ * Two `session-assign` tests went to `Received: null` where they expected a
+ * captured request, which reads as the app not making the call and sends you
+ * into the app. Measured: 2 failed with the worker, 2 passed with it stashed,
+ * 2 passed with this line.
+ *
+ * ⚠ **This override belongs in `phoneConfig`, not here** (#1625): every adopter
+ * that also route-mocks its API needs it, and the four that came before recall
+ * pass only because of what their assertions happen to check. It is local for
+ * now because ui-harness is SHA-pinned in every frontend and that bump should
+ * be deliberate rather than a side effect of adding a service worker.
+ *
+ * What it gives up: this suite no longer exercises the worker at all. The
+ * update policy is unit-tested in ui-harness against a fake and the adapter
+ * here is thin, so that is a fair trade — but nothing asserts a real worker
+ * serves the shell offline.
+ */
+export default defineConfig({
+  ...base,
+  use: { ...base.use, serviceWorkers: 'block' },
+});

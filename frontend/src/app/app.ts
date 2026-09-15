@@ -16,6 +16,7 @@ import { dayKey, durationUntil, timeOfDay } from './format';
 import { CaptureState } from './models';
 import { RecallApi } from './recall-api';
 import { Telemetry } from './telemetry';
+import { SwUpdates } from './sw-updates';
 
 interface NavItem {
   readonly path: string;
@@ -60,6 +61,7 @@ export class App {
   // Instrumented from the shell alone: a trace each screen had to remember to
   // join would have holes in exactly the screens nobody thought about.
   private readonly telemetry = inject(Telemetry);
+  private readonly swUpdates = inject(SwUpdates);
 
   /** Phone-sized viewport → bottom nav; otherwise nav lives in the top toolbar. */
   protected readonly handset = toSignal(
@@ -120,6 +122,8 @@ export class App {
 
   constructor() {
     this.telemetry.init();
+    // Wired once here, so no view has to know a service worker exists.
+    this.swUpdates.start();
     this.pollCapture(0);
     setInterval(() => this.now.set(Date.now()), 30_000);
   }
