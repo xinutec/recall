@@ -28,6 +28,7 @@ mod capture;
 mod conversations;
 mod devices;
 mod diarized;
+mod identify_parity;
 mod ingest;
 mod labels;
 mod labels_write;
