@@ -534,71 +534,41 @@ in
     };
   };
 
-  # Stage E4: the `voices` runner — diarization for the room stream.
+  # Stage E4's `voices` runner: same binary and loop as recall-runner, driving
+  # `shim_voices` instead of `shim_asr`. The shim NAMES ITSELF over the protocol,
+  # so the runner discovers it can do `diarize-segment` rather than being told.
   #
-  # Same binary and same loop as recall-runner; only the shim differs, and the
-  # shim NAMES ITSELF over the protocol, so `runner` discovers that this one can
-  # do `diarize-room` rather than being told. Pointing it at the wrong module
-  # would make it lease work it can only refuse, which is why an unknown name is
-  # fatal there.
+  # ⚠ **COMMENTED OUT, not installed-and-idle.** It was the latter for one night
+  # and that broke the doctor: `agents::agent_health` treats installed-but-not-
+  # loaded as a fault, and it is RIGHT to — every other agent self-gates on the
+  # pause file and stays loaded, so an unloaded plist means one failed to start.
+  # Teaching it to accept "deliberately idle" would make it trust a declaration
+  # instead of an observation. A health agent that is permanently red is worse
+  # than one that is silent.
   #
-  # ⚠ **A SECOND GPU CONSUMER, and that is the whole risk.** It competes with
-  # the recorder and with the asr runner for the same Metal device. Nice 15 and
-  # LowPriorityIO put it BELOW both: capture must never lose a minute to
-  # diarization, which is re-derivable, and the archive pass earns more per
-  # second of GPU than a speaker split does.
+  # ⚠ Uncomment in the SAME change that starts `diarized::PER_MIC` and removes
+  # `org.xinutec.recall-refine`. Two writers over one corpus, each hiding what the
+  # other wrote, is a corpus nobody can reason about.
   #
-  # ⚠ It holds NO store and writes no turns. The result goes back to the queue;
-  # `recalld::diarized` decides what it means and owns the only write —
-  # deliberately, because that write REPLACES a transcript and the guards
-  # against emptying one belong beside the database, not beside the model.
+  # `Nice = 15`, below recall-runner's 10: capture must never lose a minute to
+  # diarization, which is re-derivable, and the archive pass earns more per second
+  # of GPU than a speaker split does. No `--pulse` — a second process stamping the
+  # archive heartbeat would make a stalled transcriber look healthy.
   #
-  # ⚠ No `--pulse`: the archive heartbeat is the asr runner's claim about
-  # transcription throughput, and a second process stamping it would make a
-  # stalled transcriber look healthy because diarization was still moving.
-  # ⚠ **NOT STARTED.** `RunAtLoad`/`KeepAlive` are false, so this is defined and
-  # deployable but idle until something drains what it produces.
-  #
-  # It works — 32 blocks on 2026-09-15, ~50s to 2.5min each. What it lacks is a
-  # consumer: `recalld::diarized`'s writers are both off (the reasons are there),
-  # so leaving this running would spend the GPU the recorder needs to fill a queue
-  # nobody drains.
-  #
-  # Start it in the same change that starts a writer, never before.
-  launchd.agents."org.xinutec.recall-voices" = daemon {
-    label = "org.xinutec.recall-voices";
-    name = "voices";
-    args = [ ];
-    program = pkgs.writeShellApplication {
-      name = "recall-voices";
-      runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
-      text = ''
-        # RECALL_SYNC_TOKEN lives in .env and must never enter the store.
-        ENV_FILE="''${RECALL_ENV:-$HOME/.config/recall/env}"
-        if [ -r "$ENV_FILE" ]; then
-          set -a
-          # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
-          . "$ENV_FILE"
-          set +a
-        fi
-
-        exec env RUST_LOG=info \
-          ${
-            recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
-          }/bin/runner \
-            --shim ${venvPython} -m recall.shim_voices
-      '';
-    };
-    extra = {
-      # Both false: see the note above. Start by hand with `launchctl kickstart`
-      # when there is a consumer for what it produces.
-      KeepAlive = false;
-      RunAtLoad = false;
-      LowPriorityIO = true;
-      # Below recall-runner's 10: the archive pass wins the GPU.
-      Nice = 15;
-    };
-  };
+  # launchd.agents."org.xinutec.recall-voices" = daemon {
+  #   label = "org.xinutec.recall-voices";
+  #   name = "voices";
+  #   args = [ ];
+  #   program = pkgs.writeShellApplication {
+  #     name = "recall-voices";
+  #     runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
+  #     text = <env-file preamble, then:>
+  #       exec env RUST_LOG=info \
+  #         ${recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod}/bin/runner \
+  #           --shim ${venvPython} -m recall.shim_voices
+  #   };
+  #   extra = { KeepAlive = true; RunAtLoad = true; LowPriorityIO = true; Nice = 15; };
+  # };
 
   # Store-and-forward delivery (docs/architecture.md, stage B): every closed
   # segment to recalld on Isis, sha-256 receipt verified against a local
