@@ -94,8 +94,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 #
 # ⚠ ort's prebuilt ONNX Runtime REQUIRES AVX2, and the fleet's servers are Ivy
 # Bridge (2012) — isis crash-looped with SIGILL when it first ran there. Debian's
-# libonnxruntime is built for baseline x86-64 and runs on those CPUs (verified by
-# running silero through it on amun, 2026-09-05), so the daemon dlopens that
+# libonnxruntime is built for baseline x86-64 and runs on those CPUs, so the
+# daemon dlopens that
 # instead. `api-21` matches Debian trixie's 1.21; asking for a newer API than the
 # library provides fails at load.
 ort = { version = "2.0.0-rc.13", default-features = false, features = [

@@ -81,11 +81,11 @@
         # two files are all it can legitimately read. Narrowing `src` to them means
         # the env moves when the Python moves, and stays put otherwise.
         #
-        # ⚠ **A COMMENT in pyproject.toml moves it too**, measured 2026-08-10:
-        # rewording the `[tool.uv] environments` note took `recall-ml-env` from
-        # `rcd89avp…` to `kmrbklrv…` with not one dependency changed, which on the
-        # next `home-manager switch` is a new binary path for the agents that reach
-        # /Volumes/Backup. Nothing can be trimmed here — hatchling reads the whole
+        # ⚠ **A COMMENT in pyproject.toml moves it too.** Rewording a note there
+        # changes `recall-ml-env`'s store path with not one dependency changed,
+        # which on the next `home-manager switch` is a new binary path for the
+        # agents that reach /Volumes/Backup. Nothing can be trimmed here — hatchling
+        # reads the whole
         # file — so the rule is the practical one: edit pyproject.toml for a reason,
         # and keep prose that is really about the toolchain in flake.nix or
         # gate.dhall, where it is free.
@@ -111,13 +111,12 @@
 
         # The same runtime plus the `dev` group, and THIS is what `.venv` is.
         #
-        # It used to be a directory uv built from the same lock, which made the
-        # checks the odd one out: the agents ran a store path, everything a
-        # person or the gate ran came out of a mutable directory holding PyPI
-        # wheels — outside the store, outside every GC root, and reconstructed by
-        # hand after a fresh clone. `uv sync --check` existed only to report when
-        # the two had drifted, which is a check that would not be needed if there
-        # were one artifact.
+        # A STORE PATH, not a directory uv builds from the same lock. The
+        # directory makes the checks the odd one out: the agents run a store path
+        # while everything a person or the gate runs comes out of a mutable tree of
+        # PyPI wheels — outside the store, outside every GC root, and reconstructed
+        # by hand after a fresh clone. The drift check that arrangement needs is a
+        # check one artifact does not.
         #
         # `deps.all` rather than `deps.default` is the whole difference: the dev
         # group is where `pytest` lives, and it has to be IN the environment
@@ -175,10 +174,9 @@
               # The terminal client. Not deployed as an agent, but a workspace
               # member — cargo cannot load the graph without it.
               ./cli
-              # The one licence-clean speech clip (#1433). This entry was removed
-              # on 2026-09-05 as pointless — every fixture was gitignored audio,
-              # so nothing could arrive — and is back because one CAN now, which
-              # is the whole reason for committing it.
+              # The one licence-clean speech clip (#1433). ⚠ Not pointless: every
+              # OTHER fixture here is gitignored audio, so this entry is the only
+              # way a committed clip reaches the sandbox.
               ./tests/fixtures/speech
               # The worker/doctor contract, held in one file because its two
               # halves are now in different languages: the Python worker test

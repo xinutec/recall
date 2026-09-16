@@ -28,7 +28,7 @@ targets:
         # writes this plist literally, so without these two the bundle carried
         # Apple's 1.0/1 defaults forever and the heartbeat's `version` — whose whole
         # job is to make "restarted into a NEW BUILD" distinguishable from a crash —
-        # was a constant. Measured 2026-08-14: three version bumps, all invisible.
+        # would be a constant across every version bump.
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}

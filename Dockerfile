@@ -1,12 +1,9 @@
 # recall's fleet image (Isis k3s): the browsing API, the web app and the device ingest,
 # all served by `recalld`. NO ML — the Mac keeps capture, ASR, diarization and the LLM.
 #
-# ⚠ **No Python, and no interpreter.** Until 2026-09-12 this was a python:3.12 base
-# carrying FastAPI, uvicorn and numpy so `recall.api` could serve the fleet tier; the
-# port to recalld finished and the Deployment stopped naming Python months before the
-# image did. What is left is a Debian base, one static-ish binary, and the media tools
-# recalld shells out to — so the fleet dependency set is now the Rust lockfile and
-# `apt` line below, nothing else.
+# ⚠ **No Python, and no interpreter.** A Debian base, one static-ish binary, and the
+# media tools recalld shells out to — so the fleet dependency set is the Rust lockfile
+# and the `apt` line below, nothing else.
 #
 # Multi-stage: build the Angular app, build recalld, then assemble. Runs as non-root
 # uid 1000, matching the Deployment's runAsUser + fsGroup.
@@ -54,10 +51,10 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 # ⚠ EVERY workspace MEMBER, or cargo cannot even load the graph — it fails with
 # a bare "No such file or directory" naming nothing. Only recalld is built here,
-# which makes it tempting to copy only what it needs; adding a crate to
-# Cargo.toml and not to this list broke four consecutive image builds on
-# 2026-09-08 before anyone looked, because the commit gate does not build this
-# image. flake.nix carries the same list and the same warning.
+# which makes it tempting to copy only what it needs. ⚠ Adding a crate to
+# Cargo.toml and not to this list breaks the image build and NOTHING ELSE — the
+# commit gate never builds it. flake.nix carries the same list and the same
+# warning.
 COPY audiocore/ audiocore/
 COPY audiod/ audiod/
 COPY doctor/ doctor/
@@ -85,8 +82,7 @@ RUN apt-get update \
 # deep-filter denoises playback clips on demand (audio.rs, `enhance=true`) — the
 # #1522 listen-test winner. The release binary is static musl with tract
 # inference (pure Rust): no AVX2, which matters because the fleet is Ivy Bridge
-# and ort's prebuilt binaries already SIGILLed here once (above). Verified on
-# isis 2026-09-10: runs, 10 s of speech in 3.5 s, 57 MB peak.
+# and ort's prebuilt binaries already SIGILLed here once (above).
 ADD --checksum=sha256:70775e251eee44c0f2451a1e833326cf8bcbbe304d3e7cd12851e6fce72ef7da \
     --chmod=755 \
     https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/deep-filter-0.5.6-x86_64-unknown-linux-musl \

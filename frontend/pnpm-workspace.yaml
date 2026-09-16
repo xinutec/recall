@@ -34,8 +34,8 @@ allowBuilds:
 #
 # Both match `tasks` and `home` exactly. Two spellings of one constraint drift.
 #
-# browserslist and fast-uri: the same shape again, found 2026-09-09 while reading
-# Dependabot. Both are transitive under @angular/build and vitest, neither ships
+# browserslist and fast-uri: the same shape again. Both are transitive under
+# @angular/build and vitest, neither ships
 # in the browser bundle, and nothing in the tree asks for the patched version —
 # so, as above, only a floor moves them.
 #
@@ -46,12 +46,11 @@ allowBuilds:
 # the vulnerable 4.13.1 — a floor is the only thing that moves it. Dev-time
 # only: nothing here serves HTTP in production.
 #
-# ⚠ These were found 2026-09-11 by checking each Dependabot alert's version
-# range against the version pnpm actually installed. Do not read the alert list
-# and stop: every alert names `frontend/package-lock.json`, deleted five weeks
-# ago, and that stale path made the whole list look ignorable while three of
-# them were real (#1505). vitest and @vitest/mocker were the other two, and they
-# needed no floor — `^4.1.9` already admitted the fix, so `pnpm update` moved
+# ⚠ FLOORS COME FROM CHECKING EACH ALERT'S VULNERABLE RANGE against the version
+# pnpm actually installed. Do not read the alert list and stop: every alert names
+# `frontend/package-lock.json`, long deleted, and that stale path makes the whole
+# list look ignorable while some of it is real (#1505). Most alerted packages
+# need no floor — the range already admits the fix, so `pnpm update` moves
 # them.
 overrides:
   esbuild: ^0.28.1

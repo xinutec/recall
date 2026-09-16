@@ -65,10 +65,10 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       # Build it, BOOT it, and only then publish it. Without the smoke step an image
-      # that cannot run the app still gets tagged :latest and deployed — which is
-      # exactly what happened: a lint fix dragged numpy into the serving chain of the
-      # Python tier this image used to carry, and Isis CrashLoopBackOff'd on a green
-      # build. The Dockerfile's dep set is a claim; running it is the proof.
+      # that cannot run the app still gets tagged :latest and deployed: a lint fix
+      # is enough to drag a package into the serving chain and leave Isis in
+      # CrashLoopBackOff off a green build. The Dockerfile's dep set is a claim;
+      # running it is the proof.
       - uses: docker/build-push-action@v7
         with:
           context: .

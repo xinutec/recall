@@ -8,14 +8,13 @@
 # Imported by the personal home-manager flake (~/.config/home-manager), so
 # `home-manager switch` installs, reloads and removes these agents declaratively.
 #
-# WHAT THE AGENTS RUN (changed 2026-07-22): a wrapper in the nix store, whose
-# PYTHONPATH is the store copy of THIS commit — not `~/Code/recall/src`. The
-# module was always pinned by the flake lock; the code it ran was not, so an
-# uncommitted edit in the working tree became the running daemon at its next
-# restart. Now the two move together, and `./scripts/recall.sh …` in the tree is
-# purely a development entry point.
+# WHAT THE AGENTS RUN: a wrapper in the nix store, whose PYTHONPATH is the store
+# copy of THIS commit — not `~/Code/recall/src`. Point it at the tree and an
+# uncommitted edit becomes the running daemon at its next restart, with the flake
+# lock still pinning the module. `./scripts/recall.sh …` is a development entry
+# point only.
 #
-# HOW THEY RUN IT (changed 2026-08-01): a real package. The wrapper names the store
+# HOW THEY RUN IT: a real package. The wrapper names the store
 # paths of the interpreter, sox and ffmpeg directly instead of entering the devshell
 # (`nix develop path:${src} --command …`), which used to put a full flake evaluation
 # in every agent's startup path. Same flake.lock, so the same store paths — including
@@ -30,20 +29,19 @@
 #     derivation, so the two cannot drift.
 #   - the interpreter split. capture/ingest run the DEVSHELL python (no ML deps —
 #     the gate checks that their import surface stays ML-free); everything else runs
-#     the python that holds mlx/pyannote/torch. What DID change (2026-07-31): that
-#     second interpreter is now the uv2nix store env (`nix build .#ml-env`), not the
-#     working tree's `.venv`, so nothing an agent imports lives in $HOME any more.
+#     the python that holds mlx/pyannote/torch, which is the uv2nix store env
+#     (`nix build .#ml-env`) rather than the working tree's `.venv` — so nothing an
+#     agent imports lives in $HOME.
 #   - the agent env (HF_TOKEN, RECALL_SYNC_TOKEN, the ingest tokens) is read at
 #     runtime from ~/.config/recall/env, 0600, on the INTERNAL disk. Secrets must
 #     never enter the store.
 #
-#     ⚠ It used to be ~/Code/recall/.env, and that path is a symlink onto
-#     /Volumes/Backup — the external archive volume. A launchd-spawned process
-#     cannot write there ("Operation not permitted") and, on first touch, its
-#     open can HANG rather than fail, waiting on a consent nobody is at the
-#     machine to give. On 2026-09-14 that wedged NINE agents at once, each stuck
-#     in bash sourcing this file; the four that survived were exactly the ones
-#     whose wrappers do not read it. Reproduce the write half with:
+#     ⚠ NOT under ~/Code/recall — that path is a symlink onto /Volumes/Backup,
+#     the external archive volume. A launchd-spawned process cannot write there
+#     ("Operation not permitted") and, on first touch, its open can HANG rather
+#     than fail, waiting on a consent nobody is at the machine to give. That
+#     wedges every agent whose wrapper sources the file, in bash, before it
+#     starts. Reproduce the write half with:
 #
 #         launchctl submit -l probe -- /bin/bash -c \
 #           'echo x > /Volumes/Backup/recall/.probe 2>/tmp/probe.err; echo $? >>/tmp/probe.err'
@@ -98,11 +96,10 @@ let
   # is identical, so the arguments below are the single source of truth for what
   # each daemon does (the old scripts/recall-*.sh wrappers duplicated them).
   #
-  # A real package, not a devshell entry (changed 2026-08-01). Each wrapper used to
-  # `exec nix develop path:${src} --command …`, which put a full flake evaluation in
-  # every agent's startup path — including capture's. That was never free, and on
-  # 2026-07-17/18 it was catastrophic: with nix's cache on the USB volume, evals went
-  # from 15s to over 30 minutes machine-wide for nine hours. The devshell was only
+  # A real package, NOT a devshell entry. `exec nix develop path:${src} --command …`
+  # puts a full flake evaluation in every agent's startup path, including capture's
+  # — never free, and catastrophic when nix's cache is on the USB volume, where an
+  # eval can go from seconds to tens of minutes machine-wide. The devshell is only
   # ever there for three things — the interpreter, sox and ffmpeg — and all three are
   # store paths this can name directly, from the same flake.lock the devshell resolves
   # against. `runtimeInputs` PREPENDS to PATH, so `say` and `launchctl` still come
@@ -115,10 +112,10 @@ let
   # every reader of this module (memview #645). Config states it; a symlink only
   # implies it.
   #
-  # ⚠ **The path is on the external volume ON PURPOSE**, and it moved hardware on
-  # 2026-08-12: it was the 6 TB HDD, it is now the 2 TB SSD that took the name
-  # `/Volumes/Backup`. Nothing here changed because the NAME did not — which is
-  # exactly why the volume was renamed rather than the paths rewritten.
+  # ⚠ **The path is on the external volume ON PURPOSE**, and it is written by NAME:
+  # `/Volumes/Backup` has survived a hardware swap underneath it because the name
+  # did, which is why a replacement volume takes the name rather than the paths
+  # being rewritten.
   #
   # The `cache/cache` doubling is a fossil of the era when `~/.cache` itself was
   # a symlink to `/Volumes/Backup/cache`. Kept because tidying it means moving
@@ -246,8 +243,7 @@ in
   # reachable from Isis under the one-way WireGuard model and need a Mac-initiated job-pull
   # (like capture-mirror) — tracked as Phase 2, not served from the Mac.
 
-  # Single-port audio ingest for the phone mics — audiod (Rust) since 2026-09-04.
-  # The Python server was deleted 2026-09-05; the rollback is git history.
+  # Single-port audio ingest for the phone mics — audiod (Rust).
   # Same reasoning as capture for the priority class: this holds the phones' live
   # PCM sockets and pumps them into ffmpeg in real time. A throttled reader drops
   # a phone's samples exactly as a throttled sox drops the USB mic's.
@@ -280,8 +276,7 @@ in
   # ⚠ **`recall-worker` WAS HERE and is gone (#1538).** It indexed and
   # transcribed the Mac's own segments; `runner` now leases `transcribe-segment`
   # from Isis and drives the same shim with the same model, and recalld's
-  # `turns::PER_MIC` pass writes the turns — including the live reconciliation
-  # this agent used to do, which is why that moved in the same commit.
+  # `turns::PER_MIC` pass writes the turns, including the live reconciliation.
   #
   # Nothing replaced its SCAN: it also discovered new source directories and
   # cleared dead-capture stubs. `audiod capture` registers its own source and
@@ -315,9 +310,8 @@ in
   # precision comes from the diarization + word-level speaker alignment, not the ASR
   # model. The household LoRA adapter (adapter-current -> adapter-20260708b) was tried
   # here for extra word accuracy, but on long recordings it is ~8x slower (full fp32
-  # large-v3, a 32-layer decoder vs turbo's 4) for a WER win (2026-07-08 A/B:
-  # 0.125 -> 0.064) that was only ever measured on short clips — so refine stays on
-  # turbo. To re-enable the adapter, add back these args (it is auto-detected as an
+  # large-v3, a 32-layer decoder vs turbo's 4) for a WER win only ever measured on
+  # short clips — so refine stays on turbo. To re-enable the adapter, add back these args (it is auto-detected as an
   # adapter dir via adapter_config.json and loaded on top of --base-model):
   #   "--model" "/Volumes/Backup/recall/adapter-current"
   #   "--base-model" "openai/whisper-large-v3"
@@ -333,7 +327,7 @@ in
   #   args = [ "refine" "--out" out ];
   # };
 
-  # The instant feed — Rust since 2026-09-14. Reads the UDP tap capture
+  # The instant feed. Reads the UDP tap capture
   # publishes, cuts it at the pauses with the same silero the archive uses,
   # drives the asr shim, and POSTs each turn to Isis, which shows it within
   # seconds and hides it once the archive pass reaches that minute.
@@ -386,12 +380,11 @@ in
   # stretches. That is silent, unrecoverable loss of household speech, which is the one
   # failure this system exists to prevent (#1330).
   #
-  # Measured 2026-09-03, machine at load 42 (a Blender batch render at 565% CPU, other
-  # sessions' builds, this repo's own gate): usb segment intervals went from a clean
-  # 60.15 s mean in a quiet hour to 109.75 s with a 235 s worst case — roughly half the
-  # wall clock unrecorded, while capture sat in the throttled class by configuration.
-  # An earlier ablation had already cleared the transcription worker of causing it; the
-  # cause was never a particular neighbour, it was that ANY load outranks the recorder.
+  # Measured under heavy machine load: usb segment intervals went from a clean 60 s
+  # mean to nearly double, with worst cases four times that — roughly half the wall
+  # clock unrecorded, while capture sat in the throttled class by configuration. An
+  # ablation cleared the transcription worker of causing it; the cause is never a
+  # particular neighbour, it is that ANY load outranks a throttled recorder.
   #
   # `Interactive` is the honest description: nothing on this machine is more
   # latency-critical than not missing what was said in the room.
@@ -401,12 +394,11 @@ in
     args = [ ];
     program = audiodWrapper {
       name = "capture";
-      # ⚠ No `--codec` here, and that is deliberate: lossless is audiod's
-      # DEFAULT since 2026-09-11, so every recorder gets it without a flag.
-      # Carrying it explicitly on this one agent read as "the condenser is
-      # special", which is how the phones stayed Opus for a day after the
-      # decision — `audiod ingest` (below) simply took the default nobody had
-      # revisited. The reasoning lives with the default, in
+      # ⚠ No `--codec` here, and that is deliberate: lossless is audiod's DEFAULT,
+      # so every recorder gets it without a flag. Carrying it explicitly on this
+      # one agent would read as "the condenser is special" and leave the other
+      # recorders on whatever default nobody revisited. The reasoning lives with
+      # the default, in
       # audiod/src/segmenter.rs; the retention side is docs/architecture.md.
       args = [ "capture" "--root" out "--id" "usb" "--device" "USB Condenser Microphone" ];
     };
@@ -417,11 +409,10 @@ in
   # odin's nightly restic takes an integrity-checked SQLite snapshot from inside the
   # Isis pod plus an audio rsync of the recall PVC (nixos-config
   # machines/odin/backup-prepare.sh), so every recording is already protected
-  # server-to-server. The Mac used to push its whole archive here too — a pre-split
-  # leftover from when the Mac was the system of record. Its only content Isis lacks
-  # is the training corpora (finetune-corpus, pilot-*), which are derived from the
-  # archive + corrections and are deliberately NOT backed up: they can be regenerated.
-  # Retiring it also drops the /Volumes/Backup TCC fragility that broke it before.
+  # server-to-server. The only content Isis lacks is the training corpora
+  # (finetune-corpus, pilot-*), which are derived from the archive + corrections
+  # and are deliberately NOT backed up: they can be regenerated. A Mac-side push
+  # would also carry the /Volumes/Backup TCC fragility for nothing.
 
   # Is recall actually working? Every 5 minutes, reported to fleetwatch.
   #

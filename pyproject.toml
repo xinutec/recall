@@ -11,8 +11,8 @@ requires-python = ">=3.12"
 # frozen, complete pin set; this list is the human-readable intent behind it.
 dependencies = [
     "datasets>=5.0",
-    # The LLM host's HTTP surface, and ONLY that: the fleet tier it used to serve
-    # is recalld now, so nothing here answers a browser. `recall llm-host` holds the
+    # The LLM host's HTTP surface, and ONLY that — recalld serves the fleet tier,
+    # so nothing here answers a browser. `recall llm-host` holds the
     # mlx-lm weights and lends them over localhost, which is why the web stack is
     # still a Mac dependency at all.
     "fastapi>=0.136",
