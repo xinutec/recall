@@ -179,24 +179,6 @@ use crate::align::{SpeakerTurn, Word, assign_words_to_speakers};
 use chrono::SecondsFormat;
 use serde::Deserialize;
 
-/// `provenance` a diarized-aligned turn records — the reversal key.
-///
-/// ⚠ Spelled to match what `refine.py` has been writing for months
-/// (`ALIGNED_MARKER (model)`), because `recalld::reads::tier()`,
-/// `audio::render_blocking` and `assign` all test `provenance.starts_with`
-/// against it. A new spelling would make every turn this writes read as
-/// un-diarized to three separate readers.
-#[must_use]
-pub fn provenance(model: &str) -> String {
-    format!("diarized-aligned ({model})")
-}
-
-/// …and what the turns it supersedes record in `hidden_reason`.
-#[must_use]
-pub fn hidden_by(model: &str) -> String {
-    format!("diarized ({model})")
-}
-
 #[derive(Deserialize)]
 struct Reply<T> {
     ok: bool,
@@ -322,6 +304,8 @@ pub fn apply(
         start: block_start,
         language,
         model,
+        provenance,
+        hidden_reason,
         now,
     } = *block;
     let Swap::Replace { insert, hide } = swap else {
@@ -336,7 +320,7 @@ pub fn apply(
         tx.execute(
             "UPDATE transcript_segments SET hidden_reason = ?1
              WHERE id = ?2 AND hidden_reason IS NULL",
-            (hidden_by(model), id),
+            (hidden_reason, id),
         )?;
     }
     let mut written = 0;
@@ -370,7 +354,7 @@ pub fn apply(
                 if trusted { turn.confidence } else { 0.0 },
                 model,
                 turn.speaker,
-                provenance(model),
+                provenance,
                 serde_json::to_string(&rebased).unwrap_or_else(|_| "[]".to_owned()),
                 now,
             ],
@@ -409,6 +393,10 @@ pub struct Block<'a> {
     /// languages a turn keeps its audio and loses its confidence.
     pub language: Option<&'a str>,
     pub model: &'a str,
+    /// The stream's reversal key — see [`Stream::provenance`].
+    pub provenance: &'a str,
+    /// What this pass records on the turns it supersedes.
+    pub hidden_reason: &'a str,
     pub now: &'a str,
 }
 
@@ -506,6 +494,19 @@ pub struct Stream<'a> {
     pub transcribe_kind: &'a str,
     /// What written rows record in `asr_model`.
     pub model: &'a str,
+    /// What they record in `provenance` — THE REVERSAL KEY, and it must name
+    /// this pass alone.
+    ///
+    /// ⚠ Keep the `diarized-aligned` prefix: `reads::tier()`,
+    /// `audio::render_blocking` and `assign` all test `starts_with` against it,
+    /// so losing it makes these turns read as un-diarized to three readers. And
+    /// do NOT reuse `refine.py`'s exact string — it wrote `diarized-aligned
+    /// (<model>)` with the same model name these rows carry, so sharing it would
+    /// leave a reversal able to take both passes' rows or neither.
+    pub provenance: &'a str,
+    /// What the turns it supersedes record in `hidden_reason`. Named for the same
+    /// reason: un-hiding what THIS pass hid must not disturb what refine hid.
+    pub hidden_reason: &'a str,
 }
 
 /// One MICROPHONE's clip — `refine.py`'s stream, and the one that replaces it.
@@ -518,6 +519,8 @@ pub const PER_MIC: Stream<'static> = Stream {
     diarize_kind: crate::queue::DIARIZE_SEGMENT,
     transcribe_kind: crate::queue::TRANSCRIBE_SEGMENT,
     model: crate::turns::SHIM_MODEL,
+    provenance: "diarized-aligned (per-mic runner)",
+    hidden_reason: "diarized (per-mic runner)",
 };
 
 /// The derived room stream. ⚠ **Gated on #1461, and its writer is OFF.**
@@ -534,6 +537,8 @@ pub const ROOM: Stream<'static> = Stream {
     diarize_kind: crate::queue::DIARIZE_ROOM,
     transcribe_kind: crate::queue::TRANSCRIBE_ROOM,
     model: crate::turns::ROOM_MODEL,
+    provenance: "diarized-aligned (room runner)",
+    hidden_reason: "diarized (room runner)",
 };
 
 /// What one diarized pass did.
@@ -665,6 +670,8 @@ pub fn write_pass(
                         start: block_start,
                         language: language.as_deref(),
                         model,
+                        provenance: stream.provenance,
+                        hidden_reason: stream.hidden_reason,
                         now,
                     },
                     &swap,

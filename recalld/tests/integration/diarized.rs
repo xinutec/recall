@@ -447,10 +447,7 @@ fn a_finished_diarization_replaces_the_room_turns_with_speaker_split_ones() {
             |r| r.get(0),
         )
         .expect("old turn still there");
-    assert_eq!(
-        hidden.as_deref(),
-        Some("diarized (mlx-whisper/large-v3-turbo (room))")
-    );
+    assert_eq!(hidden.as_deref(), Some(ROOM.hidden_reason));
 
     // The new ones carry the speaker and the provenance three other readers test.
     let mut stmt = meaning
@@ -738,10 +735,15 @@ fn a_per_mic_turn_keeps_the_corpus_model_name_and_is_reversible_by_provenance() 
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("a written turn");
+    // ⚠ The model is the corpus's, so a reader filtering on it sees one archive…
     assert_eq!(model, recalld::turns::SHIM_MODEL);
-    assert_eq!(
+    // …while the provenance names THIS pass, so a reversal can take its rows and
+    // not `refine.py`'s — which wrote `diarized-aligned (<that same model>)`.
+    assert_eq!(provenance, PER_MIC.provenance);
+    assert_ne!(
         provenance,
-        format!("diarized-aligned ({})", recalld::turns::SHIM_MODEL)
+        format!("diarized-aligned ({})", recalld::turns::SHIM_MODEL),
+        "must not collide with what refine.py wrote"
     );
 }
 
@@ -784,10 +786,23 @@ fn the_room_pass_does_not_touch_the_per_mic_streams_jobs() {
 /// diarized corpus along with 22 of mine.
 #[test]
 fn the_two_streams_write_provenances_that_cannot_match_each_other() {
-    let per_mic = format!("diarized-aligned ({})", PER_MIC.model);
-    let room = format!("diarized-aligned ({})", ROOM.model);
-    assert_ne!(per_mic, room);
-    assert!(!per_mic.starts_with(&room) && !room.starts_with(&per_mic));
+    // ⚠ Read from the STREAMS, never rebuilt here. This test passed while both
+    // streams wrote an identical string, because it constructed the strings
+    // itself from `model` instead of asking what is actually written — a test
+    // mirroring the wiring tests its copy.
+    assert_ne!(PER_MIC.provenance, ROOM.provenance);
+    assert_ne!(PER_MIC.hidden_reason, ROOM.hidden_reason);
+    for p in [PER_MIC.provenance, ROOM.provenance] {
+        assert!(
+            p.starts_with("diarized-aligned"),
+            "three readers test this prefix: {p}"
+        );
+        assert_ne!(
+            p,
+            format!("diarized-aligned ({})", recalld::turns::SHIM_MODEL),
+            "refine.py's string — a reversal could not tell the passes apart"
+        );
+    }
 }
 
 /// The kinds a runner may be handed must not overlap between streams either.
