@@ -303,16 +303,14 @@ fn spawn_background_passes(root: &std::path::Path) {
     // twice.
     spawn_turn_writer(root.clone(), recalld::turns::PER_MIC);
     //
-    // ⚠ **OFF, and uncommenting this ALONE is a bug.** `recall refine` writes
-    // diarized turns for these same clips. Two writers over one corpus, each
-    // HIDING what the other wrote, is a corpus nobody can reason about — so the
-    // switch is one deploy on both machines: this line AND the removal of
-    // `org.xinutec.recall-refine`, together.
+    // ⚠ **THE ONLY LOOP HERE THAT REPLACES A TRANSCRIPT SOMEBODY READS**, and it
+    // must never run beside `recall refine`, which wrote these same clips until
+    // that agent was removed in the same change. Two writers over one corpus,
+    // each HIDING what the other wrote, is a corpus nobody can reason about.
     //
-    // (`diarized::ROOM` is the other stream and is gated separately; the reason
-    // is on the constant.)
-    //
-    // spawn_diarized_writer(root.clone(), recalld::diarized::PER_MIC);
+    // (`diarized::ROOM` is the other stream and stays off; the reason is on the
+    // constant.)
+    spawn_diarized_writer(root.clone(), recalld::diarized::PER_MIC);
     spawn_segment_registrar(root.clone());
     spawn_segment_deriver(root.clone());
 }
@@ -360,12 +358,6 @@ fn spawn_background_passes(root: &std::path::Path) {
 /// A SMALL batch on a slow cadence, for the reason the turn writer has one: the
 /// queue drains over hours, so a bad verdict is noticed while it is dozens of
 /// blocks rather than nine hundred.
-#[expect(
-    dead_code,
-    reason = "the call above is commented out pending #1461, and this is what gets \
-              uncommented. Deleting it to satisfy the lint would mean rewriting the \
-              pass from its tests when the decision lands."
-)]
 fn spawn_diarized_writer(root: PathBuf, stream: recalld::diarized::Stream<'static>) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
     const BATCH: usize = 20;

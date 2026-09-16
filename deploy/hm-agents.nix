@@ -321,12 +321,17 @@ in
   # adapter dir via adapter_config.json and loaded on top of --base-model):
   #   "--model" "/Volumes/Backup/recall/adapter-current"
   #   "--base-model" "openai/whisper-large-v3"
-  launchd.agents."org.xinutec.recall-refine" = daemon {
-    label = "org.xinutec.recall-refine";
-    name = "refine";
-    python = venvPython;
-    args = [ "refine" "--out" out ];
-  };
+  # ⚠ **RETIRED with the start of `recalld::diarized::PER_MIC`.** Both write
+  # speaker-split turns over the same per-mic clips and both HIDE what they
+  # supersede; two of them over one corpus is a corpus nobody can reason about.
+  # Do not restore without stopping that writer.
+  #
+  # launchd.agents."org.xinutec.recall-refine" = daemon {
+  #   label = "org.xinutec.recall-refine";
+  #   name = "refine";
+  #   python = venvPython;
+  #   args = [ "refine" "--out" out ];
+  # };
 
   # The instant feed — Rust since 2026-09-14. Reads the UDP tap capture
   # publishes, cuts it at the pauses with the same silero the archive uses,
@@ -538,37 +543,52 @@ in
   # `shim_voices` instead of `shim_asr`. The shim NAMES ITSELF over the protocol,
   # so the runner discovers it can do `diarize-segment` rather than being told.
   #
-  # ⚠ **COMMENTED OUT, not installed-and-idle.** It was the latter for one night
-  # and that broke the doctor: `agents::agent_health` treats installed-but-not-
-  # loaded as a fault, and it is RIGHT to — every other agent self-gates on the
-  # pause file and stays loaded, so an unloaded plist means one failed to start.
-  # Teaching it to accept "deliberately idle" would make it trust a declaration
-  # instead of an observation. A health agent that is permanently red is worse
-  # than one that is silent.
-  #
-  # ⚠ Uncomment in the SAME change that starts `diarized::PER_MIC` and removes
-  # `org.xinutec.recall-refine`. Two writers over one corpus, each hiding what the
-  # other wrote, is a corpus nobody can reason about.
+  # ⚠ **It leases `diarize-segment` ONLY.** `kinds_for` decides that, and the
+  # reason is there: `diarize-room` jobs are derived for every transcribed block
+  # whether or not anything consumes them — thousands were queued with the room
+  # writer off — and `queue::lease` orders across kinds by capture time, so
+  # leasing both would spend half of every pass on results nothing reads.
   #
   # `Nice = 15`, below recall-runner's 10: capture must never lose a minute to
   # diarization, which is re-derivable, and the archive pass earns more per second
   # of GPU than a speaker split does. No `--pulse` — a second process stamping the
   # archive heartbeat would make a stalled transcriber look healthy.
   #
-  # launchd.agents."org.xinutec.recall-voices" = daemon {
-  #   label = "org.xinutec.recall-voices";
-  #   name = "voices";
-  #   args = [ ];
-  #   program = pkgs.writeShellApplication {
-  #     name = "recall-voices";
-  #     runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
-  #     text = <env-file preamble, then:>
-  #       exec env RUST_LOG=info \
-  #         ${recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod}/bin/runner \
-  #           --shim ${venvPython} -m recall.shim_voices
-  #   };
-  #   extra = { KeepAlive = true; RunAtLoad = true; LowPriorityIO = true; Nice = 15; };
-  # };
+  # ⚠ It holds NO store and writes no turns. The result goes back to the queue;
+  # `recalld::diarized` decides what it means and owns the only write, because
+  # that write REPLACES a transcript and the guards against emptying one belong
+  # beside the database, not beside the model.
+  launchd.agents."org.xinutec.recall-voices" = daemon {
+    label = "org.xinutec.recall-voices";
+    name = "voices";
+    args = [ ];
+    program = pkgs.writeShellApplication {
+      name = "recall-voices";
+      runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
+      text = ''
+        # RECALL_SYNC_TOKEN lives in .env and must never enter the store.
+        ENV_FILE="''${RECALL_ENV:-$HOME/.config/recall/env}"
+        if [ -r "$ENV_FILE" ]; then
+          set -a
+          # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
+          . "$ENV_FILE"
+          set +a
+        fi
+
+        exec env RUST_LOG=info \
+          ${
+            recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
+          }/bin/runner \
+            --shim ${venvPython} -m recall.shim_voices
+      '';
+    };
+    extra = {
+      KeepAlive = true;
+      RunAtLoad = true;
+      LowPriorityIO = true;
+      Nice = 15;
+    };
+  };
 
   # Store-and-forward delivery (docs/architecture.md, stage B): every closed
   # segment to recalld on Isis, sha-256 receipt verified against a local

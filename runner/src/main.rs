@@ -40,12 +40,17 @@ fn kinds_for(shim_name: &str) -> Option<&'static [&'static str]> {
         // room block and a microphone clip from the same minute compete on
         // equal terms rather than one starving the other.
         "asr" => Some(&["transcribe-room", "transcribe-segment"]),
-        // ⚠ Both, and `diarize-segment` is the one that matters: it refines
-        // clips that already carry turns, which is what `refine.py` does.
-        // `diarize-room` refines the room stream, which is gated on #1461 — a
-        // runner may hold both because the QUEUE decides which exist, and no
-        // room job is derived while nothing writes room turns.
-        "voices" => Some(&["diarize-segment", "diarize-room"]),
+        // ⚠ **`diarize-segment` ONLY, and NOT `diarize-room`.** Room jobs are
+        // derived for every transcribed block whether or not anything consumes
+        // them — 3,232 were queued when this was written, with the room writer
+        // off pending #1461. Leasing them would spend the GPU the recorder needs
+        // on results nothing reads, and `queue::lease` orders across kinds by
+        // capture time, so they would take roughly half of every pass.
+        //
+        // An earlier comment here claimed the queue could be trusted to only
+        // contain what a consumer wanted. It cannot: derivation and consumption
+        // are separate switches, and this is the consuming one.
+        "voices" => Some(&["diarize-segment"]),
         _ => None,
     }
 }
