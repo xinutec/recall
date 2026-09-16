@@ -121,3 +121,100 @@ def test_a_request_without_audio_is_refused(tmp_path: Path) -> None:
 def test_an_unknown_op_is_refused() -> None:
     with pytest.raises(ValueError, match="unknown op"):
         handle("identify", {"audio": "/x"})
+
+
+def _fixed_turns() -> list[SpeakerTurn]:
+    """⚠ SPEAKER_00 holds a 0.4s backchannel AND a 6.0s explanation. A voiceprint
+    built from the backchannel is worse than one built from the explanation, and
+    diarization returns both — so which span is chosen is a decision, not a detail."""
+    return [
+        SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=0.4),
+        SpeakerTurn(speaker="SPEAKER_01", start=0.4, end=3.0),
+        SpeakerTurn(speaker="SPEAKER_00", start=3.0, end=9.0),
+    ]
+
+
+def _fixed(turns: list[SpeakerTurn]) -> Diarize:
+    def diarize(
+        audio: Path,
+        /,
+        *,
+        model: str,
+        clustering_threshold: float | None,
+        min_cluster_size: int | None,
+    ) -> list[SpeakerTurn]:
+        return turns
+
+    return diarize
+
+
+def _constant_embedder(vector: list[float]) -> Embed:
+    def embed(audio: Path, /, *, model: str) -> list[float]:
+        return vector
+
+    return embed
+
+
+def test_diarize_embeds_each_speaker_from_their_longest_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sliced: list[tuple[float, float]] = []
+
+    def fake_slice(src: Path, dst: Path, start: float, end: float) -> None:
+        sliced.append((start, end))
+        dst.write_bytes(b"clip")
+
+    monkeypatch.setattr("recall.shim_voices.slice_clip", fake_slice)
+    answer = as_dict(
+        handle(
+            "diarize",
+            {"audio": str(clip_at(tmp_path)), "embed": True},
+            diarize=_fixed(_fixed_turns()),
+            embed=_constant_embedder([0.5, 0.5]),
+        )
+    )
+
+    speakers = [as_dict(s) for s in as_list(answer["speakers"])]
+    assert [s["speaker"] for s in speakers] == ["SPEAKER_00", "SPEAKER_01"]
+    # SPEAKER_00's 6.0s span won over its 0.4s one.
+    assert sliced == [(3.0, 9.0), (0.4, 3.0)]
+    assert speakers[0]["seconds"] == 6.0
+
+
+def test_diarize_without_embed_sends_no_vectors(tmp_path: Path) -> None:
+    """Opt-in: the embedding costs a model load and a slice per speaker, and a
+    caller that only wants spans must not pay for it."""
+    answer = as_dict(
+        handle(
+            "diarize",
+            {"audio": str(clip_at(tmp_path))},
+            diarize=_fixed(_fixed_turns()),
+            embed=_constant_embedder([1.0]),
+        )
+    )
+    assert "speakers" not in answer
+
+
+def test_a_speaker_whose_clip_will_not_slice_is_skipped_not_faked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A corrupt frame costs that speaker a name, never the whole reply."""
+
+    def bad_slice(src: Path, dst: Path, start: float, end: float) -> None:
+        if start == 3.0:
+            msg = "ffmpeg refused"
+            raise RuntimeError(msg)
+        dst.write_bytes(b"clip")
+
+    monkeypatch.setattr("recall.shim_voices.slice_clip", bad_slice)
+    answer = as_dict(
+        handle(
+            "diarize",
+            {"audio": str(clip_at(tmp_path)), "embed": True},
+            diarize=_fixed(_fixed_turns()),
+            embed=_constant_embedder([0.1]),
+        )
+    )
+
+    speakers = [as_dict(s) for s in as_list(answer["speakers"])]
+    assert [s["speaker"] for s in speakers] == ["SPEAKER_01"]

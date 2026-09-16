@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Protocol
 
 from recall import shim
+from recall.asr import scratch_wav, slice_clip
 from recall.diarize import DEFAULT_DIARIZER, SpeakerTurn, pyannote_diarize
 from recall.shim import JsonDict, JsonValue
 from recall.speakerid import pyannote_embed
@@ -80,6 +81,49 @@ def _optional_int(args: JsonDict, key: str) -> int | None:
     return int(value) if isinstance(value, int) else None
 
 
+def _embed_speakers(
+    audio: Path, turns: list[SpeakerTurn], embed: Embed, model: str
+) -> list[JsonValue]:
+    """One voiceprint per distinct speaker in the clip, from their LONGEST span.
+
+    ⚠ **Per SPEAKER, where `refine` embeds per aligned TURN, and the difference is
+    deliberate.** Alignment happens on the fleet — it needs the words, which are a
+    different job's result — so embedding per turn would need a second round trip
+    for every clip. A speaker's longest span is audio this process already has,
+    and it is usually LONGER than any one turn, which is the direction that helps
+    a voiceprint rather than hurts it.
+
+    ⚠ What it cannot do is prove that: whether per-speaker attribution is as good
+    as per-turn is a question for a differential over the real archive, not for an
+    argument here. Until that is run it is a change, not an improvement.
+
+    A span that will not slice is SKIPPED, not faked: a corrupt frame makes ffmpeg
+    fail on some clips, and a speaker with no vector is simply one the fleet will
+    not guess a name for — which is the right answer when the audio is unreadable.
+    """
+    longest: dict[str, SpeakerTurn] = {}
+    for turn in turns:
+        best = longest.get(turn.speaker)
+        if best is None or (turn.end - turn.start) > (best.end - best.start):
+            longest[turn.speaker] = turn
+    out: list[JsonValue] = []
+    for speaker, turn in sorted(longest.items()):
+        try:
+            with scratch_wav(audio.parent / f"{audio.stem}-{speaker}.wav") as clip:
+                slice_clip(audio, clip, turn.start, turn.end)
+                vector: list[JsonValue] = list(embed(clip, model=model))
+        except Exception:  # a bad clip costs one speaker, never the whole reply
+            continue
+        out.append(
+            {
+                "speaker": speaker,
+                "seconds": turn.end - turn.start,
+                "vector": vector,
+            }
+        )
+    return out
+
+
 def handle(
     op: str,
     args: JsonDict,
@@ -90,17 +134,23 @@ def handle(
     """Answer one request. The collaborators are injected so the protocol and the
     argument handling are testable without a gated download or 2 GB of weights."""
     if op == "diarize":
+        audio = _clip(args)
         turns = diarize(
-            _clip(args),
+            audio,
             model=str(args.get("model") or DEFAULT_DIARIZER),
             clustering_threshold=_optional_float(args, "clustering_threshold"),
             min_cluster_size=_optional_int(args, "min_cluster_size"),
         )
-        return {
+        answer: JsonDict = {
             "turns": [
                 {"speaker": t.speaker, "start": t.start, "end": t.end} for t in turns
             ]
         }
+        if args.get("embed"):
+            answer["speakers"] = _embed_speakers(
+                audio, turns, embed, str(args.get("embed_model") or DEFAULT_EMBEDDER)
+            )
+        return answer
     if op == "embed":
         model = str(args.get("model") or DEFAULT_EMBEDDER)
         # Re-built as JsonValue rather than passed through: `list[float]` is not a

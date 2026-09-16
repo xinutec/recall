@@ -796,3 +796,35 @@ fn the_two_streams_draw_from_different_queue_kinds() {
         "a kind is claimed twice: {kinds:?}"
     );
 }
+
+// --- the voiceprints that come back with the spans ---------------------------
+
+use recalld::diarized::voices;
+
+const WITH_VOICES: &str = r#"{"ok": true, "result": {
+    "turns": [{"speaker": "SPEAKER_00", "start": 0.0, "end": 2.0}],
+    "speakers": [{"speaker": "SPEAKER_00", "seconds": 2.0, "vector": [0.1, 0.9]}]}}"#;
+
+#[test]
+fn a_diarization_carries_a_voiceprint_per_speaker() {
+    let (turns, prints) = voices(WITH_VOICES).expect("parsed");
+    assert_eq!(turns.len(), 1);
+    assert_eq!(prints.len(), 1);
+    assert_eq!(prints[0].speaker, "SPEAKER_00");
+    assert_eq!(prints[0].vector.len(), 2);
+}
+
+/// ⚠ A result stored BEFORE the shim embedded carries spans and no vectors, and
+/// must still align. Those turns get no name guess — worse than a guess, better
+/// than a wrong name — rather than failing the whole clip.
+#[test]
+fn a_diarization_with_no_voiceprints_still_yields_its_spans() {
+    let (turns, prints) = voices(TWO_SPEAKERS).expect("parsed");
+    assert_eq!(turns.len(), 2);
+    assert!(prints.is_empty());
+}
+
+#[test]
+fn a_refused_diarization_yields_nothing_rather_than_empty_spans() {
+    assert!(voices(r#"{"ok": false, "error": "no such file"}"#).is_none());
+}

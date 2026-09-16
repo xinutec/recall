@@ -207,6 +207,15 @@ struct Reply<T> {
 struct Voices {
     #[serde(default)]
     turns: Vec<SpeakerTurn>,
+    #[serde(default)]
+    speakers: Vec<SpeakerVoice>,
+}
+
+/// One voiceprint the shim built for a speaker in this clip.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct SpeakerVoice {
+    pub speaker: String,
+    pub vector: Vec<f64>,
 }
 
 #[derive(Deserialize)]
@@ -245,8 +254,26 @@ struct TranscribedSegment {
 /// because a stored result does not change on a later pass.
 #[must_use]
 pub fn speaker_turns(stored: &str) -> Option<Vec<SpeakerTurn>> {
+    Some(voices(stored)?.0)
+}
+
+/// The spans AND the per-speaker voiceprints a stored diarization carries.
+///
+/// ⚠ The voiceprints may be EMPTY where the spans are not — an older result
+/// stored before the shim embedded, or a clip whose slices all failed. That is a
+/// turn with no name guess, which is worse than one with a guess and better than
+/// a wrong name, so it is a normal outcome rather than an error.
+///
+/// # Errors
+/// `None` when the shim refused or the body is not this shape — both permanent.
+#[must_use]
+pub fn voices(stored: &str) -> Option<(Vec<SpeakerTurn>, Vec<SpeakerVoice>)> {
     let reply: Reply<Voices> = serde_json::from_str(stored).ok()?;
-    reply.ok.then_some(reply.result?.turns)
+    if !reply.ok {
+        return None;
+    }
+    let body = reply.result?;
+    Some((body.turns, body.speakers))
 }
 
 /// Every word a stored `transcribe-room` result carries, in order, with the

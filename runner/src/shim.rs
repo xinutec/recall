@@ -179,13 +179,21 @@ impl Shim {
     ///
     /// # Errors
     /// Whatever `request` reports.
+    /// Diarize one clip, and embed each speaker found in it.
+    ///
+    /// ⚠ **`embed` is asked for HERE rather than in a second job**, because the
+    /// model is on this machine and the turn boundaries are decided on the fleet.
+    /// Without it a diarized turn reaches the archive with a bare `SPEAKER_00`
+    /// and no name guess — and 98% of the corpus `refine` built carries one, so
+    /// dropping it is not a small regression.
+    ///
+    /// No tuning passed: the shipped pyannote parameters are what the whole
+    /// archive was diarized with, and a runner is not the place to diverge from
+    /// that quietly.
     pub fn diarize(&mut self, audio: &Path) -> Result<serde_json::Value, Error> {
-        // No tuning passed: the shipped pyannote parameters are what the whole
-        // archive was diarized with, and a runner is not the place to diverge
-        // from that quietly.
         self.request(
             "diarize",
-            &serde_json::json!({ "audio": audio.to_string_lossy() }),
+            &serde_json::json!({ "audio": audio.to_string_lossy(), "embed": true }),
         )
     }
 
