@@ -313,13 +313,17 @@ pub fn words_of(stored: &str) -> Option<(Vec<Word>, Option<String>)> {
 /// half-applied.
 pub fn apply(
     conn: &mut rusqlite::Connection,
-    audio_segment_id: i64,
-    block_start: DateTime<Utc>,
+    block: &Block<'_>,
     swap: &Swap,
-    language: Option<&str>,
-    model: &str,
-    now: &str,
+    named: &Named<'_>,
 ) -> rusqlite::Result<usize> {
+    let Block {
+        audio_segment_id,
+        start: block_start,
+        language,
+        model,
+        now,
+    } = *block;
     let Swap::Replace { insert, hide } = swap else {
         return Ok(0);
     };
@@ -379,10 +383,45 @@ pub fn apply(
             "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
             (id, &turn.text),
         )?;
+        // ⚠ IN the same transaction as the turn. A turn written without its
+        // embedding is one no later re-match can reach — `rematch_speaker_guesses`
+        // reads `transcript_embeddings`, so a crash between the two leaves a turn
+        // permanently unnameable rather than merely unnamed.
+        if let Some(vector) = named.voices.get(turn.speaker.as_str()) {
+            let guess = crate::identify::match_one(vector, named.enrolled);
+            crate::identify::record(&tx, id, vector, guess.as_ref())?;
+        }
         written += 1;
     }
     tx.commit()?;
     Ok(written)
+}
+
+/// The one clip a write is about. Grouped because these five always travel
+/// together and always come from the same row.
+#[derive(Debug, Clone, Copy)]
+pub struct Block<'a> {
+    pub audio_segment_id: i64,
+    /// Where the clip begins in absolute time — the shim's offsets are relative
+    /// to the clip it was handed and mean nothing without this.
+    pub start: DateTime<Utc>,
+    /// The whole-clip language detection, or `None`. Outside the household's
+    /// languages a turn keeps its audio and loses its confidence.
+    pub language: Option<&'a str>,
+    pub model: &'a str,
+    pub now: &'a str,
+}
+
+/// What a pass needs to put a name to the speakers it writes: the clip's own
+/// voiceprints, and the people already enrolled.
+///
+/// ⚠ Empty `voices` is ORDINARY, not an error — a diarization stored before the
+/// shim embedded carries none. Those turns land with their `SPEAKER_nn` cluster
+/// and no guess, which is what a reader should see when nothing is known.
+pub struct Named<'a> {
+    /// Speaker label from THIS clip's diarization to the vector built for it.
+    pub voices: std::collections::HashMap<&'a str, &'a [f64]>,
+    pub enrolled: &'a [crate::identify::Voiceprint],
 }
 
 /// The machine turns standing on a block, and the spans a person has corrected
@@ -558,8 +597,12 @@ pub fn write_pass(
         .collect::<Result<_, _>>()?;
 
     let kind = stream.diarize_kind;
+    // ⚠ Loaded ONCE per pass, not per block: it is the same few hundred vectors
+    // every time, and re-reading them per clip would make the cost of naming
+    // scale with the backlog rather than with the people.
+    let enrolled = crate::identify::enrolled(meaning)?;
     let mut pass = Pass::default();
-    for (filename, voices, transcription, source) in jobs {
+    for (filename, stored_voices, transcription, source) in jobs {
         if pass.blocks >= limit {
             break;
         }
@@ -567,7 +610,7 @@ pub fn write_pass(
             crate::turns::ledger(ingest, kind, &filename, "unnameable", now)?;
             continue;
         };
-        let Some(speakers) = speaker_turns(&voices) else {
+        let Some((speakers, prints)) = voices(&stored_voices) else {
             // The shim refused, or sent a shape this does not understand. Both
             // permanent: a stored result does not change on a later pass.
             crate::turns::ledger(ingest, kind, &filename, "unreadable", now)?;
@@ -608,14 +651,24 @@ pub fn write_pass(
                 pass.kept += 1;
             }
             Swap::Replace { hide, .. } => {
+                let named = Named {
+                    voices: prints
+                        .iter()
+                        .map(|p| (p.speaker.as_str(), p.vector.as_slice()))
+                        .collect(),
+                    enrolled: &enrolled,
+                };
                 let written = apply(
                     meaning,
-                    audio_id,
-                    block_start,
+                    &Block {
+                        audio_segment_id: audio_id,
+                        start: block_start,
+                        language: language.as_deref(),
+                        model,
+                        now,
+                    },
                     &swap,
-                    language.as_deref(),
-                    model,
-                    now,
+                    &named,
                 )?;
                 pass.turns += written;
                 pass.hidden += hide.len();

@@ -117,3 +117,62 @@ pub fn worth_writing(stored: Option<(&str, Option<f64>)>, fresh: &Guess) -> bool
         }
     }
 }
+
+// --- reading the enrolled people ---------------------------------------------
+
+/// Every enrolled voiceprint, as `recall.store.speaker_profiles` reads them.
+///
+/// ⚠ Vectors are stored as a JSON array in a TEXT column; a row that will not
+/// parse is SKIPPED rather than defaulted. A zero vector substituted for a
+/// corrupt one would not be inert — it would sit at cosine 0 against everyone
+/// and quietly become somebody's best match on quiet audio.
+///
+/// # Errors
+/// If the database refuses.
+pub fn enrolled(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<Voiceprint>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.name, e.vector FROM speakers s
+         JOIN speaker_embeddings e ON e.speaker_id = s.id",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (person, raw) = row?;
+        if let Ok(vector) = serde_json::from_str::<Vec<f64>>(&raw) {
+            out.push(Voiceprint { person, vector });
+        }
+    }
+    Ok(out)
+}
+
+/// Store a turn's embedding and the name it implies.
+///
+/// ⚠ **The guess goes in `speaker_guess`, NEVER `speaker_label`.** The label is
+/// the name a PERSON gave; a machine writing there would make its own guess
+/// indistinguishable from somebody's decision, and the read path shows the two
+/// differently for exactly that reason.
+///
+/// # Errors
+/// If the database refuses.
+pub fn record(
+    conn: &rusqlite::Connection,
+    turn_id: i64,
+    embedding: &[f64],
+    guess: Option<&Guess>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO transcript_embeddings (segment_id, vector) VALUES (?1, ?2)",
+        rusqlite::params![
+            turn_id,
+            serde_json::to_string(embedding).unwrap_or_default()
+        ],
+    )?;
+    if let Some(guess) = guess {
+        conn.execute(
+            "UPDATE transcript_segments SET speaker_guess = ?1, speaker_score = ?2
+             WHERE id = ?3",
+            rusqlite::params![guess.person, guess.score, turn_id],
+        )?;
+    }
+    Ok(())
+}

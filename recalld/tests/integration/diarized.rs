@@ -352,6 +352,16 @@ fn meaning_plane(path: &std::path::Path) -> Connection {
              speaker_score REAL, speaker_cluster TEXT, word_timings TEXT
          );
          CREATE VIRTUAL TABLE transcript_fts USING fts5(text);
+         CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+         CREATE TABLE speaker_embeddings (
+             id INTEGER PRIMARY KEY, speaker_id INTEGER NOT NULL,
+             vector TEXT NOT NULL, created_utc TEXT NOT NULL,
+             source_correction_id INTEGER, source_segment_id INTEGER
+         );
+         CREATE TABLE transcript_embeddings (
+             segment_id INTEGER PRIMARY KEY REFERENCES transcript_segments(id),
+             vector     TEXT NOT NULL
+         );
          CREATE TABLE corrections (
              id INTEGER PRIMARY KEY, transcript_segment_id INTEGER,
              audio_segment_id INTEGER, start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
@@ -827,4 +837,142 @@ fn a_diarization_with_no_voiceprints_still_yields_its_spans() {
 #[test]
 fn a_refused_diarization_yields_nothing_rather_than_empty_spans() {
     assert!(voices(r#"{"ok": false, "error": "no such file"}"#).is_none());
+}
+
+// --- naming the speakers a pass writes ---------------------------------------
+//
+// ⚠ 98% of the corpus `refine` built carries a speaker guess. A port that wrote
+// bare `SPEAKER_nn` turns would be a regression dressed as a port, so this is the
+// property that decides whether the switch is safe.
+
+const VOICED: &str = r#"{"ok": true, "result": {
+    "turns": [{"speaker": "SPEAKER_00", "start": 0.0, "end": 1.0},
+              {"speaker": "SPEAKER_01", "start": 1.0, "end": 2.0}],
+    "speakers": [{"speaker": "SPEAKER_00", "seconds": 1.0, "vector": [1.0, 0.0]},
+                 {"speaker": "SPEAKER_01", "seconds": 1.0, "vector": [0.0, 1.0]}]}}"#;
+
+/// Enrol two people whose voiceprints point along opposite axes, so which one a
+/// turn matches is unambiguous and the test is about the WIRING, not the maths.
+fn enrol_two(conn: &Connection) {
+    for (id, name, vector) in [(1, "Alice", "[1.0, 0.0]"), (2, "Bob", "[0.0, 1.0]")] {
+        conn.execute(
+            "INSERT INTO speakers (id, name) VALUES (?1, ?2)",
+            (id, name),
+        )
+        .expect("speaker");
+        conn.execute(
+            "INSERT INTO speaker_embeddings (speaker_id, vector, created_utc)
+             VALUES (?1, ?2, ?3)",
+            (id, vector, NOW),
+        )
+        .expect("voiceprint");
+    }
+}
+
+#[test]
+fn a_written_turn_carries_the_name_its_voiceprint_implies() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut meaning = mic_meaning(dir.path());
+    enrol_two(&meaning);
+    let ingest = mic_ingest(dir.path(), VOICED, WORDS_TODAY);
+    room_turn(&meaning, "een twee");
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+    assert_eq!(pass.turns, 2);
+
+    let mut stmt = meaning
+        .prepare(
+            "SELECT speaker_cluster, speaker_guess, speaker_score, speaker_label
+             FROM transcript_segments
+             WHERE hidden_reason IS NULL AND speaker_guess IS NOT NULL
+             ORDER BY start_utc",
+        )
+        .expect("prepare");
+    let rows: Vec<(String, String, f64, Option<String>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+
+    assert_eq!(rows.len(), 2, "both turns named");
+    assert_eq!(rows[0].0, "SPEAKER_00");
+    assert_eq!(rows[0].1, "Alice");
+    assert_eq!(rows[1].1, "Bob");
+    assert!(
+        rows[0].2 > 0.5,
+        "a confident match scores high: {}",
+        rows[0].2
+    );
+
+    // ⚠ The guess must NEVER land in `speaker_label`: that column is the name a
+    // PERSON gave, and a machine writing there makes its own guess
+    // indistinguishable from somebody's decision.
+    assert!(rows.iter().all(|r| r.3.is_none()), "a guess is not a label");
+}
+
+/// The embedding is stored WITH the turn, or no later re-match can reach it —
+/// `rematch_speaker_guesses` reads `transcript_embeddings`, so a turn written
+/// without one is permanently unnameable rather than merely unnamed.
+#[test]
+fn a_written_turn_keeps_the_embedding_a_later_rematch_needs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut meaning = mic_meaning(dir.path());
+    enrol_two(&meaning);
+    let ingest = mic_ingest(dir.path(), VOICED, WORDS_TODAY);
+    room_turn(&meaning, "een twee");
+
+    write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+
+    let stored: i64 = meaning
+        .query_row("SELECT count(*) FROM transcript_embeddings", [], |r| {
+            r.get(0)
+        })
+        .expect("count");
+    assert_eq!(stored, 2, "one per written turn");
+}
+
+/// ⚠ With nobody enrolled there is NO guess — not a low-scoring one. The archive
+/// starts empty, and a confident-looking name on the first turn ever recorded
+/// would be worse than silence.
+#[test]
+fn with_nobody_enrolled_turns_are_written_unnamed_rather_than_guessed_at() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut meaning = mic_meaning(dir.path());
+    let ingest = mic_ingest(dir.path(), VOICED, WORDS_TODAY);
+    room_turn(&meaning, "een twee");
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+    assert_eq!(pass.turns, 2, "the turns are still written");
+
+    let guessed: i64 = meaning
+        .query_row(
+            "SELECT count(*) FROM transcript_segments WHERE speaker_guess IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(guessed, 0);
+}
+
+/// A diarization stored before the shim embedded carries spans and no vectors.
+/// Those turns must still be WRITTEN — unnamed, not skipped.
+#[test]
+fn a_diarization_without_voiceprints_still_writes_its_turns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut meaning = mic_meaning(dir.path());
+    enrol_two(&meaning);
+    let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY); // no "speakers"
+    room_turn(&meaning, "een twee");
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+
+    assert_eq!(pass.turns, 2);
+    let guessed: i64 = meaning
+        .query_row(
+            "SELECT count(*) FROM transcript_segments WHERE speaker_guess IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(guessed, 0, "no vector, no guess — and no crash");
 }
