@@ -5,11 +5,9 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
 
-    # The ML runtime as a nix package, built from uv.lock's PyPI wheels. NOT
-    # from nixpkgs' python packages: nixpkgs has no mlx-whisper at all and is
-    # several minors behind on transformers/peft, and compiling that stack from
-    # source on aarch64-darwin is uncached (~377 derivations). Wheels make it a
-    # download instead.
+    # The ML runtime from uv.lock's PyPI wheels, NOT nixpkgs' python packages:
+    # nixpkgs has no mlx-whisper and lags on transformers/peft, and that stack from
+    # source on aarch64-darwin is uncached.
     pyproject-nix = {
       url = "github:pyproject-nix/pyproject.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -58,11 +56,9 @@
           });
         };
 
-        # antlr4-python3-runtime (pulled in by omegaconf) publishes an sdist only, and
-        # its pyproject omits setuptools from build-system.requires — so the isolated
-        # build has no backend and fails. uv papers over this with its own fallback;
-        # nix does not. Supply the build system rather than pin an older release: the
-        # package is a dependency of a dependency, not something we chose.
+        # antlr4-python3-runtime ships an sdist whose pyproject omits setuptools from
+        # build-system.requires, so the isolated build has no backend. uv papers over
+        # it with a fallback; nix does not.
         antlrBuildSystem = final: prev: {
           antlr4-python3-runtime = prev.antlr4-python3-runtime.overrideAttrs (old: {
             nativeBuildInputs =
@@ -71,24 +67,13 @@
           });
         };
 
-        # uv2nix installs the workspace's OWN package into the venv, so `recall`'s
-        # `src` decides whether the ML env's store path moves. Left as the whole
-        # workspace root, every commit produced a new `recall-ml-env` — a frontend
-        # tweak or a docs line handed the eight ML agents a different binary path,
-        # which is the path macOS attributes their /Volumes/Backup access to.
+        # ⚠ NARROWED, because uv2nix installs the workspace's own package and this
+        # `src` decides whether `recall-ml-env`'s store path moves. At the workspace
+        # root, every commit hands the ML agents a different binary path — which is
+        # the identity macOS attributes their /Volumes/Backup access to.
         #
-        # The wheel is built by hatchling from `packages = ["src/recall"]`, so those
-        # two files are all it can legitimately read. Narrowing `src` to them means
-        # the env moves when the Python moves, and stays put otherwise.
-        #
-        # ⚠ **A COMMENT in pyproject.toml moves it too.** Rewording a note there
-        # changes `recall-ml-env`'s store path with not one dependency changed,
-        # which on the next `home-manager switch` is a new binary path for the
-        # agents that reach /Volumes/Backup. Nothing can be trimmed here — hatchling
-        # reads the whole
-        # file — so the rule is the practical one: edit pyproject.toml for a reason,
-        # and keep prose that is really about the toolchain in flake.nix or
-        # gate.dhall, where it is free.
+        # ⚠ A COMMENT in pyproject.toml still moves it: hatchling reads the whole
+        # file. Keep toolchain prose in flake.nix or gate.dhall, where it is free.
         wheelSrc = nixpkgs.lib.fileset.toSource {
           root = ./.;
           fileset = nixpkgs.lib.fileset.unions [ ./pyproject.toml ./src ];
@@ -111,12 +96,9 @@
 
         # The same runtime plus the `dev` group, and THIS is what `.venv` is.
         #
-        # A STORE PATH, not a directory uv builds from the same lock. The
-        # directory makes the checks the odd one out: the agents run a store path
-        # while everything a person or the gate runs comes out of a mutable tree of
-        # PyPI wheels — outside the store, outside every GC root, and reconstructed
-        # by hand after a fresh clone. The drift check that arrangement needs is a
-        # check one artifact does not.
+        # A STORE PATH, not a directory uv builds from the same lock — otherwise the
+        # agents run a store path while the gate runs a mutable tree outside every GC
+        # root, and the two need a drift check one artifact does not.
         #
         # `deps.all` rather than `deps.default` is the whole difference: the dev
         # group is where `pytest` lives, and it has to be IN the environment
@@ -129,32 +111,24 @@
         # ahead of the rows that use it (see gate.dhall).
         devEnv = mlPythonSet.mkVirtualEnv "recall-dev-env" uvWorkspace.deps.all;
 
-        # The non-ML interpreter, defined ONCE and used by both the devshell and the
-        # launchd agents (deploy/hm-agents.nix). Same expression means the same store
-        # path, and that is load-bearing: capture and ingest run this python, and
-        # macOS attributes the microphone grant to the binary — a leaner interpreter
-        # here would be a new path and a re-prompt on the one agent that must never
-        # die. mypy/pytest ride along for that reason, not because an agent needs them.
+        # ⚠ The non-ML interpreter, defined ONCE for both the devshell and the launchd
+        # agents. macOS attributes the microphone grant to the BINARY, so a leaner
+        # interpreter here is a new store path and a re-prompt on capture. mypy and
+        # pytest ride along for that reason, not because an agent needs them.
         devPython = python.withPackages (ps: [ ps.mypy ps.pytest ]);
 
-        # The external binaries the agents shell out to by bare name: sox captures
-        # the mic, ffmpeg segments and encodes, ffprobe reads durations. Exposed as
-        # a package because home-manager evaluates deploy/hm-agents.nix against ITS
-        # OWN nixpkgs — writing `pkgs.sox` there would silently give the agents a
-        # different sox from the one this repo pins and tests against. (The two locks
-        # happen to agree today; that is not a guarantee.)
+        # The binaries the agents shell out to by bare name. ⚠ Exposed as a package
+        # because home-manager evaluates deploy/hm-agents.nix against ITS OWN nixpkgs:
+        # `pkgs.sox` there is a different sox from the one this repo tests against.
         agentTools = pkgs.buildEnv {
           name = "recall-agent-tools";
           paths = [ pkgs.sox pkgs.ffmpeg ];
         };
 
-        # The Rust audio-plane daemon (audiod/, docs/audio-plane.md), built
-        # from the WORKSPACE (docs/architecture.md, stage D1: one lockfile,
-        # audiocore shared with recalld). Resolved from the committed lockfile,
-        # and the build RUNS THE TESTS — a deployed audiod is one whose suite
-        # passed inside the sandbox, same promise the agents row makes for the
-        # Python side. The source is a fileset of exactly the Rust workspace,
-        # so a Python or frontend edit does not rebuild the agents' daemon.
+        # The Rust audio-plane daemon (audiod/, docs/audio-plane.md), built from the
+        # workspace. The build RUNS THE TESTS, so a deployed audiod is one whose suite
+        # passed in the sandbox. The fileset is exactly the Rust workspace, so a
+        # Python or frontend edit does not rebuild it.
         audiodPkg = pkgs.rustPlatform.buildRustPackage {
           pname = "audiod";
           version = "0.1.0";
@@ -178,11 +152,9 @@
               # OTHER fixture here is gitignored audio, so this entry is the only
               # way a committed clip reaches the sandbox.
               ./tests/fixtures/speech
-              # The worker/doctor contract, held in one file because its two
-              # halves are now in different languages: the Python worker test
-              # asserts the real worker writes these keys, the doctor's test
-              # parses them. The sandbox has no `tests/` beyond what is named
-              # here, so leaving it out fails the build rather than the test.
+              # The worker/doctor contract, whose two halves are in different
+              # languages. ⚠ The sandbox has no `tests/` beyond what is named here,
+              # so leaving it out fails the BUILD rather than the test.
               ./tests/fixtures/worker-heartbeat.json
               # The ASR model contract, for the same reason one entry up: the
               # queue carries no model field, so `turns::SHIM_MODEL` has to name

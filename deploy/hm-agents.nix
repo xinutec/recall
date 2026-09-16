@@ -1,66 +1,41 @@
 # hm-agents.nix — home-manager module: recall launchd daemons (Mac mini).
 #
-# Apply after editing (it is a PINNED flake input — the lock must be bumped):
-#   1. commit this change in ~/Code/recall
-#   2. cd ~/.config/home-manager
-#   3. nix flake update recall && home-manager switch --flake .#pippijn
+# Apply after editing (a PINNED flake input, so the lock must be bumped): commit
+# here, then in ~/.config/home-manager run
+# `nix flake update recall && home-manager switch --flake .#pippijn`.
 #
-# Imported by the personal home-manager flake (~/.config/home-manager), so
-# `home-manager switch` installs, reloads and removes these agents declaratively.
+# The agents run a WRAPPER IN THE STORE whose PYTHONPATH is the store copy of this
+# commit, not `~/Code/recall/src` — `./scripts/recall.sh …` is a development entry
+# point only. The wrapper names the store paths of the interpreter, sox and ffmpeg
+# directly rather than entering the devshell, so no flake evaluation sits in an
+# agent's startup path. Same flake.lock, so the same store paths, including the
+# mic-TCC-bearing python.
 #
-# WHAT THE AGENTS RUN: a wrapper in the nix store, whose PYTHONPATH is the store
-# copy of THIS commit — not `~/Code/recall/src`. Point it at the tree and an
-# uncommitted edit becomes the running daemon at its next restart, with the flake
-# lock still pinning the module. `./scripts/recall.sh …` is a development entry
-# point only.
+# ⚠ TWO INTERPRETERS. capture/ingest run the devshell python and the gate checks
+# their import surface stays ML-free; everything else runs the uv2nix store env
+# (`nix build .#ml-env`) that holds mlx/pyannote/torch.
 #
-# HOW THEY RUN IT: a real package. The wrapper names the store
-# paths of the interpreter, sox and ffmpeg directly instead of entering the devshell
-# (`nix develop path:${src} --command …`), which used to put a full flake evaluation
-# in every agent's startup path. Same flake.lock, so the same store paths — including
-# the mic-TCC-bearing python — but no eval, and no dependency on nix being reachable
-# at spawn.
+# The agent env (HF_TOKEN, RECALL_SYNC_TOKEN, the ingest tokens) is read at runtime
+# from ~/.config/recall/env, 0600, on the INTERNAL disk — secrets must never enter
+# the store.
 #
-# What deliberately did NOT change:
-#   - the toolchain. sox/ffmpeg/python are still the versions recall's own flake.lock
-#     pins and tests against — the same store paths the working tree resolves to,
-#     which is what keeps the mic-TCC identity stable. `flake.nix` defines the
-#     interpreter once (`packages.dev-python`) and the devshell uses that same
-#     derivation, so the two cannot drift.
-#   - the interpreter split. capture/ingest run the DEVSHELL python (no ML deps —
-#     the gate checks that their import surface stays ML-free); everything else runs
-#     the python that holds mlx/pyannote/torch, which is the uv2nix store env
-#     (`nix build .#ml-env`) rather than the working tree's `.venv` — so nothing an
-#     agent imports lives in $HOME.
-#   - the agent env (HF_TOKEN, RECALL_SYNC_TOKEN, the ingest tokens) is read at
-#     runtime from ~/.config/recall/env, 0600, on the INTERNAL disk. Secrets must
-#     never enter the store.
+# ⚠ NOT under ~/Code/recall: that path is a symlink onto /Volumes/Backup, where a
+# launchd-spawned process cannot write, and whose first touch can HANG rather than
+# fail, waiting on a consent nobody is at the machine to give. That wedges every
+# agent whose wrapper sources the file, in bash, before it starts. An interactive
+# shell writes there fine, so it is invisible until something runs under launchd.
 #
-#     ⚠ NOT under ~/Code/recall — that path is a symlink onto /Volumes/Backup,
-#     the external archive volume. A launchd-spawned process cannot write there
-#     ("Operation not permitted") and, on first touch, its open can HANG rather
-#     than fail, waiting on a consent nobody is at the machine to give. That
-#     wedges every agent whose wrapper sources the file, in bash, before it
-#     starts. Reproduce the write half with:
-#
-#         launchctl submit -l probe -- /bin/bash -c \
-#           'echo x > /Volumes/Backup/recall/.probe 2>/tmp/probe.err; echo $? >>/tmp/probe.err'
-#
-#     An interactive shell writes there fine, which is why this is invisible
-#     until something runs under launchd.
-#
-# Logs live in ~/Library/Logs/recall, NOT in the repo: launchd opens the stdio
+# ⚠ Logs live in ~/Library/Logs/recall, NOT in the repo: launchd opens the stdio
 # paths before any code runs, so a log path inside a checkout that moves takes the
-# agent down with exit 78 and an empty log — the failure that hid 470 crash-loops
-# for weeks. `recall.cli._LOG_DIR` points at the same place for rotation.
+# agent down with exit 78 and an EMPTY log. `recall.cli._LOG_DIR` matches, for
+# rotation.
 #
-# NOTE: recall-capture opens the microphone. recall-live does NOT — it reads the UDP
-# tap capture publishes, because two CoreAudio clients on one device starve each other
+# recall-capture opens the microphone; recall-live does NOT — it reads the UDP tap
+# capture publishes, because two CoreAudio clients on one device starve each other
 # (audiod segmenter's fanout; runner::live::TAP is the other end).
 #
-# home-manager writes each plist read-only into ~/Library/LaunchAgents with no
-# native comment, so a provenance `Comment` key points back here. Do NOT
-# hand-edit the generated plists.
+# home-manager writes each plist read-only with no native comment, so a provenance
+# `Comment` key points back here. Do NOT hand-edit the generated plists.
 { pkgs, lib, recall, ... }:
 
 let
@@ -92,25 +67,17 @@ let
   # grant macOS attributes to that binary — is unchanged by this packaging.
   devPython = "${recall.packages.${pkgs.stdenv.hostPlatform.system}.dev-python}/bin/python";
 
-  # One store wrapper per agent. `python` selects the interpreter; everything else
-  # is identical, so the arguments below are the single source of truth for what
-  # each daemon does (the old scripts/recall-*.sh wrappers duplicated them).
+  # One store wrapper per agent; `python` selects the interpreter and the arguments
+  # below are the single source of truth for what each daemon does.
   #
-  # A real package, NOT a devshell entry. `exec nix develop path:${src} --command …`
-  # puts a full flake evaluation in every agent's startup path, including capture's
-  # — never free, and catastrophic when nix's cache is on the USB volume, where an
-  # eval can go from seconds to tens of minutes machine-wide. The devshell is only
-  # ever there for three things — the interpreter, sox and ffmpeg — and all three are
-  # store paths this can name directly, from the same flake.lock the devshell resolves
-  # against. `runtimeInputs` PREPENDS to PATH, so `say` and `launchctl` still come
-  # from the system paths launchd provides.
+  # ⚠ A real package, NOT a devshell entry: `nix develop --command` puts a full flake
+  # evaluation in every agent's startup path, which is catastrophic when nix's cache
+  # is on the USB volume. `runtimeInputs` PREPENDS to PATH, so `say` and `launchctl`
+  # still come from the system paths launchd provides.
   # Where the Hugging Face models live, DECLARED rather than symlinked.
   #
-  # This was `~/.cache/huggingface` -> here, a symlink nothing in this repo knew
-  # about: the agents inherited it by accident of the filesystem, so the one
-  # thing that decided where tens of gigabytes of models lived was invisible to
-  # every reader of this module (memview #645). Config states it; a symlink only
-  # implies it.
+  # Declared, not inherited from a symlink: a symlink makes where tens of gigabytes
+  # of models live invisible to every reader of this module (memview #645).
   #
   # ⚠ **The path is on the external volume ON PURPOSE**, and it is written by NAME:
   # `/Volumes/Backup` has survived a hardware swap underneath it because the name
@@ -306,19 +273,13 @@ in
   # *paused* (e.g. overnight), so the heavy pyannote pass never competes with live
   # capture. It also drains Ask jobs and day-summaries (via the llm-host).
   #
-  # Refine transcribes with the same mlx large-v3-turbo as the live/worker path — its
-  # precision comes from the diarization + word-level speaker alignment, not the ASR
-  # model. The household LoRA adapter (adapter-current -> adapter-20260708b) was tried
-  # here for extra word accuracy, but on long recordings it is ~8x slower (full fp32
-  # large-v3, a 32-layer decoder vs turbo's 4) for a WER win only ever measured on
-  # short clips — so refine stays on turbo. To re-enable the adapter, add back these args (it is auto-detected as an
-  # adapter dir via adapter_config.json and loaded on top of --base-model):
-  #   "--model" "/Volumes/Backup/recall/adapter-current"
-  #   "--base-model" "openai/whisper-large-v3"
-  # ⚠ **RETIRED with the start of `recalld::diarized::PER_MIC`.** Both write
-  # speaker-split turns over the same per-mic clips and both HIDE what they
-  # supersede; two of them over one corpus is a corpus nobody can reason about.
-  # Do not restore without stopping that writer.
+  # Refine's precision comes from diarization + word-level speaker alignment, not
+  # the ASR model, so it stays on turbo: the household LoRA adapter is ~8x slower on
+  # long recordings for a WER win only measured on short clips.
+  #
+  # ⚠ RETIRED — `recalld::diarized::PER_MIC` writes speaker-split turns over the same
+  # clips, and both HIDE what they supersede. Do not restore without stopping that
+  # writer.
   #
   # launchd.agents."org.xinutec.recall-refine" = daemon {
   #   label = "org.xinutec.recall-refine";
@@ -373,21 +334,11 @@ in
   # Devshell python (no ML deps): the one process that must never die. A renamed or
   # missing --device makes sox fail hard and the agent crash-loop, visibly, rather
   # than silently recording from the wrong mic.
-  # ⚠ ProcessType overrides the Background default, and this is the agent that most
-  # needs it: `Background` is macOS's THROTTLED class (reduced CPU share, deprioritised
-  # I/O), and this process holds the always-on microphone. sox reads CoreAudio in real
-  # time — starve it and its buffer overruns, samples are DROPPED, and the segment ring
-  # stretches. That is silent, unrecoverable loss of household speech, which is the one
-  # failure this system exists to prevent (#1330).
-  #
-  # Measured under heavy machine load: usb segment intervals went from a clean 60 s
-  # mean to nearly double, with worst cases four times that — roughly half the wall
-  # clock unrecorded, while capture sat in the throttled class by configuration. An
-  # ablation cleared the transcription worker of causing it; the cause is never a
-  # particular neighbour, it is that ANY load outranks a throttled recorder.
-  #
-  # `Interactive` is the honest description: nothing on this machine is more
-  # latency-critical than not missing what was said in the room.
+  # ⚠ `Interactive`, overriding the `Background` default: Background is macOS's
+  # THROTTLED class, and sox reads CoreAudio in real time — starve it and its buffer
+  # overruns, samples are DROPPED, and the segment ring stretches. That is silent,
+  # unrecoverable loss of household speech (#1330). Measured under load, a throttled
+  # recorder loses roughly half the wall clock; ANY neighbour outranks it.
   launchd.agents."org.xinutec.recall-capture" = daemon {
     label = "org.xinutec.recall-capture";
     name = "capture";
@@ -491,10 +442,9 @@ in
   # for produces a corpus that has to be redone, and re-transcription is the cost
   # #1388 exists to reduce. An empty vocabulary is fine; an unreachable one is not.
   #
-  # ⚠ What this does NOT do, which is what makes deploying it safe: results are
-  # stored OPAQUE in ingest.sqlite's job rows. Nothing becomes a visible turn
-  # until the results-to-turns step lands, so starting this changes no transcript
-  # anybody reads. It transcribes the 2,539 queued blocks and stops.
+  # ⚠ Results are stored OPAQUE in ingest.sqlite's job rows. Nothing becomes a
+  # visible turn until the results-to-turns step lands, so running this changes no
+  # transcript anybody reads.
   #
   # Nice + LowPriorityIO: transcription must never compete with the recorder
   # (design.md §7), and this one holds a GPU.
