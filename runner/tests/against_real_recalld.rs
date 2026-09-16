@@ -206,3 +206,51 @@ fn the_vocabulary_prompt_is_read_and_an_empty_one_is_no_biasing() {
         "an empty vocabulary is NO biasing, not an empty prompt"
     );
 }
+
+/// ⚠ **An idle runner must be distinguishable from a dead one**, and for a long
+/// time it was not: both stamped nothing, so the doctor's transcription-pulse
+/// check read a drained backlog as a stall — "last pass 1024 min ago" with the
+/// runner healthy and the queue simply empty. The doctor already renders
+/// `rows == 0` as "nothing to do"; it was never sent such a beat.
+///
+/// This drives the SHIPPED binary rather than a copy of its loop, because the
+/// property is about what the deployed agent writes.
+#[test]
+fn a_runner_with_an_empty_queue_stamps_a_beat_saying_it_had_nothing_to_do() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = serve(dir.path()); // no blobs registered: the queue derives nothing
+    let pulse = dir.path().join("worker-heartbeat.json");
+    // Names itself `voices`, so `kinds_for` gives it `diarize-*` and the runner
+    // skips the vocabulary fetch that only a transcriber needs.
+    let (program, args) =
+        stub_shim("print(json.dumps({'id': msg['id'], 'ok': True, 'result': {'shim': 'voices'}}))");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_runner"))
+        .args(["--url", &base, "--api", &base, "--once"])
+        .arg("--pulse")
+        .arg(&pulse)
+        .arg("--shim")
+        .arg(&program)
+        .args(&args)
+        .env("RECALL_SYNC_TOKEN", READ_TOKEN)
+        .output()
+        .expect("the runner runs");
+    assert!(
+        out.status.success(),
+        "runner exited {}: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let raw = std::fs::read_to_string(&pulse).expect("a beat was stamped");
+    let beat: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+    assert_eq!(
+        beat["rows"].as_u64(),
+        Some(0),
+        "an empty queue is zero rows, not an absent beat"
+    );
+    assert!(
+        beat["finished"].is_string(),
+        "finished must be present, or the doctor reads a pass that never ended"
+    );
+}

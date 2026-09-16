@@ -113,6 +113,15 @@ fn parse_args() -> Config {
 }
 
 /// Do one job. `Ok(false)` means the queue was empty.
+///
+/// ⚠ **An empty queue STAMPS the pulse.** The doctor cannot otherwise tell a
+/// runner with nothing to do from one that is gone: both stamp nothing, and
+/// "last pass 1024 min ago" reads as a stall when the truth is that the backlog
+/// drained. It already renders `rows == 0` as "nothing to do" — it was simply
+/// never sent such a beat.
+///
+/// A runner wedged INSIDE a job still never reaches here, so the stall it exists
+/// to catch is still caught.
 fn one(
     client: &Client,
     shim: &mut Shim,
@@ -123,6 +132,7 @@ fn one(
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let started = Utc::now();
     let Some(job) = client.lease(kinds)? else {
+        stamp_pulse(pulse, started, 0);
         return Ok(false);
     };
     let Job {
