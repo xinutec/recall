@@ -211,6 +211,14 @@ monorepo `06f226ce` sets `RECALL_ROLE=fleet`):
 - Two launchd agents in `deploy/hm-agents.nix`: `recall-sync` (timer, data) and
   `recall-capture-mirror` (resident 5s loop). Both read `RECALL_SYNC_TOKEN` from `.env`.
 
+⛔ **`recall-sync` and `sync_push` are DELETED as of 2026-09-17.** The Mac stopped
+being a replica worth keeping in step: `audiod upload` delivers every closed
+segment to the ingest plane, recalld derives the work and writes the turns, and
+enrolment moved to the fleet with the labels it learns from (#1538). The
+Mac-initiated inversion these entries describe is still how work crosses the
+one-way VPN — the runner polls recalld's queue — but nothing pushes an archive
+any more.
+
 
 ### Mac UI retired + local break-glass control (2026-07-15)
 
@@ -218,8 +226,9 @@ With Phase 1 live-sync deployed, Isis serves the full timeline (archive + the in
 live feed), so the Mac's own web UI became pure duplication. **Retired it:** dropped the
 `recall-api` launchd agent from `deploy/hm-agents.nix` (the Mac now serves nothing —
 `:8000` refuses locally; Isis `10.100.0.2:8000` is the sole UI + control plane). Nothing
-in the Mac's pipeline needed it: `recall-sync` pushes Mac→Isis, `doctor` reads the DB and
-posts to fleetwatch, `capture-mirror` polls Isis, `backup` rsyncs to odin.
+in the Mac's pipeline needed it: `recall-sync` pushed Mac→Isis (retired, see above),
+`doctor` reads the DB and posts to fleetwatch, `capture-mirror` polls Isis, `backup`
+rsyncs to odin.
 
 Retiring the UI removed the Mac's only *local* control surface, which made Isis a **single
 point of failure for pause/resume**: exactly the gap that bit us during a rollout, when the

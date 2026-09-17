@@ -11,17 +11,17 @@ The store is the backbone of the memory aid. It holds:
 
 Search and time-range queries return only *current* (non-superseded) segments.
 
-⚠ **This class is SHRINKING, and what is left is not all live.** The browsing
-reads moved to `recalld` and the terminal to `recall-cli`, so on 2026-09-15 nine
-methods with no production caller were deleted with their tests (`recent_transcripts`,
-`session_summaries`, `supersede_many`, `current_version`, `set_speaker_guess`,
-`mark_unreadable_capture`, `unreadable_capture_names`, `audio_segment_id_at`,
-`_count`). On 2026-09-17 `refine.py` and `jobs.py` went, taking `add_refine_request`,
-`pending_refine_requests`, `mark_refine_request_done`, `audio_segments_to_diarize`,
-`audio_segments_to_rediarize`, `audio_segments_in_range`, the four diarize-skip
-helpers and `rollback` — whose only caller was the refine daemon's per-pass recovery.
-The rest have no production caller either and were KEPT, each for a reason worth not
-rediscovering:
+⚠ **This class is SHRINKING, and what is left is not all live.** Its callers are
+being deleted one loop at a time (#1538) — the browsing reads went to `recalld`,
+the terminal to `recall-cli`, and on 2026-09-17 `refine.py`, `jobs.py`, `sync.py`
+and `sync_push.py` all went, taking two dozen methods with them: the refine
+queue and its diarize-skip guard, the push watermark (`unmirrored_segments`,
+`mark_pushed`), and the fleet->Mac label channel (`name_voice`,
+`cluster_namings`) — which existed because the Mac was once a replica worth
+keeping in step, and it is not.
+
+The rest have no production caller either and were KEPT, each for a reason worth
+not rediscovering:
 
 - `schema_version` is the only accessor four MIGRATION tests assert through, and
   the migration machinery is live — `open()` calls `migrate()`.
@@ -782,33 +782,6 @@ class Store:
             for r in rows
         ]
 
-    def unmirrored_segments(
-        self, *, limit: int = 500, older_than: datetime | None = None
-    ) -> list[AudioSegmentId]:
-        """Processed segments that have never reached the fleet (`pushed_utc` unset),
-        oldest-first — the mirror-completion queue. Covers what the turn-watermark
-        push cannot: a speechless segment mints no turn ids, so it never synced and
-        the fleet's quiet review could never sweep it. `older_than` filters to
-        segments processed before that time (the doctor's in-flight slack)."""
-        clause = "WHERE transcribed_utc IS NOT NULL AND pushed_utc IS NULL"
-        args: list[object] = []
-        if older_than is not None:
-            clause += " AND transcribed_utc < ?"
-            args.append(older_than.isoformat())
-        rows = self._conn.execute(
-            f"SELECT id FROM audio_segments {clause} ORDER BY id LIMIT ?",
-            (*args, limit),
-        ).fetchall()
-        return [AudioSegmentId(int(r["id"])) for r in rows]
-
-    def mark_pushed(self, audio_id: AudioSegmentId) -> None:
-        """Stamp that this segment (audio + current turns) reached the fleet."""
-        self._conn.execute(
-            "UPDATE audio_segments SET pushed_utc = ? WHERE id = ?",
-            (datetime.now(UTC).isoformat(), int(audio_id)),
-        )
-        self._commit()
-
     def is_tombstoned(self, source: str, start: datetime) -> bool:
         """Whether this identity was deliberately deleted here — the veto that stops
         a later sync push resurrecting it on the fleet.
@@ -1137,62 +1110,6 @@ class Store:
             [(name, score, sid) for sid, name, score in updates],
         )
         self._commit()
-
-    def name_voice(self, source_id: str, cluster: str, name: str | None) -> int:
-        """Human-name a diarization voice across a source: set speaker_label on every
-        current turn of that cluster (name=None clears it). Returns turns updated.
-
-        The authoritative human naming of a voice; it overrides the auto guess. It
-        writes no correction, but it is not display-only: `speaker_label` is what
-        `turns_needing_voiceprint` selects on, so the backfill enrols this voice from
-        its turns — naming a meeting's clinician does add them to the matching pool,
-        the same as any household voice.
-
-        Deliberately no hidden_reason filter (unlike the read-side queries):
-        hiding is a display state, but who spoke is a fact about the turn — a
-        hidden turn that is later unhidden must come back correctly named.
-        """
-        cur = self._conn.execute(
-            "UPDATE transcript_segments SET speaker_label = ? WHERE id IN ("
-            "SELECT ts.id FROM transcript_segments ts "
-            "JOIN audio_segments a ON a.id = ts.audio_segment_id "
-            "WHERE a.source_id = ? AND ts.speaker_cluster = ? "
-            "AND ts.superseded_by IS NULL)",
-            (name, source_id, cluster),
-        )
-        self._commit()
-        return cur.rowcount
-
-    def cluster_namings(self) -> list[ClusterNaming]:
-        """Every human naming of a voice, as (source, cluster, name) — the whole set,
-        so it is the fleet→Mac label channel's payload and the Mac's own diff baseline.
-
-        A human name lives denormalized on `speaker_label`; the cluster is the shared
-        key both machines carry (it rides every segment push). A cluster is one voice,
-        so if a few of its turns were individually reassigned to different names, the
-        cluster's *dominant* (most-turns) label wins — a single mapping per voice, which
-        is exactly what `name_voice` replays on the Mac. Ordered for a stable payload.
-        """
-        rows = self._conn.execute(
-            "SELECT a.source_id src, ts.speaker_cluster cl, ts.speaker_label lbl, "
-            "COUNT(*) n FROM transcript_segments ts "
-            "JOIN audio_segments a ON a.id = ts.audio_segment_id "
-            "WHERE ts.speaker_label IS NOT NULL AND ts.speaker_cluster IS NOT NULL "
-            "AND ts.superseded_by IS NULL AND ts.hidden_reason IS NULL "
-            "GROUP BY a.source_id, ts.speaker_cluster, ts.speaker_label "
-            "ORDER BY a.source_id, ts.speaker_cluster, n DESC, ts.speaker_label"
-        ).fetchall()
-        dominant: dict[tuple[str, str], str] = {}
-        for r in rows:
-            key = (str(r["src"]), str(r["cl"]))
-            if (
-                key not in dominant
-            ):  # first row per (src, cl) is the highest-count label
-                dominant[key] = str(r["lbl"])
-        return [
-            ClusterNaming(source_id=src, cluster=cl, name=name)
-            for (src, cl), name in dominant.items()
-        ]
 
     def set_turn_speaker(self, segment_id: int, name: str | None) -> None:
         """Set/clear the human speaker label on one turn — reassign a mis-diarized turn

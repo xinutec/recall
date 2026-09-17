@@ -737,67 +737,6 @@ def test_embed_worklist_skips_too_short_clips() -> None:
     assert [s.id for s in store.segments_missing_embedding()] == [good]
 
 
-def test_name_voice_labels_a_whole_cluster_in_a_source() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    ids = [
-        store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=i),
-            end=BASE + timedelta(seconds=i + 1),
-            text=f"turn {i}",
-            asr_model="diarized",
-            speaker_cluster=cluster,
-        )
-        for i, cluster in enumerate(["SPEAKER_01", "SPEAKER_00", "SPEAKER_01"])
-    ]
-    # naming a voice labels every turn of that cluster, and no other voice
-    n = store.name_voice("usb", "SPEAKER_01", "Dr Lee")
-    assert n == 2
-    rng = store.segments_in_range(BASE, BASE + timedelta(seconds=10))
-    rows = {r.id: r for r in rng}
-    assert rows[ids[0]].speaker_label == "Dr Lee"
-    assert rows[ids[2]].speaker_label == "Dr Lee"
-    assert rows[ids[1]].speaker_label is None  # the other voice untouched
-    # and it doesn't enrol a voiceprint (no correction recorded)
-    assert store.correction_count() == 0
-    # clearing a name removes it
-    store.name_voice("usb", "SPEAKER_01", None)
-    rng = store.segments_in_range(BASE, BASE + timedelta(seconds=10))
-    rows = {r.id: r for r in rng}
-    assert rows[ids[0]].speaker_label is None
-
-
-def test_cluster_namings_returns_one_dominant_name_per_voice() -> None:
-    # cluster_namings is the fleet→Mac label payload. It reports (source, cluster, name)
-    # for every human-named voice, one row per voice — the whole set, so the Mac can
-    # diff it. A cluster names one voice, so if a couple of turns were reassigned to
-    # another name, the voice's dominant (most-turns) label wins.
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment())
-    for i, cluster in enumerate(["SPEAKER_00", "SPEAKER_00", "SPEAKER_01"]):
-        store.add_transcript_segment(
-            audio_segment_id=audio_id,
-            start=BASE + timedelta(seconds=i),
-            end=BASE + timedelta(seconds=i + 1),
-            text=f"turn {i}",
-            asr_model="diarized",
-            speaker_cluster=cluster,
-        )
-    # No human labels yet → nothing to publish.
-    assert store.cluster_namings() == []
-
-    store.name_voice("usb", "SPEAKER_00", "Dr. Voss")
-    store.name_voice("usb", "SPEAKER_01", "Pippijn")
-    namings = {(n.source_id, n.cluster): n.name for n in store.cluster_namings()}
-    assert namings == {
-        ("usb", "SPEAKER_00"): "Dr. Voss",
-        ("usb", "SPEAKER_01"): "Pippijn",
-    }
-
-
 def test_set_turn_speaker_reassigns_a_single_turn() -> None:
     store = Store.memory()
     store.add_source(_source())
@@ -1042,25 +981,6 @@ def test_deleting_a_source_journals_every_segment() -> None:
     store.delete_source("meeting-1")
     assert store.is_tombstoned("meeting-1", BASE) is True
     assert store.is_tombstoned("meeting-1", BASE + timedelta(seconds=60)) is True
-
-
-def test_unmirrored_segments_are_the_processed_unstamped_ones() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    unprocessed = store.add_audio_segment(_segment(0.0))
-    processed = store.add_audio_segment(_segment(60.0))
-    stamped = store.add_audio_segment(_segment(120.0))
-    store.mark_transcribed(processed)
-    store.mark_transcribed(stamped)
-    store.mark_pushed(stamped)
-
-    assert store.unmirrored_segments() == [processed]
-    assert unprocessed  # the worker hasn't listened yet — not the mirror's turn
-
-    # the doctor's in-flight slack: only segments processed before the cutoff count
-    # (transcribed_utc is stamped with the segment's end time)
-    assert store.unmirrored_segments(older_than=BASE + timedelta(seconds=61)) == []
-    assert store.unmirrored_segments(older_than=datetime.now(UTC)) == [processed]
 
 
 def test_register_source_corrects_a_guessed_kind_but_keeps_a_human_name() -> None:

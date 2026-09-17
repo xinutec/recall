@@ -12,7 +12,6 @@ import argparse
 import logging
 import os
 import sys
-import time
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -724,44 +723,6 @@ def _cmd_identify(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_sync(args: argparse.Namespace) -> int:
-    """Push the local archive to the fleet's system of record (the Isis split). The
-    token is read from RECALL_SYNC_TOKEN. Imports are lazy so `recall.cli` stays ML- and
-    framework-free for the capture agents (recall.sync drags in the web framework)."""
-    runlog.setup()  # UTC-stamped logging for the fleet sync pass
-    token = os.environ.get("RECALL_SYNC_TOKEN")
-    if not token:
-        print("sync needs RECALL_SYNC_TOKEN")
-        return 1
-    from recall.sync import SyncClient  # noqa: PLC0415 - lazy: pulls the web framework
-    from recall.sync_push import pull_labels, sync_push  # noqa: PLC0415
-
-    store = Store.open(args.out / "recall.sqlite")
-    client = SyncClient(args.url, token)
-    started = time.monotonic()
-    try:
-        pushed = sync_push(store, client)
-        # Reverse leg: bring the fleet's human voice-namings home. The UI is on the
-        # fleet, so this is the only path a name reaches the master archive and the
-        # voiceprint enrolment.
-        named = pull_labels(store, client)
-    finally:
-        store.close()
-    # ⚠ LOGGED, not printed, and with its DURATION — both were missing and both
-    # were load-bearing. `sync.out.log` carried no clock at all, so a pass could
-    # be counted but never timed: #1346 asks for a before/after on a real deep
-    # catch-up (passes of 36-81 and 500 segments are both in the record) and the
-    # measurement was unrecoverable from 33,501 lines of undated output.
-    logging.getLogger("recall.sync").info(
-        "sync: pushed %d segment(s), pulled %d voice-naming(s) in %.1fs — %s",
-        pushed,
-        named,
-        time.monotonic() - started,
-        args.url,
-    )
-    return 0
-
-
 def _cmd_pause(args: argparse.Namespace) -> int:
     """Pause recording on THIS machine directly, with no network — the break-glass
     control for when Isis (the normal pause/resume surface) is unreachable, e.g. mid
@@ -891,7 +852,6 @@ def _cmd_repair_transcripts(args: argparse.Namespace) -> int:
 
 
 _COMMANDS = {
-    "sync": _cmd_sync,
     "pause": _cmd_pause,
     "resume": _cmd_resume,
     "capture-trace": _cmd_capture_trace,

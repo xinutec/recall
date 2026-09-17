@@ -35,14 +35,13 @@ want while developing.
 | `org.xinutec.recall-beat-relay` | accept a mic app's heartbeat on the LAN (port 8000) and forward it to Isis, for a phone whose VPN is down | always on |
 | `org.xinutec.recall-voices` | lease a diarization or enrolment job from Isis, drive the voices shim, push back the speaker-split turns and the voiceprints (Rust, `runner`) | continuous |
 | `org.xinutec.recall-llm-host` | holds the LLM for the whole Mac on `127.0.0.1:8092` — kept for *life*, not for recall (see below) | always on; weights loaded on demand, released after 5 min idle |
-| `org.xinutec.recall-sync` | push the archive to Isis (the system of record) — only what changed since the last watermark | timer |
 | `org.xinutec.recall-upload` | store-and-forward delivery: closed segments → recalld on Isis, sha-256 receipts re-hashed before anything counts as delivered ([architecture.md](architecture.md) stage B) | timer |
 | `org.xinutec.recall-capture-mirror` | poll Isis's desired capture state and mirror it onto the local pause file | every ~5 s |
 | `org.xinutec.recall-doctor` | run the health checks and report them to fleetwatch (Rust, `doctor/`) | every 5 min |
 | `org.xinutec.recall-speech` | measure how much of each archived segment is SPEECH — the evidence the quiet review needs before it may propose deleting anything (Rust, `audiod speech`) | every 5 min |
 
 There is deliberately **no `recall-api` agent**: the Mac serves no UI or control plane
-(see the Isis split below). `recall-sync` and `recall-capture-mirror` are inert until `RECALL_SYNC_TOKEN` is set; the other
+(see the Isis split below). `recall-capture-mirror` is inert until `RECALL_SYNC_TOKEN` is set; the other
 credential-carrying agents use their own — `recall-upload` takes
 `RECALL_INGEST_TOKEN`, `recall-doctor` the fleetwatch token, and `recall-speech`
 needs none. Named rather than counted: the table's order is not a contract.
@@ -130,8 +129,8 @@ the inside one.
 The off-machine backup is **odin's**, not the Mac's: odin's nightly restic takes an
 integrity-checked SQLite snapshot from inside the Isis pod plus an rsync of the audio
 PVC (`nixos-config machines/odin/backup-prepare.sh`), so every recording is protected
-server-to-server. The Mac keeps the protected master archive on this volume and pushes
-it to Isis (`recall-sync`); it runs no backup agent of its own. The training corpora
+server-to-server. The Mac keeps the protected master archive on this volume and delivers every
+closed segment to Isis (`recall-upload`); it runs no backup agent of its own. The training corpora
 (`finetune-corpus`, `pilot-*`) live only here and are deliberately not backed up.
 ⚠ They can no longer be REGENERATED, which is why that is no longer the reason:
 the toolchain that made them was deleted when training was cut. They are

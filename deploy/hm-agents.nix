@@ -204,11 +204,10 @@ in
 
   # NO recall-api here — the Mac serves no UI or control plane (the Isis split). Isis
   # (10.100.0.2:8000) is the system of record and the only web UI / control surface; the
-  # Mac is capture + all MLX + push (recall-sync) + the protected master archive. Browsers
-  # and the phone web app point at Isis; pause/resume is mirrored down by recall-capture-
-  # mirror. Interactive MLX endpoints (refine, ab-compare, /api/sessions upload) are NOT
-  # reachable from Isis under the one-way WireGuard model and need a Mac-initiated job-pull
-  # (like capture-mirror) — tracked as Phase 2, not served from the Mac.
+  # Mac is capture, all MLX, and the protected master archive. Browsers and the phone web
+  # app point at Isis; pause/resume is mirrored down by recall-capture-mirror. Work that
+  # needs the GPU reaches the Mac by its own poll of recalld's queue — Isis cannot dial a
+  # one-way peer, so every path here is Mac-initiated.
 
   # Single-port audio ingest for the phone mics — audiod (Rust).
   # Same reasoning as capture for the priority class: this holds the phones' live
@@ -497,7 +496,7 @@ in
 
   # Store-and-forward delivery (docs/architecture.md, stage B): every closed
   # segment to recalld on Isis, sha-256 receipt verified against a local
-  # re-hash before it is recorded delivered. A timer like recall-sync; each
+  # re-hash before it is recorded delivered. A timer, not KeepAlive; each
   # pass is bounded (--max) and resumes from upload-state.sqlite, so the
   # historical backfill proceeds in bites and a killed pass costs nothing.
   # Reads RECALL_INGEST_TOKEN (the custodial `*` grant) from .env — the token
@@ -529,24 +528,6 @@ in
       KeepAlive = false;
       RunAtLoad = true;
       StartInterval = 60;
-      LowPriorityIO = true;
-      Nice = 10;
-    };
-  };
-
-  # Push the archive to Isis, the system of record (the Isis split). A timer, not
-  # KeepAlive: each run sends only what changed since the last (a transcript-id
-  # watermark) and exits. The Mac must push — it is a one-way WireGuard peer the fleet
-  # cannot reach. Inert until RECALL_SYNC_TOKEN is set in .env.
-  launchd.agents."org.xinutec.recall-sync" = daemon {
-    label = "org.xinutec.recall-sync";
-    name = "sync";
-    python = venvPython;
-    args = [ "sync" "--url" fleet "--out" out ];
-    extra = {
-      KeepAlive = false;
-      RunAtLoad = true;
-      StartInterval = 120;
       LowPriorityIO = true;
       Nice = 10;
     };

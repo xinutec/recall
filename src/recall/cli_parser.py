@@ -199,14 +199,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
     ide.add_argument("--model", default="pyannote/embedding")
     ide.add_argument("--threshold", type=float, default=0.5)
 
-    syn = sub.add_parser(
-        "sync", help="push the local archive to the fleet (Isis split; needs a token)"
-    )
-    syn.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    syn.add_argument(
-        "--url", required=True, help="fleet base URL, e.g. http://10.100.0.2:8000"
-    )
-
     pau = sub.add_parser(
         "pause",
         help="pause recording locally, no network (break-glass when Isis is down)",
