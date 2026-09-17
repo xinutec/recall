@@ -11,10 +11,7 @@ fn at(iso: &str) -> DateTime<Utc> {
 }
 
 /// The meaning plane's shape, in its own timestamp spelling (`+00:00`).
-fn meaning() -> rusqlite::Connection {
-    let conn = rusqlite::Connection::open_in_memory().expect("mem");
-    conn.execute_batch(
-        "CREATE TABLE audio_segments (
+const SCHEMA: &str = "CREATE TABLE audio_segments (
              id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
              start_utc TEXT NOT NULL);
          CREATE TABLE transcript_segments (
@@ -26,9 +23,11 @@ fn meaning() -> rusqlite::Connection {
              created_utc TEXT NOT NULL, source_correction_id INTEGER,
              source_segment_id INTEGER);
          INSERT INTO audio_segments (id, source_id, path, start_utc) VALUES
-             (1, 'usb', '/data/usb/usb-20260910T100000.opus', '2026-09-10T10:00:00+00:00');",
-    )
-    .expect("schema");
+             (1, 'usb', '/data/usb/usb-20260910T100000.opus', '2026-09-10T10:00:00+00:00');";
+
+fn meaning() -> rusqlite::Connection {
+    let conn = rusqlite::Connection::open_in_memory().expect("mem");
+    conn.execute_batch(SCHEMA).expect("schema");
     conn
 }
 
@@ -414,4 +413,71 @@ fn a_replayed_result_does_not_enrol_the_same_turn_twice() {
     let pass = write_pass(&conn, &ingest, "2026-09-10T12:20:00+00:00", 10).expect("pass");
     assert_eq!((pass.prints, pass.stale), (0, 1));
     assert_eq!(enrolled_names(&conn).len(), 1);
+}
+
+#[test]
+fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
+    // ⚠ The runner has one clip and no way to ask which stretches to embed, so a
+    // job that arrives without spans embeds nothing and enrols nobody — silently,
+    // because an empty print list is a valid result. Other kinds must stay
+    // byte-identical on the wire: `spans` is skipped when empty.
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let conn =
+            rusqlite::Connection::open(dir.path().join("recall.sqlite")).expect("meaning file");
+        conn.execute_batch(SCHEMA).expect("schema");
+        turn(&conn, 10, Some("Alice"), 2.0, 4.0);
+    }
+
+    let mut enrol_job = recalld::queue::Job {
+        id: 1,
+        kind: ENROLL_SPEAKER.to_owned(),
+        filename: "usb-20260910T100000.wav".to_owned(),
+        source: "usb".to_owned(),
+        spans: Vec::new(),
+    };
+    recalld::enrol::attach_spans(dir.path(), &mut enrol_job).expect("attach");
+    assert_eq!(
+        enrol_job.spans,
+        vec![Span {
+            segment_id: 10,
+            start_s: 2.0,
+            end_s: 6.0
+        }]
+    );
+    assert!(
+        serde_json::to_string(&enrol_job)
+            .expect("json")
+            .contains("spans")
+    );
+
+    let mut diarize_job = recalld::queue::Job {
+        kind: "diarize-segment".to_owned(),
+        spans: Vec::new(),
+        ..enrol_job.clone()
+    };
+    recalld::enrol::attach_spans(dir.path(), &mut diarize_job).expect("attach");
+    assert!(diarize_job.spans.is_empty());
+    assert!(
+        !serde_json::to_string(&diarize_job)
+            .expect("json")
+            .contains("spans"),
+        "an unrelated kind's lease body must not grow a field"
+    );
+}
+
+#[test]
+fn a_lease_of_another_kind_does_not_need_the_meaning_plane_at_all() {
+    // ⚠ Regression: opening `recall.sqlite` unconditionally made EVERY lease 500
+    // wherever it was absent, which is the runner's own end-to-end harness. A
+    // transcription runner must not be stopped by a database it never reads.
+    let empty = tempfile::tempdir().expect("tempdir");
+    let mut job = recalld::queue::Job {
+        id: 1,
+        kind: "transcribe-segment".to_owned(),
+        filename: "usb-20260910T100000.wav".to_owned(),
+        source: "usb".to_owned(),
+        spans: Vec::new(),
+    };
+    recalld::enrol::attach_spans(empty.path(), &mut job).expect("no meaning plane, no problem");
 }

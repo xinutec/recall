@@ -135,6 +135,29 @@ pub fn spans_for(meaning: &Connection, filename: &str) -> rusqlite::Result<Vec<S
         .collect())
 }
 
+/// Fill a leased job's spans, if it is a kind that has any.
+///
+/// ⚠ **At LEASE time, not at derivation.** The work-list lives in the meaning
+/// plane and the queue does not, so carrying the spans in the job row would be a
+/// second copy of a list that changes whenever somebody renames a voice. Reading
+/// them here also means a turn re-assigned since the job was derived is embedded
+/// under the span it has now, or dropped if it no longer qualifies.
+///
+/// ⚠ **The meaning plane is opened ONLY for a kind that needs it.** Opening it
+/// unconditionally made every lease 500 wherever `recall.sqlite` was absent —
+/// caught by the runner's own end-to-end test, which runs an ingest plane alone.
+/// A transcription runner must not be stopped by a database it never reads.
+///
+/// # Errors
+/// If the meaning plane refuses.
+pub fn attach_spans(root: &std::path::Path, job: &mut crate::queue::Job) -> rusqlite::Result<()> {
+    if job.kind != ENROLL_SPEAKER {
+        return Ok(());
+    }
+    job.spans = spans_for(&crate::reads::open(root)?, &job.filename)?;
+    Ok(())
+}
+
 /// Derive one enrolment job per CLIP holding turns that still need a voiceprint.
 ///
 /// ⚠ **Per clip, not per turn**, because `jobs` is keyed `UNIQUE (kind,

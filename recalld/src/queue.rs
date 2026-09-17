@@ -52,7 +52,7 @@ pub const DIARIZE_SEGMENT: &str = "diarize-segment";
 pub const ENROLL_SPEAKER: &str = "enroll-speaker";
 const LEASE_TTL_S: i64 = 10 * 60;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Job {
     pub id: i64,
     pub kind: String,
@@ -67,6 +67,15 @@ pub struct Job {
     /// a real source id and every plausible split of its name is wrong. The
     /// ingest plane already knows; it says so here.
     pub source: String,
+    /// For [`ENROLL_SPEAKER`] only: which stretches of the clip to embed.
+    ///
+    /// ⚠ **Filled at LEASE time, not at derivation.** The work-list lives in the
+    /// meaning plane and this table does not; carrying the spans in the row
+    /// would mean a second copy of a list that changes whenever somebody renames
+    /// a voice. Empty for every other kind, and omitted from the wire entirely
+    /// so their lease body is byte-identical to what it has always been.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spans: Vec<crate::enrol::Span>,
 }
 
 pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -320,6 +329,9 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Resul
                 kind: r.get(1)?,
                 filename: r.get(2)?,
                 source: r.get(3)?,
+                // Filled by the caller that can reach the meaning plane; this
+                // one holds only the ingest connection.
+                spans: Vec::new(),
             })
         })
         .optional()?;

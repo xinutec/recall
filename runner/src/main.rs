@@ -12,7 +12,7 @@
 //! (#1461), which cannot yet say which stream is better.
 
 use chrono::Utc;
-use runner::client::{Client, Job};
+use runner::client::{Client, Job, Span};
 use runner::pulse::stamp_pulse;
 use runner::shim::{self, Shim};
 use std::path::Path;
@@ -125,6 +125,40 @@ fn parse_args() -> Config {
 /// drained. It already renders `rows == 0` as "nothing to do" — it was simply
 /// never sent such a beat.
 ///
+/// Embed each named span of one clip into the print list the fleet files.
+///
+/// ⚠ **A refused span is skipped, not fatal.** One corrupt stretch would
+/// otherwise cost every other voice in the clip its enrolment, and the fleet
+/// cannot tell "the clip was bad" from "the runner gave up" — it would ledger the
+/// whole clip as decided and never come back for the spans that were fine.
+fn embed_spans(
+    shim: &mut Shim,
+    clip: &Path,
+    spans: &[Span],
+) -> Result<serde_json::Value, shim::Error> {
+    let mut prints = Vec::new();
+    for span in spans {
+        match shim.embed(clip, span.start_s, span.end_s) {
+            Ok(answer) => {
+                if let Some(vector) = answer.get("vector") {
+                    prints.push(serde_json::json!({
+                        "segment_id": span.segment_id,
+                        "vector": vector,
+                    }));
+                }
+            }
+            Err(shim::Error::Refused(why)) => {
+                tracing::warn!(segment_id = span.segment_id, %why, "span refused; skipping it");
+            }
+            // Not a refusal: the shim itself is broken or gone, and the next
+            // span would meet the same wall. Let it end the job so the lease
+            // lapses and another attempt gets a fresh process.
+            Err(other) => return Err(other),
+        }
+    }
+    Ok(serde_json::json!({ "prints": prints }))
+}
+
 /// A runner wedged INSIDE a job still never reaches here, so the stall it exists
 /// to catch is still caught.
 fn one(
@@ -145,6 +179,7 @@ fn one(
         kind,
         filename,
         source,
+        spans,
     } = job;
     tracing::info!(id, %kind, %source, %filename, "leased");
     let clip = scratch.join(&filename);
@@ -158,6 +193,12 @@ fn one(
         // recalld's question, not the runner's.
         "transcribe-room" | "transcribe-segment" => shim.transcribe(&clip, None, prompt),
         "diarize-room" | "diarize-segment" => shim.diarize(&clip),
+        // ⚠ **The one kind that is MANY model calls**, one per named turn in the
+        // clip, so the runner composes the result the others receive whole. A
+        // span the shim refuses costs that print and not the job: the rest of
+        // the clip's voices still enrol, and the fleet re-derives the missing
+        // one on the next pass because its turn is still unenrolled.
+        "enroll-speaker" => embed_spans(shim, &clip, &spans),
         other => Err(shim::Error::Refused(format!(
             "runner cannot do job kind {other}"
         ))),
@@ -168,10 +209,11 @@ fn one(
         Ok(result) => {
             // ⚠ **Each shim names its result differently, and counting only
             // one spelling makes the other's log line a constant.** `asr`
-            // answers `segments`, `voices` answers `turns` — so a diarize job
-            // logged `rows=0` whether it had found twelve speakers or none,
-            // which is the one thing the line exists to say.
-            let rows = ["segments", "turns"]
+            // answers `segments`, `voices` answers `turns` for a diarization and
+            // `prints` for an enrolment — so a diarize job logged `rows=0`
+            // whether it had found twelve speakers or none, which is the one
+            // thing the line exists to say. Adding a kind means adding its key.
+            let rows = ["segments", "turns", "prints"]
                 .iter()
                 .filter_map(|key| result.get(*key))
                 .filter_map(serde_json::Value::as_array)

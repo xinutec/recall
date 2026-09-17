@@ -412,10 +412,19 @@ pub async fn lease_job(
         return refused.into_response();
     }
     let kinds = query.kinds();
-    let handle = tokio::task::spawn_blocking(move || {
-        let borrowed: Vec<&str> = kinds.iter().map(String::as_str).collect();
-        crate::queue::lease(&config.root, Utc::now(), &borrowed)
-    });
+    let handle =
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<crate::queue::Job>> {
+            let borrowed: Vec<&str> = kinds.iter().map(String::as_str).collect();
+            let leased = crate::queue::lease(&config.root, Utc::now(), &borrowed)?;
+            // An enrolment job names a clip; its spans say which stretches to
+            // embed, and they live in the meaning plane which `lease` cannot
+            // reach. Attached here so the runner needs no second round trip.
+            let Some(mut job) = leased else {
+                return Ok(None);
+            };
+            crate::enrol::attach_spans(&config.root, &mut job)?;
+            Ok(Some(job))
+        });
     match handle.await {
         Ok(Ok(Some(job))) => (StatusCode::OK, axum::Json(json!({ "job": job }))).into_response(),
         Ok(Ok(None)) => (StatusCode::OK, axum::Json(json!({ "job": null }))).into_response(),

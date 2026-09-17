@@ -197,6 +197,32 @@ impl Shim {
         )
     }
 
+    /// Embed one stretch of a clip into the vector that names a voice.
+    ///
+    /// ⚠ **A SPAN, not the clip.** Enrolment teaches one person's voice from one
+    /// labelled turn; embedding the whole minute it sits in would build a print
+    /// mostly of whoever else was in the room. The shim cuts it — it already
+    /// holds the decoder, and a second decode here would be the slower half of
+    /// the work done twice.
+    ///
+    /// # Errors
+    /// Whatever `request` reports.
+    pub fn embed(
+        &mut self,
+        audio: &Path,
+        start_s: f64,
+        end_s: f64,
+    ) -> Result<serde_json::Value, Error> {
+        self.request(
+            "embed",
+            &serde_json::json!({
+                "audio": audio.to_string_lossy(),
+                "start": start_s,
+                "end": end_s,
+            }),
+        )
+    }
+
     /// Transcribe one clip.
     ///
     /// # Errors

@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::Path;
 
 /// One unit of work, exactly as the queue hands it over.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Job {
     pub id: i64,
     pub kind: String,
@@ -14,6 +14,22 @@ pub struct Job {
     /// Which recorder it came from. Served by recalld from the ingest plane —
     /// NEVER guessed here, and never `room` by default.
     pub source: String,
+    /// For `enroll-speaker`: which stretches of the clip to embed, in seconds
+    /// from its start. Absent for every other kind.
+    #[serde(default)]
+    pub spans: Vec<Span>,
+}
+
+/// One stretch of a clip to embed, as recalld serves it.
+///
+/// ⚠ **No name.** The runner does not learn whose voice it is, and does not need
+/// to: the fleet reads the label when it writes the print, so a turn re-assigned
+/// while the model was running is filed under the name it has now.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct Span {
+    pub segment_id: i64,
+    pub start_s: f64,
+    pub end_s: f64,
 }
 
 #[derive(Deserialize)]
