@@ -26,12 +26,6 @@ use std::path::Path;
 /// The live tier writes its turns under this ASR model name.
 const LIVE_MODEL: &str = "live";
 
-/// In-flight slack for the fleet-mirror check: the sync timer runs every 120s
-/// and the mirror-completion queue drains 500 a pass, so anything processed an
-/// hour ago and still unpushed means the push has actually stopped.
-pub fn mirror_slack() -> Duration {
-    Duration::hours(1)
-}
 /// How far back the speech-loss reconciliation looks.
 pub fn loss_window() -> Duration {
     Duration::hours(48)
@@ -138,37 +132,6 @@ pub fn archive_check(seconds: Option<f64>, detail: &str) -> Check {
     .build()
 }
 
-/// Is the fleet's copy of the archive complete?
-///
-/// The invariant since the mirror-completion push: every processed segment
-/// reaches the fleet within a couple of sync passes. A count stuck above zero
-/// (beyond the in-flight slack) means the mirror has silently stopped — the same
-/// class of failure as a stalled backup, and it gets the same verdict: `fail`,
-/// because "if the Mac dies the archive lives on Isis" is only true while this
-/// is zero.
-pub fn mirror_check(unmirrored: usize, slack: Duration) -> Check {
-    check(
-        "sync",
-        "fleet mirror complete",
-        if unmirrored == 0 {
-            Verdict::Pass
-        } else {
-            Verdict::Fail
-        },
-        if unmirrored == 0 {
-            "every processed segment mirrored".to_owned()
-        } else {
-            format!("{unmirrored} processed segment(s) not on the fleet")
-        },
-        format!(
-            "0 unmirrored older than {:.0}m",
-            slack.num_seconds() as f64 / 60.0
-        ),
-    )
-    .trend(unmirrored as f64, "segments")
-    .build()
-}
-
 /// See [`crate::blanked`] for why the count is gated by the detector.
 pub fn blanked_check(blanked: usize) -> Check {
     check(
@@ -215,28 +178,6 @@ pub fn source_rows(conn: &Connection) -> rusqlite::Result<Vec<(String, SourceKin
         .into_iter()
         .filter_map(|(id, kind)| Some((id, SourceKind::parse(&kind)?)))
         .collect())
-}
-
-/// Processed segments that have never reached the fleet (`pushed_utc` unset).
-///
-/// Covers what the turn-watermark push cannot: a speechless segment mints no
-/// turn ids, so it never synced and the fleet's quiet review could never sweep
-/// it.
-pub fn unmirrored_count(
-    conn: &Connection,
-    older_than: DateTime<Utc>,
-    limit: usize,
-) -> rusqlite::Result<usize> {
-    let count: usize = conn.query_row(
-        "SELECT count(*) FROM (
-             SELECT id FROM audio_segments
-             WHERE transcribed_utc IS NOT NULL AND pushed_utc IS NULL
-               AND transcribed_utc < ?1
-             ORDER BY id LIMIT ?2)",
-        rusqlite::params![python_iso(older_than), limit],
-        |row| row.get(0),
-    )?;
-    Ok(count)
 }
 
 /// When the live tier last produced a turn, or `None` if it never has.
@@ -474,11 +415,14 @@ fn speech_loss(
 }
 
 /// Everything the child process reports. The `--collect` half of the doctor.
-pub fn archive_checks(
-    root: &Path,
-    now: DateTime<Utc>,
-    fleet_configured: bool,
-) -> rusqlite::Result<Vec<Check>> {
+///
+/// ⚠ It took a `fleet_configured` flag until 2026-09-17, to gate a `fleet mirror
+/// complete` check on `pushed_utc`. That column's writer (`sync_push`) is
+/// deleted, so the count could only ever be zero and the check could only ever
+/// say the archive was safely replicated — the one claim worth being sure of.
+/// `delivery_checks` makes the same promise on evidence that is still written:
+/// every file on disk against audiod's own upload state.
+pub fn archive_checks(root: &Path, now: DateTime<Utc>) -> rusqlite::Result<Vec<Check>> {
     let conn = open(&root.join("recall.sqlite"))?;
     // Registered recorders, not whatever directories exist: a mic the household
     // actually uses is one the archive knows about. Devices only — an imported
@@ -489,7 +433,6 @@ pub fn archive_checks(
         .filter(|(_, kind)| kind.is_device())
         .collect();
     let (losses, dead_windows) = speech_loss(&conn, &sources, now)?;
-    let unmirrored = unmirrored_count(&conn, now - mirror_slack(), 10_000)?;
     let blanked = blanked_segments(&conn)?;
     let heard = crate::deaf::heard_between(&conn, &sources, now - deaf_window(), now)?;
     let newest_live = newest_live_turn(&conn)?;
@@ -522,11 +465,6 @@ pub fn archive_checks(
         capture::live_quiet(),
         live_window,
     ));
-    // The fleet mirror only exists when the split is on (RECALL_SYNC_TOKEN
-    // set); a stock LAN-only deployment has no fleet to be incomplete against.
-    if fleet_configured {
-        checks.push(mirror_check(unmirrored, mirror_slack()));
-    }
     // Quiet until audiod's uploader has run here (stage B): reads its state db.
     checks.extend(crate::delivery::delivery_checks(root, now));
     checks.push(blanked_check(blanked));

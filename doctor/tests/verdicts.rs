@@ -1,8 +1,8 @@
 //! The rules that decide what fleetwatch is told: the roll-up, the recording
 //! checks, the transcription pulse, the live tier, and the archive's own reachability.
 
-use chrono::{DateTime, Duration, Utc};
-use doctor::archive::{self, archive_check, blanked_check, mirror_check};
+use chrono::{DateTime, Utc};
+use doctor::archive::{self, archive_check, blanked_check};
 use doctor::capture::{
     Beat, Recorder, WindowAudio, agent_checks, capture_checks, live_check, live_quiet,
     silent_after, worker_check, worker_slow, worker_stopped,
@@ -343,13 +343,6 @@ fn an_archive_that_answered_with_an_error_still_fails() {
     let failed = archive_check(Some(2.0), "database is locked");
     assert_eq!(failed.verdict, Verdict::Fail);
     assert!(failed.observed.contains("database is locked"));
-}
-
-#[test]
-fn an_incomplete_fleet_mirror_fails_because_the_backup_claim_depends_on_it() {
-    // "If the Mac dies the archive lives on Isis" is only true while this is 0.
-    assert_eq!(mirror_check(0, Duration::hours(1)).verdict, Verdict::Pass);
-    assert_eq!(mirror_check(1, Duration::hours(1)).verdict, Verdict::Fail);
 }
 
 #[test]

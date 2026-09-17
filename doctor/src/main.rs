@@ -152,11 +152,7 @@ fn main() {
         // The child times ITSELF, so the figure that reaches fleetwatch is the
         // archive read rather than a second process's startup.
         let started = Instant::now();
-        let checks = match archive::archive_checks(
-            &config.out,
-            now,
-            std::env::var_os("RECALL_SYNC_TOKEN").is_some(),
-        ) {
+        let checks = match archive::archive_checks(&config.out, now) {
             Ok(checks) => checks,
             Err(err) => {
                 // stderr, and a non-zero exit: the parent turns this into the
