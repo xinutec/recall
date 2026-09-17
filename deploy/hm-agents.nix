@@ -273,13 +273,9 @@ in
   # *paused* (e.g. overnight), so the heavy pyannote pass never competes with live
   # capture. It also drains Ask jobs and day-summaries (via the llm-host).
   #
-  # Refine's precision comes from diarization + word-level speaker alignment, not
-  # the ASR model, so it stays on turbo: the household LoRA adapter is ~8x slower on
-  # long recordings for a WER win only measured on short clips.
-  #
-  # ⚠ RETIRED — `recalld::diarized::PER_MIC` writes speaker-split turns over the same
-  # clips, and both HIDE what they supersede. Do not restore without stopping that
-  # writer.
+  # ⚠ RETIRED — `recalld::diarized::PER_MIC` writes speaker-split turns over the
+  # same clips, and both HIDE what they supersede. Do not restore without stopping
+  # that writer.
   #
   # launchd.agents."org.xinutec.recall-refine" = daemon {
   #   label = "org.xinutec.recall-refine";
@@ -367,15 +363,12 @@ in
 
   # Is recall actually working? Every 5 minutes, reported to fleetwatch.
   #
-  # The check that was missing when it mattered: capture crash-looped on 22 June,
-  # recorded nothing for ninety minutes, and was found three weeks later by hand.
-  # launchd restarts capture when it dies, so a persistent fault becomes a loop —
-  # and a loop looks exactly like a quiet house.
+  # ⚠ launchd RESTARTS capture when it dies, so a persistent fault becomes a loop —
+  # and a crash loop looks exactly like a quiet house.
   #
-  # The interval MUST match the doctor's declared INTERVAL_S (300): fleetwatch
-  # derives staleness from the cadence the report declares, and a producer that
-  # stops reporting renders as failed. That is the point — this agent dying, or
-  # the Mac dying, is itself the alarm. Nothing here has to detect it.
+  # ⚠ The interval MUST match the doctor's declared INTERVAL_S (300): fleetwatch
+  # derives staleness from the cadence the report declares, so this agent dying, or
+  # the Mac dying, is itself the alarm.
   #
   # ⚠ `KeepAlive = false` with a 300s interval is why the doctor reads the
   # archive in a child it can abandon: launchd starts no further run while one
@@ -431,20 +424,16 @@ in
   # acks. Stateless: no watermark, no outbox, no mirror queue, so killing it
   # costs an expiring lease and nothing else.
   #
-  # ⚠ KeepAlive, NOT a StartInterval timer, and the shim is why: it holds the
-  # whisper weights for the life of the process, which is the whole reason the
-  # protocol exists. A periodic agent would reload them every pass and pay that
-  # cost per job instead of per boot. The runner has its own idle sleep and
-  # backoff, and respawns a dead shim itself.
+  # ⚠ KeepAlive, NOT a StartInterval timer: the shim holds the whisper weights for
+  # the life of the process, so a periodic agent would reload them per job instead
+  # of per boot. The runner has its own idle sleep and respawns a dead shim.
   #
-  # ⚠ It REFUSES TO START without the vocabulary — deliberately, in the runner
-  # rather than here. Transcribing without the biasing the vocabulary was built
-  # for produces a corpus that has to be redone, and re-transcription is the cost
-  # #1388 exists to reduce. An empty vocabulary is fine; an unreachable one is not.
+  # ⚠ It REFUSES TO START without the vocabulary (in the runner, not here):
+  # transcribing without that biasing produces a corpus that has to be redone
+  # (#1388). An EMPTY vocabulary is fine; an unreachable one is not.
   #
-  # ⚠ Results are stored OPAQUE in ingest.sqlite's job rows. Nothing becomes a
-  # visible turn until the results-to-turns step lands, so running this changes no
-  # transcript anybody reads.
+  # ⚠ Results are stored OPAQUE in ingest.sqlite's job rows, so running this
+  # changes no transcript anybody reads.
   #
   # Nice + LowPriorityIO: transcription must never compete with the recorder
   # (design.md §7), and this one holds a GPU.
@@ -484,21 +473,18 @@ in
   # `shim_voices` instead of `shim_asr`. The shim NAMES ITSELF over the protocol,
   # so the runner discovers it can do `diarize-segment` rather than being told.
   #
-  # ⚠ **It leases `diarize-segment` ONLY.** `kinds_for` decides that, and the
-  # reason is there: `diarize-room` jobs are derived for every transcribed block
-  # whether or not anything consumes them — thousands were queued with the room
-  # writer off — and `queue::lease` orders across kinds by capture time, so
-  # leasing both would spend half of every pass on results nothing reads.
+  # ⚠ It leases `diarize-segment` ONLY (`kinds_for`): `diarize-room` jobs are
+  # derived for every transcribed block whether or not anything consumes them, and
+  # `queue::lease` orders across kinds by capture time, so leasing both spends half
+  # of every pass on results nothing reads.
   #
-  # `Nice = 15`, below recall-runner's 10: capture must never lose a minute to
-  # diarization, which is re-derivable, and the archive pass earns more per second
-  # of GPU than a speaker split does. No `--pulse` — a second process stamping the
-  # archive heartbeat would make a stalled transcriber look healthy.
+  # `Nice = 15`, below recall-runner's 10 — diarization is re-derivable where the
+  # archive pass is not. ⚠ No `--pulse`: a second process stamping the archive
+  # heartbeat would make a stalled transcriber look healthy.
   #
-  # ⚠ It holds NO store and writes no turns. The result goes back to the queue;
-  # `recalld::diarized` decides what it means and owns the only write, because
-  # that write REPLACES a transcript and the guards against emptying one belong
-  # beside the database, not beside the model.
+  # ⚠ It writes no turns. The result goes back to the queue and
+  # `recalld::diarized` owns the only write, because that write REPLACES a
+  # transcript and the guards against emptying one belong beside the database.
   launchd.agents."org.xinutec.recall-voices" = daemon {
     label = "org.xinutec.recall-voices";
     name = "voices";
