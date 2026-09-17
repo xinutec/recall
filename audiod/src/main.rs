@@ -210,6 +210,25 @@ fn main() -> ExitCode {
 /// never compete with the recorder (design.md §7). A 13k-segment backlog is
 /// meant to drain over days behind live capture, not in one greedy pass.
 fn run_speech(root: &std::path::Path, max: usize) -> ExitCode {
+    // ⚠ **Registration FIRST, and in this agent rather than its own.** The
+    // scanner's work-list is `audio_segments` rows with no measurement, so a
+    // clip that has never been registered is invisible to it — and since the
+    // Python that used to register them stopped running, that was every clip
+    // recorded after 2026-09-13 (#1650). Same bounded, low-priority pass: both
+    // decode, both must lose to the recorder.
+    //
+    // A failure here does NOT stop the measurement. The two are independent
+    // answers to independent questions, and a machine that cannot probe is
+    // still a machine that can listen to what it already knows about.
+    match audiod::register::run(root, max) {
+        Ok(pass) if pass.registered + pass.unreadable > 0 => tracing::info!(
+            registered = pass.registered,
+            unreadable = pass.unreadable,
+            "register: pass complete"
+        ),
+        Ok(_) => {}
+        Err(err) => tracing::warn!(%err, "register: pass failed"),
+    }
     match audiod::speech_scan::run(root, max) {
         Ok(pass) => {
             let left = audiod::speech_scan::remaining(root).unwrap_or(-1);

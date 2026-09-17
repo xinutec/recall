@@ -23,6 +23,7 @@ mod meter;
 mod pause;
 mod pause_mirror;
 mod rebase;
+mod register;
 mod segmenter;
 mod speech_scan;
 mod store;

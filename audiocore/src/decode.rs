@@ -69,6 +69,45 @@ pub fn decode_native_s16(path: &Path) -> Option<Vec<u8>> {
     out.status.success().then_some(out.stdout)
 }
 
+/// A segment's native sample rate and channel count, from the stream header.
+///
+/// ⚠ **The header carries no DURATION**, and that is measured rather than
+/// assumed: `ffprobe -show_entries format=duration` on a live `usb-*.flac`
+/// returns an empty object (checked 2026-09-17). A caller that needs length has
+/// to decode — [`decode_s16`] and divide the byte count by the rate it asked
+/// for.
+///
+/// ⚠ Two plain lines, not JSON, so this crate needs no serialiser: `audiocore`
+/// is linked into every binary here and a dependency added for two integers
+/// would be paid by all of them.
+#[must_use]
+pub fn stream_shape(path: &Path) -> Option<(i64, i64)> {
+    let out = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            "-show_entries",
+            "stream=sample_rate,channels",
+        ])
+        .arg(path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.split_whitespace();
+    // Order follows the -show_entries list, which is why it is spelled there and
+    // read here in one place rather than assumed at each call site.
+    let rate: i64 = lines.next()?.parse().ok()?;
+    let channels: i64 = lines.next()?.parse().ok()?;
+    Some((rate, channels))
+}
+
 /// s16le bytes to f32 samples in [-1, 1].
 pub fn to_f32(pcm: &[u8]) -> Vec<f32> {
     pcm.chunks_exact(2)

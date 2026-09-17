@@ -13,6 +13,7 @@ pub mod meter;
 pub mod pause;
 pub mod pause_mirror;
 pub mod rebase;
+pub mod register;
 pub mod segmenter;
 pub mod server;
 pub mod speech_scan;
