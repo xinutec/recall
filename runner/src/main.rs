@@ -50,7 +50,10 @@ fn kinds_for(shim_name: &str) -> Option<&'static [&'static str]> {
         // An earlier comment here claimed the queue could be trusted to only
         // contain what a consumer wanted. It cannot: derivation and consumption
         // are separate switches, and this is the consuming one.
-        "voices" => Some(&["diarize-segment"]),
+        // ⚠ `enroll-speaker` rides with diarization because both are pyannote
+        // in the same process — a separate runner would load the weights twice
+        // for work that arrives a handful of turns a week.
+        "voices" => Some(&["diarize-segment", "enroll-speaker"]),
         _ => None,
     }
 }

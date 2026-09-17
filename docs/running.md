@@ -33,7 +33,7 @@ want while developing.
 | `org.xinutec.recall-runner` | lease a transcription job from Isis, drive the asr shim, push the turns back (Rust, `runner`) | continuous |
 | `org.xinutec.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
 | `org.xinutec.recall-beat-relay` | accept a mic app's heartbeat on the LAN (port 8000) and forward it to Isis, for a phone whose VPN is down | always on |
-| `org.xinutec.recall-voices` | lease a diarization job from Isis, drive the voices shim, push the speaker-split turns and their embeddings back (Rust, `runner`) | continuous |
+| `org.xinutec.recall-voices` | lease a diarization or enrolment job from Isis, drive the voices shim, push back the speaker-split turns and the voiceprints (Rust, `runner`) | continuous |
 | `org.xinutec.recall-llm-host` | holds the LLM for the whole Mac on `127.0.0.1:8092` — kept for *life*, not for recall (see below) | always on; weights loaded on demand, released after 5 min idle |
 | `org.xinutec.recall-sync` | push the archive to Isis (the system of record) — only what changed since the last watermark | timer |
 | `org.xinutec.recall-upload` | store-and-forward delivery: closed segments → recalld on Isis, sha-256 receipts re-hashed before anything counts as delivered ([architecture.md](architecture.md) stage B) | timer |

@@ -313,6 +313,58 @@ fn spawn_background_passes(root: &std::path::Path) {
     spawn_diarized_writer(root.clone(), recalld::diarized::PER_MIC);
     spawn_segment_registrar(root.clone());
     spawn_segment_deriver(root.clone());
+    spawn_enroller(root.clone());
+}
+
+/// Stage E4's last loop: turn a human-named turn into a reference voiceprint.
+///
+/// ⚠ **DELIBERATELY SLOW, and the reason is measured.** Adding 222 prints to the
+/// fleet's 750 moved attribution +0.19 points, and 187 prints score within 1.3 of
+/// 972 (#1648) — the corpus saturated long ago. So this exists to retire the
+/// Mac's last Python loop, not to raise a number, and it must not outbid
+/// diarization for the one GPU: a small batch on a slow cadence keeps up with new
+/// labels, which arrive a handful a week, and lets the backlog trickle.
+///
+/// ⚠ Derivation and consumption are ONE switch here, unlike the transcription
+/// port. Nothing else enrols — the Python that did was deleted with `refine` —
+/// so there is no second writer to collide with, and a derived job nobody leases
+/// would just be the diarize-room queue's mistake again.
+fn spawn_enroller(root: PathBuf) {
+    const EVERY: std::time::Duration = std::time::Duration::from_mins(10);
+    const DERIVE: usize = 5;
+    const WRITE: usize = 20;
+    tokio::spawn(async move {
+        loop {
+            let pass_root = root.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                let ingest = recalld::store::open(&pass_root)?;
+                let meaning = recalld::work::open_write(&pass_root)?;
+                let now = chrono::Utc::now();
+                let queued = recalld::enrol::derive_jobs(&ingest, &meaning, now, DERIVE)?;
+                let pass = recalld::enrol::write_pass(&meaning, &ingest, &now.to_rfc3339(), WRITE)?;
+                Ok::<_, rusqlite::Error>((queued, pass))
+            })
+            .await;
+            match done {
+                // ⚠ `stale` is IN this guard. A pass that decides every clip's
+                // spans are no longer wanted writes nothing and queues nothing,
+                // and without it the one pass worth reading logs no line at all.
+                Ok(Ok((queued, pass))) if queued + pass.prints + pass.stale > 0 => {
+                    tracing::info!(
+                        queued,
+                        clips = pass.clips,
+                        prints = pass.prints,
+                        stale = pass.stale,
+                        "enrol: pass"
+                    );
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => tracing::warn!(%err, "enrol: pass failed"),
+                Err(err) => tracing::error!(%err, "enrol: task failed"),
+            }
+            tokio::time::sleep(EVERY).await;
+        }
+    });
 }
 
 /// Stage E4: turn finished `diarize-room` results into speaker-split turns.

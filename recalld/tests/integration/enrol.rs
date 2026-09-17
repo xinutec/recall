@@ -47,13 +47,18 @@ fn turn(conn: &rusqlite::Connection, id: i64, label: Option<&str>, offset: f64, 
 
 /// The ingest plane's row for clip 1 — note the OTHER extension.
 fn delivered(root: &std::path::Path, filename: &str) {
+    delivered_at(root, filename, "2026-09-10T10:00:00Z");
+}
+
+/// A delivered blob with a capture time of its own.
+fn delivered_at(root: &std::path::Path, filename: &str, start_utc: &str) {
     let conn = store::open(root).expect("ingest");
     store::insert(
         &conn,
         &store::Row {
             source: "usb".into(),
             filename: filename.into(),
-            start_utc: "2026-09-10T10:00:00Z".into(),
+            start_utc: start_utc.into(),
             bytes: 1,
             sha256: "x".into(),
             received_utc: "2026-09-10T10:01:00Z".into(),
@@ -480,4 +485,46 @@ fn a_lease_of_another_kind_does_not_need_the_meaning_plane_at_all() {
         spans: Vec::new(),
     };
     recalld::enrol::attach_spans(empty.path(), &mut job).expect("no meaning plane, no problem");
+}
+
+#[test]
+fn enrolment_outranks_capture_time_or_it_would_never_be_leased() {
+    // ⚠ Measured on the fleet 2026-09-17: 31 clips awaited a print, the newest
+    // from 2026-09-03, behind 2,251 diarize jobs newer than it — two days of GPU
+    // before the first could be leased. And the next label somebody adds will sit
+    // on whatever clip they were reading, which is old too, so it is not a
+    // backlog that clears itself.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ingest = ingest_at(dir.path());
+    // A NEWER clip with diarization to do, and an OLDER one awaiting a print.
+    delivered_at(
+        dir.path(),
+        "usb-20260912T100000.wav",
+        "2026-09-12T10:00:00Z",
+    );
+    delivered(dir.path(), "usb-20260910T100000.wav");
+    for (kind, filename) in [
+        ("diarize-segment", "usb-20260912T100000.wav"),
+        (ENROLL_SPEAKER, "usb-20260910T100000.wav"),
+    ] {
+        ingest
+            .execute(
+                "INSERT INTO jobs (kind, filename, created_utc)
+                 VALUES (?1, ?2, '2026-09-12T11:00:00Z')",
+                rusqlite::params![kind, filename],
+            )
+            .expect("job");
+    }
+
+    let job = recalld::queue::lease(
+        dir.path(),
+        at("2026-09-12T12:00:00Z"),
+        &["diarize-segment", ENROLL_SPEAKER],
+    )
+    .expect("lease")
+    .expect("a job");
+    assert_eq!(
+        job.kind, ENROLL_SPEAKER,
+        "the older clip's print comes first"
+    );
 }

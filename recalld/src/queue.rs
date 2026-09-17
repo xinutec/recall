@@ -307,6 +307,18 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Resul
     // The join is safe because every job is DERIVED from a `segments` row, so
     // one always exists; a job whose blob the ingest plane has forgotten is
     // unleasable, which is the correct reading of "there is nothing to fetch".
+    //
+    // ⚠ **ENROLMENT OUTRANKS CAPTURE TIME, and without that it would never run.**
+    // Every other kind is derived from audio, so newest-first is "what are they
+    // saying now". Enrolment is derived from what a PERSON typed, and the clip
+    // they typed it on is whatever they happened to be reading — usually old.
+    // Measured on the fleet 2026-09-17: 31 clips awaited a print, the newest from
+    // 2026-09-03, behind **2,251** diarize jobs newer than it — about two days of
+    // GPU before the first one could be leased, and a label added today would
+    // queue behind the same wall. The same principle `work::pending_jobs` states
+    // for the other queue: a backlog must not starve the work somebody is waiting
+    // on. Safe because the derivation is bounded at a few per pass, so at most a
+    // handful of enrolment jobs can exist to jump ahead.
     let sql = format!(
         "SELECT j.id, j.kind, j.filename, s.source FROM jobs j
          JOIN segments s ON s.filename = j.filename
@@ -314,7 +326,8 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Resul
            AND (j.leased_until IS NULL OR j.leased_until < ?1)
            AND j.done_utc IS NULL
            AND j.kind IN ({places})
-         ORDER BY s.start_utc DESC, j.filename DESC LIMIT 1"
+         ORDER BY (j.kind = '{ENROLL_SPEAKER}') DESC, s.start_utc DESC, j.filename DESC
+         LIMIT 1"
     );
     let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(kinds.len() + 1);
     let stamp = iso(now);
