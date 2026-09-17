@@ -100,15 +100,12 @@
         # agents run a store path while the gate runs a mutable tree outside every GC
         # root, and the two need a drift check one artifact does not.
         #
-        # `deps.all` rather than `deps.default` is the whole difference: the dev
-        # group is where `pytest` lives, and it has to be IN the environment
-        # rather than beside it because mypy resolves third-party imports through
-        # `python_executable = ".venv/bin/python"` — so a pytest it cannot see is
-        # ~175 unfollowed-import errors under --strict.
+        # ⚠ `deps.all`, not `deps.default`: mypy resolves third-party imports
+        # through `python_executable = ".venv/bin/python"`, so a pytest beside the
+        # environment rather than IN it is a flood of unfollowed-import errors.
         #
-        # Deliberately NOT added to the devshell: it would drag the whole ML
-        # closure into `ruff check`. The gate builds it into `.venv` in one row,
-        # ahead of the rows that use it (see gate.dhall).
+        # NOT in the devshell — it would drag the whole ML closure into
+        # `ruff check`. The gate builds it into `.venv` in one row (gate.dhall).
         devEnv = mlPythonSet.mkVirtualEnv "recall-dev-env" uvWorkspace.deps.all;
 
         # ⚠ The non-ML interpreter, defined ONCE for both the devshell and the launchd
@@ -197,17 +194,14 @@
         # Everything home-manager will actually run, as ONE buildable output: a farm
         # of the launchd wrappers named in deploy/hm-agents.nix, keyed by label.
         #
-        # The gate proved the source tree healthy and built nothing the agents run, so
-        # an unbuildable ml-env or a wrapper that fails shellcheck stayed invisible
-        # until `home-manager switch` — which is a different day, a different repo, and
-        # a bare error with no commit attached. gamepads and thoth sat broken for weeks
-        # in exactly that gap (a pnpm-deps FOD, cached green since long after it died).
+        # ⚠ Without this the gate proves the source tree healthy and builds nothing
+        # the agents run, so an unbuildable ml-env or a wrapper failing shellcheck
+        # stays invisible until `home-manager switch` — a different day, a different
+        # repo, and a bare error with no commit attached.
         #
-        # No home-manager dependency: that module is a plain function, so it is applied
-        # here with the arguments home-manager passes it. The cost is that it is applied
-        # rather than evaluated as a MODULE, so launchd option types are not checked —
-        # a misspelled `KeepAlive` still gets through. What is covered is every part
-        # that is a derivation, and that is where the breakage has actually been.
+        # ⚠ Applied as a FUNCTION, not evaluated as a module, so launchd option types
+        # are unchecked and a misspelled `KeepAlive` still gets through. What is
+        # covered is every part that is a derivation.
         deployedAgents =
           let
             lib = nixpkgs.lib;
