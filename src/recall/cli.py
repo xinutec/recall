@@ -13,7 +13,6 @@ import logging
 import os
 import sys
 import time
-import traceback
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -46,7 +45,6 @@ from recall.maintenance import (
 from recall.paths import ArchiveAway, require_archive
 from recall.probe import probe_media, scan_segments
 from recall.redrive import redrive_archive
-from recall.refine import refine_diarized
 from recall.reprocess import reprocess
 from recall.sources import AudioSource, SourceKind
 from recall.speakerid import pyannote_embed
@@ -396,129 +394,6 @@ def _cmd_redrive(args: argparse.Namespace) -> int:
     finally:
         store.close()
     print(f"redrive: added {added} re-derived transcript rows")
-    return 0
-
-
-def _refine_one_source(
-    store: Store, args: argparse.Namespace, *, diarize_enabled: bool
-) -> int:
-    """Deliberate one-shot re-derive of a single recording — not idle-gated (the
-    operator chose to run it), processes every segment, then exits."""
-    if not diarize_enabled:
-        store.close()
-        print("refine --source needs HF_TOKEN (diarization is gated)")
-        return 1
-    try:
-        turns = refine_diarized(
-            store,
-            pyannote_diarize,
-            _transcriber_for(args, words=True, store=store),
-            pyannote_embed,
-            work_dir=args.out / "work",
-            model_name=args.model,
-            source=args.source,
-        )
-    finally:
-        store.close()
-    print(f"refine: re-derived source {args.source!r}, {turns} turn(s)")
-    return 0
-
-
-def _cmd_refine(args: argparse.Namespace) -> int:
-    """Diarize-refine the archive, but only while capture is idle (paused) so the
-    heavy pyannote pass never competes with live recording. Runs as a daemon by
-    default; --max-segments N does a bounded run (one segment at a time, re-checking
-    the pause state before each) and exits.
-
-    The daemon also drains queued A/B model comparisons (`recall ab-compare` from the
-    web UI). Those are operator-chosen and read-only, so they run regardless of the
-    pause state and need no HF_TOKEN — diarization is what's gated, not comparison."""
-    runlog.setup()  # UTC-stamped logging for the refine pass
-    diarize_enabled = bool(os.environ.get("HF_TOKEN"))
-    store = Store.open(args.out / "recall.sqlite")
-
-    if args.source:
-        return _refine_one_source(store, args, diarize_enabled=diarize_enabled)
-
-    # Built lazily: the diarize passes need it, but an HF-token-less daemon that only
-    # services ab-compare jobs must not require the refine adapter at all.
-    transcriber = (
-        _transcriber_for(args, words=True, store=store) if diarize_enabled else None
-    )
-
-    def diarize_one(*, redo: bool) -> int:
-        assert transcriber is not None  # only called on the diarize_enabled branches
-        return refine_diarized(
-            store,
-            pyannote_diarize,
-            transcriber,
-            pyannote_embed,
-            work_dir=args.out / "work",
-            model_name=args.model,
-            limit=1,
-            redo=redo,
-        )
-
-    def refine_request_one() -> tuple[int, int]:
-        """Process one on-demand request from the web — refine exactly its window's
-        segments. Returns (turns added, segments processed)."""
-        assert transcriber is not None  # only called on the diarize_enabled branches
-        req = store.pending_refine_requests(limit=1)[0]
-        ids = store.audio_segments_in_range(
-            req.source, req.start, req.end, limit=10_000
-        )
-        added = refine_diarized(
-            store,
-            pyannote_diarize,
-            transcriber,
-            pyannote_embed,
-            work_dir=args.out / "work",
-            model_name=args.model,
-            audio_ids=ids,
-        )
-        store.mark_refine_request_done(req.id)
-        print(f"refine: request #{req.id} ({req.source}, {len(ids)} seg) -> {added}")
-        return added, len(ids)
-
-    segments = turns = 0
-    try:
-        while args.max_segments == 0 or segments < args.max_segments:
-            now = datetime.now(UTC)
-            # Start each pass on a clean connection. A write that failed under lock
-            # contention leaves an aborted transaction open, which freezes this
-            # connection's read snapshot — the daemon then never sees an ask the jobs
-            # runner queued and sleeps forever with it pending (the bug that silently
-            # hung Ask). Rolling back is a no-op when nothing is open.
-            store.rollback()
-            try:
-                # Ask, A/B comparison and day-summaries used to be drained here.
-                # All three were cut with the product's scope (architecture.md);
-                # what is left is the diarizing refine pass this daemon is named
-                # for, which stays idle-gated so it never competes with capture.
-                idle = diarize_enabled and capture_control.is_paused(args.out, now)
-                if idle and store.pending_refine_requests(limit=1):
-                    added, n = refine_request_one()  # on-demand requests first
-                    turns += added
-                    segments += n
-                elif idle and store.audio_segments_to_diarize(limit=1):
-                    turns += diarize_one(redo=False)  # never-diarized audio first
-                    segments += 1
-                elif idle and store.audio_segments_to_rediarize(limit=1):
-                    turns += diarize_one(redo=True)  # then upgrade older diarized days
-                    segments += 1
-                elif args.max_segments:
-                    break  # bounded run: nothing to do right now, so stop
-                else:
-                    time.sleep(args.poll_seconds)  # capture active or caught up — idle
-            except Exception:  # one bad pass must never wedge the daemon
-                # Recover the connection and keep serving — the failed unit is left for
-                # the next pass to retry (or time out on the fleet).
-                store.rollback()
-                traceback.print_exc()
-                time.sleep(args.poll_seconds)
-    finally:
-        store.close()
-    print(f"refine: diarized {segments} segment(s), {turns} turn(s)")
     return 0
 
 
@@ -887,30 +762,6 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_jobs(args: argparse.Namespace) -> int:
-    """Run on-demand work the fleet requested but can't do itself (the Isis split):
-    pull its refine queue into this Mac's local queue (the idle refine daemon drains
-    it), and fetch uploaded sessions into this Mac's archive (the worker transcribes
-    them; results sync back on their own). The Mac holds the ML and mic; the fleet
-    holds only the UI. Token is RECALL_SYNC_TOKEN. Imports are lazy so recall.cli stays
-    framework-free for the capture agents (recall.sync pulls the web framework)."""
-    runlog.setup()  # UTC-stamped logging for the job runner
-    token = os.environ.get("RECALL_SYNC_TOKEN")
-    if not token:
-        print("jobs needs RECALL_SYNC_TOKEN")
-        return 1
-    from recall.jobs import run_jobs_once  # noqa: PLC0415
-    from recall.sync import SyncClient  # noqa: PLC0415 - lazy: pulls the web framework
-
-    store = Store.open(args.out / "recall.sqlite")
-    try:
-        handed = run_jobs_once(store, SyncClient(args.url, token), data_root=args.out)
-    finally:
-        store.close()
-    print(f"jobs: brought {handed} fleet job(s) home from {args.url}")
-    return 0
-
-
 def _cmd_pause(args: argparse.Namespace) -> int:
     """Pause recording on THIS machine directly, with no network — the break-glass
     control for when Isis (the normal pause/resume surface) is unreachable, e.g. mid
@@ -1041,7 +892,6 @@ def _cmd_repair_transcripts(args: argparse.Namespace) -> int:
 
 _COMMANDS = {
     "sync": _cmd_sync,
-    "jobs": _cmd_jobs,
     "pause": _cmd_pause,
     "resume": _cmd_resume,
     "capture-trace": _cmd_capture_trace,
@@ -1051,7 +901,6 @@ _COMMANDS = {
     "score-asr": _cmd_score_asr,
     "reprobe": _cmd_reprobe,
     "redrive": _cmd_redrive,
-    "refine": _cmd_refine,
     "scan-hallucinations": _cmd_scan_hallucinations,
     "scan-loops": _cmd_scan_loops,
     "scan-foreign-script": _cmd_scan_foreign_script,

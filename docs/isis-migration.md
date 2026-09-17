@@ -234,6 +234,14 @@ local pause alone until Isis's *intent* actually changes. Intent lives in Isis's
 Run break-glass from the Mac: `~/Code/recall/scripts/recall.sh pause` (or `resume`). No
 launchd agent, no deploy — the wrapper runs live `src`.
 
+⛔ **RETIRED 2026-09-17.** Diarization is a queue now, not a request: the `voices`
+runner leases `diarize-segment` from recalld the same way the transcription runner
+leases `transcribe-segment`, so every clip is diarized without anybody asking. The
+`recall jobs` bridge and the idle-gated refine daemon it fed are deleted, and with
+them the Mac's local refine queue. The `/sync/jobs` endpoints and `SyncClient.poll_jobs`
+still stand for the upload path below. The entry is kept because the *inversion* it
+describes is still how the Mac gets work across a one-way VPN.
+
 **MLX job-pull — refine done (2026-07-15).** Interactive MLX endpoints are unreachable
 from Isis under the one-way WireGuard model (Isis can't dial the Mac), so they need a
 Mac-initiated **job-pull** — the same inversion capture-mirror uses. The refine path is
@@ -255,12 +263,18 @@ refines (blob filename, title, and stream shape in the job), the Mac's `recall j
 timer fetches the blob via the new `GET /sync/audio/file` into its own archive root and
 registers the source + segment keyed to the fleet's exact start — so the worker's normal
 pass transcribes it, the refine daemon diarizes it, and the pushed-back turns dedupe onto
-Isis's existing row (UNIQUE source_id+start). The job retires on the Mac's typed
+Isis's existing row (UNIQUE source_id+start). ⚠ The "refine daemon diarizes it" step in that chain is now the `voices` runner — see the retirement note above. The job retires on the Mac's typed
 acknowledgement (`/sync/jobs/{id}/done?type=upload` → `mark_transcribed`), with a belt:
 any segment push now marks the fleet row transcribed too. Pre-split sessions self-heal —
 their blobs and rows are already on the Mac, so the first pass skips straight to the
 acknowledgement. Still to confirm by hand: the phone's share-to-Recall flow points at
 Isis.
+
+⛔ **RETIRED with their features.** A/B comparison and Ask were both cut with the
+product's scope (architecture.md); `ab_compare_runs` and `ask_requests` are dropped
+by migration, and the refine daemon the next two entries hand work to is deleted.
+They are kept as the record of how a *result* comes back across the one-way VPN when
+turn-sync cannot carry it — the relay shape, not the features.
 
 **Ab-compare job-pull — done (2026-07-16).** Unlike refine, an A/B run's result is the
 report row itself (result_json + WER summary), so turn-sync can't carry it back — it

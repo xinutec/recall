@@ -33,18 +33,16 @@ want while developing.
 | `org.xinutec.recall-runner` | lease a transcription job from Isis, drive the asr shim, push the turns back (Rust, `runner`) | continuous |
 | `org.xinutec.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
 | `org.xinutec.recall-beat-relay` | accept a mic app's heartbeat on the LAN (port 8000) and forward it to Isis, for a phone whose VPN is down | always on |
-| `org.xinutec.recall-refine` | re-derive segments diarized + speaker-split | while capture paused |
+| `org.xinutec.recall-voices` | lease a diarization job from Isis, drive the voices shim, push the speaker-split turns and their embeddings back (Rust, `runner`) | continuous |
 | `org.xinutec.recall-llm-host` | holds the LLM for the whole Mac on `127.0.0.1:8092` — kept for *life*, not for recall (see below) | always on; weights loaded on demand, released after 5 min idle |
 | `org.xinutec.recall-sync` | push the archive to Isis (the system of record) — only what changed since the last watermark | timer |
 | `org.xinutec.recall-upload` | store-and-forward delivery: closed segments → recalld on Isis, sha-256 receipts re-hashed before anything counts as delivered ([architecture.md](architecture.md) stage B) | timer |
 | `org.xinutec.recall-capture-mirror` | poll Isis's desired capture state and mirror it onto the local pause file | every ~5 s |
-| `org.xinutec.recall-jobs` | pull Isis-queued work (refine, upload) into the Mac's local queues | timer |
 | `org.xinutec.recall-doctor` | run the health checks and report them to fleetwatch (Rust, `doctor/`) | every 5 min |
 | `org.xinutec.recall-speech` | measure how much of each archived segment is SPEECH — the evidence the quiet review needs before it may propose deleting anything (Rust, `audiod speech`) | every 5 min |
 
 There is deliberately **no `recall-api` agent**: the Mac serves no UI or control plane
-(see the Isis split below). `recall-sync`, `recall-jobs` and
-`recall-capture-mirror` are inert until `RECALL_SYNC_TOKEN` is set; the other
+(see the Isis split below). `recall-sync` and `recall-capture-mirror` are inert until `RECALL_SYNC_TOKEN` is set; the other
 credential-carrying agents use their own — `recall-upload` takes
 `RECALL_INGEST_TOKEN`, `recall-doctor` the fleetwatch token, and `recall-speech`
 needs none. Named rather than counted: the table's order is not a contract.

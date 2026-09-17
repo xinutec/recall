@@ -400,9 +400,8 @@ dropped.**
 6. **Re-transcribe** — re-run ASR over the archive and supersede the old machine
    turns; human corrections are never touched. **Granularity matters:** Whisper needs
    ~30 s of context, so re-derive *whole segments*, not tiny re-sliced clips that
-   hallucinate on a bare 2 s span. The whole-segment passes are `recall redrive`
-   (VAD-gated, full context) and `recall refine` (diarized, word-aligned) — prefer
-   these. `recall reprocess` is the narrower legacy path that re-transcribes individual
+   hallucinate on a bare 2 s span. The whole-segment pass is `recall redrive`
+   (VAD-gated, full context) — prefer it. `recall reprocess` is the narrower legacy path that re-transcribes individual
    turn clips for an improved model and won't degrade to a lower-confidence result; it's
    subject to that same context caveat, so it's only apt for re-running a confident,
    substantial turn through a new adapter.

@@ -111,35 +111,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         help="max segments this run (chunk it to keep load off capture)",
     )
 
-    ref = sub.add_parser(
-        "refine",
-        help="diarize-refine the archive while capture is idle (splits merged turns "
-        "by speaker; supersedes the basic turns)",
-    )
-    ref.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    ref.add_argument("--model", default=DEFAULT_MODEL, help="mlx-whisper model")
-    ref.add_argument(
-        "--llm", default=DEFAULT_LLM, help="mlx-lm model for the summary drain"
-    )
-    ref.add_argument(
-        "--max-segments",
-        type=int,
-        default=0,
-        help="process at most N segments then exit (0 = run as an idle daemon)",
-    )
-    ref.add_argument(
-        "--poll-seconds",
-        type=float,
-        default=60.0,
-        help="how often to re-check for an idle window / new work",
-    )
-    ref.add_argument(
-        "--source",
-        default=None,
-        help="force a full re-derive of one recording (every segment of this source, "
-        "regardless of state) through the canonical pipeline, then exit",
-    )
-
     lmh = sub.add_parser(
         "llm-host",
         help="hold the LLM in ONE process and serve generation on localhost "
@@ -252,16 +223,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "resume",
         help="resume recording locally, no network (break-glass when Isis is down)",
     ).add_argument("--out", type=Path, default=default_data_root(), help="data root")
-
-    job = sub.add_parser(
-        "jobs",
-        help="run on-demand ML the fleet requested but can't do itself: pull the "
-        "fleet's refine queue into this Mac's (Isis split; needs a token)",
-    )
-    job.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    job.add_argument(
-        "--url", required=True, help="fleet base URL, e.g. http://10.100.0.2:8000"
-    )
 
     trace = sub.add_parser(
         "capture-trace",

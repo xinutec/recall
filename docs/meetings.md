@@ -113,12 +113,12 @@ columns. Confusing them inverts every reading of this path:
 diarization failed.** On 2026-09-06, 11 of 20 meetings were in that state, and the
 machine had done its part on all of them.
 
-Where diarization actually comes from: the `runner` writes text only — the asr
-shim transcribes, and pyannote never competes with live capture. `recall refine`
-adds the speakers, running only while capture is paused, taking never-diarized
-audio first (speech-weighted, #1331). The re-diarize button on the session screen queues an
-explicit request that jumps that queue — for when the first pass split the audio
-wrongly, not as the normal route.
+Where diarization actually comes from: transcription and diarization are two
+queues over the same clips. The `runner` leases `transcribe-segment` and writes
+text; the `voices` runner leases `diarize-segment`, drives pyannote through the
+voices shim, and `recalld::diarized` writes the speaker-split turns over the text
+ones. Both run continuously — diarization no longer waits for a paused mic, and
+no longer needs a button to ask for it.
 
 ## 5. Clean & attribute
 

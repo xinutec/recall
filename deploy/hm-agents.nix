@@ -269,21 +269,6 @@ in
     extra = { ProcessType = "Standard"; };
   };
 
-  # Idle diarization-refinement. `recall refine` only diarizes while capture is
-  # *paused* (e.g. overnight), so the heavy pyannote pass never competes with live
-  # capture. It also drains Ask jobs and day-summaries (via the llm-host).
-  #
-  # ⚠ RETIRED — `recalld::diarized::PER_MIC` writes speaker-split turns over the
-  # same clips, and both HIDE what they supersede. Do not restore without stopping
-  # that writer.
-  #
-  # launchd.agents."org.xinutec.recall-refine" = daemon {
-  #   label = "org.xinutec.recall-refine";
-  #   name = "refine";
-  #   python = venvPython;
-  #   args = [ "refine" "--out" out ];
-  # };
-
   # The instant feed. Reads the UDP tap capture
   # publishes, cuts it at the pauses with the same silero the archive uses,
   # drives the asr shim, and POSTs each turn to Isis, which shows it within
@@ -569,25 +554,6 @@ in
       KeepAlive = false;
       RunAtLoad = true;
       StartInterval = 120;
-      LowPriorityIO = true;
-      Nice = 10;
-    };
-  };
-
-  # Run on-demand ML the fleet asked for but can't do (the Isis split). A timer, not
-  # KeepAlive: each run pulls Isis's refine queue (a refine requested from its UI) into the
-  # Mac's local queue and exits; the refine daemon then does the ML while the mic is idle,
-  # and the refined turns sync back via recall-sync. The Mac must poll — it is a one-way
-  # WireGuard peer the fleet cannot reach. Inert until RECALL_SYNC_TOKEN is set in .env.
-  launchd.agents."org.xinutec.recall-jobs" = daemon {
-    label = "org.xinutec.recall-jobs";
-    name = "jobs";
-    python = venvPython;
-    args = [ "jobs" "--url" fleet "--out" out ];
-    extra = {
-      KeepAlive = false;
-      RunAtLoad = true;
-      StartInterval = 60;
       LowPriorityIO = true;
       Nice = 10;
     };
