@@ -62,9 +62,9 @@ let
   # The grant these need is /Volumes/Backup, re-established once for the new binary.
   venvPython = "${recall.packages.${pkgs.stdenv.hostPlatform.system}.ml-env}/bin/python";
 
-  # The non-ML interpreter capture and ingest run. The SAME derivation the devshell
-  # uses (flake.nix defines it once), so the store path — and with it the microphone
-  # grant macOS attributes to that binary — is unchanged by this packaging.
+  # The non-ML interpreter capture and ingest run — the SAME derivation the devshell
+  # uses, so the store path, and the microphone grant macOS attributes to it, does
+  # not move.
   devPython = "${recall.packages.${pkgs.stdenv.hostPlatform.system}.dev-python}/bin/python";
 
   # One store wrapper per agent; `python` selects the interpreter and the arguments
@@ -227,9 +227,8 @@ in
   # the heartbeat is the only signal there is — so a beat receiver that shared that
   # lifecycle would be shut precisely when it was needed.
   #
-  # ⚠ NO `--root`, and that is the point: it FORWARDS and stores nothing. A local
-  # beat store the collector had to merge with the fleet's would let two places
-  # disagree about which mics are alive, which is worse than the bug this fixes.
+  # ⚠ NO `--root`: it FORWARDS and stores nothing. A second beat store would let two
+  # places disagree about which mics are alive.
   launchd.agents."org.xinutec.recall-beat-relay" = daemon {
     label = "org.xinutec.recall-beat-relay";
     name = "beat-relay";
@@ -274,11 +273,8 @@ in
   # drives the asr shim, and POSTs each turn to Isis, which shows it within
   # seconds and hides it once the archive pass reaches that minute.
   #
-  # ⚠ It holds NO STORE. The Python it replaces wrote live turns into the Mac's
-  # recall.sqlite and pushed them from a watermark on a second thread, because
-  # the Mac was once the system of record. It is not, so the push IS the write.
-  # That is also why there is no --out: this agent touches the archive volume
-  # nowhere, and #1412's stalls cannot reach it.
+  # ⚠ It holds NO STORE — the push IS the write, so there is no `--out` and this
+  # agent touches the archive volume nowhere (#1412's stalls cannot reach it).
   launchd.agents."org.xinutec.recall-live" = daemon {
     label = "org.xinutec.recall-live";
     name = "live";
@@ -328,23 +324,20 @@ in
       name = "capture";
       # ⚠ No `--codec` here, and that is deliberate: lossless is audiod's DEFAULT,
       # so every recorder gets it without a flag. Carrying it explicitly on this
-      # one agent would read as "the condenser is special" and leave the other
-      # recorders on whatever default nobody revisited. The reasoning lives with
-      # the default, in
-      # audiod/src/segmenter.rs; the retention side is docs/architecture.md.
+      # one agent would read as "the condenser is special" and leave the others on a
+      # default nobody revisited. The reasoning lives with the default, in
+      # audiod/src/segmenter.rs; retention is docs/architecture.md.
       args = [ "capture" "--root" out "--id" "usb" "--device" "USB Condenser Microphone" ];
     };
     extra = { ProcessType = "Interactive"; };
   };
 
-  # NO recall-backup here — the off-machine backup is odin's job, not the Mac's.
-  # odin's nightly restic takes an integrity-checked SQLite snapshot from inside the
-  # Isis pod plus an audio rsync of the recall PVC (nixos-config
-  # machines/odin/backup-prepare.sh), so every recording is already protected
-  # server-to-server. The only content Isis lacks is the training corpora
-  # (finetune-corpus, pilot-*), which are derived from the archive + corrections
-  # and are deliberately NOT backed up: they can be regenerated. A Mac-side push
-  # would also carry the /Volumes/Backup TCC fragility for nothing.
+  # NO recall-backup here: odin's nightly restic already takes an
+  # integrity-checked SQLite snapshot from inside the Isis pod plus an audio rsync
+  # of the recall PVC, so every recording is protected server-to-server.
+  #
+  # The only content Isis lacks is the training corpora, derived from the archive
+  # and deliberately NOT backed up — they can be regenerated.
 
   # Is recall actually working? Every 5 minutes, reported to fleetwatch.
   #
