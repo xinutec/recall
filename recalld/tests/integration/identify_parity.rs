@@ -7,6 +7,13 @@
 //! whole value: a generator that recomputed the softmax itself would pin what I
 //! believe the Python does.
 //!
+//! ⛔ **THE GENERATOR IS GONE.** `recall.identify` and the script were deleted on
+//! 2026-09-17 with the rest of the Mac's enrolment, so this fixture can no longer
+//! be REGENERATED — there is no second implementation left to disagree with. It
+//! has stopped being a parity check and is now a regression test that pins the
+//! Rust to what the Python did on the day it was retired. Keep it for that; do
+//! not read a passing run as evidence that two implementations still agree.
+//!
 //! ⚠ **The vectors are synthetic, and that is a real limitation.** This
 //! repository is public and the voiceprints are members of a household, so what
 //! this cannot show is that the two agree on real voices. A differential over the

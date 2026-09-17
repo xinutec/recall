@@ -13,10 +13,10 @@ re-homed in Rust (they are the part that blanked 132 segments when it was got
 wrong, so they move on their own, with their own tests). This shim is the half
 that cannot move, and it is 100 lines.
 
-Matching against enrolled voiceprints is deliberately NOT here. `identify` is
-pure arithmetic over vectors — `speakerid.cosine_similarity` — and pure
-arithmetic belongs on the side that owns the profiles, not inside the process
-holding the weights.
+Matching against enrolled voiceprints is deliberately NOT here, and no longer
+anywhere in Python: it is pure arithmetic over vectors, and pure arithmetic
+belongs on the side that owns the profiles (`recalld::identify`), not inside the
+process holding the weights.
 """
 
 from __future__ import annotations

@@ -1,67 +1,20 @@
-"""Speaker identification: match a voice embedding to an enrolled person.
+"""The speaker-embedding model, behind a lazy import.
 
-Enrollment stores reference voiceprints per household member (recall.store). At
-runtime each speaker turn is embedded and compared (cosine) to every profile; the
-best match above a threshold names the person, otherwise it's "unknown". The
-embedding model itself is heavy/gated and isolated behind a lazy import; the
-matching logic here is pure and fully tested.
+⚠ **What is left here is the MODEL and nothing else.** The matching arithmetic —
+cosine, the profile type, the threshold rule — lived here until 2026-09-17 and is
+now `recalld::identify`, on the side that owns the voiceprints. This module is
+part of the Python floor: pyannote's weights, the decode, and the process that
+holds them, reached through `shim_voices`.
 """
 
 from __future__ import annotations
 
-import math
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 Embedding = Sequence[float]
-
-
-def cosine_similarity(a: Embedding, b: Embedding) -> float:
-    """Cosine similarity in [-1, 1]; 0.0 if either vector is zero-length."""
-    if len(a) != len(b):
-        msg = f"embedding dimension mismatch: {len(a)} vs {len(b)}"
-        raise ValueError(msg)
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(y * y for y in b))
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return dot / (norm_a * norm_b)
-
-
-@dataclass(frozen=True)
-class SpeakerProfile:
-    """An enrolled person and their reference voiceprints."""
-
-    name: str
-    embeddings: tuple[tuple[float, ...], ...]
-
-    def similarity(self, embedding: Embedding) -> float:
-        """Best (max) similarity of `embedding` to any enrolled voiceprint."""
-        return max(
-            (cosine_similarity(embedding, ref) for ref in self.embeddings),
-            default=0.0,
-        )
-
-
-def identify(
-    embedding: Embedding,
-    profiles: Sequence[SpeakerProfile],
-    *,
-    threshold: float,
-) -> str | None:
-    """Name the best-matching profile above `threshold`, else None (unknown)."""
-    best_name: str | None = None
-    best_similarity = -1.0
-    for profile in profiles:
-        similarity = profile.similarity(embedding)
-        if similarity > best_similarity:
-            best_similarity = similarity
-            best_name = profile.name
-    return best_name if best_similarity >= threshold else None
 
 
 class Embedder(Protocol):

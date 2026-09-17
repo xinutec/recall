@@ -12,6 +12,14 @@
 //! per-turn one is a different question needing re-embedded audio, and this says
 //! nothing about it.
 //!
+//! ⚠ **ITS BASELINE IS ERODING, and nothing here will say so.** The stored
+//! `speaker_guess` values this compares against were written by Python, which was
+//! deleted on 2026-09-17 — and `recalld::diarized` now writes guesses of its own
+//! over the same rows. Every turn the Rust re-derives makes this compare Rust to
+//! Rust and agree trivially. The 1.000000 it last reported over 28,153 turns was
+//! a real result; a future one may be an empty tautology, so read the DATE of the
+//! rows it scored, not only the rate.
+//!
 //! Ignored by default: it depends on a machine-specific file and would fail
 //! everywhere else. Run it deliberately:
 //!

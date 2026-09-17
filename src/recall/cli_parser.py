@@ -188,17 +188,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         "opposite of --chop, and the way to test a longer window on live capture",
     )
 
-    enr = sub.add_parser("enroll", help="enroll a speaker voiceprint from audio")
-    enr.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    enr.add_argument("--name", required=True, help="speaker name")
-    enr.add_argument("--audio", type=Path, required=True, help="clean voice clip")
-    enr.add_argument("--model", default="pyannote/embedding")
-
-    ide = sub.add_parser("identify", help="resolve speaker turns to enrolled people")
-    ide.add_argument("--out", type=Path, default=default_data_root(), help="data root")
-    ide.add_argument("--model", default="pyannote/embedding")
-    ide.add_argument("--threshold", type=float, default=0.5)
-
     pau = sub.add_parser(
         "pause",
         help="pause recording locally, no network (break-glass when Isis is down)",

@@ -35,7 +35,6 @@ from recall.cleanup import (
 )
 from recall.cli_parser import build_parser
 from recall.diarize import SpeakerTurn, pyannote_diarize
-from recall.identify import identify_segments
 from recall.ingest import ingest_diarized, ingest_transcripts
 from recall.logrotate import rotate_logs
 from recall.maintenance import (
@@ -46,7 +45,6 @@ from recall.probe import probe_media, scan_segments
 from recall.redrive import redrive_archive
 from recall.reprocess import reprocess
 from recall.sources import AudioSource, SourceKind
-from recall.speakerid import pyannote_embed
 from recall.store import Store
 from recall.vad import silero_speech_regions
 from recall.vocabulary import build_initial_prompt
@@ -73,45 +71,6 @@ _EMBED_BACKFILL_PER_PASS = 16
 # the wrong place and unwritable — rotation would quietly stop. RECALL_LOG_DIR
 # overrides it.
 _LOG_DIR = Path(os.environ.get("RECALL_LOG_DIR") or Path.home() / "Library/Logs/recall")
-
-
-def _speaker_id_pass(store: Store, out: Path) -> None:
-    """The offline speaker-ID work (no-op without a token; lazy/gated imports):
-    prune voiceprints that no longer match a current label, enrol every current
-    human-labelled turn into voiceprints (text corrections *and* session-view assigns),
-    embed any un-embedded machine turns (once), then cheaply re-derive every turn's
-    guess from its stored embedding against the current voiceprints — so guesses stay
-    fresh as labelling grows the profiles, with no re-embedding.
-    """
-    if not os.environ.get("HF_TOKEN"):
-        return
-    from recall.identify import (  # noqa: PLC0415 - heavy/gated
-        backfill_embeddings,
-        backfill_voiceprints,
-        rematch_speaker_guesses,
-    )
-    from recall.speakerid import pyannote_embed  # noqa: PLC0415 - heavy/gated
-
-    # Drop prints whose label changed/turn vanished (and legacy correction-sourced
-    # rows) so enrolment re-derives them from the current turns.
-    pruned = store.prune_stale_voiceprints()
-    enrolled = backfill_voiceprints(
-        store,
-        pyannote_embed,
-        work_dir=out / "work",
-        now=datetime.now(UTC),
-        limit=_VOICEPRINT_BACKFILL_PER_PASS,
-    )
-    embedded = backfill_embeddings(
-        store,
-        pyannote_embed,
-        work_dir=out / "work",
-        limit=_EMBED_BACKFILL_PER_PASS,
-    )
-    # Cheap re-match only when the landscape changed (prints pruned/enrolled, or new
-    # embeddings); idle otherwise.
-    if pruned or enrolled or embedded:
-        rematch_speaker_guesses(store)
 
 
 def _db_path(root: Path) -> Path:
@@ -697,32 +656,6 @@ def _cmd_llm_host(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_enroll(args: argparse.Namespace) -> int:
-    embedding = pyannote_embed(args.audio, model=args.model)
-    store = Store.open(args.out / "recall.sqlite")
-    try:
-        speaker_id = store.enroll_speaker(args.name, embedding, now=datetime.now(UTC))
-    finally:
-        store.close()
-    print(f"enrolled {args.name!r} (speaker {speaker_id})")
-    return 0
-
-
-def _cmd_identify(args: argparse.Namespace) -> int:
-    def embedder(audio: Path) -> list[float]:
-        return pyannote_embed(audio, model=args.model)
-
-    store = Store.open(args.out / "recall.sqlite")
-    try:
-        resolved = identify_segments(
-            store, embedder, work_dir=args.out / "work", threshold=args.threshold
-        )
-    finally:
-        store.close()
-    print(f"resolved {resolved} segments to enrolled speakers")
-    return 0
-
-
 def _cmd_pause(args: argparse.Namespace) -> int:
     """Pause recording on THIS machine directly, with no network — the break-glass
     control for when Isis (the normal pause/resume surface) is unreachable, e.g. mid
@@ -867,8 +800,6 @@ _COMMANDS = {
     "scan-wordless": _cmd_scan_wordless,
     "llm-host": _cmd_llm_host,
     "score-attribution": _cmd_score_attribution,
-    "enroll": _cmd_enroll,
-    "identify": _cmd_identify,
 }
 
 
