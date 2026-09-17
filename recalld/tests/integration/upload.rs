@@ -2,8 +2,8 @@
 
 use chrono::{DateTime, Utc};
 use recalld::upload::{
-    Media, is_supported, london_offset_hours, meeting_id, register, started_at, stored_path,
-    suffix_of,
+    Media, deliver, is_supported, london_offset_hours, meeting_id, register, started_at,
+    stored_path, suffix_of,
 };
 use rusqlite::Connection;
 
@@ -54,12 +54,57 @@ fn the_stored_filename_uses_the_utc_stamp_not_the_local_one() {
         ".mp3",
     );
 
+    // ⚠ Under `ingest/`, where every delivered blob lives. An upload written
+    // beside it instead is invisible to the runner that would transcribe it
+    // (#1649), and `/ingest/v1/blob` would 404 on the fetch.
     assert_eq!(
         path,
         std::path::Path::new(
-            "/data/meeting-20260703-0950/meeting-20260703-0950-20260703T085000.mp3"
+            "/data/ingest/meeting-20260703-0950/meeting-20260703-0950-20260703T085000.mp3"
         )
     );
+}
+
+#[test]
+fn an_upload_is_recorded_in_the_ingest_plane_and_a_repeat_is_a_no_op() {
+    // The row `queue::derive_segment_jobs` reads. Without it the session appears
+    // in the list and is never transcribed, which is how #1649 stayed invisible:
+    // the visible half of an upload is written by `register`, the transcribable
+    // half by this.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let started = at("2026-07-03T08:50:00+00:00");
+    let now = at("2026-07-03T09:00:00+00:00");
+    let path = stored_path(dir.path(), "meeting-20260703-0950", started, ".mp3");
+    let ingest = recalld::store::open(dir.path()).expect("ingest");
+
+    deliver(
+        &ingest,
+        "meeting-20260703-0950",
+        &path,
+        started,
+        11,
+        "abc",
+        now,
+    )
+    .expect("deliver");
+    deliver(
+        &ingest,
+        "meeting-20260703-0950",
+        &path,
+        started,
+        11,
+        "abc",
+        now,
+    )
+    .expect("again");
+
+    let row = recalld::store::lookup(&ingest, "meeting-20260703-0950-20260703T085000.mp3")
+        .expect("lookup")
+        .expect("row");
+    assert_eq!(row.source, "meeting-20260703-0950");
+    // ⚠ The ingest plane's spelling, with a trailing Z.
+    assert_eq!(row.start_utc, "2026-07-03T08:50:00Z");
+    assert_eq!(row.bytes, 11);
 }
 
 #[test]
@@ -595,5 +640,21 @@ fn two_uploads_in_the_repeated_hour_stay_two_sessions_with_two_files() {
             )
             .expect("count segments");
         assert_eq!(n, want, "{id} should hold exactly its own recording");
+    }
+}
+
+#[test]
+fn an_accepted_container_can_also_be_fetched_back() {
+    // ⚠ Two lists, one contract. `is_supported` decides what an upload may BE;
+    // `audiocore::names::parse` decides what `/ingest/v1/blob` will SERVE, and
+    // the runner has to fetch the clip it was queued for. A suffix in the first
+    // and not the second is a session stored, queued, and permanently unreadable
+    // — which is the shape of #1649, arrived at from the other end.
+    for suffix in recalld::upload::AUDIO_SUFFIXES {
+        let ext = suffix.trim_start_matches('.');
+        assert!(
+            audiocore::names::Extension::parse(ext).is_some(),
+            "{suffix} is accepted for upload but cannot be fetched back"
+        );
     }
 }

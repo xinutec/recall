@@ -394,6 +394,10 @@ pub fn register_segments(
     limit: usize,
 ) -> rusqlite::Result<Registered> {
     ensure_ledger(ingest)?;
+    // ⚠ Uploads are excluded because `upload::register` already writes their
+    // meaning-plane rows — not because they take a different road to a
+    // transcriber. They do not: since 2026-09-17 an upload is leased and
+    // transcribed exactly as a microphone clip is (#1649).
     let mics: std::collections::HashSet<String> = {
         let mut stmt =
             meaning.prepare("SELECT id FROM sources WHERE kind NOT IN ('upload', ?1)")?;

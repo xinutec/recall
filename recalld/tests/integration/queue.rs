@@ -386,16 +386,15 @@ fn deriving_twice_queues_nothing_new() {
 }
 
 #[test]
-fn an_uploaded_meeting_gets_no_transcribe_job() {
-    // ⚠ `source != 'room'` is not the same predicate as "a microphone". Uploaded
-    // MEETINGS live in the ingest plane under source ids of their own, and they
-    // reach the archive by a different road — recalld transcribes them on
-    // arrival. Admitting them here would spend GPU re-deriving turns that
-    // already exist, and the clip would then be refused at the write step, so
-    // nothing but the bill would show it.
+fn an_uploaded_meeting_is_leased_by_the_same_runner_as_a_microphone() {
+    // ⚠ This test asserted the OPPOSITE until 2026-09-17, on the belief that
+    // "recalld transcribes them on arrival". It does not and never did: an upload
+    // reached the Mac through `/sync/jobs`, whose consumer (`recall jobs`) was
+    // deleted with refine. Excluding uploads here left the feature with no
+    // transcriber at all (#1649). The ingest plane is the one road now.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-08T12:00:00Z".parse().expect("t");
-    mic_row(dir.path(), "meeting-20260907-0905", "20260907T090500");
+    let meeting = mic_row(dir.path(), "meeting-20260907-0905", "20260907T090500");
     mic_row(dir.path(), "usb", "20260907T100000");
 
     let meaning = meaning_plane();
@@ -411,17 +410,53 @@ fn an_uploaded_meeting_gets_no_transcribe_job() {
     ensure_schema(&ingest).expect("schema");
     assert_eq!(
         derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
-        1,
-        "the microphone clip, and not the meeting"
+        2,
+        "the microphone clip AND the meeting"
     );
-    let only: String = ingest
-        .query_row(
-            "SELECT filename FROM jobs WHERE kind = ?1",
-            [TRANSCRIBE_SEGMENT],
-            |r| r.get(0),
+    let queued: Vec<String> = {
+        let mut stmt = ingest
+            .prepare("SELECT filename FROM jobs WHERE kind = ?1 ORDER BY filename")
+            .expect("prepare");
+        let rows = stmt
+            .query_map([TRANSCRIBE_SEGMENT], |r| r.get::<_, String>(0))
+            .expect("rows");
+        rows.collect::<Result<_, _>>().expect("collect")
+    };
+    assert!(queued.contains(&meeting), "got {queued:?}");
+}
+
+#[test]
+fn an_uploaded_meeting_that_already_has_turns_gets_no_job() {
+    // The guard that makes the line above safe: 22 uploads were already
+    // transcribed when uploads were admitted, and re-deriving them would have
+    // spent the GPU on turns that exist. Their basenames are in the `have` set
+    // exactly as a microphone clip's are — the road differed, the join key never
+    // did.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-08T12:00:00Z".parse().expect("t");
+    let meeting = mic_row(dir.path(), "meeting-20260907-0905", "20260907T090500");
+
+    let meaning = meaning_plane();
+    meaning
+        .execute(
+            "INSERT INTO sources (id, name, kind)
+             VALUES ('meeting-20260907-0905', 'Meeting', 'upload')",
+            [],
         )
-        .expect("job");
-    assert!(only.starts_with("usb-"), "got {only}");
+        .expect("meeting source");
+    already_transcribed(
+        &meaning,
+        "meeting-20260907-0905",
+        &meeting,
+        "2026-09-07T09:05:00+00:00",
+    );
+
+    let ingest = store::open(dir.path()).expect("db");
+    ensure_schema(&ingest).expect("schema");
+    assert_eq!(
+        derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
+        0
+    );
 }
 
 #[test]

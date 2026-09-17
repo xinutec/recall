@@ -473,19 +473,21 @@ fn the_names_the_mac_really_pushes_are_accepted() {
     }
 }
 
-/// ⚠ **This is why the guard is `safe_component` and NOT
-/// `audiocore::names::parse`.** That grammar accepts only flac/opus/ogg/wav, and
-/// every uploaded meeting is `.mp3` — so the stricter check would refuse every
-/// meeting audio push with a 400 the Mac would retry for ever, and the meeting
-/// half of the product would stop syncing without one error that named the cause.
+/// ⚠ **The reason this guard is `safe_component` EXPIRED on 2026-09-17.** It was
+/// `safe_component` and not `audiocore::names::parse` because that grammar took
+/// only flac/opus/ogg/wav while every uploaded meeting is `.mp3` — the strict
+/// check would have 400'd every meeting audio push and the Mac would have
+/// retried for ever. The grammar now covers those containers (#1649), so the
+/// strict check is available here and would additionally pin the stamp. Left as
+/// it is because this push path goes with `sync_push` (#1538); tightening
+/// something on its way out buys nothing.
 #[test]
-fn the_strict_segment_grammar_would_refuse_a_real_meeting_file() {
+fn a_real_meeting_file_now_passes_the_strict_segment_grammar_too() {
     let meeting = "meeting-20260520-1901-20260520T180121.mp3";
 
-    assert!(
-        audiocore::names::parse("meeting-20260520-1901", meeting).is_err(),
-        "if this now PASSES, the extension set grew and this note needs revisiting"
-    );
+    let parsed = audiocore::names::parse("meeting-20260520-1901", meeting)
+        .expect("the grammar covers an uploaded meeting's container");
+    assert_eq!(parsed.start_utc, "2026-05-20T18:01:21Z");
     assert_eq!(safe_component(meeting), Some(meeting));
 }
 

@@ -169,17 +169,19 @@ pub fn derive_segment_jobs(
         }
     }
 
-    // ⚠ **A MICROPHONE, not merely "not the room".** The ingest plane holds
-    // uploaded MEETINGS under source ids of their own (`meeting-20260907-0905`),
-    // and they reach this archive by a different road entirely — recalld
-    // transcribes them on arrival. `source != 'room'` admits every one of them,
-    // and each would be re-transcribed on the GPU to produce turns that already
-    // exist. The meaning plane is the only thing that knows a source's KIND, so
-    // ask it, and let a source it has never heard of wait: nothing could
-    // register that clip's audio either, so a job for it could only go barren.
-    let mics: std::collections::HashSet<String> = {
-        let mut stmt =
-            meaning.prepare("SELECT id FROM sources WHERE kind NOT IN ('upload', ?1)")?;
+    // ⚠ **Every source the meaning plane knows EXCEPT the room**, uploads
+    // included. `source != 'room'` alone is not enough: a source this plane has
+    // never heard of gets no job, because nothing could register that clip's
+    // audio either, so the job could only go barren.
+    //
+    // ⚠ Uploads were excluded here until 2026-09-17, on the belief that "recalld
+    // transcribes them on arrival". It does not — an upload reached the Mac
+    // through `/sync/jobs`, and that queue lost its consumer when `recall jobs`
+    // went with refine, leaving the feature with no transcriber (#1649). What
+    // stops an already-transcribed upload being re-derived is the `have` set
+    // above, the same guard every microphone clip relies on.
+    let known: std::collections::HashSet<String> = {
+        let mut stmt = meaning.prepare("SELECT id FROM sources WHERE kind != ?1")?;
         let rows = stmt.query_map([crate::room::ROOM_KIND], |r| r.get::<_, String>(0))?;
         rows.collect::<Result<_, _>>()?
     };
@@ -205,7 +207,7 @@ pub fn derive_segment_jobs(
         if inserted >= limit {
             break;
         }
-        if have.contains(&stem(&filename)) || !mics.contains(&source) {
+        if have.contains(&stem(&filename)) || !known.contains(&source) {
             continue;
         }
         inserted += ingest.execute(

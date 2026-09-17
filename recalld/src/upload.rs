@@ -2,9 +2,14 @@
 //! session. Ported from `recall.api_sessions.create_session`.
 //!
 //! This is use case 2's front door: a file arrives, becomes a source, and the
-//! worker transcribes it while the idle-gated daemon diarizes it. The session
-//! appears in the list AT ONCE with zero turns, because an upload that showed
-//! nothing until transcription finished would look like it had failed.
+//! runner transcribes it. The session appears in the list AT ONCE with zero
+//! turns, because an upload that showed nothing until transcription finished
+//! would look like it had failed.
+//!
+//! ⚠ **Two writes, and the second is the one that gets it read.** `register`
+//! makes the session VISIBLE in the meaning plane; `deliver` puts the blob in the
+//! ingest plane, which is where the work queue looks. Doing only the first is
+//! #1649: a session in the list that nothing will ever transcribe.
 //!
 //! ⚠ **The container is kept, not forced to WAV.** ffprobe validates what is
 //! actually inside; the suffix only gates what is worth trying.
@@ -13,12 +18,18 @@ use crate::{instant, pyjson};
 use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
 use chrono_tz::Europe::London;
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Containers a conversation recording might arrive in — phone voice memos are
 /// m4a, most recorders export mp3.
-const AUDIO_SUFFIXES: &[&str] = &[
+///
+/// ⚠ **Every one of these must also parse as `audiocore::names::Extension`**, or
+/// the upload is stored and then 400s on the fetch that would transcribe it
+/// (#1649). `an_accepted_container_can_also_be_fetched_back` holds the two
+/// together; a suffix added here without that is a silently unreadable session.
+pub const AUDIO_SUFFIXES: &[&str] = &[
     ".mp3", ".m4a", ".mp4", ".wav", ".flac", ".aac", ".ogg", ".opus", ".webm",
 ];
 
@@ -26,6 +37,10 @@ const AUDIO_SUFFIXES: &[&str] = &[
 const UPLOAD_KIND: &str = "upload";
 
 const S16_BYTES_PER_SAMPLE: usize = 2;
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
 
 #[derive(Debug)]
 pub enum UploadError {
@@ -203,7 +218,17 @@ fn repeated_hour_marker(started: DateTime<Utc>, local: &DateTime<chrono_tz::Tz>)
     }
 }
 
-/// Where the uploaded file lands: its own directory under the data root.
+/// Where the uploaded file lands: the INGEST plane's directory for its source.
+///
+/// ⚠ **The ingest plane, not a directory of its own.** An upload used to land in
+/// `<root>/<source>/` and reach a transcriber through `/sync/jobs`, a queue of its
+/// own. That queue lost its consumer and the feature went silently untranscribed
+/// (#1649). Written where every delivered blob lives, an upload is leased,
+/// fetched over `/ingest/v1/blob` and transcribed by exactly the road a
+/// microphone clip takes — one road, no second queue to keep a consumer for.
+///
+/// ⚠ Rows written before that date still point at `<root>/<source>/` and playback
+/// reads `audio_segments.path`, so they keep working where they are.
 pub fn stored_path(root: &Path, source: &str, started: DateTime<Utc>, suffix: &str) -> PathBuf {
     let stamp = format!(
         "{:04}{:02}{:02}T{:02}{:02}{:02}",
@@ -214,7 +239,45 @@ pub fn stored_path(root: &Path, source: &str, started: DateTime<Utc>, suffix: &s
         started.minute(),
         started.second()
     );
-    root.join(source).join(format!("{source}-{stamp}{suffix}"))
+    crate::store::source_dir(root, source).join(format!("{source}-{stamp}{suffix}"))
+}
+
+/// Record the blob in the INGEST plane, so `queue::derive_segment_jobs` sees it.
+///
+/// ⚠ Idempotent by lookup rather than by `INSERT OR IGNORE`: `segments.filename`
+/// is the primary key, and a second upload under the same name is the same
+/// recording — re-inserting would fail the whole request for a row that already
+/// says what we would write.
+pub fn deliver(
+    ingest: &Connection,
+    source: &str,
+    path: &Path,
+    started: DateTime<Utc>,
+    bytes: usize,
+    sha256: &str,
+    now: DateTime<Utc>,
+) -> rusqlite::Result<()> {
+    let filename = path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    if crate::store::lookup(ingest, &filename)?.is_some() {
+        return Ok(());
+    }
+    crate::store::insert(
+        ingest,
+        &crate::store::Row {
+            source: source.to_owned(),
+            filename,
+            // ⚠ The INGEST plane's spelling, a trailing Z — not the meaning
+            // plane's `+00:00`. The two are compared as TEXT nowhere, but a row
+            // that reads differently from its neighbours invites someone to try.
+            start_utc: started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            bytes: bytes as u64,
+            sha256: sha256.to_owned(),
+            received_utc: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            sent_utc: None,
+        },
+    )
 }
 
 /// Register the source and its one audio segment.
@@ -414,6 +477,18 @@ pub async fn create_session_route(
             &path,
             started,
             media,
+        )?;
+        // ⚠ The ingest row is what makes it transcribable; the meaning rows above
+        // only make it VISIBLE. An upload that registered but never delivered is
+        // exactly #1649 — a session in the list that nothing will ever read.
+        deliver(
+            &crate::store::open(&root)?,
+            &source,
+            &path,
+            started,
+            form.bytes.len(),
+            &sha256_hex(&form.bytes),
+            Utc::now(),
         )?;
         Ok(created_json(&source, &name, started, media.duration_s))
     });

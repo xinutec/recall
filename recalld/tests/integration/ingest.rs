@@ -150,7 +150,7 @@ async fn a_bad_name_is_refused_before_anything_is_written() {
     let h = harness(None, None);
     for (source, filename) in [
         ("usb", "geb-20260905T120000.flac"),
-        ("usb", "usb-20260905T120000.mp3"),
+        ("usb", "usb-20260905T120000.aiff"),
         ("usb", "usb-2026.flac"),
         ("USB", "USB-20260905T120000.flac"),
     ] {

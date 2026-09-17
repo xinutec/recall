@@ -8,17 +8,28 @@
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use std::path::{Path, PathBuf};
 
-/// The closed set of containers a recorder may deliver. FLAC is the target
+/// The closed set of containers a producer may deliver. FLAC is the target
 /// (decision 1); the rest are what existing capture paths produce today,
 /// accepted because the protocol is container-agnostic and a recorder flips
 /// formats independently. An enum so the set is parsed once, here, and every
 /// consumer downstream matches a type rather than a string.
+///
+/// ⚠ **A recorder is not the only producer.** An uploaded session — a phone
+/// voice memo, a handheld recorder's export — is stored in the ingest plane like
+/// any delivered blob and fetched back through `/ingest/v1/blob`, which parses
+/// the name. A container missing here is a 400 on that fetch, so the clip is
+/// queued and can never be read (#1649). The list therefore mirrors
+/// `recalld::upload::AUDIO_SUFFIXES`; the two must not drift apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Extension {
     Flac,
     Opus,
     Ogg,
     Wav,
+    Mp3,
+    Mp4,
+    Aac,
+    Webm,
 }
 
 impl Extension {
@@ -28,6 +39,11 @@ impl Extension {
             "opus" => Some(Self::Opus),
             "ogg" => Some(Self::Ogg),
             "wav" => Some(Self::Wav),
+            "mp3" => Some(Self::Mp3),
+            // `.m4a` is an MP4 container by another name; both are served as one.
+            "m4a" | "mp4" => Some(Self::Mp4),
+            "aac" => Some(Self::Aac),
+            "webm" => Some(Self::Webm),
             _ => None,
         }
     }
@@ -38,6 +54,10 @@ impl Extension {
             Self::Flac => "audio/flac",
             Self::Wav => "audio/wav",
             Self::Opus | Self::Ogg => "audio/ogg",
+            Self::Mp3 => "audio/mpeg",
+            Self::Mp4 => "audio/mp4",
+            Self::Aac => "audio/aac",
+            Self::Webm => "audio/webm",
         }
     }
 }
@@ -68,7 +88,7 @@ impl NameError {
             Self::BadSource => "source id must be [a-z0-9][a-z0-9_-]*, at most 64 chars",
             Self::WrongPrefix => "filename must be <source>-<stamp>.<ext>",
             Self::BadStamp => "stamp must be a valid YYYYMMDDTHHMMSS UTC instant",
-            Self::BadExtension => "extension must be one of flac/opus/ogg/wav",
+            Self::BadExtension => "extension must be one of flac/opus/ogg/wav/mp3/m4a/mp4/aac/webm",
         }
     }
 }

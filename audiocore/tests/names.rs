@@ -43,9 +43,26 @@ fn a_short_stamp_is_refused() {
 #[test]
 fn unknown_extensions_are_refused() {
     assert_eq!(
-        parse("usb", "usb-20260905T120000.mp3"),
+        parse("usb", "usb-20260905T120000.aiff"),
         Err(NameError::BadExtension)
     );
+}
+
+#[test]
+fn an_uploaded_recordings_container_is_a_deliverable_one() {
+    // ⚠ An uploaded session is stored in the ingest plane and fetched back
+    // through `/ingest/v1/blob`, which parses the name — so a phone voice memo's
+    // container has to be in this grammar or the runner can never read the file
+    // it was asked to transcribe (#1649). `.mp3` was refused here until
+    // 2026-09-17, and refusing it is what a 400 on the fetch would have been.
+    for ext in ["mp3", "m4a", "mp4", "aac", "webm"] {
+        let name = parse(
+            "meeting-20260907-0905",
+            &format!("meeting-20260907-0905-20260907T080526.{ext}"),
+        )
+        .unwrap_or_else(|_| panic!(".{ext} must be accepted"));
+        assert_eq!(name.start_utc, "2026-09-07T08:05:26Z");
+    }
 }
 
 #[test]
