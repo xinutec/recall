@@ -631,7 +631,13 @@ pub fn write_pass(
             ],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
         ) else {
-            pass.waiting += 1;
+            // Transient — unless the session was deleted, in which case the
+            // audio is never coming and waiting is for ever (#1653).
+            if crate::turns::tombstoned_block(meaning, &source, block_start)? {
+                crate::turns::ledger(ingest, stream.diarize_kind, &filename, "deleted", now)?;
+            } else {
+                pass.waiting += 1;
+            }
             continue;
         };
         // ⚠ Transient, so no ledger row: a transcription without word timings

@@ -715,6 +715,9 @@ fn planes_for_a_pass() -> (
                  start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
                  sample_rate INTEGER NOT NULL, channels INTEGER NOT NULL,
                  UNIQUE (source_id, start_utc));
+             CREATE TABLE deleted_segments (
+                 id INTEGER PRIMARY KEY, source_id TEXT NOT NULL,
+                 start_utc TEXT NOT NULL, deleted_utc TEXT NOT NULL);
              CREATE TABLE transcript_segments (
                  id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
                  start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
@@ -1710,4 +1713,40 @@ fn twin_blob(root: &std::path::Path, source: &str, stamp: &str, seconds: f64, ex
     )
     .expect("row");
     filename
+}
+
+#[test]
+fn a_block_whose_session_was_deleted_is_decided_not_waited_for() {
+    // #1653: the no-audio cause is transient for a live clip and PERMANENT for a
+    // deleted session — the ingest plane is append-only, so the clip and its
+    // finished job outlive the deletion. Without a row the pass re-examines it
+    // on every run for ever. The tombstone journal is what tells the two apart.
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    done_job(
+        &ingest,
+        "transcribe-segment",
+        "meeting-20260917-1500",
+        "meeting-20260917-1500-20260917T150000.opus",
+        "2026-09-17T15:00:00+00:00",
+        &a_result("this session was deleted after it was transcribed"),
+    );
+    meaning
+        .execute(
+            "INSERT INTO deleted_segments (source_id, start_utc, deleted_utc)
+             VALUES ('meeting-20260917-1500', '2026-09-17T15:00:00+00:00', 'now')",
+            [],
+        )
+        .expect("tombstone");
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, "now", 20).expect("pass");
+    assert_eq!(pass.barren, 1);
+    let outcome: String = ingest
+        .query_row("SELECT outcome FROM pass_ledger", [], |r| r.get(0))
+        .expect("one ledger row");
+    assert_eq!(outcome, "deleted");
+    assert_eq!(
+        write_pass(&mut meaning, &ingest, &PER_MIC, "now", 20).expect("again"),
+        Pass::default(),
+        "a deleted session is decided once, not re-examined on every pass"
+    );
 }

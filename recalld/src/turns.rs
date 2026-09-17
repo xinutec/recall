@@ -792,6 +792,31 @@ pub struct Pass {
 ///
 /// # Errors
 /// If the database refuses.
+/// Whether the block starting at `block_start` on `source` was deliberately
+/// deleted on the fleet — the same second-resolution match the audio lookup
+/// uses, because the tombstone carries whatever spelling the row had.
+///
+/// # Errors
+/// If the meaning plane refuses.
+pub fn tombstoned_block(
+    meaning: &rusqlite::Connection,
+    source: &str,
+    block_start: DateTime<Utc>,
+) -> rusqlite::Result<bool> {
+    use rusqlite::OptionalExtension;
+    Ok(meaning
+        .query_row(
+            "SELECT 1 FROM deleted_segments WHERE source_id = ?1 AND start_utc LIKE ?2",
+            rusqlite::params![
+                source,
+                format!("{}%", block_start.format("%Y-%m-%dT%H:%M:%S"))
+            ],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some())
+}
+
 pub fn ensure_ledger(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS pass_ledger (
@@ -910,6 +935,12 @@ pub fn write_pass(
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
         ) else {
             pass.barren += 1;
+            // ⚠ Unless the session was DELETED: then the audio is never coming,
+            // and "wait" would be this pass re-examining the clip for ever
+            // (#1653). The tombstone journal is what tells the two apart.
+            if tombstoned_block(meaning, &source, block_start)? {
+                ledger(ingest, stream.kind, &filename, "deleted", now)?;
+            }
             continue;
         };
         // Already written. Derived rather than ledgered, so a reversal that

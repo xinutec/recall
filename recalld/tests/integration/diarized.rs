@@ -342,6 +342,10 @@ fn meaning_plane(path: &std::path::Path) -> Connection {
              start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
              sample_rate INTEGER NOT NULL, channels INTEGER NOT NULL
          );
+         CREATE TABLE deleted_segments (
+             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL,
+             start_utc TEXT NOT NULL, deleted_utc TEXT NOT NULL
+         );
          CREATE TABLE transcript_segments (
              id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
              start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
