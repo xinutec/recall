@@ -47,10 +47,14 @@ fn a_closed_clip_with_no_row_is_offered() {
     .expect("scan");
     assert_eq!(work.len(), 1);
     assert_eq!(work[0].source, "usb");
-    // ⚠ The MEANING plane's spelling. `known` is read from the same column and
-    // the two are compared as TEXT, so a trailing Z here would re-register every
-    // clip on every pass, for ever.
-    assert_eq!(work[0].start_utc, "2026-09-10T10:00:00.000000+00:00");
+    // ⚠ **THE EXACT TEXT PYTHON WROTE, and this assertion is the whole test.**
+    // It said `.000000+00:00` when it was written, which is what the Rust
+    // formatter produces and NOT what the column holds — `datetime.isoformat()`
+    // omits microseconds when they are zero. Deployed, it matched nothing in the
+    // dedup set, re-offered every clip in the archive oldest-first, and wrote
+    // **241 duplicate rows** beside their twins before it was caught. The test
+    // passed throughout, because it was pinning my formatter to itself.
+    assert_eq!(work[0].start_utc, "2026-09-10T10:00:00+00:00");
 }
 
 #[test]
@@ -77,8 +81,8 @@ fn a_clip_already_registered_is_not_offered_again() {
     conn.execute(
         "INSERT INTO audio_segments
              (source_id, path, start_utc, end_utc, sample_rate, channels)
-         VALUES ('usb', '/x', '2026-09-10T10:00:00.000000+00:00',
-                 '2026-09-10T10:01:00.000000+00:00', 48000, 1)",
+         VALUES ('usb', '/x', '2026-09-10T10:00:00+00:00',
+                 '2026-09-10T10:01:00+00:00', 48000, 1)",
         [],
     )
     .expect("row");
@@ -131,10 +135,7 @@ fn the_oldest_gap_is_filled_first_and_the_pass_is_bounded() {
     let starts: Vec<&str> = work.iter().map(|u| u.start_utc.as_str()).collect();
     assert_eq!(
         starts,
-        [
-            "2026-09-10T10:00:00.000000+00:00",
-            "2026-09-10T10:01:00.000000+00:00"
-        ]
+        ["2026-09-10T10:00:00+00:00", "2026-09-10T10:01:00+00:00"]
     );
 }
 

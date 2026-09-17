@@ -101,9 +101,15 @@ pub fn unregistered(
             if start >= cutoff {
                 continue; // still being written
             }
-            // ⚠ The meaning plane's own spelling, `+00:00`, because that column
-            // is what `known` was read from and they are compared as TEXT.
-            let start_utc = start.to_rfc3339_opts(SecondsFormat::Micros, false);
+            // ⚠ **SECONDS, and this cost 241 duplicate rows to learn.** The
+            // column holds what Python's `datetime.isoformat()` wrote, and that
+            // omits microseconds when they are zero — a segment start always is,
+            // since the name it is parsed from is `YYYYmmddTHHMMSS`. Writing
+            // `.000000+00:00` matched nothing in `known`, so every clip in the
+            // archive looked unregistered and `INSERT OR IGNORE` let each one in
+            // beside its twin: the UNIQUE key is the TEXT, and two spellings of
+            // one instant are two keys.
+            let start_utc = start.to_rfc3339_opts(SecondsFormat::Secs, false);
             if known.contains(&start_utc) {
                 continue;
             }
@@ -180,6 +186,8 @@ pub fn run(root: &Path, limit: usize) -> Result<Pass, Box<dyn std::error::Error>
                 item.source,
                 item.path.to_string_lossy(),
                 item.start_utc,
+                // Microseconds HERE, unlike the start: a clip's length is not a
+                // whole number of seconds and `isoformat()` would have written them.
                 end.to_rfc3339_opts(SecondsFormat::Micros, false),
                 rate,
                 channels
