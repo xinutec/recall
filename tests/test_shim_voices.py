@@ -106,6 +106,40 @@ def test_an_embed_request_returns_the_vector(tmp_path: Path) -> None:
     assert as_list(as_dict(out)["vector"]) == [0.5, -0.25, 0.125]
 
 
+def test_an_embed_request_can_name_a_span_within_the_clip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Enrolment embeds ONE labelled turn, not the whole clip a turn sits in.
+
+    A minute of room audio holding four seconds of the person being enrolled
+    would make a voiceprint mostly of everyone else — so the span is the request,
+    and the clip is only where it is cut from."""
+    sliced: list[tuple[float, float]] = []
+
+    def fake_slice(src: Path, dst: Path, start: float, end: float) -> None:
+        sliced.append((start, end))
+        dst.write_bytes(b"clip")
+
+    monkeypatch.setattr("recall.shim_voices.slice_clip", fake_slice)
+    out = as_dict(
+        handle(
+            "embed",
+            {"audio": str(clip_at(tmp_path)), "start": 4.0, "end": 9.5},
+            embed=_constant_embedder([0.25]),
+        )
+    )
+    assert sliced == [(4.0, 9.5)]
+    assert as_list(out["vector"]) == [0.25]
+
+
+def test_an_embed_request_without_a_span_reads_the_whole_clip(tmp_path: Path) -> None:
+    """The span is OPTIONAL, and its absence must not silently become 0..0 — a
+    caller that wants the clip is the original contract and still has it."""
+    seen: dict[str, object] = {}
+    out = handle("embed", {"audio": str(clip_at(tmp_path))}, embed=embedder(seen))
+    assert as_list(as_dict(out)["vector"]) == [0.5, -0.25, 0.125]
+
+
 def test_a_missing_clip_is_refused_clearly_on_both_ops(tmp_path: Path) -> None:
     for op in ("diarize", "embed"):
         with pytest.raises(FileNotFoundError):

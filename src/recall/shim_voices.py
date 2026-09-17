@@ -153,10 +153,25 @@ def handle(
         return answer
     if op == "embed":
         model = str(args.get("model") or DEFAULT_EMBEDDER)
+        audio = _clip(args)
+        start = _optional_float(args, "start")
+        end = _optional_float(args, "end")
+        # ⚠ A SPAN, when one is asked for. Enrolment names one labelled turn, and
+        # embedding the whole clip it sits in would make a voiceprint mostly of
+        # whoever else was in the room. Both or neither: a half-given span is a
+        # caller bug, and defaulting the missing end to the clip's would enrol a
+        # different stretch than the one that was named.
+        if (start is None) != (end is None):
+            raise ValueError("embed: start and end are given together or not at all")
         # Re-built as JsonValue rather than passed through: `list[float]` is not a
         # `list[JsonValue]` to a type checker, and the wire type is stated on
         # purpose (recall.shim) so an unserialisable result is an error here.
-        vector: list[JsonValue] = list(embed(_clip(args), model=model))
+        if start is None or end is None:
+            vector: list[JsonValue] = list(embed(audio, model=model))
+            return {"vector": vector}
+        with scratch_wav(audio.parent / f"{audio.stem}-span.wav") as span:
+            slice_clip(audio, span, start, end)
+            vector = list(embed(span, model=model))
         return {"vector": vector}
     raise ValueError(f"unknown op: {op}")
 

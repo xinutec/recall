@@ -43,6 +43,13 @@ pub const TRANSCRIBE_SEGMENT: &str = "transcribe-segment";
 /// segments, and those already carry turns, so a pass over them REPLACES rather
 /// than adds. Same model, same shim, same code; entirely different consequence.
 pub const DIARIZE_SEGMENT: &str = "diarize-segment";
+/// Stage E4's last piece: turn a HUMAN-NAMED turn into a reference voiceprint.
+///
+/// ⚠ **The only job kind whose work-list lives in the MEANING plane.** Every
+/// other kind is derived from delivered audio; this one is derived from what a
+/// person typed, so its candidates change when nobody is recording. See
+/// [`crate::enrol`].
+pub const ENROLL_SPEAKER: &str = "enroll-speaker";
 const LEASE_TTL_S: i64 = 10 * 60;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

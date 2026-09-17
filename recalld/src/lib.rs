@@ -13,6 +13,7 @@ pub mod capture;
 pub mod conversations;
 pub mod devices;
 pub mod diarized;
+pub mod enrol;
 pub mod identify;
 pub mod ingest;
 pub mod instant;

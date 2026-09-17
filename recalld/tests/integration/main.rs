@@ -28,6 +28,7 @@ mod capture;
 mod conversations;
 mod devices;
 mod diarized;
+mod enrol;
 mod identify_differential;
 mod identify_parity;
 mod ingest;
