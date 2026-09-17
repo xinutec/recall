@@ -60,7 +60,6 @@ function setup(
   const correct = opts.correct ?? vi.fn(() => of({ newId: 9 }));
   const speakers = vi.fn(() => of({ names: ['Alice', 'Bob', 'Carol', 'Pippijn'] }));
   const assignSpan = vi.fn(() => of({ touched: 1 }));
-  const refineRange = vi.fn(() => of({ ok: true }));
   TestBed.configureTestingModule({
     providers: [
       provideZonelessChangeDetection(),
@@ -71,7 +70,6 @@ function setup(
           correct,
           speakers,
           assignSpan,
-          refineRange,
         },
       },
       { provide: Router, useValue: { navigate } },
@@ -93,7 +91,6 @@ function setup(
     correct,
     open,
     assignSpan,
-    refineRange,
   };
 }
 
@@ -417,26 +414,3 @@ describe('continuationTurnIds', () => {
   });
 });
 
-describe('refineConversation', () => {
-  it('queues a refine of the conversation window on its primary source', () => {
-    const { c, refineRange, open } = setup();
-    const conv = {
-      start: '2026-01-15T09:30:00+00:00',
-      end: '2026-01-15T09:48:00+00:00',
-      moments: [{ primary: [{ id: 5, source: 'usb' }] }],
-    };
-    c.refineConversation(conv);
-    expect(refineRange).toHaveBeenCalledWith(
-      'usb',
-      '2026-01-15T09:30:00+00:00',
-      '2026-01-15T09:48:00+00:00',
-    );
-    expect(open).toHaveBeenCalled(); // confirmation snackbar
-  });
-
-  it('does nothing when the conversation has no source', () => {
-    const { c, refineRange } = setup();
-    c.refineConversation({ start: 'x', end: 'y', moments: [{ primary: [{ id: 5 }] }] });
-    expect(refineRange).not.toHaveBeenCalled();
-  });
-});

@@ -10,7 +10,6 @@ import {
   CorrectRequest,
   CorrectResult,
   Ok,
-  RefineRequest,
   Session,
   SessionRenameRequest,
   SpeakerNames,
@@ -124,13 +123,6 @@ export class RecallApi {
   /** Soft-remove a bad label from the corpus. */
   hideCorrection(id: number): Observable<Ok> {
     return this.http.post<Ok>(`/api/correction/${id}/hide`, {});
-  }
-
-  /** Queue an on-demand diarize-refine of [start, end) of a recording (the idle daemon
-   * runs it). `start`/`end` are ISO 8601 strings. */
-  refineRange(source: string, start: string, end: string): Observable<Ok> {
-    const body: RefineRequest = { source, start, end };
-    return this.http.post<Ok>('/api/refine', body);
   }
 
   /** Upload a conversation recording (e.g. a hospital appointment) as a new session.

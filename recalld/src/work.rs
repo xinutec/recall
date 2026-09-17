@@ -158,29 +158,10 @@ pub struct TermIn {
     term: String,
 }
 
-#[derive(Deserialize)]
-pub struct RefineIn {
-    source: String,
-    start: String,
-    end: String,
-}
-
 #[derive(Serialize)]
 struct NewId {
     #[serde(rename = "newId")]
     new_id: i64,
-}
-
-/// An ISO-8601 instant, or a 400. Never a substituted "now".
-///
-/// ⚠ Manufacturing a time for a malformed one would queue a refine over the wrong
-/// stretch of audio — silently, since the request would succeed.
-///
-/// ⚠ Spelled by [`crate::instant`], not by chrono's default. This used to
-/// convert to UTC and let chrono trim the fraction, which stored a different
-/// text for the same moment than every row the Python wrote.
-fn instant(value: &str) -> Option<String> {
-    crate::instant::python_isoformat(value)
 }
 
 pub async fn vocabulary_route(State(st): State<Arc<reads::State>>) -> Response {
@@ -218,25 +199,6 @@ pub async fn vocabulary_delete_route(
     .await
     {
         Ok(()) => route::ack(),
-        Err(response) => response,
-    }
-}
-
-pub async fn refine_route(
-    State(st): State<Arc<reads::State>>,
-    Json(body): Json<RefineIn>,
-) -> Response {
-    let (Some(start), Some(end)) = (instant(&body.start), instant(&body.end)) else {
-        return (StatusCode::BAD_REQUEST, "start and end must be ISO-8601").into_response();
-    };
-    let root = st.root.clone();
-    let now = chrono::Utc::now().to_rfc3339();
-    match route::blocking("refine enqueue", move || {
-        add_refine_request(&open_write(&root)?, &body.source, &start, &end, &now)
-    })
-    .await
-    {
-        Ok(_) => route::ack(),
         Err(response) => response,
     }
 }

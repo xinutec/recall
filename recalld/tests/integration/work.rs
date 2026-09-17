@@ -160,9 +160,10 @@ fn a_refine_request_records_the_span_it_was_asked_for() {
 
 #[test]
 fn two_refine_requests_for_one_stretch_both_stand() {
-    // ⚠ Deliberately NOT deduplicated. You press "refine this section" again
-    // because the first result was wrong; collapsing the second into the first
-    // would make the button do nothing precisely when it is needed.
+    // ⚠ Deliberately NOT deduplicated. You ask a second time because the first
+    // result was wrong; collapsing the second into the first would make the ask do
+    // nothing precisely when it is needed. The caller is `sessions::rediarize` —
+    // the timeline's own "refine this section" button went on 2026-09-17.
     let conn = db();
     conn.execute(
         "INSERT INTO sources (id, name, kind) VALUES ('usb', 'usb', 'coreaudio')",

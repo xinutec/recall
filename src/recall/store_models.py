@@ -193,16 +193,6 @@ class SegmentVolume:
 
 
 @dataclass(frozen=True)
-class RefineRequest:
-    """A queued on-demand refine of [start, end) of one recording."""
-
-    id: int
-    source: str
-    start: datetime
-    end: datetime
-
-
-@dataclass(frozen=True)
 class UploadJob:
     """An uploaded session segment awaiting the Mac's ASR (the fleet has no ML).
 

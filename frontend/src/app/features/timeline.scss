@@ -285,11 +285,6 @@ audio {
   block-size: 1.9rem;
 }
 
-// Action bar shown when a conversation is expanded (e.g. "Refine this section").
-.convo-actions {
-  padding: 0.1rem 0.25rem 0.3rem;
-}
-
 // Sticky bar that opens when a phrase is selected — split it onto another speaker.
 .assign-bar {
   position: sticky;

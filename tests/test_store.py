@@ -38,143 +38,6 @@ def _segment(start_s: float = 0.0, dur_s: float = 60.0) -> Segment:
     )
 
 
-def test_diarize_skip_drops_a_segment_from_the_never_diarized_picker() -> None:
-    # A segment the diarize coverage guard declined is journaled in diarize_skips, so
-    # the newest-first `audio_segments_to_diarize` advances past it instead of the
-    # daemon re-picking the same one forever (the live-lock: capture is paused, so no
-    # newer segment ever bumps it out of the "newest" slot). A forced re-derive sees it.
-    store = Store.memory()
-    store.add_source(_source())
-    a = store.add_audio_segment(_segment(0))
-    b = store.add_audio_segment(_segment(120))
-    for aid in (a, b):
-        store.add_transcript_segment(
-            audio_segment_id=aid,
-            start=BASE,
-            end=BASE + timedelta(seconds=3),
-            text="hello there",
-            asr_model="m",
-        )
-    assert set(store.audio_segments_to_diarize(limit=10)) == {a, b}
-
-    store.mark_diarize_skipped(a, "coverage-guard (m)")
-    assert store.audio_segments_to_diarize(limit=10) == [b]  # a advanced past
-    assert store.is_diarize_skipped(a)
-    # a forced source re-derive still sees it (skip table is scoped to the auto-pickers)
-    assert a in store.audio_segments_for_source("usb", limit=10)
-
-    store.clear_diarize_skip(a)
-    assert set(store.audio_segments_to_diarize(limit=10)) == {a, b}  # back in the queue
-    assert not store.is_diarize_skipped(a)
-
-
-def test_diarize_picker_prefers_segments_with_more_transcribed_speech() -> None:
-    # Newest-first alone sent the daemon at the quiet-night junk tail (short
-    # hallucinations on near-silent audio, newest ids) while a visit's dense
-    # conversation (older ids, lots of text) waited hours (#1331, measured
-    # 2026-09-03 overnight). The picker now weights by how much visible speech a
-    # segment already carries, so the substantial audio is refined first and the
-    # thin tail sorts to the back; recency is only the tiebreak.
-    store = Store.memory()
-    store.add_source(_source())
-    dense = store.add_audio_segment(_segment(0))  # OLDER id
-    thin = store.add_audio_segment(_segment(120))  # NEWER id
-    store.add_transcript_segment(
-        audio_segment_id=dense,
-        start=BASE,
-        end=BASE + timedelta(seconds=3),
-        text="a long stretch of real household conversation worth attributing",
-        asr_model="m",
-    )
-    store.add_transcript_segment(
-        audio_segment_id=thin,
-        start=BASE + timedelta(seconds=120),
-        end=BASE + timedelta(seconds=121),
-        text="uh",
-        asr_model="m",
-    )
-    # Dense first despite its older id; newest-first would have returned thin first.
-    assert store.audio_segments_to_diarize(limit=10) == [dense, thin]
-
-
-def test_diarize_picker_breaks_ties_by_recency() -> None:
-    # Equal speech weight → the more recent segment still wins, so among comparable
-    # candidates the freshest audio is refined first (the good half of newest-first).
-    store = Store.memory()
-    store.add_source(_source())
-    older = store.add_audio_segment(_segment(0))
-    newer = store.add_audio_segment(_segment(120))
-    for aid, start in ((older, BASE), (newer, BASE + timedelta(seconds=120))):
-        store.add_transcript_segment(
-            audio_segment_id=aid,
-            start=start,
-            end=start + timedelta(seconds=2),
-            text="same length here",
-            asr_model="m",
-        )
-    assert store.audio_segments_to_diarize(limit=10) == [newer, older]
-
-
-def test_diarize_skip_drops_a_segment_from_the_rediarize_picker() -> None:
-    # The same skip also holds a segment out of the re-diarize (older-pipeline) queue,
-    # so a guard-tripping segment can't live-lock that pass once the never-diarized
-    # queue drains.
-    store = Store.memory()
-    store.add_source(_source())
-    audio_id = store.add_audio_segment(_segment(0))
-    store.add_transcript_segment(
-        audio_segment_id=audio_id,
-        start=BASE,
-        end=BASE + timedelta(seconds=3),
-        text="older pipeline turn",
-        asr_model="m",
-        provenance="diarized (old)",  # visible, old-pipeline → eligible for re-diarize
-    )
-    assert store.audio_segments_to_rediarize(limit=10) == [audio_id]
-
-    store.mark_diarize_skipped(audio_id, "coverage-guard (m)")
-    assert store.audio_segments_to_rediarize(limit=10) == []
-
-    store.clear_diarize_skip(audio_id)
-    assert store.audio_segments_to_rediarize(limit=10) == [audio_id]
-
-
-def test_rollback_recovers_a_connection_wedged_by_a_failed_write(
-    tmp_path: Path,
-) -> None:
-    # A write that fails under lock contention leaves the connection with an aborted
-    # transaction open, which in WAL mode freezes its read snapshot — so a long-lived
-    # daemon stops seeing rows other connections commit (the bug that hung Ask).
-    # store.rollback() must clear that state and restore fresh reads.
-    db = tmp_path / "recall.sqlite"
-    a = Store.open(db)
-    a.add_source(_source())
-    b = Store.open(db)  # the "daemon" connection
-
-    # b's write is blocked by a holds the write lock, so it fails and leaves b wedged.
-    a._conn.execute("BEGIN IMMEDIATE")
-    a._conn.execute("INSERT INTO settings(key, value) VALUES ('x', '1')")
-    b._conn.execute("PRAGMA busy_timeout = 200")
-    with pytest.raises(sqlite3.OperationalError):
-        b.set_setting("y", "2")  # blocked → busy timeout → raises, txn left open
-    # Read into a local: asserting on `b._conn.in_transaction` directly pins it to
-    # Literal[True] in mypy's binder, and it can't see that b.rollback() below clears
-    # it — so the post-rollback assert would look always-false (unreachable).
-    wedged = b._conn.in_transaction
-    assert wedged  # an aborted transaction is still open
-    a._conn.rollback()  # the other writer releases the lock
-
-    # Another connection commits a NEW row while b is wedged.
-    a.add_refine_request("usb", BASE, BASE + timedelta(seconds=60))
-
-    b.rollback()  # recover
-    recovered = b._conn.in_transaction
-    assert not recovered
-    assert len(b.pending_refine_requests(limit=10)) == 1  # b sees the fresh row
-    a.close()
-    b.close()
-
-
 def test_search_finds_inserted_text() -> None:
     store = Store.memory()
     store.add_source(_source())
@@ -994,30 +857,6 @@ def _seg_at(start_s: float, dur_s: float, path: str) -> Segment:
     )
 
 
-def test_refine_request_queue_roundtrip() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    rid = store.add_refine_request("usb", BASE, BASE + timedelta(minutes=5))
-    pending = store.pending_refine_requests()
-    assert [r.id for r in pending] == [rid]
-    assert pending[0].source == "usb"
-    assert (pending[0].start, pending[0].end) == (BASE, BASE + timedelta(minutes=5))
-    store.mark_refine_request_done(rid)
-    assert store.pending_refine_requests() == []
-
-
-def test_audio_segments_in_range_returns_only_overlapping() -> None:
-    store = Store.memory()
-    store.add_source(_source())
-    a = store.add_audio_segment(_seg_at(0, 60, "a.flac"))  # [0, 60)
-    b = store.add_audio_segment(_seg_at(60, 60, "b.flac"))  # [60, 120)
-    store.add_audio_segment(_seg_at(120, 60, "c.flac"))  # [120, 180) — outside
-    got = store.audio_segments_in_range(
-        "usb", BASE + timedelta(seconds=50), BASE + timedelta(seconds=70), limit=100
-    )
-    assert set(got) == {a, b}
-
-
 def test_file_backed_store_uses_wal(tmp_path: Path) -> None:
     # WAL lets the six concurrent agents read while one writes; the default
     # rollback journal made readers block on every writer commit.
@@ -1131,7 +970,11 @@ def test_delete_source_removes_all_derived_rows_and_returns_paths() -> None:
         created=BASE,
         speaker="Pippijn",
     )
-    store.add_refine_request("meeting-x", BASE, BASE + timedelta(minutes=5))
+    store._conn.execute(
+        "INSERT INTO refine_requests (source_id, start_utc, end_utc, created_utc) "
+        "VALUES ('meeting-x', ?, ?, ?)",
+        (BASE.isoformat(), (BASE + timedelta(minutes=5)).isoformat(), BASE.isoformat()),
+    )
 
     paths = store.delete_source("meeting-x")
 
@@ -1139,7 +982,9 @@ def test_delete_source_removes_all_derived_rows_and_returns_paths() -> None:
     assert store.source_kind("meeting-x") is None
     assert store.audio_segment(audio_id) is None
     assert store.turns_by_id([turn_id]) == []
-    assert store.pending_refine_requests() == []
+    assert (
+        store._conn.execute("SELECT COUNT(*) FROM refine_requests").fetchone()[0] == 0
+    )
     # a global voiceprint/speaker registry is untouched by a session delete
     conn = store._conn
     assert conn.execute("SELECT COUNT(*) FROM corrections").fetchone()[0] == 0

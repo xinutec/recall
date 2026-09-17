@@ -97,7 +97,6 @@ REQUEST_NAME_MAP = {
     "UnintelligibleIn": "UnintelligibleRequest",
     "UnhideIn": "UnhideRequest",
     "NudgeIn": "NudgeRequest",
-    "RefineRequestIn": "RefineRequest",
     "AbCompareStartIn": "AbCompareStartRequest",
     "ReassignIn": "ReassignRequest",
     "FragmentIn": "SplitFragment",

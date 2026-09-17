@@ -67,11 +67,6 @@
         </button>
 
         @if (isExpanded(conv)) {
-          <div class="convo-actions">
-            <button matButton (click)="refineConversation(conv)">
-              <mat-icon>auto_fix_high</mat-icon> Refine this section
-            </button>
-          </div>
           <div class="turns" (mouseup)="onSelect()" (touchend)="onSelect()">
             @for (m of conv.moments; track m.start) {
               <div class="moment">

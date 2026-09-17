@@ -231,12 +231,6 @@ export interface AssignSpanRequest {
   readonly name: string;
 }
 
-export interface RefineRequest {
-  readonly source: string;
-  readonly start: string;
-  readonly end: string;
-}
-
 export interface ReassignRequest {
   readonly speaker: string;
 }

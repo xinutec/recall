@@ -100,7 +100,6 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
             "/api/vocabulary/{id}",
             delete(work::vocabulary_delete_route),
         )
-        .route("/api/refine", post(work::refine_route))
         // The labelling surface's READ half; its writes touch the system of
         // record and move in their own change (see `labels`).
         .route("/api/speakers", get(labels::speakers_route))

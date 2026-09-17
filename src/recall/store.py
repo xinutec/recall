@@ -16,8 +16,12 @@ reads moved to `recalld` and the terminal to `recall-cli`, so on 2026-09-15 nine
 methods with no production caller were deleted with their tests (`recent_transcripts`,
 `session_summaries`, `supersede_many`, `current_version`, `set_speaker_guess`,
 `mark_unreadable_capture`, `unreadable_capture_names`, `audio_segment_id_at`,
-`_count`). Twelve more have no production caller either and were KEPT, each for a
-reason worth not rediscovering:
+`_count`). On 2026-09-17 `refine.py` and `jobs.py` went, taking `add_refine_request`,
+`pending_refine_requests`, `mark_refine_request_done`, `audio_segments_to_diarize`,
+`audio_segments_to_rediarize`, `audio_segments_in_range`, the four diarize-skip
+helpers and `rollback` — whose only caller was the refine daemon's per-pass recovery.
+The rest have no production caller either and were KEPT, each for a reason worth not
+rediscovering:
 
 - `schema_version` is the only accessor four MIGRATION tests assert through, and
   the migration machinery is live — `open()` calls `migrate()`.
@@ -29,8 +33,12 @@ reason worth not rediscovering:
   respectively construct their world.
 - `set_turn_speaker`, `rename_source`, `add_capture_event`, `set_loudness`,
   `set_audio_analysis`, `set_audio_measurement`, `source_kind`, `sources_of`,
-  `correction_count`, `pending_audio_segments`, `is_diarize_skipped` and
-  `diarize_skip_reason` set up tests for rules that ARE live.
+  `correction_count` and `pending_audio_segments` set up tests for rules that ARE
+  live. ⚠ `is_diarize_skipped` and `diarize_skip_reason` were on that list until
+  2026-09-17 and are now gone with the rest of the diarize-skip guard: the rule
+  they set tests up for stopped being live when `refine.py` was deleted, and no
+  Rust reads `diarize_skips`. A reason to keep something expires with the thing
+  it points at.
 
 So "no production caller" is where that question starts, not where it ends.
 """
@@ -55,7 +63,6 @@ from recall.store_models import (
     Correction,
     LabelledFragment,
     PendingVoiceprint,
-    RefineRequest,
     SegmentVolume,
     SessionSummary,
     SourceCoverage,
@@ -83,7 +90,6 @@ __all__ = [
     "Correction",
     "LabelledFragment",
     "PendingVoiceprint",
-    "RefineRequest",
     "SegmentVolume",
     "SessionSummary",
     "SourceCoverage",
@@ -114,8 +120,8 @@ LIVE_MODEL = "live"
 
 
 # Hidden-reason / provenance prefixes marking a turn produced by a re-derive pass.
-# The resumable queries (_segments_without_marker), the writers (refine.py /
-# redrive.py) and the UI tier check (api._tier) all key off these prefixes, so
+# The resumable query (_segments_without_marker), redrive.py, recalld's diarized
+# writer and the UI tier check all key off these prefixes, so
 # they live here as the single source of truth: a typo in one copy would silently
 # break classification and make the pass re-run forever.
 DIARIZED_MARKER = "diarized"
@@ -164,17 +170,6 @@ class Store:
         """Commit — unless inside `transaction()`, which owns the commit."""
         if not self._in_transaction:
             self._conn.commit()
-
-    def rollback(self) -> None:
-        """End any open transaction, discarding uncommitted work.
-
-        A write that fails under lock contention (busy_timeout elapsed) leaves the
-        connection with an ABORTED transaction still open — which in WAL mode freezes
-        this connection's read snapshot, so a long-lived daemon stops seeing rows other
-        processes commit (e.g. an ask queued by the jobs runner) until it's cleared. A
-        no-op when nothing is open; call it to recover a wedged connection."""
-        self._conn.rollback()
-        self._in_transaction = False
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -678,136 +673,32 @@ class Store:
         return [_row_to_segment(row) for row in rows]
 
     def _segments_without_marker(
-        self,
-        marker: str,
-        *,
-        limit: int,
-        newest_first: bool = False,
-        exclude_diarize_skips: bool = False,
-        speech_weighted: bool = False,
+        self, marker: str, *, limit: int
     ) -> list[AudioSegmentId]:
         """Audio segments that still have visible machine turns but no turn yet
-        hidden with `marker` (a 'reason' prefix). The hidden-turn marker is what
-        makes a re-derive pass resumable + chunkable.
+        hidden with `marker` (a 'reason' prefix), oldest-first. The hidden-turn
+        marker is what makes a re-derive pass resumable + chunkable.
 
-        `exclude_diarize_skips` drops segments the diarize coverage guard already
-        declined (see `diarize_skips`), so the picker advances past them instead of
-        live-locking on the same one.
-
-        `speech_weighted` orders by how much visible speech text a segment already
-        carries (most first), with recency only the tiebreak. Plain recency sent the
-        refine daemon at the quiet-night junk tail — short hallucinations on
-        near-silent audio have the newest ids — while a visit's dense conversation
-        waited (#1331). Weighting by transcribed chars floats the real speech to the
-        front; the thin tail sorts to the back. Chosen over `speech_s` because that is
-        only populated by the cleanup scan, whereas every segment in this population
-        already has visible turns to measure."""
-        # `order` is a controlled literal (not user input), so inlining it is safe.
-        order = "DESC" if newest_first else "ASC"
-        skip_clause = (
-            " AND audio_segment_id NOT IN (SELECT audio_segment_id FROM diarize_skips)"
-            if exclude_diarize_skips
-            else ""
-        )
-        # DISTINCT for the plain pickers; GROUP BY when we also need to SUM each
-        # segment's visible speech to weight it. Same WHERE either way.
-        projection = (
-            "audio_segment_id" if speech_weighted else "DISTINCT audio_segment_id"
-        )
-        where = (
-            "WHERE audio_segment_id IS NOT NULL AND superseded_by IS NULL "
-            "AND hidden_reason IS NULL AND asr_model != ? "
-            "AND audio_segment_id NOT IN ("
-            "  SELECT audio_segment_id FROM transcript_segments "
-            "  WHERE hidden_reason LIKE ? AND audio_segment_id IS NOT NULL)"
-            f"{skip_clause} "
-        )
-        if speech_weighted:
-            # Sum each segment's visible speech; recency (id DESC) breaks ties so the
-            # fresher of two comparable segments still goes first.
-            tail = (
-                "GROUP BY audio_segment_id "
-                "ORDER BY SUM(LENGTH(text)) DESC, audio_segment_id DESC LIMIT ?"
-            )
-        else:
-            tail = f"ORDER BY audio_segment_id {order} LIMIT ?"
-        query = f"SELECT {projection} FROM transcript_segments {where}{tail}"
-        rows = self._conn.execute(query, (HUMAN_MODEL, marker + "%", limit)).fetchall()
-        return [AudioSegmentId(int(r["audio_segment_id"])) for r in rows]
-
-    def audio_segments_to_redrive(self, *, limit: int) -> list[AudioSegmentId]:
-        """Segments still needing the basic re-derive (no 'reprocessed' marker)."""
-        return self._segments_without_marker(REPROCESSED_MARKER, limit=limit)
-
-    def audio_segments_to_diarize(self, *, limit: int) -> list[AudioSegmentId]:
-        """Segments still needing diarized refinement (no 'diarized' marker).
-        Speech-weighted: the segments carrying the most transcribed speech are
-        refined first, recency the tiebreak — so a visit's dense conversation is
-        attributed before the quiet-night junk tail (#1331)."""
-        return self._segments_without_marker(
-            DIARIZED_MARKER,
-            limit=limit,
-            exclude_diarize_skips=True,
-            speech_weighted=True,
-        )
-
-    def audio_segments_to_rediarize(self, *, limit: int) -> list[AudioSegmentId]:
-        """Segments diarized by an *older* pipeline: visible diarized turns whose
-        provenance predates ALIGNED_MARKER. Re-diarizing upgrades them to the current
-        pipeline; it re-tags them ALIGNED_MARKER, so the pass terminates. Newest-first.
+        It took three optional orderings — newest-first, a diarize-skip exclusion
+        and a speech weighting — for the refine daemon's pickers. All three went
+        with `refine.py` on 2026-09-17; `redrive` is the only caller left and wants
+        none of them.
         """
         rows = self._conn.execute(
             "SELECT DISTINCT audio_segment_id FROM transcript_segments "
             "WHERE audio_segment_id IS NOT NULL AND superseded_by IS NULL "
             "AND hidden_reason IS NULL AND asr_model != ? "
-            "AND provenance LIKE ? AND provenance NOT LIKE ? "
-            "AND audio_segment_id NOT IN (SELECT audio_segment_id FROM diarize_skips) "
-            "ORDER BY audio_segment_id DESC LIMIT ?",
-            (HUMAN_MODEL, DIARIZED_MARKER + "%", ALIGNED_MARKER + "%", limit),
+            "AND audio_segment_id NOT IN ("
+            "  SELECT audio_segment_id FROM transcript_segments "
+            "  WHERE hidden_reason LIKE ? AND audio_segment_id IS NOT NULL) "
+            "ORDER BY audio_segment_id ASC LIMIT ?",
+            (HUMAN_MODEL, marker + "%", limit),
         ).fetchall()
         return [AudioSegmentId(int(r["audio_segment_id"])) for r in rows]
 
-    def mark_diarize_skipped(self, audio_segment_id: int, reason: str) -> None:
-        """Record that the diarize pass attempted this segment but its coverage guard
-        declined the swap — so the newest-first auto-pickers stop re-picking it forever
-        (a live-lock while capture is paused). Scoped to
-        `audio_segments_to_diarize`/`audio_segments_to_rediarize`; an explicit re-derive
-        (`source` / on-demand request) ignores it. Idempotent."""
-        self._conn.execute(
-            "INSERT OR REPLACE INTO diarize_skips "
-            "(audio_segment_id, reason, created_utc) VALUES (?, ?, ?)",
-            (int(audio_segment_id), reason, datetime.now(UTC).isoformat()),
-        )
-        self._commit()
-
-    def clear_diarize_skip(self, audio_segment_id: int) -> None:
-        """Drop a segment's guard-skip marker — called when a pass does write turns for
-        it, so a segment that once tripped the guard but later refines cleanly (e.g. an
-        improved model via a forced re-derive) doesn't keep a stale skip row."""
-        self._conn.execute(
-            "DELETE FROM diarize_skips WHERE audio_segment_id = ?",
-            (int(audio_segment_id),),
-        )
-        self._commit()
-
-    def diarize_skip_reason(self, audio_segment_id: int) -> str | None:
-        """Why the guard held this segment, or None if it is not skipped. The refusal
-        arithmetic recorded here is the only surviving evidence of the declined pass —
-        what the threshold question (#1333) is answered from."""
-        row = self._conn.execute(
-            "SELECT reason FROM diarize_skips WHERE audio_segment_id = ?",
-            (audio_segment_id,),
-        ).fetchone()
-        return None if row is None else str(row["reason"])
-
-    def is_diarize_skipped(self, audio_segment_id: int) -> bool:
-        """Whether the diarize coverage guard has declined this segment (see
-        `mark_diarize_skipped`) — so it's held out of the auto-pickers."""
-        row = self._conn.execute(
-            "SELECT 1 FROM diarize_skips WHERE audio_segment_id = ?",
-            (int(audio_segment_id),),
-        ).fetchone()
-        return row is not None
+    def audio_segments_to_redrive(self, *, limit: int) -> list[AudioSegmentId]:
+        """Segments still needing the basic re-derive (no 'reprocessed' marker)."""
+        return self._segments_without_marker(REPROCESSED_MARKER, limit=limit)
 
     def audio_segments_for_source(
         self, source: str, *, limit: int
@@ -819,20 +710,6 @@ class Store:
             "SELECT id FROM audio_segments WHERE source_id = ? "
             "ORDER BY start_utc LIMIT ?",
             (source, limit),
-        ).fetchall()
-        return [AudioSegmentId(int(r["id"])) for r in rows]
-
-    def audio_segments_in_range(
-        self, source: str, start: datetime, end: datetime, *, limit: int
-    ) -> list[AudioSegmentId]:
-        """Audio segments of `source` whose span overlaps [start, end), oldest-first —
-        for refining just a chosen stretch of a recording, not the whole thing."""
-        _require_aware(start, "start")
-        _require_aware(end, "end")
-        rows = self._conn.execute(
-            "SELECT id FROM audio_segments WHERE source_id = ? "
-            "AND start_utc < ? AND end_utc > ? ORDER BY start_utc LIMIT ?",
-            (source, end.isoformat(), start.isoformat(), limit),
         ).fetchall()
         return [AudioSegmentId(int(r["id"])) for r in rows]
 
@@ -904,44 +781,6 @@ class Store:
             )
             for r in rows
         ]
-
-    def add_refine_request(self, source: str, start: datetime, end: datetime) -> int:
-        """Queue an on-demand refine of [start, end) of `source`; the idle daemon runs
-        it. Returns the request id."""
-        _require_aware(start, "start")
-        _require_aware(end, "end")
-        cursor = self._conn.execute(
-            "INSERT INTO refine_requests (source_id, start_utc, end_utc, created_utc) "
-            "VALUES (?, ?, ?, ?)",
-            (source, start.isoformat(), end.isoformat(), datetime.now(UTC).isoformat()),
-        )
-        self._commit()
-        return int(cursor.lastrowid or 0)
-
-    def pending_refine_requests(self, *, limit: int = 100) -> list[RefineRequest]:
-        """Queued refine requests not yet processed, oldest-first."""
-        rows = self._conn.execute(
-            "SELECT id, source_id, start_utc, end_utc FROM refine_requests "
-            "WHERE done_utc IS NULL ORDER BY id LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [
-            RefineRequest(
-                id=int(r["id"]),
-                source=str(r["source_id"]),
-                start=datetime.fromisoformat(r["start_utc"]),
-                end=datetime.fromisoformat(r["end_utc"]),
-            )
-            for r in rows
-        ]
-
-    def mark_refine_request_done(self, request_id: int) -> None:
-        """Mark a refine request processed, so the daemon won't run it again."""
-        self._conn.execute(
-            "UPDATE refine_requests SET done_utc = ? WHERE id = ?",
-            (datetime.now(UTC).isoformat(), request_id),
-        )
-        self._commit()
 
     def unmirrored_segments(
         self, *, limit: int = 500, older_than: datetime | None = None

@@ -113,12 +113,6 @@ class AssignSpanIn(BaseModel):
     name: str
 
 
-class RefineRequestIn(BaseModel):
-    source: str
-    start: str  # ISO 8601
-    end: str  # ISO 8601
-
-
 class ReassignIn(BaseModel):
     speaker: str
 

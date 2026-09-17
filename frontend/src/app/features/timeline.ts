@@ -386,22 +386,6 @@ export class Timeline {
     return this.continuations().has(t.id);
   }
 
-  /** Queue a diarize-refine of this conversation's stretch (the idle daemon runs it with
-   * the configured model). Source is the conversation's primary mic. */
-  protected refineConversation(conv: Conversation): void {
-    const turn = conv.moments.flatMap((m) => m.primary)[0];
-    if (!turn?.source) {
-      this.snack.open('No source to refine', 'Dismiss', { duration: 3000 });
-      return;
-    }
-    this.api.refineRange(turn.source, conv.start, conv.end).subscribe({
-      next: () =>
-        this.snack.open('Queued for refinement', undefined, { duration: 2500 }),
-      error: () =>
-        this.snack.open('Could not queue refinement', 'Dismiss', { duration: 4000 }),
-    });
-  }
-
   /** Confirm/fix who said a turn: files a correction (keeping the text), which
    * sets the speaker and enrols the voiceprint — improving future auto-guesses. */
   protected relabel(t: Transcript, speaker: string): void {
