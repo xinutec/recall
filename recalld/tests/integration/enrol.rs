@@ -231,3 +231,187 @@ fn a_turn_whose_clip_was_never_delivered_gets_no_job() {
         0
     );
 }
+
+// --- writing back what the runner embedded -----------------------------------
+
+use recalld::enrol::{Print, write_pass};
+
+/// A finished `enroll-speaker` job carrying `result`.
+fn finished(ingest: &rusqlite::Connection, filename: &str, result: &str) {
+    ingest
+        .execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES (?1, ?2, 'done', '2026-09-10T12:00:00Z', '2026-09-10T12:05:00Z', ?3)",
+            rusqlite::params![ENROLL_SPEAKER, filename, result],
+        )
+        .expect("job");
+}
+
+fn reply(prints: &[Print]) -> String {
+    serde_json::json!({ "ok": true, "result": { "prints": prints } }).to_string()
+}
+
+fn ingest_at(root: &std::path::Path) -> rusqlite::Connection {
+    let conn = store::open(root).expect("ingest");
+    ensure_schema(&conn).expect("schema");
+    conn
+}
+
+fn enrolled_names(conn: &rusqlite::Connection) -> Vec<(String, i64)> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.name, e.source_segment_id FROM speaker_embeddings e
+             JOIN speakers s ON s.id = e.speaker_id ORDER BY e.id",
+        )
+        .expect("prepare");
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .expect("rows");
+    rows.collect::<Result<_, _>>().expect("collect")
+}
+
+#[test]
+fn an_embedded_span_becomes_a_reference_voiceprint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = meaning();
+    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
+        .expect("speakers");
+    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
+    let ingest = ingest_at(dir.path());
+    finished(
+        &ingest,
+        "usb-20260910T100000.wav",
+        &reply(&[Print {
+            segment_id: 10,
+            vector: vec![0.5, -0.25],
+        }]),
+    );
+
+    let pass = write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+    assert_eq!(pass.prints, 1);
+    assert_eq!(enrolled_names(&conn), vec![("Alice".to_owned(), 10)]);
+    // The turn is enrolled, so it leaves the work-list by itself.
+    assert!(pending(&conn).expect("pending").is_empty());
+}
+
+#[test]
+fn a_turn_renamed_while_the_runner_worked_is_not_filed_under_the_old_name() {
+    // ⚠ Embedding takes minutes and a person can re-assign in that window. The
+    // job carries no name for exactly this reason: the label is read here.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = meaning();
+    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
+        .expect("speakers");
+    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
+    let ingest = ingest_at(dir.path());
+    finished(
+        &ingest,
+        "usb-20260910T100000.wav",
+        &reply(&[Print {
+            segment_id: 10,
+            vector: vec![1.0],
+        }]),
+    );
+    conn.execute(
+        "UPDATE transcript_segments SET speaker_label = 'Bob' WHERE id = 10",
+        [],
+    )
+    .expect("rename");
+
+    write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+    assert_eq!(enrolled_names(&conn), vec![("Bob".to_owned(), 10)]);
+}
+
+#[test]
+fn a_turn_hidden_while_the_runner_worked_enrols_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = meaning();
+    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
+        .expect("speakers");
+    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
+    let ingest = ingest_at(dir.path());
+    finished(
+        &ingest,
+        "usb-20260910T100000.wav",
+        &reply(&[Print {
+            segment_id: 10,
+            vector: vec![1.0],
+        }]),
+    );
+    conn.execute(
+        "UPDATE transcript_segments SET hidden_reason = 'review' WHERE id = 10",
+        [],
+    )
+    .expect("hide");
+
+    let pass = write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+    assert_eq!((pass.prints, pass.stale), (0, 1));
+    assert!(enrolled_names(&conn).is_empty());
+}
+
+#[test]
+fn an_empty_vector_is_refused_rather_than_enrolled() {
+    // ⚠ A zero-length vector is not inert. `identify::enrolled` skips a row it
+    // cannot parse for the same reason: a degenerate print sits at cosine 0
+    // against everyone and becomes somebody's best match on quiet audio.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = meaning();
+    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
+        .expect("speakers");
+    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
+    let ingest = ingest_at(dir.path());
+    finished(
+        &ingest,
+        "usb-20260910T100000.wav",
+        &reply(&[Print {
+            segment_id: 10,
+            vector: vec![],
+        }]),
+    );
+
+    let pass = write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+    assert_eq!((pass.prints, pass.stale), (0, 1));
+    assert!(enrolled_names(&conn).is_empty());
+}
+
+#[test]
+fn a_clip_that_enrols_nothing_is_still_ledgered() {
+    // ⚠ The candidate query is "not in the ledger". A decision that writes no
+    // row would leave the clip a candidate for ever, re-deciding it every pass.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = meaning();
+    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
+        .expect("speakers");
+    let ingest = ingest_at(dir.path());
+    finished(&ingest, "usb-20260910T100000.wav", "not json at all");
+
+    let first = write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+    assert_eq!(first.clips, 1);
+    let again = write_pass(&conn, &ingest, "2026-09-10T12:20:00+00:00", 10).expect("pass");
+    assert_eq!(again.clips, 0, "a decided clip must not come back");
+}
+
+#[test]
+fn a_replayed_result_does_not_enrol_the_same_turn_twice() {
+    // Belt as well as braces: the ledger stops the clip returning, and
+    // `still_wanted` stops the turn being enrolled again even if it did.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = meaning();
+    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
+        .expect("speakers");
+    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
+    let ingest = ingest_at(dir.path());
+    let payload = reply(&[Print {
+        segment_id: 10,
+        vector: vec![1.0],
+    }]);
+    finished(&ingest, "usb-20260910T100000.wav", &payload);
+    write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+
+    ingest
+        .execute("DELETE FROM pass_ledger", [])
+        .expect("forget the ledger");
+    let pass = write_pass(&conn, &ingest, "2026-09-10T12:20:00+00:00", 10).expect("pass");
+    assert_eq!((pass.prints, pass.stale), (0, 1));
+    assert_eq!(enrolled_names(&conn).len(), 1);
+}

@@ -187,3 +187,155 @@ pub fn derive_jobs(
     }
     Ok(inserted)
 }
+
+// --- writing what the runner embedded ----------------------------------------
+
+#[derive(Deserialize)]
+struct Reply {
+    ok: bool,
+    result: Option<Prints>,
+}
+
+#[derive(Deserialize)]
+struct Prints {
+    #[serde(default)]
+    prints: Vec<Print>,
+}
+
+/// One embedded span as the runner sends it back.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Print {
+    pub segment_id: i64,
+    pub vector: Vec<f64>,
+}
+
+/// What one pass did, for the log line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Enrolled {
+    pub clips: usize,
+    pub prints: usize,
+    /// Spans whose turn no longer qualifies — re-named, hidden, or enrolled by
+    /// something else while the runner was working.
+    pub stale: usize,
+}
+
+/// Whose voice a segment is NOW, or `None` if it should no longer be enrolled.
+///
+/// ⚠ **Re-read at WRITE time, never carried from the lease.** Embedding takes
+/// minutes and a person can re-assign a turn in that window; trusting the label
+/// the job was derived under would file the audio under the name it has just
+/// stopped having. Same reason the span carries no name.
+fn still_wanted(meaning: &Connection, segment_id: i64) -> rusqlite::Result<Option<String>> {
+    meaning
+        .query_row(
+            "SELECT t.speaker_label FROM transcript_segments t
+             WHERE t.id = ?1
+               AND t.speaker_label IS NOT NULL
+               AND t.speaker_label NOT LIKE 'SPEAKER%'
+               AND t.superseded_by IS NULL
+               AND t.hidden_reason IS NULL
+               AND t.id NOT IN (
+                 SELECT source_segment_id FROM speaker_embeddings
+                 WHERE source_segment_id IS NOT NULL)",
+            [segment_id],
+            |r| r.get::<_, String>(0),
+        )
+        .map(Some)
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })
+}
+
+/// Enrol one span under `person`, creating the speaker if this is their first.
+///
+/// # Errors
+/// If the meaning plane refuses.
+fn enrol_one(meaning: &Connection, person: &str, print: &Print, now: &str) -> rusqlite::Result<()> {
+    meaning.execute(
+        "INSERT OR IGNORE INTO speakers (name) VALUES (?1)",
+        [person],
+    )?;
+    let speaker_id: i64 =
+        meaning.query_row("SELECT id FROM speakers WHERE name = ?1", [person], |r| {
+            r.get(0)
+        })?;
+    meaning.execute(
+        "INSERT INTO speaker_embeddings
+             (speaker_id, vector, created_utc, source_correction_id, source_segment_id)
+         VALUES (?1, ?2, ?3, NULL, ?4)",
+        rusqlite::params![
+            speaker_id,
+            serde_json::to_string(&print.vector).unwrap_or_else(|_| "[]".to_owned()),
+            now,
+            print.segment_id
+        ],
+    )?;
+    Ok(())
+}
+
+/// Turn finished `enroll-speaker` results into reference voiceprints.
+///
+/// ⚠ **Every clip examined is ledgered**, including one that enrols nothing.
+/// The candidate query is "not in the ledger", so a decision that writes no row
+/// leaves the clip a candidate for ever — the mistake `write_pass` and
+/// `register_segments` each made once, in a costlier place each time.
+///
+/// # Errors
+/// If either database refuses.
+pub fn write_pass(
+    meaning: &Connection,
+    ingest: &Connection,
+    now: &str,
+    limit: usize,
+) -> rusqlite::Result<Enrolled> {
+    crate::turns::ensure_ledger(ingest)?;
+    let candidates: Vec<(String, String)> = {
+        let mut stmt = ingest.prepare(
+            "SELECT j.filename, j.result FROM jobs j
+             WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM pass_ledger l
+                               WHERE l.kind = ?1 AND l.filename = j.filename)
+             ORDER BY j.filename ASC",
+        )?;
+        let rows = stmt.query_map([ENROLL_SPEAKER], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<Result<_, _>>()?
+    };
+
+    let mut pass = Enrolled::default();
+    for (filename, result) in candidates {
+        if pass.clips >= limit {
+            break;
+        }
+        pass.clips += 1;
+        let Ok(reply) = serde_json::from_str::<Reply>(&result) else {
+            crate::turns::ledger(ingest, ENROLL_SPEAKER, &filename, "unreadable", now)?;
+            continue;
+        };
+        let Some(body) = reply.result.filter(|_| reply.ok) else {
+            crate::turns::ledger(ingest, ENROLL_SPEAKER, &filename, "refused", now)?;
+            continue;
+        };
+        let mut wrote = 0;
+        for print in &body.prints {
+            // ⚠ An EMPTY vector is not a voiceprint. It would sit at cosine 0
+            // against everyone and become somebody's best match on quiet audio —
+            // the same failure `identify::enrolled` refuses to default into.
+            if print.vector.is_empty() {
+                pass.stale += 1;
+                continue;
+            }
+            match still_wanted(meaning, print.segment_id)? {
+                Some(person) => {
+                    enrol_one(meaning, &person, print, now)?;
+                    wrote += 1;
+                }
+                None => pass.stale += 1,
+            }
+        }
+        pass.prints += wrote;
+        let outcome = if wrote > 0 { "enrolled" } else { "nothing" };
+        crate::turns::ledger(ingest, ENROLL_SPEAKER, &filename, outcome, now)?;
+    }
+    Ok(pass)
+}
