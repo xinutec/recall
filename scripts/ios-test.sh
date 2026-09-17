@@ -11,6 +11,13 @@ set -euo pipefail
 
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ios"
 
+# The Xcode project is GENERATED from project.yml and gitignored, and it lists
+# every source file by name — so a fresh clone has no project at all, and a
+# clone with a stale one cannot see a Swift file added since (#1381: two files
+# lived only in one machine's hand-edited project). Regenerating is idempotent
+# (byte-identical when nothing changed) and takes a second, so do it every run.
+nix run nixpkgs#xcodegen -- generate --quiet
+
 # xcrun/xcodebuild must resolve the REAL Xcode toolchain; a Nix devshell retargets
 # DEVELOPER_DIR to its own SDK, so clear it (same dance as the gate's swift-format row).
 env -u DEVELOPER_DIR xcodebuild test \

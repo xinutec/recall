@@ -62,7 +62,7 @@ to the connected iPhone in one go — handy after a code change:
 
 ```sh
 cd ios
-nix-shell -p xcodegen --run 'xcodegen generate'      # only if project.yml changed
+nix-shell -p xcodegen --run 'xcodegen generate'      # whenever project.yml OR the file list under Sources/ or Tests/ changed
 DEV=$(xcrun devicectl list devices | awk '/iPhone/{print $4; exit}')   # CoreDevice id
 xcodebuild -project RecallMic.xcodeproj -scheme RecallMic -configuration Debug \
   -destination 'platform=iOS,id=<UDID>' -derivedDataPath build -allowProvisioningUpdates build
