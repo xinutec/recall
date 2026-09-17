@@ -420,9 +420,13 @@ pub fn build_once(
         //     iphone11              755        24%         56%
         //     usb                 1,343         0%          0%
         //
-        // EVERY PHONE GATES DURING SPEECH. That is #1526 part 1 confirmed at
-        // scale — Android and iOS noise suppression — so the rule does not
-        // separate a broken device from a phone behaving normally. It separates
+        // EVERY PHONE READS AS GATING DURING SPEECH — and on 2026-09-17 that
+        // was shown to be the INSTRUMENT, not the phones: a 0.1 s RMS bucket
+        // under -80 dBFS is three LSB, and a phone recording UNPROCESSED with a
+        // talker across the room peaks at 20 LSB over a 2-3 LSB floor, so its
+        // pauses land under the line without any gate. At sample level the same
+        // pixel5/pixel9 minutes hold no exact-zero run longer than 0.08 s; geb's
+        // speakerphone held 0.69 s runs and 93% zeros. This column separates
         // PHONES FROM THE CONDENSER, and applying it makes selection "always
         // usb": the degenerate fixed choice this whole stage exists to replace.
         //

@@ -61,12 +61,34 @@ fn an_undecodable_segment_is_an_error_not_zero_speech() {
 }
 
 #[test]
-fn quiet_audio_is_lifted_but_near_silence_is_not_amplified_into_speech() {
+fn quiet_audio_is_lifted_to_the_target_however_quiet_it_is() {
     assert!((detection_gain(0.5) - 1.0).abs() < f32::EPSILON);
     assert!((detection_gain(0.05) - 10.0).abs() < 1e-5);
-    // Bounded: room tone at 1e-6 would otherwise be lifted 500000x.
-    assert!((detection_gain(0.000_001) - 32.0).abs() < 1e-5);
+    // pixel5 across the room: -62 dBFS. A cap at ×32 here is what #1485 was.
+    assert!((detection_gain(0.000_79) - 632.911).abs() < 1e-2);
     assert!((detection_gain(0.0) - 1.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn one_lsb_of_dither_lifted_to_full_scale_is_still_not_speech() {
+    // The fear that bought the old cap, tested at its extreme instead of
+    // believed: a file that is digital silence plus one LSB of noise gets the
+    // largest lift there is (×16384), and must still read as nobody talking.
+    let mut d = Detector::load().expect("model");
+    let mut seed: u32 = 0x9E37_79B9;
+    let dither: Vec<f32> = (0..RATE as usize * 10)
+        .map(|_| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            f32::from((seed >> 30) as i8 - 1) / 32768.0 // -1, 0, 1 LSB, uniform
+        })
+        .collect();
+    let heard: f64 = d
+        .regions(&dither)
+        .expect("run")
+        .iter()
+        .map(audiocore::vad::Region::seconds)
+        .sum();
+    assert!(heard < 0.5, "dither read as {heard:.1}s of speech");
 }
 
 #[test]

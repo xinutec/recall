@@ -21,20 +21,21 @@ from typing import Protocol
 _SAMPLE_RATE = 16000
 # Phone mics capture un-gained, ~25-40 dB below the USB mic — which left their clearly
 # audible speech below the detector's level sensitivity, so it was gated to silence and
-# dropped even though it transcribes perfectly. Lift a clip's peak toward this target
-# before detection, bounded by _DETECT_MAX_GAIN so near-silent room tone isn't amplified
-# into a false speech trigger. The ASR still sees the original audio.
+# dropped even though it transcribes perfectly. Lift a clip's peak to this target before
+# detection. The ASR still sees the original audio.
+#
+# No cap on the lift: the x32 bound that used to sit here is what silenced pixel5
+# (#1485) — see audiocore::vad::TARGET_PEAK for the measurement. The two detectors
+# must agree, and that one is the reference.
 _DETECT_TARGET_PEAK = 0.5
-_DETECT_MAX_GAIN = 32.0
 
 
 def _detection_gain(peak: float) -> float:
-    """Gain to lift a clip's peak toward the detector's target level — bounded, and
-    never attenuating (>= 1.0). Quiet but real speech clears the gate; near-silence,
-    capped, stays too low to read as speech."""
+    """Gain to lift a clip's peak to the detector's target level — never attenuating
+    (>= 1.0), and never capped: a cap is a floor below which a microphone is deaf."""
     if peak <= 0.0 or peak >= _DETECT_TARGET_PEAK:
         return 1.0
-    return min(_DETECT_TARGET_PEAK / peak, _DETECT_MAX_GAIN)
+    return _DETECT_TARGET_PEAK / peak
 
 
 @dataclass(frozen=True)

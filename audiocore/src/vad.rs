@@ -49,12 +49,20 @@ const MIN_SILENCE_MS: f64 = 300.0;
 /// Phone mics capture un-gained, ~25-40 dB below the USB mic, which once left
 /// their clearly audible speech below the detector's sensitivity — gated to
 /// silence and dropped though it transcribed perfectly. `recall.vad` fixed that
-/// by lifting the peak before detection, and a port that omits it would
-/// disagree with Python exactly on the mics that need it most.
+/// by lifting the peak to this target before detection.
+///
+/// ⚠ **There is deliberately NO CAP on that lift.** There was one — ×32, "so
+/// near-silent room tone isn't amplified into a false speech trigger" — and it
+/// was the whole of #1485: pixel5 records UNPROCESSED and a talker across the
+/// room peaks at -62 dBFS on it, so ×32 left it at -32 dBFS, where silero heard
+/// 2.0 s of a minute its peers heard 22 s of, and 0.0 s of a minute they heard
+/// 54 s of. Measured 2026-09-17 on the archive, 24 speaking and 24 empty phone
+/// minutes: normalising to the target recovered 0.0→47.1 s, 7.1→44.7 s,
+/// 13.0→35.6 s, never lost more than 1.4 s, and lifted at most 1.1 s out of
+/// any empty minute — the trigger the cap guarded against does not occur. And
+/// a segment read as 0.0 s gets no transcribe job, so the cap did not merely
+/// under-count: it deleted those minutes from the transcript.
 const TARGET_PEAK: f32 = 0.5;
-/// The bound that stops near-silent room tone being amplified into a false
-/// trigger. Without it the gain fix trades one error for the opposite one.
-const MAX_GAIN: f32 = 32.0;
 
 /// A span of detected speech, in seconds from the start of the audio.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -116,7 +124,7 @@ pub fn detection_gain(peak: f32) -> f32 {
     if peak <= 0.0 || peak >= TARGET_PEAK {
         return 1.0;
     }
-    (TARGET_PEAK / peak).min(MAX_GAIN)
+    TARGET_PEAK / peak
 }
 
 /// One real inference on silence, to prove the whole chain works before the
