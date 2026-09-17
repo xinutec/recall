@@ -14,6 +14,7 @@
 //!       The token comes from `--token-file` or the `RECALL_INGEST_TOKEN` env var
 //!       (the launchd agent sources it from .env — never the nix store)
 
+use chrono::Utc;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -40,6 +41,8 @@ struct Args {
     producer: audiod::capture_run::Producer,
     token_file: Option<PathBuf>,
     max: usize,
+    /// `pause` only: how long, or None for the full cap.
+    minutes: Option<i64>,
     codec: audiod::segmenter::Codec,
 }
 
@@ -59,6 +62,8 @@ fn parse_args() -> Option<Args> {
     let mut producer = audiod::capture_run::Producer::Sox;
     let mut token_file: Option<PathBuf> = None;
     let mut max: usize = 500;
+    // None = the full MAX_PAUSE. `pause` is the only reader (audiod::pause).
+    let mut minutes: Option<i64> = None;
     let mut codec = audiod::segmenter::CaptureConfig::default().codec;
     let mut once = false;
     while let Some(arg) = args.next() {
@@ -87,6 +92,10 @@ fn parse_args() -> Option<Args> {
             "--token-file" => token_file = Some(PathBuf::from(value)),
             "--max" => match value.parse() {
                 Ok(parsed) => max = parsed,
+                Err(_) => return None,
+            },
+            "--minutes" => match value.parse() {
+                Ok(parsed) => minutes = Some(parsed),
                 Err(_) => return None,
             },
             "--seconds" => match value.parse() {
@@ -118,6 +127,7 @@ fn parse_args() -> Option<Args> {
         producer,
         token_file,
         max,
+        minutes,
         codec,
     })
 }
@@ -141,6 +151,7 @@ fn main() -> ExitCode {
         producer,
         token_file,
         max,
+        minutes,
         codec,
     }) = parse_args()
     else {
@@ -199,6 +210,31 @@ fn main() -> ExitCode {
             run_upload(root, url, token_file, max)
         }
         Some("speech") => run_speech(&root, max),
+        // ⚠ **The household's break-glass control.** The normal surface is the
+        // fleet's UI; this is what still works when Isis cannot be reached, and
+        // it is the reason it lives HERE rather than in `recall-cli`, which
+        // would need the network the emergency is about. Ported from
+        // `recall.capture_control` when the Python CLI retired.
+        Some("pause") => match audiod::pause::pause(&root, Utc::now(), minutes) {
+            Ok(until) => {
+                println!("paused until {}", until.to_rfc3339());
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("audiod pause: {err} — the pause did NOT take");
+                ExitCode::FAILURE
+            }
+        },
+        Some("resume") => match audiod::pause::resume(&root) {
+            Ok(()) => {
+                println!("resumed");
+                ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("audiod resume: {err}");
+                ExitCode::FAILURE
+            }
+        },
         _ => usage(),
     }
 }
