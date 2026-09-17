@@ -18,9 +18,25 @@ pub const KIND_PAUSE: &str = "pause";
 pub const KIND_RESUME: &str = "resume";
 pub const KIND_PRODUCER_CYCLED: &str = "producer_cycled";
 
+/// Whether this machine has a meaning plane at all.
+///
+/// ⚠ **ABSENT IS A SHAPE, NOT A FAULT.** A store-and-forward recorder — geb —
+/// has no `recall.sqlite` and is not supposed to: its segments reach the meaning
+/// plane on Isis through `audiod upload` with verified receipts
+/// (docs/architecture.md, stage C3). The same call is right on the Mac, which
+/// runs beside a real archive, and meaningless there. Reporting it as an ERROR
+/// on every start of a correctly configured recorder is how a log gets ignored.
+///
+/// ⚠ **Do not "fix" this by creating the file.** A local meaning plane the fleet
+/// would have to merge is exactly what store-and-forward exists to avoid.
+#[must_use]
+pub fn has_meaning_plane(root: &Path) -> bool {
+    root.join("recall.sqlite").is_file()
+}
+
 fn open(root: &Path) -> rusqlite::Result<rusqlite::Connection> {
-    // READ_WRITE without CREATE: the Python migrations own the file. A missing
-    // database is a deployment fault to report, not something to half-create.
+    // READ_WRITE without CREATE: the migrations own the file, and half-creating
+    // one here would put an empty archive where a recorder expects none.
     let conn = rusqlite::Connection::open_with_flags(
         root.join("recall.sqlite"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
@@ -40,6 +56,14 @@ pub fn register_source(root: &Path, source_id: &str) {
 /// The same registration under an explicit kind — the capture agent registers
 /// the local mic as `coreaudio`, correcting any kind a worker guessed.
 pub fn register_source_kind(root: &Path, source_id: &str, kind: &str) {
+    if !has_meaning_plane(root) {
+        tracing::debug!(
+            source = source_id,
+            root = %root.display(),
+            "no meaning plane here — store-and-forward recorder, nothing to register"
+        );
+        return;
+    }
     let result = open(root).and_then(|conn| {
         conn.execute(
             "INSERT INTO sources (id, name, kind, port) VALUES (?1, ?2, ?3, NULL)
@@ -65,6 +89,12 @@ pub fn add_capture_event(
     source_id: &str,
     detail: Option<&str>,
 ) {
+    if !has_meaning_plane(root) {
+        // Same shape as registration: the durable record of this recorder's
+        // lifecycle is the fleet's, reached by delivery rather than written here.
+        tracing::debug!(kind, source = source_id, "no meaning plane here");
+        return;
+    }
     let result = open(root).and_then(|conn| {
         conn.execute(
             "INSERT INTO capture_events (utc, kind, source_id, detail) VALUES (?1, ?2, ?3, ?4)",

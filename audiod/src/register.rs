@@ -146,6 +146,11 @@ fn credible(pass: &Pass) -> bool {
 /// # Errors
 /// If the meaning plane refuses, or if nothing decoded at all.
 pub fn run(root: &Path, limit: usize) -> Result<Pass, Box<dyn std::error::Error>> {
+    // A store-and-forward recorder has no meaning plane to register into, and
+    // that is its shape rather than a fault (`store::has_meaning_plane`).
+    if !crate::store::has_meaning_plane(root) {
+        return Ok(Pass::default());
+    }
     let conn = open(root)?;
     let work = unregistered(&conn, root, Utc::now(), limit)?;
     if work.is_empty() {
