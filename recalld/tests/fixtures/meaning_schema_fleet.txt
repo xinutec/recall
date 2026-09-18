@@ -1,0 +1,47 @@
+# The meaning plane's schema AS IT STANDS ON ISIS, dumped 2026-09-18 from the
+# live recall.sqlite (user_version 44) behind 145,062 turns.
+#
+# ⚠ This is the REFERENCE the ported migration ladder is held to. It was taken
+# from the running system, not produced by the code under test — which is the
+# whole point: a ladder checked against itself proves only that it is
+# self-consistent, and the failure that matters is a column the port spells
+# differently from the column the archive actually has.
+#
+# DDL only. No row values, and checked for none before committing.
+# Regenerate (only to re-baseline against production, never to make a test pass):
+#   ssh root@isis "sqlite3 -readonly <data>/recall.sqlite \
+#     \"SELECT type||' '||name||' :: '||COALESCE(REPLACE(REPLACE(sql,char(10),' '),'  ',' '),'(auto)') \
+#       FROM sqlite_master ORDER BY type, name\""
+index idx_capture_events_utc :: CREATE INDEX idx_capture_events_utc ON capture_events (utc)
+index idx_ts_audio_current :: CREATE INDEX idx_ts_audio_current ON transcript_segments(audio_segment_id)     WHERE superseded_by IS NULL AND hidden_reason IS NULL
+index idx_ts_current :: CREATE INDEX idx_ts_current ON transcript_segments(id)     WHERE superseded_by IS NULL AND hidden_reason IS NULL
+index idx_ts_start :: CREATE INDEX idx_ts_start     ON transcript_segments (start_utc) WHERE superseded_by IS NULL
+index sqlite_autoindex_audio_segments_1 :: (auto)
+index sqlite_autoindex_deleted_segments_1 :: (auto)
+index sqlite_autoindex_settings_1 :: (auto)
+index sqlite_autoindex_sources_1 :: (auto)
+index sqlite_autoindex_speakers_1 :: (auto)
+index sqlite_autoindex_transcript_lineage_1 :: (auto)
+index sqlite_autoindex_unreadable_captures_1 :: (auto)
+index sqlite_autoindex_vocabulary_1 :: (auto)
+table audio_segments :: CREATE TABLE audio_segments (     id     INTEGER PRIMARY KEY,     source_id  TEXT NOT NULL REFERENCES sources(id),     path    TEXT NOT NULL,     start_utc  TEXT NOT NULL,     end_utc   TEXT NOT NULL,     sample_rate INTEGER NOT NULL,     channels  INTEGER NOT NULL, transcribed_utc TEXT, mean_volume REAL, envelope BLOB, speech_s REAL, structure REAL, pushed_utc TEXT,     UNIQUE (source_id, start_utc)   )
+table capture_events :: CREATE TABLE capture_events (     id INTEGER PRIMARY KEY,     utc TEXT NOT NULL,     kind TEXT NOT NULL,     source_id TEXT,     detail TEXT   )
+table corrections :: CREATE TABLE corrections (     id          INTEGER PRIMARY KEY,     transcript_segment_id INTEGER REFERENCES transcript_segments(id),     audio_segment_id   INTEGER REFERENCES audio_segments(id),     start_utc       TEXT NOT NULL,     end_utc        TEXT NOT NULL,     original_text     TEXT NOT NULL,     corrected_text    TEXT NOT NULL,     language       TEXT,     created_utc      TEXT NOT NULL   , speaker TEXT, hidden_reason TEXT, audio_confidence REAL)
+table deleted_segments :: CREATE TABLE deleted_segments (     id     INTEGER PRIMARY KEY,     source_id  TEXT NOT NULL,     start_utc  TEXT NOT NULL,     deleted_utc TEXT NOT NULL,     UNIQUE (source_id, start_utc)   )
+table diarize_skips :: CREATE TABLE diarize_skips (     audio_segment_id INTEGER PRIMARY KEY REFERENCES audio_segments(id),     reason      TEXT NOT NULL,     created_utc   TEXT NOT NULL   )
+table refine_requests :: CREATE TABLE refine_requests (     id     INTEGER PRIMARY KEY AUTOINCREMENT,     source_id  TEXT NOT NULL REFERENCES sources(id),     start_utc  TEXT NOT NULL,     end_utc   TEXT NOT NULL,     created_utc TEXT NOT NULL,     done_utc  TEXT   )
+table settings :: CREATE TABLE settings (     key  TEXT PRIMARY KEY,     value TEXT NOT NULL   )
+table sources :: CREATE TABLE sources (     id  TEXT PRIMARY KEY,     name TEXT NOT NULL,     kind TEXT NOT NULL   , port INTEGER, event_db REAL, noise_shape BLOB)
+table speaker_embeddings :: CREATE TABLE speaker_embeddings (     id     INTEGER PRIMARY KEY,     speaker_id INTEGER NOT NULL REFERENCES speakers(id),     vector   TEXT NOT NULL,     created_utc TEXT NOT NULL   , source_correction_id INTEGER, source_segment_id INTEGER)
+table speakers :: CREATE TABLE speakers (     id  INTEGER PRIMARY KEY,     name TEXT NOT NULL UNIQUE   )
+table sqlite_sequence :: CREATE TABLE sqlite_sequence(name,seq)
+table transcript_embeddings :: CREATE TABLE transcript_embeddings (     segment_id INTEGER PRIMARY KEY REFERENCES transcript_segments(id),     vector   TEXT NOT NULL   )
+table transcript_fts :: CREATE VIRTUAL TABLE transcript_fts USING fts5(text, content='')
+table transcript_fts_config :: CREATE TABLE 'transcript_fts_config'(k PRIMARY KEY, v) WITHOUT ROWID
+table transcript_fts_data :: CREATE TABLE 'transcript_fts_data'(id INTEGER PRIMARY KEY, block BLOB)
+table transcript_fts_docsize :: CREATE TABLE 'transcript_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB)
+table transcript_fts_idx :: CREATE TABLE 'transcript_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID
+table transcript_lineage :: CREATE TABLE transcript_lineage (     derived_id INTEGER NOT NULL REFERENCES transcript_segments(id),     source_id INTEGER NOT NULL REFERENCES transcript_segments(id),     PRIMARY KEY (derived_id, source_id)   )
+table transcript_segments :: CREATE TABLE transcript_segments (     id         INTEGER PRIMARY KEY,     audio_segment_id  INTEGER REFERENCES audio_segments(id),     start_utc      TEXT NOT NULL,     end_utc       TEXT NOT NULL,     text        TEXT NOT NULL,     language      TEXT,     language_confidence REAL,     asr_confidence   REAL,     asr_model      TEXT NOT NULL,     speaker_label    TEXT,     speaker_id     INTEGER REFERENCES speakers(id),     superseded_by    INTEGER REFERENCES transcript_segments(id)   , created_utc TEXT, provenance TEXT, hidden_reason TEXT, loudness REAL, speaker_guess TEXT, speaker_score REAL, speaker_cluster TEXT, word_timings TEXT)
+table unreadable_captures :: CREATE TABLE unreadable_captures (     source_id  TEXT NOT NULL,     name     TEXT NOT NULL,     recorded_utc TEXT NOT NULL,     PRIMARY KEY (source_id, name)   )
+table vocabulary :: CREATE TABLE vocabulary (     id     INTEGER PRIMARY KEY,     term    TEXT NOT NULL UNIQUE,     created_utc TEXT NOT NULL   )

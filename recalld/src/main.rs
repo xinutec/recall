@@ -97,6 +97,23 @@ fn serve_one(
     });
 }
 
+/// Open both planes and bring the meaning one's schema up to date, or say what
+/// is wrong in a line a human can act on.
+///
+/// ⚠ **NOTHING owned the meaning schema until 2026-09-18.** It was a Python
+/// migration ladder, and the pod has run `recalld` alone since the Python tier
+/// went — so the ladder had no runner, and a fresh deployment could not have
+/// created that database at all (#1538). Failing to start is the right response:
+/// every read route assumes those tables exist.
+fn prepare_planes(root: &std::path::Path) -> Result<(), String> {
+    recalld::store::open(root)
+        .map_err(|err| format!("cannot open {}/ingest.sqlite: {err}", root.display()))?;
+    let conn = recalld::work::open_write(root)
+        .map_err(|err| format!("cannot open {}/recall.sqlite: {err}", root.display()))?;
+    recalld::meaning_schema::ensure(&conn)
+        .map_err(|err| format!("cannot migrate {}/recall.sqlite: {err}", root.display()))
+}
+
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -142,11 +159,8 @@ fn main() -> ExitCode {
     let sync_token = std::env::var("RECALL_SYNC_TOKEN")
         .ok()
         .filter(|t| !t.is_empty());
-    if let Err(err) = recalld::store::open(&root) {
-        eprintln!(
-            "recalld: cannot open {}/ingest.sqlite: {err}",
-            root.display()
-        );
+    if let Err(complaint) = prepare_planes(&root) {
+        eprintln!("recalld: {complaint}");
         return ExitCode::FAILURE;
     }
     // The browsing plane is mounted only when SSO is configured. Absent means
