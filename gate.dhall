@@ -156,7 +156,16 @@ in  { name = "recall"
         G.Check::{
         , name = "the launchd agents build (what home-manager deploys)"
         , argv = [ "nix", "build", "--no-warn-dirty", "--no-link", ".#agents" ]
-        , timeout_s = 900
+        , {-  ⚠ 2400, not 900, and the reason is contention rather than slowness.
+              A change to `audiocore` invalidates `audiod`, so this row does a
+              COLD Rust build — ~3 minutes alone, but it runs beside `cargo test
+              (workspace)` and the frontend build, all competing for one nix
+              daemon and this machine's cores. It failed twice on 2026-09-18 and
+              passed on retry both times with nothing changed but the cache,
+              which is the shape that teaches people to re-run a red gate
+              instead of reading it.
+          -}
+          timeout_s = 2400
         }
       , {-  Real third-party types, resolved from the .venv above.
         -}

@@ -116,7 +116,7 @@
       "cwd": ".",
       "env": {},
       "name": "the launchd agents build (what home-manager deploys)",
-      "timeout_s": 900
+      "timeout_s": 2400
     },
     {
       "argv": [
