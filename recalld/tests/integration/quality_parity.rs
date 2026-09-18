@@ -1,6 +1,12 @@
 //! The port agrees with `recall.quality` — on 400 generated cases, not on the
 //! handful of examples both implementations were written from.
 //!
+//! ⚠ **`recall.quality` AND ITS GENERATOR ARE DELETED** (2026-09-18), so this is
+//! no longer a parity check between two live halves: it is a frozen record of
+//! the Python's behaviour, and the corpus can never be regenerated. That makes
+//! it strictly a regression fixture — if a case here ever looks wrong, the
+//! question is whether the RUST is right, because there is nothing left to ask.
+//!
 //! ⚠ The fixture's verdicts were produced BY the Python (`scripts/gen_quality_parity.py`,
 //! seed 20260912), so they pin that implementation's behaviour at the moment of
 //! the port — including the parts no shared unit test can reach: which match

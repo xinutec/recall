@@ -9,13 +9,18 @@
 //! was never safe — 681 turns labelled es/de/pt/tr are Dutch and English the
 //! model merely mislabelled).
 //!
-//! ⚠ **This is a PORT, and `recall.quality` is still the original.** The Mac's
-//! writers (live, worker, refine) apply the Python; this applies to the room
-//! stream recalld writes itself. Two implementations of one rule is exactly the
-//! drift `recall.quality`'s own docstring was written about, and the answer is
-//! the same one: they are checked against each other over the whole archive,
-//! not against shared unit tests both were written to pass. See
-//! `docs/architecture.md`, stage D3.
+//! ⚠ **This is now the ONLY implementation.** It began as a port, with
+//! `recall.quality` the original applied by the Mac's writers — all of which
+//! (live, worker, refine, and the Python itself) were deleted by 2026-09-18. So
+//! the drift risk that shaped this module is gone, and with it the thing the
+//! parity corpus compared against: that corpus is a frozen record of the
+//! behaviour at the moment of the port, not a live check on two halves.
+//!
+//! ⚠ **Both rules run at WRITE TIME** (`turns.rs`, `work.rs`), so a looping or
+//! wordless turn never reaches the read path. That is what replaced the
+//! retroactive `scan-wordless` sweep rather than a scheduled pass — and it is
+//! the better shape, because the sweep existed only because 214 such turns had
+//! already got through (#1410).
 //!
 //! Not ported: `foreign_script_ratio`. It asks whether a letter's Unicode NAME
 //! contains "LATIN", which has no dependency-free Rust equivalent that agrees
