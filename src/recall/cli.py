@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import os
 import sys
 from contextlib import ExitStack
@@ -17,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from recall import capture_control, runlog
+from recall import capture_control
 from recall.asr import (
     AsrResult,
     Transcriber,
@@ -643,19 +642,6 @@ def _cmd_scan_hallucinations(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_llm_host(args: argparse.Namespace) -> int:
-    """Hold the LLM for everyone who wants it (recall.llmhost). The module is
-    imported lazily: it pulls in the web stack, and it is Mac-only."""
-    runlog.setup()  # UTC-stamped logging for the LLM host
-    from recall.llmhost import serve  # noqa: PLC0415 - keeps the web stack local
-
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
-    )
-    serve(host=args.host, port=args.port, model=args.llm, idle_unload=args.idle_unload)
-    return 0
-
-
 def _cmd_pause(args: argparse.Namespace) -> int:
     """Pause recording on THIS machine directly, with no network — the break-glass
     control for when Isis (the normal pause/resume surface) is unreachable, e.g. mid
@@ -798,7 +784,6 @@ _COMMANDS = {
     "scan-loops": _cmd_scan_loops,
     "scan-foreign-script": _cmd_scan_foreign_script,
     "scan-wordless": _cmd_scan_wordless,
-    "llm-host": _cmd_llm_host,
     "score-attribution": _cmd_score_attribution,
 }
 

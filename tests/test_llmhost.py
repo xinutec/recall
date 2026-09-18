@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 import threading
+from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
-from recall.llm import ChatModel
-from recall.llmhost import ModelHolder, build_app
+import recall.llmhost
+from recall.llm import (
+    DEFAULT_IDLE_UNLOAD,
+    DEFAULT_LLM,
+    LLM_HOST_BIND,
+    LLM_HOST_PORT,
+    ChatModel,
+)
+from recall.llmhost import ModelHolder, build_app, main
 
 
 class FakeClock:
@@ -255,3 +268,54 @@ def test_a_failed_load_does_not_leave_the_host_looking_busy_forever() -> None:
         holder.generate("hi")
 
     assert holder.loading() == (None, None)
+
+
+def test_the_host_is_importable_without_the_cli_substrate() -> None:
+    """⚠ THE POINT OF `python -m recall.llmhost`, and the thing that silently
+    rots if someone adds a convenient import at the top of this module.
+
+    `llm-host` is the one Python process the Mac runs all day. While it started
+    as `recall llm-host` it entered through `recall.cli`, which imports 28
+    `recall.*` modules — so the entire CLI substrate was alive in production and
+    could not be deleted (#1342). This module needs four.
+
+    Checked in a SUBPROCESS: by the time this file runs the suite has already
+    imported half the package, so `sys.modules` in-process cannot answer it.
+    """
+    src = Path(__file__).resolve().parent.parent / "src"
+    probe = (
+        "import sys, json; import recall.llmhost; "
+        "print(json.dumps(sorted(m for m in sys.modules if m.startswith('recall'))))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "PYTHONPATH": str(src)},
+    )
+    loaded = set(json.loads(out.stdout))
+    assert "recall.cli" not in loaded, f"the CLI is back in the host's graph: {loaded}"
+    assert "recall.store" not in loaded, f"the store is back in it: {loaded}"
+    # Named rather than counted, so a genuine new dependency is a deliberate
+    # edit here rather than a number nudged upward.
+    assert loaded == {"recall", "recall.llm", "recall.llmhost", "recall.runlog"}
+
+
+def test_the_host_parses_the_flags_the_subcommand_had(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The defaults moved with the entry point; they must not have drifted."""
+    with pytest.raises(SystemExit) as exited:
+        main(["--help"])
+    assert exited.value.code == 0, "--help must be a clean exit, as any program's is"
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(recall.llmhost, "serve", lambda **kw: captured.update(kw))
+    assert main([]) == 0
+    assert captured == {
+        "host": LLM_HOST_BIND,
+        "port": LLM_HOST_PORT,
+        "model": DEFAULT_LLM,
+        "idle_unload": DEFAULT_IDLE_UNLOAD,
+    }

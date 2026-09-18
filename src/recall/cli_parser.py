@@ -11,12 +11,6 @@ import argparse
 from pathlib import Path
 
 from recall.asr import DEFAULT_MODEL
-from recall.llm import (
-    DEFAULT_IDLE_UNLOAD,
-    DEFAULT_LLM,
-    LLM_HOST_BIND,
-    LLM_HOST_PORT,
-)
 from recall.paths import default_data_root
 
 _FIX_DELIM = "=>"
@@ -34,7 +28,7 @@ def _parse_fix(raw: str) -> tuple[str, str]:
     return old, new
 
 
-def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse declarations
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="recall")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -109,21 +103,6 @@ def build_parser() -> argparse.ArgumentParser:  # noqa: PLR0915 - argparse decla
         type=int,
         default=100_000,
         help="max segments this run (chunk it to keep load off capture)",
-    )
-
-    lmh = sub.add_parser(
-        "llm-host",
-        help="hold the LLM in ONE process and serve generation on localhost "
-        "(recall's summaries/Ask and life's emotion worker share it)",
-    )
-    lmh.add_argument("--host", default=LLM_HOST_BIND, help="bind address")
-    lmh.add_argument("--port", type=int, default=LLM_HOST_PORT)
-    lmh.add_argument("--llm", default=DEFAULT_LLM, help="model to hold")
-    lmh.add_argument(
-        "--idle-unload",
-        type=float,
-        default=DEFAULT_IDLE_UNLOAD,
-        help="seconds of quiet before the weights are released",
     )
 
     att = sub.add_parser(

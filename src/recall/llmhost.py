@@ -26,6 +26,7 @@ loopback interface is the boundary. Do NOT bind it to 0.0.0.0.
 
 from __future__ import annotations
 
+import argparse
 import logging
 import threading
 import time
@@ -35,6 +36,7 @@ from dataclasses import dataclass
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+from recall import runlog
 from recall.llm import (
     DEFAULT_IDLE_UNLOAD,
     DEFAULT_LLM,
@@ -306,3 +308,44 @@ def serve(
         idle_unload,
     )
     uvicorn.run(build_app(holder), host=host, port=port, log_level="info")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the host as its own program: `python -m recall.llmhost`.
+
+    ⚠ **It has its own entry point so that the AGENT DOES NOT ENTER THROUGH THE
+    CLI.** Starting it as `recall llm-host` imports `recall.cli`, which imports
+    28 `recall.*` modules; this module needs 3. That difference is not about
+    startup cost — it is what keeps the whole CLI substrate alive in production,
+    because the one process the Mac runs all day was reaching it (#1342).
+
+    The flags and their defaults are the ones the subcommand had, and they all
+    come from `recall.llm`, so nothing new is imported to parse them.
+    """
+    parser = argparse.ArgumentParser(
+        prog="recall-llm-host",
+        description="Hold the LLM in ONE process and serve generation on localhost "
+        "(recall's summaries/Ask and life's emotion worker share it).",
+    )
+    parser.add_argument("--host", default=LLM_HOST_BIND, help="bind address")
+    parser.add_argument("--port", type=int, default=LLM_HOST_PORT)
+    parser.add_argument("--llm", default=DEFAULT_LLM, help="model to hold")
+    parser.add_argument(
+        "--idle-unload",
+        type=float,
+        default=DEFAULT_IDLE_UNLOAD,
+        help="seconds of quiet before the weights are released",
+    )
+    args = parser.parse_args(argv)
+    runlog.setup()  # UTC-stamped logging, as every recall agent uses
+    serve(
+        host=args.host,
+        port=args.port,
+        model=args.llm,
+        idle_unload=args.idle_unload,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

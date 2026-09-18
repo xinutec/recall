@@ -304,7 +304,10 @@ ownership.
 
 ```sh
 curl -s localhost:8092/health            # which model is resident, and how idle
-./scripts/recall.sh llm-host --idle-unload 60   # run one by hand (agent stopped)
+# Run one by hand (agent stopped). ⚠ Its own module, NOT `recall llm-host`:
+# the subcommand is gone, because entering through the CLI kept the whole CLI
+# substrate alive in the one process that runs all day (#1342).
+nix develop --command env PYTHONPATH=src .venv/bin/python -m recall.llmhost --idle-unload 60
 ```
 
 ## Vocabulary (proper nouns)
