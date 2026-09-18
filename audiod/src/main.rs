@@ -15,7 +15,7 @@
 //!       (the launchd agent sources it from .env — never the nix store)
 
 use chrono::Utc;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 fn usage() -> ExitCode {
@@ -132,6 +132,35 @@ fn parse_args() -> Option<Args> {
     })
 }
 
+/// Where launchd points the agents' stdio (`deploy/hm-agents.nix`).
+fn logs_dir() -> PathBuf {
+    std::env::var_os("RECALL_LOG_DIR").map_or_else(
+        || {
+            let home = std::env::var("HOME").unwrap_or_default();
+            PathBuf::from(home).join("Library/Logs/recall")
+        },
+        PathBuf::from,
+    )
+}
+
+fn run_logrotate(dir: &Path) -> ExitCode {
+    match audiod::logrotate::run(dir, audiod::logrotate::CAP_BYTES) {
+        Ok(pass) => {
+            tracing::info!(
+                examined = pass.examined,
+                rotated = pass.rotated,
+                freed_mb = pass.freed_bytes / (1024 * 1024),
+                "logrotate: pass complete"
+            );
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            tracing::error!(%err, dir = %dir.display(), "logrotate: pass failed");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -161,6 +190,10 @@ fn main() -> ExitCode {
     // Above the root check on purpose — see `run_beat_relay`.
     if mode.as_deref() == Some("beat-relay") {
         return run_beat_relay(url.as_deref(), port);
+    }
+    // Also above it: the logs are not in the data root.
+    if mode.as_deref() == Some("logrotate") {
+        return run_logrotate(&logs_dir());
     }
     let Some(root) = root else {
         return usage();

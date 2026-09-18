@@ -29,11 +29,8 @@
 # paths before any code runs, so a log path inside a checkout that moves takes the
 # agent down with exit 78 and an EMPTY log.
 #
-# ⚠ NOTHING ROTATES THEM (#1656) — 111 MB by 2026-09-18. `logrotate.py` went with
-# the CLI, but it was already vestigial: it ran from `cli.main()`, so once every
-# agent but `llm-host` was Rust it fired about once per restart of one long-lived
-# daemon. The fix belongs in a Rust agent that runs periodically, not in whatever
-# happens to start a process.
+# Bounded hourly by the recall-logrotate agent below: each log keeps its last
+# 2 MB. Before that nothing rotated them and the directory reached 112 MB.
 #
 # recall-capture opens the microphone; recall-live does NOT — it reads the UDP tap
 # capture publishes, because two CoreAudio clients on one device starve each other
@@ -389,6 +386,22 @@ in
   # recording, and delivery must never compete with the recorder (design.md §7).
   # ~0.5 s per segment measured, so 120 a pass is about a minute of CPU every
   # five — a 13k backlog drains over a day or so, behind live capture.
+  # Bounds the agents' own logs (#1656). Hourly, cheap, and it touches nothing
+  # but `~/Library/Logs/recall`.
+  launchd.agents."org.xinutec.recall-logrotate" = daemon {
+    label = "org.xinutec.recall-logrotate";
+    name = "logrotate";
+    program = audiodWrapper { name = "logrotate"; args = [ "logrotate" ]; };
+    args = [ ];
+    extra = {
+      KeepAlive = false;
+      RunAtLoad = true;
+      StartInterval = 3600;
+      LowPriorityIO = true;
+      Nice = 15;
+    };
+  };
+
   launchd.agents."org.xinutec.recall-speech" = daemon {
     label = "org.xinutec.recall-speech";
     name = "speech";

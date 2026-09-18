@@ -9,6 +9,7 @@
 
 pub mod beat_relay;
 pub mod capture_run;
+pub mod logrotate;
 pub mod meter;
 pub mod pause;
 pub mod pause_mirror;
