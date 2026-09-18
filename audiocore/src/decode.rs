@@ -22,21 +22,16 @@ pub fn decode_s16(path: &Path, rate: u32) -> Option<Vec<u8>> {
 pub struct Window {
     /// s16le mono at the requested rate, zero-filled where nothing was recorded.
     pub pcm: Vec<u8>,
-    /// Fraction of the window that a stored clip actually covered, 0.0..=1.0.
-    ///
-    /// ⚠ **The zero-fill is indistinguishable from silence once this returns**,
-    /// which is how the room builder came to transcribe blocks that were 50 of
-    /// their 60 seconds digital zero: its only guard rejected a window that was
-    /// ENTIRELY zero (#1661). A caller that writes the window somewhere has to
-    /// know the difference between "the room was quiet" and "nothing was
-    /// recorded", and after mixing it into one buffer, only this can tell it.
+    /// Fraction a stored clip actually covered, 0.0..=1.0. Once mixed into one
+    /// buffer the zero-fill is indistinguishable from silence, so only this
+    /// separates "the room was quiet" from "nothing was recorded" (#1661).
     pub coverage: f32,
 }
 
 /// The window's PCM for one source, placed on the wall clock by segment names
 /// (zero-filled where nothing was recorded). s16le mono at `rate`.
 ///
-/// Prefer [`window_covered`] anywhere the result is stored or transcribed: this
+/// Prefer [`window_covered`] where the result is stored or transcribed: this
 /// spelling cannot say whether the audio was there.
 #[must_use]
 pub fn window_pcm(
@@ -59,8 +54,8 @@ pub fn window_covered(
     rate: u32,
 ) -> Window {
     let mut buf = vec![0u8; 2 * rate as usize * seconds];
-    // Where each clip landed, so coverage is the union of the spans rather than
-    // a count of writes — two clips overlapping the same instant cover it once.
+    // Union of the spans, not a count of writes: two clips overlapping the same
+    // instant cover it once.
     let mut spans: Vec<(usize, usize)> = Vec::new();
     for path in segment_glob(&root.join(source), source) {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {

@@ -114,30 +114,18 @@ pub struct BuildSummary {
     /// Blocks where every audible source was gating. Counted apart from
     /// `silent`: the room was NOT quiet, the microphones refused to say so.
     pub gated: usize,
-    /// Blocks the winner barely recorded. Counted apart from `silent` for the
-    /// same reason: the room may well have been talking, and nothing captured
-    /// enough of it to be worth transcribing (#1661).
+    /// Blocks the winner barely recorded — the room may have been talking and
+    /// nothing captured enough of it to transcribe.
     pub sparse: usize,
 }
 
-/// How much of a block a source must actually have recorded before the block is
-/// worth building.
+/// How much of a block a source must have recorded for the block to be worth
+/// building. The window is zero-filled where nothing was recorded, and Whisper
+/// hallucinates on that silence (#1661).
 ///
-/// ⚠ **A window is ZERO-FILLED where nothing was recorded, and the zero-fill is
-/// what Whisper hallucinates on.** The builder's only guard used to reject a
-/// window that was ENTIRELY zero, so a block with 10 seconds of speech and 50 of
-/// digital silence was written and transcribed. Measured over the archive
-/// 2026-09-18: 895 of 2,251 room clips carried more than 1.4 s of near-silence,
-/// and 280 of 5,677 blocks were at least HALF of it — while the USB condenser
-/// that won most of them has a maximum near-silent run of 0.014 s in its own
-/// clips. The silence was manufactured here (#1661).
-///
-/// ⚠ **0.5 is deliberately LOW and provisional.** It refuses only what the
-/// evidence already condemns — a block more than half missing cannot make an
-/// honest transcript — and every block's coverage is now RECORDED, so the floor
-/// can be raised from the distribution rather than from an argument. Raise it
-/// before the room turn writer is switched on (#1388), because until then a bad
-/// block costs runner time and after then it costs the archive.
+/// Deliberately low and provisional: it refuses only what is plainly broken, and
+/// every block records its coverage, so the floor can be raised from the
+/// distribution. Raise it before the room turn writer goes on (#1388).
 const MIN_COVERAGE: f32 = 0.5;
 
 pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -148,8 +136,8 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
              winner       TEXT,
              filename     TEXT,
              contributors TEXT NOT NULL,
-             -- Added 2026-09-18 (#1661). NULL means the block was judged before
-             -- coverage was measured, which is NOT the same as fully covered.
+             -- NULL means judged before coverage was measured, which is not the
+             -- same as fully covered.
              coverage     REAL,
              built_utc    TEXT NOT NULL
          );",
@@ -157,12 +145,8 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
     add_coverage_column(conn)
 }
 
-/// Add `coverage` to a table that already exists.
-///
-/// ⚠ `CREATE TABLE IF NOT EXISTS` adds nothing to a table that is already there,
-/// and every deployment before 2026-09-18 has this one — so without this the
-/// insert naming `coverage` fails on every block. The same trap `segment_levels`
-/// hit in production; it is written out there in full.
+/// Add `coverage` to a table that already exists — `CREATE TABLE IF NOT EXISTS`
+/// adds nothing to one that is already there.
 fn add_coverage_column(conn: &Connection) -> rusqlite::Result<()> {
     let present: bool = conn
         .prepare("SELECT 1 FROM pragma_table_info('room_blocks') WHERE name = 'coverage'")?
@@ -529,12 +513,9 @@ pub fn build_once(
             summary.silent += 1;
             continue;
         }
-        // ⚠ **The window is ZERO-FILLED where nothing was recorded**, and the
-        // all-zero test above only catches a block where nothing was recorded at
-        // ALL. Ten seconds of speech padded with fifty of digital silence passed
-        // it, was written, and was transcribed — Whisper's hallucination on
-        // silence is exactly the 22% repetition loops and the Dutch household
-        // reported in English that got the room turn writer switched off (#1661).
+        // The all-zero test above only catches a block where nothing was
+        // recorded at all; ten seconds of speech padded with fifty of silence
+        // passes it.
         if window.coverage < MIN_COVERAGE {
             record_verdict(
                 &conn,
@@ -565,12 +546,11 @@ pub fn build_once(
     Ok(summary)
 }
 
-/// Encode the block, store the blob and its verdict together, and say whether
-/// it landed. `false` means the encode failed and the block is worth retrying.
+/// Encode the block and store the blob and its verdict together. `false` means
+/// the encode failed and the block is worth retrying.
 ///
-/// ⚠ The blob is durable before either row, so the two rows go in ONE
-/// transaction: a segments row without its verdict would be re-judged, and a
-/// verdict without its segments row names a blob nothing can find.
+/// Both rows go in one transaction: a segments row without its verdict would be
+/// re-judged, and a verdict without its row names a blob nothing can find.
 fn write_block(
     root: &Path,
     conn: &Connection,

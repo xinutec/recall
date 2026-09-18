@@ -1,14 +1,12 @@
-//! Repetition loops per source, using the PRODUCTION rule.
+//! Repetition loops per source, using the production rule.
 //!
-//! ⚠ **Written because a SQL proxy is not the rule that ships.** A first pass
-//! counted a block as looping when one segment text appeared three or more
-//! times, and compared the result against figures produced by
-//! `quality::is_repetition_loop` — two different questions, one table. The
-//! numbers moved by tens of points between them, so the comparison said nothing
-//! about the corpus and everything about the metric.
+//! A SQL proxy ("one text repeated 3+ times") is a different question and its
+//! numbers are not comparable with `is_repetition_loop`'s. Name the rule beside
+//! any figure this produces.
 //!
 //! Input: `filename|source|minute|quiet_run_s|text`, one line per transcribed
 //! segment, dumped from the fleet's ingest plane.
+
 use recalld::quality::is_repetition_loop;
 use std::collections::BTreeMap;
 
@@ -31,8 +29,7 @@ fn main() {
             continue;
         }
         let (clip, source, quiet, body) = (f[0], f[1], f[3].parse::<f64>().unwrap_or(-1.0), f[4]);
-        // The room stream is split by how much of the block was really recorded,
-        // because that is the change under test (#1661).
+        // Split by how much of the block was really recorded (#1661).
         let kind = if source == "room" {
             match quiet {
                 q if q < 0.0 => "room (coverage unknown)",
@@ -70,12 +67,9 @@ fn main() {
     paired(&text);
 }
 
-/// The decision input for #1388: the SAME MINUTE, room against the microphones
-/// that were also recording it.
-///
-/// ⚠ Unpaired source rates cannot answer this — the microphones cover different
-/// minutes (pixel9 is switched off for days at a time), so an unpaired table
-/// compares the rooms each mic happened to be in, not the mics.
+/// Room against the microphones recording the SAME minute. Unpaired rates cannot
+/// answer this: the mics cover different minutes, so an unpaired table compares
+/// the rooms each happened to be in.
 fn paired(text: &str) {
     // minute -> (room segments, room loops, mic segments, mic loops) for
     // well-covered room blocks only, which is what the builder now produces.

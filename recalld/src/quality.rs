@@ -9,18 +9,11 @@
 //! was never safe — 681 turns labelled es/de/pt/tr are Dutch and English the
 //! model merely mislabelled).
 //!
-//! ⚠ **This is now the ONLY implementation.** It began as a port, with
-//! `recall.quality` the original applied by the Mac's writers — all of which
-//! (live, worker, refine, and the Python itself) were deleted by 2026-09-18. So
-//! the drift risk that shaped this module is gone, and with it the thing the
-//! parity corpus compared against: that corpus is a frozen record of the
-//! behaviour at the moment of the port, not a live check on two halves.
+//! The only implementation: `recall.quality` was deleted, so the parity corpus
+//! is a frozen record of the port rather than a live comparison.
 //!
-//! ⚠ **Both rules run at WRITE TIME** (`turns.rs`, `work.rs`), so a looping or
-//! wordless turn never reaches the read path. That is what replaced the
-//! retroactive `scan-wordless` sweep rather than a scheduled pass — and it is
-//! the better shape, because the sweep existed only because 214 such turns had
-//! already got through (#1410).
+//! Both rules run at write time (`turns.rs`, `work.rs`), so a looping or
+//! wordless turn never reaches the read path.
 //!
 //! Not ported: `foreign_script_ratio`. It asks whether a letter's Unicode NAME
 //! contains "LATIN", which has no dependency-free Rust equivalent that agrees

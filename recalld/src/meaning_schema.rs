@@ -1,30 +1,12 @@
 //! The meaning plane's schema: the ordered migration ladder for `recall.sqlite`.
 //!
-//! ⚠ **PORTED VERBATIM from `src/recall/store_schema.py`, which is DELETED.**
-//! Every string below is that file's `_MIGRATIONS` tuple, entry for entry, emitted
-//! mechanically rather than retyped. The Python was the only definition of the
-//! schema behind 145,000 turns of archive, and nothing ran it: the fleet pod is
-//! `recalld` alone, so the ladder had no runner and a fresh deployment could not
-//! have created this database at all (#1538).
-//!
-//! ⚠ **APPEND ONLY. Never edit a shipped entry.** Each migrates the database from
-//! version i to i+1, tracked in `PRAGMA user_version`, and runs exactly once.
-//! Editing one changes nothing on any database that already passed it, so the
-//! statement you wrote and the schema you have would silently disagree.
-//!
-//! The port is checked against the live fleet database rather than against
-//! itself — see the integration test, which builds a database from this ladder
-//! and diffs `sqlite_master` with a dump taken from Isis.
+//! Ported from `store_schema.py`, which is deleted (#1538). The integration test
+//! builds from empty and diffs against a dump of the live fleet database.
 
 use rusqlite::Connection;
 
-/// Entry i migrates version i to version i+1.
-///
-/// Every entry is a raw string with hashes, including the ones that do not need
-/// them: the delimiter is uniform because these were emitted mechanically from
-/// the Python, and picking a different quoting per entry is how an escape gets
-/// wrong in a file where being wrong means a schema that differs from the
-/// archive's.
+/// Entry i migrates version i to version i+1. APPEND ONLY — editing a shipped
+/// entry changes nothing on a database that already passed it.
 #[allow(clippy::needless_raw_string_hashes, reason = "uniform by construction")]
 pub const MIGRATIONS: &[&str] = &[
     // v1
@@ -417,10 +399,9 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
     if have >= want {
         return Ok(());
     }
+    // One transaction per step: a half-applied step must not be recorded, and a
+    // step that succeeded must not be undone by a later one failing.
     for (index, statement) in MIGRATIONS.iter().enumerate().skip(have as usize) {
-        // ⚠ One transaction PER STEP, not one for the ladder: a half-applied
-        // step must not be recorded, and a step that succeeded must not be
-        // undone by a later one failing. `user_version` moves with its own step.
         conn.execute_batch("BEGIN")?;
         conn.execute_batch(statement)?;
         conn.execute_batch(&format!("PRAGMA user_version = {}", index + 1))?;

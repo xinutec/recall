@@ -1,10 +1,9 @@
-//! Probe: does a GATE survive the archive — lossy coding, then the 16 kHz
-//! decode the level scanner uses? Prints the longest exact-zero run and the
-//! longest near-zero (<3 LSB) run, at native rate and at 16 kHz, per file.
+//! Does a gate survive the archive — lossy coding, then the 16 kHz decode the
+//! level scanner uses? Prints the longest exact-zero and near-zero run at native
+//! rate and at 16 kHz.
 //!
-//! #1526 asks for a sample-level gate detector. This says which statistic can
-//! actually carry it on STORED audio, rather than on the raw ALSA capture the
-//! original 93.6%/0.69 s measurement came from.
+//! Exact zeros do not survive lossy coding; near-zero runs do (#1526).
+
 use audiocore::decode;
 use std::path::Path;
 

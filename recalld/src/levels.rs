@@ -41,8 +41,7 @@ pub const GATE_DB: f32 = -80.0;
 /// round number would cost a decode per segment for nothing.
 const GATE_MIN_BUCKETS: usize = 3;
 
-/// A sample this small is not a quiet room — it is a source emitting nothing.
-/// Two LSB of a 16-bit sample, the same floor the 2026-09-12 investigation used.
+/// Two LSB of a 16-bit sample: not a quiet room, a source emitting nothing.
 const QUIET_LSB: u16 = 2;
 
 /// One segment's measured levels.
@@ -50,56 +49,25 @@ const QUIET_LSB: u16 = 2;
 pub struct Levels {
     pub speech_db: f32,
     pub floor_db: f32,
-    /// The longest unbroken stretch at or under [`QUIET_LSB`], in seconds —
-    /// **the gate detector that works on STORED audio**, where [`Levels::gated`]
-    /// does not.
+    /// Longest unbroken stretch at or under [`QUIET_LSB`], in seconds — the gate
+    /// detector that works on stored audio (#1526).
     ///
-    /// ⚠ **Not exact zeros, and that is measured rather than chosen.** #1526
-    /// asked for exact-zero runs, because raw ALSA off the gating speakerphone
-    /// was 93.6% exact zeros with 0.69 s runs. Opus does not preserve them: the
-    /// SAME clips, read back out of the archive, hold no exact-zero run longer
-    /// than 0.002 s. A detector built on exact zeros would have measured the
-    /// codec and reported every source clean.
+    /// Near-zero rather than exact-zero because lossy coding fills exact zeros:
+    /// the gating speakerphone's 0.69 s runs read as 0.002 s once archived.
     ///
-    /// The near-zero run does survive, and separates completely — 55 clips with
-    /// ≥5 s of detected speech, through this exact decode, 2026-09-18:
-    ///
-    /// ```text
-    /// source                n    min   median     max
-    /// geb (gating device)  14  1.664    3.119  10.520
-    /// pixel5               13  0.020    0.141   1.194
-    /// pixel9                6  0.049    0.339   0.508
-    /// iphone11             12  0.004    0.008   0.015
-    /// oneplus6t            11  0.007    0.007   0.024
-    /// usb                  18  0.001    0.002   0.004
-    /// ```
-    ///
-    /// ⚠ **Only meaningful where somebody was SPEAKING.** An empty room takes
-    /// every microphone to its floor together, so a long run there is a quiet
-    /// house, not a gate — the sample above is conditioned on the VAD hearing
-    /// ≥5 s, and any rule reading this column must be too.
-    ///
-    /// ⚠ No policy threshold lives here. This is the measurement; the room
-    /// builder owns the cut, so moving it never needs a re-scan.
+    /// Only meaningful where somebody was speaking — an empty room takes every
+    /// microphone to its floor together. No threshold here; the room builder
+    /// owns the cut, so moving it needs no re-scan.
     pub quiet_run_s: f32,
     /// Fraction of the segment inside a sub-[`GATE_DB`] stretch of
     /// [`GATE_MIN_BUCKETS`] or more.
     ///
-    /// ⚠ **This is NOT a gate detector, though it was built as one.** A 0.1 s
-    /// RMS bucket under -80 dBFS is three LSB, and an un-gained phone recording
-    /// UNPROCESSED puts a talker across the room at ~20 LSB over a 2-3 LSB
-    /// floor — so its pauses fall under the line with no gate anywhere. Every
-    /// phone therefore reads 0.45-1.0 here during speech, which is why the
-    /// filter built on it degenerated to "always the condenser" and was reverted
-    /// (#1526). Use [`Levels::quiet_run_s`] for gating; this stays because it is
-    /// a true measurement of how much of a clip sits near the floor.
+    /// NOT a gate detector despite the name: an un-gained phone's pauses sit
+    /// under the threshold with no gate anywhere, so every phone reads high here
+    /// during speech. Use [`Levels::quiet_run_s`] for gating.
     ///
-    /// ⚠ **This is the one level statistic that must not be read as quality.**
-    /// Gating makes a source score BETTER on speech-vs-floor: removing everything
-    /// between words is what produced geb's "52 dB SNR, best in the room" while
-    /// its transcripts were unusable. A rank built on `speech_db` alone therefore
-    /// PREFERS the microphone most aggressively destroying its own audio, which
-    /// is why geb won 72% of room blocks (#1526).
+    /// Never read it as quality either — gating IMPROVES speech-vs-floor, so a
+    /// rank on `speech_db` prefers the microphone destroying its own audio.
     pub gated: f32,
 }
 
@@ -194,14 +162,10 @@ pub fn gated_fraction(envelope: &[f32]) -> f32 {
 
 /// The longest unbroken run at or under [`QUIET_LSB`], in seconds.
 ///
-/// ⚠ **The longest ONE, not the total.** A source that hears the room emits
-/// short near-silences all through a conversation, and summing them measures how
-/// quiet the room was. A gate holds the line shut until the next word, so what
-/// distinguishes it is the length of a single stretch.
-///
-/// Reads samples rather than the 0.1 s envelope because the envelope cannot see
-/// it: an RMS bucket spanning the edge of a gate averages the word beside it and
-/// lifts clear of any floor.
+/// The longest one, not the total: summing short near-silences measures how
+/// quiet the room was, whereas a gate holds one stretch shut until the next
+/// word. Reads samples, not the 0.1 s envelope — a bucket spanning a gate's edge
+/// averages the word beside it and lifts clear of any floor.
 #[must_use]
 pub fn quiet_run_seconds(pcm: &[u8], rate: u32) -> f32 {
     let (mut best, mut run) = (0usize, 0usize);

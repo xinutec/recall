@@ -1,47 +1,30 @@
-"""Raw vs calibrated room selection, refereed against human corrections.
+"""Raw vs calibrated room selection, refereed against human corrections (#1461).
 
-#1461's referee, and it did not exist until now. `fusion_bakeoff.py` scores the
-FUSED rendering against one reference mic — a different question — and it reads a
-local `--db`, which since `sync` was deleted means the Mac's copy, frozen at
-2026-07-11. Corrections are made on the FLEET.
+For each correction, asks which microphone each RANK would have chosen for its
+block, takes what that microphone actually transcribed, and scores both against
+the corrected text. Reports the median.
 
-For each correction this asks which microphone each RANK would have chosen for
-the block it falls in, takes what THAT MICROPHONE ACTUALLY TRANSCRIBED there, and
-scores both against the corrected text. The verdict is the median.
+Three constraints, each of which produced a wrong answer when missed:
 
-⚠ **It compares STORED TRANSCRIPTS, not re-transcribed audio slices, and that is
-the whole design.** The first version sliced the corrected span out of each
-source's clip and ran the model on both. It scored every case 1.00/1.00, and
-looking at why produced the finding: the correction's span comes from ONE
-source's timeline, and the microphones do not share a clock. On 2026-06-19
-19:05:18 the usb mic heard "New practical technique. Let's see if it goes right."
-while pixel9 heard the truth — "Nu werkt die goed denk ik." — 3.7 SECONDS LATER
-on its own clock. Slicing usb's span out of pixel9's clip lands on the wrong
-audio, so the arm that was RIGHT scored as a total miss. See
-`project_recall_phone_clock_skew`: never compare cross-mic timestamps as if they
-share a reference.
+  - Compare STORED TRANSCRIPTS, never re-transcribed slices. The correction's
+    span comes from one source's timeline and the mics do not share a clock —
+    pixel9 ran 3.7 s behind usb — so slicing one arm's span out of the other's
+    clip scores the wrong audio. Matching is by overlap within a tolerance.
+  - Exclude HUMAN CORRECTIONS from the hypothesis. A correction is stored as a
+    turn that supersedes the machine's, so reading the current turn makes the
+    hypothesis identical to the truth.
+  - Take only the LATEST machine version per moment; the archive keeps every
+    re-transcription.
 
-⚠ Matching is therefore by OVERLAP inside a tolerance, not by equality, and the
-tolerance is stated in the output. Widen it and neighbouring speech starts to
-qualify; narrow it and real matches are lost. Read the n, not only the medians.
+A block where both ranks choose the same microphone is skipped: both arms would
+carry identical audio, which is how the June window refereed this twice and
+answered nothing.
 
-⚠ **A block where both ranks choose the same microphone is SKIPPED, not scored.**
-Both arms would carry identical audio and tie, which is how the June window
-"refereed" this twice and answered nothing: usb wins there under both rules. A
-tie between identical inputs is not evidence.
-
-⚠ **It reports the MEDIAN.** Hallucination loops (#1410) moved the mean 25x
-between two runs of the SAME audio while the median did not move at all.
-
-⚠ Both arms' transcripts were produced with the same vocabulary biasing, so the
-comparison is symmetric — but neither is the bare model, so these numbers are not
-comparable with score-asr's.
-
-Non-destructive: every database is opened read-only; only the report is written.
+Every database is opened read-only; only the report is written.
 
 Usage (no model needed — it reads what the pipeline already wrote):
   python3 scripts/rank_referee.py \
-      --db /tmp/fleet-recall.sqlite --ingest /tmp/fleet-ingest.sqlite \
+      --db <fleet recall.sqlite> --ingest <fleet ingest.sqlite> \
       --start 2026-09-03T10:00:00Z --minutes 60 --out /tmp/referee.json
 """
 
@@ -56,12 +39,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 DEFAULT_TOLERANCE_S = 6.0
-"""How far a source's turn may sit from the corrected span and still be its match.
-
-⚠ Sized from a MEASURED skew, not chosen: pixel9 ran 3.7 s behind usb on
-2026-06-19. Six seconds covers that with headroom and is stated in the report so
-a reader can see what it admitted.
-"""
+"""Cross-mic skew a turn may sit away and still match. Sized from a measured
+3.7 s, and printed in the report so a reader sees what it admitted."""
 
 
 @dataclass(frozen=True)
@@ -87,8 +66,8 @@ def _block_of(when: datetime) -> str:
 def winners(ingest: sqlite3.Connection, block: str) -> tuple[str, str] | None:
     """(raw winner, calibrated winner) for a block, or None if unrankable.
 
-    Read from the verdict the builder RECORDED rather than re-derived, so this
-    scores the choice production would have made at the time.
+    From the verdict the builder recorded, so this scores the choice production
+    would have made at the time.
     """
     row = ingest.execute(
         "SELECT contributors FROM room_blocks WHERE start_utc = ?", (block,)
@@ -117,23 +96,9 @@ def heard(
 ) -> str | None:
     """What `source` transcribed over the span, within the skew tolerance.
 
-    Every CURRENT turn whose span overlaps the corrected one, joined in time
-    order — a single utterance is often several turns on one microphone and one
-    on another, so taking the nearest turn alone would score a fragment against a
-    sentence.
-
-    ⚠⚠ **HUMAN CORRECTIONS ARE EXCLUDED, and this is the difference between a
-    measurement and a tautology.** A correction is stored as a NEW TURN with
-    provenance `human correction of #N` which SUPERSEDES the machine's. Take the
-    current turn and the hypothesis IS the truth: both arms scored 0.00 and were
-    identical on every case, which is what caught it. The hypothesis has to be
-    what the MICROPHONE heard, so corrections are filtered out and the machine's
-    own turn — superseded though it now is — is what gets scored.
-
-    ⚠ And only the LATEST machine version per moment. The archive keeps every
-    re-transcription, so without that a moment contributes its old text and its
-    new one and the arm is scored against the same sentence twice — WER above 1.0
-    for both arms, which is how THAT was caught.
+    Every overlapping machine turn joined in time order: one utterance is often
+    several turns on one microphone and one on another, so the nearest turn alone
+    would score a fragment against a sentence.
     """
     rows = db.execute(
         """SELECT ts.start_utc, ts.text FROM transcript_segments ts
@@ -191,9 +156,7 @@ def load_cases(
         raw_text = heard(db, raw_src, span_start, span_end, tolerance_s)
         cal_text = heard(db, cal_src, span_start, span_end, tolerance_s)
         if raw_text is None or cal_text is None:
-            # ⚠ Counted, not silently dropped: an arm with no turn at all is a
-            # real outcome (that microphone contributed nothing), and hiding it
-            # would flatter whichever arm does have one.
+            # Counted, not dropped: hiding these flatters whichever arm has a turn.
             skipped["an arm heard nothing"] += 1
             continue
         cases.append(Case(int(cid), str(truth), raw_src, cal_src, raw_text, cal_text))
@@ -258,8 +221,8 @@ def main() -> None:
         cals = [float(r["wer_calibrated"]) for r in results]  # type: ignore[arg-type]
         better = sum(1 for r, c in zip(raws, cals, strict=True) if c < r)
         worse = sum(1 for r, c in zip(raws, cals, strict=True) if c > r)
-        # ⚠ MEDIAN. The mean moved 25x between two runs of identical audio when a
-        # few hallucination loops landed in it (#1410); the median did not move.
+        # Median: the mean moved 25x between two runs of identical audio when a
+        # few hallucination loops landed in it (#1410).
         print(
             f"\nMEDIAN WER — raw: {statistics.median(raws):.3f}   "
             f"calibrated: {statistics.median(cals):.3f}   (n={len(results)})"

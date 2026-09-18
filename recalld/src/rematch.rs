@@ -1,39 +1,8 @@
 //! Re-derive stored speaker guesses when the voiceprint corpus has grown.
 //!
-//! ⚠ **A guess is written ONCE and was never revisited, and that cost more than
-//! anything else measured here.** `diarized.rs` names a turn when its embedding
-//! is first stored, against whatever prints existed at that instant. Enrolment
-//! goes on — 798 prints over 10 people by 2026-09-18, from a corpus that was
-//! much smaller when most turns were written — and nothing re-asked the
-//! question. Measured on the fleet, on the same 277 human-labelled turns:
-//!
-//! ```text
-//! what is STORED in speaker_guess vs the human label   0.491
-//! the same rule RE-RUN now, leave-one-out              0.913
-//! ```
-//!
-//! Same turns, same arithmetic. The difference is age, not accuracy.
-//!
-//! ⚠ **There used to be a pass for this** — `recall.identify`'s
-//! `rematch_speaker_guesses` — and the port took the arithmetic
-//! ([`crate::identify`]) without it. Comments elsewhere still name it as though
-//! it exists; this is what replaced it.
-//!
-//! # Which turns are stale
-//!
-//! A guess is suspect when it was derived before the newest voiceprint was
-//! enrolled. That rule is self-limiting — it empties out and stays empty — and it
-//! RE-ARMS ITSELF the moment somebody enrols a voice, which is the only event
-//! that can change an answer here.
-//!
-//! ⚠ It writes `speaker_matched_utc` on every turn it examines, including ones
-//! whose answer did not change. A pass that only stamped the rewrites would
-//! re-examine every unchanged turn for ever — the shape the ledgered passes
-//! already warn about.
-//!
-//! ⚠ **`speaker_guess` ONLY, never `speaker_label`.** The label is the name a
-//! person gave. This is the machine disagreeing with its past self, which is
-//! allowed; overwriting somebody's decision is not.
+//! A guess is written once, when a turn's embedding is first stored, against
+//! whatever voiceprints existed then. Enrolment continues; nothing else re-asks
+//! (#1657).
 
 use crate::identify::{match_one, worth_writing};
 use rusqlite::Connection;
@@ -41,13 +10,10 @@ use rusqlite::Connection;
 /// What one pass did.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Pass {
-    /// Turns looked at.
     pub examined: usize,
-    /// Turns whose name or score changed.
     pub rewritten: usize,
-    /// Turns the corpus still answers the same way.
     pub unchanged: usize,
-    /// Turns no enrolled voice matched at all.
+    /// No enrolled voice matched; the stored guess was left alone.
     pub unmatched: usize,
 }
 
@@ -68,14 +34,18 @@ pub fn newest_enrolment(conn: &Connection) -> rusqlite::Result<Option<String>> {
     })
 }
 
-/// Re-derive up to `limit` stale guesses. Returns what it did.
+/// Re-derive up to `limit` stale guesses.
+///
+/// Writes `speaker_guess` only — `speaker_label` is the name a person gave, and
+/// the machine may disagree with its past self but not with them. Stamps every
+/// turn it EXAMINES, including unchanged ones, or the pass never finishes.
 ///
 /// # Errors
 /// If the database refuses.
 pub fn run_once(conn: &mut Connection, limit: usize, now: &str) -> rusqlite::Result<Pass> {
+    // Stamping against an empty corpus would mark every turn fresh, so the
+    // first real enrolment would look already applied.
     let Some(newest) = newest_enrolment(conn)? else {
-        // Nobody is enrolled: there is no answer to re-derive, and stamping
-        // turns now would mark them fresh against an empty corpus.
         return Ok(Pass::default());
     };
     let enrolled = crate::identify::enrolled(conn)?;
@@ -92,9 +62,7 @@ pub fn run_once(conn: &mut Connection, limit: usize, now: &str) -> rusqlite::Res
     let tx = conn.transaction()?;
     for turn in stale {
         pass.examined += 1;
-        // ⚠ On None the stored guess is LEFT ALONE. "No match today" is not
-        // evidence the old name was wrong, and blanking it would trade an answer
-        // for nothing.
+        // No match today is not evidence the old name was wrong.
         let Some(guess) = match_one(&turn.vector, &enrolled) else {
             stamp(&tx, turn.id, now)?;
             pass.unmatched += 1;
@@ -128,10 +96,8 @@ fn stamp(conn: &Connection, id: i64, now: &str) -> rusqlite::Result<()> {
 
 /// Turns with an embedding whose guess predates the newest enrolment.
 ///
-/// ⚠ Hidden and superseded turns are INCLUDED. A turn hidden as a loop can be
-/// un-hidden, and a superseded one is still read through its lineage — leaving
-/// either with a name the corpus no longer supports is the same staleness this
-/// exists to end, only less visible.
+/// Hidden and superseded turns are included: both can still be read, so a stale
+/// name on them is the same fault, merely less visible.
 fn pending(conn: &Connection, newest: &str, limit: usize) -> rusqlite::Result<Vec<Stale>> {
     let mut stmt = conn.prepare(
         "SELECT t.id, e.vector, t.speaker_guess, t.speaker_score
@@ -153,8 +119,7 @@ fn pending(conn: &Connection, newest: &str, limit: usize) -> rusqlite::Result<Ve
     let mut out = Vec::new();
     for row in rows {
         let (id, raw, stored) = row?;
-        // A vector that will not parse is SKIPPED, matching `identify::enrolled`
-        // — but it is stamped, or the pass would return to it every time.
+        // An unparseable vector is skipped, matching `identify::enrolled`.
         if let Ok(vector) = serde_json::from_str::<Vec<f64>>(&raw) {
             out.push(Stale { id, vector, stored });
         }

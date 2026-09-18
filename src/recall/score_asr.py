@@ -1,14 +1,8 @@
-"""The golden ASR gate: transcribe the committed speech fixtures with the REAL
+"""The golden ASR gate: transcribe the committed speech fixtures with the real
 model and fail if word error rate drifts past each one's threshold.
 
-The regression net under the model and decoder seams — unit tests stub the ASR,
-so nothing else here notices a runtime or decoder change that quietly makes
-transcription worse. On demand, never part of `verify`: it loads the model.
-
-⚠ **Its own entry point, like `recall.llmhost`.** It used to be a `recall
-score-asr` subcommand, which meant running it imported the whole CLI. The CLI is
-gone (#1342) and this is one of the two things kept from it, because a quality
-change has to be judged by a number rather than by argument.
+The regression net under the model and decoder seams — unit tests stub the ASR.
+On demand, never part of `verify`: it loads the model.
 
     python -m recall.score_asr [--model MODEL]
 """
@@ -29,16 +23,9 @@ FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "speech"
 class GoldenFixture:
     """One clip in the golden ASR gate.
 
-    Each clip is single-language by construction: a mixed-language one trips
-    Whisper's one-language-per-segment detection, which is the documented
-    code-switching weakness rather than a regression signal. Several clips may
-    share a language — two do — and that is coverage, not duplication.
-
-    ⚠ There is no `committed` flag any more. Every clip here ships with the repo
-    (2026-09-09), so a missing one is a FAULT rather than a fresh clone's normal
-    state — and that is the safer default for whatever is added next: an absent
-    fixture fails loudly instead of quietly narrowing what the gate covers, which
-    is the whole of #1433.
+    Single-language by construction: a mixed clip trips Whisper's
+    one-language-per-segment detection, which is a real code-switching weakness
+    rather than a regression signal.
     """
 
     audio: str
@@ -47,31 +34,13 @@ class GoldenFixture:
     threshold: float
 
 
-# ⚠ EVERY fixture here ships with the repo, and #1433 is why that is worth
-# stating. The gate advertised a "committed speech fixture" for months while its
-# audio existed on ONE Mac, so it could not run on a clone, in CI, or in a nix
-# sandbox — a check that read as a repo-wide guarantee and was not one.
+# The dialogue pair is macOS `say` reading invented lines — nobody's voice, which
+# is what made committing it to a public repo safe. It carries the gate's only Dutch.
 #
-# The dialogue pair is macOS `say` reading INVENTED lines (plants, a plumber, a
-# bakery), rendered by scripts/gen-speech-fixture.sh. It is nobody's voice and
-# says nothing about this household, which is what made committing it safe for a
-# public repo; the blanket *.flac ignore that had swallowed it was narrowed on
-# 2026-09-09. It carries the only Dutch in the gate.
-#
-# Thresholds are per fixture, and each is set from ITS OWN measured baseline
-# rather than copied, because the references differ in exactness and one number
-# would silently import the loosest denominator. Measured 2026-09-06 with
-# large-v3-turbo, three identical runs each (the decode is deterministic here, so
-# headroom is for a runtime/decoder change, not for run-to-run noise):
-#   - dialogue-en 0.0123, dialogue-nl 0.0000 — exact references.
-#   - public-domain-en 0.0426 — the CANONICAL poem plus the LibriVox preamble,
-#     NOT a transcription of this reading, so the reader's own deviations sit in
-#     the baseline permanently (see the fixture README).
-# Each threshold is baseline + ~0.05, so all three trip on a regression the size
-# of the adapter's real-audio one (~0.05 absolute) — equal DETECTION POWER, not
-# an equal number. These are DRIFT bounds; none is evidence about absolute
-# transcription quality. If a legitimate runtime update trips one, re-baseline it
-# deliberately rather than widening it reflexively.
+# Each threshold is its own measured baseline + ~0.05, never copied: the
+# references differ in exactness, and one number would import the loosest
+# denominator. These are DRIFT bounds, not evidence about absolute quality. If a
+# legitimate runtime update trips one, re-baseline deliberately.
 GOLDEN_FIXTURES = (
     GoldenFixture(
         audio="public-domain-en.flac",
@@ -103,11 +72,9 @@ def result_text(result: AsrResult) -> str:
 def main(argv: list[str] | None = None) -> int:
     """Score every fixture and report. Returns 1 if any drifted.
 
-    ⚠ A MISSING fixture FAILS the run rather than being skipped: a gate with less
-    to score than it claims must not report success (#1433).
-
-    ⚠ It passes NO vocabulary bias, deliberately — this measures the bare model,
-    so that a household name added in the UI cannot move the number.
+    A missing fixture FAILS rather than being skipped — a gate with less to score
+    than it claims must not report success (#1433). Passes no vocabulary bias, so
+    a name added in the UI cannot move the number.
     """
     parser = argparse.ArgumentParser(
         prog="recall-score-asr",

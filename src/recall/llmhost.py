@@ -313,14 +313,9 @@ def serve(
 def main(argv: list[str] | None = None) -> int:
     """Run the host as its own program: `python -m recall.llmhost`.
 
-    ⚠ **It has its own entry point so that the AGENT DOES NOT ENTER THROUGH THE
-    CLI.** Starting it as `recall llm-host` imports `recall.cli`, which imports
-    28 `recall.*` modules; this module needs 3. That difference is not about
-    startup cost — it is what keeps the whole CLI substrate alive in production,
-    because the one process the Mac runs all day was reaching it (#1342).
-
-    The flags and their defaults are the ones the subcommand had, and they all
-    come from `recall.llm`, so nothing new is imported to parse them.
+    Its own entry point so the agent does not enter through the CLI, which would
+    drag the whole package in behind it (#1342). Defaults come from `recall.llm`,
+    so parsing them imports nothing new.
     """
     parser = argparse.ArgumentParser(
         prog="recall-llm-host",

@@ -1,7 +1,6 @@
-//! Probe: how loud a stored segment is, how far the detector lifts it, and how
-//! much speech it then hears — one line per file. This is how #1485 was found
-//! (compare the seconds against a peer's for the same minute); keep it for the
-//! next quiet microphone.
+//! How loud a stored segment is, how far the detector lifts it, and how much
+//! speech it then hears. Compare against a peer's same minute (#1485).
+
 use audiocore::decode;
 use audiocore::vad::{Detector, Region, detection_gain};
 use std::path::Path;
