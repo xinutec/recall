@@ -240,7 +240,8 @@ Isis stays the authority when reachable: `capture-mirror` is edge-triggered, so 
 local pause alone until Isis's *intent* actually changes. Intent lives in Isis's DB on the
 `recall-data-pvc`, so a pod rollout preserves a deliberate pause (no unwanted resume).
 
-Run break-glass from the Mac: `~/Code/recall/scripts/recall.sh pause` (or `resume`). No
+Run break-glass from the Mac: `audiod pause` (or `resume`), the Rust port that
+replaced the Python command on 2026-09-17. No
 launchd agent, no deploy — the wrapper runs live `src`.
 
 ⛔ **RETIRED 2026-09-17.** Diarization is a queue now, not a request: the `voices`

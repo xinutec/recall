@@ -1,8 +1,15 @@
 # Running recall
 
-All ML commands run via `scripts/recall.sh <cmd>` (Nix tools + the `.venv` with
-mlx-whisper/pyannote + `HF_TOKEN` from `.env`). Data root is
-`/Volumes/Backup/recall` (encrypted), passed as `--out`.
+⚠ **There is no `recall` CLI any more** (#1342, 2026-09-18). The Python that
+remains is the ML floor — the `asr`/`voices` shims the runners drive, `llm-host`,
+and `score_asr` — and each is its own module:
+
+```sh
+nix develop --command env PYTHONPATH=src .venv/bin/python -m recall.<module>
+```
+
+Everything operational is a Rust binary (`audiod`, `recalld`, `doctor`, `runner`,
+`recall-cli`). Data root is `/Volumes/Backup/recall` (encrypted).
 
 `.venv` is a symlink into the nix store (`nix build .#dev-env --out-link .venv`),
 so a person runs the same interpreter the agents do rather than a second copy
@@ -16,15 +23,17 @@ agent's command lives in that module and is wrapped into the nix store. Apply a
 change with: edit that module, commit, then in `~/.config/home-manager` run
 `nix flake update recall && home-manager switch --flake .#pippijn`. Restart one
 ad-hoc with `launchctl kickstart -k gui/$(id -u)/<name>`. Logs:
-`~/Library/Logs/recall/<agent>.{out,err}.log`; health: `./scripts/recall.sh doctor`
-(checks every agent is loaded).
+`~/Library/Logs/recall/<agent>.{out,err}.log`; health: `doctor` (checks every
+agent is loaded), which is a Rust binary run by its own agent — see below.
+⚠ Nothing rotates those logs since the Python CLI went (#1342); they grow.
 
 **What an agent runs is what was committed.** Its `PYTHONPATH` is the store copy of
 the pinned revision, so editing `src/` does not change a running daemon — bump the
 lock and switch, as above. The toolchain is unchanged by this: each wrapper still
 enters this repo's own devshell, so sox/ffmpeg/python are the versions `flake.lock`
-pins. `./scripts/recall.sh <cmd>` still runs the working tree, which is what you
-want while developing.
+pins. Running a module with `PYTHONPATH=src` (above) runs the WORKING TREE,
+which is what you want while developing — ⚠ without it you get the built copy
+from the nix store, because `.venv` symlinks `recall` there.
 
 | agent | does | when |
 |---|---|---|
@@ -47,8 +56,8 @@ credential-carrying agents use their own — `recall-upload` takes
 needs none. Named rather than counted: the table's order is not a contract.
 
 ⚠ **The agents read `~/.config/recall/env`, NOT the repo's `.env`.** Two copies,
-deliberately: `scripts/recall.sh` sources `.env` for interactive work, and that is
-fine because a terminal can reach the archive volume. A launchd agent cannot —
+deliberately: `.env` is for interactive work, and that is fine because a
+terminal can reach the archive volume. A launchd agent cannot —
 `~/Code/recall` is a symlink onto `/Volumes/Backup`, an external USB volume that
 macOS denies launchd-spawned processes write access to, and whose first touch can
 HANG an agent outright rather than fail it. On 2026-09-14 that wedged nine agents
@@ -186,7 +195,7 @@ from the wrong mic.
 ```sh
 launchctl bootout   gui/$(id -u)/org.xinutec.recall-capture                                # stop
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.xinutec.recall-capture.plist   # start
-nix develop --command python -m recall verify --out /Volumes/Backup/recall                # check for gaps
+# Gaps are the delivery/loss checks in `doctor` now; `recall verify` is deleted.
 ```
 
 A **pause** stops *all* recording (USB mic and phones): the ingest server closes
@@ -215,9 +224,8 @@ supersedes the merged ones — human corrections kept, nothing deleted. Heavy
 yields the moment it resumes; newest-first, resumable. Needs `HF_TOKEN`.
 
 ```sh
-./scripts/recall.sh worker  --out /Volumes/Backup/recall                  # run a pass now
-./scripts/recall.sh refine  --out /Volumes/Backup/recall --max-segments 5
-./scripts/recall.sh search "coffee" --out /Volumes/Backup/recall
+# ⚠ ALL THREE ARE DELETED. worker and refine are the `runner`/`voices` agents
+# (Rust, leasing jobs from recalld); search is the web app, or `recall-cli`.
 ```
 
 ## runner + shims (stage E3, SHADOW — nothing reads its output yet)
@@ -277,7 +285,8 @@ label — there's no separate enrol screen. To seed a voice up front from a clea
 use the CLI:
 
 ```sh
-./scripts/recall.sh enroll --name Alex --audio alex.wav --out /Volumes/Backup/recall
+# ⚠ DELETED. Enrolment is a fleet job now: name a turn in the web app and
+# recalld derives an `enroll-speaker` job from it (recalld/src/enrol.rs).
 ```
 
 ## Daily flow
@@ -286,8 +295,8 @@ Capture + transcription run themselves. What's left is occasional: correct
 transcripts in the **Review** screen (accumulates training data), then:
 
 ```sh
-./scripts/recall.sh identify   --out /Volumes/Backup/recall   # attribute turns to enrolled people
-./scripts/recall.sh transcript --out /Volumes/Backup/recall   # list / read sessions — see review.md
+# ⚠ BOTH DELETED. Attribution is recalld's (the arithmetic moved to Rust);
+# reading sessions is the web app, or `recall-cli` — see review.md.
 ```
 
 ## llm-host — the model holder (recall no longer asks it anything)
@@ -320,7 +329,8 @@ included automatically). The cheap proper-noun lever; no training involved.
 ## Golden ASR check
 
 ```sh
-./scripts/recall.sh score-asr    # transcribe tests/fixtures/speech with the real model
+# The golden ASR gate — its own module since the CLI went (#1342):
+nix develop --command env PYTHONPATH=src .venv/bin/python -m recall.score_asr
 ```
 
 Fails if WER drifts past a fixture's threshold, or if the language is

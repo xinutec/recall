@@ -295,10 +295,11 @@ def test_the_host_is_importable_without_the_cli_substrate() -> None:
         env={**os.environ, "PYTHONPATH": str(src)},
     )
     loaded = set(json.loads(out.stdout))
-    assert "recall.cli" not in loaded, f"the CLI is back in the host's graph: {loaded}"
-    assert "recall.store" not in loaded, f"the store is back in it: {loaded}"
-    # Named rather than counted, so a genuine new dependency is a deliberate
-    # edit here rather than a number nudged upward.
+    # ⚠ Named rather than counted, so a genuine new dependency is a deliberate
+    # edit here rather than a number nudged upward. It used to also assert that
+    # `recall.cli` and `recall.store` were absent; both are now DELETED, so those
+    # assertions had become true no matter what the code did — which is a test
+    # passing for the wrong reason, not a test passing.
     assert loaded == {"recall", "recall.llm", "recall.llmhost", "recall.runlog"}
 
 

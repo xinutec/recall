@@ -171,12 +171,12 @@
         "--command",
         "python",
         "-c",
-        "import recall.cli"
+        "import recall.shim_asr, recall.shim_voices, recall.score_asr"
       ],
       "artifacts": [],
       "cwd": ".",
       "env": {},
-      "name": "capture-agent import surface (devshell python, no ML deps)",
+      "name": "shim import surface (devshell python, no ML deps)",
       "timeout_s": 300
     },
     {

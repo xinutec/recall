@@ -1,9 +1,23 @@
 # Discrete meeting recordings
 
 recall's live capture is continuous, but it can also ingest **discrete, one-off
-recordings** — e.g. a meeting or appointment recorded on a phone and dropped into
-a cloud folder — transcribe them with diarization, and hand them off as clean
-transcripts. This is the `ingest_meetings.py` → `transcribe` → `transcript` path.
+recordings** — e.g. a meeting or appointment recorded on a phone — transcribe them
+with diarization, and hand them off as clean transcripts.
+
+⚠ **THE PATH BELOW IS DELETED, 2026-09-18.** `ingest_meetings.py` → `transcribe`
+→ `transcript` was three Python commands that went with the CLI (#1342), and the
+script wrote into the MAC's `recall.sqlite` — which stopped being a replica when
+`sync` was deleted and whose newest turn is 2026-07-11. So it had already stopped
+reaching the archive of record before it was removed.
+
+**Upload the file in the web app instead.** It lands in the ingest plane as its
+own source (`POST /api/sessions`, then the blob), recalld derives the transcribe
+and diarize jobs, and the runners do the work — the same pipeline every
+microphone goes through, on the fleet, with the result where everything else is.
+
+The rest of this file is kept for the **conventions**, which the upload path
+still honours: the filename stamp, the session id, and how add-ons fold in.
+Treat every command block below as history.
 
 The steps below are generic. A *consumer* of this pipeline (a project that pulls
 the resulting transcripts into its own documents) keeps its own private mapping of

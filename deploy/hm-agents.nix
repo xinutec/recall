@@ -27,8 +27,11 @@
 #
 # ⚠ Logs live in ~/Library/Logs/recall, NOT in the repo: launchd opens the stdio
 # paths before any code runs, so a log path inside a checkout that moves takes the
-# agent down with exit 78 and an EMPTY log. `recall.cli._LOG_DIR` matches, for
-# rotation.
+# agent down with exit 78 and an EMPTY log.
+#
+# ⚠ Nothing rotates them any more: `recall.cli._LOG_DIR` and `logrotate.py` went
+# with the CLI (#1342), so these grow unbounded. `speech.out.log` was 8.6 MB on
+# 2026-09-18.
 #
 # recall-capture opens the microphone; recall-live does NOT — it reads the UDP tap
 # capture publishes, because two CoreAudio clients on one device starve each other

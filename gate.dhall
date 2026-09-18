@@ -193,16 +193,27 @@ in  { name = "recall"
             G.inDevShell [ ".venv/bin/python", "scripts/gen_models.py", "--check" ]
         , timeout_s = 300
         }
-      , {-  recall-capture/-ingest run `python -m recall` on the DEVSHELL
-            interpreter, which has no ML deps, so every ML import reachable from
-            the CLI must stay lazy. pytest cannot catch a new top-level ML import
-            — it runs on the fully-stocked .venv — but one would crash-loop the
-            capture agent, the one process that must never die. So: import the
-            CLI on the exact interpreter the agents use.
+      , {-  THE ML IMPORTS MUST STAY LAZY, and pytest cannot show it: pytest runs
+            on the fully-stocked .venv, where a new top-level `import mlx_whisper`
+            is invisible. Importing on the DEVSHELL interpreter, which has no ML
+            deps, is what catches it.
+
+            ⚠ This used to import `recall.cli`, because recall-capture/-ingest ran
+            `python -m recall` on this interpreter. Both are Rust now and the CLI
+            is deleted (#1342), so that subject is gone — but the discipline is
+            not. The shims are the reason it still matters: the runner spawns them
+            per job, and a module-level ML import turns a missing or broken model
+            dependency into a shim that dies at spawn, which reads as the queue
+            being quiet rather than as a fault.
         -}
         G.Check::{
-        , name = "capture-agent import surface (devshell python, no ML deps)"
-        , argv = G.inDevShell [ "python", "-c", "import recall.cli" ]
+        , name = "shim import surface (devshell python, no ML deps)"
+        , argv =
+            G.inDevShell
+              [ "python"
+              , "-c"
+              , "import recall.shim_asr, recall.shim_voices, recall.score_asr"
+              ]
         , timeout_s = 300
         }
       , {-  The .venv interpreter: plain `pytest` is the nix one and cannot

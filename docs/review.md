@@ -1,5 +1,9 @@
 # Reviewing a recorded call
 
+⚠ **`recall-cli` reads the FLEET**, which is the archive of record; the Python
+`recall.sh transcript` these examples used to show was deleted with the CLI
+(#1342) and read a Mac database that has been frozen since July.
+
 To read a recorded session (a meeting / phone call) from the command line — for your
 own review, or to hand to another agent — use the `transcript` command. It reads
 straight from the store; no server needed.
@@ -10,7 +14,7 @@ The data lives at `/Volumes/Backup/recall`, which is already the default on this
 ## List the recorded sessions
 
 ```
-./scripts/recall.sh transcript --out /Volumes/Backup/recall
+recall-cli sessions
 ```
 
 ```
@@ -24,7 +28,7 @@ Columns: session id, when, duration, turn count, and the confirmed speakers (or
 ## Read one session
 
 ```
-./scripts/recall.sh transcript meeting-20260209-1033 --out /Volumes/Backup/recall
+recall-cli transcript meeting-20260209-1033
 ```
 
 ```
@@ -45,8 +49,8 @@ Phone calls and in-person conversations caught by the always-on mics aren't "ses
 conversations, then dump one by its number:
 
 ```
-./scripts/recall.sh transcript --day today --out /Volumes/Backup/recall
-./scripts/recall.sh transcript --day 2026-02-09 --conv 3 --out /Volumes/Backup/recall
+recall-cli day 2026-02-09
+recall-cli day 2026-02-09 --conv 3
 ```
 
 ```
@@ -64,8 +68,9 @@ per moment, so the dump isn't doubled.
 
 ## Machine-readable
 
-Add `--json` to either form for structured output — a session array, or the clean
-transcript below — for an agent to parse instead of scraping the text.
+⚠ `--json` is gone with the Python CLI (#1342). `recall-cli` prints for a
+reader; for structured output call the API directly, or use
+`scripts/recall-api.py` below.
 
 ## Export a transcript
 

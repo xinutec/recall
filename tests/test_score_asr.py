@@ -1,4 +1,7 @@
-"""`recall score-asr` — the golden-fixture WER gate over the real ASR stack."""
+"""`python -m recall.score_asr` — the golden-fixture WER gate over the real ASR
+stack. It was a CLI subcommand until 2026-09-18; the CLI is gone (#1342) and this
+is one of the two things kept out of it, because a quality change has to be
+judged by a number."""
 
 from __future__ import annotations
 
@@ -6,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from recall import cli
+from recall import score_asr
 from recall.asr import AsrResult, AsrSegment
 
 
@@ -23,22 +26,18 @@ def _result(text: str, language: str) -> AsrResult:
 
 
 def _stub(texts: dict[str, str]) -> object:
-    """A transcriber answering per-fixture, keyed by the audio file's stem."""
+    """Stands in for `mlx_transcribe`, answering per-fixture by the audio stem."""
 
-    def build(_model: str, *, words: bool) -> object:
+    def transcribe(audio: Path, *, model: str, words: bool) -> AsrResult:
         assert words is False  # plain text pass; word timings not needed
+        assert model, "the gate must name the model it scored"
+        return _result(texts[audio.stem], _language_of(audio.stem))
 
-        def transcribe(audio: Path) -> AsrResult:
-            stem = audio.stem
-            return _result(texts[stem], _language_of(stem))
-
-        return transcribe
-
-    return build
+    return transcribe
 
 
 def _language_of(stem: str) -> str:
-    for fixture in cli._GOLDEN_FIXTURES:
+    for fixture in score_asr.GOLDEN_FIXTURES:
         if Path(fixture.audio).stem == stem:
             return fixture.language
     raise AssertionError(f"no golden fixture named {stem}")
@@ -47,17 +46,17 @@ def _language_of(stem: str) -> str:
 def _references() -> dict[str, str]:
     """The reference text of every fixture whose audio is actually present."""
     return {
-        Path(f.audio).stem: (cli._GOLDEN_FIXTURE / f.reference).read_text()
-        for f in cli._GOLDEN_FIXTURES
-        if (cli._GOLDEN_FIXTURE / f.audio).exists()
+        Path(f.audio).stem: (score_asr.FIXTURES / f.reference).read_text()
+        for f in score_asr.GOLDEN_FIXTURES
+        if (score_asr.FIXTURES / f.audio).exists()
     }
 
 
 def test_score_asr_passes_when_the_transcript_matches(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(cli, "_build_transcriber", _stub(_references()))
-    assert cli.main(["score-asr"]) == 0
+    monkeypatch.setattr(score_asr, "mlx_transcribe", _stub(_references()))
+    assert score_asr.main([]) == 0
     assert "WER" in capsys.readouterr().out
 
 
@@ -65,8 +64,8 @@ def test_score_asr_fails_when_wer_drifts(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     wrong = {stem: "completely unrelated words entirely" for stem in _references()}
-    monkeypatch.setattr(cli, "_build_transcriber", _stub(wrong))
-    assert cli.main(["score-asr"]) == 1
+    monkeypatch.setattr(score_asr, "mlx_transcribe", _stub(wrong))
+    assert score_asr.main([]) == 1
     assert "FAIL" in capsys.readouterr().out
 
 
@@ -77,10 +76,10 @@ def test_every_fixture_really_ships() -> None:
     gate named a fixture whose audio lived on one Mac, so it read as a repo-wide
     guarantee for months while covering less than it said.
     """
-    assert cli._GOLDEN_FIXTURES, "no fixtures — the gate cannot run at all"
-    for fixture in cli._GOLDEN_FIXTURES:
-        assert (cli._GOLDEN_FIXTURE / fixture.audio).exists(), fixture.audio
-        assert (cli._GOLDEN_FIXTURE / fixture.reference).exists(), fixture.reference
+    assert score_asr.GOLDEN_FIXTURES, "no fixtures — the gate cannot run at all"
+    for fixture in score_asr.GOLDEN_FIXTURES:
+        assert (score_asr.FIXTURES / fixture.audio).exists(), fixture.audio
+        assert (score_asr.FIXTURES / fixture.reference).exists(), fixture.reference
 
 
 def test_both_household_languages_are_scored_on_any_clone() -> None:
@@ -90,7 +89,7 @@ def test_both_household_languages_are_scored_on_any_clone() -> None:
     this assertion would have passed on one Mac and failed on every clone. If a
     future change makes a fixture local again, this fails and says why.
     """
-    languages = {f.language for f in cli._GOLDEN_FIXTURES}
+    languages = {f.language for f in score_asr.GOLDEN_FIXTURES}
     assert {"en", "nl"} <= languages, (
         f"the household speaks en and nl; the gate scores {sorted(languages)}"
     )
@@ -107,8 +106,8 @@ def test_a_missing_fixture_fails_rather_than_passing_vacuously(
     audio existed on one machine. Scoring "every fixture that happens to be
     present" reproduces exactly that the moment one goes missing.
     """
-    monkeypatch.setattr(cli, "_GOLDEN_FIXTURE", tmp_path)
-    monkeypatch.setattr(cli, "_build_transcriber", _stub({}))
-    assert cli.main(["score-asr"]) == 1
+    monkeypatch.setattr(score_asr, "FIXTURES", tmp_path)
+    monkeypatch.setattr(score_asr, "mlx_transcribe", _stub({}))
+    assert score_asr.main([]) == 1
     out = capsys.readouterr().out
     assert "missing" in out.lower()

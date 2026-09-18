@@ -20,7 +20,6 @@ from recall.asr import (
     decode_pcm_f32,
     result_to_drafts,
 )
-from recall.probe import probe_media
 
 BASE = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
 
@@ -79,7 +78,28 @@ def test_concat_really_joins_audio(tmp_path: Path) -> None:
     out = tmp_path / "joined.wav"
     concat_working_copy(parts, out, normalize=True)
     assert out.exists()
-    assert 2.5 <= probe_media(out).duration.total_seconds() <= 3.5
+    assert 2.5 <= _duration_seconds(out) <= 3.5
+
+
+def _duration_seconds(path: Path) -> float:
+    """Duration via ffprobe. Local to this test because `recall.probe` went with
+    the CLI (#1342) — what is under test here is the concat, not the prober."""
+    out = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return float(out.stdout.strip())
 
 
 def test_slice_argv_extracts_window() -> None:

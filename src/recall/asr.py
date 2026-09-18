@@ -314,8 +314,9 @@ def mlx_transcribe(
     `language` forces a language (e.g. "en"/"nl"); None auto-detects. `words=True`
     adds per-word timings (for aligning a whole-segment transcription to diarized
     speakers) at some extra cost; off by default. `initial_prompt` biases decoding
-    toward the household vocabulary (recall.vocabulary) — names it has seen in the
-    prompt get spelled right.
+    toward the household vocabulary — names it has seen in the prompt get spelled
+    right. The prompt is built by the FLEET (`recalld::labels::initial_prompt`)
+    and handed to the shim per job; the Python that used to build it is gone.
     """
     import mlx_whisper  # noqa: PLC0415 - lazy: mlx-whisper is an optional heavy dep
 
