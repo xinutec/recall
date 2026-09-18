@@ -495,3 +495,41 @@ fn a_fully_covered_block_still_builds_and_records_its_coverage() {
         "a whole minute of audio covers the whole minute"
     );
 }
+
+#[test]
+fn coverage_is_backfilled_for_blocks_judged_before_it_was_measured() {
+    // Blocks built before the column existed read NULL, which means UNKNOWN and
+    // not "fully covered" — the distribution is what decides what to do about
+    // the padded ones (#1661).
+    let dir = tempfile::tempdir().expect("tmp");
+    for i in 0..4 {
+        stored(dir.path(), "usb", &format!("20260905T1000{i:02}"), 0.5);
+    }
+    stored_short(dir.path(), "usb", "20260905T110050", 0.5, 10.0);
+    let block = DateTime::parse_from_rfc3339("2026-09-05T11:00:00Z")
+        .expect("t")
+        .with_timezone(&Utc);
+    scan_once(dir.path(), 100).expect("levels");
+    seed_speech(dir.path());
+    build_once(dir.path(), &config(), now_after(block)).expect("build");
+
+    // Put the archive back in the state a pre-2026-09-18 deployment was in.
+    let conn = store::open(dir.path()).expect("db");
+    conn.execute("UPDATE room_blocks SET coverage = NULL", [])
+        .expect("clear");
+
+    let measured = recalld::room::backfill_coverage(dir.path(), 100).expect("backfill");
+    assert!(measured > 0, "there were blocks to measure");
+    let (verdict, coverage) = block_row(dir.path(), block);
+    assert_eq!(verdict, "sparse", "the verdict is not rewritten");
+    assert!(
+        coverage.expect("measured") < 0.25,
+        "ten seconds of sixty is about 0.17"
+    );
+
+    assert_eq!(
+        recalld::room::backfill_coverage(dir.path(), 100).expect("again"),
+        0,
+        "a measured block is not measured again"
+    );
+}

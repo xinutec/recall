@@ -608,3 +608,47 @@ pub fn verdict_of(conn: &Connection, block_start_utc: &str) -> rusqlite::Result<
     )
     .optional()
 }
+
+/// Fill `coverage` for blocks judged before it was measured.
+///
+/// Read-only about the verdict: it records how much of each block its winner
+/// actually recorded and changes nothing else. Blocks already found sparse keep
+/// their verdict; what this produces is the distribution needed to decide what
+/// to do about the ones that were built anyway (#1661).
+///
+/// # Errors
+/// If the database refuses.
+pub fn backfill_coverage(root: &Path, limit: usize) -> rusqlite::Result<usize> {
+    let conn = store::open(root)?;
+    ensure_schema(&conn)?;
+    let pending: Vec<(String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT start_utc, winner FROM room_blocks
+              WHERE coverage IS NULL AND winner IS NOT NULL
+              ORDER BY start_utc DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([u32::try_from(limit).unwrap_or(u32::MAX)], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
+        rows.collect::<Result<_, _>>()?
+    };
+    let mut written = 0;
+    for (start_utc, winner) in pending {
+        let Ok(block) = DateTime::parse_from_rfc3339(&start_utc) else {
+            continue;
+        };
+        let window = decode::window_covered(
+            &root.join("ingest"),
+            &winner,
+            block.with_timezone(&Utc),
+            BLOCK_S as usize,
+            RATE,
+        );
+        conn.execute(
+            "UPDATE room_blocks SET coverage = ?1 WHERE start_utc = ?2",
+            rusqlite::params![f64::from(window.coverage), start_utc],
+        )?;
+        written += 1;
+    }
+    Ok(written)
+}

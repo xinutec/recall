@@ -314,6 +314,34 @@ fn spawn_rematcher(root: PathBuf) {
     });
 }
 
+/// Measure coverage for blocks judged before it was recorded (#1661). Ends when
+/// the archive is measured and never runs again.
+fn spawn_coverage_backfill(root: PathBuf) {
+    const BATCH: usize = 50;
+    const IDLE: std::time::Duration = std::time::Duration::from_mins(30);
+    tokio::spawn(async move {
+        loop {
+            let batch_root = root.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                recalld::room::backfill_coverage(&batch_root, BATCH)
+            })
+            .await;
+            match done {
+                Ok(Ok(0)) => tokio::time::sleep(IDLE).await,
+                Ok(Ok(n)) => tracing::info!(measured = n, "room: coverage backfilled"),
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, "room: coverage backfill failed; backing off");
+                    tokio::time::sleep(IDLE).await;
+                }
+                Err(err) => {
+                    tracing::error!(%err, "room: coverage task failed; backing off");
+                    tokio::time::sleep(IDLE).await;
+                }
+            }
+        }
+    });
+}
+
 /// Start every background pass the daemon runs.
 ///
 /// ⚠ **Extracted so the LIST is readable, not merely so `main` is short.** These
@@ -327,6 +355,7 @@ fn spawn_background_passes(root: &std::path::Path) {
     spawn_level_scanner(root.clone());
     spawn_speech_scanner(root.clone());
     spawn_rematcher(root.clone());
+    spawn_coverage_backfill(root.clone());
     spawn_room_builder(root.clone());
     spawn_room_registrar(root.clone());
     // ⚠ **OFF since 2026-09-11, MEASURED.** Its first 20 blocks produced turns
