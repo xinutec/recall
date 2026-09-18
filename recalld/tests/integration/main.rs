@@ -41,6 +41,7 @@ mod proxy;
 mod quality_parity;
 mod queue;
 mod reads;
+mod rematch;
 mod reports;
 mod room;
 mod segments;

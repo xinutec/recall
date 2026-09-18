@@ -397,6 +397,14 @@ pub const MIGRATIONS: &[&str] = &[
     DROP TABLE IF EXISTS day_summaries;
     DROP TABLE IF EXISTS live_summaries;
 "#,
+    // v45
+    r#"
+    -- When this turn's speaker_guess was last derived. NULL means "before this
+    -- column existed", which is exactly the population the re-match pass wants
+    -- first: every guess written against a voiceprint corpus that has since
+    -- grown (#1657).
+    ALTER TABLE transcript_segments ADD COLUMN speaker_matched_utc TEXT;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

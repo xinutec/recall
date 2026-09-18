@@ -1,5 +1,7 @@
 # The meaning plane's schema AS IT STANDS ON ISIS, dumped 2026-09-18 from the
-# live recall.sqlite (user_version 44) behind 145,062 turns.
+# live recall.sqlite behind 145,062 turns.
+#
+# user_version: 44
 #
 # ⚠ This is the REFERENCE the ported migration ladder is held to. It was taken
 # from the running system, not produced by the code under test — which is the

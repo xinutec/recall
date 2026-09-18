@@ -27,6 +27,7 @@ pub mod pyjson;
 pub mod quality;
 pub mod queue;
 pub mod reads;
+pub mod rematch;
 pub mod reports;
 pub mod room;
 pub mod route;

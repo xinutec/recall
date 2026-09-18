@@ -269,6 +269,51 @@ fn spawn_level_scanner(root: PathBuf) {
     });
 }
 
+/// Re-derive stored speaker guesses when the voiceprint corpus has grown.
+///
+/// ⚠ **This REWRITES THE RECORD**, so it is bounded and visible rather than
+/// quiet: every batch logs what it changed. Measured on the fleet 2026-09-18,
+/// the stored guesses agreed with the human label 49.1% of the time and the same
+/// rule re-run agreed 91.3% — the archive was showing names derived from a
+/// voiceprint corpus that has since more than doubled (#1657).
+///
+/// The work-list empties out and only refills when somebody enrols a voice, so
+/// the idle sleep is what this loop does almost always.
+fn spawn_rematcher(root: PathBuf) {
+    const BATCH: usize = 200;
+    const IDLE: std::time::Duration = std::time::Duration::from_mins(5);
+    const BACKOFF: std::time::Duration = std::time::Duration::from_mins(5);
+    tokio::spawn(async move {
+        loop {
+            let batch_root = root.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                let mut conn = recalld::work::open_write(&batch_root)?;
+                let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                recalld::rematch::run_once(&mut conn, BATCH, &now)
+            })
+            .await;
+            match done {
+                Ok(Ok(pass)) if pass.examined == 0 => tokio::time::sleep(IDLE).await,
+                Ok(Ok(pass)) => tracing::info!(
+                    examined = pass.examined,
+                    rewritten = pass.rewritten,
+                    unchanged = pass.unchanged,
+                    unmatched = pass.unmatched,
+                    "rematch: batch complete"
+                ),
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, "rematch: pass failed; backing off");
+                    tokio::time::sleep(BACKOFF).await;
+                }
+                Err(err) => {
+                    tracing::error!(%err, "rematch: task failed; backing off");
+                    tokio::time::sleep(BACKOFF).await;
+                }
+            }
+        }
+    });
+}
+
 /// Start every background pass the daemon runs.
 ///
 /// ⚠ **Extracted so the LIST is readable, not merely so `main` is short.** These
@@ -281,6 +326,7 @@ fn spawn_background_passes(root: &std::path::Path) {
     let root = &root;
     spawn_level_scanner(root.clone());
     spawn_speech_scanner(root.clone());
+    spawn_rematcher(root.clone());
     spawn_room_builder(root.clone());
     spawn_room_registrar(root.clone());
     // ⚠ **OFF since 2026-09-11, MEASURED.** Its first 20 blocks produced turns

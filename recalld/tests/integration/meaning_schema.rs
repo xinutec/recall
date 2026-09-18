@@ -30,11 +30,36 @@ fn fleet_schema() -> Vec<String> {
         .collect()
 }
 
+/// The version the fixture was dumped at.
+///
+/// ⚠ **The comparison runs to THIS rung, not to the top of the ladder.** This
+/// fixture's job is to prove the PORT was faithful — a fact about v1..=44 and
+/// the database they built. A migration added afterwards makes the schema differ
+/// from the dump BY DESIGN, and re-baselining the fixture to keep the test green
+/// would quietly turn a production dump into whatever this code last produced,
+/// which is the one thing it must never become.
+fn fixture_version() -> usize {
+    include_str!("../fixtures/meaning_schema_fleet.txt")
+        .lines()
+        .find_map(|l| l.strip_prefix("# user_version:"))
+        .and_then(|v| v.trim().parse().ok())
+        .expect("the fixture must record the version it was dumped at")
+}
+
+/// Build a database by applying exactly `rungs` migrations.
+fn built_to(rungs: usize) -> rusqlite::Connection {
+    let conn = rusqlite::Connection::open_in_memory().expect("db");
+    for (index, statement) in MIGRATIONS.iter().enumerate().take(rungs) {
+        conn.execute_batch(statement).expect("rung");
+        conn.execute_batch(&format!("PRAGMA user_version = {}", index + 1))
+            .expect("stamp");
+    }
+    conn
+}
+
 #[test]
 fn the_ladder_builds_the_schema_the_fleet_is_actually_running() {
-    let conn = rusqlite::Connection::open_in_memory().expect("db");
-    ensure(&conn).expect("migrate from empty");
-
+    let conn = built_to(fixture_version());
     let built = schema_of(&conn);
     let want = fleet_schema();
 
@@ -81,5 +106,9 @@ fn a_database_halfway_up_the_ladder_climbs_the_rest() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("version");
     assert_eq!(version as usize, MIGRATIONS.len());
-    assert_eq!(schema_of(&conn), fleet_schema());
+    // And it lands on the same schema as climbing from empty, which is the
+    // property an upgrade actually has to have.
+    let from_empty = rusqlite::Connection::open_in_memory().expect("db");
+    ensure(&from_empty).expect("from empty");
+    assert_eq!(schema_of(&conn), schema_of(&from_empty));
 }

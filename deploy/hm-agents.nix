@@ -29,9 +29,11 @@
 # paths before any code runs, so a log path inside a checkout that moves takes the
 # agent down with exit 78 and an EMPTY log.
 #
-# ⚠ Nothing rotates them any more: `recall.cli._LOG_DIR` and `logrotate.py` went
-# with the CLI (#1342), so these grow unbounded. `speech.out.log` was 8.6 MB on
-# 2026-09-18.
+# ⚠ NOTHING ROTATES THEM (#1656) — 111 MB by 2026-09-18. `logrotate.py` went with
+# the CLI, but it was already vestigial: it ran from `cli.main()`, so once every
+# agent but `llm-host` was Rust it fired about once per restart of one long-lived
+# daemon. The fix belongs in a Rust agent that runs periodically, not in whatever
+# happens to start a process.
 #
 # recall-capture opens the microphone; recall-live does NOT — it reads the UDP tap
 # capture publishes, because two CoreAudio clients on one device starve each other
