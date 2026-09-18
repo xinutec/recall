@@ -36,6 +36,11 @@ RUN pnpm run build
 # The Rust system-of-record daemon (docs/architecture.md, stage A) — the only
 # program this image exists to run. One binary binds both planes, so the pod is
 # one container and the image is one artifact to version, push and roll.
+# TRIXIE, where the rest of the fleet is on bookworm, and that is forced rather
+# than drifted: Debian ships libonnxruntime only from trixie (1.21), and the VAD
+# dlopens Debian's baseline build because ort's prebuilt needs AVX2 — which
+# SIGILLs on isis (Ivy Bridge, 2012). Harmonising this to bookworm takes the
+# speech detector off the air (#1629).
 FROM rust:1-slim-trixie AS recalld
 WORKDIR /build
 # The whole Rust workspace (stage D1): cargo needs every member's manifest and
