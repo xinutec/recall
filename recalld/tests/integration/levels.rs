@@ -285,3 +285,119 @@ fn a_database_from_before_the_detector_gains_the_column() {
     // And running it twice must not fail on the column already being there.
     recalld::levels::ensure_schema(&conn).expect("idempotent");
 }
+
+use recalld::levels::quiet_run_seconds;
+
+/// Decode a stored fixture exactly as `measure` does.
+fn fixture_pcm(name: &str) -> Option<Vec<u8>> {
+    let path = std::path::PathBuf::from("../tests/fixtures/speech").join(name);
+    if !path.exists() {
+        // Not deliberate when it happens: .gitignore's blanket *.flac has
+        // swallowed these before (#1433).
+        eprintln!("skipping: fixture {name} absent");
+        return None;
+    }
+    audiocore::decode::decode_s16(&path, 16_000)
+}
+
+#[test]
+fn a_real_recording_of_speech_holds_no_long_quiet_run() {
+    // ⚠ THE DIRECTION THAT MATTERS. A gate detector earns its place by leaving
+    // healthy microphones alone: the one that shipped before this flagged every
+    // phone in the house, so the filter built on it had to be reverted (#1526).
+    //
+    // A human reading, recorded rather than synthesised, measures 0.128 s here.
+    let Some(pcm) = fixture_pcm("public-domain-en.flac") else {
+        return;
+    };
+    let run = quiet_run_seconds(&pcm, 16_000);
+    assert!(
+        run < 0.5,
+        "a real recording must not read as gated; got {run:.3}s"
+    );
+}
+
+#[test]
+fn synthesised_speech_carries_digital_silence_that_a_microphone_never_would() {
+    // ⚠ Recorded so it is not mistaken for evidence about real audio. Both
+    // `dialogue-*` fixtures are MACHINE-READ (tests/fixtures/speech/README.md),
+    // and a synthesiser emits true zeros between utterances: 18-22% of their
+    // samples are exactly zero and the longest quiet stretch is ~0.81 s, against
+    // 0.128 s for the human reading beside them. That is the synthesiser, not a
+    // gate — so these two must never be used to calibrate this detector.
+    let Some(pcm) = fixture_pcm("dialogue-en.flac") else {
+        return;
+    };
+    let run = quiet_run_seconds(&pcm, 16_000);
+    assert!(
+        run > 0.5,
+        "expected the synthesiser's digital silence; got {run:.3}s"
+    );
+}
+
+#[test]
+fn the_longest_stretch_is_what_counts_not_the_total_quiet() {
+    // The whole design in one assertion. A microphone listening to a room emits
+    // many short near-silences; a gate holds ONE long one. Summing them would
+    // measure how quiet the room was and flag every calm conversation — which is
+    // exactly how the previous detector failed.
+    let rate = 16_000u32;
+    let mut scattered: Vec<i16> = Vec::new();
+    for _ in 0..20 {
+        scattered.extend(std::iter::repeat_n(0i16, rate as usize / 10)); // 0.1 s
+        scattered.extend(std::iter::repeat_n(4000i16, rate as usize / 10));
+    }
+    let mut gated = vec![4000i16; rate as usize];
+    gated.extend(std::iter::repeat_n(0i16, 2 * rate as usize)); // one 2 s stretch
+    gated.extend(std::iter::repeat_n(4000i16, rate as usize));
+
+    let bytes = |v: &[i16]| -> Vec<u8> { v.iter().flat_map(|s| s.to_le_bytes()).collect() };
+    let scattered_run = quiet_run_seconds(&bytes(&scattered), rate);
+    let gated_run = quiet_run_seconds(&bytes(&gated), rate);
+
+    assert!(
+        (scattered_run - 0.1).abs() < 0.01,
+        "2.0 s of quiet in twenty pieces is 0.1 s, not 2.0; got {scattered_run:.3}s"
+    );
+    assert!(
+        (gated_run - 2.0).abs() < 0.01,
+        "one 2 s stretch must measure 2 s; got {gated_run:.3}s"
+    );
+}
+
+#[test]
+fn a_database_that_already_has_gated_gains_the_run_column() {
+    // ⚠ THE SHAPE PRODUCTION IS IN TODAY, which the pre-2026-09-12 test above
+    // does NOT cover: the fleet's table already has `gated`, so a migration
+    // keyed on that column alone would decide it had nothing to do and the
+    // insert naming `quiet_run_s` would fail on every segment.
+    let dir = tempfile::tempdir().expect("tmp");
+    let conn = store::open(dir.path()).expect("db");
+    conn.execute_batch(
+        "CREATE TABLE segment_levels (
+             filename     TEXT PRIMARY KEY,
+             source       TEXT NOT NULL,
+             speech_db    REAL NOT NULL,
+             floor_db     REAL NOT NULL,
+             gated        REAL,
+             computed_utc TEXT NOT NULL
+         );
+         INSERT INTO segment_levels
+           VALUES ('usb-x.wav','usb',-20.0,-60.0,0.0,'2026-09-15T00:00:00Z');",
+    )
+    .expect("the schema as the fleet has it");
+
+    recalld::levels::ensure_schema(&conn).expect("migrate");
+
+    let run: Option<f64> = conn
+        .query_row(
+            "SELECT quiet_run_s FROM segment_levels WHERE filename = 'usb-x.wav'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("the column must exist");
+    assert!(
+        run.is_none(),
+        "a row measured before this statistic reads UNKNOWN, never a clean zero"
+    );
+}
