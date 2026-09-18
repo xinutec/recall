@@ -398,3 +398,100 @@ fn the_backfill_re_measures_a_row_whose_gate_reading_is_missing() {
         "a bursting sine is not a gate"
     );
 }
+
+/// A clip that covers only `seconds` of its minute — the shape a pause, a
+/// dropout or a late-starting recorder leaves behind.
+fn stored_short(root: &Path, source: &str, stamp: &str, amplitude: f32, seconds: f32) {
+    let name = format!("{source}-{stamp}.wav");
+    let dir = root.join("ingest").join(source);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    wav(&dir.join(&name), amplitude, seconds);
+    let start = DateTime::parse_from_str(&format!("{stamp}+0000"), "%Y%m%dT%H%M%S%z")
+        .expect("stamp")
+        .with_timezone(&Utc);
+    let conn = store::open(root).expect("db");
+    store::insert(
+        &conn,
+        &store::Row {
+            source: source.to_owned(),
+            filename: name,
+            start_utc: start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            bytes: 1,
+            sha256: "x".into(),
+            received_utc: "2026-09-05T00:00:00Z".into(),
+            sent_utc: None,
+        },
+    )
+    .expect("row");
+}
+
+fn block_row(root: &Path, block: DateTime<Utc>) -> (String, Option<f64>) {
+    let conn = store::open(root).expect("db");
+    conn.query_row(
+        "SELECT verdict, coverage FROM room_blocks WHERE start_utc = ?1",
+        [block.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .expect("verdict row")
+}
+
+#[test]
+fn a_block_the_winner_barely_recorded_is_refused_not_padded() {
+    // ⚠ **THE DEFECT #1661 RECORDS, at the size it really occurs.** A real block
+    // on 2026-09-13 had one usb clip starting at :50 — ten seconds of a sixty
+    // second window — and the other fifty were written as DIGITAL ZEROS and
+    // transcribed. The all-zero guard cannot see it: the block is not all zero.
+    let dir = tempfile::tempdir().expect("tmp");
+    // A history, so the source is rankable at all.
+    for i in 0..4 {
+        stored(dir.path(), "usb", &format!("20260905T1000{i:02}"), 0.5);
+    }
+    // The block under test: ten seconds of audio in a sixty second minute.
+    stored_short(dir.path(), "usb", "20260905T110050", 0.5, 10.0);
+    let block = DateTime::parse_from_rfc3339("2026-09-05T11:00:00Z")
+        .expect("t")
+        .with_timezone(&Utc);
+    scan_once(dir.path(), 100).expect("levels");
+    seed_speech(dir.path());
+
+    build_once(dir.path(), &config(), now_after(block)).expect("build");
+
+    // ⚠ Asserted on the BLOCK UNDER TEST, never on the pass counts. The seeded
+    // history builds blocks of its own, and its clips start a second apart — so
+    // their tails leave the FOLLOWING minute covered by three seconds, which is
+    // itself sparse and correctly refused. Counting would pin the fixture's
+    // shape rather than the behaviour.
+    let (verdict, coverage) = block_row(dir.path(), block);
+    assert_eq!(verdict, "sparse");
+    let coverage = coverage.expect("the coverage must be RECORDED, not merely acted on");
+    assert!(
+        coverage < 0.25,
+        "ten seconds of sixty is about 0.17; got {coverage:.3}"
+    );
+}
+
+#[test]
+fn a_fully_covered_block_still_builds_and_records_its_coverage() {
+    // The other half of the guard: refusing sparse blocks must not refuse the
+    // ordinary ones, and the number is recorded either way so the floor can be
+    // raised from the distribution rather than from an argument.
+    let dir = tempfile::tempdir().expect("tmp");
+    for i in 0..4 {
+        stored(dir.path(), "usb", &format!("20260905T1000{i:02}"), 0.5);
+    }
+    stored(dir.path(), "usb", "20260905T110000", 0.5);
+    let block = DateTime::parse_from_rfc3339("2026-09-05T11:00:00Z")
+        .expect("t")
+        .with_timezone(&Utc);
+    scan_once(dir.path(), 100).expect("levels");
+    seed_speech(dir.path());
+
+    build_once(dir.path(), &config(), now_after(block)).expect("build");
+
+    let (verdict, coverage) = block_row(dir.path(), block);
+    assert!(verdict.starts_with("built"), "got {verdict}");
+    assert!(
+        coverage.expect("recorded") > 0.9,
+        "a whole minute of audio covers the whole minute"
+    );
+}

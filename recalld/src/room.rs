@@ -114,7 +114,31 @@ pub struct BuildSummary {
     /// Blocks where every audible source was gating. Counted apart from
     /// `silent`: the room was NOT quiet, the microphones refused to say so.
     pub gated: usize,
+    /// Blocks the winner barely recorded. Counted apart from `silent` for the
+    /// same reason: the room may well have been talking, and nothing captured
+    /// enough of it to be worth transcribing (#1661).
+    pub sparse: usize,
 }
+
+/// How much of a block a source must actually have recorded before the block is
+/// worth building.
+///
+/// ⚠ **A window is ZERO-FILLED where nothing was recorded, and the zero-fill is
+/// what Whisper hallucinates on.** The builder's only guard used to reject a
+/// window that was ENTIRELY zero, so a block with 10 seconds of speech and 50 of
+/// digital silence was written and transcribed. Measured over the archive
+/// 2026-09-18: 895 of 2,251 room clips carried more than 1.4 s of near-silence,
+/// and 280 of 5,677 blocks were at least HALF of it — while the USB condenser
+/// that won most of them has a maximum near-silent run of 0.014 s in its own
+/// clips. The silence was manufactured here (#1661).
+///
+/// ⚠ **0.5 is deliberately LOW and provisional.** It refuses only what the
+/// evidence already condemns — a block more than half missing cannot make an
+/// honest transcript — and every block's coverage is now RECORDED, so the floor
+/// can be raised from the distribution rather than from an argument. Raise it
+/// before the room turn writer is switched on (#1388), because until then a bad
+/// block costs runner time and after then it costs the archive.
+const MIN_COVERAGE: f32 = 0.5;
 
 pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
@@ -124,9 +148,29 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
              winner       TEXT,
              filename     TEXT,
              contributors TEXT NOT NULL,
+             -- Added 2026-09-18 (#1661). NULL means the block was judged before
+             -- coverage was measured, which is NOT the same as fully covered.
+             coverage     REAL,
              built_utc    TEXT NOT NULL
          );",
-    )
+    )?;
+    add_coverage_column(conn)
+}
+
+/// Add `coverage` to a table that already exists.
+///
+/// ⚠ `CREATE TABLE IF NOT EXISTS` adds nothing to a table that is already there,
+/// and every deployment before 2026-09-18 has this one — so without this the
+/// insert naming `coverage` fails on every block. The same trap `segment_levels`
+/// hit in production; it is written out there in full.
+fn add_coverage_column(conn: &Connection) -> rusqlite::Result<()> {
+    let present: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('room_blocks') WHERE name = 'coverage'")?
+        .exists([])?;
+    if present {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE room_blocks ADD COLUMN coverage REAL")
 }
 
 fn minute_floor(t: DateTime<Utc>) -> DateTime<Utc> {
@@ -321,11 +365,12 @@ fn record_verdict(
     winner: Option<&str>,
     filename: Option<&str>,
     contributors: &[Contributor],
+    coverage: Option<f32>,
 ) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO room_blocks
-             (start_utc, verdict, winner, filename, contributors, built_utc)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (start_utc, verdict, winner, filename, contributors, coverage, built_utc)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         (
             iso(block),
             verdict,
@@ -336,6 +381,7 @@ fn record_verdict(
             // the exact shape of a quiet minute.
             serde_json::to_string(contributors)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            coverage.map(f64::from),
             iso(Utc::now()),
         ),
     )?;
@@ -369,7 +415,7 @@ pub fn build_once(
             .collect();
         if audible.is_empty() {
             // Nothing decodable heard this minute at all.
-            record_verdict(&conn, block, "no-audio", None, None, &contributors)?;
+            record_verdict(&conn, block, "no-audio", None, None, &contributors, None)?;
             summary.silent += 1;
             continue;
         }
@@ -449,7 +495,7 @@ pub fn build_once(
             // transcript into the archive that nobody can tell apart from a good
             // one. The contributors are recorded, so the verdict is re-derivable
             // if the threshold ever moves.
-            record_verdict(&conn, block, "all-gated", None, None, &contributors)?;
+            record_verdict(&conn, block, "all-gated", None, None, &contributors, None)?;
             summary.gated += 1;
             continue;
         }
@@ -461,61 +507,116 @@ pub fn build_once(
             summary.deferred += 1;
             continue;
         };
-        let pcm = decode::window_pcm(
+        let window = decode::window_covered(
             &root.join("ingest"),
             &winner.source,
             block,
             BLOCK_S as usize,
             RATE,
         );
+        let coverage = window.coverage;
+        let pcm = window.pcm;
         if pcm.iter().all(|b| *b == 0) {
-            record_verdict(&conn, block, "no-audio", None, None, &contributors)?;
-            summary.silent += 1;
-            continue;
-        }
-        let filename = format!("{ROOM_SOURCE}-{}.flac", stamp(block));
-        let bytes = match encode_flac(root, &filename, &pcm) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                tracing::warn!(%err, block = %iso(block), "room: encode failed; retrying next pass");
-                summary.deferred += 1;
-                continue;
-            }
-        };
-        let row = store::Row {
-            source: ROOM_SOURCE.into(),
-            filename: filename.clone(),
-            start_utc: iso(block),
-            bytes: bytes.len() as u64,
-            sha256: hex::encode(Sha256::digest(&bytes)),
-            received_utc: iso(Utc::now()),
-            sent_utc: None,
-        };
-        // The blob is durable; make the two rows land together.
-        conn.execute_batch("BEGIN")?;
-        let stored = store::insert(&conn, &row).and_then(|()| {
             record_verdict(
                 &conn,
                 block,
-                // Which RULE chose is part of the verdict: a later census must
-                // be able to separate calibrated blocks from fallback ones
-                // without re-deriving the reference that existed at the time.
-                "built:raw",
-                Some(&winner.source),
-                Some(&filename),
+                "no-audio",
+                None,
+                None,
                 &contributors,
-            )
-        });
-        match stored {
-            Ok(()) => conn.execute_batch("COMMIT")?,
-            Err(err) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                return Err(err);
-            }
+                Some(coverage),
+            )?;
+            summary.silent += 1;
+            continue;
         }
-        summary.built += 1;
+        // ⚠ **The window is ZERO-FILLED where nothing was recorded**, and the
+        // all-zero test above only catches a block where nothing was recorded at
+        // ALL. Ten seconds of speech padded with fifty of digital silence passed
+        // it, was written, and was transcribed — Whisper's hallucination on
+        // silence is exactly the 22% repetition loops and the Dutch household
+        // reported in English that got the room turn writer switched off (#1661).
+        if window.coverage < MIN_COVERAGE {
+            record_verdict(
+                &conn,
+                block,
+                "sparse",
+                Some(&winner.source),
+                None,
+                &contributors,
+                Some(coverage),
+            )?;
+            summary.sparse += 1;
+            continue;
+        }
+        if write_block(
+            root,
+            &conn,
+            block,
+            &winner.source,
+            &pcm,
+            &contributors,
+            coverage,
+        )? {
+            summary.built += 1;
+        } else {
+            summary.deferred += 1;
+        }
     }
     Ok(summary)
+}
+
+/// Encode the block, store the blob and its verdict together, and say whether
+/// it landed. `false` means the encode failed and the block is worth retrying.
+///
+/// ⚠ The blob is durable before either row, so the two rows go in ONE
+/// transaction: a segments row without its verdict would be re-judged, and a
+/// verdict without its segments row names a blob nothing can find.
+fn write_block(
+    root: &Path,
+    conn: &Connection,
+    block: DateTime<Utc>,
+    winner: &str,
+    pcm: &[u8],
+    contributors: &[Contributor],
+    coverage: f32,
+) -> rusqlite::Result<bool> {
+    let filename = format!("{ROOM_SOURCE}-{}.flac", stamp(block));
+    let Ok(bytes) = encode_flac(root, &filename, pcm) else {
+        tracing::warn!(block = %iso(block), "room: encode failed; retrying next pass");
+        return Ok(false);
+    };
+    let row = store::Row {
+        source: ROOM_SOURCE.into(),
+        filename: filename.clone(),
+        start_utc: iso(block),
+        bytes: bytes.len() as u64,
+        sha256: hex::encode(Sha256::digest(&bytes)),
+        received_utc: iso(Utc::now()),
+        sent_utc: None,
+    };
+    conn.execute_batch("BEGIN")?;
+    let stored = store::insert(conn, &row).and_then(|()| {
+        record_verdict(
+            conn,
+            block,
+            // Which RULE chose is part of the verdict: a later census must be
+            // able to separate calibrated blocks from fallback ones without
+            // re-deriving the reference that existed at the time.
+            "built:raw",
+            Some(winner),
+            Some(&filename),
+            contributors,
+            Some(coverage),
+        )
+    });
+    match stored {
+        Ok(()) => conn.execute_batch("COMMIT")?,
+        Err(err) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(err);
+        }
+    }
+    Ok(true)
 }
 
 /// Was this block already judged? (Read side for tests and, later, the API.)
