@@ -412,8 +412,18 @@ push the result, ack. It replaces worker, live, jobs, sync-push, outbox and
 capture-mirror — a stateless poller needs no watermark, no outbox, no mirror
 queue, because the queue lives on Isis.
 
-The shims are the Python floor: long-lived processes speaking JSON over stdio,
-one per model family —
+The shims are the Python floor — and as of 2026-09-18 they are very nearly ALL
+of it. `src/recall` is **14 modules / 2,301 lines**, down from 40 / 8,228: the
+agent's CLI toolbox was deleted whole (#1342), and `store_schema.py`'s migration
+ladder became `recalld::meaning_schema` (#1538). What remains is these shims,
+their model wrappers, `llm-host`, `score_asr` (the golden ASR gate, kept so a
+quality change is judged by a number), and `api_models`/`schemas` which the
+gate's frontend type generator reads.
+
+⚠ **That floor is the decided end state, not a staging post.** The models are
+Python, so their wrappers are.
+
+Long-lived processes speaking JSON over stdio, one per model family —
 
 | shim | wraps | serves |
 |---|---|---|
