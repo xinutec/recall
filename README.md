@@ -45,8 +45,10 @@ ML deps (mlx-whisper, pyannote) live in `.venv`, which is a **symlink into the
 nix store** — `nix build .#dev-env --out-link .venv` builds it from `uv.lock`,
 the same lock the agents' `ml-env` comes from, plus the `dev` group. It was a
 uv-managed directory until 2026-08-10; nothing needs `uv sync` any more, and a
-fresh clone gets it from the gate's first venv row. `scripts/recall.sh` runs any
-command with the full environment.
+fresh clone gets it from the gate's first venv row. Run a Python entry point
+with `nix develop --command env PYTHONPATH=src .venv/bin/python -m recall.<module>`
+— ⚠ without `PYTHONPATH=src` you get the built copy from the nix store, because
+`.venv` symlinks `recall` there.
 
 ## Status
 

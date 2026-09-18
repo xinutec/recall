@@ -9,7 +9,7 @@ own review, or to hand to another agent — use the `transcript` command. It rea
 straight from the store; no server needed.
 
 The data lives at `/Volumes/Backup/recall`, which is already the default on this Mac
-(`recall.paths.default_data_root`) — pass `--out` only to point somewhere else.
+(the data root) — pass `--out` only to point somewhere else.
 
 ## List the recorded sessions
 

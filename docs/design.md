@@ -113,8 +113,9 @@ spans (Whisper hallucinates filler on silence). Raw audio is kept regardless, so
 better VAD can re-derive.
 
 The gate is not airtight — a creak or a passing car reads as speech-like, and
-Whisper invents words over it — so `recall.cleanup` sweeps the archive afterwards
-and **soft-hides**, never deletes:
+Whisper invents words over it — so `recalld::quality` refuses such a turn at
+WRITE time (`is_repetition_loop`, `is_wordless`), and it never reaches the read
+path. It replaced a retroactive sweep that soft-hid, never deleted:
 
 | pass | signal | needs audio |
 |---|---|---|
@@ -143,7 +144,8 @@ read path in the first place.
 Word timestamps in the refine pass align words to diarized speakers. Non-turbo
 `initial_prompt` vocab biasing is built: every transcription pass is biased by
 the household vocabulary (enrolled names + terms managed on the Labels page,
-`recall.vocabulary`), rebuilt per call so a new term applies immediately.
+built by `recalld::labels::initial_prompt` and handed to the shim per job, so a
+new term applies immediately).
 Non-turbo `large-v3` (better on Dutch) remains an open lever — see
 [pipeline.md §2](pipeline.md).
 
@@ -156,7 +158,7 @@ is additive — labelling a correction enrols that voice, and the archive
 re-attributes. Far-field household audio matches at only ~0.3 cosine, so the
 displayed confidence is a softmax "this person vs the others," not raw cosine.
 
-**5.6 Storage (SQLite + FTS5)** — `recall.store` migrations:
+**5.6 Storage (SQLite + FTS5)** — `recalld::meaning_schema` migrations:
 
 - `sources(id, name, kind, port)` — each recorder (USB mic, a phone, uploads).
 - `audio_segments(id, source_id, path, start_utc, end_utc, sample_rate,
