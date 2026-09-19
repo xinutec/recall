@@ -41,6 +41,10 @@ pub const COVERAGE_REF_MIN_CHARS: usize = 200;
 pub struct Existing {
     pub id: i64,
     pub text: String,
+    /// The turn's own span, so attribution can follow the diarization's
+    /// evidence instead of assuming it covers the clip.
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
 }
 
 /// A span a person has corrected, in absolute time.
@@ -115,6 +119,16 @@ pub enum Swap {
         insert: Vec<AlignedTurn>,
         hide: Vec<i64>,
     },
+    /// Name the turns that are already there. No text is rewritten and no
+    /// boundary is lost — the pass contributes the one thing it actually knows.
+    ///
+    /// ⚠ This is what a single-speaker pass should do. Replacing instead cost
+    /// 814 clips their segmentation: 3,686 turns hidden, 815 written back, and
+    /// 813 of those clips are now ONE turn (#1663).
+    Attribute {
+        speaker: String,
+        to: Vec<i64>,
+    },
     Keep(Refusal),
 }
 
@@ -188,6 +202,28 @@ pub fn decide(
     let speakers: std::collections::BTreeSet<&str> =
         keep.iter().map(|t| t.speaker.as_str()).collect();
     if speakers.len() < 2 && keep.len() < existing.len() {
+        // ⚠ Only the turns the diarization ACTUALLY COVERED. Asserting the one
+        // speaker across the whole clip is the same over-claim the flattening
+        // made: `pixel5-20260908T162259` had 8 spans totalling 5.6 s against a
+        // 617-character transcript, and every word took the only span on offer.
+        let to: Vec<i64> = existing
+            .iter()
+            .filter(|o| {
+                keep.iter().any(|t| {
+                    overlaps(
+                        (o.start, o.end),
+                        (at(block_start, t.start), at(block_start, t.end)),
+                    )
+                })
+            })
+            .map(|o| o.id)
+            .collect();
+        if let Some(speaker) = speakers.iter().next().filter(|_| !to.is_empty()) {
+            return Swap::Attribute {
+                speaker: (*speaker).to_owned(),
+                to,
+            };
+        }
         return Swap::Keep(Refusal::Undiscriminating {
             produced: keep.len(),
             existing: existing.len(),
@@ -372,6 +408,64 @@ pub fn has_word_timings(stored: &str) -> bool {
             .is_some_and(|t| t.segments.iter().any(|s| !s.words.is_empty()))
 }
 
+/// The replace arm's write, lifted out so `write_pass` stays under one screen.
+///
+/// # Errors
+/// If the database refuses.
+fn write_replacement(
+    meaning: &mut rusqlite::Connection,
+    swap: &Swap,
+    block: &Block<'_>,
+    prints: &[SpeakerVoice],
+    enrolled: &[crate::identify::Voiceprint],
+) -> rusqlite::Result<usize> {
+    let named = Named {
+        voices: prints
+            .iter()
+            .map(|p| (p.speaker.as_str(), p.vector.as_slice()))
+            .collect(),
+        enrolled,
+    };
+    apply(meaning, block, swap, &named)
+}
+
+/// Name turns that already exist, without touching their text or boundaries.
+///
+/// ⚠ **The whole point is that nothing is hidden and nothing is inserted.** A
+/// single-speaker pass has exactly one thing to contribute — who was talking —
+/// and replacing the transcript to deliver it cost 814 clips their segmentation
+/// before this existed (#1663).
+///
+/// The voiceprint is optional: an older diarization stored before the shim
+/// embedded leaves the cluster recorded and the name unguessed, which is worse
+/// than a name and better than a wrong one.
+///
+/// # Errors
+/// If the database refuses.
+fn attribute(
+    conn: &mut rusqlite::Connection,
+    ids: &[i64],
+    speaker: &str,
+    vector: Option<&[f64]>,
+    enrolled: &[crate::identify::Voiceprint],
+) -> rusqlite::Result<usize> {
+    let tx = conn.transaction()?;
+    let mut named = 0;
+    for &id in ids {
+        tx.execute(
+            "UPDATE transcript_segments SET speaker_cluster = ?1 WHERE id = ?2",
+            rusqlite::params![speaker, id],
+        )?;
+        if let Some(vector) = vector {
+            let guess = crate::identify::match_one(vector, enrolled);
+            crate::identify::record(&tx, id, vector, guess.as_ref())?;
+        }
+        named += 1;
+    }
+    tx.commit()?;
+    Ok(named)
+}
+
 /// Apply a [`Swap::Replace`] to one block. ONE transaction: the hides, the
 /// inserts and their search-index rows land together or not at all.
 ///
@@ -516,17 +610,37 @@ pub fn standing(
     audio_segment_id: i64,
 ) -> rusqlite::Result<Vec<Existing>> {
     let mut stmt = conn.prepare(
-        "SELECT id, text FROM transcript_segments
+        "SELECT id, text, start_utc, end_utc FROM transcript_segments
          WHERE audio_segment_id = ?1 AND superseded_by IS NULL
            AND hidden_reason IS NULL AND asr_model <> 'human'",
     )?;
     let rows = stmt.query_map([audio_segment_id], |r| {
-        Ok(Existing {
-            id: r.get(0)?,
-            text: r.get(1)?,
-        })
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+        ))
     })?;
-    rows.collect()
+    // ⚠ A turn whose stored instants will not parse is SKIPPED, not defaulted:
+    // a span at the epoch would overlap nothing and quietly go unnamed, which
+    // reads exactly like a turn the diarization did not cover.
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, text, start, end) = row?;
+        if let (Ok(start), Ok(end)) = (
+            DateTime::parse_from_rfc3339(&start),
+            DateTime::parse_from_rfc3339(&end),
+        ) {
+            out.push(Existing {
+                id,
+                text,
+                start: start.with_timezone(&Utc),
+                end: end.with_timezone(&Utc),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Every corrected span overlapping `[from, to)`.
@@ -644,6 +758,9 @@ pub struct Pass {
     /// Blocks waiting on something transient — no audio segment registered yet,
     /// or no words to align against. These get NO ledger row.
     pub waiting: usize,
+    /// Turns NAMED in place, where the pass had a speaker but no segmentation
+    /// worth trading the existing boundaries for.
+    pub named: usize,
 }
 
 /// Drain the finished `diarize-room` jobs into speaker-aligned turns.
@@ -785,29 +902,26 @@ pub fn write_pass(
                 crate::turns::ledger(ingest, kind, &filename, &why.to_string(), now)?;
                 pass.kept += 1;
             }
+            Swap::Attribute { speaker, to } => {
+                let vector = prints
+                    .iter()
+                    .find(|p| p.speaker == *speaker)
+                    .map(|p| p.vector.as_slice());
+                pass.named += attribute(meaning, to, speaker, vector, &enrolled)?;
+                let why = format!("attributed: {} turn(s) named in place", to.len());
+                crate::turns::ledger(ingest, kind, &filename, &why, now)?;
+            }
             Swap::Replace { hide, .. } => {
-                let named = Named {
-                    voices: prints
-                        .iter()
-                        .map(|p| (p.speaker.as_str(), p.vector.as_slice()))
-                        .collect(),
-                    enrolled: &enrolled,
+                let block = Block {
+                    audio_segment_id: audio_id,
+                    start: block_start,
+                    language: language.as_deref(),
+                    model,
+                    provenance: stream.provenance,
+                    hidden_reason: stream.hidden_reason,
+                    now,
                 };
-                let written = apply(
-                    meaning,
-                    &Block {
-                        audio_segment_id: audio_id,
-                        start: block_start,
-                        language: language.as_deref(),
-                        model,
-                        provenance: stream.provenance,
-                        hidden_reason: stream.hidden_reason,
-                        now,
-                    },
-                    &swap,
-                    &named,
-                )?;
-                pass.turns += written;
+                pass.turns += write_replacement(meaning, &swap, &block, &prints, &enrolled)?;
                 pass.hidden += hide.len();
                 crate::turns::ledger(ingest, kind, &filename, "aligned", now)?;
             }

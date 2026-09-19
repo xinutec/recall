@@ -34,9 +34,16 @@ fn turn(start: f64, end: f64, text: &str) -> AlignedTurn {
 }
 
 fn existing(id: i64, text: &str) -> Existing {
+    at_seconds(id, text, 0.0, 60.0)
+}
+
+/// An existing turn with its own span, for the overlap the attribution needs.
+fn at_seconds(id: i64, text: &str, start: f64, end: f64) -> Existing {
     Existing {
         id,
         text: text.to_owned(),
+        start: base() + TimeDelta::milliseconds((start * 1000.0) as i64),
+        end: base() + TimeDelta::milliseconds((end * 1000.0) as i64),
     }
 }
 
@@ -58,7 +65,7 @@ fn a_real_pass_replaces_the_machine_turns_it_supersedes() {
             assert_eq!(insert.len(), 2);
             assert_eq!(hide, vec![11]);
         }
-        other @ Swap::Keep(_) => panic!("expected a replace, got {other:?}"),
+        other => panic!("expected a replace, got {other:?}"),
     }
 }
 
@@ -110,15 +117,64 @@ fn a_single_speaker_pass_does_not_flatten_a_finer_transcript() {
     );
 
     match swap {
-        Swap::Keep(Refusal::Undiscriminating {
-            produced,
-            existing,
-            speakers,
-        }) => {
-            assert_eq!((produced, existing, speakers), (1, 3, 1));
+        Swap::Attribute { speaker, to } => {
+            assert_eq!(speaker, "SPEAKER_00");
+            assert_eq!(
+                to,
+                vec![11, 12, 13],
+                "every turn the one speaker covers is NAMED, none replaced"
+            );
         }
-        other => panic!("the finer transcript must stand, got {other:?}"),
+        other => panic!("the finer transcript must stand and be named, got {other:?}"),
     }
+}
+
+/// ⚠ **Attribution follows the EVIDENCE, not the clip.** The diarization heard
+/// one speaker over part of the clip; a turn outside that span gets no name.
+///
+/// This is the over-claim the flattening made: `pixel5-20260908T162259` had 8
+/// spans totalling 5.6 s against a 617-character transcript, and the pass
+/// asserted one speaker for the whole minute.
+#[test]
+fn a_turn_outside_the_speaker_span_is_left_unnamed() {
+    let swap = decide(
+        base(),
+        vec![turn(0.0, 5.0, "what the one speaker said")],
+        &[
+            at_seconds(11, "inside the span", 0.0, 5.0),
+            at_seconds(12, "well outside it", 40.0, 50.0),
+        ],
+        &[],
+    );
+
+    match swap {
+        Swap::Attribute { to, .. } => assert_eq!(
+            to,
+            vec![11],
+            "only the turn the diarization actually covered"
+        ),
+        other => panic!("expected attribution, got {other:?}"),
+    }
+}
+
+/// …and when the one speaker covers NOTHING that exists, there is nothing to
+/// say, so the transcript simply stands.
+#[test]
+fn a_pass_covering_no_existing_turn_is_a_plain_refusal() {
+    let swap = decide(
+        base(),
+        vec![turn(0.0, 5.0, "what the one speaker said")],
+        &[
+            at_seconds(11, "later", 40.0, 45.0),
+            at_seconds(12, "later still", 50.0, 55.0),
+        ],
+        &[],
+    );
+
+    assert!(
+        matches!(swap, Swap::Keep(Refusal::Undiscriminating { .. })),
+        "got {swap:?}"
+    );
 }
 
 /// ⚠ …but a pass that DOES tell two people apart is exactly what this stage is
@@ -196,7 +252,7 @@ fn a_turn_inside_a_human_corrected_span_is_dropped() {
             assert_eq!(insert.len(), 1);
             assert_eq!(insert[0].text, "well clear of it");
         }
-        other @ Swap::Keep(_) => panic!("expected a replace, got {other:?}"),
+        other => panic!("expected a replace, got {other:?}"),
     }
 }
 
@@ -285,7 +341,7 @@ fn a_repetition_loop_cannot_win_the_coverage_guard_by_sheer_length() {
             assert_eq!(insert.len(), 1);
             assert_eq!(hide, vec![11], "the loop is what gets hidden");
         }
-        other @ Swap::Keep(_) => panic!("the loop must not block an honest pass, got {other:?}"),
+        other => panic!("the loop must not block an honest pass, got {other:?}"),
     }
 }
 
@@ -302,7 +358,7 @@ fn an_empty_block_with_an_unusable_pass_is_not_a_refusal() {
     // Whatever survives the filter, nothing is hidden, because nothing is there.
     match swap {
         Swap::Replace { hide, .. } => assert!(hide.is_empty()),
-        Swap::Keep(_) => {}
+        Swap::Keep(_) | Swap::Attribute { .. } => {}
     }
 }
 
@@ -558,6 +614,53 @@ fn room_turn(conn: &Connection, text: &str) -> i64 {
 const TWO_SPEAKERS: &str = r#"{"ok": true, "result": {"turns": [
     {"speaker": "SPEAKER_00", "start": 0.0, "end": 1.0},
     {"speaker": "SPEAKER_01", "start": 1.0, "end": 2.0}]}}"#;
+
+const ONE_SPEAKER: &str = r#"{"ok": true, "result": {"turns": [
+    {"speaker": "SPEAKER_00", "start": 0.0, "end": 2.0}]}}"#;
+
+/// ⚠ **THE REPAIR FOR #1663, end to end.** A pass that hears ONE speaker over a
+/// transcript finer than itself NAMES those turns where they stand. Nothing is
+/// hidden, nothing is inserted, no boundary is spent.
+///
+/// Before this, the same input hid every turn and wrote one block in its place.
+/// It happened to 814 clips: 3,686 turns hidden, 815 written back, and 813 of
+/// those clips are now a single turn.
+#[test]
+fn a_single_speaker_pass_names_the_turns_that_are_there_and_hides_nothing() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let mut meaning = meaning_plane(dir.path());
+    let ingest = ingest_plane(dir.path(), ONE_SPEAKER, WORDS_TODAY);
+    let a = room_turn(&meaning, "een");
+    let b = room_turn(&meaning, "twee");
+    let c = room_turn(&meaning, "drie");
+
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+
+    assert_eq!(pass.named, 3, "every turn the speaker covers");
+    assert_eq!(pass.hidden, 0, "⚠ NOTHING may be hidden");
+    assert_eq!(pass.turns, 0, "and nothing inserted");
+
+    for id in [a, b, c] {
+        let (hidden, cluster): (Option<String>, Option<String>) = meaning
+            .query_row(
+                "SELECT hidden_reason, speaker_cluster FROM transcript_segments WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("row");
+        assert_eq!(hidden, None, "the turn stands");
+        assert_eq!(cluster.as_deref(), Some("SPEAKER_00"), "and is named");
+    }
+
+    let outcome: String = ingest
+        .query_row(
+            "SELECT outcome FROM pass_ledger WHERE filename = ?1",
+            [BLOCK],
+            |r| r.get(0),
+        )
+        .expect("a ledger row");
+    assert!(outcome.starts_with("attributed:"), "got {outcome}");
+}
 
 #[test]
 fn a_finished_diarization_replaces_the_room_turns_with_speaker_split_ones() {
