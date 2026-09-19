@@ -92,6 +92,33 @@ pub struct Contributor {
     pub calibrated: Option<CalibratedDb>,
     /// Fraction of this source's minute inside a gate (`levels::gated_fraction`).
     pub gated: f32,
+    /// This SOURCE's median `quiet_run_s` over its recent speaking clips, or
+    /// `None` with too little history. Recorded, never acted on — see
+    /// [`is_gating`].
+    pub gate_median: Option<f32>,
+}
+
+/// Above this median, a SOURCE is gating: it is reporting on its own noise
+/// suppression rather than on the room.
+///
+/// ⚠ **A per-SOURCE median, not a per-clip cut, because per-clip the
+/// distributions overlap.** Over 9,700 speaking clips the medians separate with
+/// no overlap — geb 2.830 s against pixel5 0.226, pixel9 0.223, oneplus6t 0.009,
+/// iphone11 0.008, usb 0.002 — while geb's per-clip minimum is 0.716 and
+/// pixel5's maximum is 16.8. Gating is a property of the device, not the minute.
+///
+/// 1.0 s is the round value nearest the geometric mean of the two nearest
+/// medians (`sqrt(0.226 * 2.830) = 0.80`), so it sits in an empty gap four times
+/// above the loudest healthy source and nearly three times below the gating one.
+/// ⚠ It errs toward ADMITTING, which is the cheap direction: refusing a healthy
+/// phone degenerates selection toward the fixed choice this stage replaces.
+pub const GATING_MEDIAN_S: f32 = 1.0;
+
+/// Is this source gating? `None` — too little history — is NOT gating: a source
+/// is unrankable until it has a signature, never condemned by default.
+#[must_use]
+pub fn is_gating(c: &Contributor) -> bool {
+    c.gate_median.is_some_and(|m| m > GATING_MEDIAN_S)
 }
 
 /// Above this, a source spent so much of the minute emitting digital silence
@@ -261,15 +288,62 @@ fn block_contributors(
     for (source, (speech_db, gated)) in per_source {
         let calibrated = reference_db(conn, config, &source)?
             .map(|reference| CalibratedDb(speech_db - reference));
+        let gate_median = gate_median(conn, config, &source)?;
         out.push(Contributor {
             source,
             speech_db,
             calibrated,
             gated,
+            gate_median,
         });
     }
     Ok(Some(out))
 }
+
+/// A source's median `quiet_run_s` over its recent SPEAKING clips, or `None`
+/// while it has too little history.
+///
+/// ⚠ **Conditioned on speech.** An empty room takes every microphone to its
+/// floor together, so a long quiet run in silence is a quiet house, not a gate.
+/// The same `min_reference_rows` bar as the level reference: a source that
+/// cannot be ranked cannot be condemned either.
+///
+/// # Errors
+/// If the database refuses.
+fn gate_median(
+    conn: &Connection,
+    config: &RoomConfig,
+    source: &str,
+) -> rusqlite::Result<Option<f32>> {
+    let runs: Vec<f64> = {
+        let mut stmt = conn.prepare(
+            "SELECT l.quiet_run_s FROM segment_levels l
+             JOIN segment_speech p ON p.filename = l.filename
+             WHERE l.source = ?1 AND l.quiet_run_s IS NOT NULL
+               AND p.speech_seconds >= ?2
+             ORDER BY l.filename DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![source, GATE_SPEECH_MIN_S, config.reference_window],
+            |r| r.get(0),
+        )?;
+        rows.collect::<Result<_, _>>()?
+    };
+    if (runs.len() as u32) < config.min_reference_rows {
+        return Ok(None);
+    }
+    let mut runs = runs;
+    runs.sort_by(f64::total_cmp);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a run length in seconds is far inside f32"
+    )]
+    Ok(Some(runs[runs.len() / 2] as f32))
+}
+
+/// A clip counts toward the signature only with this much detected speech —
+/// the same bar the fleet-wide distribution was read at.
+const GATE_SPEECH_MIN_S: f64 = 5.0;
 
 /// A source's reference, or `None` while it has too little history to mean
 /// anything — in which case the source is unrankable, never defaulted.
@@ -469,9 +543,23 @@ pub fn build_once(
         // disagree, and which is right is unresolved. Agreement was checked on
         // THREE files and that was not enough to carry a threshold.
         //
-        // TO PUT IT BACK: reconcile the two instruments on one corpus first, then
-        // find a rule that distinguishes destroyed speech from ordinary
-        // suppression — `gated` alone cannot, because all four phones do it.
+        // ⚠⚠ **THE REPLACEMENT RULE EXISTS AND IS ALSO OFF.** [`is_gating`] reads
+        // the SOURCE's median `quiet_run_s`, which does separate the fleet
+        // without overlap where `gated` did not. Every contributor now RECORDS
+        // its signature, so what the rule would have decided is re-derivable
+        // from `room_blocks.contributors` without it ever having acted.
+        //
+        // It stays off until that record says something. Two reasons, and the
+        // second is the stronger:
+        //
+        //   - #1461's referee has not run, so there is still no evidence that
+        //     dropping a source improves a transcript rather than removing one.
+        //   - ⚠ **The fleet no longer HAS a gating device.** geb's capsule was
+        //     swapped on 2026-09-13 and its quiet runs went from a 3.702 s daily
+        //     mean to 0.000 across every clip since (max 0.001). So switching the
+        //     filter on today cannot help any current source and can only cost —
+        //     every firing would be a false positive until some device starts
+        //     gating again.
         let ungated: Vec<&Contributor> = audible.clone();
         if ungated.is_empty() {
             // ⚠ Every microphone that heard this minute was gating. There is no
