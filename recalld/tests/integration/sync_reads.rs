@@ -307,18 +307,17 @@ fn retiring_a_refine_removes_it_from_the_queue() {
 
 use recalld::work::{LiveTurn, ingest_live};
 
+/// ⚠ The REAL migration ladder, not a slice of it. A hand-written copy stood
+/// here and stopped matching production the first time a column was added.
 fn live_store() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(
-        "CREATE TABLE transcript_segments (
-             id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
-             start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
-             language TEXT, asr_model TEXT NOT NULL,
-             superseded_by INTEGER, hidden_reason TEXT);
-         CREATE VIRTUAL TABLE transcript_fts USING fts5(text, content='');",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn
+}
+
+/// Any delivery instant; only the test that asserts on it cares which.
+fn delivered() -> chrono::DateTime<chrono::Utc> {
+    "2026-09-09T10:00:31.500000+00:00".parse().unwrap()
 }
 
 fn a_turn(start: &str, text: &str) -> LiveTurn {
@@ -329,6 +328,36 @@ fn a_turn(start: &str, text: &str) -> LiveTurn {
         asr_model: "live".to_owned(),
         language: Some("en".to_owned()),
     }
+}
+
+/// ⚠ A live turn's `start_utc` is WHERE IN THE AUDIO the words were said, not
+/// when the tier delivered them. Without `created_utc` the one tier whose whole
+/// value is immediacy leaves no evidence of its own latency, and a stall can
+/// only be caught while it is happening — which is how #1383's went unseen for
+/// forty minutes.
+#[test]
+fn a_live_turn_records_when_it_was_delivered_not_only_when_it_was_said() {
+    let mut conn = live_store();
+
+    ingest_live(
+        &mut conn,
+        &[a_turn("2026-09-09T10:00:00+00:00", "hello there")],
+        delivered(),
+    )
+    .unwrap();
+
+    let (said, stored): (String, String) = conn
+        .query_row(
+            "SELECT start_utc, created_utc FROM transcript_segments",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("the turn carries both instants");
+    assert_eq!(said, "2026-09-09T10:00:00+00:00");
+    assert_eq!(
+        stored, "2026-09-09T10:00:31.500000+00:00",
+        "the delivery instant is what makes live latency measurable after the fact"
+    );
 }
 
 /// ⚠ The search index has NO trigger behind it — `transcript_fts` is a
@@ -342,6 +371,7 @@ fn a_stored_live_turn_is_searchable() {
     let stored = ingest_live(
         &mut conn,
         &[a_turn("2026-09-09T10:00:00+00:00", "hello there")],
+        delivered(),
     )
     .unwrap();
 
@@ -363,9 +393,9 @@ fn a_repushed_turn_is_skipped_even_once_hidden() {
     let mut conn = live_store();
     let turns = [a_turn("2026-09-09T10:00:00+00:00", "same words")];
 
-    assert_eq!(ingest_live(&mut conn, &turns).unwrap(), 1);
+    assert_eq!(ingest_live(&mut conn, &turns, delivered()).unwrap(), 1);
     assert_eq!(
-        ingest_live(&mut conn, &turns).unwrap(),
+        ingest_live(&mut conn, &turns, delivered()).unwrap(),
         0,
         "a retry duplicated it"
     );
@@ -378,7 +408,7 @@ fn a_repushed_turn_is_skipped_even_once_hidden() {
     .unwrap();
 
     assert_eq!(
-        ingest_live(&mut conn, &turns).unwrap(),
+        ingest_live(&mut conn, &turns, delivered()).unwrap(),
         0,
         "a hidden turn was resurrected"
     );
@@ -396,12 +426,22 @@ fn a_z_suffixed_time_matches_the_offset_spelling_it_was_stored_as() {
     let mut conn = live_store();
 
     assert_eq!(
-        ingest_live(&mut conn, &[a_turn("2026-09-09T10:00:00+00:00", "x")]).unwrap(),
+        ingest_live(
+            &mut conn,
+            &[a_turn("2026-09-09T10:00:00+00:00", "x")],
+            delivered()
+        )
+        .unwrap(),
         1
     );
     // The same instant, spelled the other way round.
     assert_eq!(
-        ingest_live(&mut conn, &[a_turn("2026-09-09T10:00:00Z", "x")]).unwrap(),
+        ingest_live(
+            &mut conn,
+            &[a_turn("2026-09-09T10:00:00Z", "x")],
+            delivered()
+        )
+        .unwrap(),
         0
     );
 
@@ -426,6 +466,7 @@ fn an_unparseable_time_costs_that_turn_and_no_other() {
             a_turn("not a time", "dropped"),
             a_turn("2026-09-09T10:00:00+00:00", "kept"),
         ],
+        delivered(),
     )
     .unwrap();
 
@@ -504,13 +545,19 @@ fn a_degenerate_loop_is_not_stored_as_a_live_turn() {
             &[a_turn(
                 "2026-09-09T10:00:00+00:00",
                 "goog goog goog goog goog goog"
-            )]
+            )],
+            delivered(),
         )
         .unwrap(),
         0
     );
     assert_eq!(
-        ingest_live(&mut conn, &[a_turn("2026-09-09T10:00:01+00:00", "... ***")]).unwrap(),
+        ingest_live(
+            &mut conn,
+            &[a_turn("2026-09-09T10:00:01+00:00", "... ***")],
+            delivered()
+        )
+        .unwrap(),
         0
     );
     // And real speech still lands, so the filter is not simply refusing.
@@ -520,7 +567,8 @@ fn a_degenerate_loop_is_not_stored_as_a_live_turn() {
             &[a_turn(
                 "2026-09-09T10:00:02+00:00",
                 "we should leave at eight"
-            )]
+            )],
+            delivered(),
         )
         .unwrap(),
         1

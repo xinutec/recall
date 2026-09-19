@@ -47,20 +47,15 @@ fn serve(root: &Path) -> String {
     format!("http://{}", rx.recv().expect("addr"))
 }
 
-/// The meaning store the instant feed writes into. Its schema is Python's
-/// (`store_schema.py`); this is the slice `ingest_live` touches.
+/// The meaning store the instant feed writes into — built by the REAL migration
+/// ladder, not a copy of it.
+///
+/// ⚠ A hand-written slice used to stand here, and it silently stopped matching
+/// production the first time a column was added: the write failed, no turn was
+/// stored, and this test reported that speech had not crossed the tap.
 fn meaning_store(root: &Path) {
     let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("open");
-    conn.execute_batch(
-        "CREATE TABLE transcript_segments (
-             id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
-             start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
-             language TEXT, asr_model TEXT NOT NULL,
-             superseded_by INTEGER, hidden_reason TEXT);
-         CREATE VIRTUAL TABLE transcript_fts USING fts5(text, content='');
-         CREATE TABLE vocabulary (id INTEGER PRIMARY KEY, term TEXT NOT NULL);",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
 }
 
 /// A shim that speaks the real protocol: names itself `asr` and answers every

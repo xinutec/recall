@@ -375,7 +375,7 @@ pub async fn live_route(
     let root = st.root.clone();
     match crate::route::blocking("sync live", move || {
         let mut conn = crate::work::open_write(&root)?;
-        crate::work::ingest_live(&mut conn, &body.turns)
+        crate::work::ingest_live(&mut conn, &body.turns, chrono::Utc::now())
     })
     .await
     {

@@ -27,7 +27,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -335,6 +335,11 @@ pub struct LiveTurn {
 /// while the archive pass catches up, then reconciled when the segment spanning
 /// them arrives.
 ///
+/// ⚠ **`start_utc` is where in the AUDIO the words were said; `created_utc` is
+/// when this tier delivered them.** Only the second can show a stall after the
+/// fact, and live turns carried no delivery instant at all until #1383 — so the
+/// tier whose entire value is immediacy left no evidence of its own latency.
+///
 /// ⚠ **Idempotent by (model, start, text).** A retried push, or one the archive
 /// has already reconciled to hidden, is SKIPPED — so a re-push never duplicates a
 /// turn and never resurrects a hidden one. The presence check deliberately asks
@@ -353,7 +358,12 @@ pub struct LiveTurn {
 ///
 /// One transaction per turn, so a turn and its index row land together or not at
 /// all — a half-written pair would be a turn that exists and cannot be found.
-pub fn ingest_live(conn: &mut Connection, turns: &[LiveTurn]) -> rusqlite::Result<usize> {
+pub fn ingest_live(
+    conn: &mut Connection,
+    turns: &[LiveTurn],
+    now: DateTime<Utc>,
+) -> rusqlite::Result<usize> {
+    let delivered = now.to_rfc3339_opts(SecondsFormat::Micros, false);
     let mut stored = 0;
     for turn in turns {
         // The stored spelling, so the presence check and the insert agree. A
@@ -382,9 +392,16 @@ pub fn ingest_live(conn: &mut Connection, turns: &[LiveTurn]) -> rusqlite::Resul
         let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO transcript_segments \
-             (audio_segment_id, start_utc, end_utc, text, language, asr_model) \
-             VALUES (NULL, ?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![start, end, turn.text, turn.language, turn.asr_model],
+             (audio_segment_id, start_utc, end_utc, text, language, asr_model, created_utc) \
+             VALUES (NULL, ?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                start,
+                end,
+                turn.text,
+                turn.language,
+                turn.asr_model,
+                delivered
+            ],
         )?;
         let id = tx.last_insert_rowid();
         tx.execute(
