@@ -1262,3 +1262,33 @@ fn a_diarization_without_voiceprints_still_writes_its_turns() {
         .expect("count");
     assert_eq!(guessed, 0, "no vector, no guess — and no crash");
 }
+
+/// ⚠ **Script outranks the language LABEL, and this is the wiring that matters.**
+/// A turn the model labelled `nl` while writing Cyrillic is the model
+/// contradicting itself, so the turn is KEPT — it has audio behind it — and no
+/// confidence is asserted in it, exactly as a non-household language is treated.
+#[test]
+fn a_foreign_script_turn_keeps_its_text_and_loses_its_confidence() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let mut meaning = meaning_plane(dir.path());
+    let words = r#"{"ok": true, "result": {"language": "nl", "segments": [
+        {"start": 0.0, "end": 2.0, "text": " И ти не правиш нищо",
+         "words": [{"start": 0.0, "end": 1.0, "text": " И ти", "probability": 0.9},
+                   {"start": 1.0, "end": 2.0, "text": " не правиш нищо", "probability": 0.9}]}
+    ]}}"#;
+    let ingest = ingest_plane(dir.path(), ONE_SPEAKER, words);
+    room_turn(&meaning, "een");
+
+    write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+
+    let (text, confidence): (String, Option<f64>) = meaning
+        .query_row(
+            "SELECT text, asr_confidence FROM transcript_segments
+             WHERE provenance LIKE 'diarized%' AND hidden_reason IS NULL",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("the turn is written, not dropped");
+    assert!(text.contains('И'), "the words are kept");
+    assert_eq!(confidence, Some(0.0), "but nothing is asserted about them");
+}

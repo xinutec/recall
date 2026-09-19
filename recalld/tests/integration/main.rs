@@ -44,6 +44,7 @@ mod reads;
 mod rematch;
 mod reports;
 mod room;
+mod script;
 mod segments;
 mod sessions;
 mod sources;

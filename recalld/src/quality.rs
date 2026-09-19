@@ -64,6 +64,70 @@ pub fn is_wordless(text: &str) -> bool {
         .is_empty()
 }
 
+/// Is this character a letter Python's `unicodedata` names LATIN?
+///
+/// Binary search over the generated table, which is why it agrees with the
+/// Python on Latin Extended and the fullwidth forms rather than guessing at
+/// block boundaries.
+#[must_use]
+pub fn is_latin_letter(c: char) -> bool {
+    let cp = c as u32;
+    crate::latin_ranges::LATIN_RANGES
+        .binary_search_by(|&(lo, hi)| {
+            if cp < lo {
+                std::cmp::Ordering::Greater
+            } else if cp > hi {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
+/// What fraction of this turn's LETTERS are not Latin.
+///
+/// ⚠ **Only letters vote.** Punctuation, digits and spaces are not evidence
+/// about script, and counting them would read "..." as wholly foreign — a case
+/// [`is_wordless`] already owns. A turn with no letters scores 0.0: nothing was
+/// written in any script.
+#[must_use]
+pub fn foreign_script_ratio(text: &str) -> f64 {
+    let letters = text.chars().filter(|c| c.is_alphabetic());
+    let (mut total, mut foreign) = (0u32, 0u32);
+    for c in letters {
+        total += 1;
+        if !is_latin_letter(c) {
+            foreign += 1;
+        }
+    }
+    if total == 0 {
+        return 0.0;
+    }
+    f64::from(foreign) / f64::from(total)
+}
+
+/// Above this fraction of non-Latin letters, a turn is written in a script this
+/// household does not speak.
+///
+/// ⚠ **A MAJORITY, not a trace.** One borrowed word must not condemn a Dutch
+/// sentence. Measured 2026-09-19 over the whole archive: the ratio is strongly
+/// bimodal — 818 of 1,301 multi-byte turns sit at 0.0 and 305 at 1.0 — so the
+/// exact cut matters far less than being on the right side of the gap.
+pub const FOREIGN_SCRIPT_MAX: f64 = 0.5;
+
+/// True if this turn is mostly not in Latin script.
+///
+/// ⚠ **A SIGNAL, not a verdict.** The household speaks Dutch and English, so
+/// Cyrillic or Japanese in a turn the model itself labelled `nl` is the model
+/// contradicting itself — but a person really speaking Russian would read the
+/// same, and this cannot tell those apart. Deciding what to DO with a flagged
+/// turn is not this function's business (#1410).
+#[must_use]
+pub fn is_foreign_script(text: &str) -> bool {
+    foreign_script_ratio(text) > FOREIGN_SCRIPT_MAX
+}
+
 /// True if `text` is a degenerate repetition loop (a model artifact).
 #[must_use]
 pub fn is_repetition_loop(text: &str) -> bool {

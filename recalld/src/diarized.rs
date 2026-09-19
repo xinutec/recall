@@ -535,7 +535,18 @@ pub fn apply(
                 // A non-household language for the whole block is the model
                 // hallucinating on unclear audio: keep the turn, assert no
                 // confidence in it.
-                if trusted { turn.confidence } else { 0.0 },
+                // ⚠ **Script outranks the LABEL.** 681 visible turns carry a
+                // foreign language label and only 180 are in a foreign SCRIPT —
+                // the rest are Dutch and English the model mislabelled, so the
+                // label alone would zero real speech. The other way round is the
+                // tell that matters: 273 turns are written in Cyrillic or
+                // Japanese while LABELLED nl or en, which is the model
+                // contradicting itself (#1410).
+                if trusted && !crate::quality::is_foreign_script(&turn.text) {
+                    turn.confidence
+                } else {
+                    0.0
+                },
                 model,
                 turn.speaker,
                 provenance,
