@@ -47,6 +47,12 @@ catches up — this is what guarantees requirement #1.
 
 ## 4. Precision in layers, not one model
 
+⚠ **The layers must be ADDITIVE.** A layer that improves attribution may not
+rewrite the transcript to do it — every serious data loss in this system came
+from one that did, and 28,046 turns are hidden by diarization passes that had
+nothing to say about the words. Proposed model and evidence:
+[architecture.md, "text is written once"](architecture.md).
+
 Fine-tuning is the **last** lever, not the first: it needs a corpus of corrected
 household audio that doesn't exist until the system has run a while, and the
 biggest errors are proper nouns and speaker confusion, which fine-tuning doesn't

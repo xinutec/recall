@@ -164,6 +164,89 @@ The ten questions the proposal had to answer, decided 2026-09-05.
     not a pause button). A stolen recorder can append audio and do nothing
     else, and is revoked individually.
 
+## Proposed: text is written once — attribution labels, never rewrites
+
+⚠ **A DIRECTION, not a decision.** Raised by Pippijn on 2026-09-19 ("we need to
+simplify; we're going to have our own way to do the time/separation work") and
+written up with the evidence so the choice can be made on it. Nothing below is
+implemented beyond the one special case named at the end.
+
+### The measured problem
+
+Every serious data loss in this system has the same shape: **a pass that rewrites
+text in order to deliver metadata.**
+
+    transcript rows ever written        146,966
+      hidden                             96,829   (66%)
+      superseded                         11,166
+      visible                            49,646
+      hidden BY A HUMAN                       5
+
+Of the hides, **28,046 were made by diarization passes** to attach speaker labels
+(`diarized (mlx-community/whisper-large-v3-turbo)` 18,605, `diarized (per-mic
+runner)` 8,615, `diarized (adapter-current)` 826). The rest are legitimate
+replacements — a provisional live turn replaced by its archive version, a sync
+dedup — where new text supersedes old text of the same thing.
+
+⚠ The 28,046 are different in kind: **the pass had nothing to say about the
+words, and hid them anyway.**
+
+What that has cost, each a separate bug and all of them catastrophic for the same
+structural reason:
+
+- `refine.py` applied its filters AFTER hiding and blanked **132 segments** of
+  real household conversation.
+- The diarized pass flattened **814 clips** — 3,686 turns hidden, 815 written
+  back, 813 of them now a single turn (#1663).
+- It discarded every turn on **576 clips** because a loop filter ran on the
+  collapsed turn rather than the model's own segments (#1663).
+
+A metadata pass with a bug should produce a wrong label. This one produces a
+destroyed transcript.
+
+### What the rewrite buys, measured
+
+⚠ Less than the cost. Of the clips this stage aligned, **64% carried a single
+speaker** — nothing to split, so the rewrite delivered a name and spent the
+sentence boundaries to do it. On the 2026-09-19 controlled test its speaker spans
+covered 5.6 s of one 60 s clip and 8.0 s of another, and attribution scored
+0.177-0.651. Meanwhile five microphones produced byte-identical, essentially
+correct text without it, and Whisper's own segmentation beat anything the room
+re-cut produced (#1528, #1383).
+
+### The proposed model
+
+**Text is written once, by ASR, and no attribution pass may replace it.** Two
+operations are permitted on a turn, and neither can lose a word:
+
+- **split** — divide a turn at a boundary, preserving every word and its timing;
+- **label** — attach a speaker, a confidence, or any other metadata, touching no
+  text at all.
+
+The single-speaker case (64%) is then a pure label. The two-speaker case becomes
+"split at 12.4 s, label the halves", which is text-preserving by construction.
+**The destructive class of bug stops existing — not because it is fixed, but
+because the operation that caused it is gone.**
+
+Identity becomes a SEPARATE, ADDITIVE stream: voiceprints, cross-mic energy
+(#1529 places a speaker in the right room 7 times in 8) and habitual position are
+evidence attached to a turn with a confidence. A wrong one is corrected by
+changing a label, not by re-deriving a transcript.
+
+### What it gives up
+
+True diarization can in principle separate two voices INSIDE one ASR segment,
+where there is no boundary to split at. ⚠ Today's evidence says that is rare, and
+that the structural cost of keeping the capability is large. Decide it on that
+trade, not on the capability in the abstract.
+
+### Already pointing this way
+
+`recalld::diarized::Swap::Attribute` (e6abe82, 2026-09-19) names the turns that
+are already there when the pass hears one speaker — no hide, no insert. ⚠ It was
+added as a SPECIAL CASE for the flattening bug, not as the general rule. Under
+the model above it would BE the rule, and `Swap::Replace` would retire.
+
 ## What must survive — and what is therefore disposable
 
 **DECIDED 2026-09-06 by Pippijn: only the RECORDING has to survive. All
