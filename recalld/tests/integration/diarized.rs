@@ -279,6 +279,50 @@ const WORDS_STORED_EARLIER: &str = r#"{"ok": true, "result": {"language": "nl", 
                {"word": " twee", "start": 1.9, "end": 2.4}]}
 ]}}"#;
 
+/// ⚠ **A hallucinated segment must not condemn the clip's real speech.**
+///
+/// Measured 2026-09-19 over 602 refused clips: only 25.5% of ASR segments are
+/// loops, and 597 of 602 carry clean ones — but the pass collapses a clip into a
+/// SINGLE turn 87% of the time, so one hallucinated run anywhere made the whole
+/// turn a loop and every turn was discarded. In 94.4% of them the whole was
+/// condemned while the parts were not (#1663).
+///
+/// The per-mic writer never had this problem because it filters PER SEGMENT.
+/// This is the same rule at the same granularity.
+const WORDS_WITH_A_LOOPING_SEGMENT: &str = r#"{"ok": true, "result": {"language": "nl", "segments": [
+    {"start": 0.0, "end": 2.0, "text": " een twee",
+     "words": [{"start": 0.0, "end": 1.0, "text": " een", "probability": 0.9},
+               {"start": 1.0, "end": 2.0, "text": " twee", "probability": 0.8}]},
+    {"start": 2.0, "end": 4.0, "text": " wawawawawawawawawawawawawawa",
+     "words": [{"start": 2.0, "end": 3.0, "text": " wawawawawawawa", "probability": 0.2},
+               {"start": 3.0, "end": 4.0, "text": " wawawawawawawa", "probability": 0.2}]}
+]}}"#;
+
+#[test]
+fn a_looping_segment_is_dropped_without_taking_the_clips_real_words_with_it() {
+    let (words, _) = words_of(WORDS_WITH_A_LOOPING_SEGMENT).expect("the clean segment survives");
+
+    assert_eq!(
+        words.len(),
+        2,
+        "only the clean segment's words, not the loop's"
+    );
+    assert_eq!(words[0].text, " een");
+    assert_eq!(words[1].text, " twee");
+}
+
+/// …and a clip that is NOTHING but a loop still yields nothing, so the guard
+/// that protects the archive is not loosened — only narrowed to the segment
+/// that earned it.
+#[test]
+fn a_clip_that_is_all_loop_still_yields_no_words() {
+    let all_loop = r#"{"ok": true, "result": {"language": "nl", "segments": [
+        {"start": 0.0, "end": 2.0, "text": " wawawawawawawawawawawawawawa",
+         "words": [{"start": 0.0, "end": 1.0, "text": " wawawawawawawa", "probability": 0.2}]}
+    ]}}"#;
+    assert!(words_of(all_loop).is_none());
+}
+
 #[test]
 fn the_current_shim_spelling_yields_its_words() {
     let (words, language) = words_of(WORDS_TODAY).expect("words");
@@ -523,8 +567,14 @@ fn a_decided_block_leaves_a_ledger_row_and_is_not_decided_twice() {
     assert_eq!(again, recalld::diarized::Pass::default());
 }
 
-/// ⚠ **THE 132-SEGMENT RULE, end to end.** Every produced turn is a repetition
-/// loop, so nothing is written — and the room transcript must still be there.
+/// ⚠ **THE 132-SEGMENT RULE, end to end.** The whole transcription is a
+/// repetition loop, so nothing is written — and the room transcript must still
+/// be there.
+///
+/// ⚠ The refusal is now `all-segments-looped` rather than `all-turns-filtered`:
+/// the loop is caught on the model's own segments, before alignment, so no turn
+/// is ever built. It MUST still leave a ledger row — the stored result will not
+/// change, and a refusal with no row is a decision made again for ever (#1663).
 #[test]
 fn a_block_whose_pass_is_all_junk_keeps_its_transcript_and_is_not_retried() {
     let junk = r#"{"ok": true, "result": {"language": "nl", "segments": [
@@ -557,7 +607,35 @@ fn a_block_whose_pass_is_all_junk_keeps_its_transcript_and_is_not_retried() {
             |r| r.get(0),
         )
         .expect("a ledger row for the refusal");
-    assert!(outcome.starts_with("all-turns-filtered"), "got {outcome}");
+    assert!(outcome.starts_with("all-segments-looped"), "got {outcome}");
+}
+
+/// ⚠ **The other side of the same rule, and the defect #1663 records.** A clip
+/// with ONE hallucinated segment beside real speech must still be attributed:
+/// the loop is dropped, the real words align, and the turns are written.
+///
+/// Before this, alignment collapsed the clip into a single turn carrying both,
+/// the whole turn read as a loop, and every turn was discarded — measured on
+/// 602 clips, 94.4% were condemned whole while their parts were clean.
+#[test]
+fn one_looping_segment_no_longer_costs_the_clip_its_speakers() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let mut meaning = meaning_plane(dir.path());
+    let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_WITH_A_LOOPING_SEGMENT);
+    room_turn(&meaning, "a minute of Dutch about writing things down");
+
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+
+    assert!(pass.turns > 0, "the clean words must become turns");
+    assert_eq!(pass.kept, 0, "this is no longer a refusal");
+    let outcome: String = ingest
+        .query_row(
+            "SELECT outcome FROM pass_ledger WHERE filename = ?1",
+            [BLOCK],
+            |r| r.get(0),
+        )
+        .expect("a ledger row");
+    assert_eq!(outcome, "aligned");
 }
 
 /// A human correction over the block: the machine pass must not restate it.

@@ -237,6 +237,10 @@ struct Stored {
 
 #[derive(Deserialize)]
 struct TranscribedSegment {
+    /// The segment's own text — read ONLY to judge whether the model looped on
+    /// it. The turns are built from `words`.
+    #[serde(default)]
+    text: String,
     #[serde(default)]
     words: Vec<Word>,
 }
@@ -278,6 +282,19 @@ pub fn voices(stored: &str) -> Option<(Vec<SpeakerTurn>, Vec<SpeakerVoice>)> {
 /// sentence on one speaker and is the coarse behaviour stage E4 exists to
 /// replace. A result with no word timings therefore yields nothing, and the
 /// caller keeps the transcript it has.
+///
+/// ⚠ **A segment the model LOOPED on contributes no words, and that is where
+/// the quality rule has to be applied — not to the finished turn.** Measured
+/// 2026-09-19 across 602 refused clips: 25.5% of ASR segments are loops, but
+/// 597 of the 602 also carry clean ones. Because alignment collapses a clip into
+/// a single turn 87% of the time, one hallucinated run condemned the whole turn
+/// and the pass discarded everything — the whole was a loop while the parts were
+/// not, in 94.4% of them. Those clips kept their per-mic text and lost only
+/// their SPEAKERS: 4,185 turns across them, 16 with a speaker (#1663).
+///
+/// The per-mic writer never had this defect because `turns::plan` filters per
+/// segment. This is the same rule at the same granularity, so the two passes
+/// agree on what the model actually said.
 #[must_use]
 pub fn words_of(stored: &str) -> Option<(Vec<Word>, Option<String>)> {
     let reply: Reply<Transcription> = serde_json::from_str(stored).ok()?;
@@ -288,10 +305,32 @@ pub fn words_of(stored: &str) -> Option<(Vec<Word>, Option<String>)> {
     let words: Vec<Word> = outcome
         .segments
         .into_iter()
+        .filter(|s| {
+            !(crate::quality::is_repetition_loop(&s.text) || crate::quality::is_wordless(&s.text))
+        })
         .flat_map(|s| s.words)
         .filter(|w| w.end > w.start)
         .collect();
     (!words.is_empty()).then_some((words, outcome.language))
+}
+
+/// Did this stored transcription carry ANY word timings, before the quality
+/// filter in [`words_of`] had its say?
+///
+/// ⚠ The two absences are opposite kinds. No timings at all is TRANSIENT — an
+/// older result whose word key this pass could not read once already, which a
+/// code change can make eligible again. Timings present but every segment a
+/// loop is PERMANENT: the stored result will not change, so the clip must be
+/// retired with a ledger row or it sits at the head of the queue for ever.
+#[must_use]
+pub fn has_word_timings(stored: &str) -> bool {
+    let Ok(reply) = serde_json::from_str::<Reply<Transcription>>(stored) else {
+        return false;
+    };
+    reply.ok
+        && reply
+            .result
+            .is_some_and(|t| t.segments.iter().any(|s| !s.words.is_empty()))
 }
 
 /// Apply a [`Swap::Replace`] to one block. ONE transaction: the hides, the
@@ -583,6 +622,36 @@ pub struct Pass {
 ///
 /// # Errors
 /// If either database refuses.
+/// A clip whose transcription yields no usable words: decide WHICH absence it is
+/// and retire the permanent one.
+///
+/// `true` = retired with a ledger row, because the words are there and every
+/// segment carrying them looped, and a stored result does not change. `false` =
+/// no word timings this pass can read, which a later code change can fix, so it
+/// is left to be examined again.
+///
+/// # Errors
+/// If the ledger refuses.
+fn retire_if_permanently_unusable(
+    ingest: &rusqlite::Connection,
+    kind: &str,
+    filename: &str,
+    transcription: &str,
+    now: &str,
+) -> rusqlite::Result<bool> {
+    if !has_word_timings(transcription) {
+        return Ok(false);
+    }
+    crate::turns::ledger(
+        ingest,
+        kind,
+        filename,
+        "all-segments-looped: the transcription carries no usable words",
+        now,
+    )?;
+    Ok(true)
+}
+
 pub fn write_pass(
     meaning: &mut rusqlite::Connection,
     ingest: &rusqlite::Connection,
@@ -655,7 +724,11 @@ pub fn write_pass(
         // ⚠ Transient, so no ledger row: a transcription without word timings
         // today may be re-derived with them.
         let Some((words, language)) = words_of(&transcription) else {
-            pass.waiting += 1;
+            if retire_if_permanently_unusable(ingest, kind, &filename, &transcription, now)? {
+                pass.kept += 1;
+            } else {
+                pass.waiting += 1;
+            }
             continue;
         };
         // An unparseable end collapses the window to the block's start, so the
