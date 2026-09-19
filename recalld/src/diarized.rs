@@ -57,8 +57,13 @@ pub struct Corrected {
 pub enum Refusal {
     /// The pass produced no turns at all: no words, or no speaker spans.
     NothingAligned,
+    /// Every turn was dropped, counted by the filter that dropped it. The two
+    /// mean opposite things: a loop is the pass hallucinating on good audio, a
+    /// corrected turn is the guard working. Conflating them made 455 refusals
+    /// undiagnosable (#1663).
     AllFiltered {
-        produced: usize,
+        loops: usize,
+        corrected: usize,
     },
     Coverage {
         existing: usize,
@@ -70,10 +75,10 @@ impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NothingAligned => write!(f, "nothing-aligned"),
-            Self::AllFiltered { produced } => write!(
+            Self::AllFiltered { loops, corrected } => write!(
                 f,
-                "all-turns-filtered: the pass produced {produced} turn(s), every one a \
-                 repetition loop or inside a human-corrected span"
+                "all-turns-filtered: {loops} repetition loop(s), {corrected} inside a \
+                 human-corrected span"
             ),
             Self::Coverage { existing, new } => write!(
                 f,
@@ -131,17 +136,24 @@ pub fn decide(
     if aligned.is_empty() {
         return Swap::Keep(Refusal::NothingAligned);
     }
-    let produced = aligned.len();
+    let (mut loops, mut corrected) = (0, 0);
     let keep: Vec<AlignedTurn> = aligned
         .into_iter()
-        .filter(|t| !is_repetition_loop(&t.text))
         .filter(|t| {
+            if is_repetition_loop(&t.text) {
+                loops += 1;
+                return false;
+            }
             let span = (at(block_start, t.start), at(block_start, t.end));
-            !human.iter().any(|c| overlaps(span, (c.start, c.end)))
+            if human.iter().any(|c| overlaps(span, (c.start, c.end))) {
+                corrected += 1;
+                return false;
+            }
+            true
         })
         .collect();
     if !existing.is_empty() && keep.is_empty() {
-        return Swap::Keep(Refusal::AllFiltered { produced });
+        return Swap::Keep(Refusal::AllFiltered { loops, corrected });
     }
     let existing_chars: usize = existing
         .iter()

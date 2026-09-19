@@ -80,8 +80,12 @@ fn a_pass_that_produces_nothing_usable_keeps_what_is_there() {
 
     assert_eq!(
         swap,
-        Swap::Keep(Refusal::AllFiltered { produced: 1 }),
-        "the existing transcript must not be hidden"
+        Swap::Keep(Refusal::AllFiltered {
+            loops: 1,
+            corrected: 0
+        }),
+        "the existing transcript must not be hidden, and the refusal must name \
+         the loop rather than the human guard"
     );
 }
 
@@ -135,7 +139,13 @@ fn a_block_entirely_inside_a_human_span_is_kept_not_emptied() {
         &human,
     );
 
-    assert_eq!(swap, Swap::Keep(Refusal::AllFiltered { produced: 1 }));
+    assert_eq!(
+        swap,
+        Swap::Keep(Refusal::AllFiltered {
+            loops: 0,
+            corrected: 1
+        })
+    );
 }
 
 /// Ordinary household speech, long enough to be worth protecting.
