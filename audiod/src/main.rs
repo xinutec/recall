@@ -21,9 +21,17 @@ use std::process::ExitCode;
 fn usage() -> ExitCode {
     eprintln!(
         "usage: audiod ingest --root <data-root> [--port <port>]\n\
-        \x20      audiod capture-mirror --root <data-root> --url <base> [--once]\n\x20      audiod capture --root <data-root> --id <source> [--device <name>] [--seconds <n>] [--codec opus|flac]\n\
+        \x20      audiod capture-mirror --root <data-root> --url <base> [--once]\n\
+        \x20      audiod capture --root <data-root> --id <source> [--device <name>] [--seconds <n>] [--codec opus|flac]\n\
         \x20      audiod upload --root <data-root> --url <base> [--token-file <path>] [--max <n>]\n\
-        \x20      audiod beat-relay --url <fleet> [--port <port>]"
+        \x20      audiod beat-relay --url <fleet> [--port <port>]\n\
+        \x20      audiod pause-mirror --root <data-root> --url <base>\n\
+        \x20      audiod speech --root <data-root> [--max <n>]\n\
+        \x20      audiod logrotate\n\
+        \n\
+        \x20  the break-glass control, when the fleet cannot be reached:\n\
+        \x20      audiod pause --root <data-root> [--minutes <n>]\n\
+        \x20      audiod resume --root <data-root>"
     );
     ExitCode::FAILURE
 }

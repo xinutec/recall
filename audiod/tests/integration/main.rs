@@ -29,5 +29,6 @@ mod speech_scan;
 mod store;
 mod upload;
 mod upload_real_server;
+mod usage;
 mod wire;
 mod wire_fixture;
