@@ -272,9 +272,11 @@ making more of them. Treat the pair — audio plus what a person said about it �
 as the thing that survives.
 
 **Everything else is a derived view and may be dropped or recomputed:**
-82 235 transcript rows, of which **52 423 are hidden and 11 163 superseded —
-64% is invisible weight** carried by every query, every migration and every
-port; plus 45 639 embeddings, 19 tables and 43 migrations of accreted schema.
+Two thirds of the transcript rows are hidden or superseded — **invisible weight**
+carried by every query, every migration and every port — plus tens of thousands
+of embeddings across 19 tables and a long migration ladder. ⚠ The ratio has held
+as the archive grew; the measured counts live in "text is written once" above,
+and are not restated here because a count in prose rots.
 
 Consequences, and they are large:
 
@@ -382,7 +384,7 @@ own consumption of it.
 
 ⚠ Cutting the quiet review does not mean junk returns to the read path. Under a
 rebuilt schema the sweeps become a filter at derivation time rather than a
-`hidden_reason` column plus a review UI — which is also why 52 423 hidden rows
+`hidden_reason` column plus a review UI — which is also why so many hidden rows
 need not travel.
 
 **Dropped 2026-09-06, from measured use rather than taste** (the archive records
@@ -633,6 +635,21 @@ speech (recalld's VAD), which is the same promise — a dot the audio can back
 dead-app-while-paused gap they were built for ([devices.md](devices.md)).
 
 ## Migration ladder and work packages
+
+⚠ **Mostly a COMPLETED RECORD — read it for reasoning, not for status.** The
+migration landed: the only Python left is the floor named in "What stays Python"
+below, ~2,300 lines of model shims and evaluation. Individual packages carry
+their own dated notes, which is where the reasoning lives.
+
+**Still open, and the only three worth scanning for:**
+
+- **C4. Retire streaming** — the phones still stream to `audiod ingest`; the TCP
+  path and the `.alive` marker go when every device has flipped and survived real
+  days.
+- **D5. Retention** — superseded as written; what is left is silence filtering.
+- **F2. The Mac joins the recorder contract fully** — eviction at a generous
+  ceiling, and the "master archive" title passing to Isis and the backup chain.
+
 
 Stages land in order; each is shadow-first and per-device where it touches a
 live recorder; nothing Python dies before its replacement has survived real
@@ -887,7 +904,11 @@ B3 lands.*
   STILL TO BUILD: the rest of the wiring — speech into liveness, the
   quiet review's evidence, room priority, and the calibrated reference that
   un-parks D3's rank.
-- **D5. Retention.** Window transcode to Opus + enforcement, measured cost.
+- **D5. Retention.** ⚠ **SUPERSEDED as written.** It said "window transcode to
+  Opus + enforcement", and the decision record above revised that to LOSSLESS
+  FOREVER — the Opus tail is a convenience copy, not what lossless decays into.
+  What remains of D5 is silence filtering, which is a second-order win once
+  delivery is really FLAC.
 
 ### Stage E — the queue and the runner
 
