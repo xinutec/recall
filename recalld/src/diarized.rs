@@ -69,6 +69,13 @@ pub enum Refusal {
         existing: usize,
         new: usize,
     },
+    /// The pass told nobody apart AND would write fewer turns than already
+    /// exist. See the guard in [`decide`] for why that is a refusal.
+    Undiscriminating {
+        produced: usize,
+        existing: usize,
+        speakers: usize,
+    },
 }
 
 impl std::fmt::Display for Refusal {
@@ -84,6 +91,16 @@ impl std::fmt::Display for Refusal {
                 f,
                 "coverage-guard: new {new} chars < {:.0}% of existing {existing}",
                 MIN_COVERAGE_RATIO * 100.0
+            ),
+            Self::Undiscriminating {
+                produced,
+                existing,
+                speakers,
+            } => write!(
+                f,
+                "undiscriminating: {speakers} speaker(s) over {produced} turn(s) against \
+                 {existing} existing — nothing to add but a name, and re-segmenting \
+                 would spend boundaries to buy it"
             ),
         }
     }
@@ -154,6 +171,28 @@ pub fn decide(
         .collect();
     if !existing.is_empty() && keep.is_empty() {
         return Swap::Keep(Refusal::AllFiltered { loops, corrected });
+    }
+    // ⚠ **A pass that distinguishes NOBODY must not flatten a finer transcript.**
+    //
+    // Measured 2026-09-19 by releasing 20 refused clips: 7 of the 8 that aligned
+    // had diarization return exactly ONE speaker, so there was nothing to split.
+    // A 13-turn clip became one 629-character block carrying a single name at
+    // 0.177 confidence, and a clip with 8 speaker spans totalling 5.6 s was
+    // funnelled whole into one turn because every word takes the only span on
+    // offer. That is the coarse, sentence-flattening behaviour this stage exists
+    // to REPLACE, arrived at from the other side.
+    //
+    // Two speakers is the whole point of the stage, so it passes. One speaker
+    // over a transcript no finer than the pass passes too: no boundary is lost
+    // and the turn gains a name. Only the flattening case is refused.
+    let speakers: std::collections::BTreeSet<&str> =
+        keep.iter().map(|t| t.speaker.as_str()).collect();
+    if speakers.len() < 2 && keep.len() < existing.len() {
+        return Swap::Keep(Refusal::Undiscriminating {
+            produced: keep.len(),
+            existing: existing.len(),
+            speakers: speakers.len(),
+        });
     }
     let existing_chars: usize = existing
         .iter()

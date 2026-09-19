@@ -89,6 +89,82 @@ fn a_pass_that_produces_nothing_usable_keeps_what_is_there() {
     );
 }
 
+/// ⚠ **THE TRIAL'S LESSON (2026-09-19).** A pass that distinguishes NOBODY must
+/// not replace a transcript that is already finer than what it would write.
+///
+/// Released 20 refused clips to re-run: 7 of the 8 that aligned had diarization
+/// return exactly ONE speaker, so there was nothing to split. A 13-turn clip
+/// became a single 629-character block carrying one name at 0.177 confidence.
+/// Whisper's sentence boundaries were spent to buy a low-confidence label.
+#[test]
+fn a_single_speaker_pass_does_not_flatten_a_finer_transcript() {
+    let swap = decide(
+        base(),
+        vec![turn(0.0, 30.0, "everything the clip said, as one block")],
+        &[
+            existing(11, "the first thing said"),
+            existing(12, "the second thing said"),
+            existing(13, "the third thing said"),
+        ],
+        &[],
+    );
+
+    match swap {
+        Swap::Keep(Refusal::Undiscriminating {
+            produced,
+            existing,
+            speakers,
+        }) => {
+            assert_eq!((produced, existing, speakers), (1, 3, 1));
+        }
+        other => panic!("the finer transcript must stand, got {other:?}"),
+    }
+}
+
+/// ⚠ …but a pass that DOES tell two people apart is exactly what this stage is
+/// for, and it may replace a finer transcript, because the boundaries it writes
+/// carry information the old ones did not.
+#[test]
+fn a_pass_that_separates_two_speakers_may_still_replace_a_finer_transcript() {
+    let mut a = turn(0.0, 10.0, "what the first person said");
+    a.speaker = "SPEAKER_00".to_owned();
+    let mut b = turn(10.0, 20.0, "what the second person said");
+    b.speaker = "SPEAKER_01".to_owned();
+
+    let swap = decide(
+        base(),
+        vec![a, b],
+        &[
+            existing(11, "the first thing said"),
+            existing(12, "the second thing said"),
+            existing(13, "the third thing said"),
+        ],
+        &[],
+    );
+
+    assert!(
+        matches!(swap, Swap::Replace { .. }),
+        "two speakers is the whole point of the stage, got {swap:?}"
+    );
+}
+
+/// …and one speaker over a transcript no finer than the pass is fine: nothing is
+/// lost, and the turn gains a name.
+#[test]
+fn a_single_speaker_pass_may_replace_an_equally_coarse_transcript() {
+    let swap = decide(
+        base(),
+        vec![turn(0.0, 30.0, "the whole of what was said in this clip")],
+        &[existing(11, "the whole of what was said")],
+        &[],
+    );
+
+    assert!(
+        matches!(swap, Swap::Replace { .. }),
+        "no boundary is lost here, got {swap:?}"
+    );
+}
+
 /// The same rule by the other route: the aligner returned nothing at all,
 /// because there were no words or no speaker spans.
 #[test]
