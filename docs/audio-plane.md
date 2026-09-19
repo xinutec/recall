@@ -167,8 +167,10 @@ best throughout, it *is* that mic, at no measured cost, while transcribing one
 stream instead of five. Its value appears only where the best mic changes,
 which this window cannot show — that needs a window recorded while the room
 moved. **Its dependency is per-device calibration, and that is not a footnote
-— it is what makes selection mean anything.** `src/recall/calibrate.py` already
-measured the faintest real speech each mic has recorded: usb -50 dB, iphone11
+— it is what makes selection mean anything.** ⚠ `calibrate.py` is DELETED; the
+reference is now a QUERY over each source's own recent level rows
+(`levels::speech_reference_db`), so it cannot go stale. Measured once per device,
+it had the faintest real speech each mic has recorded: usb -50 dB, iphone11
 -57, pixel9 -68, pixel5 -70. So most of the 21 dB by which the condenser leads
 is the *device*, not the distance, and an uncalibrated speech-level rank picks
 it essentially always — selection degenerating into the fixed choice it exists
