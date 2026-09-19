@@ -449,8 +449,10 @@ was un-deployed. The fix is wired into the export + train path
   the old 1e-3 plus early stopping is what stops it memorising.
 - **Gate = whole-segment A/B on real recordings** (`recall ab-compare`), not the
   pilot's held-out clip WER — the pilot already passed once while the adapter
-  regressed in production shape. Only an A/B win re-points the refine agent
-  (`deploy/hm-agents.nix`) at `adapter-current`.
+  regressed in production shape. Only an A/B win re-pointed the refine agent at
+  `adapter-current`. ⚠ Refine and `ab-compare` are both deleted, so a revisit
+  needs the gate rebuilt before the training: it is the part that caught what
+  the pilot hid, twice.
 - **Run in a capture-idle window only** — two Whispers starve capture (sox
   buffer overrun = dropped samples), same constraint as refine.
 
@@ -475,8 +477,22 @@ the same A/B gate**: 0/74 garbling, mean WER 0.125 → 0.064, 18 per-correction 
 6 trivial (single-word article/dialect) losses. It ran the idle refine pass from
 2026-07-09, then was **reverted on 2026-07-11**: the win was only ever measured on
 short clips, and on long recordings full fp32 large-v3 (a 32-layer decoder vs turbo's
-4) is ~8x slower. Refine is back on turbo; the args that re-enable the adapter are kept
-in `deploy/hm-agents.nix` next to the refine agent.
+4) is ~8x slower.
+
+⚠ **So the last adapter tried was not a failure — it halved WER and was dropped on
+COST.** Read the two verdicts together or the record inverts: the 2026-06 adapter
+regressed, the 2026-07-08b adapter won.
+
+⚠ The re-enable args used to live beside the refine agent in
+`deploy/hm-agents.nix`; that agent and its comment were deleted (4515b11,
+2026-09-16), so they are recorded HERE instead. The adapter directory is
+auto-detected via `adapter_config.json` and loaded on top of `--base-model`:
+
+    "--model"      "/Volumes/Backup/recall/adapter-current"
+    "--base-model" "openai/whisper-large-v3"
+
+`adapter-current` still symlinks `adapter-20260708b/adapter`. Nothing reads it —
+the LoRA code is deleted — so re-enabling means restoring a consumer first.
 
 > **Still a follow-up:** per-person adapters (selected at transcription time by the
 > identified speaker), and an mlx conversion if the adapter ever needs the live path.
