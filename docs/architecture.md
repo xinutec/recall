@@ -1,6 +1,6 @@
 # Target architecture: store-and-forward, one room stream, Rust on the server
 
-**Status: decided 2026-09-05, being built.** This file replaces the
+**Status: decided, and built except for C4, D5 and F2.** This file replaces the
 store-and-forward questions doc (git history has it); every question it raised
 is answered in the decision record below. [isis-migration.md](isis-migration.md)
 describes the system as it **runs today** — read this file as the destination
@@ -259,12 +259,15 @@ audio, rebuild the rest", and the difference is most of the remaining work.
 
 **Not re-derivable — these are the system of record:**
 
-| what | rows (2026-09-06) | why it cannot be recomputed |
-|---|---|---|
-| the audio itself | 11 920 segments | requirement #1; a gap is the worst failure |
-| human corrections | 468 | a person listened and typed; the enrolment seed, and the only human input besides the audio |
-| enrolled speakers + voiceprints | 9 / 958 | seeded from corrections and confirmed turns |
-| vocabulary terms | 5 | hand-managed proper nouns |
+| what | why it cannot be recomputed |
+|---|---|
+| the audio itself | requirement #1; a gap is the worst failure |
+| human corrections | a person listened and typed; the enrolment seed, and the only human input besides the audio |
+| enrolled speakers + voiceprints | seeded from corrections and confirmed turns |
+| vocabulary terms | hand-managed proper nouns |
+
+⚠ No counts here on purpose: they grow, and a stale one reads as authority. Count
+them when a decision needs the size.
 
 ⚠ Corrections are NOT "the recording", and they are kept anyway. They are the
 other human input in the system, they cost real time, and #1461 is blocked on
@@ -321,7 +324,7 @@ archive on 2026-09-06:
 | **diarized** | **20 of 20 — every one of the 2 222 visible turns carries a cluster** |
 | voices named by a person | 9 sessions; **11 have never been opened and named** |
 | rows kept | 10 593 written → 2 222 visible (the rest are the pre-alignment pass) |
-| corrections made on them | 24 of 468 |
+| corrections made on them | a handful |
 
 ⚠ **`speaker_label` is the HUMAN name, not the machine's answer.** Diarization writes
 `speaker_cluster` (`SPEAKER_00`…); `speaker_label` is filled by the session screen's
@@ -394,7 +397,7 @@ which tools were actually used):
 |---|---|
 | the `train` bulk-correction queue | one correction screen is enough, and #1461 needs the timeline's window-targeted one, not lowest-confidence-first |
 | `/api/split` (per-fragment split) | **no caller in the frontend at all** — already dead code |
-| manual hide / unhide of a turn | 9 uses, ever: 5 through the train screen's "can't make out", 4 hand-hidden. The other ~52k hidden turns were all hidden by machine |
+| manual hide / unhide of a turn | 9 uses, ever: 5 through the train screen's "can't make out", 4 hand-hidden. Every other hidden turn was hidden by machine |
 | the clip-trimmer (boundary nudge) | same family; no use detectable, needed by neither use case |
 
 ⚠ **span-assign is HELD OUT of this list, 2026-09-06, and the same measurement is
@@ -409,12 +412,12 @@ repairs is broken is the wrong order. Revisit once #1470 has ground truth.
 `can't make out (human)` and hand-authored hide reasons exist in the archive. Nine
 rows does not change the decision — it changes what the decision may claim.
 
-KEPT for the same reason: **453 of 468 corrections set a SPEAKER** and 183
-changed text, so correcting *who spoke* is the job. Hiding a bad CORRECTION stays
+KEPT for the same reason: **almost every correction sets a SPEAKER** and only a
+minority change text, so correcting *who spoke* is the job. Hiding a bad CORRECTION stays
 (13 real uses) — a mistaken correction otherwise poisons enrolment.
 
-⚠ **And the finding that outranks the list**: corrections ran 456 in June, 12 in
-July, and NONE since. See #1467 — whether the review UI is the reason is unknown
+⚠ **And the finding that outranks the list**: corrections were made in bulk in one
+month, a trickle the next, and have all but stopped since. See #1467 — whether the review UI is the reason is unknown
 and unmeasurable from the archive, and it decides whether #1461 is even the right
 next task.
 
@@ -474,8 +477,8 @@ stage. It owns, in build order:
   and the rest absorbed from `/sync/jobs` later), results in (turn rows,
   written with the same SQL the Python store uses — copied, not re-derived,
   the `audiod::store` precedent).
-- **Retention** (stage D): transcode blobs past the lossless window to Opus;
-  enforce the window.
+- **Retention** (stage D): ⚠ SUPERSEDED — the decision record revised this to
+  LOSSLESS FOREVER. What remains is silence filtering, never re-encoding.
 - **Browsing API + webauth + static frontend** (stage F): the FastAPI surface
   ported route-group by route-group; the Angular app unchanged, its typed
   contract regenerated from Rust types. **DONE 2026-09-12** — the Python is
@@ -497,8 +500,9 @@ push the result, ack. It replaces worker, live, jobs, sync-push, outbox and
 capture-mirror — a stateless poller needs no watermark, no outbox, no mirror
 queue, because the queue lives on Isis.
 
-The shims are the Python floor — and as of 2026-09-18 they are very nearly ALL
-of it. `src/recall` is **14 modules / 2,301 lines**, down from 40 / 8,228: the
+The shims are the Python floor, and very nearly ALL of the Python. `src/recall`
+is down from 40 modules and ~8,000 lines to a fraction of that — count it with
+`wc -l src/recall/*.py` rather than trusting a number here. The
 agent's CLI toolbox was deleted whole (#1342), and `store_schema.py`'s migration
 ladder became `recalld::meaning_schema` (#1538). What remains is these shims,
 their model wrappers, `llm-host`, `score_asr` (the golden ASR gate, kept so a
@@ -553,9 +557,10 @@ rates is an order of magnitude more, ~20 GB/day. Isis has 1.1 T free (`df` on
 the PVC's filesystem). That figure was the basis for the ~30-day window, which is
 **withdrawn (2026-09-10): lossless is kept forever.**
 
-⚠ Re-measured 2026-09-10, and the shape of the bill has changed because the
-recorders send WAV rather than FLAC. Three phones deliver lossless today
-(pixel5, oneplus6t, pixel9 — 3,794 segments); `iphone11` and `usb` do not, and
+⚠ The shape of the bill depends on what each recorder actually sends, and they
+differ — WAV, FLAC and Opus are all present in the archive at once. ⚠ Check the
+extensions before costing anything. When measured, three phones delivered
+lossless while `iphone11` and `usb` did not, and
 `usb` is the condenser that leads the others by 21 dB, so it is the one most
 worth having. At WAV's flat 5.76 MB/min, three phones recording ~12 h/day is
 ~12.8 GB/day, and Isis's 969 GB free is about seventy days. As FLAC the same
@@ -901,9 +906,10 @@ B3 lands.*
   calibration needs: geb 20 speech / 6 silent, pixel5 11/39, oneplus6t 26/24.
   Oldest-first, before the flip, had spent 25 minutes still inside 13-15 June.
 
-  STILL TO BUILD: the rest of the wiring — speech into liveness, the
-  quiet review's evidence, room priority, and the calibrated reference that
-  un-parks D3's rank.
+  ⚠ That list of remaining wiring is SPENT: liveness is speech-gated (above), the
+  queue takes newest-first, the calibrated reference is a query
+  (`levels::speech_reference_db`), and the quiet review was CUT with the product's
+  scope. Nothing is outstanding in D4.
 - **D5. Retention.** ⚠ **SUPERSEDED as written.** It said "window transcode to
   Opus + enforcement", and the decision record above revised that to LOSSLESS
   FOREVER — the Opus tail is a convenience copy, not what lossless decays into.
@@ -1515,19 +1521,15 @@ B3 lands.*
     passed it. Guard the half parsed from TEXT; the half that reads a live object
     is allowed to reach zero.
 
-  ⚠ **STILL TO DO:** capture — and then the Mac side, which is where the
-  remaining Python actually lives.
+  ⚠ That note said capture was still to do; the table above records it DONE. The
+  Mac side went too — worker, live, sync-push and the CLI are all deleted.
 
-  ⚠ **The API was never the bulk, so "nearly done" is true of it and false of
-  the repo.** Measured 2026-09-07: `find src scripts -name '*.py' | xargs wc -l`
-  gives ~20k against ~35k of Rust, and the whole serving tier was about 5% of
-  that Python. What remains splits four ways: the Mac's capture/worker/sync
-  (~3.2k, portable, `audiod` already covers part), `store.py` + `store_schema.py`
-  (~3.3k, the god object of #1340 — Rust already reads and writes this database
-  directly, so it is duplication rather than a dependency), `cli.py` +
-  `cli_parser.py` (~2.3k, 40 subcommands whose deadness CANNOT be measured
-  statically because they are typed at a terminal), and the ML shims (~1.5k),
-  which stay Python by §9 and are the intended floor.
+  ⚠ **The API was never the bulk, so "nearly done" was true of it and false of
+  the repo** — the serving tier was a few percent of the Python. Everything that
+  audit listed as remaining (the Mac's capture/worker/sync, `store.py` +
+  `store_schema.py`, `cli.py` + `cli_parser.py`) has since been deleted; what is
+  left is the ML floor. ⚠ The lesson outlives the numbers: size the REMAINDER
+  before calling a port nearly done.
 
   *Checked against the running pod, so the next session does not have to guess:*
   `NC_INTERNAL_URL` is `http://nextcloud-server.nextcloud.svc.cluster.local` —
@@ -1572,8 +1574,8 @@ B3 lands.*
 
 The floor, permanent: the three model shims (mlx-whisper, pyannote, mlx-lm) —
 Python because the models are Python, per [design.md §9](design.md). Plus what
-is left of the evaluation side: `wer` and the golden ASR check
-(`tests/test_cli_score_asr.py`).
+is left of the evaluation side: `wer` and the golden ASR check, which now lives
+in `src/recall/score_asr.py`.
 
 ⚠ This used to name `finetune`, `pilot` and `export` in that floor. They were
 deleted with the LoRA toolchain ("Training is not a goal" above) and the floor
