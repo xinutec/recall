@@ -1,17 +1,17 @@
 # The audio plane — audiod
 
 `audiod/` is the Rust daemon that owns the audio plane: everything from
-transducer to filesystem. The Python half owns everything from filesystem to
-meaning (ASR, diarization, speaker ID, the LLM) — that split is deliberate and
-stays (see [design.md §9](design.md)). The two halves meet only at:
+transducer to filesystem. The meaning plane — ASR, diarization, speaker ID — is
+owned by `recalld`, with Python reduced to the model shims
+(see [design.md §9](design.md)). The planes meet only at:
 
 - segment files named `<source>-<UTC-start>.<ext>` under `<root>/<source>/`
-- the `.alive` liveness marker (touched only on measured signal)
-- the `capture_paused_until` pause file (audiod reads, Python writes)
-- two bookkeeping writes into `recall.sqlite` (source registration,
-  `capture_events`)
+- the `capture_paused_until` pause file, which every recorder self-gates on
+- bookkeeping rows in `recall.sqlite` (source registration, `capture_events`)
 
-Nothing downstream may be able to tell which language wrote a segment.
+⚠ This section once described the far side as Python and named a `.alive`
+marker. Both moved. Nothing downstream may be able to tell which language wrote
+a segment, which is why the seam is files and rows rather than calls.
 
 ## Why a daemon, and why one room stream
 
@@ -86,14 +86,21 @@ tier.
    on it, only on transcribing one stream instead of five. D3 has produced 5,644
    blocks.
 
-   ⚠ **Transcribing that stream is a separate verdict, and the first one was
-   NEGATIVE.** Written as turns on 2026-09-12, the room text measured worse than
-   the per-mic turns it replaced over the same minutes — 22% repetition loops
-   against 0%, and a Dutch household reported as mostly English. Reversed, writer
-   off. Whether #1410's read-path filters close that gap (the per-mic corpus is
-   swept of exactly these; the room turns were raw) or the audio is genuinely
-   worse is #1388's next experiment. A stream that is cheaper to transcribe is
-   not yet a stream worth reading.
+   ⚠ **Transcribing that stream is a separate verdict, and it is still open.**
+   Room turns were written once, measured worse than the per-mic turns, and
+   reversed; the writer is off.
+
+   ⚠⚠ **RETRACTED: the figures that reversal rested on (22% repetition loops
+   against 0%) were produced by a SQL proxy, not the rule that ships.** Re-measured
+   with `quality::is_repetition_loop` and PAIRED over minutes where both exist,
+   the room stream loops slightly LESS than the microphones it would replace
+   (#1388). Do not cite the old numbers, and do not compare any loop figure with
+   one measured under a different rule.
+
+   What has replaced them is a known-truth comparison that points the other way
+   for a different reason — the room clip transcribed its own winner's audio worse
+   than that microphone's own clip. n=1; see #1388. A stream that is cheaper to
+   transcribe is not yet a stream worth reading.
 4. **Spatial features** — per-frame TDOA/level vectors across devices as
    sidecar files: a position fingerprint that separates same-voice/different-
    seat where voiceprints confuse, feeding diarization as a third view, and
@@ -173,9 +180,9 @@ well is this mic hearing the speaker, for this mic".
 above about "a window where the best mic changes" is exactly why.** The
 calibrated rank exists, its reference is now gated on a real speech detector
 rather than a loudness proxy, and it is recorded in provenance. It does not
-choose. The two ranks disagree on 48% of blocks and calibration takes almost
-every recent block off the condenser (raw picks usb 72 of 75; calibrated picks
-phones and geb), while the corrections that could judge that are from mid-June,
+choose. The two ranks disagree on roughly half of all blocks and calibration takes almost
+every recent block off the condenser, while the corrections that could judge that
+are from mid-June,
 before the fleet had enough microphones to disagree — an overlap of 1.7%. So the
 reasoning here stands and remains the plan; what is missing is evidence, not
 argument. See architecture.md's D3 acceptance note and #1461.

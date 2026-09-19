@@ -49,8 +49,8 @@ catches up — this is what guarantees requirement #1.
 
 ⚠ **The layers must be ADDITIVE.** A layer that improves attribution may not
 rewrite the transcript to do it — every serious data loss in this system came
-from one that did, and 28,046 turns are hidden by diarization passes that had
-nothing to say about the words. Proposed model and evidence:
+from one that did, and most hidden turns were hidden by a pass that had nothing
+to say about the words. Proposed model and evidence:
 [architecture.md, "text is written once"](architecture.md).
 
 Fine-tuning is the **last** lever, not the first: it needs a corpus of corrected
@@ -72,9 +72,10 @@ it today**: two adapters were held back by the A/B gate (truncation, then a
 language-head bug), the third rode the idle refine pass 2026-07-09..07-11 and was
 pulled — once windowing made it correct on long audio it was **~8x slower** there (a
 32-layer fp32 decoder against turbo's 4) for a WER win only ever measured on short
-clips. Refine's precision is the diarization and word alignment, not the ASR model, so
-it stays on turbo; the re-enable arguments sit commented in `deploy/hm-agents.nix` and
-only an A/B win on real audio should uncomment them (see [pipeline.md §5](pipeline.md)).
+clips. Precision came from diarization and word alignment, not the ASR model, so it
+stayed on turbo. ⚠ Refine and its agent are deleted; the re-enable arguments are
+recorded in [pipeline.md §5](pipeline.md), and only an A/B win on real audio should
+bring them back.
 The post-correction dictionary was the cheap lever still un-built — until the
 corrections corpus was mined for it (2026-09-02, 176 changed pairs, difflib
 word alignment): only 9 substitutions recur at all, and they split into
@@ -123,17 +124,17 @@ Whisper invents words over it — so `recalld::quality` refuses such a turn at
 WRITE time (`is_repetition_loop`, `is_wordless`), and it never reaches the read
 path. It replaced a retroactive sweep that soft-hid, never deleted:
 
-| pass | signal | needs audio |
-|---|---|---|
-| `scan-loops` | degenerate repetition | no |
-| `scan-hallucinations` | repeated filler **and** VAD silence | yes |
-| `scan-foreign-script` | non-Latin script **and** VAD silence | yes (candidates only) |
-| `scan-wordless` | no word in the text at all | no |
+⚠ **Those retroactive sweeps are deleted.** What they did now happens at write
+time (`is_repetition_loop`, `is_wordless`) or as a confidence signal
+(`foreign_script_ratio`), so a junk turn never reaches the read path and nothing
+has to be un-hidden later.
 
-Two independent signals are required wherever hiding could cost real speech: a
-visitor really can speak Japanese, so script alone would erase them. `scan-wordless`
-is the one single-signal rule, and only because a turn of `...` says nothing about
-what was spoken however loud the room was.
+The rule they were built on still governs: **two independent signals wherever
+hiding could cost real speech.** A visitor really can speak Japanese, so script
+alone must never erase them — which is why foreign script now zeroes a turn's
+confidence rather than hiding it. Wordlessness is the one single-signal rule, and
+only because a turn of `...` says nothing about what was spoken however loud the
+room was.
 
 ⚠ **What is deliberately NOT a rule: confidence, length, or the language label.**
 The commonest low-confidence turns here are `Ja.`, `Yeah.` and `Okay.` — quiet real
@@ -142,9 +143,9 @@ most are Dutch and English the model merely mislabelled; only the ones in non-La
 *script* are safe to act on. Recount with the queries in the tracking issue rather
 than trusting a number written here.
 
-The sweeps run from the worker pass when it wrote rows, not by hand. They were
-hand-only commands for months, which is exactly how the wordless turns reached the
-read path in the first place.
+⚠ The lesson that outlived them: a quality rule must run where rows are WRITTEN,
+not as a command someone remembers. They were hand-only for months, which is
+exactly how wordless turns reached the read path in the first place.
 
 **5.3 ASR.** mlx-whisper, `large-v3-turbo` (`asr.DEFAULT_MODEL`), on every pass.
 Word timestamps in the refine pass align words to diarized speakers. Non-turbo
@@ -235,15 +236,17 @@ attribution works. (They fed a fine-tune corpus too until training was cut on
 
 ## 7. Service & resilience
 
-Separate launchd agents: **capture** (must never die) and the
-**worker / live / refine** processes (killable, resume from unprocessed audio).
+Separate launchd agents: **capture** (must never die) and the killable
+processing agents, which resume from unprocessed audio. ⚠ Which agents those are
+changes with the migration — read `deploy/hm-agents.nix`, not a list here.
 Health surfaces last-captured / last-transcribed timestamps, queue depth, disk
 free. Explicit failure handling: disk full (keep capturing, stop transcribing),
 mic unplug (alert + auto-resume), worker crash (resume from queue).
 
 **The recorder outranks everything on the machine.** capture and ingest run as
 launchd `ProcessType = Interactive`; the rest take the `Background` default,
-except llm-host (`Standard` — an Ask has a human waiting on it). That is not a preference, it is requirement #1 in scheduler terms:
+except llm-host (`Standard`, because a person waits on what it serves). That is
+not a preference, it is requirement #1 in scheduler terms:
 `Background` is macOS's *throttled* class, and sox reads CoreAudio in real time,
 so a starved reader overruns its buffer and drops samples that no later pass can
 recover. Measured 2026-09-03 on a busy machine (a batch render at 565% CPU, other
@@ -281,5 +284,6 @@ conventions (strict typing, TDD): [conventions.md](conventions.md).
 
 Retention is **closed** ([architecture.md](architecture.md): lossless, forever
 — the rolling window was withdrawn 2026-09-10). Still open: audio scope (all vs
-speech-padded); re-transcription cadence (scheduled vs on-demand). The recall/Q&A LLM is
-Qwen2.5-7B-Instruct (4-bit, mlx-lm) — first pick, revisit as local models move.
+speech-padded); re-transcription cadence (scheduled vs on-demand). ⚠ Q&A itself is
+CUT, so the model choice behind it (Qwen2.5-7B-Instruct, 4-bit, mlx-lm) is a note
+for whoever revives the ambition, not a live decision.
