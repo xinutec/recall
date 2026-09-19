@@ -65,22 +65,27 @@ transcripts, and summaries live on Isis (and its backups).
 
 ## Topology
 
+⚠ **Redrawn 2026-09-19.** The diagram named `worker`, `refine` and the Python
+`live` — all three deleted — and an Ask queue that was cut with the product's
+scope. What follows is what actually runs.
+
 ```
                           home LAN / WireGuard 10.100.0.0/24
   ┌─────────────── Mac mini (10.100.0.11, one-way WG peer) ───────────────┐
-  │  capture (USB mic) → Opus segments                                    │
-  │  worker/live: mlx-whisper turbo  (audio → text)                       │
-  │  refine: pyannote diarize + speaker align                             │
-  │  llm: mlx Qwen (summaries, ask answers)                               │
-  │  outbox + poller  ── all traffic Mac-INITIATED ──►                    │
+  │  audiod capture (USB mic) → Opus segments                             │
+  │  audiod ingest             ← the phones' tcp_pcm streams              │
+  │  recall-live: tap → VAD → asr shim → POST /sync/live                  │
+  │  runner x2: shim_asr (mlx-whisper turbo), shim_voices (pyannote)      │
+  │  llmhost: mlx Qwen — ⚠ held for LIFE, not recall; Ask is CUT          │
+  │  audiod upload + capture-mirror ── all traffic Mac-INITIATED ──►      │
   └───────────────────────────────┬───────────────────────────────────────┘
-                                   │  (1) push: audio blobs + transcript/turn/summary rows
-                                   │  (2) poll: pending ask-queries, re-diarize requests
+                                   │  (1) push: audio blobs + transcript/turn rows
+                                   │  (2) poll: the job queue (transcribe, diarize, enrol)
                                    ▼
   ┌─────────────── Isis (10.100.0.2, single-node k3s) ────────────────────┐
-  │  ingest/queue API   (WG-bound, authenticated)                         │
+  │  recalld: ingest/queue API   (WG-bound, authenticated)                │
   │  store: SQLite system-of-record + audio archive  (plaintext — see Open) │
-  │  api + web: timeline / search / review / ask      (VPN/LAN-only)      │
+  │  api + web: timeline / search / review            (VPN/LAN-only)      │
   └───────────────────────────────┬───────────────────────────────────────┘
                                    │  odin restic PULLS (SSH)
                                    ▼
