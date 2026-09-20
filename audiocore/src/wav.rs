@@ -1,6 +1,6 @@
-//! Minimal mono 16-bit WAV writing — the fusion prototypes' output format,
-//! because the ASR working-copy path accepts WAV directly and 44 bytes of
-//! header is not worth a dependency.
+//! Minimal mono 16-bit WAV writing — what every caller here hands the ASR
+//! shim, because that path accepts WAV directly and 44 bytes of header is not
+//! worth a dependency.
 
 use std::io::Write;
 use std::path::Path;

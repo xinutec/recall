@@ -18,8 +18,8 @@ pub fn rms_buckets(pcm: &[u8]) -> Vec<f32> {
     rms_buckets_at(pcm, DECODE_RATE, BUCKET_S)
 }
 
-/// The same measurement on any rate/bucket pair — the fusion driver reuses it
-/// at 10 ms buckets for fine alignment.
+/// The same measurement on any rate/bucket pair, for a caller that needs a
+/// finer grain than a stored segment's.
 pub fn rms_buckets_at(pcm: &[u8], rate: u32, bucket_s: f64) -> Vec<f32> {
     let samples_per_bucket = (f64::from(rate) * bucket_s) as usize;
     let bytes_per_bucket = 2 * samples_per_bucket;
@@ -39,9 +39,8 @@ pub fn rms_buckets_at(pcm: &[u8], rate: u32, bucket_s: f64) -> Vec<f32> {
 
 /// The dB level of the envelope's `q`-quantile bucket — the one measurement
 /// stage D's calibration stores per segment: `q = 0.9` is "what this mic
-/// hears when someone talks", `q = 0.1` its floor, the same quantiles the
-/// fusion bake-off ranked with (docs/audio-plane.md). `NEG_INFINITY` for an
-/// empty envelope, so an absent segment never reads as a quiet one.
+/// hears when someone talks", `q = 0.1` its floor. `NEG_INFINITY` for an empty
+/// envelope, so an absent segment never reads as a quiet one.
 pub fn level_quantile_db(envelope: &[f32], q: f64) -> f32 {
     if envelope.is_empty() {
         return f32::NEG_INFINITY;

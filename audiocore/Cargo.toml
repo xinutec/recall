@@ -2,10 +2,14 @@
 # (docs/architecture.md, stage D1).
 #
 # What lives here is exactly what must not fork: the segment-name grammar
-# (names), decode/align/envelope (the tier-1 aligner), the STFT and the
-# measured-and-bounded fusion engine, and WAV I/O. audiod (the Mac's audio
-# plane) and recalld (the fleet's system of record) both depend on it; the
-# room builder (stage D3) is its next consumer.
+# (names), decode/align/envelope (the tier-1 aligner), the silero VAD, and WAV
+# I/O. audiod (the Mac's audio plane) and recalld (the fleet's system of record)
+# both depend on it.
+#
+# ⚠ The STFT and the fusion engine were REMOVED 2026-09-20. Waveform fusion is
+# settled dead on the Opus archive — it lost to the best single microphone and
+# the control proved the loss belonged to the algorithms, not the pipeline
+# (#1388). Nothing called either module; the numbers are in the task.
 [package]
 name = "audiocore"
 version = "0.1.0"
@@ -32,8 +36,6 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 
 [dependencies]
-# The one FFT implementation to trust — same reasoning as audiod's original.
-rustfft = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # ONNX runtime for the silero VAD, loaded DYNAMICALLY from the system library
 # rather than ort's prebuilt binaries.

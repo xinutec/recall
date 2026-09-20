@@ -116,9 +116,10 @@ with (3), which needs the PCM in process anyway.
 
 ## What the gate measured
 
-Run 2026-09-05 over the 2026-06-23 20:12Z window, 38 human corrections with a
-covering `usb` segment; both arms get identical spans, one model, no vocabulary
-prompt (`scripts/fusion_bakeoff.py`, reports under `/tmp/fusion-bakeoff/`).
+Run over a window of 38 human corrections with a covering `usb` segment; both
+arms got identical spans, one model, no vocabulary prompt. ⚠ The harness and the
+fusion engine were REMOVED once this settled — the result below is the record,
+and git holds the code that produced it.
 Verified first that the arms are comparable at all: each fused clip
 cross-correlates with its reference clip at zero lag, peak r 0.92-0.98.
 

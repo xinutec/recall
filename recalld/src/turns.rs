@@ -12,7 +12,8 @@
 //! - [`ROOM`] drains `transcribe-room`. It is the stream whose SELECTION #1461
 //!   cannot yet referee, and it is the only one that hides anything: a room turn
 //!   standing in for four microphones means those four turns should not also be
-//!   read. **Off** (see `spawn_room_turn_writer`).
+//!   read. **Off** — the call in `main` is commented out, with the reason
+//!   beside it.
 //! - [`PER_MIC`] drains `transcribe-segment`. It hides nothing and replaces
 //!   nothing — it writes the turns for microphone clips that have NONE, which is
 //!   14,078 of 22,312 of them. This is `worker.py`'s loop moved to the runner,

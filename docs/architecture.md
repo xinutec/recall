@@ -807,8 +807,8 @@ B3 lands.*
 
 - **D1. Shared DSP crate.** *Done 2026-09-05:* one workspace
   (audiocore + audiod + recalld, one lockfile), `audiocore` holding the DSP
-  (`align`/`envelope`/`decode`/`stft`/`fuse`/`wav`), the offline instruments
-  (`align_probe`, `fuse_window`) and — deliberately — the ONE segment-name
+  (`align`/`envelope`/`decode`/`wav`), the offline instruments
+  (`align_probe`) and — deliberately — the ONE segment-name
   grammar (`names`, recalld's typed parser merged with the sweeps'
   stamp/glob readers). It also bought the test the stub deferred: audiod's
   uploader now proves delivery, the auth gate and the 409 path against the
