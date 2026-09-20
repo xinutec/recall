@@ -520,6 +520,10 @@ pub fn apply(
                 w: w.text.clone(),
             })
             .collect();
+        // ⚠ From `rebased`, not from the shim's own array: these are recalld's
+        // `{s,e,w}`, re-based to this turn, which is the only encoding the rate
+        // rule may read.
+        let spans: Vec<(f64, f64)> = rebased.iter().map(|w| (w.s, w.e)).collect();
         tx.execute(
             "INSERT INTO transcript_segments
                  (audio_segment_id, start_utc, end_utc, text, language,
@@ -542,7 +546,10 @@ pub fn apply(
                 // tell that matters: 273 turns are written in Cyrillic or
                 // Japanese while LABELLED nl or en, which is the model
                 // contradicting itself (#1410).
-                if trusted && !crate::quality::is_foreign_script(&turn.text) {
+                if trusted
+                    && !crate::quality::is_foreign_script(&turn.text)
+                    && !crate::quality::is_implausibly_slow(&spans)
+                {
                     turn.confidence
                 } else {
                     0.0

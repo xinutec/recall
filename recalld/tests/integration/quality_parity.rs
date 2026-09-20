@@ -94,3 +94,63 @@ fn the_rust_quality_rules_match_the_python_ones_case_for_case() {
         );
     }
 }
+
+// --- the turn's own speaking rate (#1410) ------------------------------------
+
+use recalld::quality::{SLOW_RATE, is_implausibly_slow, speaking_rate};
+
+/// Word spans at a steady `rate`, starting at zero.
+fn at_rate(words: usize, rate: f64) -> Vec<(f64, f64)> {
+    let step = 1.0 / rate;
+    (0..words)
+        .map(|i| {
+            let start = i as f64 * step;
+            (start, start + step * 0.5)
+        })
+        .collect()
+}
+
+#[test]
+fn the_slow_tail_is_a_single_word_over_near_silence_not_slow_speech() {
+    // ⚠ The measured shape of the band: four words spread over 32 seconds. The
+    // median of the whole corpus is 2.18 w/s — human conversational speed — so
+    // a rule that caught ordinary slow talking would catch the archive.
+    let junk = vec![(0.0, 0.4), (11.0, 11.3), (21.0, 21.4), (32.0, 32.4)];
+    assert!(is_implausibly_slow(&junk));
+
+    // Deliberate, careful speech is NOT this. A memory aid whose quality rule
+    // fires on someone speaking slowly has misread what it is for.
+    let deliberate = at_rate(12, 1.0);
+    assert!(!is_implausibly_slow(&deliberate));
+    assert!(!is_implausibly_slow(&at_rate(20, 2.18)));
+}
+
+#[test]
+fn a_turn_with_nothing_to_divide_by_is_not_accused() {
+    // ⚠ `None`, not "infinitely fast" and not "infinitely slow". A turn whose
+    // words all carry the same instant says the timings are unusable, and a
+    // rule that read that as a verdict would grade the encoding, not the speech.
+    assert_eq!(speaking_rate(&[]), None);
+    assert_eq!(speaking_rate(&[(5.0, 5.0)]), None);
+    assert!(!is_implausibly_slow(&[]));
+    assert!(!is_implausibly_slow(&[(5.0, 5.0)]));
+}
+
+#[test]
+fn the_fast_tail_gets_no_rule_because_it_is_seventeen_turns() {
+    // 17 turns above 10 w/s across the whole corpus. A rule for 17 turns is one
+    // whose false positives outnumber its finds — and the physically impossible
+    // rates live in the OTHER timing encoding, which this must never be fed.
+    assert!(!is_implausibly_slow(&at_rate(8, 30.0)));
+    assert!(speaking_rate(&at_rate(8, 30.0)).is_some_and(|r| r > 10.0));
+}
+
+#[test]
+fn the_cut_is_read_from_the_rule_rather_than_copied_beside_it() {
+    // ⚠ A threshold pasted into a test drifts from the one that ships, and then
+    // the test certifies the number it was written against rather than the rule.
+    let just_under = at_rate(6, SLOW_RATE * 0.9);
+    let just_over = at_rate(6, SLOW_RATE * 1.1);
+    assert!(is_implausibly_slow(&just_under));
+    assert!(!is_implausibly_slow(&just_over));
+}

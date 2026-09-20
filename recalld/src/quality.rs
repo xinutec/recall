@@ -95,6 +95,53 @@ pub fn is_bare_name(text: &str, names: &[String]) -> bool {
             .any(|name| name.trim().eq_ignore_ascii_case(bare))
 }
 
+/// Words per second below which a turn is not somebody talking. Measured on the
+/// 4,989 turns carrying usable timings: the median is 2.18 w/s — human
+/// conversational speed — and below 0.2 the median turn is **four words spread
+/// over 32 seconds**, which is a single word over near-silence.
+pub const SLOW_RATE: f64 = 0.2;
+
+/// The turn's own speaking rate: words over first-word-start to last-word-end.
+///
+/// ⚠ **The denominator is the turn's OWN span, and that is the whole point.**
+/// Every earlier junk signal reached OUTSIDE the turn for a denominator and a
+/// per-DEVICE one is what broke them — tokens per speech-second fires on
+/// minutes when the room really was talking, because a phone's suppression
+/// gates between words, so silero reports a fraction of the speech present
+/// while Whisper still transcribes the fragments. It measured AGC aggression,
+/// not hallucination. Word timings are device-independent.
+///
+/// `None` when there is nothing to divide by.
+#[must_use]
+pub fn speaking_rate(words: &[(f64, f64)]) -> Option<f64> {
+    let first = words.first()?.0;
+    let last = words.last()?.1;
+    let span = last - first;
+    (span > 0.0).then(|| words.len() as f64 / span)
+}
+
+/// The slow tail, corroborated twice by instruments sharing nothing with word
+/// timings: foreign script runs 3.0% in this band against 0.3% in the normal
+/// one, and on the only microphone whose VAD readings are trustworthy the band
+/// carries a median 0.9 s of speech against 31.2 s.
+///
+/// ⚠ **Only ever `asr_confidence = 0.0`, never deletion** — the same treatment a
+/// foreign script gets. The turn is kept, stays searchable, and lands in the
+/// review queue instead of heading a conversation card.
+///
+/// ⚠ The FAST tail is real and negligible — 17 turns above 10 w/s across the
+/// whole corpus — so it gets no rule. A rule for 17 turns is a rule whose false
+/// positives outnumber its finds.
+///
+/// ⚠⚠ **Feed this only recalld's OWN `{s,e,w}` timings.** The other stored shape
+/// is the ASR shim's output verbatim and gives p95 30 w/s and max 550 — so it
+/// does not mean what this assumes, and pooling the two produces a p99 that is
+/// pure artefact (#1410).
+#[must_use]
+pub fn is_implausibly_slow(words: &[(f64, f64)]) -> bool {
+    speaking_rate(words).is_some_and(|rate| rate < SLOW_RATE)
+}
+
 /// Is this character a letter Python's `unicodedata` names LATIN?
 ///
 /// Binary search over the generated table, which is why it agrees with the

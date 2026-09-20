@@ -110,6 +110,59 @@ fn live_turns(root: &Path) -> Vec<(String, String)> {
         .expect("rows")
 }
 
+/// Which half failed, when no turn arrived — the tap, or the store.
+///
+/// ⚠ **They are INDISTINGUISHABLE in this test's result, and that has already
+/// cost real time.** Adding a column broke the schema this test used to
+/// hand-copy: the write was rejected, no turn was stored, and the failure read
+/// as "speech crossed the tap and no live turn reached the store" — the same
+/// sentence the flake under investigation reports (#1630). A race was the
+/// leading suspect for a failure that was not a race at all.
+///
+/// So the store half is probed with the REAL writer rather than a model of it:
+/// if a canary goes in, the schema and the file are fine and the failure is
+/// upstream of them. ⓘ The canary is only ever written on the failure path, and
+/// the assertion that follows has already been decided by then.
+fn which_half_failed(root: &Path, agent: &mut std::process::Child, elapsed: Duration) -> String {
+    let conn = rusqlite::Connection::open(root.join("recall.sqlite"));
+    // ⚠ Counted BEFORE the canary, and labelled as such: "stored 1" beside a
+    // count taken after it would read as a contradiction.
+    let rows = conn.as_ref().map_or_else(ToString::to_string, |c| {
+        c.query_row("SELECT COUNT(*) FROM transcript_segments", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .map_or_else(|e| e.to_string(), |n| n.to_string())
+    });
+    let canary = match rusqlite::Connection::open(root.join("recall.sqlite")) {
+        Ok(mut c) => recalld::work::ingest_live(
+            &mut c,
+            &[recalld::work::LiveTurn {
+                start: "2000-01-01T00:00:00+00:00".to_owned(),
+                end: "2000-01-01T00:00:01+00:00".to_owned(),
+                text: "a canary probing the write half".to_owned(),
+                asr_model: "live".to_owned(),
+                language: Some("en".to_owned()),
+            }],
+            chrono::Utc::now(),
+        )
+        .map_or_else(|e| format!("REFUSED: {e}"), |n| format!("stored {n}")),
+        Err(err) => format!("cannot open the store: {err}"),
+    };
+    // ⚠ `try_wait`, never `wait`: the agent is still running in the passing
+    // case, and blocking here would hang the diagnosis instead of printing it.
+    let alive = match agent.try_wait() {
+        Ok(None) => "still running".to_owned(),
+        Ok(Some(status)) => format!("EXITED {status}"),
+        Err(err) => format!("unknown ({err})"),
+    };
+    format!(
+        "\n  the store half: {rows} rows before it; a canary write {canary}\
+         \n  the tap half:   the agent is {alive}\
+         \n  elapsed:        {:.1}s (a passing run takes ~7s; a failure sits in the whole deadline)",
+        elapsed.as_secs_f64()
+    )
+}
+
 #[test]
 fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
     let fixture = Path::new("../tests/fixtures/speech/public-domain-en.flac");
@@ -167,6 +220,7 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
     // this makes a single dropped burst survivable, and claims nothing more.
     std::thread::sleep(Duration::from_secs(2));
 
+    let started = Instant::now();
     let deadline = Instant::now() + Duration::from_secs(90);
     let mut turns = Vec::new();
     while turns.is_empty() && Instant::now() < deadline {
@@ -182,15 +236,19 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
             std::thread::sleep(Duration::from_millis(250));
         }
     }
+    // ⚠ Diagnosed BEFORE the kill. `try_wait` on a killed process says only that
+    // it is gone, which is the one answer that cannot distinguish anything.
+    let halves = if turns.is_empty() {
+        which_half_failed(root, &mut agent, started.elapsed())
+    } else {
+        String::new()
+    };
     let _ = agent.kill();
     let _ = agent.wait();
     // The tap ffmpeg outlives the SIGKILL above; it exits on its own within the
     // idle timeout, and nothing here waits for that.
 
-    assert!(
-        !turns.is_empty(),
-        "speech crossed the tap and no live turn reached the store"
-    );
+    assert!(!turns.is_empty(), "no live turn reached the store.{halves}");
     assert_eq!(turns[0].1, "a stub heard something");
     // The spelling the rest of the system stores instants in — a second one is
     // how two rows for one turn happen.
