@@ -132,6 +132,69 @@ pub fn archive_check(seconds: Option<f64>, detail: &str) -> Check {
     .build()
 }
 
+/// How long a FIXED read of the volume may take before it is worth saying so.
+/// Four seconds is absurd for one page off a working disk and is deliberately
+/// far above the tenths this costs when the volume is well — the point is to
+/// catch a mode, not to grade jitter.
+pub fn volume_slow() -> Duration {
+    Duration::seconds(4)
+}
+
+/// One page off the archive volume, timed. **The only fixed-size read the
+/// doctor does.**
+///
+/// ⚠ **This exists because `archive answers` cannot separate two causes.** That
+/// check times the whole archive read — six queries and a directory listing —
+/// so it gets slower when the volume is contended AND when the archive simply
+/// grows, and the value it trends cannot say which. Measured over its own
+/// history, the FASTEST read of the day moved from 0.05 s to seconds, in a
+/// floor that flips between two modes and holds for hours; a volume that stops
+/// answering adds a tail and does not raise a floor, so at least one of the two
+/// is not the fault that check was built for.
+///
+/// This one does not grow. Its size is one page, today and after another year
+/// of recording, so a rise in it belongs to the DISK — which is exactly the
+/// discrimination the whole question turns on.
+///
+/// ⚠ Kept BESIDE `archive answers`, never folded into it: that check has its
+/// own history under its own name, and the difference between the two trends is
+/// the measurement. Renaming it would spend the history to say the same thing.
+pub fn volume_check(root: &Path) -> Check {
+    use std::io::Read;
+    let db = root.join("recall.sqlite");
+    let started = std::time::Instant::now();
+    let read = std::fs::File::open(&db).and_then(|mut file| {
+        let mut page = [0_u8; 4096];
+        file.read_exact(&mut page)
+    });
+    let seconds = started.elapsed().as_secs_f64();
+    let slow = volume_slow().num_seconds() as f64;
+    let expected = format!("one page off the volume in under {slow:.0}s");
+    if let Err(err) = read {
+        return check(
+            "archive",
+            "the volume answers",
+            Verdict::Fail,
+            format!("cannot read the archive: {err}"),
+            expected,
+        )
+        .build();
+    }
+    check(
+        "archive",
+        "the volume answers",
+        if seconds >= slow {
+            Verdict::Warn
+        } else {
+            Verdict::Pass
+        },
+        format!("one page in {seconds:.2}s"),
+        expected,
+    )
+    .trend((seconds * 1000.0).round() / 1000.0, "s")
+    .build()
+}
+
 /// See [`crate::blanked`] for why the count is gated by the detector.
 pub fn blanked_check(blanked: usize) -> Check {
     check(
@@ -423,6 +486,10 @@ fn speech_loss(
 /// `delivery_checks` makes the same promise on evidence that is still written:
 /// every file on disk against audiod's own upload state.
 pub fn archive_checks(root: &Path, now: DateTime<Utc>) -> rusqlite::Result<Vec<Check>> {
+    // ⚠ FIRST, before a single query. Any read below leaves the file's first
+    // pages in the cache, and a probe that measures a cache hit measures
+    // nothing about the disk it is there to watch.
+    let volume = volume_check(root);
     let conn = open(&root.join("recall.sqlite"))?;
     // Registered recorders, not whatever directories exist: a mic the household
     // actually uses is one the archive knows about. Devices only — an imported
@@ -443,8 +510,13 @@ pub fn archive_checks(root: &Path, now: DateTime<Utc>) -> rusqlite::Result<Vec<C
     let recorders: Vec<Recorder> = capture::recorders_on_disk(root, &sources);
     let beat = read_beat(root);
 
-    let mut checks =
-        capture::capture_checks(&recorders, now, paused_until, capture::silent_after());
+    let mut checks = vec![volume];
+    checks.extend(capture::capture_checks(
+        &recorders,
+        now,
+        paused_until,
+        capture::silent_after(),
+    ));
     checks.extend(loss::loss_checks(
         &losses,
         &dead_windows,

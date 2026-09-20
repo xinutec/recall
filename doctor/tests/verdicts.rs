@@ -9,6 +9,7 @@ use doctor::capture::{
 };
 use doctor::check::{Verdict, worst};
 use doctor::source::SourceKind;
+use std::path::Path;
 
 fn at(minute: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_788_894_682 + minute * 60, 0).expect("a real instant")
@@ -336,6 +337,50 @@ fn a_slow_archive_warns_while_it_is_still_only_slow() {
     assert_eq!(archive_check(Some(59.0), "").verdict, Verdict::Warn);
     // Trended either way: the only warning anyone gets before it wedges.
     assert_eq!(archive_check(Some(1.5), "").value, Some(1.5));
+}
+
+#[test]
+fn an_unreachable_volume_fails_rather_than_reading_as_a_fast_probe() {
+    // ⚠ The failure mode this exists to avoid: a probe whose error path answers
+    // "0.00s" would report the disk as healthiest at the moment it is gone.
+    let missing = archive::volume_check(Path::new("/nonexistent-volume-for-a-test"));
+    assert_eq!(missing.verdict, Verdict::Fail);
+    assert!(missing.value.is_none(), "an unread page has no latency");
+    assert!(
+        missing.observed.contains("cannot read the archive"),
+        "{}",
+        missing.observed
+    );
+}
+
+#[test]
+fn the_volume_probe_reads_a_fixed_page_however_big_the_archive_gets() {
+    // ⚠ This is the whole point of it existing beside `archive answers`, which
+    // times six growing queries and a directory listing and so cannot say
+    // whether a slow reading is the DISK or the archive having got bigger.
+    let dir = tempfile::tempdir().expect("a scratch dir");
+    let db = dir.path().join("recall.sqlite");
+    std::fs::write(&db, vec![0_u8; 1024 * 1024]).expect("write");
+    let small = archive::volume_check(dir.path());
+    std::fs::write(&db, vec![0_u8; 64 * 1024 * 1024]).expect("write");
+    let large = archive::volume_check(dir.path());
+    assert_eq!(small.verdict, Verdict::Pass);
+    assert_eq!(large.verdict, Verdict::Pass);
+    // Both carry a reading — the trend is the measurement, so an absent value
+    // would make the two checks indistinguishable in exactly the case they
+    // were split to tell apart.
+    assert!(small.value.is_some() && large.value.is_some());
+    assert!(
+        large.value.expect("a reading") < volume_slow_seconds(),
+        "a 64x bigger archive cost {:?}s to probe",
+        large.value
+    );
+}
+
+/// The warn threshold as a number, so the test above reads the rule rather than
+/// repeating it — a copied bound drifts from the one that ships.
+fn volume_slow_seconds() -> f64 {
+    archive::volume_slow().num_seconds() as f64
 }
 
 #[test]
