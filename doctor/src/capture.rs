@@ -282,6 +282,65 @@ impl WindowAudio {
 /// household's silence teaches a person to stop reading it, and the 15.5 h that
 /// remain are real (#1383). So silence SKIPS — but only when the window was
 /// measured well enough to say so; see [`WindowAudio`].
+/// The lag a healthy instant feed runs at. A call costs its 30-second Whisper
+/// window whatever it holds, so the floor is a few seconds and always will be;
+/// this is set where a REGRESSION shows rather than where perfection does.
+///
+/// ⓘ Calibrated against the household's own audio on the last day the tier ran
+/// unjoined: 43 live turns, **median 83.8 s behind** (mean 103 — read the
+/// median). Thirty seconds is comfortably under that and comfortably over a
+/// healthy feed, which is what a warn threshold is for.
+#[must_use]
+pub fn live_lag_slow() -> Duration {
+    Duration::seconds(30)
+}
+
+/// How far behind the speaker the instant feed is running.
+///
+/// ⚠ **The failure [`live_check`] cannot see.** That one asks whether a live
+/// turn arrived at all. This tier's other failure is turns arriving steadily,
+/// each later than the last: before its calls were joined, each fragment cost
+/// more than the speech it carried, so the lag GREW for as long as anybody kept
+/// talking — 33 seconds of speech took 2 minutes 39 to deliver — and every
+/// check stayed green (#1383).
+///
+/// ⚠ Too few turns SKIPS rather than passing. "Nothing to measure" and "measured
+/// and fine" are different claims, and a check that conflates them reports a
+/// dead tier as healthy.
+pub fn live_lag_check(median_seconds: Option<f64>, slow: Duration) -> Check {
+    let bound = slow.num_seconds() as f64;
+    let expected = format!("live turns arriving within {bound:.0}s of being said");
+    let Some(median) = median_seconds else {
+        return check(
+            "capture",
+            "live delivery lag",
+            Verdict::Skip,
+            "too few live turns to measure",
+            expected,
+        )
+        .build();
+    };
+    check(
+        "capture",
+        "live delivery lag",
+        if median >= bound {
+            Verdict::Warn
+        } else {
+            Verdict::Pass
+        },
+        if median >= bound {
+            format!(
+                "median {median:.1}s behind — the feed is falling further behind as people talk"
+            )
+        } else {
+            format!("median {median:.1}s behind")
+        },
+        expected,
+    )
+    .trend((median * 10.0).round() / 10.0, "s")
+    .build()
+}
+
 pub fn live_check(
     newest_turn: Option<DateTime<Utc>>,
     now: DateTime<Utc>,

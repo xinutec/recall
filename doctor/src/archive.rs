@@ -18,7 +18,7 @@ use crate::capture::{self, Beat, Recorder};
 use crate::check::{Check, Verdict, check};
 use crate::loss::{self, Event, Gap};
 use crate::source::SourceKind;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -289,6 +289,53 @@ pub fn newest_live_turn(conn: &Connection) -> rusqlite::Result<Option<DateTime<U
     Ok(newest.as_deref().and_then(crate::instant::parse))
 }
 
+/// How far behind the speaker the instant feed is running, in seconds — the
+/// MEDIAN over recent live turns of `created_utc - end_utc`.
+///
+/// ⚠ **Liveness is not latency, and this tier can fail at either.**
+/// [`crate::capture::live_check`] asks whether a live turn arrived at all,
+/// which is the 40-minute-silence failure it was built for. It cannot see the
+/// other one: turns arriving steadily, each later than the last, the lag growing
+/// for as long as anybody keeps talking. That is what live did before its calls
+/// were joined — 33 seconds of speech took 2 minutes 39 to deliver (#1383) —
+/// and every check stayed green throughout.
+///
+/// ⚠ THE MEDIAN, never the mean. One clip that waited behind a restart moves a
+/// mean by minutes and says nothing about the tier.
+///
+/// `None` when too few turns exist to say — a handful is not a distribution,
+/// and a check that grades three turns reports noise as a regression.
+pub fn live_lag_seconds(conn: &Connection, since: DateTime<Utc>) -> rusqlite::Result<Option<f64>> {
+    let mut stmt = conn.prepare(
+        "SELECT created_utc, end_utc FROM transcript_segments \
+         WHERE asr_model = ?1 AND created_utc IS NOT NULL AND end_utc >= ?2",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![
+            LIVE_MODEL,
+            since.to_rfc3339_opts(SecondsFormat::Micros, false)
+        ],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?;
+    let mut lags: Vec<f64> = Vec::new();
+    for row in rows {
+        let (created, end) = row?;
+        if let (Some(created), Some(end)) =
+            (crate::instant::parse(&created), crate::instant::parse(&end))
+        {
+            lags.push((created - end).num_milliseconds() as f64 / 1000.0);
+        }
+    }
+    if lags.len() < MIN_LAG_SAMPLES {
+        return Ok(None);
+    }
+    lags.sort_by(f64::total_cmp);
+    Ok(Some(lags[lags.len() / 2]))
+}
+
+/// Below this the sample is not a distribution and gets no verdict.
+const MIN_LAG_SAMPLES: usize = 10;
+
 /// What the device recorders delivered in `[since, until)`, and how much of it
 /// the speech scanner has measured — the evidence [`crate::capture::live_check`]
 /// needs to tell a quiet house from a broken live tier.
@@ -537,6 +584,7 @@ pub fn archive_checks(root: &Path, now: DateTime<Utc>) -> rusqlite::Result<Vec<C
     let heard = crate::deaf::heard_between(&conn, &sources, now - deaf_window(), now)?;
     let newest_live = newest_live_turn(&conn)?;
     let live_window = window_audio(&conn, &sources, now - capture::live_quiet(), now)?;
+    let live_lag = live_lag_seconds(&conn, now - loss_window())?;
     drop(conn);
 
     let paused_until = crate::agents::paused_until(root);
@@ -563,6 +611,7 @@ pub fn archive_checks(root: &Path, now: DateTime<Utc>) -> rusqlite::Result<Vec<C
         capture::worker_slow(),
         capture::worker_stopped(),
     ));
+    checks.push(capture::live_lag_check(live_lag, capture::live_lag_slow()));
     checks.push(capture::live_check(
         newest_live,
         now,
