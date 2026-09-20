@@ -1,18 +1,18 @@
-//! How much of each delivered segment is speech (docs/architecture.md) —
-//! SPEECH, stored once per blob.
+//! How much of each delivered segment is SPEECH, stored once per blob
+//! (docs/architecture.md).
 //!
-//! D2 measures how LOUD a segment is; this measures whether anyone was
-//! talking, which is a different question and the one three consumers actually
-//! want. Liveness wants "someone is speaking" rather than "bytes arrived". The
-//! quiet review wants evidence before it proposes deleting anything. The room
-//! builder wants to prioritise blocks that carry speech. And the queue refuses
-//! to transcribe a segment measured silent, because asking a model about
-//! silence returns inventions rather than nothing (#1410).
+//! The calibration scanner measures how LOUD a segment is; this measures
+//! whether anyone was TALKING — a different question, and the one three
+//! consumers actually want. Liveness wants "someone is speaking" rather than
+//! "bytes arrived". The quiet review wants evidence before it proposes deleting
+//! anything. The room builder wants to prioritise blocks that carry speech. And
+//! the queue refuses to transcribe a segment measured silent, because asking a
+//! model about silence returns inventions rather than nothing (#1410).
 //!
-//! ⚠ It was also meant to un-park D3's calibrated rank, and it did give that
-//! reference an honest speech gate — but the rank stayed parked for a different
-//! reason: no corpus can test it (#1461). Speech evidence was necessary and not
-//! sufficient.
+//! ⚠ It was also meant to un-park the room builder's calibrated rank, and it
+//! did give that reference an honest speech gate — but the rank stayed parked
+//! for a different reason: no corpus can test it (#1461). Speech evidence was
+//! necessary and not sufficient.
 //!
 //! Same discipline as the level scanner it mirrors — bounded batches, one row
 //! per blob ever, a segment's speech being a fact about its bytes — with one

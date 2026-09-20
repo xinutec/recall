@@ -15,7 +15,7 @@
 //!
 //! ⚠ **The JSON is a CONTRACT with a shipped Angular app**, so the field names
 //! and the null-vs-absent distinction are copied, not redesigned. Anything that
-//! looks like it wants tidying here is load-bearing until F1 regenerates the
+//! looks like it wants tidying here is load-bearing until the frontend regenerates the
 //! frontend's typed contract from these structs.
 
 use rusqlite::{Connection, OptionalExtension, Row};

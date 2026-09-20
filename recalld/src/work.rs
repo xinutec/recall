@@ -7,7 +7,7 @@
 //! this database READ-ONLY on purpose: while the Python API is the only writer,
 //! recalld must not be *able* to write it. That rule holds for everything derived
 //! — turns, tiers, attribution — and it is not being relaxed for those. What
-//! changes here is narrower: F1 moves the browsing tier route group by route
+//! changes here is narrower: the port moves the browsing tier route group by route
 //! group, and a route group that writes cannot move at all under a read-only
 //! connection. So writes are opened per route, on their own connection, with the
 //! same WAL + busy-timeout discipline the Mac's agents already use on their copy.

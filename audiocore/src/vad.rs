@@ -1,10 +1,11 @@
 //! Speech detection at ingest.
 //!
-//! `segment_levels` (D2) can say a segment is LOUD; only this can say it is
-//! SPEECH. That distinction is what the rest of the stage needs: liveness that
-//! means "someone is talking" rather than "bytes arrived", the quiet review's
-//! evidence, room prioritisation, and — the reason D3's calibrated rank is
-//! parked — a reference built from real speech instead of whatever was loudest.
+//! `segment_levels` can say a segment is LOUD; only this can say it is SPEECH.
+//! That distinction is what the rest of the stage needs: liveness that means
+//! "someone is talking" rather than "bytes arrived", the quiet review's
+//! evidence, room prioritisation, and — the reason the room builder's
+//! calibrated rank is parked — a reference built from real speech instead of
+//! whatever was loudest.
 //!
 //! The network is silero, embedded (see `assets/README.md`). It consumes fixed
 //! 512-sample windows of 16 kHz mono and carries a state tensor between them,

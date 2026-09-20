@@ -6,7 +6,7 @@
 //! username allowlist; recalld's own read side takes the sync token, which is
 //! weaker. Mounting reads before this landed would have opened a second, weaker
 //! door to the household's audio, so the read layer was deliberately left off the
-//! router until this exists (docs/architecture.md, F1).
+//! router until this exists (docs/architecture.md).
 //!
 //! ⚠ **The token format is deliberately IDENTICAL to the Python's**, and that is
 //! the one place in this rebuild where compatibility is worth having. It is not

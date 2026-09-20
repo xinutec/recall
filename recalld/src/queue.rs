@@ -36,11 +36,12 @@ pub const TRANSCRIBE_SEGMENT: &str = "transcribe-segment";
 /// exist. The per-mic twin of [`DIARIZE_ROOM`], and the one that actually
 /// replaces `refine.py`.
 ///
-/// ⚠ **The distinction, and it is not cosmetic.** `DIARIZE_ROOM`
-/// diarizes the DERIVED room stream, which is gated on #1461 and whose writer is
-/// off — so turning it on writes a second transcript beside the per-mic one
-/// rather than improving anything. `refine.py` worked on per-mic segments, and
-/// those already carry turns, so a pass over them REPLACES rather than adds. Same model, same shim, same code; entirely different consequence.
+/// ⚠ **The distinction, and it is not cosmetic.** `DIARIZE_ROOM` diarizes the
+/// DERIVED room stream, which is gated on #1461 and whose writer is off — so
+/// turning it on writes a second transcript beside the per-mic one rather than
+/// improving anything. `refine.py` worked on per-mic segments, and those
+/// already carry turns, so a pass over them REPLACES rather than adds. Same
+/// model, same shim, same code; entirely different consequence.
 pub const DIARIZE_SEGMENT: &str = "diarize-segment";
 /// Turn a HUMAN-NAMED turn into a reference voiceprint.
 ///
@@ -358,7 +359,7 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Resul
     Ok(job)
 }
 
-/// Retire a job with its result (opaque JSON the E3 stage will interpret;
+/// Retire a job with its result (opaque JSON the runner will interpret;
 /// stored so nothing is lost while that lands).
 pub fn done(root: &Path, id: i64, result: &str, now: DateTime<Utc>) -> rusqlite::Result<bool> {
     let conn = store::open(root)?;
