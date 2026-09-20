@@ -252,6 +252,35 @@ pub fn cluster_namings(conn: &Connection) -> rusqlite::Result<Vec<ClusterNaming>
 /// Skipping the long one and carrying on would silently reorder what the model
 /// is biased toward, and would make the prompt depend on which terms happen to
 /// be long rather than on their priority.
+///
+/// ## ⚠⚠ DO NOT DROP THIS FOR SHORT CLIPS — measured, and it is a bad trade
+///
+/// The prompt has a real cost: on audio it cannot place, the model reaches for
+/// the names it was handed. Both directions were measured on 2026-09-20
+/// (`cargo run -p runner --example prompt_cost` and `--example
+/// prompt_spelling`), and the obvious remedy loses:
+///
+/// ```text
+/// what it BUYS   names spelled right   12 of 22 with   3 of 22 without
+/// what it COSTS  names hallucinated     5 of 355 short clips   0 without
+/// ```
+///
+/// ⭐ Dropping it removes about five hallucinations per 355 sub-two-second
+/// clips and costs **nine of twenty-two** correctly spelled names. The harm is
+/// real and it is the smaller number.
+///
+/// ⓘ The hallucinations were ALL on clips of a second or less, and there were
+/// none at all above two seconds in either arm — so length gates the harm, and
+/// #1383's call-joining already makes live clips longer whenever the tier is
+/// behind.
+///
+/// ⚠ The harm is handled at the OUTPUT instead: `quality::is_bare_name` refuses
+/// a live turn that is nothing but a name. A name inside a fluent sentence
+/// still gets through and has no known remedy (#1665).
+///
+/// ⚠ n is small on the buying side — 22 is the whole ground truth that exists,
+/// not a sample of it. Re-measure rather than trusting these numbers if the
+/// glossary or the model changes.
 pub fn initial_prompt(conn: &Connection) -> rusqlite::Result<Option<String>> {
     let mut ordered: Vec<String> = known_speaker_names(conn)?.names;
     ordered.extend(
