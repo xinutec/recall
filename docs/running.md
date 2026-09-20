@@ -38,7 +38,7 @@ from the nix store, because `.venv` symlinks `recall` there.
 | agent | does | when |
 |---|---|---|
 | `org.xinutec.recall-capture` | USB mic → gap-free Opus segments | always on |
-| `org.xinutec.recall-live` | the tap → VAD → transcribe each utterance (~2–3 s, provisional) and push it straight to Isis; keeps no store (Rust, `recall-live`) | always on |
+| `org.xinutec.recall-live` | the tap → VAD → transcribe what was just said, provisionally, and push it straight to Isis; keeps no store (Rust, `recall-live`) | always on |
 | `org.xinutec.recall-runner` | lease a transcription job from Isis, drive the asr shim, push the turns back (Rust, `runner`) | continuous |
 | `org.xinutec.recall-ingest` | one TCP server (port 9999) for all phone mics | when phones used |
 | `org.xinutec.recall-beat-relay` | accept a mic app's heartbeat on the LAN (port 8000) and forward it to Isis, for a phone whose VPN is down | always on |

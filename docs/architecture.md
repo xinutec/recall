@@ -525,6 +525,34 @@ stdio and the audio path it is handed. Model choice per job stays a queue
 field, so the non-turbo `large-v3` lever ([pipeline.md §2](pipeline.md)) is a
 config change once #1388's capacity win lands.
 
+### recall-live — the instant feed, and why a call costs its window
+
+`recall-live` reads the tap, cuts it at the pauses with `audiocore::vad` and
+pushes what was said straight to `POST /sync/live`. It keeps no store: a live
+turn is provisional, the archive pass re-derives the same minute properly within
+the hour, so the push IS the write.
+
+⚠ **A transcribe call costs the WINDOW, not the audio in it.** Whisper pads every
+input to 30 seconds and runs its encoder over all of it. That makes a
+one-second call and a twenty-nine-second call cost nearly the same, and puts a
+whole extra encoder pass just past 30 s. The consequence is specific to this
+tier, which cuts at sub-second pauses: transcribing each fragment on its own
+throws away most of every call, and because each costs more than the speech it
+carries, **the lag grows for as long as anybody keeps talking.**
+
+So the tier joins whatever is already waiting into one call
+(`live::drain`), bounded by `live::CALL_SECONDS`. Nothing is ever waited FOR —
+an empty queue means the shim is keeping up and the utterance goes alone — so
+the joining happens only when the tier is behind, which is the only time it
+helps. Measure a change here with `cargo run -p runner --example live_cost`,
+which runs both disciplines through the real shim on the same audio and prints
+the text as well as the clock: the reason to read the text is that a longer call
+gives the model more context, and context changes words.
+
+⚠ The bound is a latency choice, not a throughput one. Joining to the full 30 s
+would maximise throughput and maximise latency, which is the wrong end for the
+one tier whose entire value is immediacy.
+
 ### Credential planes
 
 The three existing planes are untouched

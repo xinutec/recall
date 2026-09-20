@@ -51,13 +51,31 @@ pub const LIVE_MODEL: &str = "live";
 /// Utterances that may wait for the shim. Small on purpose: if transcription
 /// falls behind the microphone, the feed is already late and a deep queue only
 /// makes it later. See `Agent::offer`.
+///
+/// ⚠ Since [`drain`] joins whatever is waiting into ONE call, a queue this deep
+/// is not a deep queue of calls — it is at most [`CALL_SECONDS`] of audio.
 pub const BACKLOG: usize = 8;
 
-/// The longest one utterance may run before it is cut and sent anyway. The
-/// hysteresis ends a region at a PAUSE, and somebody reading aloud may not give
-/// one for minutes — which is correct for the archive and useless for a tier
-/// whose entire promise is latency.
-pub const MAX_UTTERANCE_SECONDS: f64 = 30.0;
+/// The most audio one transcribe call carries, and so the longest one utterance
+/// may run before it is cut and sent anyway.
+///
+/// ⚠ **The cost of a call is the WINDOW, not the audio.** Whisper pads every
+/// input to 30 seconds and runs its encoder over all of it, so a 1 s call costs
+/// 2.72 s and a 29 s call 3.37 s — 24% more for 29x the audio, and then a whole
+/// extra encoder pass appears at 30 s. Fitted, `2.60 s + 0.0584 s per second`.
+///
+/// So the only thing this number trades is how long the tier WAITS, and the
+/// answer is not 29: that maximises throughput and maximises latency, which is
+/// the wrong end for a tier whose entire value is immediacy. At 12 s a full call
+/// runs at ~0.25x real time — the backlog drains while the speaker is still
+/// talking — and worst-case latency is BOUNDED by the window instead of growing
+/// for as long as anyone speaks.
+pub const CALL_SECONDS: f64 = 12.0;
+
+/// The longest pause bridged when queued utterances are joined into one call.
+/// Past it the speaker has stopped rather than drawn breath, and holding the
+/// finished sentence back to wait for the next one is latency for nothing.
+pub const BRIDGE_SECONDS: f64 = 2.0;
 
 /// ffmpeg reading the tap and writing raw 16 kHz mono PCM to stdout.
 ///
@@ -94,6 +112,45 @@ pub struct Utterance {
     pub end: DateTime<Utc>,
 }
 
+impl Utterance {
+    /// How much audio this carries.
+    #[must_use]
+    pub fn seconds(&self) -> f64 {
+        (self.end - self.start).as_seconds_f64()
+    }
+
+    /// Join `next` onto the end of this one, restoring the pause between them so
+    /// the model hears what the room did rather than a splice.
+    ///
+    /// `Err(next)` means they do not belong in one call — too long a pause, or
+    /// the result would outrun [`CALL_SECONDS`] — and hands `next` back to start
+    /// the following one.
+    ///
+    /// # Errors
+    /// See above; the error IS the rejected utterance, so nothing is lost.
+    pub fn join(&mut self, next: Self) -> Result<(), Self> {
+        // ⚠ Clamped, not rejected. Both stamps are derived backwards from the
+        // clock, so a boundary can round to a few milliseconds of overlap, and
+        // splitting a call over that would be an arithmetic artefact.
+        let pause = (next.start - self.end).as_seconds_f64().max(0.0);
+        if pause > BRIDGE_SECONDS || (next.end - self.start).as_seconds_f64() > CALL_SECONDS {
+            return Err(next);
+        }
+        self.samples
+            .resize(self.samples.len() + samples_in(pause), 0.0);
+        self.samples.extend_from_slice(&next.samples);
+        self.end = next.end;
+        Ok(())
+    }
+}
+
+/// Samples in a span of silence, saturating: a nonsense span must not be able to
+/// allocate the agent to death.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn samples_in(seconds: f64) -> usize {
+    (seconds.clamp(0.0, BRIDGE_SECONDS) * f64::from(vad::RATE)) as usize
+}
+
 /// The tap, cut into utterances.
 ///
 /// Owns the buffer, the detector's carried state and the region policy. It does
@@ -124,7 +181,7 @@ impl Cutter {
 
     /// Feed exactly one window of samples. `Some` is an utterance that just
     /// closed — because the speaker paused, or because they did not and
-    /// [`MAX_UTTERANCE_SECONDS`] ran out.
+    /// [`CALL_SECONDS`] ran out.
     ///
     /// ⚠ **The timestamp is derived BACKWARDS from `now`, not forwards from a
     /// start anchor**, and the reason is that the tap is UDP. A dropped datagram
@@ -165,7 +222,7 @@ impl Cutter {
     fn overdue(&mut self) -> Option<Windows> {
         let open = self.splitter.open_since()?;
         let windows = self.splitter.windows_seen().saturating_sub(open);
-        (seconds_of(windows) >= MAX_UTTERANCE_SECONDS)
+        (seconds_of(windows) >= CALL_SECONDS)
             .then(|| self.splitter.cut())
             .flatten()
     }
@@ -279,10 +336,32 @@ impl Drop for Tap {
 /// satisfied and every health check green: the reader kept reading and nothing
 /// was ever transcribed again. Log it and take the next utterance.
 pub fn drain(utterances: &Receiver<Utterance>, mut emit: impl FnMut(Utterance)) {
-    while let Ok(utterance) = utterances.recv() {
-        let at = utterance.start;
-        emit(utterance);
-        tracing::debug!(%at, "utterance handled");
+    let mut carried = None;
+    loop {
+        // ⚠ The carried one is already in hand, so it must NOT wait on the
+        // channel: it was refused by the batch before it, not by the queue.
+        let Some(mut batch) = carried.take().or_else(|| utterances.recv().ok()) else {
+            return;
+        };
+        // ⚠ **Everything already waiting goes in the SAME call.** A call costs
+        // its 30-second window whatever it holds ([`CALL_SECONDS`]), so sending
+        // the next half-second separately buys a whole extra encoder pass and
+        // the feed falls further behind for as long as anyone keeps talking.
+        //
+        // Nothing is ever waited FOR. An empty queue means the shim is keeping
+        // up, and then this is exactly the old one-utterance-per-call behaviour
+        // with no latency added; the joining only happens when it is behind,
+        // which is the only time it helps.
+        while let Ok(next) = utterances.try_recv() {
+            if let Err(refused) = batch.join(next) {
+                carried = Some(refused);
+                break;
+            }
+        }
+        let at = batch.start;
+        let seconds = batch.seconds();
+        emit(batch);
+        tracing::debug!(%at, seconds, "utterance handled");
     }
 }
 

@@ -7,7 +7,11 @@
 
 // Sample counts and window counts as numbers. Exact for anything a test can
 // reach, and the alternative is `try_from` noise around every assertion.
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 
 use audiocore::decode;
 use audiocore::vad::{RATE, WINDOW, window_seconds};
@@ -189,4 +193,117 @@ fn a_backed_up_transcriber_drops_rather_than_blocks() {
     // reader must stop and let KeepAlive restart the pair.
     drop(from);
     assert!(!offer(&to, utterance));
+}
+
+/// An utterance of `seconds` of (nominal) audio, starting `at` seconds into the
+/// epoch. The samples are what makes the length checks below real: a join that
+/// stamped a span it had not actually bridged would pass every timestamp
+/// assertion and send the model a splice.
+fn utterance(at: f64, seconds: f64) -> Utterance {
+    Utterance {
+        samples: vec![0.1; (seconds * f64::from(RATE)) as usize],
+        start: epoch() + TimeDelta::milliseconds((at * 1000.0) as i64),
+        end: epoch() + TimeDelta::milliseconds(((at + seconds) * 1000.0) as i64),
+    }
+}
+
+/// Everything `drain` emits for a fixed set of utterances, with the sender
+/// dropped first so the queue is full before the transcriber ever looks — which
+/// is what a shim that has fallen behind the microphone produces.
+fn batches(utterances: Vec<Utterance>) -> Vec<Utterance> {
+    let (to, from) = channel();
+    for utterance in utterances {
+        assert!(offer(&to, utterance), "the transcriber is alive");
+    }
+    drop(to);
+    let mut out = Vec::new();
+    runner::live::drain(&from, |batch| out.push(batch));
+    out
+}
+
+#[test]
+fn utterances_waiting_on_a_busy_shim_go_out_in_one_call() {
+    // ⚠ The whole of #1383. A call costs its 30-second window whatever it
+    // holds, so four calls for four fragments is four encoder passes for two
+    // seconds of speech — and the lag grows for as long as anyone talks.
+    let queued = vec![
+        utterance(0.0, 0.5),
+        utterance(1.0, 0.5),
+        utterance(2.0, 0.5),
+        utterance(3.0, 0.5),
+    ];
+    let batches = batches(queued);
+    assert_eq!(batches.len(), 1, "four fragments, {} calls", batches.len());
+    let batch = &batches[0];
+    assert_eq!(batch.start, epoch(), "the batch starts where the burst did");
+    assert!(
+        (batch.seconds() - 3.5).abs() < 0.01,
+        "the batch spans {:.2}s of a 3.5s burst",
+        batch.seconds()
+    );
+}
+
+#[test]
+fn the_pause_between_joined_utterances_is_in_the_audio_the_model_hears() {
+    // ⚠ Splicing speech end-to-end would hand the model a discontinuity where
+    // the room had a breath. The archive pass, which is the better arm, sees a
+    // whole 60 s clip with its silence in it; this must not be cheaper than that
+    // in a way the model can hear.
+    let batches = batches(vec![utterance(0.0, 1.0), utterance(2.0, 1.0)]);
+    let batch = batches.first().expect("one call");
+    let carried = batch.samples.len() as f64 / f64::from(RATE);
+    assert!(
+        (carried - batch.seconds()).abs() < 0.01,
+        "{carried:.3}s of audio stamped {:.3}s long",
+        batch.seconds()
+    );
+    assert!(
+        batch.samples[16_000..32_000].iter().all(|s| *s == 0.0),
+        "the bridged second is not the pause that was there"
+    );
+}
+
+#[test]
+fn a_speaker_who_has_stopped_is_not_held_back_for_the_next_one() {
+    // Past BRIDGE_SECONDS the sentence is finished. Joining it to whatever comes
+    // next would be latency bought for nothing — the call was going to cost the
+    // same window either way.
+    let apart = runner::live::BRIDGE_SECONDS + 1.0;
+    let batches = batches(vec![utterance(0.0, 1.0), utterance(1.0 + apart, 1.0)]);
+    assert_eq!(batches.len(), 2, "a long pause was bridged");
+    assert!(
+        (batches[1].seconds() - 1.0).abs() < 0.01,
+        "and the second one survived it, at {:.2}s",
+        batches[1].seconds()
+    );
+}
+
+#[test]
+fn no_call_outruns_the_window_it_is_paying_for() {
+    // ⚠ Joining without a cap would walk past 30 s, where a SECOND encoder pass
+    // appears — the one place the flat cost stops being flat — and would make
+    // worst-case latency the length of the conversation.
+    let queued: Vec<_> = (0..runner::live::BACKLOG)
+        .map(|i| utterance(i as f64 * 3.0, 2.5))
+        .collect();
+    let spoken = queued.len();
+    let batches = batches(queued);
+    assert!(
+        batches.len() > 1,
+        "{spoken} utterances went out in one call"
+    );
+    for batch in &batches {
+        assert!(
+            batch.seconds() <= runner::live::CALL_SECONDS,
+            "a call carries {:.1}s",
+            batch.seconds()
+        );
+    }
+    // ⚠ Nothing may be dropped on the floor by the batching itself: a refused
+    // join starts the next call, it does not lose the utterance.
+    let total: f64 = batches.iter().map(Utterance::seconds).sum();
+    assert!(
+        total >= 2.5 * spoken as f64,
+        "{total:.1}s of {spoken} survived"
+    );
 }
