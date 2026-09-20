@@ -54,16 +54,29 @@ impl Answer {
     }
 }
 
-/// Read a pipe to EOF on its own thread, handing the bytes back through a
-/// channel. Two of these, because a child that fills the 64 KiB stderr pipe
-/// while the parent reads only stdout blocks forever — and that deadlock is
-/// indistinguishable from the wedge this module exists to survive.
+/// Read a pipe on its own thread, handing each chunk back as it arrives. Two of
+/// these, because a child that fills the 64 KiB stderr pipe while the parent
+/// reads only stdout blocks forever — and that deadlock is indistinguishable
+/// from the wedge this module exists to survive.
+///
+/// ⚠ **Chunk by chunk, NOT read-to-EOF.** A child that hangs never reaches EOF,
+/// so a single send at the end means everything it managed to say before
+/// hanging is thrown away — in exactly the run where it is worth having. The
+/// channel disconnecting is how EOF is reported instead.
 fn drain<R: Read + Send + 'static>(mut pipe: R) -> mpsc::Receiver<Vec<u8>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut buffer = Vec::new();
-        let _ = pipe.read_to_end(&mut buffer);
-        let _ = tx.send(buffer);
+        let mut chunk = [0_u8; 8192];
+        loop {
+            match pipe.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if tx.send(chunk[..read].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
     });
     rx
 }
@@ -95,12 +108,36 @@ pub fn run(
     let err = drain(child.stderr.take().expect("stderr was piped"));
 
     let deadline = started + timeout;
-    let collect = |rx: &mpsc::Receiver<Vec<u8>>| -> Option<Vec<u8>> {
-        let left = deadline.saturating_duration_since(Instant::now());
-        rx.recv_timeout(left).ok()
+    // Everything the pipe has produced, and whether it reached EOF. ⚠ Queued
+    // chunks are taken WITHOUT waiting first, so a pipe that already said
+    // something still reports it after the deadline has passed — which is the
+    // whole point of streaming them.
+    let collect = |rx: &mpsc::Receiver<Vec<u8>>| -> (Vec<u8>, bool) {
+        let mut all = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(chunk) => {
+                    all.extend_from_slice(&chunk);
+                    continue;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return (all, true),
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return (all, false);
+            }
+            match rx.recv_timeout(left) {
+                Ok(chunk) => all.extend_from_slice(&chunk),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return (all, true),
+                Err(mpsc::RecvTimeoutError::Timeout) => return (all, false),
+            }
+        }
     };
-    let stdout = collect(&out);
-    let stderr = collect(&err);
+    let (out_bytes, out_done) = collect(&out);
+    let (err_bytes, err_done) = collect(&err);
+    let stdout = out_done.then_some(out_bytes);
+    let stderr = err_done.then(|| err_bytes.clone());
 
     let seconds = started.elapsed().as_secs_f64();
     let (Some(stdout), Some(stderr)) = (stdout, stderr) else {
@@ -111,7 +148,9 @@ pub fn run(
         std::mem::forget(child);
         return Ok(Answer {
             stdout: None,
-            stderr: String::new(),
+            // ⚠ What it managed to SAY before it hung. This used to be empty,
+            // which threw away the only report from the one run that matters.
+            stderr: String::from_utf8_lossy(&err_bytes).into_owned(),
             status: None,
             seconds,
             pid,

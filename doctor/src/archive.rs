@@ -565,11 +565,16 @@ fn speech_loss(
 /// say the archive was safely replicated — the one claim worth being sure of.
 /// `delivery_checks` makes the same promise on evidence that is still written:
 /// every file on disk against audiod's own upload state.
-pub fn archive_checks(root: &Path, now: DateTime<Utc>) -> rusqlite::Result<Vec<Check>> {
-    // ⚠ FIRST, before a single query. Any read below leaves the file's first
-    // pages in the cache, and a probe that measures a cache hit measures
-    // nothing about the disk it is there to watch.
-    let volume = volume_check(root);
+pub fn archive_checks(
+    root: &Path,
+    now: DateTime<Utc>,
+    volume: Check,
+) -> rusqlite::Result<Vec<Check>> {
+    // ⚠ The probe is taken by the CALLER and handed in, so it can be SAID
+    // before the queries below run. Computed here it would be lost on exactly
+    // the run it exists for: a child that hangs never returns these checks at
+    // all, so the one reading that could say whether the DISK answered went
+    // down with it.
     let conn = open(&root.join("recall.sqlite"))?;
     // Registered recorders, not whatever directories exist: a mic the household
     // actually uses is one the archive knows about. Devices only — an imported

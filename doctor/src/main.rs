@@ -92,12 +92,23 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
     };
 
     let Some(stdout) = answer.stdout else {
+        // ⚠ **TIMESTAMPED, and that is the point of the line.** These are the
+        // only record that a stall HAPPENED, and without a clock they cannot
+        // answer the first question anybody asks of them — do the stalls
+        // cluster in time (#1412). Sixty-nine of them accumulated saying
+        // nothing.
         eprintln!(
-            "doctor: the archive did not answer in {:.0}s — abandoned pid {} \
+            "{} doctor: the archive did not answer in {:.0}s — abandoned pid {} \
              (it is in uninterruptible disk wait; it exits when the volume does)",
+            Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             bound.as_secs_f64(),
             answer.pid
         );
+        // What the child managed to say before it hung — the volume probe is
+        // the first thing it prints, so this names which half was slow.
+        for line in answer.stderr.lines().filter(|l| !l.trim().is_empty()) {
+            eprintln!("  it had said: {line}");
+        }
         return (Vec::new(), archive::archive_check(None, ""));
     };
     if answer.status != Some(0) {
@@ -152,7 +163,14 @@ fn main() {
         // The child times ITSELF, so the figure that reaches fleetwatch is the
         // archive read rather than a second process's startup.
         let started = Instant::now();
-        let checks = match archive::archive_checks(&config.out, now) {
+        // ⚠ Probe the disk and SAY SO before anything slow. If the queries
+        // below hang, the parent abandons this process and never sees its
+        // checks — but it does see what reached stderr, and "the disk answered
+        // a fixed read in 0.00s while the archive read never returned" is the
+        // single most useful sentence a stalled run can leave behind (#1412).
+        let volume = archive::volume_check(&config.out);
+        eprintln!("doctor: {} — {}", volume.label, volume.observed);
+        let checks = match archive::archive_checks(&config.out, now, volume) {
             Ok(checks) => checks,
             Err(err) => {
                 // stderr, and a non-zero exit: the parent turns this into the

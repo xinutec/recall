@@ -69,3 +69,43 @@ fn the_child_starts_off_the_callers_working_directory() {
     let answer = run(&program, &args, Duration::from_secs(10), &[]).unwrap();
     assert_eq!(answer.stdout.as_deref(), Some("/\n"));
 }
+
+/// ⚠ **A child that HANGS never reaches EOF**, so a drain that sends once at
+/// the end throws away everything it managed to say — in exactly the run where
+/// that is worth having. `doctor`'s archive read prints its volume probe first
+/// for this reason: "the disk answered a fixed read instantly while the archive
+/// read never returned" is the whole diagnosis, and it used to be discarded.
+#[test]
+fn what_a_hanging_child_already_said_survives_being_abandoned() {
+    let script = "echo 'the disk answered' >&2; sleep 60";
+    let answer = doctor::bounded::run(
+        std::path::Path::new("/bin/sh"),
+        &["-c".to_owned(), script.to_owned()],
+        std::time::Duration::from_millis(700),
+        &[],
+    )
+    .expect("spawn");
+
+    assert!(!answer.answered(), "the child must not have finished");
+    assert!(
+        answer.stderr.contains("the disk answered"),
+        "what it said before hanging was lost: {:?}",
+        answer.stderr
+    );
+}
+
+/// …and a child that finishes normally still reports both streams whole.
+#[test]
+fn a_child_that_finishes_reports_both_streams_whole() {
+    let answer = doctor::bounded::run(
+        std::path::Path::new("/bin/sh"),
+        &["-c".to_owned(), "echo out; echo err >&2".to_owned()],
+        std::time::Duration::from_secs(10),
+        &[],
+    )
+    .expect("spawn");
+
+    assert!(answer.answered());
+    assert_eq!(answer.stdout.as_deref().map(str::trim), Some("out"));
+    assert_eq!(answer.stderr.trim(), "err");
+}
