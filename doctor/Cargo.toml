@@ -45,8 +45,6 @@ serde_json = "1"
 # is enabled HERE and nowhere else. Not `tls-native`: that drags in an openssl
 # the deploy image does not carry.
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tempfile = "3"
