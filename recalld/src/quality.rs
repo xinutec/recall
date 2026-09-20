@@ -95,6 +95,35 @@ pub fn is_bare_name(text: &str, names: &[String]) -> bool {
             .any(|name| name.trim().eq_ignore_ascii_case(bare))
 }
 
+/// ⚠⚠ **FOUR SIGNALS THAT LOOKED RIGHT AND ARE REFUTED.** Every one was measured
+/// on this archive and every one would be reached for again by anybody trying to
+/// find junk in a transcript. They are here rather than in a task because this
+/// is the file where the next attempt will be written.
+///
+/// * **ASR confidence.** The commonest low-confidence turns in this archive ARE
+///   the quiet agreement a memory aid must keep: `Ja.` 421 times, `Yeah.` 108,
+///   `Okay.` 55. Filtering on it deletes the household agreeing with each other.
+/// * **Tokens per speech-second.** Of 32 turns at >=20 words per speech-second,
+///   25 had a concurrent microphone and ALL 25 of those measured speech — it
+///   fires when the room really was talking. The denominator is wrong PER
+///   DEVICE: a phone's suppression gates between words, so silero reports a
+///   fraction of the speech present while Whisper still transcribes the
+///   fragments. It measures AGC aggression, not hallucination.
+/// * **Repetition loops, as a proxy for this band.** These are not loops — the
+///   median distinct-word ratio in the slow band is 0.641, HIGHER than the
+///   normal band's 0.590. ⓘ Real loops are a separate rule and it works;
+///   see [`is_repetition_loop`].
+/// * **The language LABEL.** 681 visible turns are labelled es/de/pt/tr but only
+///   180 are in a non-Latin SCRIPT; the rest are Dutch and English the model
+///   mislabelled, so the label alone would zero real speech. ⚠ Script outranks
+///   the label, never the reverse.
+///
+/// ⚠ **And read the MEDIAN, never the mean, when scoring any of this.** Two runs
+/// over the same unchanged audio scored mean WER 0.666 and 16.449 while the
+/// median was 0.229 both times — four short utterances had come back as
+/// hallucination loops ("Yep." against "As to As to As to…" several hundred
+/// times, WER 223).
+///
 /// Words per second below which a turn is not somebody talking. Measured on the
 /// 4,989 turns carrying usable timings: the median is 2.18 w/s — human
 /// conversational speed — and below 0.2 the median turn is **four words spread
