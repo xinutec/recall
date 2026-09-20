@@ -574,3 +574,56 @@ fn a_degenerate_loop_is_not_stored_as_a_live_turn() {
         1
     );
 }
+
+/// ⚠ **The ASR prompt lists household names first, so on audio it cannot place
+/// the model reaches for them** — eight scripted lines containing no names
+/// produced a household first name four times, and across every short turn ever
+/// written the live tier is 7x likelier than the archive pass to emit a turn
+/// that is nothing but a name (#1665). A false name is invisible to every other
+/// signal: fluent, Latin script, correctly language-labelled, plausibly timed.
+#[test]
+fn a_live_turn_that_is_nothing_but_a_household_name_is_refused() {
+    let mut conn = live_store();
+    conn.execute("INSERT INTO speakers (name) VALUES ('Anna')", [])
+        .unwrap();
+
+    let stored = ingest_live(
+        &mut conn,
+        &[
+            a_turn("2026-09-09T10:00:00+00:00", "Anna."),
+            a_turn("2026-09-09T10:00:01+00:00", " anna "),
+            a_turn("2026-09-09T10:00:02+00:00", "Anna, are you there?"),
+            a_turn("2026-09-09T10:00:03+00:00", "Annabel"),
+        ],
+        delivered(),
+    )
+    .unwrap();
+
+    // ⚠ Only the BARE name goes. A name inside a sentence is the ordinary case
+    // this system exists to record, and a different name that merely starts the
+    // same way is a different word.
+    assert_eq!(stored, 2, "a name in a sentence must survive");
+    let kept: Vec<String> = conn
+        .prepare("SELECT text FROM transcript_segments ORDER BY start_utc")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(kept, vec!["Anna, are you there?", "Annabel"]);
+}
+
+/// ⚠ The refusal is scoped to a name the household actually has. Without an
+/// enrolled speaker it must do nothing at all — a rule that fires on an empty
+/// list would silently refuse whatever happened to look like one.
+#[test]
+fn with_nobody_enrolled_the_bare_name_rule_refuses_nothing() {
+    let mut conn = live_store();
+    let stored = ingest_live(
+        &mut conn,
+        &[a_turn("2026-09-09T10:00:00+00:00", "Anna.")],
+        delivered(),
+    )
+    .unwrap();
+    assert_eq!(stored, 1);
+}

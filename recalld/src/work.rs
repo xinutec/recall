@@ -364,6 +364,10 @@ pub fn ingest_live(
     now: DateTime<Utc>,
 ) -> rusqlite::Result<usize> {
     let delivered = now.to_rfc3339_opts(SecondsFormat::Micros, false);
+    // ⚠ Read ONCE, not per turn, and read here rather than passed in: the names
+    // are the same list the ASR prompt biased the model with, so the refusal and
+    // the cause cannot drift apart.
+    let names = crate::labels::known_speaker_names(conn)?.names;
     let mut stored = 0;
     for turn in turns {
         // The stored spelling, so the presence check and the insert agree. A
@@ -374,7 +378,9 @@ pub fn ingest_live(
         let Some(end) = crate::instant::python_isoformat(&turn.end) else {
             continue;
         };
-        if crate::quality::is_repetition_loop(&turn.text) || crate::quality::is_wordless(&turn.text)
+        if crate::quality::is_repetition_loop(&turn.text)
+            || crate::quality::is_wordless(&turn.text)
+            || crate::quality::is_bare_name(&turn.text, &names)
         {
             continue;
         }

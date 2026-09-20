@@ -64,6 +64,37 @@ pub fn is_wordless(text: &str) -> bool {
         .is_empty()
 }
 
+/// True if `text` is nothing but one of `names` — "Anna.", " anna ", "Anna!".
+///
+/// ⚠ **This is the cost of the vocabulary prompt, not a hallucination rule in
+/// general.** The ASR prompt lists household names FIRST so Whisper spells them
+/// right, so on audio it cannot place, it reaches for them: measured over every
+/// short turn ever written, the live tier is 7x more likely than the archive
+/// pass to emit a turn that is nothing but a name (#1665). It was caught with
+/// spoken ground truth — eight scripted lines containing no names produced a
+/// household first name four times.
+///
+/// ⚠ **Why this one is refused rather than kept without confidence**, which is
+/// what a non-household language or a foreign script gets: a turn that is only
+/// a name carries nothing a memory aid needs, and what it DOES carry is the
+/// assertion that a specific person spoke. Installing a false memory is the
+/// harm this system exists to guard against, and it is invisible to every other
+/// signal — fluent, Latin script, correctly language-labelled, plausibly timed.
+///
+/// ⚠ It costs the real vocative: somebody calling "Anna!" across the room is
+/// refused too. That is affordable HERE and nowhere else, because the tier this
+/// runs on is provisional — the archive pass re-derives the same minute from a
+/// 60 s clip with the context to tell the two apart, and supersedes whatever
+/// this wrote.
+#[must_use]
+pub fn is_bare_name(text: &str, names: &[String]) -> bool {
+    let bare = text.trim_matches(|c| WORDLESS.contains(c)).trim();
+    !bare.is_empty()
+        && names
+            .iter()
+            .any(|name| name.trim().eq_ignore_ascii_case(bare))
+}
+
 /// Is this character a letter Python's `unicodedata` names LATIN?
 ///
 /// Binary search over the generated table, which is why it agrees with the
