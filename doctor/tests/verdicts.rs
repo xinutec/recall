@@ -377,6 +377,25 @@ fn the_volume_probe_reads_a_fixed_page_however_big_the_archive_gets() {
     );
 }
 
+#[test]
+fn an_archive_smaller_than_a_page_is_not_a_stalled_volume() {
+    // ⚠ The probe seeks to a RANDOM page so it cannot time the page cache — the
+    // first page of this file is touched every five minutes and would read
+    // 0.00s with the disk wedged. The cost of that is this edge: a file with no
+    // whole page in it, which must not be reported as an unreadable archive.
+    // A fault invented by the instrument is worse than no instrument.
+    let dir = tempfile::tempdir().expect("a scratch dir");
+    for bytes in [0_usize, 1, 100] {
+        std::fs::write(dir.path().join("recall.sqlite"), vec![0_u8; bytes]).expect("write");
+        let check = archive::volume_check(dir.path());
+        assert_eq!(
+            check.verdict,
+            Verdict::Pass,
+            "{bytes} bytes read as a fault"
+        );
+    }
+}
+
 /// The warn threshold as a number, so the test above reads the rule rather than
 /// repeating it — a copied bound drifts from the one that ships.
 fn volume_slow_seconds() -> f64 {

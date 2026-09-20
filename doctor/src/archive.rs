@@ -132,6 +132,24 @@ pub fn archive_check(seconds: Option<f64>, detail: &str) -> Check {
     .build()
 }
 
+/// One page, the unit this probe is fixed at.
+const PAGE: usize = 4096;
+
+/// A page number under `pages`, varying run to run.
+///
+/// ⓘ The clock, not a random crate: this needs to be UNPREDICTABLE TO THE CACHE,
+/// not unpredictable to an adversary, and a dependency for that would be a
+/// dependency for nothing.
+fn somewhere(pages: u64) -> u64 {
+    if pages == 0 {
+        return 0;
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| u64::from(since.subsec_nanos()))
+        % pages
+}
+
 /// How long a FIXED read of the volume may take before it is worth saying so.
 /// Four seconds is absurd for one page off a working disk and is deliberately
 /// far above the tenths this costs when the volume is well — the point is to
@@ -156,16 +174,31 @@ pub fn volume_slow() -> Duration {
 /// of recording, so a rise in it belongs to the DISK — which is exactly the
 /// discrimination the whole question turns on.
 ///
+/// ⚠ It samples ONE INSTANT, at the start of the archive read. A volume that
+/// stalls part-way through the queries is invisible to it, so a healthy reading
+/// beside a slow `archive answers` narrows the cause without closing it.
+///
 /// ⚠ Kept BESIDE `archive answers`, never folded into it: that check has its
 /// own history under its own name, and the difference between the two trends is
 /// the measurement. Renaming it would spend the history to say the same thing.
 pub fn volume_check(root: &Path) -> Check {
-    use std::io::Read;
+    use std::io::{Read, Seek, SeekFrom};
     let db = root.join("recall.sqlite");
     let started = std::time::Instant::now();
     let read = std::fs::File::open(&db).and_then(|mut file| {
-        let mut page = [0_u8; 4096];
-        file.read_exact(&mut page)
+        // ⚠ **A RANDOM page, never the first one.** The first page of this file
+        // is read by every doctor run and by recalld continuously, so it is
+        // always in the page cache — a probe on it times the CACHE and would
+        // report 0.00s with the disk wedged, which is the one reading that must
+        // never be possible here. The archive holds six figures of pages; a
+        // fresh offset each run is almost certainly a real read.
+        let pages = file.metadata()?.len() / PAGE as u64;
+        file.seek(SeekFrom::Start(somewhere(pages) * PAGE as u64))?;
+        let mut page = [0_u8; PAGE];
+        // ⚠ `read`, not `read_exact`. An archive smaller than one page is not a
+        // stalled volume, and `read_exact` would report the disk as UNREADABLE
+        // for it — a fault invented by the instrument.
+        file.read(&mut page).map(|_| ())
     });
     let seconds = started.elapsed().as_secs_f64();
     let slow = volume_slow().num_seconds() as f64;

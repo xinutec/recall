@@ -492,9 +492,7 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
         frontend: None,
     }));
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = crate::loopback::listener().await;
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;

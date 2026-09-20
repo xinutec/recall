@@ -283,7 +283,38 @@ conventions (strict typing, TDD): [conventions.md](conventions.md).
 ## 10. Open questions
 
 Retention is **closed** ([architecture.md](architecture.md): lossless, forever
-— the rolling window was withdrawn 2026-09-10). Still open: audio scope (all vs
-speech-padded); re-transcription cadence (scheduled vs on-demand). ⚠ Q&A itself is
-CUT, so the model choice behind it (Qwen2.5-7B-Instruct, 4-bit, mlx-lm) is a note
-for whoever revives the ambition, not a live decision.
+— the rolling window was withdrawn 2026-09-10).
+
+**Re-transcription cadence: ON-DEMAND, never scheduled.** Models change; the
+archive does not re-transcribe itself, and should not.
+
+- A pass that rewrites stored text to deliver a better version of it is the
+  shape every serious data loss here has taken (architecture.md, "text is
+  written once"). A calendar is the worst possible trigger for one, because
+  nobody is reading the result when it runs.
+- Transcription capacity is already the ceiling, not a spare resource — a
+  background re-derivation competes directly with the work that answers "what
+  was just said".
+- So the trigger is a MEASURED win on the golden ASR gate (`score_asr`), on a
+  named range, run deliberately. "A new model exists" is not a reason; "this
+  model scores better on our own audio" is.
+
+**Audio scope — all, or speech-padded — is Pippijn's, and it now has a
+deadline.** It was parked here as a routine call on the grounds that storage was
+comfortable. Both halves of that have moved: the rolling window that made
+trimming a *windowing* choice was withdrawn, so scope now decides what is
+discarded PERMANENTLY, and the fleet's headroom is months rather than years.
+
+- ⚠ **Trimming bakes today's speech detector into the archive irreversibly.** A
+  better detector can never be re-run on audio the old one threw away, and two
+  live directions need the untrimmed signal: cross-mic energy as a location
+  signature, and any restoration model trained on this fleet's own pairs.
+- The recommendation is therefore to keep everything and answer the budget with
+  disk. But discarding part of a household's recorded life is not a call to make
+  on a recommendation.
+- To re-measure the runway rather than trusting a number here: take a full
+  recording day's segment count and mean size from the ingest ledger, and
+  compare against `df` on the archive volume and on the fleet's data PVC.
+
+⚠ Q&A itself is CUT, so the model choice behind it (Qwen2.5-7B-Instruct, 4-bit,
+mlx-lm) is a note for whoever revives the ambition, not a live decision.

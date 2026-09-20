@@ -641,7 +641,20 @@ pub fn write_block(
                 turn.end.to_rfc3339_opts(SecondsFormat::Micros, false),
                 turn.text,
                 turn.language,
-                turn.confidence,
+                // ⚠ The same rule `diarized` applies, on the OTHER stored
+                // timing encoding — this path holds most of the archive's
+                // turns, so leaving it out left the signal covering a tenth of
+                // what it can see (#1410). `word_spans` reads both spellings.
+                turn.word_timings
+                    .as_deref()
+                    .map_or(turn.confidence, |timings| {
+                        if crate::quality::is_implausibly_slow(&crate::quality::word_spans(timings))
+                        {
+                            Some(0.0)
+                        } else {
+                            turn.confidence
+                        }
+                    }),
                 stream.model,
                 stream.provenance,
                 turn.word_timings,

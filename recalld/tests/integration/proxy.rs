@@ -94,9 +94,7 @@ async fn upstream_server() -> (String, Arc<AtomicUsize>) {
             "/api/query",
             get(|uri: axum::http::Uri| async move { uri.query().unwrap_or("none").to_string() }),
         );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind upstream");
+    let listener = crate::loopback::listener().await;
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
@@ -138,9 +136,7 @@ async fn recalld_gated(upstream: Option<String>) -> String {
         upstream: upstream.map(|base| Upstream { base }),
         frontend: None,
     });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind recalld");
+    let listener = crate::loopback::listener().await;
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
         let _ = axum::serve(listener, router(config)).await;
@@ -166,9 +162,7 @@ async fn recalld_with_frontend(
         upstream: upstream.map(|base| Upstream { base }),
         frontend,
     });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind recalld");
+    let listener = crate::loopback::listener().await;
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
         let _ = axum::serve(listener, router(config)).await;
@@ -595,9 +589,7 @@ fn a_body_too_big_for_one_write_does_not_deadlock_the_runtime() {
             .expect("runtime");
         runtime.block_on(async move {
             let app = Router::new().route("/api/legacy", get(|| async { "x".repeat(BODY) }));
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                .await
-                .expect("bind upstream");
+            let listener = crate::loopback::listener().await;
             let addr = listener.local_addr().expect("addr");
             tokio::spawn(async move {
                 let _ = axum::serve(listener, app).await;

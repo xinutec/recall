@@ -112,12 +112,54 @@ pub const SLOW_RATE: f64 = 0.2;
 /// not hallucination. Word timings are device-independent.
 ///
 /// `None` when there is nothing to divide by.
+///
+/// ⚠⚠ **READ THE DENOMINATOR BEFORE BELIEVING A RATE FROM THIS.** Turns carrying
+/// the shim's verbatim timings were once read as giving p95 30 w/s and max 550,
+/// and that shape was set aside as not meaning what this assumes. It means
+/// exactly what it says; the spread is the denominator's:
+///
+/// ```text
+/// span < 0.5 s    6,652 turns   mean 22.6 w/s   max 600.0   ⛔
+/// span 0.5-2 s    9,417 turns   mean  2.5 w/s   max  22.0
+/// span 2-10 s     5,669 turns   mean  2.1 w/s   max  29.0
+/// span >= 10 s      879 turns   mean  1.6 w/s   max  17.8
+/// ```
+///
+/// **Every impossible rate is a sub-half-second span**, and above that the two
+/// encodings read alike. ⓘ [`is_implausibly_slow`] is immune by construction —
+/// 0.2 w/s takes five seconds per word, so no short span can reach it — which is
+/// why there is no minimum-span guard here. A rule on the FAST side would need
+/// one, and would be building on the artefact without it.
 #[must_use]
 pub fn speaking_rate(words: &[(f64, f64)]) -> Option<f64> {
     let first = words.first()?.0;
     let last = words.last()?.1;
     let span = last - first;
     (span > 0.0).then(|| words.len() as f64 / span)
+}
+
+/// Word spans out of a stored `word_timings` value, whichever way it is
+/// spelled.
+///
+/// ⚠ **Two encodings are stored and they are both honest.** `diarized` writes
+/// recalld's own `{s,e,w}`, re-based to the turn; `turns` stores the ASR shim's
+/// reply VERBATIM as `{start,end,probability,text}`, absolute within the clip.
+/// Reading only one of them is what limited this signal to a tenth of the
+/// archive. ⚠ The absolute one must never be compared ACROSS turns — only its
+/// own first-to-last span is meaningful here.
+#[must_use]
+pub fn word_spans(timings: &str) -> Vec<(f64, f64)> {
+    let Ok(serde_json::Value::Array(words)) = serde_json::from_str(timings) else {
+        return Vec::new();
+    };
+    words
+        .iter()
+        .filter_map(|w| {
+            let start = w.get("s").or_else(|| w.get("start"))?.as_f64()?;
+            let end = w.get("e").or_else(|| w.get("end"))?.as_f64()?;
+            Some((start, end))
+        })
+        .collect()
 }
 
 /// The slow tail, corroborated twice by instruments sharing nothing with word
@@ -133,10 +175,8 @@ pub fn speaking_rate(words: &[(f64, f64)]) -> Option<f64> {
 /// whole corpus — so it gets no rule. A rule for 17 turns is a rule whose false
 /// positives outnumber its finds.
 ///
-/// ⚠⚠ **Feed this only recalld's OWN `{s,e,w}` timings.** The other stored shape
-/// is the ASR shim's output verbatim and gives p95 30 w/s and max 550 — so it
-/// does not mean what this assumes, and pooling the two produces a p99 that is
-/// pure artefact (#1410).
+/// ⓘ Either stored encoding may be fed to this — see [`word_spans`]. What must
+/// NOT be done is compare one turn's absolute timings against another's.
 #[must_use]
 pub fn is_implausibly_slow(words: &[(f64, f64)]) -> bool {
     speaking_rate(words).is_some_and(|rate| rate < SLOW_RATE)
