@@ -1,4 +1,4 @@
-//! Speech detection at ingest (stage D4).
+//! Speech detection at ingest.
 //!
 //! `segment_levels` (D2) can say a segment is LOUD; only this can say it is
 //! SPEECH. That distinction is what the rest of the stage needs: liveness that

@@ -1,4 +1,4 @@
-//! Conversation and moment folding (stage F1), ported from `recall.conversations`,
+//! Conversation and moment folding, ported from `recall.conversations`,
 //! `recall.moments` and `api_reads.conversations`.
 //!
 //! ⚠ **This is the LAST unported read**, and the only one that is more than a

@@ -1,4 +1,4 @@
-//! Stage D2 (docs/architecture.md): per-device calibration, measured from
+//! Per-device calibration (docs/architecture.md), measured from
 //! what each microphone actually delivers. Every stored segment gets one row
 //! of level evidence — the dB of its envelope's speech quantile (0.9) and
 //! floor quantile (0.1) — and the per-device reference the room builder's
@@ -261,7 +261,7 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
 // standing in for a SPEECH test, and it failed as one: the WER referee indicted
 // it twice (room 0.321 vs usb 0.229, then pixel9 taking 13 of 29 blocks in a
 // window where usb was best throughout), which is why the calibrated rank spent
-// stage D3 parked. The gate below asks the detector instead.
+// the room builder parked. The gate below asks the detector instead.
 
 /// The per-device reference the rank compares against: the given quantile of
 /// this source's measured speech levels over its most recent `window` rows that

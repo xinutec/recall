@@ -1,4 +1,4 @@
-//! Stage D3 (docs/architecture.md): the room builder. One UTC-aligned minute
+//! The room builder (docs/architecture.md). One UTC-aligned minute
 //! at a time, choose the microphone that heard the room best — *for that
 //! microphone* — and carry its audio whole into a `room` segment the queue
 //! can hand to transcription. Selection, never fusion: per-block choice tied
@@ -12,7 +12,7 @@
 //! - **The rank is calibrated.** A raw speech level ranks the most sensitive
 //!   microphone always (the condenser leads the phones by ~21 dB of device,
 //!   not distance). Each source's block level is compared against its OWN
-//!   faintest-speech reference from stage D2's table, so the question is
+//!   faintest-speech reference from the calibration table, so the question is
 //!   "how well is this mic hearing the speaker, for this mic".
 //! - **No verdict on partial evidence.** A block whose overlapping segments
 //!   are not all measured yet is deferred — no row, retried next pass — never

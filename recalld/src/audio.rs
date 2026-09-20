@@ -1,4 +1,4 @@
-//! Playback clips (stage F1), ported from `recall.api_audio`.
+//! Playback clips, ported from `recall.api_audio`.
 //!
 //! Two routes, both read-only: one turn's audio, and one continuous span across a
 //! run of same-speaker turns. Like [`crate::reads`], this opens `recall.sqlite`

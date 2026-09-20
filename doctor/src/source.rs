@@ -18,7 +18,7 @@ pub enum SourceKind {
     /// admission, not a producer: nothing here says what wrote those files.
     Discovered,
     /// A stream this system BUILT rather than recorded: the room stream, one
-    /// settled minute at a time from whichever microphone won it (stage D3).
+    /// settled minute at a time from whichever microphone won it.
     ///
     /// Not a device, and the distinction is load-bearing: `deaf`, the liveness
     /// view and the sources panel all ask `is_device()`, and a derived stream

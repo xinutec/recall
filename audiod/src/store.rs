@@ -23,7 +23,7 @@ pub const KIND_PRODUCER_CYCLED: &str = "producer_cycled";
 /// ⚠ **ABSENT IS A SHAPE, NOT A FAULT.** A store-and-forward recorder — geb —
 /// has no `recall.sqlite` and is not supposed to: its segments reach the meaning
 /// plane on Isis through `audiod upload` with verified receipts
-/// (docs/architecture.md, stage C3). The same call is right on the Mac, which
+/// (docs/architecture.md). The same call is right on the Mac, which
 /// runs beside a real archive, and meaningless there. Reporting it as an ERROR
 /// on every start of a correctly configured recorder is how a log gets ignored.
 ///

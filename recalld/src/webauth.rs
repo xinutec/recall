@@ -1,4 +1,4 @@
-//! Nextcloud SSO for the human-facing web UI (stage F1), ported from
+//! Nextcloud SSO for the human-facing web UI, ported from
 //! `recall.webauth`. Inert unless configured.
 //!
 //! This is the gate that has to exist before recalld may serve a single

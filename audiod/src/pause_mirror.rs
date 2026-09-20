@@ -1,11 +1,11 @@
 //! Mirror the household pause onto a recorder. Two modes, because the two
 //! recorders have different jobs.
 //!
-//! **`poll`** (stage C3: geb) reads Isis's login-free `/api/capture` and
+//! **`poll`** (geb) reads Isis's login-free `/api/capture` and
 //! maintains the same `capture_paused_until` file every capture loop self-gates
 //! on. One way: geb reports nothing because it knows nothing the fleet wants.
 //!
-//! **`exchange`** (stage E4) is the MAC's half, ported from
+//! **`exchange`** is the MAC's half, ported from
 //! `recall.capture_mirror`. One round trip that both reports and long-polls:
 //! push what the Mac actually applied, pull the fleet's intent. The report is
 //! not decoration — "a pause you cannot confirm took effect is worthless for a

@@ -1,4 +1,4 @@
-//! `runner` — the Mac's whole job orchestration (stage E3).
+//! `runner` — the Mac's whole job orchestration.
 //!
 //! Poll recalld for the newest job, fetch its audio, drive a model shim, push
 //! the result, ack. Stateless: no watermark, no outbox, no mirror queue, because

@@ -1,4 +1,4 @@
-//! Stage D4 (docs/architecture.md): how much of each delivered segment is
+//! How much of each delivered segment is speech (docs/architecture.md) —
 //! SPEECH, stored once per blob.
 //!
 //! D2 measures how LOUD a segment is; this measures whether anyone was
@@ -23,7 +23,7 @@
 //! levels. Oldest-first would have made a five-figure archive block both of
 //! them for hours behind audio from June. Newest-first makes the scanner useful
 //! within a minute and lets the archive backfill behind it — the same
-//! newest-first priority the work queue takes (stage E1).
+//! newest-first priority the work queue takes.
 
 use crate::store;
 use audiocore::vad::Detector;

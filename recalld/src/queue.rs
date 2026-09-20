@@ -1,4 +1,4 @@
-//! Stage E1 (docs/architecture.md): the work queue the Mac's runner polls.
+//! The work queue the Mac's runner polls (docs/architecture.md).
 //!
 //! Jobs are DERIVED, not enqueued — the share-upload lesson: a
 //! `transcribe-room` job exists for exactly every room segment without a
@@ -16,7 +16,7 @@ use std::path::Path;
 
 /// The job kind stage E starts with.
 pub const TRANSCRIBE_ROOM: &str = "transcribe-room";
-/// Stage E4: who spoke when, over a block whose words already exist. The
+/// Who spoke when, over a block whose words already exist. The
 /// `voices` shim answers it (`recall.shim_voices`); ask/ab-compare follow.
 pub const DIARIZE_ROOM: &str = "diarize-room";
 /// One MICROPHONE's segment, transcribed by the same `asr` shim as a room block.
@@ -32,7 +32,7 @@ pub const DIARIZE_ROOM: &str = "diarize-room";
 /// archive. The runner inherits that backlog at the same rate — one stream
 /// instead of five (#1388) is the only thing that changes the arithmetic.
 pub const TRANSCRIBE_SEGMENT: &str = "transcribe-segment";
-/// Stage E4 for ONE MICROPHONE's clip: who spoke when, over words that already
+/// The same for ONE MICROPHONE's clip: who spoke when, over words that already
 /// exist. The per-mic twin of [`DIARIZE_ROOM`], and the one that actually
 /// replaces `refine.py`.
 ///
@@ -42,7 +42,7 @@ pub const TRANSCRIBE_SEGMENT: &str = "transcribe-segment";
 /// rather than improving anything. `refine.py` worked on per-mic segments, and
 /// those already carry turns, so a pass over them REPLACES rather than adds. Same model, same shim, same code; entirely different consequence.
 pub const DIARIZE_SEGMENT: &str = "diarize-segment";
-/// Stage E4's last piece: turn a HUMAN-NAMED turn into a reference voiceprint.
+/// Turn a HUMAN-NAMED turn into a reference voiceprint.
 ///
 /// ⚠ **The only job kind whose work-list lives in the MEANING plane.** Every
 /// other kind is derived from delivered audio; this one is derived from what a

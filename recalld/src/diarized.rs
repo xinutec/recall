@@ -1,4 +1,4 @@
-//! Stage E4's write: replacing a block's machine turns with speaker-aligned ones.
+//! Replacing a block's machine turns with speaker-aligned ones.
 //!
 //! ⚠ **This is the most destructive pass in the system, and the rules below are
 //! the ones that were got wrong.** `refine.py` applied its filters AFTER hiding
@@ -497,7 +497,7 @@ pub fn voices(stored: &str) -> Option<(Vec<SpeakerTurn>, Vec<SpeakerVoice>)> {
 ///
 /// ⚠ **Words, not segments.** Alignment assigns each WORD to whoever was
 /// speaking at its midpoint; a segment-level assignment would put a whole
-/// sentence on one speaker and is the coarse behaviour stage E4 exists to
+/// sentence on one speaker and is the coarse behaviour this pass exists to
 /// replace. A result with no word timings therefore yields nothing, and the
 /// caller keeps the transcript it has.
 ///

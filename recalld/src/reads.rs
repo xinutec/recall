@@ -1,4 +1,4 @@
-//! The browsing tier's read routes (stage F1), ported from `recall.api_reads`.
+//! The browsing tier's read routes, ported from `recall.api_reads`.
 //!
 //! This is the first route group to move, and it is deliberately the read-only
 //! one: a port that can only ever answer questions cannot destroy anything if it

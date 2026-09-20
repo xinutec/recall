@@ -400,7 +400,7 @@ impl LeaseQuery {
     }
 }
 
-/// Stage E1: lease the newest available job of a kind the caller can do. The
+/// Lease the newest available job of a kind the caller can do. The
 /// runner's plane is the sync token's — same trust as reading blobs, which the
 /// job points at.
 pub async fn lease_job(

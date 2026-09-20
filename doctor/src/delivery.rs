@@ -1,5 +1,5 @@
 //! Store-and-forward delivery — is the fleet's copy keeping up, and did
-//! anything collide? (docs/architecture.md, stage B4)
+//! anything collide? (docs/architecture.md)
 //!
 //! Reads `upload-state.sqlite` — audiod's uploader state, the audio-plane side
 //! of the filesystem contract — and compares BOTH sides: every grammar-matching

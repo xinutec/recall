@@ -43,7 +43,7 @@ const STOP_POLL: Duration = Duration::from_secs(1);
 /// Which program opens the audio device. `Sox` is the Mac's proven path
 /// (`CoreAudio`, sample-perfect); `Alsa` is ffmpeg reading ALSA — geb's own
 /// proven device path from its streaming era, kept rather than teaching sox a
-/// second platform (stage C3).
+/// second platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Producer {
     Sox,

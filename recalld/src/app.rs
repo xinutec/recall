@@ -2,7 +2,7 @@
 //! load-bearing (docs/architecture.md, decision 2).
 //!
 //! Two planes are assembled here and they are gated differently. The ingest and
-//! work surfaces take their own tokens. The BROWSING surface — stage F1's port —
+//! work surfaces take their own tokens. The BROWSING surface —
 //! sits behind the Nextcloud SSO gate and is mounted only when that gate is
 //! configured, so a dev or LAN-only recalld is unchanged.
 
@@ -62,7 +62,7 @@ pub struct Config {
 /// PROXIED rather than answered with the app shell.
 pub const UPSTREAM_PREFIXES: &[&str] = &["/api/", "/sync/"];
 
-/// The browsing plane: stage F1's ported routes, behind the SSO gate.
+/// The browsing plane: the ported read routes, behind the SSO gate.
 ///
 /// ⚠ **A cookie is scoped to a HOST, not a port** — which is what makes the
 /// incremental cutover work in practice. recalld answers on `10.100.0.2:8001`

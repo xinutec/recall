@@ -1,6 +1,6 @@
 //! Assign a whole-block transcription to diarized speakers, by word timing.
 //!
-//! The high-quality path, and the reason stage E4 runs two shims over one clip:
+//! The high-quality path, and the reason two shims run over one clip:
 //! transcribe the whole block once — full context, so the language is detected
 //! reliably and the anti-hallucination decoding works — then diarize it
 //! separately and assign each word to whoever was speaking at that moment. The

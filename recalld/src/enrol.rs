@@ -1,4 +1,4 @@
-//! Voiceprint enrolment (stage E4): turning a named turn into a reference vector.
+//! Voiceprint enrolment: turning a named turn into a reference vector.
 //!
 //! ⚠ **Why it is here rather than on the Mac.** `sync` and `sync_push` existed
 //! to replay the fleet's namings onto the Mac so the Mac could enrol them; with

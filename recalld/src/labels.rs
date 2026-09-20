@@ -1,4 +1,4 @@
-//! The labelling surface's READ half (stage F1), from `recall.api_labels`:
+//! The labelling surface's READ half, from `recall.api_labels`:
 //! the speaker roster, the labelled fragments, and one fragment's audio.
 //!
 //! ⚠ **Only the reads. The writes are deliberately NOT here yet**, and the reason

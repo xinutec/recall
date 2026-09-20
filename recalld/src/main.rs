@@ -239,7 +239,7 @@ async fn bind_all(binds: &[String]) -> Option<Vec<tokio::net::TcpListener>> {
     Some(listeners)
 }
 
-/// Stage D2: the calibration scanner, measuring levels for every delivered
+/// The calibration scanner, measuring levels for every delivered
 /// segment in bounded batches. Off the request path — its ffmpeg children and
 /// sqlite writes ride `spawn_blocking`, and WAL keeps it from ever blocking
 /// an upload.
@@ -405,7 +405,7 @@ fn spawn_background_passes(root: &std::path::Path) {
     spawn_enroller(root.clone());
 }
 
-/// Stage E4's last loop: turn a human-named turn into a reference voiceprint.
+/// Turn a human-named turn into a reference voiceprint.
 ///
 /// ⚠ **DELIBERATELY SLOW, and the reason is measured.** Adding 222 prints to the
 /// fleet's 750 moved attribution +0.19 points, and 187 prints score within 1.3 of
@@ -456,7 +456,7 @@ fn spawn_enroller(root: PathBuf) {
     });
 }
 
-/// Stage E4: turn finished `diarize-room` results into speaker-split turns.
+/// Turn finished `diarize-room` results into speaker-split turns.
 ///
 /// ⚠ **THE ONLY LOOP IN THIS DAEMON THAT REPLACES A TRANSCRIPT.** Everything
 /// else derives, registers, or fills a gap; this hides turns somebody can read
@@ -540,7 +540,7 @@ fn spawn_diarized_writer(root: PathBuf, stream: recalld::diarized::Stream<'stati
     });
 }
 
-/// Stage D4: the speech scanner — VAD over every delivered segment, so
+/// The speech scanner — VAD over every delivered segment, so
 /// "active" can mean someone is TALKING rather than bytes arrived, and the
 /// quiet review has evidence before it proposes deleting anything.
 ///
@@ -586,10 +586,10 @@ fn spawn_speech_scanner(root: PathBuf) {
     });
 }
 
-/// Stage D3: the room builder — one settled block at a time, calibrated
+/// The room builder — one settled block at a time, calibrated
 /// selection, terminal verdicts only. Chases the level scanner: a block whose
 /// evidence is incomplete defers and returns next pass.
-/// Stage E3a: turn stored transcription results into turns people actually read.
+/// Turn stored transcription results into turns people actually read.
 ///
 /// ⚠ **THE FIRST LOOP HERE THAT CHANGES A TRANSCRIPT SOMEBODY READS.** Everything
 /// above it derives, measures or registers.

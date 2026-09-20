@@ -1,4 +1,4 @@
-//! What the browser tells the server (stage F1), ported from
+//! What the browser tells the server, ported from
 //! `recall.api_client_reports`: error reports and the activity trace.
 //!
 //! Two routes that write no database and store nothing. `/api/log` records a

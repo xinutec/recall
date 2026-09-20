@@ -160,7 +160,7 @@ impl Client {
     /// moves with everything else at stage F.
     ///
     /// ⚠ Read ONCE at startup by the runner and carried on every job. The shim
-    /// must not fetch it — a model process holds no database (stage E2) — and
+    /// must not fetch it — a model process holds no database — and
     /// writing it onto each job at derivation time would pin it, so a name
     /// learned today would never reach a job queued yesterday.
     ///

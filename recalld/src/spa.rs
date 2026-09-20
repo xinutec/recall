@@ -1,4 +1,4 @@
-//! Serving the built Angular app (stage F1), ported from `recall.api`'s `spa`.
+//! Serving the built Angular app, ported from `recall.api`'s `spa`.
 //!
 //! ⚠ **Built and tested, and deliberately NOT mounted yet** — the same rule that
 //! kept the read routes off the router until webauth existed. recalld serves 2 of

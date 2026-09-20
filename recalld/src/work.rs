@@ -1,4 +1,4 @@
-//! Vocabulary and on-demand refine (stage F1), ported from `recall.api_work`.
+//! Vocabulary and on-demand refine, ported from `recall.api_work`.
 //!
 //! These are the first routes in recalld that WRITE `recall.sqlite`, so read the
 //! ownership note before adding more.
