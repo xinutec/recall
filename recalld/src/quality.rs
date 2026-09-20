@@ -167,6 +167,41 @@ pub fn speaking_rate(words: &[(f64, f64)]) -> Option<f64> {
     (span > 0.0).then(|| words.len() as f64 / span)
 }
 
+/// One word as the model timed it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Word {
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+}
+
+/// Words with their text and timing, out of a stored `word_timings` value.
+///
+/// ⚠ **The TEXT matters as much as the span** for anything that divides a turn:
+/// a split is only safe if the pieces can be shown to carry every word the
+/// original did, and that check needs the words themselves.
+///
+/// See [`word_spans`] for the two encodings this reads.
+#[must_use]
+pub fn timed_words(timings: &str) -> Vec<Word> {
+    let Ok(serde_json::Value::Array(items)) = serde_json::from_str(timings) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|w| {
+            let start = w.get("s").or_else(|| w.get("start"))?.as_f64()?;
+            let end = w.get("e").or_else(|| w.get("end"))?.as_f64()?;
+            let text = w.get("w").or_else(|| w.get("text"))?.as_str()?;
+            Some(Word {
+                start,
+                end,
+                text: text.to_owned(),
+            })
+        })
+        .collect()
+}
+
 /// Word spans out of a stored `word_timings` value, whichever way it is
 /// spelled.
 ///
@@ -176,18 +211,14 @@ pub fn speaking_rate(words: &[(f64, f64)]) -> Option<f64> {
 /// Reading only one of them is what limited this signal to a tenth of the
 /// archive. ⚠ The absolute one must never be compared ACROSS turns — only its
 /// own first-to-last span is meaningful here.
+///
+/// ⓘ Reads through [`timed_words`], so the two cannot drift apart about which
+/// spellings exist.
 #[must_use]
 pub fn word_spans(timings: &str) -> Vec<(f64, f64)> {
-    let Ok(serde_json::Value::Array(words)) = serde_json::from_str(timings) else {
-        return Vec::new();
-    };
-    words
-        .iter()
-        .filter_map(|w| {
-            let start = w.get("s").or_else(|| w.get("start"))?.as_f64()?;
-            let end = w.get("e").or_else(|| w.get("end"))?.as_f64()?;
-            Some((start, end))
-        })
+    timed_words(timings)
+        .into_iter()
+        .map(|w| (w.start, w.end))
         .collect()
 }
 

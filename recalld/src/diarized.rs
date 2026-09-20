@@ -45,6 +45,10 @@ pub struct Existing {
     /// evidence instead of assuming it covers the clip.
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
+    /// The stored `word_timings`, verbatim. ⚠ Without these a turn can only be
+    /// LABELLED; dividing one whose words belong to two people needs to know
+    /// where each word was.
+    pub word_timings: Option<String>,
 }
 
 /// A span a person has corrected, in absolute time.
@@ -149,6 +153,112 @@ pub enum Swap {
         to: Vec<(i64, String)>,
     },
     Keep(Refusal),
+}
+
+/// One piece of a turn that carried two people's words.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Piece {
+    pub speaker: String,
+    pub text: String,
+    /// Seconds from the block's start, matching [`AlignedTurn`].
+    pub start: f64,
+    pub end: f64,
+}
+
+/// Divide `turn` where the speaker changes, keeping every word.
+///
+/// ⚠⚠ **THE PIECES ARE CHECKED AGAINST THE ORIGINAL BEFORE THEY ARE OFFERED.**
+/// A split is the one rewrite the write model permits, and only because it
+/// cannot lose anything — so that has to be PROVEN per turn, not argued once.
+/// If the words do not reconstruct the turn's own text, this returns `None` and
+/// the caller labels the turn instead. Punctuation and spacing differ between
+/// the text and the word list often enough that this refuses regularly, and a
+/// refusal costs only a label that was going to be the old behaviour anyway.
+///
+/// `None` also when there are no usable timings, or when every word belongs to
+/// one speaker — there is nothing to divide.
+#[must_use]
+pub fn split_at_speaker_changes(
+    turn: &Existing,
+    block_start: DateTime<Utc>,
+    by: &[AlignedTurn],
+) -> Option<Vec<Piece>> {
+    let words = crate::quality::timed_words(turn.word_timings.as_deref()?);
+    if words.is_empty() {
+        return None;
+    }
+    // ⚠ The stored timings are absolute within the CLIP, and `by` is in seconds
+    // from the block's start. One origin, or every word lands on the wrong
+    // speaker.
+    let offset = (turn.start - block_start).as_seconds_f64();
+    let base = words.first()?.start;
+
+    let mut runs: Vec<(String, Vec<crate::quality::Word>)> = Vec::new();
+    for word in words {
+        // Where this word sits on the block's clock.
+        let at = offset + (word.start - base);
+        let speaker = by
+            .iter()
+            .find(|t| at >= t.start && at < t.end)
+            .map(|t| t.speaker.clone())
+            .or_else(|| nearest_speaker(at, by))?;
+        match runs.last_mut() {
+            Some((who, run)) if *who == speaker => run.push(word),
+            _ => runs.push((speaker, vec![word])),
+        }
+    }
+    if runs.len() < 2 {
+        return None;
+    }
+
+    let pieces: Vec<Piece> = runs
+        .iter()
+        .map(|(speaker, run)| {
+            let text = run
+                .iter()
+                .map(|w| w.text.trim())
+                .collect::<Vec<_>>()
+                .join(" ");
+            Piece {
+                speaker: speaker.clone(),
+                text,
+                start: offset + (run.first().map_or(0.0, |w| w.start) - base),
+                end: offset + (run.last().map_or(0.0, |w| w.end) - base),
+            }
+        })
+        .collect();
+
+    // ⚠ The proof. Compare on letters and digits only: the word list carries
+    // spacing and punctuation differently from the turn's own text, and a split
+    // that keeps every WORD is what matters.
+    let rebuilt = squashed(
+        &pieces
+            .iter()
+            .map(|p| p.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    (rebuilt == squashed(&turn.text)).then_some(pieces)
+}
+
+/// Letters and digits, lowercased — everything a split must preserve and
+/// nothing it is allowed to be judged on.
+fn squashed(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// The speaker whose span is closest, for a word falling in a gap between them.
+fn nearest_speaker(at: f64, by: &[AlignedTurn]) -> Option<String> {
+    by.iter()
+        .min_by(|a, b| {
+            let da = (at - a.start).abs().min((at - a.end).abs());
+            let db = (at - b.start).abs().min((at - b.end).abs());
+            da.total_cmp(&db)
+        })
+        .map(|t| t.speaker.clone())
 }
 
 fn overlaps(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)) -> bool {
@@ -667,7 +777,7 @@ pub fn standing(
     audio_segment_id: i64,
 ) -> rusqlite::Result<Vec<Existing>> {
     let mut stmt = conn.prepare(
-        "SELECT id, text, start_utc, end_utc FROM transcript_segments
+        "SELECT id, text, start_utc, end_utc, word_timings FROM transcript_segments
          WHERE audio_segment_id = ?1 AND superseded_by IS NULL
            AND hidden_reason IS NULL AND asr_model <> 'human'",
     )?;
@@ -677,6 +787,7 @@ pub fn standing(
             r.get::<_, String>(1)?,
             r.get::<_, String>(2)?,
             r.get::<_, String>(3)?,
+            r.get::<_, Option<String>>(4)?,
         ))
     })?;
     // ⚠ A turn whose stored instants will not parse is SKIPPED, not defaulted:
@@ -684,7 +795,7 @@ pub fn standing(
     // reads exactly like a turn the diarization did not cover.
     let mut out = Vec::new();
     for row in rows {
-        let (id, text, start, end) = row?;
+        let (id, text, start, end, word_timings) = row?;
         if let (Ok(start), Ok(end)) = (
             DateTime::parse_from_rfc3339(&start),
             DateTime::parse_from_rfc3339(&end),
@@ -694,6 +805,7 @@ pub fn standing(
                 text,
                 start: start.with_timezone(&Utc),
                 end: end.with_timezone(&Utc),
+                word_timings,
             });
         }
     }

@@ -44,6 +44,25 @@ fn at_seconds(id: i64, text: &str, start: f64, end: f64) -> Existing {
         text: text.to_owned(),
         start: base() + TimeDelta::milliseconds((start * 1000.0) as i64),
         end: base() + TimeDelta::milliseconds((end * 1000.0) as i64),
+        word_timings: None,
+    }
+}
+
+/// The same, carrying the word timings a SPLIT needs. Spans are absolute within
+/// the clip, which is how the shim stores them.
+fn timed(id: i64, start: f64, end: f64, words: &[(f64, f64, &str)]) -> Existing {
+    let json: Vec<String> = words
+        .iter()
+        .map(|(s, e, w)| format!(r#"{{"s":{s},"e":{e},"w":"{w}"}}"#))
+        .collect();
+    let text = words
+        .iter()
+        .map(|(_, _, w)| *w)
+        .collect::<Vec<_>>()
+        .join(" ");
+    Existing {
+        word_timings: Some(format!("[{}]", json.join(","))),
+        ..at_seconds(id, &text, start, end)
     }
 }
 
@@ -1334,4 +1353,141 @@ fn a_foreign_script_turn_keeps_its_text_and_loses_its_confidence() {
         .expect("the turn is written, not dropped");
     assert!(text.contains('И'), "the words are kept");
     assert_eq!(confidence, Some(0.0), "but nothing is asserted about them");
+}
+
+// --- dividing a turn that carried two people's words (#1663) -----------------
+
+use recalld::diarized::split_at_speaker_changes;
+
+/// A pass telling two people apart, 0-5s and 5-10s.
+fn two_speakers() -> Vec<AlignedTurn> {
+    let mut a = turn(0.0, 5.0, "first");
+    "SPEAKER_00".clone_into(&mut a.speaker);
+    let mut b = turn(5.0, 10.0, "second");
+    "SPEAKER_01".clone_into(&mut b.speaker);
+    vec![a, b]
+}
+
+/// ⭐ The last thing the write model needs: a turn whose words belong to TWO
+/// people is DIVIDED, keeping every word, instead of taking one label for both.
+#[test]
+fn a_turn_spanning_a_speaker_change_is_divided_and_keeps_every_word() {
+    let t = timed(
+        11,
+        0.0,
+        10.0,
+        &[
+            (0.0, 1.0, "is"),
+            (1.0, 2.0, "the"),
+            (2.0, 3.0, "kettle"),
+            (6.0, 7.0, "yes"),
+            (7.0, 8.0, "it"),
+            (8.0, 9.0, "is"),
+        ],
+    );
+
+    let pieces = split_at_speaker_changes(&t, base(), &two_speakers()).expect("a split");
+    assert_eq!(pieces.len(), 2, "one piece per speaker run");
+    assert_eq!(pieces[0].speaker, "SPEAKER_00");
+    assert_eq!(pieces[0].text, "is the kettle");
+    assert_eq!(pieces[1].speaker, "SPEAKER_01");
+    assert_eq!(pieces[1].text, "yes it is");
+    // ⚠ The invariant the whole model rests on: every word survives, once.
+    let rebuilt: Vec<&str> = pieces.iter().flat_map(|p| p.text.split(' ')).collect();
+    assert_eq!(rebuilt, vec!["is", "the", "kettle", "yes", "it", "is"]);
+}
+
+/// ⚠⚠ **A split that cannot prove itself must not happen.** If the words do not
+/// reconstruct the turn's own text, something is wrong with one of them — and
+/// the safe answer is the old behaviour, a label, not a guess at where to cut.
+#[test]
+fn a_split_whose_words_do_not_rebuild_the_text_is_refused() {
+    let mut t = timed(
+        11,
+        0.0,
+        10.0,
+        &[(0.0, 1.0, "is"), (1.0, 2.0, "the"), (6.0, 7.0, "yes")],
+    );
+    // The stored text carries a word the timings never mention.
+    t.text = "is the kettle on yes".to_owned();
+
+    assert_eq!(split_at_speaker_changes(&t, base(), &two_speakers()), None);
+}
+
+/// …and punctuation and spacing differences do NOT refuse it. They are the
+/// ordinary case — the model writes "Yes," in the text and "Yes" in the word
+/// list — and refusing on them would make the split never fire.
+#[test]
+fn punctuation_between_the_text_and_the_word_list_is_not_a_mismatch() {
+    let mut t = timed(
+        11,
+        0.0,
+        10.0,
+        &[(0.0, 1.0, "is"), (1.0, 2.0, "it"), (6.0, 7.0, "yes")],
+    );
+    t.text = "Is it?  \"Yes!\"".to_owned();
+
+    let pieces = split_at_speaker_changes(&t, base(), &two_speakers()).expect("a split");
+    assert_eq!(pieces.len(), 2);
+}
+
+/// ⚠ One speaker over the whole turn is NOT a split — there is nothing to
+/// divide, and the caller labels it instead.
+#[test]
+fn a_turn_with_one_speaker_is_not_divided() {
+    let t = timed(11, 0.0, 4.0, &[(0.0, 1.0, "just"), (1.0, 2.0, "me")]);
+    assert_eq!(split_at_speaker_changes(&t, base(), &two_speakers()), None);
+}
+
+/// ⚠ A turn with no stored timings cannot be cut anywhere. That is most of the
+/// archive, and it must degrade to a label rather than to a guess.
+#[test]
+fn a_turn_without_word_timings_is_not_divided() {
+    let t = at_seconds(11, "no timings on this one", 0.0, 10.0);
+    assert_eq!(split_at_speaker_changes(&t, base(), &two_speakers()), None);
+}
+
+/// ⚠⚠ **THE TWO ENCODINGS PUT THE WORD CLOCK IN DIFFERENT PLACES**, and a turn
+/// that does not start at the block's start is the only case that can tell.
+/// `diarized` re-bases its `{s,e,w}` word timings to the TURN, so a turn 20 s
+/// into the block
+/// has words starting at 0.0 — read literally, every one of them lands on
+/// whoever spoke at the beginning of the block.
+///
+/// This turn sits at 20-26 s, the speaker changes at 23 s, and the words are
+/// re-based. Getting the origin wrong puts all six on `SPEAKER_00`.
+#[test]
+fn a_turn_offset_into_the_block_maps_its_words_to_the_right_speakers() {
+    let mut a = turn(0.0, 23.0, "earlier");
+    a.speaker = "SPEAKER_00".to_owned();
+    let mut b = turn(23.0, 40.0, "later");
+    b.speaker = "SPEAKER_01".to_owned();
+
+    let t = timed(
+        11,
+        20.0,
+        26.0,
+        // re-based to the turn: 0.0 here means 20.0 on the block's clock
+        &[
+            (0.0, 0.5, "before"),
+            (0.5, 1.0, "the"),
+            (1.0, 1.5, "change"),
+            (3.5, 4.0, "after"),
+            (4.0, 4.5, "the"),
+            (4.5, 5.0, "change"),
+        ],
+    );
+
+    let pieces = split_at_speaker_changes(&t, base(), &[a, b]).expect("a split");
+    assert_eq!(pieces.len(), 2, "the change at 23s must be found");
+    assert_eq!(pieces[0].speaker, "SPEAKER_00");
+    assert_eq!(pieces[0].text, "before the change");
+    assert_eq!(pieces[1].speaker, "SPEAKER_01");
+    assert_eq!(pieces[1].text, "after the change");
+    // And the pieces are stamped on the BLOCK's clock, not the turn's.
+    assert!(
+        (pieces[0].start - 20.0).abs() < 0.01,
+        "first piece starts at {:.2}s, expected 20",
+        pieces[0].start
+    );
 }
