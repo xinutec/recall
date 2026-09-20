@@ -184,11 +184,11 @@ fn a_pass_covering_no_existing_turn_is_a_plain_refusal() {
 /// did not". That was true only while `Swap::Attribute` could carry ONE
 /// speaker, which made replacing the only way to deliver two.
 ///
-/// It is no longer true, and the old carve-out is the larger half of the
-/// damage: measured over the archive, 1,449 single-speaker clips lost 8,792
-/// boundaries — and **754 clips with two or more speakers lost 9,114**, more,
-/// entirely unguarded, because "the stage is doing its job" was read off the
-/// speaker count instead of off whether anything was lost (#1663).
+/// It is no longer true, and the carve-out cost real damage: over household
+/// clips, 752 with two or more speakers were flattened, losing **4,956
+/// boundaries** entirely unguarded — because "the stage is doing its job" was
+/// read off the speaker count instead of off whether anything was lost (#1663).
+/// (The single-speaker half, which was guarded, lost 8,780 across 1,448 clips.)
 ///
 /// Attribution delivers both: every existing boundary stands AND each turn
 /// carries the speaker whose span covers it most.

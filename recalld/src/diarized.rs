@@ -124,13 +124,23 @@ pub enum Swap {
     /// contributes the one thing it actually knows.
     ///
     /// ⚠⚠ **This is what a pass does whenever it would write FEWER turns than
-    /// it hides, at ANY speaker count.** Replacing instead cost 3,075 clips
-    /// their segmentation — and the guard that first shipped covered only the
-    /// single-speaker half of it. Measured over the archive: 1,449 one-speaker
-    /// clips lost 8,792 boundaries, and **754 clips with two or more speakers
-    /// lost 9,114** — more damage, entirely unguarded, because "the stage is
-    /// doing its job" was read off the speaker count rather than off whether
-    /// anything was lost (#1663).
+    /// it hides, at ANY speaker count.** The guard that first shipped covered
+    /// only the single-speaker half. Measured over household clips:
+    ///
+    /// ```text
+    /// 1 speaker    1,448 clips flattened   8,780 boundaries lost   was guarded
+    /// 2+ speakers    752 clips flattened   4,956 boundaries lost   was NOT
+    /// ```
+    ///
+    /// The unguarded half is the smaller one, but it is 752 clips and ~5,000
+    /// boundaries, and it was unguarded because "the stage is doing its job"
+    /// was read off the SPEAKER COUNT rather than off whether anything was lost
+    /// (#1663).
+    ///
+    /// ⚠ Count household clips only. Meetings are re-processed across several
+    /// passes, so hidden turns accumulate against a single current set and a
+    /// naive hidden-versus-written comparison reads 12 meeting files as 4,226
+    /// lost boundaries that were never lost.
     ///
     /// ⓘ A pass may SPLIT (more turns, every word kept) or LABEL (no text
     /// touched). Merging is neither, and is what this exists to refuse.

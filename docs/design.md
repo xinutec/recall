@@ -299,22 +299,20 @@ archive does not re-transcribe itself, and should not.
   named range, run deliberately. "A new model exists" is not a reason; "this
   model scores better on our own audio" is.
 
-**Audio scope — all, or speech-padded — is Pippijn's, and it now has a
-deadline.** It was parked here as a routine call on the grounds that storage was
-comfortable. Both halves of that have moved: the rolling window that made
-trimming a *windowing* choice was withdrawn, so scope now decides what is
-discarded PERMANENTLY, and the fleet's headroom is months rather than years.
+**Audio scope: KEEP EVERYTHING.** Pippijn's call — the budget is answered with
+disk, not by discarding.
 
-- ⚠ **Trimming bakes today's speech detector into the archive irreversibly.** A
-  better detector can never be re-run on audio the old one threw away, and two
-  live directions need the untrimmed signal: cross-mic energy as a location
-  signature, and any restoration model trained on this fleet's own pairs.
-- The recommendation is therefore to keep everything and answer the budget with
-  disk. But discarding part of a household's recorded life is not a call to make
-  on a recommendation.
-- To re-measure the runway rather than trusting a number here: take a full
-  recording day's segment count and mean size from the ingest ledger, and
-  compare against `df` on the archive volume and on the fleet's data PVC.
+- ⚠ **Trimming would bake today's speech detector into the archive
+  irreversibly.** A better detector can never be re-run on audio the old one
+  threw away, and two live directions need the untrimmed signal: cross-mic
+  energy as a location signature, and any restoration model trained on this
+  fleet's own pairs.
+- ⓘ It is also the status quo, so it needs no work. Nothing trims anything
+  today: `quiet-cleanup` went with the Python.
+- The cost is real and is a disk purchase rather than a wall. To re-measure the
+  runway rather than trusting a number here: take a full recording day's segment
+  count and mean size from the ingest ledger, and compare against `df` on the
+  archive volume and on the fleet's data PVC.
 
 ⚠ Q&A itself is CUT, so the model choice behind it (Qwen2.5-7B-Instruct, 4-bit,
 mlx-lm) is a note for whoever revives the ambition, not a live decision.
