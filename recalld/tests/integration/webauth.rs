@@ -296,10 +296,13 @@ fn a_cookie_minted_by_the_python_verifies_here() {
 use axum::Router;
 use axum::routing::{get, post};
 use recalld::webauth::{AuthError, exchange_code, fetch_userinfo, server_call};
+use std::net::SocketAddr;
 
 /// Serve `routes` on an ephemeral port and return its base URL.
 async fn serve(routes: Router) -> String {
-    let listener = crate::loopback::listener().await;
+    let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+        .await
+        .expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
         axum::serve(listener, routes).await.expect("serve");

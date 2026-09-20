@@ -426,7 +426,9 @@ async fn serve() -> (tempfile::TempDir, String) {
         upstream: None,
         frontend: None,
     }));
-    let listener = crate::loopback::listener().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
     let addr = listener.local_addr().expect("addr").to_string();
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;

@@ -463,7 +463,9 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
         upstream: None,
         frontend: None,
     }));
-    let listener = crate::loopback::listener().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;

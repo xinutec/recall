@@ -79,12 +79,28 @@ fn stub_shim() -> Vec<String> {
 }
 
 /// A port this test owns, so the household's tap is never read or written.
+///
+/// ⚠⚠ **Outside the EPHEMERAL range, and that is the whole point.** This binds
+/// to find a free port, reads it, then DROPS the socket so ffmpeg can take it —
+/// a real window in which anything may claim it. Drawn from `:0` that window is
+/// inside `net.inet.ip.portrange.first..last`, which is exactly where the kernel
+/// hands out ports to every other process on the machine, so two concurrent test
+/// suites are two allocators racing for the same pool. #1630's leading
+/// hypothesis, and the same class as #1480's.
+///
+/// Below the range nothing is allocated automatically, so only another copy of
+/// THIS test could collide. The window is not closed — it cannot be, while
+/// ffmpeg is the one that must bind — but it stops being a lottery everything
+/// else on the machine is entered into.
 fn free_udp_port() -> u16 {
-    UdpSocket::bind("127.0.0.1:0")
-        .expect("bind")
-        .local_addr()
-        .expect("addr")
-        .port()
+    for port in 20_000..32_768 {
+        if let Ok(socket) = UdpSocket::bind(("127.0.0.1", port)) {
+            let bound = socket.local_addr().expect("addr").port();
+            drop(socket);
+            return bound;
+        }
+    }
+    panic!("no free udp port outside the ephemeral range")
 }
 
 /// Publish real speech onto the tap, paced like a microphone.
