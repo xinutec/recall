@@ -47,7 +47,7 @@ use std::time::Duration;
 /// exactly the failure that produced: within ten minutes of `/sync/capture`
 /// cutting over, one mirror handshake in 116 came back 500 with `database is
 /// locked`. The Python's `Store` sets `PRAGMA busy_timeout = 30000` and had
-/// answered 104,482 of these without a single 500, so giving up six times sooner
+/// answered six figures of these without a single 500, so giving up sooner
 /// was the whole of the difference. `audiod`'s speech scanner already waits 30 s
 /// on this same file for the same reason.
 ///

@@ -278,7 +278,7 @@ pub fn foreign_script_ratio(text: &str) -> f64 {
 ///
 /// ⚠ **A MAJORITY, not a trace.** One borrowed word must not condemn a Dutch
 /// sentence. Measured 2026-09-19 over the whole archive: the ratio is strongly
-/// bimodal — 818 of 1,301 multi-byte turns sit at 0.0 and 305 at 1.0 — so the
+/// bimodal — most multi-byte turns sit at 0.0 or 1.0, few between — so the
 /// exact cut matters far less than being on the right side of the gap.
 pub const FOREIGN_SCRIPT_MAX: f64 = 0.5;
 

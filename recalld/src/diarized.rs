@@ -508,7 +508,8 @@ pub fn voices(stored: &str) -> Option<(Vec<SpeakerTurn>, Vec<SpeakerVoice>)> {
 /// a single turn 87% of the time, one hallucinated run condemned the whole turn
 /// and the pass discarded everything — the whole was a loop while the parts were
 /// not, in 94.4% of them. Those clips kept their per-mic text and lost only
-/// their SPEAKERS: 4,185 turns across them, 16 with a speaker (#1663).
+/// their SPEAKERS: thousands of turns across them, a handful with a speaker
+/// (#1663 holds the query and the figures as measured on a date).
 ///
 /// The per-mic writer never had this defect because `turns::plan` filters per
 /// segment. This is the same rule at the same granularity, so the two passes

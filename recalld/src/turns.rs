@@ -15,10 +15,10 @@
 //!   read. **Off** — the call in `main` is commented out, with the reason
 //!   beside it.
 //! - [`PER_MIC`] drains `transcribe-segment`. It hides nothing and replaces
-//!   nothing — it writes the turns for microphone clips that have NONE, which is
-//!   14,078 of 22,312 of them. This is `worker.py`'s loop moved to the runner,
-//!   not a new judgement about audio, so it carries none of the room stream's
-//!   open question.
+//!   nothing — it writes the turns for microphone clips that have NONE, which
+//!   is most of them. This is `worker.py`'s loop moved to the runner, not a new
+//!   judgement about audio, so it carries none of the room stream's open
+//!   question.
 //!
 //! ⚠ **The provenance field is the RESTORE, armed before the break.** Every row
 //! either pass writes is deletable by `provenance = '<stream>'` and by nothing
@@ -264,10 +264,10 @@ pub const ROOM_CHANNELS: i64 = 1;
 /// writes `...T10:00:00.000000+00:00`, which is not what
 /// [`crate::instant::python_isoformat_utc`] would write and not what
 /// `register_segments` writes — and that inconsistency is CORRECT, because the
-/// idempotency key is compared as TEXT. All 5,645 room rows already carry the
-/// fractional spelling (measured 2026-09-13); changing it would make every one
-/// of them stop matching and the next pass would mint 5,645 duplicates. The two
-/// registrars differ because the rows they are idempotent AGAINST differ.
+/// idempotency key is compared as TEXT. EVERY room row already written carries
+/// the fractional spelling, so changing it would make all of them stop matching
+/// and mint a duplicate for each. The two registrars differ because the rows
+/// they are idempotent AGAINST differ.
 ///
 /// # Errors
 /// If either database refuses the read or the write.
@@ -340,10 +340,11 @@ pub struct Registered {
     /// Clips whose minute is ALREADY registered — a sibling file with the same
     /// `(source_id, start_utc)` holds the row, so the insert was ignored.
     ///
-    /// ⚠ Not a fault: `.wav` and `.opus` copies of one minute are 1,599 clips
-    /// of the archive (#1591). It is counted separately because "the insert did
-    /// nothing" and "the clip is new" were indistinguishable before, and that
-    /// is what let them be re-decoded for ever.
+    /// ⚠ Not a fault, and not rare: a minute delivered as both `.wav` and
+    /// `.opus` is over a thousand clips — count them by stripping the extension
+    /// and grouping in `segments`. It is counted separately because "the insert
+    /// did nothing" and "the clip is new" were indistinguishable before, and
+    /// that is what let them be re-decoded for ever.
     pub covered: usize,
     /// Clips an earlier pass had already registered, retired cheaply by name.
     pub retired: usize,
@@ -415,7 +416,7 @@ pub fn register_segments(
 
     // ⚠ NEWEST FIRST, unlike `write_pass`. This pass has no starvation problem
     // to avoid — the ledger retires what it cannot read — and the live clip
-    // arriving now must not queue behind 5,487 clips of backfill before anyone
+    // arriving now must not queue behind a backlog of backfill before anyone
     // can read what was just said (decision 8).
     let candidates: Vec<(String, String)> = {
         let mut stmt = ingest.prepare(
@@ -494,13 +495,13 @@ pub fn register_segments(
         let end = start + Duration::microseconds((media.duration_s * 1e6).round() as i64);
         // ⚠ **`python_isoformat_utc`, NOT `SecondsFormat::Micros`, and the
         // difference is the idempotency key.** `UNIQUE (source_id, start_utc)`
-        // compares TEXT. Every one of the 16,821 microphone rows already here
+        // compares TEXT. EVERY microphone row already here
         // was written by the Python and spells a whole second WITHOUT a
         // fraction; `Micros` would write `...29.000000+00:00`, which is the
         // same instant, a different string, and therefore no conflict at all —
         // so a clip the `have` set missed would get a SECOND row rather than
-        // being absorbed. Measured, not assumed: mic rows 16,821/16,821
-        // whole-second, room rows 5,645/5,645 fractional.
+        // being absorbed. Measured, not assumed: every mic row whole-second,
+        // every room row fractional — no mixture in either.
         let inserted = meaning.execute(
             "INSERT OR IGNORE INTO audio_segments
                  (source_id, path, start_utc, end_utc, sample_rate, channels)
@@ -567,7 +568,7 @@ fn registered_names(
 /// learn a duration the ignored insert then throws away. But a clip's start time
 /// is in its NAME, and `(source_id, start_utc)` is the very key the `UNIQUE`
 /// constraint rejects on — so the answer is knowable before any decoding
-/// happens. 1,599 clips of this archive are such siblings.
+/// happens, and such siblings are a four-figure share of this archive.
 fn registered_minutes(
     meaning: &rusqlite::Connection,
 ) -> rusqlite::Result<std::collections::HashSet<(String, String)>> {

@@ -20,7 +20,7 @@
 //!
 //! Both consumers that matter read RECENT rows. Liveness asks "is anyone
 //! talking now"; the calibrated reference asks for a source's recent speech
-//! levels. Oldest-first would have made a 15,800-segment archive block both of
+//! levels. Oldest-first would have made a five-figure archive block both of
 //! them for hours behind audio from June. Newest-first makes the scanner useful
 //! within a minute and lets the archive backfill behind it — the same
 //! newest-first priority the work queue takes (stage E1).
