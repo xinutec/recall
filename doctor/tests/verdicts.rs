@@ -462,6 +462,11 @@ fn too_few_live_turns_skips_rather_than_passing() {
     let unmeasured = live_lag_check(None, live_lag_slow());
     assert_eq!(unmeasured.verdict, Verdict::Skip);
     assert!(unmeasured.value.is_none(), "an unmeasured lag has no trend");
+    assert!(
+        unmeasured.observed.contains("on the fleet"),
+        "a skip must say WHY, or a blind check reads as a quiet house: {}",
+        unmeasured.observed
+    );
 }
 
 #[test]

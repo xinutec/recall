@@ -305,6 +305,18 @@ pub fn newest_live_turn(conn: &Connection) -> rusqlite::Result<Option<DateTime<U
 ///
 /// `None` when too few turns exist to say — a handful is not a distribution,
 /// and a check that grades three turns reports noise as a regression.
+///
+/// ⚠⚠ **THIS READS THE MAC'S ARCHIVE, AND THE LIVE TIER NO LONGER WRITES
+/// THERE.** `recall-live` POSTs to the fleet and keeps no local store, so the
+/// Mac's copy holds only live turns from before that moved: 20,261 of them,
+/// none carrying `created_utc`, against the fleet's 20,294 with the newest
+/// minutes old. The lag is therefore ALWAYS unmeasurable here and this check
+/// always skips.
+///
+/// ⚠ It is left in place, skipping honestly, rather than deleted: the
+/// measurement is worth having and the only thing wrong is WHERE it looks.
+/// Moving it needs a decision about the doctor reading the fleet, which it does
+/// not do today. See the task.
 pub fn live_lag_seconds(conn: &Connection, since: DateTime<Utc>) -> rusqlite::Result<Option<f64>> {
     let mut stmt = conn.prepare(
         "SELECT created_utc, end_utc FROM transcript_segments \

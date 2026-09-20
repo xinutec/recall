@@ -311,11 +311,15 @@ pub fn live_lag_check(median_seconds: Option<f64>, slow: Duration) -> Check {
     let bound = slow.num_seconds() as f64;
     let expected = format!("live turns arriving within {bound:.0}s of being said");
     let Some(median) = median_seconds else {
+        // ⚠ Say WHY it cannot be measured. "Too few live turns" reads as a
+        // quiet house; the truth today is that the tier writes to the fleet and
+        // this reads the Mac, so it can never be measured here at all. A skip
+        // whose reason is wrong is how a blind check gets trusted.
         return check(
             "capture",
             "live delivery lag",
             Verdict::Skip,
-            "too few live turns to measure",
+            "not measurable here — live turns are on the fleet, not in this archive",
             expected,
         )
         .build();
