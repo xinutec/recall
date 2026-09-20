@@ -21,11 +21,11 @@ pub const TRANSCRIBE_ROOM: &str = "transcribe-room";
 pub const DIARIZE_ROOM: &str = "diarize-room";
 /// One MICROPHONE's segment, transcribed by the same `asr` shim as a room block.
 ///
-/// ⚠ **This is the orchestration port, not the room stream.** `worker.py` does
-/// exactly this today — pick a segment, drive the model, write the turns — and
-/// the runner already does that shape for room blocks. Same audio, same model,
-/// same GPU; only the process holding the loop changes. So it carries none of
-/// the room stream's open quality question, and does not wait on it.
+/// ⚠ **This is the orchestration port, not the room stream.** `worker.py` did
+/// exactly this — pick a segment, drive the model, write the turns — and the
+/// runner already did that shape for room blocks. Same audio, same model, same
+/// GPU; only the process holding the loop changed. So it carries none of the
+/// room stream's open quality question, and does not wait on it.
 ///
 /// ⚠ It does not fix throughput either. Measured 2026-09-12: 14,078 of 22,312
 /// per-mic segments on Isis have no turns, so the Mac is 63% behind on its own
@@ -39,9 +39,8 @@ pub const TRANSCRIBE_SEGMENT: &str = "transcribe-segment";
 /// ⚠ **The distinction, and it is not cosmetic.** `DIARIZE_ROOM`
 /// diarizes the DERIVED room stream, which is gated on #1461 and whose writer is
 /// off — so turning it on writes a second transcript beside the per-mic one
-/// rather than improving anything. `refine.py` has always worked on per-mic
-/// segments, and those already carry turns, so a pass over them REPLACES rather
-/// than adds. Same model, same shim, same code; entirely different consequence.
+/// rather than improving anything. `refine.py` worked on per-mic segments, and
+/// those already carry turns, so a pass over them REPLACES rather than adds. Same model, same shim, same code; entirely different consequence.
 pub const DIARIZE_SEGMENT: &str = "diarize-segment";
 /// Stage E4's last piece: turn a HUMAN-NAMED turn into a reference voiceprint.
 ///
@@ -238,8 +237,8 @@ pub fn derive_segment_jobs(
 ///
 /// Gated on the words existing, for two reasons. Diarization alone attributes
 /// nothing — it yields `SPEAKER_00` spans, and it is the alignment against words
-/// that makes them turns (`refine.py`, which this replaces, transcribes first for
-/// exactly this reason). And a block the ASR REFUSED is a block whose clip is the
+/// that makes them turns (`refine.py`, which this replaced, transcribed first
+/// for exactly this reason). And a block the ASR REFUSED is a block whose clip is the
 /// problem (`turns::Barren::Refused`); handing the same clip to pyannote
 /// spends GPU to learn that again.
 ///

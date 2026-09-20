@@ -882,7 +882,7 @@ pub struct Stream<'a> {
 /// One MICROPHONE's clip — `refine.py`'s stream, and the one that replaces it.
 ///
 /// ⚠ `model` is the shim's own default, NOT a decorated name: these rows join the
-/// same per-microphone corpus `refine.py` has been writing for months, and a
+/// same per-microphone corpus `refine.py` wrote for months, and a
 /// reader filtering on `asr_model` must not see the archive split in two on the
 /// day the orchestrator changed. Provenance carries "who wrote it" instead.
 pub const PER_MIC: Stream<'static> = Stream {

@@ -1,9 +1,9 @@
 //! Voiceprint enrolment (stage E4): turning a named turn into a reference vector.
 //!
-//! ⚠ **This is the last thing keeping the Mac's Python alive.** `sync` and
-//! `sync_push` exist to replay the fleet's namings onto the Mac so the Mac's
-//! `identify.backfill_voiceprints` can enrol them; with enrolment here, the
-//! namings never have to leave the machine that already holds them (#1538).
+//! ⚠ **Why it is here rather than on the Mac.** `sync` and `sync_push` existed
+//! to replay the fleet's namings onto the Mac so the Mac could enrol them; with
+//! enrolment here the namings never leave the machine that already holds them,
+//! and both agents are gone (#1538).
 //!
 //! ⚠ **Enrolling more is not the same as identifying better.** Measured
 //! 2026-09-17 (#1648): going from 750 prints to 972 moved attribution +0.19

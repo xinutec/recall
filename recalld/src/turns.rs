@@ -723,8 +723,7 @@ pub struct Stream<'a> {
     /// ⚠ **Not the same act as `hides_covered`, and not optional for a stream
     /// that replaces the archive pass.** A live turn is a guess made while
     /// somebody was still speaking; the archive turn for that span supersedes
-    /// it, and `worker.py::reconcile_live` has been hiding them on the Mac for
-    /// months. On the fleet the same thing happens in `work::store_segment`,
+    /// it, and `worker.py::reconcile_live` hid them on the Mac for months. On the fleet the same thing happens in `work::store_segment`,
     /// which is the SYNC-PUSH path — and a runner writing turns directly never
     /// goes through it. Without this, the timeline shows the live guess and the
     /// archive turn side by side, which reads as the conversation happening
@@ -766,8 +765,8 @@ pub const SHIM_MODEL: &str = "mlx-community/whisper-large-v3-turbo";
 /// One microphone's own clip (`transcribe-segment`) — `worker.py`'s loop, moved.
 ///
 /// ⚠ `model` is the shim's real default, NOT a decorated name like [`ROOM`]'s:
-/// these rows sit in the same per-microphone corpus that `worker.py` has been
-/// writing for months, and a reader filtering on `asr_model` must not see the
+/// these rows sit in the same per-microphone corpus that `worker.py` wrote for
+/// months, and a reader filtering on `asr_model` must not see the
 /// archive split in two on the day the orchestrator changed. The provenance
 /// field carries the "who wrote it" question instead, where a reader who is
 /// asking it will look.

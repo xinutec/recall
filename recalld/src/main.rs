@@ -382,8 +382,8 @@ fn spawn_background_passes(root: &std::path::Path) {
     // one. It writes turns for microphone clips that have none — 14,078 of
     // 22,312 of them when this landed — and it neither hides nor supersedes
     // anything, so the worst case is a transcript where there was silence,
-    // deletable by its provenance. It is the last thing between `worker.py`
-    // and deletion (#1538).
+    // deletable by its provenance. It is what allowed `worker.py` to be
+    // deleted (#1538).
     //
     // ⚠ Nothing feeds it until the runner leases `transcribe-segment`, which
     // is the separate switch: deriving jobs costs nothing, leasing them
