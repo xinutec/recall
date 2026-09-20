@@ -1,28 +1,16 @@
-//! Is this transcript text trustworthy? — the Rust half of `recall.quality`.
+//! Is this transcript text trustworthy?
 //!
-//! Whisper loops on hard or short audio ("goog goog goog…", "ASTASTAST…") and
-//! emits punctuation where it heard nothing ("...", "***"). No human utterance
-//! does either, so dropping them loses nothing — and unlike every other quality
-//! signal tried here, both are decidable from the TEXT alone: no audio decode,
-//! no VAD, no per-device calibration. That is why these two ported and the
-//! others did not (#1410 refuted tokens-per-speech-second; the language LABEL
-//! was never safe — 681 turns labelled es/de/pt/tr are Dutch and English the
-//! model merely mislabelled).
+//! ⚠ **Every rule here is decidable from the TEXT alone** — no audio decode, no
+//! VAD, no per-device calibration. That is not a coincidence: signals needing a
+//! per-device denominator were tried and refuted (see [`SLOW_RATE`]), because a
+//! phone's noise suppression makes the same utterance measure differently on
+//! two microphones.
 //!
-//! The only implementation: `recall.quality` was deleted, so the parity corpus
-//! is a frozen record of the port rather than a live comparison.
+//! ⚠ **They run at WRITE time**, so a turn they refuse never reaches the read
+//! path. A rule added here changes what is stored, not what is displayed.
 //!
-//! Both rules run at write time (`turns.rs`, `work.rs`), so a looping or
-//! wordless turn never reaches the read path.
-//!
-//! Not ported: `foreign_script_ratio`. It asks whether a letter's Unicode NAME
-//! contains "LATIN", which has no dependency-free Rust equivalent that agrees
-//! with Python on the edges (ª, µ and the combining marks are alphabetic with
-//! no LATIN in their names). The archive's non-Latin residue is ~180 turns and
-//! it is not what the room stream gets wrong — it reports a Dutch household in
-//! English, which is Latin script and passes any such filter. Port it when
-//! there is a reason, and port it through a GENERATED range table rather than a
-//! guess at the block boundaries.
+//! ⓘ The Python original is deleted, so the parity corpus is a frozen record of
+//! the port rather than a live comparison.
 
 /// Need a few words before a dominant one means "loop".
 const WORD_MIN: usize = 6;

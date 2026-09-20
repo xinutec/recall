@@ -29,6 +29,19 @@ const EVIDENCE_REASONS: [&str; 4] = [
     "no words",
 ];
 
+/// ⚠⚠ **EVERYTHING FROM HERE TO [`is_repetition_loop`] IS A COPY of
+/// `recalld::quality`**, because the doctor deliberately does not depend on
+/// recalld — that would pull a web server and its tree into an agent whose job
+/// is to read files. The copy is not free: the two drifted, and the doctor's
+/// half was the one that had wandered off the Python these were ported from.
+///
+/// ⚠ **They must agree, because they judge the same text for opposite
+/// purposes** — recalld decides whether to WRITE a turn, this decides whether a
+/// hidden one is worth RESTORING. A turn recalld wrote that this calls junk is
+/// household memory reported as unrecoverable.
+///
+/// ⓘ The right fix is one implementation in a shared crate; see the task.
+///
 /// Characters that carry no word. A turn made only of these says nothing about
 /// what was spoken, which is why hiding one cannot lose information. The unicode
 /// dashes and ellipsis are named rather than written: Whisper really does emit
@@ -134,17 +147,25 @@ fn is_char_loop(text: &str) -> bool {
         .collect();
     for start in 0..compact.len() {
         for unit in CHAR_LOOP_UNIT {
+            // ⚠ `break`, and the early `return` below, are NOT tidying — they
+            // are what the Python original did, and recalld's copy is verified
+            // against its frozen output. Searching on instead (the obvious
+            // reading of a greedy `\1{3,}`) makes the two disagree: on
+            // "ababababxyzxyzxyzxyzxyz" this said loop and recalld said not,
+            // so a turn recalld had happily written read here as unrestorable
+            // junk. Pinned by a test.
             if start + unit * CHAR_LOOP_REPEATS > compact.len() {
-                continue;
+                break;
             }
+            let head = &compact[start..start + unit];
             let mut reps = 1;
-            while start + unit * (reps + 1) <= compact.len()
-                && (0..unit).all(|i| compact[start + i] == compact[start + reps * unit + i])
+            while start + (reps + 1) * unit <= compact.len()
+                && &compact[start + reps * unit..start + (reps + 1) * unit] == head
             {
-                reps += 1; // `\1{3,}` is greedy: take as many as there are
+                reps += 1;
             }
-            if reps >= CHAR_LOOP_REPEATS && unit * reps >= CHAR_LOOP_MIN_LEN {
-                return true;
+            if reps >= CHAR_LOOP_REPEATS {
+                return reps * unit >= CHAR_LOOP_MIN_LEN;
             }
         }
     }
