@@ -119,21 +119,44 @@ pub enum Swap {
         insert: Vec<AlignedTurn>,
         hide: Vec<i64>,
     },
-    /// Name the turns that are already there. No text is rewritten and no
-    /// boundary is lost — the pass contributes the one thing it actually knows.
+    /// Name the turns that are already there — each with the speaker whose span
+    /// covers it most. No text is rewritten and no boundary is lost; the pass
+    /// contributes the one thing it actually knows.
     ///
-    /// ⚠ This is what a single-speaker pass should do. Replacing instead cost
-    /// 814 clips their segmentation: 3,686 turns hidden, 815 written back, and
-    /// 813 of those clips are now ONE turn (#1663).
+    /// ⚠⚠ **This is what a pass does whenever it would write FEWER turns than
+    /// it hides, at ANY speaker count.** Replacing instead cost 3,075 clips
+    /// their segmentation — and the guard that first shipped covered only the
+    /// single-speaker half of it. Measured over the archive: 1,449 one-speaker
+    /// clips lost 8,792 boundaries, and **754 clips with two or more speakers
+    /// lost 9,114** — more damage, entirely unguarded, because "the stage is
+    /// doing its job" was read off the speaker count rather than off whether
+    /// anything was lost (#1663).
+    ///
+    /// ⓘ A pass may SPLIT (more turns, every word kept) or LABEL (no text
+    /// touched). Merging is neither, and is what this exists to refuse.
     Attribute {
-        speaker: String,
-        to: Vec<i64>,
+        /// Existing turn id, and the speaker to name it.
+        to: Vec<(i64, String)>,
     },
     Keep(Refusal),
 }
 
 fn overlaps(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)) -> bool {
     a.0 < b.1 && a.1 > b.0
+}
+
+/// How many seconds `a` and `b` share, or `None` if they do not meet.
+///
+/// ⚠ The SHARED span, not "do they touch": a turn brushed by the last
+/// millisecond of one speaker's span and covered by the next one belongs to the
+/// second, and a boolean cannot say so.
+fn overlap_seconds(
+    a: (DateTime<Utc>, DateTime<Utc>),
+    b: (DateTime<Utc>, DateTime<Utc>),
+) -> Option<f64> {
+    let start = a.0.max(b.0);
+    let end = a.1.min(b.1);
+    (end > start).then(|| (end - start).as_seconds_f64())
 }
 
 /// Seconds-from-block-start to an absolute instant.
@@ -201,28 +224,32 @@ pub fn decide(
     // and the turn gains a name. Only the flattening case is refused.
     let speakers: std::collections::BTreeSet<&str> =
         keep.iter().map(|t| t.speaker.as_str()).collect();
-    if speakers.len() < 2 && keep.len() < existing.len() {
+    if keep.len() < existing.len() {
         // ⚠ Only the turns the diarization ACTUALLY COVERED. Asserting the one
         // speaker across the whole clip is the same over-claim the flattening
         // made: `pixel5-20260908T162259` had 8 spans totalling 5.6 s against a
         // 617-character transcript, and every word took the only span on offer.
-        let to: Vec<i64> = existing
+        // ⚠ Each turn takes the speaker whose span covers MOST of it, and a
+        // turn no span touches is left alone. Asserting one speaker across the
+        // whole clip is the same over-claim the flattening made:
+        // `pixel5-20260908T162259` had 8 spans totalling 5.6 s against a
+        // 617-character transcript, and every word took the only span on offer.
+        let to: Vec<(i64, String)> = existing
             .iter()
-            .filter(|o| {
-                keep.iter().any(|t| {
-                    overlaps(
-                        (o.start, o.end),
-                        (at(block_start, t.start), at(block_start, t.end)),
-                    )
-                })
+            .filter_map(|o| {
+                let best = keep
+                    .iter()
+                    .filter_map(|t| {
+                        let span = (at(block_start, t.start), at(block_start, t.end));
+                        overlap_seconds((o.start, o.end), span)
+                            .map(|shared| (shared, t.speaker.as_str()))
+                    })
+                    .max_by(|a, b| a.0.total_cmp(&b.0))?;
+                Some((o.id, best.1.to_owned()))
             })
-            .map(|o| o.id)
             .collect();
-        if let Some(speaker) = speakers.iter().next().filter(|_| !to.is_empty()) {
-            return Swap::Attribute {
-                speaker: (*speaker).to_owned(),
-                to,
-            };
+        if !to.is_empty() {
+            return Swap::Attribute { to };
         }
         return Swap::Keep(Refusal::Undiscriminating {
             produced: keep.len(),
@@ -444,21 +471,23 @@ fn write_replacement(
 /// If the database refuses.
 fn attribute(
     conn: &mut rusqlite::Connection,
-    ids: &[i64],
-    speaker: &str,
-    vector: Option<&[f64]>,
+    to: &[(i64, String)],
+    prints: &[SpeakerVoice],
     enrolled: &[crate::identify::Voiceprint],
 ) -> rusqlite::Result<usize> {
     let tx = conn.transaction()?;
     let mut named = 0;
-    for &id in ids {
+    for (id, speaker) in to {
         tx.execute(
             "UPDATE transcript_segments SET speaker_cluster = ?1 WHERE id = ?2",
             rusqlite::params![speaker, id],
         )?;
-        if let Some(vector) = vector {
-            let guess = crate::identify::match_one(vector, enrolled);
-            crate::identify::record(&tx, id, vector, guess.as_ref())?;
+        // ⚠ The voiceprint of THIS turn's speaker, not of the block's. With
+        // several speakers named in one pass, reusing one vector would enrol
+        // every turn against whoever happened to be first.
+        if let Some(print) = prints.iter().find(|p| p.speaker == *speaker) {
+            let guess = crate::identify::match_one(&print.vector, enrolled);
+            crate::identify::record(&tx, *id, &print.vector, guess.as_ref())?;
         }
         named += 1;
     }
@@ -920,13 +949,15 @@ pub fn write_pass(
                 crate::turns::ledger(ingest, kind, &filename, &why.to_string(), now)?;
                 pass.kept += 1;
             }
-            Swap::Attribute { speaker, to } => {
-                let vector = prints
-                    .iter()
-                    .find(|p| p.speaker == *speaker)
-                    .map(|p| p.vector.as_slice());
-                pass.named += attribute(meaning, to, speaker, vector, &enrolled)?;
-                let why = format!("attributed: {} turn(s) named in place", to.len());
+            Swap::Attribute { to } => {
+                pass.named += attribute(meaning, to, &prints, &enrolled)?;
+                let speakers: std::collections::BTreeSet<&str> =
+                    to.iter().map(|(_, s)| s.as_str()).collect();
+                let why = format!(
+                    "attributed: {} turn(s) named in place across {} speaker(s)",
+                    to.len(),
+                    speakers.len()
+                );
                 crate::turns::ledger(ingest, kind, &filename, &why, now)?;
             }
             Swap::Replace { hide, .. } => {

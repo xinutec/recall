@@ -117,14 +117,15 @@ fn a_single_speaker_pass_does_not_flatten_a_finer_transcript() {
     );
 
     match swap {
-        Swap::Attribute { speaker, to } => {
-            assert_eq!(speaker, "SPEAKER_00");
-            assert_eq!(
-                to,
-                vec![11, 12, 13],
-                "every turn the one speaker covers is NAMED, none replaced"
-            );
-        }
+        Swap::Attribute { to } => assert_eq!(
+            to,
+            vec![
+                (11, "SPEAKER_00".to_owned()),
+                (12, "SPEAKER_00".to_owned()),
+                (13, "SPEAKER_00".to_owned()),
+            ],
+            "every turn the one speaker covers is NAMED, none replaced"
+        ),
         other => panic!("the finer transcript must stand and be named, got {other:?}"),
     }
 }
@@ -150,7 +151,7 @@ fn a_turn_outside_the_speaker_span_is_left_unnamed() {
     match swap {
         Swap::Attribute { to, .. } => assert_eq!(
             to,
-            vec![11],
+            vec![(11, "SPEAKER_00".to_owned())],
             "only the turn the diarization actually covered"
         ),
         other => panic!("expected attribution, got {other:?}"),
@@ -177,11 +178,22 @@ fn a_pass_covering_no_existing_turn_is_a_plain_refusal() {
     );
 }
 
-/// ⚠ …but a pass that DOES tell two people apart is exactly what this stage is
-/// for, and it may replace a finer transcript, because the boundaries it writes
-/// carry information the old ones did not.
+/// ⚠⚠ **TWO SPEAKERS IS NOT A LICENCE TO MERGE.** This used to assert the
+/// opposite — that a pass telling two people apart "may replace a finer
+/// transcript, because the boundaries it writes carry information the old ones
+/// did not". That was true only while `Swap::Attribute` could carry ONE
+/// speaker, which made replacing the only way to deliver two.
+///
+/// It is no longer true, and the old carve-out is the larger half of the
+/// damage: measured over the archive, 1,449 single-speaker clips lost 8,792
+/// boundaries — and **754 clips with two or more speakers lost 9,114**, more,
+/// entirely unguarded, because "the stage is doing its job" was read off the
+/// speaker count instead of off whether anything was lost (#1663).
+///
+/// Attribution delivers both: every existing boundary stands AND each turn
+/// carries the speaker whose span covers it most.
 #[test]
-fn a_pass_that_separates_two_speakers_may_still_replace_a_finer_transcript() {
+fn two_speakers_is_not_a_licence_to_merge_a_finer_transcript() {
     let mut a = turn(0.0, 10.0, "what the first person said");
     a.speaker = "SPEAKER_00".to_owned();
     let mut b = turn(10.0, 20.0, "what the second person said");
@@ -191,16 +203,47 @@ fn a_pass_that_separates_two_speakers_may_still_replace_a_finer_transcript() {
         base(),
         vec![a, b],
         &[
-            existing(11, "the first thing said"),
-            existing(12, "the second thing said"),
-            existing(13, "the third thing said"),
+            at_seconds(11, "the first thing said", 0.0, 5.0),
+            at_seconds(12, "the second thing said", 5.0, 10.0),
+            at_seconds(13, "the third thing said", 12.0, 18.0),
         ],
+        &[],
+    );
+
+    match swap {
+        Swap::Attribute { to } => assert_eq!(
+            to,
+            vec![
+                (11, "SPEAKER_00".to_owned()),
+                (12, "SPEAKER_00".to_owned()),
+                (13, "SPEAKER_01".to_owned()),
+            ],
+            "three boundaries kept, and each turn named by the span covering it"
+        ),
+        other => panic!("2 turns must not replace 3, got {other:?}"),
+    }
+}
+
+/// …and a pass that genuinely SPLITS — more turns out than in — is the stage
+/// doing its job and replaces freely. That is the other half of the rule: a
+/// pass may split or label, and merging is neither.
+#[test]
+fn a_pass_that_writes_more_turns_than_it_hides_is_a_split_and_replaces() {
+    let mut a = turn(0.0, 10.0, "what the first person said");
+    a.speaker = "SPEAKER_00".to_owned();
+    let mut b = turn(10.0, 20.0, "what the second person said");
+    b.speaker = "SPEAKER_01".to_owned();
+
+    let swap = decide(
+        base(),
+        vec![a, b],
+        &[at_seconds(11, "both of them, in one block", 0.0, 20.0)],
         &[],
     );
 
     assert!(
         matches!(swap, Swap::Replace { .. }),
-        "two speakers is the whole point of the stage, got {swap:?}"
+        "2 turns from 1 is a split and is the whole point of the stage, got {swap:?}"
     );
 }
 
