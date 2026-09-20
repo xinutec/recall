@@ -812,7 +812,7 @@ B3 lands.*
   grammar (`names`, recalld's typed parser merged with the sweeps'
   stamp/glob readers). It also bought the test the stub deferred: audiod's
   uploader now proves delivery, the auth gate and the 409 path against the
-  REAL recalld router (`audiod/tests/upload_real_server.rs`).
+  REAL recalld router (`audiod/tests/integration/upload_real_server.rs`).
 - **D2. Calibration.** *Measuring since 2026-09-05:* recalld's background
   scanner decodes every delivered segment once (ffmpeg, bounded batches)
   and stores its speech/floor quantile levels (`segment_levels`); the
@@ -1351,7 +1351,7 @@ B3 lands.*
   a move:*
 
   - **621 lines of Python went with it**: `api_devices.py`, `liveness.py`,
-    `ingest_liveness.py` and `tests/test_liveness.py`, plus five route tests in
+    `ingest_liveness.py` and its liveness tests, plus five route tests in
     `test_api.py`. `schemas.py`'s `SourcesOut` STAYS — `gen_models.py` renders the
     frontend's TypeScript from it, so it is the wire contract, not the route.
   - ⚠ **The Mac-local branch was CUT, not ported, and that is not a capability
@@ -1368,7 +1368,7 @@ B3 lands.*
   - **Parity by generating the test from the Python.** `source_statuses` is pure
     on both sides, so the same eleven-case matrix was run through
     `recall.liveness` and its answers — 33 rows — became the expected table in
-    `recalld/tests/sources.rs`. Ablating `stopped_recently` fails exactly the case
+    `recalld/tests/integration/sources.rs`. Ablating `stopped_recently` fails exactly the case
     built for it, so the table is not decorative.
   - ⚠ **`stopped_recently` is the rule worth reading twice.** A marker that went
     stale RECENTLY beats delivery evidence, because a deliberate stop is newer
@@ -1426,7 +1426,7 @@ B3 lands.*
     settings writes diffed against the Rust's; then the route itself was served
     in-process and its status and body compared for the authorised, missing,
     wrong, non-bearer and bad-liveness cases. Both agree, and the expected values
-    in `recalld/tests/sync.rs` are the Python's output rather than the Rust's.
+    in `recalld/tests/integration/sync.rs` are the Python's output rather than the Rust's.
   - ⚠ **`json.dumps` preserves the Mac's key ORDER where `serde_json` sorts.**
     `capture_reported_source_liveness` is written by both tiers, so a reordered
     object is a second spelling of one value in one column — which is what makes
@@ -1498,7 +1498,7 @@ B3 lands.*
   and the Rust handler was written, tested and never mounted. recalld's tests
   call the function directly (a route test needs the gate mounted), the Python
   suite cannot miss a route it no longer has, and the differential drives the
-  function rather than the server. `tests/test_route_coverage.py` unioned the
+  function rather than the server. a route-coverage test unioned the
   axum and FastAPI tables against the frontend's call sites for as long as there
   were two tables. dev-lint's DL-WIRE-ROUTE-DRIFT could not do that and should not
   have tried: it resolves recalld's table alone, which is wrong mid-strangler,

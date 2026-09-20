@@ -61,7 +61,7 @@ tier.
 
 ## The products, in build order
 
-1. **Ingest server** — same wire protocol (`src/recall/wire.py` +
+1. **Ingest server** — same wire protocol (the wire protocol +
    `audiod/tests/handshakes.json` are the shared-facts references), same
    archive layout, same pause behaviour, same `capture_events` evidence.
    **Deployed 2026-09-04**; the Python server it ported is deleted — the

@@ -266,7 +266,7 @@ now closed: the `/sync/jobs` + `/sync/jobs/{id}/done` endpoints and `SyncClient.
 queue into the Mac's *local* refine queue. It runs no ML itself — the existing idle-gated
 refine daemon drains the local queue (never during recording) and the refined turns sync
 back through the normal segment/turn push. So a refine requested from Isis's UI now
-reaches the Mac. Commit `e29fa43`; TDD `tests/test_jobs.py`.
+reaches the Mac. Commit `e29fa43`, TDD-first.
 
 **Share-upload job-pull — done (2026-07-16).** A session uploaded to Isis's
 `/api/sessions` used to sit there recorded-but-never-transcribed: the blob and its rows

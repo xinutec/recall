@@ -67,6 +67,17 @@ in  { name = "recall"
         , argv = G.inDevShell [ "scripts/check-pii.sh" ]
         , timeout_s = 300
         }
+      , {-  Documentation rots SILENTLY: a doc naming a deleted file reads
+            exactly like one naming a live file, so the claim around it keeps
+            its authority long after the evidence is gone. Found by hand twice
+            — a permanent Python floor citing a deleted test module, and seven
+            paths left behind when the suites moved into `integration/`.
+        -}
+        G.Check::{
+        , name = "every repo path the docs cite exists"
+        , argv = G.inDevShell [ "scripts/check-doc-paths.sh" ]
+        , timeout_s = 120
+        }
       , G.Check::{
         , name = "ruff check (lint)"
         , argv = G.inDevShell [ "ruff", "check" ]

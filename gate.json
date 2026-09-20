@@ -20,6 +20,20 @@
         "develop",
         "--no-warn-dirty",
         "--command",
+        "scripts/check-doc-paths.sh"
+      ],
+      "artifacts": [],
+      "cwd": ".",
+      "env": {},
+      "name": "every repo path the docs cite exists",
+      "timeout_s": 120
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
         "ruff",
         "check"
       ],
