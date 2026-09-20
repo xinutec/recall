@@ -125,7 +125,7 @@ pub fn is_bare_name(text: &str, names: &[String]) -> bool {
 /// times, WER 223).
 ///
 /// Words per second below which a turn is not somebody talking. Measured on the
-/// 4,989 turns carrying usable timings: the median is 2.18 w/s — human
+/// the turns carrying usable timings: the median is about 2 w/s — human
 /// conversational speed — and below 0.2 the median turn is **four words spread
 /// over 32 seconds**, which is a single word over near-silence.
 pub const SLOW_RATE: f64 = 0.2;
@@ -148,10 +148,10 @@ pub const SLOW_RATE: f64 = 0.2;
 /// exactly what it says; the spread is the denominator's:
 ///
 /// ```text
-/// span < 0.5 s    6,652 turns   mean 22.6 w/s   max 600.0   ⛔
-/// span 0.5-2 s    9,417 turns   mean  2.5 w/s   max  22.0
-/// span 2-10 s     5,669 turns   mean  2.1 w/s   max  29.0
-/// span >= 10 s      879 turns   mean  1.6 w/s   max  17.8
+/// span < 0.5 s    mean ~22 w/s, max in the hundreds   ⛔ the artefact
+/// span 0.5-2 s    mean  ~2.5 w/s
+/// span 2-10 s     mean  ~2.1 w/s
+/// span >= 10 s    mean  ~1.6 w/s
 /// ```
 ///
 /// **Every impossible rate is a sub-half-second span**, and above that the two

@@ -308,10 +308,13 @@ pub fn newest_live_turn(conn: &Connection) -> rusqlite::Result<Option<DateTime<U
 ///
 /// ⚠⚠ **THIS READS THE MAC'S ARCHIVE, AND THE LIVE TIER NO LONGER WRITES
 /// THERE.** `recall-live` POSTs to the fleet and keeps no local store, so the
-/// Mac's copy holds only live turns from before that moved: 20,261 of them,
-/// none carrying `created_utc`, against the fleet's 20,294 with the newest
-/// minutes old. The lag is therefore ALWAYS unmeasurable here and this check
-/// always skips.
+/// Mac's copy holds only live turns from before that moved — none of them
+/// carrying `created_utc` at all. The lag is therefore ALWAYS unmeasurable
+/// here and this check always skips.
+///
+/// ⓘ The tell, on any store: `SELECT max(created_utc) FROM transcript_segments
+/// WHERE asr_model = 'live'`. NULL or old here, minutes old on the fleet. A
+/// COUNT cannot distinguish a live store from an abandoned one.
 ///
 /// ⚠ It is left in place, skipping honestly, rather than deleted: the
 /// measurement is worth having and the only thing wrong is WHERE it looks.

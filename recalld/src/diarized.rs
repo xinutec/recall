@@ -129,22 +129,18 @@ pub enum Swap {
     ///
     /// ⚠⚠ **This is what a pass does whenever it would write FEWER turns than
     /// it hides, at ANY speaker count.** The guard that first shipped covered
-    /// only the single-speaker half. Measured over household clips:
+    /// only the single-speaker half. Measured over household clips, roughly a
+    /// THIRD of the damage sat in the unguarded two-speaker case — thousands of
+    /// boundaries, not a rounding error — and it was unguarded because "the
+    /// stage is doing its job" was read off the SPEAKER COUNT rather than off
+    /// whether anything was lost (#1663).
     ///
-    /// ```text
-    /// 1 speaker    1,448 clips flattened   8,780 boundaries lost   was guarded
-    /// 2+ speakers    752 clips flattened   4,956 boundaries lost   was NOT
-    /// ```
-    ///
-    /// The unguarded half is the smaller one, but it is 752 clips and ~5,000
-    /// boundaries, and it was unguarded because "the stage is doing its job"
-    /// was read off the SPEAKER COUNT rather than off whether anything was lost
-    /// (#1663).
-    ///
-    /// ⚠ Count household clips only. Meetings are re-processed across several
-    /// passes, so hidden turns accumulate against a single current set and a
-    /// naive hidden-versus-written comparison reads 12 meeting files as 4,226
-    /// lost boundaries that were never lost.
+    /// ⚠ The counts MOVE while this pass runs; #1663 holds the query and the
+    /// figures as measured on a date. Two traps if it is re-run: EXCLUDE
+    /// meetings, which are re-processed across several passes so hidden turns
+    /// accumulate against one current set (counting them inflated the
+    /// two-speaker figure enough to reverse which half looked worse), and band
+    /// by whether anything was actually lost rather than by speaker count.
     ///
     /// ⓘ A pass may SPLIT (more turns, every word kept) or LABEL (no text
     /// touched). Merging is neither, and is what this exists to refuse.

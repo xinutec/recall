@@ -261,13 +261,16 @@ pub fn cluster_namings(conn: &Connection) -> rusqlite::Result<Vec<ClusterNaming>
 /// prompt_spelling`), and the obvious remedy loses:
 ///
 /// ```text
-/// what it BUYS   names spelled right   12 of 22 with   3 of 22 without
-/// what it COSTS  names hallucinated     5 of 355 short clips   0 without
+/// what it BUYS   names spelled right    ~4x as many WITH the prompt
+/// what it COSTS  names hallucinated     ~1% of sub-two-second clips,
+///                                       and NONE without the prompt
 /// ```
 ///
-/// ⭐ Dropping it removes about five hallucinations per 355 sub-two-second
-/// clips and costs **nine of twenty-two** correctly spelled names. The harm is
-/// real and it is the smaller number.
+/// ⭐ **It buys several times more than it costs, so dropping it is a bad
+/// trade.** The harm is real and it is the smaller effect.
+///
+/// ⚠ Both figures MOVE — the spelling side is scored against corrections, which
+/// accumulate. Re-measure rather than trusting a number here.
 ///
 /// ⓘ The hallucinations were ALL on clips of a second or less, and there were
 /// none at all above two seconds in either arm — so length gates the harm, and
@@ -278,9 +281,9 @@ pub fn cluster_namings(conn: &Connection) -> rusqlite::Result<Vec<ClusterNaming>
 /// a live turn that is nothing but a name. A name inside a fluent sentence
 /// still gets through and has no known remedy (#1665).
 ///
-/// ⚠ n is small on the buying side — 22 is the whole ground truth that exists,
-/// not a sample of it. Re-measure rather than trusting these numbers if the
-/// glossary or the model changes.
+/// ⚠⚠ **n is small on the buying side** — the corrections containing a name are
+/// the whole ground truth that exists, not a sample of it, and there are a
+/// couple of dozen. Treat the DIRECTION as settled and the magnitude as rough.
 pub fn initial_prompt(conn: &Connection) -> rusqlite::Result<Option<String>> {
     let mut ordered: Vec<String> = known_speaker_names(conn)?.names;
     ordered.extend(
