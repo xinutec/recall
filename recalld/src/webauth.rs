@@ -409,6 +409,26 @@ impl std::fmt::Display for AuthError {
     }
 }
 
+/// A transport failure with the detail #1480 needs, walked out of the error
+/// chain.
+///
+/// ⚠ **`os error 22` is that flake's invariant** and `e.to_string()` alone
+/// cannot say which layer produced it. The io kind and the raw errno name the
+/// syscall's verdict rather than ureq's paraphrase of it. ⓘ Nothing here can
+/// carry household data: an error kind and an errno are the whole of it.
+fn transport(e: &ureq::Error) -> AuthError {
+    use std::fmt::Write;
+    let mut detail = e.to_string();
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = source {
+        if let Some(io) = err.downcast_ref::<std::io::Error>() {
+            let _ = write!(detail, " [io {} os={:?}]", io.kind(), io.raw_os_error());
+        }
+        source = err.source();
+    }
+    AuthError::Transport(detail)
+}
+
 /// The agent both Nextcloud calls use.
 ///
 /// ⚠ NOT `ureq::get`/`ureq::post`. Those share ONE process-wide connection
@@ -441,9 +461,11 @@ pub fn exchange_code(cfg: &Config, code: &str) -> Result<String, AuthError> {
             ("client_secret", &cfg.client_secret),
             ("redirect_uri", &cfg.redirect_uri),
         ])
-        .map_err(|e| AuthError::Transport(e.to_string()))?
+        .map_err(|e| transport(&e))?
         .into_json()
-        .map_err(|e| AuthError::Transport(e.to_string()))?;
+        .map_err(|e| {
+            AuthError::Transport(format!("{e} [io {} os={:?}]", e.kind(), e.raw_os_error()))
+        })?;
     match resp.get("access_token").and_then(serde_json::Value::as_str) {
         Some(t) if !t.is_empty() => Ok(t.to_owned()),
         _ => Err(AuthError::Malformed("missing access_token")),
@@ -464,11 +486,13 @@ pub fn fetch_userinfo(cfg: &Config, access_token: &str) -> Result<Session, AuthE
     if let Some(h) = host.as_deref() {
         req = req.set("Host", h);
     }
-    let resp: serde_json::Value = req
-        .call()
-        .map_err(|e| AuthError::Transport(e.to_string()))?
-        .into_json()
-        .map_err(|e| AuthError::Transport(e.to_string()))?;
+    let resp: serde_json::Value =
+        req.call()
+            .map_err(|e| transport(&e))?
+            .into_json()
+            .map_err(|e| {
+                AuthError::Transport(format!("{e} [io {} os={:?}]", e.kind(), e.raw_os_error()))
+            })?;
     let data = resp.get("ocs").and_then(|o| o.get("data"));
     let uid = data
         .and_then(|d| d.get("id"))

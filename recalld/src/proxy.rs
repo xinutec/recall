@@ -229,9 +229,24 @@ impl Relayed {
 fn read_fully(resp: ureq::Response) -> Result<Relayed, Failed> {
     let status = StatusCode::from_u16(resp.status()).unwrap_or(StatusCode::BAD_GATEWAY);
     let headers = response_headers(&resp);
+    // ⚠ Diagnostic fields for #1480, and each one discriminates. `os error 22`
+    // is the invariant across every face of that flake, and nothing so far can
+    // say WHICH read produced it: the byte count separates a body that never
+    // started from one cut short, and the framing separates a length-delimited
+    // read from a chunked one. ⓘ No household data is in a byte count, a header
+    // length or an io error kind.
+    let framing = resp
+        .header("content-length")
+        .map_or_else(|| "chunked-or-eof".to_owned(), ToOwned::to_owned);
     let mut body = Vec::new();
-    std::io::copy(&mut resp.into_reader(), &mut body)
-        .map_err(|e| Failed::Body(format!("{} ({e})", e.kind())))?;
+    std::io::copy(&mut resp.into_reader(), &mut body).map_err(|e| {
+        Failed::Body(format!(
+            "{kind} ({e}) os={os:?} after {read} bytes, content-length {framing}",
+            kind = e.kind(),
+            os = e.raw_os_error(),
+            read = body.len(),
+        ))
+    })?;
     Ok(Relayed {
         status,
         headers,
