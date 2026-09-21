@@ -157,25 +157,21 @@ fn the_state_letters_that_matter_are_told_apart() {
 }
 
 #[test]
-fn where_ps_works_a_living_child_is_read_as_sleeping() {
-    // ⚠ Skipped where `ps` cannot look — the nix sandbox is one such place, and
-    // a test that demanded an answer there would fail the BUILD over the
-    // environment rather than over the code. The case that matters when it
-    // cannot look is the one above, which runs everywhere.
-    let mut child = std::process::Command::new("sleep")
-        .arg("30")
-        .spawn()
-        .expect("spawn");
-    let state = doctor::bounded::process_state(child.id());
-    // The child is a `sleep` this test owns; nothing downstream depends on it
-    // dying cleanly, so the discard is the choice rather than an oversight.
-    let _ = child.kill();
-    let _ = child.wait();
-
-    if let State::Named(raw) = state {
-        assert!(
-            raw.starts_with('S') || raw.starts_with('I'),
-            "a sleeping process is not in disk wait: {raw}"
-        );
+fn a_live_pid_is_named_and_never_read_as_gone() {
+    // ⚠ **This process's own pid, and no child.** An earlier version spawned a
+    // `sleep` to look at, and both halves of that were wrong: a freshly spawned
+    // process is legitimately `R` before it reaches its nanosleep, so the
+    // assertion graded the SCHEDULER — and the spawn itself made the neighbour
+    // above flaky, which runs `pwd` on a ten-second clock. Measured under eight
+    // burners: 0/40 without these tests, 2/40 with them.
+    //
+    // What is worth pinning is neither the letter nor the spawn: a pid that is
+    // alive must never read as GONE, which is exactly the fault the nix sandbox
+    // caught when `ps` could not be asked at all.
+    match doctor::bounded::process_state(std::process::id()) {
+        State::Named(raw) => assert!(!raw.is_empty(), "a named state is not empty"),
+        // `ps` cannot look here; the case that matters then is pinned above.
+        State::Unknown(_) => {}
+        State::Gone => panic!("this process is running, so it cannot be gone"),
     }
 }
