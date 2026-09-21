@@ -5,7 +5,8 @@ use chrono::{DateTime, Utc};
 use doctor::archive::{self, archive_check, blanked_check};
 use doctor::capture::{
     Beat, Recorder, WindowAudio, agent_checks, capture_checks, live_check, live_lag_check,
-    live_lag_slow, live_quiet, silent_after, worker_check, worker_slow, worker_stopped,
+    live_lag_slow, live_lag_window, live_quiet, silent_after, worker_check, worker_slow,
+    worker_stopped,
 };
 use doctor::check::{Verdict, worst};
 use doctor::source::SourceKind;
@@ -496,4 +497,20 @@ fn a_feed_falling_behind_the_speaker_warns_while_it_is_still_only_slow() {
             .contains("falling further behind"),
         "a warn must say what is happening, not just that it is slow"
     );
+}
+
+#[test]
+fn the_lag_window_is_shorter_than_a_day_so_it_cannot_blend_a_fault_with_its_fix() {
+    // ⚠ Run over the 48-hour LOSS window on 2026-09-21 the median read 36.2s,
+    // because that window held both #1383's regression and its repair — and it
+    // would then have gone green the next day when the old turns aged out,
+    // reporting the window rather than the tier.
+    assert!(
+        live_lag_window() < chrono::Duration::days(1),
+        "a lag median spanning days grades whichever days it caught"
+    );
+    // ⚠ And long enough to hold a conversation: an in-house test on 2026-09-20
+    // produced 18 live turns inside half an hour, so anything above an hour
+    // clears the sample floor whenever the household is actually talking.
+    assert!(live_lag_window() > chrono::Duration::hours(1));
 }

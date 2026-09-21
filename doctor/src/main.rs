@@ -150,7 +150,7 @@ fn live_checks(config: &Config, now: chrono::DateTime<Utc>, out: &Path) -> Vec<C
     let Some(fleet) = live::Fleet::new(config.fleet.as_deref(), token.as_deref()) else {
         return live::unconfigured();
     };
-    let fetched = live::fetch(&fleet, now, archive::loss_window());
+    let fetched = live::fetch(&fleet, now, capture::live_lag_window());
     live::live_checks(&fetched, now, agents::paused_until(out))
 }
 

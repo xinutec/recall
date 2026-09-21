@@ -295,6 +295,26 @@ pub fn live_lag_slow() -> Duration {
     Duration::seconds(30)
 }
 
+/// How far back the lag median looks.
+///
+/// ⚠ **NOT the loss window, and the difference is not tidiness.** Speech loss
+/// asks "did we lose audio in the last two days"; this asks "is the feed
+/// keeping up", which is a question about now. Run over 48 hours on
+/// 2026-09-21 it answered 36.2 s — an honest median over a window holding both
+/// #1383's regression (43 turns on the 19th, up to 239 s behind) and its fix
+/// (18 turns on the 20th, none over 16 s). The check would then have gone
+/// green by itself the next day because an old outage aged out, which is a
+/// verdict about the window rather than about the tier.
+///
+/// Six hours is longer than any one conversation and shorter than a day, so it
+/// cannot blend a fault with its repair. Too few turns SKIP, which is the right
+/// answer while the household is paused: the tier it grades is not running
+/// either.
+#[must_use]
+pub fn live_lag_window() -> Duration {
+    Duration::hours(6)
+}
+
 /// How far behind the speaker the instant feed is running.
 ///
 /// ⚠ **The failure [`live_check`] cannot see.** That one asks whether a live
