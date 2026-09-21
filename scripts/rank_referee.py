@@ -38,6 +38,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+BOTH_ARMS = 2
+"""Corrections must be typed over BOTH competing microphones, or the set scores
+one arm against its own words and the other against a stranger's."""
+
 DEFAULT_TOLERANCE_S = 6.0
 """Cross-mic skew a turn may sit away and still match. Sized from a measured
 3.7 s, and printed in the report so a reader sees what it admitted."""
@@ -51,6 +55,15 @@ class Case:
     calibrated_source: str
     raw_text: str
     calibrated_text: str
+    origin_source: str
+    """Which microphone's words the human EDITED.
+
+    ⚠⚠ Without this the report cannot be read at all. A correction is an edit of
+    one microphone's own text, so the arm it came from shares that arm's
+    vocabulary and phrasing and is flattered by it — and a median taken over
+    corrections of mixed, unrecorded origin averages a self-score with a
+    cross-score and reports the blend as if it were a comparison.
+    """
 
 
 def _utc(text: str) -> datetime:
@@ -133,9 +146,10 @@ def load_cases(
     """Corrections in the window whose block the two ranks DISAGREE about."""
     end = start + timedelta(minutes=minutes)
     rows = db.execute(
-        """SELECT c.id, c.corrected_text, ts.start_utc, ts.end_utc
+        """SELECT c.id, c.corrected_text, ts.start_utc, ts.end_utc, a.source_id
              FROM corrections c
              JOIN transcript_segments ts ON ts.id = c.transcript_segment_id
+             JOIN audio_segments a ON a.id = ts.audio_segment_id
             WHERE ts.start_utc >= ? AND ts.end_utc <= ?
             ORDER BY ts.start_utc""",
         (start.isoformat(), end.isoformat()),
@@ -143,7 +157,7 @@ def load_cases(
 
     skipped = {"unrankable": 0, "ranks agree": 0, "an arm heard nothing": 0}
     cases: list[Case] = []
-    for cid, truth, s_text, e_text in rows:
+    for cid, truth, s_text, e_text, origin in rows:
         span_start, span_end = _utc(str(s_text)), _utc(str(e_text))
         chosen = winners(ingest, _block_of(span_start))
         if chosen is None:
@@ -159,8 +173,68 @@ def load_cases(
             # Counted, not dropped: hiding these flatters whichever arm has a turn.
             skipped["an arm heard nothing"] += 1
             continue
-        cases.append(Case(int(cid), str(truth), raw_src, cal_src, raw_text, cal_text))
+        cases.append(
+            Case(
+                int(cid),
+                str(truth),
+                raw_src,
+                cal_src,
+                raw_text,
+                cal_text,
+                str(origin),
+            )
+        )
     return cases, skipped
+
+
+def _report_by_origin(cases: list[Case]) -> None:
+    """Split the medians by which microphone the human actually edited.
+
+    ⚠⚠ **THE HEADLINE MEDIANS ABOVE ARE NOT A COMPARISON ON THEIR OWN.** Each
+    correction flatters the arm it was typed over, so a one-sided set makes that
+    arm win by construction and a balanced set averages the bias away into
+    mush. What CAN be compared is cross against cross: each arm scored only
+    against truth derived from the OTHER one.
+    """
+    from recall.wer import word_error_rate  # noqa: PLC0415
+
+    origins = sorted({c.origin_source for c in cases})
+    print("\nBY THE MICROPHONE THE HUMAN EDITED — self-scores are flattered:")
+    cross: dict[str, list[float]] = {}
+    for origin in origins:
+        group = [c for c in cases if c.origin_source == origin]
+        raw = statistics.median(word_error_rate(c.truth, c.raw_text) for c in group)
+        cal = statistics.median(
+            word_error_rate(c.truth, c.calibrated_text) for c in group
+        )
+        raw_src, cal_src = group[0].raw_source, group[0].calibrated_source
+
+        def mark(src: str, origin: str = origin) -> str:
+            return "SELF " if src == origin else "cross"
+
+        print(
+            f"  origin {origin:<10} n={len(group):<4} "
+            f"raw({raw_src}) {raw:.3f} [{mark(raw_src)}]   "
+            f"calibrated({cal_src}) {cal:.3f} [{mark(cal_src)}]"
+        )
+        if raw_src != origin:
+            cross.setdefault(raw_src, []).append(raw)
+        if cal_src != origin:
+            cross.setdefault(cal_src, []).append(cal)
+
+    if len(origins) < BOTH_ARMS:
+        only = origins[0]
+        print(
+            f"\n⚠⚠ EVERY correction was typed over {only}, so that arm is "
+            "flattered and the other cannot be compared without bias. This set "
+            "cannot referee the ranks; correct a comparable number over the "
+            "competing microphone."
+        )
+        return
+    print("\n⭐ CROSS vs CROSS — each arm against truth derived from the other:")
+    for src in sorted(cross):
+        print(f"  {src:<10} {statistics.median(cross[src]):.3f}")
+    print("  (lower is better, and neither side is scoring against its own words)")
 
 
 def main() -> None:
@@ -209,6 +283,7 @@ def main() -> None:
                 "calibrated_text": case.calibrated_text,
                 "wer_raw": wer_raw,
                 "wer_calibrated": wer_cal,
+                "origin_source": case.origin_source,
             }
         )
         print(
@@ -228,6 +303,7 @@ def main() -> None:
             f"calibrated: {statistics.median(cals):.3f}   (n={len(results)})"
         )
         print(f"calibrated better on {better}, worse on {worse}")
+        _report_by_origin(cases)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(results, indent=2))
     print(f"wrote {args.out}")
