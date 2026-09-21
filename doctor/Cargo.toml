@@ -35,6 +35,13 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 
 [dependencies]
+# ⚠ Not "the doctor may as well depend on things now". The text rules that
+# decide whether a hidden turn is worth restoring are the SAME rules recalld
+# used to decide whether to write it, and they may not disagree; a copy of them
+# here already drifted once. Depending on recalld itself would pull a web server
+# into an agent whose job is to read files — audiocore is the leaf both daemons
+# already share.
+audiocore = { path = "../audiocore" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

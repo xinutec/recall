@@ -15,6 +15,12 @@
 //! heard nothing in gets nothing back, and a generation that is entirely junk is
 //! not counted as restorable.
 
+// ⚠ The text rules come from `audiocore::text` rather than a copy. They WERE a
+// copy, the two drifted, and a turn recalld had written then read here as
+// unrestorable junk — the fault this detector exists to catch, committed by the
+// detector.
+use audiocore::text::{is_repetition_loop, is_wordless};
+
 /// Reasons a turn was hidden on the EVIDENCE of what it was, rather than by a
 /// pass replacing it. Such a turn is never a candidate for restoring.
 ///
@@ -28,154 +34,6 @@ const EVIDENCE_REASONS: [&str; 4] = [
     "non-Latin script, no speech (VAD)",
     "no words",
 ];
-
-/// ⚠⚠ **EVERYTHING FROM HERE TO [`is_repetition_loop`] IS A COPY of
-/// `recalld::quality`**, because the doctor deliberately does not depend on
-/// recalld — that would pull a web server and its tree into an agent whose job
-/// is to read files. The copy is not free: the two drifted, and the doctor's
-/// half was the one that had wandered off the Python these were ported from.
-///
-/// ⚠ **They must agree, because they judge the same text for opposite
-/// purposes** — recalld decides whether to WRITE a turn, this decides whether a
-/// hidden one is worth RESTORING. A turn recalld wrote that this calls junk is
-/// household memory reported as unrecoverable.
-///
-/// ⓘ The right fix is one implementation in a shared crate; see the task.
-///
-/// Characters that carry no word. A turn made only of these says nothing about
-/// what was spoken, which is why hiding one cannot lose information. The unicode
-/// dashes and ellipsis are named rather than written: Whisper really does emit
-/// them, and spelled literally they are indistinguishable from ASCII to a reader.
-const WORDLESS: &str = ". !?*-_,:;\"'()[]{}~/\\|@#$%^&+=<>`\t\n\u{2026}\u{00b7}\u{2013}\u{2014}";
-
-/// True if `text` contains no word at all — "...", "***", "!".
-pub fn is_wordless(text: &str) -> bool {
-    text.trim_matches(|c| WORDLESS.contains(c))
-        .trim()
-        .is_empty()
-}
-
-// A word repeated 3+ times in a row is a loop *only* if it is long enough —
-// short words are real emphasis ("no no no", "who who who"), long ones are
-// hallucinations ("everything everything everything").
-const RUN_MIN: usize = 3;
-const RUN_WORD_MIN_LEN: usize = 6;
-const WORD_MIN: usize = 6; // need a few words before a dominant one means "loop"
-const WORD_FRACTION: f64 = 0.5; // one token is >= half the words
-const MAX_PHRASE_WORDS: usize = 6; // a repeated "phrase" up to this many words
-const MIN_PHRASE_REPEATS: usize = 3; // repeated at least this many times
-// A 2-8 char unit repeated 4+ times in a row ("ASTASTASTAST", "obaobaoba").
-const CHAR_LOOP_UNIT: std::ops::RangeInclusive<usize> = 2..=8;
-const CHAR_LOOP_REPEATS: usize = 4;
-const CHAR_LOOP_MIN_LEN: usize = 12;
-
-fn words(text: &str) -> Vec<String> {
-    let lower = text.to_lowercase();
-    let mut out = Vec::new();
-    let mut current = String::new();
-    for c in lower.chars() {
-        if c.is_alphanumeric() || c == '_' {
-            current.push(c);
-        } else if !current.is_empty() {
-            out.push(std::mem::take(&mut current));
-        }
-    }
-    if !current.is_empty() {
-        out.push(current);
-    }
-    out
-}
-
-/// The longest run of one word repeated back-to-back, and that word.
-fn longest_consecutive_run(words: &[String]) -> (usize, &str) {
-    let mut best = 0;
-    let mut best_word = "";
-    let mut run = 0;
-    let mut prev = "";
-    for word in words {
-        run = if word == prev { run + 1 } else { 1 };
-        prev = word;
-        if run > best {
-            best = run;
-            best_word = word;
-        }
-    }
-    (best, best_word)
-}
-
-fn is_word_loop(text: &str) -> bool {
-    let words = words(text);
-    if words.is_empty() {
-        return false;
-    }
-    // A long word repeated back-to-back — catches short hallucinated loops the
-    // word-count floor below would miss.
-    let (run, run_word) = longest_consecutive_run(&words);
-    if run >= RUN_MIN && run_word.chars().count() >= RUN_WORD_MIN_LEN {
-        return true;
-    }
-    if words.len() < WORD_MIN {
-        return false;
-    }
-    // One token dominates ("momentum momentum momentum…").
-    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    for word in &words {
-        *counts.entry(word.as_str()).or_default() += 1;
-    }
-    if counts.values().copied().max().unwrap_or(0) as f64 / words.len() as f64 >= WORD_FRACTION {
-        return true;
-    }
-    // A short phrase repeated back-to-back ("see you on the phone" x3).
-    (1..=MAX_PHRASE_WORDS).any(|period| {
-        let reps = words.len() / period;
-        reps >= MIN_PHRASE_REPEATS && (0..period * reps).all(|i| words[i] == words[i % period])
-    })
-}
-
-/// Space-less loops ("ASTASTAST", "obaobaoba"): a short unit repeated in a row.
-///
-/// The Python is a backreferenced regex (`(.{2,8}?)\1{3,}`), which the Rust
-/// regex engine cannot express. Written out rather than pulling in a
-/// backtracking engine for one predicate: scan left to right, and at each
-/// position try the SHORTEST unit first — that is what the non-greedy `?` does,
-/// and it decides which match is found, hence its length against the floor.
-fn is_char_loop(text: &str) -> bool {
-    let compact: Vec<char> = text
-        .to_lowercase()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    for start in 0..compact.len() {
-        for unit in CHAR_LOOP_UNIT {
-            // ⚠ `break`, and the early `return` below, are NOT tidying — they
-            // are what the Python original did, and recalld's copy is verified
-            // against its frozen output. Searching on instead (the obvious
-            // reading of a greedy `\1{3,}`) makes the two disagree: on
-            // "ababababxyzxyzxyzxyzxyz" this said loop and recalld said not,
-            // so a turn recalld had happily written read here as unrestorable
-            // junk. Pinned by a test.
-            if start + unit * CHAR_LOOP_REPEATS > compact.len() {
-                break;
-            }
-            let head = &compact[start..start + unit];
-            let mut reps = 1;
-            while start + (reps + 1) * unit <= compact.len()
-                && &compact[start + reps * unit..start + (reps + 1) * unit] == head
-            {
-                reps += 1;
-            }
-            if reps >= CHAR_LOOP_REPEATS {
-                return reps * unit >= CHAR_LOOP_MIN_LEN;
-            }
-        }
-    }
-    false
-}
-
-/// True if `text` is a degenerate repetition loop (a model artifact).
-pub fn is_repetition_loop(text: &str) -> bool {
-    is_word_loop(text) || is_char_loop(text)
-}
 
 /// One hidden turn, as `segments_showing_no_turns` returns it.
 #[derive(Debug, Clone)]

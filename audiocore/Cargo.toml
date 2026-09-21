@@ -1,10 +1,4 @@
-# audiocore — the DSP and segment-grammar library both daemons read
-# (docs/architecture.md, stage D1).
-#
-# What lives here is exactly what must not fork: the segment-name grammar
-# (names), decode/align/envelope (the tier-1 aligner), the silero VAD, and WAV
-# I/O. audiod (the Mac's audio plane) and recalld (the fleet's system of record)
-# both depend on it.
+# audiocore — what recall's Rust crates must not fork; src/lib.rs says why.
 #
 # ⚠ The STFT and the fusion engine were REMOVED 2026-09-20. Waveform fusion is
 # settled dead on the Opus archive — it lost to the best single microphone and
@@ -58,3 +52,7 @@ ort = { version = "2.0.0-rc.13", default-features = false, features = [
     "api-21",
 ] }
 
+[dev-dependencies]
+# The frozen quality corpus is the deleted Python's own JSON output.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

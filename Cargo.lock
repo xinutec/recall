@@ -50,6 +50,8 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "ort",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -283,6 +285,7 @@ dependencies = [
 name = "doctor"
 version = "0.1.0"
 dependencies = [
+ "audiocore",
  "chrono",
  "filetime",
  "rusqlite",
