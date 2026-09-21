@@ -56,15 +56,20 @@ pub struct Levels {
     /// the gating speakerphone's 0.69 s runs read as 0.002 s once archived.
     ///
     /// Only meaningful where somebody was speaking — an empty room takes every
-    /// microphone to its floor together. No threshold here; the room builder
-    /// owns the cut, so moving it needs no re-scan.
+    /// microphone to its floor together.
+    ///
+    /// Recorded as evidence, decided on by nobody. A per-source median of this
+    /// was one of two candidate gate detectors and LOST on 2026-09-21 (#1526):
+    /// it needs fifty reference rows, so it still carried a device's pre-swap
+    /// signature a fortnight after that device was repaired. `processed.rs`
+    /// holds the measure that won.
     pub quiet_run_s: f32,
     /// Fraction of the segment inside a sub-[`GATE_DB`] stretch of
     /// [`GATE_MIN_BUCKETS`] or more.
     ///
     /// NOT a gate detector despite the name: an un-gained phone's pauses sit
     /// under the threshold with no gate anywhere, so every phone reads high here
-    /// during speech. Use [`Levels::quiet_run_s`] for gating.
+    /// during speech. `processed.rs` holds the measure that detects gating.
     ///
     /// Never read it as quality either — gating IMPROVES speech-vs-floor, so a
     /// rank on `speech_db` prefers the microphone destroying its own audio.
