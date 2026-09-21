@@ -11,7 +11,9 @@
 //! doctor sat in uninterruptible disk wait for over an hour — with
 //! `KeepAlive = false` and a 300s `StartInterval`, launchd starts no further run
 //! while one is stuck, so a single wedged doctor silenced every doctor after it.
-//! What runs in the parent reads launchd and `~/.config`, both on the boot disk.
+//! What runs in the parent reads launchd and `~/.config`, both on the boot
+//! disk, plus one bounded network read: the live tier's output is on the fleet,
+//! not on this volume ([`live`]).
 
 pub mod agents;
 pub mod archive;
@@ -23,5 +25,6 @@ pub mod deaf;
 pub mod delivery;
 pub mod fleetwatch;
 pub mod instant;
+pub mod live;
 pub mod loss;
 pub mod source;

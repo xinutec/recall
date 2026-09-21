@@ -130,10 +130,10 @@ let
     };
 
   # The Rust health agent (doctor/). Sources .env, unlike audiodWrapper: the
-  # presence of RECALL_SYNC_TOKEN is what tells the doctor this machine is half
-  # of the Isis split, and so whether the fleet-mirror check applies at all. It
-  # needs no agent-tools — the doctor spawns only ITSELF, as the bounded child
-  # that reads the archive.
+  # doctor needs RECALL_SYNC_TOKEN to ask Isis how the live tier is running,
+  # which is the one thing it cannot see from this volume. It needs no
+  # agent-tools — the doctor spawns only ITSELF, as the bounded child that
+  # reads the archive.
   doctorWrapper = { name, args }:
     pkgs.writeShellApplication {
       name = "recall-${name}";
@@ -363,7 +363,10 @@ in
     args = [ ];
     program = doctorWrapper {
       name = "doctor";
-      args = [ "--out" out "--post" ];
+      # ⚠ `--fleet` is what makes the live checks measurable at all: the tier
+      # is a Mac agent that keeps no store, so its output is only on Isis. The
+      # bearer is RECALL_SYNC_TOKEN, which doctorWrapper already sources.
+      args = [ "--out" out "--post" "--fleet" fleet ];
     };
     extra = {
       KeepAlive = false;

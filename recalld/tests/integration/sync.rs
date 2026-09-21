@@ -222,14 +222,12 @@ async fn serve(token: Option<&str>) -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path().to_path_buf();
     recalld::store::open(&root).expect("ingest db");
+    // ⚠ The REAL ladder, not a hand-written subset. These routes are reached
+    // over HTTP and answer 500 on any schema they did not expect, so a fixture
+    // that approximates the schema tests the approximation — and a column this
+    // file forgot would look exactly like an unmounted route.
     let conn = recalld::work::open_write(&root).expect("recall db");
-    conn.execute_batch(
-        "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-         CREATE TABLE capture_events (
-             id INTEGER PRIMARY KEY, utc TEXT NOT NULL, kind TEXT NOT NULL,
-             source_id TEXT, detail TEXT);",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     drop(conn);
 
     let app = recalld::app::router(std::sync::Arc::new(recalld::app::Config {
@@ -548,24 +546,11 @@ async fn get(addr: &str, path: &str, token: Option<&str>) -> (u16, String) {
 /// glossary to anything that can reach the port.
 #[tokio::test]
 async fn every_sync_read_route_is_mounted_and_gated() {
-    let (dir, addr) = serve(Some("sekrit")).await;
-    let conn = recalld::work::open_write(dir.path()).expect("db");
-    // ⚠ NOT `.ok()`. These routes answer 200 with an empty body when their tables
-    // are missing, so a swallowed setup failure would leave every assertion below
-    // passing for the wrong reason — the exact shape this test exists to catch.
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS speakers (
-             id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
-         CREATE TABLE IF NOT EXISTS vocabulary (
-             id INTEGER PRIMARY KEY, term TEXT NOT NULL UNIQUE, created_utc TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS audio_segments (
-             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS transcript_segments (
-             id INTEGER PRIMARY KEY, audio_segment_id INTEGER, speaker_label TEXT,
-             speaker_cluster TEXT, superseded_by INTEGER, hidden_reason TEXT);",
-    )
-    .expect("the meaning-plane schema these reads need");
-    drop(conn);
+    // ⚠ These routes answer 200 with an empty body when their tables are
+    // missing, so a fixture that got the schema wrong would leave every
+    // assertion below passing for the wrong reason — the exact shape this test
+    // exists to catch. `serve` therefore runs the real migration ladder.
+    let (_dir, addr) = serve(Some("sekrit")).await;
 
     for path in [
         "/sync/labels",
@@ -590,7 +575,11 @@ async fn every_sync_read_route_is_mounted_and_gated() {
 async fn the_read_routes_are_absent_when_no_token_is_configured() {
     let (_dir, addr) = serve(None).await;
 
-    for path in ["/sync/labels", "/sync/vocabulary/prompt"] {
+    for path in [
+        "/sync/labels",
+        "/sync/vocabulary/prompt",
+        "/sync/live/health",
+    ] {
         let (status, _) = get(&addr, path, Some("sekrit")).await;
         assert_eq!(status, 404, "{path} must not answer at all");
     }
@@ -958,4 +947,89 @@ async fn a_wait_that_elapses_with_no_change_returns_the_intent_it_started_with()
         held < std::time::Duration::from_secs(10),
         "held for {held:?} — the wait is not bounded by what the caller asked for"
     );
+}
+
+// --- the live tier's own numbers (#1671) -------------------------------------
+
+/// `GET /sync/live/health` with the stamps spelled the way a caller sends them.
+async fn live_health(addr: &str, token: Option<&str>, since: &str) -> (u16, String) {
+    let url = format!("http://{addr}/sync/live/health");
+    let (token, since) = (token.map(ToOwned::to_owned), since.to_owned());
+    tokio::task::spawn_blocking(move || {
+        let mut req = agent()
+            .get(&url)
+            .query("lag_since", &since)
+            .query("window_since", &since)
+            .query("window_until", "2026-09-21T12:00:00+00:00");
+        if let Some(token) = token {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+        match req.call() {
+            Ok(res) => (res.status(), res.into_string().unwrap_or_default()),
+            Err(ureq::Error::Status(code, res)) => (code, res.into_string().unwrap_or_default()),
+            Err(err) => panic!("transport: {err}"),
+        }
+    })
+    .await
+    .expect("request")
+}
+
+#[tokio::test]
+async fn the_live_tier_numbers_are_reachable_and_gated() {
+    let (dir, addr) = serve(Some("sekrit")).await;
+    let conn = recalld::work::open_write(dir.path()).expect("db");
+    conn.execute_batch(
+        "INSERT INTO transcript_segments
+             (asr_model, text, start_utc, end_utc, created_utc)
+         VALUES ('live', 'ja dat doen we', '2026-09-21T11:41:00+00:00',
+                 '2026-09-21T11:41:30+00:00', '2026-09-21T11:41:34+00:00');",
+    )
+    .expect("turn");
+    drop(conn);
+
+    for token in [None, Some("wrong")] {
+        let (status, _) = live_health(&addr, token, "2026-09-21T11:40:00+00:00").await;
+        assert_eq!(status, 401, "the live numbers are not open");
+    }
+
+    let (status, body) = live_health(&addr, Some("sekrit"), "2026-09-21T11:40:00+00:00").await;
+    assert_eq!(status, 200);
+    assert!(body.contains(r#""lagSamples":1"#), "{body}");
+    assert!(body.contains(r#""lagMedianS":4.0"#), "{body}");
+}
+
+#[tokio::test]
+async fn the_same_moment_spelled_two_ways_gives_the_same_answer() {
+    // ⚠⚠ Every stored timestamp is compared as TEXT, so `…Z` and `…+00:00` are
+    // the same instant and two different VALUES — and `Z` (0x5A) sorts after
+    // `+` (0x2B), so a caller that spelled its window the other way would
+    // silently lose its own first row while still getting a well-formed 200.
+    // The bound is therefore re-spelled server-side rather than trusted.
+    let (dir, addr) = serve(Some("sekrit")).await;
+    let conn = recalld::work::open_write(dir.path()).expect("db");
+    conn.execute_batch(
+        "INSERT INTO transcript_segments
+             (asr_model, text, start_utc, end_utc, created_utc)
+         VALUES ('live', 'ja', '2026-09-21T11:40:00+00:00',
+                 '2026-09-21T11:40:00+00:00', '2026-09-21T11:40:04+00:00');",
+    )
+    .expect("turn");
+    drop(conn);
+
+    // The turn ends exactly ON the boundary, which is where the two spellings
+    // disagree; anywhere else the minutes differ first and the bug hides.
+    for spelling in ["2026-09-21T11:40:00+00:00", "2026-09-21T11:40:00Z"] {
+        let (status, body) = live_health(&addr, Some("sekrit"), spelling).await;
+        assert_eq!(status, 200, "{spelling}: {body}");
+        assert!(body.contains(r#""lagSamples":1"#), "{spelling}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_window_bound_that_is_not_an_instant_is_refused() {
+    // Not a 500, and not a silent comparison against a string that merely
+    // looks like a timestamp.
+    let (_dir, addr) = serve(Some("sekrit")).await;
+    let (status, _) = live_health(&addr, Some("sekrit"), "yesterday").await;
+    assert_eq!(status, 400);
 }

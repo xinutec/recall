@@ -18,14 +18,10 @@ use crate::capture::{self, Beat, Recorder};
 use crate::check::{Check, Verdict, check};
 use crate::loss::{self, Event, Gap};
 use crate::source::SourceKind;
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-
-/// The live tier writes its turns under this ASR model name.
-const LIVE_MODEL: &str = "live";
-
 /// How far back the speech-loss reconciliation looks.
 pub fn loss_window() -> Duration {
     Duration::hours(48)
@@ -276,139 +272,6 @@ pub fn source_rows(conn: &Connection) -> rusqlite::Result<Vec<(String, SourceKin
         .collect())
 }
 
-/// When the live tier last produced a turn, or `None` if it never has.
-///
-/// Deliberately ignores `hidden_reason`: a live turn the archive has since
-/// reconciled still proves live was working when it wrote it.
-pub fn newest_live_turn(conn: &Connection) -> rusqlite::Result<Option<DateTime<Utc>>> {
-    let newest: Option<String> = conn.query_row(
-        "SELECT max(start_utc) FROM transcript_segments WHERE asr_model = ?1",
-        [LIVE_MODEL],
-        |row| row.get(0),
-    )?;
-    Ok(newest.as_deref().and_then(crate::instant::parse))
-}
-
-/// How far behind the speaker the instant feed is running, in seconds — the
-/// MEDIAN over recent live turns of `created_utc - end_utc`.
-///
-/// ⚠ **Liveness is not latency, and this tier can fail at either.**
-/// [`crate::capture::live_check`] asks whether a live turn arrived at all,
-/// which is the 40-minute-silence failure it was built for. It cannot see the
-/// other one: turns arriving steadily, each later than the last, the lag growing
-/// for as long as anybody keeps talking. That is what live did before its calls
-/// were joined — 33 seconds of speech took 2 minutes 39 to deliver (#1383) —
-/// and every check stayed green throughout.
-///
-/// ⚠ THE MEDIAN, never the mean. One clip that waited behind a restart moves a
-/// mean by minutes and says nothing about the tier.
-///
-/// `None` when too few turns exist to say — a handful is not a distribution,
-/// and a check that grades three turns reports noise as a regression.
-///
-/// ⚠⚠ **THIS READS THE MAC'S ARCHIVE, AND THE LIVE TIER NO LONGER WRITES
-/// THERE.** `recall-live` POSTs to the fleet and keeps no local store, so the
-/// Mac's copy holds only live turns from before that moved — none of them
-/// carrying `created_utc` at all. The lag is therefore ALWAYS unmeasurable
-/// here and this check always skips.
-///
-/// ⓘ The tell, on any store: `SELECT max(created_utc) FROM transcript_segments
-/// WHERE asr_model = 'live'`. NULL or old here, minutes old on the fleet. A
-/// COUNT cannot distinguish a live store from an abandoned one.
-///
-/// ⚠ It is left in place, skipping honestly, rather than deleted: the
-/// measurement is worth having and the only thing wrong is WHERE it looks.
-/// Moving it needs a decision about the doctor reading the fleet, which it does
-/// not do today. See the task.
-pub fn live_lag_seconds(conn: &Connection, since: DateTime<Utc>) -> rusqlite::Result<Option<f64>> {
-    let mut stmt = conn.prepare(
-        "SELECT created_utc, end_utc FROM transcript_segments \
-         WHERE asr_model = ?1 AND created_utc IS NOT NULL AND end_utc >= ?2",
-    )?;
-    let rows = stmt.query_map(
-        rusqlite::params![
-            LIVE_MODEL,
-            since.to_rfc3339_opts(SecondsFormat::Micros, false)
-        ],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-    )?;
-    let mut lags: Vec<f64> = Vec::new();
-    for row in rows {
-        let (created, end) = row?;
-        if let (Some(created), Some(end)) =
-            (crate::instant::parse(&created), crate::instant::parse(&end))
-        {
-            lags.push((created - end).num_milliseconds() as f64 / 1000.0);
-        }
-    }
-    if lags.len() < MIN_LAG_SAMPLES {
-        return Ok(None);
-    }
-    lags.sort_by(f64::total_cmp);
-    Ok(Some(lags[lags.len() / 2]))
-}
-
-/// Below this the sample is not a distribution and gets no verdict.
-const MIN_LAG_SAMPLES: usize = 10;
-
-/// What the device recorders delivered in `[since, until)`, and how much of it
-/// the speech scanner has measured — the evidence [`crate::capture::live_check`]
-/// needs to tell a quiet house from a broken live tier.
-///
-/// ⚠ Delivered and scanned are counted in ONE pass over the same rows, so they
-/// cannot disagree about which segments were in the window. Counting them
-/// separately would let a segment land between the two queries and read as
-/// delivered-but-unscanned forever.
-pub fn window_audio(
-    conn: &Connection,
-    sources: &[(String, crate::source::SourceKind)],
-    since: DateTime<Utc>,
-    until: DateTime<Utc>,
-) -> rusqlite::Result<crate::capture::WindowAudio> {
-    let mut out = crate::capture::WindowAudio {
-        delivered_s: 0.0,
-        scanned_s: 0.0,
-        speech_s: 0.0,
-    };
-    for (source, kind) in sources {
-        if !kind.is_device() {
-            continue;
-        }
-        let mut stmt = conn.prepare(
-            "SELECT start_utc, end_utc, speech_s FROM audio_segments
-             WHERE source_id = ?1 AND start_utc >= ?2 AND start_utc < ?3",
-        )?;
-        let rows = stmt.query_map(
-            rusqlite::params![source, python_iso(since), python_iso(until)],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<f64>>(2)?,
-                ))
-            },
-        )?;
-        for row in rows {
-            let (start, end, speech) = row?;
-            let (Some(start), Some(end)) =
-                (crate::instant::parse(&start), crate::instant::parse(&end))
-            else {
-                continue;
-            };
-            let seconds = (end - start).num_milliseconds() as f64 / 1000.0;
-            if seconds <= 0.0 {
-                continue;
-            }
-            out.delivered_s += seconds;
-            if let Some(speech) = speech {
-                out.scanned_s += seconds;
-                out.speech_s += speech;
-            }
-        }
-    }
-    Ok(out)
-}
-
 /// Capture events at or after `since`, oldest-first.
 pub fn capture_events_since(
     conn: &Connection,
@@ -602,9 +465,6 @@ pub fn archive_checks(
     let (losses, dead_windows) = speech_loss(&conn, &sources, now)?;
     let blanked = blanked_segments(&conn)?;
     let heard = crate::deaf::heard_between(&conn, &sources, now - deaf_window(), now)?;
-    let newest_live = newest_live_turn(&conn)?;
-    let live_window = window_audio(&conn, &sources, now - capture::live_quiet(), now)?;
-    let live_lag = live_lag_seconds(&conn, now - loss_window())?;
     drop(conn);
 
     let paused_until = crate::agents::paused_until(root);
@@ -630,14 +490,6 @@ pub fn archive_checks(
         now,
         capture::worker_slow(),
         capture::worker_stopped(),
-    ));
-    checks.push(capture::live_lag_check(live_lag, capture::live_lag_slow()));
-    checks.push(capture::live_check(
-        newest_live,
-        now,
-        paused_until,
-        capture::live_quiet(),
-        live_window,
     ));
     // Quiet until audiod's uploader has run here (stage B): reads its state db.
     checks.extend(crate::delivery::delivery_checks(root, now));

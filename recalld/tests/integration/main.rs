@@ -35,6 +35,7 @@ mod ingest;
 mod labels;
 mod labels_write;
 mod levels;
+mod live_tier;
 mod meaning_schema;
 mod processed;
 mod proxy;

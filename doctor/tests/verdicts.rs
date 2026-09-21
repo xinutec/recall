@@ -459,33 +459,39 @@ fn too_few_live_turns_skips_rather_than_passing() {
     // ⚠ "Nothing to measure" and "measured and fine" are different claims. A
     // check that conflates them reports a DEAD tier as healthy, which is the
     // exact failure the live checks exist to catch.
-    let unmeasured = live_lag_check(None, live_lag_slow());
+    let unmeasured = live_lag_check(None, live_lag_slow(), "3 live turn(s) in the window");
     assert_eq!(unmeasured.verdict, Verdict::Skip);
     assert!(unmeasured.value.is_none(), "an unmeasured lag has no trend");
     assert!(
-        unmeasured.observed.contains("on the fleet"),
-        "a skip must say WHY, or a blind check reads as a quiet house: {}",
+        unmeasured.observed.contains("3 live turn(s)"),
+        "a skip must carry the caller's reason verbatim, or a blind check \
+         reads as a quiet house: {}",
         unmeasured.observed
     );
 }
 
 #[test]
 fn a_feed_falling_behind_the_speaker_warns_while_it_is_still_only_slow() {
+    // The skip reason is not reached when there IS a median.
+    const UNUSED: &str = "";
     // ⚠ The failure `live_check` cannot see: turns keep ARRIVING, so liveness
     // stays green, while each one is later than the last. Before the calls were
     // joined, 33s of speech took 2m39s and every check passed throughout.
     let slow = live_lag_slow();
     let bound = slow.num_seconds() as f64;
-    assert_eq!(live_lag_check(Some(3.0), slow).verdict, Verdict::Pass);
     assert_eq!(
-        live_lag_check(Some(bound + 1.0), slow).verdict,
+        live_lag_check(Some(3.0), slow, UNUSED).verdict,
+        Verdict::Pass
+    );
+    assert_eq!(
+        live_lag_check(Some(bound + 1.0), slow, UNUSED).verdict,
         Verdict::Warn
     );
     // Trended either way — the number is the point, not the verdict: a lag
     // creeping up over days is what a regression here looks like.
-    assert_eq!(live_lag_check(Some(3.0), slow).value, Some(3.0));
+    assert_eq!(live_lag_check(Some(3.0), slow, UNUSED).value, Some(3.0));
     assert!(
-        live_lag_check(Some(bound + 1.0), slow)
+        live_lag_check(Some(bound + 1.0), slow, UNUSED)
             .observed
             .contains("falling further behind"),
         "a warn must say what is happening, not just that it is slow"

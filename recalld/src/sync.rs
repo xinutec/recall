@@ -262,6 +262,55 @@ pub async fn outbox_route(State(st): State<Arc<Gate>>, headers: axum::http::Head
     gated_read(&st, &headers, "sync outboxes", crate::devices::reports_out).await
 }
 
+/// The windows the caller wants the live tier measured over.
+///
+/// ⚠ **No defaults.** The doctor owns every threshold and every window, and a
+/// default here would be a second opinion that only shows up when a caller
+/// forgets one — which is the reading nobody checks.
+#[derive(Deserialize)]
+pub struct LiveHealthQuery {
+    pub lag_since: String,
+    pub window_since: String,
+    pub window_until: String,
+}
+
+/// `GET /sync/live/health` — how the instant feed is running, for the doctor.
+///
+/// ⚠ On the SYNC plane because the READER is the Mac, and it already holds this
+/// token. ⚠ Numbers only: the verdicts stay on the Mac so fleetwatch sees one
+/// grader (#1671).
+pub async fn live_health_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<LiveHealthQuery>,
+) -> Response {
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Err(refusal) = check(bearer(presented), &st.expected) {
+        return refusal.into_response();
+    }
+    // ⚠ Parsed HERE, so an unspellable bound is the caller's 400 rather than a
+    // TEXT comparison against something that only looks like a timestamp.
+    let (Some(lag_since), Some(window_since), Some(window_until)) = (
+        crate::instant::parse(&q.lag_since),
+        crate::instant::parse(&q.window_since),
+        crate::instant::parse(&q.window_until),
+    ) else {
+        return (StatusCode::BAD_REQUEST, "unparseable window bound").into_response();
+    };
+    let root = st.root.clone();
+    crate::route::json("sync live health", move || {
+        crate::live_tier::live_health(
+            &root,
+            lag_since.into(),
+            window_since.into(),
+            window_until.into(),
+        )
+    })
+    .await
+}
+
 /// How many jobs the Mac asks for. Defaulted so a client that omits it gets what
 /// the Python gave it.
 #[derive(Deserialize)]
@@ -512,6 +561,7 @@ pub fn routes(gate: Arc<Gate>) -> Router {
         .route("/sync/jobs", axum::routing::get(jobs_route))
         .route("/sync/jobs/{job_id}/done", post(job_done_route))
         .route("/sync/live", post(live_route))
+        .route("/sync/live/health", axum::routing::get(live_health_route))
         .route(
             "/sync/audio",
             axum::routing::get(audio_present_route).post(audio_push_route),

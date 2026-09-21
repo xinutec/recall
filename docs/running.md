@@ -52,8 +52,9 @@ from the nix store, because `.venv` symlinks `recall` there.
 There is deliberately **no `recall-api` agent**: the Mac serves no UI or control plane
 (see the Isis split below). `recall-capture-mirror` is inert until `RECALL_SYNC_TOKEN` is set; the other
 credential-carrying agents use their own — `recall-upload` takes
-`RECALL_INGEST_TOKEN`, `recall-doctor` the fleetwatch token, and `recall-speech`
-needs none. Named rather than counted: the table's order is not a contract.
+`RECALL_INGEST_TOKEN`, `recall-doctor` both the fleetwatch token (to report) and
+`RECALL_SYNC_TOKEN` (to ask Isis how the live tier is running), and
+`recall-speech` needs none. Named rather than counted: the table's order is not a contract.
 
 ⚠ **The agents read `~/.config/recall/env`, NOT the repo's `.env`.** Two copies,
 deliberately: `.env` is for interactive work, and that is fine because a
@@ -68,7 +69,9 @@ when a token changes; `~/.config/recall/env` is 0600 and on the internal disk.
 
 `doctor` starts a child — itself, with `--collect` — that does every read of
 `/Volumes/Backup` and prints its checks as JSON, and a parent that reports them
-while touching only launchd and `~/.config`. If the child does not answer within
+while touching only launchd, `~/.config` and one bounded read of Isis. The
+boundary is the archive VOLUME, not I/O in general: the live tier keeps no local
+store, so what it produced can only be asked of the fleet. If the child does not answer within
 60 seconds the parent **abandons it** and reports
 `archive/archive answers: no answer in 60s`, naming the abandoned pid on stderr.
 

@@ -307,19 +307,19 @@ pub fn live_lag_slow() -> Duration {
 /// ⚠ Too few turns SKIPS rather than passing. "Nothing to measure" and "measured
 /// and fine" are different claims, and a check that conflates them reports a
 /// dead tier as healthy.
-pub fn live_lag_check(median_seconds: Option<f64>, slow: Duration) -> Check {
+pub fn live_lag_check(median_seconds: Option<f64>, slow: Duration, unmeasured: &str) -> Check {
     let bound = slow.num_seconds() as f64;
     let expected = format!("live turns arriving within {bound:.0}s of being said");
     let Some(median) = median_seconds else {
-        // ⚠ Say WHY it cannot be measured. "Too few live turns" reads as a
-        // quiet house; the truth today is that the tier writes to the fleet and
-        // this reads the Mac, so it can never be measured here at all. A skip
-        // whose reason is wrong is how a blind check gets trusted.
+        // ⚠ The caller says WHY, because only it knows. "Too few live turns"
+        // reads as a quiet house, and for a year it was said when the truth was
+        // that this read the wrong database entirely. A skip whose reason is
+        // wrong is how a blind check gets trusted.
         return check(
             "capture",
             "live delivery lag",
             Verdict::Skip,
-            "not measurable here — live turns are on the fleet, not in this archive",
+            unmeasured.to_owned(),
             expected,
         )
         .build();

@@ -21,6 +21,7 @@ pub mod labels;
 pub mod labels_write;
 pub mod latin_ranges;
 pub mod levels;
+pub mod live_tier;
 pub mod meaning_schema;
 pub mod processed;
 pub mod proxy;

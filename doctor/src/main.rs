@@ -10,7 +10,7 @@
 
 use chrono::Utc;
 use doctor::check::{Check, Verdict};
-use doctor::{agents, archive, bounded, capture, fleetwatch};
+use doctor::{agents, archive, bounded, capture, fleetwatch, live};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -19,6 +19,9 @@ struct Config {
     collect: bool,
     post: bool,
     url: String,
+    /// Where the fleet is. Absent means this Mac is not half of the Isis pair,
+    /// and the live checks say so rather than guessing an address.
+    fleet: Option<String>,
 }
 
 fn usage() -> ! {
@@ -27,6 +30,8 @@ fn usage() -> ! {
          \n\
          --post   send the verdicts to fleetwatch (token from\n\
          \x20        RECALL_FLEETWATCH_TOKEN or ~/.config/fleetwatch/token)\n\
+         --fleet  the fleet's base URL, for the live tier's own numbers\n\
+         \x20        (bearer from RECALL_SYNC_TOKEN)\n\
          --collect  read the archive and print its checks as JSON — the child\n\
          \x20          half; not meant to be run by hand"
     );
@@ -38,11 +43,13 @@ fn parse_args() -> Config {
     let mut collect = false;
     let mut post = false;
     let mut url = fleetwatch::DEFAULT_URL.to_owned();
+    let mut fleet = None;
     let mut cli = std::env::args().skip(1);
     while let Some(arg) = cli.next() {
         match arg.as_str() {
             "--out" => out = Some(PathBuf::from(cli.next().unwrap_or_else(|| usage()))),
             "--url" => url = cli.next().unwrap_or_else(|| usage()),
+            "--fleet" => fleet = Some(cli.next().unwrap_or_else(|| usage())),
             "--collect" => collect = true,
             "--post" => post = true,
             _ => usage(),
@@ -53,6 +60,7 @@ fn parse_args() -> Config {
         collect,
         post,
         url,
+        fleet,
     }
 }
 
@@ -131,6 +139,21 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
     }
 }
 
+/// The live tier's two checks — asked of the fleet, graded here.
+///
+/// ⚠ **In the PARENT, not the bounded child.** The child exists to survive an
+/// unresponsive archive VOLUME; a network read has nothing to do with that
+/// disk, and putting it behind the same bound would make a slow fleet look like
+/// a stalled one.
+fn live_checks(config: &Config, now: chrono::DateTime<Utc>, out: &Path) -> Vec<Check> {
+    let token = std::env::var("RECALL_SYNC_TOKEN").ok();
+    let Some(fleet) = live::Fleet::new(config.fleet.as_deref(), token.as_deref()) else {
+        return live::unconfigured();
+    };
+    let fetched = live::fetch(&fleet, now, archive::loss_window());
+    live::live_checks(&fetched, now, agents::paused_until(out))
+}
+
 /// Send the verdicts on. An unreachable monitor is not a broken recording: say
 /// so and carry on, because the missing report is already visible at the other
 /// end as staleness. Failing the health check because the *health reporting*
@@ -193,6 +216,7 @@ fn main() {
     let mut checks = vec![reachable];
     checks.extend(archive_checks);
     checks.extend(capture::agent_checks(&agents::agent_health(&home())));
+    checks.extend(live_checks(&config, now, &config.out));
 
     for check in &checks {
         println!(
