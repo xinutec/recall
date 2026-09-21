@@ -105,12 +105,17 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
         // answer the first question anybody asks of them — do the stalls
         // cluster in time (#1412). Sixty-nine of them accumulated saying
         // nothing.
+        // ⚠ The state is READ, not assumed. This line used to assert
+        // "uninterruptible disk wait" on every abandonment, which is the claim
+        // the whole diagnosis rests on and the one thing nobody had checked.
+        let state = bounded::process_state(answer.pid);
         eprintln!(
-            "{} doctor: the archive did not answer in {:.0}s — abandoned pid {} \
-             (it is in uninterruptible disk wait; it exits when the volume does)",
+            "{} doctor: the archive did not answer in {:.0}s — abandoned pid {} in state {} ({})",
             Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             bound.as_secs_f64(),
-            answer.pid
+            answer.pid,
+            state.label(),
+            state.explain()
         );
         // What the child managed to say before it hung — the volume probe is
         // the first thing it prints, so this names which half was slow.

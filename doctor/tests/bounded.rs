@@ -109,3 +109,73 @@ fn a_child_that_finishes_reports_both_streams_whole() {
     assert_eq!(answer.stdout.as_deref().map(str::trim), Some("out"));
     assert_eq!(answer.stderr.trim(), "err");
 }
+
+use doctor::bounded::State;
+
+#[test]
+fn a_ps_that_cannot_be_asked_is_unknown_and_never_gone() {
+    // ⚠⚠ The two must not collapse. `ps` does not work inside the nix build
+    // sandbox, and for one commit a living child there read as "gone" — the
+    // same lie as the assertion this replaced, pointing the other way. A
+    // process that certifies a stall must not invent the one fact it exists
+    // to report.
+    let unknown = doctor::bounded::process_state_via("no-such-ps-binary", std::process::id());
+    assert!(
+        matches!(unknown, State::Unknown(_)),
+        "an unrunnable ps is not evidence of anything: {unknown:?}"
+    );
+    assert!(
+        unknown.explain().contains("unknown"),
+        "{}",
+        unknown.explain()
+    );
+    assert_eq!(unknown.label(), "?");
+}
+
+#[test]
+fn the_state_letters_that_matter_are_told_apart() {
+    // `ps` appends flags (`Ss`, `S+`); only the leading letter is the state.
+    assert!(
+        State::Named("U".to_owned())
+            .explain()
+            .contains("volume has not answered")
+    );
+    assert!(
+        State::Named("Ss".to_owned())
+            .explain()
+            .contains("NOT the disk")
+    );
+    assert!(
+        State::Named("R+".to_owned())
+            .explain()
+            .contains("slow, not blocked")
+    );
+    assert!(
+        State::Gone.explain().contains("exited just after"),
+        "gone is a reading, not an absence"
+    );
+}
+
+#[test]
+fn where_ps_works_a_living_child_is_read_as_sleeping() {
+    // ⚠ Skipped where `ps` cannot look — the nix sandbox is one such place, and
+    // a test that demanded an answer there would fail the BUILD over the
+    // environment rather than over the code. The case that matters when it
+    // cannot look is the one above, which runs everywhere.
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn");
+    let state = doctor::bounded::process_state(child.id());
+    // The child is a `sleep` this test owns; nothing downstream depends on it
+    // dying cleanly, so the discard is the choice rather than an oversight.
+    let _ = child.kill();
+    let _ = child.wait();
+
+    if let State::Named(raw) = state {
+        assert!(
+            raw.starts_with('S') || raw.starts_with('I'),
+            "a sleeping process is not in disk wait: {raw}"
+        );
+    }
+}

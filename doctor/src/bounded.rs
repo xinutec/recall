@@ -168,3 +168,94 @@ pub fn run(
         pid,
     })
 }
+
+/// What state the kernel has an abandoned child in.
+///
+/// ⚠⚠ **Because the log line ASSERTED it.** "it is in uninterruptible disk
+/// wait" was printed unconditionally on every abandonment, so hundreds of them
+/// carried a claim nobody had checked — and the whole diagnosis turns on it:
+/// `U` is the volume not answering, `S` is the child waiting on something that
+/// is not the disk at all (a database lock has that shape), and `R` is a read
+/// that is merely slow. Three different faults that the same sentence described.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum State {
+    /// `ps` named it. The string is the raw field, flags and all.
+    Named(String),
+    /// `ps` ran and knows no such process: it finished just after the bound ran
+    /// out rather than wedging, which is its own reading.
+    Gone,
+    /// ⚠ **`ps` could not be asked**, so nothing is known — and this must never
+    /// collapse into [`State::Gone`]. It did, for one commit: `ps` does not work
+    /// inside the nix build sandbox, and a living child there read as "gone".
+    /// That is the same lie as the assertion this type replaced, in the other
+    /// direction.
+    Unknown(String),
+}
+
+impl State {
+    /// How it reads to somebody who has not memorised `ps`'s letters.
+    ///
+    /// The rest of the field is flags — `Ss`, `S+` — and only the leading state
+    /// letter says what the process is doing.
+    #[must_use]
+    pub fn explain(&self) -> String {
+        match self {
+            State::Gone => "it exited just after the bound ran out".to_owned(),
+            State::Unknown(why) => format!("state unknown: {why}"),
+            State::Named(raw) => match raw.chars().next() {
+                Some('U') => "uninterruptible disk wait — the volume has not answered",
+                Some('S' | 'I') => {
+                    "interruptible sleep — waiting on something that is NOT the disk"
+                }
+                Some('R') => "runnable — the read is slow, not blocked",
+                Some('T') => "stopped",
+                Some('Z') => "a zombie, so it has already exited",
+                _ => "an unrecognised state",
+            }
+            .to_owned(),
+        }
+    }
+
+    /// What to print for the state itself.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        match self {
+            State::Named(raw) => raw,
+            State::Gone => "gone",
+            State::Unknown(_) => "?",
+        }
+    }
+}
+
+/// Ask `ps` what state `pid` is in.
+#[must_use]
+pub fn process_state(pid: u32) -> State {
+    process_state_via("ps", pid)
+}
+
+/// The same, against a named `ps`, so a test can ask an absent one.
+#[must_use]
+pub fn process_state_via(program: &str, pid: u32) -> State {
+    let out = match Command::new(program)
+        .args(["-o", "state=", "-p", &pid.to_string()])
+        .output()
+    {
+        Ok(out) => out,
+        Err(e) => return State::Unknown(format!("cannot run {program}: {e}")),
+    };
+    let state = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    if !state.is_empty() {
+        return State::Named(state);
+    }
+    // ⚠ An empty stdout means "no such process" ONLY if ps itself succeeded.
+    // Where it cannot look — a sandbox, a stripped image — it exits non-zero
+    // with nothing on stdout, which is indistinguishable by stdout alone.
+    if out.status.success() {
+        State::Gone
+    } else {
+        State::Unknown(format!(
+            "{program} said nothing ({})",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
