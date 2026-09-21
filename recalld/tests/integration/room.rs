@@ -534,7 +534,7 @@ fn coverage_is_backfilled_for_blocks_judged_before_it_was_measured() {
     );
 }
 
-// --- the per-source gate rule (#1526) ----------------------------------------
+// --- the per-source gate signature (#1526) -----------------------------------
 //
 // The `quiet_run_s` rule and its tests were CUT on 2026-09-21. Two detectors
 // existed for one fault and the speech-to-floor gap in `processed.rs` won: it
@@ -542,3 +542,75 @@ fn coverage_is_backfilled_for_blocks_judged_before_it_was_measured() {
 // one needed fifty reference rows and still carried geb's pre-swap signature a
 // fortnight after its capsule was swapped. The column stays as evidence; the
 // rule that read it does not.
+
+/// The winner is RECORDED on every contributor and decides nothing, which is
+/// what lets it be judged before it ever acts: a block built today carries what
+/// the rule would have said about each source.
+#[test]
+fn every_contributor_records_the_gap_signature_without_it_changing_the_verdict() {
+    let dir = tempfile::tempdir().expect("tmp");
+    for i in 0..12 {
+        stored(dir.path(), "usb", &format!("20260905T1000{i:02}"), 0.5);
+    }
+    stored(dir.path(), "usb", "20260905T110000", 0.5);
+    let block = DateTime::parse_from_rfc3339("2026-09-05T11:00:00Z")
+        .expect("t")
+        .with_timezone(&Utc);
+    scan_once(dir.path(), 100).expect("levels");
+    seed_speech(dir.path());
+
+    build_once(dir.path(), &config(), now_after(block)).expect("build");
+
+    let conn = store::open(dir.path()).expect("db");
+    let (verdict, contributors): (String, String) = conn
+        .query_row(
+            "SELECT verdict, contributors FROM room_blocks WHERE start_utc = ?1",
+            [block.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("row");
+
+    // ⚠ NOT merely that the key is there — serde writes it either way, so a
+    // measure that always answered `None` would pass that. The value has to be
+    // a number.
+    assert!(
+        !contributors.contains("\"gap_db\":null"),
+        "twelve measured segments must produce a signature, got {contributors}"
+    );
+    assert!(
+        contributors.contains("\"gap_db\":"),
+        "the signature is persisted as provenance, got {contributors}"
+    );
+    assert!(
+        verdict.starts_with("built"),
+        "recording a signature must not drop the source, got {verdict}"
+    );
+}
+
+/// A source with too little history records NO signature, which is what keeps a
+/// new microphone from being judged on its first day.
+#[test]
+fn too_few_segments_record_no_gap_signature() {
+    let dir = tempfile::tempdir().expect("tmp");
+    stored(dir.path(), "usb", "20260905T110000", 0.5);
+    let block = DateTime::parse_from_rfc3339("2026-09-05T11:00:00Z")
+        .expect("t")
+        .with_timezone(&Utc);
+    scan_once(dir.path(), 100).expect("levels");
+    seed_speech(dir.path());
+
+    build_once(dir.path(), &config(), now_after(block)).expect("build");
+
+    let conn = store::open(dir.path()).expect("db");
+    let contributors: String = conn
+        .query_row(
+            "SELECT contributors FROM room_blocks WHERE start_utc = ?1",
+            [block.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)],
+            |r| r.get(0),
+        )
+        .expect("row");
+    assert!(
+        contributors.contains("\"gap_db\":null"),
+        "one clip is below MIN_SEGMENTS, got {contributors}"
+    );
+}

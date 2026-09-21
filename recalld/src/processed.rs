@@ -182,3 +182,43 @@ pub fn levels_between(
     )?;
     rows.collect()
 }
+
+/// This SOURCE's median speech-to-floor gap over its most recent `window`
+/// segments, or `None` while it has too little history to mean anything.
+///
+/// The per-source read the room builder needs, beside [`gaps`]'s whole-fleet
+/// one. `None` at fewer than [`MIN_SEGMENTS`]: a source that cannot be measured
+/// is unmeasured, never assumed healthy and never condemned.
+///
+/// # Errors
+/// If the database refuses.
+pub fn source_gap(
+    conn: &rusqlite::Connection,
+    source: &str,
+    window: u32,
+) -> rusqlite::Result<Option<f32>> {
+    let mut stmt = conn.prepare(
+        "SELECT l.speech_db, l.floor_db FROM segment_levels l
+         WHERE l.source = ?1
+         ORDER BY l.filename DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![source, window], |row| {
+        Ok(Levels {
+            source: source.to_owned(),
+            speech_db: row.get::<_, f64>(0)? as f32,
+            floor_db: row.get::<_, f64>(1)? as f32,
+        })
+    })?;
+    // Through `carries_speech` and `gap_db` rather than arithmetic here, so the
+    // per-source answer cannot drift from the whole-fleet one.
+    let usable: Vec<f32> = rows
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(Levels::carries_speech)
+        .map(|l| l.gap_db())
+        .collect();
+    if usable.len() < MIN_SEGMENTS {
+        return Ok(None);
+    }
+    Ok(median(usable))
+}

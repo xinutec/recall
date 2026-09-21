@@ -92,6 +92,14 @@ pub struct Contributor {
     pub calibrated: Option<CalibratedDb>,
     /// Fraction of this source's minute inside a gate (`levels::gated_fraction`).
     pub gated: f32,
+    /// This SOURCE's median speech-to-floor gap over its recent segments, or
+    /// `None` with too little history.
+    ///
+    /// Recorded, never acted on. It is the detector that WON #1526 on
+    /// 2026-09-21, and recording it here is what lets the rule be judged before
+    /// it ever decides anything: what it would have said is re-derivable from
+    /// `room_blocks.contributors` for every block built since.
+    pub gap_db: Option<f32>,
 }
 
 /// Above this, a source spent so much of the minute emitting digital silence
@@ -261,11 +269,13 @@ fn block_contributors(
     for (source, (speech_db, gated)) in per_source {
         let calibrated = reference_db(conn, config, &source)?
             .map(|reference| CalibratedDb(speech_db - reference));
+        let gap_db = crate::processed::source_gap(conn, &source, config.reference_window)?;
         out.push(Contributor {
             source,
             speech_db,
             calibrated,
             gated,
+            gap_db,
         });
     }
     Ok(Some(out))
