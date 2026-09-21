@@ -266,7 +266,7 @@ pub fn cluster_namings(conn: &Connection) -> rusqlite::Result<Vec<ClusterNaming>
 ///                                       and NONE without the prompt
 /// ```
 ///
-/// ⭐ **It buys several times more than it costs, so dropping it is a bad
+/// **It buys several times more than it costs, so dropping it is a bad
 /// trade.** The harm is real and it is the smaller effect.
 ///
 /// ⚠ Both figures MOVE — the spelling side is scored against corrections, which

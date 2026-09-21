@@ -1368,7 +1368,7 @@ fn two_speakers() -> Vec<AlignedTurn> {
     vec![a, b]
 }
 
-/// ⭐ The last thing the write model needs: a turn whose words belong to TWO
+/// The last thing the write model needs: a turn whose words belong to TWO
 /// people is DIVIDED, keeping every word, instead of taking one label for both.
 #[test]
 fn a_turn_spanning_a_speaker_change_is_divided_and_keeps_every_word() {

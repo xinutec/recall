@@ -231,7 +231,7 @@ def _report_by_origin(cases: list[Case]) -> None:
             "competing microphone."
         )
         return
-    print("\n⭐ CROSS vs CROSS — each arm against truth derived from the other:")
+    print("\nCROSS vs CROSS — each arm against truth derived from the other:")
     for src in sorted(cross):
         print(f"  {src:<10} {statistics.median(cross[src]):.3f}")
     print("  (lower is better, and neither side is scoring against its own words)")

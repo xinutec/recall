@@ -99,7 +99,7 @@ fn the_slow_rule_is_immune_to_the_short_span_artefact() {
         speaking_rate(&blink).is_some_and(|r| r > 10.0),
         "the artefact is a HIGH rate"
     );
-    // ⭐ Which is why the slow rule cannot be fooled by it: reaching SLOW_RATE
+    // Which is why the slow rule cannot be fooled by it: reaching SLOW_RATE
     // takes 1/SLOW_RATE seconds PER WORD, so no short span qualifies however
     // few words it holds.
     assert!(!is_implausibly_slow(&blink));
