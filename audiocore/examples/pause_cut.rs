@@ -25,6 +25,17 @@ use std::path::PathBuf;
 /// measured anything about.
 const JOIN_PAUSE_S: f64 = 2.0;
 
+/// A piece shorter than this is a FRAGMENT, not an utterance, and is merged
+/// into its neighbour rather than transcribed alone.
+///
+/// ⚠ This is the floor the project's "never transcribe short isolated clips"
+/// rule is actually about. On read speech every piece landed at 3.9-5.8 s and
+/// the floor looked unnecessary; on 22 blocks of real household conversation
+/// 12 of 58 pieces came out under two seconds and 5 under one. The difference
+/// is turn-taking: a listener's "mm" between two long turns is a region of its
+/// own.
+const MIN_PIECE_S: f64 = 3.0;
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [clip, outdir] = args.as_slice() else {
@@ -51,6 +62,25 @@ fn main() {
             _ => pieces.push(r),
         }
     }
+
+    // Absorb fragments into the piece before them, or the one after when a
+    // fragment opens the clip. The pause between is carried too: the audio
+    // stays contiguous, which is the whole reason a piece can be transcribed.
+    let mut merged: Vec<vad::Region> = Vec::new();
+    for piece in pieces {
+        match merged.last_mut() {
+            Some(last) if piece.seconds() < MIN_PIECE_S || last.seconds() < MIN_PIECE_S => {
+                last.end = piece.end;
+            }
+            _ => merged.push(piece),
+        }
+    }
+    // ⚠ A clip whose ONLY region is a fragment keeps it: there is no neighbour
+    // to absorb it into. Not reached on the 22 conversation blocks measured
+    // (minimum piece 3.1 s), but it is the case a caller must decide about —
+    // transcribing a lone half-second alone is the hallucination this floor
+    // exists to avoid.
+    let pieces = merged;
 
     println!("clip {total:.1}s -> {} piece(s)", pieces.len());
     for (i, piece) in pieces.iter().enumerate() {
