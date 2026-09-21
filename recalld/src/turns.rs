@@ -1,36 +1,28 @@
-//! What a finished transcription job MEANS.
+//! What a finished transcription job means.
 //!
 //! The runner leases a clip, drives the shim, and retires the job with the
-//! shim's reply as opaque JSON (`queue::done`). This is what reads it.
+//! shim's reply as opaque JSON (`queue::done`). This reads it.
 //!
-//! ⚠ **TWO STREAMS, ONE WRITER, and the difference between them is one field.**
-//! A [`Stream`] says which job kind a pass drains, what the rows record as their
-//! provenance, and whether a written turn HIDES what it covers. Everything else
-//! — interpreting the shim's reply, refusing a human-corrected span, sweeping
-//! model junk, the transaction — is the same work and is written once.
+//! Two streams, one writer, differing in one field. A [`Stream`] says which job
+//! kind a pass drains, what its rows record as provenance, and whether a written
+//! turn hides what it covers; interpreting the reply, refusing a human-corrected
+//! span, sweeping model junk and the transaction are shared.
 //!
-//! - [`ROOM`] drains `transcribe-room`. It is the stream whose SELECTION #1461
-//!   cannot yet referee, and it is the only one that hides anything: a room turn
-//!   standing in for four microphones means those four turns should not also be
-//!   read. **Off** — the call in `main` is commented out, with the reason
-//!   beside it.
-//! - [`PER_MIC`] drains `transcribe-segment`. It hides nothing and replaces
-//!   nothing — it writes the turns for microphone clips that have NONE, which
-//!   is most of them. This is `worker.py`'s loop moved to the runner, not a new
-//!   judgement about audio, so it carries none of the room stream's open
-//!   question.
+//! [`ROOM`] drains `transcribe-room` and is the only stream that hides
+//! anything: a room turn standing in for four microphones means those four
+//! should not also be read. It is off, pending the selection #1461 has to
+//! referee — the call in `main` is commented out. [`PER_MIC`] drains
+//! `transcribe-segment`, hides nothing, and writes the turns for microphone
+//! clips that have none, which is most of them.
 //!
-//! ⚠ **The provenance field is the RESTORE, armed before the break.** Every row
-//! either pass writes is deletable by `provenance = '<stream>'` and by nothing
-//! else — which is what made the 2026-09-11 room reversal a one-line `DELETE`
-//! rather than an archaeology problem. A pass that wrote NULL there, matching
-//! the corpus convention, would be a pass nobody can take back.
+//! ⚠ Every row either pass writes is deletable by `provenance = '<stream>'` and
+//! by nothing else. A pass that left it NULL, matching the corpus convention,
+//! could not be taken back.
 //!
-//! ⚠ **"Hidden" was considered and rejected as the safe option.** It is not
-//! absent: a hidden row is still in `transcript_fts` (maintained in CODE here,
-//! not by a trigger), still counted, and still seen by supersession — which is
-//! the machinery whose failure overwrites a person's typed correction. A second
-//! writer into that span is not a small thing to guess at.
+//! Hiding rather than deleting was rejected as the safer option: a hidden row is
+//! still in `transcript_fts` (maintained here in code, not by a trigger), still
+//! counted, and still seen by supersession — the machinery whose failure
+//! overwrites a typed correction.
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::Deserialize;

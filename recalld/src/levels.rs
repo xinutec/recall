@@ -58,11 +58,10 @@ pub struct Levels {
     /// Only meaningful where somebody was speaking — an empty room takes every
     /// microphone to its floor together.
     ///
-    /// Recorded as evidence, decided on by nobody. A per-source median of this
-    /// was one of two candidate gate detectors and LOST on 2026-09-21 (#1526):
-    /// it needs fifty reference rows, so it still carried a device's pre-swap
-    /// signature a fortnight after that device was repaired. `processed.rs`
-    /// holds the measure that won.
+    /// Recorded as evidence, decided on by nobody: a per-source median of this
+    /// lost to the speech-to-floor gap as a gate detector (#1526), because it
+    /// needs fifty reference rows and so carries a repaired device's old
+    /// signature for weeks. `processed.rs` holds the measure that won.
     pub quiet_run_s: f32,
     /// Fraction of the segment inside a sub-[`GATE_DB`] stretch of
     /// [`GATE_MIN_BUCKETS`] or more.

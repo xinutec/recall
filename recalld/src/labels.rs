@@ -253,7 +253,7 @@ pub fn cluster_namings(conn: &Connection) -> rusqlite::Result<Vec<ClusterNaming>
 /// is biased toward, and would make the prompt depend on which terms happen to
 /// be long rather than on their priority.
 ///
-/// ## ⚠⚠ DO NOT DROP THIS FOR SHORT CLIPS — measured, and it is a bad trade
+/// ## ⚠ DO NOT DROP THIS FOR SHORT CLIPS — measured, and it is a bad trade
 ///
 /// The prompt has a real cost: on audio it cannot place, the model reaches for
 /// the names it was handed. Both directions were measured on 2026-09-20
@@ -281,7 +281,7 @@ pub fn cluster_namings(conn: &Connection) -> rusqlite::Result<Vec<ClusterNaming>
 /// a live turn that is nothing but a name. A name inside a fluent sentence
 /// still gets through and has no known remedy (#1665).
 ///
-/// ⚠⚠ **n is small on the buying side** — the corrections containing a name are
+/// ⚠ **n is small on the buying side** — the corrections containing a name are
 /// the whole ground truth that exists, not a sample of it, and there are a
 /// couple of dozen. Treat the DIRECTION as settled and the magnitude as rough.
 pub fn initial_prompt(conn: &Connection) -> rusqlite::Result<Option<String>> {

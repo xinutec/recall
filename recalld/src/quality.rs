@@ -46,7 +46,7 @@ pub fn is_bare_name(text: &str, names: &[String]) -> bool {
             .any(|name| name.trim().eq_ignore_ascii_case(bare))
 }
 
-/// ⚠⚠ **FOUR SIGNALS THAT LOOKED RIGHT AND ARE REFUTED.** Every one was measured
+/// ⚠ **FOUR SIGNALS THAT LOOKED RIGHT AND ARE REFUTED.** Every one was measured
 /// on this archive and every one would be reached for again by anybody trying to
 /// find junk in a transcript. They are here rather than in a task because this
 /// is the file where the next attempt will be written.
@@ -93,7 +93,7 @@ pub const SLOW_RATE: f64 = 0.2;
 ///
 /// `None` when there is nothing to divide by.
 ///
-/// ⚠⚠ **READ THE DENOMINATOR BEFORE BELIEVING A RATE FROM THIS.** Turns carrying
+/// ⚠ **READ THE DENOMINATOR BEFORE BELIEVING A RATE FROM THIS.** Turns carrying
 /// the shim's verbatim timings were once read as giving p95 30 w/s and max 550,
 /// and that shape was set aside as not meaning what this assumes. It means
 /// exactly what it says; the spread is the denominator's:

@@ -447,9 +447,9 @@ pub fn build_once(
         // (#1526). Any weighting scheme would be arguing with a signal that is
         // pointing the wrong way; the only safe move is to drop the source.
         //
-        // ⚠⚠ **THE FILTER IS OFF, 2026-09-12, and the measurement stays.** It was
-        // switched on for about an hour and reverted the same evening when the
-        // backfill produced enough rows to see the fleet-wide distribution.
+        // ⚠ **The `gated` filter is OFF and its measurement stays.** It was
+        // switched on briefly and reverted once the backfill produced enough
+        // rows to see the fleet-wide distribution.
         //
         // Conditioned on the VAD hearing >= 5 s of speech in the minute:
         //
@@ -479,28 +479,24 @@ pub fn build_once(
         // disagree, and which is right is unresolved. Agreement was checked on
         // THREE files and that was not enough to carry a threshold.
         //
-        // ⚠⚠ **THE REPLACEMENT RULE LIVES IN `processed.rs`, AND IS ALSO OFF.**
-        // It reads the median gap between a source's speech quantile and its
-        // floor quantile. Measured 2026-09-21 over every source since the 1st:
-        // geb 70.1 dB before its capsule was swapped against 13.7-22.8 for the
-        // five healthy microphones, and 2.2 dB after — so it separates the
-        // fault by 47 dB and clears a repair as soon as ten segments exist.
+        // ⚠ **The replacement rule is `processed.rs`, and it is also OFF.** It
+        // reads a source's median speech-to-floor gap, which separates a gating
+        // device from a healthy one by tens of dB and clears a repair within
+        // ten segments; the numbers are in #1526. Every contributor RECORDS its
+        // `gap_db`, so what the rule would have decided is re-derivable from
+        // provenance without it ever having acted.
         //
-        // ⚠ A per-source median of `quiet_run_s` was the other candidate and
-        // LOST on 2026-09-21 (#1526). It needs fifty reference rows, so it
-        // still carried geb's pre-swap signature a fortnight after the repair
-        // and would have excluded a working device. The column is still
-        // recorded as evidence; nothing decides on it.
+        // A per-source median of `quiet_run_s` was the other candidate and lost
+        // (#1526): it needs fifty reference rows, so it carried a repaired
+        // device's old signature for weeks. Do not rebuild it.
         //
-        // It stays off until the record says something. Two reasons, and the
-        // second is the stronger:
+        // Two reasons it stays off, and the second is the stronger:
         //
         //   - #1461's referee has not run, so there is still no evidence that
         //     dropping a source improves a transcript rather than removing one.
-        //   - ⚠ **The fleet no longer HAS a gating device.** geb's capsule was
-        //     swapped on 2026-09-13, so switching a filter on today cannot help
-        //     any current source and can only cost — every firing would be a
-        //     false positive until some device starts gating again.
+        //   - It can only pay while some device is actually gating. Read the
+        //     recorded `gap_db` signatures to find out rather than assuming
+        //     either way — with none gating, every firing is a false positive.
         //     gating again.
         let ungated: Vec<&Contributor> = audible.clone();
         if ungated.is_empty() {

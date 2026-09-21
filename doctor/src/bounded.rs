@@ -171,12 +171,10 @@ pub fn run(
 
 /// What state the kernel has an abandoned child in.
 ///
-/// ⚠⚠ **Because the log line ASSERTED it.** "it is in uninterruptible disk
-/// wait" was printed unconditionally on every abandonment, so hundreds of them
-/// carried a claim nobody had checked — and the whole diagnosis turns on it:
-/// `U` is the volume not answering, `S` is the child waiting on something that
-/// is not the disk at all (a database lock has that shape), and `R` is a read
-/// that is merely slow. Three different faults that the same sentence described.
+/// ⚠ **Three states, three different faults, and the diagnosis turns on which.**
+/// `U` is the volume not answering; `S` is the child waiting on something that
+/// is not the disk at all, which is the shape a database lock has; `R` is a
+/// read that is merely slow. Reporting one sentence for all three says nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
     /// `ps` named it. The string is the raw field, flags and all.
@@ -184,11 +182,12 @@ pub enum State {
     /// `ps` ran and knows no such process: it finished just after the bound ran
     /// out rather than wedging, which is its own reading.
     Gone,
-    /// ⚠ **`ps` could not be asked**, so nothing is known — and this must never
-    /// collapse into [`State::Gone`]. It did, for one commit: `ps` does not work
-    /// inside the nix build sandbox, and a living child there read as "gone".
-    /// That is the same lie as the assertion this type replaced, in the other
-    /// direction.
+    /// `ps` could not be asked, so nothing is known.
+    ///
+    /// ⚠ **Never collapse this into [`State::Gone`]** — a living child would
+    /// then read as finished. `ps` does not work inside the nix build sandbox,
+    /// so this case is reached in ordinary test runs rather than being
+    /// theoretical.
     Unknown(String),
 }
 

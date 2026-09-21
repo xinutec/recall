@@ -15,10 +15,10 @@
 //! heard nothing in gets nothing back, and a generation that is entirely junk is
 //! not counted as restorable.
 
-// ⚠ The text rules come from `audiocore::text` rather than a copy. They WERE a
-// copy, the two drifted, and a turn recalld had written then read here as
-// unrestorable junk — the fault this detector exists to catch, committed by the
-// detector.
+// ⚠ Shared, never copied here. recalld judges the same text for the OPPOSITE
+// purpose — it decides whether to write a turn, this decides whether a hidden
+// one is worth restoring — so a drifted copy reports household memory as
+// unrecoverable. A copy drifted exactly that way once.
 use audiocore::text::{is_repetition_loop, is_wordless};
 
 /// Reasons a turn was hidden on the EVIDENCE of what it was, rather than by a
