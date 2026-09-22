@@ -166,10 +166,10 @@ The ten questions the proposal had to answer, decided 2026-09-05.
 
 ## Proposed: text is written once — attribution labels, never rewrites
 
-⚠ **A DIRECTION, not a decision.** Raised by Pippijn on 2026-09-19 ("we need to
-simplify; we're going to have our own way to do the time/separation work") and
-written up with the evidence so the choice can be made on it. Nothing below is
-implemented beyond the one special case named at the end.
+⚠ **A DIRECTION, not a decision.** Raised by Pippijn ("we need to simplify;
+we're going to have our own way to do the time/separation work") and written up
+with the evidence so the choice can be made on it. One part ships, named at the
+end.
 
 ### The measured problem
 
@@ -240,12 +240,14 @@ where there is no boundary to split at. ⚠ Today's evidence says that is rare, 
 that the structural cost of keeping the capability is large. Decide it on that
 trade, not on the capability in the abstract.
 
-### Already pointing this way
+### What already ships
 
-`recalld::diarized::Swap::Attribute` (e6abe82, 2026-09-19) names the turns that
-are already there when the pass hears one speaker — no hide, no insert. ⚠ It was
-added as a SPECIAL CASE for the flattening bug, not as the general rule. Under
-the model above it would BE the rule, and `Swap::Replace` would retire.
+`recalld::diarized::Swap::Attribute` labels the turns already there, each with
+the speaker whose span covers it most — no hide, no insert. A pass uses it
+whenever it would write fewer turns than it hides, at any speaker count, so it
+can no longer flatten a clip. `diarized::split_at_speaker_changes` is built and
+self-checking but unwired (#1663). Under the model above `Attribute` and a split
+would be the only operations, and `Swap::Replace` would retire.
 
 ## What must survive — and what is therefore disposable
 

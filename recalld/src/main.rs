@@ -358,47 +358,24 @@ fn spawn_background_passes(root: &std::path::Path) {
     spawn_coverage_backfill(root.clone());
     spawn_room_builder(root.clone());
     spawn_room_registrar(root.clone());
-    // ⚠ **OFF since 2026-09-11, MEASURED.** Its first 20 blocks produced turns
-    // materially worse than the per-mic transcripts they hid, over the same
-    // minutes:
-    //
-    //     repetition loops   room 16/73 (22%)   per-mic 0/160 (0%)
-    //     median confidence  room 0.509         per-mic 0.683
-    //     median chars/turn  room 20            per-mic 45
-    //     languages          room en 56, nl 10  per-mic nl 111, en 45
-    //
-    // The language row is the finding: the microphones hear a DUTCH
-    // household and the room stream reports mostly English, which is
-    // Whisper's known failure on degraded audio — default to English and
-    // invent. Whether the fault is the room AUDIO or the missing read-path
-    // filters (#1410 sweeps the per-mic corpus of exactly these; the room
-    // output was written raw) is the next question, and it is not answerable
-    // by leaving this on.
-    //
-    // Re-enable only with that answered and a fresh comparison in hand.
+    // OFF. Room turns read worse than the per-mic turns they hid, mostly
+    // English where the microphones heard Dutch. The cause is one language
+    // label per clip, not the room audio: mislabelled, a microphone's clip
+    // fails the same way (#1388). Re-enable once language is decided per
+    // piece rather than per clip, and #1461 shows the room stream beats
+    // per-mic on spontaneous speech.
     // spawn_turn_writer(root.clone(), recalld::turns::ROOM);
     //
-    // The PER-MIC stream is a different decision and is not gated on that
-    // one. It writes turns for microphone clips that have none — 14,078 of
-    // 22,312 of them when this landed — and it neither hides nor supersedes
-    // anything, so the worst case is a transcript where there was silence,
-    // deletable by its provenance. It is what allowed `worker.py` to be
-    // deleted (#1538).
-    //
-    // ⚠ Nothing feeds it until the runner leases `transcribe-segment`, which
-    // is the separate switch: deriving jobs costs nothing, leasing them
-    // spends GPU that the Mac's own worker is still spending on the same
-    // clips. Turning both on at once is how the same minute gets transcribed
-    // twice.
+    // The per-mic stream only fills clips that have no turns; it hides and
+    // supersedes nothing, so its worst case is a transcript where there was
+    // silence, deletable by its provenance. Nothing feeds it until the runner
+    // leases `transcribe-segment`.
     spawn_turn_writer(root.clone(), recalld::turns::PER_MIC);
     //
-    // ⚠ **THE ONLY LOOP HERE THAT REPLACES A TRANSCRIPT SOMEBODY READS**, and it
-    // must never run beside `recall refine`, which wrote these same clips until
-    // that agent was removed in the same change. Two writers over one corpus,
-    // each HIDING what the other wrote, is a corpus nobody can reason about.
-    //
-    // (`diarized::ROOM` is the other stream and stays off; the reason is on the
-    // constant.)
+    // The only running loop that can hide a transcript somebody reads, so it
+    // must stay the only writer over this corpus: two writers each hiding
+    // what the other wrote leave a corpus nobody can reason about.
+    // `diarized::ROOM` stays off; the reason is on the constant.
     spawn_diarized_writer(root.clone(), recalld::diarized::PER_MIC);
     spawn_segment_registrar(root.clone());
     spawn_segment_deriver(root.clone());
@@ -407,17 +384,12 @@ fn spawn_background_passes(root: &std::path::Path) {
 
 /// Turn a human-named turn into a reference voiceprint.
 ///
-/// ⚠ **DELIBERATELY SLOW, and the reason is measured.** Adding 222 prints to the
-/// fleet's 750 moved attribution +0.19 points, and 187 prints score within 1.3 of
-/// 972 (#1648) — the corpus saturated long ago. So this exists to retire the
-/// Mac's last Python loop, not to raise a number, and it must not outbid
-/// diarization for the one GPU: a small batch on a slow cadence keeps up with new
-/// labels, which arrive a handful a week, and lets the backlog trickle.
+/// Deliberately slow: more prints barely move attribution (#1648), so this only
+/// has to keep up with new labels, which arrive a handful a week, and must not
+/// outbid diarization for the one GPU.
 ///
-/// ⚠ Derivation and consumption are ONE switch here, unlike the transcription
-/// port. Nothing else enrols — the Python that did was deleted with `refine` —
-/// so there is no second writer to collide with, and a derived job nobody leases
-/// would just be the diarize-room queue's mistake again.
+/// Derivation and consumption are one switch here: nothing else enrols, so there
+/// is no second writer to collide with, and a derived job nobody leases is waste.
 fn spawn_enroller(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(10);
     const DERIVE: usize = 5;
@@ -586,9 +558,6 @@ fn spawn_speech_scanner(root: PathBuf) {
     });
 }
 
-/// The room builder — one settled block at a time, calibrated
-/// selection, terminal verdicts only. Chases the level scanner: a block whose
-/// evidence is incomplete defers and returns next pass.
 /// Turn stored transcription results into turns people actually read.
 ///
 /// ⚠ **THE FIRST LOOP HERE THAT CHANGES A TRANSCRIPT SOMEBODY READS.** Everything
@@ -598,7 +567,7 @@ fn spawn_speech_scanner(root: PathBuf) {
 /// [`recalld::turns::Stream`] and not a loop:
 ///
 /// - [`recalld::turns::ROOM`] — writes room turns AND HIDES the per-mic turns
-///   they cover, thousands of rows at a time. **Off** pending #1461.
+///   they cover, thousands of rows at a time. Off, pending #1388 and #1461.
 /// - [`recalld::turns::PER_MIC`] — fills gaps only. It hides nothing and
 ///   revisits nothing: a clip that already carries turns is refused before a
 ///   row is touched.
@@ -814,6 +783,9 @@ fn spawn_room_registrar(root: PathBuf) {
     });
 }
 
+/// The room builder — one settled block at a time, calibrated
+/// selection, terminal verdicts only. Chases the level scanner: a block whose
+/// evidence is incomplete defers and returns next pass.
 fn spawn_room_builder(root: PathBuf) {
     const IDLE: std::time::Duration = std::time::Duration::from_mins(1);
     tokio::spawn(async move {
