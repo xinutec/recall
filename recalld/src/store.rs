@@ -13,6 +13,15 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
+/// A byte count column, read as the i64 SQLite stores and returned as the
+/// u64 the rows carry. rusqlite 0.40 stopped reading `u64` itself, since a
+/// stored value can be negative; one that is names the column, like any
+/// other out-of-range integer.
+fn byte_count(r: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<u64> {
+    let stored: i64 = r.get(column)?;
+    u64::try_from(stored).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(column, stored))
+}
+
 /// One stored segment, as the read side serves it.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Row {
@@ -71,7 +80,9 @@ pub fn insert(conn: &Connection, row: &Row) -> rusqlite::Result<()> {
             &row.filename,
             &row.source,
             &row.start_utc,
-            row.bytes,
+            // SQLite's integer is i64; rusqlite 0.40 stopped pretending a
+            // u64 fits. A file size does.
+            i64::try_from(row.bytes).expect("a byte count fits SQLite's i64"),
             &row.sha256,
             &row.received_utc,
             &row.sent_utc,
@@ -90,7 +101,7 @@ pub fn lookup(conn: &Connection, filename: &str) -> rusqlite::Result<Option<Row>
                 source: r.get(0)?,
                 filename: r.get(1)?,
                 start_utc: r.get(2)?,
-                bytes: r.get(3)?,
+                bytes: byte_count(r, 3)?,
                 sha256: r.get(4)?,
                 received_utc: r.get(5)?,
                 sent_utc: r.get(6)?,
@@ -129,7 +140,7 @@ pub fn list(
             source: r.get(0)?,
             filename: r.get(1)?,
             start_utc: r.get(2)?,
-            bytes: r.get(3)?,
+            bytes: byte_count(r, 3)?,
             sha256: r.get(4)?,
             received_utc: r.get(5)?,
             sent_utc: r.get(6)?,

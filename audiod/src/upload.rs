@@ -252,7 +252,9 @@ pub fn run_pass(config: &Config) -> PassSummary {
                         &candidate.filename,
                         &candidate.source,
                         &sha256,
-                        bytes as u64,
+                        // SQLite's integer is i64; rusqlite 0.40 stopped
+                        // pretending a u64 fits. A file size does.
+                        i64::try_from(bytes).expect("a byte count fits SQLite's i64"),
                         now_rfc3339(),
                     ),
                 );

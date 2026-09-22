@@ -34,7 +34,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # system of record the right questions and reads the answers correctly, and a
 # mock server would encode my belief about both.
 recalld = { path = "../recalld" }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 axum = "0.8"
 tempfile = "3"

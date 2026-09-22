@@ -23,7 +23,7 @@
 //!   because a device cannot perform an interactive OAuth login.
 //! * **Device token** — a closed set where a bearer stands in for a cookie.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::collections::HashSet;

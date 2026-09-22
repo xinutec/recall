@@ -107,8 +107,9 @@ impl CaptureState {
             settled: self.settled,
         };
         let json = crate::pyjson::dump(&payload);
+        // sha2 0.11's digest is an array with no `LowerHex`; `hex` spells it out.
         let digest = Sha256::digest(json.as_bytes());
-        format!("{digest:x}").chars().take(12).collect()
+        hex::encode(digest).chars().take(12).collect()
     }
 }
 

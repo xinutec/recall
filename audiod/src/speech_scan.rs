@@ -68,12 +68,19 @@ fn pending(conn: &Connection, limit: usize, now: DateTime<Utc>) -> rusqlite::Res
           LIMIT ?1",
     )?;
     let rows = stmt
-        .query_map(rusqlite::params![limit, cutoff], |row| {
-            Ok(Pending {
-                id: row.get(0)?,
-                path: PathBuf::from(row.get::<_, String>(1)?),
-            })
-        })?
+        // SQLite's integer is i64; rusqlite 0.40 takes no usize.
+        .query_map(
+            rusqlite::params![
+                i64::try_from(limit).expect("a row limit fits SQLite's i64"),
+                cutoff
+            ],
+            |row| {
+                Ok(Pending {
+                    id: row.get(0)?,
+                    path: PathBuf::from(row.get::<_, String>(1)?),
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }

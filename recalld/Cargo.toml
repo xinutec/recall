@@ -43,12 +43,12 @@ axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 # Bundled so the build needs no system sqlite at link time — the same
 # hermeticity reason audiod gives, doubly so inside the Docker build.
-rusqlite = { version = "0.32", features = ["bundled"] }
-sha2 = "0.10"
+rusqlite = { version = "0.40", features = ["bundled"] }
+sha2 = "0.11"
 # The SSO gate's stateless cookie: HMAC-SHA256 over a base64url payload, the same
 # shape the Python mints so one sign-in serves both halves during the port.
-hmac = "0.12"
-base64 = "0.22"
+hmac = "0.13"
+base64 = "0.23"
 form_urlencoded = "1"
 # The OAuth code exchange and userinfo lookup. TLS is enabled EXPLICITLY here,
 # unlike audiod's `default-features = false`: production reaches Nextcloud over
