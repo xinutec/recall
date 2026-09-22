@@ -1623,7 +1623,7 @@ The API modules are already off it — nine went on 2026-09-07, `health`,
 `fleetwatch`, `bounded` and `loss` followed on 2026-09-08 with the doctor (its
 own Rust crate, `doctor/`), `api_devices` on 2026-09-09, and `api.py` +
 `api_capture.py` on 2026-09-12. What is left under `/api` is `api_models.py`,
-which serves no routes: it is the generator input `scripts/gen_models.py` reads
+which serves no routes: it is the generator input the deleted `gen_models.py` reads
 to write the frontend's TypeScript, and the shapes it declares are what RECALLD
 accepts.
 

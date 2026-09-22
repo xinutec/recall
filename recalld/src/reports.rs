@@ -83,7 +83,8 @@ pub struct ClientLog {
 /// makes every telemetry batch fail to deserialise. `path` is required. Both were
 /// wrong in the first draft of this port and dev-lint's mirror check caught it
 /// against the generated `models.ts`, which is what that check is for.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct TelemetryEvent {
     pub kind: String,
     pub path: String,

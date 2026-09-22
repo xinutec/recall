@@ -45,7 +45,8 @@ fn report_fresh() -> Duration {
 // `micReachable` are what the client renders and what the token hashes — so
 // collapsing them into an enum would change the contract, not tidy it.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct CaptureState {
     pub running: bool,
     #[serde(rename = "pausedUntil")]

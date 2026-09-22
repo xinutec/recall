@@ -29,13 +29,15 @@ pub fn open_write(root: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export, rename = "VocabularyTerm")]
 pub struct Term {
     pub id: i64,
     pub term: String,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export, rename = "VocabularyList")]
 pub struct VocabularyOut {
     pub items: Vec<Term>,
 }
@@ -105,15 +107,10 @@ pub fn delete_term(conn: &Connection, id: i64) -> rusqlite::Result<()> {
 
 // --- HTTP ------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(export, rename = "VocabularyRequest")]
 pub struct TermIn {
     term: String,
-}
-
-#[derive(Serialize)]
-struct NewId {
-    #[serde(rename = "newId")]
-    new_id: i64,
 }
 
 pub async fn vocabulary_route(State(st): State<Arc<reads::State>>) -> Response {
@@ -130,7 +127,7 @@ pub async fn vocabulary_add_route(
     let added =
         tokio::task::spawn_blocking(move || add_term(&open_write(&root)?, &body.term, &now));
     match added.await {
-        Ok(Ok(id)) => Json(NewId { new_id: id }).into_response(),
+        Ok(Ok(id)) => Json(route::NewId { new_id: id }).into_response(),
         // The only answer the caller can act on: they sent whitespace.
         Ok(Err(TermError::Blank)) => {
             (StatusCode::BAD_REQUEST, "vocabulary term must not be blank").into_response()

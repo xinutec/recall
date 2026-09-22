@@ -269,7 +269,8 @@ use std::sync::Arc;
 
 /// One wall-clock moment as the app renders it: the best mic's turn(s), its
 /// speaker split kept, plus the other mics' overlapping versions for compare.
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, ts_rs::TS)]
+#[ts(export, rename = "Moment")]
 pub struct MomentOut {
     pub start: String,
     pub end: String,
@@ -279,7 +280,8 @@ pub struct MomentOut {
 }
 
 /// A gap-segmented run of turns, folded into per-moment cards.
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, ts_rs::TS)]
+#[ts(export, rename = "Conversation")]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationOut {
     pub start: String,
@@ -290,7 +292,8 @@ pub struct ConversationOut {
     pub moments: Vec<MomentOut>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, ts_rs::TS)]
+#[ts(export, rename = "ConversationPage")]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationsOut {
     pub items: Vec<ConversationOut>,

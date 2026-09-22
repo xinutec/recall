@@ -27,7 +27,8 @@ const UPLOAD_KIND: &str = "upload";
 /// speaker: `SPEAKER_00` is an answer about voices, not about people.
 const CLUSTER_PREFIX: &str = "SPEAKER";
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export, rename = "Session")]
 #[serde(rename_all = "camelCase")]
 pub struct SessionOut {
     pub id: String,
@@ -38,7 +39,8 @@ pub struct SessionOut {
     pub speakers: Vec<String>,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export, rename = "SessionList")]
 pub struct SessionsOut {
     pub items: Vec<SessionOut>,
 }
@@ -318,14 +320,17 @@ fn local_iso(stored: &str) -> String {
 
 // --- HTTP -------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(export, rename = "SessionRenameRequest")]
 pub struct RenameIn {
     title: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(export, rename = "VoiceNameRequest")]
 pub struct VoiceNameIn {
     cluster: String,
+    #[ts(optional = nullable)]
     name: Option<String>,
 }
 

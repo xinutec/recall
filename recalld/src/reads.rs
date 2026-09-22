@@ -36,7 +36,8 @@ const DIARIZED_MARKER: &str = "diarized";
 /// a null confidence ("confirmed by a human, no score applies") from a numeric
 /// one ("a guess, this strong"), so these serialise as `null` rather than being
 /// skipped.
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, ts_rs::TS)]
+#[ts(export, rename = "Transcript")]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptOut {
     pub id: i64,
@@ -50,6 +51,7 @@ pub struct TranscriptOut {
     pub confidence: Option<f64>,
     pub loudness: Option<f64>,
     pub model: Option<String>,
+    #[ts(type = "'live' | 'transcribed' | 'diarized' | 'corrected'")]
     pub tier: &'static str,
     pub hidden: Option<String>,
     pub audio_url: String,
@@ -57,7 +59,8 @@ pub struct TranscriptOut {
     pub cluster: Option<String>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, ts_rs::TS)]
+#[ts(export, rename = "TranscriptList")]
 pub struct ItemsOut {
     pub items: Vec<TranscriptOut>,
 }

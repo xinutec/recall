@@ -522,7 +522,8 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(export, rename = "AssignSpanRequest")]
 #[serde(rename_all = "camelCase")]
 pub struct AssignIn {
     start_turn: i64,
@@ -532,8 +533,9 @@ pub struct AssignIn {
     name: String,
 }
 
-#[derive(Serialize)]
-struct AssignOut {
+#[derive(Serialize, ts_rs::TS)]
+#[ts(export, rename = "AssignResult")]
+pub struct AssignOut {
     touched: i64,
 }
 

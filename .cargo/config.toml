@@ -1,0 +1,8 @@
+# Where ts-rs writes the frontend's generated types on every `cargo test`,
+# instead of its default ./bindings. `relative = true` resolves it against the
+# workspace root.
+[env]
+TS_RS_EXPORT_DIR = { value = "frontend/src/app/generated", relative = true }
+# An i64 crosses JSON as a double either way; `bigint` would push BigInt onto
+# every id the app touches.
+TS_RS_LARGE_INT = "number"

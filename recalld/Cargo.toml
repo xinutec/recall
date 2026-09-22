@@ -80,6 +80,9 @@ serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 # partial bytes.
 tempfile = "3"
 tracing = "0.1"
+# The frontend's types are generated from the structs below (`#[ts(export)]`);
+# `scripts/gen-types.sh` writes them and the gate fails on drift.
+ts-rs = { version = "12", features = ["serde-compat"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # ONNX runtime for the silero VAD (stage D4), loaded DYNAMICALLY from the
 # system library rather than ort's prebuilt binaries.

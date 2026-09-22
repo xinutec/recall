@@ -31,7 +31,8 @@ const PAD_S: f64 = 1.5;
 /// Minimum length for a context clip, so a short fragment is listenable.
 const MIN_S: f64 = 5.0;
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export)]
 pub struct SpeakerNames {
     pub names: Vec<String>,
 }
@@ -61,7 +62,8 @@ pub fn known_speaker_names(conn: &Connection) -> rusqlite::Result<SpeakerNames> 
     Ok(SpeakerNames { names })
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct Label {
     pub id: i64,
@@ -72,10 +74,12 @@ pub struct Label {
     pub audio_url: String,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
+#[ts(export, rename = "LabelList")]
 #[serde(rename_all = "camelCase")]
 pub struct CorrectionsOut {
     pub items: Vec<Label>,
+    #[ts(type = "Record<string, number>")]
     pub by_speaker: std::collections::BTreeMap<String, i64>,
 }
 

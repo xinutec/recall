@@ -66,8 +66,8 @@ The web app in `frontend/` is Angular 22, kept on the most modern footing:
 - **Strict TypeScript**: `strict` plus `noUnusedLocals/Parameters`,
   `exactOptionalPropertyTypes`, and `strictTemplates` in `tsconfig.json`. The
   build must be error-free (strict templates catch real bugs).
-- `ChangeDetectionStrategy.OnPush` on components; prefer `readonly` and precise
-  interfaces in `models.ts` over loose shapes.
+- `ChangeDetectionStrategy.OnPush` on components. The wire types are generated
+  from recalld's structs (`scripts/gen-types.sh`); never hand-write a shape.
 
 ## Reading the real archive
 
@@ -96,8 +96,7 @@ Before considering a unit of work done, run **`nix run ../dev-lint#gate -- . gat
 — the full gate, every row in `gate.dhall` (the count lives there, not here): `ruff check` + `ruff format
 --check`, `swift-format lint --strict` (the iOS app, via the Xcode toolchain),
 the venv store-path build, `mypy --strict`, `dev-lint` (custom rules), the
-frontend↔backend schema contract (`gen_models.py --check`), both import-surface
-checks, `pytest` (via the venv that holds the ML deps), the frontend build +
+generated-types drift check, the shim import-surface check, `pytest` (via the venv that holds the ML deps), the frontend build +
 layout harness + vitest, and the Android app. All green. It runs every row and
 names every one that failed, rather than stopping at the first.
 A pre-commit hook runs it on every commit (`scripts/setup-hooks.sh`); there is no

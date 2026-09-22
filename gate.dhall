@@ -185,11 +185,8 @@ in  { name = "recall"
         , argv = G.inDevShell [ "mypy" ]
         , timeout_s = 900
         }
-      , {-  Fails if frontend models.ts has drifted from src/recall/schemas.py
-            (responses) or src/recall/api_models.py (request bodies). The
-            cross-boundary contract as a build error rather than a convention.
-            Regenerate with `.venv/bin/python scripts/gen_models.py --write`.
-            The .venv interpreter, because it imports pydantic.
+      , {-  Generated-types drift: regenerate the ts-rs bindings from recalld's
+            structs and fail if the committed frontend/src/app/generated moved.
         -}
         {-  ⚠ THE ONLY CHECK HERE THAT GUARDS THE DEPLOY PATH ITSELF. A crate
             added to Cargo.toml but not to the Dockerfile makes the image build
@@ -208,10 +205,9 @@ in  { name = "recall"
         , timeout_s = 60
         }
       , G.Check::{
-        , name = "contract: frontend models.ts is generated from the API shapes"
-        , argv =
-            G.inDevShell [ ".venv/bin/python", "scripts/gen_models.py", "--check" ]
-        , timeout_s = 300
+        , name = "generated types are current"
+        , argv = G.inDevShell [ "scripts/gen-types.sh", "--check" ]
+        , timeout_s = 900
         }
       , {-  THE ML IMPORTS MUST STAY LAZY, and pytest cannot show it: pytest runs
             on the fully-stocked .venv, where a new top-level `import mlx_whisper`

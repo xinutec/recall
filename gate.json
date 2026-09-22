@@ -167,15 +167,14 @@
         "develop",
         "--no-warn-dirty",
         "--command",
-        ".venv/bin/python",
-        "scripts/gen_models.py",
+        "scripts/gen-types.sh",
         "--check"
       ],
       "artifacts": [],
       "cwd": ".",
       "env": {},
-      "name": "contract: frontend models.ts is generated from the API shapes",
-      "timeout_s": 300
+      "name": "generated types are current",
+      "timeout_s": 900
     },
     {
       "argv": [

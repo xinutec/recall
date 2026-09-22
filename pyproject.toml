@@ -10,11 +10,8 @@ requires-python = ">=3.12"
 # The DIRECT dependencies (what src/recall imports + serving glue). uv.lock is the
 # frozen, complete pin set; this list is the human-readable intent behind it.
 dependencies = [
-    "datasets>=5.0",
-    # The LLM host's HTTP surface, and ONLY that — recalld serves the fleet tier,
-    # so nothing here answers a browser. `recall llm-host` holds the
-    # mlx-lm weights and lends them over localhost, which is why the web stack is
-    # still a Mac dependency at all.
+    # The LLM host's HTTP surface, and only that: it holds the mlx-lm weights
+    # and lends them over localhost to `life`'s emotion worker.
     "fastapi>=0.136",
     "httpx>=0.28",
     "mlx-lm>=0.31",
@@ -29,12 +26,9 @@ dependencies = [
     # whole time. Keep it declared, and be suspicious of any dependency audit that
     # only reads source.
     "omegaconf>=2.3",
-    "peft>=0.19",
     "pyannote-audio>=4.0",
-    "pydantic>=2.13",
     "silero-vad>=6.2",
     "torch>=2.12",
-    "transformers>=5.12",
     "uvicorn>=0.49",
 ]
 
@@ -70,8 +64,8 @@ packages = ["src/recall"]
 # below — never a blanket ignore. See docs/conventions.md.
 [tool.mypy]
 python_version = "3.12"
-# Resolve third-party imports from the venv so typed libraries (FastAPI, Pydantic,
-# numpy) are *really* checked; only genuinely-stubless ML libs are waived below.
+# Resolve third-party imports from the venv so typed libraries are really
+# checked; only genuinely stubless ML libs are waived below.
 python_executable = ".venv/bin/python"
 strict = true
 warn_unreachable = true
@@ -94,16 +88,9 @@ files = ["src", "tests", "scripts"]
 # ML libraries ship no type stubs. Scope the missing-imports waiver to exactly
 # those modules, with a code, so it never silently hides errors in our code.
 [[tool.mypy.overrides]]
-# Only the libraries that genuinely ship no types. Everything else (FastAPI,
-# Pydantic, numpy, pyannote, torch, transformers, peft) ships real
-# types and is checked for real (resolved from the venv above).
 module = [
   "mlx_whisper.*",
   "silero_vad.*",
-  "datasets.*",
-  # scipy ships no stubs (scipy-stubs is a separate, third-party package);
-  # used only by scripts/fusion_phasefree.py.
-  "scipy.*",
 ]
 ignore_missing_imports = true
 

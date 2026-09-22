@@ -79,11 +79,20 @@ where
 /// can move between the two implementations without the frontend seeing a
 /// change. Nothing reads the field — the app branches on the status — which is
 /// exactly why it is cheap to keep identical.
-#[derive(Serialize)]
+#[derive(Serialize, ts_rs::TS)]
+#[ts(export, rename = "Ok")]
 pub struct Ack {
     ok: bool,
 }
 
 pub fn ack() -> Response {
     Json(Ack { ok: true }).into_response()
+}
+
+/// What a write that minted a row answers with.
+#[derive(Serialize, ts_rs::TS)]
+#[ts(export, rename = "CorrectResult")]
+pub struct NewId {
+    #[serde(rename = "newId")]
+    pub new_id: i64,
 }

@@ -68,67 +68,11 @@ per moment, so the dump isn't doubled.
 
 ## Machine-readable
 
-⚠ `--json` is gone with the Python CLI (#1342). `recall-cli` prints for a
-reader; for structured output call the API directly, or use
-`scripts/recall-api.py` below.
-
-## Export a transcript
-
-`scripts/recall-api.py` is a **dependency-free** (stdlib-only) client for a running recall
-server — copy it anywhere with `python3`, no install. It defaults to
-`http://localhost:8000` (override with `--base-url` or `RECALL_API_URL`) and is read-only
-(it never changes capture or any data).
-
-```
-scripts/recall-api.py sessions                          # list sessions (JSON)
-scripts/recall-api.py transcript <id>                   # the clean export (JSON)
-scripts/recall-api.py transcript <id> --markdown        # ready-to-splice md bubbles
-scripts/recall-api.py search "<query>" --limit 20
-scripts/recall-api.py status | capture | sources | speakers
-scripts/recall-api.py timeline [--limit N] [--before <iso>]
-scripts/recall-api.py around <turn-id> [-n N]
-```
-
-`transcript <id>` returns the session's clean, finalised transcript as JSON:
-
-```jsonc
-{
-  "session": "meeting-20260209-1033",
-  "date": "2026-02-09T10:33:03+00:00",   // first bubble's start (local offset); null if empty
-  "speakers": ["Alex", "Dr. Adams"],     // confirmed names present, in first-seen order
-  "turns": [
-    { "start": "2026-02-09T10:33:03+00:00", "speaker": "Alex",
-      "text": "Thanks for fitting me in this morning." },
-    { "start": "2026-02-09T10:35:16+00:00", "speaker": "Dr. Adams",
-      "text": "Of course — let's go through the results together." }
-  ]
-}
-```
-
-- **Coalesced**: consecutive same-speaker turns are merged into one bubble. `speaker` is
-  a confirmed name, or `SPEAKER_nn`/`unknown` if not yet confirmed (see trust note below).
-- **Current state only**: superseded/hidden turns and the per-mic alternates are excluded
-  — just the finalised, human-corrected reading.
-- **Deterministic**: stable order, no generation timestamp. Re-running with no new
-  corrections returns byte-identical output (`transcript --json`, above, emits the same).
-
-`--markdown` renders the transcript as `**[HH:MM] Speaker:** text` bubbles. To update
-**only** the transcript and leave the rest of a page intact, wrap the block in markers and
-replace between them on each export — the bubbles carry no markers themselves:
-
-```markdown
-<!-- recall:transcript meeting-20260209-1033 -->
-…rendered bubbles…
-<!-- /recall:transcript -->
-```
-
-Because the export is deterministic, a re-run with no new corrections produces no diff —
-the manually-maintained parts of the page are never touched.
-
-> `scripts/recall-api.py` speaks **no auth** (plain `urllib`), so it works only against
-> an unauthenticated API. Isis's fleet API sits behind the Nextcloud sign-in and will
-> answer `401` — point the tool at a local API, or read the store directly with the CLI
-> commands above, which need no server at all.
+`recall-cli` prints for a reader. For structured output call the API directly:
+`GET /api/sessions/<id>/transcript` is the session's clean export, one bubble per
+run of same-speaker turns, current state only, deterministic. It sits behind the
+Nextcloud sign-in like every browsing route; `cli/src/api.rs` shows how the CLI
+carries the cookie.
 
 ## Editing in the app
 

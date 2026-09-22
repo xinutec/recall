@@ -115,8 +115,10 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use std::sync::Arc;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(export, rename = "TurnSpeakerRequest")]
 pub struct TurnSpeakerIn {
+    #[ts(optional = nullable)]
     name: Option<String>,
 }
 
@@ -376,20 +378,19 @@ pub fn apply_correction(
     Ok(new_id)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(export, rename = "CorrectRequest")]
 pub struct CorrectIn {
     id: i64,
     text: String,
+    #[ts(optional = nullable)]
     speaker: Option<String>,
+    #[ts(optional = nullable)]
     start: Option<String>,
+    #[ts(optional = nullable)]
     end: Option<String>,
+    #[ts(optional = nullable)]
     language: Option<String>,
-}
-
-#[derive(serde::Serialize)]
-struct NewId {
-    #[serde(rename = "newId")]
-    new_id: i64,
 }
 
 pub async fn correct_route(
@@ -414,7 +415,7 @@ pub async fn correct_route(
         )
     });
     match applied.await {
-        Ok(Ok(new_id)) => Json(NewId { new_id }).into_response(),
+        Ok(Ok(new_id)) => Json(route::NewId { new_id }).into_response(),
         // These three are the caller's to fix, and each says which.
         Ok(Err(CorrectError::Blank)) => {
             (StatusCode::BAD_REQUEST, "corrected text must not be blank").into_response()
