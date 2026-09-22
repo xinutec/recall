@@ -5,7 +5,7 @@
 # fusion. It talks to the Python half through the archive layout alone —
 # segment files named `<source>-<UTC>.<ext>`, the `.alive` liveness marker,
 # and two bookkeeping writes into recall.sqlite — so neither side depends on
-# the other's runtime. See docs/audio-plane.md.
+# the other's runtime. See docs/architecture.md.
 #
 # First inhabitant: the ingest server (the port of src/recall/stream_server.py).
 [package]

@@ -1,4 +1,4 @@
-//! recall-audiod — the audio-plane daemon (docs/audio-plane.md).
+//! recall-audiod — the audio-plane daemon (docs/architecture.md).
 //!
 //!   audiod ingest  --root <archive> [--port 9999]
 //!       the network-mic ingest server (the live recall-ingest agent)
@@ -284,7 +284,7 @@ fn main() -> ExitCode {
 ///
 /// ⚠ Bounded on purpose, and low priority in the agent that drives it. This
 /// decodes audio, and the machine it runs on is also recording: delivery must
-/// never compete with the recorder (design.md §7). A 13k-segment backlog is
+/// never compete with the recorder (docs/architecture.md: capture runs at launchd's Interactive class). A 13k-segment backlog is
 /// meant to drain over days behind live capture, not in one greedy pass.
 fn run_speech(root: &std::path::Path, max: usize) -> ExitCode {
     // ⚠ **Registration FIRST, and in this agent rather than its own.** The

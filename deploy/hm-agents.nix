@@ -114,7 +114,7 @@ let
       '';
     };
 
-  # The Rust audio-plane daemon (audiod/, docs/audio-plane.md). Its wrapper
+  # The Rust audio-plane daemon (audiod/, docs/architecture.md). Its wrapper
   # sources no .env — the ingest path holds no secrets — but keeps agent-tools
   # on PATH: audiod spawns ffmpeg as its segmenter child, and it must be the
   # same ffmpeg the test suite and the Python agents run.
@@ -386,7 +386,7 @@ in
   # delivered, and those are the least replicated audio in the house.
   #
   # Bounded and low priority: this decodes audio on the machine that is also
-  # recording, and delivery must never compete with the recorder (design.md §7).
+  # recording, and delivery must never compete with the recorder (docs/architecture.md: capture runs at launchd's Interactive class).
   # ~0.5 s per segment measured, so 120 a pass is about a minute of CPU every
   # five — a 13k backlog drains over a day or so, behind live capture.
   # Bounds the agents' own logs (#1656). Hourly, cheap, and it touches nothing
@@ -439,7 +439,7 @@ in
   # changes no transcript anybody reads.
   #
   # Nice + LowPriorityIO: transcription must never compete with the recorder
-  # (design.md §7), and this one holds a GPU.
+  # (docs/architecture.md: capture runs at launchd's Interactive class), and this one holds a GPU.
   launchd.agents."org.xinutec.recall-runner" = daemon {
     label = "org.xinutec.recall-runner";
     name = "runner";
@@ -527,7 +527,7 @@ in
   # historical backfill proceeds in bites and a killed pass costs nothing.
   # Reads RECALL_INGEST_TOKEN (the custodial `*` grant) from .env — the token
   # must never enter the store, the standing rule. Nice + LowPriorityIO:
-  # delivery must never compete with the recorder (design.md §7).
+  # delivery must never compete with the recorder (docs/architecture.md: capture runs at launchd's Interactive class).
   #
   # ⚠ NO EVICTION RIDES THIS. The Mac's archive stays the protected master
   # until stage F; this agent only ever adds copies.

@@ -1,7 +1,7 @@
 //! Offline tier-1 alignment probe: measure, per wall-clock block, how far each
 //! source's archive timestamps sit from a reference source's — from the audio
 //! itself, by envelope correlation. The instrument for validating the
-//! alignment ladder (docs/audio-plane.md) on real recorded days, including
+//! alignment ladder (docs/architecture.md) on real recorded days, including
 //! the pre-epoch-fix era whose clocks genuinely disagree.
 //!
 //!   align-probe --root /Volumes/Backup/recall --reference usb \

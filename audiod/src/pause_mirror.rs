@@ -22,7 +22,7 @@
 //! only ever writes a pause the control plane EXPLICITLY stated (a bounded
 //! `pausedUntil`), and an unreachable control plane leaves the last state
 //! standing — a poller that invented a pause on error would be a recorder
-//! silenced by a wifi blip, and completeness outranks (design.md §1). The
+//! silenced by a wifi blip, and completeness outranks (docs/architecture.md, requirement 1). The
 //! pause file's own bounded timestamp is the backstop: even a stale pause
 //! expires by itself.
 
@@ -187,7 +187,7 @@ pub fn source_liveness(root: &Path) -> serde_json::Map<String, serde_json::Value
 /// # Errors
 /// Transport or protocol failure. The caller keeps the last state on either —
 /// a mirror that invented a pause on a wifi blip would be a recorder silenced by
-/// a network, and completeness outranks (design.md §1).
+/// a network, and completeness outranks (docs/architecture.md, requirement 1).
 pub fn exchange(
     agent: &ureq::Agent,
     url: &str,

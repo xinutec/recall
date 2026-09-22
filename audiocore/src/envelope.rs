@@ -1,5 +1,5 @@
 //! Energy envelopes: the level-blind, codec-blind fingerprint of *when sound
-//! happened*, and therefore the tier-1 alignment signal (docs/audio-plane.md).
+//! happened*, and therefore the tier-1 alignment signal (docs/architecture.md).
 //! Decoded at a low rate in coarse buckets — the same resolution the Python
 //! side draws timelines at (`recall.envelope`) — because alignment at this
 //! tier needs shape, not fidelity.

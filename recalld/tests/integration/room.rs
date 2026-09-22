@@ -218,7 +218,7 @@ fn a_judged_block_is_never_rejudged() {
 #[test]
 #[ignore = "re-parked 2026-09-06: calibration is recorded, not obeyed — see room.rs"]
 fn calibration_chooses_the_device_hearing_best_for_itself() {
-    // The whole point of calibrating (docs/audio-plane.md): `loud` is a
+    // The whole point of calibrating (docs/architecture.md): `loud` is a
     // sensitive condenser at its NORMAL level, `quiet` a gated phone at TEN
     // TIMES its own normal. Absolute level says `loud`; calibration says
     // `quiet`, because it is the one that suddenly hears something.

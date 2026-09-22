@@ -1,8 +1,18 @@
 # Conventions
 
+## Rust
+
+Six crates in one workspace, `unsafe` forbidden, clippy `pedantic` as warnings
+with `dbg!`, `todo!` and `unimplemented!` denied, and the gate runs clippy over
+every target. Tests are integration tests against public APIs, one binary per
+crate (`recalld/tests/integration/main.rs`), never `#[cfg(test)]` modules.
+A rule two crates need lives in `audiocore`, not beside a caller. Doc comments
+say what a thing is for today; history is in git. An intra-doc link that does
+not resolve fails the gate.
+
 ## Typing (strict)
 
-The Python in this project is fully, strictly typed.
+The Python is the model floor and is fully, strictly typed.
 
 - **`mypy --strict` must pass with zero errors** on `src/`, `tests/` and `scripts/`. Config
   lives in `pyproject.toml` (`[tool.mypy]`), with several extra error codes
@@ -14,12 +24,9 @@ The Python in this project is fully, strictly typed.
   code: `# type: ignore[attr-defined]`. `warn_unused_ignores` removes them once
   they're stale.
 - **No blanket `ignore_missing_imports`.** mypy resolves third-party imports
-  from the venv (`python_executable`), so typed libraries (FastAPI, Pydantic,
-  numpy, pyannote, torch, transformers, peft) are *really* checked.
-  Only the genuinely-stubless libraries (mlx-whisper, silero-vad, datasets) are
-  waived *per-module* — never globally, so missing types in our code are never
-  hidden. (Checking the real types caught real bugs, e.g. a pyannote-4.0 API
-  change.)
+  from the venv (`python_executable`), so typed libraries (FastAPI, numpy,
+  pyannote, torch) are really checked. Only the stubless ones (mlx-whisper,
+  silero-vad) are waived, per module, never globally.
 - **Avoid `Any`.** `disallow_any_unimported` is on. Prefer precise types;
   reach for `typing.Protocol`, `TypedDict`, `dataclass`, and generics over
   loose dicts. Untyped third-party return values get narrowed at the boundary,
@@ -36,7 +43,8 @@ The Python in this project is fully, strictly typed.
 - **TDD-first**: write the failing test before the implementation, even for
   small changes. Pipeline/geometry code gets real-data fixtures (captured audio
   clips), not just synthetic units.
-- Tests live in `tests/` (backend) plus the frontend specs. Run the whole gate
+- Python tests live in `tests/`, Rust tests beside each crate, and the frontend
+  specs with the app. Run the whole gate
   with **`nix run ../dev-lint#gate -- . gate.json`**; for just the backend tests use
   `nix develop --command .venv/bin/python -m pytest` (the venv holds the ML deps —
   bare `pytest` can't import numpy/fastapi). `.venv` is a symlink into the store,

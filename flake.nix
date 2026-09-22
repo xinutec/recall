@@ -122,7 +122,7 @@
           paths = [ pkgs.sox pkgs.ffmpeg ];
         };
 
-        # The Rust audio-plane daemon (audiod/, docs/audio-plane.md), built from the
+        # The Rust audio-plane daemon (audiod/, docs/architecture.md), built from the
         # workspace. The build RUNS THE TESTS, so a deployed audiod is one whose suite
         # passed in the sandbox. The fileset is exactly the Rust workspace, so a
         # Python or frontend edit does not rebuild it.
@@ -283,7 +283,7 @@
             # no longer the venv: `.venv` is `packages.dev-env`, built from that
             # lock by uv2nix. Kept here for relocking and for `uv tree`.
             pkgs.uv
-            # audiod/ — the Rust audio-plane daemon (docs/audio-plane.md)
+            # audiod/ — the Rust audio-plane daemon (docs/architecture.md)
             pkgs.cargo
             pkgs.rustc
             pkgs.rust-analyzer

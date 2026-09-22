@@ -8,7 +8,7 @@
 //! "always the most sensitive microphone" — the condenser leads the phones by
 //! 21 dB mostly because of the DEVICE, not the room — so selection without
 //! this is the fixed choice it was meant to replace
-//! (docs/audio-plane.md, "What the gate measured").
+//! (docs/architecture.md, "Decisions that bind").
 //!
 //! Runs as recalld's background scanner: decode (ffmpeg, the same binary the
 //! Mac's plane spawns), bucket, store. Bounded batches, oldest first, one row
@@ -23,7 +23,7 @@ use std::path::Path;
 
 pub const SPEECH_QUANTILE: f64 = 0.9;
 pub const FLOOR_QUANTILE: f64 = 0.1;
-/// The bake-off's envelope resolution (docs/audio-plane.md tier 1).
+/// The bake-off's envelope resolution (docs/architecture.md).
 const BUCKET_S: f64 = 0.1;
 const RATE: u32 = 16_000;
 

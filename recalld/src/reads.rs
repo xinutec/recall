@@ -7,7 +7,7 @@
 //! real archive, byte identical. Nothing here writes.
 //!
 //! ⚠ **This reads `recall.sqlite`, NOT `ingest.sqlite`.** The audio plane and the
-//! meaning plane stay split (docs/audio-plane.md): blobs plus `ingest.sqlite` are
+//! meaning plane stay split (docs/architecture.md): blobs plus `ingest.sqlite` are
 //! recalld's own, while `recall.sqlite` remains the transcript system of record
 //! that the Python tier also has open. So every connection here is opened
 //! READ-ONLY and in WAL — recalld must not be able to write a plane it does not

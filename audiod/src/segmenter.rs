@@ -5,7 +5,7 @@
 //! ffmpeg stays the encoder for now, deliberately: it keeps this port's output
 //! byte-comparable with the Python server's during the shadow period. Native
 //! Opus encoding arrives with the fusion engine, which needs the PCM in
-//! process anyway (docs/audio-plane.md).
+//! process anyway (docs/architecture.md).
 
 use std::path::Path;
 

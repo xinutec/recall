@@ -3,7 +3,7 @@
 //! microphone* — and carry its audio whole into a `room` segment the queue
 //! can hand to transcription. Selection, never fusion: per-block choice tied
 //! the best single microphone exactly in the WER bake-off while every fusion
-//! lost or nulled (docs/audio-plane.md, "What the gate measured"), so this
+//! lost or nulled (docs/architecture.md, "Decisions that bind"), so this
 //! reproduces the measured instrument's behaviour — hard cuts at block
 //! boundaries included — rather than improving on it unmeasured.
 //!

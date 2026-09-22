@@ -17,7 +17,7 @@ The cluster comes from the model (`dhall/clusters.json`: `recall: isis.xinutec.o
 so it is never passed by hand.
 
 Nothing auto-applies anywhere — the fleet does NOT run Flux; every app is deployed by
-hand. Rationale and topology: `docs/isis-migration.md`.
+hand. Rationale and topology: `docs/architecture.md`.
 
 ## What runs here
 
@@ -62,7 +62,7 @@ read-only rootfs + `/tmp` emptyDir, seccomp, probes, limits), `03-service` (Clus
    restricts who may enter after a valid sign-in. The recording plane stays login-free:
    `/sync/*` keeps its bearer token, and the iOS mic app's capture endpoints
    (`/api/capture`, `/api/sources`, `/api/capture/pause|resume`) are exempt — a headless
-   device can't do an interactive OAuth login. See `docs/isis-migration.md`.
+   device can't do an interactive OAuth login. See `docs/architecture.md`, "Credential planes".
 4. **WireGuard exposure** — do NOT add an nginx Ingress. Expose the Service over WireGuard
    only: a MetalLB address from a `wg0`-only pool, or a NodePort firewalled to `wg0`. That
    is the real network gate; the public ingress is not one.

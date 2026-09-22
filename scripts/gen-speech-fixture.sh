@@ -25,7 +25,7 @@ trap 'rm -rf "$WORK"' EXIT
 # The dialogues: neutral, invented content; alternating voices like a household
 # exchange. One fixture per household language — Whisper detects ONE language per
 # segment, so a mixed fixture makes it mangle the minority language (the
-# documented code-switching weakness, pipeline.md §2), which is a known
+# documented code-switching weakness, docs/architecture.md), which is a known
 # limitation, not a regression baseline. Keep these lines and reference-*.txt in
 # lockstep — the references are what WER scores against.
 utter() { # utter <index> <voice> <text>

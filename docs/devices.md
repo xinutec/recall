@@ -1,7 +1,7 @@
 # recall — device ingest, identity & onboarding
 
 How recorder devices (the USB mic, roaming phones, and always-on Linux hosts) connect, are identified, and
-report liveness. Companion to design.md §5.1a, which covers *fusing* multiple sources —
+report liveness. Companion to [architecture.md](architecture.md), which covers what happens to several sources —
 several co-located mics capturing the **same** speech; this covers getting their audio
 in and knowing which device is which.
 
@@ -25,7 +25,7 @@ closed segment from arrival time to capture time — so cross-mic timestamps sha
 clock and moment folding lines up. Absent or nonsense (a clock >10 min out), segments
 stay arrival-stamped exactly as before; the shift is only ever backwards, never past
 ffmpeg's open segment.
-The server (`audiod` — Rust, [audio-plane.md](audio-plane.md)):
+The server (`audiod`, Rust):
 
 1. reads *exactly* the handshake line (byte by byte, so it never consumes any PCM),
 2. **auto-registers** the source by the announced id (a filesystem-safe id = one source
@@ -86,13 +86,12 @@ module with its own entry point rather than a `recall` subcommand: the main CLI
 imports all three, and would advertise the command on macOS, which has no ALSA to
 open.
 
-## The audio path: Python pumps, the kernel buffers
+## The audio path: a pump, and the kernel buffers
 
-The server reads the socket and writes the bytes to ffmpeg's stdin — one short pump
-loop is the only Python in the audio path. That's safe because a phone is a **TCP**
-source: the kernel's receive buffer holds incoming audio across any momentary pause
-(GC, scheduling), so a stall can't drop samples — the bytes are still contiguous when
-the pump catches up. ffmpeg does all the decoding/segmenting, reading a clean pipe.
+`audiod ingest` reads the socket and writes the bytes to ffmpeg's stdin. That is
+safe because a phone is a **TCP** source: the kernel's receive buffer holds
+incoming audio across any momentary pause, so a stall cannot drop samples.
+ffmpeg does all the segmenting, reading a clean pipe.
 
 The USB mic — a real-time local device with **no** such buffer — stays sox/ffmpeg-only
 and is never pumped; gap-free local capture depends on keeping our code out of that path.
@@ -291,7 +290,7 @@ audio dropped in RAM. See ios/README.md ("Always-on").
 - **One agent, many devices.** `recall-ingest` serves every phone; there's no
   per-device plist or port, and the handshake distinguishes devices, so the old
   unique-port constraint is gone.
-- **The USB mic is unchanged** — a separate local `recall record --id usb` agent
+- **The USB mic is unchanged** — a separate local `audiod capture --id usb` agent
   (sox -d), not a TCP client, so it neither handshakes nor pumps.
 
 ## Updating a phone's app (and getting it recording again)

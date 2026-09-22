@@ -134,8 +134,8 @@ Household capture on the USB mic is a different device and is unaffected.
 
 `create_session` registers an UPLOAD source holding **one segment for the whole file**,
 so the recording is diarized as a single window — the regime that scores best on speaker
-boundaries (see [pipeline.md](pipeline.md) §4). It appears in the web app immediately
-with 0 turns while the worker transcribes and refine diarizes; rename, delete and
+boundaries (see [architecture.md](architecture.md)). It appears in the web app immediately
+with 0 turns while the runners transcribe and diarize it; rename, delete and
 re-diarize already work on it.
 
 The app knows the true start instant, so `start` is filled and the session lands at the
@@ -161,7 +161,7 @@ report about a bad token, which is the fault it exists to catch.
 
 Found on 2026-08-07, the first time a real recording was uploaded to Isis: **every
 upload got a 401**, deterministically, and always would have. `POST /api/sessions` is on
-the browsing plane behind the Nextcloud sign-in ([isis-migration.md](isis-migration.md)),
+the browsing plane behind the Nextcloud sign-in ([architecture.md](architecture.md), "Credential planes"),
 and `ShareUpload` sent no credential at all. The web Upload button works because a
 browser carries the `recall_session` cookie; the phone has none, and the WebView that
 could get one is a different app (`org.recall.web`) with its own cookie jar. The share

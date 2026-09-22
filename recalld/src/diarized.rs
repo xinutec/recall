@@ -341,15 +341,9 @@ pub fn decide(
     let speakers: std::collections::BTreeSet<&str> =
         keep.iter().map(|t| t.speaker.as_str()).collect();
     if keep.len() < existing.len() {
-        // ⚠ Only the turns the diarization ACTUALLY COVERED. Asserting the one
-        // speaker across the whole clip is the same over-claim the flattening
-        // made: `pixel5-20260908T162259` had 8 spans totalling 5.6 s against a
-        // 617-character transcript, and every word took the only span on offer.
-        // ⚠ Each turn takes the speaker whose span covers MOST of it, and a
-        // turn no span touches is left alone. Asserting one speaker across the
-        // whole clip is the same over-claim the flattening made:
-        // `pixel5-20260908T162259` had 8 spans totalling 5.6 s against a
-        // 617-character transcript, and every word took the only span on offer.
+        // Each turn takes the speaker whose span covers most of it, and a turn
+        // no span touches is left alone: asserting one speaker across the whole
+        // clip is the over-claim the flattening made.
         let to: Vec<(i64, String)> = existing
             .iter()
             .filter_map(|o| {
@@ -929,22 +923,7 @@ pub struct Pass {
     pub named: usize,
 }
 
-/// Drain the finished `diarize-room` jobs into speaker-aligned turns.
-///
-/// ⚠ **This pass REPLACES turns, which no other pass does.** `turns::write_pass`
-/// only ever writes where there is nothing; this hides what is there and writes
-/// over it, so every refusal goes through [`decide`] first and every terminal
-/// decision leaves a ledger row. A decision that writes no row is a decision
-/// made again for ever.
-///
-/// ⚠ The two transient outcomes get NO row, deliberately: a clip whose audio
-/// segment is not yet registered, and one whose transcription carried no word
-/// timings that this pass can see. Both can become eligible later, and a row
-/// would retire them permanently for being examined too early.
-///
-/// # Errors
-/// If either database refuses.
-/// A clip whose transcription yields no usable words: decide WHICH absence it is
+/// A clip whose transcription yields no usable words: decide which absence it is
 /// and retire the permanent one.
 ///
 /// `true` = retired with a ledger row, because the words are there and every
@@ -974,6 +953,13 @@ fn retire_if_permanently_unusable(
     Ok(true)
 }
 
+/// Drain the finished diarize jobs into speaker-aligned turns.
+///
+/// The one pass that replaces turns: it hides what is there and writes over it,
+/// so every swap goes through [`decide`] first and every terminal decision
+/// leaves a ledger row. The two transient outcomes get no row: a clip whose
+/// audio segment is not registered yet, and one whose transcription carries no
+/// word timings this pass can read. Both can become eligible later.
 pub fn write_pass(
     meaning: &mut rusqlite::Connection,
     ingest: &rusqlite::Connection,

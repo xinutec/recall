@@ -1,62 +1,33 @@
 # recall
 
-Local, always-on household speech recall system — a memory aid that records,
-transcribes, attributes (who said it), and makes searchable the conversations
-in the house. Everything stays on-device.
+Local, always-on household speech recall: records the house, transcribes it,
+attributes who said what, and makes it searchable. A memory aid. Everything
+stays on the household's own machines.
 
-- **Running it (services, web app, HF setup, enrollment, daily flow):** [`docs/running.md`](docs/running.md)
-- **Design:** [`docs/design.md`](docs/design.md)
-- **The Mac/Isis split (topology, one-way VPN, SSO, sweep veto):** [`docs/isis-migration.md`](docs/isis-migration.md)
-- **Analysis pipeline (ASR, EN/NL, speakers, reprocessing):** [`docs/pipeline.md`](docs/pipeline.md)
-- **Phone/mic ingest (connect, identity, liveness):** [`docs/devices.md`](docs/devices.md)
-- **Reading a recorded call from the CLI:** [`docs/review.md`](docs/review.md)
-- **Ingesting discrete meeting recordings (download → ingest → transcribe → clean):** [`docs/meetings.md`](docs/meetings.md)
-- **Meeting recorder in the Android app (record on the phone, upload as a session):** [`docs/meeting-recorder.md`](docs/meeting-recorder.md)
-- **Conventions (strict typing, TDD):** [`docs/conventions.md`](docs/conventions.md)
-- **Target architecture (store-and-forward, one room stream — decided, being built):** [`docs/architecture.md`](docs/architecture.md)
+- [`docs/architecture.md`](docs/architecture.md): what it is for and how it is built
+- [`docs/running.md`](docs/running.md): the agents, the fleet, deploying
+- [`docs/devices.md`](docs/devices.md): phone and microphone ingest, identity, liveness
+- [`docs/meetings.md`](docs/meetings.md) and [`docs/meeting-recorder.md`](docs/meeting-recorder.md): one-off recordings
+- [`docs/review.md`](docs/review.md): reading a session from the terminal
+- [`docs/conventions.md`](docs/conventions.md): how the code is written and checked
 
-## Web app
+## Layout
 
-Open **`http://10.100.0.2:8000`** (Isis, over the VPN, behind a Nextcloud sign-in):
-a timeline of the conversation, full-text search with audio playback, a
-review/correct queue, record-from-device (phone as a second mic), and speaker
-labelling that enrols voices as you confirm who spoke. It's an Angular app served
-by `recalld` on one origin, running on Isis — the Mac serves no UI.
-See [`docs/running.md`](docs/running.md).
+A Rust workspace: `audiocore` (what the crates share), `audiod` (the Mac's audio
+plane), `recalld` (the fleet's system of record and the web API), `runner` (the
+Mac's job loop and the live feed), `doctor` (the Mac's health agent), `cli`.
+`src/recall` is the Python model floor: the two shims the runners drive, the
+golden ASR check, and `llm-host`. `frontend/` is the Angular app; `android/` and
+`ios/` the microphone apps.
 
 ## Dev
 
-Backend (Python) in the Nix devshell:
-
 ```sh
-nix develop          # python + mypy + ruff + pytest + ffmpeg + sox + uv + node
-nix run ../dev-lint#gate -- . gate.json   # the full gate (gate.dhall -> gate.json)
+nix develop                               # rust, python, node, ffmpeg, sox, the lot
+nix run ../dev-lint#gate -- . gate.json   # the full gate; a commit runs it
 ```
 
-Frontend (Angular 22, in `frontend/`):
-
-```sh
-./scripts/recall-build-frontend.sh           # build into dist/ (served by the API)
-nix develop --command bash -c 'cd frontend && pnpm start'             # dev, proxies /api -> :8000
-nix develop --command bash -c 'cd frontend && pnpm test --watch=false'
-```
-
-ML deps (mlx-whisper, pyannote) live in `.venv`, which is a **symlink into the
-nix store** — `nix build .#dev-env --out-link .venv` builds it from `uv.lock`,
-the same lock the agents' `ml-env` comes from, plus the `dev` group. It was a
-uv-managed directory until 2026-08-10; nothing needs `uv sync` any more, and a
-fresh clone gets it from the gate's first venv row. Run a Python entry point
-with `nix develop --command env PYTHONPATH=src .venv/bin/python -m recall.<module>`
-— ⚠ without `PYTHONPATH=src` you get the built copy from the nix store, because
-`.venv` symlinks `recall` there.
-
-## Status
-
-Live and self-running, split across two machines: the Mac mini does capture and
-live + batch transcription as launchd services, recording the household to an
-encrypted disk, and pushes to Isis, which is the system of record and serves the
-web app.
-Per-turn EN/NL transcription works; speaker attribution turns on once a
-HuggingFace token is set and voices are enrolled (see `docs/running.md`).
-Transcripts are versioned and re-derived, never overwritten, so accuracy improves
-over time without losing history.
+`.venv` is a symlink into the nix store, built by `nix build .#dev-env
+--out-link .venv` from `uv.lock`. Run a Python module with
+`nix develop --command env PYTHONPATH=src .venv/bin/python -m recall.<module>`;
+without `PYTHONPATH=src` you run the store's copy, not your edit.

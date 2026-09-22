@@ -197,7 +197,6 @@ impl Detector {
         Ok(Self { session })
     }
 
-    /// Per-window speech probabilities for 16 kHz mono samples.
     /// Per-window speech probabilities for 16 kHz mono samples. Public because
     /// it is the only view that can pin the model's INPUT CONTRACT: the region
     /// rules above it are hysteresis, and hysteresis over all-zero probabilities

@@ -175,10 +175,6 @@ impl Shim {
             .ok_or_else(|| Error::Protocol("hello did not name the shim".to_owned()))
     }
 
-    /// Diarize one clip — who spoke when, as clip-relative spans.
-    ///
-    /// # Errors
-    /// Whatever `request` reports.
     /// Diarize one clip, and embed each speaker found in it.
     ///
     /// ⚠ **`embed` is asked for HERE rather than in a second job**, because the
@@ -190,6 +186,9 @@ impl Shim {
     /// No tuning passed: the shipped pyannote parameters are what the whole
     /// archive was diarized with, and a runner is not the place to diverge from
     /// that quietly.
+    ///
+    /// # Errors
+    /// Whatever `request` reports.
     pub fn diarize(&mut self, audio: &Path) -> Result<serde_json::Value, Error> {
         self.request(
             "diarize",

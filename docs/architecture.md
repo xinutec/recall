@@ -1,44 +1,42 @@
-# Target architecture: store-and-forward, one room stream, Rust on the server
+# recall — how it is built
 
-**Status: decided, and built except for C4, D5 and F2.** This file replaces the
-store-and-forward questions doc (git history has it); every question it raised
-is answered in the decision record below. [isis-migration.md](isis-migration.md)
-describes the system as it **runs today** — read this file as the destination
-and the ladder to it, not as what exists. The migration policy of
-[design.md §9](design.md) governs the whole ladder: a Python path is deleted
-only after its Rust replacement has survived real days.
+A local, always-on system that records household speech, transcribes it,
+attributes it to the person who said it, and makes it searchable: a memory aid,
+a faithful record of what was said, by whom, when. Everyone entering the house is
+told they are recorded. This file is the shape of the system as it runs;
+[running.md](running.md) is how to operate it.
 
-## Why this shape
+## Requirements, in priority order
 
-Three measured facts force it; none of them is a preference.
+1. **Completeness.** Never silently drop audio; a gap is the worst failure. Raw
+   audio is kept, so any minute can be re-derived later.
+2. **Accuracy.** Proper nouns (people, places, recurring topics) must be right.
+3. **Attribution.** Every utterance tagged with who said it, with an "unknown"
+   bucket for visitors.
+4. **Recall.** Full-text search, time and speaker filtering.
+5. **Privacy.** On-device, encrypted at rest, no cloud ASR, no telemetry. The
+   repository holds no transcript content and no names; those live only in
+   runtime data.
+6. **Low maintenance.** Runs as services, restarts on failure, surfaces its
+   health.
 
-- **The ML is Apple-Silicon-bound and nothing else is.** mlx-whisper and mlx-lm
-  are Metal-only; pyannote crawls on CPU ([isis-migration.md](isis-migration.md),
-  "the hard constraint"). Everything that is not a model call — recording,
-  delivery, storage, alignment, selection, VAD, the queue, the web backend — is
-  invariant-heavy plumbing, exactly the half [design.md §9](design.md) already
-  assigns to Rust when touched. This redesign touches all of it.
-- **Combination lost; selection tied.** SNR-weighted fusion failed its WER gate
-  and is null even between equal microphones; calibrated per-block *selection*
-  reproduces the best microphone exactly ([audio-plane.md](audio-plane.md),
-  "What the gate measured"). Selection needs no phase and near-zero CPU — so
-  the room stream can be produced on Isis, and the Mac shrinks to a stateless
-  GPU worker.
-- **Enhance the selected mic; do not stitch mics.** The #1522 listen test
-  (2026-09-04 dinner, five mics, judged by ear 2026-09-10): the best single
-  microphone was the clearest version of every minute tried, and that mic
-  through DeepFilterNet was better still — "no noise, clear voices" from
-  21 kbps Opus, so the lossy archive IS salvageable to pleasant audio.
-  Per-bin selection across mics sounded fine but never beat the best mic, and
-  one device whose own noise suppression had gutted its stream poisoned every
-  mix it entered while topping every floor-based ranking (#1526) — a defect
-  no metric caught and the ear caught in seconds. Enhancement is
-  phase-free, CPU-cheap, and composes with per-block selection (#1388).
-- **Streaming PCM discards on disconnect, by design** ([devices.md](devices.md)):
-  the server rebases a connection by one offset measured at its first byte, so
-  a replayed backlog would drift. Requirement #1 is completeness; the fix named
-  there — *a protocol that times each segment, not a bigger buffer* — is this
-  architecture.
+Latency is not a requirement: minutes behind real time is fine, which is what
+lets the most accurate models be used.
+
+## What it is for
+
+Two situations, and nothing else. Anything that serves neither is weight.
+
+1. **The home room, recorded by several microphones at once.** Continuous
+   capture, several mics hearing the same speech, turned into one searchable,
+   attributed record.
+2. **A single recording of a meeting, in hospital.** One file from a phone,
+   uploaded, transcribed and diarized, read back as a clean attributed
+   transcript. Not continuous, not multi-mic; the accuracy that matters is
+   proper nouns and medical terms.
+
+The two share a spine (capture, ASR, diarize, attribute, read) and differ in
+almost everything else.
 
 ## The shape
 
@@ -48,1628 +46,234 @@ phones (Kotlin/Swift)      geb + machines (audiod)      Mac USB mic (audiod)
         └─────────────┬── PUT segment, sha-256 receipt ──┬─────────┘
                       ▼                                  ▼
  ┌─ Isis — recalld (Rust): the system of record ──────────────────────────┐
- │  ingest plane: append-only blob store + ingest.sqlite   (no delete     │
- │  VAD at ingest → speech evidence, liveness               endpoint      │
- │  room builder: tier-1 align + raw selection [1]          exists)       │
- │  work queue → jobs out, results in                                     │
- │  [stage F] absorbs the browsing API + webauth + Angular UI             │
+ │  ingest plane: append-only blob store + ingest.sqlite  (no delete      │
+ │  speech detection at ingest → evidence, liveness        endpoint      │
+ │  room builder: align + select one microphone per minute  exists)      │
+ │  work queue → jobs out, results in → turns                            │
+ │  browsing API + Nextcloud sign-in + the Angular app                   │
  └──────────────┬──────────────────────────────▲──────────────────────────┘
-      odin restic nightly              Mac POLLS (one-way WireGuard intact)
+      odin restic nightly              the Mac POLLS (one-way WireGuard)
                       ┌────────────────────────┘
- Mac = stateless GPU worker: `runner` (Rust) polling the queue, driving
- three Python model shims — mlx-whisper, pyannote, mlx-lm. Nothing stateful.
+ Mac = stateless GPU worker: `runner` (Rust) polling the queue, driving two
+ Python model shims — mlx-whisper (`asr`) and pyannote (`voices`)
 ```
 
-[1] Calibrated selection is built and PARKED — see D3 below. The rank is
-    recorded in provenance; raw level chooses.
+Principles:
 
-Principles, each argued in the decision record:
-
-1. **Recorders own their audio until eviction.** Delivery is store-and-forward:
-   record → cache → upload → verify the receipt → keep anyway, until local
-   cache pressure evicts the oldest *verified* segment. No recorder ever
-   deletes because a server said so.
+1. **Recorders own their audio until eviction.** Record, cache, upload, verify
+   the receipt, keep anyway until local cache pressure evicts the oldest
+   verified segment. No recorder deletes because a server said so.
 2. **Isis is the system of record and the only always-on service.** One Rust
-   daemon, `recalld`, owns the ingest plane, the room stream, and the queue —
-   and, by the final stage, the browsing API.
+   daemon, `recalld`, owns the ingest plane, the room stream, the queue, the
+   passes that write turns, and the browsing API.
 3. **The Mac is a stateless GPU worker.** If it dies, every other recorder
-   keeps recording *and delivering*; the loss is bounded to its own microphone
-   going forward plus its own unuploaded cache.
+   keeps recording and delivering; the loss is its own microphone going
+   forward plus its own unuploaded cache.
 4. **The one-way VPN is untouched.** Recorders push to Isis; the Mac polls
-   Isis; nothing ever initiates toward the Mac.
-5. **The ingest plane is append-only.** There is no delete on any network
-   surface; destruction stays an operator act, behind the backup chain.
-6. **Python survives only where a model is called.** Three shims, plus `wer`
-   and the golden ASR check; everything else has a named retirement stage.
+   Isis; nothing initiates toward the Mac.
+5. **The ingest plane is append-only.** No network surface deletes; destruction
+   is an operator act behind the backup chain.
+6. **Python survives only where a model is called.**
 
-## Decision record
+Why this shape: the ML is Apple-Silicon-bound (mlx-whisper is Metal-only,
+pyannote crawls on CPU) and nothing else is; combining microphones lost to
+selecting the best one; and the fleet's threat model is destruction, not
+observation, so the Mac's isolation is the backbone rather than an obstacle.
 
-The ten questions the proposal had to answer, decided 2026-09-05.
+## What must survive
 
-1. **Format — FLAC on the wire; LOSSLESS FOREVER (revised 2026-09-10).**
-   Recorders deliver FLAC (mono, native rate) and Isis keeps it. The Opus tail
-   stands as a convenience copy, not as what the lossless decays into.
+Only the recording has to survive. Everything derived may be recomputed.
 
-   ⚠ **This supersedes the ~30-day rolling window #1425 decided.** Pippijn's
-   call, 2026-09-10, with the cost stated and accepted: fusion and high-quality
-   voice audio are the GOAL, not a possible later experiment, so the audio the
-   goal needs cannot be on a timer. Silence filtering is the intended way to
-   claw space back later.
-
-   ⚠ **And most of that clawing-back is free the moment delivery is really
-   FLAC.** Measured 2026-09-10: the phones currently send **WAV** — every
-   segment is exactly 5,760,044 bytes, 60 s of 48 kHz/16-bit mono, whatever it
-   contains. FLAC of the same audio is lossless and content-sensitive: the room
-   stream (16 kHz, built from these very sources) runs **78 KB for a quiet
-   minute against 509 KB for a talkative one**. So near-silence already costs
-   almost nothing in FLAC, and the planned silence filter is a second-order win
-   on top of a first-order one nobody has taken.
-   *Why:* selection needs no phase, but the spatial/TDOA tier is the one
-   unmeasured lever on the worst measured quality problem — attribution near a
-   speaker change ([pipeline.md §4](pipeline.md)), evidence one microphone
-   cannot carry. Opus at the source would weld that door shut permanently;
-   lossless forever is weeks of disk. The window keeps the door open on
-   exactly the audio experiments would run on. The upload protocol itself is
-   container-agnostic (the filename carries the extension): a recorder flips
-   to FLAC when its capture path does, and delivers what it has meanwhile.
-2. **The sweep veto's job moved to eviction rules + the backup chain** (done
-   2026-09-06: the deletion-order channel is deleted, not merely vetoed). See
-   "Deletion authority" below. The short form: a receipt triggers nothing; only
-   local cache pressure deletes; the ingest plane has no delete endpoint; Isis's
-   copy is behind odin's nightly restic and the Mac's off-site copy of it.
-3. **"Isis has it" = the recorder re-hashed its own file and the receipt's
-   sha-256 matched.** A 2xx is not proof and never triggers deletion — both
-   halves of the meeting-recorder litigation
-   ([meeting-recorder.md](meeting-recorder.md)) hold. What differs, deliberately:
-   continuous capture cannot keep everything on a phone forever, so eviction on
-   *cache pressure* replaces "only a person deletes" — but eviction eats only
-   segments whose hash was verified, oldest first, and never the open one.
-4. **Per-segment timing is in phase 1, by construction.** Closed segments carry
-   their capture stamp in their name (`<source>-YYYYMMDDTHHMMSS.<ext>`, UTC,
-   the recorder's own clock at segment open). The one-offset connection rebase
-   is retired with the streaming protocol, not repaired. Name-vs-arrival is
-   *delivery latency* under this protocol (a cached backlog arrives late,
-   legitimately), so clock skew is measured separately: the upload carries the
-   recorder's send-time, and the server stores it beside its own receive-time.
-   A skewed clock is recorded and flagged, never refused — completeness
-   outranks precision, same rule as today.
-5. **Isis produces the room stream, in Rust.** Selection is envelope alignment
-   plus a calibrated per-block rank — no STFT, no model. The Mac fetches one
-   stream and transcribes once (#1388). Fusion is not built; if coherent
-   combination is ever attempted it starts from the lossless window, which is
-   why decision 1 matters.
-6. **The USB mic path keeps our code out of capture.** The uploader reads
-   *closed* files from disk; sox → ffmpeg stays exactly as deployed. Machines
-   flip to FLAC by changing the ffmpeg segment codec, nothing else.
-7. **Retention: lossless, forever.** Pippijn's call 2026-09-10, cost stated and
-   accepted — fusion and high-quality voice audio are the GOAL, so the audio
-   they need cannot be on a timer. Silence filtering is how space comes back,
-   never re-encoding. Superseding a decision means grepping for its other
-   spellings: this line said "Opus forever, lossless windowed" for a day after
-   the section below was rewritten, so the file contradicted itself.
-8. **Live survives, structurally simplified.** The runner takes the *newest*
-   room segment first, backfill fills the rest; live and worker become one
-   path. The latency floor is segment length + upload + poll (~2 min today) —
-   accepted; latency is explicitly not a requirement
-   ([design.md §1](design.md)), and #1383's stalls were a property of the path
-   this deletes. Segment length stays a recorder parameter if that floor ever
-   needs lowering.
-9. **The archive and corrections migrate through the same front door.** The
-   Mac's audiod backfills its master archive through the ingest plane like any
-   other upload (bounded, idempotent, hash-verified). Rows are already on Isis
-   — it has been the system of record for them since the split.
-10. **A fourth credential plane: per-device, write-only ingest tokens.** See
-    "Credential planes". Not the sync token (opens all of `/sync/*`), not the
-    device token (creates sessions), not login-free (accepting gigabytes is
-    not a pause button). A stolen recorder can append audio and do nothing
-    else, and is revoked individually.
-
-## Proposed: text is written once — attribution labels, never rewrites
-
-⚠ **A DIRECTION, not a decision.** Raised by Pippijn ("we need to simplify;
-we're going to have our own way to do the time/separation work") and written up
-with the evidence so the choice can be made on it. One part ships, named at the
-end.
-
-### The measured problem
-
-Every serious data loss in this system has the same shape: **a pass that rewrites
-text in order to deliver metadata.**
-
-    transcript rows ever written        146,966
-      hidden                             96,829   (66%)
-      superseded                         11,166
-      visible                            49,646
-      hidden BY A HUMAN                       5
-
-Of the hides, **28,046 were made by diarization passes** to attach speaker labels
-(`diarized (mlx-community/whisper-large-v3-turbo)` 18,605, `diarized (per-mic
-runner)` 8,615, `diarized (adapter-current)` 826). The rest are legitimate
-replacements — a provisional live turn replaced by its archive version, a sync
-dedup — where new text supersedes old text of the same thing.
-
-⚠ The 28,046 are different in kind: **the pass had nothing to say about the
-words, and hid them anyway.**
-
-What that has cost, each a separate bug and all of them catastrophic for the same
-structural reason:
-
-- `refine.py` applied its filters AFTER hiding and blanked **132 segments** of
-  real household conversation.
-- The diarized pass flattened **814 clips** — 3,686 turns hidden, 815 written
-  back, 813 of them now a single turn (#1663).
-- It discarded every turn on **576 clips** because a loop filter ran on the
-  collapsed turn rather than the model's own segments (#1663).
-
-A metadata pass with a bug should produce a wrong label. This one produces a
-destroyed transcript.
-
-### What the rewrite buys, measured
-
-⚠ Less than the cost. Of the clips this stage aligned, **64% carried a single
-speaker** — nothing to split, so the rewrite delivered a name and spent the
-sentence boundaries to do it. On the 2026-09-19 controlled test its speaker spans
-covered 5.6 s of one 60 s clip and 8.0 s of another, and attribution scored
-0.177-0.651. Meanwhile five microphones produced byte-identical, essentially
-correct text without it, and Whisper's own segmentation beat anything the room
-re-cut produced (#1528, #1383).
-
-### The proposed model
-
-**Text is written once, by ASR, and no attribution pass may replace it.** Two
-operations are permitted on a turn, and neither can lose a word:
-
-- **split** — divide a turn at a boundary, preserving every word and its timing;
-- **label** — attach a speaker, a confidence, or any other metadata, touching no
-  text at all.
-
-The single-speaker case (64%) is then a pure label. The two-speaker case becomes
-"split at 12.4 s, label the halves", which is text-preserving by construction.
-**The destructive class of bug stops existing — not because it is fixed, but
-because the operation that caused it is gone.**
-
-Identity becomes a SEPARATE, ADDITIVE stream: voiceprints, cross-mic energy
-(#1529 places a speaker in the right room 7 times in 8) and habitual position are
-evidence attached to a turn with a confidence. A wrong one is corrected by
-changing a label, not by re-deriving a transcript.
-
-### What it gives up
-
-True diarization can in principle separate two voices INSIDE one ASR segment,
-where there is no boundary to split at. ⚠ Today's evidence says that is rare, and
-that the structural cost of keeping the capability is large. Decide it on that
-trade, not on the capability in the abstract.
-
-### What already ships
-
-`recalld::diarized::Swap::Attribute` labels the turns already there, each with
-the speaker whose span covers it most — no hide, no insert. A pass uses it
-whenever it would write fewer turns than it hides, at any speaker count, so it
-can no longer flatten a clip. `diarized::split_at_speaker_changes` is built and
-self-checking but unwired (#1663). Under the model above `Attribute` and a split
-would be the only operations, and `Swap::Replace` would retire.
-
-## What must survive — and what is therefore disposable
-
-**DECIDED 2026-09-06 by Pippijn: only the RECORDING has to survive. All
-processing may be changed at will; the product is being REBUILT, not
-transported, and the result does not have to be identical to today's.**
-
-That single sentence changes the shape of every stage below it, so read it
-before the ladder. It replaces "port the Python faithfully" with "keep the
-audio, rebuild the rest", and the difference is most of the remaining work.
-
-**Not re-derivable — these are the system of record:**
-
-| what | why it cannot be recomputed |
+| system of record | why it cannot be recomputed |
 |---|---|
-| the audio itself | requirement #1; a gap is the worst failure |
-| human corrections | a person listened and typed; the enrolment seed, and the only human input besides the audio |
-| enrolled speakers + voiceprints | seeded from corrections and confirmed turns |
+| the audio | requirement 1 |
+| human corrections | a person listened and typed; the enrolment seed |
+| enrolled speakers and voiceprints | seeded from corrections and confirmed turns |
 | vocabulary terms | hand-managed proper nouns |
 
-⚠ No counts here on purpose: they grow, and a stale one reads as authority. Count
-them when a decision needs the size.
+Transcripts, alignments, embeddings and speaker guesses are derived views.
+They are versioned, never overwritten: a better pass supersedes or hides, and
+the history stays. Re-transcription is on demand, triggered by a measured win
+on the golden ASR check, never by a calendar.
 
-⚠ Corrections are NOT "the recording", and they are kept anyway. They are the
-other human input in the system, they cost real time, and #1461 is blocked on
-making more of them. Treat the pair — audio plus what a person said about it —
-as the thing that survives.
+## Two planes, two databases
 
-**Everything else is a derived view and may be dropped or recomputed:**
-Two thirds of the transcript rows are hidden or superseded — **invisible weight**
-carried by every query, every migration and every port — plus tens of thousands
-of embeddings across 19 tables and a long migration ladder. ⚠ The ratio has held
-as the archive grew; the measured counts live in "text is written once" above,
-and are not restated here because a count in prose rots.
+`ingest.sqlite` is the **audio plane**: one row per delivered blob, speech
+seconds and level evidence per blob, room blocks, the job queue and the passes'
+ledger. `recall.sqlite` is the **meaning plane**: sources, audio segments,
+turns, corrections, speakers and voiceprints, and the FTS index. recalld owns
+both; the schema of the second is a migration ladder
+(`recalld::meaning_schema`), that of the first one `ensure`
+(`recalld::ingest_schema`). Every stored instant is text in one spelling
+(`audiocore::instant`), because instants are compared and ordered as text.
 
-Consequences, and they are large:
+The Mac keeps its own `recall.sqlite` beside its master archive, written by
+`audiod` (source registration, capture events, segment registration, speech
+seconds) and read by the doctor. It has no schema owner; a new column reaches
+the fleet and not the Mac.
 
-- **The browsing tier is REBUILT, not ported.** The 8 968 lines of `api_*`,
-  `store`, `store_schema`, `schemas` and `webauth` do not need a faithful
-  translation; recalld gets a clean schema of a handful of tables and the
-  current view, and the history stays behind in the old database.
-- **Byte-parity with the Python stops being a goal.** A parity gate would fail
-  on the first deliberate improvement. The read port was verified against the
-  real archive once (see F1) and the harness was then retired on purpose.
-- **A cut feature needs no port at all.** The fastest route to less Python is
-  deleting surfaces the product no longer has, not translating them.
+## Recorders
 
-### What recall is FOR — two use cases, and nothing else
+Three implementations, one contract.
 
-**DECIDED 2026-09-06 by Pippijn.** The product serves exactly two situations.
-Anything that serves neither is not a feature, it is weight.
-
-1. **The home room, recorded by several microphones at once.** Continuous
-   household capture, multiple mics hearing the same speech, turned into a
-   searchable attributed record. This is what the room-stream question (#1388,
-   #1461) is *about*: several recordings of one room have to become one
-   transcript.
-2. **A single recording of a meeting with doctors, in hospital.** One file from
-   the phone, uploaded, transcribed and diarized, read back as a clean
-   attributed transcript — who said what in an appointment. Not continuous, not
-   multi-mic, and the accuracy that matters is proper nouns and medical terms.
-
-The two share a spine (capture -> ASR -> diarize -> attribute -> read) and differ
-in almost everything else, which is why naming them separates what must be built
-from what merely exists.
-
-#### Use case 2 has no ladder, and its backlog is human, not mechanical
-
-Stages A–F below are entirely about use case 1. Use case 2 was measured against the
-archive on 2026-09-06:
-
-| | measured |
-|---|---|
-| recordings uploaded | 20, roughly weekly, over four months |
-| transcribed | 20 of 20 |
-| **diarized** | **20 of 20 — every one of the 2 222 visible turns carries a cluster** |
-| voices named by a person | 9 sessions; **11 have never been opened and named** |
-| rows kept | 10 593 written → 2 222 visible (the rest are the pre-alignment pass) |
-| corrections made on them | a handful |
-
-⚠ **`speaker_label` is the HUMAN name, not the machine's answer.** Diarization writes
-`speaker_cluster` (`SPEAKER_00`…); `speaker_label` is filled by the session screen's
-naming strip, where a person names each voice once and the label applies to every turn
-of that voice. Reading a null `speaker_label` as "diarization did not run" inverts the
-finding completely — it says a person has not been here yet, and the machine half is
-done. Both `recalld::sessions::sessions` and `name_voice` document this; the query does not.
-
-So use case 2 has no pipeline defect on the evidence available. Its measured gap is
-**11 meetings awaiting a few minutes each of naming**, which is the same shape as the
-corrections finding below: the machine work is done and the human work stopped. Before
-building anything here, that is the fact to act on, and it needs no code.
-
-What use case 2 does **not** need, and this is worth recording because it looks like it
-should: a role picker. Naming each diarization voice once per session, applied to all
-its turns, with a voiceprint suggestion beside it, is already built and is what the
-session screen is.
-
-⚠ **What is NOT established** is quality: whether those clusters split the doctor from
-the patient correctly, and whether medical terms and proper nouns survive ASR. Nothing
-measures either — `docs/meetings.md` still says a publishable transcript is
-hand-cleaned. That is where a real use-case-2 work package would start, and it needs
-ground truth on a meeting before it can start at all.
-
-### Training is not a goal
-
-**DECIDED 2026-09-06 by Pippijn: "We don't need to train. We only need to
-correct. What we train from that, we can decide later."**
-
-So the LoRA toolchain is deleted (`finetune`, `training`, `hf_asr`, `evaluate`,
-`finetune_pilot` — 925 lines), and with it the export/pilot/fine-tune commands
-and the adapter branch in the transcriber.
-
-⚠ **ENROLMENT IS NOT TRAINING, and it stays.** Labelling a voice attaches a name
-to a voiceprint; that is how attribution works, it is requirement #3, and it is
-what separates the doctor from the patient in use case 2. `identify` and `embed`
-were checked and are independent of the deleted cluster. Corrections keep
-feeding voiceprints — what went is the LoRA machinery, which `design.md` already
-recorded as un-deployed since 2026-07-11.
-
-⚠ **Corrections are still collected, and are still not re-derivable.** They are
-the human half of the system of record ("What must survive" above). What changed
-is what we do with them: attribution now, training maybe later.
-
-### Scope of the rebuilt product
-
-**DECIDED 2026-09-06 by Pippijn.** KEPT: the core memory aid — timeline,
-search, playback, correction, speaker attribution — plus **meetings/sessions
-upload** (the Android recorder and its device-token plane).
-
-CUT: **Ask** (LLM Q&A over the archive), **day summaries**, **Compare / A-B**,
-and the **quiet-review** operator surface.
-
-⚠ **Cutting Ask MUST NOT take `llm-host` with it.** The one-holder daemon
-(`recall.llmhost`, 127.0.0.1:8092) is also the model holder for a DIFFERENT
-project — `life/tools/emotion_worker.py` addresses it directly over loopback.
-Deleting it would break life silently, from a change made in this repo for
-unrelated reasons. The daemon and its launchd agent stay; what goes is recall's
-own consumption of it.
-
-⚠ Cutting the quiet review does not mean junk returns to the read path. Under a
-rebuilt schema the sweeps become a filter at derivation time rather than a
-`hidden_reason` column plus a review UI — which is also why so many hidden rows
-need not travel.
-
-**Dropped 2026-09-06, from measured use rather than taste** (the archive records
-which tools were actually used):
-
-| dropped | evidence |
-|---|---|
-| the `train` bulk-correction queue | one correction screen is enough, and #1461 needs the timeline's window-targeted one, not lowest-confidence-first |
-| `/api/split` (per-fragment split) | **no caller in the frontend at all** — already dead code |
-| manual hide / unhide of a turn | 9 uses, ever: 5 through the train screen's "can't make out", 4 hand-hidden. Every other hidden turn was hidden by machine |
-| the clip-trimmer (boundary nudge) | same family; no use detectable, needed by neither use case |
-
-⚠ **span-assign is HELD OUT of this list, 2026-09-06, and the same measurement is
-why.** Its 57 uses across 17 parents on one June day were *all on a hospital meeting*
-— use case 2, the half Pippijn ranked first. It is the one gesture behind
-reassign/split/merge, i.e. the tool for repairing attribution when diarization merges
-two people into one voice, and #1470 records that meeting attribution quality has
-never been measured. Cutting the repair tool before knowing whether the thing it
-repairs is broken is the wrong order. Revisit once #1470 has ground truth.
-
-⚠ The "zero uses, ever" above was WRONG when first written and is corrected here:
-`can't make out (human)` and hand-authored hide reasons exist in the archive. Nine
-rows does not change the decision — it changes what the decision may claim.
-
-KEPT for the same reason: **almost every correction sets a SPEAKER** and only a
-minority change text, so correcting *who spoke* is the job. Hiding a bad CORRECTION stays
-(13 real uses) — a mistaken correction otherwise poisons enrolment.
-
-⚠ **And the finding that outranks the list**: corrections were made in bulk in one
-month, a trickle the next, and have all but stopped since. See #1467 — whether the review UI is the reason is unknown
-and unmeasurable from the archive, and it decides whether #1461 is even the right
-next task.
-
-## Components
-
-### Recorders
-
-Three implementations, one contract:
-
-| recorder | capture | store-and-forward |
+| recorder | capture | delivery |
 |---|---|---|
-| Mac USB mic | `audiod capture` (deployed): sox → ffmpeg segments | `audiod upload` (stage B): watch closed segments, deliver, verify, record state |
-| Linux hosts (geb) | `audiod capture` via nix — sox reads ALSA on Linux | same binary, same uploader |
-| phones | Kotlin / Swift apps, today streaming PCM | record closed segments via the platform encoder; upload with the same protocol (stage C) |
+| Mac USB mic | `audiod capture`: sox on CoreAudio, ffmpeg segmenting | `audiod upload` |
+| Linux hosts (geb) | `audiod capture` with ffmpeg on ALSA | the same |
+| phones | Kotlin and Swift apps: stream PCM to `audiod ingest`, and record closed segments locally | the apps' own uploader |
 
-The recorder contract, in full:
+The contract: record fixed-length segments (60 s) named
+`<source>-YYYYMMDDTHHMMSS.<ext>` from the recorder's own UTC clock at segment
+open; `PUT /ingest/v1/segments/{source}/{filename}` with the source's bearer
+token; compare the receipt's sha-256 with a local re-hash before counting it
+delivered; evict only under cache pressure, only verified segments, oldest
+first, never the open one; honour the household pause. The name is the only
+timing a segment carries, so one crate parses it (`audiocore::names`), and a
+skewed clock is recorded beside the receive time rather than refused.
 
-- Record fixed-length segments (60 s today) to local storage, named
-  `<source>-YYYYMMDDTHHMMSS.<ext>` from the recorder's own UTC clock at
-  segment open. The capture thread never blocks on anything the uploader does.
-- Upload each closed segment: `PUT /ingest/v1/segments/{source}/{filename}`
-  with its bearer token; compare the receipt's `sha256` against a local
-  re-hash. Match → mark verified. Mismatch or error → retry with backoff;
-  the file stays.
-- Evict only under cache pressure (a configured ceiling), only verified
-  segments, oldest first, never the open segment.
-- Honour pause: recorders poll the control plane's pause state (the phones
-  already do, for their UI); a paused household records nothing anywhere.
-  The Mac's local `capture_paused_until` break-glass file keeps working.
-- Upload policy is network-aware on phones: deliver on unmetered networks,
-  cache on metered ones. Machines deliver always.
-- Heartbeats are unchanged (hourly, credential-free, to the control plane).
+Capture is sox into ffmpeg, never ffmpeg's own device input: ffmpeg's
+`avfoundation` drops samples on this Mac. The USB mic is pinned by CoreAudio
+device name; an unknown name fails loudly rather than falling back to whatever
+macOS made the default. The capture agents run at launchd's `Interactive`
+class, because `Background` is throttled and a starved real-time reader drops
+samples no later pass recovers. A pause stops every recorder; nothing is
+recorded against one.
 
-### recalld — the Isis daemon
+Segments are FLAC, lossless, kept forever. Opus was the default once and
+destroys phase, which is why the older archive cannot be combined coherently.
 
-One Rust binary (axum + rusqlite), replacing the Python fleet tier stage by
-stage. It owns, in build order:
+## recalld
 
-- **Ingest plane** (stage A): the upload endpoint, an append-only blob tree
-  `<data>/ingest/<source>/<filename>`, and `<data>/ingest.sqlite` bookkeeping
-  (source, filename, capture start parsed from the name, bytes, sha-256,
-  received time, skew flag). Durability order: stream to a temp file while
-  hashing, fsync, rename into place, fsync the directory, insert the row,
-  then answer. Idempotent: re-upload of identical bytes returns the same
-  receipt; a name collision with different bytes is 409 — never overwrite.
-- **VAD at ingest** (stage D): silero via ONNX on each stored segment —
-  speech seconds per segment, feeding liveness ("active" = recent segment
-  with speech), the quiet review's evidence, and room prioritisation.
-- **Room builder** (stage D): align sources per block (tier-1 envelope
-  correlation — works on everything, including the Opus tail), rank by
-  calibrated speech level, emit `room-<UTC>.flac` segments into the same
-  store plus queue rows. Calibration is maintained per device from what each
-  actually records (rolling floor/speech percentiles), which is what makes
-  the rank mean "how well is this mic hearing the speaker, for this mic"
-  ([audio-plane.md](audio-plane.md)).
-- **Work queue** (stage E): jobs out (`transcribe-room` first; refine, ask,
-  and the rest absorbed from `/sync/jobs` later), results in (turn rows,
-  written with the same SQL the Python store uses — copied, not re-derived,
-  the `audiod::store` precedent).
-- **Retention** (stage D): ⚠ SUPERSEDED — the decision record revised this to
-  LOSSLESS FOREVER. What remains is silence filtering, never re-encoding.
-- **Browsing API + webauth + static frontend** (stage F): the FastAPI surface
-  ported route-group by route-group; the Angular app unchanged, its typed
-  contract regenerated from Rust types. **DONE 2026-09-12** — the Python is
-  deleted, not merely unreachable, and the image carries no interpreter.
+One binary (axum, rusqlite) on Isis, binding the ingest port the recorders
+push to and the port the browser uses. It owns:
 
-recalld and the Python `recall api` ran side by side in the pod until stage F
-retired the latter. recalld owns `ingest.sqlite`; `recall.sqlite`
-remains the transcript system of record (shared, WAL, busy-timeout — the same
-multi-process discipline the Mac's own agents use on their copy). The
-audio-plane / meaning-plane split of [audio-plane.md](audio-plane.md) is thereby
-preserved on Isis: blobs + ingest.sqlite are the audio plane; recall.sqlite is
-meaning.
+- **The ingest door.** Bytes stream to a temp file, are fsynced, renamed into
+  place, the directory fsynced, the row inserted, then the receipt goes out.
+  A re-PUT of identical bytes is idempotent; a different blob under a taken
+  name is 409 and the stored one is untouched.
+- **Speech and level evidence per blob.** Silero (`audiocore::vad`, the same
+  detector the Mac runs) measures speech seconds; a level scanner measures the
+  speech and floor quantiles per segment, from which each device's reference is
+  a query rather than a typed number. A segment measured silent gets no
+  transcription job: transcribing silence returns inventions, not nothing.
+- **The room builder.** One microphone per minute, chosen by level, aligned by
+  envelope correlation. Built and transcribed in shadow; its turns are not yet
+  written for the household to read (#1388).
+- **The work queue.** Jobs are derived from the blobs, never enqueued, so a
+  missed enqueue cannot strand audio. A lease is time-bounded; a runner that
+  dies lets it lapse; a job nobody finishes is retired after three leases. Kinds:
+  `transcribe-segment` and `diarize-segment` for every microphone clip and
+  uploaded meeting, `enroll-speaker` for turns a person has named, and the room
+  pair. Enrolment outranks capture time in the lease, or a label would wait
+  behind days of backlog.
+- **The passes.** `turns` writes the transcript of a clip that has none;
+  `diarized` aligns the words to the speaker spans and labels the turns that
+  exist, or replaces them with speaker-split ones, and never writes fewer turns
+  than it hides; `enrol` turns a named turn into a voiceprint; `rematch`
+  re-derives speaker guesses when the voiceprints have grown. Every terminal
+  decision that writes nothing leaves a ledger row, or the clip sits at the
+  head of the queue for ever. Every row a pass writes carries a provenance that
+  names the pass, so a pass can be taken back.
+- **The browsing API and the app.** Timeline, search, playback, corrections,
+  sessions, labels, the capture control, behind the Nextcloud sign-in. The
+  frontend's types are generated from the route structs (`ts-rs`); the gate
+  fails on drift.
 
-### runner + model shims — the Mac worker
+Quality rules run where rows are written: a repetition loop or a wordless turn
+is refused at the write (`audiocore::text`, shared with the doctor so both
+judge the same text the same way); a whole-clip language outside the
+household's two zeroes a turn's confidence rather than hiding it. Confidence,
+length and the language label alone are never grounds to hide: the commonest
+low-confidence turns are quiet real agreement, and most turns labelled a
+foreign language are Dutch and English mislabelled.
 
-`runner` (Rust, stage E) is the whole Mac orchestration: poll recalld for the
-next job (newest room segment first), fetch the blob, drive a local model shim,
-push the result, ack. It replaces worker, live, jobs, sync-push, outbox and
-capture-mirror — a stateless poller needs no watermark, no outbox, no mirror
-queue, because the queue lives on Isis.
+### Text is written once
 
-The shims are the Python floor, and very nearly ALL of the Python. `src/recall`
-is down from 40 modules and ~8,000 lines to a fraction of that — count it with
-`wc -l src/recall/*.py` rather than trusting a number here. The
-agent's CLI toolbox was deleted whole (#1342), and `store_schema.py`'s migration
-ladder became `recalld::meaning_schema` (#1538). What remains is these shims,
-their model wrappers, `llm-host`, `score_asr` (the golden ASR gate, kept so a
-quality change is judged by a number), and `api_models`/`schemas` which the
-gate's frontend type generator reads.
+A direction, not yet the whole rule: a pass that attributes may split a turn
+or label it, and may not rewrite its text to do so. Every serious data loss here
+was a metadata pass that hid text to deliver a label. What ships: a pass that
+would write fewer turns than it hides labels instead (`Swap::Attribute`), and a
+proven, unwired split (`diarized::split_at_speaker_changes`). `Swap::Replace`
+still exists for the rest.
 
-⚠ **That floor is the decided end state, not a staging post.** The models are
-Python, so their wrappers are.
+### Speaker attribution: identification, not diarization
 
-Long-lived processes speaking JSON over stdio, one per model family —
+For the household, the question per stretch of speech is which of a few known
+people it is, not how many voices there are. Whisper's own segment boundaries
+fall at speaker changes nearly every time; pyannote's spans cover about a fifth
+of the speech in a busy clip. So the direction (#1711) is to embed each Whisper
+segment, match it to the enrolled prints, and use cross-mic energy as a
+position prior, with a small model fitted on the household's labelled turns.
+Pyannote's clustering stays for meetings: unknown speakers, one microphone.
 
-| shim | wraps | serves |
-|---|---|---|
-| `asr` | mlx-whisper | transcription, word timings |
-| `voices` | pyannote | diarization, embeddings |
-| `llm` | mlx-lm | summaries, ask (stays behind llm-host's one-holder rule) |
+## runner and the model shims
 
-A shim holds weights, takes one job at a time, and does no I/O beyond its
-stdio and the audio path it is handed. Model choice per job stays a queue
-field, so the non-turbo `large-v3` lever ([pipeline.md §2](pipeline.md)) is a
-config change once #1388's capacity win lands.
+`runner` is the Mac's whole orchestration: lease a job, fetch the blob, drive a
+shim over stdio, push the result, ack. It holds no state. Two agents run it,
+one per shim, because each shim holds one model's weights. A shim is a
+long-lived Python process speaking line-delimited JSON on stdio, holding
+weights, taking one job at a time, doing no I/O beyond its stdio and the audio
+path it is handed. `asr` wraps mlx-whisper (large-v3-turbo, word timings);
+`voices` wraps pyannote (diarization and embeddings). The vocabulary the
+transcriber is biased with is read from the fleet at startup and handed to the
+shim per job; a runner that cannot read it refuses to transcribe unbiased.
 
-### recall-live — the instant feed, and why a call costs its window
+`recall-live` is the instant feed: it reads the tap the segmenter publishes,
+cuts at pauses with the same detector, transcribes each utterance as the
+speaker stops, and pushes it to `POST /sync/live`. A live turn is provisional;
+the archive pass hides it when it writes the same minute. It joins whatever is
+waiting into one call, because Whisper pads every call to 30 seconds and the
+cost is the window, not the audio.
 
-`recall-live` reads the tap, cuts it at the pauses with `audiocore::vad` and
-pushes what was said straight to `POST /sync/live`. It keeps no store: a live
-turn is provisional, the archive pass re-derives the same minute properly within
-the hour, so the push IS the write.
-
-⚠ **A transcribe call costs the WINDOW, not the audio in it.** Whisper pads every
-input to 30 seconds and runs its encoder over all of it. That makes a
-one-second call and a twenty-nine-second call cost nearly the same, and puts a
-whole extra encoder pass just past 30 s. The consequence is specific to this
-tier, which cuts at sub-second pauses: transcribing each fragment on its own
-throws away most of every call, and because each costs more than the speech it
-carries, **the lag grows for as long as anybody keeps talking.**
-
-So the tier joins whatever is already waiting into one call
-(`live::drain`), bounded by `live::CALL_SECONDS`. Nothing is ever waited FOR —
-an empty queue means the shim is keeping up and the utterance goes alone — so
-the joining happens only when the tier is behind, which is the only time it
-helps. Measure a change here with `cargo run -p runner --example live_cost`,
-which runs both disciplines through the real shim on the same audio and prints
-the text as well as the clock: the reason to read the text is that a longer call
-gives the model more context, and context changes words.
-
-⚠ The bound is a latency choice, not a throughput one. Joining to the full 30 s
-would maximise throughput and maximise latency, which is the wrong end for the
-one tier whose entire value is immediacy.
-
-### Credential planes
-
-The three existing planes are untouched
-([isis-migration.md](isis-migration.md)); this adds the fourth:
+## Credential planes
 
 | plane | credential | can |
 |---|---|---|
-| browsing | Nextcloud SSO session | read/write the UI's API |
+| browsing | Nextcloud SSO session | read and write the app's API |
 | recording control | none (network-gated) | pause state, liveness, heartbeats |
 | device upload | `RECALL_DEVICE_TOKEN` | `POST /api/sessions` only |
-| **ingest (new)** | per-device token | `PUT` its **own** source's segments; nothing else — not read, not list, not another device's source |
-
-The token table (`RECALLD_INGEST_TOKENS`, or `--tokens <file>` in dev) holds
-one `<source> <token>` per line, supplied from the k8s secret — never in the
-image, never in the nix store. One widening: a `*` line grants a token every
-source, still write-only — the Mac's backfill grant, because its archive
-holds every device's master plus a new source per uploaded meeting, and an
-enumerated list would drift with each one. Devices never get `*`. Unconfigured = open, the repo's standing inert-unless-configured
-pattern, so dev and tests need no ceremony. The read side (listing, blob
-fetch, the queue) takes the Mac's sync token. A phone that can upload still
-cannot read a transcript — the property that motivated the third plane,
-preserved in the fourth.
-
-## Storage, retention, bandwidth
-
-Measured 2026-09-05, method noted so the numbers can be re-derived rather than
-trusted: five sources produced 104 MB Opus in 2 h 22 min (`du` over the source
-dirs), so continuous capture is ~1 GB/day compressed; lossless mono at native
-rates is an order of magnitude more, ~20 GB/day. Isis has 1.1 T free (`df` on
-the PVC's filesystem). That figure was the basis for the ~30-day window, which is
-**withdrawn (2026-09-10): lossless is kept forever.**
-
-⚠ The shape of the bill depends on what each recorder actually sends, and they
-differ — WAV, FLAC and Opus are all present in the archive at once. ⚠ Check the
-extensions before costing anything. When measured, three phones delivered
-lossless while `iphone11` and `usb` did not, and
-`usb` is the condenser that leads the others by 21 dB, so it is the one most
-worth having. At WAV's flat 5.76 MB/min, three phones recording ~12 h/day is
-~12.8 GB/day, and Isis's 969 GB free is about seventy days. As FLAC the same
-audio is several times smaller and silence is nearly free, which is what makes
-"forever" a disk purchase rather than a wall. **Encoding the delivered WAV to
-FLAC is therefore the first storage work, and it costs no quality at all.**
-
-⚠ **The Mac's own archive was the half nobody had looked at, and it was still
-lossy — a day after the decision.** Measured 2026-09-11: every network-mic
-segment at rest was `.opus`, because the phones stream raw PCM to `audiod
-ingest` and the segmenter took its DEFAULT codec, which was Opus. The
-condenser had been switched by hand the night before, which is precisely why
-nothing looked wrong. Fixed at the default rather than per agent
-(`audiod/src/segmenter.rs`), so a recorder cannot be lossy by omission; the
-explicit `--codec flac` on the condenser agent came back out, because carrying
-it on one agent is what made the others look deliberate.
-
-  The cost, from the only true-lossless minutes in the archive (3 condenser
-  segments, 48 kHz mono — thin, so treat as an order of magnitude): **0.57 MB
-  for a quiet minute, 1.5 MB for a talkative one**, against Opus's flat
-  ~0.17 MB. Four network mics recording most of a day therefore land in the
-  low single GB/day. The backup volume has 939 GB free against a 12 GB
-  archive, so the horizon is months, not weeks — and silence filtering is what
-  extends it, never re-encoding.
-
-Bandwidth is the one unmeasured prerequisite: lossless delivery sustains
-~2 Mbit/s aggregate from the house to Isis. Stage B's acceptance includes
-measuring the real sustained rate; if the uplink cannot carry lossless, the
-recorders still deliver (the protocol doesn't care), the cache absorbs the
-difference, and the fallback is explicit — constrained recorders stay on Opus
-and the lossless window narrows to the microphones that matter most for TDOA.
-Phones defer upload on metered networks by default.
-
-Isis CPU (4 cores, shared with Nextcloud): VAD, the room builder and the Opus
-transcode are each order-of-magnitude ~1 core-hour per day at current volume —
-estimates, to be measured in their stages, with the room builder's measured
-90x-realtime Mac figure as the anchor ([audio-plane.md](audio-plane.md)).
-
-## Deletion authority — what replaces the sweep veto
-
-The fleet's threat model is destruction, not observation. The Mac's master
-archive used to refuse destructive orders from Isis (the sweep veto,
-[isis-migration.md](isis-migration.md)); since 2026-09-06 it receives none,
-because the channel was removed rather than guarded — the veto, its refusal
-journal and its doctor check went with it. Isis-as-master redistributes that
-protection rather than dropping it:
-
-- **No network path deletes.** The ingest plane is append-only; recalld
-  exposes no delete. Quiet-review sweeps of speechless capture remain an
-  operator-plane act on Isis, now backed by Isis's own VAD evidence — and
-  they no longer cascade anywhere, because nothing obeys deletion orders.
-- **Recorders never obey.** Eviction is a local decision under local cache
-  pressure. Isis's word can cause *nothing* to be destroyed on any recorder;
-  a compromised Isis can at worst lie about receipts, which slows eviction
-  (the safe direction) or — with a forged matching hash it cannot compute
-  without the bytes it claims to hold — is caught by the re-hash.
-- **The backup chain holds the tail risk.** odin pulls a nightly restic of
-  Isis (SQLite snapshot + blob rsync — the ingest tree lives on the same PVC
-  and rides the same job); the Mac keeps its off-site copy of odin's repo.
-  The window in which one machine holds the only copy is upload → next
-  nightly run, and recorder caches typically span multiple such cycles
-  (machines hold days–weeks at their ceilings; phones hours–days).
-- **The Mac's master archive is not surrendered early.** Until stage F its
-  archive stays complete and protected exactly as today; eviction on the Mac
-  is enabled last, after Isis + backups have carried the full load through
-  real weeks.
-
-## Pause and liveness under store-and-forward
-
-Pause authority is unchanged: intent lives on Isis, the Mac keeps its
-break-glass file, and *recorders stop recording* rather than the server
-refusing bytes — a paused household produces nothing to upload. Liveness
-inverts cleanly: today the ingest socket's `.alive` marker says "streaming";
-under store-and-forward, "active" is a recent delivered segment bearing
-speech (recalld's VAD), which is the same promise — a dot the audio can back
-— with delivery latency added. Heartbeats continue to cover the
-dead-app-while-paused gap they were built for ([devices.md](devices.md)).
-
-## Migration ladder and work packages
-
-⚠ **Mostly a COMPLETED RECORD — read it for reasoning, not for status.** The
-migration landed: the only Python left is the floor named in "What stays Python"
-below, ~2,300 lines of model shims and evaluation. Individual packages carry
-their own dated notes, which is where the reasoning lives.
-
-**Still open, and the only three worth scanning for:**
-
-- **C4. Retire streaming** — the phones still stream to `audiod ingest`; the TCP
-  path and the `.alive` marker go when every device has flipped and survived real
-  days.
-- **D5. Retention** — superseded as written; what is left is silence filtering.
-- **F2. The Mac joins the recorder contract fully** — eviction at a generous
-  ceiling, and the "master archive" title passing to Isis and the backup chain.
-
-
-Stages land in order; each is shadow-first and per-device where it touches a
-live recorder; nothing Python dies before its replacement has survived real
-days. Work packages are written to be delegable: each names its context, its
-contract, and what proves it. Every package lands green through the full gate
-(`nix run ../dev-lint#gate -- . gate.json`) and follows
-[conventions.md](conventions.md) — TDD, strict lints, no warnings.
-
-### Stage A — recalld ingest plane (additive; touches nothing live)
-
-*Stage A is live 2026-09-05: A1–A4 built and deployed via A5 (the kubes
-model grew a `Sidecar`; the fleet image carries `recalld` and the pod runs
-it beside the api).*
-
-- **A1. Crate + skeleton.** New `recalld/` crate (axum, tokio, rusqlite
-  bundled, sha2, tracing), mirroring `audiod/`'s lint posture
-  (`unsafe_code = "forbid"`, pedantic clippy). Binary `recalld` with
-  `--root`, `--bind`, `--tokens`; `GET /ingest/v1/health`. Gate rows: fmt,
-  clippy, test (copy audiod's three in `gate.dhall`, regenerate `gate.json`
-  via dhall-to-json). *Proof:* gate green; health answers in a test.
-- **A2. Blob store + receipts.** `PUT /ingest/v1/segments/{source}/{filename}`
-  with the durability order, naming validation (source dir = name prefix,
-  stamp parses, extension allowlisted: flac/opus/ogg/wav), idempotency, 409
-  on divergent re-upload, size cap, skew flag. `ingest.sqlite` schema +
-  row insert. *Proof:* tests for round-trip hash, idempotent re-PUT,
-  divergent 409, bad names, a truncated body never producing a row or a blob.
-- **A3. Token plane.** Tokens file, per-source authorization, inert when
-  unconfigured, constant-time compare. *Proof:* tests for wrong token, right
-  token/wrong source, unconfigured-open.
-- **A4. Read side.** `GET /ingest/v1/segments?source=&since=` (rows) and
-  `GET /ingest/v1/blob/{source}/{filename}`, gated by the sync token.
-  *Proof:* list/fetch tests incl. auth.
-- **A5. Deploy.** The Dockerfile's Rust stage (done with A1) puts `recalld`
-  in the one fleet image; the pod runs it as a second container from the
-  same image. The monorepo's kubes model (`dhall/lib/types.dhall`,
-  `render.dhall`) models one container per Workload plus DB sidecars, so
-  this needs a modelled second-container field, not a hand-edit: same
-  image, own command (`recalld --root /data --bind 0.0.0.0:8001 --tokens
-  /secrets/ingest-tokens`), the same PVC mount (RWO — same pod is what
-  makes sharing it legal), a tokens file projected from `recall-secret`,
-  `RECALLD_READ_TOKEN` env, and a second wg-bound hostPort (8001) beside
-  8000. Also: the PVC's modelled 50 Gi is sized for today's mirror, not
-  the stage-D lossless window — revisit `storageGi` when D5 lands, not
-  now. Verify odin's backup job covers the ingest tree (it rsyncs the
-  whole PVC — confirm, don't assume). Host-touching; deploy with
-  `kubes/deploy.sh recall` per the monorepo's docs.
-
-### Stage B — the Mac delivers (audiod upload)
-
-*Live 2026-09-05: A5 deployed (the pod runs recalld beside the api, wg
-hostPort 8001, write gate proven up by a refused wrong-token PUT), B1's
-agent wired, and the first deliveries verified end to end — a blob fetched
-back from Isis hashes identical to the Mac's master. B2's first measurement:
-200 segments in 50.1 s, zero failures, wall time all network wait — ~4
-deliveries/s sequential, ~4.2 Mbit/s effective at the archive's smallest
-segments. That clears continuous capture (~5 segments/min) by ~50x and the
-~2 Mbit/s lossless floor with room; re-measure at FLAC segment sizes when
-B3 lands.*
-
-- **B1. Uploader.** `audiod upload --root <archive> --url <base>`: scan for
-  closed segments, deliver oldest-first, verify receipts, record state in an
-  audiod-owned `upload-state.sqlite` under the archive root. Never touches
-  the open segment; wholly off the capture thread (separate process).
-  Launchd timer agent in `deploy/hm-agents.nix`. *Proof:* tests against a
-  stub server — receipt match, mismatch retry, crash-resume idempotence.
-- **B2. Measure.** Sustained upload throughput and archive backfill rate on
-  the real link (decision-record bandwidth gate). Record findings here.
-- **B3. FLAC on machines.** Flip `audiod capture`'s ffmpeg segment codec to
-  FLAC behind a flag; shadow first (`docs/audio-plane.md` cutover rule).
-- **B4. The doctor learns delivery.** *Done 2026-09-05:* `delivery_checks`
-  grades the backlog by its oldest member's age (both sides counted — the
-  disk scan against the state db, so completeness is the same check) and
-  WARNs on any journaled 409, naming the files. Quiet where the uploader
-  has never run. The whole archive backfilled the same day: every
-  grammar-matching segment delivered and verified, zero conflicts.
-
-### Stage C — phones and geb flip, streaming retires
-
-- **C1. Android store-and-forward.** *Shadow built 2026-09-05:* the mic loop
-  tees into capture-stamped closed segments (`SegmentWriter`/`SegmentStore`,
-  the meeting queue's state-is-a-directory idiom), delivered by
-  `SegmentUpload` with the receipt re-hash rule, unmetered-only, evicting
-  verified-delivered oldest-first under a ~2 GiB ceiling and never anything
-  else. WAV first, deliberately: the protocol is container-agnostic and
-  MediaCodec's FLAC header behaviour gets probed on-device (C1b) rather
-  than assumed. Streaming is untouched; a segment never spans a reconnect
-  gap (the name claims continuity from its stamp).
-  *Verified end to end 2026-09-05: pixel5's shadow WAVs delivered to Isis
-  under its own token during a live test; per-device tokens live for all
-  four phones.*
-  **DECIDED 2026-09-06 by Pippijn: RECORD WHENEVER UNPAUSED.** The mic opens
-  whenever capture is not paused, regardless of the Mac or of being at home.
-  The alternatives were keeping Mac-connect (an outage silences every phone,
-  the failure store-and-forward exists to end) and gating on home presence.
-  ⚠ **This deliberately widens capture BEYOND the house** — cafés, other
-  people's homes, other people's conversations — and that is a consent
-  decision, which is why it was his to make and not a default to infer. The
-  pause remains the whole control surface, so it becomes the thing that must
-  always work: everything else can degrade, that cannot.
-- **C2. iOS store-and-forward.** *Built and installed 2026-09-05:* the
-  Swift mirror of C1 (SegmentStore/Writer/Upload, WAV first, receipts
-  re-hashed, evict-under-pressure), tee gated on the CONNECTION — on iOS
-  the mic stays hot even while paused, so the connection is the one signal
-  meaning at-home + unpaused. Token provisioned via the app's data
-  container over devicectl.
-- **C3. geb.** *Cut over 2026-09-05* — the LAST Python recorder retired:
-  `audiod capture` (ALSA producer via ffmpeg, geb's own proven device
-  path) + `audiod upload` + `audiod pause-mirror` under systemd
-  (nixos-config `machines/geb/recall-recorder.nix`; audiod pinned by
-  out-link, see the module's bump note). First store-and-forward delivery
-  verified on Isis within a minute of capture. Transitional and accepted:
-  geb no longer beats or streams, so the old liveness reads it stale until
-  the delivery-based liveness lands (see D4/liveness below).
-- **C4. Retire streaming.** After every device has flipped and survived real
-  days: delete the TCP ingest path (`audiod::server`, `rebase`, `beat_relay`
-  LAN fallback if subsumed), and the `.alive` marker with it. `recall.mic` —
-  the Python streaming client for a Linux host — is already gone (2026-09-12):
-  `audiod capture` replaced it on geb and nothing imported it afterwards. Per-device, one at a time, confirm each records+delivers
-  before the next ([devices.md](devices.md) update rule).
-
-### Stage D — the room stream on Isis
-
-- **D1. Shared DSP crate.** *Done 2026-09-05:* one workspace
-  (audiocore + audiod + recalld, one lockfile), `audiocore` holding the DSP
-  (`align`/`envelope`/`decode`/`wav`), the offline instruments
-  (`align_probe`) and — deliberately — the ONE segment-name
-  grammar (`names`, recalld's typed parser merged with the sweeps'
-  stamp/glob readers). It also bought the test the stub deferred: audiod's
-  uploader now proves delivery, the auth gate and the 409 path against the
-  REAL recalld router (`audiod/tests/integration/upload_real_server.rs`).
-- **D2. Calibration.** *Measuring since 2026-09-05:* recalld's background
-  scanner decodes every delivered segment once (ffmpeg, bounded batches)
-  and stores its speech/floor quantile levels (`segment_levels`); the
-  per-device reference is a QUERY over a source's own recent rows
-  (`levels::speech_reference_db`) — calibrate.py's faintest-speech
-  measurement re-derived continuously from delivery instead of once by
-  hand. D3's rank consumes it; uncalibrated rank degenerates to the fixed
-  choice ([audio-plane.md](audio-plane.md)).
-- **D3. Room builder.** *Built 2026-09-05, running in shadow:* one settled UTC
-  minute at a time (15 min settling for delivery latency), the winner's audio
-  carried whole into `room-<stamp>.flac` (16 kHz mono, ASR's shape) with full
-  provenance per block. No verdict on partial evidence: unmeasured overlap
-  defers. `CalibratedDb` is a newtype so a raw level cannot cross the rank
-  boundary by accident. **Raw speech level chooses; the calibrated rank is
-  recorded in provenance and parked** — see the acceptance note below for why,
-  which is now a statement about the CORPUS rather than about the rank.
-
-  Because the builder runs over the delivered archive, the referee (room vs
-  best-single) runs OFFLINE and is the acceptance gate before stage E transcribes
-  room.
-
-- **D3 NOT ACCEPTED — calibrated selection RE-PARKED 2026-09-06, and this time
-  the reason is the corpus, not the rank.** The reference is now VAD-gated
-  (stage D4's detector rather than a loudness proxy), which is a real
-  improvement and is kept. What is NOT kept is letting it choose.
-
-  The June window passed: cleared and rebuilt by the real builder, 29/29
-  `built:calibrated`, zero deferrals, usb winning all 29, median WER 0.229 both
-  arms. But that window compares IDENTICAL AUDIO — usb wins there under both
-  ranks — so it was never evidence, exactly as it had been flagged.
-
-  ⚠ **Where the ranks DO differ, the corpus cannot test them at all.** Census
-  over the whole archive: they disagree on **1290 of 2664 rankable blocks
-  (48%)**, systematically moving blocks off the condenser onto phones (usb ->
-  iphone11 448, usb -> pixel5 281, usb -> geb 242, usb -> pixel9 238). Ground
-  truth is mid-June — 328 of 468 corrections fall on 14-16 June — while the
-  disagreements are September (1127 of 1290). **They overlap on 8 minutes:
-  1.7%.** That is structural, not sampling: the corrections predate the
-  multi-device fleet, so there were barely two microphones to disagree about
-  when they were made.
-
-  Raw has MEASURED parity with best-single (median 0.229, twice). Calibration
-  has no measurement anywhere it differs. Shipping it would be a verdict on
-  partial evidence — the thing the builder already refuses for a single block —
-  applied to half of them. Nothing consumes room yet, so parking costs nothing.
-
-  **TO DECIDE IT:** ground truth on SEPTEMBER minutes where the ranks differ,
-  then the referee on that window. The census names the densest hours
-  (2026-09-02T19, 2026-09-03T19, 2026-09-04T20). This is a DATA task, not a code
-  one, and it is what #1388's quality half now waits on.
-
-  ⚠⚠ **READ THE MEDIAN, NOT THE MEAN, and the harness prints the mean.** This
-  run's mean was usb 16.449 / room 12.083; the previous night's, on the SAME usb
-  audio, was 0.666 for both. The control moved 25x while the median did not move
-  at all. The cause is ASR hallucination loops (#1410): on a one-word utterance
-  the model emits "As to As to As to…" hundreds of times, scoring WER 223. Four
-  of 38 cases; excluding them the means are usb 0.347 / room 0.343. The loops
-  are not stable run to run — identical CONTENT through a different encode path
-  flips them — so no decision may rest on a mean over this corpus.
-
-- **D4. VAD at ingest** (silero ONNX). Liveness + quiet evidence + priority.
-  *Detector built 2026-09-05:* `recalld::vad` runs silero through `ort`, the
-  network EMBEDDED in the binary (`include_bytes!`) so no rollout can forget a
-  model path. Verified on real speech rather than tones — a sine proves nothing
-  about a speech model. ⚠ Three environment gaps that macOS hid, all found by
-  building on amun rather than trusting the laptop: the Linux link needs `g++`
-  (onnxruntime is C++), `ort`'s default `tls-native` drags in openssl that
-  `rust:1-slim` lacks (rustls instead), and silero v5+ prepends 64 samples of
-  CONTEXT — omitting it is accepted silently by the dynamic input shape and
-  returns near-zero probability on obvious speech, which reads as a quiet room
-  rather than a bug. A golden probability trace pins that contract everywhere,
-  because the real-speech fixtures are gitignored (public repo, see #1433).
-  *Scanner built 2026-09-05:* `recalld::speech` measures every delivered
-  segment in bounded batches, oldest first, one row per blob for ever, with an
-  UNKNOWN sentinel (-1 s) so "we could not look" can never be read as "nobody
-  spoke" by a sweep. Inference is pinned to one thread — a background
-  measurement must not saturate a 4-core box shared with Nextcloud.
-
-  ⚠ **The runtime is DLOPENED, not bundled, and that is load-bearing.** ort's
-  prebuilt ONNX Runtime requires AVX2; isis (Xeon E3-1225 V2) and amun
-  (E3-1245 V2) are Ivy Bridge, 2012, and AVX2 arrived with Haswell in 2013.
-  Calling it there did not degrade — it raised SIGILL and killed the daemon that
-  IS the system of record (measured 2026-09-05: recalld crash-looped, exit 132,
-  five restarts, ingest refusing connections until the image was pinned back).
-  The fix is Debian's `libonnxruntime`, built for baseline x86-64: `ort` uses
-  `load-dynamic` at `api-21`, the image installs `libonnxruntime1.21`, and
-  `ORT_DYLIB_PATH` names it by VERSIONED soname so an apt upgrade cannot swap the
-  ABI under a running image. The devshell and the nix check derivation supply the
-  same variable, so local, sandbox and production share one mechanism.
-
-  ⚠ **The session is a process-lifetime singleton that is NEVER DROPPED.** With
-  dynamic loading, ONNX Runtime's destructors run after the library is unloaded:
-  on amun every test PASSED and the binary then died with SIGSEGV on exit. A
-  daemon that segfaults on shutdown is not shippable, and "all assertions green"
-  is not the same as "the process survived".
-
-  ⚠ **Verified by RUNNING on the target, not by building for it.** The first
-  attempt built the image on amun, called Linux proven, and shipped a daemon that
-  crash-looped on isis — amun shares isis's CPU generation, so executing the
-  suite there would have caught it in seconds. It now runs on amun under the
-  exact Debian runtime production uses: 13 tests green, exit 0, and the golden
-  probability trace IDENTICAL to macOS under a different ORT version and
-  architecture, which is what makes that trace worth keeping.
-
-  *Wired into liveness 2026-09-05:* `/ingest/v1/liveness` is SPEECH-GATED, which
-  keeps the promise the `.alive` marker already made — a dot the audio can back,
-  so a room of digital silence reads idle on purpose. ⚠ Only a segment MEASURED
-  AS SILENT disqualifies: unmeasured and undecodable ones still count, because
-  the scanner runs BEHIND live audio and "not looked at yet" is not evidence of
-  silence — treating it as silence would black out every recorder the moment it
-  ships. The scan therefore runs NEWEST FIRST (both consumers read recent rows),
-  with the archive backfilling behind, the same priority the work queue takes.
-
-  *Measured in production:* ~98 segments/min at ~0.9 core (pod 189m -> ~1080m,
-  load 1.22 -> ~2.5 on 4 cores), the 15.8k backlog clearing in ~2.6 h. The gate
-  does real work rather than passing everything through — usb's newest DELIVERED
-  segment was 21:12:29 while its newest SPEECH was 21:02:29, ten minutes of
-  measured silence correctly excluded. Per-device ratios differ the way
-  calibration needs: geb 20 speech / 6 silent, pixel5 11/39, oneplus6t 26/24.
-  Oldest-first, before the flip, had spent 25 minutes still inside 13-15 June.
-
-  ⚠ That list of remaining wiring is SPENT: liveness is speech-gated (above), the
-  queue takes newest-first, the calibrated reference is a query
-  (`levels::speech_reference_db`), and the quiet review was CUT with the product's
-  scope. Nothing is outstanding in D4.
-- **D5. Retention.** ⚠ **SUPERSEDED as written.** It said "window transcode to
-  Opus + enforcement", and the decision record above revised that to LOSSLESS
-  FOREVER — the Opus tail is a convenience copy, not what lossless decays into.
-  What remains of D5 is silence filtering, which is a second-order win once
-  delivery is really FLAC.
-
-### Stage E — the queue and the runner
-
-- **E1. Queue in recalld.** *Built 2026-09-05, lean:* jobs are DERIVED from
-  room segments (the share-upload lesson — a missed enqueue cannot strand
-  audio), leased newest-first with a 10-minute TTL (`PUT /work/v1/lease`,
-  `PUT /work/v1/jobs/{id}/done`, the sync-token plane), results stored
-  opaque until E3 interprets them into turn rows. Long-poll and the resolved
-  result-writing are E3's.
-- **E2. Shim protocol + `asr` shim.** *Built 2026-09-06:* `recall.shim` is the
-  contract (line-delimited JSON, one job at a time, `hello` answered by the
-  protocol itself so it works even for a shim whose model failed to load), and
-  `recall.shim_asr` wraps mlx-whisper. Errors are RESPONSES: a shim that dies on
-  one bad clip loses weights that cost seconds to load and strands the queue.
-  ⚠ **stdout is the protocol, so nothing else may touch it** — mlx-whisper's
-  dependency prints a huggingface progress bar, and one stray line desyncs the
-  stream SILENTLY. `serve` keeps a private handle on the real stdout and points
-  `sys.stdout` at stderr; a subprocess test pins it.
-  ⚠ **The shim reads no database.** `initial_prompt` (vocabulary biasing) is
-  CARRIED by the caller — fetching it would put a DB handle and a failure mode
-  inside the process whose only job is to run a model, against principle 3.
-- **E3. runner.** *Built 2026-09-06, shadow:* the `runner` crate — lease, fetch
-  the blob, drive the shim over stdio, push, ack. Stateless by construction: no
-  watermark, no outbox, no mirror queue, so killing it costs an expiring lease.
-  A shim REFUSAL is terminal and recorded (the clip is the problem); a TRANSPORT
-  failure says nothing and lets the lease expire (the shim is). Tested against
-  the real recalld router with only the model substituted.
-
-  ⚠ **Running it against the live fleet is what found the silence problem.**
-  Transcribing a silent minute does not return nothing — it returned
-  "Thank you." twice, and another minute came back as 156 segments carrying a
-  150-character run of tildes at 0.19 confidence (#1410). The queue had derived
-  a job for EVERY room segment: 1784 of 4288 were measured silent. Derivation is
-  now gated on D4's speech evidence, same rule as liveness — only MEASURED
-  silence disqualifies.
-
-  STILL OPEN before the flip:
-  - **#1461**, which decides what the room stream should be at all. This is now
-    the ONLY one, and it needs labelling time rather than code.
-
-  Two items that stood here were already DONE and were still being read as work
-  (corrected 2026-09-11 by checking the code and the live agents, not this file):
-  - *The vocabulary prompt* — the runner fetches it once at startup and is
-    deliberately FATAL if it cannot (`main.rs`: "refusing to transcribe
-    unbiased"). It logs `vocabulary loaded terms=14`. The warning to settle it
-    "before ~2500 real jobs" never came due.
-  - *The launchd agent* — `org.xinutec.recall-runner` exists and runs.
-
-- **E3a. Results → turns.** *Interpreter built 2026-09-11; NOTHING IS WRITTEN.*
-  `room_turns::interpret` turns one stored job result into the turns it implies:
-  offsets against the block's own start (from the filename, the naming
-  contract), text trimmed, language and confidence carried, word timings
-  verbatim-or-absent, and a turn with no word in it DROPPED — the #1410 rule one
-  stage later, for blocks whose silence nobody had measured.
-
-  ⚠ **Measured over the real queue 2026-09-11: 656 stored results → 5,301 turns
-  from 656 blocks, 0 refused, 0 unreadable, 0 filenames off the contract.** The
-  GPU time is already spent and the transcripts are unreachable; `queue::done`
-  stores them and nothing in either language reads them.
-
-  ⚠ **The WRITE is a separate decision and is deliberately not taken.** Room
-  turns are gated on #1461 accepting the selection they came from, and an
-  unvalidated transcript in the system of record is not undone by deleting a
-  row. Writing them HIDDEN was considered and rejected: hidden is not absent —
-  the row is still in `transcript_fts` (maintained in code here, not by a
-  trigger), still counted, and still seen by supersession, which is the
-  machinery whose failure overwrites a person's typed correction.
-- **E4. Absorb the rest of `/sync/jobs`.** refine (via the `voices` shim),
-  ab-compare; retire `recall.jobs`, `sync_push`, outbox,
-  capture-mirror (pause intent moves to a recalld long-poll the runner
-  mirrors — same edge-trigger semantics).
-
-  **The live tier is Rust, 2026-09-14.** `recall-live` reads the tap, cuts it
-  with `audiocore::vad` and pushes each utterance to `POST /sync/live`.
-  `live.py`, the `live` subcommand, `sync_push.push_live_turns` and
-  `Store.visible_live_turns_since` are deleted.
-
-  ⚠ **It keeps NO STORE, and that is the whole simplification.** The Python
-  wrote live turns into the Mac's `recall.sqlite` and pushed them from an id
-  watermark on a second thread; both existed because the Mac was once the system
-  of record. It is not, so the push IS the write — no watermark, no second
-  thread, and one less agent touching the volume that stalls (#1412).
-
-  ⚠ **The region policy is now written ONCE.** `vad::Splitter` decides window by
-  window and `regions_from_probabilities` is a fold over it, so live and the
-  archive cannot disagree about where an utterance ended. And a live turn's
-  timestamp is derived BACKWARDS from the moment its region closed, not forwards
-  from a start anchor: the tap is UDP, and counting samples forwards stamps every
-  later turn progressively earlier as datagrams drop.
-
-  *Started 2026-09-11:* `recall.shim_voices` (diarize + embed behind the `asr`
-  stdio protocol), the `diarize-room` job kind — derived from a transcribe job
-  that SUCCEEDED, since diarization alone attributes nothing and a refused clip
-  is a clip, not a transcript — a `lease` that takes the kinds the CALLER can do,
-  and `recalld::align` (`recall.align` ported, proved against a 120-case
-  differential corpus). All shadow: no `voices` runner is deployed.
-
-  ⚠ **This line used to say "ask (via `llm`)" and there is no ask.** Checked
-  2026-09-11: no `/api/ask` route, nothing in the Angular app, and
-  `push_ask_result` POSTed to `/sync/ask/{id}/result` — a route no server in
-  this repo serves. `AskResultIn`, `AbResultIn` and the whole client half of
-  `recall.llm` went with it. The holder stays: `life` is a live client of it.
-
-  ⚠ **Porting `refine.py`'s per-segment WRITE is work stage E deletes.** #1388
-  is "ONE stream transcribed instead of five", with per-mic turns hidden once a
-  room turn covers them. What survives is the diarization and alignment above —
-  the room stream needs both. The write does not.
-
-### Stage F — recalld absorbs the browsing tier; the Mac lets go
-
-- **F1. Port the API route-group by route-group** (reads, labels, capture,
-  devices, quiet, recall/ask, sessions), webauth (Nextcloud OAuth +
-  HMAC-signed cookie), static frontend serving; regenerate the Angular
-  contract from the Rust types; retire `recall api` and the Python fleet
-  image tier. **DONE 2026-09-12**: `api.py`, `api_capture.py`, `webauth.py` and
-  the serving half of `sync.py` are deleted, the `api` subcommand is gone, and
-  the image is a Debian base with no interpreter.
-
-  *Reads first, 2026-09-06:* `recalld::reads` serves them from `recall.sqlite`
-  opened READ-ONLY — recalld does not own the meaning plane and must not be able
-  to write it. Reads went first because a route group that only answers questions
-  cannot destroy anything if it is wrong, and because two implementations of one
-  contract can be DIFFED.
-
-  ⚠ **They stayed OFF the router until webauth was ported**, and the rule
-  generalises: the browsing plane's promise is a Nextcloud sign-in plus a user
-  allowlist, so mounting transcripts behind anything weaker — recalld's read side
-  takes the sync token — opens a SECOND, WEAKER door to the household's audio. A
-  port lands behind the gate or not at all.
-
-  *webauth ported 2026-09-06:* `recalld::webauth` is the SSO gate — the three
-  planes (browsing gated, recording login-free, device-token), the stateless
-  HMAC-signed cookie, the short-TTL OAuth state, the username allowlist, and
-  inert-unless-configured. 11 tests, each named for the attack it stands against.
-
-  ⚠ **The token format is deliberately IDENTICAL to the Python's, and that is
-  what makes an incremental cutover possible.** Sharing `RECALL_SESSION_SECRET`
-  and the exact `<payload>.<mac>` shape means a cookie minted by the Python OAuth
-  flow verifies in Rust and vice versa, so recalld can be mounted behind the
-  EXISTING sign-in, route-group by route-group, with no second login and no flag
-  day. This is the one place in the rebuild where compatibility is worth keeping,
-  and it is kept for that reason rather than for fidelity's sake. A golden token
-  minted by `recall.webauth` itself is pinned in the tests.
-
-  ⚠ **`recall.webauth` is deleted (2026-09-12); the golden token OUTLIVES it.**
-  Its value was never "the two halves agree" — that mattered for the weeks of the
-  cutover and is moot now. What it is today is the only remaining *specimen* of
-  the format: no code can re-mint one, so if a refactor changes what Rust accepts,
-  this fixture is what notices. Do not regenerate it from the Rust — that would
-  make it agree with whatever the code does, which is the one thing it must not.
-
-  Two things the port improved rather than copied:
-  - **Expiry is enforced inside `verify`**, behind a trait every claim type
-    implements, so a caller cannot be able to forget it. In the Python it is
-    checked in `_verify` too, but nothing stops a new reader of the payload
-    skipping it; here the type system does.
-  - **The device-token compare is constant-time** (HMAC of both sides), where the
-    Python's is a plain equality on a secret.
-
-  *The flow and the gate landed 2026-09-06 too:* `/login`, `/auth/callback`,
-  `/logout`, `/api/me`, and the middleware — 20 tests, the OAuth exchange driven
-  against a REAL stub Nextcloud rather than a mocked client (the likeliest error
-  is the request SHAPE, and a mock would have tested my expectation of it), and
-  the gate driven through a real router. Mutation-checked: opening the gate fails
-  three tests.
-
-  Two properties worth naming, both tested:
-  - **The callback rejects a bad state BEFORE any network call**, so a stranger
-    cannot make this server dial Nextcloud on demand. The test points the config
-    at a dead port, so reaching the network would 502 instead of 403.
-  - **A user outside the allowlist gets 403, not 401.** They ARE signed in, and
-    401 would loop them through Nextcloud for ever.
-
-  *Mounted 2026-09-06:* `app::router` assembles the browsing plane behind the gate
-  and `/api/timeline` + `/api/search` are served from it.
-
-  ⚠ **Here `None` means ABSENT, not open — the one place this repo's
-  inert-unless-configured rule is deliberately INVERTED.** Everywhere else an
-  unconfigured credential means "run open", which is right for a LAN-only dev box
-  and wrong for routes that serve household transcripts: an unconfigured recalld
-  answers them with 404 rather than answering them to anyone. A test pins it.
-
-  ⚠ **A cookie is scoped to a HOST, not a port**, which is what makes the cutover
-  work in practice rather than only in principle. recalld answers on
-  `10.100.0.2:8001` while the Python answers on `:8000`, and a browser sends the
-  same `recall_session` to both. With the token format identical, a person signed
-  in through the Python is already signed in here — so a route group can move
-  between the two with nobody signing in again, and the dash redirect-URI question
-  only arises when recalld starts serving the sign-in ITSELF.
-
-  One deliberate divergence, the first: **the read routes clamp `limit`** where
-  the Python passes it straight to SQLite. `?limit=10000000` asks for the whole
-  archive in one page, and a browsing route a signed-in person can accidentally
-  turn into an archive dump will eventually be turned into one.
-
-  *Static serving, 2026-09-06:* `recalld::spa` implements
-  the three rules a generic static handler would get wrong, all tested, two of
-  them bought by incidents rather than designed:
-  - an `/api/*` miss is a **404, never the shell** — returning HTML with status
-    200 turns "no such route" into a JSON parse failure far from its cause;
-  - **`index.html` is `no-cache`, hashed bundles are immutable** — the shell names
-    the current bundles, so caching it means a deploy is invisible until a hard
-    refresh, which is the bug that served stale code from isis;
-  - **a request cannot escape the frontend root** — containment is checked on the
-    CANONICALISED path, so `..` and symlinks resolve first. Above `dist/` sit the
-    archive, the database and the token file.
-  Both the traversal guard and the cache rule are mutation-checked.
-
-  ⚠ **Mounting it was blocked for a day by dev-lint, and the rule was right.**
-  Wiring the SPA made recalld a serving ROOT, so `DL-WIRE-ROUTE-DRIFT` resolved
-  its axum table against the frontend's call sites and found **26 calls that would
-  miss** — recalld then served 2 of the ~28 `/api/*` routes the app makes, and
-  serving the UI would have handed someone a half-working app. It was mounted at
-  the cutover, once the proxy could answer for everything not yet ported. The rule
-  generalises: do not expose a surface that is not ready, and a lint that can see
-  the whole surface is how you find out that it is not.
-
-  *Audio ported and mounted 2026-09-07:* `recalld::audio` serves `/api/audio/{id}`
-  and `/api/audio-span` behind the same gate, from the same read-only connection —
-  a clip is a read of the meaning plane plus a read of an audio file, so it could
-  follow the reads without new authority. The window rules are the port's whole
-  content: a rough whole-phrase turn gets a wide context window, a *precise* cutout
-  (diarized, or carrying word timings) gets a tight one, because widening that
-  would pull in the neighbouring speaker and undo the attribution diarization just
-  made. Nine tests pin the arithmetic and that decision; both failure modes are
-  silent, since the wrong clip still plays.
-
-  ⚠ `/api/clip` was NOT ported — it had no caller anywhere, having served the
-  deleted clip-trimmer. Sizing a route group is the cheapest moment to find that.
-
-  ⚠ ffmpeg and sox are now RUNTIME dependencies of recalld, failing at play time
-  rather than at boot. The fleet image already carries them (it once shipped with
-  ffmpeg alone and every audio request died inside loudness normalisation while
-  transcripts served perfectly), and recalld runs from that same image.
-
-  *The strangler fallback, 2026-09-07 — the change that makes Python deletable
-  INCREMENTALLY.* Until now the cutover was all-or-nothing, and that is worth
-  naming because it silently governed the whole migration: the browser talks to
-  whichever host served the page, so a route ported to recalld changed nothing
-  while Python served the app. "Port a group, delete its module" — the only way
-  this finishes — was impossible, and every ported group was dead weight until
-  the last one landed.
-
-  `recalld::proxy` is the fix: recalld becomes the front door and forwards
-  anything it has not ported to the Python beside it in the pod. It is a
-  FALLBACK, never an override — it runs only where recalld's own router had no
-  match, so a ported route always wins and a half-ported group cannot keep
-  silently answering from the old tier. Eight tests, driven against a REAL
-  upstream server rather than a mocked client, because the likeliest error in a
-  proxy is the request SHAPE and a mock tests one's expectation of it.
-
-  Two properties worth naming, both tested:
-  - **The session cookie crosses verbatim.** Otherwise ported routes work while
-    proxied ones 401 — a split brain that reads as a webauth bug.
-  - **A dead upstream is a 502, never an empty 200.** Mid-migration that is the
-    whole diagnosis: "the Python half is down" versus "that route legitimately
-    has nothing", and reading the second for the first sends someone hunting a
-    data bug that does not exist.
-
-  **THE PORT ARRANGEMENT, and why nothing external moves.** recalld `--bind`
-  now REPEATS, and takes BOTH 8001 (what recorders already push to) and 8000
-  (what the browser and the registered OAuth redirect already use); the Python
-  api moved to a pod-internal 8002 and recalld proxied to it. The hostPort DNATs
-  into the pod's shared network namespace, so which container binds 8000 is not
-  something Kubernetes polices — which means no recorder is reconfigured, no
-  redirect URI is re-registered, and no bookmark changes. ⚠ That indirection is
-  gone as of 2026-09-12: with one container, the one that DECLARES a port is the
-  one that binds it, and `Reach.WireGuard` carries the second in `alsoPublish`. The kubes model holds
-  one port per container by design and does NOT need changing for this.
-
-  ⚠ **EACH CONTAINER PROBES ITSELF, and that is the whole of it.** The api probes
-  `/api/capture` on 8002, recalld probes `/ingest/v1/health` on 8001. The danger a
-  shared probe carries is that it passes while the thing it names is dead — a
-  probe on 8000 nominally belonging to the api would test recalld, and the pod
-  would read healthy with Python down and every unported route 502ing.
-
-  ⚠ Two drafts of this note were wrong before the deploy settled it. One proposed
-  probing Python THROUGH the proxy, which stops testing Python the moment recalld
-  ports the probed route. The other had the container ROLES swapping — recalld
-  becoming the main container. Neither was needed: which container binds 8000 is
-  not something Kubernetes polices, so the roles stayed as they were and only the
-  probes had to be honest.
-
-  ⚠ **The config change and the image are COUPLED, so they ship together.**
-  `--upstream`, `--frontend` and the repeated `--bind` exist only in a freshly
-  built binary; landing the kubes change first would leave a deploy that starts a
-  recalld which rejects its own arguments.
-
-  **CUT OVER 2026-09-07, COMPLETED 2026-09-12.** recalld served the app, its own
-  ported routes and the recorders' ingest while the Python api answered the rest
-  behind it on pod-internal 8002. That second container is now GONE — one
-  container, both ports, no proxy and no upstream. Nothing external moved at
-  either step, which was the point of doing it in two.
-
-  Three things that only running it revealed:
-
-  - ⚠ **The first deploy reached NONE of the Rust.** recalld mounts its browsing
-    plane only when webauth is configured, and the sidecar had only its ingest
-    tokens — so `webauth = None`, which means ABSENT rather than open, and every
-    ported route fell through to the proxy. The app worked perfectly and not one
-    line of the port was exercised. Found by asking WHICH CONTAINER logged the
-    request, not by trusting a 200. The keys now come from the same
-    `recall-secret` the api reads, which makes the session secret identical by
-    construction rather than by remembering.
-  - ⚠ **It broke the fleet for about an hour.** The fallback sent `/api/*` to the
-    proxy and everything else to the app shell — but Python owns `/sync/*` too,
-    so the Mac's sync and jobs agents got `index.html` with a 200 and died on
-    `JSONDecodeError`. No archive push, no session pulls, every status green.
-    Mitigated by dropping `--frontend` (config only, no image), fixed in
-    `proxy::UPSTREAM_PREFIXES`, restored. The regression test only reproduces
-    WITH a frontend configured — every prior proxy test ran without one, which is
-    exactly why it escaped.
-  - Three proxy 502s in the 286 ms before the api finished booting. recalld binds
-    and serves before its upstream is ready; expected, and worth knowing so a
-    handful of failures right after a deploy is not mistaken for a fault.
-
-  **The port is finished. The Python was deleted on 2026-09-12** — `api.py`,
-  `api_capture.py`, `webauth.py`, the serving half of `sync.py`, the `api`
-  subcommand, and the interpreter in the image. There is no second tier, so
-  "which tier answered" is no longer a question anyone can ask, and the
-  discriminator that answered it (`server: uvicorn` present on a Python reply,
-  absent on recalld's) has nothing left to discriminate.
-
-  What the strangler taught, and what outlives it:
-
-  ⚠ **A route registered by CALL has no decorator to find.** `api_capture.py`
-  mounted with `app.get("/api/capture")(capture_status)`, so `grep '@app\.'`
-  reported zero `/api` routes where three were live — that grep is what produced
-  the false "zero remain" in recall #1342. The general rule: ask the ROUTER, not
-  the source text. In Python that was `app.routes`; in recalld it is the axum
-  table, which `.route("…")` literals do make greppable — a property of this
-  router, not a law, and one a future refactor can take away.
-
-  ⚠ **A grep undercounts invisibly.** It sees a path once where two methods are
-  registered on it, and it counts strings that are not routes at all.
-
-  ⚠ **A GET probe is USELESS on any POST-only path, and reads as a confident
-  wrong answer.** `/sync/*` and `/logout` are POST-only, so a GET never reaches
-  one: it falls past them to the SPA catch-all, which returns `index.html` with a
-  200. The probe then reports on the fallback, not on the route being asked
-  about, and it does so with a success code. **Probe a plane in its real request
-  shape** — the real method, with a deliberately WRONG token, which is refused
-  before any write.
-
-  ⚠⚠ **DO NOT reach for that trick on a CONTROL route.** Sending the real method
-  with a bad payload is safe on `/sync/*` because the token check refuses first.
-  It is NOT safe on `/api/capture/pause`, which is DEVICE-EXEMPT (no token to get
-  wrong) and takes its duration from a QUERY parameter, so a JSON body is ignored
-  and the call SUCCEEDS with the default 24h bound. Doing this on 2026-09-09
-  extended the household's pause from 11:56Z to 21:17Z — recording that Pippijn
-  expected back at midday would not have returned until evening. The pause is
-  his. Read `GET /api/capture`; never POST to a control route to find out
-  anything.
-
-  The api modules that served a ported group were DELETED with it, not left
-  inert — that is the rule the strangler exists to make possible. The last of
-  them went on 2026-09-12 and there is no `src/recall/api*` left to list. What
-  moved: reads, playback, the work queue,
-  client reports, uploaded meetings including their upload and delete, the
-  corrections corpus, the span assign, and the recorders' heartbeats and
-  outboxes.
-
-  | group | state |
-  |---|---|
-  | reads | DONE, including `conversations`, which was the one with logic rather than a query. |
-  | audio | DONE. `/api/clip` deleted rather than ported — no caller. |
-  | work | DONE (vocabulary, refine) — recalld's first writes. |
-  | client reports | DONE. |
-  | labels | DONE — correct, turn speaker, correction reassign/hide, span assign. `/api/suggest` and `/voices` were CUT, not ported: voiceprint name suggestions are gone by product decision. |
-  | sessions | DONE, including the upload and the delete. ⚠ The delete is the one irreversible operation here and is guarded to UPLOAD sources: the household archive must never be reachable through a path meant for meetings. Every deleted segment is TOMBSTONED in the same transaction, or the Mac's next refine push resurrects the session. |
-  | devices | DONE — heartbeats, outboxes, and `/api/sources` 2026-09-09. The last one waited on the capture family, which it reads `fleet_capture_state` from. |
-  | capture | DONE 2026-09-08 — status, pause, resume, mounted as ONE group. Splitting the household's control across two languages is the one place a strangler seam is not worth having. |
-  | sync | DONE 2026-09-09 — all thirteen. capture, labels, vocabulary, the two device reads, the job queue and its ack, live turns, the audio blob push and its two fetches, the segment push and its batch. |
-
-  *The segment push, 2026-09-09 — the last route, and the one that taught the
-  most:*
-
-  - ⚠ **A FIXTURE BUILT FROM THE DATACLASS, NOT THE TABLE.** `CREATE TABLE
-    sources` was written with a `spec` column because the Python's `AudioSource`
-    has one. The real table does not — it is `(id, name, kind, port, event_db,
-    noise_shape)`. Ten tests passed against a database that does not exist, and
-    every real push answered 500 for forty minutes. **Copy a test schema from
-    `sqlite_master`, never from the model beside it.**
-  - ⚠ **And the invented schema HID a silent one.** The Python's upsert reads
-    `name = CASE WHEN sources.name = sources.id THEN excluded.name ELSE
-    sources.name END`: a name a PERSON set on the fleet survives every later
-    push, and only a placeholder equal to the id is replaced. The port wrote
-    `name = excluded.name`, which renames whatever somebody titled on the next
-    sync pass — and the test asserted that wrong behaviour outright. The crash
-    was loud and cost forty minutes; this would have been silent and cost the
-    source names.
-  - ⚠ **AN ABLATION THAT DOES NOT VERIFY ITS EDIT TESTS NOTHING.** The first
-    attempt to disprove that rename rule PASSED, because the `perl` substitution
-    silently matched nothing — which reads exactly like "the rule does not
-    matter". Re-run through a replace that asserts its pattern count, it failed
-    as it should. Every ablation here now edits through a checked replace.
-  - **The five rules, each with an ablation that fails one test:** the tombstone
-    veto; the path re-homing; live reconciliation running BEFORE the no-op check;
-    the sorted-tuple no-op; and the human-correction skip. The last is the only
-    one whose failure destroys data rather than reporting it.
-  - **What actually caught all of it was deploying and watching**, not the suite.
-    The Mac's retry semantics are why forty minutes of 500s cost nothing: a
-    transport failure aborts the pass before the watermark advances.
-
-  *`/api/sources`, 2026-09-09 — the last `/api` route, and a deletion rather than
-  a move:*
-
-  - **621 lines of Python went with it**: `api_devices.py`, `liveness.py`,
-    `ingest_liveness.py` and its liveness tests, plus five route tests in
-    `test_api.py`. `schemas.py`'s `SourcesOut` STAYS — `gen_models.py` renders the
-    frontend's TypeScript from it, so it is the wire contract, not the route.
-  - ⚠ **The Mac-local branch was CUT, not ported, and that is not a capability
-    loss.** `_local_last_active` read `.alive` files directly and only ran when
-    the api was served on the Mac. It never is: `deploy/hm-agents.nix` says so in
-    as many words — "NO recall-api here — the Mac serves no UI or control plane
-    (the Isis split)" — and no launchd agent serves one. recalld runs only on the
-    fleet, so implementing only the fleet branch is correct rather than partial.
-  - **The HTTP hop disappeared.** The Python fetched delivery evidence from
-    recalld's own `/ingest/v1/liveness` — a loopback request with a bearer token
-    and a 1.5 s timeout, made from inside a UI poll. On this side it is a query
-    against the same file. What survives is its best-effort contract: an
-    unreadable ingest database means "no extra evidence", never an error page.
-  - **Parity by generating the test from the Python.** `source_statuses` is pure
-    on both sides, so the same eleven-case matrix was run through
-    `recall.liveness` and its answers — 33 rows — became the expected table in
-    `recalld/tests/integration/sources.rs`. Ablating `stopped_recently` fails exactly the case
-    built for it, so the table is not decorative.
-  - ⚠ **`stopped_recently` is the rule worth reading twice.** A marker that went
-    stale RECENTLY beats delivery evidence, because a deliberate stop is newer
-    information than a segment captured just before it. Without it a phone stays
-    green for five minutes after its owner stops it (measured on pixel9,
-    2026-09-05, where it used to go idle in twelve seconds).
-
-  *The capture cutover, 2026-09-08, and what it cost to do safely:*
-
-  - ⚠ **The `stateToken` is a hash of the state's JSON**, so it needs Python's
-    separators, sorted keys and `null` — and getting it wrong does not fail, it
-    silently turns every client's long-poll into a busy poll. It was pinned
-    against PRODUCTION rather than against a reading of the code: two of the
-    three test vectors are tokens the live fleet served that day, one paused and
-    one running.
-  - ⚠ **The long-poll re-derives on a slice rather than parking on a notify**,
-    which is a deliberate divergence. A notify works in the Python because ONE
-    process serves every request; during a cutover the writer may be the other
-    tier, whose notify this process cannot receive. And a pause ELAPSING has no
-    writer at all, so nothing could ever notify it.
-  - ⚠ **The intent keeps its stored SPELLING.** `settled` compares it to the
-    Mac's echo by string equality, so re-deriving the timestamp — writing
-    `...22.000000+00:00` where Python writes `...22+00:00` — makes a correctly
-    applied pause read as transitioning for ever. Caught by a test, not by review.
-  - ⚠ **The routes are on the DEVICE-EXEMPT plane** (`webauth::DEVICE_EXEMPT`):
-    the mic apps poll `/api/capture` and press pause with no credential at all.
-    A gate that demanded a session here would stop every phone's pause button.
-  - **Verified by asking WHICH container answered**, with a still-proxied route
-    as the control — `server: uvicorn` present on `/sync/*`, absent on
-    `/api/capture` — and then by pressing pause and watching the file appear on
-    the Mac. A 200 proves nothing here: recalld records INTENT, and the Mac's
-    mirror is what actually silences the microphones.
-  - **`api_capture.py` was NOT deleted with it.** Fleet images are `:latest`
-    only, so a rollback IS a roll-forward; the old implementation is what a
-    roll-forward rolls to. It was kept for that reason until 2026-09-12, when the
-    rollback it backed had been unexercised for four days and the pod had stopped
-    running Python at all.
-
-  *The first `/sync/*` route, 2026-09-08 — the plane the one-way peer dials in on:*
-
-  - **`POST /sync/capture` moved with the capture family, and belongs to it.** It
-    is the same state under a different door: Isis records intent and cannot dial
-    the Mac, so the Mac's mirror POSTs what it applied and reads back what the
-    fleet wants, in one round trip. Leaving it on the Python would have split the
-    household's capture control across two languages after all.
-  - ⚠ **Mounting is gated on `RECALL_SYNC_TOKEN` being in recalld's OWN
-    environment**, and absent means the routes are not mounted at all — so
-    `/sync/*` keeps reaching Python. That makes shipping the code and cutting
-    over to it two separate acts, and makes the rollback a one-line env change
-    rather than an image build. Same secret as the api's, same `SYNC_TOKEN` key
-    of `recall-secret`; recalld already read it under another name
-    (`RECALLD_READ_TOKEN`), which is not a reason to conflate two gates.
-  - **Parity was established by RUNNING the Python, not by reading it.** Its
-    `record_reported` was called directly for three argument sets and its four
-    settings writes diffed against the Rust's; then the route itself was served
-    in-process and its status and body compared for the authorised, missing,
-    wrong, non-bearer and bad-liveness cases. Both agree, and the expected values
-    in `recalld/tests/integration/sync.rs` are the Python's output rather than the Rust's.
-  - ⚠ **`json.dumps` preserves the Mac's key ORDER where `serde_json` sorts.**
-    `capture_reported_source_liveness` is written by both tiers, so a reordered
-    object is a second spelling of one value in one column — which is what makes
-    a later parity check report drift that is not drift. `preserve_order` is on
-    for this, and the test pins the Mac's order rather than the alphabetical one.
-  - **The long-poll costs up to one 2 s slice** where the Python woke in ~RTT, for
-    the reason the capture cutover gives above. `GET /api/capture` already ships
-    that to every phone in the house, so it is consistency rather than a new
-    regression — but an in-process notify layered ON TOP of the slice would buy
-    back both, and both routes now have their writer in the same process.
-
-  **CUT OVER 2026-09-08, and it is live.** `RECALL_SYNC_TOKEN` went into recalld's
-  container and the Mac's mirror has been handshaking with the Rust since. What
-  the cutover cost and how it was checked:
-
-  - **The rollout cost ~40 s of failed handshakes** — five 502s while the api
-    container was still booting behind the proxy, then connection-refused, then
-    twenty consecutive 200s. The mirror logged each one and retried, which is what
-    `run_loop` promises ("a blip must never wedge the mic"). Worth expecting
-    rather than diagnosing next time.
-  - ⚠ **`/api/sources` is the check that only a live deploy can make.** recalld
-    now WRITES `capture_reported_source_liveness` and the Python api READS it, so
-    that column crosses the tier boundary every mirror pass. A separator or key
-    order this end could not parse the other would return `{}`, and every source
-    would show `lastActive: null` — a total loss of the liveness signal that no
-    test on either side would catch. All six sources came through the cutover
-    byte-identical to their pre-deploy values.
-  - ⚠ **The mirror's 5 s cadence cannot tell you the hang works.** Its loop sleeps
-    `interval - elapsed`, so a hang that returns instantly and one that holds the
-    full wait both produce a 5 s period. Measured instead against the read-only
-    twin, `GET /api/capture?wait=&known=`, which shares the mechanism and writes
-    nothing: `wait=4` held 4.06 s and `wait=8` held 8.13 s, while a stale `known`
-    returned in 0.05 s. Both halves are needed — a hang that never returns early
-    is as wrong as one that never hangs.
-  - **The Python route is NOT deleted, and the reason is stronger than
-    `api_capture.py`'s.** There the old implementation was merely what a
-    roll-forward rolls to. Here the rollback IS removing the env var, which
-    unmounts the Rust and sends `/sync/capture` back through the proxy — so
-    deleting the Python would delete the rollback itself. That held until the
-    proxy itself went (2026-09-12): with no upstream to send anything to,
-    unsetting the variable stopped being a rollback and became an outage, and the
-    Python it protected was deleted the same day.
-  - ⚠ **The port inherited the route and not the TIMEOUT, and that showed within
-    ten minutes.** One handshake in 116 came back 500 — `database is locked` —
-    where the Python had served 104,482 of them without a single one.
-    `work::open_write` waited 5 s; the Python's `Store` sets `PRAGMA busy_timeout
-    = 30000`, and against a contended file the shorter side decides. The doc
-    comment on `open_write` had already described this exact failure ("a writer
-    that failed instead of waiting would turn ordinary contention into a 500") —
-    the intent was ported and the number was not.
-
-    Two general things worth carrying. **A shared database makes the other
-    implementation's PRAGMAs part of the contract**, as much as its JSON
-    separators are; a port that matches the bytes and not the waits is not
-    finished. And **one failure in 116 is only visible against a baseline** —
-    what made it a bug rather than noise was the 104,482 clean requests before
-    it, so the count came from the log, not from an impression.
-
-  ⚠ **A partially ported PATH needs `method_not_allowed_fallback`.** axum matches
-  the path and THEN the method, so with `GET /api/sessions` mounted and no POST,
-  a POST is answered 405 by recalld and never reaches the proxy. Porting the list
-  would have silently broken meeting uploads with the fallback sitting right
-  there. Note what this implies: a proxied method miss does NOT pass recalld's
-  gate — it goes upstream unauthenticated and PYTHON's gate refuses it. Python's
-  gate is load-bearing, not redundant.
-
-  ⚠ **A route can end up served by NOBODY, and both test suites stay green.**
-  `/api/correct` was deleted from the Python in the same change that ported it,
-  and the Rust handler was written, tested and never mounted. recalld's tests
-  call the function directly (a route test needs the gate mounted), the Python
-  suite cannot miss a route it no longer has, and the differential drives the
-  function rather than the server. a route-coverage test unioned the
-  axum and FastAPI tables against the frontend's call sites for as long as there
-  were two tables. dev-lint's DL-WIRE-ROUTE-DRIFT could not do that and should not
-  have tried: it resolves recalld's table alone, which is wrong mid-strangler,
-  where "absent from the axum table" legitimately means "Python still serves it".
-
-  ⚠ **With the port finished (2026-09-12) the union IS the axum table**, so the
-  bespoke test was deleted and DL-WIRE-ROUTE-DRIFT is the check — the case it was
-  always right for. Verified rather than assumed: it runs over this repo and
-  reports nothing, which is the statement that every `this.http.*` call in the
-  frontend resolves to a mounted route with a matching method.
-
-  ⚠ **Verify a ported WRITE with a write.** The `/api/correct` break survived a
-  deploy check that probed only reads.
-
-  *What the differential harnesses caught, kept because the classes recur. Each
-  is argued where it bites; this is the index, not the explanation.*
-
-  Three that CORRUPT, and would not have been found by reading:
-  - **Character indexing, not byte** (`assign.rs`). Python indexes text by code
-    point and the frontend counts UTF-16 units; Rust's `&str` indexes by byte, so
-    a cut inside an accented word lands wrong and PANICS. Half this archive is
-    Dutch.
-  - **Timestamps are passed through, never re-formatted** (`instant.rs`). These
-    columns are compared and ORDERED as text, so a re-spelling silently moves a
-    row to another page.
-  - **A meeting's id is its LOCAL start** (`upload.rs`), and local is
-    Europe/London, not the pod's UTC — deriving it from the container clock
-    renames every summer recording by an hour.
-
-  One that goes QUIET rather than wrong:
-  - **The search index is maintained by the WRITER, not a trigger.** A ported
-    write that forgets `transcript_fts` fails nothing and makes its rows
-    unfindable by the thing they are most likely looked up with.
-
-  Three about matching Python's stored SPELLING (`pyjson.rs`, `instant.rs`), which
-  changes no meaning and is matched anyway, so a later check cannot report drift
-  that is not drift: `serde_json` writes no space after `,` and `:` and sorts
-  object keys where a dict preserves insertion order (`preserve_order`);
-  `json.dumps` escapes non-ASCII; `timedelta` splits whole seconds off before
-  rounding half-to-even.
-
-  And one that is not about Python at all:
-  - **`serde_json`'s float parser does not round-trip** without
-    `float_roundtrip` — it read a stored word timing one ulp low. That applies to
-    every float recalld reads from JSON, not only these.
-  - **A guard calibrated to a moment rots.** The route-coverage check asserted
-    the FastAPI scan saw more than five routes, and failed the moment the port
-    passed it. Guard the half parsed from TEXT; the half that reads a live object
-    is allowed to reach zero.
-
-  ⚠ That note said capture was still to do; the table above records it DONE. The
-  Mac side went too — worker, live, sync-push and the CLI are all deleted.
-
-  ⚠ **The API was never the bulk, so "nearly done" was true of it and false of
-  the repo** — the serving tier was a few percent of the Python. Everything that
-  audit listed as remaining (the Mac's capture/worker/sync, `store.py` +
-  `store_schema.py`, `cli.py` + `cli_parser.py`) has since been deleted; what is
-  left is the ML floor. ⚠ The lesson outlives the numbers: size the REMAINDER
-  before calling a port nearly done.
-
-  *Checked against the running pod, so the next session does not have to guess:*
-  `NC_INTERNAL_URL` is `http://nextcloud-server.nextcloud.svc.cluster.local` —
-  server-to-server OAuth calls go over PLAIN HTTP in-cluster, presenting the
-  public host as `Host:` so Nextcloud's trusted-domain routing treats them like
-  the public request. Only the browser-facing authorize URL is https, and that is
-  a string the browser follows rather than a call recalld makes. So the flow needs
-  no TLS on the deployed path — but the fallback when `NC_INTERNAL_URL` is unset
-  IS https, and the workspace's `ureq` is deliberately `default-features = false`
-  (no TLS; everything else here speaks plain HTTP inside WireGuard). Enable rustls
-  explicitly rather than inheriting that, and ⚠ NOT `tls-native`: ort's default
-  dragged in an openssl `rust:1-slim` does not carry, which cost an image build
-  once already. The pure half — every decision about
-  who may enter — is done and tested; what remains is the HTTP plumbing around
-  it. ⚠ And a deployment note that is easy to miss: the redirect URI registered
-  on dash names port 8000. Serving the browsing plane from recalld's 8001 needs
-  that client re-registered, or recalld taking over 8000 at the cutover.
-
-  *Verified once, against the real archive, then the instrument was dropped:* a
-  differential harness asked both implementations the same questions about a
-  SNAPSHOT of the 554 MB archive and diffed the JSON — 10 cases over ~30k visible
-  turns, byte identical. It is not kept, because as of 2026-09-06 the product is
-  being REBUILT rather than transported (see "What must survive" above) and a
-  byte-parity gate would fail on the first deliberate improvement. Two findings
-  from building it are worth more than the harness was:
-  - ⚠ **A live archive cannot be diffed.** Pointed at the real file it reported
-    a difference that was not one: Python read a turn with no speaker, the
-    identify pass wrote a guess onto it, and the second reader saw the guess.
-    Four daemons write that database. Any A/B over it must snapshot first — the
-    same rule the v43 migration test follows.
-  - ⚠ **A case set is only as good as the ROWS IT REACHES.** The first eight
-    cases passed a mutation they should have failed — a confirmed speaker
-    keeping its score, a real contract break — because human labels live in July
-    and August while those cases sampled the newest pages. 555 visible turns
-    carry both a label and a score and not one was being looked at.
-
-- **F2. The Mac joins the recorder contract fully.** Eviction enabled at a
-  generous ceiling; the "master archive" title passes to Isis + the backup
-  chain, deliberately and last.
-
-## What stays Python, and what dies when
-
-The floor, permanent: the three model shims (mlx-whisper, pyannote, mlx-lm) —
-Python because the models are Python, per [design.md §9](design.md). Plus what
-is left of the evaluation side: `wer` and the golden ASR check, which now lives
-in `src/recall/score_asr.py`.
-
-⚠ This used to name `finetune`, `pilot` and `export` in that floor. They were
-deleted with the LoRA toolchain ("Training is not a goal" above) and the floor
-went on describing them as permanent. A floor is the thing that does not move,
-so a deleted module standing in one is the worst place for the claim to rot.
-
-Everything else in `src/recall/` retires with its stage: the mic/streaming
-client and relay with C4; worker, live, sync-push, outbox, jobs and
-capture-mirror with E3–E4 (worker went 2026-09-13, live 2026-09-14); store,
-webauth and schemas with the rest of F1. The authoritative list is
-`ls src/recall` against this ladder, not a table copied here; when a stage
-lands, its deletions land in the same change.
-
-The API modules are already off it — nine went on 2026-09-07, `health`,
-`fleetwatch`, `bounded` and `loss` followed on 2026-09-08 with the doctor (its
-own Rust crate, `doctor/`), `api_devices` on 2026-09-09, and `api.py` +
-`api_capture.py` on 2026-09-12. What is left under `/api` is `api_models.py`,
-which serves no routes: it is the generator input the deleted `gen_models.py` reads
-to write the frontend's TypeScript, and the shapes it declares are what RECALLD
-accepts.
-
-⚠ **`recall.analyse` is GONE (2026-09-10).** The speech
-detector moved to `audiod speech`, using `audiocore::vad` — the same silero
-recalld runs, so the Mac and the fleet cannot disagree about what counts as
-speech. analyse had been dead in practice since 2026-07-12: its only trigger was
-a cleanup-scan page, so it was on-demand code that stopped being demanded, and
-`scan_job.py` was deleted with the F1 session routes before anyone noticed the
-output still had readers. It came out once the Rust agent had run unattended —
-16,828 segments measured, the whole archive.
-
-⚠ **Both went on 2026-09-12, along with `envelope` and `volumes`** — the whole
-per-mic level cluster. `recalld/src/levels.rs` measures it now, and it does not
-keep the answer in a column: the per-device reference D2/D3 rank against is a
-QUERY over one row of level evidence per blob, so there is no number for a
-scanner to fall behind on.
-
-⚠ One consequence, stated rather than left to be discovered: `sources.event_db`
-and `sources.noise_shape` now have **no writer and no reader in either
-language**. The columns and their migrations stay — a migration is history and
-is never edited — but nothing fills them, so any future code reading one gets
-NULL for every source and must treat that as "never measured", not as "silent".
-That is the same trap that made `analyse`'s output outlive its readers, run the
-other way round.
-
-⚠ **THE PYTHON CONTAINER IS GONE (2026-09-12).** The fleet pod runs ONE
-container, `recalld`, binding 8000 and 8001 itself. What decided it: over a whole
-pod lifetime the Python tier logged 7,053 requests and every one was its own
-kubelet probe — no UI, no device, no sync push. It declared no `/api/*` route at
-all, only sync (recalld was already the front door), capture (dead since
-2026-09-08), webauth (recalld has its own) and an SPA fallback.
-
-⚠ **Dropping it meant dropping `--upstream`, which needed a code change first.**
-With a frontend and no upstream, recalld's fallback was the SPA, so
-`/sync/anything-unmatched` answered index.html with a 200 — how the Mac's sync
-and jobs agents died on 2026-09-07. An unmatched path under `/api/` or `/sync/`
-is now 404 (`45f9a40`). Verified in production after the cutover: both doors 200,
-two unmatched paths 404 with no app-shell markers, `/timeline` still the app.
-
-So `api.py`, `api_capture`, `webauth` and `sync`'s server half are now
-unreachable — nothing runs them. Their deletion is bookkeeping, not a cutover.
-⚠ `api_models` is NOT in that set: the frontend contract is generated from it, so
-it goes when that generator is repointed at the Rust types.
-
-⚠ `/api/sources` is served by RECALLD as of 2026-09-09 — verified from outside,
-where it answers with no `server` header while the Python sets `server: uvicorn`.
-This paragraph used to say it was the last live Python route of that family and
-the reason `api_devices` could not go; `api_devices` went the same day.
+| ingest | per-device token | `PUT` its own source's segments; nothing else |
+| sync | `RECALL_SYNC_TOKEN` | the Mac's reads: the queue, blobs, the vocabulary prompt, the live tier's numbers, and the capture handshake |
+
+Unconfigured means open for dev and tests, except the browsing and sync planes,
+which are not mounted at all without their credential: they carry the
+household's transcripts and its pause control. The Mac is a one-way WireGuard
+peer: it may initiate into the fleet and nothing may initiate toward it, so
+every cross-machine exchange is Mac-initiated, and a pause pressed in the web
+UI reaches the microphone by the Mac's mirror long-polling for it.
+
+## Deletion authority
+
+No network path deletes. The ingest plane has no delete endpoint; recorders
+evict only under their own cache pressure; an uploaded meeting can be deleted
+through the app and the household capture cannot. odin pulls a nightly restic
+of Isis (a SQLite snapshot plus the audio tree); the Mac keeps the protected
+master archive on an encrypted volume and delivers every closed segment to
+Isis.
+
+## Decisions that bind
+
+- **Combining microphones lost; selecting the best one tied it.** On 38
+  corrections, the best single mic scored 0.229 median WER against 0.348 and
+  0.437 for two fusion arms, 14 worse against 4 better; a control showed the
+  pipeline itself cost nothing. The room stream is selection.
+- **Enhance the selected mic, do not stitch mics.** By ear, the best microphone
+  through DeepFilterNet was the clearest version of every minute tried.
+- **Denoising hurts far-field ASR.** Two denoisers measured worse; raw is best.
+  The quality lever is more and closer microphones.
+- **Never transcribe short isolated clips.** Whisper needs context or it
+  hallucinates and mis-detects the language. Pause-bounded utterances are not
+  short isolated clips; fragments that begin or end mid-speech are.
+- **Training is not a goal.** Correct, enrol; what to train from that is a
+  later decision. The LoRA toolchain is deleted.
+- **Ask and summaries are cut.** The archive is searchable, not answerable.
+  `llm-host` stays on the Mac for `life`'s emotion worker, not for recall.
+- **Keep everything.** Audio scope is answered with disk, not by discarding;
+  trimming would bake today's speech detector into the archive.
+
+## What is Python
+
+The two model shims and their wrappers (`asr`, `diarize`, `speakerid`), the
+golden ASR check (`score_asr`, `wer`), and `llm-host`. Nothing else, and that is
+the end state: the models are Python, so their wrappers are. Each is its own
+module, run as `python -m recall.<module>`.

@@ -1,15 +1,8 @@
 # Reviewing a recorded call
 
-⚠ **`recall-cli` reads the FLEET**, which is the archive of record; the Python
-`recall.sh transcript` these examples used to show was deleted with the CLI
-(#1342) and read a Mac database that has been frozen since July.
-
-To read a recorded session (a meeting / phone call) from the command line — for your
-own review, or to hand to another agent — use the `transcript` command. It reads
-straight from the store; no server needed.
-
-The data lives at `/Volumes/Backup/recall`, which is already the default on this Mac
-(the data root) — pass `--out` only to point somewhere else.
+`recall-cli` reads the fleet, the archive of record, over the same API the web
+app uses; reading transcripts needs a browsing session (`recall-cli --help`
+says how to sign in). `--api` points it elsewhere.
 
 ## List the recorded sessions
 
