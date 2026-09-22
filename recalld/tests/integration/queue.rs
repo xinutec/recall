@@ -62,6 +62,43 @@ fn newest_first_lease_done_and_lapse() {
 }
 
 #[test]
+fn a_job_nobody_finishes_is_retired_after_its_attempts_are_spent() {
+    // A clip that crashes the shim never reaches `done`: its lease lapses and
+    // it is offered again, newest first, so without a cap it holds the runner
+    // for ever. After the cap it is a recorded failure like a refusal.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let start: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
+    room_row(dir.path(), "20260905T100000");
+    let mut now = start;
+    for attempt in 1..=queue::MAX_ATTEMPTS {
+        let job = lease(dir.path(), now, &[TRANSCRIBE_ROOM])
+            .expect("lease")
+            .unwrap_or_else(|| panic!("attempt {attempt} must still be offered"));
+        assert_eq!(job.filename, "room-20260905T100000.flac");
+        now += Duration::minutes(20);
+    }
+    assert!(
+        lease(dir.path(), now, &[TRANSCRIBE_ROOM])
+            .expect("lease")
+            .is_none(),
+        "spent: not offered again"
+    );
+    let (state, result): (String, String) = store::open(dir.path())
+        .expect("db")
+        .query_row(
+            "SELECT state, result FROM jobs WHERE filename = 'room-20260905T100000.flac'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("row");
+    assert_eq!(state, "done");
+    assert!(
+        result.contains(r#""ok":false"#),
+        "recorded as a failure: {result}"
+    );
+}
+
+#[test]
 fn a_segment_measured_as_silent_gets_no_transcription_job() {
     // Transcribing silence does not return nothing — it returns INVENTIONS.
     // Measured on the live queue 2026-09-06: a silent minute came back as

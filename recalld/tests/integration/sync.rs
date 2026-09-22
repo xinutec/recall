@@ -1,5 +1,5 @@
-//! The Mac→fleet sync plane: its gate, and the capture handshake's parity with
-//! the Python it replaces.
+//! The Mac→fleet sync plane: its gate, the capture handshake, and the routes
+//! the Mac's agents read.
 
 use recalld::capture::{intent_pause, record_reported, reported_state};
 use recalld::sync::{IntentOut, bearer, check};
@@ -239,9 +239,6 @@ async fn serve(token: Option<&str>) -> (tempfile::TempDir, String) {
         // left absent: the test would otherwise not be showing that.
         webauth: None,
         sync_token: token.map(ToOwned::to_owned),
-        // No upstream, so an unmounted route is an honest 404 rather than a
-        // proxy error — which is what lets the "not mounted" case be asserted.
-        upstream: None,
         frontend: None,
     }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -354,10 +351,8 @@ async fn an_unauthenticated_report_cannot_move_the_state() {
 
 #[tokio::test]
 async fn without_a_configured_token_the_route_is_absent_not_open() {
-    // ⚠ The inversion this repo makes deliberately for household data: an
-    // unconfigured credential does NOT mean "run open" here. With no upstream
-    // configured that shows up as a 404 — and in the pod, as the request going
-    // to Python instead, which is what makes the cutover a one-line env change.
+    // An unconfigured credential does not mean "run open" here: the route is
+    // not mounted, and a miss is a 404.
     let (_dir, addr) = serve(None).await;
 
     let (status, _) = post(
@@ -552,12 +547,7 @@ async fn every_sync_read_route_is_mounted_and_gated() {
     // exists to catch. `serve` therefore runs the real migration ladder.
     let (_dir, addr) = serve(Some("sekrit")).await;
 
-    for path in [
-        "/sync/labels",
-        "/sync/vocabulary/prompt",
-        "/sync/devices/heartbeats",
-        "/sync/devices/outbox",
-    ] {
+    for path in ["/sync/vocabulary/prompt"] {
         let (ok, body) = get(&addr, path, Some("sekrit")).await;
         assert_eq!(ok, 200, "{path} must be MOUNTED: {body}");
 
@@ -575,330 +565,10 @@ async fn every_sync_read_route_is_mounted_and_gated() {
 async fn the_read_routes_are_absent_when_no_token_is_configured() {
     let (_dir, addr) = serve(None).await;
 
-    for path in [
-        "/sync/labels",
-        "/sync/vocabulary/prompt",
-        "/sync/live/health",
-    ] {
+    for path in ["/sync/vocabulary/prompt", "/sync/live/health"] {
         let (status, _) = get(&addr, path, Some("sekrit")).await;
         assert_eq!(status, 404, "{path} must not answer at all");
     }
-}
-
-// --- the audio blob plane, through the real router ----------------------------
-
-/// Push a blob as multipart, the way the Mac's client does.
-async fn push_blob(
-    addr: &str,
-    token: &str,
-    source: &str,
-    name: &str,
-    bytes: Vec<u8>,
-) -> (u16, String) {
-    let url = format!("http://{addr}/sync/audio");
-    let (token, source, name) = (token.to_owned(), source.to_owned(), name.to_owned());
-    tokio::task::spawn_blocking(move || {
-        let boundary = "----recalltestboundary";
-        let mut body = Vec::new();
-        for (field, value) in [("source", source.as_bytes()), ("name", name.as_bytes())] {
-            body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-            body.extend_from_slice(
-                format!("Content-Disposition: form-data; name=\"{field}\"\r\n\r\n").as_bytes(),
-            );
-            body.extend_from_slice(value);
-            body.extend_from_slice(b"\r\n");
-        }
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        body.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n\r\n")
-                .as_bytes(),
-        );
-        body.extend_from_slice(&bytes);
-        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-
-        let res = agent()
-            .post(&url)
-            .set("Authorization", &format!("Bearer {token}"))
-            .set(
-                "Content-Type",
-                &format!("multipart/form-data; boundary={boundary}"),
-            )
-            .send_bytes(&body);
-        match res {
-            Ok(r) => (r.status(), r.into_string().unwrap_or_default()),
-            Err(ureq::Error::Status(c, r)) => (c, r.into_string().unwrap_or_default()),
-            Err(err) => panic!("transport: {err}"),
-        }
-    })
-    .await
-    .expect("request")
-}
-
-/// ⚠ **This is the test that catches a dead audio plane.** `app::router` layers
-/// its body limit onto the ingest router only, and a `.layer` applies to routes
-/// added BEFORE it — so the sync router, merged afterwards, silently inherits
-/// axum's 2 MB default. Every real segment is single-digit MB and the largest
-/// meeting in the archive is 62 MB, so without an explicit limit this plane
-/// refuses everything the Mac sends and retries for ever.
-///
-/// 4 MB here: comfortably past the 2 MB default, small enough to stay a fast
-/// test. It fails with 413 if the limit is ever lost.
-#[tokio::test]
-async fn a_push_larger_than_axums_default_body_limit_is_accepted() {
-    let (dir, addr) = serve(Some("sekrit")).await;
-    let big = vec![7u8; 4 * 1024 * 1024];
-
-    let (status, body) = push_blob(
-        &addr,
-        "sekrit",
-        "usb",
-        "usb-20260613T170653.opus",
-        big.clone(),
-    )
-    .await;
-
-    assert_eq!(status, 200, "a 4 MB push was refused: {body}");
-    assert_eq!(body, r#"{"stored":true}"#);
-    let landed = std::fs::read(dir.path().join("usb").join("usb-20260613T170653.opus")).unwrap();
-    assert_eq!(landed.len(), big.len(), "the bytes did not all arrive");
-}
-
-/// ⚠ The archive is immutable: same path, same content. A re-push is the Mac
-/// retrying after a timeout it cannot tell from a failure, and must never
-/// overwrite — nor report a second store.
-#[tokio::test]
-async fn a_repushed_blob_is_not_stored_twice_and_is_never_overwritten() {
-    let (dir, addr) = serve(Some("sekrit")).await;
-    let name = "usb-20260613T170750.opus";
-
-    assert_eq!(
-        push_blob(&addr, "sekrit", "usb", name, b"first".to_vec())
-            .await
-            .1,
-        r#"{"stored":true}"#
-    );
-    // Different bytes, same name — the archive must keep the first.
-    let (status, body) = push_blob(&addr, "sekrit", "usb", name, b"second".to_vec()).await;
-
-    assert_eq!(status, 200);
-    assert_eq!(body, r#"{"stored":false}"#);
-    assert_eq!(
-        std::fs::read(dir.path().join("usb").join(name)).unwrap(),
-        b"first",
-        "an immutable blob was overwritten"
-    );
-}
-
-/// The presence check is what lets the Mac skip re-sending bytes it already
-/// delivered, so a wrong answer here costs the whole archive's bandwidth.
-#[tokio::test]
-async fn presence_and_fetch_round_trip_and_refuse_traversal() {
-    let (_dir, addr) = serve(Some("sekrit")).await;
-    let name = "usb-20260613T170850.opus";
-
-    let absent = get(
-        &addr,
-        &format!("/sync/audio?source=usb&name={name}"),
-        Some("sekrit"),
-    )
-    .await;
-    assert_eq!(absent.1, r#"{"present":false}"#);
-
-    push_blob(&addr, "sekrit", "usb", name, b"audio bytes".to_vec()).await;
-
-    let present = get(
-        &addr,
-        &format!("/sync/audio?source=usb&name={name}"),
-        Some("sekrit"),
-    )
-    .await;
-    assert_eq!(present.1, r#"{"present":true}"#);
-
-    let fetched = get(
-        &addr,
-        &format!("/sync/audio/file?source=usb&name={name}"),
-        Some("sekrit"),
-    )
-    .await;
-    assert_eq!(fetched.0, 200);
-    assert_eq!(fetched.1, "audio bytes");
-
-    // A missing one is a 404, not a 500 or an empty 200.
-    let missing = get(
-        &addr,
-        "/sync/audio/file?source=usb&name=usb-20990101T000000.opus",
-        Some("sekrit"),
-    )
-    .await;
-    assert_eq!(missing.0, 404);
-
-    // ⚠ And the guard holds over HTTP, not just in the unit test.
-    let escape = get(
-        &addr,
-        "/sync/audio/file?source=..&name=recall.sqlite",
-        Some("sekrit"),
-    )
-    .await;
-    assert_eq!(escape.0, 400, "a traversal reached the filesystem");
-}
-
-/// Every audio route is gated — the blobs are the household's recordings.
-#[tokio::test]
-async fn the_audio_routes_are_gated() {
-    let (_dir, addr) = serve(Some("sekrit")).await;
-
-    assert_eq!(
-        get(&addr, "/sync/audio?source=usb&name=x.opus", None)
-            .await
-            .0,
-        401
-    );
-    assert_eq!(
-        get(
-            &addr,
-            "/sync/audio/file?source=usb&name=x.opus",
-            Some("wrong")
-        )
-        .await
-        .0,
-        401
-    );
-    assert_eq!(
-        push_blob(&addr, "wrong", "usb", "x.opus", b"x".to_vec())
-            .await
-            .0,
-        401
-    );
-}
-
-// --- the segment push, through the real router --------------------------------
-
-async fn post_json(
-    addr: &str,
-    path: &str,
-    token: Option<&str>,
-    body: serde_json::Value,
-) -> (u16, String) {
-    let url = format!("http://{addr}{path}");
-    let token = token.map(ToOwned::to_owned);
-    tokio::task::spawn_blocking(move || {
-        let mut req = agent().post(&url);
-        if let Some(t) = token {
-            req = req.set("Authorization", &format!("Bearer {t}"));
-        }
-        match req.send_json(body) {
-            Ok(r) => (r.status(), r.into_string().unwrap_or_default()),
-            Err(ureq::Error::Status(c, r)) => (c, r.into_string().unwrap_or_default()),
-            Err(err) => panic!("transport: {err}"),
-        }
-    })
-    .await
-    .expect("request")
-}
-
-fn a_segment(text: &str) -> serde_json::Value {
-    serde_json::json!({
-        "source_id": "usb", "source_name": "USB mic", "kind": "coreaudio",
-        "path": "/Volumes/Backup/recall/usb/usb-20260909T100000.opus",
-        "start": "2026-09-09T10:00:00+00:00", "end": "2026-09-09T10:01:00+00:00",
-        "sample_rate": 48000, "channels": 1,
-        "turns": [{"start":"2026-09-09T10:00:00+00:00","end":"2026-09-09T10:00:10+00:00",
-                   "text": text, "asr_model":"turbo","language":"en"}]
-    })
-}
-
-/// The meaning-plane schema the segment push writes into.
-fn seed_meaning_schema(root: &std::path::Path) {
-    let conn = recalld::work::open_write(root).expect("db");
-    conn.execute_batch(
-        // ⚠ THE REAL SCHEMA. An invented `spec` column here — taken from the
-        // Python DATACLASS, which has one, rather than the table, which does not
-        // — is why every real push 500'd for fifteen minutes on 2026-09-09.
-        "CREATE TABLE IF NOT EXISTS sources (
-             id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
-             port INTEGER, event_db REAL, noise_shape BLOB);
-         CREATE TABLE IF NOT EXISTS audio_segments (
-             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
-             start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, sample_rate INTEGER NOT NULL,
-             channels INTEGER NOT NULL, transcribed_utc TEXT, UNIQUE (source_id, start_utc));
-         CREATE TABLE IF NOT EXISTS transcript_segments (
-             id INTEGER PRIMARY KEY, audio_segment_id INTEGER, start_utc TEXT NOT NULL,
-             end_utc TEXT NOT NULL, text TEXT NOT NULL, language TEXT, asr_confidence REAL,
-             asr_model TEXT NOT NULL, speaker_cluster TEXT, speaker_guess TEXT,
-             speaker_score REAL, provenance TEXT, superseded_by INTEGER, hidden_reason TEXT);
-         CREATE VIRTUAL TABLE IF NOT EXISTS transcript_fts USING fts5(text, content='');
-         CREATE TABLE IF NOT EXISTS corrections (
-             id INTEGER PRIMARY KEY, audio_segment_id INTEGER NOT NULL, start_utc TEXT NOT NULL,
-             end_utc TEXT NOT NULL, corrected_text TEXT NOT NULL, language TEXT);
-         CREATE TABLE IF NOT EXISTS deleted_segments (
-             source_id TEXT NOT NULL, start_utc TEXT NOT NULL);",
-    )
-    .expect("schema");
-}
-
-#[tokio::test]
-async fn the_segment_routes_are_mounted_and_gated() {
-    let (dir, addr) = serve(Some("sekrit")).await;
-    seed_meaning_schema(dir.path());
-
-    let (ok, body) = post_json(&addr, "/sync/segments", Some("sekrit"), a_segment("hello")).await;
-    assert_eq!(ok, 200, "the single push is not mounted: {body}");
-    let out: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(out["turns_written"], 1);
-    assert_eq!(out["tombstoned"], false);
-    assert!(out["audio_segment_id"].as_i64().unwrap() > 0);
-
-    for bad in [None, Some("wrong")] {
-        assert_eq!(
-            post_json(&addr, "/sync/segments", bad, a_segment("x"))
-                .await
-                .0,
-            401
-        );
-        assert_eq!(
-            post_json(
-                &addr,
-                "/sync/segments/batch",
-                bad,
-                serde_json::json!({"segments":[]})
-            )
-            .await
-            .0,
-            401
-        );
-    }
-}
-
-/// ⚠ Results are ALIGNED BY INDEX with the request — the Mac marks each id
-/// pushed by position, so a reordered or short result list would advance the
-/// watermark past segments that never landed.
-#[tokio::test]
-async fn the_batch_returns_one_result_per_segment_in_order() {
-    let (dir, addr) = serve(Some("sekrit")).await;
-    seed_meaning_schema(dir.path());
-
-    let mut second = a_segment("second");
-    second["start"] = serde_json::json!("2026-09-09T10:02:00+00:00");
-    second["end"] = serde_json::json!("2026-09-09T10:03:00+00:00");
-    second["path"] = serde_json::json!("/Volumes/Backup/recall/usb/usb-20260909T100200.opus");
-
-    let (status, body) = post_json(
-        &addr,
-        "/sync/segments/batch",
-        Some("sekrit"),
-        serde_json::json!({"segments": [a_segment("first"), second]}),
-    )
-    .await;
-
-    assert_eq!(status, 200, "{body}");
-    let out: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let results = out["results"].as_array().expect("results");
-    assert_eq!(results.len(), 2, "one result per segment, aligned by index");
-    assert!(results.iter().all(|r| r["turns_written"] == 1));
-    assert_ne!(
-        results[0]["audio_segment_id"], results[1]["audio_segment_id"],
-        "two distinct segments collapsed into one row"
-    );
 }
 
 /// ⚠ **The third long-poll path, and the one neither language pinned.** The two

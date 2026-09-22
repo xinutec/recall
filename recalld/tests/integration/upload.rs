@@ -309,7 +309,6 @@ fn gated(root: &std::path::Path) -> axum::Router {
             now: Arc::new(|| NOW),
         }),
         sync_token: None,
-        upstream: None,
         frontend: None,
     }))
 }

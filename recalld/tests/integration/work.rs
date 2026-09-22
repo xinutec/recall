@@ -129,66 +129,6 @@ fn deleting_a_term_removes_it_and_deleting_a_missing_one_is_quiet() {
 }
 
 #[test]
-fn a_refine_request_records_the_span_it_was_asked_for() {
-    let conn = db();
-    conn.execute(
-        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'usb', 'coreaudio')",
-        (),
-    )
-    .expect("source");
-
-    work::add_refine_request(
-        &conn,
-        "usb",
-        "2026-09-03T09:00:00+00:00",
-        "2026-09-03T10:00:00+00:00",
-        NOW,
-    )
-    .expect("enqueue");
-
-    let (source, start, end): (String, String, String) = conn
-        .query_row(
-            "SELECT source_id, start_utc, end_utc FROM refine_requests",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .expect("row");
-    assert_eq!(source, "usb");
-    assert_eq!(start, "2026-09-03T09:00:00+00:00");
-    assert_eq!(end, "2026-09-03T10:00:00+00:00");
-}
-
-#[test]
-fn two_refine_requests_for_one_stretch_both_stand() {
-    // ⚠ Deliberately NOT deduplicated. You ask a second time because the first
-    // result was wrong; collapsing the second into the first would make the ask do
-    // nothing precisely when it is needed. The caller is `sessions::rediarize` —
-    // the timeline's own "refine this section" button went on 2026-09-17.
-    let conn = db();
-    conn.execute(
-        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'usb', 'coreaudio')",
-        (),
-    )
-    .expect("source");
-
-    for _ in 0..2 {
-        work::add_refine_request(
-            &conn,
-            "usb",
-            "2026-09-03T09:00:00+00:00",
-            "2026-09-03T10:00:00+00:00",
-            NOW,
-        )
-        .expect("enqueue");
-    }
-
-    let n: i64 = conn
-        .query_row("SELECT COUNT(*) FROM refine_requests", [], |r| r.get(0))
-        .expect("count");
-    assert_eq!(n, 2);
-}
-
-#[test]
 fn the_write_connection_is_separate_from_the_read_only_one() {
     // ⚠ The ownership rule, pinned: a read route must keep taking the read-only
     // handle so a bug in a read path cannot write. If `reads::open` ever starts

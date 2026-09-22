@@ -22,7 +22,6 @@ fn serve(root: &Path) -> String {
         // The runner uses the work plane only; the browsing plane is absent here.
         webauth: None,
         sync_token: None,
-        upstream: None,
         frontend: None,
     });
     let (tx, rx) = std::sync::mpsc::channel();

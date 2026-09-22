@@ -269,7 +269,6 @@ fn app(root: &std::path::Path, webauth: Option<GateState>) -> axum::Router {
         max_body_bytes: DEFAULT_MAX_BODY,
         webauth,
         sync_token: None,
-        upstream: None,
         frontend: None,
     }))
 }

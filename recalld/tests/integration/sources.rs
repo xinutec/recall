@@ -460,7 +460,6 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
             now: std::sync::Arc::new(|| 1_788_000_000),
         }),
         sync_token: None,
-        upstream: None,
         frontend: None,
     }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

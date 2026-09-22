@@ -1,22 +1,17 @@
 //! recalld — see lib.rs and docs/architecture.md.
 //!
 //!   recalld --root <data-root> [--bind <addr:port>]... [--tokens <file>]
-//!           [--upstream <url>] [--frontend <dir>]
+//!           [--frontend <dir>]
 //!
-//! `--bind` REPEATS. The fleet gives recalld both the ingest port recorders
-//! already push to and the port the browser already uses, so neither the
-//! recorders nor the registered OAuth redirect has to move for recalld to become
-//! the front door. `--upstream` is the Python API beside it in the pod, which
-//! serves whatever recalld has not ported yet; `--frontend` is the built Angular
-//! app.
+//! `--bind` repeats: the fleet gives recalld both the ingest port the recorders
+//! push to and the port the browser uses. `--frontend` is the built Angular app.
 //!
 //! `RECALLD_READ_TOKEN` (env, optional) gates the read side; per-source write
 //! tokens come from `--tokens <file>` or the `RECALLD_INGEST_TOKENS` env var
 //! (same line grammar). Everything unset = open, for dev and tests.
 //!
-//! `RECALL_SYNC_TOKEN` (env, optional) is different: it does not open or close a
-//! gate, it decides whether the `/sync/*` routes are MOUNTED at all. Unset, they
-//! stay with the Python upstream.
+//! `RECALL_SYNC_TOKEN` (env, optional) decides whether the `/sync/*` routes are
+//! mounted at all.
 
 use recalld::app::{Config, DEFAULT_MAX_BODY, router};
 use recalld::tokens::Tokens;
@@ -27,7 +22,7 @@ use std::sync::Arc;
 fn usage() -> ExitCode {
     eprintln!(
         "usage: recalld --root <data-root> [--bind <addr:port>]... [--tokens <file>] \
-         [--upstream <url>] [--frontend <dir>]"
+         [--frontend <dir>]"
     );
     ExitCode::FAILURE
 }
@@ -37,7 +32,6 @@ struct Args {
     root: PathBuf,
     binds: Vec<String>,
     tokens_path: Option<PathBuf>,
-    upstream: Option<String>,
     frontend: Option<PathBuf>,
 }
 
@@ -46,7 +40,6 @@ fn parse_args() -> Option<Args> {
     let mut root: Option<PathBuf> = None;
     let mut binds: Vec<String> = Vec::new();
     let mut tokens_path: Option<PathBuf> = None;
-    let mut upstream: Option<String> = None;
     let mut frontend: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         let value = args.next()?;
@@ -54,7 +47,6 @@ fn parse_args() -> Option<Args> {
             "--root" => root = Some(PathBuf::from(value)),
             "--bind" => binds.push(value),
             "--tokens" => tokens_path = Some(PathBuf::from(value)),
-            "--upstream" => upstream = Some(value),
             "--frontend" => frontend = Some(PathBuf::from(value)),
             _ => return None,
         }
@@ -67,7 +59,6 @@ fn parse_args() -> Option<Args> {
         root,
         binds,
         tokens_path,
-        upstream,
         frontend,
     })
 }
@@ -125,7 +116,6 @@ fn main() -> ExitCode {
         root,
         binds,
         tokens_path,
-        upstream,
         frontend,
     }) = parse_args()
     else {
@@ -153,9 +143,7 @@ fn main() -> ExitCode {
     let read_token = std::env::var("RECALLD_READ_TOKEN")
         .ok()
         .filter(|t| !t.is_empty());
-    // The Mac→fleet sync plane. Unset = the routes are not mounted and `/sync/*`
-    // still reaches the Python upstream, which is what makes shipping this code
-    // and CUTTING OVER to it two separate acts.
+    // The Mac→fleet sync plane; unset means the routes are not mounted.
     let sync_token = std::env::var("RECALL_SYNC_TOKEN")
         .ok()
         .filter(|t| !t.is_empty());
@@ -182,7 +170,6 @@ fn main() -> ExitCode {
         max_body_bytes: DEFAULT_MAX_BODY,
         webauth,
         sync_token,
-        upstream: upstream.map(|base| recalld::proxy::Upstream { base }),
         frontend,
     });
     let runtime = match tokio::runtime::Runtime::new() {

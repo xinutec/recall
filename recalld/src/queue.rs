@@ -51,6 +51,11 @@ pub const DIARIZE_SEGMENT: &str = "diarize-segment";
 /// [`crate::enrol`].
 pub const ENROLL_SPEAKER: &str = "enroll-speaker";
 const LEASE_TTL_S: i64 = 10 * 60;
+/// Leases a job may take before it is retired as failed. A runner that dies
+/// mid-job lets its lease lapse and the job is offered again; a clip that kills
+/// the shim every time would otherwise be offered every ten minutes for ever,
+/// newest first, holding the GPU.
+pub const MAX_ATTEMPTS: i64 = 3;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Job {
@@ -185,17 +190,9 @@ pub fn derive_segment_jobs(
         }
     }
 
-    // ⚠ **Every source the meaning plane knows EXCEPT the room**, uploads
-    // included. `source != 'room'` alone is not enough: a source this plane has
-    // never heard of gets no job, because nothing could register that clip's
-    // audio either, so the job could only go barren.
-    //
-    // ⚠ Uploads were excluded here until 2026-09-17, on the belief that "recalld
-    // transcribes them on arrival". It does not — an upload reached the Mac
-    // through `/sync/jobs`, and that queue lost its consumer when `recall jobs`
-    // went with refine, leaving the feature with no transcriber (#1649). What
-    // stops an already-transcribed upload being re-derived is the `have` set
-    // above, the same guard every microphone clip relies on.
+    // Every source the meaning plane knows except the room, uploads included:
+    // a source this plane has never heard of gets no job, because nothing could
+    // register that clip's audio either, so the job could only go barren.
     let known: std::collections::HashSet<String> = {
         let mut stmt = meaning.prepare("SELECT id FROM sources WHERE kind != ?1")?;
         let rows = stmt.query_map([crate::room::ROOM_KIND], |r| r.get::<_, String>(0))?;
@@ -286,6 +283,7 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Resul
     let conn = store::open(root)?;
     ensure_schema(&conn)?;
     derive_jobs(&conn, now)?;
+    retire_exhausted(&conn, now)?;
     // Built rather than bound as one parameter: SQLite has no array binding, and
     // the alternative (a comma-joined string matched with LIKE) would make
     // `transcribe-room` match a hypothetical `transcribe-room-v2`.
@@ -357,6 +355,21 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Resul
         )?;
     }
     Ok(job)
+}
+
+/// Retire every job whose leases are spent and lapsed, as a failure the passes
+/// ledger like any other refusal.
+fn retire_exhausted(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE jobs SET state = 'done', done_utc = ?1, result = ?2
+         WHERE done_utc IS NULL AND attempts >= ?3
+           AND (leased_until IS NULL OR leased_until < ?1)",
+        (
+            iso(now),
+            format!(r#"{{"ok":false,"error":"gave up after {MAX_ATTEMPTS} attempts"}}"#),
+            MAX_ATTEMPTS,
+        ),
+    )
 }
 
 /// Retire a job with its result (opaque JSON the runner will interpret;

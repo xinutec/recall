@@ -622,10 +622,8 @@ async fn login_redirects_to_nextcloud_and_the_cookie_it_later_sets_is_httponly()
     assert!(cookie.contains("Path=/"), "{cookie}");
 }
 
-/// ⚠ `/api/me` is the SPA's login probe and recalld is its ONLY implementation —
-/// the Python's copy was unreachable behind the proxy and has been deleted. The
-/// shape is what the app reads to decide it is signed in, so it is pinned here
-/// rather than left to the route existing.
+/// `/api/me` is the SPA's login probe. The shape is what the app reads to decide
+/// it is signed in, so it is pinned here rather than left to the route existing.
 #[tokio::test]
 async fn me_answers_with_the_identity_the_cookie_carries() {
     let app = gated(cfg(None));

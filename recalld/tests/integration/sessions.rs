@@ -21,11 +21,7 @@ fn schema(conn: &Connection) {
             id INTEGER PRIMARY KEY AUTOINCREMENT, audio_segment_id INTEGER,
             start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
             speaker_label TEXT, speaker_cluster TEXT,
-            superseded_by INTEGER, hidden_reason TEXT);
-         CREATE TABLE refine_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
-            created_utc TEXT NOT NULL, done_utc TEXT);",
+            superseded_by INTEGER, hidden_reason TEXT);",
     )
     .expect("schema");
 }
@@ -206,67 +202,127 @@ fn renaming_a_session_that_does_not_exist_is_a_miss_not_a_refusal() {
     assert!(matches!(err, SessionError::Missing), "got {err:?}");
 }
 
-#[test]
-fn rediarizing_queues_the_whole_recording_and_runs_nothing_inline() {
-    let conn = db();
-    source(&conn, "meeting-1", "upload");
-    segment(
-        &conn,
-        "meeting-1",
-        "2026-07-03T09:50:00+00:00",
-        "2026-07-03T10:00:00+00:00",
-    );
-    segment(
-        &conn,
-        "meeting-1",
-        "2026-07-03T10:00:00+00:00",
-        "2026-07-03T10:20:00+00:00",
-    );
-
-    rediarize(&conn, "meeting-1", NOW).expect("queued");
-
-    let (start, end): (String, String) = conn
-        .query_row(
-            "SELECT start_utc, end_utc FROM refine_requests WHERE source_id = 'meeting-1'",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+/// A meeting whose clips are delivered, transcribed and diarized: the shape
+/// `rediarize` acts on. Returns the data root.
+fn diarized_meeting(source: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let meaning = recalld::work::open_write(root).expect("meaning");
+    recalld::meaning_schema::ensure(&meaning).expect("schema");
+    meaning
+        .execute(
+            "INSERT INTO sources (id, name, kind) VALUES (?1, ?1, 'upload')",
+            [source],
         )
-        .expect("one request");
+        .expect("source");
+    let ingest = recalld::store::open(root).expect("ingest");
+    recalld::queue::ensure_schema(&ingest).expect("jobs");
+    recalld::turns::ensure_ledger(&ingest).expect("ledger");
+    for stamp in ["20260703T095000", "20260703T100000"] {
+        let filename = format!("{source}-{stamp}.mp3");
+        recalld::store::insert(
+            &ingest,
+            &recalld::store::Row {
+                source: source.to_owned(),
+                filename: filename.clone(),
+                start_utc: "2026-07-03T09:50:00Z".to_owned(),
+                bytes: 1,
+                sha256: "x".to_owned(),
+                received_utc: NOW.to_owned(),
+                sent_utc: None,
+            },
+        )
+        .expect("blob");
+        for kind in ["transcribe-segment", "diarize-segment"] {
+            ingest
+                .execute(
+                    "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+                     VALUES (?1, ?2, 'done', ?3, ?3, '{\"ok\":true}')",
+                    (kind, &filename, NOW),
+                )
+                .expect("job");
+        }
+        recalld::turns::ledger(&ingest, "diarize-segment", &filename, "aligned", NOW)
+            .expect("ledger row");
+    }
+    dir
+}
+
+fn open_jobs(root: &std::path::Path, kind: &str) -> i64 {
+    recalld::store::open(root)
+        .expect("ingest")
+        .query_row(
+            "SELECT count(*) FROM jobs WHERE kind = ?1 AND state = 'queued' AND done_utc IS NULL",
+            [kind],
+            |r| r.get(0),
+        )
+        .expect("count")
+}
+
+fn ledgered(root: &std::path::Path, kind: &str) -> i64 {
+    recalld::store::open(root)
+        .expect("ingest")
+        .query_row(
+            "SELECT count(*) FROM pass_ledger WHERE kind = ?1",
+            [kind],
+            |r| r.get(0),
+        )
+        .expect("count")
+}
+
+#[test]
+fn rediarizing_requeues_every_clip_of_the_meeting_and_nothing_else() {
+    let dir = diarized_meeting("meeting-1");
+    let root = dir.path();
+    let meaning = recalld::work::open_write(root).expect("meaning");
+    let ingest = recalld::store::open(root).expect("ingest");
+
+    let requeued = rediarize(&meaning, &ingest, "meeting-1").expect("requeued");
+
+    assert_eq!(requeued, 2);
     assert_eq!(
-        start, "2026-07-03T09:50:00+00:00",
-        "spans from the FIRST segment"
+        open_jobs(root, "diarize-segment"),
+        2,
+        "both clips are leasable again"
     );
-    assert_eq!(end, "2026-07-03T10:20:00+00:00", "to the LAST");
+    assert_eq!(
+        ledgered(root, "diarize-segment"),
+        0,
+        "the pass will decide them afresh"
+    );
+    // The words stand: only who said them is re-derived.
+    assert_eq!(open_jobs(root, "transcribe-segment"), 0);
 }
 
 #[test]
 fn rediarizing_a_session_with_no_audio_says_so() {
-    let conn = db();
-    source(&conn, "meeting-1", "upload");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let meaning = recalld::work::open_write(dir.path()).expect("meaning");
+    recalld::meaning_schema::ensure(&meaning).expect("schema");
+    source(&meaning, "meeting-1", "upload");
+    let ingest = recalld::store::open(dir.path()).expect("ingest");
 
-    let err = rediarize(&conn, "meeting-1", NOW).expect_err("nothing to refine");
+    let err = rediarize(&meaning, &ingest, "meeting-1").expect_err("nothing to redo");
 
     assert!(matches!(err, SessionError::NoAudio), "got {err:?}");
 }
 
 #[test]
 fn rediarizing_the_household_archive_is_refused() {
-    let conn = db();
-    source(&conn, "usb", "coreaudio");
-    segment(
-        &conn,
-        "usb",
-        "2026-07-03T09:00:00+00:00",
-        "2026-07-03T11:00:00+00:00",
-    );
+    let dir = diarized_meeting("meeting-1");
+    let root = dir.path();
+    let meaning = recalld::work::open_write(root).expect("meaning");
+    source(&meaning, "usb", "coreaudio");
+    let ingest = recalld::store::open(root).expect("ingest");
 
-    let err = rediarize(&conn, "usb", NOW).expect_err("must refuse");
+    let err = rediarize(&meaning, &ingest, "usb").expect_err("must refuse");
 
     assert!(matches!(err, SessionError::NotAnUpload), "got {err:?}");
-    let queued: i64 = conn
-        .query_row("SELECT COUNT(*) FROM refine_requests", [], |r| r.get(0))
-        .expect("count");
-    assert_eq!(queued, 0, "a refused guard queues nothing");
+    assert_eq!(
+        open_jobs(root, "diarize-segment"),
+        0,
+        "a refused guard requeues nothing"
+    );
 }
 
 #[test]

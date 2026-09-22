@@ -5,18 +5,12 @@
 //! two this product serves, so these routes are how a meeting is found, named
 //! and read back.
 //!
-//! ⚠ **Every mutating route is guarded to UPLOAD sources.** The continuous
-//! capture archive is append-only and must never be reachable through a path
-//! meant for meetings — renaming or re-diarizing it here would be wrong, and
-//! deleting it would be unrecoverable. The guard answers 404 for a source that
-//! does not exist and 400 for one that exists but is not an upload, so a caller
-//! can tell "no such meeting" from "that is the household archive".
-//!
-//! ⚠ **Two routes are deliberately NOT here**: the multipart upload and the
-//! delete. Delete removes turns, audio rows AND files from disk, which is the
-//! one irreversible operation in the product; it stays with the Python that has
-//! been running it. `crate::app` forwards both to the upstream by method, which
-//! is why porting half a path is safe at all.
+//! Every mutating route is guarded to UPLOAD sources. The continuous capture
+//! archive must never be reachable through a path meant for meetings: renaming
+//! or re-diarizing it would be wrong, deleting it unrecoverable. The guard
+//! answers 404 for a source that does not exist and 400 for one that is not an
+//! upload, so a caller can tell "no such meeting" from "that is the archive".
+//! The upload itself is `crate::upload`.
 
 use crate::{reads, route, work};
 use axum::extract::{Path, State};
@@ -152,25 +146,43 @@ pub fn rename(conn: &Connection, source: &str, title: &str) -> Result<(), Sessio
     Ok(())
 }
 
-/// Queue a whole-session re-derivation of who said what.
+/// Re-derive who said what across a whole session: every finished
+/// `diarize-segment` job of its clips goes back to `queued` and the diarized
+/// pass's ledger rows for them are cleared, so the voices runner diarizes them
+/// again and the pass decides afresh against the turns standing now.
 ///
-/// ⚠ Queued, never run inline: diarization is the expensive pass and running it
-/// on a request thread would starve live capture. The idle-gated daemon picks it
-/// up, which is the same contract `work::add_refine_request` serves.
-pub fn rediarize(conn: &Connection, source: &str, now: &str) -> Result<(), SessionError> {
-    require_upload(conn, source)?;
-    let span: Option<(Option<String>, Option<String>)> = conn
-        .query_row(
-            "SELECT MIN(start_utc), MAX(end_utc) FROM audio_segments WHERE source_id = ?1",
-            [source],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .ok();
-    let Some((Some(start), Some(end))) = span else {
+/// Returns how many clips were re-queued. Zero is not an error: a session whose
+/// diarization has not finished yet has nothing to redo.
+pub fn rediarize(
+    meaning: &Connection,
+    ingest: &Connection,
+    source: &str,
+) -> Result<usize, SessionError> {
+    require_upload(meaning, source)?;
+    crate::queue::ensure_schema(ingest)?;
+    crate::turns::ensure_ledger(ingest)?;
+    let clips: i64 = ingest.query_row(
+        "SELECT count(*) FROM segments WHERE source = ?1",
+        [source],
+        |r| r.get(0),
+    )?;
+    if clips == 0 {
         return Err(SessionError::NoAudio);
-    };
-    work::add_refine_request(conn, source, &start, &end, now)?;
-    Ok(())
+    }
+    let tx = ingest.unchecked_transaction()?;
+    let requeued = tx.execute(
+        "UPDATE jobs SET state = 'queued', leased_until = NULL, done_utc = NULL, result = NULL
+         WHERE kind = ?1 AND done_utc IS NOT NULL
+           AND filename IN (SELECT filename FROM segments WHERE source = ?2)",
+        (crate::queue::DIARIZE_SEGMENT, source),
+    )?;
+    tx.execute(
+        "DELETE FROM pass_ledger WHERE kind = ?1
+           AND filename IN (SELECT filename FROM segments WHERE source = ?2)",
+        (crate::queue::DIARIZE_SEGMENT, source),
+    )?;
+    tx.commit()?;
+    Ok(requeued)
 }
 
 /// Name a diarization voice across a whole session, or clear it with `None`.
@@ -348,11 +360,14 @@ pub async fn rediarize_route(
     Path(source): Path<String>,
 ) -> Response {
     let root = st.root.clone();
-    let now = chrono::Utc::now().to_rfc3339();
-    match tokio::task::spawn_blocking(move || rediarize(&work::open_write(&root)?, &source, &now))
-        .await
+    match tokio::task::spawn_blocking(move || {
+        let meaning = work::open_write(&root)?;
+        let ingest = crate::store::open(&root)?;
+        rediarize(&meaning, &ingest, &source)
+    })
+    .await
     {
-        Ok(Ok(())) => route::ack(),
+        Ok(Ok(_)) => route::ack(),
         Ok(Err(err)) => err.into_response("session rediarize"),
         Err(err) => route::faulted("session rediarize task", &err),
     }

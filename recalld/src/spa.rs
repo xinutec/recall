@@ -1,32 +1,17 @@
-//! Serving the built Angular app, ported from `recall.api`'s `spa`.
+//! Serving the built Angular app from the same origin as its API.
 //!
-//! ⚠ **Built and tested, and deliberately NOT mounted yet** — the same rule that
-//! kept the read routes off the router until webauth existed. recalld serves 2 of
-//! the ~28 `/api/*` routes the SPA calls, so serving the app from here would hand
-//! someone a half-working UI whose other calls 404. dev-lint's
-//! `DL-WIRE-ROUTE-DRIFT` says so precisely: it resolves the axum route table
-//! against the frontend's call sites, and mounting this made it report 26 calls
-//! that would miss. That is a finding, not noise, so it is being obeyed rather
-//! than waived. Mount this when the route groups are done; `app::router` gains a
-//! `frontend` field then, not before.
+//! Three rules, each learned rather than designed:
 //!
-//! One origin: the SPA and its API answer on the same host, so there is no CORS
-//! and no second deployment. Three rules, each of which was learned rather than
-//! designed, and none of which a generic static-file handler would give:
-//!
-//! 1. ⚠ **`/api/*` that falls through here is a 404, never `index.html`.** A miss
-//!    on the API must look like a miss. Returning the SPA shell with status 200
-//!    turns "this route does not exist" into "here is some HTML", which a client
-//!    then tries to parse as JSON — the error becomes a parse failure a long way
-//!    from its cause.
-//! 2. ⚠ **`index.html` is `no-cache`; hashed assets are immutable.** index.html
-//!    names the current bundles, so caching it means a deploy is not picked up
-//!    until a hard refresh — the bug that served stale code from isis. The
-//!    bundles themselves carry a content hash in the name, so they can be cached
-//!    for a year safely.
-//! 3. ⚠ **A request may not escape the frontend directory.** `../` is resolved
-//!    and checked against the root, so a crafted path cannot read the archive,
-//!    the database, or the token file.
+//! 1. A path under a server prefix that reached the fallback is a 404, never
+//!    `index.html`. Returning the shell with a 200 turns "no such route" into
+//!    HTML a client then fails to parse as JSON, far from the cause. Once, with
+//!    only `/api/` covered, the Mac's sync agents received `index.html` for
+//!    `/sync/*` and died.
+//! 2. `index.html` is `no-cache`; hashed bundles are immutable. The shell names
+//!    the current bundles, so caching it meant a deploy was not picked up until
+//!    a hard refresh.
+//! 3. A request may not escape the frontend directory: `../` is resolved and
+//!    checked against the root.
 
 use axum::body::Body;
 use axum::extract::State;
@@ -39,6 +24,9 @@ use std::sync::Arc;
 pub struct Frontend {
     pub root: PathBuf,
 }
+
+/// Prefixes the server answers itself. A miss under one of these is a miss.
+pub const SERVER_PREFIXES: &[&str] = &["/api/", "/sync/", "/ingest/", "/work/"];
 
 /// Resolve a request path to a file INSIDE the frontend root, or None.
 ///
@@ -98,8 +86,8 @@ fn file(path: &Path, cache: &str) -> Response {
 #[allow(clippy::unused_async)]
 pub async fn serve(State(fe): State<Arc<Frontend>>, uri: axum::http::Uri) -> Response {
     let path = uri.path();
-    // Rule 1: an API miss is a miss.
-    if path.starts_with("/api/") {
+    // Rule 1.
+    if SERVER_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     if let Some(asset) = resolve(&fe.root, path) {

@@ -218,17 +218,11 @@ fn repeated_hour_marker(started: DateTime<Utc>, local: &DateTime<chrono_tz::Tz>)
     }
 }
 
-/// Where the uploaded file lands: the INGEST plane's directory for its source.
-///
-/// ⚠ **The ingest plane, not a directory of its own.** An upload used to land in
-/// `<root>/<source>/` and reach a transcriber through `/sync/jobs`, a queue of its
-/// own. That queue lost its consumer and the feature went silently untranscribed
-/// (#1649). Written where every delivered blob lives, an upload is leased,
-/// fetched over `/ingest/v1/blob` and transcribed by exactly the road a
-/// microphone clip takes — one road, no second queue to keep a consumer for.
-///
-/// ⚠ Rows written before that date still point at `<root>/<source>/` and playback
-/// reads `audio_segments.path`, so they keep working where they are.
+/// Where the uploaded file lands: the INGEST plane's directory for its source,
+/// where every delivered blob lives, so an upload is leased, fetched over
+/// `/ingest/v1/blob` and transcribed by the road a microphone clip takes.
+/// Older rows point at `<root>/<source>/`; playback reads `audio_segments.path`,
+/// so they keep working where they are.
 pub fn stored_path(root: &Path, source: &str, started: DateTime<Utc>, suffix: &str) -> PathBuf {
     let stamp = format!(
         "{:04}{:02}{:02}T{:02}{:02}{:02}",

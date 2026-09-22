@@ -24,7 +24,6 @@ pub mod levels;
 pub mod live_tier;
 pub mod meaning_schema;
 pub mod processed;
-pub mod proxy;
 pub mod pyjson;
 pub mod quality;
 pub mod queue;

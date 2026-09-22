@@ -536,12 +536,6 @@ pub async fn outbox_post_route(
 }
 
 /// The heartbeats as the wire carries them.
-///
-/// ⚠ Shared by TWO planes on purpose. The browsing tier reads this at
-/// `/api/devices/heartbeat` and the Mac reads the identical bytes at
-/// `/sync/devices/heartbeats` — same reader, same shape, different credential.
-/// Two copies of this mapping would be two places for a field to drift, and the
-/// Mac would learn about it by silently losing one.
 pub fn beats_out(conn: &Connection) -> rusqlite::Result<BeatsOut> {
     Ok(BeatsOut {
         items: read_beats(conn)?

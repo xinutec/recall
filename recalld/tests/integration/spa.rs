@@ -54,8 +54,18 @@ async fn a_client_route_gets_the_shell_but_an_api_miss_gets_a_404() {
     assert_eq!(status, 200, "a client-side route must get the shell");
     assert!(body.contains("app-root"));
 
-    let (status, _, _) = get_path(&app, "/api/does-not-exist").await;
-    assert_eq!(status, 404, "an API miss must look like a miss");
+    for miss in [
+        "/api/does-not-exist",
+        "/sync/anything",
+        "/ingest/v1/x",
+        "/work/v1/x",
+    ] {
+        let (status, _, _) = get_path(&app, miss).await;
+        assert_eq!(
+            status, 404,
+            "{miss}: a server-side miss must look like a miss"
+        );
+    }
 
     // The real API route still wins over the fallback.
     let (status, _, body) = get_path(&app, "/api/timeline").await;
