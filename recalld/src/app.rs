@@ -222,7 +222,6 @@ pub fn router(config: Arc<Config>) -> Router {
         .route("/ingest/v1/blob/{source}/{filename}", get(ingest::get_blob))
         .route("/work/v1/lease", put(ingest::lease_job))
         .route("/work/v1/jobs/{id}/done", put(ingest::finish_job))
-        .layer(DefaultBodyLimit::max(limit))
         .with_state(config);
     let merged = match browsing_plane {
         Some(b) => base.merge(b),
@@ -232,6 +231,9 @@ pub fn router(config: Arc<Config>) -> Router {
         Some(gate) => merged.merge(sync::routes(gate)),
         None => merged,
     };
+    // After every merge: a layer covers only the routes present when it is
+    // applied, and a meeting upload is tens of MB on the browsing plane.
+    let merged = merged.layer(DefaultBodyLimit::max(limit));
     // ⚠ Order matters and is the safety property: `fallback` runs ONLY where
     // nothing above matched, so a ported route always beats both the proxy and
     // the shell. A half-ported group can never silently keep serving the old

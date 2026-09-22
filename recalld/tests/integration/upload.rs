@@ -658,3 +658,45 @@ fn an_accepted_container_can_also_be_fetched_back() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_recording_over_two_megabytes_is_accepted() {
+    // axum limits a request body to 2 MB unless a route is told otherwise, and
+    // the upload route sits on the browsing router, not the ingest one the
+    // `DefaultBodyLimit` layer is applied to. A meeting recording is tens of MB.
+    let dir = scratch();
+    let clip = dir.path().join("hospital.wav");
+    if !make_flac(&clip, 40.0) {
+        eprintln!("skipped: no ffmpeg on this host");
+        return;
+    }
+    let bytes = std::fs::read(&clip).expect("read");
+    assert!(
+        bytes.len() > 2 * 1024 * 1024,
+        "the fixture must exceed 2 MB"
+    );
+    let (ctype, body) = multipart("hospital.wav", &bytes, "", "2026-07-03T09:50:00+01:00");
+
+    let response = gated(dir.path())
+        .oneshot(
+            Request::post("/api/sessions")
+                .header("content-type", ctype)
+                .header("cookie", cookie())
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("call");
+
+    let status = response.status();
+    let out = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    assert_eq!(
+        status,
+        200,
+        "a {} byte upload: {}",
+        bytes.len(),
+        String::from_utf8_lossy(&out)
+    );
+}
