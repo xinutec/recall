@@ -53,7 +53,7 @@ fn clip(root: &Path, source_id: &str, name: &str, minute: u32, speech: Option<f6
     // The blob's own row first: `segment_speech.filename` references it, which
     // is the ingest plane refusing to hold a measurement of nothing.
     let conn = store::open(root).expect("ingest");
-    recalld::speech::ensure_schema(&conn).expect("schema");
+    recalld::ingest_schema::ensure(&conn).expect("schema");
     store::insert(
         &conn,
         &store::Row {

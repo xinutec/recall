@@ -305,13 +305,13 @@ pub fn apply_correction(
     // ⚠ An overridden span is RE-SPELLED, not stored as sent. These columns are
     // compared as text, so a client sending `...01Z` where the table holds
     // `...01+00:00` would write a turn that sorts into the wrong page. See
-    // `crate::instant`.
+    // `audiocore::instant`.
     let start = match edit.start {
-        Some(value) => crate::instant::python_isoformat(value).ok_or(CorrectError::BadSpan)?,
+        Some(value) => audiocore::instant::python_isoformat(value).ok_or(CorrectError::BadSpan)?,
         None => old.start_utc.clone(),
     };
     let end = match edit.end {
-        Some(value) => crate::instant::python_isoformat(value).ok_or(CorrectError::BadSpan)?,
+        Some(value) => audiocore::instant::python_isoformat(value).ok_or(CorrectError::BadSpan)?,
         None => old.end_utc.clone(),
     };
     let (start, end) = (start.as_str(), end.as_str());

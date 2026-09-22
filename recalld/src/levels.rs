@@ -75,52 +75,6 @@ pub struct Levels {
     pub gated: f32,
 }
 
-pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS segment_levels (
-             filename     TEXT PRIMARY KEY REFERENCES segments (filename),
-             source       TEXT NOT NULL,
-             speech_db    REAL NOT NULL,
-             floor_db     REAL NOT NULL,
-             -- Added 2026-09-12. NULL means measured before the gate detector
-             -- existed, which is NOT the same as measured-and-found-ungated: a
-             -- reader must treat it as unknown, never as zero.
-             gated        REAL,
-             -- Added 2026-09-18, same rule: NULL is UNKNOWN, never zero. A zero
-             -- here reads as the cleanest possible microphone -- no quiet
-             -- stretch at all -- the opposite of not-yet-measured.
-             quiet_run_s  REAL,
-             computed_utc TEXT NOT NULL
-         );
-         CREATE INDEX IF NOT EXISTS segment_levels_source
-             ON segment_levels (source, filename);",
-    )?;
-    add_column(conn, "gated")?;
-    add_column(conn, "quiet_run_s")
-}
-
-/// Add a REAL column to a table that already exists.
-///
-/// ⚠ **`CREATE TABLE IF NOT EXISTS` DOES NOT ADD A COLUMN.** Every deployment
-/// that ran before the column was introduced already has this table, so naming
-/// it in the CREATE above reaches new databases only — and the insert names it,
-/// so production fails on every segment with `no such column`. Caught in 2026-09
-/// by querying the live fleet, not by the suite: every test builds the table
-/// fresh, which is the one shape that cannot show this.
-fn add_column(conn: &Connection, name: &str) -> rusqlite::Result<()> {
-    let present: bool = conn
-        .prepare("SELECT 1 FROM pragma_table_info('segment_levels') WHERE name = ?1")?
-        .exists([name])?;
-    if present {
-        return Ok(());
-    }
-    // `name` is a literal from this file, never user input — ALTER TABLE takes
-    // no parameter for an identifier.
-    conn.execute_batch(&format!(
-        "ALTER TABLE segment_levels ADD COLUMN {name} REAL"
-    ))
-}
-
 /// Decode one blob and measure it — every container through ffmpeg, the one
 /// decoder every other consumer of the archive already trusts.
 pub fn measure(path: &Path) -> Option<Levels> {
@@ -200,7 +154,6 @@ fn bucket_db(rms: f32) -> f32 {
 /// itself a reading, and the row is what stops the scanner revisiting it.
 pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     let conn = store::open(root)?;
-    ensure_schema(&conn)?;
     let pending: Vec<(String, String)> = {
         let mut stmt = conn.prepare(
             // ⚠ Each nullable statistic is named here, so the scanner

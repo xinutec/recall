@@ -136,35 +136,6 @@ pub struct BuildSummary {
 /// distribution. Raise it before the room turn writer goes on (#1388).
 const MIN_COVERAGE: f32 = 0.5;
 
-pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS room_blocks (
-             start_utc    TEXT PRIMARY KEY,
-             verdict      TEXT NOT NULL,
-             winner       TEXT,
-             filename     TEXT,
-             contributors TEXT NOT NULL,
-             -- NULL means judged before coverage was measured, which is not the
-             -- same as fully covered.
-             coverage     REAL,
-             built_utc    TEXT NOT NULL
-         );",
-    )?;
-    add_coverage_column(conn)
-}
-
-/// Add `coverage` to a table that already exists — `CREATE TABLE IF NOT EXISTS`
-/// adds nothing to one that is already there.
-fn add_coverage_column(conn: &Connection) -> rusqlite::Result<()> {
-    let present: bool = conn
-        .prepare("SELECT 1 FROM pragma_table_info('room_blocks') WHERE name = 'coverage'")?
-        .exists([])?;
-    if present {
-        return Ok(());
-    }
-    conn.execute_batch("ALTER TABLE room_blocks ADD COLUMN coverage REAL")
-}
-
 fn minute_floor(t: DateTime<Utc>) -> DateTime<Utc> {
     let secs = t.timestamp();
     DateTime::from_timestamp(secs - secs.rem_euclid(BLOCK_S), 0).unwrap_or(t)
@@ -390,13 +361,10 @@ pub fn build_once(
     now: DateTime<Utc>,
 ) -> rusqlite::Result<BuildSummary> {
     let conn = store::open(root)?;
-    levels::ensure_schema(&conn)?;
     // ⚠ The reference JOINS segment_speech, and the speech scanner is the only
     // thing that creates it — and it declines to run where the ONNX runtime is
     // unavailable. Without this the room builder would fail outright on such a
     // host, which is far worse than building uncalibrated blocks there.
-    crate::speech::ensure_schema(&conn)?;
-    ensure_schema(&conn)?;
     let mut summary = BuildSummary::default();
     for block in candidate_blocks(&conn, config, now)? {
         let Some(contributors) = block_contributors(&conn, config, block)? else {
@@ -646,7 +614,6 @@ pub fn verdict_of(conn: &Connection, block_start_utc: &str) -> rusqlite::Result<
 /// If the database refuses.
 pub fn backfill_coverage(root: &Path, limit: usize) -> rusqlite::Result<usize> {
     let conn = store::open(root)?;
-    ensure_schema(&conn)?;
     let pending: Vec<(String, String)> = {
         let mut stmt = conn.prepare(
             "SELECT start_utc, winner FROM room_blocks

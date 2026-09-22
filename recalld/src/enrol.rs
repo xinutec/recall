@@ -312,7 +312,6 @@ pub fn write_pass(
     now: &str,
     limit: usize,
 ) -> rusqlite::Result<Enrolled> {
-    crate::turns::ensure_ledger(ingest)?;
     let candidates: Vec<(String, String)> = {
         let mut stmt = ingest.prepare(
             "SELECT j.filename, j.result FROM jobs j

@@ -250,12 +250,12 @@ fn delivered_evidence(root: &std::path::Path) -> HashMap<String, Evidence> {
         .filter_map(|(source, delivered, speech)| {
             // A source with no parseable delivered time carries no evidence at
             // all — the Python drops the entry rather than inventing one.
-            let delivered = crate::instant::parse(&delivered)?.with_timezone(&Utc);
+            let delivered = audiocore::instant::parse(&delivered)?.with_timezone(&Utc);
             Some((
                 source,
                 Evidence {
                     delivered: Some(delivered),
-                    speech: crate::instant::parse(&speech).map(|t| t.with_timezone(&Utc)),
+                    speech: audiocore::instant::parse(&speech).map(|t| t.with_timezone(&Utc)),
                 },
             ))
         })
@@ -333,9 +333,11 @@ pub fn fleet_sources(
                 name: s.name,
                 kind: s.kind.as_str(),
                 active: s.active,
-                last_active: s.last_active.map(crate::instant::python_isoformat_utc),
+                last_active: s.last_active.map(audiocore::instant::python_isoformat_utc),
                 recording: s.recording,
-                last_delivered: s.last_delivered.map(crate::instant::python_isoformat_utc),
+                last_delivered: s
+                    .last_delivered
+                    .map(audiocore::instant::python_isoformat_utc),
             })
             .collect(),
     })

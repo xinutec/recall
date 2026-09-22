@@ -9,6 +9,7 @@
 pub mod align;
 pub mod decode;
 pub mod envelope;
+pub mod instant;
 pub mod names;
 pub mod text;
 pub mod vad;

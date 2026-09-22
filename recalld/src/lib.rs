@@ -16,7 +16,7 @@ pub mod diarized;
 pub mod enrol;
 pub mod identify;
 pub mod ingest;
-pub mod instant;
+pub mod ingest_schema;
 pub mod labels;
 pub mod labels_write;
 pub mod latin_ranges;

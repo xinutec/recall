@@ -216,8 +216,7 @@ fn diarized_meeting(source: &str) -> tempfile::TempDir {
         )
         .expect("source");
     let ingest = recalld::store::open(root).expect("ingest");
-    recalld::queue::ensure_schema(&ingest).expect("jobs");
-    recalld::turns::ensure_ledger(&ingest).expect("ledger");
+    recalld::ingest_schema::ensure(&ingest).expect("jobs");
     for stamp in ["20260703T095000", "20260703T100000"] {
         let filename = format!("{source}-{stamp}.mp3");
         recalld::store::insert(

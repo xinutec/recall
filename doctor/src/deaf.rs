@@ -228,8 +228,8 @@ pub fn heard_between(
             .query_map(
                 rusqlite::params![
                     source,
-                    crate::archive::python_iso(since),
-                    crate::archive::python_iso(until)
+                    audiocore::instant::python_isoformat_utc(since),
+                    audiocore::instant::python_isoformat_utc(until)
                 ],
                 |row| {
                     Ok((
@@ -244,9 +244,10 @@ pub fn heard_between(
         let mut delivered = 0.0;
         let mut speech = 0.0;
         for (start, end, speech_s) in rows {
-            let (Some(start), Some(end)) =
-                (crate::instant::parse(&start), crate::instant::parse(&end))
-            else {
+            let (Some(start), Some(end)) = (
+                audiocore::instant::parse_utc(&start),
+                audiocore::instant::parse_utc(&end),
+            ) else {
                 continue;
             };
             let span = (end - start).num_milliseconds() as f64 / 1000.0;

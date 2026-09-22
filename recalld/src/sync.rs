@@ -261,9 +261,9 @@ pub async fn live_health_route(
     // ⚠ Parsed HERE, so an unspellable bound is the caller's 400 rather than a
     // TEXT comparison against something that only looks like a timestamp.
     let (Some(lag_since), Some(window_since), Some(window_until)) = (
-        crate::instant::parse(&q.lag_since),
-        crate::instant::parse(&q.window_since),
-        crate::instant::parse(&q.window_until),
+        audiocore::instant::parse(&q.lag_since),
+        audiocore::instant::parse(&q.window_since),
+        audiocore::instant::parse(&q.window_until),
     ) else {
         return (StatusCode::BAD_REQUEST, "unparseable window bound").into_response();
     };

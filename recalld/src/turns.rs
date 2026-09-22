@@ -254,7 +254,7 @@ pub const ROOM_CHANNELS: i64 = 1;
 ///
 /// ⚠ **DO NOT "FIX" THE TIMESTAMP SPELLING HERE.** `SecondsFormat::Micros`
 /// writes `...T10:00:00.000000+00:00`, which is not what
-/// [`crate::instant::python_isoformat_utc`] would write and not what
+/// [`audiocore::instant::python_isoformat_utc`] would write and not what
 /// `register_segments` writes — and that inconsistency is CORRECT, because the
 /// idempotency key is compared as TEXT. EVERY room row already written carries
 /// the fractional spelling, so changing it would make all of them stop matching
@@ -387,7 +387,6 @@ pub fn register_segments(
     now: &str,
     limit: usize,
 ) -> rusqlite::Result<Registered> {
-    ensure_ledger(ingest)?;
     // ⚠ Uploads are excluded because `upload::register` already writes their
     // meaning-plane rows — not because they take a different road to a
     // transcriber. They do not: since 2026-09-17 an upload is leased and
@@ -460,7 +459,10 @@ pub fn register_segments(
         };
         // A sibling already holds this minute, so the insert below could only be
         // ignored. Decided WITHOUT decoding: the duration would be discarded.
-        let minute = (source.clone(), crate::instant::python_isoformat_utc(start));
+        let minute = (
+            source.clone(),
+            audiocore::instant::python_isoformat_utc(start),
+        );
         if minutes.contains(&minute) {
             out.covered += 1;
             ledger(
@@ -501,8 +503,8 @@ pub fn register_segments(
             rusqlite::params![
                 source,
                 path.to_string_lossy(),
-                crate::instant::python_isoformat_utc(start),
-                crate::instant::python_isoformat_utc(end),
+                audiocore::instant::python_isoformat_utc(start),
+                audiocore::instant::python_isoformat_utc(end),
                 media.sample_rate,
                 media.channels,
             ],
@@ -786,18 +788,6 @@ pub struct Pass {
     pub swept: usize,
 }
 
-/// The ledger of clips a pass DECIDED WITHOUT WRITING, in the ingest plane.
-///
-/// ⚠ Only refusals go here. A clip whose turns were written needs no row — the
-/// turns are the record, and `write_pass` derives "already done" from them — so
-/// deleting a stream's turns re-enables its clips by itself. A clip that wrote
-/// NOTHING leaves no such trace, and without a row sits at the head of the
-/// queue for ever.
-///
-/// ⚠ Therefore a reversal is TWO planes: the turns, and these rows.
-///
-/// # Errors
-/// If the database refuses.
 /// Whether the block starting at `block_start` on `source` was deliberately
 /// deleted on the fleet — the same second-resolution match the audio lookup
 /// uses, because the tombstone carries whatever spelling the row had.
@@ -823,29 +813,13 @@ pub fn tombstoned_block(
         .is_some())
 }
 
-pub fn ensure_ledger(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS pass_ledger (
-             kind        TEXT NOT NULL,
-             filename    TEXT NOT NULL,
-             outcome     TEXT NOT NULL,
-             decided_utc TEXT NOT NULL,
-             PRIMARY KEY (kind, filename)
-         );",
-    )
-}
-
-/// A clip was decided and wrote nothing. `outcome` is for a person reading the
-/// table later, never branched on.
+/// Record that a pass decided a clip and wrote nothing. `outcome` is for a
+/// person reading the table, never branched on.
 ///
-/// ⚠ Keyed on (kind, filename), not filename. Three passes share this table —
-/// the two turn streams and the segment registrar — and they reach the SAME
-/// clip by the same name. A shared key would let one pass's refusal retire
-/// another's work silently, with nothing anywhere saying so.
-/// Record a terminal decision about a clip.
-///
-/// # Errors
-/// If the database refuses.
+/// Only refusals are ledgered: written turns are their own record, and
+/// `write_pass` derives "already done" from them, so deleting a stream's turns
+/// re-enables its clips by itself. A reversal is therefore two planes, the
+/// turns and these rows.
 pub fn ledger(
     conn: &rusqlite::Connection,
     kind: &str,
@@ -880,7 +854,6 @@ pub fn write_pass(
     now: &str,
     limit: usize,
 ) -> rusqlite::Result<Pass> {
-    ensure_ledger(ingest)?;
     // ⚠ NO `LIMIT` in the SQL, and `limit` counts blocks DECIDED rather than
     // blocks looked at. A limited query returns the same rows every pass when
     // they are all ineligible — which is the bug this replaces: `ORDER BY

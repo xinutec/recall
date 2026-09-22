@@ -443,19 +443,6 @@ fn no_agents_installed_at_all_is_reported_once() {
 }
 
 #[test]
-fn a_python_instant_drops_a_zero_fraction_and_keeps_a_real_one() {
-    // These strings are COMPARED as text by every archive query, so the
-    // spelling has to be the one Python wrote.
-    let whole = DateTime::from_timestamp(1_788_894_682, 0).unwrap();
-    assert_eq!(archive::python_iso(whole), "2026-09-08T19:11:22+00:00");
-    let fractional = DateTime::from_timestamp(1_788_894_682, 164_504_000).unwrap();
-    assert_eq!(
-        archive::python_iso(fractional),
-        "2026-09-08T19:11:22.164504+00:00"
-    );
-}
-
-#[test]
 fn too_few_live_turns_skips_rather_than_passing() {
     // ⚠ "Nothing to measure" and "measured and fine" are different claims. A
     // check that conflates them reports a DEAD tier as healthy, which is the

@@ -65,5 +65,5 @@ pub fn agent_health(home: &Path) -> Vec<(String, bool)> {
 /// "not paused" in the one direction that silences a household's control.
 pub fn paused_until(root: &Path) -> Option<DateTime<Utc>> {
     let text = std::fs::read_to_string(root.join(PAUSE_FILE)).ok()?;
-    crate::instant::parse(text.trim())
+    audiocore::instant::parse_utc(text.trim())
 }

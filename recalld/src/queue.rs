@@ -83,23 +83,6 @@ pub struct Job {
     pub spans: Vec<crate::enrol::Span>,
 }
 
-pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS jobs (
-             id           INTEGER PRIMARY KEY,
-             kind         TEXT NOT NULL,
-             filename     TEXT NOT NULL,
-             state        TEXT NOT NULL DEFAULT 'queued',
-             leased_until TEXT,
-             attempts     INTEGER NOT NULL DEFAULT 0,
-             created_utc  TEXT NOT NULL,
-             done_utc     TEXT,
-             result       TEXT,
-             UNIQUE (kind, filename)
-         );",
-    )
-}
-
 fn iso(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
@@ -118,7 +101,6 @@ pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<us
     // at yet" is not evidence of silence, and on a host where the detector
     // cannot run (no AVX2-capable ONNX runtime) this degrades to the old
     // behaviour rather than silently producing no work at all.
-    crate::speech::ensure_schema(conn)?;
     let inserted = conn.execute(
         "INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
          SELECT ?1, s.filename, ?2 FROM segments s
@@ -169,10 +151,6 @@ pub fn derive_segment_jobs(
     now: DateTime<Utc>,
     limit: usize,
 ) -> rusqlite::Result<usize> {
-    // The silence table is this function's dependency too, not only
-    // `derive_jobs`'s — transcribing a measured-silent clip returns INVENTIONS,
-    // not nothing (#1410), and that rule is not room-specific.
-    crate::speech::ensure_schema(ingest)?;
     // The filenames that already have turns, as basenames. Read from the meaning
     // plane in one pass rather than joined per row — a correlated LIKE over both
     // tables is a full scan of each, and on the live fleet it ran for ten
@@ -281,7 +259,6 @@ fn derive_diarize_segment_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlit
 /// nothing, which is the safe reading of "I can do nothing".
 pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Result<Option<Job>> {
     let conn = store::open(root)?;
-    ensure_schema(&conn)?;
     derive_jobs(&conn, now)?;
     retire_exhausted(&conn, now)?;
     // Built rather than bound as one parameter: SQLite has no array binding, and
@@ -376,7 +353,6 @@ fn retire_exhausted(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<u
 /// stored so nothing is lost while that lands).
 pub fn done(root: &Path, id: i64, result: &str, now: DateTime<Utc>) -> rusqlite::Result<bool> {
     let conn = store::open(root)?;
-    ensure_schema(&conn)?;
     let updated = conn.execute(
         "UPDATE jobs SET state = 'done', done_utc = ?1, result = ?2
          WHERE id = ?3 AND done_utc IS NULL",

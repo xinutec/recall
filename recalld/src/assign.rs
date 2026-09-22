@@ -19,7 +19,7 @@
 //! and, landing mid-character, PANIC rather than quietly misbehave. Everything
 //! below therefore works on `Vec<char>`.
 
-use crate::instant;
+use audiocore::instant;
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction};
 

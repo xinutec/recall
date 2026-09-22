@@ -85,7 +85,7 @@ fn seed_two_devices(root: &Path) -> DateTime<Utc> {
 /// this.
 fn seed_speech(root: &Path) {
     let conn = store::open(root).expect("db");
-    recalld::speech::ensure_schema(&conn).expect("schema");
+    recalld::ingest_schema::ensure(&conn).expect("schema");
     conn.execute(
         "INSERT OR IGNORE INTO segment_speech (filename, source, speech_seconds, computed_utc)
          SELECT filename, source, 30.0, '2026-09-05T10:00:00Z' FROM segment_levels",

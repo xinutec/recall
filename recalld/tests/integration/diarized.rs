@@ -640,7 +640,7 @@ fn ingest_plane(path: &std::path::Path, voices: &str, transcription: &str) -> Co
          );",
     )
     .expect("segments");
-    recalld::queue::ensure_schema(&conn).expect("jobs");
+    recalld::ingest_schema::ensure(&conn).expect("jobs");
     conn.execute(
         "INSERT INTO segments (source, filename, start_utc, bytes, sha256, received_utc)
          VALUES ('room', ?1, ?2, 1, 'x', ?2)",
@@ -992,7 +992,7 @@ fn mic_ingest(path: &std::path::Path, voices: &str, transcription: &str) -> Conn
          );",
     )
     .expect("segments");
-    recalld::queue::ensure_schema(&conn).expect("jobs");
+    recalld::ingest_schema::ensure(&conn).expect("jobs");
     conn.execute(
         "INSERT INTO segments (source, filename, start_utc, bytes, sha256, received_utc)
          VALUES ('usb', 'usb-20260906T094500.flac', ?1, 1, 'x', ?1)",

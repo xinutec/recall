@@ -451,9 +451,9 @@ pub fn live_check(
 /// returning", which point at launchd and at the archive respectively.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Beat {
-    #[serde(deserialize_with = "crate::instant::de")]
+    #[serde(deserialize_with = "audiocore::instant::de")]
     pub started: DateTime<Utc>,
-    #[serde(default, deserialize_with = "crate::instant::de_opt")]
+    #[serde(default, deserialize_with = "audiocore::instant::de_opt")]
     pub finished: Option<DateTime<Utc>>,
     #[serde(default)]
     pub seconds: Option<f64>,

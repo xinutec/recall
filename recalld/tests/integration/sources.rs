@@ -326,7 +326,7 @@ fn liveness(pairs: &[(&str, DateTime<Utc>)]) -> serde_json::Map<String, serde_js
         .map(|(id, when)| {
             (
                 (*id).to_owned(),
-                serde_json::Value::String(recalld::instant::python_isoformat_utc(*when)),
+                serde_json::Value::String(audiocore::instant::python_isoformat_utc(*when)),
             )
         })
         .collect()
@@ -384,7 +384,7 @@ async fn on_the_fleet_liveness_comes_from_the_macs_report() {
     // ⚠ When the Mac reports capture PAUSED, the mic reads idle AT ONCE — even
     // though its marker is still fresh and its window is a leisurely 75 s. A
     // pause that took a poll to show would be a pause the panel lied about.
-    let until = recalld::instant::python_isoformat_utc(at + Duration::hours(1));
+    let until = audiocore::instant::python_isoformat_utc(at + Duration::hours(1));
     recalld::capture::record_reported(&conn, at, false, Some(&until), &liveness(&[("usb", at)]))
         .unwrap();
     let paused = active_by_id(&root, &conn, at);
@@ -505,7 +505,7 @@ fn deliver(root: &std::path::Path, source: &str, captured: DateTime<Utc>, speech
         rusqlite::params![name, source, stamp],
     )
     .expect("segment");
-    recalld::speech::ensure_schema(&conn).expect("speech schema");
+    recalld::ingest_schema::ensure(&conn).expect("speech schema");
     conn.execute(
         "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc)
          VALUES (?1, ?2, ?3, ?4)",
@@ -542,7 +542,7 @@ async fn a_pause_silences_delivered_evidence_for_every_kind() {
     assert_eq!(running.get("usb"), Some(&true));
 
     // The household pauses. Same evidence, and now it must prove nothing.
-    let until = recalld::instant::python_isoformat_utc(at + Duration::hours(1));
+    let until = audiocore::instant::python_isoformat_utc(at + Duration::hours(1));
     recalld::capture::record_reported(&conn, at, false, Some(&until), &liveness(&[])).unwrap();
     let paused = active_by_id(&root, &conn, at);
     assert_eq!(paused.get("usb"), Some(&false), "the mic is idle at once");

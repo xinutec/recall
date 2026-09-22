@@ -25,7 +25,6 @@ fn serve(server_root: &Path, tokens_text: &str) -> String {
         // different credential and is deliberately absent here.
         webauth: None,
         sync_token: None,
-        upstream: None,
         frontend: None,
     });
     let (tx, rx) = std::sync::mpsc::channel();

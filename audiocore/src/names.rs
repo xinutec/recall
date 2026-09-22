@@ -48,6 +48,13 @@ impl Extension {
         }
     }
 
+    /// Whether a recorder's segment ring writes this container. The rest
+    /// arrive by upload, and a file in one of them under a microphone's
+    /// directory is not the recorder's to ship.
+    pub fn recorded(self) -> bool {
+        matches!(self, Self::Flac | Self::Opus | Self::Ogg | Self::Wav)
+    }
+
     /// The MIME type a blob answers with. `.opus` is an Ogg container.
     pub fn content_type(self) -> &'static str {
         match self {

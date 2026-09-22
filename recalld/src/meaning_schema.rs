@@ -402,10 +402,10 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
     // One transaction per step: a half-applied step must not be recorded, and a
     // step that succeeded must not be undone by a later one failing.
     for (index, statement) in MIGRATIONS.iter().enumerate().skip(have as usize) {
-        conn.execute_batch("BEGIN")?;
-        conn.execute_batch(statement)?;
-        conn.execute_batch(&format!("PRAGMA user_version = {}", index + 1))?;
-        conn.execute_batch("COMMIT")?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(statement)?;
+        tx.execute_batch(&format!("PRAGMA user_version = {}", index + 1))?;
+        tx.commit()?;
     }
     Ok(())
 }

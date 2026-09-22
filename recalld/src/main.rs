@@ -585,8 +585,7 @@ fn spawn_speech_scanner(root: PathBuf) {
 ///
 /// Forget it and the reversal LOOKS complete — the transcripts are back, the
 /// stream's rows are gone — while every refused or swept clip silently never
-/// gets reconsidered. `turns::ensure_ledger` carries the same warning from the
-/// other side.
+/// gets reconsidered.
 ///
 /// Written here rather than in a task because the person who needs it will be
 /// reading this file, not searching for the note.

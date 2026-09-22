@@ -330,7 +330,7 @@ async fn liveness_ignores_a_segment_measured_as_silent() {
 
     // Now record the newest as SILENT; liveness must fall back to the older one.
     let conn = recalld::store::open(h.dir.path()).expect("db");
-    recalld::speech::ensure_schema(&conn).expect("schema");
+    recalld::ingest_schema::ensure(&conn).expect("schema");
     conn.execute(
         "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc)
          VALUES ('geb-20260905T100100.opus', 'geb', 0.0, '2026-09-05T10:02:00Z')",

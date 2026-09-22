@@ -118,7 +118,7 @@ fn the_device_reference_is_a_query_over_its_own_rows() {
     // will not call speech, so the evidence is recorded directly — the point
     // under test is the QUANTILE over a source's own rows, not the detector.
     let conn = store::open(dir.path()).expect("db");
-    recalld::speech::ensure_schema(&conn).expect("schema");
+    recalld::ingest_schema::ensure(&conn).expect("schema");
     for i in 0..4 {
         conn.execute(
             "INSERT OR IGNORE INTO segment_speech
@@ -237,8 +237,9 @@ fn a_database_from_before_the_detector_gains_the_column() {
     // existing one — so `gated` was never going to appear there, and the insert
     // names it. Found by querying the live fleet: `no such column: gated`.
     let dir = tempfile::tempdir().expect("tmp");
-    let conn = store::open(dir.path()).expect("db");
-    // The schema exactly as it stood before 2026-09-12.
+    // A raw connection: `store::open` would create the table in its current shape.
+    let conn = rusqlite::Connection::open(dir.path().join("ingest.sqlite")).expect("db");
+    // The table as it stood before the detector.
     conn.execute_batch(
         "CREATE TABLE segment_levels (
              filename     TEXT PRIMARY KEY,
@@ -255,7 +256,7 @@ fn a_database_from_before_the_detector_gains_the_column() {
     )
     .expect("a row from before");
 
-    recalld::levels::ensure_schema(&conn).expect("migrate");
+    recalld::ingest_schema::ensure(&conn).expect("migrate");
 
     let has: bool = conn
         .prepare("SELECT 1 FROM pragma_table_info('segment_levels') WHERE name = 'gated'")
@@ -283,7 +284,7 @@ fn a_database_from_before_the_detector_gains_the_column() {
     assert!(gated.is_none(), "not measured is not zero");
 
     // And running it twice must not fail on the column already being there.
-    recalld::levels::ensure_schema(&conn).expect("idempotent");
+    recalld::ingest_schema::ensure(&conn).expect("idempotent");
 }
 
 use recalld::levels::quiet_run_seconds;
@@ -372,7 +373,7 @@ fn a_database_that_already_has_gated_gains_the_run_column() {
     // keyed on that column alone would decide it had nothing to do and the
     // insert naming `quiet_run_s` would fail on every segment.
     let dir = tempfile::tempdir().expect("tmp");
-    let conn = store::open(dir.path()).expect("db");
+    let conn = rusqlite::Connection::open(dir.path().join("ingest.sqlite")).expect("db");
     conn.execute_batch(
         "CREATE TABLE segment_levels (
              filename     TEXT PRIMARY KEY,
@@ -387,7 +388,7 @@ fn a_database_that_already_has_gated_gains_the_run_column() {
     )
     .expect("the schema as the fleet has it");
 
-    recalld::levels::ensure_schema(&conn).expect("migrate");
+    recalld::ingest_schema::ensure(&conn).expect("migrate");
 
     let run: Option<f64> = conn
         .query_row(

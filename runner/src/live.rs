@@ -420,12 +420,3 @@ pub fn spoken(result: &serde_json::Value) -> Option<(String, Option<String>)> {
         .map(str::to_owned);
     Some((text, language))
 }
-
-/// The spelling the rest of the system stores instants in — python's
-/// `datetime.isoformat()`: microseconds, a numeric offset, no `Z`. recalld
-/// re-spells what it receives, but sending the house spelling means the wire and
-/// the rows agree when anyone reads both.
-#[must_use]
-pub fn recall_instant(at: DateTime<Utc>) -> String {
-    at.format("%Y-%m-%dT%H:%M:%S%.6f+00:00").to_string()
-}

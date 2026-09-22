@@ -132,7 +132,7 @@ pub fn live_checks(
             health
                 .newest_turn_utc
                 .as_deref()
-                .and_then(crate::instant::parse),
+                .and_then(audiocore::instant::parse_utc),
             now,
             paused_until,
             capture::live_quiet(),

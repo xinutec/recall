@@ -142,14 +142,14 @@ pub fn intent_until(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<O
     if raw.is_empty() {
         return Ok(None);
     }
-    let Some(parsed) = crate::instant::parse(&raw) else {
+    let Some(parsed) = audiocore::instant::parse(&raw) else {
         // Unparseable reads as RUNNING, never as a pause nobody can clear.
         return Ok(None);
     };
     if parsed.with_timezone(&Utc) <= now {
         return Ok(None);
     }
-    Ok(crate::instant::python_isoformat(&raw))
+    Ok(audiocore::instant::python_isoformat(&raw))
 }
 
 /// The Mac's last-reported state if it is fresh, else `None` — meaning the Mac
@@ -165,7 +165,7 @@ pub fn reported_state(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result
     if at.is_empty() {
         return Ok(None);
     }
-    let Some(at) = crate::instant::parse(&at) else {
+    let Some(at) = audiocore::instant::parse(&at) else {
         return Ok(None);
     };
     let at = at.with_timezone(&Utc);
@@ -201,7 +201,7 @@ pub fn record_reported(
     set_setting(
         conn,
         REPORTED_AT_KEY,
-        &crate::instant::python_isoformat_utc(now),
+        &audiocore::instant::python_isoformat_utc(now),
     )?;
     set_setting(
         conn,
@@ -228,7 +228,7 @@ pub fn reported_source_liveness(
     let Some(at) = setting(conn, REPORTED_AT_KEY)?.filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
-    let Some(at) = crate::instant::parse(&at) else {
+    let Some(at) = audiocore::instant::parse(&at) else {
         return Ok(None);
     };
     if now - at.with_timezone(&Utc) > report_fresh() {
@@ -243,7 +243,7 @@ pub fn reported_source_liveness(
     };
     let mut out = std::collections::HashMap::new();
     for (source, value) in parsed {
-        if let Some(when) = value.as_str().and_then(crate::instant::parse) {
+        if let Some(when) = value.as_str().and_then(audiocore::instant::parse) {
             out.insert(source, when.with_timezone(&Utc));
         }
     }
@@ -335,7 +335,7 @@ pub fn intent_pause(
     minutes: Option<i64>,
 ) -> rusqlite::Result<String> {
     let until = compute_resume_by(now, minutes);
-    let iso = crate::instant::python_isoformat_utc(until);
+    let iso = audiocore::instant::python_isoformat_utc(until);
     set_setting(conn, INTENT_KEY, &iso)?;
     notify_intent_changed();
     Ok(iso)
@@ -371,7 +371,7 @@ pub fn record_control_origin(
     conn.execute(
         "INSERT INTO capture_events (utc, kind, source_id, detail) VALUES (?1, ?2, NULL, ?3)",
         rusqlite::params![
-            crate::instant::python_isoformat_utc(now),
+            audiocore::instant::python_isoformat_utc(now),
             "control_request",
             format!("{verb} — {origin}"),
         ],

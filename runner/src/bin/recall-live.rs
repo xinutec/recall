@@ -12,9 +12,10 @@
 //! Isis and the push IS the write. Kill this at any moment and nothing needs
 //! recovering.
 
+use audiocore::instant::python_isoformat_utc;
 use chrono::Utc;
 use runner::client::{Client, LiveTurn};
-use runner::live::{self, Cutter, LIVE_MODEL, Tap, Utterance, recall_instant, spoken};
+use runner::live::{self, Cutter, LIVE_MODEL, Tap, Utterance, spoken};
 use runner::shim::{self, Shim};
 use std::time::{Duration, Instant};
 
@@ -95,8 +96,8 @@ fn handle(
         return Ok(());
     };
     let stored = client.push_live(&[LiveTurn {
-        start: recall_instant(utterance.start),
-        end: recall_instant(utterance.end),
+        start: python_isoformat_utc(utterance.start),
+        end: python_isoformat_utc(utterance.end),
         text,
         asr_model: LIVE_MODEL.to_owned(),
         language,

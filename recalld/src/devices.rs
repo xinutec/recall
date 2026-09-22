@@ -23,7 +23,7 @@
 //! how the Python has always worked and is acceptable for an hourly status that
 //! is rewritten wholesale.
 
-use crate::instant;
+use audiocore::instant;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};

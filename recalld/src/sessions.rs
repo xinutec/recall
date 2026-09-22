@@ -159,8 +159,6 @@ pub fn rediarize(
     source: &str,
 ) -> Result<usize, SessionError> {
     require_upload(meaning, source)?;
-    crate::queue::ensure_schema(ingest)?;
-    crate::turns::ensure_ledger(ingest)?;
     let clips: i64 = ingest.query_row(
         "SELECT count(*) FROM segments WHERE source = ?1",
         [source],

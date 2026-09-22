@@ -16,7 +16,7 @@
 use audiocore::decode;
 use audiocore::vad::{RATE, WINDOW, window_seconds};
 use chrono::{DateTime, TimeDelta, Utc};
-use runner::live::{Cutter, Utterance, channel, offer, recall_instant, spoken, tap_argv};
+use runner::live::{Cutter, Utterance, channel, offer, spoken, tap_argv};
 use std::path::Path;
 
 const FIXTURE: &str = "../tests/fixtures/speech/public-domain-en.flac";
@@ -155,16 +155,6 @@ fn a_reply_with_nothing_said_in_it_is_not_a_turn() {
     ] {
         assert_eq!(spoken(&reply), None, "{reply}");
     }
-}
-
-#[test]
-fn an_instant_is_spelled_the_way_the_rest_of_the_system_stores_one() {
-    // python's `datetime.isoformat()`: microseconds, a numeric offset, no `Z`.
-    // A second spelling of one instant is how two rows for one turn happen.
-    let at: DateTime<Utc> = "2026-09-14T09:00:00.123456+00:00".parse().expect("parse");
-    assert_eq!(recall_instant(at), "2026-09-14T09:00:00.123456+00:00");
-    let whole: DateTime<Utc> = "2026-09-14T09:00:00+00:00".parse().expect("parse");
-    assert_eq!(recall_instant(whole), "2026-09-14T09:00:00.000000+00:00");
 }
 
 #[test]

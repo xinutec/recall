@@ -696,7 +696,7 @@ fn an_empty_plan_writes_nothing_and_hides_nothing() {
 
 // ---- the pass's progress ledger ----
 
-use recalld::turns::{PER_MIC, Pass, ensure_ledger, write_pass};
+use recalld::turns::{PER_MIC, Pass, write_pass};
 
 /// Both planes with enough schema for a real `write_pass`, copied from the
 /// shapes the production code writes rather than from the structs beside it.
@@ -740,8 +740,7 @@ fn planes_for_a_pass() -> (
     // not have.
     let dir = tempfile::tempdir().expect("tmp");
     let ingest = recalld::store::open(dir.path()).expect("ingest");
-    recalld::queue::ensure_schema(&ingest).expect("jobs");
-    ensure_ledger(&ingest).expect("ledger");
+    recalld::ingest_schema::ensure(&ingest).expect("jobs");
     (meaning, ingest, dir)
 }
 
@@ -1247,7 +1246,7 @@ fn one_streams_refusal_does_not_retire_the_others_job() {
         &a_result("dit is echte spraak"),
     );
     // The same filename decided by the OTHER stream, writing nothing.
-    ensure_ledger(&ingest).expect("ledger");
+    recalld::ingest_schema::ensure(&ingest).expect("ledger");
     ingest
         .execute(
             "INSERT INTO pass_ledger (kind, filename, outcome, decided_utc)

@@ -55,7 +55,7 @@ pub struct LiveHealth {
 /// timestamp is compared as TEXT, so `…T11:40:00Z` and `…T11:40:00+00:00` are
 /// the same moment and two different values to every query below — and `Z`
 /// sorts AFTER `+`, so a caller using it would silently lose the first row of
-/// its own window. [`crate::instant`] holds the one spelling.
+/// its own window. [`audiocore::instant`] holds the one spelling.
 ///
 /// ⚠ It must NOT reach for `audio_segments.speech_s`. That column is the Mac's,
 /// filled by `audiod speech`, and the fleet's copy stopped receiving it in July
@@ -68,9 +68,9 @@ pub fn live_health(
     window_until: DateTime<Utc>,
 ) -> rusqlite::Result<LiveHealth> {
     let (lag_since, window_since, window_until) = (
-        crate::instant::python_isoformat_utc(lag_since),
-        crate::instant::python_isoformat_utc(window_since),
-        crate::instant::python_isoformat_utc(window_until),
+        audiocore::instant::python_isoformat_utc(lag_since),
+        audiocore::instant::python_isoformat_utc(window_since),
+        audiocore::instant::python_isoformat_utc(window_until),
     );
     let meaning = crate::reads::open(root)?;
     let lags = live_lags(&meaning, &lag_since)?;
@@ -114,9 +114,10 @@ fn live_lags(conn: &Connection, since: &str) -> rusqlite::Result<Vec<f64>> {
     let mut lags = Vec::new();
     for row in rows {
         let (created, end) = row?;
-        if let (Some(created), Some(end)) =
-            (crate::instant::parse(&created), crate::instant::parse(&end))
-        {
+        if let (Some(created), Some(end)) = (
+            audiocore::instant::parse(&created),
+            audiocore::instant::parse(&end),
+        ) {
             lags.push((created - end).num_milliseconds() as f64 / 1000.0);
         }
     }
@@ -166,9 +167,10 @@ fn window_clips(
         })?;
         for row in rows {
             let (path, start, end) = row?;
-            let (Some(start), Some(end)) =
-                (crate::instant::parse(&start), crate::instant::parse(&end))
-            else {
+            let (Some(start), Some(end)) = (
+                audiocore::instant::parse(&start),
+                audiocore::instant::parse(&end),
+            ) else {
                 continue;
             };
             let seconds = (end - start).num_milliseconds() as f64 / 1000.0;

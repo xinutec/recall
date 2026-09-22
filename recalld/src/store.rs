@@ -52,22 +52,9 @@ pub fn source_dir(root: &std::path::Path, source: &str) -> std::path::PathBuf {
 pub fn open(root: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(root.join("ingest.sqlite"))?;
     conn.busy_timeout(Duration::from_secs(5))?;
-    // WAL so the eventual readers (room builder, retention) never block a
-    // recorder's upload, and vice versa.
+    // WAL so the readers never block a recorder's upload, and vice versa.
     conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS segments (
-             filename     TEXT PRIMARY KEY,
-             source       TEXT NOT NULL,
-             start_utc    TEXT NOT NULL,
-             bytes        INTEGER NOT NULL,
-             sha256       TEXT NOT NULL,
-             received_utc TEXT NOT NULL,
-             sent_utc     TEXT
-         );
-         CREATE INDEX IF NOT EXISTS segments_source_start
-             ON segments (source, start_utc);",
-    )?;
+    crate::ingest_schema::ensure(&conn)?;
     Ok(conn)
 }
 
@@ -80,8 +67,7 @@ pub fn insert(conn: &Connection, row: &Row) -> rusqlite::Result<()> {
             &row.filename,
             &row.source,
             &row.start_utc,
-            // SQLite's integer is i64; rusqlite 0.40 stopped pretending a
-            // u64 fits. A file size does.
+            // SQLite's integer is i64; a file size fits.
             i64::try_from(row.bytes).expect("a byte count fits SQLite's i64"),
             &row.sha256,
             &row.received_utc,

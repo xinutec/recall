@@ -15,31 +15,10 @@ use chrono::{DateTime, Duration, Utc};
 use std::collections::BTreeSet;
 use std::path::Path;
 
-const EXTENSIONS: [&str; 4] = ["flac", "opus", "ogg", "wav"];
-const STAMP_LEN: usize = "YYYYMMDDTHHMMSS".len();
 const OPEN_GRACE_MINUTES: i64 = 3;
 const WARN_MINUTES: i64 = 30;
 const FAIL_HOURS: i64 = 6;
 const CONFLICTS_NAMED: usize = 3;
-
-/// The delivery grammar — must stay the subset `audiod::upload` ships and
-/// recalld's name parser accepts (`<source>-YYYYMMDDTHHMMSS.<ext>`).
-fn is_segment_of(source: &str, filename: &str) -> bool {
-    let Some(rest) = filename.strip_prefix(&format!("{source}-")) else {
-        return false;
-    };
-    let Some((stamp, ext)) = rest.rsplit_once('.') else {
-        return false;
-    };
-    let stamp: Vec<char> = stamp.chars().collect();
-    EXTENSIONS.contains(&ext)
-        && stamp.len() == STAMP_LEN
-        && stamp[8] == 'T'
-        && stamp
-            .iter()
-            .enumerate()
-            .all(|(i, c)| i == 8 || c.is_ascii_digit())
-}
 
 /// What the uploader has already handled, and what collided.
 fn uploader_state(state: &Path) -> rusqlite::Result<(BTreeSet<String>, Vec<String>)> {
@@ -90,7 +69,7 @@ fn undelivered(out: &Path, handled: &BTreeSet<String>, now: DateTime<Utc>) -> Ve
             .flatten()
             .filter(|e| e.path().is_file())
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|name| is_segment_of(&source, name))
+            .filter(|name| audiocore::names::parse(&source, name).is_ok_and(|n| n.ext.recorded()))
             .collect();
         if names.is_empty() {
             continue;

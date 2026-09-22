@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Utc};
 use recalld::enrol::{Span, derive_jobs, pending, spans_for};
-use recalld::queue::{ENROLL_SPEAKER, ensure_schema};
+use recalld::queue::ENROLL_SPEAKER;
 use recalld::store;
 
 fn at(iso: &str) -> DateTime<Utc> {
@@ -168,7 +168,7 @@ fn the_job_names_the_ingest_filename_even_when_the_extensions_differ() {
     delivered(dir.path(), "usb-20260910T100000.wav");
 
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     assert_eq!(
         derive_jobs(&ingest, &conn, at("2026-09-10T12:00:00Z"), 100).expect("derive"),
         1
@@ -202,7 +202,7 @@ fn one_job_per_clip_however_many_named_turns_it_holds() {
     delivered(dir.path(), "usb-20260910T100000.wav");
 
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     assert_eq!(
         derive_jobs(&ingest, &conn, at("2026-09-10T12:00:00Z"), 100).expect("derive"),
         1
@@ -229,7 +229,7 @@ fn a_turn_whose_clip_was_never_delivered_gets_no_job() {
     turn(&conn, 10, Some("Alice"), 0.0, 4.0);
 
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     assert_eq!(
         derive_jobs(&ingest, &conn, at("2026-09-10T12:00:00Z"), 100).expect("derive"),
         0
@@ -257,7 +257,7 @@ fn reply(prints: &[Print]) -> String {
 
 fn ingest_at(root: &std::path::Path) -> rusqlite::Connection {
     let conn = store::open(root).expect("ingest");
-    ensure_schema(&conn).expect("schema");
+    recalld::ingest_schema::ensure(&conn).expect("schema");
     conn
 }
 

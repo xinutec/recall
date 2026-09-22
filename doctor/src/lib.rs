@@ -24,7 +24,6 @@ pub mod check;
 pub mod deaf;
 pub mod delivery;
 pub mod fleetwatch;
-pub mod instant;
 pub mod live;
 pub mod loss;
 pub mod source;

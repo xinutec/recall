@@ -32,19 +32,6 @@ use std::path::Path;
 
 pub use audiocore::vad::UNKNOWN_SECONDS;
 
-pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS segment_speech (
-             filename       TEXT PRIMARY KEY REFERENCES segments (filename),
-             source         TEXT NOT NULL,
-             speech_seconds REAL NOT NULL,
-             computed_utc   TEXT NOT NULL
-         );
-         CREATE INDEX IF NOT EXISTS segment_speech_source
-             ON segment_speech (source, filename);",
-    )
-}
-
 /// Measure up to `batch` unmeasured segments, NEWEST first; returns rows written.
 ///
 /// The detector is loaded ONCE for the whole batch. Python paid ~2 s of model
@@ -57,7 +44,6 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
 /// revisiting it forever.
 pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     let conn = store::open(root)?;
-    ensure_schema(&conn)?;
     let pending: Vec<(String, String)> = {
         let mut stmt = conn.prepare(
             "SELECT s.filename, s.source FROM segments s
@@ -116,7 +102,6 @@ pub fn latest_speech_utc(conn: &Connection, source: &str) -> rusqlite::Result<Op
     // ⚠ The table may not exist: the scanner creates it, and the scanner does
     // not run where the ONNX runtime is unavailable. Without this, liveness
     // would 500 on exactly the deployments least able to afford it.
-    ensure_schema(conn)?;
     let mut stmt = conn.prepare(
         "SELECT MAX(s.start_utc) FROM segments s
          LEFT JOIN segment_speech p ON p.filename = s.filename
@@ -144,7 +129,6 @@ pub fn latest_speech_utc(conn: &Connection, source: &str) -> rusqlite::Result<Op
 /// # Errors
 /// On database failure.
 pub fn liveness_by_source(conn: &Connection) -> rusqlite::Result<Vec<(String, String, String)>> {
-    ensure_schema(conn)?;
     let mut stmt = conn.prepare(
         "SELECT s.source,
                 MAX(s.start_utc),

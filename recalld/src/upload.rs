@@ -14,7 +14,8 @@
 //! ⚠ **The container is kept, not forced to WAV.** ffprobe validates what is
 //! actually inside; the suffix only gates what is worth trying.
 
-use crate::{instant, pyjson};
+use crate::pyjson;
+use audiocore::instant;
 use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
 use chrono_tz::Europe::London;
 use rusqlite::Connection;

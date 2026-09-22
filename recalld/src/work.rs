@@ -207,10 +207,10 @@ pub fn ingest_live(
     for turn in turns {
         // The stored spelling, so the presence check and the insert agree. A
         // turn re-spelled on the way in would never match its own earlier copy.
-        let Some(start) = crate::instant::python_isoformat(&turn.start) else {
+        let Some(start) = audiocore::instant::python_isoformat(&turn.start) else {
             continue;
         };
-        let Some(end) = crate::instant::python_isoformat(&turn.end) else {
+        let Some(end) = audiocore::instant::python_isoformat(&turn.end) else {
             continue;
         };
         if crate::quality::is_repetition_loop(&turn.text)

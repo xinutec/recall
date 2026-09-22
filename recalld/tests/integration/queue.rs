@@ -106,8 +106,7 @@ fn a_segment_measured_as_silent_gets_no_transcription_job() {
     // tildes at 0.19 confidence (#1410). 42% of the queue was silence.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = store::open(dir.path()).expect("db");
-    recalld::queue::ensure_schema(&conn).expect("jobs schema");
-    recalld::speech::ensure_schema(&conn).expect("speech schema");
+    recalld::ingest_schema::ensure(&conn).expect("jobs schema");
     for (name, seconds) in [
         ("room-20260906T100000.flac", Some(0.0)),
         ("room-20260906T100100.flac", Some(12.0)),
@@ -255,7 +254,7 @@ fn a_runner_is_never_handed_a_kind_it_cannot_do() {
 
 // ---- per-mic transcribe jobs: the orchestration port (#1538) ----
 
-use recalld::queue::{self, TRANSCRIBE_SEGMENT, derive_segment_jobs, ensure_schema};
+use recalld::queue::{self, TRANSCRIBE_SEGMENT, derive_segment_jobs};
 
 fn mic_row(root: &std::path::Path, source: &str, stamp: &str) -> String {
     let name = format!("{source}-{stamp}.opus");
@@ -337,7 +336,7 @@ fn a_segment_that_already_has_turns_gets_no_job() {
     already_transcribed(&meaning, "usb", &done_one, "2026-09-05T10:00:00+00:00");
 
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     assert_eq!(
         derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
         1,
@@ -365,7 +364,7 @@ fn room_blocks_are_not_derived_as_per_mic_work() {
     room_row(dir.path(), "20260905T100000");
     let meaning = meaning_plane();
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     assert_eq!(
         derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
         0
@@ -384,7 +383,7 @@ fn the_derivation_is_bounded_and_newest_first() {
     }
     let meaning = meaning_plane();
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     assert_eq!(
         derive_segment_jobs(&ingest, &meaning, now, 2).expect("derive"),
         2,
@@ -410,7 +409,7 @@ fn deriving_twice_queues_nothing_new() {
     mic_row(dir.path(), "usb", "20260905T100000");
     let meaning = meaning_plane();
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     assert_eq!(
         derive_segment_jobs(&ingest, &meaning, now, 100).expect("a"),
         1
@@ -444,7 +443,7 @@ fn an_uploaded_meeting_is_leased_by_the_same_runner_as_a_microphone() {
         .expect("meeting source");
 
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     assert_eq!(
         derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
         2,
@@ -489,7 +488,7 @@ fn an_uploaded_meeting_that_already_has_turns_gets_no_job() {
     );
 
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     assert_eq!(
         derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
         0
@@ -507,7 +506,7 @@ fn a_source_the_meaning_plane_has_never_heard_of_waits() {
 
     let meaning = meaning_plane();
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     assert_eq!(
         derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
         0
@@ -525,7 +524,7 @@ fn a_lease_picks_the_newest_clip_across_sources_not_the_alphabetical_one() {
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-13T12:00:00Z".parse().expect("t");
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
 
     // geb is LATER in time and EARLIER in the alphabet — the two orderings
     // disagree, which is the only case that can tell them apart.
@@ -573,7 +572,7 @@ fn a_job_whose_blob_the_ingest_plane_has_forgotten_is_not_leasable() {
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-13T12:00:00Z".parse().expect("t");
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     ingest
         .execute(
             "INSERT INTO jobs (kind, filename, created_utc)
@@ -625,7 +624,7 @@ fn a_clip_transcribed_under_another_extension_gets_no_second_job() {
         .expect("turn");
 
     let ingest = store::open(dir.path()).expect("db");
-    ensure_schema(&ingest).expect("schema");
+    recalld::ingest_schema::ensure(&ingest).expect("schema");
     assert_eq!(
         derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
         0,

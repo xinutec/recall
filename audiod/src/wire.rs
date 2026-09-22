@@ -35,16 +35,6 @@ pub struct Handshake {
     pub epoch: Option<f64>,
 }
 
-/// A handshake id becomes a source id (and a directory name), so it must be safe.
-fn safe_id(id: &str) -> bool {
-    let mut chars = id.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit() => {}
-        _ => return false,
-    }
-    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-}
-
 /// A JSON value read the way Python's `int()` reads it: integer numbers pass,
 /// floats truncate toward zero, digit strings parse. Anything else is malformed.
 fn as_int(value: &serde_json::Value) -> Option<i64> {
@@ -56,8 +46,8 @@ fn as_int(value: &serde_json::Value) -> Option<i64> {
 }
 
 /// Parse the handshake `{"id":"kitchen","rate":48000,"channels":1}`.
-/// rate/channels default to 48k mono. `None` if malformed, the id isn't
-/// filesystem-safe, or the format is non-positive.
+/// rate/channels default to 48k mono. `None` if malformed, the id is not a
+/// valid source id (it becomes a directory name), or the format is non-positive.
 pub fn parse_handshake(line: &str) -> Option<Handshake> {
     let data: serde_json::Value = serde_json::from_str(line).ok()?;
     let source_id = match data.get("id")? {
@@ -65,7 +55,7 @@ pub fn parse_handshake(line: &str) -> Option<Handshake> {
         serde_json::Value::Number(n) => n.to_string(),
         _ => return None,
     };
-    if !safe_id(&source_id) {
+    if !audiocore::names::valid_source(&source_id) {
         return None;
     }
     let rate = match data.get("rate") {

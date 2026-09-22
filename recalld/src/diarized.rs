@@ -982,7 +982,6 @@ pub fn write_pass(
     limit: usize,
 ) -> rusqlite::Result<Pass> {
     let model = stream.model;
-    crate::turns::ensure_ledger(ingest)?;
     // The diarize job and the transcription it aligns against, joined on the
     // filename they share — the words and the speaker spans are two results
     // about ONE clip, and reading them separately is how they get out of step.

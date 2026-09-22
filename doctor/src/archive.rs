@@ -281,7 +281,7 @@ pub fn capture_events_since(
         "SELECT utc, kind, source_id FROM capture_events WHERE utc >= ?1 ORDER BY utc, id",
     )?;
     let rows = stmt
-        .query_map([python_iso(since)], |row| {
+        .query_map([audiocore::instant::python_isoformat_utc(since)], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -293,7 +293,7 @@ pub fn capture_events_since(
         .into_iter()
         .filter_map(|(utc, kind, source_id)| {
             Some(Event {
-                utc: crate::instant::parse(&utc)?,
+                utc: audiocore::instant::parse_utc(&utc)?,
                 kind,
                 source_id,
             })
@@ -313,14 +313,18 @@ pub fn audio_segment_intervals(
          WHERE source_id = ?1 AND end_utc >= ?2 ORDER BY start_utc",
     )?;
     let rows = stmt
-        .query_map(rusqlite::params![source, python_iso(since)], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
+        .query_map(
+            rusqlite::params![source, audiocore::instant::python_isoformat_utc(since)],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows
         .into_iter()
         .filter_map(|(start, end)| {
-            Some((crate::instant::parse(&start)?, crate::instant::parse(&end)?))
+            Some((
+                audiocore::instant::parse_utc(&start)?,
+                audiocore::instant::parse_utc(&end)?,
+            ))
         })
         .collect())
 }
@@ -379,20 +383,6 @@ pub fn blanked_segments(conn: &Connection) -> rusqlite::Result<usize> {
             blanked::any_restorable(&texts)
         })
         .count())
-}
-
-/// The spelling `datetime.isoformat()` writes, for the TEXT comparisons the
-/// timestamp columns are ordered and filtered by.
-///
-/// ⚠ Not cosmetic. `start_utc` is compared and ordered as TEXT, so two
-/// spellings of the same moment are two different values to every query here.
-pub fn python_iso(when: DateTime<Utc>) -> String {
-    let format = if when.timestamp_subsec_micros() == 0 {
-        chrono::SecondsFormat::Secs
-    } else {
-        chrono::SecondsFormat::Micros
-    };
-    when.to_rfc3339_opts(format, false)
 }
 
 /// Reconcile the always-on mic's recorded coverage against the pause/resume

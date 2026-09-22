@@ -9,6 +9,7 @@
 //! has finished with. The one point of contact is the scan rule below that
 //! keeps it off the segment ffmpeg still has open.
 
+use audiocore::names;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -37,45 +38,6 @@ pub struct PassSummary {
     pub uploaded: usize,
     pub failed: usize,
     pub conflicted: usize,
-}
-
-/// The extensions a segment ring writes — must stay the subset recalld's
-/// name grammar accepts (`recalld/src/names.rs`; unified in stage D's shared
-/// crate).
-const EXTENSIONS: [&str; 4] = ["flac", "opus", "ogg", "wav"];
-
-/// `<source>-YYYYMMDDTHHMMSS.<ext>`, the archive naming contract. Anything
-/// else in a source directory (ffmpeg temp files, sidecars) is not ours to
-/// ship.
-fn is_segment_of(source: &str, filename: &str) -> bool {
-    let Some(rest) = filename
-        .strip_prefix(source)
-        .and_then(|r| r.strip_prefix('-'))
-    else {
-        return false;
-    };
-    let Some((stamp, ext)) = rest.split_once('.') else {
-        return false;
-    };
-    EXTENSIONS.contains(&ext)
-        && stamp.len() == 15
-        && stamp.bytes().enumerate().all(|(i, b)| {
-            if i == 8 {
-                b == b'T'
-            } else {
-                b.is_ascii_digit()
-            }
-        })
-}
-
-fn valid_source(source: &str) -> bool {
-    let mut chars = source.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    source.len() <= 64
-        && (first.is_ascii_lowercase() || first.is_ascii_digit())
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 // --- delivery state ------------------------------------------------------------------
@@ -127,13 +89,13 @@ fn scan(root: &Path, grace: Duration) -> std::io::Result<Vec<Candidate>> {
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;
         let source = entry.file_name().to_string_lossy().into_owned();
-        if !entry.file_type()?.is_dir() || !valid_source(&source) {
+        if !entry.file_type()?.is_dir() || !names::valid_source(&source) {
             continue;
         }
         let mut names: Vec<String> = std::fs::read_dir(entry.path())?
             .filter_map(Result::ok)
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|name| is_segment_of(&source, name))
+            .filter(|name| names::parse(&source, name).is_ok_and(|n| n.ext.recorded()))
             .collect();
         names.sort();
         let newest_open = names.last().is_some_and(|newest| {
