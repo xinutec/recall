@@ -1,38 +1,19 @@
-//! Voiceprint enrolment: turning a named turn into a reference vector.
-//!
-//! ⚠ **Why it is here rather than on the Mac.** `sync` and `sync_push` existed
-//! to replay the fleet's namings onto the Mac so the Mac could enrol them; with
-//! enrolment here the namings never leave the machine that already holds them,
-//! and both agents are gone (#1538).
-//!
-//! ⚠ **Enrolling more is not the same as identifying better.** Measured
-//! 2026-09-17 (#1648): going from 750 prints to 972 moved attribution +0.19
-//! points, and 187 prints score within 1.3 of 972. The corpus has saturated, so
-//! this pass exists to remove a Python loop — not to raise the number. Anyone
-//! proposing work here on quality grounds should re-run that ablation first.
-//!
-//! The work-list mirrors `recall.store.turns_needing_voiceprint` exactly, and
-//! that is deliberate: the two must select the same turns while both exist, or a
-//! turn enrolled by one is re-enrolled by the other under a second print.
+//! Voiceprint enrolment: turning a named turn into a reference vector, on the
+//! fleet, where the namings are. Enrolling more does not identify better: the
+//! print corpus has saturated (#1648), so this keeps up with new labels rather
+//! than raising a number.
 
 use crate::queue::ENROLL_SPEAKER;
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-/// A turn short enough that its clip enrols a useless print.
-///
-/// ⚠ Spelled to match `recall.store._MIN_VOICEPRINT_SECONDS`. The loudness half
-/// of the Python gate is NOT carried across: `set_loudness` has had no production
-/// caller since the API moved, so every row reads NULL and the gate keeps all of
-/// them. Porting an inert filter would have made it look enforced.
+/// A turn shorter than this enrols a useless print.
 const MIN_SECONDS: f64 = 1.0;
 
-/// One turn to embed, as the runner is told about it.
-///
-/// ⚠ **No name on the wire.** The runner does not need to know whose voice it
-/// is, and the fleet must read the label at WRITE time anyway — a turn
-/// re-assigned between lease and result would otherwise enrol the old name.
+/// One turn to embed, as the runner is told about it. No name on the wire: the
+/// fleet reads the label at write time, so a turn re-assigned between lease and
+/// result enrols under the name it has then.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Span {
     pub segment_id: i64,
@@ -41,12 +22,8 @@ pub struct Span {
     pub end_s: f64,
 }
 
-/// A clip's identity without its container — the join key between the planes.
-///
-/// ⚠ The same recording exists under two extensions (the ingest copy is often
-/// `.wav` where the meaning plane's path is the `.opus` mirror), so whole
-/// filenames compare unequal for the same audio. Same reasoning as
-/// `queue::derive_segment_jobs`, and the same trap.
+/// A clip's identity without its container, the join key between the planes:
+/// the same recording can exist under two extensions.
 fn stem(path: &str) -> String {
     let name = path.rsplit('/').next().unwrap_or(path);
     name.rsplit_once('.')
@@ -84,12 +61,8 @@ pub fn pending(meaning: &Connection) -> rusqlite::Result<Vec<(String, Span)>> {
     let mut out = Vec::new();
     for row in rows {
         let (clip, segment_id, start, end, clip_start) = row?;
-        // ⚠ Parsed and subtracted here rather than by SQLite's `julianday`.
-        // That function counts DAYS in a double, so a span it returns is a few
-        // tens of microseconds off the instant the row actually holds — and the
-        // Python this must agree with subtracts real datetimes. Two enrolment
-        // passes disagreeing in the sixth decimal is not a bug today, but it is
-        // the kind that is only ever found by someone diffing two archives.
+        // Subtracted here rather than by SQLite's `julianday`, which counts
+        // days in a double and is off by tens of microseconds.
         let (Ok(start), Ok(end), Ok(clip_start)) = (
             DateTime::parse_from_rfc3339(&start),
             DateTime::parse_from_rfc3339(&end),
@@ -110,10 +83,8 @@ pub fn pending(meaning: &Connection) -> rusqlite::Result<Vec<(String, Span)>> {
             clip,
             Span {
                 segment_id,
-                // ⚠ Clamped at zero, never negative. A turn whose start rounds
-                // a hair before its clip's would ask ffmpeg to seek backwards,
-                // and ffmpeg answers that with the whole clip rather than an
-                // error — enrolling a minute of the room as one person's voice.
+                // Clamped at zero: a negative seek makes ffmpeg return the
+                // whole clip, enrolling a minute of the room as one voice.
                 start_s: seconds(start).max(0.0),
                 end_s: seconds(end),
             },
@@ -135,18 +106,11 @@ pub fn spans_for(meaning: &Connection, filename: &str) -> rusqlite::Result<Vec<S
         .collect())
 }
 
-/// Fill a leased job's spans, if it is a kind that has any.
-///
-/// ⚠ **At LEASE time, not at derivation.** The work-list lives in the meaning
-/// plane and the queue does not, so carrying the spans in the job row would be a
-/// second copy of a list that changes whenever somebody renames a voice. Reading
-/// them here also means a turn re-assigned since the job was derived is embedded
-/// under the span it has now, or dropped if it no longer qualifies.
-///
-/// ⚠ **The meaning plane is opened ONLY for a kind that needs it.** Opening it
-/// unconditionally made every lease 500 wherever `recall.sqlite` was absent —
-/// caught by the runner's own end-to-end test, which runs an ingest plane alone.
-/// A transcription runner must not be stopped by a database it never reads.
+/// Fill a leased job's spans, if it is a kind that has any. At lease time, not
+/// at derivation: the work-list lives in the meaning plane and changes whenever
+/// somebody renames a voice. The meaning plane is opened only for a kind that
+/// needs it, so a transcription runner is not stopped by a database it never
+/// reads.
 ///
 /// # Errors
 /// If the meaning plane refuses.
@@ -158,15 +122,10 @@ pub fn attach_spans(root: &std::path::Path, job: &mut crate::queue::Job) -> rusq
     Ok(())
 }
 
-/// Derive one enrolment job per CLIP holding turns that still need a voiceprint.
-///
-/// ⚠ **Per clip, not per turn**, because `jobs` is keyed `UNIQUE (kind,
-/// filename)` and a clip routinely holds several named turns. The spans travel
-/// with the lease; the job names only the audio to fetch.
-///
-/// ⚠ Derived from the INGEST side, so a turn whose clip was never delivered gets
-/// no job — the runner could not fetch it, and a job it cannot do would burn its
-/// attempts against audio that is not there.
+/// Derive one enrolment job per clip holding turns that still need a
+/// voiceprint. Per clip, because `jobs` is keyed on (kind, filename); the spans
+/// travel with the lease. Derived from the ingest side, so a turn whose clip
+/// was never delivered gets no job the runner could not fetch.
 ///
 /// # Errors
 /// If either database refuses.
@@ -242,12 +201,8 @@ pub struct Enrolled {
     pub stale: usize,
 }
 
-/// Whose voice a segment is NOW, or `None` if it should no longer be enrolled.
-///
-/// ⚠ **Re-read at WRITE time, never carried from the lease.** Embedding takes
-/// minutes and a person can re-assign a turn in that window; trusting the label
-/// the job was derived under would file the audio under the name it has just
-/// stopped having. Same reason the span carries no name.
+/// Whose voice a segment is now, or `None` if it should no longer be enrolled.
+/// Re-read at write time: a person can re-assign a turn while the model runs.
 fn still_wanted(meaning: &Connection, segment_id: i64) -> rusqlite::Result<Option<String>> {
     meaning
         .query_row(
@@ -297,12 +252,9 @@ fn enrol_one(meaning: &Connection, person: &str, print: &Print, now: &str) -> ru
     Ok(())
 }
 
-/// Turn finished `enroll-speaker` results into reference voiceprints.
-///
-/// ⚠ **Every clip examined is ledgered**, including one that enrols nothing.
-/// The candidate query is "not in the ledger", so a decision that writes no row
-/// leaves the clip a candidate for ever — the mistake `write_pass` and
-/// `register_segments` each made once, in a costlier place each time.
+/// Turn finished `enroll-speaker` results into reference voiceprints. Every
+/// clip examined is ledgered, including one that enrols nothing: the candidate
+/// query is "not in the ledger".
 ///
 /// # Errors
 /// If either database refuses.
@@ -340,9 +292,8 @@ pub fn write_pass(
         };
         let mut wrote = 0;
         for print in &body.prints {
-            // ⚠ An EMPTY vector is not a voiceprint. It would sit at cosine 0
-            // against everyone and become somebody's best match on quiet audio —
-            // the same failure `identify::enrolled` refuses to default into.
+            // An empty vector is not a voiceprint: at cosine 0 against everyone
+            // it becomes somebody's best match on quiet audio.
             if print.vector.is_empty() {
                 pass.stale += 1;
                 continue;

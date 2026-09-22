@@ -1,16 +1,13 @@
 //! The capture-control state, as the fleet holds it.
 //!
-//! Isis is the system of record for capture INTENT but runs no capture agent:
-//! the Mac actuates and reports back what it applied. So the two can disagree
-//! for a couple of mirror cycles, and the API serves BOTH — `running` /
-//! `pausedUntil` carry the mic's confirmed word, `desired*` carries the intent,
-//! and `settled` says whether they agree. A client renders the disagreement as
-//! "Pausing…"/"Resuming…" rather than flapping between two truths it cannot
-//! tell apart.
-//!
-//! ⚠ **This is the household's privacy control.** A pause nobody can confirm
-//! took effect is worthless, which is the whole reason the confirmed and the
-//! desired halves are separate fields rather than one.
+//! Isis is the system of record for capture intent but runs no capture agent: the
+//! Mac actuates and reports back what it applied. The two can disagree for a
+//! couple of mirror cycles, so the API serves both, `running`/`pausedUntil` as
+//! the microphone's confirmed word and `desired*` as the intent, with `settled`
+//! saying whether they agree. A client renders the disagreement as "Pausing…"
+//! rather than flapping between two truths. This is the household's privacy
+//! control: a pause nobody can confirm took effect is worthless, which is why the
+//! two halves are separate fields.
 
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension};
@@ -35,15 +32,10 @@ fn report_fresh() -> Duration {
     Duration::seconds(30)
 }
 
-/// The wire shape of `GET /api/capture`.
-///
-/// ⚠ Field order and spelling are a CONTRACT, not a style choice: `stateToken`
-/// is a hash over this object's JSON, so a renamed or reordered field changes
-/// every client's long-poll. See [`CaptureState::token`].
-// Four bools, and clippy is right that a struct of them is usually a smell.
-// Here they are the WIRE SHAPE — `running`/`desiredRunning`/`settled`/
-// `micReachable` are what the client renders and what the token hashes — so
-// collapsing them into an enum would change the contract, not tidy it.
+/// The wire shape of `GET /api/capture`. Field order and spelling are a
+/// contract: `stateToken` is a hash over this object, so a renamed or reordered
+/// field changes every client's long-poll. The bools are the wire shape, so an
+/// enum would change the contract rather than tidy it.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[ts(export)]
@@ -63,15 +55,10 @@ pub struct CaptureState {
 }
 
 /// The fingerprint a long-poll echoes back as `?known=`, so "unchanged" is the
-/// server's judgement rather than the client's field-by-field comparison.
-///
-/// ⚠ **Byte-exact against the Python, deliberately.** It is
-/// `sha256(json.dumps(payload, sort_keys=True))[:12]` over every field EXCEPT
-/// `stateToken` — so it needs Python's separators (`", "` and `": "`), Python's
-/// key order (sorted, not declaration order), and Python's `null`. Get any of
-/// those wrong and the token simply never matches what a client last saw, which
-/// does not fail: it silently turns every long-poll into a busy poll.
-// Same reason as CaptureState: this struct's SHAPE is the hashed contract.
+/// server's judgement rather than the client's comparison: `sha256` of the
+/// fields except `stateToken`, keys sorted, `, ` and `: ` separators. The struct's
+/// field order is the sorted key order; a wrong spelling does not fail, it turns
+/// every long-poll into a busy poll.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Serialize)]
 struct TokenPayload<'a> {
@@ -128,14 +115,10 @@ fn setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
     .optional()
 }
 
-/// The desired resume-by, or `None` when running.
-///
-/// ⚠ An ELAPSED intent reads as running — the same bounded-pause safety net the
-/// local pause file has. A pause that outlived its own deadline must never keep
-/// a household silent because nobody cleared a row.
-/// Returns the stored spelling, not a re-derived one: the Mac round-trips this
-/// exact string back as its confirmation, and `settled` compares the two by
-/// equality (see [`fleet_capture_state`]).
+/// The desired resume-by, or `None` when running. An elapsed intent reads as
+/// running: a pause that outlived its own deadline must never keep a household
+/// silent because nobody cleared a row. Returns the stored spelling, because the
+/// Mac echoes this exact string back and `settled` compares the two by equality.
 pub fn intent_until(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<Option<String>> {
     let Some(raw) = setting(conn, INTENT_KEY)? else {
         return Ok(None);
@@ -179,17 +162,10 @@ pub fn reported_state(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result
     }))
 }
 
-/// Record what the Mac says it currently has applied, so the fleet's status can
-/// report reality rather than only what was asked for.
-///
-/// ⚠ `paused_until` is stored VERBATIM, not re-spelled. The Mac echoes back the
-/// exact intent string it read, and [`fleet_capture_state`] decides `settled` by
-/// comparing the two as strings — so normalising here would make a settled pause
-/// read as forever-pending.
-///
-/// ⚠ Writing `REPORTED_AT_KEY` is what makes the other three believable: every
-/// reader gates on its freshness, so a report that lands without it reads as a
-/// Mac that has stopped checking in.
+/// Record what the Mac says it currently has applied. `paused_until` is stored
+/// verbatim: [`fleet_capture_state`] decides `settled` by comparing it to the
+/// intent as strings. `REPORTED_AT_KEY` is what makes the rest believable; every
+/// reader gates on its freshness.
 pub fn record_reported(
     conn: &Connection,
     now: DateTime<Utc>,
@@ -212,16 +188,11 @@ pub fn record_reported(
 }
 
 /// Each source's last-proved-recording time as the Mac last reported it, or
-/// `None` when the Mac has stopped checking in.
-///
-/// ⚠ Behind the SAME freshness gate as [`reported_state`], and that is the
-/// point: the fleet runs no capture and has no liveness markers of its own, so
-/// a stale report must read as "we cannot see" rather than as the last thing we
-/// happened to hear. `None` and an empty map mean different things — the first
-/// is a Mac that has gone quiet, the second a Mac reporting no live sources.
-///
-/// A malformed entry is DROPPED, not fatal: this is best-effort status, not
-/// control, and one unparseable timestamp must not blank the whole panel.
+/// `None` when the Mac has stopped checking in. Behind the same freshness gate
+/// as [`reported_state`]: the fleet has no liveness of its own, so a stale
+/// report must read as "we cannot see" rather than as the last thing heard.
+/// `None` is a quiet Mac; an empty map is a Mac reporting no live sources. A
+/// malformed entry is dropped, not fatal.
 pub fn reported_source_liveness(
     conn: &Connection,
     now: DateTime<Utc>,
@@ -293,10 +264,9 @@ pub fn fleet_capture_state(
     .stamped())
 }
 
-/// A pause is BOUNDED, always. The household's control is "stop recording",
-/// never "stop recording indefinitely" — a pause that outlives everyone's memory
-/// of setting it is how a week of the archive goes missing without anyone
-/// deciding to lose it.
+/// A pause is bounded, always: "stop recording", never "stop indefinitely". A
+/// pause that outlives everyone's memory of setting it is how a week of the
+/// archive goes missing without anyone deciding to lose it.
 fn max_pause() -> Duration {
     Duration::hours(24)
 }
@@ -323,13 +293,9 @@ fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()
     Ok(())
 }
 
-/// Record a bounded pause as the fleet's DESIRED state, and return its resume-by
-/// in the spelling that will be stored and compared.
-///
-/// ⚠ This is intent, not actuation. Isis runs no capture agent: the Mac's mirror
-/// polls this and applies it, then reports back — which is why
-/// [`fleet_capture_state`] serves confirmed and desired separately instead of
-/// pretending the press already took effect.
+/// Record a bounded pause as the fleet's desired state and return its resume-by
+/// in the spelling that is stored and compared. Intent, not actuation: the Mac's
+/// mirror applies it and reports back.
 pub fn intent_pause(
     conn: &Connection,
     now: DateTime<Utc>,
@@ -342,27 +308,18 @@ pub fn intent_pause(
     Ok(iso)
 }
 
-/// Record "run" as the fleet's desired state.
-///
-/// ⚠ Written as EMPTY rather than deleted, so a resume is a value the mirror can
-/// read and act on. A missing row and a cleared one already mean the same thing
-/// to [`intent_until`]; keeping the row means a reader never has to tell "never
-/// paused" from "resumed".
+/// Record "run" as the desired state, as an empty value rather than a deleted
+/// row, so a reader never has to tell "never paused" from "resumed".
 pub fn intent_resume(conn: &Connection) -> rusqlite::Result<()> {
     set_setting(conn, INTENT_KEY, "")?;
     notify_intent_changed();
     Ok(())
 }
 
-/// Append the audit record of WHO asked for a pause or resume.
-///
-/// Capture control is login-free on the recording plane, so the agent's own
-/// PAUSE/RESUME event cannot name a caller; this carries the request's origin
-/// descriptor instead.
-///
-/// ⚠ Best-effort by contract: the caller must not let a failed audit fail the
-/// control action. Silencing a household's microphone must never depend on a
-/// bookkeeping write succeeding.
+/// Append the audit record of who asked for a pause or resume. Capture control
+/// is login-free, so the agent's own event cannot name a caller; this carries
+/// the request's origin. Best-effort by contract: a failed audit must never fail
+/// the control action.
 pub fn record_control_origin(
     conn: &Connection,
     now: DateTime<Utc>,
@@ -388,27 +345,19 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use std::sync::Arc;
 
-/// What the capture ROUTES need — distinct from [`CaptureState`], which is what
-/// they SERVE.
-///
-/// Its own type rather than a wider [`crate::reads::State`]: the read routes
-/// must not be handed a gate config they have no business reading, and capture
-/// is the one family that needs it — to say WHO pressed the button, on a plane
-/// that deliberately does not require a login.
+/// What the capture routes need, distinct from [`CaptureState`], which is what
+/// they serve. Its own type because capture is the one route family that needs
+/// the gate config: to say who pressed the button on a plane that requires no
+/// login.
 pub struct Control {
     pub root: std::path::PathBuf,
     pub webauth: Option<Arc<crate::webauth::Config>>,
 }
 
-/// The process-global "capture intent changed" signal.
-///
-/// ⚠ **A `watch` channel rather than a bare `Notify`, and the difference is the
-/// lost wakeup.** `Notify::notify_waiters` only wakes whoever is ALREADY parked,
-/// so a press landing between deriving the state and starting the wait is missed
-/// and costs a whole slice — which is the delay this exists to remove. A `watch`
-/// receiver remembers the version it last saw, so a change between
-/// [`intent_watch`] and [`wait_intent_changed`] returns immediately. Subscribe
-/// BEFORE the derive and the gap cannot open.
+/// The process-global "capture intent changed" signal. A `watch` channel rather
+/// than a `Notify`: a receiver remembers the version it last saw, so a press
+/// landing between deriving the state and starting the wait is not lost.
+/// Subscribe before the derive.
 static INTENT_CHANGED: std::sync::LazyLock<tokio::sync::watch::Sender<u64>> =
     std::sync::LazyLock::new(|| tokio::sync::watch::channel(0).0);
 
@@ -423,12 +372,10 @@ pub fn notify_intent_changed() {
     INTENT_CHANGED.send_modify(|v| *v = v.wrapping_add(1));
 }
 
-/// Park until the intent changes or `slice` elapses. `true` means a change.
-///
-/// ⚠ The timeout is NOT a fallback, it is the correctness floor. A pause
-/// ELAPSING has no writer — its deadline just passes — and a break-glass CLI
-/// pause writes the settings row from another process entirely. Neither can
-/// signal this one, so the caller must still re-derive on the slice.
+/// Park until the intent changes or `slice` elapses. `true` means a change. The
+/// timeout is the correctness floor, not a fallback: a pause elapsing has no
+/// writer, and a break-glass pause writes from another process, so the caller
+/// must still re-derive on the slice.
 pub async fn wait_intent_changed(
     mut watcher: tokio::sync::watch::Receiver<u64>,
     slice: std::time::Duration,
@@ -455,14 +402,9 @@ pub struct StatusQuery {
     pub known: String,
 }
 
-/// `GET /api/capture` — is the household being recorded, and if paused, until
-/// when.
-///
-/// ⚠ The long-poll is what makes a press propagate in ~RTT instead of a poll
-/// interval, and it is load-bearing for the Mac's mirror: that exchange hangs
-/// here while its intent is unchanged, so the hang doubles as the mirror's
-/// pacing. Answering immediately would not break correctness, it would turn
-/// every recorder in the house into a 5-second poller.
+/// `GET /api/capture`: is the household being recorded, and if paused, until
+/// when. The long-poll makes a press propagate in about a round trip, and it
+/// paces the Mac's mirror, which hangs here while its intent is unchanged.
 pub async fn status_route(
     State(st): State<Arc<Control>>,
     Query(q): Query<StatusQuery>,
@@ -472,10 +414,8 @@ pub async fn status_route(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(wait);
 
     loop {
-        // ⚠ SUBSCRIBE BEFORE DERIVING. A press landing between the read below and
-        // the wait at the bottom is the lost wakeup, and holding the receiver
-        // across both is what closes it: the watch remembers the version this
-        // receiver last saw, so such a change returns from the wait at once.
+        // Subscribe before deriving, so a press landing between the read and the wait
+        // returns from the wait at once.
         let watcher = intent_watch();
         let root = root.clone();
         let state = match route::blocking("capture", move || {
@@ -489,10 +429,8 @@ pub async fn status_route(
         if state.state_token != q.known || std::time::Instant::now() >= deadline {
             return axum::Json(state).into_response();
         }
-        // Notify for the fast path, slice as the floor. The writers are all in
-        // this process now, so a press wakes this in ~RTT — but a pause ELAPSING
-        // and a break-glass CLI pause have no writer that could signal, so the
-        // timeout still has to re-derive.
+        // Notify for the fast path, the slice as the floor: a pause elapsing and a
+        // break-glass pause have no writer that could signal.
         wait_intent_changed(
             watcher,
             WAIT_SLICE.min(deadline - std::time::Instant::now()),
@@ -549,24 +487,17 @@ impl Asker {
     }
 }
 
-/// Record who asked, without ever being able to refuse the action.
-///
-/// ⚠ Best-effort BY CONTRACT. Silencing a household's microphone must not
-/// depend on a bookkeeping write succeeding, so a failure here is logged and
-/// swallowed — the control action has already happened.
+/// Record who asked, without ever being able to refuse the action: a failure is
+/// logged and swallowed, the control action has already happened.
 fn audit(conn: &Connection, verb: &str, origin: &str) {
     if let Err(err) = record_control_origin(conn, chrono::Utc::now(), verb, origin) {
         tracing::warn!("could not record capture-control origin ({verb}): {err}");
     }
 }
 
-/// `POST /api/capture/pause` — stop capture so the room can be worked in.
-///
-/// ⚠ This records INTENT. Isis runs no capture agent, so the press does not
-/// silence anything by itself: the Mac's mirror polls the intent, applies it to
-/// the local pause file every recorder self-gates on, and reports back. The
-/// answer therefore comes back UNSETTLED, and that is the truth rather than a
-/// delay — a pause nobody has confirmed is not yet a pause.
+/// `POST /api/capture/pause`. Records intent; the Mac's mirror applies it and
+/// reports back, so the answer comes back unsettled, which is the truth rather
+/// than a delay.
 pub async fn pause_route(
     State(st): State<Arc<Control>>,
     Query(q): Query<PauseQuery>,

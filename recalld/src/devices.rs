@@ -1,27 +1,13 @@
 //! What each recorder says about itself: mic heartbeats and upload outboxes.
-//! Ported from `recall.api_devices`, `recall.mic_alive` and `recall.outbox`.
 //!
-//! ⚠ **Both endpoints are unauthenticated by design**, and both are STATUS, never
-//! control. A phone on an older build must cost its own line and nothing else, so
-//! an unparseable time is DROPPED rather than refused — the beat itself is the
-//! part that matters, and refusing it would delete the signal.
-//!
-//! ⚠ **`at` is the SERVER's clock, never the phone's.** A beat is evidence that
-//! this app reached the fleet just now. A phone with a wrong clock would
-//! otherwise report itself permanently fresh, or permanently stale. The phone's
-//! own times are kept only where they say something about the phone
-//! (`startedAt`, `oldestQueuedAt`).
-//!
-//! ⚠ **A GET is the reachability probe; a POST costs a row.** The write endpoints
-//! are unauthenticated, so the obvious way to ask "can this phone reach the
-//! control plane?" is to POST a beat — and that leaves a device in the list that
-//! has three times needed sqlite3 by hand to remove (#1408). A GET on the same
-//! path answers reachability with a 401 and writes nothing. Use that.
-//!
-//! ⚠ **Stored as one JSON value per key in `settings`**, rewritten whole. That is
-//! a read-modify-write, so two beats arriving together can lose one — which is
-//! how the Python has always worked and is acceptable for an hourly status that
-//! is rewritten wholesale.
+//! Both write endpoints are unauthenticated by design, and both are status,
+//! never control. A phone on an older build must cost its own detail and
+//! nothing else, so an unparseable time is dropped rather than refused. `at` is
+//! the server's clock: a beat is evidence the app reached the fleet just now,
+//! whatever the phone's clock says. To probe reachability, GET the path (a 401
+//! writes nothing); a POST leaves a row. Each list is one JSON value in
+//! `settings`, rewritten whole, so two beats arriving together can lose one,
+//! which an hourly status tolerates.
 
 use audiocore::instant;
 use chrono::{DateTime, Utc};
@@ -37,42 +23,22 @@ const MAX_DEVICE_LEN: usize = 64;
 const MAX_TEXT_LEN: usize = 64;
 const MAX_REASON_LEN: usize = 200;
 
-/// How often an app is asked to beat.
-///
-/// ⚠ **This is the canonical declaration, and two other repos CITE it by name.**
-/// It moved here from `recall.mic_alive.BEAT_EVERY_MINUTES` when that module was
-/// deleted (#1496): recalld owns the beats, so the cadence belongs beside the
-/// caps that bound them. The other two are pinned to this value and say so:
-///
-///   - `Heartbeat.EVERY_MINUTES` — the Android mic app, asserted in `HeartbeatTest`
-///   - `xinutec-infra/mac-mini/recall_mics.py` — the fleetwatch thresholds
-///
-/// ⚠ Everything downstream is expressed in MULTIPLES of this, so changing the
-/// cadence does not silently leave a threshold describing the old one. It is
-/// deliberately NOT what `MAX_AGE_DAYS` is built from — thirty days is a policy
-/// about when a silent phone stops being a device, not a count of missed beats,
-/// and tying them would make a cadence change silently rewrite a retention rule.
+/// How often an app is asked to beat. The canonical declaration: the Android
+/// app's `Heartbeat.EVERY_MINUTES` and fleetwatch's thresholds
+/// (`xinutec-infra/mac-mini/recall_mics.py`) are pinned to it. `MAX_AGE_DAYS`
+/// is deliberately not a multiple of it: when a silent phone stops being a
+/// device is a policy, not a count of missed beats.
 pub const BEAT_EVERY_MINUTES: i64 = 60;
 
-/// ⚠ The write endpoint is unauthenticated, so the number of devices is
-/// client-controlled. A single test post once put a stray row into the fleet's
-/// setting that had to be removed by hand with sqlite3 inside the pod; the cap
-/// turns that from surgery into eviction.
+/// The write endpoint is unauthenticated, so the number of devices is
+/// client-controlled; the cap turns a stray row into eviction.
 const MAX_DEVICES: usize = 16;
 
-/// How long a silent device stays in the list.
-///
-/// ⚠ A phone that has not beaten in a month is not a device any more, and this
-/// list is "last-known status", not a registry. The COUNT cap alone never
-/// removes anything while fewer than `MAX_DEVICES` exist, which is why a single
-/// stray row has twice needed sqlite3 by hand inside the pod (#1408) — three
-/// times, counting the probe that prompted this.
+/// How long a silent device stays in the list: it is last-known status, not a
+/// registry, and the count cap alone removes nothing while the list is short.
 const MAX_AGE_DAYS: i64 = 30;
 
-/// Truncate by CHARACTER, as Python's `value[:n]` does.
-///
-/// ⚠ Not by byte. A device name with any non-ASCII character would otherwise be
-/// cut at a different point, and a cut landing mid-character panics.
+/// Truncate by character, never by byte: a cut mid-character panics.
 fn clip(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
 }
@@ -108,7 +74,7 @@ fn get_setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>>
             r.get(0)
         })
         .optional()?;
-    // The Python treats a blank value as unset (`return value or None`).
+    // A blank value is unset.
     Ok(raw.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty()))
 }
 
@@ -122,14 +88,9 @@ fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()
 }
 
 /// The stored map, or empty when it is missing, blank, unparseable, or not an
-/// object.
-///
-/// ⚠ **Degrading to empty is deliberate and it is LOUD.** This is read on a
-/// health endpoint's request path, so a half-written value must not blank the
-/// whole answer with a 500 — that is the Python's rule and the reason the beats
-/// exist at all. But losing the blob silently would discard EVERY device's last
-/// beat with no trace, and the next write would persist that loss. So it is
-/// logged: degraded reads are a fault to notice, not a shape to accept quietly.
+/// object. Empty rather than a 500, because this is a health endpoint's request
+/// path; logged, because the next write would persist the loss of every
+/// device's last beat.
 fn stored_map(
     conn: &Connection,
     key: &str,
@@ -166,13 +127,7 @@ fn stored_map(
     }
 }
 
-/// A stored instant, normalised the way the Python's `_when` does.
-///
-/// ⚠ **A naive timestamp means UTC and must be STAMPED, not converted.**
-/// `.astimezone(UTC)` reads a naive value as LOCAL time, so a phone on a build
-/// that sends no offset would have every beat shifted by the host's offset — an
-/// hour in summer — and read as older than it is, moving a stuck upload back
-/// under the threshold that exists to notice it.
+/// A stored instant in the archive's spelling; a naive timestamp is UTC.
 fn when(value: Option<&serde_json::Value>) -> Option<String> {
     let text = match value {
         None | Some(serde_json::Value::Null) => return None,
@@ -190,7 +145,7 @@ fn text_of(value: Option<&serde_json::Value>, max: usize) -> String {
     }
 }
 
-/// `None` stays `None`; anything else takes Python's truthiness.
+/// `None` stays `None`; anything else takes JSON truthiness.
 fn flag(value: Option<&serde_json::Value>) -> Option<bool> {
     match value {
         None | Some(serde_json::Value::Null) => None,
@@ -235,15 +190,9 @@ fn one_report(device: &str, raw: &serde_json::Value) -> Option<Report> {
     })
 }
 
-/// Forget one device's row.
-///
-/// ⚠ **The supported way to undo a stray write** (#1408). The POST endpoints are
-/// unauthenticated by design, so anyone on the VPN can create a row; removing one
-/// has until now meant sqlite3 inside the pod, three times. This is gated — a
-/// person signs in to forget a device — because it is the only operation here
-/// that destroys a reading rather than replacing it.
-///
-/// Returns whether the device was there.
+/// Forget one device's row: the way to undo a stray write, and the one
+/// operation here that destroys a reading rather than replacing it, which is
+/// why its route is gated. Returns whether the device was there.
 pub fn forget(conn: &Connection, key: &str, device: &str) -> rusqlite::Result<bool> {
     let mut map = stored_map(conn, key)?;
     if map.remove(device).is_none() {
@@ -264,7 +213,7 @@ pub const REPORTS: &str = REPORTS_KEY;
 /// Every app's last beat, oldest device id first. Never fails on a bad entry.
 pub fn read_beats(conn: &Connection) -> rusqlite::Result<Vec<Beat>> {
     let map = stored_map(conn, BEATS_KEY)?;
-    // serde_json's Map preserves insertion order; the Python sorts by device id.
+    // Sorted by device id, so the payload is stable.
     let mut devices: Vec<&String> = map.keys().collect();
     devices.sort();
     Ok(devices
@@ -283,10 +232,9 @@ pub fn read_reports(conn: &Connection) -> rusqlite::Result<Vec<Report>> {
         .collect())
 }
 
-/// Keep the most recently heard devices, ranked by the STORED `at` text.
-///
-/// ⚠ An entry that cannot be read at all sorts oldest and is evicted first,
-/// which is what makes a malformed row self-clearing rather than permanent.
+/// Keep the most recently heard devices, ranked by the stored `at` text. An
+/// entry that cannot be read sorts oldest and is evicted first, so a malformed
+/// row is self-clearing.
 fn evicted(
     mut entries: serde_json::Map<String, serde_json::Value>,
     now: DateTime<Utc>,
@@ -300,10 +248,8 @@ fn evicted(
             .and_then(|o| o.get("at"))
             .and_then(serde_json::Value::as_str)
             .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
-            // ⚠ An entry whose `at` will not parse is KEPT here and left to the
-            // count cap, which already sorts it oldest. Dropping it on a failed
-            // parse would make an unreadable row vanish on the next write, and
-            // an unreadable row is worth seeing.
+            // An unparseable `at` is left to the count cap, which sorts it
+            // oldest: an unreadable row is worth seeing before it goes.
             .is_none_or(|at| at.with_timezone(&Utc) >= cutoff)
     });
     if entries.len() <= MAX_DEVICES {
@@ -321,12 +267,9 @@ fn evicted(
             (k.clone(), at)
         })
         .collect();
-    // Descending by `at`; Python's sort is stable, so ties keep insertion order.
+    // Descending by `at`, stable, and rebuilt in ranked order: the value is
+    // stored as text, so the order is part of what is written.
     ranked.sort_by(|a, b| b.1.cmp(&a.1));
-    // ⚠ Rebuilt in RANKED order, not filtered in place. Python's `dict(ranked[:n])`
-    // produces a map ordered most-recent-first, and this value is stored as TEXT —
-    // retaining the original order writes a different string for the same
-    // surviving set.
     let mut kept = serde_json::Map::with_capacity(MAX_DEVICES);
     for (device, _) in ranked.into_iter().take(MAX_DEVICES) {
         if let Some(value) = entries.remove(&device) {
@@ -359,11 +302,8 @@ pub fn record_beat(conn: &Connection, beat: &Beat, now: DateTime<Utc>) -> rusqli
     )
 }
 
-/// Store this phone's report, replacing whatever it said before.
-///
-/// ⚠ Evicted on the same terms as the beats. The Python capped only the beats,
-/// and the row that needed sqlite3 by hand in 2026-08-10 was an OUTBOX row — the
-/// asymmetry was the bug, not a design (#1408).
+/// Store this phone's report, replacing whatever it said before. Evicted on
+/// the same terms as the beats.
 pub fn record_report(
     conn: &Connection,
     report: &Report,
@@ -396,11 +336,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
-/// ⚠ **Every field but `device` is OPTIONAL, and that is the whole design.** An
-/// app on an older build must still count as alive: the beat arriving is the
-/// signal, and the rest is detail for the reader once it stops arriving. Requiring
-/// `app`, `version` or `streaming` would 422 exactly the phone this endpoint
-/// exists to notice.
+/// Every field but `device` is optional: an app on an older build must still
+/// count as alive. The beat arriving is the signal; the rest is detail.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeartbeatIn {
@@ -472,11 +409,8 @@ pub struct ReportsOut {
     items: Vec<ReportOut>,
 }
 
-/// A client-supplied instant, or `None` if it will not parse.
-///
-/// ⚠ Dropped, never refused. An app on an older build should cost its own detail
-/// and nothing else — least of all the beat itself, which is the part that
-/// matters.
+/// A client-supplied instant, or `None` if it will not parse. Dropped, never
+/// refused: the beat is what matters.
 fn client_instant(value: Option<&str>) -> Option<String> {
     instant::python_isoformat(value?)
 }
@@ -583,11 +517,8 @@ pub async fn outbox_get_route(State(st): State<Arc<reads::State>>) -> Response {
     route::json("outboxes", move || reports_out(&reads::open(&root)?)).await
 }
 
-/// Forget one device's heartbeat.
-///
-/// ⚠ Gated, unlike the POST beside it. A phone cannot sign in, so it writes
-/// without one; forgetting is a person's act and the only one here that destroys
-/// a reading rather than replacing it.
+/// Forget one device's heartbeat. Gated, unlike the POST beside it: forgetting
+/// is a person's act.
 pub async fn heartbeat_forget_route(
     State(st): State<Arc<reads::State>>,
     axum::extract::Path(device): axum::extract::Path<String>,

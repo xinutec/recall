@@ -1,11 +1,10 @@
-//! The work queue the Mac's runner polls (docs/architecture.md).
+//! The work queue the Mac's runners poll.
 //!
-//! Jobs are DERIVED, not enqueued — the share-upload lesson: a
-//! `transcribe-room` job exists for exactly every room segment without a
-//! completed one, so a missed enqueue cannot strand audio. Leases are
-//! time-bounded: a runner that dies mid-job simply lets its lease lapse and
-//! the job is offered again. Newest room segment first — "what are they
-//! saying now" outranks backfill (decision 8).
+//! Jobs are derived from the blobs, never enqueued, so a missed enqueue cannot
+//! strand audio: a `transcribe-segment` job exists for exactly every clip without
+//! a completed one. Leases are time-bounded; a runner that dies lets its lapse and
+//! the job is offered again. Newest clip first: "what are they saying now"
+//! outranks backfill.
 
 use crate::room::ROOM_SOURCE;
 use crate::store;
@@ -14,41 +13,19 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::Path;
 
-/// The job kind stage E starts with.
+/// The room stream's transcription, one block at a time.
 pub const TRANSCRIBE_ROOM: &str = "transcribe-room";
-/// Who spoke when, over a block whose words already exist. The
-/// `voices` shim answers it (`recall.shim_voices`); ask/ab-compare follow.
+/// Who spoke when over a room block whose words already exist.
 pub const DIARIZE_ROOM: &str = "diarize-room";
-/// One MICROPHONE's segment, transcribed by the same `asr` shim as a room block.
-///
-/// ⚠ **This is the orchestration port, not the room stream.** `worker.py` did
-/// exactly this — pick a segment, drive the model, write the turns — and the
-/// runner already did that shape for room blocks. Same audio, same model, same
-/// GPU; only the process holding the loop changed. So it carries none of the
-/// room stream's open quality question, and does not wait on it.
-///
-/// ⚠ It does not fix throughput either. Measured 2026-09-12: 14,078 of 22,312
-/// per-mic segments on Isis have no turns, so the Mac is 63% behind on its own
-/// archive. The runner inherits that backlog at the same rate — one stream
-/// instead of five (#1388) is the only thing that changes the arithmetic.
+/// One microphone's clip, or an uploaded meeting, transcribed by the `asr` shim.
 pub const TRANSCRIBE_SEGMENT: &str = "transcribe-segment";
-/// The same for ONE MICROPHONE's clip: who spoke when, over words that already
-/// exist. The per-mic twin of [`DIARIZE_ROOM`], and the one that actually
-/// replaces `refine.py`.
-///
-/// ⚠ **The distinction, and it is not cosmetic.** `DIARIZE_ROOM` diarizes the
-/// DERIVED room stream, which is gated on #1461 and whose writer is off — so
-/// turning it on writes a second transcript beside the per-mic one rather than
-/// improving anything. `refine.py` worked on per-mic segments, and those
-/// already carry turns, so a pass over them REPLACES rather than adds. Same
-/// model, same shim, same code; entirely different consequence.
+/// Who spoke when over one microphone's clip. The per-mic twin of
+/// [`DIARIZE_ROOM`], and the one whose pass replaces turns rather than adding
+/// them, because those clips already carry a transcript.
 pub const DIARIZE_SEGMENT: &str = "diarize-segment";
-/// Turn a HUMAN-NAMED turn into a reference voiceprint.
-///
-/// ⚠ **The only job kind whose work-list lives in the MEANING plane.** Every
-/// other kind is derived from delivered audio; this one is derived from what a
-/// person typed, so its candidates change when nobody is recording. See
-/// [`crate::enrol`].
+/// Turn a human-named turn into a reference voiceprint. The one kind whose
+/// work-list lives in the meaning plane: it is derived from what a person typed,
+/// so its candidates change when nobody is recording ([`crate::enrol`]).
 pub const ENROLL_SPEAKER: &str = "enroll-speaker";
 const LEASE_TTL_S: i64 = 10 * 60;
 /// Leases a job may take before it is retired as failed. A runner that dies
@@ -63,22 +40,14 @@ pub struct Job {
     pub kind: String,
     /// The blob to work on, fetchable via `/ingest/v1/blob/<source>/<filename>`.
     pub filename: String,
-    /// Which recorder it came from — the `<source>` in that URL.
-    ///
-    /// ⚠ **Carried, not derived.** The runner used to hardcode `room`, which was
-    /// true while one kind existed and silently wrong the moment a microphone
-    /// clip could be leased: the fetch would 404 on a path no source owns. It
-    /// cannot be parsed out of the filename either — `meeting-20260907-0905` is
-    /// a real source id and every plausible split of its name is wrong. The
-    /// ingest plane already knows; it says so here.
+    /// Which recorder it came from: the `<source>` in the blob URL. Carried, not
+    /// derived: `meeting-20260907-0905` is a source id, and no split of a filename
+    /// on a hyphen is safe.
     pub source: String,
-    /// For [`ENROLL_SPEAKER`] only: which stretches of the clip to embed.
-    ///
-    /// ⚠ **Filled at LEASE time, not at derivation.** The work-list lives in the
-    /// meaning plane and this table does not; carrying the spans in the row
-    /// would mean a second copy of a list that changes whenever somebody renames
-    /// a voice. Empty for every other kind, and omitted from the wire entirely
-    /// so their lease body is byte-identical to what it has always been.
+    /// For [`ENROLL_SPEAKER`] only: which stretches of the clip to embed. Filled at
+    /// lease time from the meaning plane, so a voice renamed since the job was
+    /// derived is embedded under its current name. Empty and omitted for every
+    /// other kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<crate::enrol::Span>,
 }
@@ -90,17 +59,9 @@ fn iso(t: DateTime<Utc>) -> String {
 /// Derive queued jobs for room segments that have none. Idempotent; the
 /// belt that makes a lost enqueue impossible.
 pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
-    // ⚠ A segment MEASURED AS SILENT gets no job. Transcribing silence does not
-    // return nothing — it returns INVENTIONS. Measured 2026-09-06 on the live
-    // queue: a silent minute came back as "Thank you." twice, and another as 156
-    // segments containing a 150-character run of tildes at 0.19 confidence
-    // (#1410). 1784 of 4288 open jobs were silent, so this is 42% of the work
-    // and most of the junk.
-    //
-    // Unmeasured segments still get one, matching the liveness rule: "not looked
-    // at yet" is not evidence of silence, and on a host where the detector
-    // cannot run (no AVX2-capable ONNX runtime) this degrades to the old
-    // behaviour rather than silently producing no work at all.
+    // A segment measured silent gets no job: transcribing silence returns
+    // inventions, not nothing. An unmeasured segment still gets one, because "not
+    // looked at yet" is not evidence of silence.
     let inserted = conn.execute(
         "INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
          SELECT ?1, s.filename, ?2 FROM segments s
@@ -114,13 +75,8 @@ pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<us
     Ok(inserted + derive_diarize_jobs(conn, now)? + derive_diarize_segment_jobs(conn, now)?)
 }
 
-/// A clip's identity WITHOUT its container: `oneplus6t-20260910T203720`.
-///
-/// ⚠ THE SAME RECORDING EXISTS UNDER TWO EXTENSIONS — the ingest copy is often
-/// `.wav` where the meaning plane's path is the `.opus` mirror. Comparing whole
-/// filenames therefore misses that a clip already has turns, and derives a job
-/// that costs a full transcription before `turns::write_block` refuses it.
-/// Nothing is corrupted; the queue just drains slower for no reason.
+/// A clip's identity without its container: the same recording can exist under
+/// two extensions, so whole filenames compare unequal for one clip.
 fn stem(path: &str) -> String {
     let name = path.rsplit('/').next().unwrap_or(path);
     name.rsplit_once('.')
@@ -128,33 +84,20 @@ fn stem(path: &str) -> String {
         .to_owned()
 }
 
-/// Derive a transcribe job for each microphone segment that has NO TURNS YET.
+/// Derive a transcribe job for each microphone clip or upload that has no turns
+/// yet, bounded by `limit` so a backlog queues in bites rather than days of GPU
+/// work in one statement.
 ///
-/// ⚠ **Two planes, and the join key is the FILENAME.** The segment rows live in
-/// `ingest.sqlite` and the turns in `recall.sqlite`, and the obvious join —
-/// `start_utc` to `start_utc` — silently matches NOTHING: the ingest plane
-/// writes `2026-06-13T17:06:53Z` and the meaning plane
-/// `2026-06-13T17:06:53+00:00`. Same instant, different spelling, compared as
-/// TEXT. That cost a measurement here before it was noticed, because the answer
-/// it returned was a confident zero rather than an error.
-///
-/// ⚠ **Bounded, and deliberately.** 14,078 segments were untranscribed when this
-/// was written; deriving them all at once would queue days of GPU work in one
-/// statement, competing with the room stream and with capture. `limit` is what
-/// makes turning this on reversible.
-///
-/// # Errors
-/// If either database refuses.
+/// The join across the planes is on the filename: the two planes spell the same
+/// instant differently, and `start_utc` compared as text matches nothing.
 pub fn derive_segment_jobs(
     ingest: &Connection,
     meaning: &Connection,
     now: DateTime<Utc>,
     limit: usize,
 ) -> rusqlite::Result<usize> {
-    // The filenames that already have turns, as basenames. Read from the meaning
-    // plane in one pass rather than joined per row — a correlated LIKE over both
-    // tables is a full scan of each, and on the live fleet it ran for ten
-    // minutes before it was killed.
+    // The filenames that already have turns, read in one pass: a correlated LIKE
+    // over both tables is a full scan of each.
     let mut have: std::collections::HashSet<String> = std::collections::HashSet::new();
     {
         let mut stmt = meaning.prepare(
@@ -209,17 +152,11 @@ pub fn derive_segment_jobs(
     Ok(inserted)
 }
 
-/// Derive a diarization job for every block whose transcription SUCCEEDED.
-///
-/// Gated on the words existing, for two reasons. Diarization alone attributes
-/// nothing — it yields `SPEAKER_00` spans, and it is the alignment against words
-/// that makes them turns (`refine.py`, which this replaced, transcribed first
-/// for exactly this reason). And a block the ASR REFUSED is a block whose clip is the
-/// problem (`turns::Barren::Refused`); handing the same clip to pyannote
-/// spends GPU to learn that again.
-///
-/// Not gated on speech, because `transcribe-room` already is: a block with no
-/// job never gets a done one, so silence cannot reach here.
+/// Derive a diarization job for every block whose transcription succeeded.
+/// Diarization alone attributes nothing; it is the alignment against words that
+/// makes turns, and a clip the ASR refused would only cost the GPU the same
+/// answer again. Not gated on speech: a silent block never gets a transcription
+/// job, so it cannot reach here.
 fn derive_diarize_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
     conn.execute(
         "INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
@@ -232,10 +169,7 @@ fn derive_diarize_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Resul
     )
 }
 
-/// Derive a per-mic diarization job for every microphone clip whose transcription
-/// SUCCEEDED — the same gate [`derive_diarize_jobs`] applies, for the same two
-/// reasons: diarization alone attributes nothing without words to align against,
-/// and a clip the ASR refused is a clip whose audio is the problem.
+/// The same, for one microphone's clip.
 fn derive_diarize_segment_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
     conn.execute(
         "INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
@@ -248,52 +182,32 @@ fn derive_diarize_segment_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlit
     )
 }
 
-/// Lease the newest available job of a kind the caller can actually do:
-/// queued, or leased-but-lapsed. The lease is the only mutation — a runner acks
-/// by finishing, never by holding on.
+/// Lease the newest available job of a kind the caller can do: queued, or
+/// leased and lapsed. The lease is the only mutation; a runner acks by
+/// finishing.
 ///
-/// ⚠ **`kinds` is what the RUNNER can do, not what exists.** A runner holds one
-/// shim's weights, so a runner driving `asr` must never be handed a
-/// `diarize-room`: it could only fail it, and the job would then cycle through
-/// its attempts against a process that can never do it. An empty `kinds` leases
-/// nothing, which is the safe reading of "I can do nothing".
+/// `kinds` is what the runner can do, not what exists: a runner holds one shim's
+/// weights, and a job it cannot do would cycle through its attempts against a
+/// process that can never do it. An empty `kinds` leases nothing.
 pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Result<Option<Job>> {
     let conn = store::open(root)?;
     derive_jobs(&conn, now)?;
     retire_exhausted(&conn, now)?;
-    // Built rather than bound as one parameter: SQLite has no array binding, and
-    // the alternative (a comma-joined string matched with LIKE) would make
-    // `transcribe-room` match a hypothetical `transcribe-room-v2`.
-    // Numbered explicitly rather than bare `?`: SQLite allows mixing the two, but
-    // the anonymous form's index is "one past the highest seen so far", which is
-    // a rule nobody should have to remember while reading a WHERE clause.
+    // Built rather than bound: SQLite has no array binding, and numbered so the
+    // placeholders read in order.
     let places = (2..=kinds.len() + 1)
         .map(|n| format!("?{n}"))
         .collect::<Vec<_>>()
         .join(", ");
-    // ⚠ **ORDERED BY CAPTURE TIME, JOINED — NOT by filename.** `ORDER BY
-    // filename DESC` is newest-first only while every job is `room-*`. The
-    // moment a second kind arrives it becomes SOURCE-ALPHABETICAL: `usb-` sorts
-    // above `room-`, which sorts above `pixel9-`, `pixel5-`, `oneplus6t-`,
-    // `iphone11-` and `geb-`. A runner would transcribe every usb clip ever
-    // recorded before geb got one job, and the symptom would not look like an
-    // ordering bug — it would look like geb having no transcripts.
+    // Ordered by capture time through the join, not by filename: filename order
+    // is source-alphabetical the moment a second source exists, and a runner would
+    // drain every `usb` clip ever recorded before another source got a job. The
+    // join is safe because every job is derived from a `segments` row.
     //
-    // The join is safe because every job is DERIVED from a `segments` row, so
-    // one always exists; a job whose blob the ingest plane has forgotten is
-    // unleasable, which is the correct reading of "there is nothing to fetch".
-    //
-    // ⚠ **ENROLMENT OUTRANKS CAPTURE TIME, and without that it would never run.**
-    // Every other kind is derived from audio, so newest-first is "what are they
-    // saying now". Enrolment is derived from what a PERSON typed, and the clip
-    // they typed it on is whatever they happened to be reading — usually old.
-    // Measured on the fleet 2026-09-17: 31 clips awaited a print, the newest from
-    // 2026-09-03, behind **2,251** diarize jobs newer than it — about two days of
-    // GPU before the first one could be leased, and a label added today would
-    // queue behind the same wall. The same principle `work::pending_jobs` states
-    // for the other queue: a backlog must not starve the work somebody is waiting
-    // on. Safe because the derivation is bounded at a few per pass, so at most a
-    // handful of enrolment jobs can exist to jump ahead.
+    // Enrolment outranks capture time. It is derived from what a person typed, on
+    // whatever clip they were reading, usually old, and would otherwise wait behind
+    // days of newer diarize jobs. Its derivation is bounded to a few per pass, so at
+    // most a handful jump the queue.
     let sql = format!(
         "SELECT j.id, j.kind, j.filename, s.source FROM jobs j
          JOIN segments s ON s.filename = j.filename
@@ -349,8 +263,7 @@ fn retire_exhausted(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<u
     )
 }
 
-/// Retire a job with its result (opaque JSON the runner will interpret;
-/// stored so nothing is lost while that lands).
+/// Retire a job with its result, opaque JSON the passes interpret.
 pub fn done(root: &Path, id: i64, result: &str, now: DateTime<Utc>) -> rusqlite::Result<bool> {
     let conn = store::open(root)?;
     let updated = conn.execute(
