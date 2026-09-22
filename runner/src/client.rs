@@ -155,25 +155,20 @@ impl Client {
 
     /// The household glossary, as Whisper's `initial_prompt`.
     ///
-    /// Lives on the API's SYNC plane rather than recalld's own, because the
-    /// vocabulary is in the MEANING store and recalld owns the audio plane. It
-    /// moves with everything else at stage F.
+    /// Read by the caller and carried on every job: the shim must not fetch it
+    /// (a model process holds no database), and writing it onto a job at
+    /// derivation time would pin it, so a name learned today would never reach
+    /// a job queued yesterday.
     ///
-    /// ⚠ Read ONCE at startup by the runner and carried on every job. The shim
-    /// must not fetch it — a model process holds no database — and
-    /// writing it onto each job at derivation time would pin it, so a name
-    /// learned today would never reach a job queued yesterday.
-    ///
-    /// `Ok(None)` means the vocabulary is EMPTY, which is fine and means "no
-    /// biasing". Failing to reach it is an error. What that costs depends on the
-    /// caller: for the runner it is fatal, because transcribing a corpus
-    /// unbiased produces work that has to be redone; for the live tier it is
-    /// not, because a live turn is superseded within the hour either way.
+    /// `Ok(None)` means the vocabulary is empty: no biasing. Failing to reach
+    /// it is an error; the runner treats that as fatal, because a corpus
+    /// transcribed unbiased has to be redone, and the live tier does not,
+    /// because a live turn is superseded within the hour.
     ///
     /// # Errors
-    /// If the API is unreachable or answers something unreadable.
-    pub fn prompt(&self, api_base: &str) -> Result<Option<String>, Error> {
-        let url = format!("{}/sync/vocabulary/prompt", api_base.trim_end_matches('/'));
+    /// If recalld is unreachable or answers something unreadable.
+    pub fn prompt(&self) -> Result<Option<String>, Error> {
+        let url = format!("{}/sync/vocabulary/prompt", self.base);
         let response = self
             .auth(self.agent.get(&url))
             .call()

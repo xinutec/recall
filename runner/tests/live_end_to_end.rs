@@ -199,8 +199,6 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
         .args([
             "--url",
             &base,
-            "--api",
-            &base,
             "--tap",
             &format!("udp://127.0.0.1:{port}"),
             "--shim",

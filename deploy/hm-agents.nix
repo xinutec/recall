@@ -4,16 +4,10 @@
 # here, then in ~/.config/home-manager run
 # `nix flake update recall && home-manager switch --flake .#pippijn`.
 #
-# The agents run a WRAPPER IN THE STORE whose PYTHONPATH is the store copy of this
-# commit, not `~/Code/recall/src` — `./scripts/recall.sh …` is a development entry
-# point only. The wrapper names the store paths of the interpreter, sox and ffmpeg
-# directly rather than entering the devshell, so no flake evaluation sits in an
-# agent's startup path. Same flake.lock, so the same store paths, including the
-# mic-TCC-bearing python.
-#
-# ⚠ TWO INTERPRETERS. capture/ingest run the devshell python and the gate checks
-# their import surface stays ML-free; everything else runs the uv2nix store env
-# (`nix build .#ml-env`) that holds mlx/pyannote/torch.
+# Every agent runs a wrapper in the store naming the store paths of its binary,
+# sox and ffmpeg directly, so no flake evaluation sits in an agent's startup
+# path. All but `llm-host` are Rust; the shims the runners drive and `llm-host`
+# run the uv2nix store env (`nix build .#ml-env`) that holds mlx and pyannote.
 #
 # The agent env (HF_TOKEN, RECALL_SYNC_TOKEN, the ingest tokens) is read at runtime
 # from ~/.config/recall/env, 0600, on the INTERNAL disk — secrets must never enter
@@ -58,16 +52,9 @@ let
   # commit as the code they run, and a `uv sync` in the tree can no longer change a
   # running daemon.
   #
-  # Safe to move because NO agent on this interpreter opens the microphone: capture
-  # owns the device and live consumes its UDP tap (sources.live_input_argv), so the
-  # mic-TCC identity — the devshell python that capture and ingest run — is untouched.
-  # The grant these need is /Volumes/Backup, re-established once for the new binary.
+  # No agent on this interpreter opens the microphone: capture owns the device
+  # and live consumes its UDP tap. The grant it needs is /Volumes/Backup.
   venvPython = "${recall.packages.${pkgs.stdenv.hostPlatform.system}.ml-env}/bin/python";
-
-  # The non-ML interpreter capture and ingest run — the SAME derivation the devshell
-  # uses, so the store path, and the microphone grant macOS attributes to it, does
-  # not move.
-  devPython = "${recall.packages.${pkgs.stdenv.hostPlatform.system}.dev-python}/bin/python";
 
   # One store wrapper per agent; `python` selects the interpreter and the arguments
   # below are the single source of truth for what each daemon does.
@@ -178,7 +165,7 @@ let
 
   # A KeepAlive recall daemon at background priority. `extra` adds per-agent keys.
   # `program` overrides the python wrapper for agents that are not `recall <args>`.
-  daemon = { label, name, python ? devPython, args, extra ? { }, program ? null, module ? "recall" }:
+  daemon = { label, name, python ? venvPython, args, extra ? { }, program ? null, module ? "recall" }:
     let prog = if program != null then program else wrapper { inherit name python args module; };
     in {
       enable = true;
@@ -307,7 +294,7 @@ in
           }/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary} \
           ${
             recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
-          }/bin/recall-live --url ${ingest} --api ${fleet} \
+          }/bin/recall-live --url ${ingest} \
             --shim ${venvPython} -m recall.shim_asr
       '';
     };

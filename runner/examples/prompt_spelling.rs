@@ -118,7 +118,7 @@ fn main() {
     let token = std::env::var("RECALL_SYNC_TOKEN").expect("RECALL_SYNC_TOKEN must be set");
     let client = runner::client::Client::new("http://10.100.0.2:8001", &token);
     let prompt = client
-        .prompt("http://10.100.0.2:8000")
+        .prompt()
         .expect("glossary")
         .expect("a non-empty glossary");
 

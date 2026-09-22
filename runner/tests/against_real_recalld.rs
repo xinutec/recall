@@ -193,12 +193,12 @@ fn the_vocabulary_prompt_is_read_and_an_empty_one_is_no_biasing() {
     let base = format!("http://{}", rx.recv().expect("addr"));
 
     let prompt = runner::client::Client::new(&base, "any")
-        .prompt(&base)
+        .prompt()
         .expect("fetch");
     assert_eq!(prompt.as_deref(), Some("Pippijn, Kat"));
 
-    let empty = runner::client::Client::new(&base, "any")
-        .prompt(&format!("{base}/empty"))
+    let empty = runner::client::Client::new(&format!("{base}/empty"), "any")
+        .prompt()
         .expect("fetch");
     assert_eq!(
         empty, None,
@@ -225,7 +225,7 @@ fn a_runner_with_an_empty_queue_stamps_a_beat_saying_it_had_nothing_to_do() {
         stub_shim("print(json.dumps({'id': msg['id'], 'ok': True, 'result': {'shim': 'voices'}}))");
 
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_runner"))
-        .args(["--url", &base, "--api", &base, "--once"])
+        .args(["--url", &base, "--once"])
         .arg("--pulse")
         .arg(&pulse)
         .arg("--shim")

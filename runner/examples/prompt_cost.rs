@@ -140,7 +140,7 @@ fn main() {
         .expect("RECALL_SYNC_TOKEN must be set — the glossary is behind the sync plane");
     let client = runner::client::Client::new("http://10.100.0.2:8001", &token);
     let prompt = client
-        .prompt("http://10.100.0.2:8000")
+        .prompt()
         .expect("the household glossary")
         .expect("a non-empty glossary");
     println!("prompt is {} chars; not printed\n", prompt.chars().count());

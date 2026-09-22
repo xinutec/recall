@@ -28,7 +28,6 @@ const PROMPT_EVERY: Duration = Duration::from_mins(5);
 
 struct Config {
     base: String,
-    api: String,
     token: String,
     tap: String,
     program: String,
@@ -37,7 +36,7 @@ struct Config {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: recall-live [--url <recalld>] [--api <recall api>] [--tap <udp url>]\n\
+        "usage: recall-live [--url <recalld>] [--tap <udp url>]\n\
         \x20                  [--shim <program> [args...]]\n\
          \n\
          RECALL_SYNC_TOKEN must be set: the instant feed writes to the meaning\n\
@@ -48,7 +47,6 @@ fn usage() -> ! {
 
 fn parse_args() -> Config {
     let mut base = "http://10.100.0.2:8001".to_owned();
-    let mut api = "http://10.100.0.2:8000".to_owned();
     let mut tap = live::TAP.to_owned();
     let mut program = "python".to_owned();
     let mut args = vec!["-m".to_owned(), "recall.shim_asr".to_owned()];
@@ -56,7 +54,6 @@ fn parse_args() -> Config {
     while let Some(arg) = cli.next() {
         match arg.as_str() {
             "--url" => base = cli.next().unwrap_or_else(|| usage()),
-            "--api" => api = cli.next().unwrap_or_else(|| usage()),
             "--tap" => tap = cli.next().unwrap_or_else(|| usage()),
             "--shim" => {
                 program = cli.next().unwrap_or_else(|| usage());
@@ -70,7 +67,6 @@ fn parse_args() -> Config {
     };
     Config {
         base,
-        api,
         token,
         tap,
         program,
@@ -122,7 +118,6 @@ fn main() {
     // Two threads, not the Python's three: its extra one existed to drain a
     // CoreAudio pipe that could overrun, and this reads a socket ffmpeg is
     // already allowed to drop from.
-    let api = config.api.clone();
     let program = config.program.clone();
     let args = config.args.clone();
     let worker = std::thread::spawn(move || {
@@ -149,7 +144,7 @@ fn main() {
         // redone; a live turn is superseded within the hour either way, so
         // refusing to speak until the glossary answers would cost more than it
         // saves.
-        let mut prompt = client.prompt(&api).unwrap_or_else(|err| {
+        let mut prompt = client.prompt().unwrap_or_else(|err| {
             tracing::warn!(%err, "no vocabulary; the live feed is unbiased for now");
             None
         });
@@ -157,7 +152,7 @@ fn main() {
         live::drain(&utterances, |utterance| {
             if refreshed.elapsed() >= PROMPT_EVERY {
                 refreshed = Instant::now();
-                if let Ok(fresh) = client.prompt(&api) {
+                if let Ok(fresh) = client.prompt() {
                     prompt = fresh;
                 }
             }

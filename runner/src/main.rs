@@ -60,7 +60,6 @@ fn kinds_for(shim_name: &str) -> Option<&'static [&'static str]> {
 
 struct Config {
     base: String,
-    api: String,
     token: String,
     program: String,
     args: Vec<String>,
@@ -73,7 +72,7 @@ struct Config {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: runner --url <recalld> [--api <recall api>] [--shim <program> [args...]] [--once]\n\
+        "usage: runner --url <recalld> [--shim <program> [args...]] [--once]\n\
          \n\
          RECALL_SYNC_TOKEN must be set: the runner reads blobs and the queue,\n\
          which is the read plane, never a device token."
@@ -83,7 +82,6 @@ fn usage() -> ! {
 
 fn parse_args() -> Config {
     let mut base = "http://10.100.0.2:8001".to_owned();
-    let mut api = "http://10.100.0.2:8000".to_owned();
     let mut program = "python".to_owned();
     let mut args = vec!["-m".to_owned(), "recall.shim_asr".to_owned()];
     let mut once = false;
@@ -92,7 +90,6 @@ fn parse_args() -> Config {
     while let Some(arg) = cli.next() {
         match arg.as_str() {
             "--url" => base = cli.next().unwrap_or_else(|| usage()),
-            "--api" => api = cli.next().unwrap_or_else(|| usage()),
             "--once" => once = true,
             "--pulse" => {
                 pulse = Some(std::path::PathBuf::from(
@@ -111,7 +108,6 @@ fn parse_args() -> Config {
     };
     Config {
         base,
-        api,
         token,
         program,
         args,
@@ -292,7 +288,7 @@ fn main() {
     // making a `voices` runner die on an unreachable fleet would be a dependency
     // it does not have.
     let prompt = if kinds.contains(&"transcribe-room") {
-        match client.prompt(&config.api) {
+        match client.prompt() {
             Ok(prompt) => {
                 tracing::info!(
                     terms = prompt.as_deref().map_or(0, |p| p.split(',').count()),
@@ -301,7 +297,7 @@ fn main() {
                 prompt
             }
             Err(err) => {
-                tracing::error!(%err, api = %config.api, "cannot read the vocabulary; refusing to transcribe unbiased");
+                tracing::error!(%err, "cannot read the vocabulary; refusing to transcribe unbiased");
                 std::process::exit(1);
             }
         }

@@ -108,10 +108,7 @@
         # `ruff check`. The gate builds it into `.venv` in one row (gate.dhall).
         devEnv = mlPythonSet.mkVirtualEnv "recall-dev-env" uvWorkspace.deps.all;
 
-        # ⚠ The non-ML interpreter, defined ONCE for both the devshell and the launchd
-        # agents. macOS attributes the microphone grant to the BINARY, so a leaner
-        # interpreter here is a new store path and a re-prompt on capture. mypy and
-        # pytest ride along for that reason, not because an agent needs them.
+        # The devshell's interpreter: no ML, mypy and pytest for the gate.
         devPython = python.withPackages (ps: [ ps.mypy ps.pytest ]);
 
         # The binaries the agents shell out to by bare name. ⚠ Exposed as a package
@@ -209,7 +206,6 @@
               inherit pkgs lib;
               recall.packages.${system} = {
                 ml-env = mlEnv;
-                dev-python = devPython;
                 agent-tools = agentTools;
                 audiod = audiodPkg;
                 onnxruntime = pkgs.onnxruntime;
@@ -248,7 +244,6 @@
         packages.audiod = audiodPkg;
         packages.ml-env = mlEnv;
         packages.dev-env = devEnv;
-        packages.dev-python = devPython;
         packages.agent-tools = agentTools;
         # ⚠ The ONNX runtime the speech agent must dlopen, exported so
         # home-manager reaches the SAME one this flake's tests run silero
@@ -271,8 +266,7 @@
 
         devShells.default = pkgs.mkShell {
           packages = [
-            # toolchain + type checking (also `packages.dev-python` — the agents run
-            # this exact derivation, so the two can never drift apart)
+            # toolchain + type checking
             devPython
             pkgs.ruff
             # capture (Phase 0): sox captures the mic (CoreAudio, sample-accurate),
