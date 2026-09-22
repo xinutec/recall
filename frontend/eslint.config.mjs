@@ -10,6 +10,8 @@ import angular from "angular-eslint";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
+  // ts-rs writes src/app/generated/ from the Rust types; generated code is not linted.
+  { ignores: ["src/app/generated/**"] },
   {
     files: ["src/**/*.ts"],
     extends: [

@@ -45,7 +45,6 @@ fn serve(root: &Path) -> String {
         max_body_bytes: 16 * 1024 * 1024,
         webauth: Some(webauth),
         sync_token: None,
-        upstream: None,
         frontend: None,
     });
     let (tx, rx) = std::sync::mpsc::channel();
