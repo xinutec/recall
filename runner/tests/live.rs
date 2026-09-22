@@ -34,7 +34,7 @@ fn cut(path: &Path) -> Vec<Utterance> {
     let mut cutter = Cutter::open().expect("detector");
     let mut out = Vec::new();
     let mut now = epoch();
-    for (i, window) in samples.chunks_exact(WINDOW).enumerate() {
+    for (i, window) in samples.as_chunks::<WINDOW>().0.iter().enumerate() {
         now = epoch() + window_delta(i + 1);
         if let Some(utterance) = cutter.feed(window, now).expect("feed") {
             out.push(utterance);

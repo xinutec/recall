@@ -179,7 +179,9 @@ fn a_stream_reproduces_the_batch_probabilities_window_for_window() {
     // full scale, so `detection_gain` leaves it alone.
     let mut stream = Stream::open(1.0).expect("model");
     let streamed: Vec<f32> = samples
-        .chunks_exact(WINDOW)
+        .as_chunks::<WINDOW>()
+        .0
+        .iter()
         .map(|w| stream.probability(w).expect("window"))
         .collect();
     assert_eq!(streamed.len(), batch.len());

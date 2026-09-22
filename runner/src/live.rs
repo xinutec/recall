@@ -304,8 +304,8 @@ impl Tap {
                 return read; // short read: ffmpeg exited or the pipe was torn down
             }
             read += 1;
-            for (sample, bytes) in samples.iter_mut().zip(raw.chunks_exact(2)) {
-                *sample = f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / 32_768.0;
+            for (sample, bytes) in samples.iter_mut().zip(raw.as_chunks::<2>().0) {
+                *sample = f32::from(i16::from_le_bytes(*bytes)) / 32_768.0;
             }
             if !on_window(&samples) {
                 return read;

@@ -209,7 +209,7 @@ impl Detector {
         let gain = detection_gain(samples.iter().fold(0.0_f32, |m, s| m.max(s.abs())));
         let mut carried = Carried::new();
         let mut out = Vec::with_capacity(samples.len() / WINDOW);
-        for chunk in samples.chunks_exact(WINDOW) {
+        for chunk in samples.as_chunks::<WINDOW>().0 {
             out.push(self.window(chunk, gain, &mut carried)?);
         }
         Ok(out)

@@ -26,9 +26,11 @@ pub fn rms_buckets_at(pcm: &[u8], rate: u32, bucket_s: f64) -> Vec<f32> {
     pcm.chunks_exact(bytes_per_bucket)
         .map(|bucket| {
             let sum: f64 = bucket
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| {
-                    let s = f64::from(i16::from_le_bytes([pair[0], pair[1]]));
+                    let s = f64::from(i16::from_le_bytes(*pair));
                     s * s
                 })
                 .sum();

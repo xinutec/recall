@@ -21,8 +21,10 @@ fn longest_run(x: &[i16], limit: i16) -> usize {
 }
 
 fn s16(pcm: &[u8]) -> Vec<i16> {
-    pcm.chunks_exact(2)
-        .map(|p| i16::from_le_bytes([p[0], p[1]]))
+    pcm.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| i16::from_le_bytes(*p))
         .collect()
 }
 

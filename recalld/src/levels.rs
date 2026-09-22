@@ -173,9 +173,9 @@ pub fn gated_fraction(envelope: &[f32]) -> f32 {
 #[must_use]
 pub fn quiet_run_seconds(pcm: &[u8], rate: u32) -> f32 {
     let (mut best, mut run) = (0usize, 0usize);
-    for pair in pcm.chunks_exact(2) {
+    for pair in pcm.as_chunks::<2>().0 {
         // `unsigned_abs`, because `i16::MIN.abs()` overflows.
-        if i16::from_le_bytes([pair[0], pair[1]]).unsigned_abs() <= QUIET_LSB {
+        if i16::from_le_bytes(*pair).unsigned_abs() <= QUIET_LSB {
             run += 1;
             best = best.max(run);
         } else {

@@ -382,6 +382,9 @@ struct Form {
     start: String,
 }
 
+// An axum `Response` as the error is the handler idiom — `Result<T, Response>`
+// is itself a response — and it is returned once, so boxing it buys nothing.
+#[expect(clippy::result_large_err, reason = "the Err is the HTTP response")]
 async fn read_form(mut parts: Multipart) -> Result<Form, Response> {
     let (mut filename, mut bytes, mut title, mut start) =
         (None, None, String::new(), String::new());

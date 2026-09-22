@@ -148,8 +148,10 @@ pub fn segment_is_digital_silence(path: &Path) -> bool {
     if pcm.is_empty() {
         return true;
     }
-    pcm.chunks_exact(2)
-        .all(|pair| i32::from(i16::from_le_bytes([pair[0], pair[1]])).abs() < SILENCE_PEAK)
+    pcm.as_chunks::<2>()
+        .0
+        .iter()
+        .all(|pair| i32::from(i16::from_le_bytes(*pair)).abs() < SILENCE_PEAK)
 }
 
 /// Floor the cutoff to the second: segment names carry whole seconds, so the

@@ -40,6 +40,7 @@ pub fn faulted(what: &str, err: &dyn std::fmt::Display) -> Response {
 /// `what` names the route for the log only. Both failure modes land in the same
 /// place on purpose: a panicked task and a failed query are equally a fault of
 /// ours, and the caller can act on neither.
+#[expect(clippy::result_large_err, reason = "the Err is the HTTP response")]
 pub async fn blocking<T, F>(what: &'static str, f: F) -> Result<T, Response>
 where
     F: FnOnce() -> rusqlite::Result<T> + Send + 'static,

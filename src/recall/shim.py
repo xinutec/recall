@@ -31,7 +31,7 @@ from typing import TextIO
 #: What crosses the wire. Spelled out rather than `Any`, so a handler returning
 #: something unserialisable is a type error here and not a crash mid-stream.
 type JsonValue = (
-    str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
+    str | int | float | bool | list[JsonValue] | dict[str, JsonValue] | None
 )
 type JsonDict = dict[str, JsonValue]
 

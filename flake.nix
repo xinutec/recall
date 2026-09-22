@@ -233,7 +233,7 @@
         };
         androidComposition = androidPkgs.androidenv.composeAndroidPackages {
           cmdLineToolsVersion = "13.0";
-          platformToolsVersion = "35.0.2";
+          platformToolsVersion = "37.0.1";
           buildToolsVersions = [ "36.0.0" ];
           platformVersions = [ "36" ];
           abiVersions = [ ];

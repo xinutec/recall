@@ -50,8 +50,8 @@ impl StreamMeter {
             self.carry = buf.pop();
         }
         let mut chunk_peak = 0i32;
-        for (index, pair) in buf.chunks_exact(2).enumerate() {
-            let sample = i32::from(i16::from_le_bytes([pair[0], pair[1]])).abs();
+        for (index, pair) in buf.as_chunks::<2>().0.iter().enumerate() {
+            let sample = i32::from(i16::from_le_bytes(*pair)).abs();
             chunk_peak = chunk_peak.max(sample);
             if self.first_audible_byte.is_none() && sample >= AUDIBLE_FLOOR {
                 self.first_audible_byte = Some(start + 2 * index as u64);

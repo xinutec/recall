@@ -35,7 +35,7 @@ fn cut(path: &Path) -> Vec<Utterance> {
     let epoch = Utc::now();
     let mut out = Vec::new();
     let mut now = epoch;
-    for (i, window) in samples.chunks_exact(WINDOW).enumerate() {
+    for (i, window) in samples.as_chunks::<WINDOW>().0.iter().enumerate() {
         now = epoch + TimeDelta::milliseconds(millis(i + 1));
         out.extend(cutter.feed(window, now).expect("feed"));
     }
