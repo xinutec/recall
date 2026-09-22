@@ -53,7 +53,7 @@ allowBuilds:
 # need no floor — the range already admits the fix, so `pnpm update` moves
 # them.
 overrides:
-  esbuild: ^0.28.1
+  esbuild: ^0.28.2
   "@babel/core": ^7.29.6
   browserslist: ^4.28.7
   fast-uri: ^3.1.6
