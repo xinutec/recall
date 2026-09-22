@@ -243,6 +243,7 @@ class StreamService : Service() {
                 // after Stop) and without a pointless network call.
                 if (!running) break
                 MicState.setMicOk(micOkAfter(MicState.micOk.value, e))
+                // dev-lint: allow-detekt one prelude for both outcomes; two catches would repeat the stop check
                 if (e is MicUnavailableException) {
                     // Blaming the network would send whoever reads it debugging the
                     // wrong thing — the connect succeeded; the microphone didn't.
