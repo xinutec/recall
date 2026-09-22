@@ -38,6 +38,7 @@ object ResumeWarning {
     // Last wall-clock time we scheduled for, so a state poll that re-derives the same
     // plan every couple of seconds doesn't re-arm an identical alarm each time. Process
     // state (same process as MicState); a fresh process just re-derives from the poll.
+    // dev-lint: allow-object-var a memo of the last armed alarm; a fresh process re-derives it
     @Volatile private var scheduledFor: Instant? = null
 
     /** Re-derive the plan from [capture] and schedule/cancel/leave the alarm to match. */

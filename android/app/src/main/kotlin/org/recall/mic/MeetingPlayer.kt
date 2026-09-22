@@ -23,6 +23,7 @@ import java.io.File
 object MeetingPlayer {
     private const val TAG = "recall.meeting"
 
+    // dev-lint: allow-object-var the one MediaPlayer this process owns; no test reaches it
     private var player: MediaPlayer? = null
 
     /** The file loaded right now, or null when nothing is. */
