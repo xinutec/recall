@@ -345,8 +345,8 @@ fn insert_piece(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         rusqlite::params![
             turn.audio_segment_id,
-            iso(piece.start),
-            iso(piece.end),
+            instant::python_isoformat_utc(piece.start),
+            instant::python_isoformat_utc(piece.end),
             piece.text,
             turn.language,
             turn.language_confidence,
@@ -367,11 +367,6 @@ fn insert_piece(
         (new_id, &piece.text),
     )?;
     Ok(())
-}
-
-/// An instant spelled the way every stored row is.
-fn iso(at: DateTime<Utc>) -> String {
-    instant::python_isoformat(&at.to_rfc3339()).unwrap_or_else(|| at.to_rfc3339())
 }
 
 /// Replace one turn with the pieces split at `cuts`. Returns 1 if a turn was
@@ -551,7 +546,7 @@ pub async fn assign_route(
         return (StatusCode::BAD_REQUEST, "name required").into_response();
     }
     let root = st.root.clone();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
     let span = Span {
         start_turn: body.start_turn,
         start_char: body.start_char,

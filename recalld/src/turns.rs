@@ -24,7 +24,8 @@
 //! counted, and still seen by supersession — the machinery whose failure
 //! overwrites a typed correction.
 
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use audiocore::instant;
+use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
 /// One turn a room block's transcript implies, in the archive's own terms.
@@ -252,15 +253,6 @@ pub const ROOM_CHANNELS: i64 = 1;
 /// Idempotent by the table's own `UNIQUE (source_id, start_utc)` — the whole
 /// backfill can be re-run, and is meant to be.
 ///
-/// ⚠ **DO NOT "FIX" THE TIMESTAMP SPELLING HERE.** `SecondsFormat::Micros`
-/// writes `...T10:00:00.000000+00:00`, which is not what
-/// [`audiocore::instant::python_isoformat_utc`] would write and not what
-/// `register_segments` writes — and that inconsistency is CORRECT, because the
-/// idempotency key is compared as TEXT. EVERY room row already written carries
-/// the fractional spelling, so changing it would make all of them stop matching
-/// and mint a duplicate for each. The two registrars differ because the rows
-/// they are idempotent AGAINST differ.
-///
 /// # Errors
 /// If either database refuses the read or the write.
 pub fn register_blocks(
@@ -303,8 +295,8 @@ pub fn register_blocks(
             rusqlite::params![
                 crate::room::ROOM_SOURCE,
                 room_dir.join(&filename).to_string_lossy(),
-                start.to_rfc3339_opts(SecondsFormat::Micros, false),
-                end.to_rfc3339_opts(SecondsFormat::Micros, false),
+                instant::python_isoformat_utc(start),
+                instant::python_isoformat_utc(end),
                 ROOM_RATE,
                 ROOM_CHANNELS,
             ],
@@ -459,10 +451,7 @@ pub fn register_segments(
         };
         // A sibling already holds this minute, so the insert below could only be
         // ignored. Decided WITHOUT decoding: the duration would be discarded.
-        let minute = (
-            source.clone(),
-            audiocore::instant::python_isoformat_utc(start),
-        );
+        let minute = (source.clone(), instant::python_isoformat_utc(start));
         if minutes.contains(&minute) {
             out.covered += 1;
             ledger(
@@ -487,15 +476,6 @@ pub fn register_segments(
             continue;
         };
         let end = start + Duration::microseconds((media.duration_s * 1e6).round() as i64);
-        // ⚠ **`python_isoformat_utc`, NOT `SecondsFormat::Micros`, and the
-        // difference is the idempotency key.** `UNIQUE (source_id, start_utc)`
-        // compares TEXT. EVERY microphone row already here
-        // was written by the Python and spells a whole second WITHOUT a
-        // fraction; `Micros` would write `...29.000000+00:00`, which is the
-        // same instant, a different string, and therefore no conflict at all —
-        // so a clip the `have` set missed would get a SECOND row rather than
-        // being absorbed. Measured, not assumed: every mic row whole-second,
-        // every room row fractional — no mixture in either.
         let inserted = meaning.execute(
             "INSERT OR IGNORE INTO audio_segments
                  (source_id, path, start_utc, end_utc, sample_rate, channels)
@@ -503,8 +483,8 @@ pub fn register_segments(
             rusqlite::params![
                 source,
                 path.to_string_lossy(),
-                audiocore::instant::python_isoformat_utc(start),
-                audiocore::instant::python_isoformat_utc(end),
+                instant::python_isoformat_utc(start),
+                instant::python_isoformat_utc(end),
                 media.sample_rate,
                 media.channels,
             ],
@@ -633,8 +613,8 @@ pub fn write_block(
              VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 audio_segment_id,
-                turn.start.to_rfc3339_opts(SecondsFormat::Micros, false),
-                turn.end.to_rfc3339_opts(SecondsFormat::Micros, false),
+                instant::python_isoformat_utc(turn.start),
+                instant::python_isoformat_utc(turn.end),
                 turn.text,
                 turn.language,
                 // ⚠ The same rule `diarized` applies, on the OTHER stored
@@ -678,8 +658,8 @@ pub fn write_block(
                AND start_utc >= ?2 AND start_utc < ?3",
             rusqlite::params![
                 LIVE_RECONCILED,
-                from.to_rfc3339_opts(SecondsFormat::Micros, false),
-                to.to_rfc3339_opts(SecondsFormat::Micros, false),
+                instant::python_isoformat_utc(from),
+                instant::python_isoformat_utc(to),
             ],
         )?;
     }
@@ -802,11 +782,8 @@ pub fn tombstoned_block(
     use rusqlite::OptionalExtension;
     Ok(meaning
         .query_row(
-            "SELECT 1 FROM deleted_segments WHERE source_id = ?1 AND start_utc LIKE ?2",
-            rusqlite::params![
-                source,
-                format!("{}%", block_start.format("%Y-%m-%dT%H:%M:%S"))
-            ],
+            "SELECT 1 FROM deleted_segments WHERE source_id = ?1 AND start_utc = ?2",
+            rusqlite::params![source, instant::python_isoformat_utc(block_start)],
             |r| r.get::<_, i64>(0),
         )
         .optional()?
@@ -906,11 +883,8 @@ pub fn write_pass(
         // being examined a few seconds too early.
         let Ok((audio_id, end_raw)) = meaning.query_row(
             "SELECT id, end_utc FROM audio_segments
-             WHERE source_id = ?1 AND start_utc LIKE ?2",
-            rusqlite::params![
-                source,
-                format!("{}%", block_start.format("%Y-%m-%dT%H:%M:%S"))
-            ],
+             WHERE source_id = ?1 AND start_utc = ?2",
+            rusqlite::params![source, instant::python_isoformat_utc(block_start)],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
         ) else {
             pass.barren += 1;
@@ -1002,8 +976,8 @@ fn standing_between(
     let rows = stmt.query_map(
         rusqlite::params![
             crate::room::ROOM_SOURCE,
-            start.to_rfc3339_opts(SecondsFormat::Micros, false),
-            end.to_rfc3339_opts(SecondsFormat::Micros, false),
+            instant::python_isoformat_utc(start),
+            instant::python_isoformat_utc(end),
         ],
         |r| {
             Ok(Standing {
@@ -1029,8 +1003,8 @@ fn corrected_between(
     )?;
     let rows = stmt.query_map(
         rusqlite::params![
-            start.to_rfc3339_opts(SecondsFormat::Micros, false),
-            end.to_rfc3339_opts(SecondsFormat::Micros, false),
+            instant::python_isoformat_utc(start),
+            instant::python_isoformat_utc(end),
         ],
         |r| {
             Ok(Corrected {

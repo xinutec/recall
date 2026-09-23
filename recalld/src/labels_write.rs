@@ -398,7 +398,7 @@ pub async fn correct_route(
     Json(body): Json<CorrectIn>,
 ) -> Response {
     let root = st.root.clone();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
     let applied = tokio::task::spawn_blocking(move || {
         let mut conn = work::open_write(&root)?;
         apply_correction(

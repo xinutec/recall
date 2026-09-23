@@ -387,6 +387,23 @@ pub const MIGRATIONS: &[&str] = &[
     -- grown (#1657).
     ALTER TABLE transcript_segments ADD COLUMN speaker_matched_utc TEXT;
 "#,
+    // v46
+    r#"
+    -- One spelling for every stored instant: `instant_utc`, registered by
+    -- `ensure`. The keys (`audio_segments`, `deleted_segments`) are compared as
+    -- TEXT, so before this a room row's `...:00.000000+00:00` and a mic row's
+    -- `...:00+00:00` needed a LIKE on the second to find each other.
+    UPDATE audio_segments SET start_utc = instant_utc(start_utc), end_utc = instant_utc(end_utc), transcribed_utc = instant_utc(transcribed_utc), pushed_utc = instant_utc(pushed_utc);
+    UPDATE transcript_segments SET start_utc = instant_utc(start_utc), end_utc = instant_utc(end_utc), created_utc = instant_utc(created_utc), speaker_matched_utc = instant_utc(speaker_matched_utc);
+    UPDATE corrections SET start_utc = instant_utc(start_utc), end_utc = instant_utc(end_utc), created_utc = instant_utc(created_utc);
+    UPDATE speaker_embeddings SET created_utc = instant_utc(created_utc);
+    UPDATE refine_requests SET start_utc = instant_utc(start_utc), end_utc = instant_utc(end_utc), created_utc = instant_utc(created_utc), done_utc = instant_utc(done_utc);
+    UPDATE vocabulary SET created_utc = instant_utc(created_utc);
+    UPDATE capture_events SET utc = instant_utc(utc);
+    UPDATE deleted_segments SET start_utc = instant_utc(start_utc), deleted_utc = instant_utc(deleted_utc);
+    UPDATE diarize_skips SET created_utc = instant_utc(created_utc);
+    UPDATE unreadable_captures SET recorded_utc = instant_utc(recorded_utc);
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.
@@ -399,6 +416,7 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
     if have >= want {
         return Ok(());
     }
+    register_instant_utc(conn)?;
     // One transaction per step: a half-applied step must not be recorded, and a
     // step that succeeded must not be undone by a later one failing.
     for (index, statement) in MIGRATIONS.iter().enumerate().skip(have as usize) {
@@ -408,4 +426,26 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
     Ok(())
+}
+
+/// `instant_utc(text)`: the stored instant in [`audiocore::instant::python_isoformat_utc`]'s
+/// spelling, NULL for NULL. A value that is not an instant fails the statement
+/// rather than being kept or guessed at.
+fn register_instant_utc(conn: &Connection) -> rusqlite::Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function(
+        "instant_utc",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let Some(raw) = ctx.get::<Option<String>>(0)? else {
+                return Ok(None);
+            };
+            audiocore::instant::parse_utc(&raw)
+                .map(|t| Some(audiocore::instant::python_isoformat_utc(t)))
+                .ok_or_else(|| {
+                    rusqlite::Error::UserFunctionError(format!("not an instant: {raw}").into())
+                })
+        },
+    )
 }

@@ -43,7 +43,7 @@ axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 # Bundled so the build needs no system sqlite at link time — the same
 # hermeticity reason audiod gives, doubly so inside the Docker build.
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled", "functions"] }
 sha2 = "0.11"
 # The SSO gate's stateless cookie: HMAC-SHA256 over a base64url payload, the same
 # shape the Python mints so one sign-in serves both halves during the port.

@@ -112,3 +112,75 @@ fn a_database_halfway_up_the_ladder_climbs_the_rest() {
     ensure(&from_empty).expect("from empty");
     assert_eq!(schema_of(&conn), schema_of(&from_empty));
 }
+
+/// A database at v45 holding the spellings the archive has: a mic row's whole
+/// second, a room row's `.000000`, a `Z`, nanoseconds, and a local offset.
+fn mixed_spellings() -> rusqlite::Connection {
+    let conn = built_to(45);
+    conn.execute_batch(
+        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'USB', 'mic'), ('room', 'Room', 'derived');
+         INSERT INTO audio_segments (id, source_id, path, start_utc, end_utc, sample_rate, channels) VALUES
+             (1, 'usb', 'a', '2026-09-03T10:00:00+00:00', '2026-09-03T10:01:00.250000+00:00', 16000, 1),
+             (2, 'room', 'b', '2026-09-03T10:00:00.000000+00:00', '2026-09-03T10:01:00.000000+00:00', 16000, 1);
+         INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc, text, asr_model, created_utc) VALUES
+             (1, '2026-09-03T10:00:05Z', '2026-09-03T12:00:07.5+02:00', 'hallo', 'm', '2026-09-22T20:44:37.187123456+00:00');
+         INSERT INTO deleted_segments (source_id, start_utc, deleted_utc) VALUES
+             ('room', '2026-09-03T10:02:00.000000+00:00', '2026-09-03T11:00:00');",
+    )
+    .expect("seed");
+    conn
+}
+
+#[test]
+fn every_stored_instant_is_rewritten_to_the_one_spelling() {
+    let conn = mixed_spellings();
+    ensure(&conn).expect("migrate");
+    let column = |sql: &str| -> Vec<String> {
+        let mut stmt = conn.prepare(sql).expect("prepare");
+        stmt.query_map([], |r| r.get(0))
+            .expect("rows")
+            .collect::<Result<_, _>>()
+            .expect("collect")
+    };
+    assert_eq!(
+        column("SELECT start_utc || ' ' || end_utc FROM audio_segments ORDER BY id"),
+        [
+            "2026-09-03T10:00:00+00:00 2026-09-03T10:01:00.250000+00:00",
+            "2026-09-03T10:00:00+00:00 2026-09-03T10:01:00+00:00",
+        ]
+    );
+    assert_eq!(
+        column("SELECT start_utc || ' ' || end_utc || ' ' || created_utc FROM transcript_segments"),
+        [
+            "2026-09-03T10:00:05+00:00 2026-09-03T10:00:07.500000+00:00 2026-09-22T20:44:37.187123+00:00"
+        ]
+    );
+    assert_eq!(
+        column("SELECT start_utc || ' ' || deleted_utc FROM deleted_segments"),
+        ["2026-09-03T10:02:00+00:00 2026-09-03T11:00:00+00:00"]
+    );
+}
+
+#[test]
+fn a_value_that_is_not_an_instant_stops_the_migration_and_changes_nothing() {
+    let conn = mixed_spellings();
+    conn.execute(
+        "INSERT INTO vocabulary (term, created_utc) VALUES ('x', 'yesterday')",
+        [],
+    )
+    .expect("seed");
+    let refused = ensure(&conn).expect_err("an unreadable instant must not be kept or guessed");
+    assert!(refused.to_string().contains("yesterday"), "{refused}");
+    let version: u32 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .expect("version");
+    assert_eq!(version, 45);
+    let room: String = conn
+        .query_row(
+            "SELECT start_utc FROM audio_segments WHERE id = 2",
+            [],
+            |r| r.get(0),
+        )
+        .expect("room row");
+    assert_eq!(room, "2026-09-03T10:00:00.000000+00:00");
+}

@@ -104,8 +104,9 @@ ledger. `recall.sqlite` is the **meaning plane**: sources, audio segments,
 turns, corrections, speakers and voiceprints, and the FTS index. recalld owns
 both; the schema of the second is a migration ladder
 (`recalld::meaning_schema`), that of the first one `ensure`
-(`recalld::ingest_schema`). Every stored instant is text in one spelling
-(`audiocore::instant`), because instants are compared and ordered as text.
+(`recalld::ingest_schema`). Every instant in the meaning plane is text in one
+spelling (`audiocore::instant`), because instants are compared and ordered as
+text; migration v46 rewrote the rows written before that held.
 
 The Mac keeps its own `recall.sqlite` beside its master archive, written by
 `audiod` (source registration, capture events, segment registration, speech

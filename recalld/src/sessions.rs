@@ -493,7 +493,7 @@ pub async fn delete_route(
     Path(source): Path<String>,
 ) -> Response {
     let root = st.root.clone();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
     let done = tokio::task::spawn_blocking(move || -> Result<(), SessionError> {
         let paths = {
             let mut conn = work::open_write(&root)?;

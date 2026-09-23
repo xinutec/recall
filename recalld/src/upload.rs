@@ -308,17 +308,13 @@ pub fn register(
         rusqlite::params![
             source,
             path.to_string_lossy(),
-            iso(started),
-            iso(end),
+            instant::python_isoformat_utc(started),
+            instant::python_isoformat_utc(end),
             media.sample_rate,
             media.channels,
         ],
     )?;
     Ok(())
-}
-
-fn iso(at: DateTime<Utc>) -> String {
-    instant::python_isoformat(&at.to_rfc3339()).unwrap_or_else(|| at.to_rfc3339())
 }
 
 /// Whether this suffix is worth handing to ffprobe.
@@ -343,8 +339,8 @@ pub fn created_json(source: &str, title: &str, started: DateTime<Utc>, duration_
     pyjson::dump(&serde_json::json!({
         "id": source,
         "title": title,
-        "start": iso(started),
-        "end": iso(end),
+        "start": instant::python_isoformat_utc(started),
+        "end": instant::python_isoformat_utc(end),
         "turnCount": 0,
         "speakers": [],
     }))

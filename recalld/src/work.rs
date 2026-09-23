@@ -5,11 +5,12 @@
 //! `initial_prompt` on every pass; the runner refuses to transcribe without it.
 
 use crate::{reads, route};
+use audiocore::instant;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -123,7 +124,7 @@ pub async fn vocabulary_add_route(
     Json(body): Json<TermIn>,
 ) -> Response {
     let root = st.root.clone();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
     let added =
         tokio::task::spawn_blocking(move || add_term(&open_write(&root)?, &body.term, &now));
     match added.await {
@@ -195,7 +196,7 @@ pub fn ingest_live(
     turns: &[LiveTurn],
     now: DateTime<Utc>,
 ) -> rusqlite::Result<usize> {
-    let delivered = now.to_rfc3339_opts(SecondsFormat::Micros, false);
+    let delivered = instant::python_isoformat_utc(now);
     // ⚠ Read ONCE, not per turn, and read here rather than passed in: the names
     // are the same list the ASR prompt biased the model with, so the refusal and
     // the cause cannot drift apart.
@@ -204,10 +205,10 @@ pub fn ingest_live(
     for turn in turns {
         // The stored spelling, so the presence check and the insert agree. A
         // turn re-spelled on the way in would never match its own earlier copy.
-        let Some(start) = audiocore::instant::python_isoformat(&turn.start) else {
+        let Some(start) = instant::parse_utc(&turn.start).map(instant::python_isoformat_utc) else {
             continue;
         };
-        let Some(end) = audiocore::instant::python_isoformat(&turn.end) else {
+        let Some(end) = instant::parse_utc(&turn.end).map(instant::python_isoformat_utc) else {
             continue;
         };
         if crate::quality::is_repetition_loop(&turn.text)

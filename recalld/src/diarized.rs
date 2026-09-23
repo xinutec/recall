@@ -400,7 +400,7 @@ pub fn reliable_language(language: Option<&str>) -> bool {
 // --- the write ---------------------------------------------------------------
 
 use crate::align::{SpeakerTurn, Word, assign_words_to_speakers};
-use chrono::SecondsFormat;
+use audiocore::instant;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -672,8 +672,8 @@ pub fn apply(
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 audio_segment_id,
-                at(block_start, turn.start).to_rfc3339_opts(SecondsFormat::Micros, false),
-                at(block_start, turn.end).to_rfc3339_opts(SecondsFormat::Micros, false),
+                instant::python_isoformat_utc(at(block_start, turn.start)),
+                instant::python_isoformat_utc(at(block_start, turn.end)),
                 turn.text,
                 language,
                 // A non-household language for the whole block is the model
@@ -820,8 +820,8 @@ pub fn corrections(
     )?;
     let rows = stmt.query_map(
         rusqlite::params![
-            from.to_rfc3339_opts(SecondsFormat::Micros, false),
-            to.to_rfc3339_opts(SecondsFormat::Micros, false)
+            instant::python_isoformat_utc(from),
+            instant::python_isoformat_utc(to)
         ],
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     )?;
@@ -1012,11 +1012,8 @@ pub fn write_pass(
         };
         let Ok((audio_id, end_raw)) = meaning.query_row(
             "SELECT id, end_utc FROM audio_segments
-             WHERE source_id = ?1 AND start_utc LIKE ?2",
-            rusqlite::params![
-                source,
-                format!("{}%", block_start.format("%Y-%m-%dT%H:%M:%S"))
-            ],
+             WHERE source_id = ?1 AND start_utc = ?2",
+            rusqlite::params![source, instant::python_isoformat_utc(block_start)],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
         ) else {
             // Transient — unless the session was deleted, in which case the
