@@ -1,9 +1,7 @@
 //! One device connection end to end, against a stub segmenter: handshake in,
-//! PCM pumped through, liveness marked, both capture events recorded. The
-//! accept/pause loop is deliberately not driven here — it is thin, and its
-//! parts (pause file, handshake bounds) have their own tests.
-
-use crate::common;
+//! PCM pumped through, liveness marked, the registration and both capture
+//! events logged. The accept/pause loop is deliberately not driven here — it is
+//! thin, and its parts (pause file, handshake bounds) have their own tests.
 
 use audiod::segmenter::CaptureConfig;
 use audiod::server::handle_connection;
@@ -38,7 +36,6 @@ fn stub_segmenter(dir: &Path) -> String {
 #[test]
 fn a_connection_lands_audio_liveness_and_evidence() {
     let root = tempfile::tempdir().unwrap();
-    common::create_schema(root.path());
     let config = CaptureConfig {
         program: stub_segmenter(root.path()),
         ..CaptureConfig::default()
@@ -73,25 +70,19 @@ fn a_connection_lands_audio_liveness_and_evidence() {
     // Audible signal refreshed the liveness marker.
     assert!(root.path().join("pixel9/.alive").exists());
 
-    let conn = rusqlite::Connection::open(root.path().join("recall.sqlite")).unwrap();
-    let kind: String = conn
-        .query_row("SELECT kind FROM sources WHERE id = 'pixel9'", [], |r| {
-            r.get(0)
-        })
-        .unwrap();
-    assert_eq!(kind, "tcp_pcm");
-    let events: Vec<(String, Option<String>)> = conn
-        .prepare("SELECT kind, detail FROM capture_events ORDER BY id")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[0].0, "ingest_connect");
-    assert_eq!(events[1].0, "ingest_disconnect");
+    let events = audiocore::capture_log::read(root.path()).unwrap();
+    let kinds: Vec<(&str, Option<&str>)> = events
+        .iter()
+        .map(|e| (e.kind.as_str(), e.detail.as_deref()))
+        .collect();
+    assert_eq!(
+        kinds[..2],
+        [("register", Some("tcp_pcm")), ("ingest_connect", None)]
+    );
+    assert_eq!(kinds.len(), 3);
+    assert_eq!(kinds[2].0, "ingest_disconnect");
     // The disconnect record carries what the device actually sent.
-    let stats: serde_json::Value = serde_json::from_str(events[1].1.as_deref().unwrap()).unwrap();
+    let stats: serde_json::Value = serde_json::from_str(kinds[2].1.unwrap()).unwrap();
     assert_eq!(stats["bytes"], 8);
     assert_eq!(stats["ended"], "device disconnected");
     assert!(stats["peak_db"].as_f64().unwrap() < 0.0);
@@ -100,7 +91,6 @@ fn a_connection_lands_audio_liveness_and_evidence() {
 #[test]
 fn a_malformed_handshake_leaves_no_trace() {
     let root = tempfile::tempdir().unwrap();
-    common::create_schema(root.path());
     let config = CaptureConfig::default();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -110,9 +100,9 @@ fn a_malformed_handshake_leaves_no_trace() {
     drop(client);
     let dropped = AtomicBool::new(false);
     handle_connection(&server_side, root.path(), &config, &dropped);
-    let conn = rusqlite::Connection::open(root.path().join("recall.sqlite")).unwrap();
-    let events: i64 = conn
-        .query_row("SELECT count(*) FROM capture_events", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(events, 0);
+    assert!(
+        audiocore::capture_log::read(root.path())
+            .unwrap()
+            .is_empty()
+    );
 }

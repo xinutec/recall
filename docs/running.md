@@ -1,7 +1,7 @@
 # Running recall
 
-Everything operational is a Rust binary: `audiod` (capture, ingest, upload, the
-speech scan), `recalld` (the fleet daemon), `doctor`, `runner` and `recall-live`,
+Everything operational is a Rust binary: `audiod` (capture, ingest, upload),
+`recalld` (the fleet daemon), `doctor`, `runner` and `recall-live`,
 `recall-cli`. The Python is the model floor, each piece its own module:
 
 ```sh
@@ -31,7 +31,6 @@ in `~/Library/Logs/recall/<agent>.{out,err}.log`; `recall-logrotate` caps them.
 | `recall-live` | the tap → speech detection → transcribe what was just said → `POST /sync/live` |
 | `recall-runner` | leases `transcribe-*` jobs, drives the `asr` shim, pushes the result |
 | `recall-voices` | leases `diarize-segment` and `enroll-speaker`, drives the `voices` shim |
-| `recall-speech` | measures speech seconds per archived segment, in the Mac's own database |
 | `recall-doctor` | the health checks, every five minutes, reported to fleetwatch |
 | `recall-beat-relay` | accepts a mic app's heartbeat on the LAN (port 8000) and forwards it to Isis |
 | `recall-llm-host` | holds the LLM on `127.0.0.1:8092` for `life`'s emotion worker; recall asks it nothing |
@@ -41,24 +40,19 @@ repository's `.env`: a launchd agent cannot touch `/Volumes/Backup`, and its
 first touch can hang the agent rather than fail it. Keep the two files in step
 by hand. `recall-upload` needs `RECALL_INGEST_TOKEN`; the mirror, the runners
 and the doctor need `RECALL_SYNC_TOKEN`; the doctor also needs the fleetwatch
-token; `recall-speech` needs none.
+token.
 
 ### The doctor runs itself twice
 
 `doctor` starts a child (`--collect`) that does every read of the archive
-volume and prints its checks as JSON; the parent reports them, touching only
-launchd, `~/.config` and one bounded read of Isis. If the child does not answer
+volume (the capture log, the segment files, the uploader's receipts) and prints
+its checks as JSON; the parent reports them, touching only launchd,
+`~/.config` and bounded reads of Isis for the live tier and each microphone's
+speech. If the child does not answer
 in 60 s the parent abandons it and reports `archive answers: no answer`, naming
 the pid and its process state on stderr. An abandoned child in `U` state cannot
 be killed; it exits when the volume does. The stalls come from another writer
 on the same volume, which holds every repository's build output (#1412).
-
-### Speech is measured on the Mac too
-
-`recall-speech` runs the same detector recalld runs, on the Mac's copy, because
-removing audio from the master archive is a Mac-local act and its guard must
-not depend on the fleet being reachable. A pass in which every file fails
-writes nothing: that is the instrument, not the audio.
 
 ### The runner leaves a pulse
 

@@ -139,30 +139,6 @@ let
       '';
     };
 
-  # The speech scanner (audiod speech). Needs TWO things on top of the plain
-  # audiod wrapper, and both were learnt by the scanner failing without them:
-  #
-  #   ffmpeg  — audiocore's decode shells out to it, so without it EVERY segment
-  #             "fails to decode". agent-tools carries it.
-  #   ORT_DYLIB_PATH — ort dlopens the ONNX runtime by name, and macOS has no
-  #             system libonnxruntime at all. Taken from RECALL's nixpkgs, which
-  #             is the one the test suite runs silero through; naming the
-  #             host's would hand the agent a runtime nothing here has tested.
-  speechWrapper = { name, args }:
-    pkgs.writeShellApplication {
-      name = "recall-${name}";
-      runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
-      text = ''
-        exec env RUST_LOG=info \
-          ORT_DYLIB_PATH=${
-            recall.packages.${pkgs.stdenv.hostPlatform.system}.onnxruntime
-          }/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary} \
-          ${
-            recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
-          }/bin/audiod ${lib.escapeShellArgs args}
-      '';
-    };
-
   # A KeepAlive recall daemon at background priority. `extra` adds per-agent keys.
   # `program` overrides the python wrapper for agents that are not `recall <args>`.
   daemon = { label, name, python ? venvPython, args, extra ? { }, program ? null, module ? "recall" }:
@@ -227,18 +203,6 @@ in
     };
   };
 
-  # ⚠ **`recall-worker` WAS HERE and is gone (#1538).** It indexed and
-  # transcribed the Mac's own segments; `runner` now leases `transcribe-segment`
-  # from Isis and drives the same shim with the same model, and recalld's
-  # `turns::PER_MIC` pass writes the turns, including the live reconciliation.
-  #
-  # Nothing replaced its SCAN: it also discovered new source directories and
-  # cleared dead-capture stubs. `audiod capture` registers its own source and
-  # the ingest plane is authoritative for what exists, so the scan had no
-  # remaining reader — but if a phantom source or an uncleared stub shows up,
-  # that is where it came from.
-
-
   # The one process on this Mac that holds the LLM weights (src/recall/llmhost.py).
   # recall's summaries/Ask and life's emotion worker are clients over 127.0.0.1:8092;
   # neither loads a model of its own, so the ~4.3 GB is paid once and released after
@@ -285,9 +249,10 @@ in
           set +a
         fi
 
-        # ORT_DYLIB_PATH for the same reason speechWrapper sets it: ort dlopens
-        # the ONNX runtime by name and macOS has no system libonnxruntime, so
-        # without this the detector never loads and the agent exits at once.
+        # ORT_DYLIB_PATH: ort dlopens the ONNX runtime by name and macOS has no
+        # system libonnxruntime, so without this the detector never loads and
+        # the agent exits at once. Taken from recall's nixpkgs, the one the test
+        # suite runs silero through.
         exec env RUST_LOG=info \
           ORT_DYLIB_PATH=${
             recall.packages.${pkgs.stdenv.hostPlatform.system}.onnxruntime
@@ -389,23 +354,6 @@ in
       StartInterval = 3600;
       LowPriorityIO = true;
       Nice = 15;
-    };
-  };
-
-  launchd.agents."org.xinutec.recall-speech" = daemon {
-    label = "org.xinutec.recall-speech";
-    name = "speech";
-    args = [ ];
-    program = speechWrapper {
-      name = "speech";
-      args = [ "speech" "--root" out "--max" "120" ];
-    };
-    extra = {
-      KeepAlive = false;
-      RunAtLoad = true;
-      StartInterval = 300;
-      LowPriorityIO = true;
-      Nice = 10;
     };
   };
 

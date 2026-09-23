@@ -48,7 +48,8 @@ use crate::check::{Check, Verdict, check};
 /// `:00` while usb, oneplus6t and pixel5 cut theirs at `:57`–`:58`. Bucketing by
 /// clock minute would have compared segments overlapping by two seconds and
 /// called it the same minute. Speech per second DELIVERED needs no alignment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Heard {
     pub source: String,
     /// Seconds of audio this source delivered inside the window.
@@ -82,6 +83,18 @@ impl Heard {
     pub fn comparable(&self) -> bool {
         self.delivered_s >= MIN_DELIVERED_S
     }
+}
+
+/// How far back the deaf-microphone comparison looks.
+///
+/// ⚠ **A long window hides the thing it is looking for.** The comparison only
+/// speaks when peers heard a CONVERSATION, and a rate averaged over a night of
+/// sleep falls below that: measured on the real archive, the same microphones
+/// read 31-40 s/min over the fifteen minutes of an actual conversation and
+/// 9-10 s/min once eight hours of quiet were folded in. Half an hour is long
+/// enough to contain talking and short enough not to dilute it away.
+pub fn window() -> chrono::Duration {
+    chrono::Duration::minutes(30)
 }
 
 /// Speech per minute at which a source is judged to have heard a conversation.
@@ -125,6 +138,11 @@ pub const MIN_PEERS: usize = 2;
 /// ⚠ It still refuses half a segment — a source cut off by a pause or starting
 /// mid-minute is genuinely too little to convict on, and a test pins that.
 pub const MIN_DELIVERED_S: f64 = 55.0;
+
+/// ⚠ Stable across runs: the culprit belongs in `observed`, never here, or the
+/// trend restarts whenever a different microphone fails.
+const LABEL: &str = "no microphone is deaf while the others hear speech";
+const EXPECTED: &str = "every delivering source hears what its peers hear";
 
 /// Name the sources that delivered audio containing no speech while at least
 /// [`MIN_PEERS`] others heard a conversation over the same minutes.
@@ -189,78 +207,50 @@ pub fn deaf_check(heard: &[Heard]) -> Check {
     };
 
     let deaf_count = deaf_sources(heard).len();
-    check(
-        "archive",
-        // ⚠ Stable across runs: the culprit belongs in `observed`, never here,
-        // or the trend restarts whenever a different microphone fails.
-        "no microphone is deaf while the others hear speech",
-        verdict,
-        observed,
-        "every delivering source hears what its peers hear",
-    )
-    .trend(deaf_count as f64, "sources")
-    .build()
+    check("archive", LABEL, verdict, observed, EXPECTED)
+        .trend(deaf_count as f64, "sources")
+        .build()
 }
 
-/// Read what each device source delivered and heard since `since`.
+/// Ask the fleet what each device source delivered and heard over `window` to
+/// `now`. The fleet holds every recorder's audio and its speech measurement, so
+/// the comparison covers the microphones that never pass through this Mac too.
 ///
-/// ⚠ Only segments the speech scanner has MEASURED (`speech_s IS NOT NULL`)
-/// count, on both sides of the ratio. An unmeasured segment is unknown, not
-/// silent, and counting its duration as delivered while its speech reads zero
-/// would manufacture a deaf source out of a scanner that has not caught up.
-pub fn heard_between(
-    conn: &rusqlite::Connection,
-    sources: &[(String, crate::source::SourceKind)],
-    since: chrono::DateTime<chrono::Utc>,
-    until: chrono::DateTime<chrono::Utc>,
-) -> rusqlite::Result<Vec<Heard>> {
-    let mut out = Vec::new();
-    for (source, kind) in sources {
-        if !kind.is_device() {
-            continue;
-        }
-        let mut stmt = conn.prepare(
-            "SELECT start_utc, end_utc, speech_s FROM audio_segments
-             WHERE source_id = ?1 AND start_utc >= ?2 AND start_utc < ?3
-               AND speech_s IS NOT NULL",
-        )?;
-        let rows = stmt
-            .query_map(
-                rusqlite::params![
-                    source,
-                    audiocore::instant::python_isoformat_utc(since),
-                    audiocore::instant::python_isoformat_utc(until)
-                ],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, f64>(2)?,
-                    ))
-                },
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+/// # Errors
+/// The message is meant to be read in a skip line, so it names what failed.
+pub fn fetch(
+    fleet: &crate::live::Fleet,
+    now: chrono::DateTime<chrono::Utc>,
+    window: chrono::Duration,
+) -> Result<Vec<Heard>, String> {
+    crate::live::get(fleet, "/sync/heard")
+        .query(
+            "since",
+            &audiocore::instant::python_isoformat_utc(now - window),
+        )
+        .query("until", &audiocore::instant::python_isoformat_utc(now))
+        .call()
+        .map_err(crate::live::describe)?
+        .into_json::<Vec<Heard>>()
+        .map_err(|e| format!("the fleet's answer did not parse ({e})"))
+}
 
-        let mut delivered = 0.0;
-        let mut speech = 0.0;
-        for (start, end, speech_s) in rows {
-            let (Some(start), Some(end)) = (
-                audiocore::instant::parse_utc(&start),
-                audiocore::instant::parse_utc(&end),
-            ) else {
-                continue;
-            };
-            let span = (end - start).num_milliseconds() as f64 / 1000.0;
-            if span <= 0.0 {
-                continue;
-            }
-            delivered += span;
-            speech += speech_s;
-        }
-        if delivered > 0.0 {
-            out.push(Heard::new(source, delivered, speech));
-        }
+/// [`deaf_check`] on whatever the fleet said; a fleet that could not be asked
+/// SKIPS naming why, since the delivery checks are what go red for a down link.
+#[must_use]
+pub fn deaf_check_from(fetched: &Result<Vec<Heard>, String>) -> Check {
+    match fetched {
+        Ok(heard) => deaf_check(heard),
+        Err(why) => skipped(why),
     }
-    out.sort_by(|a, b| a.source.cmp(&b.source));
-    Ok(out)
+}
+
+/// The check when there is no fleet to ask.
+#[must_use]
+pub fn unconfigured() -> Check {
+    skipped("no fleet configured — pass --fleet and set RECALL_SYNC_TOKEN")
+}
+
+fn skipped(why: &str) -> Check {
+    check("archive", LABEL, Verdict::Skip, why.to_owned(), EXPECTED).build()
 }

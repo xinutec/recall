@@ -7,6 +7,7 @@
 //! it lives here rather than beside a caller.
 
 pub mod align;
+pub mod capture_log;
 pub mod decode;
 pub mod envelope;
 pub mod instant;

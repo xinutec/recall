@@ -108,10 +108,13 @@ both; the schema of the second is a migration ladder
 spelling (`audiocore::instant`), because instants are compared and ordered as
 text; migration v46 rewrote the rows written before that held.
 
-The Mac keeps its own `recall.sqlite` beside its master archive, written by
-`audiod` (source registration, capture events, segment registration, speech
-seconds) and read by the doctor. It has no schema owner; a new column reaches
-the fleet and not the Mac.
+A recording machine keeps no database of meaning. Beside its segments,
+`audiod` appends the capture log (`capture-events.jsonl`, the format in
+`audiocore::capture_log`): each source registering and its kind, phones
+connecting and dropping, pauses and resumes. The doctor reads that log and the
+files; what the fleet measures (speech per microphone, the live tier) it asks
+the fleet for. The Mac's old `recall.sqlite` is retired as an archive, read
+only by the doctor's volume probe.
 
 ## Recorders
 

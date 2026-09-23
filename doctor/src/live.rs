@@ -17,7 +17,7 @@
 
 use crate::capture::{self, WindowAudio};
 use crate::check::{Check, Verdict, check};
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, Utc};
 
 /// Below this the sample is not a distribution and gets no verdict. A check
 /// that grades three turns reports noise as a regression.
@@ -64,8 +64,24 @@ pub struct LiveHealth {
 /// checks that would have said the archive was fine.
 const TIMEOUT_S: u64 = 10;
 
-fn stamp(when: DateTime<Utc>) -> String {
-    when.to_rfc3339_opts(SecondsFormat::Micros, false)
+/// A bounded, authenticated GET of `path` on the fleet.
+///
+/// ⚠ Callers add the window with `.query` rather than a formatted URL: an
+/// RFC3339 stamp ends in `+00:00` and a raw `+` arrives at the other end as a
+/// SPACE, so the fleet would parse a different instant than the one asked about.
+pub fn get(fleet: &Fleet, path: &str) -> ureq::Request {
+    ureq::get(&format!("{}{path}", fleet.url))
+        .set("Authorization", &format!("Bearer {}", fleet.token))
+        .timeout(std::time::Duration::from_secs(TIMEOUT_S))
+}
+
+/// A failed fleet request, as a skip line reads it.
+#[must_use]
+pub fn describe(err: ureq::Error) -> String {
+    match err {
+        ureq::Error::Status(code, _) => format!("the fleet answered {code}"),
+        ureq::Error::Transport(t) => format!("cannot reach the fleet ({t})"),
+    }
 }
 
 /// Ask the fleet for the numbers, over the windows this grader uses.
@@ -78,21 +94,21 @@ pub fn fetch(
     now: DateTime<Utc>,
     lag_window: Duration,
 ) -> Result<LiveHealth, String> {
-    // ⚠ `.query` rather than a formatted URL: an RFC3339 stamp ends in `+00:00`
-    // and a raw `+` arrives at the other end as a SPACE, so the fleet would
-    // parse a different instant than the one asked about — quietly, and only
-    // for windows, which is the hardest kind of wrong to notice.
-    ureq::get(&format!("{}/sync/live/health", fleet.url))
-        .set("Authorization", &format!("Bearer {}", fleet.token))
-        .timeout(std::time::Duration::from_secs(TIMEOUT_S))
-        .query("lag_since", &stamp(now - lag_window))
-        .query("window_since", &stamp(now - capture::live_quiet()))
-        .query("window_until", &stamp(now))
+    get(fleet, "/sync/live/health")
+        .query(
+            "lag_since",
+            &audiocore::instant::python_isoformat_utc(now - lag_window),
+        )
+        .query(
+            "window_since",
+            &audiocore::instant::python_isoformat_utc(now - capture::live_quiet()),
+        )
+        .query(
+            "window_until",
+            &audiocore::instant::python_isoformat_utc(now),
+        )
         .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(code, _) => format!("the fleet answered {code}"),
-            ureq::Error::Transport(t) => format!("cannot reach the fleet ({t})"),
-        })?
+        .map_err(describe)?
         .into_json::<LiveHealth>()
         .map_err(|e| format!("the fleet's answer did not parse ({e})"))
 }

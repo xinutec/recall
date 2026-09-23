@@ -8,7 +8,6 @@ use chrono::{DateTime, Duration, Utc};
 use doctor::check::Verdict;
 use doctor::loss::{Event, Gap, PAUSE, RESUME, active_spans, loss_checks, uncovered_loss};
 use doctor::source::SourceKind;
-use std::collections::BTreeMap;
 
 fn at(minute: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_757_000_000 + minute * 60, 0).unwrap()
@@ -145,12 +144,7 @@ fn a_phone_warns_where_the_wired_mic_fails() {
         ("usb".to_owned(), SourceKind::CoreAudio),
         ("pixel9".to_owned(), SourceKind::TcpPcm),
     ];
-    let checks = loss_checks(
-        std::slice::from_ref(&gap),
-        &BTreeMap::new(),
-        &sources,
-        Duration::hours(48),
-    );
+    let checks = loss_checks(std::slice::from_ref(&gap), &sources, Duration::hours(48));
     let usb = checks
         .iter()
         .find(|c| c.label == "speech-loss:usb")
@@ -161,12 +155,7 @@ fn a_phone_warns_where_the_wired_mic_fails() {
         source_id: "pixel9".to_owned(),
         ..gap
     };
-    let checks = loss_checks(
-        &[phone_gap],
-        &BTreeMap::new(),
-        &sources,
-        Duration::hours(48),
-    );
+    let checks = loss_checks(&[phone_gap], &sources, Duration::hours(48));
     let phone = checks
         .iter()
         .find(|c| c.label == "speech-loss:pixel9")
@@ -186,7 +175,7 @@ fn loss_on_an_unregistered_source_gets_its_own_line() {
         start: at(0),
         end: at(30),
     };
-    let checks = loss_checks(&[gap], &BTreeMap::new(), &[], Duration::hours(48));
+    let checks = loss_checks(&[gap], &[], Duration::hours(48));
     let ghost = checks
         .iter()
         .find(|c| c.label == "speech-loss:ghost")
@@ -197,7 +186,7 @@ fn loss_on_an_unregistered_source_gets_its_own_line() {
 #[test]
 fn a_clean_window_says_so_per_device_and_once_overall() {
     let sources = [("usb".to_owned(), SourceKind::CoreAudio)];
-    let checks = loss_checks(&[], &BTreeMap::new(), &sources, Duration::hours(48));
+    let checks = loss_checks(&[], &sources, Duration::hours(48));
     assert_eq!(checks.len(), 2);
     assert!(checks.iter().all(|c| c.verdict == Verdict::Pass));
     assert_eq!(checks[1].observed, "no unexplained loss in 48h");
@@ -229,18 +218,4 @@ fn a_repeated_resume_does_not_reopen_an_already_open_span() {
     let spans = active_spans(&[event(RESUME, 10), event(RESUME, 20)], at(100));
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].start, at(10));
-}
-
-#[test]
-fn a_dead_window_the_archive_cannot_attribute_still_gets_a_line() {
-    // Loss it cannot name is still loss; it must not vanish into the roll-up.
-    let mut dead = BTreeMap::new();
-    dead.insert("unattributed".to_owned(), 4);
-    let checks = loss_checks(&[], &dead, &[], Duration::hours(48));
-    let unattributed = checks
-        .iter()
-        .find(|c| c.label == "speech-loss:unattributed")
-        .unwrap();
-    assert_eq!(unattributed.verdict, Verdict::Fail);
-    assert!(unattributed.observed.contains("4 dead-window(s)"));
 }

@@ -79,24 +79,19 @@ The web app in `frontend/` is Angular 22, kept on the most modern footing:
 
 ## Reading the real archive
 
-⚠ **`Store.open()` RUNS MIGRATIONS. It is not a read.**
-
-On 2026-09-06 a harness written to *read* `/Volumes/Backup/recall/recall.sqlite`
-called `Store.open()` on it and silently migrated production to a new schema,
-while the deployed agents still ran the previous revision. The doctor's archive
-check failed for hours on `no such table: sweep_refusals`, and the skew was
-primed to widen — the deployed code referenced five tables the new migrations
-drop, so the next working-tree command would have taken four more out from under
-running agents.
+⚠ **Opening a database through recalld migrates it.** `store::open` creates the
+ingest tables and `meaning_schema::ensure` climbs the ladder, so a harness that
+goes through them to *read* production changes production under the agents
+still running the previous revision.
 
 So, for anything that only needs to look:
 
-- open read-only — `sqlite3.connect("file:...?mode=ro", uri=True)` — not `Store`;
+- open read-only (`sqlite3 -readonly`, `OpenFlags::SQLITE_OPEN_READ_ONLY`);
 - to compare implementations or test a migration, work on a **snapshot**
-  (`sqlite3.backup()`), never the live file. Four daemons write that database, so
-  a moving target cannot be diffed either way;
-- if a migration must be exercised, run it against a `.backup` copy and check the
-  row counts of everything human-authored before believing it.
+  (`.backup`), never the live file: several daemons write it, so a moving
+  target cannot be diffed either way;
+- after exercising a migration on the copy, check the row counts of everything
+  human-authored before believing it.
 
 ## Verify cycle
 

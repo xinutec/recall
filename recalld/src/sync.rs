@@ -11,9 +11,9 @@
 //! same string on both ends. It is not the browsing plane's cookie and grants
 //! none of it; the caller is a daemon and carries no session.
 //!
-//! Four routes, four callers: the capture handshake (audiod's mirror), the
-//! vocabulary prompt (the runner), the instant feed (recall-live) and the live
-//! tier's numbers (the doctor).
+//! Five routes: the capture handshake (audiod's mirror), the vocabulary prompt
+//! (the runner), the instant feed (recall-live), and the live tier's numbers and
+//! the microphones' speech (both for the doctor).
 
 use axum::Router;
 use axum::extract::{Query, State};
@@ -279,6 +279,40 @@ pub async fn live_health_route(
     .await
 }
 
+/// The window `GET /sync/heard` measures.
+#[derive(Deserialize)]
+pub struct HeardQuery {
+    pub since: String,
+    pub until: String,
+}
+
+/// `GET /sync/heard` — per device source, the audio delivered and the speech in
+/// it, for the doctor's deaf-microphone check. Numbers only, like
+/// [`live_health_route`].
+pub async fn heard_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<HeardQuery>,
+) -> Response {
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Err(refusal) = check(bearer(presented), &st.expected) {
+        return refusal.into_response();
+    }
+    let (Some(since), Some(until)) = (
+        audiocore::instant::parse_utc(&q.since),
+        audiocore::instant::parse_utc(&q.until),
+    ) else {
+        return (StatusCode::BAD_REQUEST, "unparseable window bound").into_response();
+    };
+    let root = st.root.clone();
+    crate::route::json("sync heard", move || {
+        crate::live_tier::heard(&root, since, until)
+    })
+    .await
+}
+
 /// A batch of provisional live turns from the Mac.
 #[derive(Deserialize)]
 pub struct LiveTurnsIn {
@@ -338,5 +372,6 @@ pub fn routes(gate: Arc<Gate>) -> Router {
         )
         .route("/sync/live", post(live_route))
         .route("/sync/live/health", axum::routing::get(live_health_route))
+        .route("/sync/heard", axum::routing::get(heard_route))
         .with_state(gate)
 }

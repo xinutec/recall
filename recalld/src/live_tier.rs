@@ -82,7 +82,7 @@ pub fn live_health(
     let clips = window_clips(&meaning, &window_since, &window_until)?;
     drop(meaning);
 
-    let names: Vec<&str> = clips.iter().map(|(name, _)| name.as_str()).collect();
+    let names: Vec<&str> = clips.iter().map(|clip| clip.filename.as_str()).collect();
     let speech = speech_seconds(&store::open(root)?, &names)?;
     let mut out = LiveHealth {
         lag_median_s: median(lags.clone()),
@@ -92,14 +92,61 @@ pub fn live_health(
         scanned_s: 0.0,
         speech_s: 0.0,
     };
-    for (filename, seconds) in clips {
-        out.delivered_s += seconds;
-        if let Some(measured) = speech.get(&filename) {
-            out.scanned_s += seconds;
+    for clip in clips {
+        out.delivered_s += clip.seconds;
+        if let Some(measured) = speech.get(&clip.filename) {
+            out.scanned_s += clip.seconds;
             out.speech_s += measured;
         }
     }
     Ok(out)
+}
+
+/// What one device source delivered and heard in a window.
+///
+/// ⚠ **Only MEASURED clips count, on both sides of the ratio.** An unmeasured
+/// clip is unknown, not silent; counting its length as delivered while its
+/// speech reads zero would make a deaf microphone out of a scanner that has not
+/// caught up.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Heard {
+    pub source: String,
+    pub delivered_s: f64,
+    pub speech_s: f64,
+}
+
+/// Per device source, what the doctor's deaf check compares: sources that
+/// delivered no measured audio are left out, in source order.
+///
+/// # Errors
+/// If either plane refuses the read.
+pub fn heard(
+    root: &Path,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> rusqlite::Result<Vec<Heard>> {
+    let clips = window_clips(
+        &crate::reads::open(root)?,
+        &audiocore::instant::python_isoformat_utc(since),
+        &audiocore::instant::python_isoformat_utc(until),
+    )?;
+    let names: Vec<&str> = clips.iter().map(|clip| clip.filename.as_str()).collect();
+    let speech = speech_seconds(&store::open(root)?, &names)?;
+    let mut by_source: std::collections::BTreeMap<&str, Heard> = std::collections::BTreeMap::new();
+    for clip in &clips {
+        let Some(measured) = speech.get(&clip.filename) else {
+            continue;
+        };
+        let entry = by_source.entry(&clip.source).or_insert_with(|| Heard {
+            source: clip.source.clone(),
+            delivered_s: 0.0,
+            speech_s: 0.0,
+        });
+        entry.delivered_s += clip.seconds;
+        entry.speech_s += measured;
+    }
+    Ok(by_source.into_values().collect())
 }
 
 /// Seconds between each recent live turn's end and the moment it was stored.
@@ -134,6 +181,13 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
     Some(values[values.len() / 2])
 }
 
+/// A device clip that started inside the window.
+struct Clip {
+    source: String,
+    filename: String,
+    seconds: f64,
+}
+
 /// Each device clip that started inside the window, and how long it ran.
 ///
 /// ⚠ **Which sources count is [`crate::sources::SourceKind::is_device`]'s to
@@ -141,11 +195,7 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
 /// answer to "is there a recorder behind this" — an imported meeting and the
 /// derived room stream are both sources with no microphone, and counting
 /// either as delivered audio says the room was busy when a file was uploaded.
-fn window_clips(
-    conn: &Connection,
-    since: &str,
-    until: &str,
-) -> rusqlite::Result<Vec<(String, f64)>> {
+fn window_clips(conn: &Connection, since: &str, until: &str) -> rusqlite::Result<Vec<Clip>> {
     let devices: Vec<String> = crate::sources::source_rows(conn)?
         .into_iter()
         .filter(|row| row.kind.is_device())
@@ -158,7 +208,7 @@ fn window_clips(
     )?;
     let mut out = Vec::new();
     for source in devices {
-        let rows = stmt.query_map(rusqlite::params![source, since, until], |row| {
+        let rows = stmt.query_map(rusqlite::params![&source, since, until], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -175,7 +225,11 @@ fn window_clips(
             };
             let seconds = (end - start).num_milliseconds() as f64 / 1000.0;
             if seconds > 0.0 {
-                out.push((basename(&path), seconds));
+                out.push(Clip {
+                    source: source.clone(),
+                    filename: basename(&path),
+                    seconds,
+                });
             }
         }
     }

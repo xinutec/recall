@@ -12,12 +12,12 @@
 //! `KeepAlive = false` and a 300s `StartInterval`, launchd starts no further run
 //! while one is stuck, so a single wedged doctor silenced every doctor after it.
 //! What runs in the parent reads launchd and `~/.config`, both on the boot
-//! disk, plus one bounded network read: the live tier's output is on the fleet,
-//! not on this volume ([`live`]).
+//! disk, plus bounded network reads for what is on the fleet rather than this
+//! volume: the live tier's output ([`live`]) and every microphone's speech
+//! ([`deaf`]).
 
 pub mod agents;
 pub mod archive;
-pub mod blanked;
 pub mod bounded;
 pub mod capture;
 pub mod check;

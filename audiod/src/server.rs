@@ -8,11 +8,11 @@
 //! refreshed only while real signal arrives), so there is no separate
 //! heartbeat — and no way for a silent stream to read as recording.
 
+use crate::events;
 use crate::meter::{SILENCE_PEAK, StreamMeter};
 use crate::pause;
 use crate::rebase::{connection_offset, rebase_segment_names};
 use crate::segmenter::{CaptureConfig, build_segment_argv, segment_output_pattern};
-use crate::store;
 use crate::wire::{Handshake, HandshakeError, read_handshake};
 use audiocore::names::segment_glob;
 use chrono::{DateTime, Utc};
@@ -236,7 +236,7 @@ fn serve_stream(
     handshake: &Handshake,
 ) {
     let source_id = handshake.source_id.as_str();
-    store::register_source(root, source_id);
+    events::register(root, source_id, "tcp_pcm");
     let out_dir = root.join(source_id);
     if let Err(err) = std::fs::create_dir_all(&out_dir) {
         tracing::error!(source = source_id, error = %err, "ingest: cannot create source directory");
@@ -249,13 +249,7 @@ fn serve_stream(
     };
     let pattern = segment_output_pattern(root, source_id, seg.codec.container_ext());
     tracing::info!(source = source_id, "ingest: connected");
-    store::add_capture_event(
-        root,
-        store::KIND_INGEST_CONNECT,
-        Utc::now(),
-        source_id,
-        None,
-    );
+    events::record(root, events::INGEST_CONNECT, source_id, None);
     let connected = SystemTime::now();
     let mut meter = StreamMeter::new(handshake.sample_rate, handshake.channels);
     let mut child = match std::process::Command::new(&seg.program)
@@ -308,13 +302,7 @@ fn serve_stream(
         "ended": ended,
     })
     .to_string();
-    store::add_capture_event(
-        root,
-        store::KIND_INGEST_DISCONNECT,
-        Utc::now(),
-        source_id,
-        Some(&stats),
-    );
+    events::record(root, events::INGEST_DISCONNECT, source_id, Some(&stats));
     tracing::info!(source = source_id, stats = %stats, "ingest: disconnected");
 }
 

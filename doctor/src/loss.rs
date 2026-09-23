@@ -2,8 +2,8 @@
 //! speech.
 //!
 //! A hole in the always-on mic's coverage is benign only when capture was
-//! deliberately paused across it. The durable pause/resume events
-//! (`capture_events`) say when capture was *meant* to be recording: each resume
+//! deliberately paused across it. The pause/resume events in the capture log
+//! ([`audiocore::capture_log`]) say when capture was *meant* to be recording: each resume
 //! opens an active span, the next pause closes it. Any part of an active span
 //! not covered by recorded audio is capture running but producing nothing —
 //! UNEXPLAINED, i.e. silently lost, unrecoverable speech. Judged as coverage of
@@ -21,14 +21,9 @@ use crate::source::SourceKind;
 use chrono::{DateTime, Duration, Utc};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Durable capture-lifecycle event kinds. A closed taxonomy: a typo'd kind
-/// would be written and then silently never match here, which is exactly the
-/// check that must not fail quietly.
-pub const PAUSE: &str = "pause";
-pub const RESUME: &str = "resume";
-pub const DEAD_WINDOW: &str = "dead_window";
+pub use audiocore::capture_log::{PAUSE, RESUME};
 
-/// The slice of a stored capture event the reconciler reads.
+/// The slice of a logged capture event the reconciler reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
     pub utc: DateTime<Utc>,
@@ -108,10 +103,8 @@ fn merged(intervals: &[(DateTime<Utc>, DateTime<Utc>)]) -> Vec<(DateTime<Utc>, D
 /// total loss this check exists for. `min_loss` absorbs boundary slop (a first
 /// segment starting a beat after the resume, a pause recorded a beat after the
 /// last segment; the sub-second seams between adjacent segments fall out the
-/// same way). `settle` excludes the trailing stretch the indexer cannot have
-/// caught up with yet — the newest audio is an in-progress segment plus the
-/// worker's min-age guard, so a running capture's last few minutes are always
-/// uncovered in the store and must never read as loss.
+/// same way). `settle` excludes the trailing stretch where the newest segment
+/// is still being written, which must never read as loss.
 pub fn uncovered_loss(
     intervals: &[(DateTime<Utc>, DateTime<Utc>)],
     events: &[Event],
@@ -156,18 +149,8 @@ pub fn uncovered_loss(
 
 const LOSS_EXPECTED: &str = "every gap explained by a deliberate pause";
 
-fn loss_summary(gaps: usize, lost: Duration, dead: usize) -> String {
-    let mut parts = Vec::new();
-    if gaps > 0 {
-        parts.push(format!(
-            "{gaps} unexplained gap(s) totalling {} min",
-            minutes(lost)
-        ));
-    }
-    if dead > 0 {
-        parts.push(format!("{dead} dead-window(s)"));
-    }
-    parts.join(", ")
+fn loss_summary(gaps: usize, lost: Duration) -> String {
+    format!("{gaps} unexplained gap(s) totalling {} min", minutes(lost))
 }
 
 /// How loudly to say that this microphone lost speech.
@@ -201,7 +184,6 @@ fn loss_verdict(kind: Option<SourceKind>) -> Verdict {
 /// bare `source_id` is already taken by the per-mic recording checks.
 pub fn loss_checks(
     losses: &[Gap],
-    dead_windows: &BTreeMap<String, usize>,
     sources: &[(String, SourceKind)],
     window: Duration,
 ) -> Vec<Check> {
@@ -223,7 +205,6 @@ pub fn loss_checks(
     let source_ids: BTreeSet<&str> = kinds
         .keys()
         .copied()
-        .chain(dead_windows.keys().map(String::as_str))
         .chain(gaps_by_source.keys().copied())
         .collect();
 
@@ -233,15 +214,14 @@ pub fn loss_checks(
 
     for source_id in source_ids {
         let gaps = gaps_by_source.get(source_id).map_or(&[][..], Vec::as_slice);
-        let dead = dead_windows.get(source_id).copied().unwrap_or(0);
         let lost = gaps
             .iter()
             .fold(Duration::zero(), |acc, g| acc + g.length());
         total_lost += lost;
-        let (verdict, observed) = if gaps.is_empty() && dead == 0 {
+        let (verdict, observed) = if gaps.is_empty() {
             (Verdict::Pass, format!("no unexplained loss in {hours:.0}h"))
         } else {
-            let summary = loss_summary(gaps.len(), lost, dead);
+            let summary = loss_summary(gaps.len(), lost);
             hurt.push(format!("{source_id}: {summary}"));
             (
                 loss_verdict(kinds.get(source_id).copied()),

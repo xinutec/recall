@@ -2,7 +2,7 @@
 //! checks, the transcription pulse, the live tier, and the archive's own reachability.
 
 use chrono::{DateTime, Utc};
-use doctor::archive::{self, archive_check, blanked_check};
+use doctor::archive::{self, archive_check};
 use doctor::capture::{
     Beat, Recorder, WindowAudio, agent_checks, capture_checks, live_check, live_lag_check,
     live_lag_slow, live_lag_window, live_quiet, silent_after, worker_check, worker_slow,
@@ -357,10 +357,10 @@ fn an_unreachable_volume_fails_rather_than_reading_as_a_fast_probe() {
 #[test]
 fn the_volume_probe_reads_a_fixed_page_however_big_the_archive_gets() {
     // ⚠ This is the whole point of it existing beside `archive answers`, which
-    // times six growing queries and a directory listing and so cannot say
+    // times a growing log read and a directory listing and so cannot say
     // whether a slow reading is the DISK or the archive having got bigger.
     let dir = tempfile::tempdir().expect("a scratch dir");
-    let db = dir.path().join("recall.sqlite");
+    let db = dir.path().join(archive::PROBE_FILE);
     std::fs::write(&db, vec![0_u8; 1024 * 1024]).expect("write");
     let small = archive::volume_check(dir.path());
     std::fs::write(&db, vec![0_u8; 64 * 1024 * 1024]).expect("write");
@@ -387,7 +387,7 @@ fn an_archive_smaller_than_a_page_is_not_a_stalled_volume() {
     // A fault invented by the instrument is worse than no instrument.
     let dir = tempfile::tempdir().expect("a scratch dir");
     for bytes in [0_usize, 1, 100] {
-        std::fs::write(dir.path().join("recall.sqlite"), vec![0_u8; bytes]).expect("write");
+        std::fs::write(dir.path().join(archive::PROBE_FILE), vec![0_u8; bytes]).expect("write");
         let check = archive::volume_check(dir.path());
         assert_eq!(
             check.verdict,
@@ -408,14 +408,6 @@ fn an_archive_that_answered_with_an_error_still_fails() {
     let failed = archive_check(Some(2.0), "database is locked");
     assert_eq!(failed.verdict, Verdict::Fail);
     assert!(failed.observed.contains("database is locked"));
-}
-
-#[test]
-fn a_blanked_segment_names_the_command_that_fixes_it() {
-    assert_eq!(blanked_check(0).verdict, Verdict::Pass);
-    let bad = blanked_check(3);
-    assert_eq!(bad.verdict, Verdict::Fail);
-    assert!(bad.observed.contains("recall repair"));
 }
 
 #[test]

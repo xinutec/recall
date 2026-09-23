@@ -10,10 +10,10 @@
 //! segments decode to pure silence (or rotation stalls), so a wedge costs
 //! minutes instead of the rest of the recording.
 
+use crate::events;
 use crate::meter::{SILENCE_PEAK, StreamMeter};
 use crate::pause;
 use crate::segmenter::{CaptureConfig, build_segment_argv, segment_output_pattern};
-use crate::store;
 use audiocore::decode::decode_native_s16;
 use audiocore::names::{parse_segment_start, segment_glob};
 use chrono::{DateTime, Utc};
@@ -366,13 +366,7 @@ pub fn record(
                     why,
                     "capture: dead stream — cycling the producer"
                 );
-                store::add_capture_event(
-                    root,
-                    store::KIND_PRODUCER_CYCLED,
-                    Utc::now(),
-                    source_id,
-                    Some(&why),
-                );
+                events::record(root, events::PRODUCER_CYCLED, source_id, Some(&why));
                 let _ = producer.kill();
                 let _ = producer.wait();
                 wait_grace(&mut consumer, TERM_GRACE);
@@ -464,7 +458,7 @@ pub fn serve_paused_aware(
     max_seconds: Option<u64>,
     beat_url: Option<&str>,
 ) -> ! {
-    store::register_source_kind(
+    events::register(
         root,
         source_id,
         match producer_kind {
@@ -482,14 +476,14 @@ pub fn serve_paused_aware(
         while pause::is_paused(root, Utc::now()) {
             std::thread::sleep(STOP_POLL);
         }
-        store::add_capture_event(root, store::KIND_RESUME, Utc::now(), source_id, None);
+        events::record(root, events::RESUME, source_id, None);
         let ended = record(root, source_id, device, producer_kind, config, max_seconds);
         // ⚠ `Ended::Paused` is the ONLY clean end. Anything else means the
         // producer stopped on its own — a device that would not open, a stream
         // that died — and that is precisely what the beat exists to carry.
         mic_ok.store(ended == Ended::Paused, std::sync::atomic::Ordering::Relaxed);
         if ended == Ended::Paused {
-            store::add_capture_event(root, store::KIND_PAUSE, Utc::now(), source_id, None);
+            events::record(root, events::PAUSE, source_id, None);
             continue;
         }
         // Non-pause end: exit so launchd respawns us with a fresh device open

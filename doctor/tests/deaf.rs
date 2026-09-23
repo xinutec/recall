@@ -193,3 +193,15 @@ fn half_a_segment_is_still_too_little_to_judge() {
 
     assert_eq!(check.verdict, Verdict::Skip, "{}", check.observed);
 }
+
+#[test]
+fn a_fleet_that_could_not_be_asked_skips_saying_why() {
+    let check = doctor::deaf::deaf_check_from(&Err("cannot reach the fleet (timeout)".to_owned()));
+    assert_eq!(check.verdict, Verdict::Skip);
+    assert!(
+        check.observed.contains("cannot reach the fleet"),
+        "{}",
+        check.observed
+    );
+    assert_eq!(check.label, deaf_check(&measured()).label);
+}

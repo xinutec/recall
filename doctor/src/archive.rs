@@ -2,42 +2,28 @@
 //! reading itself.
 //!
 //! ⚠ This module runs in the CHILD process ([`crate::bounded`]). All of it can
-//! block indefinitely: the store queries, the segment stat walk and the pause
+//! block indefinitely: the capture log, the segment stat walk and the pause
 //! marker all live on the archive volume, and on 2026-08-10 all three were in
 //! uninterruptible disk wait at once. Keeping them behind one module keeps the
 //! boundary honest — if a check belongs here it is unsafe to run in the
 //! reporting process.
 //!
-//! The archive is opened READ-ONLY. The doctor observes; it must not be able to
-//! write to the plane it is judging, and [`crate::bounded`]'s bargain requires
-//! it: an abandoned child may still be running after the parent gave up on it,
-//! so it has to be disposable.
+//! Nothing here writes. The doctor observes, and [`crate::bounded`]'s bargain
+//! requires it: an abandoned child may still be running after the parent gave
+//! up on it, so it has to be disposable.
 
-use crate::blanked::{self, HiddenTurn};
 use crate::capture::{self, Beat, Recorder};
 use crate::check::{Check, Verdict, check};
 use crate::loss::{self, Event, Gap};
 use crate::source::SourceKind;
+use audiocore::capture_log;
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::{Connection, OpenFlags};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 /// How far back the speech-loss reconciliation looks.
 pub fn loss_window() -> Duration {
     Duration::hours(48)
 }
-/// How far back the deaf-microphone comparison looks.
-///
-/// ⚠ **A long window hides the thing it is looking for.** The comparison only
-/// speaks when peers heard a CONVERSATION, and a rate averaged over a night of
-/// sleep falls below that: measured on the real archive, the same microphones
-/// read 31-40 s/min over the fifteen minutes of an actual conversation and
-/// 9-10 s/min once eight hours of quiet were folded in. Half an hour is long
-/// enough to contain talking and short enough not to dilute it away.
-pub fn deaf_window() -> Duration {
-    Duration::minutes(30)
-}
-
 /// The smallest uncovered active-capture stretch that counts as loss — below
 /// this is the boundary slop of a pause recorded a beat after the last segment,
 /// not real lost speech.
@@ -128,6 +114,11 @@ pub fn archive_check(seconds: Option<f64>, detail: &str) -> Check {
     .build()
 }
 
+/// The file the volume probe reads a page of: the Mac's meaning plane, retired
+/// on 2026-09-23 and kept as an archive. Large, and never written again, so
+/// nothing else keeps its pages warm.
+pub const PROBE_FILE: &str = "recall.sqlite";
+
 /// One page, the unit this probe is fixed at.
 const PAGE: usize = 4096;
 
@@ -179,15 +170,14 @@ pub fn volume_slow() -> Duration {
 /// the measurement. Renaming it would spend the history to say the same thing.
 pub fn volume_check(root: &Path) -> Check {
     use std::io::{Read, Seek, SeekFrom};
-    let db = root.join("recall.sqlite");
+    let db = root.join(PROBE_FILE);
     let started = std::time::Instant::now();
     let read = std::fs::File::open(&db).and_then(|mut file| {
-        // ⚠ **A RANDOM page, never the first one.** The first page of this file
-        // is read by every doctor run and by recalld continuously, so it is
-        // always in the page cache — a probe on it times the CACHE and would
-        // report 0.00s with the disk wedged, which is the one reading that must
-        // never be possible here. The archive holds six figures of pages; a
-        // fresh offset each run is almost certainly a real read.
+        // ⚠ **A RANDOM page, never the first one.** A page read every run stays
+        // in the page cache, and a probe on it times the CACHE — 0.00s with the
+        // disk wedged, the one reading that must never be possible here. The
+        // file holds six figures of pages; a fresh offset each run is almost
+        // certainly a real read.
         let pages = file.metadata()?.len() / PAGE as u64;
         file.seek(SeekFrom::Start(somewhere(pages) * PAGE as u64))?;
         let mut page = [0_u8; PAGE];
@@ -224,197 +214,85 @@ pub fn volume_check(root: &Path) -> Check {
     .build()
 }
 
-/// See [`crate::blanked`] for why the count is gated by the detector.
-pub fn blanked_check(blanked: usize) -> Check {
-    check(
-        "archive",
-        "no blanked segments",
-        if blanked == 0 {
-            Verdict::Pass
-        } else {
-            Verdict::Fail
-        },
-        if blanked == 0 {
-            "every transcribed segment shows turns".to_owned()
-        } else {
-            format!(
-                "{blanked} segment(s) show NO turns where hidden ones exist — \
-                 run `recall repair`"
-            )
-        },
-        "0 blanked",
-    )
-    .trend(blanked as f64, "segments")
-    .build()
-}
-
-/// The archive, opened read-only.
-pub fn open(db: &Path) -> rusqlite::Result<Connection> {
-    Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)
-}
-
-/// Registered sources — id and kind, in id order.
+/// Every device that has registered here, by its latest registration, in id
+/// order.
 ///
 /// ⚠ An unrecognised kind is DROPPED rather than guessed at. A source whose
 /// kind this build has never heard of cannot be graded (the always-on rule is a
 /// judgement about a specific kind of hardware), and inventing a verdict for it
 /// would be worse than the missing line.
-pub fn source_rows(conn: &Connection) -> rusqlite::Result<Vec<(String, SourceKind)>> {
-    let mut stmt = conn.prepare("SELECT id, kind FROM sources ORDER BY id")?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows
+#[must_use]
+pub fn registered_devices(events: &[capture_log::Event]) -> Vec<(String, SourceKind)> {
+    let mut latest: BTreeMap<&str, &str> = BTreeMap::new();
+    for event in events.iter().filter(|e| e.kind == capture_log::REGISTER) {
+        if let (Some(source), Some(kind)) = (event.source.as_deref(), event.detail.as_deref()) {
+            latest.insert(source, kind);
+        }
+    }
+    latest
         .into_iter()
-        .filter_map(|(id, kind)| Some((id, SourceKind::parse(&kind)?)))
-        .collect())
+        .filter_map(|(id, kind)| Some((id.to_owned(), SourceKind::parse(kind)?)))
+        .filter(|(_, kind)| kind.is_device())
+        .collect()
 }
 
-/// Capture events at or after `since`, oldest-first.
-pub fn capture_events_since(
-    conn: &Connection,
-    since: DateTime<Utc>,
-) -> rusqlite::Result<Vec<Event>> {
-    let mut stmt = conn.prepare(
-        "SELECT utc, kind, source_id FROM capture_events WHERE utc >= ?1 ORDER BY utc, id",
-    )?;
-    let rows = stmt
-        .query_map([audiocore::instant::python_isoformat_utc(since)], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(utc, kind, source_id)| {
-            Some(Event {
-                utc: audiocore::instant::parse_utc(&utc)?,
-                kind,
-                source_id,
-            })
-        })
-        .collect())
-}
-
-/// `(start, end)` of `source`'s audio segments ending at or after `since` — the
-/// recorded coverage a loss check reconciles against the pause/resume events.
-pub fn audio_segment_intervals(
-    conn: &Connection,
+/// `(start, end)` of each of `source`'s segments on disk that ended at or after
+/// `since`: the start from its name, the end from its mtime, which is when the
+/// recorder last wrote to it. A zero-byte file is a stub that caught no audio
+/// and covers nothing.
+#[must_use]
+pub fn recorded_intervals(
+    root: &Path,
     source: &str,
     since: DateTime<Utc>,
-) -> rusqlite::Result<Vec<(DateTime<Utc>, DateTime<Utc>)>> {
-    let mut stmt = conn.prepare(
-        "SELECT start_utc, end_utc FROM audio_segments
-         WHERE source_id = ?1 AND end_utc >= ?2 ORDER BY start_utc",
-    )?;
-    let rows = stmt
-        .query_map(
-            rusqlite::params![source, audiocore::instant::python_isoformat_utc(since)],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(start, end)| {
-            Some((
-                audiocore::instant::parse_utc(&start)?,
-                audiocore::instant::parse_utc(&end)?,
-            ))
-        })
-        .collect())
-}
-
-/// Segments that once had turns and now show none — the ones a refine emptied,
-/// gated by the speech detector.
-pub fn blanked_segments(conn: &Connection) -> rusqlite::Result<usize> {
-    let silent: BTreeSet<i64> = conn
-        .prepare("SELECT id FROM audio_segments WHERE speech_s = 0.0")?
-        .query_map([], |row| row.get::<_, i64>(0))?
-        .collect::<rusqlite::Result<_>>()?;
-
-    // Superseded turns are excluded: those were properly replaced, and their
-    // replacement stands.
-    let mut stmt = conn.prepare(
-        "SELECT t.audio_segment_id, t.id, t.hidden_reason, t.text
-           FROM transcript_segments t
-          WHERE t.audio_segment_id IS NOT NULL
-            AND t.hidden_reason IS NOT NULL
-            AND t.superseded_by IS NULL
-            AND NOT EXISTS (
-                SELECT 1 FROM transcript_segments v
-                 WHERE v.audio_segment_id = t.audio_segment_id
-                   AND v.superseded_by IS NULL AND v.hidden_reason IS NULL)
-          ORDER BY t.audio_segment_id, t.id",
-    )?;
-    let mut by_segment: BTreeMap<i64, Vec<HiddenTurn>> = BTreeMap::new();
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            HiddenTurn {
-                id: row.get(1)?,
-                hidden_reason: row.get(2)?,
-                text: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-            },
-        ))
-    })?;
-    for row in rows {
-        let (audio_id, turn) = row?;
-        by_segment.entry(audio_id).or_default().push(turn);
+) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
+    let Ok(entries) = std::fs::read_dir(root.join(source)) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(start) = audiocore::names::parse_segment_start(&name.to_string_lossy()) else {
+            continue;
+        };
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let end = DateTime::<Utc>::from(modified);
+        if meta.len() > 0 && end >= since {
+            out.push((start, end));
+        }
     }
-
-    Ok(by_segment
-        .into_iter()
-        .filter(|(audio_id, _)| !silent.contains(audio_id))
-        .filter(|(_, turns)| {
-            let restore = blanked::last_generation(turns);
-            if restore.is_empty() {
-                return false;
-            }
-            let texts: Vec<&str> = turns
-                .iter()
-                .filter(|t| restore.contains(&t.id))
-                .map(|t| t.text.as_str())
-                .collect();
-            blanked::any_restorable(&texts)
-        })
-        .count())
+    out
 }
 
 /// Reconcile the always-on mic's recorded coverage against the pause/resume
-/// events over the recent window: uncovered active stretches (capture active, no
-/// audio) plus the dead windows *per device* — telling a deliberate pause from
-/// lost speech, and one broken microphone from a broken house.
+/// events over the recent window: an uncovered active stretch is capture
+/// running and producing nothing.
 fn speech_loss(
-    conn: &Connection,
+    root: &Path,
+    log: &[capture_log::Event],
     sources: &[(String, SourceKind)],
     now: DateTime<Utc>,
-) -> rusqlite::Result<(Vec<Gap>, BTreeMap<String, usize>)> {
+) -> Vec<Gap> {
     let since = now - loss_window();
-    let events = capture_events_since(conn, since)?;
-    let mut dead: BTreeMap<String, usize> = BTreeMap::new();
-    for event in events.iter().filter(|e| e.kind == loss::DEAD_WINDOW) {
-        // source_id is nullable in the schema. Loss the archive cannot
-        // attribute is still loss, so it gets its own bucket instead of being
-        // dropped.
-        let bucket = event
-            .source_id
-            .clone()
-            .unwrap_or_else(|| "unattributed".to_owned());
-        *dead.entry(bucket).or_default() += 1;
-    }
+    let events: Vec<Event> = log
+        .iter()
+        .filter(|e| e.utc >= since)
+        .map(|e| Event {
+            utc: e.utc,
+            kind: e.kind.clone(),
+            source_id: e.source.clone(),
+        })
+        .collect();
     let mut losses = Vec::new();
     for (source_id, kind) in sources {
         if *kind != capture::ALWAYS_ON {
             continue;
         }
-        let intervals = audio_segment_intervals(conn, source_id, since)?;
         losses.extend(loss::uncovered_loss(
-            &intervals,
+            &recorded_intervals(root, source_id, since),
             &events,
             source_id,
             now,
@@ -422,40 +300,28 @@ fn speech_loss(
             loss_settle(),
         ));
     }
-    Ok((losses, dead))
+    losses
 }
 
 /// Everything the child process reports. The `--collect` half of the doctor.
 ///
-/// ⚠ It took a `fleet_configured` flag until 2026-09-17, to gate a `fleet mirror
-/// complete` check on `pushed_utc`. That column's writer (`sync_push`) is
-/// deleted, so the count could only ever be zero and the check could only ever
-/// say the archive was safely replicated — the one claim worth being sure of.
-/// `delivery_checks` makes the same promise on evidence that is still written:
-/// every file on disk against audiod's own upload state.
+/// # Errors
+/// If the capture log exists and cannot be read.
 pub fn archive_checks(
     root: &Path,
     now: DateTime<Utc>,
     volume: Check,
-) -> rusqlite::Result<Vec<Check>> {
+) -> std::io::Result<Vec<Check>> {
     // ⚠ The probe is taken by the CALLER and handed in, so it can be SAID
-    // before the queries below run. Computed here it would be lost on exactly
+    // before the reads below run. Computed here it would be lost on exactly
     // the run it exists for: a child that hangs never returns these checks at
     // all, so the one reading that could say whether the DISK answered went
     // down with it.
-    let conn = open(&root.join("recall.sqlite"))?;
+    let log = capture_log::read(root)?;
     // Registered recorders, not whatever directories exist: a mic the household
-    // actually uses is one the archive knows about. Devices only — an imported
-    // meeting is a source but has no recorder that could stop or lose speech,
-    // and a row per meeting would bury the four microphones that matter.
-    let sources: Vec<(String, SourceKind)> = source_rows(&conn)?
-        .into_iter()
-        .filter(|(_, kind)| kind.is_device())
-        .collect();
-    let (losses, dead_windows) = speech_loss(&conn, &sources, now)?;
-    let blanked = blanked_segments(&conn)?;
-    let heard = crate::deaf::heard_between(&conn, &sources, now - deaf_window(), now)?;
-    drop(conn);
+    // actually uses is one that has announced itself here.
+    let sources = registered_devices(&log);
+    let losses = speech_loss(root, &log, &sources, now);
 
     let paused_until = crate::agents::paused_until(root);
     let recorders: Vec<Recorder> = capture::recorders_on_disk(root, &sources);
@@ -468,13 +334,7 @@ pub fn archive_checks(
         paused_until,
         capture::silent_after(),
     ));
-    checks.extend(loss::loss_checks(
-        &losses,
-        &dead_windows,
-        &sources,
-        loss_window(),
-    ));
-    checks.push(crate::deaf::deaf_check(&heard));
+    checks.extend(loss::loss_checks(&losses, &sources, loss_window()));
     checks.push(capture::worker_check(
         beat.as_ref(),
         now,
@@ -483,7 +343,6 @@ pub fn archive_checks(
     ));
     // Quiet until audiod's uploader has run here (stage B): reads its state db.
     checks.extend(crate::delivery::delivery_checks(root, now));
-    checks.push(blanked_check(blanked));
     Ok(checks)
 }
 

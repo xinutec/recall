@@ -29,7 +29,7 @@ The server (`audiod`, Rust):
 
 1. reads *exactly* the handshake line (byte by byte, so it never consumes any PCM),
 2. **auto-registers** the source by the announced id (a filesystem-safe id = one source
-   = one storage directory) — no host-side provisioning,
+   = one storage directory) in the capture log — no host-side provisioning,
 3. pumps the socket's PCM into an ffmpeg segmenter that writes the 60 s segment files —
    the same files the USB mic produces.
 

@@ -10,7 +10,7 @@
 
 use chrono::Utc;
 use doctor::check::{Check, Verdict};
-use doctor::{agents, archive, bounded, capture, fleetwatch, live};
+use doctor::{agents, archive, bounded, capture, deaf, fleetwatch, live};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -141,7 +141,8 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
     }
 }
 
-/// The live tier's two checks — asked of the fleet, graded here.
+/// The checks whose evidence is on the fleet — the live tier's two and the deaf
+/// microphone — asked of it, graded here.
 ///
 /// ⚠ **In the PARENT, not the bounded child.** The child exists to survive an
 /// unresponsive archive VOLUME; a network read has nothing to do with that
@@ -150,10 +151,18 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
 fn live_checks(config: &Config, now: chrono::DateTime<Utc>, out: &Path) -> Vec<Check> {
     let token = std::env::var("RECALL_SYNC_TOKEN").ok();
     let Some(fleet) = live::Fleet::new(config.fleet.as_deref(), token.as_deref()) else {
-        return live::unconfigured();
+        let mut checks = live::unconfigured();
+        checks.push(deaf::unconfigured());
+        return checks;
     };
     let fetched = live::fetch(&fleet, now, capture::live_lag_window());
-    live::live_checks(&fetched, now, agents::paused_until(out))
+    let mut checks = live::live_checks(&fetched, now, agents::paused_until(out));
+    checks.push(deaf::deaf_check_from(&deaf::fetch(
+        &fleet,
+        now,
+        deaf::window(),
+    )));
+    checks
 }
 
 /// Send the verdicts on. An unreachable monitor is not a broken recording: say

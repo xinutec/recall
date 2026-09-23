@@ -235,3 +235,43 @@ fn an_empty_archive_answers_with_no_opinion_rather_than_a_zero() {
     assert_eq!(out.newest_turn_utc, None);
     assert!((out.delivered_s - 0.0).abs() < f64::EPSILON);
 }
+
+#[test]
+fn heard_is_per_microphone_and_counts_only_measured_clips() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = meaning(dir.path());
+    source(&conn, "usb", "coreaudio");
+    source(&conn, "pixel5", "tcp_pcm");
+    source(&conn, "room", "derived");
+    drop(conn);
+    clip(
+        dir.path(),
+        "usb",
+        "usb-20260921T114100.flac",
+        41,
+        Some(20.0),
+    );
+    clip(dir.path(), "usb", "usb-20260921T114200.flac", 42, None);
+    clip(
+        dir.path(),
+        "pixel5",
+        "pixel5-20260921T114100.flac",
+        41,
+        Some(0.0),
+    );
+    clip(
+        dir.path(),
+        "room",
+        "room-20260921T114300.flac",
+        43,
+        Some(30.0),
+    );
+
+    let heard =
+        recalld::live_tier::heard(dir.path(), at(WINDOW_SINCE), at(WINDOW_UNTIL)).expect("heard");
+    let got: Vec<(&str, f64, f64)> = heard
+        .iter()
+        .map(|h| (h.source.as_str(), h.delivered_s, h.speech_s))
+        .collect();
+    assert_eq!(got, [("pixel5", 30.0, 0.0), ("usb", 30.0, 20.0)]);
+}
