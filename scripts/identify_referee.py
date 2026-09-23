@@ -115,7 +115,7 @@ def extract(db_path: Path, clips: Path, work: Path) -> None:
 def extract_pyannote(db_path: Path, clips: Path, work: Path) -> None:
     """Run the production diarize request and a word-timed transcription per
     clip, stored as the runner stores job results, for `align_referee`."""
-    from recall import shim_asr, shim_voices  # noqa: PLC0415 - the ML env only
+    from recall import shim, shim_asr, shim_voices  # noqa: PLC0415 - the ML env only
 
     db = open_ro(db_path)
     out_path = work / "pyannote.jsonl"
@@ -142,7 +142,8 @@ def extract_pyannote(db_path: Path, clips: Path, work: Path) -> None:
             ):
                 try:
                     result = handle(op, {"audio": clip, **args})
-                    record[key] = {"ok": True, "result": result}
+                    # as the worker replies: NaN becomes null (`shim.finite`)
+                    record[key] = {"ok": True, "result": shim.finite(result)}
                 except (ValueError, OSError, RuntimeError) as err:
                     record[key] = {"ok": False, "error": str(err)}
             out.write(json.dumps(record) + "\n")
