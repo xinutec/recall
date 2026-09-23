@@ -1,7 +1,5 @@
-//! launchd, and the pause file — the two things the reporting process may read.
-//!
-//! Both live on the boot disk. Nothing here touches the archive volume: that is
-//! the whole boundary this crate is built around (see [`crate::bounded`]).
+//! launchd and the pause file: both on the boot disk, so the reporting process
+//! may read them.
 
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
@@ -60,9 +58,8 @@ pub fn agent_health(home: &Path) -> Vec<(String, bool)> {
 
 /// The recorded resume-by time, or `None` if not paused.
 ///
-/// A hand-written naive timestamp is read as UTC rather than refused: this
-/// gates every capture agent's main loop, and refusing to parse would read as
-/// "not paused" in the one direction that silences a household's control.
+/// A hand-written naive timestamp is read as UTC rather than refused: refusing
+/// would read as "not paused", overriding the household's pause.
 pub fn paused_until(root: &Path) -> Option<DateTime<Utc>> {
     let text = std::fs::read_to_string(root.join(PAUSE_FILE)).ok()?;
     audiocore::instant::parse_utc(text.trim())

@@ -271,7 +271,7 @@ fn max_pause() -> Duration {
     Duration::hours(24)
 }
 
-/// When a pause starting at `now` must end, clamped to [`max_pause`].
+/// When a pause starting at `now` must end, clamped to `max_pause`.
 ///
 /// A negative or absent `minutes` is not an error: `None` means "the full
 /// bound", and a negative one clamps to zero rather than minting a pause that

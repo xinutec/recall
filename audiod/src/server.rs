@@ -1,12 +1,10 @@
-//! Single-port audio ingest server. Port of `src/recall/stream_server.py`.
+//! Single-port audio ingest server.
 //!
-//! Every phone shares ONE port; the handshake carries identity, not the port.
-//! A device opens a connection, sends a one-line handshake announcing its id
-//! and PCM format, then streams raw PCM. The server reads only the handshake,
-//! then pumps the socket into an ffmpeg segmenter — so ffmpeg does all the
-//! audio, gap-free. The measured stream is the liveness signal (the marker is
-//! refreshed only while real signal arrives), so there is no separate
-//! heartbeat — and no way for a silent stream to read as recording.
+//! Every phone shares one port; the handshake carries identity. A device sends
+//! a one-line handshake announcing its id and PCM format, then streams raw PCM,
+//! which the server pumps into an ffmpeg segmenter. The measured stream is the
+//! liveness signal (the marker is refreshed only while real signal arrives), so
+//! there is no separate heartbeat and a silent stream cannot read as recording.
 
 use crate::events;
 use crate::meter::{SILENCE_PEAK, StreamMeter};
@@ -24,18 +22,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// A mic stream is CONTINUOUS — 48 kHz * 2 bytes flows even in a silent room —
-/// so no data for this long means the peer is gone, and that is a far stronger
-/// signal than TCP keepalive, which never probes a connection the kernel still
-/// believes is fine. 15 s tolerates a brief Wi-Fi stall.
+/// A mic stream is continuous (48 kHz * 2 bytes flows even in a silent room),
+/// so no data for this long means the peer is gone; TCP keepalive never probes
+/// a connection the kernel believes is fine. 15 s tolerates a brief Wi-Fi stall.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_CHUNK_BYTES: usize = 65536;
 /// How often the accept loop re-checks the global pause.
 const PAUSE_POLL: Duration = Duration::from_secs(2);
 /// How long a nonblocking accept sleeps when nothing is waiting.
 const ACCEPT_IDLE: Duration = Duration::from_millis(250);
-/// How often the pump sweeps for closed segments to rebase. Cheap (one
-/// listdir), and well inside the worker's 120 s min-age indexing guard.
+/// How often the pump sweeps for closed segments to rebase. Cheap: one
+/// listdir.
 const REBASE_SWEEP: Duration = Duration::from_secs(10);
 
 fn unix_seconds(time: SystemTime) -> f64 {
@@ -51,7 +48,7 @@ fn mark_alive(source_dir: &Path) {
 
 /// The segment file this connection last finalised: the newest one touched
 /// since the connection opened. `None` when the connection wrote no file at
-/// all — naming an older file would blame the wrong window.
+/// all: naming an older file would blame the wrong window.
 fn flushed_segment(out_dir: &Path, source_id: &str, since: SystemTime) -> Option<(String, u64)> {
     segment_glob(out_dir, source_id)
         .into_iter()
@@ -68,10 +65,9 @@ fn flushed_segment(out_dir: &Path, source_id: &str, since: SystemTime) -> Option
         .map(|(_, name, size)| (name, size))
 }
 
-/// The socket -> segmenter pump, and what it learned on the way. A struct
-/// rather than a function returning its findings, because the caller's
-/// cleanup files the disconnect record even when the pump exits early — and
-/// on that path `first_byte` is still evidence.
+/// The socket -> segmenter pump, and what it learned on the way. A struct, so
+/// the caller can file the disconnect record from it even when the pump exits
+/// early.
 struct Pump<'a> {
     stream: &'a TcpStream,
     stdin: Option<std::process::ChildStdin>,
@@ -83,9 +79,8 @@ struct Pump<'a> {
     /// Set by the serve loop before it closes this socket for a pause, so the
     /// disconnect record can tell "the pause dropped it" from "the peer left".
     dropped_by_pause: &'a AtomicBool,
-    /// Why the stream ended, for the disconnect record. The endings are not
-    /// the same event: a phone walking out of range and a pause dropping the
-    /// stream both just stop.
+    /// Why the stream ended, for the disconnect record: a phone walking out of
+    /// range and a pause dropping the stream both just stop.
     ended: String,
     first_byte: Option<f64>,
     /// capture-minus-arrival for this connection, fixed at the first byte.
@@ -122,10 +117,9 @@ impl Pump<'_> {
                     return;
                 }
                 Err(err) => {
-                    // The serve loop closes an active socket to drop the stream
-                    // when capture pauses; an errno on the closed fd is how the
-                    // reader is told. Expected, so it finalises like any other
-                    // disconnect instead of escaping as a crash.
+                    // A pause closes the active socket, and the errno on the
+                    // closed fd is how the reader learns of it: finalise like
+                    // any other disconnect.
                     self.ended = format!("closed locally ({err})");
                     return;
                 }
@@ -146,9 +140,7 @@ impl Pump<'_> {
             self.maybe_rebase(false);
             let heard = self.meter.first_audible_byte.is_some();
             // Liveness: refresh the marker only when the chunk carries real
-            // signal — "active" must mean recording. A connected phone
-            // streaming digital silence (the pixel9 dead path) reads idle, so
-            // nobody speaks trusting a dot the audio can't back.
+            // signal. A connected phone streaming digital silence reads idle.
             if self.meter.feed(data) >= SILENCE_PEAK {
                 mark_alive(self.out_dir);
             }
@@ -163,10 +155,8 @@ impl Pump<'_> {
     }
 
     /// Rename this connection's closed segments to capture time. Rides the
-    /// pump loop rather than a thread — one fewer thing to stop. `finished`
-    /// runs once after the segmenter has exited: every segment is closed then,
-    /// so even the newest name is safe to move — without it the connection's
-    /// LAST segment would stay arrival-stamped forever.
+    /// pump loop rather than a thread. `finished` runs once after the segmenter
+    /// has exited, when every segment is closed, so the last one is renamed too.
     fn maybe_rebase(&mut self, finished: bool) {
         let (Some(offset_s), Some(first_byte)) = (self.offset_s, self.first_byte) else {
             return;
@@ -197,19 +187,17 @@ impl Pump<'_> {
 /// absorbs any pause in the pump, so a momentary stall can't lose audio.
 /// Returns when the device disconnects.
 ///
-/// Every connection leaves durable evidence (`capture_events`): an
-/// `ingest_connect` on open, and an `ingest_disconnect` on close carrying what the
-/// device actually sent. That record is what tells a stream of digital silence
-/// from no stream at all when speech goes missing.
+/// Every connection leaves evidence in the capture log: an `ingest_connect` on
+/// open, and an `ingest_disconnect` on close carrying what the device actually
+/// sent, which tells a stream of digital silence from no stream at all.
 pub fn handle_connection(
     stream: &TcpStream,
     root: &Path,
     config: &CaptureConfig,
     dropped_by_pause: &AtomicBool,
 ) {
-    // Bound every read on this socket, the handshake included — a peer that
-    // connects and then says nothing (a port scanner, a phone that died
-    // between connect and handshake) must not hold a thread for good.
+    // Bound every read on this socket, the handshake included: a peer that
+    // connects and says nothing must not hold a thread for good.
     if stream.set_read_timeout(Some(READ_TIMEOUT)).is_err() {
         return;
     }
@@ -284,9 +272,9 @@ fn serve_stream(
     drop(pump.stdin.take()); // EOF -> the segmenter finalises the current segment
     let _ = child.wait();
     let flushed = flushed_segment(&out_dir, source_id, connected);
-    // Every segment is closed now: give the connection's LAST one its
-    // capture-time name too. After flushed_segment, whose stats keep the
-    // segmenter's own (arrival) name for the disconnect record.
+    // Every segment is closed now: give the last one its capture-time name
+    // too. After flushed_segment, so the disconnect record keeps the arrival
+    // name.
     pump.maybe_rebase(true);
     let ended = std::mem::take(&mut pump.ended);
     drop(pump); // releases the meter borrow for the stats below
@@ -306,8 +294,7 @@ fn serve_stream(
     tracing::info!(source = source_id, stats = %stats, "ingest: disconnected");
 }
 
-/// Round-to-decimals for the disconnect stats, matching Python's round(x, n)
-/// closely enough for telemetry (ties differ; nothing reads them that finely).
+/// Round to `decimals` places, for the disconnect stats.
 trait RoundTo {
     fn round_to(self, decimals: u32) -> f64;
 }
@@ -328,8 +315,7 @@ struct ConnHandle {
 /// handshake, then gets its own segmenter.
 ///
 /// Honours the global capture pause: while paused, the listener is closed (so
-/// phones are refused and back off) and any active stream is dropped — a pause
-/// stops phone recording just as it stops the USB mic.
+/// phones are refused and back off) and any active stream is dropped.
 pub fn serve(root: &Path, port: u16, config: &CaptureConfig) -> ! {
     let conns: Arc<Mutex<HashMap<u64, ConnHandle>>> = Arc::new(Mutex::new(HashMap::new()));
     let mut listener: Option<TcpListener> = None;

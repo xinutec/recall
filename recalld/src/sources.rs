@@ -1,17 +1,15 @@
 //! Per-source liveness: which recorders are measurably recording right now.
 //!
 //! Every source reduces to a last-proved-recording time from its liveness
-//! marker — refreshed by the ingest pump while a phone streams real signal, and
+//! marker, refreshed by the ingest pump while a phone streams real signal and
 //! by the capture watchdog while the local mic's closed segments decode to real
-//! audio. **"Active" therefore means RECORDING, never merely connected**: a
-//! phone streaming digital silence, or a mic in a startup dead-window, reads
-//! idle.
+//! audio. "Active" therefore means recording, not merely connected: a phone
+//! streaming digital silence, or a mic in a startup dead-window, reads idle.
 //!
-//! ⚠ **The fleet has no markers of its own.** It runs no capture and no ingest
-//! pump, so every time here arrives via the Mac's ~5 s mirror report and is one
-//! report-cadence old. That lag is why the windows widen on this side, and why a
-//! Mac that stops reporting must read as "we cannot see" rather than as the last
-//! thing we heard.
+//! The fleet has no markers of its own: every time here arrives via the Mac's
+//! ~5 s mirror report, one report-cadence old. Hence the wider windows on this
+//! side, and a Mac that stops reporting must read as "cannot see", not as the
+//! last thing heard.
 
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
@@ -26,14 +24,12 @@ pub enum SourceKind {
     TcpPcm,
     Upload,
     Discovered,
-    /// A stream this system BUILT rather than recorded: the room stream, one
+    /// A stream this system built rather than recorded: the room stream, one
     /// settled minute at a time from whichever microphone won it.
     ///
-    /// Not a device, and the distinction is load-bearing: `deaf`, the liveness
-    /// view and the sources panel all ask `is_device()`, and a derived stream
-    /// has no recorder to be deaf, no `.alive` marker, and no phone to blame.
-    /// It inherits whichever microphone's audio it carried, so measuring it as a
-    /// microphone would double-count the one that was already measured.
+    /// Not a device: it has no recorder, no `.alive` marker and no phone to
+    /// blame, and measuring it as a microphone would double-count the one whose
+    /// audio it carries. Device checks ask `is_device()`.
     Derived,
 }
 
@@ -67,12 +63,9 @@ impl SourceKind {
 
     /// Is this a recorder whose up-or-down state is a real question?
     ///
-    /// ⚠ `Upload` is a clip someone sent, not a producer. `Discovered` is audio
-    /// the worker found on disk with no registered source — an admission that
-    /// nothing knows what wrote it, so every device check would be asking about
-    /// a machine that may not exist. If a discovered source really is a
-    /// recorder, its agent registers the true kind on start and it joins this
-    /// set then.
+    /// `Upload` is a clip someone sent, not a producer. `Discovered` is audio
+    /// found on disk with no registered source, so nothing knows what wrote it;
+    /// if it really is a recorder, its agent registers the true kind on start.
     #[must_use]
     pub fn is_device(self) -> bool {
         !matches!(self, Self::Upload | Self::Discovered | Self::Derived)
@@ -87,8 +80,8 @@ pub struct SourceRow {
     pub kind: SourceKind,
 }
 
-/// What a recorder's DELIVERIES prove — two times, because they answer two
-/// different questions and collapsing them is the #1428 bug.
+/// What a recorder's deliveries prove: two times, because they answer two
+/// different questions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Evidence {
     /// Newest segment sent, whatever was on it: "is it running".
@@ -105,12 +98,11 @@ pub struct SourceStatus {
     pub name: String,
     pub kind: SourceKind,
     pub last_active: Option<DateTime<Utc>>,
-    /// The CONSENT signal — "your voice is being captured audibly" — so it goes
+    /// The consent signal, "your voice is being captured audibly", so it goes
     /// out in a silent room.
     pub active: bool,
-    /// The OPERATIONAL one — bytes arriving, whatever is on them. Answering the
-    /// second with the first is how geb came to read "off" while recording
-    /// perfectly (#1428).
+    /// The operational one: bytes arriving, whatever is on them. A recorder in
+    /// a silent room is recording but not active.
     pub recording: bool,
     pub last_delivered: Option<DateTime<Utc>>,
 }
@@ -129,12 +121,10 @@ fn watchdog_active_within() -> Duration {
 fn fleet_report_lag() -> Duration {
     Duration::seconds(7)
 }
-/// A store-and-forward recorder streams to nothing, so no marker of its is ever
-/// refreshed; it proves itself by DELIVERING a closed segment. That evidence
-/// arrives once per segment: 60 s of audio must close, then wait up to the 60 s
-/// upload timer, then transfer and verify. Five minutes covers it with margin —
-/// wide enough not to flap, narrow enough that a dead recorder does not read
-/// live for long.
+/// A store-and-forward recorder refreshes no marker; it proves itself by
+/// delivering a closed segment, which takes up to 60 s to close plus up to the
+/// 60 s upload timer plus transfer. Five minutes covers that without flapping,
+/// and a dead recorder does not read live for long.
 fn delivered_active_within() -> Duration {
     Duration::minutes(5)
 }
@@ -156,8 +146,8 @@ pub fn active_window(kind: SourceKind, on_fleet: bool) -> Duration {
 
 /// Combine registered sources with their last-activity time.
 ///
-/// ⚠ Both times must be CAPTURE times, never arrival times: a backlog draining
-/// hours late arrives now and proves nothing about now.
+/// ⚠ Both times must be capture times, never arrival times: a backlog draining
+/// hours late proves nothing about now.
 #[must_use]
 pub fn source_statuses<S: std::hash::BuildHasher, T: std::hash::BuildHasher>(
     sources: &[SourceRow],
@@ -172,15 +162,11 @@ pub fn source_statuses<S: std::hash::BuildHasher, T: std::hash::BuildHasher>(
             let seen = last_active.get(&row.id).copied();
             let window = active_window(row.kind, on_fleet);
             let marker_fresh = seen.is_some_and(|t| now - t < window);
-            // ⚠ A marker that went stale RECENTLY is a deliberate stop, and that
-            // is NEWER information than a segment captured just before it.
-            // Without this, delivery-proof resurrects a phone the moment its
-            // owner stops it: measured 2026-09-05, pixel9 stayed green for the
-            // full five minutes after stopping, where it used to go idle in
-            // twelve seconds. A phone streams as its PRIMARY path, so its marker
-            // falling silent IS the event; geb's marker is hours stale only
-            // because it never streams at all. How stale is what tells them
-            // apart.
+            // ⚠ A marker that went stale recently is a deliberate stop, newer
+            // than any segment captured just before it; without this check a
+            // stopped phone stays green for the whole delivery window. A
+            // recorder that never streams has a marker hours stale, so how stale
+            // tells the two apart.
             let stopped_recently =
                 seen.is_some_and(|t| !marker_fresh && now - t < delivered_active_within());
             let fresh = |when: Option<DateTime<Utc>>| {
@@ -195,9 +181,8 @@ pub fn source_statuses<S: std::hash::BuildHasher, T: std::hash::BuildHasher>(
                 name: row.name.clone(),
                 kind: row.kind,
                 last_active: [seen, heard].into_iter().flatten().max(),
-                // The marker is itself signal-gated (refreshed only above the
-                // silence floor), so a fresh marker IS evidence of audible
-                // speech.
+                // The marker is refreshed only above the silence floor, so a
+                // fresh marker is evidence of audible speech.
                 active: marker_fresh || fresh(heard),
                 recording: marker_fresh || fresh(shipped),
                 last_delivered: [seen, shipped].into_iter().flatten().max(),
@@ -208,9 +193,8 @@ pub fn source_statuses<S: std::hash::BuildHasher, T: std::hash::BuildHasher>(
 
 /// Registered sources, for the liveness view.
 ///
-/// ⚠ An unknown kind in the database fails LOUD here rather than becoming a
-/// silently never-matching string downstream — the same choice the Python's
-/// `SourceKind(...)` makes by raising.
+/// An unknown kind in the database is an error here rather than a string that
+/// silently never matches downstream.
 pub fn source_rows(conn: &Connection) -> rusqlite::Result<Vec<SourceRow>> {
     let mut stmt = conn.prepare("SELECT id, name, kind FROM sources ORDER BY id")?;
     let rows = stmt.query_map([], |r| {
@@ -233,12 +217,8 @@ pub fn source_rows(conn: &Connection) -> rusqlite::Result<Vec<SourceRow>> {
 
 /// The delivered-segment evidence, read straight from the ingest database.
 ///
-/// ⚠ The Python fetched this over HTTP from recalld's own `/ingest/v1/liveness`
-/// — a loopback request, with a token and a 1.5 s timeout, made from inside a UI
-/// poll. On this side it is a query, so the hop, the credential and the timeout
-/// all disappear. What must NOT disappear is its best-effort contract: an
-/// unreadable ingest database means "no extra evidence", never an error page,
-/// because the panel is still correct on markers alone.
+/// Best-effort: an unreadable ingest database means "no extra evidence", never
+/// an error, because the panel is still correct on markers alone.
 fn delivered_evidence(root: &std::path::Path) -> HashMap<String, Evidence> {
     let Ok(conn) = crate::store::open(root) else {
         return HashMap::new();
@@ -248,8 +228,7 @@ fn delivered_evidence(root: &std::path::Path) -> HashMap<String, Evidence> {
     };
     rows.into_iter()
         .filter_map(|(source, delivered, speech)| {
-            // A source with no parseable delivered time carries no evidence at
-            // all — the Python drops the entry rather than inventing one.
+            // A source with no parseable delivered time carries no evidence.
             let delivered = audiocore::instant::parse(&delivered)?.with_timezone(&Utc);
             Some((
                 source,
@@ -284,12 +263,9 @@ pub struct SourcesOut {
 
 /// Everything `GET /api/sources` needs, computed off the request thread.
 ///
-/// ⚠ **Delivery evidence is discarded outright while capture is paused**, and
-/// for EVERY kind rather than just the local mic. Delivered segments are up to a
-/// segment old, so audio captured in the seconds before a pause would otherwise
-/// keep a dot green for the whole delivered window — the exact opposite of the
-/// promise a pause makes. A pause stops the phones and the machines too, so none
-/// of them may be resurrected by what they recorded just before it.
+/// ⚠ Delivery evidence is discarded while capture is paused, for every kind:
+/// audio captured just before a pause would otherwise keep a dot green for the
+/// whole delivery window, contradicting the pause.
 pub fn fleet_sources(
     root: &std::path::Path,
     conn: &Connection,

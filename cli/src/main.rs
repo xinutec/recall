@@ -1,7 +1,7 @@
 //! Argument parsing and dispatch for `recall-cli`.
 //!
 //! Hand-rolled, like `runner` and `audiod`: the workspace carries no argument
-//! parser, and one subcommand table is not the place to start.
+//! parser.
 
 use cli::api::{Api, Error};
 use cli::render;
@@ -9,9 +9,8 @@ use cli::render;
 /// The fleet: the system of record, and the only thing this talks to.
 const DEFAULT_API: &str = "http://10.100.0.2:8000";
 const DEFAULT_LIMIT: i64 = 100;
-/// A conversation breaks after a silence longer than this, matching
-/// `recalld::conversations::DEFAULT_GAP_SECONDS`. Named here rather than left to
-/// the route's default so the value a person sees is the value in this file.
+/// A conversation breaks after a silence longer than this. Matches
+/// `recalld::conversations::DEFAULT_GAP_SECONDS`, but sent explicitly.
 const DEFAULT_GAP: f64 = 300.0;
 
 fn usage() -> ! {
@@ -75,8 +74,7 @@ fn take_flag(args: &mut Vec<String>, flag: &str) -> bool {
     true
 }
 
-/// `Ok(false)` means "nothing matched", which is exit 1 — the shape the Python
-/// had, so a script that branched on it keeps working.
+/// `Ok(false)` means nothing matched, which exits 1 so scripts can branch on it.
 fn run(api: &Api, command: &str, mut args: Vec<String>) -> Result<bool, Error> {
     match command {
         "search" => search(api, &mut args),
@@ -176,10 +174,7 @@ fn transcript(api: &Api, args: &[String]) -> Result<bool, Error> {
 
 /// A day of the always-on stream: list its conversations, or read one.
 ///
-/// ⚠ The window is the LOCAL day, not the UTC one. A person asking for
-/// "yesterday" means the day they lived, and the archive stores UTC — so an
-/// evening conversation would land on the wrong date if the bounds were taken
-/// literally.
+/// The window is the local day, not the UTC one (see [`cli::day`]).
 fn day(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
     let which = take_value(args, "--conv");
     let limit = take_limit(args);
@@ -242,9 +237,8 @@ fn sources(api: &Api) -> Result<bool, Error> {
     Ok(!sources.is_empty())
 }
 
-/// ⚠ Read-only, and the reason it is a command at all: the pause is Pippijn's
-/// control, and anything that could silence a recorder is preceded by asking
-/// what the recorders are currently doing.
+/// Read-only: what the recorders are doing, to check before anything that
+/// could pause them.
 fn capture(api: &Api) -> Result<bool, Error> {
     let capture = api.capture()?;
     println!(
@@ -264,20 +258,16 @@ fn capture(api: &Api) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// ⚠ The one write, and it reaches the corrections corpus — the only thing in
-/// the archive that is not re-derivable from audio. `--apply` is required and
-/// the change is printed either way: the Python this replaces was dry-run by
-/// default for the same reason, and a correction typed against the wrong id is
-/// not recoverable from the CLI.
+/// ⚠ The one write. It reaches the corrections corpus, the only part of the
+/// archive not re-derivable from audio, so it is a dry run unless `--apply` is
+/// given, and the change is printed either way.
 ///
-/// Two forms, because the Python had two and dropping one would lose the
-/// usable one:
+/// Two forms:
 ///
 ///     correct <id> "<the whole corrected line>"
 ///     correct --session <id> --fix "OLD=>NEW" [--fix ...]
 ///
-/// The second is how a person actually corrects a transcript — by the words
-/// they can see, not by an id they would have to look up first.
+/// The second corrects by the visible words, without looking up an id.
 fn correct(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
     let apply = take_flag(args, "--apply");
     let session = take_value(args, "--session");
@@ -320,10 +310,8 @@ fn correct_by_id(api: &Api, args: &[String], apply: bool) -> Result<bool, Error>
     Ok(true)
 }
 
-/// ⚠ **A substring matching more than one turn is SKIPPED, not guessed at.**
-/// This is how the Python behaved and the reason is the corpus: "yes" appears in
-/// a hundred turns, and correcting the wrong one writes a person's words onto
-/// somebody else's sentence, where nothing later can tell it was misplaced.
+/// A substring matching more than one turn is skipped, not guessed at: a
+/// correction on the wrong turn cannot be detected later.
 fn correct_by_substring(
     api: &Api,
     session: &str,

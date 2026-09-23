@@ -3,9 +3,6 @@
 /**
  * What a write route answers with when it has nothing to return.
  *
- * Copies the Python's `{"ok": true}` rather than improving on it, so a route
- * can move between the two implementations without the frontend seeing a
- * change. Nothing reads the field — the app branches on the status — which is
- * exactly why it is cheap to keep identical.
+ * `{"ok": true}`. Nothing reads the field; the app branches on the status.
  */
 export type Ok = { ok: boolean, };

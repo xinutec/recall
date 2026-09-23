@@ -1,17 +1,12 @@
-//! What the browser tells the server, ported from
-//! `recall.api_client_reports`: error reports and the activity trace.
+//! What the browser tells the server: error reports and the activity trace.
 //!
-//! Two routes that write no database and store nothing. `/api/log` records a
-//! browser-side error to a file, because the phone has no console anyone can
-//! read; `/api/telemetry` records what a person DID — a tap that hit a cache, a
-//! control that was disabled, a screen that rendered wrong — none of which
-//! reaches the server otherwise, so "I pressed it and nothing happened" would be
-//! undiagnosable.
+//! Neither route touches a database. `/api/log` appends a browser-side error to
+//! a file, because the phone has no readable console; `/api/telemetry` logs what
+//! a person did (a tap that hit a cache, a disabled control), which otherwise
+//! never reaches the server.
 //!
-//! ⚠ **`one_line` is a SECURITY BOUNDARY, not tidiness.** A label is verbatim UI
-//! text written into a log line as `label=…`. A newline inside it forges WHOLE
-//! LOG LINES — including further `client-event` lines attributed to someone else
-//! — and the log stops being evidence, which is the one thing it exists to be.
+//! ⚠ `one_line` is a security boundary: client text goes verbatim into log
+//! lines, and a newline in it could forge whole `client-event` lines.
 
 use axum::Json;
 use axum::response::{IntoResponse, Response};
@@ -23,16 +18,12 @@ const MAX_EVENTS: usize = 100;
 /// glyph is never split in half.
 const MAX_LABEL: usize = 160;
 
-/// Characters that are invisible but can REORDER a rendered line — bidi
-/// overrides and zero-width marks. They cannot forge a newline, so they are not
-/// a line-injection risk; they can make a log line read as something other than
-/// what it says, which is the same attack against the same property.
+/// Invisible characters that can reorder or disguise a rendered line: bidi
+/// overrides and zero-width marks. They cannot forge a newline, but they can
+/// make a log line read as something it does not say.
 ///
-/// ⚠ Deliberately an explicit short list rather than a general Unicode-category
-/// table. `char::is_control` already covers Cc and `char::is_whitespace` covers
-/// the U+2028/U+2029 line and paragraph separators, so what is left is this
-/// bounded set. A hand-maintained copy of the full Cf category would rot against
-/// every Unicode release while adding nothing here.
+/// An explicit list rather than the whole Cf category: `char::is_control`
+/// covers Cc and `char::is_whitespace` covers U+2028/U+2029, leaving this set.
 const REORDERING: &[char] = &[
     '\u{00AD}', // soft hyphen
     '\u{200B}', '\u{200C}', '\u{200D}', '\u{200E}', '\u{200F}', // zero-width + LRM/RLM
@@ -78,11 +69,9 @@ pub struct ClientLog {
 
 /// One thing that happened in the client.
 ///
-/// ⚠ The field types are the CONTRACT with a shipped app, not a choice. `at` is
-/// the client's clock in epoch MILLISECONDS — a number, and typing it as a string
-/// makes every telemetry batch fail to deserialise. `path` is required. Both were
-/// wrong in the first draft of this port and dev-lint's mirror check caught it
-/// against the generated `models.ts`, which is what that check is for.
+/// ⚠ The field types are the contract with a shipped app. `at` is the client's
+/// clock in epoch milliseconds, a number; typed as a string, every batch fails
+/// to deserialise. `path` is required.
 #[derive(Debug, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct TelemetryEvent {
@@ -94,9 +83,9 @@ pub struct TelemetryEvent {
     pub at: i64,
 }
 
-/// The line `/api/log` appends. Split out so the format is testable without a
-/// filesystem — only the FIRST line of a stack is kept, so one client error
-/// cannot write a hundred lines.
+/// The line `/api/log` appends, split out to be testable without a filesystem.
+/// Only the first line of a stack is kept, so one client error cannot write a
+/// hundred lines.
 #[must_use]
 pub fn log_line(stamp: &str, entry: &ClientLog) -> String {
     let mut line = format!(
@@ -145,9 +134,8 @@ pub async fn log_route(
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        // ⚠ A failed write must not fail the request: this endpoint exists to
-        // report that something already went wrong in the browser, and losing
-        // the report is better than turning it into a second error.
+        // A failed write must not fail the request: losing the report is better
+        // than turning it into a second error.
         match std::fs::OpenOptions::new()
             .create(true)
             .append(true)

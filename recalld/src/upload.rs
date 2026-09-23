@@ -1,18 +1,15 @@
-//! Uploading a discrete recording — a hospital appointment, a meeting — as a new
-//! session. Ported from `recall.api_sessions.create_session`.
+//! Uploading a discrete recording (an appointment, a meeting) as a new session.
 //!
-//! This is use case 2's front door: a file arrives, becomes a source, and the
-//! runner transcribes it. The session appears in the list AT ONCE with zero
-//! turns, because an upload that showed nothing until transcription finished
-//! would look like it had failed.
+//! The file becomes a source and the runner transcribes it. The session appears
+//! in the list at once with zero turns, so the upload does not look failed while
+//! transcription runs.
 //!
-//! ⚠ **Two writes, and the second is the one that gets it read.** `register`
-//! makes the session VISIBLE in the meaning plane; `deliver` puts the blob in the
-//! ingest plane, which is where the work queue looks. Doing only the first is
-//! #1649: a session in the list that nothing will ever transcribe.
+//! Two writes: [`register`] makes the session visible in the meaning plane;
+//! [`deliver`] puts the blob in the ingest plane, where the work queue looks.
+//! Without the second, the session is listed but never transcribed.
 //!
-//! ⚠ **The container is kept, not forced to WAV.** ffprobe validates what is
-//! actually inside; the suffix only gates what is worth trying.
+//! The container is kept as uploaded. ffprobe validates the contents; the suffix
+//! only gates what is worth trying.
 
 use crate::pyjson;
 use audiocore::instant;
@@ -23,13 +20,12 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Containers a conversation recording might arrive in — phone voice memos are
-/// m4a, most recorders export mp3.
+/// Containers a recording might arrive in: phone voice memos are m4a, most
+/// recorders export mp3.
 ///
-/// ⚠ **Every one of these must also parse as `audiocore::names::Extension`**, or
-/// the upload is stored and then 400s on the fetch that would transcribe it
-/// (#1649). `an_accepted_container_can_also_be_fetched_back` holds the two
-/// together; a suffix added here without that is a silently unreadable session.
+/// ⚠ Each must also parse as `audiocore::names::Extension`, or the upload is
+/// stored and then 400s on the fetch that would transcribe it. The test
+/// `an_accepted_container_can_also_be_fetched_back` holds the two together.
 pub const AUDIO_SUFFIXES: &[&str] = &[
     ".mp3", ".m4a", ".mp4", ".wav", ".flac", ".aac", ".ogg", ".opus", ".webm",
 ];
@@ -75,10 +71,8 @@ pub struct Media {
     pub channels: i64,
 }
 
-/// Sample rate and channels from the stream header, which is reliable.
-///
-/// ⚠ The DURATION is not taken from the header. Segment-muxer output carries
-/// none, so it is measured by decoding — see [`decode_duration`].
+/// Sample rate and channels from the stream header. The duration is measured by
+/// `decode_duration` instead: segment-muxer output has none in its header.
 pub fn probe(path: &Path) -> Result<Media, UploadError> {
     let out = Command::new("ffprobe")
         .args([
@@ -122,11 +116,9 @@ pub fn probe(path: &Path) -> Result<Media, UploadError> {
     })
 }
 
-/// Exact duration by decoding to raw PCM and counting bytes.
-///
-/// ⚠ Header-independent on purpose, and exact at any length — including
-/// sub-second trailing segments, where ffmpeg's human-readable progress reports
-/// `time=N/A` and a header-derived answer is simply absent.
+/// Exact duration by decoding to raw PCM and counting bytes. Independent of the
+/// header, so it also works for sub-second segments where ffmpeg's progress
+/// reports `time=N/A`.
 fn decode_duration(path: &Path, sample_rate: i64, channels: i64) -> Result<f64, UploadError> {
     let out = Command::new("ffmpeg")
         .args(["-nostdin", "-v", "error", "-i"])
@@ -148,7 +140,7 @@ fn decode_duration(path: &Path, sample_rate: i64, channels: i64) -> Result<f64, 
     Ok(frames as f64 / sample_rate as f64)
 }
 
-/// The suffix, lowercased, including the dot — or empty when there is none.
+/// The suffix, lowercased, including the dot; empty when there is none.
 pub fn suffix_of(filename: &str) -> String {
     Path::new(filename)
         .extension()
@@ -158,25 +150,16 @@ pub fn suffix_of(filename: &str) -> String {
 
 /// A meeting's id and default title, from its LOCAL start.
 ///
-/// ⚠ Local is Europe/London, not the host's zone. The pod runs UTC, so deriving
-/// this from the container clock would shift the id by an hour every summer and
-/// mint a different id for the same recording.
+/// Local is Europe/London, not the host's zone: the pod runs UTC, which would
+/// shift the id by an hour in summer.
 pub fn meeting_id(started: DateTime<Utc>) -> (String, String) {
     let local = started.with_timezone(&London);
-    // ⚠ **The autumn clock change makes a local time ambiguous, and the id is
-    // local** (#1476). On the night the clocks go back, 01:00-02:00 happens
-    // TWICE, so 00:30Z and 01:30Z both read as 01:30 and derived ONE id. The
-    // second upload then registered the id the first already held — an UPSERT,
-    // not a refusal — its segment landed under the same source because the start
-    // times differ, and its audio was written into the first meeting's
-    // directory. Two recordings became one session and nothing errored.
-    //
-    // Marking the REPEAT rather than rebasing to UTC is the fix that costs
-    // nothing: the id stays the local time a person reads, every meeting that
-    // already exists keeps its spelling, and only the second pass through a
-    // repeated hour gains a marker. Deriving it from the instant rather than
-    // from the database also keeps it idempotent — the same recording uploaded
-    // twice still lands on one id, where a collision check would mint a second.
+    // ⚠ When the clocks go back, 01:00-02:00 local happens twice, so two
+    // different instants read as the same local time. Without a marker they
+    // would share one id and `register` would upsert them into one session.
+    // Only the second pass is marked, so every other id keeps its spelling.
+    // Deriving the marker from the instant (not a collision check against the
+    // database) keeps the id idempotent for a re-uploaded recording.
     let marker = repeated_hour_marker(started, &local);
     (
         format!(
@@ -202,13 +185,9 @@ pub fn meeting_id(started: DateTime<Utc>) -> (String, String) {
     )
 }
 
-/// The zone abbreviation, but ONLY for the second pass through a repeated local
-/// hour — otherwise `None`.
-///
-/// ⚠ The control that matters is an ordinary winter meeting: it is in GMT too,
-/// and marking every GMT meeting would rename everything from November to March.
-/// What distinguishes the repeat is that its local time maps back to TWO
-/// instants, and this one is the later of them.
+/// The zone abbreviation, only for the second pass through a repeated local
+/// hour; otherwise `None`. Being in GMT is not enough (every winter meeting is):
+/// the local time must map back to two instants and this must be the later.
 fn repeated_hour_marker(started: DateTime<Utc>, local: &DateTime<chrono_tz::Tz>) -> Option<String> {
     use chrono::offset::LocalResult;
     match London.from_local_datetime(&local.naive_local()) {
@@ -219,11 +198,10 @@ fn repeated_hour_marker(started: DateTime<Utc>, local: &DateTime<chrono_tz::Tz>)
     }
 }
 
-/// Where the uploaded file lands: the INGEST plane's directory for its source,
-/// where every delivered blob lives, so an upload is leased, fetched over
-/// `/ingest/v1/blob` and transcribed by the road a microphone clip takes.
-/// Older rows point at `<root>/<source>/`; playback reads `audio_segments.path`,
-/// so they keep working where they are.
+/// Where the uploaded file lands: the ingest plane's directory for its source,
+/// so an upload is leased, fetched over `/ingest/v1/blob` and transcribed the
+/// same way as a microphone clip. Older rows point at `<root>/<source>/`; they
+/// still play because playback reads `audio_segments.path`.
 pub fn stored_path(root: &Path, source: &str, started: DateTime<Utc>, suffix: &str) -> PathBuf {
     let stamp = format!(
         "{:04}{:02}{:02}T{:02}{:02}{:02}",
@@ -237,12 +215,11 @@ pub fn stored_path(root: &Path, source: &str, started: DateTime<Utc>, suffix: &s
     crate::store::source_dir(root, source).join(format!("{source}-{stamp}{suffix}"))
 }
 
-/// Record the blob in the INGEST plane, so `queue::derive_segment_jobs` sees it.
+/// Record the blob in the ingest plane, so `queue::derive_segment_jobs` sees it.
 ///
-/// ⚠ Idempotent by lookup rather than by `INSERT OR IGNORE`: `segments.filename`
-/// is the primary key, and a second upload under the same name is the same
-/// recording — re-inserting would fail the whole request for a row that already
-/// says what we would write.
+/// Idempotent by lookup: `segments.filename` is the primary key, and a second
+/// upload under the same name is the same recording, so re-inserting would fail
+/// the request for a row that already holds what we would write.
 pub fn deliver(
     ingest: &Connection,
     source: &str,
@@ -263,9 +240,8 @@ pub fn deliver(
         &crate::store::Row {
             source: source.to_owned(),
             filename,
-            // ⚠ The INGEST plane's spelling, a trailing Z — not the meaning
-            // plane's `+00:00`. The two are compared as TEXT nowhere, but a row
-            // that reads differently from its neighbours invites someone to try.
+            // The ingest plane's spelling (trailing Z), not the meaning plane's
+            // `+00:00`, so this row matches its neighbours.
             start_utc: started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             bytes: bytes as u64,
             sha256: sha256.to_owned(),
@@ -277,12 +253,10 @@ pub fn deliver(
 
 /// Register the source and its one audio segment.
 ///
-/// ⚠ **REGISTER, not add.** The worker scans the data root continuously and may
-/// already have claimed this directory with a DISCOVERED kind and a placeholder
-/// name. An `INSERT OR IGNORE` would leave that guess standing and the session
-/// would never appear in the list — because the list selects on `kind='upload'`.
-/// The name is preserved unless it is still the placeholder: a title the user
-/// chose is theirs.
+/// An upsert, not `INSERT OR IGNORE`: the source may already exist with another
+/// kind (such as `discovered`) and a placeholder name equal to its id, and the
+/// list only shows `kind = 'upload'`. The name is replaced only while it is
+/// still the placeholder, so a title the user chose is kept.
 pub fn register(
     conn: &Connection,
     source: &str,
@@ -373,8 +347,8 @@ struct Form {
     start: String,
 }
 
-// An axum `Response` as the error is the handler idiom — `Result<T, Response>`
-// is itself a response — and it is returned once, so boxing it buys nothing.
+// A `Response` as the error is the axum handler idiom, and it is returned once,
+// so boxing it buys nothing.
 #[expect(clippy::result_large_err, reason = "the Err is the HTTP response")]
 async fn read_form(mut parts: Multipart) -> Result<Form, Response> {
     let (mut filename, mut bytes, mut title, mut start) =
@@ -454,9 +428,8 @@ pub async fn create_session_route(
         let path = stored_path(&root, &source, started, &suffix);
         std::fs::create_dir_all(path.parent().expect("a file has a parent"))?;
         std::fs::write(&path, &form.bytes)?;
-        // ⚠ Probed AFTER writing and removed if it will not read: a file we
-        // cannot decode must not be left behind for the worker to find and
-        // register as a source of its own.
+        // Probed after writing, and removed if it will not decode, so no
+        // unreadable file is left in the data root.
         let media = match probe(&path) {
             Ok(media) => media,
             Err(err) => {
@@ -472,9 +445,8 @@ pub async fn create_session_route(
             started,
             media,
         )?;
-        // ⚠ The ingest row is what makes it transcribable; the meaning rows above
-        // only make it VISIBLE. An upload that registered but never delivered is
-        // exactly #1649 — a session in the list that nothing will ever read.
+        // The ingest row makes it transcribable; the meaning rows above only
+        // make it visible.
         deliver(
             &crate::store::open(&root)?,
             &source,

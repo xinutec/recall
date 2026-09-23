@@ -3,20 +3,15 @@
 //! not list, not another device's directory — so a stolen recorder can append
 //! audio and do nothing else, and is revoked by deleting its line.
 //!
-//! One deliberate widening: a `*` line grants a token EVERY source — still
-//! write-only. It exists for the Mac's backfill (stage B), which mirrors an
-//! archive holding every device's master plus a new source per uploaded
-//! meeting; enumerating those per token would drift with each recording, and
-//! a missed line would read as a device fault. A device never gets `*` — the
-//! custodian of all the audio is the one holder this doesn't widen anything
-//! for.
+//! One deliberate widening: a `*` line grants a token every source, still
+//! write-only. It is for the Mac's backfill, which mirrors every device's audio
+//! plus a new source per uploaded meeting, so a per-source list would drift. A
+//! device never gets `*`.
 //!
-//! The file lives outside the repo and outside the image (`--tokens` points at
-//! a mounted secret); one `<source> <token>` per line, `#` comments and blank
-//! lines ignored. Read once at startup — rotation is a pod rollout, which is
-//! how every other secret here already rotates. Unconfigured means open: the
-//! repo's standing inert-unless-configured pattern, so dev and tests carry no
-//! ceremony and the fleet raises the gate by mounting the file.
+//! The file lives outside the repo and the image (`--tokens` points at a
+//! mounted secret); one `<source> <token>` per line, `#` comments and blank
+//! lines ignored. Read once at startup, so rotation is a pod rollout.
+//! Unconfigured means open, so dev and tests need no setup.
 
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -34,9 +29,9 @@ fn digest(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
-/// The authorization verdict, split three ways so the surface can answer 401
-/// (who are you) and 403 (not yours) distinctly — a recorder mis-holding a
-/// *valid* neighbour's token is a configuration fault worth naming.
+/// The authorization verdict, split so the surface can answer 401 (who are
+/// you) and 403 (not yours) distinctly: a recorder holding a valid neighbour's
+/// token is a configuration fault worth naming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Allowed,
@@ -49,9 +44,8 @@ impl Tokens {
         Self::parse(&std::fs::read_to_string(path)?)
     }
 
-    /// The same grammar from any carrier — the fleet supplies it as an env
-    /// var projected from `recall-secret` (`RECALLD_INGEST_TOKENS`), dev as a
-    /// file, and both stay one parser.
+    /// The same grammar from any carrier: the fleet supplies it as an env var
+    /// (`RECALLD_INGEST_TOKENS`), dev as a file.
     pub fn parse(text: &str) -> std::io::Result<Self> {
         let mut by_source: HashMap<String, Vec<[u8; 32]>> = HashMap::new();
         let mut any_source: Vec<[u8; 32]> = Vec::new();

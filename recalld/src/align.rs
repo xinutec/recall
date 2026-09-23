@@ -1,23 +1,13 @@
 //! Assign a whole-block transcription to diarized speakers, by word timing.
 //!
-//! The high-quality path, and the reason two shims run over one clip:
-//! transcribe the whole block once — full context, so the language is detected
-//! reliably and the anti-hallucination decoding works — then diarize it
-//! separately and assign each word to whoever was speaking at that moment. The
-//! ASR context stays intact while the result still splits by speaker, at word
-//! granularity rather than a coarse midpoint.
+//! The block is transcribed once, with full context so language detection and
+//! anti-hallucination decoding work, and diarized separately; each word then
+//! goes to whoever was speaking at its midpoint.
 //!
-//! Word timestamps (Whisper) and diarization boundaries (pyannote) are both
-//! ~100 ms approximate, so a single word at a speaker boundary — or a one-word
-//! backchannel ("yeah") — routinely lands in the wrong span and would become its
-//! own spurious turn. After the raw per-word assignment we **smooth**: any run
-//! shorter than `MIN_TURN_S` is absorbed into a neighbour. Real speaking turns
-//! are longer than that; sub-threshold "turns" are alignment artefacts.
-//!
-//! ⚠ **This is a PORT of `recall.align`, which is still live.** Both run until
-//! the Python refine path retires, so a divergence here is a bug, not a variant:
-//! `tests/align.rs` is `tests/test_align.py` case for case, including the
-//! jitter-flip case that names the ping-pong bug this smoothing exists for.
+//! Word timestamps and diarization boundaries are both ~100 ms approximate, so
+//! a word at a speaker boundary, or a one-word backchannel, often lands in the
+//! wrong span. Runs shorter than `MIN_TURN_S` are therefore absorbed into a
+//! neighbour: real turns are longer than that.
 
 use serde::Deserialize;
 use std::cmp::Ordering;
@@ -27,17 +17,11 @@ use std::cmp::Ordering;
 pub const MIN_TURN_S: f64 = 0.5;
 
 /// One word with its timing, as the `asr` shim reports it.
-/// ⚠ **TWO WIRE SPELLINGS, both real.** `shim_asr` sends `text` and
-/// `probability` today; a stored `transcribe-room` result from 2026-09-11
-/// carries mlx-whisper's raw `word` with no probability at all
-/// (`tests/integration/turns.rs` quotes one). Results are STORED, so both eras
-/// sit in the queue and a parser that knows only the current spelling would
-/// align nothing for the older one — silently, because a block with no words
-/// yields no turns and looks exactly like a block with nothing said in it.
 ///
-/// So `word` is an alias and the probability defaults, the way
-/// `store._load_word_timings` already substitutes 1.0 for timings that never
-/// stored one.
+/// Stored results use two spellings: `text` with `probability`, and older
+/// mlx-whisper output with `word` and no probability. Hence the alias and the
+/// default. A parser that missed the old spelling would align no words, which
+/// looks exactly like a silent block.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Word {
     pub start: f64,
@@ -49,9 +33,8 @@ pub struct Word {
     pub probability: f64,
 }
 
-/// What a word with no stored probability is worth. Not zero: an absent score is
-/// "nobody measured", and averaging zeros into a turn's confidence would report
-/// every old-era turn as one the model had no faith in.
+/// Probability for a word that has none. Not zero: an absent score means
+/// "not measured", and zeros would drag the turn's mean confidence down.
 const fn unscored() -> f64 {
     1.0
 }
@@ -103,9 +86,8 @@ fn speaker_at(t: f64, turns: &[SpeakerTurn]) -> Option<&str> {
     if let Some(turn) = turns.iter().find(|tr| tr.start <= t && t <= tr.end) {
         return Some(&turn.speaker);
     }
-    // `min_by` keeps the FIRST of equal minima, which is what Python's `min`
-    // does — the tie-break is observable when a word sits exactly between two
-    // turns, so the two implementations must agree on it.
+    // `min_by` keeps the first of equal minima. The tie-break shows when a word
+    // sits exactly between two turns; `tests/integration/align_parity.rs` pins it.
     turns
         .iter()
         .min_by(|a, b| {

@@ -1,14 +1,12 @@
-//! The local-mic capture pipeline: a PCM producer (sox on `CoreAudio`) piped
-//! into the ffmpeg segmenter through a metered pump, watched by the
-//! dead-segment watchdog. Port of `recall.runner` + the capture entrypoint of
-//! `recall.cli` (`_cmd_record` / `_serve_paused_aware`).
+//! The local-mic capture pipeline: a PCM producer (sox on `CoreAudio`, or
+//! ffmpeg on ALSA) piped into the ffmpeg segmenter through a metered pump,
+//! watched by the dead-segment watchdog.
 //!
-//! The split is what makes capture gap-free: sox does not drop samples, and
-//! ffmpeg only ever sees a clean continuous stream. sox's one known failure —
-//! its `CoreAudio` read rarely wedges to digital zeros while the device stays
-//! healthy — is covered by the watchdog: it cycles the producer when closed
-//! segments decode to pure silence (or rotation stalls), so a wedge costs
-//! minutes instead of the rest of the recording.
+//! The split keeps capture gap-free: sox does not drop samples, and ffmpeg only
+//! sees a clean continuous stream. sox's one known failure, a `CoreAudio` read
+//! that wedges to digital zeros while the device stays healthy, is covered by
+//! the watchdog: it cycles the producer when closed segments decode to pure
+//! silence (or rotation stalls), so a wedge costs minutes.
 
 use crate::events;
 use crate::meter::{SILENCE_PEAK, StreamMeter};
@@ -31,19 +29,15 @@ const WATCH_POLL: Duration = Duration::from_secs(30);
 const DEAD_SEGMENTS_TO_CYCLE: u32 = 2;
 /// producer -> segmenter pump chunk (matches the ingest pump's socket chunk).
 const PUMP_CHUNK_BYTES: usize = 65536;
-/// Grace for ffmpeg to flush + finalise the current segment on a pause before
-/// force-killing — so a pause never leaves a truncated segment file.
+/// Grace for ffmpeg to finalise the current segment on a pause before
+/// force-killing, so a pause never leaves a truncated segment.
 const TERM_GRACE: Duration = Duration::from_secs(10);
 /// How often the pipe re-checks the pause while running / while parked.
 const STOP_POLL: Duration = Duration::from_secs(1);
 
-/// sox argv for the pinned `CoreAudio` device. An unknown device name makes sox
-/// fail hard (the launchd agent crash-loops visibly) — never a silent fallback
-/// to the system default, which a Bluetooth handsfree mic can grab.
-/// Which program opens the audio device. `Sox` is the Mac's proven path
-/// (`CoreAudio`, sample-perfect); `Alsa` is ffmpeg reading ALSA — geb's own
-/// proven device path from its streaming era, kept rather than teaching sox a
-/// second platform.
+/// Which program opens the audio device. `Sox` is the Mac's path (`CoreAudio`,
+/// sample-perfect); `Alsa` is ffmpeg reading ALSA on the Linux recorder,
+/// rather than teaching sox a second platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Producer {
     Sox,
@@ -51,7 +45,7 @@ pub enum Producer {
 }
 
 /// ffmpeg argv for an ALSA device: s16le on stdout, downmixed and resampled
-/// to the segmenter's shape, exactly as geb's streaming client had ffmpeg do.
+/// to the segmenter's shape.
 pub fn alsa_argv(
     device: Option<&str>,
     sample_rate: u32,
@@ -69,16 +63,11 @@ pub fn alsa_argv(
     ]
     .map(String::from)
     .to_vec();
-    // ⚠ **`-channels` BELONGS BEFORE `-i`, and `-ac` after it is not the same
-    // thing.** Options before `-i` configure the INPUT; after, the output. The
-    // `-ac` below downmixes whatever arrives — but the ALSA demuxer opens the
-    // device at its own default of TWO channels first, and a MONO-only
-    // microphone refuses outright:
+    // ⚠ `-channels` belongs before `-i`; `-ac` after it is not the same thing.
+    // Before `-i` configures the input. Without it the ALSA demuxer opens the
+    // device at two channels, and a mono-only microphone refuses:
     //
     //     [in#0] cannot set channel count to 2 (Invalid argument)
-    //     [in#0] Error opening input: Input/output error
-    //
-    // A stereo device hides this; a mono one cannot open at all.
     argv.splice(argv.len().., ["-channels".to_owned(), channels.to_string()]);
     argv.push("-i".to_owned());
     argv.push(device.unwrap_or("default").to_owned());
@@ -100,6 +89,9 @@ pub fn alsa_argv(
     argv
 }
 
+/// sox argv for the pinned `CoreAudio` device. An unknown device name makes sox
+/// fail hard (the launchd agent crash-loops visibly), never a silent fallback
+/// to the system default, which a Bluetooth handsfree mic can grab.
 pub fn sox_argv(
     device: Option<&str>,
     sample_rate: u32,
@@ -133,9 +125,9 @@ pub fn sox_argv(
     argv
 }
 
-/// True when the segment holds nothing or decodes to pure digital zeros — the
+/// True when the segment holds nothing or decodes to pure digital zeros, the
 /// signature of a wedged device read (a live room's noise floor is never
-/// zero). Unreadable is NOT a verdict: never cycle on doubt.
+/// zero). Unreadable is not a verdict: never cycle on doubt.
 pub fn segment_is_digital_silence(path: &Path) -> bool {
     match path.metadata() {
         Ok(meta) if meta.len() == 0 => return true,
@@ -163,7 +155,7 @@ fn starts_after(name: &str, cutoff: DateTime<Utc>) -> bool {
     })
 }
 
-/// Why a `record` run ended — the caller's respawn/park decision hangs on it.
+/// Why a `record` run ended; the caller's respawn/park decision hangs on it.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Ended {
     /// The pause file stopped it; park and resume later.
@@ -177,7 +169,7 @@ fn mark_alive(out_dir: &Path) {
 }
 
 /// The watchdog loop body, one poll: returns `Some(reason)` when the producer
-/// must be cycled. Split from the thread for testability of the decision.
+/// must be cycled. Split from the thread so the decision is testable.
 struct Watchdog {
     out_dir: PathBuf,
     source_id: String,
@@ -204,7 +196,7 @@ impl Watchdog {
             self.newest_for = Duration::ZERO;
         }
         let stalled = self.newest_for >= self.stall_after;
-        // The last name is the open segment; before it is the newest CLOSED one.
+        // The last name is the open segment; before it is the newest closed one.
         if names.len() > 1 {
             let closed = &names[names.len() - 2];
             if Some(closed) != self.last_checked.as_ref() {
@@ -301,7 +293,7 @@ pub fn record(
                 };
                 if writer.write_all(&buf[..n]).is_err() {
                     // The segmenter died mid-run: tell record() so it can
-                    // terminate sox — a producer against a full pipe wedges.
+                    // terminate sox, since a producer against a full pipe wedges.
                     pump_dead.store(true, Ordering::Relaxed);
                     break;
                 }
@@ -344,7 +336,7 @@ pub fn record(
         }
         if pause::is_paused(root, Utc::now()) {
             // Close the producer first, then let the segmenter finalise the
-            // current segment on the resulting EOF — no audio lost.
+            // current segment on the resulting EOF, so no audio is lost.
             let _ = producer.kill();
             let _ = producer.wait();
             wait_grace(&mut consumer, TERM_GRACE);
@@ -401,29 +393,18 @@ fn wait_grace(child: &mut Child, grace: Duration) {
     }
 }
 
-/// Park while paused, run while active, re-park when a pause interrupts —
-/// exiting (for the `KeepAlive` respawn) only when a run ends for a non-pause
-/// reason. Durably marks RESUME/PAUSE transitions, best-effort.
 /// How often a store-and-forward recorder says it is alive.
 ///
-/// ⚠ **Its heartbeat is NOT its delivery, and conflating them hid a dead
-/// recorder for eight days.** geb's beat sat at 2026-09-05 — the day it stopped
-/// being a streaming client — while the devices list showed it fine, because
-/// LIVENESS there is derived from segments arriving. That masking is the whole
-/// problem: a recorder delivers nothing when it is paused AND when its
-/// microphone is dead, and those must not look alike.
-///
-/// Sixty seconds because that is the segment length: a beat per segment means
-/// "still recording" and a beat without one means "running, but producing
-/// nothing" — which is exactly the state delivery cannot express.
+/// ⚠ The heartbeat is not the delivery: a recorder delivers nothing both when
+/// paused and when its microphone is dead, and liveness derived from arriving
+/// segments cannot tell those apart. Sixty seconds, the segment length.
 const BEAT_EVERY: Duration = Duration::from_mins(1);
 
 /// What this recorder tells the fleet about itself.
 ///
-/// `streaming` is FALSE by construction — this is the store-and-forward path,
-/// so audio reaches the fleet by upload, never by a live socket. `mic_ok` is
-/// what the last producer start actually did, not a guess: a device that will
-/// not open is the one fact worth beating.
+/// `streaming` is false by construction: on the store-and-forward path audio
+/// reaches the fleet by upload. `mic_ok` is what the last producer start
+/// actually did.
 pub fn beat_body(source_id: &str, mic_ok: bool) -> serde_json::Value {
     serde_json::json!({
         "device": source_id,
@@ -434,9 +415,8 @@ pub fn beat_body(source_id: &str, mic_ok: bool) -> serde_json::Value {
     })
 }
 
-/// Beat until the process ends. Its own thread, so a fleet that stops answering
-/// slows nothing down: the recorder's job is the microphone, and a beat is a
-/// courtesy to whoever is watching.
+/// Beat until the process ends, on its own thread so a fleet that stops
+/// answering slows nothing down.
 fn spawn_beat(source_id: &str, url: &str, mic_ok: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     let source_id = source_id.to_owned();
     let url = url.to_owned();
@@ -449,6 +429,9 @@ fn spawn_beat(source_id: &str, url: &str, mic_ok: std::sync::Arc<std::sync::atom
     });
 }
 
+/// Park while paused, run while active, re-park when a pause interrupts;
+/// exit (for the `KeepAlive` respawn) only when a run ends for a non-pause
+/// reason. Marks RESUME/PAUSE transitions in the capture log, best-effort.
 pub fn serve_paused_aware(
     root: &Path,
     source_id: &str,
@@ -466,8 +449,8 @@ pub fn serve_paused_aware(
             Producer::Alsa => "alsa",
         },
     );
-    // Starts TRUE: nothing has failed yet, and a recorder that beat `micOk:
-    // false` before its first attempt would cry wolf on every restart.
+    // Starts true: nothing has failed yet, and `micOk: false` before the first
+    // attempt would cry wolf on every restart.
     let mic_ok = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     if let Some(url) = beat_url {
         spawn_beat(source_id, url, mic_ok.clone());
@@ -478,9 +461,8 @@ pub fn serve_paused_aware(
         }
         events::record(root, events::RESUME, source_id, None);
         let ended = record(root, source_id, device, producer_kind, config, max_seconds);
-        // ⚠ `Ended::Paused` is the ONLY clean end. Anything else means the
-        // producer stopped on its own — a device that would not open, a stream
-        // that died — and that is precisely what the beat exists to carry.
+        // `Ended::Paused` is the only clean end. Anything else means the
+        // producer stopped on its own, which is what the beat exists to carry.
         mic_ok.store(ended == Ended::Paused, std::sync::atomic::Ordering::Relaxed);
         if ended == Ended::Paused {
             events::record(root, events::PAUSE, source_id, None);

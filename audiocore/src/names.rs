@@ -1,25 +1,18 @@
 //! The segment-name grammar every recorder speaks:
 //! `<source>-YYYYMMDDTHHMMSS.<ext>`, UTC, stamped by the recorder's own clock
 //! at segment open (docs/architecture.md, decision 4). The name is the only
-//! timing metadata a segment carries, so ONE crate parses it — recalld's
-//! ingest door, audiod's sweeps and rebase, and the room builder all read
-//! these functions rather than keeping grammars that could drift.
+//! timing metadata a segment carries, so every reader parses it here.
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use std::path::{Path, PathBuf};
 
 /// The closed set of containers a producer may deliver. FLAC is the target
-/// (decision 1); the rest are what existing capture paths produce today,
-/// accepted because the protocol is container-agnostic and a recorder flips
-/// formats independently. An enum so the set is parsed once, here, and every
-/// consumer downstream matches a type rather than a string.
+/// (decision 1); the rest are what capture paths and uploads produce, since the
+/// protocol is container-agnostic.
 ///
-/// ⚠ **A recorder is not the only producer.** An uploaded session — a phone
-/// voice memo, a handheld recorder's export — is stored in the ingest plane like
-/// any delivered blob and fetched back through `/ingest/v1/blob`, which parses
-/// the name. A container missing here is a 400 on that fetch, so the clip is
-/// queued and can never be read (#1649). The list therefore mirrors
-/// `recalld::upload::AUDIO_SUFFIXES`; the two must not drift apart.
+/// ⚠ Uploaded sessions are fetched back through `/ingest/v1/blob`, which parses
+/// the name, so a container missing here makes an uploaded clip unreadable.
+/// This list must mirror `recalld::upload::AUDIO_SUFFIXES`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Extension {
     Flac,
@@ -73,14 +66,13 @@ impl Extension {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentName {
     pub source: String,
-    /// ISO-8601 with a trailing `Z`, e.g. `2026-09-05T12:00:00Z` — the form
-    /// the sqlite rows store and sort by.
+    /// ISO-8601 with a trailing `Z`, e.g. `2026-09-05T12:00:00Z`.
     pub start_utc: String,
     pub ext: Extension,
 }
 
-/// Why a name was refused — carried into the 400 body so a recorder's log
-/// says what to fix rather than "bad request".
+/// Why a name was refused, carried into the 400 body so a recorder's log says
+/// what to fix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameError {
     BadSource,
@@ -100,10 +92,8 @@ impl NameError {
     }
 }
 
-/// A filesystem-safe source id: one source = one storage directory, so the id
-/// is a path component and the grammar excludes everything a path could
-/// interpret ('.', '/', case games). Matches the ids in use: usb, geb,
-/// pixel5, iphone11, room.
+/// A filesystem-safe source id: the id is a storage directory name, so the
+/// grammar excludes everything a path could interpret ('.', '/', case games).
 pub fn valid_source(source: &str) -> bool {
     let mut chars = source.chars();
     let Some(first) = chars.next() else {
@@ -141,9 +131,8 @@ const TS_FORMAT: &str = "%Y%m%dT%H%M%S";
 
 /// The UTC start time embedded in a segment filename (the first
 /// `YYYYMMDDTHHMMSS` token), or `None` for a file that carries none. Looser
-/// than [`parse`] on purpose: the sweeps and the rebase read files that may
-/// predate the strict grammar (arrival-stamped, derived copies), and a stamp
-/// anywhere in the name is still a stamp.
+/// than [`parse`] on purpose: the sweeps and the rebase read files outside the
+/// strict grammar (arrival-stamped, derived copies).
 pub fn parse_segment_start(filename: &str) -> Option<DateTime<Utc>> {
     for start in 0..filename.len().saturating_sub(14) {
         // .get: a multibyte filename must not panic the sweep on a boundary

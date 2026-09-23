@@ -1,27 +1,23 @@
-//! The global capture pause, read from the single pause file. Port of the
-//! read side of `src/recall/capture_control.py` — writing the file (pause /
-//! resume / the bounded auto-clear) stays with the Python control plane; this
-//! daemon only self-gates on it, like every other recording agent.
+//! The global capture pause: the single pause file every recording agent
+//! self-gates on, and the local commands that write and clear it.
 
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use std::path::Path;
 
-/// The pause file's name — a cross-process contract: the Python control plane
-/// writes and clears it, every recording agent self-gates on it.
+/// The pause file's name: a cross-process contract every recording agent
+/// self-gates on.
 pub const PAUSE_FILE: &str = "capture_paused_until";
 
 /// The recorded resume-by time, or `None` if not paused. A hand-written naive
-/// timestamp is read as UTC rather than failing — this gates every capture
-/// agent's main loop, so an unreadable file must mean "recording", never a
-/// crash-loop.
+/// timestamp is read as UTC; an unreadable file means "recording", never a
+/// crash loop.
 pub fn paused_until(root: &Path) -> Option<DateTime<Utc>> {
     let text = std::fs::read_to_string(root.join(PAUSE_FILE)).ok()?;
     parse_pause_timestamp(text.trim())
 }
 
-/// The subset of ISO-8601 Python's `fromisoformat` accepts that has ever been
-/// seen in this file: aware timestamps, naive timestamps (read as UTC), and a
-/// bare date (midnight UTC).
+/// The ISO-8601 forms this file holds: aware timestamps, naive timestamps
+/// (read as UTC), and a bare date (midnight UTC).
 fn parse_pause_timestamp(text: &str) -> Option<DateTime<Utc>> {
     if let Ok(aware) = DateTime::parse_from_rfc3339(text) {
         return Some(aware.with_timezone(&Utc));
@@ -35,14 +31,11 @@ fn parse_pause_timestamp(text: &str) -> Option<DateTime<Utc>> {
 
 /// A pause lasts at most this long, then recording auto-resumes.
 ///
-/// ⚠ A safety net, not a policy: a forgotten pause must not leave the household
-/// unrecorded indefinitely. 24h covers a full day away and is back on within a
-/// day even if nobody re-enables it. Spelled to match
-/// `recall.capture_control.MAX_PAUSE`, which wrote this file until the Python
-/// CLI was retired.
+/// A safety net, not a policy: a forgotten pause must not leave the household
+/// unrecorded indefinitely. 24h covers a full day away.
 pub const MAX_PAUSE_HOURS: i64 = 24;
 
-/// When a pause starting at `now` must end — clamped to [`MAX_PAUSE_HOURS`].
+/// When a pause starting at `now` must end, clamped to [`MAX_PAUSE_HOURS`].
 #[must_use]
 pub fn resume_by(now: DateTime<Utc>, minutes: Option<i64>) -> DateTime<Utc> {
     let cap = Duration::hours(MAX_PAUSE_HOURS);
@@ -52,14 +45,12 @@ pub fn resume_by(now: DateTime<Utc>, minutes: Option<i64>) -> DateTime<Utc> {
 
 /// Begin a bounded pause. Returns when it will auto-resume by.
 ///
-/// ⚠ **THIS IS THE HOUSEHOLD'S CONTROL, and the break-glass half of it**: the
-/// normal surface is the fleet's UI, and this is what still works when Isis
-/// cannot be reached. Every recording agent self-gates on the file, so writing it
-/// stops them and nothing else has to be told.
+/// The household's break-glass control: the normal surface is the fleet's UI,
+/// and this still works when Isis cannot be reached. Every recording agent
+/// self-gates on the file, so nothing else has to be told.
 ///
-/// ⚠ Written with the same spelling Python's `datetime.isoformat()` produced —
-/// an aware RFC-3339 instant — because [`paused_until`] reads it back and other
-/// machines' agents read the same file.
+/// Written as an aware RFC 3339 instant, which [`paused_until`] and other
+/// agents read back.
 ///
 /// # Errors
 /// If the file cannot be written, which means the pause did NOT take.
@@ -78,10 +69,8 @@ pub fn pause(
 
 /// End a pause by clearing the file; parked agents resume on their own.
 ///
-/// ⚠ **Never call this on Pippijn's behalf.** The pause is his control and
-/// resuming capture is his decision, not an inference from a stale file — the
-/// standing rule, and the reason this function exists only for him to invoke.
-/// Absent file is success: the end state is what is asked for, not the write.
+/// ⚠ Only on a person's explicit command: resuming capture is the household's
+/// decision, never an inference from a stale file. An absent file is success.
 ///
 /// # Errors
 /// If the file exists and cannot be removed.

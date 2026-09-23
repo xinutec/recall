@@ -1,22 +1,9 @@
-//! The browsing tier's read routes, ported from `recall.api_reads`.
+//! The browsing tier's read routes over `recall.sqlite` (the meaning plane, not
+//! `ingest.sqlite`; see docs/architecture.md). Nothing here writes: every
+//! connection is opened read-only.
 //!
-//! This is the first route group to move, and it is deliberately the read-only
-//! one: a port that can only ever answer questions cannot destroy anything if it
-//! is wrong, and it was checked against the Python it replaces by asking both the
-//! SAME question about the SAME database and diffing the JSON — 10 cases over the
-//! real archive, byte identical. Nothing here writes.
-//!
-//! ⚠ **This reads `recall.sqlite`, NOT `ingest.sqlite`.** The audio plane and the
-//! meaning plane stay split (docs/architecture.md): blobs plus `ingest.sqlite` are
-//! recalld's own, while `recall.sqlite` remains the transcript system of record
-//! that the Python tier also has open. So every connection here is opened
-//! READ-ONLY and in WAL — recalld must not be able to write a plane it does not
-//! own, and must never block a writer that does.
-//!
-//! ⚠ **The JSON is a CONTRACT with a shipped Angular app**, so the field names
-//! and the null-vs-absent distinction are copied, not redesigned. Anything that
-//! looks like it wants tidying here is load-bearing until the frontend regenerates the
-//! frontend's typed contract from these structs.
+//! The JSON is a contract with the Angular app, so field names and null-versus-
+//! absent are fixed; the exported structs generate its typed contract.
 
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
@@ -27,7 +14,7 @@ use std::time::Duration;
 const HUMAN_MODEL: &str = "human";
 /// `asr_model` of the provisional live pass.
 const LIVE_MODEL: &str = "live";
-/// `provenance` prefix written by the diarized refine pass.
+/// `provenance` prefix of a diarized turn.
 const DIARIZED_MARKER: &str = "diarized";
 
 /// One turn, in exactly the shape the Angular app already consumes.
@@ -179,17 +166,9 @@ pub fn to_out_with(
     }
 }
 
-/// Times go out exactly as stored.
-///
-/// ⚠ This is a PASS-THROUGH on purpose, and it is the one place this port could
-/// diverge invisibly. The Python parses the stored string into a `datetime` and
-/// re-emits it with `.isoformat()`, so the two agree only while the stored text
-/// is already canonical isoformat — which it is, because the same `.isoformat()`
-/// wrote it. Re-formatting here would be the way to introduce a difference (a
-/// `Z` for a `+00:00`, or dropped microseconds), not to avoid one. The parity
-/// test compares these strings against the live Python on the real archive, so a
-/// row that ever breaks the assumption shows up as a diff rather than as a
-/// subtly wrong timestamp in the UI.
+/// Times go out exactly as stored. The stored text is already isoformat, and
+/// re-formatting could only introduce a difference (a `Z` for `+00:00`, or
+/// dropped microseconds).
 pub fn iso(stored: &str) -> String {
     stored.to_owned()
 }
@@ -203,15 +182,14 @@ const SELECT_VISIBLE: &str = "SELECT t.*, a.source_id FROM transcript_segments t
      LEFT JOIN audio_segments a ON t.audio_segment_id = a.id \
      WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL";
 
-/// Open `recall.sqlite` read-only. See the module note: recalld does not own
-/// this plane and must not be able to write it.
+/// Open `recall.sqlite` read-only, so a read route cannot write the record.
 pub fn open(root: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open_with_flags(
         root.join("recall.sqlite"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )?;
-    // The Python tier writes this database; a reader must wait for it rather
-    // than fail, and must never hold it up.
+    // Background passes write this database; a reader waits for them rather
+    // than failing.
     conn.busy_timeout(Duration::from_secs(5))?;
     Ok(conn)
 }
@@ -239,19 +217,14 @@ pub fn search(conn: &Connection, query: &str, limit: i64) -> rusqlite::Result<It
 
 /// The live version of a turn, following the supersede chain.
 ///
-/// ⚠ **A deep link points at the id it was made from, which may since have been
-/// corrected or reprocessed.** Resolving to the current version is what makes an
-/// old link show the text that is true now rather than the text that was true
-/// when somebody copied the URL.
+/// A deep link names the id it was made from, which may since have been
+/// corrected or reprocessed; resolving it shows the text that is true now.
 ///
-/// ⚠ **The `seen` set is a CYCLE GUARD, not tidiness.** `superseded_by` is
-/// written by several passes; one bad chain would spin this loop forever on a
-/// request thread, which is a hang rather than an error.
+/// `seen` is a cycle guard: several passes write `superseded_by`, and one bad
+/// chain would otherwise hang a request thread.
 pub fn current_version(conn: &Connection, id: i64) -> rusqlite::Result<Option<TranscriptOut>> {
-    // The chain is walked with a scalar query rather than by widening `Segment`:
-    // every other query here filters `superseded_by IS NULL`, so carrying the
-    // column on the shared row type would add a field that is always NULL
-    // everywhere else it is used.
+    // A scalar query rather than a wider `Segment`: every other query filters
+    // `superseded_by IS NULL`, so the column would always be NULL there.
     let mut seen = std::collections::HashSet::new();
     let mut at = id;
     loop {
@@ -284,9 +257,8 @@ pub fn current_version(conn: &Connection, id: i64) -> rusqlite::Result<Option<Tr
 
 /// Specific turns by id, resolved to their live versions, in the order asked.
 ///
-/// ⚠ Deduped: several requested ids can resolve to the SAME live turn once one
-/// superseded another, and showing it twice would read as two separate things
-/// having been said.
+/// Deduped: several ids can resolve to the same live turn, and showing it twice
+/// would read as two things said.
 pub fn transcripts(conn: &Connection, ids: &[i64]) -> rusqlite::Result<ItemsOut> {
     let mut items = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -302,9 +274,7 @@ pub fn transcripts(conn: &Connection, ids: &[i64]) -> rusqlite::Result<ItemsOut>
 
 /// The review queue: current turns most in need of a human, least confident first.
 ///
-/// ⚠ **NULL confidence sorts FIRST** — unknown is the most suspect, not the least.
-/// Sorting it last (which is what a plain `ORDER BY` does in some engines) would
-/// bury exactly the turns nobody has ever scored.
+/// NULL confidence sorts first: a turn nobody has scored is the most suspect.
 pub fn review(conn: &Connection, max_confidence: f64, limit: i64) -> rusqlite::Result<ItemsOut> {
     let mut stmt = conn.prepare(
         "SELECT t.*, a.source_id FROM transcript_segments t \
@@ -322,19 +292,11 @@ pub fn review(conn: &Connection, max_confidence: f64, limit: i64) -> rusqlite::R
     Ok(ItemsOut { items })
 }
 
-/// One page of the timeline, older than `before` (or the newest page).
+/// Which slice of the stream to read.
 ///
-/// ⚠ **A full page is EXTENDED past `limit` to include every turn tied with its
-/// boundary instant.** Turns genuinely share a start time — co-located mics
-/// recording the same speech, and corrections — so a page that cut a tie group in
-/// half would make the next strict-`<` page skip the group's remainder silently.
-/// That is why `hasMore` is `len >= limit` and not `len == limit`.
-/// Which slice of the stream to read, mirroring `store.recent_transcripts`.
-///
-/// ⚠ `before` and `after` are not symmetric. `before` takes the newest page
-/// OLDER than the cursor and reads newest-first; `after` takes the oldest page
-/// NEWER than it and reads oldest-first, so a forward page is contiguous with
-/// what the caller already holds rather than a jump.
+/// `before` and `after` are not symmetric: `before` takes the newest page older
+/// than the cursor, newest-first; `after` takes the oldest page newer than it,
+/// oldest-first, so a forward page is contiguous with what the caller holds.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Window<'a> {
     pub before: Option<&'a str>,
@@ -344,12 +306,10 @@ pub struct Window<'a> {
 
 /// Current, visible turns for one page, including the boundary instant's ties.
 ///
-/// ⚠ **A full page extends PAST `limit`, on purpose.** The cursor on the wire is
-/// a bare start time and turns share one constantly — co-located mics, and
-/// corrections that inherit their turn's span. A page cut mid-group would make
-/// the next strict-`<` page skip the group's remainder silently, so the boundary
-/// instant is completed before returning. That is why callers test
-/// `len >= limit` for has-more rather than `==`.
+/// ⚠ A full page extends past `limit`. The cursor is a bare start time and turns
+/// share one often (co-located mics, corrections), so a page cut mid-group would
+/// make the next strict-`<` page skip the rest of it. Callers therefore test
+/// `len >= limit` for has-more, not `==`.
 pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result<Vec<Segment>> {
     let mut filters = String::new();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -383,8 +343,7 @@ pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result
         .query_map(page_params.as_slice(), Segment::from_row)?
         .collect::<rusqlite::Result<_>>()?;
 
-    // `!is_empty()` mirrors Python's `if rows and ...`: at limit 0 an empty page
-    // must not trigger a tie pass with no boundary.
+    // At limit 0 an empty page must not trigger a tie pass with no boundary.
     let full_page = !segments.is_empty() && i64::try_from(segments.len()).is_ok_and(|n| n == limit);
     if full_page {
         let boundary = segments
@@ -420,6 +379,8 @@ fn borrowed(params: &[Box<dyn rusqlite::ToSql>]) -> Vec<&dyn rusqlite::ToSql> {
     params.iter().map(std::convert::AsRef::as_ref).collect()
 }
 
+/// One page of the timeline older than `before` (or the newest page), in
+/// conversation order.
 pub fn timeline(conn: &Connection, limit: i64, before: Option<&str>) -> rusqlite::Result<PageOut> {
     let mut segments = recent(
         conn,
@@ -475,12 +436,8 @@ const fn default_search_limit() -> i64 {
     100
 }
 
-/// A limit is clamped rather than trusted.
-///
-/// ⚠ The Python takes it straight from the query string, so `?limit=10000000`
-/// asks `SQLite` for the whole archive in one page. That is not a hole worth
-/// copying: a browsing route that a signed-in person can accidentally turn into
-/// an archive dump will eventually be turned into one.
+/// A limit is clamped rather than trusted, so `?limit=10000000` cannot turn a
+/// browsing route into an archive dump.
 fn clamp(limit: i64) -> i64 {
     limit.clamp(0, 1000)
 }
@@ -518,9 +475,8 @@ pub async fn transcripts_route(
     axum::extract::State(st): axum::extract::State<Arc<State>>,
     Query(q): Query<TranscriptsQuery>,
 ) -> Response {
-    // ⚠ A non-integer id is a 400, never a silently dropped one: the caller asked
-    // for a specific set of fragments, and quietly returning fewer would read as
-    // "those turns are gone".
+    // A non-integer id is a 400, not silently dropped: returning fewer turns
+    // than asked would read as "those turns are gone".
     let mut ids = Vec::new();
     for piece in q.ids.split(',').map(str::trim).filter(|p| !p.is_empty()) {
         match piece.parse::<i64>() {

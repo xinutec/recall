@@ -1,53 +1,39 @@
 //! Replacing a block's machine turns with speaker-aligned ones.
 //!
-//! ⚠ **This is the most destructive pass in the system, and the rules below are
-//! the ones that were got wrong.** `refine.py` applied its filters AFTER hiding
-//! the existing turns, so a pass whose every turn was filtered out — or which
-//! produced none at all — hid the transcript and wrote nothing in its place. It
-//! blanked 132 segments of real household conversation that way, including a
-//! minute of Dutch about writing things down to remember them.
-//!
-//! So the whole decision is made HERE, on data, before anything is written:
-//! [`decide`] takes what exists and what the pass produced and answers with a
-//! [`Swap`] that either replaces or keeps. A pass replaces a transcript or it
-//! keeps it. It never empties one.
-//!
-//! Ported from `refine._replace_turns`, rule for rule, because both run until
-//! the Python retires and a divergence would be a bug rather than a variant.
+//! This is the most destructive pass in the system: it hides turns and writes
+//! over them. The whole decision is made in [`decide`], on data, before anything
+//! is written, so a filter that drops every new turn cannot leave the block
+//! empty. A pass replaces a transcript, names it in place, or keeps it. It never
+//! empties one.
 
 use crate::align::AlignedTurn;
 use crate::quality::is_repetition_loop;
 use chrono::{DateTime, Duration, Utc};
 
-/// Languages this household actually speaks. A whole-block detection outside
-/// this set is the model hallucinating on unclear audio — the turns are kept
-/// (they have audio behind them) but their confidence is zeroed rather than
-/// asserted.
+/// Languages spoken in the archive. A whole-block detection outside this set is
+/// the model hallucinating on unclear audio: the turns are kept but their
+/// confidence is zeroed.
 pub const HOUSEHOLD_LANGUAGES: [&str; 2] = ["nl", "en"];
 
-/// Below this fraction of the existing visible text, a pass is declined.
-///
-/// A refined pass that comes back with far less text than the block already has
-/// is a degenerate transcription — a truncated long-form decode, a whole-clip
-/// mis-detection — and swapping it in would hide the good transcript from every
-/// view.
+/// Below this fraction of the existing visible text, a pass is declined: far
+/// less text means a degenerate transcription (a truncated decode, a whole-clip
+/// mis-detection), and swapping it in would hide the good transcript.
 pub const MIN_COVERAGE_RATIO: f64 = 0.5;
 
-/// …and only once there is a substantial transcript to protect. Tiny blocks
-/// swing too wildly in ratio for the bar to mean anything.
+/// The coverage bar applies only above this many existing characters: tiny
+/// blocks swing too wildly in ratio for it to mean anything.
 pub const COVERAGE_REF_MIN_CHARS: usize = 200;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Existing {
     pub id: i64,
     pub text: String,
-    /// The turn's own span, so attribution can follow the diarization's
-    /// evidence instead of assuming it covers the clip.
+    /// The turn's own span, so attribution follows the diarization's evidence
+    /// instead of assuming it covers the clip.
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
-    /// The stored `word_timings`, verbatim. ⚠ Without these a turn can only be
-    /// LABELLED; dividing one whose words belong to two people needs to know
-    /// where each word was.
+    /// The stored `word_timings`, verbatim. Without them a turn can only be
+    /// labelled, not divided between speakers.
     pub word_timings: Option<String>,
 }
 
@@ -58,17 +44,15 @@ pub struct Corrected {
     pub end: DateTime<Utc>,
 }
 
-/// Why a swap was declined. Each names the arithmetic, because a refusal nobody
-/// can read is indistinguishable from a bug — and these refusals are recorded
-/// against clips that then wait for a fixed pass.
+/// Why a swap was declined. Each names its arithmetic, because the refusal is
+/// recorded against the clip and an unreadable one looks like a bug.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     /// The pass produced no turns at all: no words, or no speaker spans.
     NothingAligned,
     /// Every turn was dropped, counted by the filter that dropped it. The two
-    /// mean opposite things: a loop is the pass hallucinating on good audio, a
-    /// corrected turn is the guard working. Conflating them made 455 refusals
-    /// undiagnosable (#1663).
+    /// mean opposite things: a loop is the pass hallucinating, a corrected turn
+    /// is the guard working.
     AllFiltered {
         loops: usize,
         corrected: usize,
@@ -77,8 +61,8 @@ pub enum Refusal {
         existing: usize,
         new: usize,
     },
-    /// The pass told nobody apart AND would write fewer turns than already
-    /// exist. See the guard in [`decide`] for why that is a refusal.
+    /// The pass would write fewer turns than exist, and none of its speaker
+    /// spans overlaps an existing turn, so there is nothing to name either.
     Undiscriminating {
         produced: usize,
         existing: usize,
@@ -116,34 +100,17 @@ impl std::fmt::Display for Refusal {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Swap {
-    /// Hide `hide` and write `insert`, in ONE transaction — a crash between them
-    /// would leave the block blank and, because the marker is what keeps it from
-    /// being re-picked, never re-derived.
+    /// Hide `hide` and write `insert`, in one transaction (see [`apply`]).
     Replace {
         insert: Vec<AlignedTurn>,
         hide: Vec<i64>,
     },
-    /// Name the turns that are already there — each with the speaker whose span
-    /// covers it most. No text is rewritten and no boundary is lost; the pass
-    /// contributes the one thing it actually knows.
+    /// Name the turns that are already there, each with the speaker whose span
+    /// covers it most. No text is rewritten and no boundary is lost.
     ///
-    /// ⚠⚠ **This is what a pass does whenever it would write FEWER turns than
-    /// it hides, at ANY speaker count.** The guard that first shipped covered
-    /// only the single-speaker half. Measured over household clips, roughly a
-    /// THIRD of the damage sat in the unguarded two-speaker case — thousands of
-    /// boundaries, not a rounding error — and it was unguarded because "the
-    /// stage is doing its job" was read off the SPEAKER COUNT rather than off
-    /// whether anything was lost (#1663).
-    ///
-    /// ⚠ The counts MOVE while this pass runs; #1663 holds the query and the
-    /// figures as measured on a date. Two traps if it is re-run: EXCLUDE
-    /// meetings, which are re-processed across several passes so hidden turns
-    /// accumulate against one current set (counting them inflated the
-    /// two-speaker figure enough to reverse which half looked worse), and band
-    /// by whether anything was actually lost rather than by speaker count.
-    ///
-    /// ⓘ A pass may SPLIT (more turns, every word kept) or LABEL (no text
-    /// touched). Merging is neither, and is what this exists to refuse.
+    /// ⚠ This is the outcome whenever a pass would write FEWER turns than it
+    /// hides, at any speaker count. A pass may split (more turns, every word
+    /// kept) or label (no text touched); merging is neither, and is refused.
     Attribute {
         /// Existing turn id, and the speaker to name it.
         to: Vec<(i64, String)>,
@@ -163,16 +130,12 @@ pub struct Piece {
 
 /// Divide `turn` where the speaker changes, keeping every word.
 ///
-/// ⚠⚠ **THE PIECES ARE CHECKED AGAINST THE ORIGINAL BEFORE THEY ARE OFFERED.**
-/// A split is the one rewrite the write model permits, and only because it
-/// cannot lose anything — so that has to be PROVEN per turn, not argued once.
-/// If the words do not reconstruct the turn's own text, this returns `None` and
-/// the caller labels the turn instead. Punctuation and spacing differ between
-/// the text and the word list often enough that this refuses regularly, and a
-/// refusal costs only a label that was going to be the old behaviour anyway.
+/// A split is the one rewrite permitted, because it loses nothing, so that is
+/// checked per turn: if the pieces' words do not reconstruct the turn's own
+/// text, this returns `None` and the caller labels the turn instead.
 ///
 /// `None` also when there are no usable timings, or when every word belongs to
-/// one speaker — there is nothing to divide.
+/// one speaker.
 #[must_use]
 pub fn split_at_speaker_changes(
     turn: &Existing,
@@ -183,9 +146,8 @@ pub fn split_at_speaker_changes(
     if words.is_empty() {
         return None;
     }
-    // ⚠ The stored timings are absolute within the CLIP, and `by` is in seconds
-    // from the block's start. One origin, or every word lands on the wrong
-    // speaker.
+    // `by` is in seconds from the block's start: place each word there via the
+    // turn's own start, or every word lands on the wrong speaker.
     let offset = (turn.start - block_start).as_seconds_f64();
     let base = words.first()?.start;
 
@@ -224,9 +186,8 @@ pub fn split_at_speaker_changes(
         })
         .collect();
 
-    // ⚠ The proof. Compare on letters and digits only: the word list carries
-    // spacing and punctuation differently from the turn's own text, and a split
-    // that keeps every WORD is what matters.
+    // Compare on letters and digits only: the word list carries spacing and
+    // punctuation differently from the turn's own text.
     let rebuilt = squashed(
         &pieces
             .iter()
@@ -237,8 +198,7 @@ pub fn split_at_speaker_changes(
     (rebuilt == squashed(&turn.text)).then_some(pieces)
 }
 
-/// Letters and digits, lowercased — everything a split must preserve and
-/// nothing it is allowed to be judged on.
+/// Letters and digits, lowercased: what a split must preserve.
 fn squashed(text: &str) -> String {
     text.chars()
         .filter(|c| c.is_alphanumeric())
@@ -263,9 +223,8 @@ fn overlaps(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)
 
 /// How many seconds `a` and `b` share, or `None` if they do not meet.
 ///
-/// ⚠ The SHARED span, not "do they touch": a turn brushed by the last
-/// millisecond of one speaker's span and covered by the next one belongs to the
-/// second, and a boolean cannot say so.
+/// The shared span, not a boolean: a turn brushed by the end of one speaker's
+/// span and covered by the next belongs to the second.
 fn overlap_seconds(
     a: (DateTime<Utc>, DateTime<Utc>),
     b: (DateTime<Utc>, DateTime<Utc>),
@@ -280,22 +239,17 @@ fn at(block_start: DateTime<Utc>, offset_s: f64) -> DateTime<Utc> {
     block_start + Duration::milliseconds((offset_s * 1000.0).round() as i64)
 }
 
-/// Decide the swap for one block. Pure, so every rule here is testable without a
-/// database — they are the rules that can destroy a person's words.
+/// Decide the swap for one block. Pure, so every rule is testable without a
+/// database.
 ///
-/// 1. **A turn inside a human-corrected span is DROPPED**, and so is a
-///    repetition loop. Both before anything else is considered.
-/// 2. **If the block has turns and nothing survives the filter, KEEP.** This is
-///    the 132-segment rule. Note the `existing` condition: a block with no turns
-///    at all and nothing to write is not a refusal, it is a block with nothing
-///    in it.
-/// 3. **If the surviving text is far smaller than what is there, KEEP.**
-///    ⚠ BOTH sides are filtered the same way, and the symmetry is the point.
-///    Counting the existing side RAW let a hallucination win by length: a
-///    Whisper loop is hundreds of characters of nothing, so every honest pass
-///    measured as "covering too little", the loop was kept, and the block was
-///    marked skipped — garbage preserved, never retried. It held roughly one in
-///    ten of the guard-skipped segments that way.
+/// 1. A repetition loop, or a turn inside a human-corrected span, is dropped.
+/// 2. If the block has turns and nothing survives, keep. A block with no turns
+///    and nothing to write is not a refusal.
+/// 3. If fewer turns survive than exist, name the existing turns in place
+///    ([`Swap::Attribute`]); keep if no span overlaps any of them.
+/// 4. If the surviving text is far smaller than what is there, keep. Both sides
+///    drop repetition loops, so a long hallucinated loop on the existing side
+///    cannot make an honest pass look too short.
 #[must_use]
 pub fn decide(
     block_start: DateTime<Utc>,
@@ -325,25 +279,13 @@ pub fn decide(
     if !existing.is_empty() && keep.is_empty() {
         return Swap::Keep(Refusal::AllFiltered { loops, corrected });
     }
-    // ⚠ **A pass that distinguishes NOBODY must not flatten a finer transcript.**
-    //
-    // Measured 2026-09-19 by releasing 20 refused clips: 7 of the 8 that aligned
-    // had diarization return exactly ONE speaker, so there was nothing to split.
-    // A 13-turn clip became one 629-character block carrying a single name at
-    // 0.177 confidence, and a clip with 8 speaker spans totalling 5.6 s was
-    // funnelled whole into one turn because every word takes the only span on
-    // offer. That is the coarse, sentence-flattening behaviour this stage exists
-    // to REPLACE, arrived at from the other side.
-    //
-    // Two speakers is the whole point of the stage, so it passes. One speaker
-    // over a transcript no finer than the pass passes too: no boundary is lost
-    // and the turn gains a name. Only the flattening case is refused.
+    // ⚠ A pass must not flatten a finer transcript. Writing fewer turns than
+    // exist loses boundaries at any speaker count, so it names in place instead.
     let speakers: std::collections::BTreeSet<&str> =
         keep.iter().map(|t| t.speaker.as_str()).collect();
     if keep.len() < existing.len() {
-        // Each turn takes the speaker whose span covers most of it, and a turn
-        // no span touches is left alone: asserting one speaker across the whole
-        // clip is the over-claim the flattening made.
+        // Each turn takes the speaker whose span covers most of it; a turn no
+        // span touches is left unnamed rather than given a guess.
         let to: Vec<(i64, String)> = existing
             .iter()
             .filter_map(|o| {
@@ -431,15 +373,11 @@ struct Transcription {
     segments: Vec<TranscribedSegment>,
 }
 
-/// One word as `transcript_segments.word_timings` STORES it.
+/// One word as `transcript_segments.word_timings` stores it.
 ///
-/// ⚠ **`{s, e, w}`, not `{start, end, text}`, and no probability at all.** This
-/// is `store._dump_word_timings`'s shape, read back by `store._load_word_timings`
-/// (which substitutes `probability=1.0`) and by the boundary editor. Deriving
-/// `Serialize` on `align::Word` and writing that instead was the first attempt
-/// here: it produces valid JSON in a shape NOTHING reads, so the words would
-/// simply vanish from every turn this pass writes — silently, because a turn
-/// with unparseable timings is indistinguishable from one with none.
+/// ⚠ `{s, e, w}`, not `{start, end, text}`, and no probability. Serialising
+/// `align::Word` instead gives valid JSON that no reader parses, and a turn with
+/// unparseable timings looks the same as one with none.
 #[derive(serde::Serialize)]
 struct Stored {
     s: f64,
@@ -449,7 +387,7 @@ struct Stored {
 
 #[derive(Deserialize)]
 struct TranscribedSegment {
-    /// The segment's own text — read ONLY to judge whether the model looped on
+    /// The segment's own text, read only to judge whether the model looped on
     /// it. The turns are built from `words`.
     #[serde(default)]
     text: String,
@@ -460,8 +398,8 @@ struct TranscribedSegment {
 /// The speaker spans a stored `diarize-room` result carries.
 ///
 /// # Errors
-/// `None` when the shim refused or the body is not this shape — both permanent,
-/// because a stored result does not change on a later pass.
+/// `None` when the shim refused or the body is not this shape. Both are
+/// permanent: a stored result does not change.
 #[must_use]
 pub fn speaker_turns(stored: &str) -> Option<Vec<SpeakerTurn>> {
     Some(voices(stored)?.0)
@@ -469,13 +407,12 @@ pub fn speaker_turns(stored: &str) -> Option<Vec<SpeakerTurn>> {
 
 /// The spans AND the per-speaker voiceprints a stored diarization carries.
 ///
-/// ⚠ The voiceprints may be EMPTY where the spans are not — an older result
-/// stored before the shim embedded, or a clip whose slices all failed. That is a
-/// turn with no name guess, which is worse than one with a guess and better than
-/// a wrong name, so it is a normal outcome rather than an error.
+/// The voiceprints may be empty where the spans are not (a result stored before
+/// the shim embedded, or a clip whose slices all failed). That is a normal
+/// outcome: the turns get no name guess.
 ///
 /// # Errors
-/// `None` when the shim refused or the body is not this shape — both permanent.
+/// `None` when the shim refused or the body is not this shape. Both permanent.
 #[must_use]
 pub fn voices(stored: &str) -> Option<(Vec<SpeakerTurn>, Vec<SpeakerVoice>)> {
     let reply: Reply<Voices> = serde_json::from_str(stored).ok()?;
@@ -489,25 +426,14 @@ pub fn voices(stored: &str) -> Option<(Vec<SpeakerTurn>, Vec<SpeakerVoice>)> {
 /// Every word a stored `transcribe-room` result carries, in order, with the
 /// block's detected language.
 ///
-/// ⚠ **Words, not segments.** Alignment assigns each WORD to whoever was
-/// speaking at its midpoint; a segment-level assignment would put a whole
-/// sentence on one speaker and is the coarse behaviour this pass exists to
-/// replace. A result with no word timings therefore yields nothing, and the
-/// caller keeps the transcript it has.
+/// Words, not segments: alignment assigns each word to whoever was speaking at
+/// its midpoint. A result with no word timings yields `None`, and the caller
+/// keeps the transcript it has.
 ///
-/// ⚠ **A segment the model LOOPED on contributes no words, and that is where
-/// the quality rule has to be applied — not to the finished turn.** Measured
-/// 2026-09-19 across 602 refused clips: 25.5% of ASR segments are loops, but
-/// 597 of the 602 also carry clean ones. Because alignment collapses a clip into
-/// a single turn 87% of the time, one hallucinated run condemned the whole turn
-/// and the pass discarded everything — the whole was a loop while the parts were
-/// not, in 94.4% of them. Those clips kept their per-mic text and lost only
-/// their SPEAKERS: thousands of turns across them, a handful with a speaker
-/// (#1663 holds the query and the figures as measured on a date).
-///
-/// The per-mic writer never had this defect because `turns::plan` filters per
-/// segment. This is the same rule at the same granularity, so the two passes
-/// agree on what the model actually said.
+/// ⚠ A segment the model looped on, or one without words, contributes nothing.
+/// The quality rule applies per segment, as in `turns::plan`, not to the
+/// finished turn: alignment often collapses a clip into one turn, and one looped
+/// segment would then condemn the clean ones around it.
 #[must_use]
 pub fn words_of(stored: &str) -> Option<(Vec<Word>, Option<String>)> {
     let reply: Reply<Transcription> = serde_json::from_str(stored).ok()?;
@@ -530,11 +456,10 @@ pub fn words_of(stored: &str) -> Option<(Vec<Word>, Option<String>)> {
 /// Did this stored transcription carry ANY word timings, before the quality
 /// filter in [`words_of`] had its say?
 ///
-/// ⚠ The two absences are opposite kinds. No timings at all is TRANSIENT — an
-/// older result whose word key this pass could not read once already, which a
-/// code change can make eligible again. Timings present but every segment a
-/// loop is PERMANENT: the stored result will not change, so the clip must be
-/// retired with a ledger row or it sits at the head of the queue for ever.
+/// The two absences differ. No timings at all is transient: a code change can
+/// make the result readable. Timings present but every segment filtered is
+/// permanent, so the clip is retired with a ledger row rather than left at the
+/// head of the queue.
 #[must_use]
 pub fn has_word_timings(stored: &str) -> bool {
     let Ok(reply) = serde_json::from_str::<Reply<Transcription>>(stored) else {
@@ -569,14 +494,11 @@ fn write_replacement(
 
 /// Name turns that already exist, without touching their text or boundaries.
 ///
-/// ⚠ **The whole point is that nothing is hidden and nothing is inserted.** A
-/// single-speaker pass has exactly one thing to contribute — who was talking —
-/// and replacing the transcript to deliver it cost 814 clips their segmentation
-/// before this existed (#1663).
+/// Nothing is hidden and nothing is inserted: the pass contributes who was
+/// talking and keeps the existing segmentation.
 ///
-/// The voiceprint is optional: an older diarization stored before the shim
-/// embedded leaves the cluster recorded and the name unguessed, which is worse
-/// than a name and better than a wrong one.
+/// The voiceprint is optional: without one the cluster is recorded and no name
+/// is guessed.
 ///
 /// # Errors
 /// If the database refuses.
@@ -593,9 +515,8 @@ fn attribute(
             "UPDATE transcript_segments SET speaker_cluster = ?1 WHERE id = ?2",
             rusqlite::params![speaker, id],
         )?;
-        // ⚠ The voiceprint of THIS turn's speaker, not of the block's. With
-        // several speakers named in one pass, reusing one vector would enrol
-        // every turn against whoever happened to be first.
+        // The voiceprint of this turn's speaker, not the block's: several
+        // speakers can be named in one pass.
         if let Some(print) = prints.iter().find(|p| p.speaker == *speaker) {
             let guess = crate::identify::match_one(&print.vector, enrolled);
             crate::identify::record(&tx, *id, &print.vector, guess.as_ref())?;
@@ -606,13 +527,12 @@ fn attribute(
     Ok(named)
 }
 
-/// Apply a [`Swap::Replace`] to one block. ONE transaction: the hides, the
-/// inserts and their search-index rows land together or not at all.
+/// Apply a [`Swap::Replace`] to one block. One transaction: the hides, the
+/// inserts, their search-index rows and embeddings land together or not at all.
 ///
-/// ⚠ **A crash between the hide and the inserts would leave the block BLANK and
-/// never re-derived** — the provenance marker is what keeps it from being picked
-/// again, so the half-applied state is indistinguishable from a finished one.
-/// That is why this is not two calls.
+/// ⚠ A crash between hide and insert would leave the block blank, and the
+/// provenance marker would stop it being picked again. That is why this is not
+/// two calls.
 ///
 /// # Errors
 /// If the transaction cannot be taken or any statement fails. Nothing is left
@@ -649,8 +569,8 @@ pub fn apply(
     }
     let mut written = 0;
     for turn in insert {
-        // Word timings are re-based to the TURN's start, so a later boundary
-        // edit can snap to a real word time and play exactly that span.
+        // Word timings are re-based to the turn's start, so a later boundary
+        // edit can snap to a real word time.
         let rebased: Vec<Stored> = turn
             .words
             .iter()
@@ -660,9 +580,8 @@ pub fn apply(
                 w: w.text.clone(),
             })
             .collect();
-        // ⚠ From `rebased`, not from the shim's own array: these are recalld's
-        // `{s,e,w}`, re-based to this turn, which is the only encoding the rate
-        // rule may read.
+        // From `rebased`, not the shim's array: the rate rule reads the stored,
+        // turn-relative encoding.
         let spans: Vec<(f64, f64)> = rebased.iter().map(|w| (w.s, w.e)).collect();
         tx.execute(
             "INSERT INTO transcript_segments
@@ -676,16 +595,10 @@ pub fn apply(
                 instant::python_isoformat_utc(at(block_start, turn.end)),
                 turn.text,
                 language,
-                // A non-household language for the whole block is the model
-                // hallucinating on unclear audio: keep the turn, assert no
-                // confidence in it.
-                // ⚠ **Script outranks the LABEL.** 681 visible turns carry a
-                // foreign language label and only 180 are in a foreign SCRIPT —
-                // the rest are Dutch and English the model mislabelled, so the
-                // label alone would zero real speech. The other way round is the
-                // tell that matters: 273 turns are written in Cyrillic or
-                // Japanese while LABELLED nl or en, which is the model
-                // contradicting itself (#1410).
+                // Zero the confidence for an unexpected block language, a
+                // foreign script, or implausibly slow speech; the turn is kept.
+                // The script check catches the model contradicting its own
+                // `nl`/`en` label.
                 if trusted
                     && !crate::quality::is_foreign_script(&turn.text)
                     && !crate::quality::is_implausibly_slow(&spans)
@@ -702,17 +615,15 @@ pub fn apply(
             ],
         )?;
         let id = tx.last_insert_rowid();
-        // ⚠ Maintained in CODE — `transcript_fts` is contentless FTS5. Forgetting
-        // it fails nothing; it just makes the text unfindable by the one route
-        // most likely to look for it.
+        // ⚠ `transcript_fts` is contentless FTS5, maintained here. Forgetting it
+        // fails nothing; the text is just unsearchable.
         tx.execute(
             "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
             (id, &turn.text),
         )?;
-        // ⚠ IN the same transaction as the turn. A turn written without its
-        // embedding is one no later re-match can reach — `rematch_speaker_guesses`
-        // reads `transcript_embeddings`, so a crash between the two leaves a turn
-        // permanently unnameable rather than merely unnamed.
+        // ⚠ In the same transaction as the turn: `rematch_speaker_guesses` reads
+        // `transcript_embeddings`, so a turn without its embedding can never be
+        // named later.
         if let Some(vector) = named.voices.get(turn.speaker.as_str()) {
             let guess = crate::identify::match_one(vector, named.enrolled);
             crate::identify::record(&tx, id, vector, guess.as_ref())?;
@@ -723,16 +634,16 @@ pub fn apply(
     Ok(written)
 }
 
-/// The one clip a write is about. Grouped because these five always travel
-/// together and always come from the same row.
+/// The one clip a write is about. Grouped because these fields always travel
+/// together.
 #[derive(Debug, Clone, Copy)]
 pub struct Block<'a> {
     pub audio_segment_id: i64,
-    /// Where the clip begins in absolute time — the shim's offsets are relative
-    /// to the clip it was handed and mean nothing without this.
+    /// Where the clip begins in absolute time; the shim's offsets are relative
+    /// to it.
     pub start: DateTime<Utc>,
-    /// The whole-clip language detection, or `None`. Outside the household's
-    /// languages a turn keeps its audio and loses its confidence.
+    /// The whole-clip language detection, or `None`. Outside
+    /// [`HOUSEHOLD_LANGUAGES`] a turn loses its confidence.
     pub language: Option<&'a str>,
     pub model: &'a str,
     /// The stream's reversal key — see [`Stream::provenance`].
@@ -745,9 +656,8 @@ pub struct Block<'a> {
 /// What a pass needs to put a name to the speakers it writes: the clip's own
 /// voiceprints, and the people already enrolled.
 ///
-/// ⚠ Empty `voices` is ORDINARY, not an error — a diarization stored before the
-/// shim embedded carries none. Those turns land with their `SPEAKER_nn` cluster
-/// and no guess, which is what a reader should see when nothing is known.
+/// Empty `voices` is ordinary, not an error: those turns land with their
+/// `SPEAKER_nn` cluster and no guess.
 pub struct Named<'a> {
     /// Speaker label from THIS clip's diarization to the vector built for it.
     pub voices: std::collections::HashMap<&'a str, &'a [f64]>,
@@ -755,11 +665,10 @@ pub struct Named<'a> {
 }
 
 /// The machine turns standing on a block, and the spans a person has corrected
-/// inside it — the two things [`decide`] needs from the database.
+/// inside it: the two things [`decide`] needs from the database.
 ///
-/// ⚠ A HUMAN turn is not "existing" for this purpose: it is never superseded and
-/// never hidden, and including it would let the coverage guard measure a
-/// person's own words as something to be replaced.
+/// ⚠ Human turns are excluded: they are never hidden, and counting them would
+/// let the coverage guard treat a person's words as something to replace.
 ///
 /// # Errors
 /// If the database refuses.
@@ -781,9 +690,8 @@ pub fn standing(
             r.get::<_, Option<String>>(4)?,
         ))
     })?;
-    // ⚠ A turn whose stored instants will not parse is SKIPPED, not defaulted:
-    // a span at the epoch would overlap nothing and quietly go unnamed, which
-    // reads exactly like a turn the diarization did not cover.
+    // A turn whose stored instants will not parse is skipped, not defaulted to
+    // the epoch, where it would silently overlap nothing.
     let mut out = Vec::new();
     for row in rows {
         let (id, text, start, end, word_timings) = row?;
@@ -806,9 +714,8 @@ pub fn standing(
 /// Every corrected span overlapping `[from, to)`.
 ///
 /// # Errors
-/// If the database refuses. A stored instant that will not parse is SKIPPED
-/// rather than defaulted — a corrected span placed at the epoch would protect
-/// nothing and silently let a machine pass overwrite a person's words.
+/// If the database refuses. A stored instant that will not parse is skipped
+/// rather than defaulted: a span at the epoch would protect nothing.
 pub fn corrections(
     conn: &rusqlite::Connection,
     from: DateTime<Utc>,
@@ -843,13 +750,12 @@ pub fn corrections(
 
 // --- the pass ----------------------------------------------------------------
 
-/// Which stream a diarized pass refines, and the four things that differ between
-/// them. Everything else in this module is shared.
+/// Which stream a diarized pass refines, and what differs between streams.
+/// Everything else in this module is shared.
 ///
-/// ⚠ **A `Stream` is the unit of REVERSAL**, like `turns::Stream`: `provenance`
-/// must name exactly the rows one pass wrote and no others, or nobody can take
-/// it back. The model name is IN it for that reason — see the reversal block in
-/// `main.rs`, which says why an exact match and not a `LIKE`.
+/// ⚠ A `Stream` is the unit of reversal, like `turns::Stream`: `provenance` must
+/// name exactly the rows one pass wrote. The reversal in `main.rs` matches it
+/// exactly, not with `LIKE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stream<'a> {
     /// The queue kind whose stored speaker spans this pass interprets.
@@ -858,27 +764,24 @@ pub struct Stream<'a> {
     pub transcribe_kind: &'a str,
     /// What written rows record in `asr_model`.
     pub model: &'a str,
-    /// What they record in `provenance` — THE REVERSAL KEY, and it must name
-    /// this pass alone.
+    /// What they record in `provenance`: the reversal key, naming this pass
+    /// alone.
     ///
-    /// ⚠ Keep the `diarized-aligned` prefix: `reads::tier()`,
-    /// `audio::render_blocking` and `assign` all test `starts_with` against it,
-    /// so losing it makes these turns read as un-diarized to three readers. And
-    /// do NOT reuse `refine.py`'s exact string — it wrote `diarized-aligned
-    /// (<model>)` with the same model name these rows carry, so sharing it would
-    /// leave a reversal able to take both passes' rows or neither.
+    /// ⚠ Keep the `diarized-aligned` prefix: `reads`, `audio` and `assign` test
+    /// the `diarized` prefix, and without it these turns read as un-diarized.
+    /// Do not use `diarized-aligned (<model>)`: older rows already carry that
+    /// string with the same model name, and a reversal could not tell them apart.
     pub provenance: &'a str,
-    /// What the turns it supersedes record in `hidden_reason`. Named for the same
-    /// reason: un-hiding what THIS pass hid must not disturb what refine hid.
+    /// What the turns it supersedes record in `hidden_reason`. Unique for the same
+    /// reason: un-hiding what this pass hid must not disturb anything else.
     pub hidden_reason: &'a str,
 }
 
-/// One MICROPHONE's clip — `refine.py`'s stream, and the one that replaces it.
+/// One microphone's clip.
 ///
-/// ⚠ `model` is the shim's own default, NOT a decorated name: these rows join the
-/// same per-microphone corpus `refine.py` wrote for months, and a
-/// reader filtering on `asr_model` must not see the archive split in two on the
-/// day the orchestrator changed. Provenance carries "who wrote it" instead.
+/// `model` is the shim's own default, not a decorated name: these rows join the
+/// existing per-microphone corpus, and a reader filtering on `asr_model` must
+/// see one archive. Provenance carries who wrote it instead.
 pub const PER_MIC: Stream<'static> = Stream {
     diarize_kind: crate::queue::DIARIZE_SEGMENT,
     transcribe_kind: crate::queue::TRANSCRIBE_SEGMENT,
@@ -887,16 +790,12 @@ pub const PER_MIC: Stream<'static> = Stream {
     hidden_reason: "diarized (per-mic runner)",
 };
 
-/// The derived room stream. ⚠ **Gated on #1461, and its writer is OFF.**
+/// The derived room stream. ⚠ Its writer is off.
 ///
-/// Its clips carry no turns, so a pass over them ADDS rather than replaces — and
-/// nothing hides the per-mic turns it duplicates. What it produces is therefore a
-/// second transcript of every minute, not a better one; measured on a live
-/// archive, nearly every turn it wrote overlapped a per-mic turn.
-///
-/// The gate is whether the room stream is known to beat the per-mic one at all
-/// (#1461). Kept because the code is identical to [`PER_MIC`]'s, so the day that
-/// is answered, this is what it needs.
+/// Its clips carry no turns, so a pass over them adds rather than replaces, and
+/// nothing hides the per-mic turns it duplicates: the result is a second
+/// transcript of every minute, not a better one. It stays off until the room
+/// stream is shown to beat the per-mic one.
 pub const ROOM: Stream<'static> = Stream {
     diarize_kind: crate::queue::DIARIZE_ROOM,
     transcribe_kind: crate::queue::TRANSCRIBE_ROOM,
@@ -911,14 +810,13 @@ pub struct Pass {
     pub blocks: usize,
     pub turns: usize,
     pub hidden: usize,
-    /// Blocks whose existing transcript was KEPT, by refusal. The number worth
-    /// watching: a pass that keeps most of what it looks at is reporting on the
-    /// audio or on the guards, not doing work.
+    /// Blocks whose existing transcript was kept, by refusal. A pass that keeps
+    /// most of what it sees is not doing work.
     pub kept: usize,
-    /// Blocks waiting on something transient — no audio segment registered yet,
-    /// or no words to align against. These get NO ledger row.
+    /// Blocks waiting on something transient: no audio segment registered yet,
+    /// or no word timings this pass can read. These get no ledger row.
     pub waiting: usize,
-    /// Turns NAMED in place, where the pass had a speaker but no segmentation
+    /// Turns named in place, where the pass had speakers but no segmentation
     /// worth trading the existing boundaries for.
     pub named: usize,
 }
@@ -926,10 +824,9 @@ pub struct Pass {
 /// A clip whose transcription yields no usable words: decide which absence it is
 /// and retire the permanent one.
 ///
-/// `true` = retired with a ledger row, because the words are there and every
-/// segment carrying them looped, and a stored result does not change. `false` =
-/// no word timings this pass can read, which a later code change can fix, so it
-/// is left to be examined again.
+/// `true`: retired with a ledger row, because timings exist but every segment
+/// carrying them was filtered, and a stored result does not change. `false`: no
+/// word timings this pass can read, which a code change can fix.
 ///
 /// # Errors
 /// If the ledger refuses.
@@ -955,11 +852,10 @@ fn retire_if_permanently_unusable(
 
 /// Drain the finished diarize jobs into speaker-aligned turns.
 ///
-/// The one pass that replaces turns: it hides what is there and writes over it,
-/// so every swap goes through [`decide`] first and every terminal decision
-/// leaves a ledger row. The two transient outcomes get no row: a clip whose
-/// audio segment is not registered yet, and one whose transcription carries no
-/// word timings this pass can read. Both can become eligible later.
+/// Every swap goes through [`decide`] first and every terminal decision leaves a
+/// ledger row. The two transient outcomes get none: a clip whose audio segment
+/// is not registered yet, and one whose transcription carries no word timings
+/// this pass can read.
 pub fn write_pass(
     meaning: &mut rusqlite::Connection,
     ingest: &rusqlite::Connection,
@@ -969,8 +865,7 @@ pub fn write_pass(
 ) -> rusqlite::Result<Pass> {
     let model = stream.model;
     // The diarize job and the transcription it aligns against, joined on the
-    // filename they share — the words and the speaker spans are two results
-    // about ONE clip, and reading them separately is how they get out of step.
+    // shared filename so the two results cannot get out of step.
     let mut stmt = ingest.prepare(
         "SELECT d.filename, d.result, t.result, s.source
          FROM jobs d
@@ -990,9 +885,8 @@ pub fn write_pass(
         .collect::<Result<_, _>>()?;
 
     let kind = stream.diarize_kind;
-    // ⚠ Loaded ONCE per pass, not per block: it is the same few hundred vectors
-    // every time, and re-reading them per clip would make the cost of naming
-    // scale with the backlog rather than with the people.
+    // Loaded once per pass, not per block, so the cost of naming does not scale
+    // with the backlog.
     let enrolled = crate::identify::enrolled(meaning)?;
     let mut pass = Pass::default();
     for (filename, stored_voices, transcription, source) in jobs {
@@ -1004,8 +898,7 @@ pub fn write_pass(
             continue;
         };
         let Some((speakers, prints)) = voices(&stored_voices) else {
-            // The shim refused, or sent a shape this does not understand. Both
-            // permanent: a stored result does not change on a later pass.
+            // The shim refused, or sent an unknown shape. Both permanent.
             crate::turns::ledger(ingest, kind, &filename, "unreadable", now)?;
             pass.kept += 1;
             continue;
@@ -1016,8 +909,8 @@ pub fn write_pass(
             rusqlite::params![source, instant::python_isoformat_utc(block_start)],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
         ) else {
-            // Transient — unless the session was deleted, in which case the
-            // audio is never coming and waiting is for ever (#1653).
+            // Transient, unless the session was deleted and the audio is never
+            // coming.
             if crate::turns::tombstoned_block(meaning, &source, block_start)? {
                 crate::turns::ledger(ingest, stream.diarize_kind, &filename, "deleted", now)?;
             } else {
@@ -1025,8 +918,7 @@ pub fn write_pass(
             }
             continue;
         };
-        // ⚠ Transient, so no ledger row: a transcription without word timings
-        // today may be re-derived with them.
+        // No usable words: retire the permanent case, wait on the transient one.
         let Some((words, language)) = words_of(&transcription) else {
             if retire_if_permanently_unusable(ingest, kind, &filename, &transcription, now)? {
                 pass.kept += 1;

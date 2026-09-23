@@ -1,19 +1,16 @@
-//! A microphone whose own noise suppression has destroyed the recording —
-//! while every floor-based metric scores it BEST IN THE ROOM.
+//! A microphone whose own noise suppression has destroyed the recording, while
+//! every floor-based metric scores it best in the room.
 //!
-//! ⚠ **The case is #1526, and geb on 2026-09-04 is the proof.** The best
-//! hardware in the house, a speaker sitting beside it, and by ear: a voice with
-//! no words. Phone-side NS gated the inter-speech frames to near-zero and
-//! scrubbed off-voice spectrum during speech too. Nothing downstream noticed,
-//! because everything downstream measures the FLOOR — and a scrubbed floor is
-//! indistinguishable from an excellent one. It scored 52 dB "SNR", twice, under
-//! two different floor definitions, and won per-bin selection outright.
+//! Phone-side noise suppression can gate the frames between words to near-zero
+//! and scrub off-voice spectrum during speech: by ear, a voice with no words.
+//! A scrubbed floor is indistinguishable from an excellent one, so floor-based
+//! SNR scores such a source highest.
 //!
 //! # The discriminator, measured rather than chosen
 //!
-//! A real microphone in a real room sits close above its own noise. Over the
-//! 2026-09-04 archive (`segment_levels`, speech quantile 0.9 against floor
-//! quantile 0.1):
+//! A real microphone in a real room sits close above its own noise. Over one
+//! day's archive (`segment_levels`, speech quantile 0.9 against floor quantile
+//! 0.1):
 //!
 //! ```text
 //!     source    segments   MEDIAN gap
@@ -24,38 +21,29 @@
 //!     geb           148       70.9   <- the defect
 //! ```
 //!
-//! Four genuine microphones span 14.3 to 24.7 dB. geb sits 70.9 dB above its own
-//! floor. Only a gate produces that: silence between words is not quiet, it is
-//! EMPTY.
+//! Four genuine microphones span 14.3 to 24.7 dB; the gated one sits 70.9 dB
+//! above its floor. Only a gate produces that. The figures are medians of
+//! per-segment gaps, which is what the check consumes.
 //!
-//! ⚠ **Read the MEDIAN of per-segment gaps, not a gap between averages.** An
-//! earlier draft of this comment computed it the second way and reported 13.1 to
-//! 20.4 for the real mics and 55.7 for geb — same conclusion, wrong numbers, and
-//! a range narrow enough that the threshold below would have looked tuned. The
-//! per-segment spread is what the check actually consumes, so it is what is
-//! quoted here.
+//! ⚠ The threshold is not delicate and must not be tuned: any cut between 24.7
+//! and 70.9 behaves identically on this data. A source landing inside that
+//! range is a new finding to investigate, not a reason to move the cut.
 //!
-//! ⚠ **The threshold is not delicate and must not be tuned.** Any cut between
-//! 24.7 and 70.9 behaves identically on the real data — a 46 dB gap. A source
-//! landing inside it is a NEW finding and wants reading, not a nudge here, the
-//! same rule `deaf` states for the same reason.
+//! # Why this is not doctor's `deaf` check
 //!
-//! # Why this cannot be folded into `deaf`
-//!
-//! `deaf` asks whether a source heard the conversation. This source DID: geb's
-//! speech level is the second highest in the room. The audio arrives, carries
-//! speech, transcribes into plausible text, and is wrong. Absence of speech and
-//! destruction of speech are different faults with opposite signatures.
+//! `deaf` asks whether a source heard the conversation. A gated source did: its
+//! speech level can be among the highest in the room, and it transcribes into
+//! plausible, wrong text. Absent speech and destroyed speech have opposite
+//! signatures.
 //!
 //! # Why it is per-source and not relative to peers
 //!
-//! Unlike `deaf`, this needs no agreement between microphones: the gap is a
-//! property of ONE stream against ITSELF. A house where every mic was denoised
-//! would defeat a peer comparison and is exactly the case worth catching.
+//! The gap is a property of one stream against itself, so it needs no
+//! agreement between microphones. If every microphone were denoised, a peer
+//! comparison would miss it; this would not.
 
 /// One segment's level evidence: the dB of its envelope's speech quantile
-/// against its floor quantile — recalld's `segment_levels`, recomputed here from
-/// the envelope the Mac already stores.
+/// against its floor quantile, as stored in `segment_levels`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Levels {
     pub source: String,
@@ -71,10 +59,9 @@ impl Levels {
 
     /// Whether this segment says anything about the microphone.
     ///
-    /// A segment with no speech in it has no speech level to compare, and its
-    /// gap is noise about noise. `-75 dB` is below every real speech level in
-    /// the table above (the quietest, pixel5, is -77.0 on a day it was faulty —
-    /// so this deliberately admits a weak mic and excludes silence).
+    /// A segment with no speech has no speech level to compare, and its gap is
+    /// noise about noise. [`MIN_SPEECH_DB`] admits a weak microphone and
+    /// excludes silence.
     #[must_use]
     pub fn carries_speech(&self) -> bool {
         self.speech_db > MIN_SPEECH_DB && self.floor_db.is_finite()
@@ -98,9 +85,8 @@ fn median(mut values: Vec<f32>) -> Option<f32> {
 
 /// The median speech-to-floor gap per source, over segments that carry speech.
 ///
-/// Median rather than mean: one genuinely silent minute that slipped the speech
-/// filter would drag a mean, and the question is what this microphone does
-/// USUALLY.
+/// Median rather than mean: a silent minute that slipped the speech filter
+/// would drag a mean, and the question is what the microphone usually does.
 #[must_use]
 pub fn gaps(levels: &[Levels]) -> Vec<(String, f32, usize)> {
     let mut sources: Vec<&str> = levels.iter().map(|l| l.source.as_str()).collect();
@@ -134,9 +120,7 @@ pub fn processed_sources(levels: &[Levels]) -> Vec<String> {
 /// Every flagged source with the evidence against it: `(source, median gap dB,
 /// segments considered)`.
 ///
-/// Returned rather than rendered: the verdict surface is `doctor`'s, and this
-/// crate has no business owning how a warning reads. What it owns is the
-/// measurement.
+/// Returned rather than rendered: `doctor` owns how the warning reads.
 #[must_use]
 pub fn processed_with_evidence(levels: &[Levels]) -> Vec<(String, f32, usize)> {
     gaps(levels)
@@ -147,15 +131,11 @@ pub fn processed_with_evidence(levels: &[Levels]) -> Vec<(String, f32, usize)> {
 
 /// Read one window's level evidence from `segment_levels`.
 ///
-/// ⚠ **This is recalld's own table, and it has to be.** The obvious reader —
-/// recompute from `audio_segments.envelope` on the Mac — cannot work: measured
-/// 2026-09-11, that column is WRITE-DEAD. Four of the 14,595 segments since
-/// 2026-07-12 carry one, and the last real envelope was written
-/// 2026-07-12T15:50:27, when D2 moved level measurement into the scanner here
-/// and the column was left behind. `mean_volume` went with it: zero of
-/// September's segments have one.
+/// ⚠ Levels live only here, in recalld's own table, written by the scanner in
+/// `levels.rs`. `audio_segments.envelope` and `mean_volume` are no longer
+/// written.
 ///
-/// The room stream is excluded: it is BUILT from whichever microphone won each
+/// The room stream is excluded: it is built from whichever microphone won each
 /// minute, so it inherits their levels and is not a device to diagnose.
 ///
 /// # Errors

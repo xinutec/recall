@@ -8,45 +8,34 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 pub enum Error {
     Spawn(String),
     Write(String),
-    /// The child closed its stdout — it died, and the caller must respawn
-    /// rather than keep writing into a pipe nobody reads.
+    /// The child closed its stdout: it died, and the caller must respawn it.
     Closed,
     Protocol(String),
-    /// The shim answered, and the answer was "no". Distinct from the transport
-    /// errors above: this job failed, the SHIM is fine, and retrying it against
-    /// a fresh process would waste a model load to reach the same answer.
+    /// The shim answered `ok: false`. The job failed but the shim is fine, so
+    /// respawning it would waste a model load to reach the same answer.
     Refused(String),
 }
 
-/// Describe a reply that would not parse, WITHOUT reproducing it.
+/// Describe a reply that would not parse, without reproducing it.
 ///
-/// ⚠ **The instrument this was missing, and it cost three days.** Between
-/// 2026-09-10 and 2026-09-13 the runner failed 1,976 jobs against 1,454
-/// successes, every one of them `shim protocol: expected value at line 1 column
-/// N`, and nothing anywhere recorded what was AT column N. Three incompatible
-/// causes look identical from that message — a bare `NaN` from Python's
-/// `json.dumps`, a C-level write to fd 1 slipping under the shim's
-/// `sys.stdout = sys.stderr` guard, or a truncated line — and they need
-/// different fixes. #1480 taught the same lesson from the other side: the
-/// helper that named WHICH of three 502s fired was worth more than the fix.
+/// A parse error alone cannot tell apart a bare `NaN` from Python's
+/// `json.dumps`, a C-level write to fd 1 under the shim's stdout guard, and a
+/// truncated line, and each needs a different fix.
 ///
-/// ⚠ **It must not log the reply itself.** That line carries the transcript of
-/// a household conversation, and a debugging aid is not a reason to copy one
-/// into a log file. So this reports the SHAPE: how long it was, what the bytes
-/// immediately around the failure look like by CLASS, and whether the line
-/// looks truncated. Enough to tell the three apart, and nothing anyone said.
+/// ⚠ Never log the reply itself: it carries a transcript of private speech.
+/// Only its shape is reported: length, byte classes, bare literals and whether
+/// it ends in a brace.
 fn shape_of(response: &str) -> String {
     let bytes = response.as_bytes();
     let len = bytes.len();
     let ends_brace = response.trim_end().ends_with('}');
-    // Bare `NaN`/`Infinity` are what Python emits and JSON does not allow; they
-    // are the one cause identifiable by name rather than by position.
+    // Bare `NaN`/`Infinity`: Python emits them, JSON does not allow them.
     let literal = ["NaN", "Infinity", "-Infinity"]
         .into_iter()
         .find(|t| response.contains(t))
         .unwrap_or("none");
-    // Control bytes cannot appear unescaped in a JSON string: their presence
-    // means something wrote to the stream that was not the protocol.
+    // Unescaped control bytes mean something other than the protocol wrote to
+    // the stream.
     let control = bytes
         .iter()
         .filter(|b| **b < 0x20 && **b != b'\n' && **b != b'\r')
@@ -72,9 +61,8 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// A running shim. Held for the life of the runner: loading a Whisper model
-/// costs seconds, and paying that per clip is the bill this architecture stops
-/// paying (`recall.shim`).
+/// A running shim (`recall.shim`), held for the life of the runner because
+/// loading a model costs seconds.
 pub struct Shim {
     child: Child,
     stdin: ChildStdin,
@@ -85,8 +73,8 @@ pub struct Shim {
 impl Shim {
     /// Start `program args…` as a shim.
     ///
-    /// ⚠ stderr is INHERITED on purpose: the shim logs there, and its model
-    /// chatter is exactly what must not be captured as if it were protocol.
+    /// stderr is inherited: the shim logs there, and that output must not be
+    /// read as protocol.
     ///
     /// # Errors
     /// If the process cannot be started or its pipes cannot be taken.
@@ -160,9 +148,9 @@ impl Shim {
             .unwrap_or(serde_json::Value::Null))
     }
 
-    /// Ask the shim what it is. Answered by the protocol itself, so it works
-    /// even for a shim whose model failed to load (`recall.shim`) — which is
-    /// what makes it safe to use for capability discovery at startup.
+    /// Ask the shim what it is. Answered by the protocol layer, so it works
+    /// even when the model failed to load, which makes it safe for capability
+    /// discovery at startup.
     ///
     /// # Errors
     /// Whatever `request` reports, or `Protocol` if the answer has no name.
@@ -177,15 +165,12 @@ impl Shim {
 
     /// Diarize one clip, and embed each speaker found in it.
     ///
-    /// ⚠ **`embed` is asked for HERE rather than in a second job**, because the
-    /// model is on this machine and the turn boundaries are decided on the fleet.
-    /// Without it a diarized turn reaches the archive with a bare `SPEAKER_00`
-    /// and no name guess — and 98% of the corpus `refine` built carries one, so
-    /// dropping it is not a small regression.
+    /// Embedding happens in the same request, because the model is on this
+    /// machine; without it a diarized turn reaches the archive as a bare
+    /// `SPEAKER_00` with no name guess.
     ///
-    /// No tuning passed: the shipped pyannote parameters are what the whole
-    /// archive was diarized with, and a runner is not the place to diverge from
-    /// that quietly.
+    /// No tuning is passed: the archive is diarized with the shipped pyannote
+    /// parameters.
     ///
     /// # Errors
     /// Whatever `request` reports.
@@ -198,11 +183,9 @@ impl Shim {
 
     /// Embed one stretch of a clip into the vector that names a voice.
     ///
-    /// ⚠ **A SPAN, not the clip.** Enrolment teaches one person's voice from one
-    /// labelled turn; embedding the whole minute it sits in would build a print
-    /// mostly of whoever else was in the room. The shim cuts it — it already
-    /// holds the decoder, and a second decode here would be the slower half of
-    /// the work done twice.
+    /// A span, not the whole clip: enrolment learns one voice from one labelled
+    /// turn, and the rest of the clip holds other speakers. The shim does the
+    /// cutting, since it already decodes the audio.
     ///
     /// # Errors
     /// Whatever `request` reports.
@@ -248,8 +231,7 @@ impl Shim {
 
 impl Drop for Shim {
     fn drop(&mut self) {
-        // Closing stdin is how a shim is asked to stop: its loop ends when
-        // stdin does. Kill only if it will not take the hint.
+        // Kill and reap the child so it does not outlive the runner.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

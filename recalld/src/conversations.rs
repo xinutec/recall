@@ -1,19 +1,13 @@
-//! Conversation and moment folding, ported from `recall.conversations`,
-//! `recall.moments` and `api_reads.conversations`.
+//! Conversation and moment folding: the structure that makes an always-on
+//! stream of turns browsable.
 //!
-//! ⚠ **This is the LAST unported read**, and the only one that is more than a
-//! query: capture is always on, so the archive is one unbroken stream of turns
-//! and this is what gives it structure a person can browse. Two independent
-//! groupings, applied in order. First a *conversation* is a maximal run with no
-//! silence longer than `gap` between turns. Then, inside one, a *moment* folds
-//! the several microphones that heard the same utterance into one card, because
-//! every source transcribes the room independently and the raw stream shows the
-//! same sentence four times.
+//! Two groupings, in order. A *conversation* is a maximal run with no silence
+//! longer than `gap` between turns. Inside one, a *moment* folds the several
+//! microphones that heard the same utterance into one card, since every source
+//! transcribes the room independently.
 //!
-//! ⚠ **Pure, and deliberately not given a database.** Both foldings are decided
-//! by turn spans, sources and confidences alone, so they are tested by
-//! constructing turns rather than a schema — which is what makes the tie rules
-//! below testable at all.
+//! The folding is pure (no database): it reads only spans, sources and
+//! confidences, so tests construct turns directly.
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -24,10 +18,8 @@ pub const DEFAULT_GAP_SECONDS: f64 = 300.0;
 
 /// A turn reduced to what folding reads, with its instants parsed once.
 ///
-/// ⚠ Parsed up front rather than per comparison: the grouping rules compare
-/// spans a quadratic number of times in `best_colocated_guess`, and re-parsing
-/// an ISO string inside that loop would be both slow and a place for a parse
-/// failure to appear halfway through a fold.
+/// Parsed up front because `best_colocated_guess` compares spans a quadratic
+/// number of times, and a parse failure must not surface halfway through a fold.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Turn {
     pub id: i64,
@@ -42,14 +34,12 @@ pub struct Turn {
 
 /// Seconds between two instants, exactly.
 ///
-/// ⚠ Microseconds, not `num_seconds()`: the gap rule is `>` against a threshold
-/// a caller can set to any float, so truncating to whole seconds would put turns
-/// on the wrong side of a boundary the caller chose deliberately.
+/// Microseconds, not `num_seconds()`: the gap threshold is any float, and
+/// truncating would put turns on the wrong side of it.
 fn seconds_between(from: DateTime<Utc>, to: DateTime<Utc>) -> f64 {
     let delta = to - from;
     delta.num_microseconds().map_or_else(
-        // Only reachable for spans of ~292 000 years, where "an enormous gap"
-        // is the right answer anyway.
+        // Only for spans beyond ~292 000 years, which are an enormous gap anyway.
         || delta.num_seconds() as f64,
         |micros| micros as f64 / 1_000_000.0,
     )
@@ -60,10 +50,9 @@ fn seconds_between(from: DateTime<Utc>, to: DateTime<Utc>) -> f64 {
 /// Returns index groups into `turns`, which must be sorted ascending by start
 /// and already filtered to current, non-hidden turns.
 ///
-/// ⚠ The silence is measured from the running maximum end, not the previous
-/// turn's end. Turns overlap constantly — several mics hear one utterance — and
-/// measuring from the last turn's end would manufacture a gap out of a turn that
-/// merely finished early.
+/// Silence is measured from the running maximum end, not the previous turn's
+/// end: turns from several mics overlap, and a turn that finished early must not
+/// create a gap.
 pub fn segment_conversations(turns: &[Turn], gap_seconds: f64) -> Vec<Vec<usize>> {
     let mut conversations = Vec::new();
     let mut current: Vec<usize> = Vec::new();
@@ -88,8 +77,8 @@ pub fn segment_conversations(turns: &[Turn], gap_seconds: f64) -> Vec<Vec<usize>
 /// overlapping versions of the same speech.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Moment {
-    /// The spine's turns — its segmentation kept, so a multi-speaker split it
-    /// caught survives the fold.
+    /// The spine's turns, with its segmentation kept so a multi-speaker split
+    /// survives the fold.
     pub primary: Vec<usize>,
     /// Every other source's overlapping turns, for the compare view.
     pub alternates: Vec<usize>,
@@ -97,10 +86,9 @@ pub struct Moment {
 
 /// Fold one conversation's turns into moments.
 ///
-/// The same merge-overlapping-intervals sweep `segment_conversations` uses, at a
-/// different scale: every turn overlapping the cluster's running span joins it,
-/// so one utterance heard by four mics becomes one moment while sequential
-/// utterances stay separate.
+/// A merge-overlapping-intervals sweep: every turn overlapping the cluster's
+/// running span joins it, so one utterance heard by several mics becomes one
+/// moment while sequential utterances stay separate.
 pub fn cluster_moments(turns: &[Turn], group: &[usize]) -> Vec<Moment> {
     let mut clusters: Vec<Vec<usize>> = Vec::new();
     let mut current: Vec<usize> = Vec::new();
@@ -139,8 +127,7 @@ fn confidence(turns: &[Turn], indices: &[usize]) -> f64 {
 }
 
 fn to_moment(turns: &[Turn], cluster: &[usize]) -> Moment {
-    // First-appearance order of each source, which is what Python's dict
-    // iteration gives and what both tie rules below depend on.
+    // First-appearance order of each source; both tie rules below depend on it.
     let mut order: Vec<Option<&str>> = Vec::new();
     let mut by_source: HashMap<Option<&str>, Vec<usize>> = HashMap::new();
     for &index in cluster {
@@ -155,12 +142,8 @@ fn to_moment(turns: &[Turn], cluster: &[usize]) -> Moment {
     // scores higher); ties go to the one with more turns, i.e. the finer
     // speaker split.
     //
-    // ⚠ **The FIRST maximum, not the last.** Python's `max` keeps the first
-    // among equals and Rust's `max_by_key` keeps the last, so a strict `>` here
-    // is not a style choice: on a true tie — equal summed confidence AND equal
-    // turn count — the two implementations would choose different microphones as
-    // the spine, silently swapping which transcription the UI shows as primary
-    // and which it hides behind "compare".
+    // ⚠ On a full tie the first source wins, hence the strict `>` loop:
+    // `max_by_key` would keep the last.
     let mut best = order[0];
     let mut best_key = (confidence(turns, &by_source[&best]), by_source[&best].len());
     for &source in &order[1..] {
@@ -194,20 +177,15 @@ fn to_moment(turns: &[Turn], cluster: &[usize]) -> Moment {
 }
 
 /// For each spine turn, the most confident speaker guess among it and the
-/// time-overlapping alternates — the same speech caught by other microphones.
+/// time-overlapping alternates (the same speech caught by other microphones).
+/// The spine is chosen for the cleanest transcription, but another mic may
+/// carry a stronger voiceprint match.
 ///
-/// The spine is chosen for the cleanest *transcription*, which says nothing
-/// about *attribution*: a co-located mic may carry a stronger voiceprint match
-/// for the very same words.
-///
-/// ⚠ **Identity-preserving, and that asymmetry is the point.** A missing guess
-/// is filled from the most confident overlapping version, and an existing guess
-/// has its confidence raised only by mics naming the SAME person — but a name is
-/// never flipped on a time overlap alone. Phone clocks are arrival-stamped and
-/// lag by a variable few seconds, so raw overlap is not a reliable "same
-/// speaker" signal; borrowing a different name from it would assert the wrong
-/// person, while corroborating the same name only strengthens what is there.
-/// Confirmed human labels are untouched — this refines the auto guess only.
+/// ⚠ A missing guess is filled from the most confident overlapping version; an
+/// existing guess only has its score raised by mics naming the same person, and
+/// is never replaced. Phone clocks lag by a variable few seconds, so overlap
+/// alone does not prove the same speaker. Only the auto guess is refined, never
+/// a human label.
 pub fn best_colocated_guess(
     turns: &[Turn],
     primary: &[usize],
@@ -317,9 +295,8 @@ fn distinct<'a>(values: impl Iterator<Item = Option<&'a str>>) -> Vec<String> {
 
 /// Reduce stored rows to the fields folding reads, parsing each instant once.
 ///
-/// ⚠ A row whose stored time will not parse is DROPPED rather than defaulted.
-/// Substituting an epoch would place the turn at the far past, where it would
-/// silently split every conversation after it by manufacturing a huge gap.
+/// A row whose stored time will not parse is dropped, not defaulted: an epoch
+/// would create a huge gap and split the conversation.
 fn turns_of(segments: &[reads::Segment]) -> (Vec<Turn>, Vec<usize>) {
     let mut turns = Vec::with_capacity(segments.len());
     let mut kept = Vec::with_capacity(segments.len());
@@ -375,10 +352,9 @@ fn moment_out(
 ) -> MomentOut {
     let guesses = best_colocated_guess(turns, &moment.primary, &moment.alternates);
     let row = |i: usize| &segments[kept[i]];
-    // ⚠ Stored text, never a re-formatted instant — see `reads::iso`. chrono
-    // trims trailing zeros from the fraction (.960) where Python's isoformat
-    // keeps six digits (.960000), so parsing and re-emitting here would change
-    // every timestamp on the wire while looking like a no-op.
+    // ⚠ Emit the stored text (`reads::iso`), never a re-formatted instant:
+    // chrono trims trailing fraction zeros (.960 for .960000), which would
+    // change every timestamp on the wire.
     MomentOut {
         start: extreme(turns, &moment.primary, |t| t.start, false)
             .map(|i| reads::iso(&row(i).start_utc))
@@ -442,10 +418,9 @@ fn conversation_out(
 
 /// Fold a page of stored turns into conversations, ready to serialise.
 ///
-/// ⚠ `segments` must be in CHRONOLOGICAL order, which is not how most pages
-/// arrive: `reads::recent` answers newest-first unless paging forward. Folding a
-/// reversed page computes negative gaps, so every turn lands in one conversation
-/// and the moments inside it are grouped by a sweep that never advances.
+/// ⚠ `segments` must be in chronological order, but `reads::recent` answers
+/// newest-first unless paging forward. A reversed page has negative gaps and
+/// folds into one conversation.
 pub fn fold(segments: &[reads::Segment], gap_seconds: f64, limit: i64) -> ConversationsOut {
     let (turns, kept) = turns_of(segments);
     ConversationsOut {
@@ -481,9 +456,8 @@ pub async fn conversations_route(
     axum::extract::State(st): axum::extract::State<Arc<reads::State>>,
     Query(q): Query<ConversationsQuery>,
 ) -> Response {
-    // ⚠ A malformed cursor is a 400, never a dropped filter: paging on with the
-    // bound silently removed would serve the whole archive as one page and read
-    // as "the conversation grew", not as an error.
+    // A malformed cursor is a 400, not a dropped filter, which would silently
+    // serve an unbounded page.
     for (name, value) in [("before", &q.before), ("after", &q.after)] {
         if let Some(value) = value
             && DateTime::parse_from_rfc3339(value).is_err()
@@ -504,8 +478,8 @@ pub async fn conversations_route(
                 source: q.source.as_deref(),
             },
         )?;
-        // Forward paging already reads oldest-first; every other page is
-        // newest-first and has to be turned around before folding.
+        // Forward paging reads oldest-first; every other page is newest-first
+        // and is reversed before folding.
         if q.after.is_none() {
             segments.reverse();
         }

@@ -1,14 +1,7 @@
-//! Does this transcript text say anything, or is it a model artifact?
+//! Does this transcript text say anything, or is it a model artifact? recalld
+//! asks before writing a turn.
 //!
-//! ⚠ **These two rules judge the same text for OPPOSITE purposes**, which is why
-//! they live in a shared crate rather than beside either caller: recalld decides
-//! whether to WRITE a turn, the doctor decides whether a hidden one is worth
-//! RESTORING. A disagreement is household memory reported as unrecoverable.
-//!
-//! ⓘ Ported from Python that is now deleted, so `tests/text.rs` is a frozen
-//! record of that behaviour rather than a live comparison. If a case there looks
-//! wrong the question is whether the Rust is right — there is nothing left to
-//! ask.
+//! `tests/text.rs` pins the behaviour case by case; it is the specification.
 
 /// Need a few words before a dominant one means "loop".
 const WORD_MIN: usize = 6;
@@ -21,8 +14,8 @@ const MIN_PHRASE_REPEATS: usize = 3;
 /// A word repeated back-to-back this many times is a candidate loop.
 const RUN_MIN: usize = 3;
 /// …but only if the word is this long. Short words are real emphasis ("no no
-/// no", "who who who"); long ones are hallucinations ("everything everything
-/// everything"). Six is calibrated from the archive, not chosen.
+/// no"); long ones are hallucinations ("everything everything everything").
+/// Six is calibrated from the archive.
 const RUN_WORD_MIN_LEN: usize = 6;
 /// A space-less loop's repeated unit is 2-8 characters ("ASTASTASTAST").
 const CHAR_UNIT_MIN: usize = 2;
@@ -32,27 +25,23 @@ const CHAR_LOOP_MIN_REPEATS: usize = 4;
 /// …spanning at least this many characters. Shorter runs are ordinary words.
 const CHAR_LOOP_MIN_LEN: usize = 12;
 
-/// Characters that carry no word. A turn made only of these says nothing about
-/// what was spoken, which is why hiding one cannot lose information. The unicode
-/// dashes and ellipsis are written as escapes: Whisper really does emit them,
-/// and spelled literally they are indistinguishable from ASCII to a reader.
+/// Characters that carry no word; a turn made only of these says nothing. The
+/// unicode dashes and ellipsis (which Whisper emits) are escapes so a reader
+/// can tell them from ASCII.
 const WORDLESS: &str = ". !?*-_,:;\"'()[]{}~/\\|@#$%^&+=<>`\t\n\u{2026}\u{00b7}\u{2013}\u{2014}";
 
 /// `text` with everything that carries no word stripped from both ends.
 ///
-/// Exposed because a caller asking "is this turn nothing but X" needs the same
-/// stripping [`is_wordless`] uses, and a second spelling of it would be a rule
-/// that disagrees with this one about where a word begins.
+/// Exposed so a caller asking "is this turn nothing but X" strips exactly as
+/// [`is_wordless`] does.
 #[must_use]
 pub fn trim_wordless(text: &str) -> &str {
     text.trim_matches(|c| WORDLESS.contains(c)).trim()
 }
 
-/// True if `text` contains no word at all — "...", "***", "!".
-///
-/// The only single-signal rule in this family, and it needs no second one: the
-/// test is not "was this probably speech" but "does this text say anything", and
-/// the answer is no however loud the room was.
+/// True if `text` contains no word at all: "...", "***", "!". A single signal
+/// suffices: the question is whether the text says anything, not whether it
+/// was speech.
 #[must_use]
 pub fn is_wordless(text: &str) -> bool {
     trim_wordless(text).is_empty()
@@ -64,12 +53,10 @@ pub fn is_repetition_loop(text: &str) -> bool {
     is_word_loop(text) || is_char_loop(text)
 }
 
-/// The word tokens Python's `re.findall(r"\w+", text.lower())` finds.
+/// The lower-cased word tokens: runs of Unicode alphanumerics and underscore.
 ///
-/// ⚠ `\w` on a Python `str` is Unicode-aware — alphanumerics plus underscore —
-/// not `[A-Za-z0-9_]`. Reading it as ASCII would split every Dutch word carrying
-/// a diaeresis into two tokens and turn "coördinatie coördinatie" into a
-/// four-token run that looks nothing like the two-token loop it is.
+/// ⚠ Unicode, not `[A-Za-z0-9_]`: ASCII would split "coördinatie" into two
+/// tokens and hide a two-word loop.
 fn words(text: &str) -> Vec<String> {
     let lowered = text.to_lowercase();
     lowered
@@ -98,9 +85,8 @@ fn is_word_loop(text: &str) -> bool {
     if words.is_empty() {
         return false;
     }
-    // A long word repeated back-to-back. This runs BEFORE the word-count floor
-    // on purpose: "everything everything everything" is three words and would
-    // otherwise never be examined.
+    // A long word repeated back-to-back. Before the word-count floor on purpose:
+    // "everything everything everything" is only three words.
     let (run, run_word) = longest_consecutive_run(&words);
     if run >= RUN_MIN && run_word.chars().count() >= RUN_WORD_MIN_LEN {
         return true;
@@ -133,13 +119,11 @@ fn is_word_loop(text: &str) -> bool {
 
 /// Space-less loops ("ASTASTAST", "obaobaoba"): a short unit repeated in a row.
 ///
-/// ⚠ **The FIRST such run decides, not the longest**, and that is the Python's
-/// behaviour rather than an oversight worth fixing here. `re.search` of
-/// `(.{2,8}?)\1{3,}` returns the leftmost match with the shortest unit, and the
-/// length test is applied to THAT match — so a four-fold "abab" early in a turn
-/// answers "not a loop" even when a forty-character run follows it. The obvious
-/// reading, searching on for a longer run, answers the opposite on real archive
-/// rows; the test pins the string that separates them.
+/// ⚠ The first such run decides, not the longest: the leftmost, shortest-unit
+/// match of `(.{2,8}?)\1{3,}`, with the length test applied to that match. So a
+/// four-fold "abab" early in a turn answers "not a loop" even when a longer run
+/// follows; searching on answers differently on real rows, and a test pins the
+/// string that separates them.
 fn is_char_loop(text: &str) -> bool {
     let compact: Vec<char> = text
         .to_lowercase()

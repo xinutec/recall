@@ -1,16 +1,10 @@
-//! Every check that has to READ the archive volume — and the check on the
-//! reading itself.
+//! Every check that reads the archive volume, and the check on the reading
+//! itself.
 //!
-//! ⚠ This module runs in the CHILD process ([`crate::bounded`]). All of it can
-//! block indefinitely: the capture log, the segment stat walk and the pause
-//! marker all live on the archive volume, and on 2026-08-10 all three were in
-//! uninterruptible disk wait at once. Keeping them behind one module keeps the
-//! boundary honest — if a check belongs here it is unsafe to run in the
-//! reporting process.
-//!
-//! Nothing here writes. The doctor observes, and [`crate::bounded`]'s bargain
-//! requires it: an abandoned child may still be running after the parent gave
-//! up on it, so it has to be disposable.
+//! Runs in the child process ([`crate::bounded`]): the capture log, the segment
+//! stat walk and the pause marker all live on the archive volume, and any of
+//! them can block indefinitely. Nothing here writes, because an abandoned child
+//! may still be running after the parent gives up on it.
 
 use crate::capture::{self, Beat, Recorder};
 use crate::check::{Check, Verdict, check};
@@ -30,44 +24,29 @@ pub fn loss_window() -> Duration {
 pub fn loss_min() -> Duration {
     Duration::minutes(2)
 }
-/// The store always trails a running capture: an in-progress segment (up to
-/// 60s) plus the worker's min-age guard (120s) plus its pass cadence. Coverage
-/// inside this trailing stretch is unknowable, so the reconciler never judges it.
+/// The trailing stretch the reconciler never judges: the newest segment (up to
+/// 60s) is still being written, so coverage there is not yet known.
 pub fn loss_settle() -> Duration {
     Duration::minutes(10)
 }
 
-/// How long the archive-reading half of the doctor may take before it is
-/// treated as not having answered. A healthy run is ~1.5s end to end, so this
-/// is forty times the work — and it has to stay far under the agent's 300s
-/// `StartInterval`, because `KeepAlive = false` means launchd will not start the
-/// next doctor while this one is still going: one wedged run silences every run
-/// after it.
+/// How long the archive-reading half may take before it counts as not having
+/// answered. A healthy run is ~1.5s; this must stay far under the agent's 300s
+/// `StartInterval`, since launchd starts no new doctor while one is running.
 pub fn archive_bound() -> Duration {
     Duration::seconds(60)
 }
-/// The reading that predicts the bound being hit. During the 2026-08-10
-/// starvation a two-table `COUNT(*)` alone took 4m19s, so the interesting range
-/// is not near 1.5s; anything past a few seconds means the volume is already
-/// contended.
+/// The reading that predicts the bound being hit: anything past a few seconds
+/// means the volume is already contended.
 pub fn archive_slow() -> Duration {
     Duration::seconds(10)
 }
 
-/// Could this machine read its own archive at all — and how long did it take?
+/// Could this machine read its own archive at all, and how long did it take?
+/// Reported by the parent, so it survives a child stuck in disk wait.
 ///
-/// Every other check in this module presumes the archive answered. On
-/// 2026-08-10 it did not, for over an hour, and the doctor did not report that:
-/// it lives on the volume it checks, so it went into uninterruptible disk wait
-/// alongside the worker and the sync (#709). This is the check that survives
-/// that, because the archive is read in a child process the parent abandons and
-/// the timeout is reported from off the disk.
-///
-/// ⚠ **Unanswered is `fail`, never `skip`.** A skip reads as "not applicable",
-/// and nothing is more applicable than the archive being unreachable — the June
-/// lesson was that a silence which looks deliberate is how a fault survives for
-/// weeks. The latency is carried as `value` so the trend is visible while it is
-/// still only slow, which is the only warning anyone gets before it wedges.
+/// Unanswered is `fail`, never `skip`: a skip reads as "not applicable". The
+/// latency is carried as `value` so a slowing volume shows before it wedges.
 pub fn archive_check(seconds: Option<f64>, detail: &str) -> Check {
     let slow = archive_slow().num_seconds() as f64;
     let expected = format!("the archive read in under {slow:.0}s");
@@ -114,9 +93,8 @@ pub fn archive_check(seconds: Option<f64>, detail: &str) -> Check {
     .build()
 }
 
-/// The file the volume probe reads a page of: the Mac's meaning plane, retired
-/// on 2026-09-23 and kept as an archive. Large, and never written again, so
-/// nothing else keeps its pages warm.
+/// The file the volume probe reads a page of: the Mac's retired meaning plane,
+/// kept as an archive. Large and never written, so nothing keeps its pages warm.
 pub const PROBE_FILE: &str = "recall.sqlite";
 
 /// One page, the unit this probe is fixed at.
@@ -124,9 +102,8 @@ const PAGE: usize = 4096;
 
 /// A page number under `pages`, varying run to run.
 ///
-/// ⓘ The clock, not a random crate: this needs to be UNPREDICTABLE TO THE CACHE,
-/// not unpredictable to an adversary, and a dependency for that would be a
-/// dependency for nothing.
+/// The clock, not a random crate: it only has to be unpredictable to the page
+/// cache.
 fn somewhere(pages: u64) -> u64 {
     if pages == 0 {
         return 0;
@@ -137,53 +114,37 @@ fn somewhere(pages: u64) -> u64 {
         % pages
 }
 
-/// How long a FIXED read of the volume may take before it is worth saying so.
-/// Four seconds is absurd for one page off a working disk and is deliberately
-/// far above the tenths this costs when the volume is well — the point is to
-/// catch a mode, not to grade jitter.
+/// How long the fixed one-page read may take before it warns. Far above the
+/// tenths of a second it costs on a well volume: this catches a mode, not
+/// jitter.
 pub fn volume_slow() -> Duration {
     Duration::seconds(4)
 }
 
-/// One page off the archive volume, timed. **The only fixed-size read the
-/// doctor does.**
+/// One page off the archive volume, timed: the only fixed-size read the doctor
+/// does.
 ///
-/// ⚠ **This exists because `archive answers` cannot separate two causes.** That
-/// check times the whole archive read — six queries and a directory listing —
-/// so it gets slower when the volume is contended AND when the archive simply
-/// grows, and the value it trends cannot say which. Measured over its own
-/// history, the FASTEST read of the day moved from 0.05 s to seconds, in a
-/// floor that flips between two modes and holds for hours; a volume that stops
-/// answering adds a tail and does not raise a floor, so at least one of the two
-/// is not the fault that check was built for.
+/// `archive answers` times the whole archive read (the capture log, the
+/// uploader's state, a stat walk of every segment), so it slows both when the
+/// volume is contended and
+/// when the archive grows. This read never grows, so a rise in it belongs to
+/// the disk. It samples one instant, at the start of the archive read: a stall
+/// part-way through is invisible to it.
 ///
-/// This one does not grow. Its size is one page, today and after another year
-/// of recording, so a rise in it belongs to the DISK — which is exactly the
-/// discrimination the whole question turns on.
-///
-/// ⚠ It samples ONE INSTANT, at the start of the archive read. A volume that
-/// stalls part-way through the queries is invisible to it, so a healthy reading
-/// beside a slow `archive answers` narrows the cause without closing it.
-///
-/// ⚠ Kept BESIDE `archive answers`, never folded into it: that check has its
-/// own history under its own name, and the difference between the two trends is
-/// the measurement. Renaming it would spend the history to say the same thing.
+/// Kept beside `archive answers`, not folded into it: each keeps its own trend
+/// history, and the difference between the two is the measurement.
 pub fn volume_check(root: &Path) -> Check {
     use std::io::{Read, Seek, SeekFrom};
     let db = root.join(PROBE_FILE);
     let started = std::time::Instant::now();
     let read = std::fs::File::open(&db).and_then(|mut file| {
-        // ⚠ **A RANDOM page, never the first one.** A page read every run stays
-        // in the page cache, and a probe on it times the CACHE — 0.00s with the
-        // disk wedged, the one reading that must never be possible here. The
-        // file holds six figures of pages; a fresh offset each run is almost
-        // certainly a real read.
+        // ⚠ A random page, never a fixed one: a page read every run stays in
+        // the page cache, and would time 0.00s with the disk wedged.
         let pages = file.metadata()?.len() / PAGE as u64;
         file.seek(SeekFrom::Start(somewhere(pages) * PAGE as u64))?;
         let mut page = [0_u8; PAGE];
-        // ⚠ `read`, not `read_exact`. An archive smaller than one page is not a
-        // stalled volume, and `read_exact` would report the disk as UNREADABLE
-        // for it — a fault invented by the instrument.
+        // `read`, not `read_exact`: a file shorter than one page is not an
+        // unreadable disk.
         file.read(&mut page).map(|_| ())
     });
     let seconds = started.elapsed().as_secs_f64();
@@ -217,10 +178,8 @@ pub fn volume_check(root: &Path) -> Check {
 /// Every device that has registered here, by its latest registration, in id
 /// order.
 ///
-/// ⚠ An unrecognised kind is DROPPED rather than guessed at. A source whose
-/// kind this build has never heard of cannot be graded (the always-on rule is a
-/// judgement about a specific kind of hardware), and inventing a verdict for it
-/// would be worse than the missing line.
+/// An unrecognised kind is dropped rather than guessed at: the grading rules
+/// are judgements about specific kinds of hardware.
 #[must_use]
 pub fn registered_devices(events: &[capture_log::Event]) -> Vec<(String, SourceKind)> {
     let mut latest: BTreeMap<&str, &str> = BTreeMap::new();
@@ -312,14 +271,11 @@ pub fn archive_checks(
     now: DateTime<Utc>,
     volume: Check,
 ) -> std::io::Result<Vec<Check>> {
-    // ⚠ The probe is taken by the CALLER and handed in, so it can be SAID
-    // before the reads below run. Computed here it would be lost on exactly
-    // the run it exists for: a child that hangs never returns these checks at
-    // all, so the one reading that could say whether the DISK answered went
-    // down with it.
+    // The volume probe is taken by the caller and printed before the reads
+    // below, so a child that hangs here has still said whether the disk
+    // answered.
     let log = capture_log::read(root)?;
-    // Registered recorders, not whatever directories exist: a mic the household
-    // actually uses is one that has announced itself here.
+    // Registered recorders, not whatever directories exist.
     let sources = registered_devices(&log);
     let losses = speech_loss(root, &log, &sources, now);
 
@@ -346,12 +302,9 @@ pub fn archive_checks(
     Ok(checks)
 }
 
-/// The worker's pulse, stamped in the archive root.
-///
-/// It lives on the archive volume rather than off it, deliberately: a heartbeat
-/// that kept ticking while the archive was unreachable would be worse than none,
-/// since the thing it certifies is work done *on* that archive. That is also why
-/// it is read here, in the child, and not in the reporting process.
+/// The runner's pulse, stamped in the archive root. It lives on the archive
+/// volume so it cannot tick while the archive is unreachable, which is also
+/// why it is read here, in the child.
 pub fn read_beat(root: &Path) -> Option<Beat> {
     let text = std::fs::read_to_string(root.join("worker-heartbeat.json")).ok()?;
     serde_json::from_str(&text).ok()

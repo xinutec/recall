@@ -1,19 +1,13 @@
 //! The instant feed's health, read from the fleet and graded here.
 //!
-//! ⚠ **The subject is a Mac agent whose output lands elsewhere.**
-//! `org.xinutec.recall-live` runs beside this doctor and keeps no store — the
-//! push IS the write — so the only record of what it produced is the fleet's.
-//! Reading the Mac's archive for it, which is what these checks did until
-//! 2026-09-21, grades a database the tier stopped writing to: both skipped
-//! forever, and a blind check reads as a quiet house (#1671).
+//! `org.xinutec.recall-live` runs beside this doctor but keeps nothing locally:
+//! it pushes each turn, so the only record of what it produced is the fleet's.
 //!
-//! ⚠ **The fleet measures, this grades.** Every threshold and every window is
-//! named here and sent with the request, so there is one grader rather than two
-//! that could disagree about what "behind" means.
+//! The fleet measures, this grades: every threshold and window is named here
+//! and sent with the request, so there is one grader.
 //!
-//! ⚠ **An unreachable fleet SKIPS naming the network — never fails.** The Mac's
-//! own delivery checks are what go red when the link is down, so an outage is
-//! reported once, by the check whose subject it is.
+//! An unreachable fleet skips, naming the network, and never fails: the
+//! delivery checks already go red when the link is down.
 
 use crate::capture::{self, WindowAudio};
 use crate::check::{Check, Verdict, check};
@@ -25,17 +19,16 @@ const MIN_LAG_SAMPLES: usize = 10;
 
 /// Where the fleet is, and the credential for it.
 ///
-/// ⓘ The token is the one the Mac already holds for every other `/sync/*` read
-/// — `doctorWrapper` sources `~/.config/recall/env` for exactly this reason.
+/// The token is the one the Mac holds for every `/sync/*` read;
+/// `doctorWrapper` sources `~/.config/recall/env` to provide it.
 pub struct Fleet {
     pub url: String,
     pub token: String,
 }
 
 impl Fleet {
-    /// `None` when this Mac is not half of the Isis pair, or has no token: the
-    /// checks then skip saying which it was, rather than inventing a default
-    /// address and reporting that nothing answered there.
+    /// `None` without a fleet URL or token: the checks then skip rather than
+    /// guess a default address.
     #[must_use]
     pub fn new(url: Option<&str>, token: Option<&str>) -> Option<Self> {
         Some(Self {
@@ -59,16 +52,14 @@ pub struct LiveHealth {
 
 /// How long to wait on the fleet before calling it unreachable.
 ///
-/// Short on purpose: this runs in the doctor's PARENT, which has no bounded
-/// child around it, so a hung read would stall the whole report — including the
-/// checks that would have said the archive was fine.
+/// Short: this runs in the doctor's parent, outside the bounded child, so a
+/// hung read would stall the whole report.
 const TIMEOUT_S: u64 = 10;
 
 /// A bounded, authenticated GET of `path` on the fleet.
 ///
-/// ⚠ Callers add the window with `.query` rather than a formatted URL: an
-/// RFC3339 stamp ends in `+00:00` and a raw `+` arrives at the other end as a
-/// SPACE, so the fleet would parse a different instant than the one asked about.
+/// ⚠ Callers add parameters with `.query`, not a formatted URL: an RFC3339
+/// stamp ends in `+00:00`, and a raw `+` arrives as a space.
 pub fn get(fleet: &Fleet, path: &str) -> ureq::Request {
     ureq::get(&format!("{}{path}", fleet.url))
         .set("Authorization", &format!("Bearer {}", fleet.token))
@@ -115,8 +106,8 @@ pub fn fetch(
 
 /// The two live checks, from whatever the fleet said.
 ///
-/// ⚠ Both skip together when the fleet cannot be asked. Reporting one and not
-/// the other would leave a reader to infer that the silent one was fine.
+/// Both skip together when the fleet cannot be asked, so neither reads as fine
+/// by omission.
 #[must_use]
 pub fn live_checks(
     fetched: &Result<LiveHealth, String>,
@@ -132,9 +123,8 @@ pub fn live_checks(
             ];
         }
     };
-    // ⚠ The sample floor is applied HERE rather than on the fleet: it is a
-    // grading rule, and a measurement that hid its own sample size could not be
-    // graded by any other one.
+    // The sample floor is a grading rule, so it is applied here, not on the
+    // fleet.
     let median = health
         .lag_median_s
         .filter(|_| health.lag_samples >= MIN_LAG_SAMPLES);
@@ -161,8 +151,7 @@ pub fn live_checks(
     ]
 }
 
-/// ⚠ The skip must say the fleet was unreachable, not that the house was quiet.
-/// A skip whose reason is wrong is how a blind check gets trusted.
+/// The skip says the fleet was unreachable, not that the house was quiet.
 fn skip(label: &'static str, why: &str) -> Check {
     check(
         "capture",

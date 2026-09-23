@@ -1,22 +1,18 @@
-//! Naming a voice from its embedding — ported from `recall.identify`.
+//! Naming a voice from its embedding.
 //!
-//! ⚠ **This decides whose words a turn is attributed to**, so the rule is copied
-//! rather than re-derived, down to the temperature. It is pure arithmetic over
-//! vectors, which is exactly why it lives on the side that owns the profiles and
-//! not inside the process holding the model weights (`shim_voices` says the same
-//! from its end).
+//! Pure arithmetic over vectors, so it lives with the profiles rather than in
+//! the process holding the model weights.
 //!
-//! A person's score is the BEST cosine over their enrolled voiceprints, never the
+//! A person's score is the best cosine over their enrolled voiceprints, never the
 //! mean: someone recorded on four microphones has four quite different vectors,
 //! and averaging them describes nobody. The best-scoring person is the guess.
 //!
-//! Its confidence is a SOFTMAX over the per-person bests rather than the raw
-//! cosine — the "vs the others" likelihood. A 0.7 against a 0.68 runner-up and a
-//! 0.7 against a 0.2 mean opposite things, and the raw cosine reports them
-//! identically.
+//! Its confidence is a softmax over the per-person bests rather than the raw
+//! cosine: 0.7 against a 0.68 runner-up and 0.7 against a 0.2 mean opposite
+//! things.
 
-/// Softmax temperature. ⚠ Shared with `recall.identify._SOFTMAX_TEMPERATURE`; the
-/// two spellings of one number, and a test compares them.
+/// Softmax temperature. The fixture in `tests/integration/identify_parity.rs`
+/// pins it.
 pub const SOFTMAX_TEMPERATURE: f64 = 0.1;
 
 /// Below this change, a re-derived score is not worth a write.
@@ -33,15 +29,14 @@ pub struct Voiceprint {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Guess {
     pub person: String,
-    /// The softmax confidence, rounded the way the Python rounds it so a
-    /// re-derivation on either side compares equal.
+    /// The softmax confidence, rounded to six places so a re-derivation compares
+    /// equal to the stored score.
     pub score: f64,
 }
 
 fn normalise(v: &[f64]) -> Vec<f64> {
-    // ⚠ `+ 1e-12`, matching the Python: a zero vector must not divide by zero.
-    // It can happen — an embedding of pure silence — and NaN propagates into
-    // every comparison rather than losing one of them.
+    // `+ 1e-12`: a zero vector (an embedding of pure silence) must not divide by
+    // zero, or NaN spreads into every comparison.
     let norm = v.iter().map(|x| x * x).sum::<f64>().sqrt() + 1e-12;
     v.iter().map(|x| x / norm).collect()
 }
@@ -52,20 +47,17 @@ fn cosine(a: &[f64], b: &[f64]) -> f64 {
 
 /// Name the voice in `embedding`, or `None` when nobody is enrolled.
 ///
-/// ⚠ Returns a guess for EVERY embedding when anyone is enrolled — there is no
-/// threshold, deliberately. On out-of-domain audio a visitor scores 0.95 against
-/// a household member, so no cutoff separates true from false; the score is
-/// reported and the reader decides. That is why a guess is never written to
-/// `speaker_label` (see `reads::to_out`: a confirmed name and a guess are
-/// different columns and the UI shows them differently).
+/// Deliberately no threshold: when anyone is enrolled, every embedding gets a
+/// guess. On out-of-domain audio a stranger can score 0.95 against an enrolled
+/// voice, so no cutoff separates true from false; the score is reported and the
+/// reader decides. Hence a guess never goes in `speaker_label`.
 #[must_use]
 pub fn match_one(embedding: &[f64], voiceprints: &[Voiceprint]) -> Option<Guess> {
     if embedding.is_empty() || voiceprints.is_empty() {
         return None;
     }
     let e = normalise(embedding);
-    // Best cosine per person, in first-seen order so ties resolve the way the
-    // Python's `argmax` resolves them — the FIRST maximum, not the last.
+    // Best cosine per person, in first-seen order: ties go to the first maximum.
     let mut people: Vec<&str> = Vec::new();
     let mut best: Vec<f64> = Vec::new();
     for print in voiceprints {
@@ -89,8 +81,7 @@ pub fn match_one(embedding: &[f64], voiceprints: &[Voiceprint]) -> Option<Guess>
             top = i;
         }
     }
-    // Softmax over the per-person bests, max-subtracted for stability exactly as
-    // the Python does it.
+    // Softmax over the per-person bests, max-subtracted for stability.
     let logits: Vec<f64> = best.iter().map(|s| s / SOFTMAX_TEMPERATURE).collect();
     let peak = logits.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let exps: Vec<f64> = logits.iter().map(|l| (l - peak).exp()).collect();
@@ -98,16 +89,15 @@ pub fn match_one(embedding: &[f64], voiceprints: &[Voiceprint]) -> Option<Guess>
     let confidence = if total > 0.0 { exps[top] / total } else { 0.0 };
     Some(Guess {
         person: people[top].to_owned(),
-        // Six places, matching `round(float(confidence), 6)`.
+        // Six places, the stored precision.
         score: (confidence * 1e6).round() / 1e6,
     })
 }
 
 /// Whether a re-derived guess is worth writing over the stored one.
 ///
-/// ⚠ The `None` score case is NOT "unchanged": a turn with a name and no score
-/// has never been scored, and leaving it that way keeps it invisible to every
-/// reader that sorts by confidence.
+/// A stored name with no score counts as changed: it has never been scored, and
+/// stays invisible to every reader that sorts by confidence until it is.
 #[must_use]
 pub fn worth_writing(stored: Option<(&str, Option<f64>)>, fresh: &Guess) -> bool {
     match stored {
@@ -120,12 +110,11 @@ pub fn worth_writing(stored: Option<(&str, Option<f64>)>, fresh: &Guess) -> bool
 
 // --- reading the enrolled people ---------------------------------------------
 
-/// Every enrolled voiceprint, as `recall.store.speaker_profiles` reads them.
+/// Every enrolled voiceprint.
 ///
-/// ⚠ Vectors are stored as a JSON array in a TEXT column; a row that will not
-/// parse is SKIPPED rather than defaulted. A zero vector substituted for a
-/// corrupt one would not be inert — it would sit at cosine 0 against everyone
-/// and quietly become somebody's best match on quiet audio.
+/// Vectors are JSON arrays in a TEXT column; a row that will not parse is
+/// skipped, not defaulted. A zero vector would not be inert: it could become
+/// somebody's best match on quiet audio.
 ///
 /// # Errors
 /// If the database refuses.
@@ -147,10 +136,8 @@ pub fn enrolled(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<Voiceprint>
 
 /// Store a turn's embedding and the name it implies.
 ///
-/// ⚠ **The guess goes in `speaker_guess`, NEVER `speaker_label`.** The label is
-/// the name a PERSON gave; a machine writing there would make its own guess
-/// indistinguishable from somebody's decision, and the read path shows the two
-/// differently for exactly that reason.
+/// ⚠ The guess goes in `speaker_guess`, never `speaker_label`: the label is the
+/// name a person gave, and the read path shows the two differently.
 ///
 /// # Errors
 /// If the database refuses.

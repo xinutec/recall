@@ -3,15 +3,14 @@
 //! re-hash before they will ever evict a local copy. Everything here serves
 //! that contract:
 //!
-//! - **Durability before acknowledgement.** Bytes stream to a temp file in the
-//!   same filesystem, are fsynced, renamed into place, the directory fsynced,
-//!   and the row inserted — only then does the receipt go out. A name never
-//!   points at partial bytes, and a crash leaves either nothing or a blob the
-//!   next identical PUT heals a row for.
+//! - **Durability before acknowledgement.** Bytes are written to a temp file
+//!   in the same filesystem, fsynced, renamed into place, the directory
+//!   fsynced, and the row inserted; only then does the receipt go out. A name
+//!   never points at partial bytes, and a crash leaves either nothing or a blob
+//!   the next identical PUT heals a row for.
 //! - **Append-only.** A re-PUT of identical bytes is idempotent (same
 //!   receipt); a name collision with different bytes is 409 and the stored
-//!   blob is untouched. Nothing here deletes, and no route ever will — the
-//!   absence of a delete endpoint is decision 2, not an omission.
+//!   blob is untouched. There is no delete endpoint, by design (decision 2).
 //! - **Write is the only verb a device token buys.** Read (listing, blobs) is
 //!   the sync token's, so a recorder that can upload still cannot read.
 
@@ -292,14 +291,12 @@ pub async fn list_segments(
 }
 
 /// Liveness for recorders that stream to nothing: each source's newest capture
-/// time that could be someone TALKING. The `.alive` markers the panel was built
-/// on are refreshed by a STREAM, so a store-and-forward recorder never touches
-/// one and reads dead while recording perfectly (#1428).
+/// time that could be someone talking. `.alive` markers are refreshed only by a
+/// stream, so a store-and-forward recorder needs this instead.
 ///
-/// Speech-gated, matching the promise the marker already made — "a dot the audio
-/// can back", so a room of digital silence reads idle on purpose. A segment not
-/// yet measured still counts: the scanner runs behind live audio, and absence of
-/// a measurement is not evidence of silence.
+/// Speech-gated, so a room of digital silence reads idle on purpose. A segment
+/// not yet measured still counts: the scanner runs behind live audio, and a
+/// missing measurement is not evidence of silence.
 pub async fn liveness(State(config): State<Arc<Config>>, headers: HeaderMap) -> Response {
     if let Err(refused) = read_auth(&config, &headers) {
         return refused.into_response();
@@ -381,12 +378,10 @@ pub struct LeaseQuery {
 impl LeaseQuery {
     /// The kinds to offer.
     ///
-    /// ⚠ **Absent means `transcribe-room` ALONE, and deliberately not "all".**
-    /// A runner that predates this parameter holds exactly one shim's weights —
-    /// `asr` — so "all" would hand the deployed runner a `diarize-room` it can
-    /// only fail, burning the job's attempts against a process that can never do
-    /// it. The permissive default is the one that breaks during a rollout, and
-    /// recalld and the runner deploy from different machines.
+    /// ⚠ Absent means `transcribe-room` alone, not "all": a runner that does not
+    /// send the parameter holds only the `asr` shim, and would burn a
+    /// `diarize-room` job's attempts failing it. recalld and the runner deploy
+    /// separately, so this default must suit an older runner.
     fn kinds(&self) -> Vec<String> {
         match self.kinds.as_deref() {
             None => vec![crate::queue::TRANSCRIBE_ROOM.to_owned()],

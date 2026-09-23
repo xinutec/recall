@@ -1,29 +1,17 @@
-//! The room builder (docs/architecture.md). One UTC-aligned minute
-//! at a time, choose the microphone that heard the room best — *for that
-//! microphone* — and carry its audio whole into a `room` segment the queue
-//! can hand to transcription. Selection, never fusion: per-block choice tied
-//! the best single microphone exactly in the WER bake-off while every fusion
-//! lost or nulled (docs/architecture.md, "Decisions that bind"), so this
-//! reproduces the measured instrument's behaviour — hard cuts at block
-//! boundaries included — rather than improving on it unmeasured.
+//! The room builder (docs/architecture.md). For each UTC-aligned minute, pick
+//! one microphone and carry its audio whole into a `room` segment the queue can
+//! hand to transcription. Selection, never fusion: per-block choice tied the
+//! best single microphone in the WER bake-off while every fusion lost, so this
+//! reproduces the measured behaviour, hard cuts at block boundaries included.
 //!
-//! Three rules carried from the evidence:
-//!
-//! - **The rank is calibrated.** A raw speech level ranks the most sensitive
-//!   microphone always (the condenser leads the phones by ~21 dB of device,
-//!   not distance). Each source's block level is compared against its OWN
-//!   faintest-speech reference from the calibration table, so the question is
-//!   "how well is this mic hearing the speaker, for this mic".
-//! - **No verdict on partial evidence.** A block whose overlapping segments
-//!   are not all measured yet is deferred — no row, retried next pass — never
-//!   ranked on whatever happens to be scanned. A source without a usable
-//!   reference is unrankable; a block where nothing is rankable is deferred
-//!   too, because building it uncalibrated is the degenerate fixed choice
-//!   this stage exists to replace.
-//! - **Terminal verdicts only are persisted** (`built`, `no-audio`), each
-//!   with full provenance: which sources contributed, at what level, who won
-//!   and by how much. A source that delivers later than the settling window
-//!   is thereby a *recorded* absence, not a silent one.
+//! - **The loudest raw speech level wins.** Each contributor's level against its
+//!   own faintest-speech reference is recorded as provenance but does not
+//!   choose; see the note in [`build_once`].
+//! - **No verdict on partial evidence.** A block whose overlapping segments are
+//!   not all measured is deferred: no row, retried next pass.
+//! - **Only terminal verdicts are persisted** (`built:raw`, `no-audio`,
+//!   `sparse`, `all-gated`), each with its contributors, so a source that
+//!   delivers after the settling window is a recorded absence, not a silent one.
 
 use crate::levels;
 use crate::store;
@@ -38,31 +26,29 @@ use std::path::Path;
 
 /// The synthetic source every built block lands under.
 pub const ROOM_SOURCE: &str = "room";
-/// What the meaning plane records as its KIND — how a reader tells it from a
-/// recorder. `derived` is not a device: it has no microphone to be deaf, no
-/// `.alive` marker, and it inherits whichever source won the minute.
+/// The room source's kind in the meaning plane, which tells it apart from a
+/// recorder: it has no microphone, no `.alive` marker, and inherits whichever
+/// source won the minute.
 pub const ROOM_KIND: &str = "derived";
 /// The block grid: one minute, UTC-aligned.
 pub const BLOCK_S: i64 = 60;
 /// ASR's input shape — what the room stream exists to feed.
 const RATE: u32 = 16_000;
 
-/// A rank in dB **above this device's own reference** — the only unit sources
-/// may be compared in. A newtype so a raw, uncalibrated level cannot cross
-/// this boundary by accident.
+/// A level in dB above this device's own reference. A newtype so a raw level
+/// cannot be passed as a calibrated one.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct CalibratedDb(pub f32);
 
-/// Everything the builder needs decided, in one place — tests own the clock
-/// and the thresholds; production takes the defaults.
+/// The builder's thresholds: tests set them, production takes the defaults.
 pub struct RoomConfig {
     /// How long after a block's end before it may be judged: covers delivery
-    /// latency (the phones' shadow uploads on a `WorkManager` cadence).
+    /// latency (phones upload on a `WorkManager` cadence).
     pub settle: Duration,
     /// Blocks judged per pass, oldest first.
     pub batch: usize,
-    /// The reference is this quantile of a source's own recent speech levels
-    /// — low, so it reads "the faintest speech this microphone records".
+    /// The reference is this quantile of a source's own recent speech levels:
+    /// low, so it reads as the faintest speech this microphone records.
     pub reference_quantile: f64,
     /// How many recent rows the reference is drawn from.
     pub reference_window: u32,
@@ -92,25 +78,20 @@ pub struct Contributor {
     pub calibrated: Option<CalibratedDb>,
     /// Fraction of this source's minute inside a gate (`levels::gated_fraction`).
     pub gated: f32,
-    /// This SOURCE's median speech-to-floor gap over its recent segments, or
-    /// `None` with too little history.
-    ///
-    /// Recorded, never acted on. It is the detector that WON #1526 on
-    /// 2026-09-21, and recording it here is what lets the rule be judged before
-    /// it ever decides anything: what it would have said is re-derivable from
-    /// `room_blocks.contributors` for every block built since.
+    /// This source's median speech-to-floor gap over its recent segments, or
+    /// `None` with too little history. Recorded, never acted on, so the gating
+    /// rule in `processed.rs` can be judged from `room_blocks.contributors`
+    /// before it decides anything.
     pub gap_db: Option<f32>,
 }
 
-/// Above this, a source spent so much of the minute emitting digital silence
-/// that it is reporting on its own noise suppression, not on the room.
+/// Above this `gated` fraction, a source spent so much of the minute emitting
+/// digital silence that it reports its own noise suppression, not the room.
+/// The builder does not apply it; see the note in [`build_once`].
 ///
-/// ⚠ **0.20 is measured, not chosen for roundness.** 83 segments, one per source
-/// per day, evenings when the house was occupied: usb, iphone11 and oneplus6t
-/// never reached it at all (0%, across 41 segments), geb's BEST segment was 39%
-/// and its worst 68%, and pixel5/pixel9 sat near zero with tails to 85-99%. The
-/// gap between the cleanest failing case and the dirtiest passing one is wide
-/// enough that the exact figure is not load-bearing (#1526).
+/// Measured with `ffmpeg silencedetect` over 83 segments: usb, iphone11 and
+/// oneplus6t never reached it, and the gating speakerphone never fell below
+/// 0.39, so the exact figure is not load-bearing.
 pub const GATED_MAX: f32 = 0.20;
 
 /// What one pass did.
@@ -120,20 +101,21 @@ pub struct BuildSummary {
     pub silent: usize,
     pub deferred: usize,
     /// Blocks where every audible source was gating. Counted apart from
-    /// `silent`: the room was NOT quiet, the microphones refused to say so.
+    /// `silent`: the room was not quiet, the microphones refused to say so.
+    /// Always zero while the gated filter is off.
     pub gated: usize,
     /// Blocks the winner barely recorded — the room may have been talking and
     /// nothing captured enough of it to transcribe.
     pub sparse: usize,
 }
 
-/// How much of a block a source must have recorded for the block to be worth
+/// How much of a block the winner must have recorded for the block to be worth
 /// building. The window is zero-filled where nothing was recorded, and Whisper
-/// hallucinates on that silence (#1661).
+/// hallucinates on that silence.
 ///
-/// Deliberately low and provisional: it refuses only what is plainly broken, and
-/// every block records its coverage, so the floor can be raised from the
-/// distribution. Raise it before the room turn writer goes on (#1388).
+/// Deliberately low: it refuses only what is plainly broken. Every block records
+/// its coverage, so raise the floor from that distribution before the room turn
+/// writer goes on.
 const MIN_COVERAGE: f32 = 0.5;
 
 fn minute_floor(t: DateTime<Utc>) -> DateTime<Utc> {
@@ -193,8 +175,8 @@ fn candidate_blocks(
     Ok(blocks.iter().copied().take(config.batch).collect())
 }
 
-/// The segments overlapping one block, with their measured levels.
-/// `Err(())`-like via Option: `None` means some overlap is unmeasured yet.
+/// Each source overlapping one block, with its measured levels. `None` means
+/// some overlap is not measured yet.
 fn block_contributors(
     conn: &Connection,
     config: &RoomConfig,
@@ -220,10 +202,8 @@ fn block_contributors(
         let Some(speech_db) = speech_db else {
             return Ok(None); // unmeasured overlap: no verdict on partial evidence
         };
-        // ⚠ Same rule for the gate reading, and for the same reason: a NULL here
-        // is a segment measured before the detector existed, not a segment found
-        // to be clean. Ranking on it would be the partial-evidence verdict this
-        // function already refuses. `levels::scan_once` backfills these.
+        // A NULL gate reading means measured before the detector existed, not
+        // clean, so it defers too. `levels::scan_once` backfills these.
         let Some(gated) = gated else {
             return Ok(None);
         };
@@ -279,8 +259,8 @@ fn reference_db(
     )
 }
 
-/// Encode one block of s16le PCM as FLAC via ffmpeg (the fleet image carries
-/// it), landing with the ingest plane's own durability order.
+/// Encode one block of s16le PCM as FLAC via ffmpeg, landing it with the ingest
+/// plane's durability order (temp file, fsync, rename, fsync the directory).
 fn encode_flac(root: &Path, filename: &str, pcm: &[u8]) -> std::io::Result<Vec<u8>> {
     let dir = root.join("ingest").join(ROOM_SOURCE);
     std::fs::create_dir_all(&dir)?;
@@ -341,9 +321,8 @@ fn record_verdict(
             verdict,
             winner,
             filename,
-            // Propagated, not defaulted: a provenance row claiming "nobody
-            // contributed" because serialisation failed would be a lie with
-            // the exact shape of a quiet minute.
+            // Propagated, not defaulted: an empty list from a failed
+            // serialisation would look exactly like a quiet minute.
             serde_json::to_string(contributors)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             coverage.map(f64::from),
@@ -361,10 +340,6 @@ pub fn build_once(
     now: DateTime<Utc>,
 ) -> rusqlite::Result<BuildSummary> {
     let conn = store::open(root)?;
-    // ⚠ The reference JOINS segment_speech, and the speech scanner is the only
-    // thing that creates it — and it declines to run where the ONNX runtime is
-    // unavailable. Without this the room builder would fail outright on such a
-    // host, which is far worse than building uncalibrated blocks there.
     let mut summary = BuildSummary::default();
     for block in candidate_blocks(&conn, config, now)? {
         let Some(contributors) = block_contributors(&conn, config, block)? else {
@@ -381,98 +356,37 @@ pub fn build_once(
             summary.silent += 1;
             continue;
         }
-        // ⚠ RAW LEVEL CHOOSES, and calibration stays in provenance. This was
-        // un-parked on 2026-09-06 and re-parked the same hour, by measurement:
+        // ⚠ Raw level chooses; the calibrated level stays in provenance. The two
+        // ranks disagree on about half of rankable blocks, moving them off the
+        // condenser onto phones, and no ground truth covers the minutes where
+        // they differ. Raw has measured parity with best-single (median WER
+        // 0.229); calibration has no measurement where it differs. To switch:
+        // collect ground truth on minutes where the ranks differ, then run the
+        // referee on that window.
         //
-        //   - The two ranks DISAGREE on 1290 of 2664 rankable blocks (48%), and
-        //     the flips are systematic — usb -> iphone11 448, usb -> pixel5 281,
-        //     usb -> geb 242, usb -> pixel9 238. Calibration moves blocks off
-        //     the condenser onto phones.
-        //   - The referee CANNOT test that. Ground truth is mid-June (328 of 468
-        //     corrections fall on 14-16 June); the disagreements are September
-        //     (1127 of 1290). They overlap on 8 minutes — 1.7%. The corrections
-        //     predate the multi-device fleet, so there were barely two mics to
-        //     disagree about when they were made.
-        //   - The June window that DID pass is therefore no evidence: usb wins
-        //     there under both ranks, so it compares identical audio.
+        // ⚠ A gating source scores better on raw level (silence between words
+        // reads as high SNR), so gating must remove a source before the rank,
+        // never be weighed in it.
         //
-        // Raw has MEASURED parity with best-single (median WER 0.229, twice).
-        // Calibration has no measurement anywhere it differs. Running the
-        // untested rule by default would be a verdict on partial evidence — the
-        // rule this file already refuses for a single block, applied to half of
-        // them. Nothing consumes room yet, so this costs nothing and keeps the
-        // provenance needed to decide later.
+        // The filter is off. The stored `gated` metric (0.1 s RMS buckets) reads
+        // every phone as gating during speech, because an unprocessed phone's
+        // pauses fall under -80 dBFS without any gate; applied, it makes
+        // selection always pick the condenser. `GATED_MAX` came from a
+        // sample-level measure, and the two disagree.
         //
-        // TO UNPARK: ground truth on SEPTEMBER minutes where the ranks differ
-        // (see the census above), then the referee on that window.
-        //
-        // ⚠ **GATED SOURCES ARE REMOVED BEFORE THE RANK, NOT PENALISED IN IT.**
-        // A gate makes a source score BETTER here: deleting everything between
-        // words is what produced geb's "52 dB SNR, best in the room" while its
-        // transcripts were unusable. So the rank above does not merely fail to
-        // notice gating — it actively REWARDS it, and geb won 965 of 1,332
-        // transcribed blocks for exactly the reason it should have lost them
-        // (#1526). Any weighting scheme would be arguing with a signal that is
-        // pointing the wrong way; the only safe move is to drop the source.
-        //
-        // ⚠ **The `gated` filter is OFF and its measurement stays.** It was
-        // switched on briefly and reverted once the backfill produced enough
-        // rows to see the fleet-wide distribution.
-        //
-        // Conditioned on the VAD hearing >= 5 s of speech in the minute:
-        //
-        //     source      speaking mins   p50 gated   over 0.20
-        //     geb                    72        49%        100%
-        //     pixel5                494        48%         96%
-        //     pixel9                492        45%         92%
-        //     iphone11              755        24%         56%
-        //     usb                 1,343         0%          0%
-        //
-        // EVERY PHONE READS AS GATING DURING SPEECH — and on 2026-09-17 that
-        // was shown to be the INSTRUMENT, not the phones: a 0.1 s RMS bucket
-        // under -80 dBFS is three LSB, and a phone recording UNPROCESSED with a
-        // talker across the room peaks at 20 LSB over a 2-3 LSB floor, so its
-        // pauses land under the line without any gate. At sample level the same
-        // pixel5/pixel9 minutes hold no exact-zero run longer than 0.08 s; geb's
-        // speakerphone held 0.69 s runs and 93% zeros. This column separates
-        // PHONES FROM THE CONDENSER, and applying it makes selection "always
-        // usb": the degenerate fixed choice this whole stage exists to replace.
-        //
-        // ⚠ **And the threshold was calibrated on a DIFFERENT INSTRUMENT than the
-        // one that ships.** 0.20 came from `ffmpeg silencedetect` at sample level
-        // over 83 segments, where iphone11 read 0.00 s of gap in 14 consecutive
-        // files; the stored metric is 0.1 s RMS buckets and reads 56% of that
-        // source's speaking minutes above the line. At 56% base rate, 14 clean in
-        // a row is about 1 in 100,000 — so this is not sampling, the two measures
-        // disagree, and which is right is unresolved. Agreement was checked on
-        // THREE files and that was not enough to carry a threshold.
-        //
-        // ⚠ **The replacement rule is `processed.rs`, and it is also OFF.** It
-        // reads a source's median speech-to-floor gap, which separates a gating
-        // device from a healthy one by tens of dB and clears a repair within
-        // ten segments; the numbers are in #1526. Every contributor RECORDS its
-        // `gap_db`, so what the rule would have decided is re-derivable from
-        // provenance without it ever having acted.
-        //
-        // A per-source median of `quiet_run_s` was the other candidate and lost
-        // (#1526): it needs fifty reference rows, so it carried a repaired
-        // device's old signature for weeks. Do not rebuild it.
-        //
-        // Two reasons it stays off, and the second is the stronger:
-        //
-        //   - #1461's referee has not run, so there is still no evidence that
-        //     dropping a source improves a transcript rather than removing one.
-        //   - It can only pay while some device is actually gating. Read the
-        //     recorded `gap_db` signatures to find out rather than assuming
-        //     either way — with none gating, every firing is a false positive.
-        //     gating again.
+        // The candidate replacement is `processed.rs` (median speech-to-floor
+        // gap), also off: every contributor records its `gap_db`, so its
+        // decisions can be judged from provenance first. It stays off until
+        // there is evidence that dropping a source improves a transcript, and
+        // while no device is gating every firing would be a false positive. A
+        // per-source median of `quiet_run_s` was tried and lost: it needs fifty
+        // reference rows, so it holds a repaired device's old signature for
+        // weeks.
         let ungated: Vec<&Contributor> = audible.clone();
         if ungated.is_empty() {
-            // ⚠ Every microphone that heard this minute was gating. There is no
-            // honest room block to build, and picking the least-bad would put a
-            // transcript into the archive that nobody can tell apart from a good
-            // one. The contributors are recorded, so the verdict is re-derivable
-            // if the threshold ever moves.
+            // Every microphone that heard this minute was gating: picking the
+            // least bad would archive a transcript indistinguishable from a good
+            // one. Unreachable while the filter above is off.
             record_verdict(&conn, block, "all-gated", None, None, &contributors, None)?;
             summary.gated += 1;
             continue;
@@ -573,9 +487,8 @@ fn write_block(
         record_verdict(
             conn,
             block,
-            // Which RULE chose is part of the verdict: a later census must be
-            // able to separate calibrated blocks from fallback ones without
-            // re-deriving the reference that existed at the time.
+            // The verdict names the rule that chose, so a later census can
+            // separate blocks by rule without re-deriving old references.
             "built:raw",
             Some(winner),
             Some(&filename),
@@ -593,7 +506,7 @@ fn write_block(
     Ok(true)
 }
 
-/// Was this block already judged? (Read side for tests and, later, the API.)
+/// The verdict recorded for this block, if it has been judged.
 pub fn verdict_of(conn: &Connection, block_start_utc: &str) -> rusqlite::Result<Option<String>> {
     conn.query_row(
         "SELECT verdict FROM room_blocks WHERE start_utc = ?1",
@@ -605,10 +518,9 @@ pub fn verdict_of(conn: &Connection, block_start_utc: &str) -> rusqlite::Result<
 
 /// Fill `coverage` for blocks judged before it was measured.
 ///
-/// Read-only about the verdict: it records how much of each block its winner
-/// actually recorded and changes nothing else. Blocks already found sparse keep
-/// their verdict; what this produces is the distribution needed to decide what
-/// to do about the ones that were built anyway (#1661).
+/// Records how much of each block its winner actually recorded and changes
+/// nothing else, verdicts included. The result is the distribution needed to
+/// decide about blocks built without a coverage measurement.
 ///
 /// # Errors
 /// If the database refuses.

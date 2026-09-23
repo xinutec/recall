@@ -1,5 +1,5 @@
-//! Router assembly. The absence of a DELETE anywhere on the ingest plane is
-//! load-bearing (docs/architecture.md, decision 2).
+//! Router assembly. The ingest plane has no DELETE route, by design
+//! (docs/architecture.md, decision 2).
 //!
 //! Three planes, gated differently: ingest and work take their own tokens, the
 //! sync plane its shared secret, and the browsing plane sits behind the
@@ -29,18 +29,14 @@ pub struct Config {
     /// The read gate (listing, blobs). `None` = open, same pattern.
     pub read_token: Option<String>,
     pub max_body_bytes: usize,
-    /// The browsing plane's SSO gate. `None` = the browsing routes are NOT
+    /// The browsing plane's SSO gate. `None` = the browsing routes are not
     /// mounted at all.
     ///
-    /// ⚠ Absent means ABSENT, not open. Everywhere else in this repo an
-    /// unconfigured credential means "inert, run open" — that is right for a
-    /// LAN-only dev box and wrong here, because these routes serve household
-    /// transcripts. An unconfigured recalld must not answer them at all rather
-    /// than answer them to anyone.
+    /// ⚠ Unlike the other credentials here, absent means unmounted, not open:
+    /// these routes serve private transcripts.
     pub webauth: Option<webauth::GateState>,
-    /// The Mac→fleet sync plane's shared secret. `None` = those routes are NOT
-    /// mounted: they carry the household's capture control, and an unconfigured
-    /// recalld must not answer them open.
+    /// The Mac→fleet sync plane's shared secret. `None` = those routes are not
+    /// mounted: they carry capture control and must never answer open.
     pub sync_token: Option<String>,
     /// The built Angular app. `None` = not served (the default, and what every
     /// test and dev run uses).
@@ -53,9 +49,8 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
     let read = Arc::new(reads::State { root });
     Router::new()
         .route("/api/timeline", get(reads::timeline_route))
-        // ⚠ DEVICE-EXEMPT (webauth::DEVICE_EXEMPT). The mic apps poll this
-        // to show the household who is recording, and they carry no session
-        // at all — a gate here would blank the panel on every phone.
+        // Device-exempt (`webauth::DEVICE_EXEMPT`): the mic apps poll this to
+        // show who is recording, and carry no session.
         .route("/api/sources", get(sources::sources_route))
         .route("/api/search", get(reads::search_route))
         .route("/api/transcripts", get(reads::transcripts_route))
@@ -83,8 +78,8 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
             "/api/correction/{id}/audio",
             get(labels::correction_audio_route),
         )
-        // The recorders' own status: heartbeats and upload outboxes, device-exempt
-        // in the gate (`webauth::DEVICE_EXEMPT`).
+        // The recorders' own status: heartbeats and upload outboxes. Their POSTs
+        // are device-exempt in the gate (`webauth::DEVICE_EXEMPT`).
         .route(
             "/api/devices/heartbeat",
             get(devices::heartbeat_get_route).post(devices::heartbeat_post_route),
@@ -136,12 +131,8 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
             get(sessions::transcript_route),
         )
         .with_state(read)
-        // ⚠ THE HOUSEHOLD'S PAUSE CONTROL. Its own state because it is the one
-        // family that needs the gate config — to record WHO pressed the button
-        // on a plane that deliberately requires no login. Mounted as a group:
-        // splitting status from pause/resume across two languages would leave
-        // the control half-ported, which is the one place a strangler seam is
-        // not worth having.
+        // The pause control. Its own state because it needs the gate config, to
+        // record who pressed the button on routes that require no login.
         .merge(
             Router::new()
                 .route("/api/capture", get(capture::status_route))

@@ -1,9 +1,9 @@
 //! recalld — recall's system-of-record daemon on the fleet.
 //!
-//! Stage A of docs/architecture.md: the ingest plane. Recorders PUT closed
+//! The ingest plane (docs/architecture.md, stage A): recorders PUT closed
 //! segments and verify sha-256 receipts; the store is append-only; read is a
-//! separate credential. Later stages add VAD, the room builder, the work
-//! queue, and the browsing API.
+//! separate credential. On top of it: VAD, the room builder, the work queue and
+//! the browsing API.
 
 pub mod align;
 pub mod app;

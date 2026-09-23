@@ -1,22 +1,17 @@
 //! The ingest plane's bookkeeping: one row per stored blob, in
-//! `<root>/ingest.sqlite`. This database belongs to recalld alone — the
-//! transcript system of record (`recall.sqlite`) is a different plane and a
-//! different writer, the same audio/meaning split the Mac keeps
-//! (docs/architecture.md, "recalld").
+//! `<root>/ingest.sqlite`. The transcript system of record (`recall.sqlite`) is
+//! a separate plane (docs/architecture.md, "recalld").
 //!
-//! Append-only by construction: there is no delete here because no network
-//! path deletes (decision 2). Retention (stage D) will be the one writer that
-//! ever removes anything, and it arrives with its own evidence trail.
+//! Append-only: there is no delete here because no network path deletes
+//! (decision 2).
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
-/// A byte count column, read as the i64 SQLite stores and returned as the
-/// u64 the rows carry. rusqlite 0.40 stopped reading `u64` itself, since a
-/// stored value can be negative; one that is names the column, like any
-/// other out-of-range integer.
+/// A byte count column, read as the i64 SQLite stores and returned as u64. A
+/// negative value is an out-of-range error naming the column.
 fn byte_count(r: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<u64> {
     let stored: i64 = r.get(column)?;
     u64::try_from(stored).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(column, stored))
@@ -31,7 +26,7 @@ pub struct Row {
     pub bytes: u64,
     pub sha256: String,
     pub received_utc: String,
-    /// The recorder's own clock at upload, when it sent one — what clock skew
+    /// The recorder's own clock at upload, when it sent one, which clock skew
     /// is measured against. Name-vs-arrival is delivery latency, not skew: a
     /// cached backlog arrives late legitimately.
     pub sent_utc: Option<String>,
@@ -39,11 +34,8 @@ pub struct Row {
 
 /// Where a source's delivered blobs live: `<root>/ingest/<source>/`.
 ///
-/// ⚠ **One function because the shape was written out FOUR times**, and the
-/// fourth got it wrong: a 2026-09-11 room registrar used `<root>/<source>/` and
-/// would have recorded 5,646 blocks with a path to a directory that does not
-/// exist — unplayable audio, which is the exact failure that registration exists
-/// to prevent. Nothing type-checks a `join`, so the only defence is having one.
+/// Use this rather than spelling the path out: nothing type-checks a `join`,
+/// and a wrong one records unplayable audio paths.
 #[must_use]
 pub fn source_dir(root: &std::path::Path, source: &str) -> std::path::PathBuf {
     root.join("ingest").join(source)

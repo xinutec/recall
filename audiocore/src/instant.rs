@@ -1,10 +1,10 @@
 //! One spelling of an ISO-8601 instant, and one reader of them.
 //!
-//! Every stored timestamp is compared and ordered as TEXT (`WHERE start_utc <
-//! ?1`), so two spellings of one moment are two different values to every
-//! query. The archive holds the spelling `datetime.isoformat()` wrote: `+00:00`
-//! rather than `Z`, no fraction when it is zero and six digits when it is not,
-//! a non-UTC offset kept rather than converted.
+//! Stored timestamps are compared and ordered as text (`WHERE start_utc <
+//! ?1`), so two spellings of one moment are two different values. The one
+//! spelling is Python's `datetime.isoformat()`: `+00:00` rather than `Z`, no
+//! fraction when it is zero and six digits when it is not, a non-UTC offset
+//! kept rather than converted.
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 
@@ -16,14 +16,13 @@ fn format_for(subsec_micros: u32) -> SecondsFormat {
     }
 }
 
-/// Spell a UTC instant the way the archive stores one.
+/// Spell a UTC instant in the stored form.
 #[must_use]
 pub fn python_isoformat_utc(when: DateTime<Utc>) -> String {
     when.to_rfc3339_opts(format_for(when.timestamp_subsec_micros()), false)
 }
 
-/// Re-spell an instant the way the archive stores one, or `None` if it does
-/// not parse.
+/// Re-spell an instant in the stored form, or `None` if it does not parse.
 #[must_use]
 pub fn python_isoformat(value: &str) -> Option<String> {
     let parsed = parse(value)?;

@@ -1,13 +1,11 @@
 //! Store-and-forward delivery (docs/architecture.md, stage B): walk the
 //! archive for closed segments, PUT each to recalld's ingest plane, verify
 //! the sha-256 receipt against the local bytes, and record what is proven
-//! delivered. The recorder contract's first half — eviction (the second half)
-//! is deliberately NOT here: the Mac's archive stays the protected master
-//! until stage F, so this module only ever adds copies.
+//! delivered. Eviction is not here: the Mac's archive stays the master, so
+//! this only ever adds copies.
 //!
-//! Never in the capture path: this runs as its own process over files ffmpeg
-//! has finished with. The one point of contact is the scan rule below that
-//! keeps it off the segment ffmpeg still has open.
+//! Never in the capture path: this runs as its own process, and the scan rule
+//! below keeps it off the segment ffmpeg still has open.
 
 use audiocore::names;
 use sha2::{Digest, Sha256};
@@ -43,9 +41,9 @@ pub struct PassSummary {
 // --- delivery state ------------------------------------------------------------------
 
 /// The uploader's own bookkeeping, beside the archive it mirrors. A row in
-/// `uploads` is a receipt that VERIFIED (hash equality against our own
-/// re-read); a row in `conflicts` is a 409 — the name is taken by different
-/// bytes, which retrying cannot fix and a person must look at.
+/// `uploads` is a verified receipt (hash equal to our own re-read); a row in
+/// `conflicts` is a 409: the name is taken by different bytes, which retrying
+/// cannot fix and a person must look at.
 fn open_state(root: &Path) -> rusqlite::Result<rusqlite::Connection> {
     let conn = rusqlite::Connection::open(root.join("upload-state.sqlite"))?;
     conn.busy_timeout(Duration::from_secs(5))?;
@@ -82,8 +80,8 @@ struct Candidate {
 }
 
 /// Everything shippable right now, oldest first. The lexically-newest file of
-/// each source is skipped while its mtime is fresh — that is the segment
-/// ffmpeg may still be writing.
+/// each source is skipped while its mtime is fresh: ffmpeg may still be
+/// writing it.
 fn scan(root: &Path, grace: Duration) -> std::io::Result<Vec<Candidate>> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(root)? {
@@ -156,8 +154,8 @@ fn deliver(config: &Config, candidate: &Candidate, agent: &ureq::Agent) -> Deliv
         Ok(receipt) => receipt,
         Err(err) => return Delivery::Failed(format!("receipt parse: {err}")),
     };
-    // The eviction-grade check: the receipt must equal our OWN hash of what
-    // we read from disk. A 2xx proves nothing by itself.
+    // The receipt must equal our own hash of what we read from disk; a 2xx
+    // proves nothing by itself.
     if receipt["sha256"] == sha256.as_str() && receipt["bytes"] == bytes.len() {
         Delivery::Verified {
             sha256,
@@ -173,8 +171,8 @@ fn now_rfc3339() -> String {
 }
 
 /// One bounded pass: scan, deliver, record. Individual failures are logged
-/// and left for the next pass — the files are the state, so nothing needs a
-/// retry queue.
+/// and left for the next pass; the files are the state, so there is no retry
+/// queue.
 pub fn run_pass(config: &Config) -> PassSummary {
     let mut summary = PassSummary::default();
     let conn = match open_state(&config.root) {
@@ -214,8 +212,8 @@ pub fn run_pass(config: &Config) -> PassSummary {
                         &candidate.filename,
                         &candidate.source,
                         &sha256,
-                        // SQLite's integer is i64; rusqlite 0.40 stopped
-                        // pretending a u64 fits. A file size does.
+                        // SQLite's integer is i64, and rusqlite refuses a
+                        // u64; a file size fits.
                         i64::try_from(bytes).expect("a byte count fits SQLite's i64"),
                         now_rfc3339(),
                     ),
@@ -231,9 +229,9 @@ pub fn run_pass(config: &Config) -> PassSummary {
                 }
             }
             Delivery::Conflict { sha256 } => {
-                // The name is taken by different bytes. Retrying cannot fix
-                // it and overwriting is forbidden by design — journal it for
-                // a person and stop resending.
+                // The name is taken by different bytes. Retrying cannot fix it
+                // and overwriting is forbidden: journal it for a person and
+                // stop resending.
                 tracing::error!(file = %candidate.filename, "receipt conflict: name held by different bytes");
                 let _ = conn.execute(
                     "INSERT OR IGNORE INTO conflicts (filename, source, sha256, noticed_utc)

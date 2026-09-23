@@ -3,11 +3,9 @@
 /**
  * One thing that happened in the client.
  *
- * ⚠ The field types are the CONTRACT with a shipped app, not a choice. `at` is
- * the client's clock in epoch MILLISECONDS — a number, and typing it as a string
- * makes every telemetry batch fail to deserialise. `path` is required. Both were
- * wrong in the first draft of this port and dev-lint's mirror check caught it
- * against the generated `models.ts`, which is what that check is for.
+ * ⚠ The field types are the contract with a shipped app. `at` is the client's
+ * clock in epoch milliseconds, a number; typed as a string, every batch fails
+ * to deserialise. `path` is required.
  */
 export type TelemetryEvent = { kind: string, path: string, 
 /**

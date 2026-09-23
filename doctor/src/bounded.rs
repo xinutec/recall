@@ -1,27 +1,18 @@
-//! Work you can give up on — a child process the parent abandons instead of
+//! Work you can give up on: a child process the parent abandons instead of
 //! waiting for.
 //!
-//! On 2026-08-10 an unrelated `rm -rf` on the archive volume starved every
-//! reader of it for over an hour. The worker, refine, sync and the doctor all
-//! sat in uninterruptible disk wait; a two-table `COUNT(*)` took 4m19s at 0.03s
-//! of user CPU. The doctor is the one that matters here: it is the process
-//! whose whole job is to say the archive is unusable, and it was taken down by
-//! the condition it exists to report (#709).
+//! A starved archive volume puts every reader into uninterruptible disk wait,
+//! the doctor included, and the doctor's job is to report exactly that.
 //!
-//! ⚠ **A timeout is not enough, and killing the child is not one either.** A
-//! process in uninterruptible wait (`U` in `ps`) runs no signal handler and
-//! does not die on SIGKILL — the kernel delivers the signal only once the I/O
-//! completes. So `wait()`-after-`kill()` blocks for exactly as long as the
-//! volume does, which is the failure being avoided.
+//! ⚠ Killing the child does not bound it. A process in uninterruptible wait
+//! (`U` in `ps`) does not die on SIGKILL until its I/O completes, so
+//! `wait()` after `kill()` blocks as long as the volume does. The only bound
+//! that holds is to abandon the child: stop reading, report the timeout, never
+//! signal or reap it. It exits on its own once its I/O completes.
 //!
-//! The only bound that actually holds is to **abandon** the child: stop
-//! reading, report the timeout as the finding, and never signal or reap it. It
-//! leaves `U` when its I/O completes and exits on its own, holding nothing
-//! anyone else needs.
-//!
-//! The caller's half of the bargain is that the child must be *disposable* — it
-//! may still be running, and still writing, after [`run`] returns. Read-only
-//! probes qualify; anything that mutates the archive does not.
+//! The child must therefore be disposable: it may still be running after
+//! [`run`] returns. Read-only probes qualify; anything that mutates the archive
+//! does not.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -29,16 +20,15 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-/// `std::process` puts nothing on the child's search path from the parent's
-/// working directory, but the parent's cwd is very often the archive volume
-/// itself — and a child that inherits a wedged cwd hangs before reaching a line
-/// of our code, so the bound would cover nothing worth bounding.
+/// The child's working directory. The parent's cwd is often the archive
+/// volume, and a child that inherits a wedged cwd hangs before running any of
+/// our code.
 const SAFE_CWD: &str = "/";
 
 /// What a bounded child said, and how long it took to say it.
 ///
-/// `stdout: None` means it never answered inside the bound. That is a reading
-/// in its own right, not a missing one: it is the finding.
+/// `stdout: None` means it never answered inside the bound, which is itself
+/// the finding.
 #[derive(Debug)]
 pub struct Answer {
     pub stdout: Option<String>,
@@ -54,15 +44,13 @@ impl Answer {
     }
 }
 
-/// Read a pipe on its own thread, handing each chunk back as it arrives. Two of
-/// these, because a child that fills the 64 KiB stderr pipe while the parent
-/// reads only stdout blocks forever — and that deadlock is indistinguishable
-/// from the wedge this module exists to survive.
+/// Read a pipe on its own thread, handing each chunk back as it arrives. One per
+/// pipe: a child that fills the 64 KiB stderr pipe while the parent reads only
+/// stdout blocks forever, indistinguishable from a wedged volume.
 ///
-/// ⚠ **Chunk by chunk, NOT read-to-EOF.** A child that hangs never reaches EOF,
-/// so a single send at the end means everything it managed to say before
-/// hanging is thrown away — in exactly the run where it is worth having. The
-/// channel disconnecting is how EOF is reported instead.
+/// ⚠ Chunk by chunk, not read-to-EOF: a child that hangs never reaches EOF, and
+/// what it said before hanging is the useful part. The channel disconnecting
+/// reports EOF.
 fn drain<R: Read + Send + 'static>(mut pipe: R) -> mpsc::Receiver<Vec<u8>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -84,8 +72,8 @@ fn drain<R: Read + Send + 'static>(mut pipe: R) -> mpsc::Receiver<Vec<u8>> {
 /// Run `argv`, read what it says, and give up on it after `timeout`.
 ///
 /// Never fails on a slow child: not answering is the answer. The returned `pid`
-/// stays valid after a timeout — the child is still alive, on purpose — so a
-/// log line can name the process an operator will find in `ps` in `U` state.
+/// stays valid after a timeout (the child is left alive), so a log line can
+/// name the process to find in `ps`.
 pub fn run(
     program: &Path,
     args: &[String],
@@ -108,10 +96,9 @@ pub fn run(
     let err = drain(child.stderr.take().expect("stderr was piped"));
 
     let deadline = started + timeout;
-    // Everything the pipe has produced, and whether it reached EOF. ⚠ Queued
-    // chunks are taken WITHOUT waiting first, so a pipe that already said
-    // something still reports it after the deadline has passed — which is the
-    // whole point of streaming them.
+    // Everything the pipe has produced, and whether it reached EOF. Queued
+    // chunks are taken without waiting first, so output already sent is kept
+    // even after the deadline.
     let collect = |rx: &mpsc::Receiver<Vec<u8>>| -> (Vec<u8>, bool) {
         let mut all = Vec::new();
         loop {
@@ -141,15 +128,13 @@ pub fn run(
 
     let seconds = started.elapsed().as_secs_f64();
     let (Some(stdout), Some(stderr)) = (stdout, stderr) else {
-        // No kill, no wait — see this module's docstring. Both would block for
-        // as long as the volume does. `child` is dropped here, which in Rust
-        // does NOT reap: the process is left to finish and exit on its own,
-        // which is exactly the intent.
+        // No kill, no wait (see the module docs): both would block as long as
+        // the volume does. Forgetting `child` leaves the process to exit on its
+        // own.
         std::mem::forget(child);
         return Ok(Answer {
             stdout: None,
-            // ⚠ What it managed to SAY before it hung. This used to be empty,
-            // which threw away the only report from the one run that matters.
+            // What it said before it hung.
             stderr: String::from_utf8_lossy(&err_bytes).into_owned(),
             status: None,
             seconds,
@@ -171,31 +156,28 @@ pub fn run(
 
 /// What state the kernel has an abandoned child in.
 ///
-/// ⚠ **Three states, three different faults, and the diagnosis turns on which.**
-/// `U` is the volume not answering; `S` is the child waiting on something that
-/// is not the disk at all, which is the shape a database lock has; `R` is a
-/// read that is merely slow. Reporting one sentence for all three says nothing.
+/// Each state points at a different fault: `U` is the volume not answering,
+/// `S` is waiting on something other than the disk (a lock), `R` is a read
+/// that is merely slow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
     /// `ps` named it. The string is the raw field, flags and all.
     Named(String),
     /// `ps` ran and knows no such process: it finished just after the bound ran
-    /// out rather than wedging, which is its own reading.
+    /// out rather than wedging.
     Gone,
     /// `ps` could not be asked, so nothing is known.
     ///
-    /// ⚠ **Never collapse this into [`State::Gone`]** — a living child would
-    /// then read as finished. `ps` does not work inside the nix build sandbox,
-    /// so this case is reached in ordinary test runs rather than being
-    /// theoretical.
+    /// ⚠ Never collapse this into [`State::Gone`]: a living child would read as
+    /// finished. `ps` does not work in the nix build sandbox, so tests reach
+    /// this.
     Unknown(String),
 }
 
 impl State {
     /// How it reads to somebody who has not memorised `ps`'s letters.
     ///
-    /// The rest of the field is flags — `Ss`, `S+` — and only the leading state
-    /// letter says what the process is doing.
+    /// Only the leading letter is the state; the rest (`Ss`, `S+`) is flags.
     #[must_use]
     pub fn explain(&self) -> String {
         match self {
@@ -246,9 +228,8 @@ pub fn process_state_via(program: &str, pid: u32) -> State {
     if !state.is_empty() {
         return State::Named(state);
     }
-    // ⚠ An empty stdout means "no such process" ONLY if ps itself succeeded.
-    // Where it cannot look — a sandbox, a stripped image — it exits non-zero
-    // with nothing on stdout, which is indistinguishable by stdout alone.
+    // An empty stdout means "no such process" only if ps succeeded; where it
+    // cannot look (a sandbox) it exits non-zero with nothing on stdout.
     if out.status.success() {
         State::Gone
     } else {

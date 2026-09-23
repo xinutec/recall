@@ -1,21 +1,5 @@
-//! The labelling surface's READ half, from `recall.api_labels`:
-//! the speaker roster, the labelled fragments, and one fragment's audio.
-//!
-//! ⚠ **Only the reads. The writes are deliberately NOT here yet**, and the reason
-//! is what they touch: `/api/correct`, the speaker assignments and the hide are
-//! the human half of the system of record — 468 corrections that no pass can
-//! re-derive, since a person listened and typed them (docs/architecture.md,
-//! "What must survive"). A correction is applied by superseding a turn and
-//! recording the pair, so a subtly wrong port does not fail loudly; it writes a
-//! wrong chain into the one table that cannot be rebuilt. Those move in their own
-//! change, with the supersede chain pinned by tests, rather than riding along
-//! with three read routes.
-//!
-//! ⚠ **`/api/suggest` and `/api/sessions/{s}/voices` are also held back**, for a
-//! different reason: they are the voiceprint SUGGESTION surface, and whether that
-//! stays in the product is an open question for Pippijn (the timeline's auto-guess
-//! chip is the same family). Porting a feature that may be cut is work spent
-//! twice.
+//! The labelling surface's reads: the speaker roster, the labelled fragments,
+//! and one fragment's audio. The writes are in `labels_write`.
 
 use crate::audio::{self, clip_window};
 use crate::reads;
@@ -26,7 +10,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// Lead-in/-out when a fragment is played WITH context.
+/// Lead-in and lead-out when a fragment is played with context.
 const PAD_S: f64 = 1.5;
 /// Minimum length for a context clip, so a short fragment is listenable.
 const MIN_S: f64 = 5.0;
@@ -37,11 +21,9 @@ pub struct SpeakerNames {
     pub names: Vec<String>,
 }
 
-/// Every name already in use — enrolled voices plus human-assigned labels.
-///
-/// ⚠ The `SPEAKER%` exclusion is load-bearing: diarization's raw cluster tags
-/// (`SPEAKER_00`) are not people, and offering them as autocomplete would spread
-/// a machine tag into the roster one accepted suggestion at a time.
+/// Every name already in use: enrolled voices plus human-assigned labels.
+/// Diarization's cluster tags (`SPEAKER_00`) are excluded: they are not people,
+/// and offering them as autocomplete would spread them into the roster.
 pub fn known_speaker_names(conn: &Connection) -> rusqlite::Result<SpeakerNames> {
     let mut stmt = conn.prepare(
         "SELECT name FROM speakers \
@@ -85,9 +67,8 @@ pub struct CorrectionsOut {
 
 /// The labelled fragments for review, newest first, optionally one voice.
 ///
-/// ⚠ `hidden_reason IS NULL`: a correction hidden as mistaken must not come back
-/// into the review list, because the whole point of hiding one is that it was
-/// poisoning enrolment.
+/// Hidden corrections are excluded: hiding one is how a mistaken label is kept
+/// out of enrolment.
 pub fn list_corrections(
     conn: &Connection,
     speaker: Option<&str>,
@@ -119,7 +100,7 @@ pub fn list_corrections(
     rows.collect()
 }
 
-/// How many labels each voice has — the progress strip on the Labels page.
+/// How many labels each voice has, for the progress strip on the Labels page.
 pub fn corrections_by_speaker(
     conn: &Connection,
 ) -> rusqlite::Result<std::collections::BTreeMap<String, i64>> {
@@ -157,10 +138,9 @@ pub fn correction_placement(
 
 /// The window for a labelled clip.
 ///
-/// ⚠ Exact by DEFAULT, padded only on request — the inverse of a turn's playback,
-/// and deliberately so. The Labels page exists to AUDIT the cut: if the span is
-/// wrong, padding it hides the very defect you opened the page to see. `context`
-/// is for when you cannot recognise a voice from the trimmed fragment.
+/// Exact by default, padded only with `context` (the inverse of a turn's
+/// playback): the Labels page audits the cut, and padding would hide a wrong
+/// span. `context` helps recognise a voice from a short fragment.
 #[must_use]
 pub fn correction_window(start_s: f64, end_s: f64, context: bool) -> (f64, f64) {
     if context {
@@ -189,52 +169,25 @@ pub struct AudioQuery {
     context: bool,
 }
 
-/// Whisper reserves 224 tokens for the prompt; stay comfortably under it so the
-/// bias list can never crowd out real left-context.
+/// Whisper reserves 224 tokens for the prompt; stay well under it so the bias
+/// list never crowds out real left-context.
 const MAX_PROMPT_CHARS: usize = 600;
 
 /// The household glossary as Whisper's `initial_prompt`, or `None` when empty.
 ///
 /// Enrolled speaker names first (short, highest value), then the explicit
-/// vocabulary, as a plain comma list — Whisper only needs to SEE the tokens.
+/// vocabulary, as a plain comma list.
 ///
-/// ⚠ The length rule BREAKS, it does not skip. Once one term would take the
-/// prompt past the cap the list ends there, so the result is always a prefix.
-/// Skipping the long one and carrying on would silently reorder what the model
-/// is biased toward, and would make the prompt depend on which terms happen to
-/// be long rather than on their priority.
+/// The length cap ends the list rather than skipping a long term, so the result
+/// is always a priority-ordered prefix.
 ///
-/// ## ⚠ DO NOT DROP THIS FOR SHORT CLIPS — measured, and it is a bad trade
-///
-/// The prompt has a real cost: on audio it cannot place, the model reaches for
-/// the names it was handed. Both directions were measured on 2026-09-20
-/// (`cargo run -p runner --example prompt_cost` and `--example
-/// prompt_spelling`), and the obvious remedy loses:
-///
-/// ```text
-/// what it BUYS   names spelled right    ~4x as many WITH the prompt
-/// what it COSTS  names hallucinated     ~1% of sub-two-second clips,
-///                                       and NONE without the prompt
-/// ```
-///
-/// **It buys several times more than it costs, so dropping it is a bad
-/// trade.** The harm is real and it is the smaller effect.
-///
-/// ⚠ Both figures MOVE — the spelling side is scored against corrections, which
-/// accumulate. Re-measure rather than trusting a number here.
-///
-/// ⓘ The hallucinations were ALL on clips of a second or less, and there were
-/// none at all above two seconds in either arm — so length gates the harm, and
-/// #1383's call-joining already makes live clips longer whenever the tier is
-/// behind.
-///
-/// ⚠ The harm is handled at the OUTPUT instead: `quality::is_bare_name` refuses
-/// a live turn that is nothing but a name. A name inside a fluent sentence
-/// still gets through and has no known remedy (#1665).
-///
-/// ⚠ **n is small on the buying side** — the corrections containing a name are
-/// the whole ground truth that exists, not a sample of it, and there are a
-/// couple of dozen. Treat the DIRECTION as settled and the magnitude as rough.
+/// ⚠ Do not drop the prompt for short clips. On audio it cannot place, the model
+/// may emit a name from the prompt: about 1% of sub-two-second clips, none
+/// without the prompt and none above two seconds. But names are spelled right
+/// about 4x as often with it (few samples: the direction is firm, the magnitude
+/// rough). Re-measure with `cargo run -p runner --example prompt_cost` and
+/// `--example prompt_spelling`. The harm is handled at the output instead:
+/// `quality::is_bare_name` refuses a live turn that is only a name.
 pub fn initial_prompt(conn: &Connection) -> rusqlite::Result<Option<String>> {
     let mut ordered: Vec<String> = known_speaker_names(conn)?.names;
     ordered.extend(
@@ -297,13 +250,10 @@ pub async fn correction_audio_route(
     Query(q): Query<AudioQuery>,
 ) -> Response {
     let root = st.root.clone();
-    // ⚠ The render must happen INSIDE the blocking task, not after awaiting it:
-    // it shells out to ffmpeg, and on the runtime thread that stalls every other
-    // request for the length of the clip. Going through `render_blocking` also
-    // makes this behave exactly like the other two clip routes.
+    // Render inside the blocking task: it shells out to ffmpeg, which would
+    // stall the runtime thread for the length of the clip.
     let rendered = tokio::task::spawn_blocking(move || {
-        // Labelling wants the recording as it is — fidelity is the thing being
-        // judged — so no enhance option here.
+        // No enhancement: labelling judges the recording as it is.
         audio::render_blocking(&root, false, |conn| {
             Ok(
                 correction_placement(conn, id)?.map(|(path, start_s, end_s)| {

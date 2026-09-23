@@ -1,23 +1,17 @@
-//! Assigning a span of the transcript to a speaker, ported from
-//! `recall.conversation`.
+//! Assigning a span of the transcript to a speaker.
 //!
-//! A turn is a run of words by one speaker, so changing who-said-what is ONE
-//! operation: assign a text span — inside a turn, or across several with partial
-//! edges — to a name. The turns are split at the span's edges, the pieces inside
-//! it take the name, and same-speaker neighbours read as one because the
-//! frontend coalesces them. So *merge* needs no surgery of its own.
+//! Changing who-said-what is one operation: assign a text span, inside a turn
+//! or across several with partial edges, to a name. The turns are split at the
+//! span's edges and the pieces inside take the name. The frontend coalesces
+//! same-speaker neighbours, so merging needs no surgery of its own.
 //!
-//! ⚠ **Splitting is the only surgery, and it HIDES rather than deletes.** The
-//! original turn stays in the table with a `hidden_reason`, so a wrong split is
-//! recoverable. Nothing here removes a row.
+//! Splitting hides the original turn (`hidden_reason`) rather than deleting it,
+//! so a wrong split is recoverable. Nothing here removes a row.
 //!
-//! ⚠ **Every offset is a CHARACTER index, never a byte one.** The Python indexes
-//! `text[lo:hi]` by code point and the frontend counts UTF-16 units; both agree
-//! for anything in the BMP, which is all this archive contains. Rust's `&str`
-//! indexes by BYTE, so the same arithmetic on a turn containing any accented
-//! character — a Dutch word, a clinician's name — would cut in the wrong place
-//! and, landing mid-character, PANIC rather than quietly misbehave. Everything
-//! below therefore works on `Vec<char>`.
+//! ⚠ Every offset is a character index, never a byte one: the frontend counts
+//! UTF-16 units, which match `char`s for BMP text. Byte arithmetic on a turn
+//! with an accented character would cut in the wrong place or panic
+//! mid-character, so everything below works on `Vec<char>`.
 
 use audiocore::instant;
 use chrono::{DateTime, Duration, Utc};
@@ -33,11 +27,8 @@ const DIARIZED_MARKER: &str = "diarized";
 /// work-list.
 const ALIGNED_MARKER: &str = "diarized-aligned";
 
-/// One word with its turn-relative timing, as stored: `{s,e,w}`.
-///
-/// ⚠ `probability` is deliberately absent. The Python carries it in memory and
-/// drops it at the JSON boundary, defaulting it to 1.0 on load, so a port that
-/// stored it would write a column shape the readers do not expect.
+/// One word with its turn-relative timing, as stored: `{s,e,w}`. No
+/// `probability`: the stored shape does not carry one.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct Word {
     pub s: f64,
@@ -75,7 +66,7 @@ pub struct Piece {
 
 /// Move `at` to the nearest space, so a split never bisects a word.
 ///
-/// Operates on characters. Ties go left, matching `left if at - left <= right - at`.
+/// Operates on characters. Ties go left.
 fn snap_to_word(chars: &[char], at: usize) -> usize {
     let at = at.min(chars.len());
     if at == 0 || at == chars.len() {
@@ -114,13 +105,12 @@ fn nearest(values: &[usize], target: usize) -> usize {
     best
 }
 
-/// A float count of seconds as a `Duration`, the way `datetime.timedelta` does it.
+/// A float count of seconds as a `Duration`, rounded as Python's
+/// `datetime.timedelta` does so stored timestamps match.
 ///
-/// ⚠ **Not `(value * 1e6).round()`.** Python splits the whole seconds off first
-/// and multiplies only the FRACTION by a million, then rounds half-to-EVEN. For a
-/// span tens of seconds long the single-multiply form loses a bit and lands one
-/// microsecond away — which the differential caught on a real turn, as a stored
-/// timestamp ending 832531 against 832532.
+/// ⚠ Not `(value * 1e6).round()`: the whole seconds come off first and only the
+/// fraction is scaled, then rounded half-to-even. On spans of tens of seconds
+/// the single-multiply form is one microsecond off.
 fn seconds(value: f64) -> Duration {
     let whole = value.trunc();
     let micros = ((value - whole) * 1_000_000.0).round_ties_even() as i64;
@@ -130,9 +120,9 @@ fn seconds(value: f64) -> Duration {
 /// Where each word starts, as a character offset into the turn's text paired
 /// with its turn-relative time, plus a closing boundary.
 ///
-/// ⚠ The words' concatenation carries leading whitespace that `turn.text` does
-/// not, so every offset is shifted back by that lead. Without it every cut in a
-/// turn whose ASR emitted a leading space lands one character late.
+/// The words' concatenation carries leading whitespace that `turn.text` does
+/// not, so every offset is shifted back by that lead; otherwise each cut lands
+/// one character late.
 fn boundaries(chars: &[char], words: &[Word]) -> Vec<(usize, f64)> {
     let joined: String = words.iter().map(|w| w.w.as_str()).collect();
     let lead = joined.chars().count() - joined.trim_start().chars().count();
@@ -170,9 +160,9 @@ pub fn pieces_of(turn: &Turn, cuts: &[usize], speakers: &[Option<String>]) -> Ve
         out
     };
 
-    // ⚠ The turn's own edges are exact. A word's TIMESTAMP can sit inside leading
-    // silence or drift, so anchoring the first or last piece to it would drop the
-    // turn's opening or closing audio. Only interior cuts snap to a word.
+    // The turn's own edges are exact, but a word's timestamp can sit inside
+    // leading silence or drift, so only interior cuts snap to a word; otherwise
+    // the turn's opening or closing audio would be dropped.
     let at = |char_at: usize| -> DateTime<Utc> {
         if char_at == 0 {
             return turn.start;
@@ -308,10 +298,9 @@ fn parse(stored: &str) -> DateTime<Utc> {
 
 /// Hide a turn only if it is still current.
 ///
-/// ⚠ One atomic statement, and that is the whole point. An impatient double-tap
-/// fires several assigns at once; both read the turn as live and reach here, and
-/// only the caller that wins the claim splits it. Without this each would stamp
-/// out its own full set of pieces.
+/// One atomic statement, so of several concurrent assigns (a double-tap) only
+/// the one that wins the claim splits the turn; otherwise each would insert its
+/// own set of pieces.
 fn claim_hidden(tx: &Transaction, id: i64, reason: &str) -> rusqlite::Result<bool> {
     let changed = tx.execute(
         "UPDATE transcript_segments SET hidden_reason = ?1 \
@@ -395,10 +384,9 @@ fn recut(
         // A concurrent split won. This caller must not also split it.
         return Ok(0);
     }
-    // ⚠ Keep the parent's tier. A split of a diarized turn is still of diarized
-    // quality, so the pieces carry the aligned marker: the UI stays "finalized"
-    // rather than dropping back to the raw card view, and the aligned prefix
-    // keeps them out of the re-diarize work-list.
+    // Keep the parent's tier: pieces of a diarized turn carry the aligned
+    // marker, so the UI still shows them as finalized and they stay out of the
+    // re-diarize work-list.
     let parent_diarized = turn
         .provenance
         .as_deref()

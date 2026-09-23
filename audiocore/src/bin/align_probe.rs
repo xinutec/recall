@@ -1,12 +1,12 @@
 //! Offline tier-1 alignment probe: measure, per wall-clock block, how far each
-//! source's archive timestamps sit from a reference source's — from the audio
-//! itself, by envelope correlation. The instrument for validating the
-//! alignment ladder (docs/architecture.md) on real recorded days, including
-//! the pre-epoch-fix era whose clocks genuinely disagree.
+//! source's timestamps sit from a reference source's, from the audio itself by
+//! envelope correlation. Validates the alignment ladder (docs/architecture.md)
+//! on real recorded days.
 //!
-//!   align-probe --root /Volumes/Backup/recall --reference usb \
-//!               --sources pixel5,pixel9 --start 2026-06-23T20:10:00Z \
-//!               --minutes 30
+//! ```text
+//! align-probe --root <archive> --reference <source> \
+//!             --sources <a>,<b> --start <RFC3339 instant> --minutes 30
+//! ```
 
 use audiocore::align::best_lag;
 use audiocore::envelope::{BUCKET_S, DECODE_RATE, rms_buckets};
@@ -15,8 +15,8 @@ use chrono::{DateTime, Duration, Utc};
 use std::path::Path;
 use std::process::ExitCode;
 
-/// Per-block lag search span. June's measured phone skew was ~3.9 s; ±15 s
-/// leaves room for worse buffering without letting a spurious far peak win.
+/// Per-block lag search span. Measured phone skew was ~3.9 s; ±15 s leaves
+/// room for worse buffering without letting a spurious far peak win.
 const MAX_LAG_S: f64 = 15.0;
 /// Analysis block: one nominal segment length.
 const BLOCK_S: usize = 60;

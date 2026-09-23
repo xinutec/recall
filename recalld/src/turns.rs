@@ -1,28 +1,20 @@
-//! What a finished transcription job means.
+//! Turns finished transcription jobs into transcript rows.
 //!
-//! The runner leases a clip, drives the shim, and retires the job with the
-//! shim's reply as opaque JSON (`queue::done`). This reads it.
+//! The runner retires each job with the shim's reply as opaque JSON
+//! (`queue::done`); this reads it. A [`Stream`] says which job kind a pass
+//! drains, what its rows record as provenance and model, and whether a written
+//! turn hides what it covers. Everything else is shared.
 //!
-//! Two streams, one writer, differing in one field. A [`Stream`] says which job
-//! kind a pass drains, what its rows record as provenance, and whether a written
-//! turn hides what it covers; interpreting the reply, refusing a human-corrected
-//! span, sweeping model junk and the transaction are shared.
+//! [`ROOM`] drains `transcribe-room` and is the only stream that hides: a room
+//! turn stands in for the microphones on that minute. Its writer is not started
+//! (the call in `main` is commented out). [`PER_MIC`] drains
+//! `transcribe-segment`, hides nothing, and fills clips that have no turns.
 //!
-//! [`ROOM`] drains `transcribe-room` and is the only stream that hides
-//! anything: a room turn standing in for four microphones means those four
-//! should not also be read. It is off, pending the selection #1461 has to
-//! referee — the call in `main` is commented out. [`PER_MIC`] drains
-//! `transcribe-segment`, hides nothing, and writes the turns for microphone
-//! clips that have none, which is most of them.
+//! Every row a pass writes is deletable by `provenance = '<stream>'` and by
+//! nothing else; a NULL provenance could not be taken back.
 //!
-//! ⚠ Every row either pass writes is deletable by `provenance = '<stream>'` and
-//! by nothing else. A pass that left it NULL, matching the corpus convention,
-//! could not be taken back.
-//!
-//! Hiding rather than deleting was rejected as the safer option: a hidden row is
-//! still in `transcript_fts` (maintained here in code, not by a trigger), still
-//! counted, and still seen by supersession — the machinery whose failure
-//! overwrites a typed correction.
+//! Hiding is not safer than deleting: a hidden row is still in `transcript_fts`,
+//! still counted, and still seen by supersession.
 
 use audiocore::instant;
 use chrono::{DateTime, Duration, Utc};
@@ -40,8 +32,7 @@ pub struct RoomTurn {
     pub word_timings: Option<String>,
 }
 
-/// Why a stored result yields no turns. All of these are ordinary, not faults:
-/// a refusal and a silent block are both things the fleet expects to see.
+/// Why a stored result yields no turns. All are ordinary outcomes, not faults.
 #[derive(Debug, PartialEq)]
 pub enum Barren {
     /// The shim reported failure (`ok: false`). The clip is the problem.
@@ -82,16 +73,12 @@ fn at(block_start: DateTime<Utc>, offset_s: f64) -> DateTime<Utc> {
 
 /// Interpret one stored job result as the turns it implies.
 ///
-/// `block_start` comes from the room block's FILENAME, which is the archive's
-/// naming contract (`room-YYYYMMDDTHHMMSS.flac`) — the shim's offsets are
-/// relative to the clip it was handed and mean nothing on their own.
+/// `block_start` comes from the clip's filename; the shim's offsets are relative
+/// to the clip and mean nothing on their own.
 ///
-/// ⚠ **A turn with no word in it is dropped here**, not left for a later sweep.
-/// Transcribing near-silence does not return nothing, it returns inventions:
-/// measured on this very queue, a silent minute came back as "Thank you." twice
-/// and another as a 150-character run of tildes (#1410). The queue already
-/// refuses MEASURED silence a job; this is the same rule one stage later, for
-/// the blocks whose silence nobody had measured yet.
+/// A segment with no alphanumeric character, or with no duration, is dropped
+/// here: near-silence comes back as invented text (e.g. "Thank you." or a run of
+/// tildes), not as nothing.
 pub fn interpret(block_start: DateTime<Utc>, stored: &str) -> Result<Vec<RoomTurn>, Barren> {
     let reply: Reply =
         serde_json::from_str(stored).map_err(|e| Barren::Unreadable(e.to_string()))?;
@@ -127,8 +114,7 @@ pub struct Standing {
     pub end: DateTime<Utc>,
 }
 
-/// A span a person has corrected. The one thing in this archive that is not
-/// re-derivable from audio.
+/// A span a person has corrected: the one thing not re-derivable from audio.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Corrected {
     pub start: DateTime<Utc>,
@@ -142,13 +128,11 @@ pub struct Plan {
     pub insert: Vec<RoomTurn>,
     /// Per-mic turn ids to hide, because a written room turn covers them.
     pub hide: Vec<i64>,
-    /// Room turns declined, and why. Recorded rather than dropped silently:
-    /// a refusal nobody can read is indistinguishable from a bug.
+    /// Room turns declined, and why, so a refusal is visible rather than silent.
     pub refused: Vec<String>,
-    /// Room turns the model produced and the quality rules swept — loops and
-    /// wordless text. Counted SEPARATELY from `refused` on purpose: a refusal
-    /// says a person's words are in the way, a sweep says the model failed, and
-    /// a log line that adds them together can report either as the other.
+    /// Room turns swept by the quality rules (loops, wordless text). Kept apart
+    /// from `refused`: a refusal means a person's words are in the way, a sweep
+    /// means the model failed.
     pub swept: usize,
 }
 
@@ -156,35 +140,22 @@ fn overlaps(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)
     a.0 < b.1 && a.1 > b.0
 }
 
-/// Decide the write for one block. Pure, so the rules below are testable without
-/// a database — they are the rules that can destroy a person's typed words.
+/// Decide the write for one block. Pure, so the rules that protect a person's
+/// typed words are testable without a database.
 ///
-/// 1. **A room turn overlapping a corrected span is REFUSED.** The human's text
-///    stands; a machine pass does not get to restate it.
-/// 2. **A per-mic turn overlapping a corrected span is NEVER hidden**, even when
-///    a room turn covers it. Hiding is not deleting, but `hidden` is not
-///    `absent` either: the row stays in `transcript_fts`, stays counted, and
-///    stays visible to supersession.
-/// 3. Only a per-mic turn actually covered by an INSERTED room turn is hidden.
-/// 4. ⚠ **If nothing will be inserted, nothing is hidden.** This is `refine`'s
-///    lesson one stage later: applying the filters AFTER hiding blanked 132
-///    segments of real household conversation, including a minute of Dutch about
-///    writing things down to remember them. A pass replaces a transcript or it
-///    keeps it. It never empties one.
-/// 5. **A room turn that is a repetition loop or has no word in it is SWEPT**
-///    before any of the above, so it can neither be written nor hide anything.
+/// 1. A room turn overlapping a corrected span is refused: the human text stands.
+/// 2. A per-mic turn overlapping a corrected span is never hidden, even when a
+///    room turn covers it.
+/// 3. Only a per-mic turn covered by an inserted room turn is hidden.
+/// 4. If nothing will be inserted, nothing is hidden. A pass replaces a
+///    transcript or keeps it; it never empties one.
+/// 5. A room turn that is a repetition loop or wordless is swept before any of
+///    the above, so it can neither be written nor hide anything.
 ///
-/// ⚠ Rule 5 is placed where it is because of rule 4, not beside it. The whole
-/// point of sweeping here — rather than on the read path, where `recall.cleanup`
-/// sweeps the per-mic corpus — is that a block whose room turns are ALL junk
-/// then inserts nothing, and therefore hides nothing, and the per-mic
-/// transcript of that minute survives untouched. Sweeping after the hide set was
-/// built would be the 132-segment mistake with a different filter.
-///
-/// ⚠ It is also what makes the room-vs-per-mic comparison fair. The 2026-09-11
-/// measurement put 22% repetition loops against the per-mic corpus's 0% — but
-/// that corpus is SWEPT of exactly these and the room turns were written raw, so
-/// the number compared raw to swept rather than room audio to mic audio (#1388).
+/// ⚠ Rule 5 must run before the hide set is built: a block whose room turns are
+/// all junk then inserts nothing, so rule 4 keeps its per-mic transcript. It
+/// also keeps room turns comparable with the per-mic corpus, which is swept of
+/// the same junk.
 #[must_use]
 pub fn plan(room: Vec<RoomTurn>, standing: &[Standing], human: &[Corrected]) -> Plan {
     let hits_human = |span: (DateTime<Utc>, DateTime<Utc>)| {
@@ -209,8 +180,7 @@ pub fn plan(room: Vec<RoomTurn>, standing: &[Standing], human: &[Corrected]) -> 
         out.insert.push(turn);
     }
 
-    // Rule 4: no insert, no hide. Checked before the hide set is built at all,
-    // so there is no path where a filter empties the insert list afterwards.
+    // Rule 4: no insert, no hide.
     if out.insert.is_empty() {
         return out;
     }
@@ -231,27 +201,21 @@ pub fn plan(room: Vec<RoomTurn>, standing: &[Standing], human: &[Corrected]) -> 
     out
 }
 
-/// The room stream's shape, taken from the builder's own encode (`-ar 16000 -ac 1`)
-/// rather than assumed: these become `audio_segments.sample_rate`/`channels`, and a
-/// wrong pair there would make every room clip play at the wrong speed.
+/// The room stream's shape, from the builder's encode (`-ar 16000 -ac 1`). These
+/// become `audio_segments.sample_rate`/`channels`; a wrong pair plays every room
+/// clip at the wrong speed.
 pub const ROOM_RATE: i64 = 16_000;
 pub const ROOM_CHANNELS: i64 = 1;
 
-/// Register built room blocks in the MEANING plane, so their turns have audio.
+/// Register built room blocks in the meaning plane, so their turns have audio.
 ///
-/// ⚠ **Why this has to exist at all.** `transcript_segments.audio_segment_id` is
-/// nullable, so room turns could be written with no audio attached — and they
-/// must not be. That id is what `/api/audio/{id}` plays a turn from, so every
-/// room turn would be text nobody can listen to, in a product whose whole point
-/// is going back to what was said.
+/// `transcript_segments.audio_segment_id` is nullable, but a room turn without
+/// one could not be played: `/api/audio/{id}` plays a turn from that id.
 ///
-/// ⚠ **A NEW CLASS OF ROW: isis-only.** Every other `audio_segments` row arrived
-/// by push from the Mac's master archive. The room stream is BUILT here and the
-/// Mac never sees it, so these rows have no counterpart there and must not be
-/// expected to.
+/// The room stream is built on this host, so these rows have no counterpart in
+/// the Mac's archive.
 ///
-/// Idempotent by the table's own `UNIQUE (source_id, start_utc)` — the whole
-/// backfill can be re-run, and is meant to be.
+/// Idempotent by `UNIQUE (source_id, start_utc)`, so the backfill can be re-run.
 ///
 /// # Errors
 /// If either database refuses the read or the write.
@@ -260,8 +224,8 @@ pub fn register_blocks(
     ingest: &rusqlite::Connection,
     room_dir: &std::path::Path,
 ) -> rusqlite::Result<usize> {
-    // The FK target. `derived` is not a device: it has no recorder to be deaf, no
-    // `.alive` marker, and it inherits whichever microphone's audio won the minute.
+    // The FK target. The room source is not a device: it has no recorder and no
+    // `.alive` marker; its audio is whichever microphone won the minute.
     meaning.execute(
         "INSERT OR IGNORE INTO sources (id, name, kind) VALUES (?1, ?2, ?3)",
         (crate::room::ROOM_SOURCE, "Room", crate::room::ROOM_KIND),
@@ -277,16 +241,13 @@ pub fn register_blocks(
     for row in rows {
         let (filename, start_raw) = row?;
         let Ok(start) = DateTime::parse_from_rfc3339(&start_raw) else {
-            // A block whose stamp will not parse cannot get an honest end time.
-            // Skipped rather than guessed: the grid is the contract, and a row
-            // that is off it is a finding, not something to round.
+            // No honest end time without a start. Skipped rather than rounded.
             tracing::warn!(%filename, %start_raw, "room register: unparseable start");
             continue;
         };
         let start = start.with_timezone(&Utc);
-        // Exactly one minute, because the builder works a UTC-ALIGNED GRID
-        // (`room::BLOCK_S`) rather than cutting variable segments. This is the one
-        // place a duration may be asserted instead of measured.
+        // Asserted, not measured: the builder cuts a UTC-aligned grid of
+        // `room::BLOCK_S`.
         let end = start + Duration::seconds(crate::room::BLOCK_S);
         added += meaning.execute(
             "INSERT OR IGNORE INTO audio_segments
@@ -305,9 +266,8 @@ pub fn register_blocks(
     Ok(added)
 }
 
-/// The job kind the segment registrar records its refusals under. Not a queue
-/// kind — no runner ever leases this — but the ledger is keyed on (kind,
-/// filename) and this pass needs its own half of that key.
+/// The ledger kind the segment registrar records its outcomes under. Not a queue
+/// kind: no runner leases it, but the ledger is keyed on `(kind, filename)`.
 pub const REGISTER_SEGMENT: &str = "register-segment";
 
 /// What one registrar pass did.
@@ -315,60 +275,41 @@ pub const REGISTER_SEGMENT: &str = "register-segment";
 pub struct Registered {
     /// Clips given an `audio_segments` row, and therefore somewhere to hang a turn.
     pub added: usize,
-    /// Clips whose SOURCE the meaning plane does not know. Not a fault and not
-    /// a verdict — see the note on `sources` below. The ONLY non-terminal
-    /// outcome here: everything else is ledgered and never looked at again.
+    /// Clips whose source the meaning plane does not know yet. The only
+    /// non-terminal outcome: everything else is ledgered and not revisited.
     pub waiting: usize,
-    /// Clips ffmpeg could not read. Ledgered, so a pass reaches past them.
+    /// Clips with an unparseable name or that ffmpeg could not read. Ledgered.
     pub unreadable: usize,
-    /// Clips whose minute is ALREADY registered — a sibling file with the same
-    /// `(source_id, start_utc)` holds the row, so the insert was ignored.
-    ///
-    /// ⚠ Not a fault, and not rare: a minute delivered as both `.wav` and
-    /// `.opus` is over a thousand clips — count them by stripping the extension
-    /// and grouping in `segments`. It is counted separately because "the insert
-    /// did nothing" and "the clip is new" were indistinguishable before, and
-    /// that is what let them be re-decoded for ever.
+    /// Clips whose minute a sibling file (e.g. the `.wav` beside the `.opus`)
+    /// already holds under `UNIQUE (source_id, start_utc)`. Common, not a fault;
+    /// counted apart from `added` so the duplicates stay visible.
     pub covered: usize,
-    /// Clips an earlier pass had already registered, retired cheaply by name.
+    /// Clips already registered by name, retired cheaply.
     pub retired: usize,
-    /// Clips whose file was DECODED — the pass's whole cost, and the only
-    /// counter that can show work being done to no effect.
-    ///
-    /// ⚠ It is here so a test can assert a duplicate costs ZERO of them. That
-    /// is a claim about cost, and a claim about cost that is not measured is
-    /// the reason this pass decoded 1,599 files a day without anyone noticing.
+    /// Clips whose file was decoded: the pass's whole cost. Lets a test assert
+    /// that a duplicate costs no decode.
     pub probed: usize,
 }
 
-/// Register microphone clips in the MEANING plane, from the INGEST plane, so
-/// their turns have somewhere to hang.
+/// Register microphone clips from the ingest plane in the meaning plane, so
+/// their turns have audio to hang on.
 ///
-/// ⚠ The path is the INGEST copy (`<root>/ingest/<source>/`), which is the
-/// complete one; the `<root>/<source>/` mirror is short (#1591). A clip already
-/// registered keeps its path — `INSERT OR IGNORE` on `UNIQUE (source_id,
-/// start_utc)` — so this never repoints a row out from under playable audio.
+/// The path is the ingest copy (`<root>/ingest/<source>/`), the complete one.
+/// `INSERT OR IGNORE` on `UNIQUE (source_id, start_utc)` means an already
+/// registered clip keeps its path.
 ///
-/// ⚠ `end_utc` is DECODED, not assumed: a microphone clip is whatever the
-/// segment muxer closed, and `write_pass` sizes the human-correction window
-/// from this column. Too narrow there overwrites somebody's typed words.
+/// `end_utc` is decoded, not assumed: a microphone clip is whatever the segment
+/// muxer closed, and `write_pass` sizes the human-correction window from it.
 ///
-/// ⚠ An unknown SOURCE waits. `sources.kind` is the sender's to know
-/// (`work::store_segment`), and registering under a guess is permanent.
+/// A clip whose source is unknown waits: `sources.kind` is the sender's to
+/// declare, and registering under a guess is permanent.
 ///
-/// `limit` bounds PROBES, because probing decodes the whole file. Cheap terminal
-/// decisions — a clip already registered, a name that will never parse — are not
-/// charged against it, so a backlog of them drains in one pass instead of one
-/// clip per pass.
+/// `limit` bounds probes, because a probe decodes the whole file. Cheap terminal
+/// decisions are not charged against it, so a backlog of them drains in one pass.
 ///
-/// ⚠ **EVERY terminal outcome is ledgered, and that is the whole of this pass's
-/// correctness.** The candidate query is "not in the ledger"; a decision that
-/// does not write one leaves the clip a candidate for ever. `write_pass` says
-/// the same thing about its own limit, and says it because an earlier version
-/// re-examined the newest twenty blocks for ever and never advanced — this pass
-/// made the identical mistake in a costlier place. Measured 2026-09-14 against
-/// the live fleet: 1,599 clips whose insert was ignored were being decoded in
-/// full on every pass, the `.wav` copies at 48 kHz, achieving nothing.
+/// ⚠ Every terminal outcome must be ledgered. The candidate query is "not in the
+/// ledger", so an unledgered decision is re-made, and possibly re-decoded, on
+/// every pass.
 ///
 /// # Errors
 /// If either database refuses.
@@ -379,28 +320,22 @@ pub fn register_segments(
     now: &str,
     limit: usize,
 ) -> rusqlite::Result<Registered> {
-    // ⚠ Uploads are excluded because `upload::register` already writes their
-    // meaning-plane rows — not because they take a different road to a
-    // transcriber. They do not: since 2026-09-17 an upload is leased and
-    // transcribed exactly as a microphone clip is (#1649).
+    // Uploads are excluded because `upload::register` writes their meaning-plane
+    // rows; they are transcribed like any microphone clip.
     let mics: std::collections::HashSet<String> = {
         let mut stmt =
             meaning.prepare("SELECT id FROM sources WHERE kind NOT IN ('upload', ?1)")?;
         let rows = stmt.query_map([crate::room::ROOM_KIND], |r| r.get::<_, String>(0))?;
         rows.collect::<Result<_, _>>()?
     };
-    // Registered already, by BASENAME. One pass over the column rather than a
-    // correlated lookup per candidate: the same shape `derive_segment_jobs`
-    // uses, and for the same reason — the correlated form was a full scan of
-    // both tables and ran ten minutes against the live fleet before it was
-    // killed.
+    // Read once into sets rather than looked up per candidate; see
+    // `registered_names`.
     let have = registered_names(meaning)?;
     let mut minutes = registered_minutes(meaning)?;
 
-    // ⚠ NEWEST FIRST, unlike `write_pass`. This pass has no starvation problem
-    // to avoid — the ledger retires what it cannot read — and the live clip
-    // arriving now must not queue behind a backlog of backfill before anyone
-    // can read what was just said (decision 8).
+    // Newest first, unlike `write_pass`: a clip arriving now must not wait
+    // behind a backfill, and the ledger retires what cannot be read, so nothing
+    // starves.
     let candidates: Vec<(String, String)> = {
         let mut stmt = ingest.prepare(
             "SELECT s.filename, s.source FROM segments s
@@ -418,15 +353,11 @@ pub fn register_segments(
     let mut out = Registered::default();
     let mut probes = 0;
     for (filename, source) in candidates {
-        // ⚠ The budget bounds DECODES, and only decodes. A cheap decision that
-        // consumed it would make a backlog of already-registered clips take one
-        // pass each to retire — which is the shape of the bug this pass had.
+        // The budget bounds decodes only; cheap decisions below do not spend it.
         if probes >= limit {
             break;
         }
-        // Already registered, by an earlier pass or by the Python. Terminal, and
-        // it MUST be ledgered: without a row it stays a candidate for ever, and
-        // the only thing standing between it and a full decode is this set.
+        // Already registered. Terminal, so ledgered.
         if have.contains(&filename) {
             ledger(
                 ingest,
@@ -438,8 +369,8 @@ pub fn register_segments(
             out.retired += 1;
             continue;
         }
-        // ⚠ NOT ledgered, and the only outcome that is not: the source may be
-        // registered later, and a clip retired here would never come back.
+        // ⚠ Not ledgered, unlike every other outcome: the source may be
+        // registered later, and a ledgered clip would never come back.
         if !mics.contains(&source) {
             out.waiting += 1;
             continue;
@@ -449,8 +380,8 @@ pub fn register_segments(
             ledger(ingest, REGISTER_SEGMENT, &filename, "unnameable", now)?;
             continue;
         };
-        // A sibling already holds this minute, so the insert below could only be
-        // ignored. Decided WITHOUT decoding: the duration would be discarded.
+        // A sibling already holds this minute, so the insert could only be
+        // ignored. Decided without decoding.
         let minute = (source.clone(), instant::python_isoformat_utc(start));
         if minutes.contains(&minute) {
             out.covered += 1;
@@ -467,10 +398,8 @@ pub fn register_segments(
         probes += 1;
         out.probed += 1;
         let Ok(media) = crate::upload::probe(&path) else {
-            // Permanent as far as this pass is concerned: a header-only
-            // dead-capture tombstone holds no audio and never will. Ledgered so
-            // the next pass reaches PAST it — four of these sit in the archive,
-            // and without a row each would be re-decoded every pass for ever.
+            // Permanent: e.g. a header-only file from a dead capture holds no
+            // audio and never will.
             out.unreadable += 1;
             ledger(ingest, REGISTER_SEGMENT, &filename, "unreadable", now)?;
             continue;
@@ -489,20 +418,12 @@ pub fn register_segments(
                 media.channels,
             ],
         )?;
-        // ⚠ **An IGNORED insert is a DECISION, not a no-op.** A sibling file
-        // holds this minute — the `.wav` beside the `.opus` — so there is
-        // nothing more this pass can do with the clip, and saying so is what
-        // stops it being decoded again on the next one, and the one after.
-        // Counted apart from `added` so the duplicate archive stays visible
-        // rather than hiding inside a success total.
+        // An ignored insert means a sibling holds this minute: terminal, and
+        // ledgered like a registration.
         if inserted == 1 {
             out.added += 1;
-            // ⚠ THIS PASS's own work counts. `minutes` is a snapshot taken
-            // before the loop, so without this a clip's sibling a few
-            // candidates later is invisible and pays a full decode — inside the
-            // very pass that just registered the minute. The test measures the
-            // decode count, which is the only reason this was found rather than
-            // reasoned past.
+            // `minutes` is a snapshot from before the loop; without this, a
+            // sibling later in the same pass would pay a full decode.
             minutes.insert(minute);
         } else {
             out.covered += 1;
@@ -517,9 +438,8 @@ pub fn register_segments(
     Ok(out)
 }
 
-/// Every registered clip's BASENAME. One pass over the column rather than a
-/// correlated lookup per candidate: the correlated form was a full scan of both
-/// tables and ran ten minutes against the live fleet before it was killed.
+/// Every registered clip's basename. One pass over the column, because a
+/// correlated lookup per candidate scans both tables and takes minutes.
 fn registered_names(
     meaning: &rusqlite::Connection,
 ) -> rusqlite::Result<std::collections::HashSet<String>> {
@@ -534,15 +454,10 @@ fn registered_names(
     Ok(set)
 }
 
-/// Every registered `(source_id, start_utc)` — the MINUTE, not the filename,
-/// and that difference is what makes a duplicate free.
-///
-/// ⚠ [`registered_names`] is keyed on basename, so the `.wav` beside the
-/// `.opus` misses it and reaches the probe, which decodes the WHOLE FILE to
-/// learn a duration the ignored insert then throws away. But a clip's start time
-/// is in its NAME, and `(source_id, start_utc)` is the very key the `UNIQUE`
-/// constraint rejects on — so the answer is knowable before any decoding
-/// happens, and such siblings are a four-figure share of this archive.
+/// Every registered `(source_id, start_utc)`: the key the `UNIQUE` constraint
+/// rejects on. A sibling file (the `.wav` beside the `.opus`) misses
+/// [`registered_names`], but its start time is in its name, so this catches it
+/// before a decode.
 fn registered_minutes(
     meaning: &rusqlite::Connection,
 ) -> rusqlite::Result<std::collections::HashSet<(String, String)>> {
@@ -553,32 +468,24 @@ fn registered_minutes(
 
 /// Marks a per-mic turn hidden because a room turn now covers its minute.
 ///
-/// A reason, not a flag: `hidden_reason` is what a reader sees when asking why a
-/// turn vanished, and "the room stream covers this" is recoverable information
-/// where a bare `1` is not.
+/// A reason rather than a flag, so a reader can see why a turn is hidden.
 pub const COVERED_BY_ROOM: &str = "covered by the room stream";
 
 /// Marks a provisional LIVE turn hidden because the archive pass has reached it.
 ///
-/// ⚠ The literal is shared with the Python (`store.RECONCILED_MARKER`) and with
-/// `work::store_segment`. Three writers, one string, and a fourth spelling would
-/// simply make some hidden turns unfindable by whoever goes looking for the
-/// other three.
+/// ⚠ The meaning-schema migrations write the same literal; a second spelling
+/// would make some hidden turns unfindable.
 pub const LIVE_RECONCILED: &str = "live-reconciled";
 
-/// Apply a [`Plan`] to one block. ONE transaction: the turns, their search-index
+/// Apply a [`Plan`] to one block in one transaction: the turns, their search
 /// rows and the hides land together or not at all.
 ///
-/// ⚠ **The search index is maintained in CODE, not by a trigger.**
-/// `transcript_fts` is contentless FTS5 that the writer inserts into by hand
-/// (`labels_write` says the same, and says it because forgetting it fails
-/// nothing — it just makes the text unfindable by the one route most likely to
-/// look for it).
+/// ⚠ `transcript_fts` has no trigger; the writer inserts into it by hand.
+/// Forgetting fails nothing and leaves the text unsearchable.
 ///
-/// ⚠ **Idempotent by REFUSING, not by overwriting.** A block whose audio segment
-/// already carries turns is left entirely alone: a second pass must never mint
-/// duplicates, and must never "fix" a minute a person has since edited. The
-/// caller gets `Ok(0)`.
+/// Idempotent by refusing: a block whose audio segment already carries turns is
+/// left alone and the caller gets `Ok(0)`, so a second pass neither duplicates
+/// turns nor overwrites an edited minute.
 ///
 /// # Errors
 /// If the transaction cannot be taken or any statement fails. Nothing is left
@@ -617,10 +524,8 @@ pub fn write_block(
                 instant::python_isoformat_utc(turn.end),
                 turn.text,
                 turn.language,
-                // ⚠ The same rule `diarized` applies, on the OTHER stored
-                // timing encoding — this path holds most of the archive's
-                // turns, so leaving it out left the signal covering a tenth of
-                // what it can see (#1410). `word_spans` reads both spellings.
+                // Implausibly slow speech zeroes the confidence, as in
+                // `diarized`; `word_spans` reads both timing encodings.
                 turn.word_timings
                     .as_deref()
                     .map_or(turn.confidence, |timings| {
@@ -645,11 +550,8 @@ pub fn write_block(
         written += 1;
     }
     if stream.reconciles_live {
-        // ⚠ The SPAN, not the audio segment. A live turn has no
-        // `audio_segment_id` of its own — it was minted from a stream, not a
-        // file — so the only thing relating it to this clip is the minute it
-        // fell in. Mirrors `work::store_segment`, which does this for the
-        // sync-push path, down to the marker string.
+        // By span, not audio segment: a live turn has no `audio_segment_id`,
+        // so only its start time relates it to this clip.
         let (from, to) = span;
         tx.execute(
             "UPDATE transcript_segments SET hidden_reason = ?1
@@ -674,42 +576,31 @@ pub fn write_block(
     Ok(written)
 }
 
-/// Which transcription stream a pass is draining, and the three things that
-/// differ between them. Everything else in this module is shared.
+/// Which transcription stream a pass drains, and what differs between streams.
 ///
-/// ⚠ **A `Stream` is the unit of REVERSAL, which is why `provenance` is in it
-/// rather than derived.** `DELETE FROM transcript_segments WHERE provenance =
-/// '<stream>'` must name exactly the rows one pass wrote and no others — a
-/// stream sharing a provenance string with another, or writing NULL like the
-/// corpus convention does, is a stream nobody can take back.
+/// ⚠ A `Stream` is the unit of reversal: `DELETE FROM transcript_segments WHERE
+/// provenance = '<stream>'` must name exactly the rows its passes wrote, so
+/// `provenance` must be unique per stream and never NULL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stream<'a> {
     /// The queue job kind whose stored results this pass interprets.
     pub kind: &'a str,
-    /// What the written rows record in `transcript_segments.provenance` — the
-    /// reversal key, unique per stream.
+    /// What the written rows record in `transcript_segments.provenance`: the
+    /// reversal key.
     pub provenance: &'a str,
     /// What they record in `asr_model`.
     pub model: &'a str,
-    /// Whether writing turns for a clip also hides the PROVISIONAL LIVE turns
-    /// standing on the same span.
+    /// Whether writing turns for a clip also hides the provisional live turns
+    /// on the same span.
     ///
-    /// ⚠ **Not the same act as `hides_covered`, and not optional for a stream
-    /// that replaces the archive pass.** A live turn is a guess made while
-    /// somebody was still speaking; the archive turn for that span supersedes
-    /// it, and `worker.py::reconcile_live` hid them on the Mac for months. On the fleet the same thing happens in `work::store_segment`,
-    /// which is the SYNC-PUSH path — and a runner writing turns directly never
-    /// goes through it. Without this, the timeline shows the live guess and the
-    /// archive turn side by side, which reads as the conversation happening
-    /// twice.
+    /// Required for the stream that acts as the archive pass: the archive turn
+    /// supersedes the live guess, and without this the timeline shows both.
     pub reconciles_live: bool,
-    /// Whether a written turn HIDES the per-mic turns it covers.
+    /// Whether a written turn hides the per-mic turns it covers.
     ///
-    /// True for the room stream alone, and it is the whole reason [`plan`]'s
-    /// rules 2, 3 and 4 exist. A per-mic pass writes turns for clips that have
-    /// NONE; there is nothing standing on that minute for it to stand in for,
-    /// and a pass that hid anything would be replacing a transcript rather than
-    /// filling a gap.
+    /// True for the room stream alone, which is why [`plan`]'s rules 2 to 4
+    /// exist. A per-mic pass fills clips that have no turns, so it has nothing
+    /// to hide.
     pub hides_covered: bool,
 }
 
@@ -718,43 +609,35 @@ pub const ROOM: Stream<'static> = Stream {
     kind: crate::queue::TRANSCRIBE_ROOM,
     provenance: "room",
     model: ROOM_MODEL,
-    // The room stream is DERIVED from microphones whose own archive pass already
-    // reconciled the live turns on that minute; doing it again would hide the
-    // same rows for a second reason and make the reversal ambiguous.
+    // The room stream is derived from microphones whose own pass reconciles the
+    // live turns; doing it again would make the reversal ambiguous.
     reconciles_live: false,
     hides_covered: true,
 };
 
-/// What the `asr` shim loads when the caller names no model, spelled the way
-/// `recall.asr.DEFAULT_MODEL` spells it.
+/// What the `asr` shim loads when the caller names no model:
+/// `recall.asr.DEFAULT_MODEL`.
 ///
-/// ⚠ **One string, two languages, and the queue does not carry a model field.**
-/// The shim is told nothing, so it uses its own default and this side has to
-/// know what that is — which makes the two copies drift silently the day
-/// somebody bumps the Python one. `a_per_mic_turn_names_the_model_the_shim_will
-/// _actually_load` reads `asr.py` and fails on the mismatch; that test is the
-/// only thing holding them together.
+/// ⚠ The queue carries no model field, so this copy must match the Python one.
+/// The test `a_per_mic_turn_names_the_model_the_shim_will_actually_load` reads
+/// `asr.py` and fails on a mismatch.
 pub const SHIM_MODEL: &str = "mlx-community/whisper-large-v3-turbo";
 
-/// One microphone's own clip (`transcribe-segment`) — `worker.py`'s loop, moved.
+/// One microphone's own clip (`transcribe-segment`).
 ///
-/// ⚠ `model` is the shim's real default, NOT a decorated name like [`ROOM`]'s:
-/// these rows sit in the same per-microphone corpus that `worker.py` wrote for
-/// months, and a reader filtering on `asr_model` must not see the
-/// archive split in two on the day the orchestrator changed. The provenance
-/// field carries the "who wrote it" question instead, where a reader who is
-/// asking it will look.
+/// `model` is the shim's real default, not a decorated name like [`ROOM`]'s:
+/// these rows join the existing per-microphone corpus, and filtering on
+/// `asr_model` must not split it by writer. `provenance` says who wrote them.
 pub const PER_MIC: Stream<'static> = Stream {
     kind: crate::queue::TRANSCRIBE_SEGMENT,
     provenance: "per-mic (runner)",
     model: SHIM_MODEL,
-    // This IS the archive pass now, so it inherits the archive pass's duty.
+    // This is the archive pass, so it reconciles live turns.
     reconciles_live: true,
     hides_covered: false,
 };
 
-/// What one pass did, so a log line can be specific about a write that touches
-/// the system of record.
+/// What one pass did, for the log line.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Pass {
     pub blocks: usize,
@@ -762,15 +645,12 @@ pub struct Pass {
     pub hidden: usize,
     pub refused: usize,
     pub barren: usize,
-    /// Room turns the quality rules swept (see [`plan`] rule 5). The number the
-    /// room-vs-per-mic comparison turns on: a pass that sweeps most of what the
-    /// model produced is reporting on the AUDIO, not on the filter.
+    /// Turns the quality rules swept (see [`plan`] rule 5).
     pub swept: usize,
 }
 
 /// Whether the block starting at `block_start` on `source` was deliberately
-/// deleted on the fleet — the same second-resolution match the audio lookup
-/// uses, because the tombstone carries whatever spelling the row had.
+/// deleted, matched on the same timestamp spelling the audio lookup uses.
 ///
 /// # Errors
 /// If the meaning plane refuses.
@@ -790,13 +670,12 @@ pub fn tombstoned_block(
         .is_some())
 }
 
-/// Record that a pass decided a clip and wrote nothing. `outcome` is for a
-/// person reading the table, never branched on.
+/// Record a pass's terminal decision on a clip. `outcome` is for a person
+/// reading the table, never branched on.
 ///
-/// Only refusals are ledgered: written turns are their own record, and
-/// `write_pass` derives "already done" from them, so deleting a stream's turns
-/// re-enables its clips by itself. A reversal is therefore two planes, the
-/// turns and these rows.
+/// `write_pass` ledgers only clips it wrote nothing for: written turns are their
+/// own record, so deleting a stream's turns re-enables those clips. A reversal
+/// must therefore clear both the turns and these rows.
 pub fn ledger(
     conn: &rusqlite::Connection,
     kind: &str,
@@ -815,11 +694,10 @@ pub fn ledger(
 /// Turn stored job results into visible turns, one clip at a time:
 /// [`interpret`] → [`plan`] → [`write_block`].
 ///
-/// ⚠ `limit` counts clips DECIDED, and the SQL has no `LIMIT`. A limited query
-/// returns the same ineligible rows every pass, which is how an earlier version
-/// re-examined the newest twenty blocks for ever and never advanced.
+/// ⚠ `limit` counts clips decided, and the SQL has no `LIMIT`: a limited query
+/// returns the same ineligible rows every pass and never advances.
 ///
-/// ⚠ ASCENDING, so a backfill drains forward from the oldest undecided clip.
+/// Ascending, so a backfill drains forward from the oldest undecided clip.
 ///
 /// # Errors
 /// If either database refuses. An uninterpretable result is counted and
@@ -831,23 +709,9 @@ pub fn write_pass(
     now: &str,
     limit: usize,
 ) -> rusqlite::Result<Pass> {
-    // ⚠ NO `LIMIT` in the SQL, and `limit` counts blocks DECIDED rather than
-    // blocks looked at. A limited query returns the same rows every pass when
-    // they are all ineligible — which is the bug this replaces: `ORDER BY
-    // filename DESC LIMIT 20` re-examined the newest twenty blocks every two
-    // minutes and refused each time, so 49 minutes of running produced exactly
-    // the first pass's 73 turns.
-    //
-    // ⚠ ASCENDING, so a backfill drains FORWARD from the oldest undecided block.
-    // Descending means the newest minute is transcribed first and the archive is
-    // never reached.
-    //
-    // ⚠ **The source is JOINED from the ingest plane, never parsed out of the
-    // filename.** `<source>-<stamp>.<ext>` looks decomposable until a source is
-    // itself hyphenated and stamped — `meeting-20260907-0905` is a real source
-    // id here — and a split on the wrong hyphen would look up the audio segment
-    // of a source that does not exist and silently find nothing. The ingest
-    // plane already knows who uploaded each blob; ask it.
+    // ⚠ The source is joined from the ingest plane, never parsed from the
+    // filename: `meeting-20260907-0905` is a source id, and no split of a
+    // filename on a hyphen is safe.
     let mut stmt = ingest.prepare(
         "SELECT j.filename, j.result, s.source FROM jobs j
          JOIN segments s ON s.filename = j.filename
@@ -873,14 +737,11 @@ pub fn write_pass(
             ledger(ingest, stream.kind, &filename, "unnameable", now)?;
             continue;
         };
-        // The clip's own audio segment. Absent means nothing has registered it
-        // in the meaning plane yet — a reason to wait, never to write a turn
-        // with no audio. `audio_segment_id` is what `/api/audio/{id}` plays a
-        // turn from, so a turn without one is text nobody can listen to.
+        // The clip's audio segment. Absent means it is not registered yet: wait,
+        // never write a turn that cannot be played.
         //
-        // ⚠ **The one barren cause that gets NO ledger row.** It is the only
-        // transient one, and a row here would retire a clip permanently for
-        // being examined a few seconds too early.
+        // ⚠ Not ledgered: this is the one transient barren cause, and a row
+        // would retire the clip for being examined too early.
         let Ok((audio_id, end_raw)) = meaning.query_row(
             "SELECT id, end_utc FROM audio_segments
              WHERE source_id = ?1 AND start_utc = ?2",
@@ -888,16 +749,14 @@ pub fn write_pass(
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
         ) else {
             pass.barren += 1;
-            // ⚠ Unless the session was DELETED: then the audio is never coming,
-            // and "wait" would be this pass re-examining the clip for ever
-            // (#1653). The tombstone journal is what tells the two apart.
+            // Unless the block was deleted: then the audio is never coming.
             if tombstoned_block(meaning, &source, block_start)? {
                 ledger(ingest, stream.kind, &filename, "deleted", now)?;
             }
             continue;
         };
-        // Already written. Derived rather than ledgered, so a reversal that
-        // deletes the room turns makes this block eligible again by itself.
+        // Already written. Derived rather than ledgered, so deleting the turns
+        // makes the clip eligible again.
         let written_already: i64 = meaning.query_row(
             "SELECT count(*) FROM transcript_segments WHERE audio_segment_id = ?1",
             [audio_id],
@@ -907,18 +766,13 @@ pub fn write_pass(
             continue;
         }
         let Ok(turns) = interpret(block_start, &result) else {
-            // Permanent: the stored result is what the shim sent and will not
-            // change shape on a later pass.
+            // Permanent: the stored result will not change.
             pass.barren += 1;
             ledger(ingest, stream.kind, &filename, "unreadable", now)?;
             continue;
         };
-        // ⚠ **The clip's end comes from its own row, not from the room grid.**
-        // A room block is exactly `BLOCK_S` because the builder cuts a UTC-aligned
-        // grid; a microphone clip is whatever ffmpeg's segment muxer closed, and
-        // capture stopping mid-segment makes short ones routinely. Asserting a
-        // minute there would size the human-correction window wrong, and the
-        // direction it errs is the one that matters: a window that ends early
+        // ⚠ The end comes from the clip's own row, not the room grid: a
+        // microphone clip can be short, and a correction window that ends early
         // cannot see a correction it is about to overwrite.
         let Ok(block_end) = DateTime::parse_from_rfc3339(&end_raw) else {
             pass.barren += 1;
@@ -926,9 +780,7 @@ pub fn write_pass(
             continue;
         };
         let block_end = block_end.with_timezone(&Utc);
-        // Read only for the stream that can hide: this is a scan per clip, and
-        // a per-mic pass that collected it would be paying for a list it is
-        // structurally forbidden to act on.
+        // Read only for a stream that can hide: it is a scan per clip.
         let standing = if stream.hides_covered {
             standing_between(meaning, block_start, block_end)?
         } else {
@@ -950,17 +802,15 @@ pub fn write_pass(
         pass.turns += written;
         pass.blocks += 1;
         if written == 0 {
-            // Decided, and left no trace in the meaning plane to derive that
-            // from. Without this row the clip is indistinguishable from one
-            // nobody has looked at, and every later pass reaches it first.
+            // Decided but left no trace in the meaning plane; without this row
+            // every later pass would reach it first.
             ledger(ingest, stream.kind, &filename, "nothing-to-write", now)?;
         }
     }
     Ok(pass)
 }
 
-/// The per-mic machine turns standing on a span. Room turns are excluded: this
-/// asks what the MICROPHONES said, and a previous room turn is not that.
+/// The visible per-mic turns overlapping a span. Room turns are excluded.
 fn standing_between(
     conn: &rusqlite::Connection,
     start: DateTime<Utc>,
@@ -990,8 +840,8 @@ fn standing_between(
     rows.collect()
 }
 
-/// The spans a person has corrected. Read WIDE and filtered in `plan` rather than
-/// trusted to SQL: this is the set whose loss is permanent.
+/// The corrected spans overlapping a span. `plan` checks the overlap again
+/// rather than trusting the SQL: this is the set whose loss is permanent.
 fn corrected_between(
     conn: &rusqlite::Connection,
     start: DateTime<Utc>,
@@ -1016,16 +866,14 @@ fn corrected_between(
     rows.collect()
 }
 
-/// An unparseable stamp becomes the far past, which makes it overlap nothing it
-/// should not — a correction that cannot be read must not silently widen into a
-/// veto over the whole archive, nor vanish into one that protects nothing.
+/// An unparseable stamp becomes `DateTime::MIN_UTC`. A span with both ends
+/// unreadable then overlaps nothing; one with only its start unreadable reaches
+/// back to the start of time.
 fn parse_stamp(raw: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(raw).map_or(DateTime::<Utc>::MIN_UTC, |t| t.with_timezone(&Utc))
 }
 
 /// What a room turn records as its model.
 ///
-/// The `asr` shim's default, named here rather than threaded from the job: the
-/// queue does not yet carry a model field, and a turn claiming a model it was not
-/// produced by is worse than one naming the only model that runs.
+/// The `asr` shim's default, named here because the queue carries no model field.
 pub const ROOM_MODEL: &str = "mlx-whisper/large-v3-turbo (room)";

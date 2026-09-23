@@ -1,20 +1,13 @@
-//! doctor — is recall working?
+//! doctor: is recall working? Agents loaded, archive mirrored and, above all,
+//! is the recording actually recording.
 //!
-//! Agents loaded, archive mirrored — and, above all, is the recording actually
-//! recording. That last one was missing, and its absence cost real memory:
-//! capture crash-looped on 22 June, recorded nothing for ninety minutes, and was
-//! found three weeks later by diffing the filesystem by hand.
-//!
-//! The whole crate is shaped by one boundary. **The reporting process must never
-//! read the archive volume.** Everything that does lives in [`archive`], behind a
-//! child process the parent abandons if it hangs ([`bounded`]). On 2026-08-10 the
-//! doctor sat in uninterruptible disk wait for over an hour — with
-//! `KeepAlive = false` and a 300s `StartInterval`, launchd starts no further run
-//! while one is stuck, so a single wedged doctor silenced every doctor after it.
-//! What runs in the parent reads launchd and `~/.config`, both on the boot
-//! disk, plus bounded network reads for what is on the fleet rather than this
-//! volume: the live tier's output ([`live`]) and every microphone's speech
-//! ([`deaf`]).
+//! **The reporting process never reads the archive volume.** Everything that
+//! does lives in [`archive`], behind a child process the parent abandons if it
+//! hangs ([`bounded`]). With `KeepAlive = false` and a 300s `StartInterval`,
+//! launchd starts no new run while one is stuck, so one doctor wedged in disk
+//! wait would silence every doctor after it. The parent reads launchd and
+//! `~/.config` (boot disk) plus bounded network reads of the fleet: the live
+//! tier's output ([`live`]) and every microphone's speech ([`deaf`]).
 
 pub mod agents;
 pub mod archive;

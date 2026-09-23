@@ -1,9 +1,8 @@
 //! Tier-1 cross-source alignment: normalised cross-correlation of energy
-//! envelopes. Immune to what breaks coherent methods — AGC changes gain
-//! slowly and normalised correlation is scale-invariant, noise suppression
-//! mangles phase but preserves when speech happens, and Opus at 32 kbps
-//! destroys phase but not the envelope. The clock (segment names, capture
-//! epoch) only bootstraps the search window; the audio decides.
+//! envelopes. Immune to what breaks coherent methods: normalised correlation is
+//! scale-invariant (AGC), and noise suppression and Opus at 32 kbps destroy
+//! phase but not the envelope. The clock (segment names) only bootstraps the
+//! search window; the audio decides.
 
 /// One measured alignment: how far a source's clock sits from the reference,
 /// and how confidently the audio says so.
@@ -42,8 +41,8 @@ fn pearson(a: &[f32], b: &[f32]) -> f64 {
 /// return the best-correlating lag as an [`Anchor`], with `bucket_s` giving
 /// the time each bucket spans. Both slices share one bucket clock (position i
 /// = the same nominal wall-time in each). `None` when the overlap at every
-/// lag is shorter than `min_overlap` buckets — a verdict from too little
-/// shared audio would be noise wearing a number.
+/// lag is shorter than `min_overlap` buckets: too little shared audio gives
+/// noise, not an offset.
 pub fn best_lag(
     reference: &[f32],
     source: &[f32],

@@ -1,11 +1,8 @@
-//! The device-ingest wire protocol — the few facts both ends must agree on.
+//! The device-ingest wire protocol: the few facts both ends must agree on.
 //!
-//! Port of `src/recall/wire.py` plus the handshake half of
-//! `src/recall/stream_server.py`. The phone clients (`android/.../Handshake.kt`,
-//! `ios/Sources/Handshake.swift`) and the Linux mic (`src/recall/mic.py`) all
-//! emit the same one-line JSON; the fixtures in the tests below are copies of
-//! what those clients actually send, so a parser change that would strand a
-//! mic fails here first.
+//! The phone clients (`android/.../Handshake.kt`, `ios/Sources/Handshake.swift`)
+//! emit the same one-line JSON; `tests/handshakes.json` holds copies of what
+//! they send, so a parser change that would strand a mic fails there first.
 
 use std::io::Read;
 
@@ -21,12 +18,10 @@ const MAX_HANDSHAKE_BYTES: usize = 8192;
 
 /// A device's opening announcement: who it is + its PCM format.
 ///
-/// `epoch` (optional) is the phone's wall-clock, in unix seconds, of the FIRST
-/// PCM byte it streams — what lets the server shift arrival-stamped segment
-/// names back to true capture time (#1332). `None` when the device doesn't
-/// send one (an older app) or sends garbage: a bad epoch degrades to
-/// arrival-stamping, never to a dropped stream — completeness outranks
-/// precision.
+/// `epoch` (optional) is the phone's wall clock, in unix seconds, at the first
+/// PCM byte it streams, which lets the server shift arrival-stamped segment
+/// names back to capture time. `None` when absent or unreadable: a bad epoch
+/// degrades to arrival-stamping, never to a dropped stream.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handshake {
     pub source_id: String,
@@ -35,8 +30,8 @@ pub struct Handshake {
     pub epoch: Option<f64>,
 }
 
-/// A JSON value read the way Python's `int()` reads it: integer numbers pass,
-/// floats truncate toward zero, digit strings parse. Anything else is malformed.
+/// A JSON value read as an integer: integers pass, floats truncate toward zero,
+/// digit strings parse. Anything else is malformed.
 fn as_int(value: &serde_json::Value) -> Option<i64> {
     match value {
         serde_json::Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f.trunc() as i64)),
@@ -79,9 +74,8 @@ pub fn parse_handshake(line: &str) -> Option<Handshake> {
     })
 }
 
-/// Every way of not getting a handshake, so the server can log which way it
-/// was — a port scanner that says nothing and a phone that died between
-/// connect and handshake leave different traces.
+/// Every way of not getting a handshake, so the server can log which: a silent
+/// port scanner and a phone that died mid-connect leave different traces.
 #[derive(Debug)]
 pub enum HandshakeError {
     /// The peer closed before the newline.

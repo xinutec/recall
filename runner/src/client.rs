@@ -11,8 +11,7 @@ pub struct Job {
     pub kind: String,
     /// The blob to work on, under `source`.
     pub filename: String,
-    /// Which recorder it came from. Served by recalld from the ingest plane —
-    /// NEVER guessed here, and never `room` by default.
+    /// Which recorder it came from, as recalld serves it. Never guessed here.
     pub source: String,
     /// For `enroll-speaker`: which stretches of the clip to embed, in seconds
     /// from its start. Absent for every other kind.
@@ -20,11 +19,9 @@ pub struct Job {
     pub spans: Vec<Span>,
 }
 
-/// One stretch of a clip to embed, as recalld serves it.
-///
-/// ⚠ **No name.** The runner does not learn whose voice it is, and does not need
-/// to: the fleet reads the label when it writes the print, so a turn re-assigned
-/// while the model was running is filed under the name it has now.
+/// One stretch of a clip to embed, as recalld serves it. It carries no name:
+/// the fleet reads the label when it writes the print, so a turn re-assigned
+/// while the model runs is filed under its current name.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct Span {
     pub segment_id: i64,
@@ -59,9 +56,9 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// A recalld the runner can reach. The sync token is the READ plane's
-/// credential — the same one the Mac already uses — never a device token: the
-/// runner reads blobs and the queue, which no recorder may do.
+/// A recalld the runner can reach. The token is the read plane's sync token,
+/// not a device token: the runner reads blobs and the queue, which no recorder
+/// may do.
 pub struct Client {
     base: String,
     token: String,
@@ -85,10 +82,9 @@ impl Client {
     /// Take the next job of a kind this runner can do, or `None` when there is
     /// none.
     ///
-    /// ⚠ `kinds` is sent EXPLICITLY even though recalld defaults to
-    /// `transcribe-room` when it is absent. That default exists so a runner
-    /// deployed before the parameter keeps working; relying on it here would
-    /// make a `voices` runner's correctness depend on which side deployed first.
+    /// `kinds` is always sent, although recalld treats an absent list as
+    /// `transcribe-room` alone; relying on that default would tie any other
+    /// runner's correctness to recalld's.
     ///
     /// # Errors
     /// If recalld is unreachable or answers something unreadable.
@@ -138,8 +134,8 @@ impl Client {
 
     /// Push provisional live turns to the instant feed.
     ///
-    /// ⚠ Lossy on purpose — see `live`'s module note. The caller logs a failure
-    /// and carries on, because the archive push carries these turns again.
+    /// Lossy on purpose (see [`crate::live`]): the caller logs a failure and
+    /// carries on, because the archive pass supersedes these turns.
     ///
     /// # Errors
     /// If recalld refuses or is unreachable.
@@ -153,17 +149,15 @@ impl Client {
         Ok(body.stored)
     }
 
-    /// The household glossary, as Whisper's `initial_prompt`.
+    /// The vocabulary, as Whisper's `initial_prompt`.
     ///
-    /// Read by the caller and carried on every job: the shim must not fetch it
-    /// (a model process holds no database), and writing it onto a job at
-    /// derivation time would pin it, so a name learned today would never reach
-    /// a job queued yesterday.
+    /// Fetched by the caller and sent with each job: a shim holds no database,
+    /// and storing it on the job at queue time would keep newly learned names
+    /// from reaching jobs already queued.
     ///
-    /// `Ok(None)` means the vocabulary is empty: no biasing. Failing to reach
-    /// it is an error; the runner treats that as fatal, because a corpus
-    /// transcribed unbiased has to be redone, and the live tier does not,
-    /// because a live turn is superseded within the hour.
+    /// `Ok(None)` means the vocabulary is empty: no biasing. The runner treats
+    /// an error as fatal, because an unbiased transcript has to be redone; the
+    /// live tier does not, because a live turn is superseded within the hour.
     ///
     /// # Errors
     /// If recalld is unreachable or answers something unreadable.
@@ -182,11 +176,9 @@ impl Client {
 /// One provisional turn, exactly as `POST /sync/live` takes it
 /// (`recalld::work::LiveTurn`).
 ///
-/// ⚠ **`snake_case` on the wire, and NOT by omission.** The route was written for
-/// pydantic, which serialises field names as declared, so `asr_model` is the
-/// name the server matches. A `rename_all = "camelCase"` here — the reflex,
-/// since the browsing plane's types all carry one — makes every push a 422 the
-/// agent logs and shrugs at, which is the instant feed off with nothing broken.
+/// ⚠ `snake_case` on the wire, deliberately: the server matches `asr_model`.
+/// A `rename_all = "camelCase"`, as the browsing plane's types carry, would
+/// make every push a 422 that the agent only logs.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct LiveTurn {
     pub start: String,

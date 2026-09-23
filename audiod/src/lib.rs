@@ -1,6 +1,6 @@
-//! audiod — the recall audio plane on a recording machine.
+//! audiod: the recall audio plane on a recording machine.
 //!
-//! What it leaves on disk is the whole contract with the rest of the system:
+//! What it leaves on disk is its whole contract with the rest of the system:
 //! segment files under `<root>/<source>/`, the `.alive` marker, the
 //! `capture_paused_until` pause file, the capture log
 //! ([`audiocore::capture_log`]) and the uploader's receipts. The doctor reads

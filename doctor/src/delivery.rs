@@ -1,13 +1,11 @@
-//! Store-and-forward delivery — is the fleet's copy keeping up, and did
-//! anything collide? (docs/architecture.md)
+//! Store-and-forward delivery: is the fleet's copy keeping up, and did anything
+//! collide? (docs/architecture.md)
 //!
-//! Reads `upload-state.sqlite` — audiod's uploader state, the audio-plane side
-//! of the filesystem contract — and compares BOTH sides: every grammar-matching
-//! file on disk against every verified/conflicted row. A backlog is graded by
-//! the age of its OLDEST member (deliveries run oldest-first, so that is how far
-//! behind the mirror is); a 409 conflict warns without failing, because nothing
-//! was lost — Isis holds different bytes under a name we also hold, and a person
-//! has to look.
+//! Compares every segment file on disk against audiod's uploader state
+//! (`upload-state.sqlite`). A backlog is graded by the age of its oldest member,
+//! since deliveries run oldest-first. A 409 conflict warns without failing:
+//! nothing was lost, but Isis holds different bytes under the same name and a
+//! person has to look.
 
 use crate::capture::minutes;
 use crate::check::{Check, Verdict, check};

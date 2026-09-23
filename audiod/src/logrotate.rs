@@ -6,18 +6,15 @@
 //! log in a `.1` sibling, then truncate the original to zero. The writer carries
 //! on appending from offset 0 with no reopen.
 //!
-//! The trade-off is copytruncate's only one: lines written during the copy are
-//! lost. For append-only agent logs that is the right price (#1656).
+//! The trade-off is copytruncate's usual one: lines written during the copy are
+//! lost, an acceptable price for append-only agent logs.
 
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-/// Rotate above this, and keep this much — so one log costs at most twice this.
-///
-/// 2 MB is roughly 20,000 lines, which is days of an agent's output. The
-/// directory held 112 MB across ~25 files before anything bounded it, and a
-/// generous cap would have raised that ceiling rather than lowered it.
+/// Rotate above this, and keep this much, so one log costs at most twice this.
+/// 2 MB is roughly 20,000 lines: days of an agent's output.
 pub const CAP_BYTES: u64 = 2 * 1024 * 1024;
 
 /// What one pass did.

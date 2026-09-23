@@ -1,16 +1,13 @@
-//! The uploaded-sessions surface, ported from `recall.api_sessions`.
+//! The uploaded-sessions surface.
 //!
-//! A *session* is one discrete recording — a hospital appointment, a meeting —
-//! as opposed to the household's continuous capture. It is use case 2 of the
-//! two this product serves, so these routes are how a meeting is found, named
-//! and read back.
+//! A *session* is one discrete recording, such as a meeting, as opposed to the
+//! continuous capture. These routes find, name and read one back; the upload
+//! itself is `crate::upload`.
 //!
-//! Every mutating route is guarded to UPLOAD sources. The continuous capture
-//! archive must never be reachable through a path meant for meetings: renaming
-//! or re-diarizing it would be wrong, deleting it unrecoverable. The guard
+//! Every mutating route is guarded to upload sources: renaming or re-diarizing
+//! the continuous archive would be wrong, deleting it unrecoverable. The guard
 //! answers 404 for a source that does not exist and 400 for one that is not an
-//! upload, so a caller can tell "no such meeting" from "that is the archive".
-//! The upload itself is `crate::upload`.
+//! upload.
 
 use crate::{reads, route, work};
 use axum::extract::{Path, State};
@@ -47,11 +44,9 @@ pub struct SessionsOut {
 
 /// Every uploaded session, newest first.
 ///
-/// ⚠ **Only human-confirmed names are listed as speakers.** Voiceprint guesses
-/// are deliberately excluded: on out-of-domain audio a visitor can score 0.95
-/// against an enrolled household member, so no threshold separates true from
-/// false and a name chip here would assert an attribution nobody made. A turn
-/// with no confirmed name counts as "unknown" instead.
+/// Only human-confirmed names are listed as speakers; a turn without one counts
+/// as "unknown". Voiceprint guesses have no trustworthy threshold (see
+/// [`crate::identify::match_one`]).
 pub fn sessions(conn: &Connection) -> rusqlite::Result<SessionsOut> {
     let mut stmt = conn.prepare(
         "SELECT s.id, s.name, MIN(a.start_utc), MAX(a.end_utc), COUNT(t.id), \
@@ -99,7 +94,7 @@ pub fn sessions(conn: &Connection) -> rusqlite::Result<SessionsOut> {
 pub enum SessionError {
     /// No source with that id.
     Missing,
-    /// It exists, but it is the household archive rather than a meeting.
+    /// It exists, but it is the continuous archive rather than an upload.
     NotAnUpload,
     /// It has no audio, so there is no span to work over.
     NoAudio,
@@ -187,13 +182,11 @@ pub fn rediarize(
 
 /// Name a diarization voice across a whole session, or clear it with `None`.
 ///
-/// ⚠ **No `hidden_reason` filter, unlike every read query.** Hiding is a display
-/// state; who spoke is a fact about the turn. A hidden turn that is later
-/// unhidden must come back correctly named, so the write covers it too.
+/// No `hidden_reason` filter, unlike the read queries: hiding is a display
+/// state, and a turn unhidden later must come back correctly named.
 ///
-/// This is not display-only: `speaker_label` is the work-list the voiceprint
-/// backfill selects on, so naming a meeting's clinician enrols them in the
-/// matching pool like any household voice.
+/// Not display-only: the voiceprint backfill selects on `speaker_label`, so
+/// naming a voice here enrols it.
 pub fn name_voice(
     conn: &Connection,
     source: &str,
@@ -269,10 +262,8 @@ fn session_turns(conn: &Connection, source: &str) -> rusqlite::Result<Vec<Export
 /// bubble, current state only, deterministic so an unchanged re-export is
 /// byte-identical.
 ///
-/// ⚠ Bubble times are LOCAL, not UTC — this is written for a person to read in
-/// a document, and `astimezone()` with no argument is what the Python does. Both
-/// containers run UTC, so the pod's output is unchanged by the port; a run on a
-/// machine in another zone differs in both implementations alike.
+/// Bubble times are in the machine's local zone, for a person reading a
+/// document. The pod runs in UTC.
 pub fn clean_transcript(source: &str, turns: &[ExportTurn]) -> TranscriptExportOut {
     let mut bubbles: Vec<BubbleOut> = Vec::new();
     let mut speakers: Vec<String> = Vec::new();
@@ -421,20 +412,16 @@ pub async fn transcript_route(
 /// Delete an uploaded session and everything derived from it, returning the audio
 /// file paths for the caller to unlink.
 ///
-/// ⚠ **The one irreversible operation in this product.** Everything else hides,
-/// supersedes or re-derives; this removes rows and the caller then removes files.
-/// It is guarded to UPLOAD sources by [`require_upload`] and must stay that way:
-/// the continuous household capture is append-only and must never be reachable
-/// through a path meant for meetings.
+/// ⚠ The one irreversible operation in this product: everything else hides,
+/// supersedes or re-derives. It must stay guarded to upload sources by
+/// `require_upload`; the continuous capture is append-only.
 ///
-/// ⚠ **Every deletion is TOMBSTONED**, inside the same transaction. Without that
-/// the Mac's next refine push would resurrect the session here — the journal is
-/// the veto that makes a deletion cross the machine split. It is a record, never
-/// an order: nothing serves it to a recorder.
+/// ⚠ Every deleted segment is tombstoned in the same transaction, so the turns
+/// pass (`turns::tombstoned_block`) does not rebuild it. A record, never an
+/// order: nothing serves it to a recorder.
 ///
-/// ⚠ `transcript_fts` is deliberately NOT cleaned. It is a contentless FTS5 table
-/// with no per-row delete, and a search rowid whose segment row is gone simply
-/// resolves to nothing.
+/// `transcript_fts` is deliberately not cleaned: it is contentless FTS5 with no
+/// per-row delete, and a rowid whose segment is gone resolves to nothing.
 pub fn delete_session(
     conn: &mut Connection,
     source: &str,
@@ -499,8 +486,8 @@ pub async fn delete_route(
             let mut conn = work::open_write(&root)?;
             delete_session(&mut conn, &source, &now)?
         };
-        // ⚠ Files AFTER the transaction commits. Unlinking first would destroy
-        // audio that a rolled-back delete still points at.
+        // Files only after the commit: unlinking first would destroy audio a
+        // rolled-back delete still points at.
         for path in paths {
             let _ = std::fs::remove_file(&path);
         }

@@ -1,12 +1,10 @@
-//! `doctor` — the Mac's health agent (launchd, every 300s).
+//! `doctor`: the Mac's health agent (launchd, every 300s).
 //!
-//! Two modes, and the split between them is the point (see the crate docs):
-//!
-//! * `--collect` is the CHILD. It reads the archive volume and prints one JSON
+//! * `--collect` is the child: it reads the archive volume and prints one JSON
 //!   object. Everything that can block indefinitely is here.
-//! * the default is the PARENT. It asks a child for the archive's verdicts,
-//!   gives up on it after a bound, adds what it can read from the boot disk
-//!   (launchd), prints the lot, and with `--post` sends it to fleetwatch.
+//! * the default is the parent: it asks a child for the archive's verdicts,
+//!   gives up on it after a bound, adds launchd and the fleet's checks, prints
+//!   the lot, and with `--post` sends it to fleetwatch.
 
 use chrono::Utc;
 use doctor::check::{Check, Verdict};
@@ -19,8 +17,8 @@ struct Config {
     collect: bool,
     post: bool,
     url: String,
-    /// Where the fleet is. Absent means this Mac is not half of the Isis pair,
-    /// and the live checks say so rather than guessing an address.
+    /// Where the fleet is. Absent, the fleet checks skip rather than guess an
+    /// address.
     fleet: Option<String>,
 }
 
@@ -73,9 +71,8 @@ struct Collected {
 
 /// Ask a child process for the archive's checks, and give up on it if it hangs.
 ///
-/// Returns what it managed to say plus the verdict on the asking itself, which
-/// is reported whether or not the archive answered — that check IS the finding
-/// when it did not.
+/// Returns its checks plus the verdict on the asking itself, which is reported
+/// whether or not the archive answered.
 fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
     let Ok(program) = std::env::current_exe() else {
         return (
@@ -100,11 +97,8 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
     };
 
     let Some(stdout) = answer.stdout else {
-        // ⚠ **TIMESTAMPED, and that is the point of the line.** These are the
-        // only record that a stall HAPPENED, and without a clock they cannot
-        // answer the first question anybody asks of them — do the stalls
-        // cluster in time (#1412). Sixty-nine of them accumulated saying
-        // nothing.
+        // Timestamped: these lines are the only record that a stall happened,
+        // and the first question about them is whether they cluster in time.
         let state = bounded::process_state(answer.pid);
         eprintln!(
             "{} doctor: the archive did not answer in {:.0}s — abandoned pid {} in state {} ({})",
@@ -114,8 +108,8 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
             state.label(),
             state.explain()
         );
-        // What the child managed to say before it hung — the volume probe is
-        // the first thing it prints, so this names which half was slow.
+        // What the child said before it hung: the volume probe prints first, so
+        // this names which half was slow.
         for line in answer.stderr.lines().filter(|l| !l.trim().is_empty()) {
             eprintln!("  it had said: {line}");
         }
@@ -141,13 +135,11 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
     }
 }
 
-/// The checks whose evidence is on the fleet — the live tier's two and the deaf
-/// microphone — asked of it, graded here.
+/// The checks whose evidence is on the fleet (the live tier's two and the deaf
+/// microphone), asked of it and graded here.
 ///
-/// ⚠ **In the PARENT, not the bounded child.** The child exists to survive an
-/// unresponsive archive VOLUME; a network read has nothing to do with that
-/// disk, and putting it behind the same bound would make a slow fleet look like
-/// a stalled one.
+/// In the parent, not the bounded child: the child survives an unresponsive
+/// volume, and behind the same bound a slow fleet would read as a stalled disk.
 fn live_checks(config: &Config, now: chrono::DateTime<Utc>, out: &Path) -> Vec<Check> {
     let token = std::env::var("RECALL_SYNC_TOKEN").ok();
     let Some(fleet) = live::Fleet::new(config.fleet.as_deref(), token.as_deref()) else {
@@ -166,9 +158,8 @@ fn live_checks(config: &Config, now: chrono::DateTime<Utc>, out: &Path) -> Vec<C
 }
 
 /// Send the verdicts on. An unreachable monitor is not a broken recording: say
-/// so and carry on, because the missing report is already visible at the other
-/// end as staleness. Failing the health check because the *health reporting*
-/// failed would be the tail wagging the dog.
+/// so and carry on, since the missing report shows as staleness at the other
+/// end.
 fn report_to_fleetwatch(checks: &[Check], url: &str, home: &Path) {
     let from_env = std::env::var("RECALL_FLEETWATCH_TOKEN").ok();
     let Some(token) = fleetwatch::read_token(home, from_env.as_deref()) else {
@@ -194,21 +185,17 @@ fn main() {
     let now = Utc::now();
 
     if config.collect {
-        // The child times ITSELF, so the figure that reaches fleetwatch is the
-        // archive read rather than a second process's startup.
+        // The child times itself, so the figure excludes process startup.
         let started = Instant::now();
-        // ⚠ Probe the disk and SAY SO before anything slow. If the queries
-        // below hang, the parent abandons this process and never sees its
-        // checks — but it does see what reached stderr, and "the disk answered
-        // a fixed read in 0.00s while the archive read never returned" is the
-        // single most useful sentence a stalled run can leave behind (#1412).
+        // ⚠ Probe the disk and print it before anything slow: if the reads
+        // below hang, the parent never sees the checks but does see stderr.
         let volume = archive::volume_check(&config.out);
         eprintln!("doctor: {} — {}", volume.label, volume.observed);
         let checks = match archive::archive_checks(&config.out, now, volume) {
             Ok(checks) => checks,
             Err(err) => {
-                // stderr, and a non-zero exit: the parent turns this into the
-                // archive check's `detail`, which is where a reader will look.
+                // The parent turns stderr plus a non-zero exit into the archive
+                // check's `detail`.
                 eprintln!("{err}");
                 std::process::exit(1);
             }

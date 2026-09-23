@@ -1,8 +1,8 @@
 //! The meaning plane's writers that are not a pass: vocabulary, and the
 //! instant feed's turns.
 //!
-//! Vocabulary is the household's proper nouns, fed to Whisper as
-//! `initial_prompt` on every pass; the runner refuses to transcribe without it.
+//! Vocabulary is the proper nouns fed to Whisper as `initial_prompt` on every
+//! pass; the runner refuses to transcribe without it.
 
 use crate::{reads, route};
 use audiocore::instant;
@@ -19,11 +19,10 @@ use std::time::Duration;
 
 /// Open `recall.sqlite` for writing.
 ///
-/// Separate from [`reads::open`]: a read route keeps the read-only handle so a
-/// bug in a read path cannot write. The busy timeout is what makes several
-/// writers civil; at 5 s a mirror handshake under contention answered 500
-/// `database is locked`, at 30 s it waits. `GET /api/capture` takes this handle
-/// too, and a late correct answer beats a prompt failure there.
+/// Separate from [`reads::open`], so a bug in a read path cannot write. The
+/// 30 s busy timeout lets several writers share the file: at 5 s, contended
+/// requests answered 500 `database is locked`, and a late correct answer beats
+/// a prompt failure.
 pub fn open_write(root: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(root.join("recall.sqlite"))?;
     conn.busy_timeout(Duration::from_secs(30))?;
@@ -59,11 +58,8 @@ pub fn vocabulary(conn: &Connection) -> rusqlite::Result<VocabularyOut> {
 
 /// Why a term was not added.
 ///
-/// ⚠ **A blank term and a broken database are not the same answer.** Collapsing
-/// them — which this did — told the user "vocabulary term must not be blank",
-/// with a 400, when the truth was a locked or unwritable `recall.sqlite`. The
-/// caller then retypes a term that was never the problem, and the real fault is
-/// invisible because a 400 is not a fault anyone investigates.
+/// A blank term (400, the caller's to fix) and a database failure (500) are
+/// kept apart, so a locked database is not reported as bad input.
 #[derive(Debug)]
 pub enum TermError {
     /// Nothing but whitespace was sent.
@@ -80,9 +76,8 @@ impl From<rusqlite::Error> for TermError {
 
 /// Add a term, returning the id — the existing one if it is already there.
 ///
-/// ⚠ Idempotent by design: `ON CONFLICT DO NOTHING` then read the id back, so
-/// adding a term twice is not an error and does not create a duplicate. The
-/// Labels page has no way to know what is already in the list before it posts.
+/// Idempotent: `ON CONFLICT DO NOTHING`, then read the id back, because the
+/// Labels page cannot know what is already in the list before it posts.
 pub fn add_term(conn: &Connection, term: &str, now: &str) -> Result<i64, TermError> {
     let cleaned = term.trim();
     if cleaned.is_empty() {
@@ -170,36 +165,28 @@ pub struct LiveTurn {
 /// while the archive pass catches up, then reconciled when the segment spanning
 /// them arrives.
 ///
-/// ⚠ **`start_utc` is where in the AUDIO the words were said; `created_utc` is
-/// when this tier delivered them.** Only the second can show a stall after the
-/// fact, and live turns carried no delivery instant at all until #1383 — so the
-/// tier whose entire value is immediacy left no evidence of its own latency.
+/// `start_utc` is where in the audio the words were said; `created_utc` is when
+/// this tier delivered them, the only record of its latency.
 ///
-/// Idempotent by (model, start, text): a retried push, or one the archive has
-/// already reconciled to hidden, is skipped, so a re-push never duplicates a
-/// turn and never resurrects a hidden one.
+/// Idempotent by (start, text) among `live` turns: a retried push, or one the
+/// archive has already reconciled to hidden, is skipped, so a re-push never
+/// duplicates a turn or resurrects a hidden one.
 ///
-/// ⚠ **Degenerate text is dropped HERE, not by the pusher.** Whisper loops on
-/// the short, hard clips this tier is made of ("goog goog goog…"), and whether
-/// a string is a model artefact is a property of the string — so it belongs
-/// where the row is written, once, rather than in each agent that might push
-/// one. Dropped turns are not counted as stored.
+/// Degenerate text is dropped here rather than by each pusher: Whisper loops on
+/// the short, hard clips this tier is made of ("goog goog goog…"), and that is a
+/// property of the string. Dropped turns are not counted as stored.
 ///
-/// ⚠ **The search index is maintained in CODE.** `transcript_fts` is a
-/// contentless FTS5 table with no trigger behind it; forgetting the second insert
-/// fails nothing and quietly makes every live turn unfindable by search.
-///
-/// One transaction per turn, so a turn and its index row land together or not at
-/// all — a half-written pair would be a turn that exists and cannot be found.
+/// ⚠ `transcript_fts` is contentless FTS5 with no trigger: skipping its insert
+/// fails nothing and makes the turn unsearchable. One transaction per turn, so
+/// a turn and its index row land together.
 pub fn ingest_live(
     conn: &mut Connection,
     turns: &[LiveTurn],
     now: DateTime<Utc>,
 ) -> rusqlite::Result<usize> {
     let delivered = instant::python_isoformat_utc(now);
-    // ⚠ Read ONCE, not per turn, and read here rather than passed in: the names
-    // are the same list the ASR prompt biased the model with, so the refusal and
-    // the cause cannot drift apart.
+    // Read once, here rather than passed in: the same names biased the ASR
+    // prompt, so the refusal and its cause cannot drift apart.
     let names = crate::labels::known_speaker_names(conn)?.names;
     let mut stored = 0;
     for turn in turns {

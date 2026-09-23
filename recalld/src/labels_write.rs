@@ -1,18 +1,12 @@
-//! The labelling WRITES, ported from `recall.api_labels`.
+//! The labelling writes.
 //!
-//! ⚠ **These touch the one thing in the product that cannot be re-derived.**
-//! Turns, tiers and attribution are all recomputable from audio; a name a person
-//! typed is not. Everything here changes `speaker_label` on a live turn or the
-//! corrections corpus, so each multi-statement write is wrapped in an EXPLICIT
-//! transaction. The Python was already atomic — `sqlite3` opens an implicit
-//! transaction before DML and its `_commit` ends it — but it read as three loose
-//! statements, and the property a reader has to check is that a correction's
-//! speaker and the live turn it produced can never disagree.
+//! ⚠ A name a person typed is the one thing here that cannot be re-derived
+//! from audio. Each multi-statement write is one explicit transaction, so a
+//! correction's speaker and the live turn it produced can never disagree.
 //!
-//! ⚠ **A label is not display-only.** `speaker_label` is the work-list the
-//! voiceprint backfill selects on, so naming a voice enrols it. That is why
-//! re-assigning a correction also DROPS its embedding: the clip has to be
-//! re-enrolled under the new name rather than keep matching the old one.
+//! ⚠ A label is not display-only: the voiceprint backfill selects on
+//! `speaker_label`, so naming a voice enrols it. Re-assigning a correction
+//! therefore drops its embedding, to be re-enrolled under the new name.
 
 use crate::route;
 use rusqlite::{Connection, Transaction};
@@ -24,10 +18,8 @@ const HIDE_REASON: &str = "review";
 
 /// Provenance stamped on the human turn that replaced `original_id`.
 ///
-/// ⚠ Written by the correction path and MATCHED here to find that live turn
-/// again. The two spellings must agree exactly or a re-assignment updates the
-/// corpus row and silently leaves the turn the timeline shows under its old
-/// name.
+/// Written by [`apply_correction`] and matched by [`set_correction_speaker`]
+/// to find that live turn again.
 fn human_correction_provenance(original_id: i64) -> String {
     format!("human correction of #{original_id}")
 }
@@ -92,9 +84,8 @@ pub fn set_correction_speaker(
 
 /// Soft-remove a bad label from the corpus, the counts, and the matching pool.
 ///
-/// ⚠ Hidden, not deleted: the pair is evidence that a person read this clip and
-/// judged it, which is worth keeping even when the judgement was that the clip
-/// is unusable.
+/// Hidden, not deleted: the pair records that a person judged this clip, even
+/// when the judgement was that it is unusable.
 pub fn hide_correction(conn: &mut Connection, correction_id: i64) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
     tx.execute(
@@ -274,17 +265,12 @@ fn load_original(tx: &Transaction, segment_id: i64) -> Result<Original, CorrectE
 
 /// Replace a turn with a human-authored one and record the corpus pair.
 ///
-/// ⚠ **One transaction, unlike the Python.** `apply_correction` called three
-/// store methods that each committed, so a failure between them could leave a
-/// human turn superseding nothing, or an original superseded with no pair to
-/// show what it became. Here the new turn, its search-index row, the supersede
-/// and the pair land together or not at all.
+/// One transaction: the new turn, its search-index row, the supersede and the
+/// pair land together or not at all.
 ///
-/// ⚠ **The search index is maintained in CODE, not by a trigger.** `transcript_fts`
-/// is a contentless FTS5 table that the writer inserts into by hand. Forgetting
-/// it here would not fail anything — it would just make every human correction
-/// unfindable by search, which is the one thing a corrected turn is most likely
-/// to be looked up by.
+/// ⚠ `transcript_fts` is contentless FTS5 maintained by the writer, not a
+/// trigger. Skipping the insert fails nothing; it just makes the correction
+/// unsearchable.
 pub fn apply_correction(
     conn: &mut Connection,
     segment_id: i64,
@@ -304,10 +290,9 @@ pub fn apply_correction(
         return Err(CorrectError::AlreadySuperseded(segment_id));
     }
     let language = edit.language.map(str::to_owned).or(old.language);
-    // ⚠ An overridden span is RE-SPELLED, not stored as sent. These columns are
-    // compared as text, so a client sending `...01Z` where the table holds
-    // `...01+00:00` would write a turn that sorts into the wrong page. See
-    // `audiocore::instant`.
+    // ⚠ An overridden span is re-spelled, not stored as sent: these columns are
+    // compared as text, so `...01Z` among `...01+00:00` rows would sort wrongly.
+    // See `audiocore::instant`.
     let start = match edit.start {
         Some(value) => audiocore::instant::python_isoformat(value).ok_or(CorrectError::BadSpan)?,
         None => old.start_utc.clone(),

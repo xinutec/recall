@@ -22,9 +22,9 @@ pub fn decode_s16(path: &Path, rate: u32) -> Option<Vec<u8>> {
 pub struct Window {
     /// s16le mono at the requested rate, zero-filled where nothing was recorded.
     pub pcm: Vec<u8>,
-    /// Fraction a stored clip actually covered, 0.0..=1.0. Once mixed into one
-    /// buffer the zero-fill is indistinguishable from silence, so only this
-    /// separates "the room was quiet" from "nothing was recorded" (#1661).
+    /// Fraction a stored clip actually covered, 0.0..=1.0. The zero-fill is
+    /// indistinguishable from silence, so only this separates "the room was
+    /// quiet" from "nothing was recorded".
     pub coverage: f32,
 }
 
@@ -134,15 +134,9 @@ pub fn decode_native_s16(path: &Path) -> Option<Vec<u8>> {
 
 /// A segment's native sample rate and channel count, from the stream header.
 ///
-/// ⚠ **The header carries no DURATION**, and that is measured rather than
-/// assumed: `ffprobe -show_entries format=duration` on a live `usb-*.flac`
-/// returns an empty object (checked 2026-09-17). A caller that needs length has
-/// to decode — [`decode_s16`] and divide the byte count by the rate it asked
-/// for.
-///
-/// ⚠ Two plain lines, not JSON, so this crate needs no serialiser: `audiocore`
-/// is linked into every binary here and a dependency added for two integers
-/// would be paid by all of them.
+/// ⚠ The header of a live segment carries no duration (`ffprobe` returns an
+/// empty `format=duration`). A caller that needs length has to decode with
+/// [`decode_s16`] and divide the byte count by the rate it asked for.
 #[must_use]
 pub fn stream_shape(path: &Path) -> Option<(i64, i64)> {
     let out = std::process::Command::new("ffprobe")
@@ -164,8 +158,7 @@ pub fn stream_shape(path: &Path) -> Option<(i64, i64)> {
     }
     let text = String::from_utf8_lossy(&out.stdout);
     let mut lines = text.split_whitespace();
-    // Order follows the -show_entries list, which is why it is spelled there and
-    // read here in one place rather than assumed at each call site.
+    // Order follows the -show_entries list above.
     let rate: i64 = lines.next()?.parse().ok()?;
     let channels: i64 = lines.next()?.parse().ok()?;
     Some((rate, channels))

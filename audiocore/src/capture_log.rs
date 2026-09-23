@@ -1,12 +1,9 @@
 //! The capture lifecycle on a recording machine: an append-only log in the
 //! archive root, written by audiod and read by the doctor.
 //!
-//! One JSON object per line. Appending is the only write, so a crash can at
+//! One JSON object per line, in the shape of [`Event`], so the writer and the
+//! reader share one format. Appending is the only write, so a crash can at
 //! worst leave a torn last line, which [`read`] skips.
-//!
-//! ⚠ **It replaced the Mac's `recall.sqlite` on 2026-09-23.** That database had
-//! no schema owner once the Python ladder went; this file's format is
-//! [`Event`], so the writer and the reader cannot disagree about it.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -47,9 +44,8 @@ fn instant_ser<S: serde::Serializer>(at: &DateTime<Utc>, s: S) -> Result<S::Ok, 
 
 /// Append one event.
 ///
-/// ⚠ **One `write_all` of the whole line**, on a file opened for append: the
-/// agents that share this log (the recorder, the phone ingest) each write
-/// short lines, and a single append-mode write of that size lands whole.
+/// ⚠ One `write_all` of the whole line on a file opened for append: several
+/// agents share this log, and a single short append-mode write lands whole.
 ///
 /// # Errors
 /// If the file cannot be opened or written.

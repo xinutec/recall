@@ -1,4 +1,5 @@
-//! How a source's PCM stream is produced — the archive's `sources.kind`.
+//! How a source's PCM stream is produced: the kind a source registers in the
+//! capture log.
 
 use std::fmt;
 
@@ -14,17 +15,12 @@ pub enum SourceKind {
     TcpPcm,
     /// clips uploaded over HTTP (e.g. phone recorder); not captured
     Upload,
-    /// Audio the worker found on disk with no registered source. It is an
-    /// admission, not a producer: nothing here says what wrote those files.
+    /// Audio found on disk with no registered source; says nothing about what
+    /// wrote it.
     Discovered,
-    /// A stream this system BUILT rather than recorded: the room stream, one
-    /// settled minute at a time from whichever microphone won it.
-    ///
-    /// Not a device, and the distinction is load-bearing: `deaf`, the liveness
-    /// view and the sources panel all ask `is_device()`, and a derived stream
-    /// has no recorder to be deaf, no `.alive` marker, and no phone to blame.
-    /// It inherits whichever microphone's audio it carried, so measuring it as a
-    /// microphone would double-count the one that was already measured.
+    /// A stream built rather than recorded: the room stream, one settled minute
+    /// at a time from whichever microphone won it. Not a device: it has no
+    /// recorder, and measuring it would double-count the microphone it carries.
     Derived,
 }
 
@@ -56,10 +52,8 @@ impl SourceKind {
 
     /// Kinds that have a recorder which could stop or lose speech.
     ///
-    /// An UPLOAD is a meeting someone imported: real speech we chose to keep,
-    /// with no microphone behind it. A DISCOVERED source has no recorder
-    /// either, so every device check would be answering a question about a
-    /// machine that may not exist — if it really is a recorder, its agent
+    /// An upload is an imported meeting with no microphone behind it. A
+    /// discovered source has no known recorder; if it is one, its agent
     /// registers the true kind on start and it joins this set.
     pub fn is_device(self) -> bool {
         !matches!(self, Self::Upload | Self::Discovered | Self::Derived)

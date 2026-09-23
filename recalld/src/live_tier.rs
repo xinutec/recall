@@ -1,14 +1,8 @@
-//! How the instant feed is doing, measured where its output actually lands.
+//! How the instant feed is doing, measured where its output lands: the live
+//! agent keeps no store of its own, so this is the only copy.
 //!
-//! ⚠ **`recall-live` is a MAC agent that keeps no store**, so the only copy of
-//! what it produced is here. The Mac's own archive holds live turns from before
-//! that moved and nothing since, which is why the doctor's two live checks were
-//! reading a database the tier had stopped writing to (#1671).
-//!
-//! ⚠ **This measures and does not judge.** Every threshold, every skip rule and
-//! every verdict stays in the doctor, so a person reading fleetwatch sees one
-//! grader rather than two that can disagree about what "behind" means. The
-//! caller names its own windows for the same reason.
+//! This measures and does not judge. Thresholds, skip rules and verdicts stay
+//! in the doctor, and the caller names its own windows, so there is one grader.
 
 use crate::store;
 use chrono::{DateTime, Utc};
@@ -22,9 +16,8 @@ const LIVE_MODEL: &str = "live";
 
 /// The numbers the doctor's live checks are computed from.
 ///
-/// ⚠ **`lagSamples` travels beside the median** because a median over a handful
-/// of turns reports noise as a regression. How many is enough is the doctor's
-/// rule; sending only the median would take that decision away from it.
+/// `lagSamples` travels beside the median because a median over a handful of
+/// turns is noise; how many is enough is the doctor's rule.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveHealth {
@@ -45,22 +38,16 @@ pub struct LiveHealth {
 
 /// Everything the doctor's live checks need, out of both planes.
 ///
-/// ⚠ **The speech evidence spans two databases and there is no join.**
-/// `audio_segments` (meaning plane) knows when a clip started and ended;
-/// `segment_speech` (ingest plane) knows how much of it was speech. They are
-/// matched in memory on the clip's filename rather than by `ATTACH`, so neither
-/// plane's connection outlives the other's read.
+/// `audio_segments` (meaning plane) holds each clip's span; `segment_speech`
+/// (ingest plane) holds how much of it was speech. They are matched in memory on
+/// the clip's filename rather than by `ATTACH`.
 ///
-/// ⚠ **The window bounds are RE-SPELLED, not passed through.** Every stored
-/// timestamp is compared as TEXT, so `…T11:40:00Z` and `…T11:40:00+00:00` are
-/// the same moment and two different values to every query below — and `Z`
-/// sorts AFTER `+`, so a caller using it would silently lose the first row of
-/// its own window. [`audiocore::instant`] holds the one spelling.
+/// ⚠ The window bounds are re-spelled with [`audiocore::instant`], because
+/// timestamps are compared as text: `Z` sorts after `+00:00`, so a `Z` bound
+/// would lose the first row of its window.
 ///
-/// ⚠ It must NOT reach for `audio_segments.speech_s`. That column is the Mac's,
-/// filled by `audiod speech`, and the fleet's copy stopped receiving it in July
-/// — a reader that trusted it would see an unmeasured window forever, which the
-/// doctor correctly refuses to call quiet, so every silent night would fail.
+/// ⚠ Do not read `audio_segments.speech_s`: this server's copy of that column
+/// is not filled, so every window would read as unmeasured.
 pub fn live_health(
     root: &Path,
     lag_since: DateTime<Utc>,
@@ -104,10 +91,9 @@ pub fn live_health(
 
 /// What one device source delivered and heard in a window.
 ///
-/// ⚠ **Only MEASURED clips count, on both sides of the ratio.** An unmeasured
-/// clip is unknown, not silent; counting its length as delivered while its
-/// speech reads zero would make a deaf microphone out of a scanner that has not
-/// caught up.
+/// Only measured clips count, on both sides of the ratio: an unmeasured clip is
+/// unknown, not silent, and counting it would make a lagging scanner look like a
+/// deaf microphone.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Heard {
@@ -171,8 +157,8 @@ fn live_lags(conn: &Connection, since: &str) -> rusqlite::Result<Vec<f64>> {
     Ok(lags)
 }
 
-/// ⚠ THE MEDIAN, never the mean. One clip that waited behind a restart moves a
-/// mean by minutes and says nothing about the tier.
+/// The median, not the mean: one clip that waited behind a restart moves a mean
+/// by minutes.
 fn median(mut values: Vec<f64>) -> Option<f64> {
     if values.is_empty() {
         return None;
@@ -190,11 +176,8 @@ struct Clip {
 
 /// Each device clip that started inside the window, and how long it ran.
 ///
-/// ⚠ **Which sources count is [`crate::sources::SourceKind::is_device`]'s to
-/// say, not this query's.** Spelling the rule again in SQL would be a second
-/// answer to "is there a recorder behind this" — an imported meeting and the
-/// derived room stream are both sources with no microphone, and counting
-/// either as delivered audio says the room was busy when a file was uploaded.
+/// Which sources count is decided by [`crate::sources::SourceKind::is_device`],
+/// not restated in SQL: uploads and the derived room stream have no microphone.
 fn window_clips(conn: &Connection, since: &str, until: &str) -> rusqlite::Result<Vec<Clip>> {
     let devices: Vec<String> = crate::sources::source_rows(conn)?
         .into_iter()
@@ -244,12 +227,9 @@ fn basename(path: &str) -> String {
 /// How much speech each named clip carries, for the ones that have been
 /// measured.
 ///
-/// ⚠ **A clip that would not decode is UNMEASURED, not silent.**
-/// [`audiocore::vad::UNKNOWN_SECONDS`] is negative precisely so it cannot be
-/// mistaken for a duration, and adding one to a window would subtract a second
-/// of speech from it — pushing a genuinely busy window under the floor that
-/// decides whether the house was talking. Leaving it out counts the clip as
-/// delivered but unscanned, which is what it is.
+/// A clip that would not decode is unmeasured, not silent: its stored value is
+/// the negative [`audiocore::vad::UNKNOWN_SECONDS`], which is filtered out so it
+/// counts as delivered but unscanned instead of subtracting speech.
 fn speech_seconds(conn: &Connection, names: &[&str]) -> rusqlite::Result<HashMap<String, f64>> {
     let mut out = HashMap::new();
     if names.is_empty() {

@@ -1,6 +1,5 @@
-//! Minimal mono 16-bit WAV writing — what every caller here hands the ASR
-//! shim, because that path accepts WAV directly and 44 bytes of header is not
-//! worth a dependency.
+//! Minimal mono 16-bit WAV writing, for handing audio to the ASR shim; 44
+//! bytes of header is not worth a dependency.
 
 use std::io::Write;
 use std::path::Path;

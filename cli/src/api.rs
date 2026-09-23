@@ -1,27 +1,18 @@
 //! The browsing API, as a person at a terminal sees it.
 //!
-//! ⚠ **This reads the SYSTEM OF RECORD, which is the fleet — not the Mac.**
-//! `recall.cli` opened the Mac's `recall.sqlite` directly, which was right while
-//! the Mac was the record and has been wrong since Isis became it
-//! (`deploy/hm-agents.nix`: "10.100.0.2:8000 is the system of record"). The
-//! local file still exists and still receives writes from `refine`, so a CLI
-//! reading it answers about a copy that is free to diverge, and nothing tells a
-//! reader which one they got. Going through the API cannot diverge by
-//! construction.
+//! This reads the system of record, the fleet, never a local copy that could
+//! diverge from it.
 //!
 //! Every type here mirrors `recalld::reads` field for field. They are separate
-//! declarations rather than a shared crate on purpose: this is a client of an
-//! HTTP contract, and a client that compiles against the server's structs stops
-//! being able to detect the day the server changed them.
+//! declarations on purpose: a client compiled against the server's structs
+//! cannot detect when the server changes its HTTP contract.
 
 use serde::Deserialize;
 
 /// One turn, in the shape `recalld::reads::TranscriptOut` serialises.
 ///
-/// ⚠ `provenance` and `superseded_by` are NOT here because the route does not
-/// send them — `tier` is the summary it sends instead. `recall show` printed
-/// both from the local database; see [`crate::render::details`] for what is said
-/// in their place rather than guessed.
+/// There is no `provenance` or `superseded_by`: the route sends `tier` as the
+/// summary instead (see [`crate::render::details`]).
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
@@ -72,13 +63,10 @@ pub struct Sources {
 
 /// What `/api/capture` says about the recorders, verbatim.
 ///
-/// ⚠ The pause is Pippijn's control. Nothing in this crate writes it; this type
-/// exists so a command can REPORT the state before doing anything that assumes
-/// it, which is the rule the rest of the system follows.
+/// Nothing in this crate writes the pause; this type only reports it.
 // Four bools, because the route sends four: `running` is what the recorders
-// are doing, `desired_*` is what they were asked to do, and `settled` says
-// whether those agree. Collapsing them into an enum here would be this client
-// deciding what a combination means, which is the server's call.
+// are doing, `desired_running` what they were asked to do, and `settled`
+// whether those agree. What a combination means is the server's call.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,10 +86,8 @@ pub struct Session {
     pub start: String,
     pub end: String,
     pub turn_count: i64,
-    /// ⚠ **Human-confirmed names ONLY.** The route excludes voiceprint guesses
-    /// deliberately: on out-of-domain audio a visitor can score 0.95 against an
-    /// enrolled household member, so a name here would assert an attribution
-    /// nobody made.
+    /// Human-confirmed names only. The route excludes voiceprint guesses: on
+    /// unfamiliar audio a stranger can score 0.95 against an enrolled voice.
     pub speakers: Vec<String>,
 }
 
@@ -184,13 +170,9 @@ impl std::error::Error for Error {}
 
 /// Where a saved browsing session lives, under `$HOME`.
 ///
-/// ⚠ **A CLI needs a CREDENTIAL here, not an exemption.** `/api/*` is the gate
-/// standing between the household's transcripts and anyone on the LAN
-/// (`recalld::webauth`), and the tempting fix — adding these routes to
-/// `DEVICE_EXEMPT`, which already holds `/api/sources` and `/api/capture` —
-/// would open the archive itself to every device token on the network. The
-/// Python this replaces needed no credential because it read the file directly;
-/// that is not a property worth preserving.
+/// ⚠ The CLI needs a credential, not an exemption: adding the transcript
+/// routes to `recalld::webauth`'s `DEVICE_EXEMPT` would open the archive to
+/// every device token on the network.
 pub const SESSION_FILE: &str = ".config/recall/session";
 
 /// What to tell someone whose request was refused for want of a session.
@@ -211,9 +193,9 @@ pub const HOW_TO_SIGN_IN: &str = concat!(
 /// A reachable recall API, and the session it presents.
 pub struct Api {
     base: String,
-    /// The `recall_session` cookie, when there is one. `None` still works for
-    /// the device-exempt routes (`sources`, `capture`), which is why a missing
-    /// session is not an error until something is actually refused.
+    /// The `recall_session` cookie, if any. `None` still works for the
+    /// device-exempt routes (`sources`, `capture`), so a missing session is not
+    /// an error until a request is refused.
     session: Option<String>,
     agent: ureq::Agent,
 }
@@ -230,10 +212,8 @@ impl Api {
 
     /// The session from the environment, else the saved file. Absent is fine.
     ///
-    /// ⚠ Whitespace is trimmed because the overwhelmingly likely way this file
-    /// gets written is a shell redirect that leaves a newline, and a cookie with
-    /// a trailing newline is rejected as a bad signature — which reads as "my
-    /// login does not work" rather than "my file has a newline in it".
+    /// Whitespace is trimmed: a shell redirect usually leaves a newline, and a
+    /// cookie with one is rejected as a bad signature.
     #[must_use]
     pub fn saved_session() -> Option<String> {
         if let Ok(from_env) = std::env::var("RECALL_SESSION")
@@ -254,10 +234,8 @@ impl Api {
         }
     }
 
-    /// Turn a transport failure into one that says what to DO about it.
-    ///
-    /// A 401 here means exactly one thing — no session, or an expired one — and
-    /// the bare status is the least useful way to say so.
+    /// Turn a transport failure into one that says what to do about it. A 401
+    /// means no session or an invalid one, so it carries sign-in instructions.
     fn refused(&self, err: &ureq::Error) -> Error {
         if matches!(err, ureq::Error::Status(401, _)) {
             let why = if self.session.is_some() {
@@ -356,12 +334,10 @@ impl Api {
 
     /// Every turn one source has, with its id — what a correction needs.
     ///
-    /// ⚠ **Both `primary` and `alternates` are flattened**, and for a single
-    /// source that is not double-counting: the primary/alternate split ranks the
-    /// several MICROPHONES that heard one moment, so filtering to one source
-    /// leaves at most one of each per moment. Taking only `primary` would hide
-    /// the turns that lost a comparison against a mic the caller did not ask
-    /// about — and a correction that cannot see a turn reports it as absent.
+    /// Both `primary` and `alternates` are flattened. The split ranks the
+    /// microphones that heard one moment, so for one source this does not
+    /// double-count, and `primary` alone would hide turns that lost to another
+    /// mic.
     ///
     /// # Errors
     /// As [`Api::search`].
@@ -384,10 +360,9 @@ impl Api {
     /// A window of the always-on stream, split at the silences and folded per
     /// moment.
     ///
-    /// ⚠ `after` and `before` are REQUIRED here even though the route allows
-    /// neither: without a window this asks for the newest page of the whole
-    /// archive, which is a different question and one `timeline` already
-    /// answers.
+    /// `after` and `before` are required here, although the route accepts
+    /// neither: without a window this would be the newest page of the whole
+    /// archive, which `timeline` already answers.
     ///
     /// # Errors
     /// As [`Api::search`]. A malformed instant is a 400 from the route, which
@@ -408,10 +383,9 @@ impl Api {
 
     /// Replace a turn's text with a person's own words.
     ///
-    /// ⚠ **The one write in this crate**, and it reaches the corrections corpus
-    /// — the only thing in the archive that is not re-derivable from audio. The
-    /// caller is responsible for having meant it; `recall-cli correct` requires
-    /// `--apply` and prints the diff first, exactly as the Python did.
+    /// The one write in this crate. It reaches the corrections corpus, the only
+    /// part of the archive not re-derivable from audio; `recall-cli correct`
+    /// requires `--apply` and prints the change first.
     ///
     /// # Errors
     /// As [`Api::search`]. A 400 arrives as [`Error::Http`] carrying the route's
@@ -427,13 +401,8 @@ impl Api {
     }
 }
 
-/// Percent-encode a query-string VALUE.
-///
-/// ⚠ Hand-written rather than pulled in: the alternative was a dependency for
-/// one function, and the rule is narrow enough to state — everything that is not
-/// an RFC 3986 unreserved character is escaped. Erring towards escaping too much
-/// is safe here; erring the other way puts a household name's apostrophe into a
-/// URL unquoted.
+/// Percent-encode a query-string value: everything but RFC 3986 unreserved
+/// characters is escaped. Hand-written to avoid a dependency for one function.
 fn urlencode(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for byte in raw.as_bytes() {

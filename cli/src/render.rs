@@ -1,25 +1,16 @@
-//! Turning API turns into the lines a person reads. Pure — no network, no clock
-//! beyond the local offset — so every rule below is unit-tested directly.
-//!
-//! ⚠ **This is a PORT of `recall.transcript_view`**, and the rules it carries
-//! are display decisions that were made once and should not be re-made by
-//! accident: which attribution a search hit shows versus a read-through
-//! transcript, what an unscored guess looks like, and the audibility bands. Each
-//! is stated where it is applied, with the test that pins it.
+//! Turning API turns into the lines a person reads. Pure (no network, no clock
+//! beyond the local offset), so every rule is unit-tested directly.
 
 use crate::api::{Conversation, Export, Session, Turn};
 use chrono::{DateTime, Local};
 
-/// Audibility bands from measured loudness, as the labelling UI draws them
-/// (`train.ts`). Two copies of two numbers; the UI's are the original.
+/// Audibility bands from measured loudness: clear, quiet, faint.
 const CLEAR_LOUDNESS: f64 = 0.05;
 const QUIET_LOUDNESS: f64 = 0.01;
 
-/// The archive stores UTC; a person asking "when" means the wall-clock the
-/// speech happened on. Every rendered instant goes through here.
-///
-/// An unparseable instant is shown verbatim rather than dropped — a turn with a
-/// malformed timestamp is a thing worth seeing, not hiding.
+/// A stored UTC instant in local wall-clock time. Every rendered instant goes
+/// through here; [`when`] shows an unparseable one verbatim rather than
+/// dropping it.
 fn local(iso: &str) -> Option<DateTime<Local>> {
     DateTime::parse_from_rfc3339(iso)
         .ok()
@@ -33,12 +24,11 @@ fn when(iso: &str, format: &str) -> String {
 /// Who said a turn, for a SEARCH HIT.
 ///
 /// A human-confirmed name is authoritative; otherwise the voiceprint guess with
-/// its strength as a hint ("Pippijn ~76%"); otherwise the bare diarization
+/// its strength as a hint ("Name ~76%"); otherwise the bare diarization
 /// voice; otherwise "unknown".
 ///
-/// ⚠ Deliberately more speculative than [`who`]. Most search hits are
-/// unconfirmed machine turns, so the guess is the only signal there is — hiding
-/// it would make search answer "unknown" to nearly everything.
+/// Deliberately more speculative than [`who`]: most search hits are
+/// unconfirmed, and without the guess nearly all would read "unknown".
 #[must_use]
 pub fn attribution(turn: &Turn) -> String {
     if turn.speaker_confirmed
@@ -57,8 +47,8 @@ pub fn attribution(turn: &Turn) -> String {
 
 /// Who said a turn, for a READ-THROUGH TRANSCRIPT: a confirmed name, else the
 /// diarization voice so distinct unnamed speakers stay distinguishable, else
-/// "unknown". No speculation — a transcript someone reads end to end should not
-/// assert a name the machine only guessed.
+/// "unknown". No guesses: a transcript read end to end should not assert a
+/// name the machine only guessed.
 #[must_use]
 pub fn who(turn: &Turn) -> String {
     if turn.speaker_confirmed
@@ -100,9 +90,8 @@ fn clarity(loudness: Option<f64>) -> &'static str {
 
 /// Attribution for the diagnostic view, tagged with how it was decided.
 ///
-/// ⚠ A confirmed label that is still `SPEAKER_*` is not a name — it is
-/// diarization's own placeholder that happened to get written to the label
-/// column — so it does not count as confirmed here.
+/// A confirmed label that is still `SPEAKER_*` is diarization's placeholder,
+/// not a name, so it does not count as confirmed.
 fn who_detail(turn: &Turn) -> String {
     match &turn.speaker {
         Some(name) if turn.speaker_confirmed && !name.starts_with("SPEAKER_") => {
@@ -118,25 +107,20 @@ fn who_detail(turn: &Turn) -> String {
     }
 }
 
-/// A diagnostic dump of specific turns — every field that explains a turn's
-/// state. For inspecting one by id rather than reading a session.
+/// A diagnostic dump of specific turns: every field that explains a turn's
+/// state.
 ///
-/// ⚠ **`asked` is what the caller typed, and it is printed when it differs from
-/// what came back.** `/api/transcripts` follows supersession to the CURRENT
-/// version of a turn, so asking about a corrected turn's old id answers about
-/// its replacement. The Python this replaces read the row itself and printed
-/// "superseded by #N"; saying which id actually answered is the same fact from
-/// the other end, and the alternative — printing the new turn under the old
-/// number — is how a person concludes their correction never applied.
+/// `asked` is the ids the caller typed. `/api/transcripts` follows supersession
+/// to the current version of a turn, so when the answering id differs, the
+/// status says which id it superseded; otherwise a corrected turn would appear
+/// under its old number.
 #[must_use]
 pub fn details(asked: &[i64], turns: &[Turn]) -> String {
     turns
         .iter()
         .zip(asked.iter().copied().chain(std::iter::repeat(0)))
         .map(|(t, asked_id)| {
-            // A turn is seconds long, so the millisecond count is nowhere near
-            // f64's exact-integer range; the cast is stated rather than left to
-            // be noticed.
+            // A turn lasts seconds, far inside f64's exact-integer range.
             #[allow(clippy::cast_precision_loss)]
             let duration = local(&t.end)
                 .zip(local(&t.start))
@@ -183,10 +167,8 @@ pub fn details(asked: &[i64], turns: &[Turn]) -> String {
         .join("\n\n")
 }
 
-/// One session or day as a speaker-attributed transcript — what a reviewer
-/// reads. Consecutive same-speaker turns are NOT merged here; the CLI's job is
-/// to show each turn with its own timestamp, which is what makes a line
-/// findable in the audio.
+/// One session or day as a speaker-attributed transcript. Same-speaker turns
+/// are not merged, so each line keeps the timestamp that finds it in the audio.
 #[must_use]
 pub fn transcript(title: &str, turns: &[Turn]) -> String {
     let mut header = format!("# {title}");
@@ -247,8 +229,8 @@ pub fn sessions(items: &[Session]) -> String {
         .join("\n")
 }
 
-/// A session's clean transcript — consecutive same-speaker turns already merged
-/// by the route, so this only lays them out.
+/// A session's clean transcript; the route has already merged consecutive
+/// same-speaker turns.
 #[must_use]
 pub fn export(export: &Export) -> String {
     let mut header = format!("# {}", export.session);
@@ -294,11 +276,9 @@ pub fn conversations(day: &str, items: &[Conversation]) -> String {
 
 /// One conversation read through.
 ///
-/// ⚠ **The PRIMARY turns only.** Capture is always on and every microphone
-/// transcribes the same room, so the raw stream shows each sentence up to four
-/// times; the route has already chosen a spine per moment, and printing the
-/// alternates too would undo that. `recall-cli show <id>` is where a specific
-/// mic's version is looked at.
+/// Primary turns only: every microphone transcribes the same room, and the
+/// route has already chosen one version per moment. `recall-cli show <id>`
+/// shows a specific mic's version.
 #[must_use]
 pub fn conversation(title: &str, conv: &Conversation) -> String {
     let primary: Vec<&Turn> = conv.moments.iter().flat_map(|m| m.primary.iter()).collect();

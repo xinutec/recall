@@ -1,15 +1,12 @@
 //! Serving the built Angular app from the same origin as its API.
 //!
-//! Three rules, each learned rather than designed:
+//! Three rules:
 //!
 //! 1. A path under a server prefix that reached the fallback is a 404, never
-//!    `index.html`. Returning the shell with a 200 turns "no such route" into
-//!    HTML a client then fails to parse as JSON, far from the cause. Once, with
-//!    only `/api/` covered, the Mac's sync agents received `index.html` for
-//!    `/sync/*` and died.
+//!    `index.html`. The shell with a 200 turns "no such route" into HTML a
+//!    client then fails to parse as JSON, far from the cause.
 //! 2. `index.html` is `no-cache`; hashed bundles are immutable. The shell names
-//!    the current bundles, so caching it meant a deploy was not picked up until
-//!    a hard refresh.
+//!    the current bundles, so a cached one hides a deploy until a hard refresh.
 //! 3. A request may not escape the frontend directory: `../` is resolved and
 //!    checked against the root.
 
@@ -30,9 +27,8 @@ pub const SERVER_PREFIXES: &[&str] = &["/api/", "/sync/", "/ingest/", "/work/"];
 
 /// Resolve a request path to a file INSIDE the frontend root, or None.
 ///
-/// ⚠ The containment check is on the CANONICALISED path, so `..` segments and
-/// symlinks are both resolved before it is applied. Checking the raw string would
-/// pass `a/../../etc/passwd`.
+/// ⚠ The containment check is on the canonicalised path, so `..` segments and
+/// symlinks are resolved first; the raw string would pass `a/../../etc/passwd`.
 #[must_use]
 pub fn resolve(root: &Path, request_path: &str) -> Option<PathBuf> {
     let root = root.canonicalize().ok()?;

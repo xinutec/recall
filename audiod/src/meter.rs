@@ -1,11 +1,10 @@
 //! Measures a raw s16le PCM stream as it is pumped, so a connection leaves
-//! evidence of what the device actually sent. Port of
-//! `capture.StreamMeter`.
+//! evidence of what the device actually sent.
 
 /// |s16| below this is digital silence, not a live mic: a real room's noise
-/// floor measures amplitude 10-90 (-69 to -51 dB); a wedged `CoreAudio` read or the
-/// pixel9 dead path yields exact zeros / amplitude 1. 2 tolerates dither while
-/// never calling a real, quiet room dead.
+/// floor measures amplitude 10-90 (-69 to -51 dB), while a wedged `CoreAudio`
+/// read or a phone's dead capture path yields 0 or 1. 2 tolerates dither while
+/// never calling a quiet room dead.
 pub const SILENCE_PEAK: i32 = 2;
 
 /// |s16 sample| at/above this counts as signal (~ -66 dBFS): safely above
@@ -62,7 +61,7 @@ impl StreamMeter {
     }
 
     /// Loudest sample seen, in dBFS; `None` when not one non-zero sample
-    /// arrived (pure digital zeros — indistinguishable from no capture path).
+    /// arrived (pure digital zeros, indistinguishable from no capture path).
     pub fn peak_db(&self) -> Option<f64> {
         if self.peak == 0 {
             return None;

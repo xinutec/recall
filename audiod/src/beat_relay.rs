@@ -1,49 +1,30 @@
-//! LAN fallback for the mic heartbeat. Port of `src/recall/beat_relay.py` (#888).
+//! LAN fallback for the mic heartbeat.
 //!
-//! WHY THIS EXISTS. The beat's reachability requirement used to be STRICTER than
-//! recording's, which made the check lie about working phones:
+//! Audio goes phone -> Mac over the LAN, but the beat goes phone -> Isis over
+//! the VPN, so a phone at home with its tunnel off would record correctly and
+//! still read `silent`, then `dead`. This relay lets the beat take the LAN too.
 //!
-//! ```text
-//! audio   phone -> Mac,  192.168.1.81:9999   (LAN)
-//! beat    phone -> Isis, 10.100.0.2:8000     (VPN)
-//! ```
+//! ⚠ Not the ingest port, and not gated on the pause: `server::serve` closes
+//! its listener while capture is paused, which is exactly when the heartbeat is
+//! the only signal there is.
 //!
-//! A phone at home with its tunnel off streamed every sample correctly and still
-//! read `silent` after 3 h and `dead` after 12 h. Both false. Measured twice on
-//! 2026-08-14, and still in use: iphone11, oneplus6t and pixel5 have each
-//! relayed beats this way within the last month.
+//! Isis stays the single source of truth: this forwards and stores nothing, so
+//! two places cannot disagree about which mics are alive.
 //!
-//! ⚠ **NOT the ingest port, and not gated on the pause.** `server::serve` closes
-//! its listener while capture is paused — and a pause is exactly when the
-//! heartbeat is the only signal there is. A beat receiver has to be independent
-//! of the capture lifecycle, so this is its own listener that runs whatever
-//! capture is doing.
-//!
-//! ⚠ **ISIS REMAINS THE SINGLE SOURCE OF TRUTH.** This forwards; it does not
-//! store. A local beat store that the collector had to merge with the fleet's
-//! would let two places disagree about which mics are alive, which is worse than
-//! the bug being fixed.
-//!
-//! ⚠ **Hand-written HTTP, deliberately.** One route, one method, an
-//! unauthenticated LAN caller and about fifteen requests a month. `axum` and
-//! `tokio` are dev-dependencies of this crate so the upload tests can run
-//! against the real recalld router; promoting them to real dependencies of the
-//! capture daemon — the one process that must never die — to serve this would be
-//! the wrong trade. The accept loop follows `server.rs`, which already does this
-//! by hand for the ingest port.
+//! Hand-written HTTP, deliberately: one route, one unauthenticated LAN caller,
+//! a handful of requests a month. `axum` and `tokio` are only dev-dependencies
+//! here, and the capture daemon should not take them on for this.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
-/// Where a relayed beat goes on the fleet.
-/// The port the phone apps use for the fallback.
-///
-/// ⚠ The same port the FLEET API answers on, so the apps need no second URL
-/// shape: the fallback is the identical request with `host` swapped for
-/// `controlHost`. A different machine, so nothing collides.
+/// The port the phone apps use for the fallback: the same port the fleet API
+/// answers on, so the fallback is the identical request with `host` swapped for
+/// `controlHost`.
 pub const DEFAULT_RELAY_PORT: u16 = 8000;
 
+/// Where a beat is posted, here and on the fleet.
 pub const BEAT_PATH: &str = "/api/devices/heartbeat";
 /// Bounded because the caller is unauthenticated: a beat is a few hundred bytes.
 pub const MAX_BODY_BYTES: usize = 4096;
@@ -54,9 +35,9 @@ const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What a phone is allowed to say.
 ///
-/// ⚠ `at` is absent ON PURPOSE — the fleet stamps it from its own clock, so a
-/// beat cannot backdate itself. `viaLan` is absent because it is this relay's
-/// testimony, not the phone's, and is added below.
+/// `at` is absent on purpose: the fleet stamps it, so a beat cannot backdate
+/// itself. `viaLan` is the relay's testimony, not the phone's, and is added
+/// below.
 const FROM_PHONE: &[&str] = &[
     "device",
     "app",
@@ -71,11 +52,9 @@ const FROM_PHONE: &[&str] = &[
 #[derive(Debug, PartialEq, Eq)]
 pub struct Rejected(pub String);
 
-/// The beat to forward: what the phone said, FILTERED, plus how it arrived.
-///
-/// This is the boundary between an unauthenticated LAN caller and the fleet's
-/// store, so it is an allowlist rather than a scrub: a key nobody named here
-/// cannot reach Isis by being added to the app.
+/// The beat to forward: what the phone said, filtered, plus how it arrived.
+/// An allowlist rather than a scrub, since the caller is unauthenticated: a key
+/// not named here cannot reach Isis.
 ///
 /// # Errors
 /// If the body is oversized, is not a JSON object, or names no usable device.
@@ -112,22 +91,18 @@ pub fn relayed(raw: &[u8]) -> Result<serde_json::Value, Rejected> {
 
 /// POST one beat to the fleet. Returns whether it landed.
 ///
-/// Best-effort like every other part of this path: a relay that raised its own
-/// failures would be the tail wagging the dog. The phone learns from the status
-/// we return, and its own retry backoff decides what to do about it.
+/// Best-effort: the phone learns from the status returned, and its own retry
+/// backoff decides what to do.
 pub fn forward(beat: &serde_json::Value, fleet_url: &str) -> bool {
     let url = format!("{}{BEAT_PATH}", fleet_url.trim_end_matches('/'));
-    // Its own agent: `ureq`'s bare functions share ONE process-wide connection
-    // pool, and a relay that hands a stale pooled socket to a phone's beat is a
-    // 502 nobody can reproduce (recalld's proxy paid for this once).
+    // Its own agent: `ureq`'s bare functions share one process-wide connection
+    // pool, and a stale pooled socket is an unreproducible 502.
     let agent = ureq::AgentBuilder::new()
         .timeout(FORWARD_TIMEOUT)
         .max_idle_connections(0)
         .build();
-    // `send_bytes` with the header set by hand: this crate takes `ureq` without
-    // default features, so the `json` feature that would provide `send_json` is
-    // not compiled in — and adding it to post one small object would pull serde
-    // into ureq for no gain.
+    // `send_bytes` with the header set by hand: ureq is built without the
+    // `json` feature that provides `send_json`.
     let body = beat.to_string();
     match agent
         .post(&url)
@@ -156,9 +131,8 @@ pub struct Head {
 
 /// Read the request line and headers, bounded.
 ///
-/// ⚠ Bounded on BOTH the line count and the byte count. An unauthenticated
-/// caller that opens a socket and sends headers forever must cost this process
-/// nothing, and "read until a blank line" alone is that hole.
+/// Bounded on both line count and byte count, so an unauthenticated caller
+/// sending headers forever costs nothing.
 ///
 /// # Errors
 /// If the stream ends, the head is oversized, or the request line is not
@@ -208,15 +182,9 @@ pub fn read_head<R: BufRead>(reader: &mut R) -> Result<Head, Rejected> {
     })
 }
 
-/// What this relay answers, and why each one rather than the neighbouring code.
-///
-/// ⚠ **204 for success, not 200.** The relay stores nothing, so it has no body
-/// to return — and the fleet answers 200, so insisting on that would have made
-/// every relayed beat read as a failure to the phone that sent it.
-///
-/// ⚠ **502 when the forward fails, never 204.** The phone must not read "the Mac
-/// took it" as "the fleet knows", or a dead Isis would look like three healthy
-/// mics.
+/// Answer with an empty body. Success is 204 (the relay has nothing to
+/// return); a failed forward is 502, never 204, so "the Mac took it" never
+/// reads as "the fleet knows".
 fn respond(stream: &mut TcpStream, status: u16, reason: &str) {
     let _ = write!(
         stream,
@@ -278,9 +246,8 @@ fn handle(stream: &mut TcpStream, fleet_url: &str) {
 
 /// Accept beats on the LAN and pass them to the fleet, forever.
 ///
-/// One thread per connection, like the Python's `ThreadingHTTPServer`: a phone
-/// whose socket stalls must not hold up the next phone's beat, and the volume
-/// (about fifteen a month) makes anything cleverer unjustifiable.
+/// One thread per connection: a phone whose socket stalls must not hold up the
+/// next phone's beat, and the volume is too low to justify anything cleverer.
 pub fn serve(port: u16, fleet_url: &str) -> std::io::Error {
     let listener = match TcpListener::bind(("0.0.0.0", port)) {
         Ok(l) => l,

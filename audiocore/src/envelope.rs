@@ -1,19 +1,18 @@
-//! Energy envelopes: the level-blind, codec-blind fingerprint of *when sound
-//! happened*, and therefore the tier-1 alignment signal (docs/architecture.md).
-//! Decoded at a low rate in coarse buckets — the same resolution the Python
-//! side draws timelines at (`recall.envelope`) — because alignment at this
-//! tier needs shape, not fidelity.
+//! Energy envelopes: the level-blind, codec-blind fingerprint of when sound
+//! happened, and so the tier-1 alignment signal (docs/architecture.md).
+//! Decoded at a low rate in coarse buckets, because alignment at this tier
+//! needs shape, not fidelity.
 
 /// Samples per second the envelope is computed from. 8 kHz keeps every speech
 /// formant that matters for "is there sound now" at a tenth of the decode cost.
 pub const DECODE_RATE: u32 = 8000;
-/// Seconds per envelope bucket: 100 ms — an alignment resolution well inside
-/// what tier 2 (onsets) refines, and coarse enough that Opus artefacts vanish.
+/// Seconds per envelope bucket: 100 ms, well inside what tier 2 (onsets)
+/// refines, and coarse enough that Opus artefacts vanish.
 pub const BUCKET_S: f64 = 0.1;
 
 /// RMS per bucket over s16le mono PCM at `DECODE_RATE`. The final partial
-/// bucket is dropped — a shorter bucket has a different noise statistic and
-/// would put one misleading point at the end of every stream.
+/// bucket is dropped: its different noise statistic would put one misleading
+/// point at the end of every stream.
 pub fn rms_buckets(pcm: &[u8]) -> Vec<f32> {
     rms_buckets_at(pcm, DECODE_RATE, BUCKET_S)
 }
@@ -39,10 +38,9 @@ pub fn rms_buckets_at(pcm: &[u8], rate: u32, bucket_s: f64) -> Vec<f32> {
         .collect()
 }
 
-/// The dB level of the envelope's `q`-quantile bucket — the one measurement
-/// stage D's calibration stores per segment: `q = 0.9` is "what this mic
-/// hears when someone talks", `q = 0.1` its floor. `NEG_INFINITY` for an empty
-/// envelope, so an absent segment never reads as a quiet one.
+/// The dB level of the envelope's `q`-quantile bucket: `q = 0.9` is "what this
+/// mic hears when someone talks", `q = 0.1` its floor. `NEG_INFINITY` for an
+/// empty envelope, so an absent segment never reads as a quiet one.
 pub fn level_quantile_db(envelope: &[f32], q: f64) -> f32 {
     if envelope.is_empty() {
         return f32::NEG_INFINITY;

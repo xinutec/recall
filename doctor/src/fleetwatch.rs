@@ -1,20 +1,11 @@
-//! Report recall's health to fleetwatch — the fleet's monitoring platform.
+//! Report recall's health to fleetwatch, the fleet's monitoring platform.
 //!
-//! fleetwatch is push-based: a producer POSTs verdict-shaped reports and it
-//! keeps their history (see its README, "The report contract"). Two properties
-//! make it the right place for this, and they are why nothing here needs to
-//! send mail or run a daemon that watches a daemon:
+//! fleetwatch is push-based and keeps the history (its README, "The report
+//! contract"). A report declares its cadence (`interval_s`) and a producer that
+//! stops reporting renders red, so a dead Mac needs no detector of its own.
 //!
-//! * **A dead producer is a failure, not a silence.** A report declares its own
-//!   cadence (`interval_s`); fleetwatch renders a producer that has stopped
-//!   reporting as `Silent` — red. So this need not detect the case where the
-//!   *Mac itself* dies: not reporting IS the report. A monitor that only speaks
-//!   when it is well is no monitor at all.
-//! * The verdicts already show up where the rest of the fleet's health does,
-//!   which is where a fault will actually be seen.
-//!
-//! The ingest token is read from `~/.config/fleetwatch/token` and never leaves
-//! this machine — it is not in the repo, not in the report, and not logged.
+//! The ingest token comes from `RECALL_FLEETWATCH_TOKEN` or
+//! `~/.config/fleetwatch/token`, and is never put in the report or logged.
 
 use crate::check::Check;
 use chrono::{DateTime, Utc};
@@ -22,9 +13,8 @@ use std::path::Path;
 use std::time::Duration;
 
 pub const DEFAULT_URL: &str = "https://fleetwatch.xinutec.org/api/reports";
-/// One producer for the whole of recall: is it recording, are its agents up, is
-/// the archive mirrored. Kept as one collector so a single fleetwatch tile
-/// answers "is recall alright?" — the question actually being asked.
+/// One collector for the whole of recall, so a single fleetwatch tile answers
+/// "is recall alright?".
 const COLLECTOR: &str = "recall";
 /// Declared cadence. fleetwatch turns this into staleness: report less often
 /// than this and the tile goes amber, stop entirely and it goes red. It must

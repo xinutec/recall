@@ -63,15 +63,9 @@ fn parse_args() -> Option<Args> {
     })
 }
 
-/// Serve one bound listener, WITH connect info.
-///
-/// ⚠ The connect info is not decoration. The capture-control audit answers "was
-/// that pause mine?" on a plane that deliberately carries no credential, so the
-/// peer address is the ONLY identifying thing there is. Without it the extension
-/// is absent and every pause is recorded against `unknown-host`.
-///
-/// recalld sees the REAL client here, which the Python never could: it sits
-/// behind this proxy and only ever saw 127.0.0.1 (#1473).
+/// Serve one bound listener with connect info. The capture-control plane carries
+/// no credential, so the peer address is the only identity its audit records;
+/// without it every pause is recorded against `unknown-host`.
 fn serve_one(
     serving: &mut tokio::task::JoinSet<std::io::Result<()>>,
     listener: tokio::net::TcpListener,
@@ -88,14 +82,9 @@ fn serve_one(
     });
 }
 
-/// Open both planes and bring the meaning one's schema up to date, or say what
-/// is wrong in a line a human can act on.
-///
-/// ⚠ **NOTHING owned the meaning schema until 2026-09-18.** It was a Python
-/// migration ladder, and the pod has run `recalld` alone since the Python tier
-/// went — so the ladder had no runner, and a fresh deployment could not have
-/// created that database at all (#1538). Failing to start is the right response:
-/// every read route assumes those tables exist.
+/// Open both planes and bring the meaning schema up to date, or say what is wrong
+/// in a line a human can act on. Failing to start is deliberate: every read route
+/// assumes those tables exist.
 fn prepare_planes(root: &std::path::Path) -> Result<(), String> {
     recalld::store::open(root)
         .map_err(|err| format!("cannot open {}/ingest.sqlite: {err}", root.display()))?;
@@ -207,11 +196,8 @@ fn main() -> ExitCode {
     })
 }
 
-/// Bind every address BEFORE serving any.
-///
-/// ⚠ A half-bound daemon — answering recorders but not the browser, or the
-/// reverse — is worse than one that refuses to start, because it looks healthy
-/// from whichever side you happen to check.
+/// Bind every address before serving any: a half-bound daemon looks healthy from
+/// whichever side you check, so refusing to start is better.
 async fn bind_all(binds: &[String]) -> Option<Vec<tokio::net::TcpListener>> {
     let mut listeners = Vec::new();
     for addr in binds {
@@ -226,10 +212,9 @@ async fn bind_all(binds: &[String]) -> Option<Vec<tokio::net::TcpListener>> {
     Some(listeners)
 }
 
-/// The calibration scanner, measuring levels for every delivered
-/// segment in bounded batches. Off the request path — its ffmpeg children and
-/// sqlite writes ride `spawn_blocking`, and WAL keeps it from ever blocking
-/// an upload.
+/// Measure levels for every delivered segment in bounded batches. Its ffmpeg
+/// children and sqlite writes run under `spawn_blocking`, and WAL keeps it from
+/// blocking an upload.
 fn spawn_level_scanner(root: PathBuf) {
     const BATCH: usize = 200;
     const IDLE: std::time::Duration = std::time::Duration::from_secs(30);
@@ -258,14 +243,9 @@ fn spawn_level_scanner(root: PathBuf) {
 
 /// Re-derive stored speaker guesses when the voiceprint corpus has grown.
 ///
-/// ⚠ **This REWRITES THE RECORD**, so it is bounded and visible rather than
-/// quiet: every batch logs what it changed. Measured on the fleet 2026-09-18,
-/// the stored guesses agreed with the human label 49.1% of the time and the same
-/// rule re-run agreed 91.3% — the archive was showing names derived from a
-/// voiceprint corpus that has since more than doubled (#1657).
-///
-/// The work-list empties out and only refills when somebody enrols a voice, so
-/// the idle sleep is what this loop does almost always.
+/// This rewrites the record, so it runs in bounded batches and logs every batch
+/// that changed something. The work-list refills only when a voice is enrolled,
+/// so the idle sleep is the usual state.
 fn spawn_rematcher(root: PathBuf) {
     const BATCH: usize = 200;
     const IDLE: std::time::Duration = std::time::Duration::from_mins(5);
@@ -301,8 +281,8 @@ fn spawn_rematcher(root: PathBuf) {
     });
 }
 
-/// Measure coverage for blocks judged before it was recorded (#1661). Ends when
-/// the archive is measured and never runs again.
+/// Measure coverage for room blocks that have none recorded. Once every block is
+/// measured, each pass finds nothing and sleeps.
 fn spawn_coverage_backfill(root: PathBuf) {
     const BATCH: usize = 50;
     const IDLE: std::time::Duration = std::time::Duration::from_mins(30);
@@ -329,12 +309,8 @@ fn spawn_coverage_backfill(root: PathBuf) {
     });
 }
 
-/// Start every background pass the daemon runs.
-///
-/// ⚠ **Extracted so the LIST is readable, not merely so `main` is short.** These
-/// loops are what recalld does when nobody is asking it anything — scan, build,
-/// register, derive, write — and WHICH OF THEM ARE ON is the single most
-/// load-bearing fact about a deployed recalld. That belongs on one screen, with
+/// Start every background pass the daemon runs. Which passes are on is the most
+/// important fact about a deployed recalld, so the list lives on one screen with
 /// the reasons beside it.
 fn spawn_background_passes(root: &std::path::Path) {
     let root = root.to_path_buf();
@@ -347,36 +323,33 @@ fn spawn_background_passes(root: &std::path::Path) {
     spawn_room_registrar(root.clone());
     // OFF. Room turns read worse than the per-mic turns they hid, mostly
     // English where the microphones heard Dutch. The cause is one language
-    // label per clip, not the room audio: mislabelled, a microphone's clip
-    // fails the same way (#1388). Re-enable once language is decided per
-    // piece rather than per clip, and #1461 shows the room stream beats
+    // label per clip, which fails a microphone's clip the same way. Re-enable
+    // once language is decided per piece, and the room stream is shown to beat
     // per-mic on spontaneous speech.
     // spawn_turn_writer(root.clone(), recalld::turns::ROOM);
     //
-    // The per-mic stream only fills clips that have no turns; it hides and
-    // supersedes nothing, so its worst case is a transcript where there was
-    // silence, deletable by its provenance. Nothing feeds it until the runner
-    // leases `transcribe-segment`.
+    // The per-mic stream only fills clips that have no turns. It hides no
+    // per-mic turn (only live guesses on the same span), so its worst case is a
+    // transcript where there was silence, deletable by its provenance. Idle
+    // until a runner leases `transcribe-segment`.
     spawn_turn_writer(root.clone(), recalld::turns::PER_MIC);
     //
-    // The only running loop that can hide a transcript somebody reads, so it
-    // must stay the only writer over this corpus: two writers each hiding
-    // what the other wrote leave a corpus nobody can reason about.
-    // `diarized::ROOM` stays off; the reason is on the constant.
+    // The only running loop that replaces a transcript somebody reads, so it
+    // must stay the only such writer: two writers each hiding what the other
+    // wrote leave a corpus nobody can reason about. `diarized::ROOM` stays off;
+    // the reason is on the constant.
     spawn_diarized_writer(root.clone(), recalld::diarized::PER_MIC);
     spawn_segment_registrar(root.clone());
     spawn_segment_deriver(root.clone());
     spawn_enroller(root.clone());
 }
 
-/// Turn a human-named turn into a reference voiceprint.
+/// Turn human-named turns into reference voiceprints.
 ///
-/// Deliberately slow: more prints barely move attribution (#1648), so this only
-/// has to keep up with new labels, which arrive a handful a week, and must not
-/// outbid diarization for the one GPU.
-///
-/// Derivation and consumption are one switch here: nothing else enrols, so there
-/// is no second writer to collide with, and a derived job nobody leases is waste.
+/// Deliberately slow: more prints barely move attribution, so this only has to
+/// keep up with new labels (a handful a week) and must not outbid diarization
+/// for the one GPU. Deriving and writing share one loop because nothing else
+/// enrols.
 fn spawn_enroller(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(10);
     const DERIVE: usize = 5;
@@ -399,9 +372,8 @@ fn spawn_enroller(root: PathBuf) {
             })
             .await;
             match done {
-                // ⚠ `stale` is IN this guard. A pass that decides every clip's
-                // spans are no longer wanted writes nothing and queues nothing,
-                // and without it the one pass worth reading logs no line at all.
+                // `stale` is in the guard: a pass that only finds spans no
+                // longer wanted writes and queues nothing, and must still log.
                 Ok(Ok((queued, pass))) if queued + pass.prints + pass.stale > 0 => {
                     tracing::info!(
                         queued,
@@ -420,49 +392,34 @@ fn spawn_enroller(root: PathBuf) {
     });
 }
 
-/// Turn finished `diarize-room` results into speaker-split turns.
+/// Turn finished diarize results into speaker-split turns.
 ///
-/// ⚠ **THE ONLY LOOP IN THIS DAEMON THAT REPLACES A TRANSCRIPT.** Everything
-/// else derives, registers, or fills a gap; this hides turns somebody can read
-/// and writes over them. `refine.py` — which it replaces — blanked 132 segments
-/// of real household conversation doing exactly this, by applying its filters
-/// AFTER hiding. `diarized::decide` is where that cannot happen: the whole
-/// decision is made on data before a row is touched, and it either replaces or
-/// keeps.
+/// The only loop that replaces a transcript: it hides turns somebody can read
+/// and writes new ones over them. `diarized::decide` makes the whole decision on
+/// data before a row is touched, and either replaces or keeps. Idle until a
+/// runner leases the stream's diarize kind.
 ///
-/// ⚠ **Nothing feeds it until a `voices` runner is deployed.** A diarize job is
-/// derived for every transcribed block, but until something leases them there
-/// are no results and this loop does nothing every two minutes. That is the
-/// intended resting state, and the switch is on the Mac, not here.
-///
-/// ⚠ **HOW TO PUT IT BACK — TWO PLANES, and the hides are the half that matters.**
+/// To reverse it, both planes (shown for [`recalld::diarized::PER_MIC`]; the room
+/// stream's strings say `room runner` and its kind is `diarize-room`):
 ///
 /// ```sql
-/// -- meaning plane (recall.sqlite): restore what the pass covered, then drop
-/// -- what it wrote. In this order: the second statement is what makes the
-/// -- blocks eligible again, and doing it first leaves the originals hidden
-/// -- while the pass re-runs.
+/// -- recall.sqlite: un-hide first, then delete. Deleting first makes the
+/// -- blocks eligible again while the originals are still hidden.
 /// UPDATE transcript_segments SET hidden_reason = NULL
-///  WHERE hidden_reason = 'diarized (mlx-whisper/large-v3-turbo (room))';
+///  WHERE hidden_reason = 'diarized (per-mic runner)';
 /// DELETE FROM transcript_segments
-///  WHERE provenance = 'diarized-aligned (mlx-whisper/large-v3-turbo (room))';
+///  WHERE provenance = 'diarized-aligned (per-mic runner)';
 ///
-/// -- ingest plane (ingest.sqlite): the blocks it DECLINED wrote no rows, so
-/// -- only the ledger holds them. Forget this and the reversal looks complete
-/// -- while every refused block stays decided for ever.
-/// DELETE FROM pass_ledger WHERE kind = 'diarize-room';
+/// -- ingest.sqlite: declined blocks wrote no rows, only a ledger entry.
+/// -- Without this they stay decided for ever.
+/// DELETE FROM pass_ledger WHERE kind = 'diarize-segment';
 /// ```
 ///
-/// ⚠ **EXACT equality, NOT `LIKE 'diarized-aligned (%'`.** That pattern also
-/// matches `diarized-aligned (mlx-community/whisper-large-v3-turbo)` —
-/// `refine.py`'s per-mic output, tens of thousands of rows of it. A reversal
-/// written with a wildcard deletes this pass's turns and the archive's real
-/// diarized corpus together. The model name is IN the provenance precisely so a
-/// reversal can name ONE pass; a wildcard throws that away.
+/// ⚠ Use exact equality, not `LIKE 'diarized-aligned (%'`: that pattern also
+/// matches the archive's older diarized corpus, and would delete it too.
 ///
-/// A SMALL batch on a slow cadence, for the reason the turn writer has one: the
-/// queue drains over hours, so a bad verdict is noticed while it is dozens of
-/// blocks rather than nine hundred.
+/// A small batch on a slow cadence, so a bad verdict is noticed while it covers
+/// dozens of blocks rather than hundreds.
 fn spawn_diarized_writer(root: PathBuf, stream: recalld::diarized::Stream<'static>) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
     const BATCH: usize = 20;
@@ -477,9 +434,8 @@ fn spawn_diarized_writer(root: PathBuf, stream: recalld::diarized::Stream<'stati
             })
             .await;
             match done {
-                // ⚠ `kept` is inside the guard, like `swept` next door: a pass
-                // that declines every block is the one most worth seeing, and
-                // without it the interesting case is the silent one.
+                // `kept` is in the guard: a pass that declines every block is
+                // the one most worth seeing.
                 Ok(Ok(pass)) if pass.turns + pass.hidden + pass.kept > 0 => {
                     tracing::info!(
                         blocks = pass.blocks,
@@ -504,19 +460,17 @@ fn spawn_diarized_writer(root: PathBuf, stream: recalld::diarized::Stream<'stati
     });
 }
 
-/// The speech scanner — VAD over every delivered segment, so
-/// "active" can mean someone is TALKING rather than bytes arrived, and the
-/// quiet review has evidence before it proposes deleting anything.
+/// Run VAD over every delivered segment, so "active" can mean someone is
+/// talking rather than that bytes arrived, and the quiet review has evidence
+/// before it proposes deleting anything.
 ///
-/// A SMALLER batch than the level scanner's: this runs a neural network per
-/// 32 ms window rather than an envelope, and Isis has four cores shared with
-/// Nextcloud. The idle wait is longer for the same reason — speech evidence is
-/// wanted within minutes, never within seconds.
+/// A smaller batch and longer idle than the level scanner: this runs a neural
+/// network per 32 ms window on four cores shared with Nextcloud, and speech
+/// evidence is wanted within minutes, not seconds.
 fn spawn_speech_scanner(root: PathBuf) {
-    // ⚠ Do not even start where the model cannot run. isis and amun are Ivy
-    // Bridge (2012) and ort's prebuilt runtime needs AVX2 (Haswell, 2013):
-    // calling it there raises SIGILL and kills the daemon that IS the system of
-    // record. Refusing once, loudly, beats failing every batch for ever.
+    // ⚠ Do not start where the model cannot run. isis and amun are Ivy Bridge
+    // and ort's prebuilt runtime needs AVX2: calling it there raises SIGILL and
+    // kills the daemon. Refuse once, loudly.
     const BATCH: usize = 40;
     const IDLE: std::time::Duration = std::time::Duration::from_mins(2);
     const BACKOFF: std::time::Duration = std::time::Duration::from_mins(5);
@@ -550,23 +504,19 @@ fn spawn_speech_scanner(root: PathBuf) {
     });
 }
 
-/// Turn stored transcription results into turns people actually read.
+/// Turn stored transcription results into turns people read.
 ///
-/// ⚠ **THE FIRST LOOP HERE THAT CHANGES A TRANSCRIPT SOMEBODY READS.** Everything
-/// above it derives, measures or registers.
+/// One function for both streams; they differ only in their
+/// [`recalld::turns::Stream`]:
 ///
-/// One function, two callers, because the difference between the streams is a
-/// [`recalld::turns::Stream`] and not a loop:
+/// - [`recalld::turns::ROOM`] writes room turns and hides the per-mic turns they
+///   cover. Off.
+/// - [`recalld::turns::PER_MIC`] fills gaps only: a clip that already carries
+///   turns is refused before a row is touched. It hides the live guesses on the
+///   span it writes, as `live-reconciled`.
 ///
-/// - [`recalld::turns::ROOM`] — writes room turns AND HIDES the per-mic turns
-///   they cover, thousands of rows at a time. Off, pending #1388 and #1461.
-/// - [`recalld::turns::PER_MIC`] — fills gaps only. It hides nothing and
-///   revisits nothing: a clip that already carries turns is refused before a
-///   row is touched.
-///
-/// ⚠ **HOW TO PUT EITHER BACK. It is TWO PLANES, and one of them is easy to
-/// miss.** Hiding is not deleting, so the meaning plane (`recall.sqlite`) undoes
-/// cleanly — the provenance string is the stream's, and names its rows alone:
+/// To reverse either, both planes. In `recall.sqlite` the provenance names the
+/// stream's rows alone, and deleting them makes those clips eligible again:
 ///
 /// ```sql
 /// UPDATE transcript_segments SET hidden_reason = NULL
@@ -576,28 +526,16 @@ fn spawn_speech_scanner(root: PathBuf) {
 /// DELETE FROM transcript_segments WHERE provenance = 'per-mic (runner)';
 /// ```
 ///
-/// That restores what anybody reads, and by itself it re-enables every clip
-/// whose turns it just deleted — `write_pass` derives "already written" from
-/// those very rows, deliberately, so this much needs no bookkeeping.
-///
-/// ⚠ But the clips that wrote NOTHING left no rows to delete, so they are held
-/// in a ledger in the INGEST plane (`ingest.sqlite`) instead, and it has to go
-/// too or they stay decided:
+/// ⚠ Clips that wrote nothing are held only in the `ingest.sqlite` ledger, under
+/// the stream's kind. Skip this and the reversal looks complete while every
+/// refused or swept clip is never reconsidered:
 ///
 /// ```sql
-/// DELETE FROM pass_ledger WHERE kind = 'transcribe-room';
+/// DELETE FROM pass_ledger WHERE kind = 'transcribe-room';  -- or 'transcribe-segment'
 /// ```
 ///
-/// Forget it and the reversal LOOKS complete — the transcripts are back, the
-/// stream's rows are gone — while every refused or swept clip silently never
-/// gets reconsidered.
-///
-/// Written here rather than in a task because the person who needs it will be
-/// reading this file, not searching for the note.
-///
-/// A SMALL batch on a slow cadence, deliberately: the queue drains over hours
-/// instead of minutes, so a bad verdict is noticed while it is dozens of clips
-/// rather than nine hundred.
+/// A small batch on a slow cadence, so a bad verdict is noticed while it covers
+/// dozens of clips rather than hundreds.
 fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
     const BATCH: usize = 20;
@@ -612,11 +550,9 @@ fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
             })
             .await;
             match done {
-                // ⚠ `swept` is IN this guard, and leaving it out is how the
-                // interesting case goes quiet: a clip whose turns are all
-                // repetition loops writes nothing, hides nothing and refuses
-                // nothing, so without it the one pass that says the audio is bad
-                // is the one pass that logs no line at all.
+                // `swept` is in the guard: a clip whose turns are all repetition
+                // loops writes, hides and refuses nothing, and that pass is the
+                // one saying the audio is bad.
                 Ok(Ok(pass)) if pass.turns + pass.hidden + pass.refused + pass.swept > 0 => {
                     tracing::info!(
                         stream = stream.provenance,
@@ -642,17 +578,12 @@ fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
 
 /// Derive `transcribe-segment` jobs for microphone clips that have no turns.
 ///
-/// Its own loop rather than a step inside `queue::lease`, and the reason is what
-/// each costs. A lease is a REQUEST — the runner asks every 20 seconds — and
-/// deriving spans both planes and scans the ingest one; paying that per request
-/// would put a scan on the hot path to save a timer. `derive_jobs` (room) is in
-/// `lease` because it is one indexed statement against one database.
+/// A timer rather than a step in `queue::lease`: a lease is a frequent request,
+/// and deriving spans both planes and scans the ingest one. The room's
+/// `derive_jobs` is in `lease` because it is one indexed statement.
 ///
-/// ⚠ Deriving is free; LEASING is what spends. A queued job is a row until a
-/// runner asks for its kind.
-///
-/// ⚠ BOUNDED, and that bound is the throttle: queuing the whole backlog in one
-/// statement would hand a runner days of work the moment it learned the kind.
+/// The batch bound is the throttle: queuing the whole backlog at once would hand
+/// a runner days of work the moment it learned the kind.
 fn spawn_segment_deriver(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(10);
     const BATCH: usize = 50;
@@ -676,16 +607,15 @@ fn spawn_segment_deriver(root: PathBuf) {
     });
 }
 
-/// Register MICROPHONE clips in the meaning plane, so their turns have audio.
+/// Register microphone clips in the meaning plane, so their turns have audio. A
+/// clip with no `audio_segments` row goes barren at the write step however often
+/// it is transcribed.
 ///
-/// The room registrar's sibling. A clip with no `audio_segments` row can only
-/// ever go barren at the write step, however often it is transcribed.
+/// Bounded because it decodes: `upload::probe` reads the whole file, competing
+/// with the room builder and with capture.
 ///
-/// ⚠ Bounded tighter than the room's, because this one DECODES: `upload::probe`
-/// reads the whole file, competing with the room builder and with capture.
-///
-/// ⚠ **HOW TO PUT IT BACK.** Registration alone plays no turn and hides
-/// nothing; what it changes is that a clip becomes ELIGIBLE. Two planes:
+/// To reverse it (registration hides nothing, it only makes clips eligible),
+/// both planes:
 ///
 /// ```sql
 /// DELETE FROM audio_segments WHERE path LIKE '%/ingest/%'
@@ -695,8 +625,8 @@ fn spawn_segment_deriver(root: PathBuf) {
 /// DELETE FROM pass_ledger WHERE kind = 'register-segment';
 /// ```
 ///
-/// The `NOT IN` is the whole of it: a row a turn already hangs from must not go,
-/// or the text stays and the audio behind it stops resolving.
+/// Keep the `NOT IN`: deleting a row a turn hangs from leaves text whose audio no
+/// longer resolves.
 fn spawn_segment_registrar(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(5);
     const BATCH: usize = 40;
@@ -711,17 +641,11 @@ fn spawn_segment_registrar(root: PathBuf) {
             })
             .await;
             match done {
-                // `waiting` is NOT in this guard. Every microphone is known
-                // today so it is always zero; if a seventh recorder ever
-                // appears it becomes a large constant number, and a line every
-                // five minutes saying so would drown the log rather than inform
-                // it. The count is there for whoever goes looking.
-                //
-                // ⚠ `covered` IS in it, and `retired` is not. A covered clip
-                // cost a full decode to discover, so it is worth a line; a
-                // retired one cost a hash lookup. The distinction matters
-                // because `covered` is the counter that would have shown this
-                // pass re-decoding 1,599 clips a day, and nothing did.
+                // `waiting` is not in the guard: an unknown recorder makes it a
+                // large constant, and a line every five minutes would drown the
+                // log. `covered` is, and `retired` is not: a covered clip cost a
+                // full decode to discover, a retired one a hash lookup, so a
+                // rising `covered` is how repeated decoding shows up.
                 Ok(Ok(pass)) if pass.added + pass.unreadable + pass.covered > 0 => {
                     tracing::info!(
                         added = pass.added,
@@ -744,13 +668,9 @@ fn spawn_segment_registrar(root: PathBuf) {
 
 /// Register built room blocks in the meaning plane, so their turns have audio.
 ///
-/// Its own loop rather than a step inside the builder's, because it spans BOTH
-/// planes — `segments` in `ingest.sqlite` and `audio_segments` in
-/// `recall.sqlite` — and the builder deliberately touches only its own.
-///
-/// Idempotent, so the first pass after a deploy backfills every block ever built
-/// and each later pass costs one indexed scan. No IDLE branch: there is nothing
-/// to back off from, and a pass that inserts nothing is the normal case.
+/// Its own loop because it spans both planes, and the builder touches only
+/// `ingest.sqlite`. Idempotent: the first pass backfills every block ever built,
+/// and a pass that inserts nothing is the normal case.
 fn spawn_room_registrar(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(5);
     tokio::spawn(async move {
@@ -774,9 +694,8 @@ fn spawn_room_registrar(root: PathBuf) {
     });
 }
 
-/// The room builder — one settled block at a time, calibrated
-/// selection, terminal verdicts only. Chases the level scanner: a block whose
-/// evidence is incomplete defers and returns next pass.
+/// Build settled room blocks, recording terminal verdicts only. Chases the level
+/// scanner: a block whose evidence is incomplete defers to the next pass.
 fn spawn_room_builder(root: PathBuf) {
     const IDLE: std::time::Duration = std::time::Duration::from_mins(1);
     tokio::spawn(async move {

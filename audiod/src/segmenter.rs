@@ -1,16 +1,9 @@
 //! The ffmpeg segmenter child: reads raw s16le PCM on stdin, writes the ring
-//! of UTC-named segment files. Port of `capture.build_segment_argv` +
-//! `capture.CaptureConfig` (ingest shape: no fanout tap).
-//!
-//! ffmpeg stays the encoder for now, deliberately: it keeps this port's output
-//! byte-comparable with the Python server's during the shadow period. Native
-//! Opus encoding arrives with the fusion engine, which needs the PCM in
-//! process anyway (docs/architecture.md).
+//! of UTC-named segment files.
 
 use std::path::Path;
 
-/// The closed set of codecs a segment ring may be written in. An enum rather
-/// than the codec string, so a typo'd codec is a compile error and the
+/// The closed set of codecs a segment ring may be written in. An enum, so the
 /// container extension can never disagree with the codec that filled it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {
@@ -36,12 +29,9 @@ impl Codec {
     /// The bitrate to ask ffmpeg for, or `None` when the codec is lossless and
     /// a bitrate would be meaningless.
     ///
-    /// ⚠ The codec OWNS this, rather than the caller pairing the two, because
-    /// the pair can be wrong in a way nothing downstream can see: `-b:a 32k`
-    /// alongside `-c:a flac` is accepted and ignored by ffmpeg, so a lossless
-    /// capture configured by hand would look configured and be fine, while the
-    /// reverse — a lossy codec whose bitrate went missing — would quietly
-    /// re-encode the household at a default nobody chose.
+    /// The codec owns this rather than the caller pairing the two: a lossy
+    /// codec whose bitrate went missing would silently encode at ffmpeg's
+    /// default, and nothing downstream could see it.
     pub fn default_bitrate(self) -> Option<&'static str> {
         match self {
             Codec::Libopus | Codec::Aac => Some("32k"),
@@ -63,16 +53,10 @@ impl Codec {
 /// Capture parameters. Defaults to FLAC: lossless, because the archive keeps
 /// what the microphones heard.
 ///
-/// ⚠ **The default carries the retention decision, and it used to carry the
-/// opposite one.** Opus at 32 kbps is perceptually transparent for speech, and
-/// on that reasoning it was the default from the beginning — but it destroys
-/// PHASE, so two recorders' streams of one room can never be combined
-/// (docs/architecture.md). The cost of that default was invisible and
-/// irreversible: measured 2026-09-11, every phone segment in the archive is
-/// `.opus` even though the phones stream raw PCM and the fleet had already
-/// decided on lossless — because `audiod ingest` took the default and nobody
-/// passed a flag. A lossy default is the wrong shape for an archive nobody can
-/// re-record; a source that wants Opus now has to say so.
+/// ⚠ The default is the retention decision. Opus at 32 kbps is transparent for
+/// speech but destroys phase, so two recorders' streams of one room could never
+/// be combined (docs/architecture.md). Audio cannot be re-recorded, so a source
+/// that wants Opus has to ask for it.
 #[derive(Debug, Clone)]
 pub struct CaptureConfig {
     pub sample_rate: u32,
@@ -81,8 +65,8 @@ pub struct CaptureConfig {
     pub codec: Codec,
     pub bitrate: Option<String>,
     pub loglevel: String,
-    /// The segmenter program — "ffmpeg", overridable so tests can substitute a
-    /// stub that records what it was fed without needing a codec.
+    /// The segmenter program: "ffmpeg", overridable so tests can substitute a
+    /// stub.
     pub program: String,
 }
 
@@ -100,8 +84,8 @@ impl Default for CaptureConfig {
     }
 }
 
-/// Output pattern `<root>/<source_id>/<source_id>-<strftime>.<ext>` — the
-/// archive naming contract everything downstream reads.
+/// Output pattern `<root>/<source_id>/<source_id>-<strftime>.<ext>`: the
+/// naming contract of [`audiocore::names`].
 pub fn segment_output_pattern(root: &Path, source_id: &str, ext: &str) -> String {
     format!(
         "{}/{source_id}/{source_id}-%Y%m%dT%H%M%S.{ext}",
@@ -109,10 +93,9 @@ pub fn segment_output_pattern(root: &Path, source_id: &str, ext: &str) -> String
     )
 }
 
-/// The live-feed tap (`recall.sources` FANOUT_*): the segmenter's SECOND
-/// output, a best-effort UDP copy at live's format. Fire-and-forget — a full
-/// or absent receiver just drops packets, so the tap can never backpressure
-/// the archive.
+/// The live-feed tap: the segmenter's second output, a best-effort UDP copy at
+/// live's format. A full or absent receiver drops packets, so the tap can
+/// never backpressure the archive.
 const FANOUT_URL: &str = "udp://127.0.0.1:9876?pkt_size=1316";
 const FANOUT_SAMPLE_RATE: u32 = 16_000;
 

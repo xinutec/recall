@@ -1,53 +1,35 @@
-//! A microphone that DELIVERS but hears nothing, while the mics beside it hear
+//! A microphone that delivers but hears nothing, while the mics beside it hear
 //! a conversation.
 //!
-//! ⚠ **The gap this fills is named in #1485.** On 2026-09-08 pixel5 delivered
-//! five 60-second segments containing 0.0 s of speech while usb, iphone11 and
-//! oneplus6t heard 54.2, 53.8 and 43.3 s per minute in the SAME minutes. It beat,
-//! it streamed, it delivered on time — so mic-alive passed, liveness passed and
-//! the delivery check passed. Every signal the fleet had said the phone was fine.
-//! Nothing measured what was IN the audio.
+//! Such a source beats, streams and delivers on time, so every status check
+//! passes; only the audio shows it. A lost microphone permission looks the same:
+//! segments arrive on schedule holding digital silence, and no error surfaces.
 //!
-//! ⚠ **The same signature has a second cause, and it is why this was written on
-//! 2026-09-10 rather than later**: a microphone permission lost on the Mac. The
-//! recorder logs `capture: listening`, segments arrive on schedule, every check
-//! goes green, and the files hold digital silence. A denial never surfaces as an
-//! error, so a check that reads status can never see it — only one that reads the
-//! audio can.
+//! # Relative, never absolute
 //!
-//! # Why the rule is relative and never absolute
+//! A quiet house takes every microphone to zero together, and a switched-off
+//! phone is not deaf. Only a disagreement between microphones over the same
+//! minutes carries information, so:
 //!
-//! A quiet house takes every microphone to zero together, and that is not a
-//! fault. An absolute floor is what once filed a phone Pippijn had deliberately
-//! switched off as "a microphone in your house is missing three quarters of what
-//! is said" — the measurement was right and the conclusion was wrong. Only a
-//! DISAGREEMENT between microphones over the same minutes carries information.
+//! - a source that delivered nothing is absent from the comparison, never deaf
+//!   in it (that is the delivery check's business).
+//! - at least two peers must have heard a conversation; with one, the peer is
+//!   as likely to be the odd one out.
+//! - too little delivered audio says nothing rather than guessing.
 //!
-//! Three consequences, each with a test:
+//! # Thresholds
 //!
-//! - a source that delivered NOTHING is absent from the comparison, never deaf
-//!   in it. A switched-off phone is the delivery check's business.
-//! - at least two peers must have heard a conversation. With one, the peer that
-//!   heard it is as likely to be the odd one out as the source that did not.
-//! - too few shared minutes says nothing rather than guessing.
-//!
-//! # On the thresholds
-//!
-//! ⚠ They are deliberately not delicate, and the measurement is why: the gap
-//! observed was **43.3 s/min against 0.0**. Any cut between those two behaves
-//! identically on the real data, so these numbers are a statement about what a
-//! conversation sounds like, not a tuned parameter. If a future case lands
-//! *between* them, that is a new finding and wants reading, not a nudge here.
+//! Not delicate: the observed gap was 43.3 s/min against 0.0, and any cut
+//! between those behaves the same. A case landing between them is a new
+//! finding, not a reason to nudge a constant.
 
 use crate::check::{Check, Verdict, check};
 
 /// Speech a source recorded, against how much audio it delivered.
 ///
-/// ⚠ **A RATE, not a per-minute bucket, and the archive is why.** The recorders
-/// do not segment in phase: measured 2026-09-08, iphone11 cut its minute at
-/// `:00` while usb, oneplus6t and pixel5 cut theirs at `:57`–`:58`. Bucketing by
-/// clock minute would have compared segments overlapping by two seconds and
-/// called it the same minute. Speech per second DELIVERED needs no alignment.
+/// A rate, not a per-minute bucket: recorders do not segment in phase (one
+/// cuts at `:00`, others at `:57`), so clock-minute buckets would compare
+/// barely overlapping audio. Speech per second delivered needs no alignment.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Heard {
@@ -87,12 +69,10 @@ impl Heard {
 
 /// How far back the deaf-microphone comparison looks.
 ///
-/// ⚠ **A long window hides the thing it is looking for.** The comparison only
-/// speaks when peers heard a CONVERSATION, and a rate averaged over a night of
-/// sleep falls below that: measured on the real archive, the same microphones
-/// read 31-40 s/min over the fifteen minutes of an actual conversation and
-/// 9-10 s/min once eight hours of quiet were folded in. Half an hour is long
-/// enough to contain talking and short enough not to dilute it away.
+/// A long window dilutes a conversation below [`CONVERSATION_PER_MIN`]: the
+/// same mics measured 31-40 s/min over fifteen minutes of talk and 9-10 s/min
+/// with eight hours of quiet folded in. Half an hour holds talk without
+/// diluting it.
 pub fn window() -> chrono::Duration {
     chrono::Duration::minutes(30)
 }
@@ -112,35 +92,17 @@ pub const DEAF_PER_MIN: f64 = 0.5;
 /// Peers that must have heard a conversation before any source is accused.
 pub const MIN_PEERS: usize = 2;
 
-/// Audio a source must have delivered in the window before its rate is used —
-/// one complete 60-second segment.
+/// Audio a source must have delivered in the window before its rate is used:
+/// one complete segment. It only has to show the source listened long enough
+/// to hear something; peer agreement ([`MIN_PEERS`], [`CONVERSATION_PER_MIN`])
+/// is the real protection.
 ///
-/// ⚠ **This was 180 s and it was wrong, shown by the case the check exists for.**
-/// Measured 2026-09-10 20:35Z, Pippijn alone reading a known script: every mic
-/// delivered ONE segment, four heard 21-25 s of him, pixel5 heard nothing and
-/// produced no turns. The check SKIPPED — "only 0 source(s) delivered enough
-/// audio to compare" — because sixty seconds is not a hundred and eighty.
-///
-/// What the floor guards against is a source that delivered only during a quiet
-/// patch, so its zero says nothing about the microphone. That risk is absent
-/// when several peers each heard twenty seconds over the SAME minute: the
-/// protection that matters is peer agreement, and it is enforced separately by
-/// [`MIN_PEERS`] and [`CONVERSATION_PER_MIN`]. This floor only has to establish
-/// that the source was listening long enough to have heard something.
-///
-/// ⚠ **55 and not 60, because a real segment is not 60 seconds.** Measured on the
-/// same archive: the phones close at **59.993 s** and only the Mac's own capture
-/// hits 60.000. A floor set at the nominal length excluded all four phones and
-/// left the check saying "only 1 source delivered enough audio" — the SECOND
-/// time this bound hid the case it exists for, and the first fixture missed it
-/// because it used the nominal 60.0 rather than the measured 59.993.
-///
-/// ⚠ It still refuses half a segment — a source cut off by a pause or starting
-/// mid-minute is genuinely too little to convict on, and a test pins that.
+/// ⚠ 55 and not 60: phones close segments at 59.993 s, so a floor at the
+/// nominal length excludes every phone. Half a segment is still refused.
 pub const MIN_DELIVERED_S: f64 = 55.0;
 
-/// ⚠ Stable across runs: the culprit belongs in `observed`, never here, or the
-/// trend restarts whenever a different microphone fails.
+/// Stable across runs: the culprit belongs in `observed`, or the trend restarts
+/// whenever a different microphone fails.
 const LABEL: &str = "no microphone is deaf while the others hear speech";
 const EXPECTED: &str = "every delivering source hears what its peers hear";
 
@@ -162,8 +124,7 @@ pub fn deaf_sources(heard: &[Heard]) -> Vec<String> {
         .collect()
 }
 
-/// The fleetwatch check. `Skip` where the comparison cannot speak — that is an
-/// absence of evidence, and ranks with `Pass` rather than dragging a summary up.
+/// The fleetwatch check; `Skip` where the comparison cannot speak.
 #[must_use]
 pub fn deaf_check(heard: &[Heard]) -> Check {
     let usable: Vec<&Heard> = heard.iter().filter(|h| h.comparable()).collect();
@@ -212,9 +173,9 @@ pub fn deaf_check(heard: &[Heard]) -> Check {
         .build()
 }
 
-/// Ask the fleet what each device source delivered and heard over `window` to
-/// `now`. The fleet holds every recorder's audio and its speech measurement, so
-/// the comparison covers the microphones that never pass through this Mac too.
+/// Ask the fleet (`GET /sync/heard`) what each device source delivered and
+/// heard over `window` to `now`. The fleet holds every recorder's audio and
+/// speech measurement, including microphones that never pass through this Mac.
 ///
 /// # Errors
 /// The message is meant to be read in a skip line, so it names what failed.

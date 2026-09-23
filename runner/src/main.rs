@@ -1,15 +1,12 @@
-//! `runner` — the Mac's whole job orchestration.
+//! `runner`: the Mac's job orchestration.
 //!
-//! Poll recalld for the newest job, fetch its audio, drive a model shim, push
-//! the result, ack. Stateless: no watermark, no outbox, no mirror queue, because
-//! the queue lives on Isis. Kill it at any moment and the only cost is a lease
-//! that expires.
+//! Poll recalld for the next job, fetch its audio, drive a model shim, push
+//! the result, ack. Stateless, because the queue lives on Isis: killing it
+//! costs only a lease that expires.
 //!
-//! ⚠ **`transcribe-segment` is LIVE: its results become turns** — the per-mic
-//! stream `recalld::turns::PER_MIC` writes, which replaced `worker.py` on
-//! 2026-09-13. `transcribe-room` is not: its results are stored opaque and
-//! nothing interprets them, because the room stream waits on the referee
-//! (#1461), which cannot yet say which stream is better.
+//! `transcribe-segment` results become turns (`recalld::turns::PER_MIC`).
+//! `transcribe-room` results are stored but not yet interpreted: the room
+//! stream waits on the referee.
 
 use chrono::Utc;
 use runner::client::{Client, Job, Span};
@@ -21,38 +18,22 @@ use std::time::Duration;
 const IDLE: Duration = Duration::from_secs(20);
 const BACKOFF: Duration = Duration::from_mins(1);
 
-/// What each shim can be given. The shim NAMES ITSELF over the protocol
-/// (`hello`), so this is discovered at startup rather than inferred from argv —
-/// a runner pointed at the wrong module would otherwise lease work confidently
-/// and fail every job of it.
-///
-/// An unknown name is FATAL. Guessing "it is probably asr" is how a `voices`
-/// process ends up holding transcription jobs it can only refuse.
+/// What each shim can be given, keyed by the name it reports in `hello` rather
+/// than inferred from argv, so a runner pointed at the wrong module does not
+/// lease work it will fail. An unknown name is fatal.
 fn kinds_for(shim_name: &str) -> Option<&'static [&'static str]> {
     match shim_name {
-        // ⚠ **THE CUTOVER.** `transcribe-segment` is here and
-        // `org.xinutec.recall-worker` is gone, in the same commit, because they
-        // are one change: both transcribe the same clips with the same model on
-        // the same GPU, and running both would do all of it twice with the
-        // second copy competing with capture.
-        //
         // The lease orders by capture time across kinds (`queue::lease`), so a
         // room block and a microphone clip from the same minute compete on
-        // equal terms rather than one starving the other.
+        // equal terms.
         "asr" => Some(&["transcribe-room", "transcribe-segment"]),
-        // ⚠ **`diarize-segment` ONLY, and NOT `diarize-room`.** Room jobs are
-        // derived for every transcribed block whether or not anything consumes
-        // them — 3,232 were queued when this was written, with the room writer
-        // off pending #1461. Leasing them would spend the GPU the recorder needs
-        // on results nothing reads, and `queue::lease` orders across kinds by
-        // capture time, so they would take roughly half of every pass.
+        // ⚠ Not `diarize-room`: room jobs are queued for every transcribed
+        // block whether or not anything reads them, and leasing them would
+        // spend the GPU on results nothing consumes. This list, not the queue,
+        // is the consumption switch.
         //
-        // An earlier comment here claimed the queue could be trusted to only
-        // contain what a consumer wanted. It cannot: derivation and consumption
-        // are separate switches, and this is the consuming one.
-        // ⚠ `enroll-speaker` rides with diarization because both are pyannote
-        // in the same process — a separate runner would load the weights twice
-        // for work that arrives a handful of turns a week.
+        // `enroll-speaker` shares the process because both are pyannote; a
+        // separate runner would load the weights twice.
         "voices" => Some(&["diarize-segment", "enroll-speaker"]),
         _ => None,
     }
@@ -64,9 +45,8 @@ struct Config {
     program: String,
     args: Vec<String>,
     once: bool,
-    /// Where to stamp the archive's pulse — `<archive root>/worker-heartbeat.json`.
-    /// Absent means "do not stamp", which is right for a runner that is not
-    /// beside the archive it would be certifying.
+    /// Where to stamp the archive's pulse (`<archive root>/worker-heartbeat.json`).
+    /// Absent means do not stamp, for a runner that is not beside the archive.
     pulse: Option<std::path::PathBuf>,
 }
 
@@ -116,20 +96,11 @@ fn parse_args() -> Config {
     }
 }
 
-/// Do one job. `Ok(false)` means the queue was empty.
-///
-/// ⚠ **An empty queue STAMPS the pulse.** The doctor cannot otherwise tell a
-/// runner with nothing to do from one that is gone: both stamp nothing, and
-/// "last pass 1024 min ago" reads as a stall when the truth is that the backlog
-/// drained. It already renders `rows == 0` as "nothing to do" — it was simply
-/// never sent such a beat.
-///
 /// Embed each named span of one clip into the print list the fleet files.
 ///
-/// ⚠ **A refused span is skipped, not fatal.** One corrupt stretch would
-/// otherwise cost every other voice in the clip its enrolment, and the fleet
-/// cannot tell "the clip was bad" from "the runner gave up" — it would ledger the
-/// whole clip as decided and never come back for the spans that were fine.
+/// A refused span is skipped, not fatal: otherwise one corrupt stretch would
+/// cost every other voice in the clip its enrolment, and the fleet would record
+/// the whole clip as decided.
 fn embed_spans(
     shim: &mut Shim,
     clip: &Path,
@@ -149,17 +120,19 @@ fn embed_spans(
             Err(shim::Error::Refused(why)) => {
                 tracing::warn!(segment_id = span.segment_id, %why, "span refused; skipping it");
             }
-            // Not a refusal: the shim itself is broken or gone, and the next
-            // span would meet the same wall. Let it end the job so the lease
-            // lapses and another attempt gets a fresh process.
+            // The shim itself is broken: end the job so the lease lapses and a
+            // fresh process retries it.
             Err(other) => return Err(other),
         }
     }
     Ok(serde_json::json!({ "prints": prints }))
 }
 
-/// A runner wedged INSIDE a job still never reaches here, so the stall it exists
-/// to catch is still caught.
+/// Do one job. `Ok(false)` means the queue was empty.
+///
+/// An empty queue stamps the pulse with `rows == 0`, so the doctor can tell an
+/// idle runner from a gone one. A runner wedged inside a job never stamps, so
+/// the doctor still catches the stall.
 fn one(
     client: &Client,
     shim: &mut Shim,
@@ -183,35 +156,27 @@ fn one(
     tracing::info!(id, %kind, %source, %filename, "leased");
     let clip = scratch.join(&filename);
     client.fetch_blob(&source, &filename, &clip)?;
-    // Only kinds this runner asked for can arrive; anything else is recalld
-    // offering work the lease filter should have withheld, and saying so is
-    // better than transcribing a diarization job by accident.
+    // Only kinds this runner asked for should arrive; anything else is refused
+    // rather than run through the wrong model.
     let outcome = match kind.as_str() {
-        // Both transcription kinds are the same work: one clip, one model, one
-        // reply. What differs is which stream's turns it becomes, and that is
-        // recalld's question, not the runner's.
+        // Both transcription kinds are the same work; which stream the result
+        // feeds is recalld's concern.
         "transcribe-room" | "transcribe-segment" => shim.transcribe(&clip, None, prompt),
         "diarize-room" | "diarize-segment" => shim.diarize(&clip),
-        // ⚠ **The one kind that is MANY model calls**, one per named turn in the
-        // clip, so the runner composes the result the others receive whole. A
-        // span the shim refuses costs that print and not the job: the rest of
-        // the clip's voices still enrol, and the fleet re-derives the missing
-        // one on the next pass because its turn is still unenrolled.
+        // One model call per named turn, composed here. A refused span costs
+        // only its print; the fleet re-derives it while its turn is unenrolled.
         "enroll-speaker" => embed_spans(shim, &clip, &spans),
         other => Err(shim::Error::Refused(format!(
             "runner cannot do job kind {other}"
         ))),
     };
-    // The scratch copy is the runner's only state, and it is gone either way.
+    // The scratch copy is removed whatever the outcome.
     let _ = std::fs::remove_file(&clip);
     match outcome {
         Ok(result) => {
-            // ⚠ **Each shim names its result differently, and counting only
-            // one spelling makes the other's log line a constant.** `asr`
-            // answers `segments`, `voices` answers `turns` for a diarization and
-            // `prints` for an enrolment — so a diarize job logged `rows=0`
-            // whether it had found twelve speakers or none, which is the one
-            // thing the line exists to say. Adding a kind means adding its key.
+            // Each kind names its result list differently: `segments` (asr),
+            // `turns` (diarize), `prints` (enrol). A new kind needs its key here,
+            // or its `rows` is always 0.
             let rows = ["segments", "turns", "prints"]
                 .iter()
                 .filter_map(|key| result.get(*key))
@@ -226,24 +191,20 @@ fn one(
             stamp_pulse(pulse, started, rows);
             Ok(true)
         }
-        // ⚠ A REFUSAL IS TERMINAL, and recorded. The shim answered — the clip is
-        // the problem, not the process — so retrying it would burn the same
-        // answer for ever. Storing the failure means a later reader can see
-        // WHICH clips could not be transcribed, instead of finding a silent gap.
+        // A refusal is terminal and recorded: the clip is the problem, not the
+        // process, so a retry would get the same answer. The stored failure
+        // shows which clips could not be processed.
         Err(shim::Error::Refused(why)) => {
             tracing::warn!(id, %why, "shim refused; recording the failure");
             client.finish(
                 id,
                 &serde_json::json!({ "ok": false, "error": why }).to_string(),
             )?;
-            // A refusal is a completed pass: the runner asked, the shim
-            // answered, the queue moved. The doctor is watching for a STALLED
-            // Mac, and a Mac refusing clips promptly is not that.
+            // A refusal is a completed pass, not a stall.
             stamp_pulse(pulse, started, 0);
             Ok(true)
         }
-        // Transport failures are the SHIM's problem: say nothing, let the lease
-        // expire, and let a fresh process try the same job.
+        // Transport failure: let the lease expire so a fresh process retries.
         Err(err) => Err(Box::new(err)),
     }
 }
@@ -280,13 +241,9 @@ fn main() {
         tracing::error!(shim = %name, "unknown shim; refusing to guess what it can do");
         std::process::exit(1);
     };
-    // ⚠ FATAL if unreachable, deliberately — but only for a runner that will
-    // TRANSCRIBE. Transcribing without the biasing the vocabulary was built for
-    // produces a corpus that has to be redone, and re-transcription is the cost
-    // #1388 exists to reduce. An EMPTY vocabulary is fine — that is `None`, and
-    // means no biasing rather than a failure. Diarization has no use for it, and
-    // making a `voices` runner die on an unreachable fleet would be a dependency
-    // it does not have.
+    // Fatal if unreachable, but only for a transcribing runner: unbiased
+    // transcripts would have to be redone. An empty vocabulary is `None`, no
+    // biasing. Diarization does not use it.
     let prompt = if kinds.contains(&"transcribe-room") {
         match client.prompt() {
             Ok(prompt) => {
@@ -314,9 +271,7 @@ fn main() {
             prompt.as_deref(),
             config.pulse.as_deref(),
         ) {
-            // ⚠ `--once` means ONE JOB, not "until the queue empties". It read
-            // the latter on 2026-09-06 and chewed through six live jobs during
-            // what was meant to be a single end-to-end check.
+            // `--once` means one job, not until the queue empties.
             Ok(true) => {
                 if config.once {
                     return;
@@ -334,8 +289,8 @@ fn main() {
                     std::process::exit(1);
                 }
                 std::thread::sleep(BACKOFF);
-                // A dead shim cannot be written to; get a fresh one rather than
-                // spin against a closed pipe.
+                // The shim may be dead; replace it rather than write to a
+                // closed pipe.
                 if let Ok(fresh) = Shim::spawn(&config.program, &config.args) {
                     shim = fresh;
                 }

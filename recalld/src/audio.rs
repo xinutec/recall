@@ -1,29 +1,20 @@
-//! Playback clips, ported from `recall.api_audio`.
+//! Playback clips.
 //!
 //! Two routes, both read-only: one turn's audio, and one continuous span across a
 //! run of same-speaker turns. Like [`crate::reads`], this opens `recall.sqlite`
-//! READ-ONLY — recalld does not own the meaning plane.
+//! read-only: recalld does not own the meaning plane.
 //!
-//! ⚠ **The clip is shaped, the recording is not.** Every clip is sliced out with
-//! ffmpeg and then peak-normalised with sox, so a quiet turn is audible without
-//! reaching for the volume. The archived audio is never touched; only the
-//! transient clip is. Both binaries are the ones the segmenters already use.
+//! Each clip is sliced with ffmpeg and peak-normalised with sox, so a quiet turn
+//! is audible; the archived audio is never touched.
 //!
-//! ⚠ **Those binaries — and `deep-filter` for `enhance=true` — are a RUNTIME
-//! dependency of recalld now, and a missing one fails at play time rather than
-//! at boot.** The fleet image installs
-//! `ffmpeg sox flac` for exactly this reason and says so: it once shipped with
-//! ffmpeg alone, and every audio request on the fleet died inside loudness
-//! normalisation while the transcripts served perfectly — a fault that hides
-//! until somebody presses play. recalld runs from that same image, so it
-//! inherits both the dependency and the failure mode.
+//! ⚠ ffmpeg, sox and (for `enhance=true`) `deep-filter` are runtime
+//! dependencies. A missing one fails only when somebody presses play, while
+//! transcripts still serve; the Dockerfile installs all three.
 //!
-//! ⚠ **The padding rule is the whole reason this is not a generic byte-range
-//! server.** A Whisper turn is a phrase — slicing exactly to it yields a
-//! one-second fragment with no lead-in, which is useless for recall. So a rough
-//! turn gets a wide context window, while a *precise* cutout (a diarized turn, or
-//! one carrying word timings) gets a tight one, because widening that would pull
-//! in the neighbouring speaker — the exact confusion diarization just resolved.
+//! Padding: a rough turn is a whole phrase, and sliced exactly it has no
+//! lead-in, so it gets a wide window. A precise cutout (diarized, or carrying
+//! word timings) gets a tight one, because widening it would pull in the
+//! neighbouring speaker.
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -74,15 +65,12 @@ const DIARIZED_MARKER: &str = "diarized";
 
 /// Where a turn's audio lives, or `None` if it has none.
 ///
-/// Times are computed as an offset from the audio segment's own start, exactly
-/// as the Python does — the turn's absolute timestamps mean nothing to ffmpeg.
+/// Times are offsets from the audio segment's own start: ffmpeg knows nothing
+/// of absolute timestamps.
 ///
-/// ⚠ The offset comes from `SQLite`'s `julianday`, which is a float day count, so
-/// it carries roughly 10µs of error at these magnitudes. That is three orders of
-/// magnitude below the millisecond precision `-ss` is formatted to, so it can
-/// never move a frame — but it does mean these seconds are not bit-identical to
-/// the Python's datetime subtraction, and a test comparing them needs a
-/// tolerance rather than equality.
+/// The offset comes from `SQLite`'s float `julianday`, so it carries roughly
+/// 10 µs of error, far below the millisecond precision `-ss` is formatted to.
+/// Tests comparing these seconds need a tolerance, not equality.
 pub fn placement(conn: &Connection, transcript_id: i64) -> rusqlite::Result<Option<Placement>> {
     let mut stmt = conn.prepare(
         "SELECT a.path, a.id, \
@@ -118,19 +106,15 @@ pub fn placement(conn: &Connection, transcript_id: i64) -> rusqlite::Result<Opti
 /// Slice `[start, end]` out of `src`, optionally denoise, and peak-normalise it,
 /// returning WAV bytes.
 ///
-/// ⚠ Separate processes, not one: ffmpeg cuts, sox normalises. Keeping sox's
-/// `norm -1` rather than reaching for an ffmpeg filter keeps playback loudness
-/// identical to what the Python served, which is a thing a person would notice
-/// change.
+/// ffmpeg cuts and sox normalises (`norm -1`), keeping playback loudness
+/// stable.
 ///
-/// The `enhance` stage sits between them: `deep-filter` (`DeepFilterNet`, tract
-/// inference — pure Rust, so no AVX2, which the Ivy Bridge fleet lacks) writes
-/// its output under the input's own name in `-o`'s directory, hence the
+/// The optional `enhance` stage sits between them: `deep-filter`
+/// (`DeepFilterNet` on tract, which needs no AVX2, which the fleet lacks)
+/// writes its output under the input's own name in `-o`'s directory, hence the
 /// subdirectory. `-D` compensates the model's lookahead so timestamps stay
-/// aligned with the raw clip. Measured on isis 2026-09-10: 10 s of speech in
-/// 3.5 s, 57 MB peak — an opt-in wait, which is why the flag defaults off.
-/// Chosen over stitching mics in the #1522 listen test ("no noise, clear
-/// voices"); see docs/architecture.md.
+/// aligned with the raw clip. It takes about 3.5 s per 10 s of speech, which is
+/// why the flag defaults off; see docs/architecture.md.
 pub fn render(src: &Path, start: f64, end: f64, enhance: bool) -> std::io::Result<Vec<u8>> {
     let dir = tempfile::tempdir()?;
     let cut = dir.path().join("clip.wav");
@@ -228,11 +212,8 @@ pub struct AudioQuery {
 
 /// Why a clip could not be produced.
 ///
-/// ⚠ **Errors as data, not as pre-rendered responses.** The picker used to
-/// return a `Box<Response>`, which meant a database query decided an HTTP status
-/// from inside a `SQLite` closure, and every caller had to box a fat value to
-/// say "the query failed". The status belongs at the edge; this is what the
-/// picker actually knows.
+/// Errors as data: the HTTP status is decided at the edge, not inside the
+/// picker's query.
 #[derive(Debug)]
 pub enum ClipError {
     /// The lookup failed. Nothing is known about whether audio exists.
@@ -250,10 +231,8 @@ impl From<rusqlite::Error> for ClipError {
 /// Render `[start, end)` of one recording as a WAV response.
 ///
 /// ⚠ Private, and reached only through [`render_blocking`], because it shells
-/// out to ffmpeg and sox. A caller on the request thread stalls every other
-/// browsing request — and the recorders' ingest, which shares this runtime —
-/// for the length of a clip. Making that mistake possible cost nothing to
-/// prevent: nobody outside needs to render without first picking.
+/// out to ffmpeg and sox: on the request thread it would stall every other
+/// request, ingest included, for the length of a clip.
 fn clip(path: &Path, start: f64, end: f64, enhance: bool) -> Response {
     match render(path, start, end, enhance) {
         Ok(bytes) => ([(header::CONTENT_TYPE, "audio/wav")], bytes).into_response(),
@@ -267,10 +246,10 @@ fn no_audio() -> Response {
 
 pub type Picked = Result<Option<(PathBuf, f64, f64)>, ClipError>;
 
-/// Open the read-only connection, pick a window, render it — the whole of what
-/// an audio route does, and the only place [`clip`] may be called from.
+/// Open the read-only connection, pick a window and render it: the whole of
+/// what an audio route does, and the only caller of `clip`.
 ///
-/// ⚠ Must run on the blocking pool; see [`clip`].
+/// ⚠ Must run on the blocking pool; see `clip`.
 pub fn render_blocking(
     root: &Path,
     enhance: bool,

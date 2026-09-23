@@ -1,18 +1,14 @@
-//! recall-audiod — the audio-plane daemon (docs/architecture.md).
+//! recall-audiod: the audio-plane daemon (docs/architecture.md). One binary,
+//! one subcommand per agent (see `usage`):
 //!
-//!   audiod ingest  --root <archive> [--port 9999]
-//!       the network-mic ingest server (the live recall-ingest agent)
-//!   audiod capture --root <archive> --id usb [--device <CoreAudio name>]
-//!       the local-mic capture pipeline (port of `recall record`; deployment
-//!       still runs the Python capture agent until the flip)
-//!   audiod pause-mirror --root <archive> --url <control base>
-//!       maintain `capture_paused_until` from the control plane's word — the
-//!       recorder-contract pause for hosts with no local mirror (geb)
-//!   audiod upload  --root <archive> --url <recalld base> [--token-file <path>]
-//!       one store-and-forward delivery pass (docs/architecture.md, stage B):
-//!       closed segments → recalld, sha-256 receipts verified, state recorded.
-//!       The token comes from `--token-file` or the `RECALL_INGEST_TOKEN` env var
-//!       (the launchd agent sources it from .env — never the nix store)
+//! * `ingest`: the network-mic ingest server.
+//! * `capture`: the local-mic capture pipeline.
+//! * `capture-mirror`: the Mac's pause mirror, which reports what it applied.
+//! * `pause-mirror`: the pause mirror for a recorder that reports nothing.
+//! * `upload`: one store-and-forward delivery pass (stage B).
+//! * `beat-relay`: the LAN heartbeat fallback.
+//! * `logrotate`: bound the agents' log files.
+//! * `pause`, `resume`: the break-glass control.
 
 use chrono::Utc;
 use std::path::{Path, PathBuf};
@@ -26,7 +22,6 @@ fn usage() -> ExitCode {
         \x20      audiod upload --root <data-root> --url <base> [--token-file <path>] [--max <n>]\n\
         \x20      audiod beat-relay --url <fleet> [--port <port>]\n\
         \x20      audiod pause-mirror --root <data-root> --url <base>\n\
-        \x20      audiod speech --root <data-root> [--max <n>]\n\
         \x20      audiod logrotate\n\
         \n\
         \x20  the break-glass control, when the fleet cannot be reached:\n\
@@ -59,9 +54,9 @@ fn parse_args() -> Option<Args> {
     let mut args = std::env::args().skip(1);
     let mode = args.next();
     let mut root: Option<PathBuf> = None;
-    // ⚠ Whether --port was GIVEN, not just its value. Two subcommands listen and
-    // their defaults differ (ingest 9999, beat-relay 8000), so a single
-    // pre-seeded default silently hands one of them the other's port.
+    // ⚠ Whether --port was given, not just its value: ingest and beat-relay
+    // default to different ports, so one pre-seeded default would hand one of
+    // them the other's.
     let mut port: Option<u16> = None;
     let mut id: Option<String> = None;
     let mut device: Option<String> = None;
@@ -75,8 +70,8 @@ fn parse_args() -> Option<Args> {
     let mut codec = audiod::segmenter::CaptureConfig::default().codec;
     let mut once = false;
     while let Some(arg) = args.next() {
-        // ⚠ Handled BEFORE the value fetch: every other flag takes one, and a
-        // bare `--once` would otherwise swallow the next argument.
+        // ⚠ Before the value fetch: every other flag takes a value, and a bare
+        // `--once` would otherwise swallow the next argument.
         if arg == "--once" {
             once = true;
             continue;
@@ -110,11 +105,9 @@ fn parse_args() -> Option<Args> {
                 Ok(parsed) => seconds = Some(parsed),
                 Err(_) => return None,
             },
-            // ⚠ Lossless is the prerequisite for COMBINING microphones, not a
-            // quality preference. Opus at 32 kbps is transparent to an ear and
-            // destructive to phase — it codes what you notice rather than the
-            // waveform — so two Opus streams of one room cannot be summed
-            // coherently however well they are aligned.
+            // Lossless is the prerequisite for combining microphones, not a
+            // quality preference: Opus destroys phase, so two Opus streams of
+            // one room cannot be summed coherently however well aligned.
             "--codec" => match value.as_str() {
                 "opus" => codec = audiod::segmenter::Codec::Libopus,
                 "flac" => codec = audiod::segmenter::Codec::Flac,
@@ -237,9 +230,8 @@ fn main() -> ExitCode {
             };
             audiod::pause_mirror::run(&root, &url)
         }
-        // The MAC's mirror: reports what it applied, then long-polls for intent.
-        // Distinct from `pause-mirror` (geb) because reporting is the difference
-        // — the fleet has no other way to know a pause took hold.
+        // The Mac's mirror: reports what it applied, then long-polls for
+        // intent. The report is how the fleet knows a pause took hold.
         Some("capture-mirror") => match url {
             None => usage(),
             Some(url) => run_capture_mirror(&root, &url, token_file, once),
@@ -250,11 +242,8 @@ fn main() -> ExitCode {
             };
             run_upload(root, url, token_file, max)
         }
-        // ⚠ **The household's break-glass control.** The normal surface is the
-        // fleet's UI; this is what still works when Isis cannot be reached, and
-        // it is the reason it lives HERE rather than in `recall-cli`, which
-        // would need the network the emergency is about. Ported from
-        // `recall.capture_control` when the Python CLI retired.
+        // The household's break-glass control. Here rather than in
+        // `recall-cli`, which would need the network the emergency is about.
         Some("pause") => match audiod::pause::pause(&root, Utc::now(), minutes) {
             Ok(until) => {
                 println!("paused until {}", until.to_rfc3339());
@@ -279,24 +268,12 @@ fn main() -> ExitCode {
     }
 }
 
-/// The upload arm: resolve the token (file or env — never argv, which is
-/// world-readable in `ps`; the fleet's secrets stay out of the nix store the
-/// same way) and run one bounded pass.
-/// The Mac's capture mirror: report what was applied, long-poll for intent.
-///
-/// The token is the SYNC plane's, not the ingest one: `/sync/capture` is a
-/// control-plane exchange, and the mirror presents the same credential
-/// `recall.sync` did.
 /// The LAN heartbeat fallback: accept a beat, forward it to the fleet, forever.
-///
-/// ⚠ NOT gated on the pause, unlike `ingest` — a pause is exactly when the
+/// Not gated on the pause, unlike `ingest`: a pause is exactly when the
 /// heartbeat is the only signal there is.
 ///
-/// ⚠ **Dispatched BEFORE the `--root` check, and that is the point rather than
-/// an ordering accident.** The relay forwards and stores nothing, so it has no
-/// data root. Requiring one would say it keeps a local beat store — the very
-/// thing `beat_relay` refuses, because two places disagreeing about which mics
-/// are alive is worse than the bug it fixes.
+/// Dispatched before the `--root` check: the relay stores nothing, so it has
+/// no data root.
 fn run_beat_relay(url: Option<&str>, port: Option<u16>) -> ExitCode {
     let Some(url) = url else {
         return usage();
@@ -307,6 +284,9 @@ fn run_beat_relay(url: Option<&str>, port: Option<u16>) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// The Mac's capture mirror: report what was applied, long-poll for intent.
+/// The token is the sync plane's, not the ingest one: `/sync/capture` is a
+/// control-plane exchange.
 fn run_capture_mirror(
     root: &std::path::Path,
     url: &str,
@@ -334,6 +314,8 @@ fn run_capture_mirror(
     audiod::pause_mirror::run_exchange(root, url, &token, interval)
 }
 
+/// The upload arm: resolve the token (file or env, never argv, which `ps`
+/// shows) and run one bounded pass.
 fn run_upload(root: PathBuf, url: String, token_file: Option<PathBuf>, max: usize) -> ExitCode {
     let token = match token_file {
         None => std::env::var("RECALL_INGEST_TOKEN")

@@ -1,8 +1,7 @@
 //! Re-derive stored speaker guesses when the voiceprint corpus has grown.
 //!
 //! A guess is written once, when a turn's embedding is first stored, against
-//! whatever voiceprints existed then. Enrolment continues; nothing else re-asks
-//! (#1657).
+//! whatever voiceprints existed then; this pass re-asks after later enrolments.
 
 use crate::identify::{match_one, worth_writing};
 use rusqlite::Connection;
