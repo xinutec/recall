@@ -9,7 +9,7 @@ fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 21, 12, 0, 0).unwrap()
 }
 
-/// A window the household clearly spoke in, so nothing skips for quiet.
+/// A window with plenty of speech, so nothing skips for quiet.
 fn talking(lag_median_s: Option<f64>, lag_samples: usize) -> LiveHealth {
     LiveHealth {
         lag_median_s,
@@ -23,10 +23,8 @@ fn talking(lag_median_s: Option<f64>, lag_samples: usize) -> LiveHealth {
 
 #[test]
 fn an_unreachable_fleet_skips_both_checks_and_fails_neither() {
-    // ⚠⚠ The failure this whole module exists for. A live tier that cannot be
-    // ASKED about is not a broken one, and a FAIL here would cry wolf every
-    // time the VPN blinked — which teaches a person to stop reading the check
-    // that is supposed to catch a dead tier.
+    // A live tier that cannot be asked about is not a broken one; failing here
+    // would cry wolf whenever the VPN blinked and teach people to ignore the check.
     let checks = live_checks(
         &Err("cannot reach the fleet (timed out)".to_owned()),
         now(),
@@ -63,8 +61,7 @@ fn a_mac_with_no_fleet_says_so_rather_than_guessing_an_address() {
 
 #[test]
 fn a_fleet_that_is_configured_needs_both_halves_of_the_credential() {
-    // Either half missing is "not half of the Isis pair", never a request to
-    // an address with no token on it.
+    // Either half missing means unconfigured, never a request without a token.
     assert!(Fleet::new(Some("http://fleet:8000"), Some("t")).is_some());
     assert!(Fleet::new(None, Some("t")).is_none());
     assert!(Fleet::new(Some("http://fleet:8000"), None).is_none());
@@ -73,9 +70,8 @@ fn a_fleet_that_is_configured_needs_both_halves_of_the_credential() {
 
 #[test]
 fn a_handful_of_turns_skips_with_the_count_rather_than_grading_noise() {
-    // ⚠ The sample floor is the GRADER's rule, which is why the fleet sends the
-    // count and not a pre-filtered median: a measurement that hid its own
-    // sample size could not be graded by any other one.
+    // The sample floor is the grader's rule, so the fleet sends the count
+    // rather than a pre-filtered median.
     let checks = live_checks(&Ok(talking(Some(4.0), 3)), now(), None);
     let lag = &checks[0];
     assert_eq!(lag.verdict, Verdict::Skip);
@@ -90,15 +86,14 @@ fn enough_turns_are_actually_graded() {
     assert_eq!(healthy[0].value, Some(4.0));
     assert_eq!(healthy[1].verdict, Verdict::Pass, "a turn a minute ago");
 
-    // The failure #1383 fixed: turns keep arriving, each later than the last.
+    // Turns keep arriving, but each later than the last.
     let behind = live_checks(&Ok(talking(Some(120.0), 40)), now(), None);
     assert_eq!(behind[0].verdict, Verdict::Warn);
 }
 
 #[test]
 fn the_pause_still_skips_the_liveness_check() {
-    // Pause is the Mac's own state and stays the Mac's to read: nothing is
-    // being recorded, so nothing should be transcribed.
+    // Pause is the Mac's own state: nothing is recorded, so nothing is transcribed.
     let until = now() + chrono::Duration::hours(1);
     let checks = live_checks(&Ok(talking(Some(4.0), 40)), now(), Some(until));
     assert_eq!(checks[1].verdict, Verdict::Skip);
@@ -111,8 +106,7 @@ fn the_pause_still_skips_the_liveness_check() {
 
 #[test]
 fn a_window_nobody_spoke_in_skips_instead_of_blaming_the_tier() {
-    // Measured 2026-09-09: the check was red for 36% of 55.8 active hours, and
-    // a quarter of that was simply a quiet house.
+    // A quiet window is not the tier's fault.
     let quiet = LiveHealth {
         speech_s: 0.0,
         ..talking(Some(4.0), 40)
@@ -125,10 +119,9 @@ fn a_window_nobody_spoke_in_skips_instead_of_blaming_the_tier() {
 
 #[test]
 fn an_unscanned_window_is_not_a_quiet_one() {
-    // ⚠ `scanned_s` is separate from `delivered_s` on purpose: a window reads
-    // "no speech" both when the house was silent and when nothing in it has
-    // been measured yet. Collapsing those would silence the check exactly when
-    // the archive fell behind — the condition most likely to accompany a stall.
+    // `scanned_s` is separate from `delivered_s`: a window reads "no speech"
+    // both when silent and when not yet measured, and collapsing those would
+    // silence the check exactly when the archive fell behind.
     let unscanned = LiveHealth {
         scanned_s: 0.0,
         speech_s: 0.0,

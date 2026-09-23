@@ -112,8 +112,8 @@ fn clearing_a_turn_speaker_stores_null_not_an_empty_name() {
 
 #[test]
 fn reassigning_a_correction_moves_the_pair_the_live_turn_and_the_voiceprint() {
-    // ⚠ All three, or the timeline keeps showing the name that was just found to
-    // be wrong while the corpus says otherwise.
+    // All three, or the timeline keeps showing the name just found to be wrong
+    // while the corpus says otherwise.
     let mut conn = db();
     let correction = corrected(&conn, 41, "Alex");
 
@@ -189,8 +189,8 @@ fn reassigning_a_correction_with_no_live_turn_still_moves_the_pair() {
 
 #[test]
 fn hiding_a_correction_keeps_the_pair_and_drops_the_voiceprint() {
-    // ⚠ Hidden, not deleted: that a person read this clip and judged it unusable
-    // is itself evidence worth keeping.
+    // Hidden, not deleted: a person judging this clip unusable is evidence worth
+    // keeping.
     let mut conn = db();
     let correction = corrected(&conn, 41, "Alex");
 
@@ -213,9 +213,8 @@ fn hiding_a_correction_keeps_the_pair_and_drops_the_voiceprint() {
 
 #[test]
 fn a_failed_reassignment_leaves_nothing_half_done() {
-    // Drop the table the LAST statement needs: the pair and the live turn must
-    // both roll back. If they did not, the corpus would say one name and the
-    // timeline another, with nothing to show which was meant.
+    // Drop the table the last statement needs: the pair and the live turn must
+    // both roll back, or the corpus and the timeline disagree.
     let mut conn = db();
     let correction = corrected(&conn, 41, "Alex");
     conn.execute("DROP TABLE speaker_embeddings", [])
@@ -329,10 +328,9 @@ fn a_correction_supersedes_the_original_and_records_the_pair() {
 
 #[test]
 fn a_corrected_turn_is_findable_by_search() {
-    // ⚠ `transcript_fts` is a contentless FTS5 table maintained BY THE WRITER,
-    // not by a trigger. Forgetting the insert breaks nothing loudly — it just
-    // makes every human correction unsearchable, which is the likeliest way
-    // anyone would go looking for one.
+    // ⚠ `transcript_fts` is a contentless FTS5 table maintained by the writer,
+    // not a trigger. Forgetting the insert breaks nothing loudly; it makes every
+    // human correction unsearchable.
     let mut conn = correction_db();
 
     let new_id = apply_correction(
@@ -373,9 +371,8 @@ fn a_correction_carries_the_voice_forward_so_it_does_not_go_unknown() {
 
 #[test]
 fn correcting_an_already_superseded_turn_is_refused() {
-    // ⚠ A double-tap, or a second tab holding a stale id, would otherwise mint a
-    // SECOND current human turn and a duplicate corpus pair — two "current"
-    // versions of one moment, with nothing to say which is meant.
+    // A double-tap, or a second tab holding a stale id, must not mint a second
+    // current human turn and a duplicate corpus pair.
     let mut conn = correction_db();
     apply_correction(&mut conn, 41, "first", NOW, &Correction::default()).expect("first");
 
@@ -473,7 +470,7 @@ fn an_overridden_span_and_language_reach_both_the_turn_and_the_pair() {
 #[test]
 fn the_pair_carries_the_original_audio_confidence_not_the_human_one() {
     // A readable label on faint audio is still good ASR data but too degraded to
-    // enrol as a voice. Storing 1.0 here would lose the only signal that says so.
+    // enrol as a voice; storing 1.0 would lose the only signal that says so.
     let mut conn = correction_db();
 
     apply_correction(&mut conn, 41, "fixed", NOW, &Correction::default()).expect("corrected");
@@ -486,9 +483,9 @@ fn the_pair_carries_the_original_audio_confidence_not_the_human_one() {
 
 #[test]
 fn a_failed_correction_leaves_no_orphan_turn_behind() {
-    // ⚠ The Python committed after EACH of these steps, so a failure could leave
-    // a human turn superseding nothing, or an original superseded with no pair to
-    // show what it became. Drop the last table to prove the whole thing unwinds.
+    // A partial correction would leave a human turn superseding nothing, or an
+    // original superseded with no pair. Drop the last table to prove the whole
+    // thing unwinds.
     let mut conn = correction_db();
     conn.execute("DROP TABLE corrections", []).expect("drop");
 
@@ -511,9 +508,9 @@ fn a_failed_correction_leaves_no_orphan_turn_behind() {
 
 #[test]
 fn an_overridden_span_is_respelled_the_way_every_stored_row_is() {
-    // ⚠ These columns are compared and ordered as TEXT. A client sending `...Z`
-    // where the table holds `...+00:00` writes a turn that sorts into the wrong
-    // page — no error, just a turn that turns up in the wrong place.
+    // ⚠ These columns are compared and ordered as TEXT: a client's `...Z` where
+    // the table holds `...+00:00` would sort the turn onto the wrong page,
+    // silently.
     let mut conn = correction_db();
 
     let new_id = apply_correction(
@@ -548,8 +545,7 @@ fn an_overridden_span_is_respelled_the_way_every_stored_row_is() {
 
 #[test]
 fn a_non_utc_offset_is_kept_rather_than_rebased() {
-    // Tidier to convert, and wrong: the Python keeps the offset it was given, so
-    // converting would write a text this table has never contained.
+    // Converting would write a spelling this table has never contained.
     let mut conn = correction_db();
 
     let new_id = apply_correction(

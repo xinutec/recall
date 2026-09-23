@@ -1,7 +1,7 @@
 //! The meaning plane's schema: the ordered migration ladder for `recall.sqlite`.
 //!
-//! Ported from `store_schema.py`, which is deleted (#1538). The integration test
-//! builds from empty and diffs against a dump of the live fleet database.
+//! The integration test builds from empty and diffs against a dump of the live
+//! fleet database.
 
 use rusqlite::Connection;
 

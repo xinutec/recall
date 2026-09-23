@@ -50,8 +50,7 @@ fn clip(root: &Path, source_id: &str, name: &str, minute: u32, speech: Option<f6
             ],
         )
         .expect("clip");
-    // The blob's own row first: `segment_speech.filename` references it, which
-    // is the ingest plane refusing to hold a measurement of nothing.
+    // The blob's own row first: `segment_speech.filename` references it.
     let conn = store::open(root).expect("ingest");
     recalld::ingest_schema::ensure(&conn).expect("schema");
     store::insert(
@@ -108,8 +107,8 @@ fn health(root: &Path) -> recalld::live_tier::LiveHealth {
 fn the_lag_is_the_median_and_only_over_the_live_tier() {
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning(dir.path());
-    // ⚠ THE MEDIAN, never the mean: one turn that waited behind a restart moves
-    // a mean by minutes and says nothing about the tier.
+    // The median, not the mean: one turn that waited behind a restart moves a
+    // mean by minutes.
     for (minute, lag) in [(41, 3), (42, 4), (43, 5), (44, 6), (45, 200)] {
         turn(&conn, "live", minute, lag);
     }
@@ -146,11 +145,9 @@ fn a_window_reports_what_was_delivered_and_how_much_of_it_was_measured() {
 
 #[test]
 fn a_clip_that_would_not_decode_is_unmeasured_rather_than_silent() {
-    // ⚠⚠ UNKNOWN_SECONDS is NEGATIVE so it cannot pass for a duration. Summed
-    // as one it would SUBTRACT a second of speech from the window and push a
-    // genuinely busy one under the floor that decides whether anybody spoke —
-    // and the check would then blame a working tier for the household's
-    // silence.
+    // ⚠ UNKNOWN_SECONDS is negative so it cannot pass for a duration. Summed, it
+    // would subtract speech and push a busy window under the floor that decides
+    // whether anybody spoke, blaming a working tier for silence.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning(dir.path());
     source(&conn, "usb", "coreaudio");
@@ -225,8 +222,8 @@ fn only_sources_with_a_recorder_count_as_delivered_audio() {
 
 #[test]
 fn an_empty_archive_answers_with_no_opinion_rather_than_a_zero() {
-    // ⚠ "Nothing to measure" and "measured and fine" are different claims, and
-    // a lag of 0.0 would read as a perfect feed.
+    // "Nothing to measure" is not "measured and fine": a lag of 0.0 would read as
+    // a perfect feed.
     let dir = tempfile::tempdir().expect("tempdir");
     drop(meaning(dir.path()));
     let out = health(dir.path());

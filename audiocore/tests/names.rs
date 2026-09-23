@@ -28,7 +28,7 @@ fn the_prefix_must_be_the_source() {
 
 #[test]
 fn an_impossible_instant_is_refused() {
-    // Month 13 — the stamp must be a real UTC instant, not fourteen digits.
+    // Month 13: the stamp must be a real UTC instant, not just fourteen digits.
     assert_eq!(
         parse("usb", "usb-20261305T120000.flac"),
         Err(NameError::BadStamp)
@@ -50,11 +50,9 @@ fn unknown_extensions_are_refused() {
 
 #[test]
 fn an_uploaded_recordings_container_is_a_deliverable_one() {
-    // ⚠ An uploaded session is stored in the ingest plane and fetched back
-    // through `/ingest/v1/blob`, which parses the name — so a phone voice memo's
-    // container has to be in this grammar or the runner can never read the file
-    // it was asked to transcribe (#1649). `.mp3` was refused here until
-    // 2026-09-17, and refusing it is what a 400 on the fetch would have been.
+    // An uploaded session is fetched back through `/ingest/v1/blob`, which
+    // parses the name, so a voice memo's container must be in this grammar or
+    // the runner cannot read the file it was asked to transcribe.
     for ext in ["mp3", "m4a", "mp4", "aac", "webm"] {
         let name = parse(
             "meeting-20260907-0905",

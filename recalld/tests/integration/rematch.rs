@@ -1,9 +1,7 @@
-//! Re-deriving stale speaker guesses (#1657).
-//!
-//! ⚠ The behaviour that matters is not "it writes a name" — it is WHICH turns it
-//! reconsiders and which it leaves alone. A pass that swept everything every time
-//! would rewrite the archive continuously; one that stamped only its rewrites
-//! would never finish.
+//! Re-deriving stale speaker guesses. What matters is which turns a pass
+//! reconsiders and which it leaves alone: sweeping everything every time would
+//! rewrite the archive continuously, and stamping only rewrites would never
+//! finish.
 
 use recalld::rematch::{Pass, run_once};
 use rusqlite::Connection;
@@ -19,7 +17,8 @@ fn json(v: &[f64]) -> String {
     serde_json::to_string(v).expect("json")
 }
 
-/// The meaning plane, built by the real ladder — not a hand-copied subset.
+/// The meaning plane, built by the real migration ladder, not a hand-copied
+/// subset.
 fn plane() -> Connection {
     let conn = Connection::open_in_memory().expect("db");
     recalld::meaning_schema::ensure(&conn).expect("migrate");
@@ -82,10 +81,8 @@ fn guess_of(conn: &Connection, id: i64) -> (Option<String>, Option<String>) {
 
 #[test]
 fn a_guess_made_before_the_newest_enrolment_is_re_derived() {
-    // ⚠ THE WHOLE POINT. The turn was named Alex when Alex was the only enrolled
-    // voice; Sam was enrolled later and is the better match. Nothing revisited it
-    // until this pass existed — 0.491 stored against 0.913 re-derived, measured
-    // on the fleet.
+    // The turn was named Alex when Alex was the only enrolled voice; Sam,
+    // enrolled later, is the better match.
     let mut conn = plane();
     enrol(&conn, "Alex", &vector(0), "2026-08-01T00:00:00Z");
     turn(&conn, 1, &vector(3), Some(("Alex", 0.9)));
@@ -101,15 +98,12 @@ fn a_guess_made_before_the_newest_enrolment_is_re_derived() {
 
 #[test]
 fn a_turn_whose_answer_is_unchanged_is_stamped_not_rewritten() {
-    // ⚠ **Stamping the UNCHANGED ones is what makes the pass finish.** Marking
-    // only rewrites would bring every settled turn back on every run, for ever.
+    // Stamping unchanged turns is what makes the pass finish; marking only
+    // rewrites would bring every settled turn back on every run.
     //
-    // ⚠ Reaching that branch takes three runs, and an earlier version of this
-    // test did not: a turn with no guess is REWRITTEN on its first pass, so the
-    // stamp under test was the rewrite branch's. Deleting the unchanged branch's
-    // stamp left the suite green. The sequence below settles the turn (rewrite),
-    // re-arms it with a new voice (unchanged — the answer still holds), and only
-    // then asks whether it was stamped.
+    // ⚠ Reaching that branch takes three runs: a turn with no guess is rewritten
+    // on its first pass, so the sequence settles it (rewrite), re-arms it with a
+    // new voice (unchanged), and only then checks the stamp.
     let mut conn = plane();
     enrol(&conn, "Alex", &vector(0), "2026-08-01T00:00:00Z");
     turn(&conn, 1, &vector(0), None);
@@ -153,8 +147,7 @@ fn enrolling_a_voice_re_arms_the_whole_archive() {
 
 #[test]
 fn a_turn_nothing_matches_keeps_the_name_it_had() {
-    // ⚠ "No match today" is not evidence the old name was wrong. Blanking it
-    // would trade an answer for nothing.
+    // No match today is not evidence the old name was wrong.
     let mut conn = plane();
     enrol(&conn, "Alex", &vector(0), "2026-08-01T00:00:00Z");
     turn(&conn, 1, &vector(0), Some(("Alex", 0.9)));
@@ -175,8 +168,8 @@ fn a_turn_nothing_matches_keeps_the_name_it_had() {
 
 #[test]
 fn with_nobody_enrolled_it_does_nothing_rather_than_stamping() {
-    // ⚠ Stamping here would mark every turn fresh against an EMPTY corpus, so the
-    // first real enrolment would look like it had already been applied.
+    // Stamping against an empty corpus would make the first real enrolment look
+    // already applied.
     let mut conn = plane();
     turn(&conn, 1, &vector(0), Some(("Alex", 0.9)));
     assert_eq!(

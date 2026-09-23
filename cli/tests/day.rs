@@ -1,5 +1,4 @@
-//! The local-day window, which is the one place this crate does arithmetic on
-//! time rather than passing it through.
+//! The local-day window, the one place this crate does arithmetic on time.
 
 use cli::day::bounds;
 
@@ -11,14 +10,9 @@ fn a_date_becomes_a_window_exactly_one_day_long() {
     assert_eq!(end - start, chrono::Duration::days(1));
 }
 
-/// ⚠ The rule this module exists for: the offset comes from the day ASKED FOR,
-/// not from now. A summer date and a winter date must not share an offset, or
-/// one of them is wrong by an hour — enough to move an evening conversation onto
-/// the wrong day.
-///
-/// Stated as "they differ" rather than "+02:00", because the assertion has to
-/// hold wherever this is run; the failure it catches is using ONE offset for
-/// both, which no timezone makes correct.
+/// The offset comes from the day asked for, not from now; otherwise a summer or
+/// winter date is an hour off, enough to move an evening onto the wrong day.
+/// Stated as "they differ" rather than a fixed offset so it holds in any timezone.
 #[test]
 fn a_summer_day_and_a_winter_day_do_not_share_an_offset() {
     let (summer, _) = bounds("2026-07-05").expect("summer");
@@ -26,8 +20,7 @@ fn a_summer_day_and_a_winter_day_do_not_share_an_offset() {
     let summer = chrono::DateTime::parse_from_rfc3339(&summer).expect("rfc3339");
     let winter = chrono::DateTime::parse_from_rfc3339(&winter).expect("rfc3339");
     if summer.offset().local_minus_utc() == winter.offset().local_minus_utc() {
-        // A fixed-offset zone (UTC, and much of the world) is not a failure —
-        // there is simply nothing for this test to catch there.
+        // A fixed-offset zone such as UTC has nothing for this test to catch.
         assert_eq!(
             chrono::Local::now().offset().to_string(),
             summer.offset().to_string(),
@@ -45,8 +38,8 @@ fn today_and_yesterday_are_a_day_apart() {
     assert_eq!(today - yesterday, chrono::Duration::days(1));
 }
 
-/// Anything else is refused rather than guessed at — `bounds` returning a
-/// plausible window for "yestreday" would answer about the wrong day in silence.
+/// Anything else is refused rather than guessed at, or a typo would silently
+/// answer about the wrong day.
 #[test]
 fn anything_that_is_not_a_date_is_refused() {
     for junk in ["yestreday", "", "2026-13-01", "05/07/2026", "last tuesday"] {

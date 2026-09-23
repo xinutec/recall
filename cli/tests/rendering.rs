@@ -1,15 +1,10 @@
 //! The display rules, exercised through the crate's public surface.
 //!
-//! ⚠ **These rules are decisions, not formatting taste.** Which attribution a
-//! search hit shows versus a read-through transcript is the difference between
-//! surfacing a weak guess and asserting a name nobody confirmed, and the pair of
-//! tests below is the whole distinction — either one alone would let the two
-//! collapse into each other.
+//! A search hit shows an unconfirmed speaker guess; a read-through transcript
+//! must not assert it. The paired tests below pin both sides of that.
 //!
-//! The private helpers (`clarity`, `who_detail`) are reached through
-//! [`cli::render::details`], which is the only thing that renders them. Testing
-//! them directly would pin an implementation detail; testing them through the
-//! dump pins what a person actually reads.
+//! The private helpers (`clarity`, `who_detail`) are tested through
+//! [`cli::render::details`], which pins what a person reads.
 
 use cli::api::Turn;
 use cli::render::{attribution, details, hit, transcript, who};
@@ -46,8 +41,7 @@ fn a_confirmed_name_wins_and_carries_no_score() {
     assert_eq!(who(&t), "Pippijn");
 }
 
-/// The rule search exists for: an unconfirmed guess is SHOWN, with its strength,
-/// because it is the only signal most hits have.
+/// Search shows an unconfirmed guess with its strength; it is the only signal most hits have.
 #[test]
 fn a_search_hit_shows_an_unconfirmed_guess_with_its_strength() {
     let t = Turn {
@@ -58,8 +52,7 @@ fn a_search_hit_shows_an_unconfirmed_guess_with_its_strength() {
     assert_eq!(attribution(&t), "Pippijn ~76%");
 }
 
-/// …and the rule a read-through transcript exists for: the same turn must NOT
-/// assert that name.
+/// A read-through transcript must not assert the same unconfirmed name.
 #[test]
 fn a_transcript_never_asserts_an_unconfirmed_guess() {
     let t = Turn {
@@ -119,9 +112,8 @@ fn the_audibility_bands_are_the_labelling_uis() {
     }
 }
 
-/// The supersession case: `/api/transcripts` answers with the CURRENT turn, so a
-/// dump asked about an old id must say so rather than print the new text under
-/// the old number.
+/// `/api/transcripts` answers with the current turn, so a dump asked about a
+/// superseded id must say so rather than print new text under the old number.
 #[test]
 fn a_dump_says_when_the_id_that_answered_is_not_the_one_asked_for() {
     let out = details(&[3], &[turn()]);

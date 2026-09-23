@@ -1,6 +1,4 @@
-//! The handshake is the cross-language contract: the fixtures here are copies
-//! of what the phone apps and the Linux mic actually send, so a parser change
-//! that would strand a mic fails here first.
+//! Handshake parsing: a parser change that would strand a mic fails here first.
 
 use audiod::wire::{HandshakeError, SAMPLE_RATE, parse_handshake, read_handshake};
 use std::io::{Cursor, Read};

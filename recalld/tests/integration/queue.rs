@@ -1,5 +1,4 @@
-//! E1 lifecycle, lean: derive → newest-first lease → done; a lapsed lease
-//! re-offers.
+//! The job queue: derive, lease newest first, done; a lapsed lease re-offers.
 
 use chrono::{DateTime, Duration, Utc};
 use recalld::queue::{DIARIZE_ROOM, TRANSCRIBE_ROOM, done, lease};
@@ -63,9 +62,8 @@ fn newest_first_lease_done_and_lapse() {
 
 #[test]
 fn a_job_nobody_finishes_is_retired_after_its_attempts_are_spent() {
-    // A clip that crashes the shim never reaches `done`: its lease lapses and
-    // it is offered again, newest first, so without a cap it holds the runner
-    // for ever. After the cap it is a recorded failure like a refusal.
+    // A clip that crashes the shim never reaches `done`, so without a cap it is
+    // re-offered for ever. After the cap it is recorded as a failure.
     let dir = tempfile::tempdir().expect("tempdir");
     let start: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
     room_row(dir.path(), "20260905T100000");
@@ -100,10 +98,7 @@ fn a_job_nobody_finishes_is_retired_after_its_attempts_are_spent() {
 
 #[test]
 fn a_segment_measured_as_silent_gets_no_transcription_job() {
-    // Transcribing silence does not return nothing — it returns INVENTIONS.
-    // Measured on the live queue 2026-09-06: a silent minute came back as
-    // "Thank you." twice, another as 156 segments with a 150-character run of
-    // tildes at 0.19 confidence (#1410). 42% of the queue was silence.
+    // Transcribing silence returns invented text, not nothing.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = store::open(dir.path()).expect("db");
     recalld::ingest_schema::ensure(&conn).expect("jobs schema");
@@ -151,17 +146,15 @@ fn a_segment_measured_as_silent_gets_no_transcription_job() {
         vec![
             // speech: queued.
             "room-20260906T100100.flac".to_owned(),
-            // unmeasured: queued too — "not looked at yet" is not evidence of
-            // silence, and a host without a detector must still do work.
+            // unmeasured: queued too. Not yet measured is not silent, and a
+            // host without a detector must still do work.
             "room-20260906T100200.flac".to_owned(),
         ],
         "the SILENT segment must not be queued"
     );
 }
 
-/// The transcription result shape the ASR shim actually returns, trimmed to what
-/// the derivation reads. Written out rather than `{"ok": true}` so the test fails
-/// if the real envelope ever stops being the thing being checked.
+/// The ASR shim's result envelope, trimmed to what the derivation reads.
 const TRANSCRIBED: &str = r#"{"ok":true,"result":{"language":"nl","segments":[]}}"#;
 const REFUSED: &str = r#"{"ok":false,"error":"FileNotFoundError: /x"}"#;
 
@@ -178,9 +171,8 @@ fn kinds_queued(root: &std::path::Path) -> Vec<(String, String)> {
 
 #[test]
 fn a_diarize_job_appears_only_once_the_words_exist() {
-    // Diarization alone attributes nothing: it yields SPEAKER_00 spans, and it is
-    // the alignment against words that makes them turns. So the job is derived
-    // from a SUCCEEDED transcription, never from the segment.
+    // Diarization spans become turns only when aligned against words, so the
+    // job derives from a succeeded transcription, never from the segment.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     room_row(dir.path(), "20260911T100000");
@@ -206,9 +198,8 @@ fn a_diarize_job_appears_only_once_the_words_exist() {
 
 #[test]
 fn a_refused_transcription_derives_no_diarization() {
-    // A block the ASR refused is a block whose CLIP is the problem
-    // (`turns::Barren::Refused`). Handing the same clip to pyannote spends
-    // GPU to learn that again.
+    // A refused block means the clip is the problem (`turns::Barren::Refused`);
+    // diarizing it would spend GPU to learn that again.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     room_row(dir.path(), "20260911T100000");
@@ -227,8 +218,8 @@ fn a_refused_transcription_derives_no_diarization() {
 
 #[test]
 fn a_runner_is_never_handed_a_kind_it_cannot_do() {
-    // A runner holds ONE shim's weights. Offering it another kind would burn the
-    // job's attempts against a process that can never do it.
+    // A runner holds one shim's weights; another kind would burn the job's
+    // attempts.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     room_row(dir.path(), "20260911T100000");
@@ -243,7 +234,7 @@ fn a_runner_is_never_handed_a_kind_it_cannot_do() {
             .expect("lease")
             .is_none()
     );
-    // "I can do nothing" leases nothing, rather than everything.
+    // An empty capability list leases nothing, not everything.
     assert!(lease(dir.path(), now, &[]).expect("lease").is_none());
     // A runner that can do both takes it.
     let both = lease(dir.path(), now, &[TRANSCRIBE_ROOM, DIARIZE_ROOM])
@@ -252,7 +243,7 @@ fn a_runner_is_never_handed_a_kind_it_cannot_do() {
     assert_eq!(both.kind, DIARIZE_ROOM);
 }
 
-// ---- per-mic transcribe jobs: the orchestration port (#1538) ----
+// ---- per-mic transcribe jobs ----
 
 use recalld::queue::{self, TRANSCRIBE_SEGMENT, derive_segment_jobs};
 
@@ -264,7 +255,7 @@ fn mic_row(root: &std::path::Path, source: &str, stamp: &str) -> String {
         &store::Row {
             source: source.into(),
             filename: name.clone(),
-            // ⚠ The INGEST plane's spelling: a trailing Z.
+            // The ingest plane's spelling: a trailing Z.
             start_utc: format!(
                 "{}-{}-{}T{}:{}:{}Z",
                 &stamp[0..4],
@@ -303,7 +294,7 @@ fn meaning_plane() -> rusqlite::Connection {
     conn
 }
 
-/// Register a segment as transcribed, in the MEANING plane's own spellings.
+/// Register a segment as transcribed, in the meaning plane's own spellings.
 fn already_transcribed(meaning: &rusqlite::Connection, source: &str, filename: &str, start: &str) {
     meaning
         .execute(
@@ -322,11 +313,9 @@ fn already_transcribed(meaning: &rusqlite::Connection, source: &str, filename: &
 
 #[test]
 fn a_segment_that_already_has_turns_gets_no_job() {
-    // ⚠ THE JOIN KEY IS THE FILENAME, AND THAT IS NOT A STYLE CHOICE. The obvious
-    // join — start_utc to start_utc — matches NOTHING: this ingest row says
-    // `2026-09-05T10:00:00Z` and the meaning row `2026-09-05T10:00:00+00:00`.
-    // Same instant, different spelling, compared as text. It returns a confident
-    // zero rather than an error, which is how it cost a real measurement.
+    // ⚠ The join key is the filename. Joining on start_utc matches nothing: the
+    // planes spell the same instant `...Z` and `...+00:00`, and text comparison
+    // returns a confident zero rather than an error.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
     let done_one = mic_row(dir.path(), "usb", "20260905T100000");
@@ -357,8 +346,8 @@ fn a_segment_that_already_has_turns_gets_no_job() {
 
 #[test]
 fn room_blocks_are_not_derived_as_per_mic_work() {
-    // The room stream has its own kind; deriving both for one blob would
-    // transcribe it twice and pay the GPU bill twice.
+    // The room stream has its own kind; deriving both would transcribe one blob
+    // twice.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
     room_row(dir.path(), "20260905T100000");
@@ -373,9 +362,8 @@ fn room_blocks_are_not_derived_as_per_mic_work() {
 
 #[test]
 fn the_derivation_is_bounded_and_newest_first() {
-    // ⚠ 14,078 segments were untranscribed when this was written. Deriving them
-    // all in one statement would queue days of GPU work at once, competing with
-    // the room stream and with capture. The bound is what makes it reversible.
+    // A backlog derived in one statement would queue days of GPU work at once,
+    // competing with the room stream. The bound keeps it reversible.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
     for minute in 0..5 {
@@ -423,11 +411,8 @@ fn deriving_twice_queues_nothing_new() {
 
 #[test]
 fn an_uploaded_meeting_is_leased_by_the_same_runner_as_a_microphone() {
-    // ⚠ This test asserted the OPPOSITE until 2026-09-17, on the belief that
-    // "recalld transcribes them on arrival". It does not and never did: an upload
-    // reached the Mac through `/sync/jobs`, whose consumer (`recall jobs`) was
-    // deleted with refine. Excluding uploads here left the feature with no
-    // transcriber at all (#1649). The ingest plane is the one road now.
+    // Uploads have no other transcriber: nothing transcribes them on arrival,
+    // so the ingest plane's queue is their only road.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-08T12:00:00Z".parse().expect("t");
     let meeting = mic_row(dir.path(), "meeting-20260907-0905", "20260907T090500");
@@ -463,11 +448,8 @@ fn an_uploaded_meeting_is_leased_by_the_same_runner_as_a_microphone() {
 
 #[test]
 fn an_uploaded_meeting_that_already_has_turns_gets_no_job() {
-    // The guard that makes the line above safe: 22 uploads were already
-    // transcribed when uploads were admitted, and re-deriving them would have
-    // spent the GPU on turns that exist. Their basenames are in the `have` set
-    // exactly as a microphone clip's are — the road differed, the join key never
-    // did.
+    // Uploads join on the basename exactly as microphone clips do, so one that
+    // already has turns is not transcribed again.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-08T12:00:00Z".parse().expect("t");
     let meeting = mic_row(dir.path(), "meeting-20260907-0905", "20260907T090500");
@@ -497,9 +479,8 @@ fn an_uploaded_meeting_that_already_has_turns_gets_no_job() {
 
 #[test]
 fn a_source_the_meaning_plane_has_never_heard_of_waits() {
-    // Not an error, and not a job either. Nothing could register that clip's
-    // audio, so a job for it could only go barren on every pass — and a barren
-    // clip with no ledger row sits at the head of the queue for ever.
+    // Neither an error nor a job: nothing could register the clip's audio, so
+    // the job would go barren on every pass and sit at the head of the queue.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-08T12:00:00Z".parse().expect("t");
     mic_row(dir.path(), "newmic", "20260907T090500");
@@ -515,19 +496,16 @@ fn a_source_the_meaning_plane_has_never_heard_of_waits() {
 
 #[test]
 fn a_lease_picks_the_newest_clip_across_sources_not_the_alphabetical_one() {
-    // ⚠ THE STARVATION BUG THIS ORDERING EXISTS TO AVOID. `ORDER BY filename
-    // DESC` is newest-first only while every job is `room-*`. With microphone
-    // clips in the queue it becomes source-alphabetical — `usb-` above `room-`
-    // above `geb-` — so a runner would transcribe every usb clip ever recorded
-    // before geb got one job. Nothing would look like an ordering fault; geb
-    // would simply have no transcripts.
+    // ⚠ `ORDER BY filename DESC` is newest-first only within one source. Across
+    // sources it is alphabetical, and `geb` would starve behind every `usb`
+    // clip ever recorded.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-13T12:00:00Z".parse().expect("t");
     let ingest = store::open(dir.path()).expect("db");
     recalld::ingest_schema::ensure(&ingest).expect("schema");
 
-    // geb is LATER in time and EARLIER in the alphabet — the two orderings
-    // disagree, which is the only case that can tell them apart.
+    // geb is later in time and earlier in the alphabet, so the two orderings
+    // disagree.
     for (source, stamp, iso) in [
         ("usb", "20260913T100000", "2026-09-13T10:00:00Z"),
         ("geb", "20260913T110000", "2026-09-13T11:00:00Z"),
@@ -566,9 +544,8 @@ fn a_lease_picks_the_newest_clip_across_sources_not_the_alphabetical_one() {
 
 #[test]
 fn a_job_whose_blob_the_ingest_plane_has_forgotten_is_not_leasable() {
-    // The join's other edge. A job with no `segments` row names a blob nothing
-    // can fetch, so offering it would spend a runner's lease on work it can
-    // only fail — and the attempts would cycle.
+    // A job with no `segments` row names a blob nothing can fetch; leasing it
+    // could only fail.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-13T12:00:00Z".parse().expect("t");
     let ingest = store::open(dir.path()).expect("db");
@@ -590,26 +567,19 @@ fn a_job_whose_blob_the_ingest_plane_has_forgotten_is_not_leasable() {
 
 #[test]
 fn a_clip_transcribed_under_another_extension_gets_no_second_job() {
-    // ⚠ MEASURED ON THE LIVE FLEET, 2026-09-13. The same recording exists as
-    // `.wav` in the ingest plane and `.opus` in the mirror the meaning plane's
-    // path points at — 22,313 clips under 20,728 stems. Keyed on the whole
-    // filename, 244 of 950 queued jobs were for clips that ALREADY HAD TURNS:
-    // a full transcription each, ~50 s of GPU, refused at the write.
-    //
-    // Nothing was corrupted — that refusal is the design — but the queue drains
-    // slower and the GPU runs hot for transcripts thrown away, and the only
-    // symptom is the absence of progress.
+    // One recording can exist under two extensions across the planes, so "already has turns" is keyed on the stem. Keyed
+    // on the whole filename, each such clip costs a full transcription that the
+    // write then refuses.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     let _ = mic_row(dir.path(), "usb", "20260910T203720");
 
     let meaning = meaning_plane();
-    // The turns hang off the OPUS row; the ingest copy this test derives from
-    // is the `.opus`-vs-`.wav` pair's other half.
+    // The ingest row is `.opus` (`mic_row`); the turns hang off a `.wav` path.
     meaning
         .execute(
             "INSERT INTO audio_segments (source_id, path, start_utc)
-             VALUES ('usb', '/data/usb/usb-20260910T203720.opus',
+             VALUES ('usb', '/data/usb/usb-20260910T203720.wav',
                      '2026-09-10T20:37:20+00:00')",
             [],
         )

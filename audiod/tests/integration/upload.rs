@@ -1,11 +1,8 @@
-//! The delivery half of the recorder contract, against a scripted receipt
-//! server. What these prove: only closed segments ship, receipts are checked
-//! by re-hash and not by status code, verified work is never resent, and a
-//! conflict is journaled for a person instead of retried forever.
-//!
-//! The server here is a stub speaking recalld's receipt shape; the live pair
-//! is proven by the stage-B shadow deployment, and a cross-crate test against
-//! the real recalld arrives with stage D's workspace (docs/architecture.md).
+//! The delivery half of the recorder contract, against a scripted stub that
+//! speaks recalld's receipt shape: only closed segments ship, receipts are
+//! checked by re-hash and not by status code, verified work is never resent,
+//! and a conflict is journaled for a person instead of retried forever. The
+//! real pair is tested in `upload_real_server.rs`.
 
 use audiod::upload::{Config, run_pass};
 use sha2::{Digest, Sha256};
@@ -21,15 +18,13 @@ type Received = Arc<Mutex<Vec<(String, Option<String>, Vec<u8>)>>>;
 enum Script {
     /// Answer every PUT with the true receipt for what arrived.
     Honest,
-    /// Answer with a receipt for different bytes — a truncated store, a
-    /// corrupt disk, a lying server; the uploader must not believe it.
+    /// Answer with a receipt for different bytes, as a corrupt store would.
     WrongHash,
-    /// 409 every PUT — the name is held by different bytes.
+    /// 409 every PUT: the name is held by different bytes.
     Conflict,
 }
 
-/// A minimal HTTP/1.1 server: enough to receive audiod's PUTs and answer per
-/// the script. Runs until the listener drops.
+/// A minimal HTTP/1.1 server that records audiod's PUTs and answers per the script.
 fn serve(script: Script) -> (String, Received) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -157,8 +152,7 @@ fn closed_segments_ship_oldest_first_and_the_open_one_waits() {
 
 #[test]
 fn a_stale_newest_segment_is_closed_and_ships() {
-    // Zero grace models "capture stopped long ago": the newest file's mtime
-    // is already past the grace, so the ring's last segment is final.
+    // Zero grace models capture having stopped long ago, so the newest segment is final.
     let dir = tempfile::tempdir().expect("tempdir");
     let (url, received) = serve(Script::Honest);
     write_segment(dir.path(), "usb", "usb-20260905T120000.opus", b"only");
@@ -191,7 +185,7 @@ fn a_receipt_that_disagrees_with_our_own_hash_is_not_believed() {
     let cfg = config(dir.path(), &url, Duration::ZERO);
     let summary = run_pass(&cfg);
     assert_eq!((summary.uploaded, summary.failed), (0, 1));
-    // Not recorded as delivered — the next pass tries again.
+    // Not recorded as delivered, so the next pass tries again.
     run_pass(&cfg);
     assert_eq!(received.lock().expect("lock").len(), 2, "retried next pass");
 }

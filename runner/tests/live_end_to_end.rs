@@ -1,16 +1,13 @@
 //! The live agent as it actually runs: the real binary, the real tap socket,
-//! the real recalld router, a real shim subprocess — only the model substituted.
+//! the real recalld router, a real shim subprocess; only the model is substituted.
 //!
-//! ⚠ **What this is for.** Every piece here is unit-tested already; what a unit
-//! test cannot see is the WIRE. A live turn crosses a UDP socket, a stdio
-//! protocol and an HTTP body with a field-naming convention on it, and the
-//! failure mode of getting any of those wrong is not a crash — it is an agent
-//! that runs, logs nothing alarming, and puts no turn on the timeline. This
-//! asserts the ROW, at the far end.
+//! A live turn crosses a UDP socket, a stdio protocol and an HTTP body, and
+//! getting any wrong gives an agent that runs quietly and stores no turn. So
+//! this asserts the row at the far end.
 //!
-//! ⚠ **It never touches the household's tap.** `--tap` points at a port this
-//! test owns: publishing a fixture onto 9876 would feed poetry to the live agent
-//! on this machine, and reading 9876 would eat the datagrams it waits for.
+//! `--tap` points at a port this test owns: publishing onto the real tap (9876)
+//! would feed the fixture to this machine's live agent, and reading it would
+//! steal that agent's datagrams.
 
 use recalld::app::{Config as ServerConfig, router};
 use std::net::UdpSocket;
@@ -46,12 +43,8 @@ fn serve(root: &Path) -> String {
     format!("http://{}", rx.recv().expect("addr"))
 }
 
-/// The meaning store the instant feed writes into — built by the REAL migration
-/// ladder, not a copy of it.
-///
-/// ⚠ A hand-written slice used to stand here, and it silently stopped matching
-/// production the first time a column was added: the write failed, no turn was
-/// stored, and this test reported that speech had not crossed the tap.
+/// The meaning store the live feed writes into, built by the real migrations
+/// so it cannot drift from production's schema.
 fn meaning_store(root: &Path) {
     let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("open");
     recalld::meaning_schema::ensure(&conn).expect("schema");
@@ -77,20 +70,9 @@ fn stub_shim() -> Vec<String> {
     ]
 }
 
-/// A port this test owns, so the household's tap is never read or written.
-///
-/// ⚠⚠ **Outside the EPHEMERAL range, and that is the whole point.** This binds
-/// to find a free port, reads it, then DROPS the socket so ffmpeg can take it —
-/// a real window in which anything may claim it. Drawn from `:0` that window is
-/// inside `net.inet.ip.portrange.first..last`, which is exactly where the kernel
-/// hands out ports to every other process on the machine, so two concurrent test
-/// suites are two allocators racing for the same pool. #1630's leading
-/// hypothesis, and the same class as #1480's.
-///
-/// Below the range nothing is allocated automatically, so only another copy of
-/// THIS test could collide. The window is not closed — it cannot be, while
-/// ffmpeg is the one that must bind — but it stops being a lottery everything
-/// else on the machine is entered into.
+/// A free UDP port below the ephemeral range. The socket is dropped so ffmpeg
+/// can bind it, leaving a window in which the port can be claimed; below the
+/// ephemeral range the kernel never hands it to another process in that window.
 fn free_udp_port() -> u16 {
     for port in 20_000..32_768 {
         if let Ok(socket) = UdpSocket::bind(("127.0.0.1", port)) {
@@ -107,8 +89,8 @@ fn publish(port: u16, pcm: &[u8]) {
     let socket = UdpSocket::bind("127.0.0.1:0").expect("bind");
     let to = format!("127.0.0.1:{port}");
     for packet in pcm.chunks(PACKET) {
-        // Unbounded speed would overflow the reader's fifo and drop the speech
-        // this test is about. One packet is 41 ms of audio; pace it as such.
+        // Unpaced sending would overflow the reader's fifo. One packet is 41 ms
+        // of audio, so 20 ms between packets stays ahead without flooding.
         std::thread::sleep(Duration::from_millis(20));
         let _ = socket.send_to(packet, &to);
     }
@@ -125,23 +107,13 @@ fn live_turns(root: &Path) -> Vec<(String, String)> {
         .expect("rows")
 }
 
-/// Which half failed, when no turn arrived — the tap, or the store.
-///
-/// ⚠ **They are INDISTINGUISHABLE in this test's result, and that has already
-/// cost real time.** Adding a column broke the schema this test used to
-/// hand-copy: the write was rejected, no turn was stored, and the failure read
-/// as "speech crossed the tap and no live turn reached the store" — the same
-/// sentence the flake under investigation reports (#1630). A race was the
-/// leading suspect for a failure that was not a race at all.
-///
-/// So the store half is probed with the REAL writer rather than a model of it:
-/// if a canary goes in, the schema and the file are fine and the failure is
-/// upstream of them. ⓘ The canary is only ever written on the failure path, and
-/// the assertion that follows has already been decided by then.
+/// Which half failed when no turn arrived, the tap or the store; the test's
+/// result alone cannot tell them apart. The store is probed with the real
+/// writer: if a canary goes in, the failure is upstream. Only called on the
+/// failure path, after the outcome is decided.
 fn which_half_failed(root: &Path, agent: &mut std::process::Child, elapsed: Duration) -> String {
     let conn = rusqlite::Connection::open(root.join("recall.sqlite"));
-    // ⚠ Counted BEFORE the canary, and labelled as such: "stored 1" beside a
-    // count taken after it would read as a contradiction.
+    // Counted before the canary, and labelled so.
     let rows = conn.as_ref().map_or_else(ToString::to_string, |c| {
         c.query_row("SELECT COUNT(*) FROM transcript_segments", [], |r| {
             r.get::<_, i64>(0)
@@ -163,8 +135,7 @@ fn which_half_failed(root: &Path, agent: &mut std::process::Child, elapsed: Dura
         .map_or_else(|e| format!("REFUSED: {e}"), |n| format!("stored {n}")),
         Err(err) => format!("cannot open the store: {err}"),
     };
-    // ⚠ `try_wait`, never `wait`: the agent is still running in the passing
-    // case, and blocking here would hang the diagnosis instead of printing it.
+    // `try_wait`, not `wait`: a still-running agent would hang the diagnosis.
     let alive = match agent.try_wait() {
         Ok(None) => "still running".to_owned(),
         Ok(Some(status)) => format!("EXITED {status}"),
@@ -207,30 +178,18 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
         .args(stub_shim())
         .env("RECALL_SYNC_TOKEN", TOKEN)
         .env("RUST_LOG", "info")
-        // ⚠ NOT inherited, and this cost 34 minutes of a session. Killing the
-        // agent leaves its ffmpeg orphaned — `Drop` cannot run on SIGKILL — and
-        // an orphan holding an INHERITED stdout keeps the test harness's output
-        // pipe open, so `cargo test` looks hung long after every test passed.
-        // The orphan itself is bounded by the tap's own idle timeout; this makes
-        // sure it cannot take the harness with it meanwhile.
+        // Not inherited: killing the agent orphans its ffmpeg (`Drop` cannot
+        // run on SIGKILL), and an orphan holding an inherited stdout keeps the
+        // harness's pipe open so `cargo test` looks hung after every test passed.
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("the agent starts");
 
-    // ⚠ **UDP DROPS WHAT ARRIVES AT A CLOSED SOCKET, so a missed burst is a
-    // RACE, not a slow path — and a longer deadline cannot wait for something
-    // that was never sent.** This published ONCE after a flat 2-second sleep. It
-    // passed in 7s on an idle machine and failed inside the gate on 2026-09-15,
-    // burning the whole 30s deadline while another repository's gate ran: by the
-    // time anything was listening the reading was over.
-    //
-    // So the reading is sent AGAIN until a turn appears. That is sound whatever
-    // swallowed the first burst — a late ffmpeg, a stolen port, a stalled spawn
-    // — which a readiness probe is not: binding the port ourselves to see if it
-    // is taken reports "ready" just as confidently when the holder is some other
-    // test's socket. ⚠ The cause of the gate failure is NOT established (#1630);
-    // this makes a single dropped burst survivable, and claims nothing more.
+    // UDP drops what arrives before the socket is bound, so a longer deadline
+    // cannot rescue a burst sent too early. The reading is resent until a turn
+    // appears, which survives any cause of a lost burst; a readiness probe
+    // could not tell our listener from another process holding the port.
     std::thread::sleep(Duration::from_secs(2));
 
     let started = Instant::now();
@@ -249,8 +208,7 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
             std::thread::sleep(Duration::from_millis(250));
         }
     }
-    // ⚠ Diagnosed BEFORE the kill. `try_wait` on a killed process says only that
-    // it is gone, which is the one answer that cannot distinguish anything.
+    // Diagnosed before the kill, since a killed process tells `try_wait` nothing.
     let halves = if turns.is_empty() {
         which_half_failed(root, &mut agent, started.elapsed())
     } else {
@@ -263,8 +221,7 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
 
     assert!(!turns.is_empty(), "no live turn reached the store.{halves}");
     assert_eq!(turns[0].1, "a stub heard something");
-    // The spelling the rest of the system stores instants in — a second one is
-    // how two rows for one turn happen.
+    // The system's one spelling of an instant; a second would split one turn into two rows.
     assert!(
         turns[0].0.ends_with("+00:00") && turns[0].0.contains('.'),
         "a live turn is stamped {}",

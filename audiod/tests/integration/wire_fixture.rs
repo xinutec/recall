@@ -1,8 +1,6 @@
 //! The cross-language handshake contract: every line in `handshakes.json` is
-//! what a real client emits (Python mic, Android, iOS, a pre-epoch app), and
-//! the LIVE parser must accept every one with exactly these fields. The
-//! Python side (`tests/test_mic.py`) asserts its client still produces its
-//! line byte for byte — so a drift on either end of the wire fails a gate.
+//! a copy of what a client emits, and the live parser must accept each one
+//! with exactly its declared fields.
 
 use audiod::wire::parse_handshake;
 

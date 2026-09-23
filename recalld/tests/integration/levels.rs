@@ -1,19 +1,19 @@
-//! Calibration evidence from delivered segments (stage D2): a loud segment
-//! and a quiet one from the same "device" must order correctly, the scanner
-//! must be idempotent, and the per-device reference must come from the rows.
+//! Calibration evidence from delivered segments: loud and quiet segments from
+//! one device order correctly, the scanner is idempotent, and the per-device
+//! reference comes from the rows.
 
 use recalld::levels::{scan_once, speech_reference_db};
 use recalld::store;
 use std::f32::consts::PI;
 use std::path::Path;
 
-/// A mono 16 kHz WAV of a sine at `amplitude` — through audiocore's writer,
-/// decoded back by the real ffmpeg path in `measure`.
+/// A mono 16 kHz WAV of a 330 Hz sine at `amplitude`, read back by the real
+/// decode path in `measure`.
 fn wav_segment(path: &Path, amplitude: f32, seconds: f32) {
     let rate = 16_000u32;
-    // BURSTS, not a steady tone: the real-speech reference gate admits a
-    // segment only when its speech quantile clears its own floor, and speech
-    // is on-off by nature — a constant sine has no floor below itself.
+    // Bursts, not a steady tone: the reference admits a segment only when its
+    // speech quantile clears its own floor, and a constant sine has no floor
+    // below itself.
     let samples: Vec<f32> = (0..(seconds * rate as f32) as usize)
         .map(|i| {
             let on = (i / rate as usize).is_multiple_of(2);
@@ -113,10 +113,9 @@ fn the_device_reference_is_a_query_over_its_own_rows() {
         );
     }
     scan_once(dir.path(), 100).expect("scan");
-    // The reference is VAD-GATED (stage D4): only segments the detector says
-    // carry speech feed it. These fixtures are bursts of tone, which silero
-    // will not call speech, so the evidence is recorded directly — the point
-    // under test is the QUANTILE over a source's own rows, not the detector.
+    // The reference only counts segments the VAD says carry speech, and silero
+    // does not call tone bursts speech, so the speech rows are written directly.
+    // Under test is the quantile over a source's own rows, not the detector.
     let conn = store::open(dir.path()).expect("db");
     recalld::ingest_schema::ensure(&conn).expect("schema");
     for i in 0..4 {
@@ -142,16 +141,14 @@ fn the_device_reference_is_a_query_over_its_own_rows() {
     );
 }
 
-// ---- the gate detector (#1526) ----
+// ---- the gate detector ----
 
 use recalld::levels::{GATE_DB, gated_fraction};
 
 #[test]
 fn a_calm_room_is_not_a_gate_however_quiet_it_is() {
-    // ⚠ THE FALSE POSITIVE THAT WOULD MAKE THIS UNUSABLE. A quiet evening has
-    // quiet buckets scattered through it; only a gate produces CONSECUTIVE ones,
-    // because it stays shut until it hears a voice. Counting quiet buckets alone
-    // would condemn every calm household.
+    // A quiet room has silent buckets scattered through it; only a gate
+    // produces consecutive ones, because it stays shut until it hears a voice.
     let silent = 0.0;
     let quiet = 10f32.powf(-40.0 / 20.0); // -40 dBFS: quiet, nowhere near the gate
     let scattered = vec![
@@ -179,8 +176,8 @@ fn a_run_shorter_than_the_minimum_does_not_count() {
 
 #[test]
 fn a_run_at_the_end_of_a_segment_is_not_lost() {
-    // ⚠ The gate closing on the LAST word is the commonest shape, and a loop
-    // that only credits a run when it SEES the run end drops exactly that one.
+    // A gate closing after the last word is the commonest shape, and a loop
+    // that credits a run only when it sees the run end drops exactly that one.
     let loud = 10f32.powf(-20.0 / 20.0);
     let trailing = gated_fraction(&[loud, loud, 0.0, 0.0, 0.0, 0.0]);
     assert!(
@@ -191,9 +188,9 @@ fn a_run_at_the_end_of_a_segment_is_not_lost() {
 
 #[test]
 fn the_threshold_is_below_anything_a_real_front_end_produces() {
-    // -80 dBFS is three LSB of a 16-bit sample. Measured 2026-09-12 over 22
-    // evening segments, the USB condenser's quietest 0.1 s never reached it.
-    // A bucket just ABOVE the line must not count, or a real mic's floor would.
+    // -80 dBFS is about three LSB of a 16-bit sample, below a real
+    // microphone's quietest 0.1 s. A bucket just above the line must not count,
+    // or a real mic's noise floor would.
     let just_above = 10f32.powf((GATE_DB + 2.0) / 20.0);
     assert!(gated_fraction(&[just_above; 20]).abs() < f32::EPSILON);
     let just_below = 10f32.powf((GATE_DB - 2.0) / 20.0);
@@ -202,8 +199,8 @@ fn the_threshold_is_below_anything_a_real_front_end_produces() {
 
 #[test]
 fn an_empty_envelope_is_not_gated() {
-    // A segment that decoded to nothing must not read as a gated source — that
-    // is a decode failure, and `speech_db` is what marks it (see `scan_once`).
+    // A segment that decoded to nothing is a decode failure, not a gated
+    // source; `speech_db` is what marks it (see `scan_once`).
     assert!(gated_fraction(&[]).abs() < f32::EPSILON);
 }
 
@@ -231,11 +228,9 @@ fn the_scanner_stores_the_gate_measurement() {
 
 #[test]
 fn a_database_from_before_the_detector_gains_the_column() {
-    // ⚠ THE SHAPE THE WHOLE SUITE WAS BLIND TO. Every other test builds
-    // `segment_levels` fresh, where the column arrives with the CREATE. Production
-    // had the table already, and `CREATE TABLE IF NOT EXISTS` adds nothing to an
-    // existing one — so `gated` was never going to appear there, and the insert
-    // names it. Found by querying the live fleet: `no such column: gated`.
+    // Every other test builds `segment_levels` fresh. An existing table gains
+    // nothing from `CREATE TABLE IF NOT EXISTS`, yet the insert names `gated`,
+    // so the migration must add the column.
     let dir = tempfile::tempdir().expect("tmp");
     // A raw connection: `store::open` would create the table in its current shape.
     let conn = rusqlite::Connection::open(dir.path().join("ingest.sqlite")).expect("db");
@@ -268,8 +263,8 @@ fn a_database_from_before_the_detector_gains_the_column() {
         "an existing table must GAIN the column, not silently skip it"
     );
 
-    // The pre-existing row keeps its readings and reads NULL for the new one —
-    // unknown, which is what makes the room builder defer rather than trust it.
+    // The existing row keeps its readings and reads NULL for the new one:
+    // unknown, so the room builder defers rather than trusts it.
     let (speech, gated): (f64, Option<f64>) = conn
         .query_row(
             "SELECT speech_db, gated FROM segment_levels WHERE filename = 'usb-old.wav'",
@@ -293,8 +288,7 @@ use recalld::levels::quiet_run_seconds;
 fn fixture_pcm(name: &str) -> Option<Vec<u8>> {
     let path = std::path::PathBuf::from("../tests/fixtures/speech").join(name);
     if !path.exists() {
-        // Not deliberate when it happens: .gitignore's blanket *.flac has
-        // swallowed these before (#1433).
+        // Never deliberate: a blanket `*.flac` in .gitignore can swallow them.
         eprintln!("skipping: fixture {name} absent");
         return None;
     }
@@ -303,11 +297,8 @@ fn fixture_pcm(name: &str) -> Option<Vec<u8>> {
 
 #[test]
 fn a_real_recording_of_speech_holds_no_long_quiet_run() {
-    // ⚠ THE DIRECTION THAT MATTERS. A gate detector earns its place by leaving
-    // healthy microphones alone: the one that shipped before this flagged every
-    // phone in the house, so the filter built on it had to be reverted (#1526).
-    //
-    // A human reading, recorded rather than synthesised, measures 0.128 s here.
+    // A gate detector is only usable if it leaves healthy microphones alone.
+    // This human reading, recorded rather than synthesised, measures 0.128 s.
     let Some(pcm) = fixture_pcm("public-domain-en.flac") else {
         return;
     };
@@ -320,12 +311,10 @@ fn a_real_recording_of_speech_holds_no_long_quiet_run() {
 
 #[test]
 fn synthesised_speech_carries_digital_silence_that_a_microphone_never_would() {
-    // ⚠ Recorded so it is not mistaken for evidence about real audio. Both
-    // `dialogue-*` fixtures are MACHINE-READ (tests/fixtures/speech/README.md),
-    // and a synthesiser emits true zeros between utterances: 18-22% of their
-    // samples are exactly zero and the longest quiet stretch is ~0.81 s, against
-    // 0.128 s for the human reading beside them. That is the synthesiser, not a
-    // gate — so these two must never be used to calibrate this detector.
+    // The `dialogue-*` fixtures are synthesised (tests/fixtures/speech/README.md)
+    // and carry true zeros between utterances, a longest quiet stretch of about
+    // 0.81 s. That is the synthesiser, not a gate, so they must never be used
+    // to calibrate this detector.
     let Some(pcm) = fixture_pcm("dialogue-en.flac") else {
         return;
     };
@@ -338,10 +327,9 @@ fn synthesised_speech_carries_digital_silence_that_a_microphone_never_would() {
 
 #[test]
 fn the_longest_stretch_is_what_counts_not_the_total_quiet() {
-    // The whole design in one assertion. A microphone listening to a room emits
-    // many short near-silences; a gate holds ONE long one. Summing them would
-    // measure how quiet the room was and flag every calm conversation — which is
-    // exactly how the previous detector failed.
+    // A microphone in a room emits many short near-silences; a gate holds one
+    // long one. Summing them would measure how quiet the room was and flag
+    // every calm conversation.
     let rate = 16_000u32;
     let mut scattered: Vec<i16> = Vec::new();
     for _ in 0..20 {
@@ -368,10 +356,9 @@ fn the_longest_stretch_is_what_counts_not_the_total_quiet() {
 
 #[test]
 fn a_database_that_already_has_gated_gains_the_run_column() {
-    // ⚠ THE SHAPE PRODUCTION IS IN TODAY, which the pre-2026-09-12 test above
-    // does NOT cover: the fleet's table already has `gated`, so a migration
-    // keyed on that column alone would decide it had nothing to do and the
-    // insert naming `quiet_run_s` would fail on every segment.
+    // A table that already has `gated`: a migration keyed on that column alone
+    // would decide it had nothing to do, and the insert naming `quiet_run_s`
+    // would fail on every segment.
     let dir = tempfile::tempdir().expect("tmp");
     let conn = rusqlite::Connection::open(dir.path().join("ingest.sqlite")).expect("db");
     conn.execute_batch(

@@ -1,9 +1,6 @@
-//! The mirror's decision rule — the part that can clobber a household's pause.
-//!
-//! Ported with `recall.capture_mirror`, and these are its cases. Each one is a
-//! property that module states in prose, so a Rust port that lost it would look
-//! correct: edge-triggering, the unparseable-value trap, and the conservative
-//! reading of an elapsed bound.
+//! The pause mirror's decision rule, the part that can clobber a local pause:
+//! edge-triggering, the unparseable-value trap, and the conservative reading
+//! of an elapsed bound.
 
 use audiod::pause_mirror::{Decision, Desired, decide, source_liveness};
 use chrono::{DateTime, Utc};
@@ -20,9 +17,8 @@ const EARLIER: &str = "2026-09-11T06:00:00+00:00";
 
 #[test]
 fn an_unchanged_intent_touches_nothing() {
-    // THE reason this is edge-triggered. Applying an unchanged "running" every
-    // five seconds would clobber a pause pressed on the Mac's own LAN UI, and
-    // nothing would say so.
+    // Why the mirror is edge-triggered: reapplying an unchanged "running" every
+    // tick would silently clobber a pause pressed on the Mac's own LAN UI.
     assert_eq!(decide("", None, at(NOW)), Decision::Unchanged);
     assert_eq!(decide(LATER, Some(LATER), at(NOW)), Decision::Unchanged);
 }
@@ -47,8 +43,8 @@ fn a_cleared_intent_resumes() {
 
 #[test]
 fn an_elapsed_bound_reads_as_running() {
-    // A bounded pause that has expired is not a pause — the same conservative
-    // reading `paused_until` and `intent_until` already take.
+    // A bounded pause that has expired is not a pause, as `paused_until` and
+    // `intent_until` also read it.
     let Decision::Apply { desired, .. } = decide("", Some(EARLIER), at(NOW)) else {
         panic!("must apply");
     };
@@ -57,16 +53,14 @@ fn an_elapsed_bound_reads_as_running() {
 
 #[test]
 fn an_unparseable_intent_is_recorded_so_it_is_never_retried_forever() {
-    // The trap this port could most easily lose. Treating a poisoned value as
-    // running is half of it; RECORDING it is the other half. Without the record
-    // the mirror retries the same bad value every tick, and a real pause pressed
-    // later is never reached.
+    // A bad value reads as running and is also recorded; without the record the
+    // mirror retries it every tick and never reaches a real pause pressed later.
     let Decision::Apply { desired, record } = decide("", Some("not-a-time"), at(NOW)) else {
         panic!("must apply");
     };
     assert_eq!(desired, Desired::Running);
     assert_eq!(record, "not-a-time", "the bad value is recorded as seen");
-    // And having recorded it, the next pass is a no-op rather than a retry.
+    // Once recorded, the next pass is a no-op rather than a retry.
     assert_eq!(
         decide("not-a-time", Some("not-a-time"), at(NOW)),
         Decision::Unchanged
@@ -93,7 +87,6 @@ fn liveness_reads_the_marker_mtime_not_its_contents() {
 
 #[test]
 fn an_unreadable_root_is_empty_not_a_panic() {
-    // Liveness is best-effort status. A mirror that died reading it would stop
-    // applying pauses, which is the opposite of what it is for.
+    // Liveness is best-effort; a mirror that died reading it would stop applying pauses.
     assert!(source_liveness(std::path::Path::new("/nonexistent-xyz")).is_empty());
 }

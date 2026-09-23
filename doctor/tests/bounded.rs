@@ -23,9 +23,8 @@ fn a_prompt_child_is_read_and_reaped() {
 
 #[test]
 fn a_slow_child_is_abandoned_rather_than_waited_for() {
-    // The bound must hold whether or not the child ever finishes. `sleep 30`
-    // stands in for uninterruptible disk wait; the point is that `run`
-    // returns on schedule and reports the silence as the finding.
+    // `sleep 30` stands in for uninterruptible disk wait: `run` must return on
+    // schedule and report the silence as the finding.
     let (program, args) = sh("sleep 30");
     let started = Instant::now();
     let answer = run(&program, &args, Duration::from_millis(300), &[]).unwrap();
@@ -41,17 +40,11 @@ fn a_slow_child_is_abandoned_rather_than_waited_for() {
 
 #[test]
 fn a_child_that_fills_stderr_does_not_deadlock_the_reader() {
-    // Far past a 64 KiB pipe buffer on either stream, interleaved, so a reader
-    // draining only one blocks the child on the other. Every chunk here is
-    // ALONE bigger than the buffer, so the property does not rest on the total.
-    //
-    // ⚠ **Four iterations, not four hundred** (#1480). This wrote the same
-    // 409,600 bytes in 1024-byte chunks, which spawned 1,600 processes inside a
-    // 30 s bound — and on 2026-09-10 that bound blew inside `nix build`, where
-    // the whole workspace's tests run at once: `stdout` came back None, meaning
-    // the run timed out rather than deadlocked. The flake was the SPAWN COUNT,
-    // not the thing under test. Shrink the count, never the timeout: raising the
-    // bound would have hidden a real deadlock behind a longer wait.
+    // Interleaved writes past a 64 KiB pipe buffer on both streams, so a reader
+    // draining only one blocks the child on the other. Each chunk alone exceeds
+    // the buffer. Few large chunks keep the spawn count low: many small ones
+    // flake under a loaded `nix build`, and raising the timeout instead would
+    // hide a real deadlock.
     let (program, args) = sh("for i in 1 2 3 4; do \
                head -c 102400 /dev/zero | tr '\\0' 'x'; \
                head -c 102400 /dev/zero | tr '\\0' 'y' >&2; \
@@ -63,18 +56,16 @@ fn a_child_that_fills_stderr_does_not_deadlock_the_reader() {
 
 #[test]
 fn the_child_starts_off_the_callers_working_directory() {
-    // The parent's cwd is often the archive volume; a wedged cwd would hang
-    // the child before it ran a line.
+    // The parent's cwd is often the archive volume, and a wedged cwd would
+    // hang the child before it ran a line.
     let (program, args) = sh("pwd");
     let answer = run(&program, &args, Duration::from_secs(10), &[]).unwrap();
     assert_eq!(answer.stdout.as_deref(), Some("/\n"));
 }
 
-/// ⚠ **A child that HANGS never reaches EOF**, so a drain that sends once at
-/// the end throws away everything it managed to say — in exactly the run where
-/// that is worth having. `doctor`'s archive read prints its volume probe first
-/// for this reason: "the disk answered a fixed read instantly while the archive
-/// read never returned" is the whole diagnosis, and it used to be discarded.
+/// A hanging child never reaches EOF, so output must be kept as it arrives.
+/// `doctor`'s archive read prints its volume probe first for this reason: "the
+/// disk answered but the archive read never returned" is the diagnosis.
 #[test]
 fn what_a_hanging_child_already_said_survives_being_abandoned() {
     let script = "echo 'the disk answered' >&2; sleep 60";
@@ -94,7 +85,7 @@ fn what_a_hanging_child_already_said_survives_being_abandoned() {
     );
 }
 
-/// …and a child that finishes normally still reports both streams whole.
+/// A child that finishes normally still reports both streams whole.
 #[test]
 fn a_child_that_finishes_reports_both_streams_whole() {
     let answer = doctor::bounded::run(
@@ -114,11 +105,8 @@ use doctor::bounded::State;
 
 #[test]
 fn a_ps_that_cannot_be_asked_is_unknown_and_never_gone() {
-    // ⚠⚠ The two must not collapse. `ps` does not work inside the nix build
-    // sandbox, and for one commit a living child there read as "gone" — the
-    // same lie as the assertion this replaced, pointing the other way. A
-    // process that certifies a stall must not invent the one fact it exists
-    // to report.
+    // Unknown and gone must not collapse: `ps` does not work inside the nix
+    // build sandbox, and a living child must not read as gone there.
     let unknown = doctor::bounded::process_state_via("no-such-ps-binary", std::process::id());
     assert!(
         matches!(unknown, State::Unknown(_)),
@@ -158,16 +146,9 @@ fn the_state_letters_that_matter_are_told_apart() {
 
 #[test]
 fn a_live_pid_is_named_and_never_read_as_gone() {
-    // ⚠ **This process's own pid, and no child.** An earlier version spawned a
-    // `sleep` to look at, and both halves of that were wrong: a freshly spawned
-    // process is legitimately `R` before it reaches its nanosleep, so the
-    // assertion graded the SCHEDULER — and the spawn itself made the neighbour
-    // above flaky, which runs `pwd` on a ten-second clock. Measured under eight
-    // burners: 0/40 without these tests, 2/40 with them.
-    //
-    // What is worth pinning is neither the letter nor the spawn: a pid that is
-    // alive must never read as GONE, which is exactly the fault the nix sandbox
-    // caught when `ps` could not be asked at all.
+    // This process's own pid, not a spawned child: a fresh child's state letter
+    // depends on the scheduler, and spawning made neighbouring tests flaky.
+    // What matters is that a live pid never reads as gone.
     match doctor::bounded::process_state(std::process::id()) {
         State::Named(raw) => assert!(!raw.is_empty(), "a named state is not empty"),
         // `ps` cannot look here; the case that matters then is pinned above.

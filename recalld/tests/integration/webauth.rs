@@ -1,5 +1,5 @@
-//! The SSO gate (stage F1). These are security properties, so each test names the
-//! attack or the failure it stands against rather than the function it calls.
+//! The SSO gate. Each test names the attack or failure it stands against rather
+//! than the function it calls.
 
 use recalld::webauth::{
     Config, Session, accepts_device_token, authorize_url, make_session_cookie, make_state,
@@ -39,9 +39,8 @@ fn a_cookie_round_trips_and_carries_the_identity() {
 
 #[test]
 fn a_forged_or_tampered_cookie_is_refused() {
-    // The whole point of signing: identity is carried by the client, so an
-    // unforgeable MAC is the only thing standing between a stranger on the VPN
-    // and the household's transcripts.
+    // The client carries its identity, so the MAC is all that stands between a
+    // stranger on the VPN and the transcripts.
     let token = make_session_cookie(SECRET, &session(), NOW).expect("sign");
 
     // Signed with a different secret.
@@ -97,8 +96,8 @@ fn a_crafted_return_to_cannot_turn_sign_in_into_an_open_redirect() {
     assert_eq!(validate_return_to(None), "/");
     assert_eq!(validate_return_to(Some("/sessions/42")), "/sessions/42");
 
-    // And it survives the round trip, so the redirect the callback performs is
-    // the sanitised one rather than what the query string asked for.
+    // The state carries the sanitised target, so the callback redirects there
+    // rather than to what the query string asked for.
     let state = make_state(SECRET, Some("//evil.example.com"), NOW).expect("sign");
     assert_eq!(read_state(SECRET, &state, NOW).as_deref(), Some("/"));
 }
@@ -142,9 +141,8 @@ fn the_browsing_plane_is_gated_and_the_recording_plane_is_not() {
 
 #[test]
 fn the_exemption_is_per_method_not_per_path() {
-    // `GET /api/capture` is the iOS app's long-poll and is open; a POST to the
-    // same path is not in the set and must be gated. A path-only check would
-    // hand the whole capture surface to anyone on the network.
+    // `GET /api/capture` is the iOS app's long-poll and is open; other methods on
+    // the same path are gated.
     assert!(!requires_session("GET", "/api/capture"));
     assert!(requires_session("POST", "/api/capture"));
     assert!(requires_session("DELETE", "/api/capture"));
@@ -160,8 +158,7 @@ fn a_device_token_opens_exactly_one_route_and_no_other() {
     assert!(accepts_device_token("POST", "/api/sessions"));
     assert!(c.presents_device_token("POST", "/api/sessions", bearer));
 
-    // The property that motivated the third plane: a phone that can upload a
-    // recording still cannot read the household's transcripts.
+    // A phone that can upload a recording still cannot read the transcripts.
     for (m, p) in [
         ("GET", "/api/timeline"),
         ("GET", "/api/search"),
@@ -177,28 +174,26 @@ fn a_device_token_opens_exactly_one_route_and_no_other() {
     assert!(!c.presents_device_token("POST", "/api/sessions", Some("device-secret")));
     assert!(!c.presents_device_token("POST", "/api/sessions", None));
 
-    // Unconfigured token = the plane does not exist, rather than "any token".
+    // Unconfigured means the plane does not exist, not "any token".
     assert!(!cfg(None).presents_device_token("POST", "/api/sessions", bearer));
 }
 
 #[test]
 fn the_allowlist_narrows_who_may_enter_after_a_valid_sign_in() {
-    // A valid Nextcloud sign-in is not enough: recall holds household and medical
-    // audio, so it is single-user by default.
+    // A valid Nextcloud sign-in is not enough once an allowlist is set.
     let mut c = cfg(None);
     c.allowed_users = ["pippijn".to_owned()].into_iter().collect();
     assert!(c.permits("pippijn"));
     assert!(!c.permits("someone-else"));
 
-    // Empty = any authenticated user, which is the documented meaning.
+    // Empty means any authenticated user.
     c.allowed_users = HashSet::new();
     assert!(c.permits("anyone"));
 }
 
 #[test]
 fn a_partial_oauth_configuration_leaves_the_gate_off_rather_than_broken() {
-    // Half a gate that refuses everyone would take the UI down, and this must
-    // never be the reason a household cannot read its own archive.
+    // Half a gate would refuse everyone and take the UI down.
     let required = [
         ("RECALL_SESSION_SECRET", SECRET),
         ("NC_CLIENT_ID", "cid"),
@@ -224,8 +219,7 @@ fn a_partial_oauth_configuration_leaves_the_gate_off_rather_than_broken() {
         );
     }
 
-    // Present but empty is also off — an unset secret and a blank one are the
-    // same mistake.
+    // Present but empty counts as missing.
     let mut blank = full.clone();
     blank.insert("NC_CLIENT_SECRET", "");
     assert!(Config::from_env(&env(&blank)).is_none());
@@ -243,19 +237,9 @@ fn the_authorize_url_carries_the_state_and_escapes_its_parameters() {
     assert!(url.contains("state=st%2Fate%2Bvalue"));
 }
 
-/// ⚠ **The claim that justifies keeping the Python's exact token format, pinned
-/// as a golden value rather than asserted.**
-///
-/// These two tokens were minted by `recall.webauth` itself (the real code, not a
-/// reimplementation of it) with `SECRET` at `NOW`. If Rust can verify them, then
-/// a cookie issued by the Python OAuth flow is accepted here — which is what lets
-/// recalld be mounted behind the EXISTING sign-in and cut over route-group by
-/// route-group, with no second login and no flag day.
-///
-/// If this test ever fails, the two halves have stopped recognising each other
-/// and an incremental cutover is off the table. That is a much bigger fact than
-/// a broken unit test, so it is spelled out here rather than left to be inferred
-/// from a diff.
+/// Golden tokens minted with `SECRET` at `NOW` by the original Python sign-in.
+/// Verifying them, and minting the same bytes, pins the token format: a change
+/// to it would sign every existing session out.
 #[test]
 fn a_cookie_minted_by_the_python_verifies_here() {
     const PY_COOKIE: &str = concat!(
@@ -277,9 +261,7 @@ fn a_cookie_minted_by_the_python_verifies_here() {
         Some("/sessions/42")
     );
 
-    // And the other direction: the bytes this mints are the bytes the Python
-    // would, so a cookie set by recalld is equally readable by the Python half
-    // while both are serving.
+    // The other direction: this mints the same bytes.
     let ours = make_session_cookie(SECRET, &session(), NOW).expect("sign");
     assert_eq!(
         ours, PY_COOKIE,
@@ -289,9 +271,9 @@ fn a_cookie_minted_by_the_python_verifies_here() {
 
 // --- the OAuth exchange, against a REAL server ---------------------------------
 //
-// A stub Nextcloud rather than a mocked client: the thing most likely to be wrong
-// in this code is the SHAPE of the request and the response parsing, and a mock
-// that returns what I expect would test my expectation rather than the wire.
+// A stub Nextcloud rather than a mocked client: the request shape and the
+// response parsing are what is most likely wrong, and a mock would only echo
+// the expectation.
 
 use axum::Router;
 use axum::routing::{get, post};
@@ -323,8 +305,8 @@ async fn a_code_is_exchanged_for_a_token_and_the_user_is_resolved() {
         .route(
             "/index.php/apps/oauth2/api/v1/token",
             post(|body: String| async move {
-                // The form must carry every field Nextcloud needs; a missing
-                // client_secret would 400 in production and pass a mock.
+                // Every field Nextcloud needs; a missing client_secret would
+                // 400 in production.
                 for field in [
                     "grant_type=authorization_code",
                     "code=the-code",
@@ -339,8 +321,8 @@ async fn a_code_is_exchanged_for_a_token_and_the_user_is_resolved() {
         .route(
             "/ocs/v2.php/cloud/user",
             get(|headers: axum::http::HeaderMap| async move {
-                // Both headers are load-bearing: OCS refuses the request without
-                // its own marker, and the bearer is what identifies the user.
+                // OCS refuses a request without its marker header, and the
+                // bearer identifies the user.
                 assert_eq!(headers.get("authorization").unwrap(), "Bearer tok-123");
                 assert_eq!(headers.get("ocs-apirequest").unwrap(), "true");
                 axum::Json(serde_json::json!({
@@ -370,8 +352,8 @@ async fn a_code_is_exchanged_for_a_token_and_the_user_is_resolved() {
 
 #[tokio::test]
 async fn a_response_missing_what_it_must_carry_is_an_error_not_an_empty_identity() {
-    // The failure that matters: silently accepting a blank id would sign someone
-    // in as "" and, with an empty allowlist, let them straight through.
+    // A blank id would sign someone in as "" and, with an empty allowlist, let
+    // them through.
     let app = Router::new()
         .route(
             "/index.php/apps/oauth2/api/v1/token",
@@ -420,8 +402,8 @@ async fn a_user_with_no_display_name_falls_back_to_their_id() {
 
 #[test]
 fn an_internal_url_is_called_but_the_public_host_is_presented() {
-    // Nextcloud routes on trusted domains, so an in-cluster call must still LOOK
-    // like the public one or it is refused.
+    // Nextcloud checks trusted domains, so an in-cluster call presents the public
+    // host.
     let mut c = cfg(None);
     c.nc_base_url = "https://dash.example.org".into();
     c.nc_internal_url = "http://nextcloud.svc.cluster.local".into();
@@ -447,8 +429,7 @@ use recalld::webauth::{COOKIE_NAME, GateState, gate, routes};
 use std::sync::Arc;
 use tower::ServiceExt;
 
-/// A router with the gate applied over one protected and one open route, so the
-/// middleware is exercised exactly as it will be in the pod.
+/// The gate over one protected and one open route, applied as in production.
 fn gated(c: Config) -> Router {
     let st = GateState {
         cfg: Arc::new(c),
@@ -469,8 +450,7 @@ async fn status(app: &Router, req: Request<Body>) -> axum::http::StatusCode {
 async fn the_gate_refuses_the_archive_without_a_session_and_lets_the_pause_through() {
     let app = gated(cfg(None));
 
-    // The property this whole module exists for: a stranger on the VPN cannot
-    // read the household's transcripts.
+    // A stranger on the VPN cannot read the transcripts.
     assert_eq!(
         status(
             &app,
@@ -507,8 +487,8 @@ async fn the_gate_refuses_the_archive_without_a_session_and_lets_the_pause_throu
 
 #[tokio::test]
 async fn a_signed_in_user_outside_the_allowlist_is_forbidden_not_unauthenticated() {
-    // 403, not 401: they ARE signed in, and telling them to sign in again would
-    // loop them through Nextcloud for ever.
+    // 403, not 401: they are signed in, and a 401 would loop them through
+    // Nextcloud for ever.
     let mut c = cfg(None);
     c.allowed_users = ["someone-else".to_owned()].into_iter().collect();
     let token = make_session_cookie(SECRET, &session(), NOW).expect("sign");
@@ -564,9 +544,9 @@ async fn a_device_token_opens_its_route_through_the_middleware_and_no_other() {
 
 #[tokio::test]
 async fn the_callback_rejects_a_forged_state_before_making_any_network_call() {
-    // The config points at a port nothing is listening on, so if the handler
-    // reached the network this would hang or 502 rather than 403 — which is the
-    // point: a stranger must not be able to make this server dial Nextcloud.
+    // Nothing listens on the configured port, so a handler that reached the
+    // network would not answer 403. A stranger must not make this server dial
+    // Nextcloud.
     let mut c = cfg(None);
     c.nc_internal_url = "http://127.0.0.1:1".into();
     let app = gated(c);
@@ -622,8 +602,7 @@ async fn login_redirects_to_nextcloud_and_the_cookie_it_later_sets_is_httponly()
     assert!(cookie.contains("Path=/"), "{cookie}");
 }
 
-/// `/api/me` is the SPA's login probe. The shape is what the app reads to decide
-/// it is signed in, so it is pinned here rather than left to the route existing.
+/// `/api/me` is the SPA's login probe; its shape is what the app reads.
 #[tokio::test]
 async fn me_answers_with_the_identity_the_cookie_carries() {
     let app = gated(cfg(None));

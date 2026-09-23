@@ -274,7 +274,7 @@ async fn a_blob_without_a_row_heals_on_redelivery() {
     assert_eq!(listing["segments"].as_array().expect("array").len(), 1);
 }
 
-// --- liveness for store-and-forward recorders (#1428) ------------------------
+// --- liveness for store-and-forward recorders --------------------------------
 
 #[tokio::test]
 async fn liveness_reports_each_source_newest_capture_time() {
@@ -315,10 +315,9 @@ async fn liveness_is_behind_the_read_plane_not_the_write_one() {
 
 #[tokio::test]
 async fn liveness_ignores_a_segment_measured_as_silent() {
-    // "Active" must mean someone is TALKING, matching the promise the stream
-    // marker already made. A segment measured as silence stops counting; one
-    // that has not been measured yet still counts, because the scanner runs
-    // BEHIND live audio and absence of a measurement is not evidence of silence.
+    // "Active" means someone is talking. A segment measured as silence stops
+    // counting; an unmeasured one still counts, because the scanner runs behind
+    // live audio.
     let h = harness(Some("* write\n"), Some("read"));
     for name in ["geb-20260905T100000.opus", "geb-20260905T100100.opus"] {
         let (status, _) = send(&h.app, put("geb", name, b"a", Some("write"))).await;

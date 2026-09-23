@@ -1,4 +1,4 @@
-//! Bounding the agents' logs (#1656).
+//! Bounding the agents' logs by copytruncate.
 
 use audiod::logrotate::{Pass, run};
 use std::io::Write;
@@ -31,7 +31,7 @@ fn an_oversized_log_is_truncated_and_its_tail_kept() {
         "the tail must begin at a line break, not mid-line: {:?}",
         &kept[..20.min(kept.len())]
     );
-    // The tail is the END of the log — that is what a reader wants after a crash.
+    // The kept tail is the end of the log, which is what a reader wants after a crash.
     assert!(kept.trim_end().ends_with(&"x".repeat(90)));
     assert!(kept.contains("line 3999"));
 }
@@ -51,9 +51,8 @@ fn a_log_under_the_cap_is_left_alone() {
 
 #[test]
 fn the_inode_survives_so_a_running_agent_keeps_writing() {
-    // ⚠ The reason this is copytruncate and not a rename: launchd opened the
-    // agent's stdout before any code ran, and it holds the FD. Replacing the
-    // file would leave the agent writing to an inode nothing can read.
+    // Copytruncate, not rename: launchd holds the agent's stdout FD, so
+    // replacing the file would leave the agent writing to an unreadable inode.
     let dir = tempfile::tempdir().expect("tmp");
     let path = write_log(dir.path(), "runner.err.log", 4_000);
     let mut held = std::fs::OpenOptions::new()

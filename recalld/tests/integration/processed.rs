@@ -1,6 +1,5 @@
-//! The processed-audio check, against the levels the 2026-09-04 archive actually
-//! held. The numbers in these tests are measurements, not fixtures invented to
-//! pass: they are the medians `segment_levels` reports for that day.
+//! The processed-audio check. The levels in these fixtures are measured medians
+//! from `segment_levels` on a real day, not numbers invented to pass.
 
 use recalld::processed::{Levels, MIN_SEGMENTS, gaps, processed_sources, processed_with_evidence};
 
@@ -14,9 +13,8 @@ fn many(source: &str, speech_db: f32, floor_db: f32, n: usize) -> Vec<Levels> {
         .collect()
 }
 
-/// The real room on the day geb was unintelligible, at the MEDIAN per-segment
-/// gap each source actually shows in `segment_levels` — not a gap between
-/// averages, which flatters the real mics and understates geb.
+/// A real room with one gated stream (geb), at each source's median per-segment
+/// gap. A gap between averages would flatter the real mics and understate geb.
 fn sep_fourth() -> Vec<Levels> {
     let mut all = Vec::new();
     all.extend(many("usb", -55.3, -69.6, 40)); // 14.3
@@ -36,8 +34,8 @@ fn it_names_geb_and_nothing_else() {
 
 #[test]
 fn the_defect_scores_best_on_a_floor_based_ratio() {
-    // Why every existing metric missed it. geb's speech-to-floor gap is the
-    // LARGEST in the room — read as SNR, it is the best microphone there.
+    // geb's speech-to-floor gap is the largest in the room: read as SNR, the
+    // defect looks like the best microphone there.
     let measured = gaps(&sep_fourth());
     let best = measured
         .iter()

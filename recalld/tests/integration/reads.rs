@@ -1,20 +1,10 @@
-//! Stage F1's read routes, against a database built to hold the cases that
-//! actually bite, plus the mounting rules.
-//!
-//! These were checked once against the live Python on a snapshot of the real
-//! archive (10 cases, byte identical) and that harness was then retired, because
-//! the product is being rebuilt rather than transported and a byte-parity gate
-//! would fail on the first deliberate improvement — `clamp` below is already one.
-//! What remains here are the invariants that must hold everywhere, including on
-//! a fresh clone.
+//! The read routes, against a database built to hold the cases that bite, plus
+//! the mounting rules: invariants that hold everywhere, including a fresh clone.
 
 use recalld::reads;
 use rusqlite::Connection;
 
-/// The subset of `recall.sqlite` these routes read. Copied from
-/// `recall.store_schema`, not imported, for the same reason `audiod::store`
-/// copies its SQL: the Python owns the schema, and a test that re-derived it
-/// would be testing its own copy rather than the shape on disk.
+/// A hand-copied subset of the `recall.sqlite` tables these routes read.
 fn schema(conn: &Connection) {
     conn.execute_batch(
         "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
@@ -63,10 +53,9 @@ fn db() -> Connection {
 
 #[test]
 fn a_superseded_or_hidden_turn_is_never_shown() {
-    // The single most important property of the read plane: supersession and
-    // soft-hiding are how this system corrects itself WITHOUT deleting, so a
-    // reader that ignored them would resurrect every wrong transcript ever
-    // written and every swept hallucination.
+    // Supersession and soft-hiding are how this system corrects itself without
+    // deleting; a reader that ignored them would resurrect every wrong
+    // transcript and every swept hallucination.
     let conn = db();
     turn(&conn, 1, "2026-09-01T10:00:00+00:00", "current", &[]);
     turn(
@@ -173,10 +162,9 @@ fn the_tier_badge_reports_how_much_processing_a_turn_has_had() {
 
 #[test]
 fn a_page_boundary_never_splits_turns_that_share_an_instant() {
-    // Co-located microphones record the SAME speech, so several turns genuinely
-    // carry one start time. A page that cut such a group in half would make the
-    // next strict-`<` page skip the remainder — audio silently missing from the
-    // timeline, which is the failure this whole system exists to avoid.
+    // Co-located microphones record the same speech, so several turns carry one
+    // start time. A page that cut such a group in half would make the next
+    // strict-`<` page skip the remainder, silently.
     let conn = db();
     turn(&conn, 1, "2026-09-01T10:00:00+00:00", "older", &[]);
     for id in 2..=4 {
@@ -226,8 +214,8 @@ fn a_turn_with_no_audio_segment_still_appears() {
 
 #[test]
 fn an_empty_page_is_not_treated_as_a_full_one() {
-    // Guards the limit-0 edge: Python skips its tie pass on an empty page, and a
-    // bare `len == limit` here would run one with no boundary.
+    // The limit-0 edge: the tie pass is skipped on an empty page, where a bare
+    // `len == limit` would run one with no boundary.
     let conn = db();
     let page = reads::timeline(&conn, 0, None).expect("timeline");
     assert!(page.items.is_empty());
@@ -275,10 +263,9 @@ fn app(root: &std::path::Path, webauth: Option<GateState>) -> axum::Router {
 
 #[tokio::test]
 async fn an_unconfigured_recalld_does_not_serve_transcripts_at_all() {
-    // ⚠ The one place this repo's inert-unless-configured rule is INVERTED, and
-    // the inversion is the point. Everywhere else an absent credential means "run
-    // open", which is right for a LAN-only dev box. These routes serve household
-    // transcripts, so absent must mean the route does not exist — 404, not 200.
+    // ⚠ The one place the inert-unless-configured rule is inverted. Elsewhere an
+    // absent credential means "run open"; these routes serve household
+    // transcripts, so absent means the route does not exist: 404, not 200.
     let dir = tempfile::tempdir().expect("tempdir");
     let a = app(dir.path(), None);
     for path in ["/api/timeline", "/api/search?q=x"] {
@@ -352,10 +339,8 @@ async fn mounted_transcripts_are_refused_without_a_session_and_served_with_one()
 
 #[tokio::test]
 async fn a_limit_is_clamped_rather_than_trusted() {
-    // The Python takes it straight from the query string, so ?limit=10000000
-    // asks SQLite for the whole archive in one page. A browsing route a signed-in
-    // person can accidentally turn into an archive dump will eventually be turned
-    // into one, so this port clamps.
+    // Unclamped, ?limit=10000000 would ask SQLite for the whole archive in one
+    // page.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
     schema(&conn);
@@ -397,10 +382,9 @@ async fn a_limit_is_clamped_rather_than_trusted() {
 
 #[test]
 fn a_deep_link_resolves_to_the_turn_as_it_reads_now() {
-    // ⚠ A link points at the id it was made from. If that turn has since been
-    // corrected, showing the ORIGINAL means an old link shows text that is no
-    // longer true — and the correction, which is the human half of the system of
-    // record, is invisible to whoever followed the link.
+    // A link points at the id it was made from. If that turn has since been
+    // corrected, the link must show the correction, not text that is no longer
+    // true.
     let conn = Connection::open_in_memory().expect("open");
     schema(&conn);
     turn(&conn, 1, "2026-06-14T18:00:00+00:00", "hird a noise", &[]);
@@ -421,8 +405,8 @@ fn a_deep_link_resolves_to_the_turn_as_it_reads_now() {
 
 #[test]
 fn a_supersede_cycle_is_reported_absent_rather_than_hanging() {
-    // ⚠ `superseded_by` is written by several passes. One bad chain would spin a
-    // request thread forever — a hang, which is far worse to diagnose than a 404.
+    // `superseded_by` is written by several passes; one cyclic chain would spin
+    // a request thread forever, which is far harder to diagnose than a 404.
     let conn = Connection::open_in_memory().expect("open");
     schema(&conn);
     turn(&conn, 1, "2026-06-14T18:00:00+00:00", "a", &[]);
@@ -464,9 +448,8 @@ fn several_ids_that_now_resolve_to_one_turn_appear_once() {
 
 #[test]
 fn the_review_queue_puts_unscored_turns_first() {
-    // ⚠ NULL confidence is the MOST suspect, not the least — nobody has ever
-    // scored it. A plain ORDER BY that sorts nulls last buries exactly the turns
-    // the queue exists to surface.
+    // A NULL confidence is the most suspect: nobody has scored it. Sorting nulls
+    // last would bury the turns the queue exists to surface.
     let conn = Connection::open_in_memory().expect("open");
     schema(&conn);
     turn(

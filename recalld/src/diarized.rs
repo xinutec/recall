@@ -621,7 +621,7 @@ pub fn apply(
             "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
             (id, &turn.text),
         )?;
-        // ⚠ In the same transaction as the turn: `rematch_speaker_guesses` reads
+        // ⚠ In the same transaction as the turn: `rematch::run_once` reads
         // `transcript_embeddings`, so a turn without its embedding can never be
         // named later.
         if let Some(vector) = named.voices.get(turn.speaker.as_str()) {

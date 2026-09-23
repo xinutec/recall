@@ -1,27 +1,15 @@
-//! The port against the REAL archive — the evidence the synthetic fixture cannot
-//! give.
+//! The matcher against the live archive's real voices, which a public repository
+//! cannot hold as a fixture. It reports rates only: no name, vector or text.
 //!
-//! `identify_parity` proves agreement on generated vectors. What it cannot show
-//! is agreement on this household's actual voices, because the repository is
-//! public and the voiceprints are people. So this reads the live archive when it
-//! is present and reports RATES ONLY: no name, no vector, no text ever leaves it.
+//! It compares the matcher over the same stored vectors, so it checks the
+//! arithmetic, not whether a per-speaker embedding attributes as well as a
+//! per-turn one.
 //!
-//! ⚠ **This settles the MATCHER, not the embedding.** It compares Rust and
-//! Python over the SAME stored vectors, so it answers "did the arithmetic port
-//! correctly". Whether a per-speaker embedding attributes as well as `refine`'s
-//! per-turn one is a different question needing re-embedded audio, and this says
-//! nothing about it.
+//! ⚠ The stored `speaker_guess` baseline comes from the Python matcher, but
+//! `recalld::diarized` rewrites guesses on the same rows, and every rewritten row
+//! agrees trivially. Read the age of the scored rows, not only the rate.
 //!
-//! ⚠ **ITS BASELINE IS ERODING, and nothing here will say so.** The stored
-//! `speaker_guess` values this compares against were written by Python, which was
-//! deleted on 2026-09-17 — and `recalld::diarized` now writes guesses of its own
-//! over the same rows. Every turn the Rust re-derives makes this compare Rust to
-//! Rust and agree trivially. The 1.000000 it last reported over 28,153 turns was
-//! a real result; a future one may be an empty tautology, so read the DATE of the
-//! rows it scored, not only the rate.
-//!
-//! Ignored by default: it depends on a machine-specific file and would fail
-//! everywhere else. Run it deliberately:
+//! Ignored by default because it needs a machine-specific file. Run it with:
 //!
 //! ```text
 //! cargo test -p recalld --test integration identify_differential -- --ignored --nocapture
@@ -32,9 +20,8 @@ use rusqlite::Connection;
 
 const ARCHIVE: &str = "/Volumes/Backup/recall/recall.sqlite";
 
-/// Agreement must be total. These are not two heuristics being compared — they
-/// are one rule in two languages, over identical inputs, so any disagreement is a
-/// porting bug rather than a tuning difference.
+/// Total: one rule in two languages over identical inputs, so any disagreement
+/// is a porting bug, not a tuning difference.
 const REQUIRED_AGREEMENT: f64 = 1.0;
 
 #[test]
@@ -56,13 +43,9 @@ fn the_port_agrees_with_the_python_on_the_real_archive() {
 
     let mut stmt = conn
         .prepare(
-            // ⚠ **THE SAME POPULATION `rematch_speaker_guesses` MAINTAINS**, and
-            // getting this wrong is how the first run of this test reported a 4%
-            // porting bug that did not exist. Without these three filters the
-            // query also returns superseded, hidden and human-labelled turns —
-            // rows whose cached guess Python deliberately never refreshes, so
-            // they are stale against ANY correct matcher. Comparing against them
-            // measures the staleness you selected for.
+            // ⚠ The same population `rematch::run_once` maintains.
+            // Superseded, hidden and human-labelled turns never get their cached
+            // guess refreshed, so they are stale against any correct matcher.
             "SELECT te.vector, ts.speaker_guess, ts.speaker_score
              FROM transcript_embeddings te
              JOIN transcript_segments ts ON ts.id = te.segment_id
@@ -99,10 +82,8 @@ fn the_port_agrees_with_the_python_on_the_real_archive() {
         }
         let gap = (got.score - py_score).abs();
         worst_score_gap = worst_score_gap.max(gap);
-        // ⚠ 1e-4, because that is the Python's OWN write threshold
-        // (`_SCORE_EPSILON`): it leaves a stored score alone below that, so the
-        // cache is allowed to lag by up to it. Demanding 1e-6 against a stored
-        // value asks for more agreement than the writer intends.
+        // 1e-4 is the writer's own threshold (`_SCORE_EPSILON`): a stored score
+        // is left alone below it, so the cache may lag by that much.
         if gap <= 1e-4 {
             same_score += 1;
         }

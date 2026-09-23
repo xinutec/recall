@@ -4,7 +4,7 @@ use std::path::Path;
 
 #[test]
 fn sox_argv_matches_the_python_producer() {
-    // The golden shape sources.py builds for the pinned CoreAudio device.
+    // The golden argv for a pinned CoreAudio device.
     assert_eq!(
         sox_argv(Some("USB Condenser Microphone"), 48_000, 1, None),
         [
@@ -62,8 +62,7 @@ fn wav_of(dir: &Path, name: &str, samples: &[f32]) -> std::path::PathBuf {
 
 #[test]
 fn a_wedged_reads_zeros_a_live_room_does_not() {
-    // Real decode path (ffmpeg), real files: the watchdog's verdict must hold
-    // on what a segmenter actually writes.
+    // Real files through the real ffmpeg decode, as the watchdog sees them.
     let dir = tempfile::tempdir().unwrap();
     let zeros = wav_of(dir.path(), "dead.wav", &vec![0.0f32; 16_000]);
     assert!(segment_is_digital_silence(&zeros));

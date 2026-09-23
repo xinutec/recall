@@ -1,7 +1,7 @@
 //! One device connection end to end, against a stub segmenter: handshake in,
 //! PCM pumped through, liveness marked, the registration and both capture
-//! events logged. The accept/pause loop is deliberately not driven here — it is
-//! thin, and its parts (pause file, handshake bounds) have their own tests.
+//! events logged. The thin accept/pause loop is not driven here; its parts
+//! have their own tests.
 
 use audiod::segmenter::CaptureConfig;
 use audiod::server::handle_connection;
@@ -10,15 +10,9 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
-/// A segmenter stand-in: ignores the ffmpeg argv except the output pattern
-/// (the last element, exactly as ffmpeg receives it), and writes its stdin to a
-/// realistically named segment file under the source directory.
-///
-/// ⚠ It takes the EXTENSION from that pattern rather than hard-coding one, so
-/// the test reads the extension the configured codec actually asked for. It did
-/// hard-code `.opus`, which kept passing unchanged when the default codec
-/// flipped to FLAC — a stub that names the file itself cannot notice that the
-/// archive's naming contract moved.
+/// A segmenter stand-in that writes its stdin to a segment file beside the
+/// output pattern (ffmpeg's last argument). It takes the extension from that
+/// pattern, so the test sees the extension the configured codec asks for.
 fn stub_segmenter(dir: &Path) -> String {
     let path = dir.join("stub-segmenter.sh");
     std::fs::write(

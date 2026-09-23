@@ -1,8 +1,7 @@
 //! Uploaded meetings: the list, the guards, and the transcript export.
 //!
-//! ⚠ The guards are the point. Rename and re-diarize reach the sources table,
-//! and the household capture archive must not be reachable through a path meant
-//! for meetings.
+//! ⚠ Rename and re-diarize reach the sources table, so the guards keep the
+//! household capture archive unreachable through a path meant for meetings.
 
 use recalld::sessions::{
     self, ExportTurn, SessionError, clean_transcript, name_voice, rediarize, rename,
@@ -111,8 +110,8 @@ fn only_uploaded_sessions_are_listed_never_the_household_capture() {
 
 #[test]
 fn a_diarization_tag_is_never_listed_as_a_person() {
-    // SPEAKER_00 is an answer about voices, not about people. Listing it would
-    // put a machine label where a name goes.
+    // A diarization cluster tag is about voices, not people; listing it would put
+    // a machine label where a name goes.
     let conn = db();
     source(&conn, "meeting-1", "upload");
     let m = segment(
@@ -146,7 +145,7 @@ fn a_diarization_tag_is_never_listed_as_a_person() {
 #[test]
 fn a_session_with_no_turns_still_lists_with_an_empty_speaker_set() {
     // A freshly uploaded meeting appears at once, at 0 turns, while the worker
-    // transcribes it. If it did not, an upload would look like it failed.
+    // transcribes it; otherwise an upload would look like it failed.
     let conn = db();
     source(&conn, "meeting-1", "upload");
     segment(
@@ -472,8 +471,7 @@ fn consecutive_turns_by_one_speaker_merge_into_a_single_bubble() {
 
 #[test]
 fn an_unnamed_voice_keeps_its_cluster_so_two_strangers_stay_apart() {
-    // ⚠ Falling back to "unknown" for both would MERGE two different people into
-    // one bubble — the export would read as one person saying both halves.
+    // Falling back to "unknown" for both would merge two people into one bubble.
     let turns = vec![
         export(
             "2026-07-03T09:51:00+00:00",
@@ -538,9 +536,8 @@ fn the_export_date_is_the_first_bubble_start() {
 
 use recalld::sessions::delete_session;
 
-/// The full cascade's tables, copied from `store_schema` rather than invented —
-/// a delete that silently missed a table would pass against a schema that lacks
-/// it.
+/// The full cascade's tables, copied from the production schema: a delete that
+/// missed a table would pass against a schema that lacks it.
 fn delete_db() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
     conn.execute_batch(
@@ -622,9 +619,8 @@ fn count(conn: &Connection, table: &str) -> i64 {
 
 #[test]
 fn deleting_the_household_archive_is_refused_and_removes_nothing() {
-    // ⚠ THE GUARD THAT MATTERS. The continuous capture is append-only and must
-    // never be reachable through a path meant for meetings. If this ever passes,
-    // the household archive is one HTTP call from gone.
+    // ⚠ The continuous capture is append-only; without this guard the household
+    // archive is one HTTP call from gone.
     let mut conn = delete_db();
     populate(&conn, "usb", "coreaudio");
 
@@ -660,8 +656,8 @@ fn deleting_a_meeting_removes_every_derived_row_and_returns_its_files() {
 
 #[test]
 fn a_deletion_is_tombstoned_so_a_later_push_cannot_resurrect_it() {
-    // ⚠ Without the journal the Mac's next refine push re-creates the session
-    // here, and a deletion that undoes itself is worse than none.
+    // Without the tombstone the turns pass rebuilds the session, and a deletion
+    // that undoes itself is worse than none.
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
 
@@ -707,8 +703,8 @@ fn deleting_a_session_that_does_not_exist_is_a_miss_not_a_wipe() {
 
 #[test]
 fn a_failed_delete_leaves_the_session_whole() {
-    // ⚠ Atomic or nothing: a half-deleted session is turns with no source, which
-    // no view can render and no path can clean up.
+    // Atomic: a half-deleted session is turns with no source, which no view can
+    // render and no path can clean up.
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
     conn.execute("DROP TABLE refine_requests", [])

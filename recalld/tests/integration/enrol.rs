@@ -1,5 +1,5 @@
-//! Voiceprint enrolment's work-list (stage E4, #1538): which named turns become
-//! reference vectors, and which clip each is cut from.
+//! Voiceprint enrolment's work-list: which named turns become reference
+//! vectors, and which clip each is cut from.
 
 use chrono::{DateTime, Utc};
 use recalld::enrol::{Span, derive_jobs, pending, spans_for};
@@ -70,9 +70,8 @@ fn delivered_at(root: &std::path::Path, filename: &str, start_utc: &str) {
 
 #[test]
 fn a_named_turn_is_offered_as_seconds_into_its_clip() {
-    // ⚠ The span is relative to the CLIP, not the epoch: the runner has one file
-    // and cuts inside it. An absolute instant here would seek past the end of
-    // every clip in the archive.
+    // The span is relative to the clip, not the epoch: the runner has one file
+    // and cuts inside it.
     let conn = meaning();
     turn(&conn, 10, Some("Alice"), 12.5, 4.0);
 
@@ -106,8 +105,8 @@ fn a_turn_already_enrolled_is_not_offered_again() {
 
 #[test]
 fn the_work_list_matches_the_pythons_own_exclusions() {
-    // ⚠ Both select the same turns while both exist. A turn one enrols and the
-    // other does not would be enrolled twice, under two prints of one clip.
+    // The same exclusions as the Python enrolment this ports, so a turn it
+    // enrolled is not enrolled again under a second print of one clip.
     let conn = meaning();
     turn(&conn, 1, None, 0.0, 4.0); // never named
     turn(&conn, 2, Some("SPEAKER_01"), 5.0, 4.0); // a cluster id is not a name
@@ -148,7 +147,7 @@ fn a_turn_hidden_or_superseded_teaches_nothing() {
 
 #[test]
 fn a_turn_starting_a_hair_before_its_clip_seeks_to_zero_not_backwards() {
-    // ⚠ ffmpeg answers a negative seek with the WHOLE CLIP rather than an error,
+    // ⚠ ffmpeg answers a negative seek with the whole clip rather than an error,
     // so an unclamped offset enrols a minute of the room as one person's voice.
     let conn = meaning();
     turn(&conn, 10, Some("Alice"), -0.2, 4.0);
@@ -159,9 +158,8 @@ fn a_turn_starting_a_hair_before_its_clip_seeks_to_zero_not_backwards() {
 
 #[test]
 fn the_job_names_the_ingest_filename_even_when_the_extensions_differ() {
-    // ⚠ The meaning plane holds `.opus`, the ingest copy is `.wav`. The runner
-    // fetches by the INGEST name, so matching on whole filenames would derive
-    // nothing and the queue would sit empty while turns waited.
+    // ⚠ The meaning plane holds `.opus`, the ingest copy is `.wav`, and the
+    // runner fetches by the ingest name: matching whole filenames derives nothing.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning();
     turn(&conn, 10, Some("Alice"), 0.0, 4.0);
@@ -300,8 +298,8 @@ fn an_embedded_span_becomes_a_reference_voiceprint() {
 
 #[test]
 fn a_turn_renamed_while_the_runner_worked_is_not_filed_under_the_old_name() {
-    // ⚠ Embedding takes minutes and a person can re-assign in that window. The
-    // job carries no name for exactly this reason: the label is read here.
+    // Embedding takes minutes and a person can re-assign in that window, so the
+    // job carries no name: the label is read here.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning();
     conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
@@ -355,8 +353,7 @@ fn a_turn_hidden_while_the_runner_worked_enrols_nothing() {
 
 #[test]
 fn an_empty_vector_is_refused_rather_than_enrolled() {
-    // ⚠ A zero-length vector is not inert. `identify::enrolled` skips a row it
-    // cannot parse for the same reason: a degenerate print sits at cosine 0
+    // A zero-length vector is not inert: a degenerate print sits at cosine 0
     // against everyone and becomes somebody's best match on quiet audio.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning();
@@ -380,8 +377,8 @@ fn an_empty_vector_is_refused_rather_than_enrolled() {
 
 #[test]
 fn a_clip_that_enrols_nothing_is_still_ledgered() {
-    // ⚠ The candidate query is "not in the ledger". A decision that writes no
-    // row would leave the clip a candidate for ever, re-deciding it every pass.
+    // The candidate query is "not in the ledger", so a decision that wrote no
+    // row would be re-made every pass.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning();
     conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
@@ -422,10 +419,9 @@ fn a_replayed_result_does_not_enrol_the_same_turn_twice() {
 
 #[test]
 fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
-    // ⚠ The runner has one clip and no way to ask which stretches to embed, so a
-    // job that arrives without spans embeds nothing and enrols nobody — silently,
-    // because an empty print list is a valid result. Other kinds must stay
-    // byte-identical on the wire: `spans` is skipped when empty.
+    // The runner cannot ask which stretches to embed, so a job without spans
+    // enrols nobody, silently: an empty print list is a valid result. Other kinds
+    // stay byte-identical on the wire because `spans` is skipped when empty.
     let dir = tempfile::tempdir().expect("tempdir");
     {
         let conn =
@@ -473,9 +469,9 @@ fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
 
 #[test]
 fn a_lease_of_another_kind_does_not_need_the_meaning_plane_at_all() {
-    // ⚠ Regression: opening `recall.sqlite` unconditionally made EVERY lease 500
-    // wherever it was absent, which is the runner's own end-to-end harness. A
-    // transcription runner must not be stopped by a database it never reads.
+    // A lease of another kind must not need `recall.sqlite`: the runner's own
+    // end-to-end harness has none, and a transcription runner must not be stopped
+    // by a database it never reads.
     let empty = tempfile::tempdir().expect("tempdir");
     let mut job = recalld::queue::Job {
         id: 1,
@@ -489,11 +485,9 @@ fn a_lease_of_another_kind_does_not_need_the_meaning_plane_at_all() {
 
 #[test]
 fn enrolment_outranks_capture_time_or_it_would_never_be_leased() {
-    // ⚠ Measured on the fleet 2026-09-17: 31 clips awaited a print, the newest
-    // from 2026-09-03, behind 2,251 diarize jobs newer than it — two days of GPU
-    // before the first could be leased. And the next label somebody adds will sit
-    // on whatever clip they were reading, which is old too, so it is not a
-    // backlog that clears itself.
+    // Clips awaiting a print are old (a label lands on whatever clip a person is
+    // reading), so ordered by capture time they would wait behind days of newer
+    // diarize jobs.
     let dir = tempfile::tempdir().expect("tempdir");
     let ingest = ingest_at(dir.path());
     // A NEWER clip with diarization to do, and an OLDER one awaiting a print.

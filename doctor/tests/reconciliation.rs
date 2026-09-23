@@ -1,8 +1,7 @@
 //! Telling a deliberate pause from silently lost speech.
 //!
-//! An unexplained gap (capture active, yet no audio landed) is unrecoverable
-//! speech — the worst outcome the archive has. These are the rules that decide
-//! when to say so, and when to keep quiet because there is no basis for a claim.
+//! An unexplained gap (capture active, no audio landed) is unrecoverable
+//! speech. These rules decide when to say so, and when there is no basis for a claim.
 
 use chrono::{DateTime, Duration, Utc};
 use doctor::check::Verdict;
@@ -23,8 +22,7 @@ fn event(kind: &str, minute: i64) -> Event {
 
 #[test]
 fn no_events_makes_no_claim() {
-    // Pre-epoch history: the reconciler judges only what it can account
-    // for, so an archive with no pause/resume record reports nothing.
+    // With no pause/resume record there is no basis for a claim.
     assert!(
         uncovered_loss(
             &[],
@@ -40,8 +38,8 @@ fn no_events_makes_no_claim() {
 
 #[test]
 fn a_span_with_no_audio_at_all_is_the_whole_span() {
-    // The crash-loop shape: capture "active", producing nothing. There is
-    // no gap BETWEEN segments to find, because there are no segments.
+    // The crash-loop shape: capture active, no segments, so no gap between
+    // segments to find.
     let events = [event(RESUME, 0), event(PAUSE, 60)];
     let losses = uncovered_loss(
         &[],
@@ -81,8 +79,7 @@ fn a_deliberate_pause_is_not_loss() {
 
 #[test]
 fn slop_under_min_loss_is_absorbed() {
-    // The first segment starts a beat after the resume. That is bookkeeping,
-    // not lost speech.
+    // The first segment starts a beat after the resume; that is not lost speech.
     let events = [event(RESUME, 0), event(PAUSE, 60)];
     let intervals = [(at(1), at(60))];
     assert!(
@@ -100,9 +97,8 @@ fn slop_under_min_loss_is_absorbed() {
 
 #[test]
 fn the_settle_horizon_keeps_a_running_captures_tail_out_of_it() {
-    // A trailing resume leaves a span open to now, and the newest audio is
-    // always missing from the store. Without `settle` every healthy pass
-    // would report the last few minutes as loss.
+    // A span open to now always lacks the newest audio; without `settle`
+    // every healthy pass would report the last few minutes as loss.
     let events = [event(RESUME, 0)];
     let intervals = [(at(0), at(50))];
     let losses = uncovered_loss(
@@ -169,7 +165,7 @@ fn a_phone_warns_where_the_wired_mic_fails() {
 #[test]
 fn loss_on_an_unregistered_source_gets_its_own_line() {
     // It must not vanish into the roll-up, and with no kind on record it
-    // takes the strict verdict: no excuse has been established for it.
+    // takes the strict verdict.
     let gap = Gap {
         source_id: "ghost".to_owned(),
         start: at(0),
@@ -194,8 +190,7 @@ fn a_clean_window_says_so_per_device_and_once_overall() {
 
 #[test]
 fn a_span_opens_on_a_resume_and_never_before_the_first_one() {
-    // Pre-epoch history: we have no basis to call capture active before the
-    // first resume we hold a record of, so nothing there is ever judged.
+    // Nothing before the first recorded resume can be called active.
     let now = at(100);
     let events = [event(PAUSE, 5), event(RESUME, 10), event(PAUSE, 20)];
     let spans = active_spans(&events, now);

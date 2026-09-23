@@ -55,9 +55,8 @@ fn a_cut_never_bisects_a_word() {
 
 #[test]
 fn a_cut_inside_a_word_ties_to_the_left() {
-    // "abc def": offset 5 is one from each space. The Python takes the left on a
-    // tie (`left if at - left <= right - at`), and a port that took the right
-    // would move every ambiguous cut by a word.
+    // "abc def": offset 5 is one from each space, and a tie goes left. Going
+    // right would move every ambiguous cut by a word.
     let t = turn("abc def ghi", None);
 
     let pieces = pieces_of(&t, &[5], &[None, Some("Dr Lee".into())]);
@@ -67,9 +66,8 @@ fn a_cut_inside_a_word_ties_to_the_left() {
 
 #[test]
 fn an_accented_turn_cuts_by_character_not_by_byte() {
-    // ⚠ THE PORT TRAP. "geëvalueerd" is 11 characters and 12 bytes. Rust's &str
-    // indexes by byte, so byte-based arithmetic would cut in the wrong place —
-    // and landing inside the ë would PANIC rather than misbehave quietly.
+    // ⚠ "geëvalueerd" is 11 characters and 12 bytes. `&str` indexes by byte, so
+    // byte arithmetic cuts in the wrong place, and landing inside the ë panics.
     let t = turn("wij hebben dat geëvalueerd vandaag", None);
 
     // Character 15 is the start of "geëvalueerd".
@@ -100,8 +98,7 @@ fn a_turn_of_only_accented_words_survives_a_cut_at_every_offset() {
 
 #[test]
 fn word_timings_place_the_cut_at_the_words_own_time() {
-    // With timings the split time is the word's, not a character fraction — the
-    // whole reason timings are stored.
+    // With timings the split time is the word's, not a character fraction.
     let words = vec![
         word(0.0, 1.0, "one"),
         word(1.0, 2.0, " two"),
@@ -404,9 +401,8 @@ fn a_right_to_left_selection_is_the_same_as_left_to_right() {
 
 #[test]
 fn a_second_assign_on_an_already_split_turn_does_nothing() {
-    // ⚠ The double-tap. Both callers read the turn as live; only the one that
-    // wins the atomic claim splits it. Without that the second stamps out a
-    // duplicate set of pieces.
+    // The double-tap: both callers read the turn as live, and only the one that
+    // wins the atomic claim splits it, so no duplicate set of pieces.
     let mut conn = db();
     add(&conn, 1, 0, "a list of errands and we want to", None);
     let span = Span {
@@ -515,23 +511,16 @@ fn a_turn_from_another_session_is_refused_rather_than_split() {
     assert_eq!(current(&conn)[0].2, None, "untouched");
 }
 
-/// ⚠ **The estimate, when there is nothing better than one.** A turn with no
-/// word timings still has to place its cut somewhere, and the rule is
-/// proportional by CHARACTER across the turn's span. The Python asserted this
-/// arithmetic directly (`test_split_without_word_timings_interpolates_by_char`);
-/// nothing on this side did, so the port carried the code and not the check —
-/// every other `start` assertion here either uses word timings or pins an edge.
-///
-/// It matters because the estimate is what the player seeks to. A port that
-/// silently fell back to the turn's own start would put every piece of every
-/// untimed turn at the same moment, and the text would still look right.
+/// A turn with no word timings places its cut proportionally by character across
+/// its span. The player seeks to this estimate; falling back to the turn's start
+/// would put every piece of an untimed turn at the same moment while the text
+/// still looked right.
 #[test]
 fn without_word_timings_a_cut_is_placed_proportionally_by_character() {
     let text = "a list of errands and we want to";
     let t = turn(text, None);
-    // ⚠ The standalone word, not the "and" inside "errands" — `find("and")`
-    // returns 13, which is mid-word, and the cut then SNAPS to the boundary at 9.
-    // Asserting the unsnapped offset is how this test was wrong the first time.
+    // The standalone word: `find("and")` returns 13, inside "errands", and the
+    // cut would snap to the boundary at 9.
     let cut = text.find(" and ").expect("offset") + 1;
 
     let pieces = pieces_of(&t, &[cut], &[None, Some("Dr Lee".into())]);

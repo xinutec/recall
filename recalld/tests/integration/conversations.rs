@@ -1,10 +1,5 @@
-//! Conversation and moment folding — the two groupings that give an always-on
+//! Conversation and moment folding: the two groupings that give an always-on
 //! capture stream a shape a person can browse.
-//!
-//! ⚠ These are pinned against `recall.conversations` / `recall.moments`, which
-//! served this route for months. Two rules below differ between the languages by
-//! default and are the reason this file exists: Python's `max` keeps the FIRST
-//! among equals, Rust's `max_by_key` keeps the LAST.
 
 use chrono::{DateTime, TimeDelta, Utc};
 use recalld::conversations::{
@@ -56,9 +51,9 @@ fn a_silence_longer_than_the_gap_starts_a_new_conversation() {
 
 #[test]
 fn the_silence_is_measured_from_the_furthest_end_not_the_previous_turn() {
-    // ⚠ A long turn from one mic covers a short one from another. Measuring the
-    // gap from the SHORT turn's end would invent a silence that nobody heard and
-    // split one conversation in two.
+    // A long turn from one mic covers a short one from another. Measuring the gap
+    // from the short turn's end would invent a silence and split the
+    // conversation.
     let turns = vec![
         turn(1, 0, 500, "usb"),   // runs long
         turn(2, 10, 20, "pixel"), // ends early, inside the first
@@ -122,12 +117,9 @@ fn the_spine_is_the_source_with_the_highest_summed_confidence() {
 
 #[test]
 fn a_tied_spine_goes_to_the_first_source_seen_not_the_last() {
-    // ⚠ THE PORT TRAP. Python's `max` returns the first maximum; Rust's
-    // `max_by_key` returns the LAST. With equal summed confidence and equal turn
-    // count the two implementations would disagree about which microphone is the
-    // spine — silently swapping which transcription the UI shows as primary and
-    // which it hides behind "compare". Nothing else in the output would look
-    // wrong, which is what makes it worth a test.
+    // ⚠ On a full tie the first microphone is the spine. Rust's `max_by_key`
+    // returns the last maximum, and swapping the spine silently swaps which
+    // transcription the UI shows as primary and which it hides behind "compare".
     let turns = vec![
         scored(turn(1, 0, 10, "usb"), 0.5),
         scored(turn(2, 1, 11, "pixel"), 0.5),
@@ -163,10 +155,10 @@ fn a_missing_guess_is_filled_from_the_most_confident_overlapping_mic() {
 
 #[test]
 fn an_existing_guess_is_strengthened_by_agreement_but_never_flipped() {
-    // ⚠ The asymmetry is deliberate and load-bearing. Phone clocks are
-    // arrival-stamped and lag by a variable few seconds, so a time overlap is NOT
-    // reliable evidence of "same speaker". A mic that agrees may raise the
-    // confidence; a mic that disagrees must not rename the person.
+    // The asymmetry is deliberate. Phone clocks are arrival-stamped and lag by a
+    // variable few seconds, so a time overlap is not reliable evidence of the same
+    // speaker: a mic that agrees may raise the confidence, one that disagrees must
+    // not rename the person.
     let turns = vec![
         guessed(turn(1, 0, 10, "usb"), "Alex", 0.4),
         guessed(turn(2, 1, 9, "pixel"), "Alex", 0.8), // agrees, stronger
@@ -262,11 +254,9 @@ fn a_gap_measured_in_fractions_of_a_second_is_respected() {
 
 // --- the conversation SUMMARY, which is what a browsing list shows -----------
 //
-// ⚠ These pin `fold`, not `segment_conversations`. Everything above works on
-// turn indices; nothing above ever built a `ConversationOut`, so `turnCount`,
-// `speakers` and `preview` — the three fields the list view is made of — had no
-// test in this language at all. `tests/test_conversations.py` had one, and it
-// was the only thing holding them.
+// These pin `fold`, which builds `ConversationOut`: `turnCount`, `speakers` and
+// `preview`, the fields the list view is made of. The tests above work on turn
+// indices only.
 
 /// A stored row, with everything the summary ignores left empty.
 fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment {
@@ -320,9 +310,8 @@ fn a_conversation_reports_its_span_its_turn_count_and_its_confirmed_speakers() {
     assert_eq!(conv.speakers, vec!["Carol".to_owned(), "Alice".to_owned()]);
 }
 
-/// ⚠ The rule `PREVIEW_MIN_CONFIDENCE` exists for: a card is headed by its first
-/// reasonably-confident line, so a low-confidence guess does not become the thing
-/// a person reads first. Untested until now in either direction.
+/// A card is headed by its first line above `PREVIEW_MIN_CONFIDENCE`, so a
+/// low-confidence guess is not what a person reads first.
 #[test]
 fn the_preview_skips_a_low_confidence_opening_line() {
     let segments = vec![
@@ -335,8 +324,8 @@ fn the_preview_skips_a_low_confidence_opening_line() {
     assert_eq!(out.items[0].preview, "the line worth showing");
 }
 
-/// …and the other half of it: when NOTHING clears the bar the card still gets a
-/// heading, because an empty preview reads as an empty conversation.
+/// When nothing clears the bar the card still gets a heading: an empty preview
+/// reads as an empty conversation.
 #[test]
 fn a_conversation_with_nothing_confident_still_previews_its_first_line() {
     let segments = vec![
@@ -349,9 +338,8 @@ fn a_conversation_with_nothing_confident_still_previews_its_first_line() {
     assert_eq!(out.items[0].preview, "mumbled nonsense");
 }
 
-/// An unscored turn is NOT treated as confident. A NULL confidence is "nobody
-/// measured", and heading a card with it would be the same mistake as heading it
-/// with a 0.1.
+/// An unscored turn is not treated as confident: a NULL confidence means nobody
+/// measured.
 #[test]
 fn an_unscored_line_does_not_clear_the_preview_bar() {
     let segments = vec![
@@ -364,8 +352,8 @@ fn an_unscored_line_does_not_clear_the_preview_bar() {
     assert_eq!(out.items[0].preview, "scored and good");
 }
 
-/// The gap is tunable, and the summary splits with it — Python's
-/// `test_threshold_is_tunable`, at the level a caller passing `?gap=` sees.
+/// The gap is tunable, and the summary splits with it, as a caller passing
+/// `?gap=` sees.
 #[test]
 fn the_gap_is_tunable_and_the_summary_splits_with_it() {
     let segments = vec![segment(1, 0, 2, "before"), segment(2, 40, 42, "after")];
@@ -374,9 +362,8 @@ fn the_gap_is_tunable_and_the_summary_splits_with_it() {
     assert_eq!(fold(&segments, 10.0, 200).items.len(), 2, "38s > 10s gap");
 }
 
-/// The instants are the STORED strings, not re-formatted ones — the same
-/// pass-through `reads::iso` promises, checked where a conversation card reads
-/// it rather than only where a turn does.
+/// The instants are the stored strings, not re-formatted ones: the pass-through
+/// `reads::iso` promises, checked on a conversation card.
 fn reads_iso(seconds: i64) -> String {
     at(seconds).to_rfc3339()
 }

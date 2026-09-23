@@ -49,8 +49,8 @@ fn a_verdict_serialises_as_the_word_the_report_contract_expects() {
 
 #[test]
 fn the_wired_mic_fails_where_a_phone_only_warns() {
-    // The always-on mic is wired to the machine doing the recording and has no
-    // excuse. A phone is carried out of the house, runs flat, gets closed.
+    // The always-on mic is wired to the recording machine and has no excuse; a
+    // phone is carried out, runs flat, gets closed.
     let now = at(60);
     let recorders = [
         mic("usb", SourceKind::CoreAudio, Some(at(0))),
@@ -63,8 +63,8 @@ fn the_wired_mic_fails_where_a_phone_only_warns() {
 
 #[test]
 fn every_microphone_silent_at_once_is_the_capture_process_not_a_coincidence() {
-    // The June shape: fourteen crash-loop restarts, ninety minutes recorded
-    // nowhere, and from outside it looked exactly like a quiet house.
+    // A crash-looping capture process looks from outside like a quiet house,
+    // except that every mic goes silent together.
     let now = at(60);
     let recorders = [
         mic("usb", SourceKind::CoreAudio, Some(at(0))),
@@ -102,8 +102,8 @@ fn no_recorders_at_all_is_a_fault_not_an_empty_pass() {
 
 #[test]
 fn a_pause_collapses_capture_to_one_skip_that_names_the_resume() {
-    // Deliberate, so it must never page anyone — but it IS shown, because a
-    // pause nobody remembers is how a week of memory goes missing.
+    // Deliberate, so it never pages anyone, but it is shown because a
+    // forgotten pause loses recording silently.
     let now = at(0);
     let recorders = [mic("usb", SourceKind::CoreAudio, None)];
     let checks = capture_checks(&recorders, now, Some(at(120)), silent_after());
@@ -141,9 +141,8 @@ fn a_recorder_that_never_wrote_says_so_and_carries_no_number() {
 
 #[test]
 fn live_is_graded_on_what_it_produced_not_on_being_up() {
-    // On 2026-09-03 live's consumer thread died while its reader carried on:
-    // the agent was up, KeepAlive satisfied, every other check green, and the
-    // tier that answers "what did they just say" wrote nothing for 40 minutes.
+    // A dead consumer thread leaves the agent up and every other check green
+    // while live writes nothing.
     let now = at(60);
     assert_eq!(
         live_check(Some(at(59)), now, None, live_quiet(), TALKING).verdict,
@@ -164,10 +163,8 @@ fn live_is_graded_on_what_it_produced_not_on_being_up() {
     );
 }
 
-/// Measured 2026-09-09 over 55.8 active hours: `live_check` was red for 36% of
-/// them, and 4.7 of the 20.2 red hours were a quiet house rather than a fault.
-/// Blaming live for the household's silence is what teaches a person to ignore
-/// it, and #1383's real stalls are the 15.5 h that remain.
+/// Blaming live for a quiet house teaches people to ignore the check, so
+/// silence skips; but only measured silence counts as quiet.
 #[test]
 fn a_quiet_house_is_not_a_live_fault_but_an_unscanned_one_is_not_quiet() {
     let now = at(60);
@@ -178,18 +175,15 @@ fn a_quiet_house_is_not_a_live_fault_but_an_unscanned_one_is_not_quiet() {
         live_check(stale, now, None, live_quiet(), SILENT).verdict,
         Verdict::Skip
     );
-    // People were audibly talking and live wrote nothing. This is the alarm the
-    // check exists for.
+    // People were talking and live wrote nothing: the alarm the check exists for.
     assert_eq!(
         live_check(stale, now, None, live_quiet(), TALKING).verdict,
         Verdict::Fail
     );
 
-    // ⚠ The trap: `speech_s` is filled by a scanner on its own cadence, so a
-    // window can read "no speech" simply because nothing in it has been
-    // measured yet. Absence of measurement is NOT absence of speech, and
-    // skipping on it would silence the check exactly when the archive fell
-    // behind — the failure most likely to accompany a live stall.
+    // `speech_s` is filled by a scanner on its own cadence, so "no speech" can
+    // mean "not measured yet". Skipping on that would silence the check exactly
+    // when the archive fell behind.
     assert_eq!(
         live_check(stale, now, None, live_quiet(), UNSCANNED).verdict,
         Verdict::Fail
@@ -200,8 +194,8 @@ fn a_quiet_house_is_not_a_live_fault_but_an_unscanned_one_is_not_quiet() {
         Verdict::Fail
     );
 
-    // Nothing was delivered at all: capture's own checks grade that, and live
-    // failing too would be the same outage counted twice.
+    // Nothing delivered: capture's checks grade that, and failing live too
+    // would count one outage twice.
     assert_eq!(
         live_check(stale, now, None, live_quiet(), NO_AUDIO).verdict,
         Verdict::Skip
@@ -236,7 +230,7 @@ const UNSCANNED: WindowAudio = WindowAudio {
     scanned_s: 0.0,
     speech_s: 0.0,
 };
-/// Half measured and quiet so far — not enough to call the window quiet.
+/// Half measured and quiet so far: not enough to call the window quiet.
 const HALF_SCANNED_SILENT: WindowAudio = WindowAudio {
     delivered_s: 1200.0,
     scanned_s: 500.0,
@@ -269,7 +263,7 @@ fn a_completed_pass_is_graded_from_when_it_finished() {
         worker_check(Some(&beat), at(20), worker_slow(), worker_stopped()).verdict,
         Verdict::Pass
     );
-    // 30 min is the warn line, an hour the fail line — the 2026-08-10 shape.
+    // 30 min is the warn line, an hour the fail line.
     assert_eq!(
         worker_check(Some(&beat), at(50), worker_slow(), worker_stopped()).verdict,
         Verdict::Warn
@@ -285,8 +279,8 @@ fn a_completed_pass_is_graded_from_when_it_finished() {
 
 #[test]
 fn a_running_pass_is_graded_from_when_it_started_and_named_differently() {
-    // Both are the same clock; they point at different things. A pass that will
-    // not return is the archive, a loop that will not start one is launchd.
+    // Same clock, different culprits: a pass that will not return points at the
+    // archive, a loop that will not start one at launchd.
     let beat = Beat {
         started: at(0),
         finished: None,
@@ -300,10 +294,9 @@ fn a_running_pass_is_graded_from_when_it_started_and_named_differently() {
 
 #[test]
 fn the_worker_heartbeat_fixture_is_the_shape_the_python_worker_writes() {
-    // The other half of this contract is tests/test_cli_worker.py, which asserts
-    // the real worker writes these exact keys. The fixture is the one copy — a
-    // field renamed on either side fails on both, which is the only way a
-    // cross-language seam gets checked at all.
+    // The other half of this contract is `runner/tests/pulse.rs`, which checks
+    // the runner writes this shape. The fixture is the one shared copy, so a
+    // field renamed on either side fails a test.
     let fixture = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../tests/fixtures/worker-heartbeat.json"
@@ -322,9 +315,8 @@ fn the_worker_heartbeat_fixture_is_the_shape_the_python_worker_writes() {
 
 #[test]
 fn an_unanswered_archive_fails_rather_than_skips() {
-    // A skip reads as "not applicable", and nothing is more applicable than the
-    // archive being unreachable. The June lesson was that a silence which looks
-    // deliberate is how a fault survives for weeks.
+    // A skip reads as "not applicable", and a silence that looks deliberate
+    // lets a fault survive for weeks.
     let unanswered = archive_check(None, "");
     assert_eq!(unanswered.verdict, Verdict::Fail);
     assert_eq!(unanswered.observed, "no answer in 60s");
@@ -336,14 +328,14 @@ fn a_slow_archive_warns_while_it_is_still_only_slow() {
     assert_eq!(archive_check(Some(1.5), "").verdict, Verdict::Pass);
     assert_eq!(archive_check(Some(10.0), "").verdict, Verdict::Warn);
     assert_eq!(archive_check(Some(59.0), "").verdict, Verdict::Warn);
-    // Trended either way: the only warning anyone gets before it wedges.
+    // Trended either way: the only warning before it wedges.
     assert_eq!(archive_check(Some(1.5), "").value, Some(1.5));
 }
 
 #[test]
 fn an_unreachable_volume_fails_rather_than_reading_as_a_fast_probe() {
-    // ⚠ The failure mode this exists to avoid: a probe whose error path answers
-    // "0.00s" would report the disk as healthiest at the moment it is gone.
+    // A probe whose error path answered "0.00s" would report the disk as
+    // healthiest at the moment it is gone.
     let missing = archive::volume_check(Path::new("/nonexistent-volume-for-a-test"));
     assert_eq!(missing.verdict, Verdict::Fail);
     assert!(missing.value.is_none(), "an unread page has no latency");
@@ -356,9 +348,8 @@ fn an_unreachable_volume_fails_rather_than_reading_as_a_fast_probe() {
 
 #[test]
 fn the_volume_probe_reads_a_fixed_page_however_big_the_archive_gets() {
-    // ⚠ This is the whole point of it existing beside `archive answers`, which
-    // times a growing log read and a directory listing and so cannot say
-    // whether a slow reading is the DISK or the archive having got bigger.
+    // Why it exists beside `archive answers`, which times a growing read and so
+    // cannot tell a slow disk from a bigger archive.
     let dir = tempfile::tempdir().expect("a scratch dir");
     let db = dir.path().join(archive::PROBE_FILE);
     std::fs::write(&db, vec![0_u8; 1024 * 1024]).expect("write");
@@ -367,9 +358,7 @@ fn the_volume_probe_reads_a_fixed_page_however_big_the_archive_gets() {
     let large = archive::volume_check(dir.path());
     assert_eq!(small.verdict, Verdict::Pass);
     assert_eq!(large.verdict, Verdict::Pass);
-    // Both carry a reading — the trend is the measurement, so an absent value
-    // would make the two checks indistinguishable in exactly the case they
-    // were split to tell apart.
+    // Both carry a reading: the trend is the measurement.
     assert!(small.value.is_some() && large.value.is_some());
     assert!(
         large.value.expect("a reading") < volume_slow_seconds(),
@@ -380,11 +369,8 @@ fn the_volume_probe_reads_a_fixed_page_however_big_the_archive_gets() {
 
 #[test]
 fn an_archive_smaller_than_a_page_is_not_a_stalled_volume() {
-    // ⚠ The probe seeks to a RANDOM page so it cannot time the page cache — the
-    // first page of this file is touched every five minutes and would read
-    // 0.00s with the disk wedged. The cost of that is this edge: a file with no
-    // whole page in it, which must not be reported as an unreadable archive.
-    // A fault invented by the instrument is worse than no instrument.
+    // The probe reads a random page so it cannot time the page cache. A file
+    // with no whole page in it must not read as an unreadable archive.
     let dir = tempfile::tempdir().expect("a scratch dir");
     for bytes in [0_usize, 1, 100] {
         std::fs::write(dir.path().join(archive::PROBE_FILE), vec![0_u8; bytes]).expect("write");
@@ -397,8 +383,7 @@ fn an_archive_smaller_than_a_page_is_not_a_stalled_volume() {
     }
 }
 
-/// The warn threshold as a number, so the test above reads the rule rather than
-/// repeating it — a copied bound drifts from the one that ships.
+/// The shipped warn threshold, read rather than copied so it cannot drift.
 fn volume_slow_seconds() -> f64 {
     archive::volume_slow().num_seconds() as f64
 }
@@ -412,8 +397,8 @@ fn an_archive_that_answered_with_an_error_still_fails() {
 
 #[test]
 fn an_installed_but_unloaded_agent_is_always_a_fault() {
-    // The agents self-gate — they park while capture is paused, they do not
-    // unload — so "not loaded" never means "deliberately off".
+    // The agents park while paused rather than unload, so "not loaded" never
+    // means deliberately off.
     let checks = agent_checks(&[
         ("org.xinutec.recall-worker".to_owned(), true),
         ("org.xinutec.recall-capture".to_owned(), false),
@@ -436,9 +421,8 @@ fn no_agents_installed_at_all_is_reported_once() {
 
 #[test]
 fn too_few_live_turns_skips_rather_than_passing() {
-    // ⚠ "Nothing to measure" and "measured and fine" are different claims. A
-    // check that conflates them reports a DEAD tier as healthy, which is the
-    // exact failure the live checks exist to catch.
+    // "Nothing to measure" is not "measured and fine"; conflating them reports
+    // a dead tier as healthy.
     let unmeasured = live_lag_check(None, live_lag_slow(), "3 live turn(s) in the window");
     assert_eq!(unmeasured.verdict, Verdict::Skip);
     assert!(unmeasured.value.is_none(), "an unmeasured lag has no trend");
@@ -454,9 +438,8 @@ fn too_few_live_turns_skips_rather_than_passing() {
 fn a_feed_falling_behind_the_speaker_warns_while_it_is_still_only_slow() {
     // The skip reason is not reached when there IS a median.
     const UNUSED: &str = "";
-    // ⚠ The failure `live_check` cannot see: turns keep ARRIVING, so liveness
-    // stays green, while each one is later than the last. Before the calls were
-    // joined, 33s of speech took 2m39s and every check passed throughout.
+    // What `live_check` cannot see: turns keep arriving, so liveness stays
+    // green, while each is later than the last.
     let slow = live_lag_slow();
     let bound = slow.num_seconds() as f64;
     assert_eq!(
@@ -467,8 +450,7 @@ fn a_feed_falling_behind_the_speaker_warns_while_it_is_still_only_slow() {
         live_lag_check(Some(bound + 1.0), slow, UNUSED).verdict,
         Verdict::Warn
     );
-    // Trended either way — the number is the point, not the verdict: a lag
-    // creeping up over days is what a regression here looks like.
+    // Trended either way: a lag creeping up over days is what a regression looks like.
     assert_eq!(live_lag_check(Some(3.0), slow, UNUSED).value, Some(3.0));
     assert!(
         live_lag_check(Some(bound + 1.0), slow, UNUSED)
@@ -480,16 +462,13 @@ fn a_feed_falling_behind_the_speaker_warns_while_it_is_still_only_slow() {
 
 #[test]
 fn the_lag_window_is_shorter_than_a_day_so_it_cannot_blend_a_fault_with_its_fix() {
-    // ⚠ Run over the 48-hour LOSS window on 2026-09-21 the median read 36.2s,
-    // because that window held both #1383's regression and its repair — and it
-    // would then have gone green the next day when the old turns aged out,
-    // reporting the window rather than the tier.
+    // A window spanning days can hold both a fault and its fix, so the median
+    // would grade the window rather than the tier.
     assert!(
         live_lag_window() < chrono::Duration::days(1),
         "a lag median spanning days grades whichever days it caught"
     );
-    // ⚠ And long enough to hold a conversation: an in-house test on 2026-09-20
-    // produced 18 live turns inside half an hour, so anything above an hour
-    // clears the sample floor whenever the household is actually talking.
+    // And long enough to clear the sample floor: half an hour of conversation
+    // yields around 18 live turns.
     assert!(live_lag_window() > chrono::Duration::hours(1));
 }

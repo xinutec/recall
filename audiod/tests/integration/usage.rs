@@ -1,11 +1,8 @@
 //! `--help` must name every mode the dispatcher accepts.
 
-/// ⚠ Five of ten modes were missing when this was written — including `pause`
-/// and `resume`, the break-glass control — so the one surface a person reaches
-/// for when the fleet is unreachable did not mention it (#1395).
-///
-/// Reads the binary's source rather than a second list: a list that can
-/// disagree with the dispatcher is the defect being guarded against.
+/// `--help` is what a person reads when the fleet is unreachable, so it must
+/// list break-glass modes like `pause`. Reads the binary's source rather than
+/// a second list, since a list can disagree with the dispatcher.
 #[test]
 fn every_mode_the_dispatcher_accepts_is_in_the_usage_text() {
     let source = include_str!("../../src/main.rs");

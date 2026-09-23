@@ -1,8 +1,6 @@
-//! The uploader against the REAL recalld — not the scripted stub in
-//! tests/upload.rs, which proves the uploader's own logic but tests a copy of
-//! the protocol. This is the pair that ships: audiod's `run_pass` delivering
-//! to recalld's actual router, receipts computed by the actual store, tokens
-//! checked by the actual gate.
+//! The uploader against the real recalld router, store and token gate. The
+//! scripted stub in `upload.rs` tests the uploader's logic against a copy of
+//! the protocol; this tests the pair that ships.
 
 use audiod::upload::{Config, run_pass};
 use recalld::app::{Config as ServerConfig, router};
@@ -21,8 +19,7 @@ fn serve(server_root: &Path, tokens_text: &str) -> String {
         tokens: Some(Tokens::load(&tokens_path).expect("parse")),
         read_token: None,
         max_body_bytes: 16 * 1024 * 1024,
-        // The uploader speaks to the ingest plane only; the browsing plane is a
-        // different credential and is deliberately absent here.
+        // The uploader speaks only to the ingest plane; the browsing credential is absent.
         webauth: None,
         sync_token: None,
         frontend: None,
@@ -71,8 +68,7 @@ fn the_real_pair_delivers_verifies_and_stays_idempotent() {
     let stored = std::fs::read(server.path().join("ingest/usb/usb-20260905T120000.opus"))
         .expect("stored blob");
     assert_eq!(stored, b"real bytes");
-    // A second pass has nothing to do — the state db remembers, and even if
-    // it forgot, the server's PUT is idempotent.
+    // A second pass has nothing to do: the state db remembers, and the PUT is idempotent anyway.
     let second = run_pass(&config);
     assert_eq!((second.uploaded, second.failed), (0, 0));
 }
@@ -105,10 +101,9 @@ fn a_divergent_name_conflicts_through_the_real_409() {
     let archive = tempfile::tempdir().expect("archive");
     let server = tempfile::tempdir().expect("server");
     let url = serve(server.path(), "* tok\n");
-    // The server already holds DIFFERENT bytes under the same name.
+    // A second archive delivers different bytes under the same name first.
     std::fs::create_dir_all(server.path().join("ingest/usb")).expect("mkdir");
     write_segment(archive.path(), "usb", "usb-20260905T120000.opus", b"ours");
-    // Deliver a first version from a second archive, then diverge.
     let other = tempfile::tempdir().expect("other");
     write_segment(other.path(), "usb", "usb-20260905T120000.opus", b"theirs");
     let seed = Config {

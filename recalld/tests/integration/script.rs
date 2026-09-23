@@ -1,4 +1,5 @@
-//! Which script a turn is written in — the one safe signal #1410 found.
+//! Which script a turn is written in: a turn mostly in a foreign script is a
+//! hallucination.
 
 use recalld::quality::{foreign_script_ratio, is_foreign_script};
 
@@ -19,9 +20,8 @@ fn dutch_and_english_are_latin() {
     }
 }
 
-/// ⚠ The hallucinations this exists to catch: 931 visible turns are under half
-/// Latin, and 273 of them are LABELLED nl or en while emitting Cyrillic or
-/// Japanese — the model contradicting itself (#1410).
+/// The hallucinations this exists to catch: turns labelled nl or en while
+/// emitting Cyrillic or Japanese.
 #[test]
 fn cyrillic_and_japanese_are_foreign() {
     for text in [
@@ -38,9 +38,8 @@ fn cyrillic_and_japanese_are_foreign() {
     }
 }
 
-/// ⚠ **Punctuation, digits and spaces are NOT letters and must not vote.** A
-/// turn of "..." would otherwise read as 100% foreign, and `is_wordless`
-/// already owns that case.
+/// Punctuation, digits and spaces do not vote: a turn of "..." would otherwise
+/// read as fully foreign, and `is_wordless` owns that case.
 #[test]
 fn only_letters_vote() {
     for text in ["...", "!!! ???", "12:45", "   "] {
@@ -59,8 +58,8 @@ fn a_mixed_turn_is_judged_by_its_majority() {
     assert!(is_foreign_script("Мы называем это soviet иногда всегда"));
 }
 
-/// ⚠ The edge the range table exists for: Latin Extended, where a guess at
-/// block boundaries would disagree with the Python this replaces.
+/// Latin Extended, compatibility and fullwidth letters are Latin: the edge the
+/// range table exists for, where a guess at block boundaries goes wrong.
 #[test]
 fn latin_extended_letters_are_latin() {
     for text in ["ŉ ǆ ȿ ɏ", "ᴀ ᴠ", "ﬀ ﬁ", "Ａ Ｚ"] {

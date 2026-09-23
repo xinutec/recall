@@ -1,4 +1,4 @@
-//! Per-source liveness, and its parity with the Python it replaces.
+//! Per-source liveness: the rules, and the `/api/sources` route on the fleet.
 
 use chrono::{DateTime, Duration, Utc};
 use recalld::sources::{
@@ -6,25 +6,17 @@ use recalld::sources::{
 };
 use std::collections::HashMap;
 
-/// A one-shot HTTP agent: **no connection pooling**.
+/// A one-shot HTTP agent with no connection pool.
 ///
-/// ⚠ `ureq::get`/`ureq::post` use ureq's GLOBAL agent, whose pool is shared by
-/// every test in the binary — and the tests run in parallel against
-/// short-lived per-test servers. When one test's server drops a socket another
-/// test is returning to the pool, ureq panics inside the return path:
-///
-///     returning stream to pool: Os { code: 22, kind: InvalidInput }
-///
-/// That is the intermittent gate failure #1480 has been chasing: it needs two
-/// tests' sockets to overlap, so it fires under load and never in a rerun. A
-/// fresh agent with no idle connections removes the shared pool, and with it
-/// the entire class — there is no socket to hand back.
+/// ⚠ `ureq::get`/`ureq::post` share one global pool across parallel tests, and
+/// ureq panics returning a socket that another test's server has dropped. With
+/// no idle connections there is nothing to hand back.
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new().max_idle_connections(0).build()
 }
 
 fn now() -> DateTime<Utc> {
-    // 2026-09-09T12:00:00Z — the instant the Python case matrix was generated at.
+    // 2026-09-09T12:00:00Z, the instant `CASES` was computed at.
     DateTime::from_timestamp(1_788_998_400, 0).expect("a real instant")
 }
 
@@ -60,11 +52,8 @@ struct Case {
     expect: &'static [(&'static str, bool, bool)],
 }
 
-/// ⚠ **Every expected value here was produced by the PYTHON**, not by this
-/// implementation: `recall.liveness.source_statuses` was run on the identical
-/// case matrix and its answers generated this table. Both sides of this function
-/// are pure, which is what makes the comparison exact rather than approximate —
-/// so a rule that reads the same and behaves differently fails here.
+/// Reference answers computed by the original Python implementation on the same
+/// matrix, not by this one. The function is pure, so the comparison is exact.
 const CASES: &[Case] = &[
     Case {
         label: "all fresh markers",
@@ -227,8 +216,8 @@ fn every_rule_agrees_with_the_python_on_the_same_inputs() {
 
 #[test]
 fn the_fleet_lag_widens_every_window_by_the_report_cadence() {
-    // The fleet sees markers one mirror report late, so a phone that is fine
-    // locally at 6 s would read dead there without the widening.
+    // The fleet sees markers one mirror report late, so a phone fine locally at
+    // 6 s would read dead there without the widening.
     assert_eq!(
         active_window(SourceKind::TcpPcm, false),
         Duration::seconds(5)
@@ -254,9 +243,8 @@ fn the_fleet_lag_widens_every_window_by_the_report_cadence() {
 
 #[test]
 fn only_real_recorders_are_devices() {
-    // ⚠ An UPLOAD is a clip somebody sent and a DISCOVERED source is audio with
-    // no known producer — asking whether either is "up" is asking about a
-    // machine that may not exist.
+    // An upload is a clip somebody sent and a discovered source has no known
+    // producer; neither is a machine that can be "up".
     assert!(SourceKind::CoreAudio.is_device());
     assert!(SourceKind::TcpPcm.is_device());
     assert!(SourceKind::Rtsp.is_device());
@@ -267,10 +255,9 @@ fn only_real_recorders_are_devices() {
 
 #[test]
 fn the_two_time_fields_take_different_pairs() {
-    // ⚠ lastActive is max(marker, SPEECH); lastDelivered is max(marker,
-    // DELIVERED). Feeding both the same pair is the easy mistake, and it hides
-    // exactly the case #1428 is about: a recorder shipping bytes nobody spoke
-    // into.
+    // ⚠ lastActive is max(marker, speech); lastDelivered is max(marker,
+    // delivered). Feeding both the same pair hides a recorder shipping bytes
+    // nobody spoke into.
     let markers = HashMap::new();
     let delivered = HashMap::from([(
         "geb".to_owned(),
@@ -345,10 +332,8 @@ fn active_by_id(
         .collect()
 }
 
-/// ⚠ The fleet runs no capture agent and no phone sockets — the `.alive` markers
-/// live on the Mac. Liveness must therefore come from the Mac's mirror report,
-/// never from local files. The bug this pins: `/api/sources` once read
-/// host-local state Isis cannot see and showed every microphone dead.
+/// The `.alive` markers live on the Mac, so on the fleet liveness comes from the
+/// Mac's mirror report, never from local files.
 #[tokio::test]
 async fn on_the_fleet_liveness_comes_from_the_macs_report() {
     let (_dir, root) = root_with(&[
@@ -360,8 +345,8 @@ async fn on_the_fleet_liveness_comes_from_the_macs_report() {
     let conn = recalld::work::open_write(&root).expect("db");
     let at = now();
 
-    // Reported running, but no measured liveness shipped: nothing reads live —
-    // a running agent is not proof of recording.
+    // Running with no liveness shipped: nothing reads live, since a running
+    // agent is not proof of recording.
     recalld::capture::record_reported(&conn, at, true, None, &liveness(&[])).unwrap();
     let empty = active_by_id(&root, &conn, at);
     assert_eq!(empty.get("usb"), Some(&false));
@@ -381,9 +366,8 @@ async fn on_the_fleet_liveness_comes_from_the_macs_report() {
     assert_eq!(live.get("usb"), Some(&true));
     assert_eq!(live.get("pixel9"), Some(&true));
 
-    // ⚠ When the Mac reports capture PAUSED, the mic reads idle AT ONCE — even
-    // though its marker is still fresh and its window is a leisurely 75 s. A
-    // pause that took a poll to show would be a pause the panel lied about.
+    // A reported pause reads idle at once, despite a fresh marker inside the
+    // 75 s window.
     let until = audiocore::instant::python_isoformat_utc(at + Duration::hours(1));
     recalld::capture::record_reported(&conn, at, false, Some(&until), &liveness(&[("usb", at)]))
         .unwrap();
@@ -391,9 +375,8 @@ async fn on_the_fleet_liveness_comes_from_the_macs_report() {
     assert_eq!(paused.get("usb"), Some(&false));
 }
 
-/// ⚠ A report older than the freshness gate means the Mac has stopped checking
-/// in — the fleet genuinely does not know, and must say so rather than serving
-/// the last thing it heard as if it were current.
+/// A report older than the freshness gate means the Mac has stopped checking in;
+/// the last thing heard is not served as current.
 #[tokio::test]
 async fn a_stale_report_reads_as_nobody_live_not_as_the_last_thing_heard() {
     let (_dir, root) = root_with(&[("pixel9", "Pixel 9", "tcp_pcm")]);
@@ -411,7 +394,7 @@ async fn a_stale_report_reads_as_nobody_live_not_as_the_last_thing_heard() {
     );
 }
 
-/// An unknown kind must fail LOUD rather than becoming a row nothing matches.
+/// An unknown kind fails loudly rather than becoming a row nothing matches.
 #[test]
 fn an_unknown_source_kind_is_an_error_not_a_silent_skip() {
     let (_dir, root) = root_with(&[("odd", "Odd", "telepathy")]);
@@ -420,11 +403,8 @@ fn an_unknown_source_kind_is_an_error_not_a_silent_skip() {
     assert!(recalld::sources::source_rows(&conn).is_err());
 }
 
-/// ⚠ Written because of a real incident: on 2026-09-07 `/api/correct` was
-/// written, tested, its Python deleted, and mounted NOWHERE — both suites green,
-/// the endpoint served by nobody. And this route has a second way to be
-/// unreachable: it is DEVICE-EXEMPT, so a gate that demanded a session here
-/// would blank the recording panel on every phone in the house.
+/// Through the real router: mounted, and device-exempt, since a session
+/// requirement would blank the recording panel on every phone.
 #[tokio::test]
 async fn the_route_is_mounted_and_answers_without_a_session() {
     let (_dir, root) = root_with(&[("pixel9", "Pixel 9", "tcp_pcm")]);
@@ -444,8 +424,7 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
         tokens: None,
         read_token: None,
         max_body_bytes: recalld::app::DEFAULT_MAX_BODY,
-        // NOT None: the browsing plane is only mounted when SSO is configured,
-        // so a test passing None would assert against a router without it.
+        // Not None: the browsing plane is only mounted when SSO is configured.
         webauth: Some(recalld::webauth::GateState {
             cfg: std::sync::Arc::new(recalld::webauth::Config {
                 session_secret: "test-secret-not-a-real-one".into(),
@@ -470,7 +449,7 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
         let _ = axum::serve(listener, app).await;
     });
 
-    // NO session cookie, deliberately.
+    // No session cookie, deliberately.
     let body = tokio::task::spawn_blocking(move || {
         agent()
             .get(&format!("http://{addr}/api/sources"))
@@ -488,13 +467,12 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
     assert_eq!(items[0]["id"], "pixel9");
     assert_eq!(items[0]["kind"], "tcp_pcm");
     assert_eq!(items[0]["active"], true);
-    // The camelCase keys are the frontend's contract, not a style choice.
+    // The camelCase keys are the frontend's contract.
     assert!(items[0].get("lastActive").is_some());
     assert!(items[0].get("lastDelivered").is_some());
 }
 
-/// Put a delivered segment in the ingest database, so the route finds real
-/// evidence rather than a mocked mapping.
+/// A delivered segment with measured speech, in the ingest database.
 fn deliver(root: &std::path::Path, source: &str, captured: DateTime<Utc>, speech_s: f64) {
     let conn = recalld::store::open(root).expect("ingest db");
     let name = format!("{source}-{}.flac", captured.format("%Y%m%dT%H%M%S"));
@@ -514,24 +492,19 @@ fn deliver(root: &std::path::Path, source: &str, captured: DateTime<Utc>, speech
     .expect("speech");
 }
 
-/// ⚠ **A pause must read idle AT ONCE, and delivered evidence must not undo
-/// it.** Delivery proof is up to a segment old, so audio captured in the seconds
-/// BEFORE a pause would otherwise hold a dot green for the whole five-minute
-/// delivered window — the exact opposite of the promise a pause makes.
-///
-/// This is asserted for a streaming phone as well as the local mic: a pause
-/// stops the phones and the machines too, so none of them may be resurrected by
-/// what they recorded just before it.
+/// A pause reads idle at once, and delivered evidence does not undo it: audio
+/// captured just before the pause would otherwise hold a dot green for the
+/// five-minute delivered window. A pause stops every kind, phones included.
 #[tokio::test]
 async fn a_pause_silences_delivered_evidence_for_every_kind() {
     let (_dir, root) = root_with(&[("usb", "usb", "coreaudio"), ("geb", "geb", "tcp_pcm")]);
     let conn = recalld::work::open_write(&root).expect("db");
     let at = now();
-    // Both delivered a speech-bearing segment 30 s ago — well inside the window.
+    // Both delivered a speech-bearing segment 30 s ago, inside the window.
     deliver(&root, "usb", at - Duration::seconds(30), 12.0);
     deliver(&root, "geb", at - Duration::seconds(30), 12.0);
 
-    // While RUNNING, that evidence is what proves a store-and-forward recorder.
+    // While running, that evidence proves a store-and-forward recorder.
     recalld::capture::record_reported(&conn, at, true, None, &liveness(&[])).unwrap();
     let running = active_by_id(&root, &conn, at);
     assert_eq!(
@@ -541,7 +514,7 @@ async fn a_pause_silences_delivered_evidence_for_every_kind() {
     );
     assert_eq!(running.get("usb"), Some(&true));
 
-    // The household pauses. Same evidence, and now it must prove nothing.
+    // Paused: the same evidence proves nothing.
     let until = audiocore::instant::python_isoformat_utc(at + Duration::hours(1));
     recalld::capture::record_reported(&conn, at, false, Some(&until), &liveness(&[])).unwrap();
     let paused = active_by_id(&root, &conn, at);
@@ -549,15 +522,14 @@ async fn a_pause_silences_delivered_evidence_for_every_kind() {
     assert_eq!(paused.get("geb"), Some(&false), "and so is the phone");
 }
 
-/// A store-and-forward recorder streams to nothing, so no marker of its is ever
-/// refreshed — it reads dead while recording perfectly unless delivery counts
-/// (#1428, geb after the C3 cutover).
+/// A store-and-forward recorder refreshes no marker, so it reads dead while
+/// recording unless delivery counts.
 #[tokio::test]
 async fn a_recorder_that_streams_to_nothing_proves_itself_by_delivering() {
     let (_dir, root) = root_with(&[("geb", "geb", "rtsp")]);
     let conn = recalld::work::open_write(&root).expect("db");
     let at = now();
-    // Running, and the Mac reports NO marker for geb — it never streams.
+    // Running, and the Mac reports no marker for geb: it never streams.
     recalld::capture::record_reported(&conn, at, true, None, &liveness(&[])).unwrap();
     assert_eq!(active_by_id(&root, &conn, at).get("geb"), Some(&false));
 

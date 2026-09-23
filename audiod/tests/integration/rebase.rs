@@ -72,15 +72,14 @@ fn an_earlier_connections_segment_is_not_ours_to_move() {
 #[test]
 fn a_taken_slot_keeps_the_arrival_name_forever() {
     let dir = tempfile::tempdir().unwrap();
-    // The corrected slot is occupied by an EARLIER connection's segment —
-    // one this sweep will not move (it is stamped before `since`).
+    // The corrected slot holds an earlier connection's segment, stamped
+    // before `since`, which this sweep will not move.
     touch(dir.path(), "p-20260904T185952.opus");
     touch(dir.path(), "p-20260904T185956.opus");
     let since = Utc.with_ymd_and_hms(2026, 9, 4, 18, 59, 55).unwrap();
     let mut done = HashSet::new();
     let renamed = rebase_segment_names(dir.path(), "p", -4.0, &mut done, since, true);
-    // Losing audio to a rename would invert priority #1: ours keeps its
-    // arrival name, the occupier is untouched.
+    // Overwriting would lose audio, so ours keeps its arrival name.
     assert!(renamed.is_empty());
     assert!(dir.path().join("p-20260904T185952.opus").exists());
     assert!(dir.path().join("p-20260904T185956.opus").exists());
@@ -89,9 +88,8 @@ fn a_taken_slot_keeps_the_arrival_name_forever() {
 #[test]
 fn a_slot_vacated_within_the_sweep_is_reusable() {
     let dir = tempfile::tempdir().unwrap();
-    // Two of OUR segments 4 s apart, shifting by -4: the first vacates the
-    // slot the second lands in. Both move — the whole connection shifts as
-    // one consistent timeline (the Python server behaves identically).
+    // Two of our segments 4 s apart, shifting by -4: the first vacates the
+    // slot the second lands in, so the whole connection shifts as one timeline.
     touch(dir.path(), "p-20260904T185956.opus");
     touch(dir.path(), "p-20260904T190000.opus");
     let since = Utc.with_ymd_and_hms(2026, 9, 4, 18, 0, 0).unwrap();

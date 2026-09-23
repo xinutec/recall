@@ -36,14 +36,10 @@ fn glossary(conn: &Connection, speakers: &[&str], terms: &[&str]) {
     }
 }
 
-/// ⚠ The expected string is the PYTHON's output, not this implementation's:
-/// `recall.vocabulary.build_initial_prompt` was run on exactly these rows on
-/// 2026-09-09 and printed it.
-///
-/// Three rules are pinned at once, and each was a real chance to diverge:
-/// speaker names come BEFORE the vocabulary; a term appearing in both is
-/// carried once, at its FIRST position; and the ordering inside each group is
-/// `COLLATE NOCASE`, not insertion order.
+/// The expected string is the Python implementation's output on these rows, not
+/// this code's. It pins three rules: speaker names come before the vocabulary; a
+/// term in both is carried once, at its first position; and each group is
+/// ordered `COLLATE NOCASE`, not by insertion.
 #[test]
 fn the_glossary_prompt_matches_what_the_python_built() {
     let conn = store();
@@ -65,17 +61,14 @@ fn the_glossary_prompt_matches_what_the_python_built() {
     );
 }
 
-/// ⚠ The cap BREAKS the list, it does not skip past the long term and carry on.
-/// Skipping would make the prompt depend on which terms happen to be long rather
-/// than on their priority, and would silently reorder what the model is biased
-/// toward. The 580-char term above sorts LAST, which is why `never-reached`
-/// survives — put a long term early and everything after it must vanish.
+/// The cap ends the list rather than skipping the long term: skipping would make
+/// the prompt depend on which terms are long rather than on their priority. (The
+/// 580-char term above sorts last, which is why `never-reached` survives there.)
 #[test]
 fn a_term_over_the_cap_ends_the_list_rather_than_being_skipped() {
     let conn = store();
-    // The middle term overflows the cap ON ITS OWN (3 + 2 + 700 = 705), so the
-    // two behaviours are distinguishable: BREAK gives "aaa"; SKIP would give
-    // "aaa, ccc", which fits easily and is the wrong answer.
+    // The middle term overflows the cap on its own (3 + 2 + 700 = 705), so the
+    // behaviours differ: break gives "aaa", skip would give "aaa, ccc".
     glossary(&conn, &[], &["aaa", &"b".repeat(700), "ccc"]);
 
     let prompt = initial_prompt(&conn).unwrap().expect("a prompt");
@@ -96,8 +89,8 @@ fn an_empty_glossary_is_none_not_an_empty_string() {
 
 use recalld::work::{LiveTurn, ingest_live};
 
-/// ⚠ The REAL migration ladder, not a slice of it. A hand-written copy stood
-/// here and stopped matching production the first time a column was added.
+/// The real migration ladder: a hand-written copy stops matching production when
+/// a column is added.
 fn live_store() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     recalld::meaning_schema::ensure(&conn).expect("schema");
@@ -119,11 +112,10 @@ fn a_turn(start: &str, text: &str) -> LiveTurn {
     }
 }
 
-/// ⚠ A live turn's `start_utc` is WHERE IN THE AUDIO the words were said, not
-/// when the tier delivered them. Without `created_utc` the one tier whose whole
-/// value is immediacy leaves no evidence of its own latency, and a stall can
-/// only be caught while it is happening — which is how #1383's went unseen for
-/// forty minutes.
+/// A live turn's `start_utc` is where in the audio the words were said, not when
+/// the tier delivered them. Without `created_utc` the tier whose value is
+/// immediacy leaves no evidence of its own latency, and a stall can only be
+/// caught while it is happening.
 #[test]
 fn a_live_turn_records_when_it_was_delivered_not_only_when_it_was_said() {
     let mut conn = live_store();
@@ -149,10 +141,9 @@ fn a_live_turn_records_when_it_was_delivered_not_only_when_it_was_said() {
     );
 }
 
-/// ⚠ The search index has NO trigger behind it — `transcript_fts` is a
-/// contentless FTS5 table the writer fills by hand. Forgetting it fails nothing
-/// and makes every live turn unfindable by search, which is exactly what a live
-/// turn is most likely to be looked up by.
+/// ⚠ `transcript_fts` is a contentless FTS5 table with no trigger; the writer
+/// fills it by hand. Forgetting it fails nothing and makes every live turn
+/// unfindable by search.
 #[test]
 fn a_stored_live_turn_is_searchable() {
     let mut conn = live_store();
@@ -175,8 +166,8 @@ fn a_stored_live_turn_is_searchable() {
     assert_eq!(found, 1, "the turn exists but cannot be searched for");
 }
 
-/// ⚠ A re-push must never duplicate a turn NOR resurrect one the archive has
-/// already reconciled to hidden.
+/// A re-push must neither duplicate a turn nor resurrect one the archive has
+/// reconciled to hidden.
 #[test]
 fn a_repushed_turn_is_skipped_even_once_hidden() {
     let mut conn = live_store();
@@ -207,9 +198,8 @@ fn a_repushed_turn_is_skipped_even_once_hidden() {
     assert_eq!(total, 1);
 }
 
-/// ⚠ The stored spelling is what the presence check compares. A turn re-spelled
-/// on the way in would never match its own earlier copy, and every retry would
-/// insert again — the duplicate-forever bug.
+/// The presence check compares the stored spelling: a turn re-spelled on the way
+/// in would never match its earlier copy, and every retry would insert again.
 #[test]
 fn a_z_suffixed_time_matches_the_offset_spelling_it_was_stored_as() {
     let mut conn = live_store();
@@ -266,9 +256,9 @@ fn an_unparseable_time_costs_that_turn_and_no_other() {
     assert_eq!(text, "kept");
 }
 
-/// ⚠ A live turn is short and hard, which is exactly what Whisper loops on. The
-/// filter is here rather than in the pusher because whether a string is a model
-/// artefact is a property of the STRING — so every writer gets the same answer.
+/// A live turn is short and hard, which is what Whisper loops on. The filter is
+/// here rather than in the pusher because being a model artefact is a property of
+/// the string, so every writer gets the same answer.
 #[test]
 fn a_degenerate_loop_is_not_stored_as_a_live_turn() {
     let mut conn = live_store();
@@ -309,12 +299,9 @@ fn a_degenerate_loop_is_not_stored_as_a_live_turn() {
     );
 }
 
-/// ⚠ **The ASR prompt lists household names first, so on audio it cannot place
-/// the model reaches for them** — eight scripted lines containing no names
-/// produced a household first name four times, and across every short turn ever
-/// written the live tier is 7x likelier than the archive pass to emit a turn
-/// that is nothing but a name (#1665). A false name is invisible to every other
-/// signal: fluent, Latin script, correctly language-labelled, plausibly timed.
+/// The ASR prompt lists household names first, so on audio it cannot place the
+/// model emits one, and short live turns are where it does. A false name passes
+/// every other signal: fluent, Latin script, correctly labelled, plausibly timed.
 #[test]
 fn a_live_turn_that_is_nothing_but_a_household_name_is_refused() {
     let mut conn = live_store();
@@ -333,9 +320,8 @@ fn a_live_turn_that_is_nothing_but_a_household_name_is_refused() {
     )
     .unwrap();
 
-    // ⚠ Only the BARE name goes. A name inside a sentence is the ordinary case
-    // this system exists to record, and a different name that merely starts the
-    // same way is a different word.
+    // Only the bare name goes: a name inside a sentence is ordinary speech, and
+    // a name that merely starts the same way is a different word.
     assert_eq!(stored, 2, "a name in a sentence must survive");
     let kept: Vec<String> = conn
         .prepare("SELECT text FROM transcript_segments ORDER BY start_utc")
@@ -347,9 +333,8 @@ fn a_live_turn_that_is_nothing_but_a_household_name_is_refused() {
     assert_eq!(kept, vec!["Anna, are you there?", "Annabel"]);
 }
 
-/// ⚠ The refusal is scoped to a name the household actually has. Without an
-/// enrolled speaker it must do nothing at all — a rule that fires on an empty
-/// list would silently refuse whatever happened to look like one.
+/// The refusal is scoped to enrolled names; with no speaker enrolled it does
+/// nothing.
 #[test]
 fn with_nobody_enrolled_the_bare_name_rule_refuses_nothing() {
     let mut conn = live_store();

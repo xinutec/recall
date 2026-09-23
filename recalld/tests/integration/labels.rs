@@ -1,8 +1,6 @@
-//! The labelling surface's read half (stage F1).
-//!
-//! Three routes, and each has one rule that a plain SELECT would get wrong. All
-//! three failures are quiet — a list renders, a clip plays, autocomplete offers
-//! something — so they are pinned rather than left to be noticed.
+//! The labelling surface's read half. Each route has a rule a plain SELECT would
+//! get wrong, and each failure is quiet: a list still renders, a clip still
+//! plays, autocomplete still offers something.
 
 use recalld::labels::{
     correction_window, corrections_by_speaker, known_speaker_names, list_corrections,
@@ -50,9 +48,8 @@ fn correction(conn: &Connection, id: i64, speaker: Option<&str>, hidden: Option<
 
 #[test]
 fn the_roster_never_offers_a_diarization_cluster_tag_as_a_name() {
-    // ⚠ `SPEAKER_00` is not a person. Offering it for autocomplete spreads a
-    // machine tag into the household roster one accepted suggestion at a time,
-    // and it looks like a real name in every list afterwards.
+    // A diarization tag is not a person. Offered for autocomplete, it spreads
+    // into the roster one accepted suggestion at a time.
     let conn = db();
     conn.execute("INSERT INTO speakers (id, name) VALUES (1, 'Pippijn')", ())
         .expect("speaker");
@@ -90,9 +87,8 @@ fn the_roster_is_case_insensitively_ordered_and_free_of_blanks() {
 
 #[test]
 fn a_hidden_correction_stays_out_of_the_review_list() {
-    // ⚠ The whole point of hiding one is that it was poisoning enrolment — a
-    // mistaken label feeding the voiceprints. Listing it again would invite
-    // re-confirming the mistake.
+    // A label is hidden because it was a mistake feeding the voiceprints; listing
+    // it again invites re-confirming it.
     let conn = db();
     correction(&conn, 1, Some("Pippijn"), None);
     correction(&conn, 2, Some("Pippijn"), Some("wrong speaker"));
@@ -152,10 +148,9 @@ fn the_per_speaker_tally_excludes_hidden_labels_too() {
 
 #[test]
 fn a_label_plays_its_exact_cut_by_default_and_pads_only_on_request() {
-    // ⚠ The INVERSE of a turn's playback, deliberately. The Labels page exists to
-    // AUDIT the cut: if the span is wrong, padding it hides the very defect you
-    // opened the page to see. Context is opt-in, for when a voice cannot be
-    // recognised from the trimmed fragment.
+    // The inverse of a turn's playback: the Labels page audits the cut, and
+    // padding would hide a wrong span. Context is opt-in, for a voice that cannot
+    // be recognised from the trimmed fragment.
     let (exact_start, exact_end) = correction_window(10.0, 12.0, false);
     assert!((exact_start - 10.0).abs() < 1e-9);
     assert!((exact_end - 12.0).abs() < 1e-9);

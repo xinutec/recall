@@ -1,9 +1,8 @@
-//! Speech detection (stage D4) through the public API.
+//! Speech detection through the public API.
 //!
 //! The fixtures are speech, not tones: silero is trained on speech and a sine
-//! wave proves nothing about it in either direction. Two kinds, deliberately —
-//! `public-domain-en` is a human reading, `dialogue-*` is machine-read invented
-//! text (see tests/fixtures/speech/README.md).
+//! wave proves nothing about it. `public-domain-en` is a human reading,
+//! `dialogue-*` is machine-read invented text (see tests/fixtures/speech/README.md).
 
 use audiocore::vad::{
     Detector, RATE, Splitter, Stream, WINDOW, Windows, detection_gain, regions_from_probabilities,
@@ -19,13 +18,10 @@ fn silence_is_not_speech() {
 
 #[test]
 fn real_speech_is_mostly_speech() {
-    // A REAL recording, not a tone: silero is trained on speech and a sine
-    // proves nothing about it either way.
     let mut d = Detector::load().expect("model");
     let path = Path::new("../tests/fixtures/speech/dialogue-en.flac");
     if !path.exists() {
-        // Not deliberate: .gitignore's blanket *.flac swallowed it (#1433). The
-        // golden trace below is what covers the model when this is missing.
+        // The golden trace below still covers the model if this is missing.
         eprintln!("skipping real_speech_is_mostly_speech: fixture absent");
         return;
     }
@@ -43,8 +39,7 @@ fn a_second_language_is_not_a_special_case() {
     let mut d = Detector::load().expect("model");
     let path = Path::new("../tests/fixtures/speech/dialogue-nl.flac");
     if !path.exists() {
-        // Not deliberate: .gitignore's blanket *.flac swallowed it (#1433). This
-        // is the ONLY Dutch coverage in the suite, so a clone loses it entirely.
+        // This is the only Dutch coverage in the suite.
         eprintln!("skipping a_second_language_is_not_a_special_case: fixture absent");
         return;
     }
@@ -64,16 +59,16 @@ fn an_undecodable_segment_is_an_error_not_zero_speech() {
 fn quiet_audio_is_lifted_to_the_target_however_quiet_it_is() {
     assert!((detection_gain(0.5) - 1.0).abs() < f32::EPSILON);
     assert!((detection_gain(0.05) - 10.0).abs() < 1e-5);
-    // pixel5 across the room: -62 dBFS. A cap at ×32 here is what #1485 was.
+    // A phone across the room reads about -62 dBFS; a gain cap would leave it
+    // undetectable.
     assert!((detection_gain(0.000_79) - 632.911).abs() < 1e-2);
     assert!((detection_gain(0.0) - 1.0).abs() < f32::EPSILON);
 }
 
 #[test]
 fn one_lsb_of_dither_lifted_to_full_scale_is_still_not_speech() {
-    // The fear that bought the old cap, tested at its extreme instead of
-    // believed: a file that is digital silence plus one LSB of noise gets the
-    // largest lift there is (×16384), and must still read as nobody talking.
+    // The uncapped gain at its extreme: digital silence plus one LSB of noise
+    // gets the largest lift there is (×16384) and must still read as nobody talking.
     let mut d = Detector::load().expect("model");
     let mut seed: u32 = 0x9E37_79B9;
     let dither: Vec<f32> = (0..RATE as usize * 10)
@@ -107,18 +102,10 @@ fn a_blip_shorter_than_the_minimum_is_not_a_region() {
     assert_eq!(regions_from_probabilities(&probs), vec![]);
 }
 
-/// ⚠ The DIALOGUE fixtures above are absent from a fresh clone — swallowed by
-/// .gitignore's blanket `*.flac` — so those tests skip there. The test below
-/// uses `public-domain-en.flac`, which IS committed: a reading of Emily
-/// Dickinson, public domain worldwide, provenance in
-/// `tests/fixtures/speech/README.md`. A HUMAN voice is covered everywhere, which
-/// machine-read dialogue would not give on its own (#1433).
-///
-/// This is that guard. The probabilities are a golden trace over deterministic
-/// pseudo-noise, and they are sensitive to the exact bug that cost an hour:
-/// dropping silero's 64-sample context takes the first window from 0.006360 to
-/// 0.001617 (measured by ablation, 2026-09-05). A contract regression therefore
-/// fails HERE, loudly, rather than silently reporting an empty room.
+/// A golden trace over deterministic pseudo-noise, independent of any audio
+/// fixture. Dropping silero's 64-sample context takes the first window from
+/// 0.006360 to 0.001617, so an input-contract regression fails here rather
+/// than silently reporting an empty room.
 #[test]
 fn the_model_input_contract_is_pinned_by_a_golden_trace() {
     let mut d = Detector::load().expect("model");
@@ -142,10 +129,8 @@ fn the_model_input_contract_is_pinned_by_a_golden_trace() {
 
 #[test]
 fn committed_public_domain_speech_is_detected_everywhere() {
-    // The point of committing a clip: this runs in CI, in the nix sandbox and on
-    // a fresh clone. 48 s of read poetry with real pauses between stanzas — so
-    // it exercises both halves, speech and the silence around it, on a human
-    // voice rather than a synthesised one.
+    // 48 s of public-domain poetry read by a human voice, with pauses between
+    // stanzas, so it exercises both speech and the silence around it.
     let mut detector = Detector::load().expect("model");
     let path = Path::new("../tests/fixtures/speech/public-domain-en.flac");
     assert!(path.exists(), "the committed fixture must not vanish");
@@ -160,11 +145,9 @@ fn committed_public_domain_speech_is_detected_everywhere() {
 
 #[test]
 fn a_stream_reproduces_the_batch_probabilities_window_for_window() {
-    // The ONE thing the streaming refactor can break: silero carries a state
-    // tensor and 64 samples of context between windows, and a stream that
-    // resets either still returns plausible numbers — near-zero on obvious
-    // speech, which reads as a quiet room rather than as a bug. Feeding the
-    // same samples both ways is what makes that visible.
+    // Silero carries a state tensor and 64 samples of context between windows.
+    // A stream that resets either still returns plausible near-zero numbers,
+    // which read as a quiet room; comparing against batch makes that visible.
     let samples: Vec<f32> = (0..16_000_u32)
         .map(|i| {
             let x = i.wrapping_mul(1_103_515_245).wrapping_add(12_345);
@@ -195,8 +178,8 @@ fn a_stream_reproduces_the_batch_probabilities_window_for_window() {
 
 #[test]
 fn a_window_of_the_wrong_length_is_refused_rather_than_answered() {
-    // The model's input shape is dynamic, so a short window is accepted and
-    // answered with a number. Refusing is the only way that stays visible.
+    // The model's input shape is dynamic and would answer a wrong-length
+    // window with a number, so the stream must refuse it.
     let mut stream = Stream::open(1.0).expect("model");
     assert!(stream.probability(&[0.0; WINDOW - 1]).is_err());
     assert!(stream.probability(&[0.0; WINDOW + 1]).is_err());
@@ -204,8 +187,7 @@ fn a_window_of_the_wrong_length_is_refused_rather_than_answered() {
 
 #[test]
 fn the_last_sentence_is_not_lost_to_the_exit() {
-    // Speech still open when the stream ends. Without flush a live agent drops
-    // whatever was being said as it shut down.
+    // Without flush, a live agent drops whatever was being said as it shut down.
     let mut splitter = Splitter::new();
     for _ in 0..40 {
         assert_eq!(splitter.push(0.9), None);
@@ -216,8 +198,8 @@ fn the_last_sentence_is_not_lost_to_the_exit() {
 
 #[test]
 fn an_unbroken_speaker_can_be_cut_and_the_next_window_starts_the_next_span() {
-    // Somebody who never pauses long enough to trigger an end. The hysteresis
-    // cannot close that, and a live tier that waits for it is not live.
+    // A speaker who never pauses long enough for the hysteresis to close a
+    // region; a live tier that waited for it would not be live.
     let mut splitter = Splitter::new();
     for _ in 0..100 {
         splitter.push(0.9);

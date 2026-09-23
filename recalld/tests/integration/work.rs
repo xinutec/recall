@@ -1,16 +1,12 @@
-//! Vocabulary and refine (stage F1) — recalld's first WRITES to `recall.sqlite`.
-//!
-//! The read routes could only ever be wrong about an answer. These change the
-//! database the Python tier also holds, so what is pinned here is the behaviour
-//! that makes a write safe to repeat and impossible to corrupt by accident.
+//! Vocabulary writes to `recall.sqlite`: what makes a write safe to repeat and
+//! hard to corrupt by accident.
 
 use recalld::work::{self, TermError};
 use rusqlite::Connection;
 
 fn schema(conn: &Connection) {
-    // Copied from `recall.store_schema`, not imported — the Python owns the
-    // schema, and a test that re-derived it would test its own copy. The UNIQUE
-    // on `term` is what makes the add idempotent, so it must be here.
+    // A copy of the tables in `meaning_schema`. The UNIQUE on `term` is what
+    // makes the add idempotent, so the copy must keep it.
     conn.execute_batch(
         "CREATE TABLE vocabulary (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,10 +32,9 @@ const NOW: &str = "2026-09-07T09:00:00+00:00";
 
 #[test]
 fn adding_the_same_term_twice_returns_the_same_id_rather_than_failing() {
-    // ⚠ The Labels page cannot know what is already in the list before it posts,
-    // so a repeat add is ORDINARY, not an error. If this ever throws or inserts a
-    // duplicate, the vocabulary grows copies of a household name and the ASR
-    // prompt repeats it.
+    // The Labels page cannot know what is already listed before it posts, so a
+    // repeat add is ordinary. A duplicate row would repeat the term in the ASR
+    // prompt.
     let conn = db();
 
     let first = work::add_term(&conn, "vorasidenib", NOW).expect("first");
@@ -51,9 +46,8 @@ fn adding_the_same_term_twice_returns_the_same_id_rather_than_failing() {
 
 #[test]
 fn a_term_is_trimmed_before_it_is_stored_and_matched() {
-    // " EGA wing " and "EGA wing" are the same term to a person. Storing the
-    // padded form would defeat the UNIQUE constraint and put two of them in the
-    // prompt.
+    // Storing the padded form would defeat the UNIQUE constraint and put two
+    // copies in the prompt.
     let conn = db();
 
     let padded = work::add_term(&conn, "  EGA wing  ", NOW).expect("padded");
@@ -84,11 +78,9 @@ fn a_blank_term_is_refused_rather_than_stored() {
 
 #[test]
 fn a_database_failure_is_not_reported_as_a_blank_term() {
-    // ⚠ These two used to be the SAME value, and the route turned that value
-    // into a 400 saying the term was blank. A user shown that message retypes a
-    // term that was never the problem, while an unwritable `recall.sqlite` goes
-    // uninvestigated because nobody investigates a 400. The distinction has to
-    // survive in the type, not in a log line.
+    // A database failure reported as a blank-term 400 sends the user retyping a
+    // term that was never the problem, while nobody investigates the unwritable
+    // database.
     let conn = Connection::open_in_memory().expect("open");
     // No schema: every write fails at the table that is not there.
 
@@ -130,9 +122,8 @@ fn deleting_a_term_removes_it_and_deleting_a_missing_one_is_quiet() {
 
 #[test]
 fn the_write_connection_is_separate_from_the_read_only_one() {
-    // ⚠ The ownership rule, pinned: a read route must keep taking the read-only
-    // handle so a bug in a read path cannot write. If `reads::open` ever starts
-    // returning a writable connection this fails, which is the point.
+    // A read route takes the read-only handle, so a bug in a read path cannot
+    // write.
     let dir = tempfile::tempdir().expect("tmp");
     {
         let seed = Connection::open(dir.path().join("recall.sqlite")).expect("create");

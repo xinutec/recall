@@ -1,7 +1,6 @@
-//! The room builder (stage D3): the calibrated rank must pick the microphone
-//! hearing the room best FOR ITSELF — not the most sensitive one — blocks
-//! must never be judged on partial evidence, and every verdict must carry
-//! its provenance.
+//! The room builder: blocks are never judged on partial evidence, every
+//! verdict carries its provenance, and the calibrated rank (parked) picks the
+//! microphone hearing best for itself rather than the most sensitive one.
 
 use chrono::{DateTime, Duration, Utc};
 use recalld::levels::scan_once;
@@ -23,9 +22,9 @@ fn config() -> RoomConfig {
 
 fn wav(path: &Path, amplitude: f32, seconds: f32) {
     let rate = 16_000u32;
-    // BURSTS, not a steady tone: the real-speech reference gate admits a
-    // segment only when its speech quantile clears its own floor, and speech
-    // is on-off by nature — a constant sine has no floor below itself.
+    // Bursts, not a steady tone: the reference admits a segment only when its
+    // speech quantile clears its own floor, and a constant sine has no floor
+    // below itself.
     let samples: Vec<f32> = (0..(seconds * rate as f32) as usize)
         .map(|i| {
             let on = (i / rate as usize).is_multiple_of(2);
@@ -60,11 +59,10 @@ fn stored(root: &Path, source: &str, stamp: &str, amplitude: f32) {
     .expect("row");
 }
 
-/// Two devices with histories: `loud` normally hears speech at 0.5 (a
-/// sensitive condenser), `quiet` normally at 0.02 (a gated phone). In the
-/// block under test, `loud` is at its usual level while `quiet` hears 0.2 —
-/// ten times its own normal. Absolute level says `loud`; calibration must
-/// say `quiet`.
+/// Two devices with histories: `loud` normally at 0.5 (a sensitive
+/// condenser), `quiet` normally at 0.02 (a phone). In the 11:00 block `loud`
+/// is at its usual level while `quiet` hears ten times its own normal, so
+/// absolute level says `loud` and calibration says `quiet`.
 fn seed_two_devices(root: &Path) -> DateTime<Utc> {
     for i in 0..4 {
         stored(root, "loud", &format!("20260905T1000{i:02}"), 0.5);
@@ -77,12 +75,9 @@ fn seed_two_devices(root: &Path) -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
-/// Mark every measured segment as carrying speech.
-///
-/// The reference is VAD-gated (stage D4), and these fixtures are tone bursts
-/// silero will not call speech — so tests about RANKING supply the detector's
-/// evidence directly. Tests about what happens WITHOUT it deliberately skip
-/// this.
+/// Mark every measured segment as carrying speech. The reference only counts
+/// VAD speech and silero does not call tone bursts speech, so ranking tests
+/// supply that evidence directly; tests about its absence skip this.
 fn seed_speech(root: &Path) {
     let conn = store::open(root).expect("db");
     recalld::ingest_schema::ensure(&conn).expect("schema");
@@ -101,13 +96,9 @@ fn now_after(block: DateTime<Utc>) -> DateTime<Utc> {
 #[test]
 #[ignore = "re-parked 2026-09-06 with calibrated selection — see room.rs"]
 fn level_evidence_without_speech_evidence_is_not_enough_to_rank() {
-    // Plenty of LEVEL rows, no SPEECH rows: the reference is VAD-gated, so
-    // nothing is rankable and the block must WAIT rather than be decided by
-    // raw loudness — the rule the WER referee indicted twice.
-    //
-    // Deferral deliberately records NO verdict row: a recorded verdict is
-    // terminal (a_judged_block_is_never_rejudged), so writing one here would
-    // turn "wait for evidence" into "decided on the absence of it".
+    // Level rows but no speech rows: nothing is rankable, so the block waits
+    // rather than being decided by raw loudness. Deferral records no verdict,
+    // because a recorded verdict is terminal (a_judged_block_is_never_rejudged).
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
     scan_once(dir.path(), 100).expect("levels");
@@ -137,12 +128,11 @@ fn the_room_blob_carries_the_winners_audio() {
     let pcm = audiocore::decode::decode_s16(&blob, 16_000).expect("decodable");
     let envelope = audiocore::envelope::rms_buckets_at(&pcm, 16_000, 0.1);
     let speech = audiocore::envelope::level_quantile_db(&envelope, 0.9);
-    // Raw rank carries `loud` (block amplitude 0.5 → ~-9 dBFS RMS bursts);
-    // `quiet`'s 0.2 would read ~-17. Calibration would invert this — and is
-    // re-parked, so the sensitive mic carries the block.
+    // Raw level chooses, so `loud` carries the block: amplitude 0.5 reads about
+    // -9 dBFS, where `quiet`'s 0.2 would read about -17.
     assert!(speech > -13.0 && speech < -3.0, "speech {speech} dB");
-    // And it registered as a segments row under the room source (the seeded
-    // history minutes build their own room blocks too — assert on this one).
+    // It is also a segments row under the room source. The seeded history
+    // builds room blocks too, so assert on this one.
     let conn = store::open(dir.path()).expect("db");
     let rows = store::list(&conn, Some(ROOM_SOURCE), None, 10).expect("list");
     assert!(
@@ -198,8 +188,8 @@ fn an_unsettled_block_is_not_judged() {
     let summary = build_once(dir.path(), &config(), block + Duration::minutes(1)).expect("build");
     let conn = store::open(dir.path()).expect("db");
     assert_eq!(verdict_of(&conn, "2026-09-05T11:00:00Z").expect("q"), None);
-    // The seeded history blocks (10:00) are settled and may build; only the
-    // 11:00 block is inside the window.
+    // The 10:00 history blocks are settled and may build, so the summary
+    // counts are not asserted.
     let _ = summary;
 }
 
@@ -218,14 +208,8 @@ fn a_judged_block_is_never_rejudged() {
 #[test]
 #[ignore = "re-parked 2026-09-06: calibration is recorded, not obeyed — see room.rs"]
 fn calibration_chooses_the_device_hearing_best_for_itself() {
-    // The whole point of calibrating (docs/architecture.md): `loud` is a
-    // sensitive condenser at its NORMAL level, `quiet` a gated phone at TEN
-    // TIMES its own normal. Absolute level says `loud`; calibration says
-    // `quiet`, because it is the one that suddenly hears something.
-    //
-    // This is what stage D3 parked and stage D4's detector unparks — so the
-    // evidence the reference needs is the DETECTOR's, supplied here directly
-    // because these fixtures are tone bursts silero would not call speech.
+    // The point of calibrating (docs/architecture.md): `quiet` wins because it
+    // is the one that suddenly hears something, though `loud` is louder.
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
     scan_once(dir.path(), 100).expect("levels");
@@ -249,18 +233,17 @@ fn calibration_chooses_the_device_hearing_best_for_itself() {
     );
 }
 
-// ---- gated sources are removed before the rank (#1526) ----
+// ---- gated sources are removed before the rank (filter parked) ----
 
 use recalld::room::GATED_MAX;
 
-/// A source that GATES: loud bursts separated by true digital silence, which is
-/// what a conference speakerphone emits and what no analogue front end can.
+/// A gating source: bursts separated by true digital silence, which a
+/// speakerphone emits and no analogue front end can.
 fn gated_wav(path: &Path, amplitude: f32, seconds: f32) {
     let rate = 16_000u32;
     let samples: Vec<f32> = (0..(seconds * rate as f32) as usize)
         .map(|i| {
-            // 0.4 s of speech, then 0.6 s of ABSOLUTE zero — the shape measured
-            // off geb: 56% of the minute emitting nothing at all.
+            // 0.4 s of tone, then 0.6 s of absolute zero, each second.
             let phase = i % rate as usize;
             if phase < (rate as usize * 2) / 5 {
                 amplitude * (2.0 * PI * 330.0 * i as f32 / rate as f32).sin()
@@ -299,9 +282,8 @@ fn stored_gated(root: &Path, source: &str, stamp: &str, amplitude: f32) {
 #[test]
 #[ignore = "parked 2026-09-12: every phone gates during speech, so the filter separates phones from the condenser rather than broken from working — see room.rs"]
 fn the_loudest_source_loses_when_it_is_gating() {
-    // ⚠ THE WHOLE POINT. The gated source is LOUDER — that is what gating does
-    // to a level measurement — so a rank that merely weighted it would still
-    // pick it. It has to be removed from the candidates entirely.
+    // Gating makes a source read louder, so a rank that merely weighted it
+    // would still pick it. It has to be removed from the candidates.
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path();
     stored_gated(root, "geb", "20260911T100000", 0.9);
@@ -326,9 +308,8 @@ fn the_loudest_source_loses_when_it_is_gating() {
 #[test]
 #[ignore = "parked 2026-09-12: every phone gates during speech, so the filter separates phones from the condenser rather than broken from working — see room.rs"]
 fn a_minute_where_every_source_gates_builds_nothing() {
-    // ⚠ Not `silent`, and not least-bad. The room was not quiet — the
-    // microphones refused to say so — and a block built from the least-gated
-    // source would enter the archive indistinguishable from an honest one.
+    // Not `silent`, and not the least-bad source: the room was not quiet, and a
+    // block built from the least-gated source would look like an honest one.
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path();
     stored_gated(root, "geb", "20260911T100000", 0.9);
@@ -350,9 +331,8 @@ fn a_minute_where_every_source_gates_builds_nothing() {
 
 #[test]
 fn a_segment_measured_before_the_detector_defers_the_block() {
-    // ⚠ NULL `gated` is "never looked at", not "looked at and found clean".
-    // Ranking on it would be the partial-evidence verdict this builder already
-    // refuses for `speech_db`. `scan_once` backfills it.
+    // NULL `gated` means never measured, not measured clean; ranking on it
+    // would be a partial-evidence verdict. `scan_once` backfills it.
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path();
     stored(root, "usb", "20260911T100000", 0.3);
@@ -374,8 +354,7 @@ fn a_segment_measured_before_the_detector_defers_the_block() {
 
 #[test]
 fn the_backfill_re_measures_a_row_whose_gate_reading_is_missing() {
-    // The other half of the above: a NULL must be fillable, or the builder
-    // defers those blocks forever and room building stops dead.
+    // A NULL must be fillable, or the builder defers those blocks forever.
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path();
     stored(root, "usb", "20260911T100000", 0.3);
@@ -399,8 +378,8 @@ fn the_backfill_re_measures_a_row_whose_gate_reading_is_missing() {
     );
 }
 
-/// A clip that covers only `seconds` of its minute — the shape a pause, a
-/// dropout or a late-starting recorder leaves behind.
+/// A clip covering only `seconds` of its minute, as a pause, dropout or
+/// late-starting recorder leaves.
 fn stored_short(root: &Path, source: &str, stamp: &str, amplitude: f32, seconds: f32) {
     let name = format!("{source}-{stamp}.wav");
     let dir = root.join("ingest").join(source);
@@ -437,10 +416,9 @@ fn block_row(root: &Path, block: DateTime<Utc>) -> (String, Option<f64>) {
 
 #[test]
 fn a_block_the_winner_barely_recorded_is_refused_not_padded() {
-    // ⚠ **THE DEFECT #1661 RECORDS, at the size it really occurs.** A real block
-    // on 2026-09-13 had one usb clip starting at :50 — ten seconds of a sixty
-    // second window — and the other fifty were written as DIGITAL ZEROS and
-    // transcribed. The all-zero guard cannot see it: the block is not all zero.
+    // One clip starting at :50 covers ten seconds of the minute; the other
+    // fifty would be zero-filled and transcribed. The all-zero guard cannot
+    // see it, because the block is not all zero.
     let dir = tempfile::tempdir().expect("tmp");
     // A history, so the source is rankable at all.
     for i in 0..4 {
@@ -456,11 +434,9 @@ fn a_block_the_winner_barely_recorded_is_refused_not_padded() {
 
     build_once(dir.path(), &config(), now_after(block)).expect("build");
 
-    // ⚠ Asserted on the BLOCK UNDER TEST, never on the pass counts. The seeded
-    // history builds blocks of its own, and its clips start a second apart — so
-    // their tails leave the FOLLOWING minute covered by three seconds, which is
-    // itself sparse and correctly refused. Counting would pin the fixture's
-    // shape rather than the behaviour.
+    // Assert on the block under test, not the pass counts: the history clips
+    // start a second apart, so their tails leave the following minute sparsely
+    // covered and refused too.
     let (verdict, coverage) = block_row(dir.path(), block);
     assert_eq!(verdict, "sparse");
     let coverage = coverage.expect("the coverage must be RECORDED, not merely acted on");
@@ -472,9 +448,8 @@ fn a_block_the_winner_barely_recorded_is_refused_not_padded() {
 
 #[test]
 fn a_fully_covered_block_still_builds_and_records_its_coverage() {
-    // The other half of the guard: refusing sparse blocks must not refuse the
-    // ordinary ones, and the number is recorded either way so the floor can be
-    // raised from the distribution rather than from an argument.
+    // Refusing sparse blocks must not refuse ordinary ones, and coverage is
+    // recorded either way so the floor can be raised from the distribution.
     let dir = tempfile::tempdir().expect("tmp");
     for i in 0..4 {
         stored(dir.path(), "usb", &format!("20260905T1000{i:02}"), 0.5);
@@ -498,9 +473,8 @@ fn a_fully_covered_block_still_builds_and_records_its_coverage() {
 
 #[test]
 fn coverage_is_backfilled_for_blocks_judged_before_it_was_measured() {
-    // Blocks built before the column existed read NULL, which means UNKNOWN and
-    // not "fully covered" — the distribution is what decides what to do about
-    // the padded ones (#1661).
+    // Blocks judged before coverage was measured read NULL, meaning unknown,
+    // not fully covered.
     let dir = tempfile::tempdir().expect("tmp");
     for i in 0..4 {
         stored(dir.path(), "usb", &format!("20260905T1000{i:02}"), 0.5);
@@ -513,7 +487,7 @@ fn coverage_is_backfilled_for_blocks_judged_before_it_was_measured() {
     seed_speech(dir.path());
     build_once(dir.path(), &config(), now_after(block)).expect("build");
 
-    // Put the archive back in the state a pre-2026-09-18 deployment was in.
+    // Blank the column, as on a database from before it existed.
     let conn = store::open(dir.path()).expect("db");
     conn.execute("UPDATE room_blocks SET coverage = NULL", [])
         .expect("clear");
@@ -534,18 +508,13 @@ fn coverage_is_backfilled_for_blocks_judged_before_it_was_measured() {
     );
 }
 
-// --- the per-source gate signature (#1526) -----------------------------------
+// --- the per-source gate signature -------------------------------------------
 //
-// The `quiet_run_s` rule and its tests were CUT on 2026-09-21. Two detectors
-// existed for one fault and the speech-to-floor gap in `processed.rs` won: it
-// separates the fault by 47 dB and clears a repair at ten segments, where this
-// one needed fifty reference rows and still carried geb's pre-swap signature a
-// fortnight after its capsule was swapped. The column stays as evidence; the
-// rule that read it does not.
+// The signature is the speech-to-floor gap in `processed.rs`. `quiet_run_s` is
+// stored as evidence but no rule reads it.
 
-/// The winner is RECORDED on every contributor and decides nothing, which is
-/// what lets it be judged before it ever acts: a block built today carries what
-/// the rule would have said about each source.
+/// The gap signature is recorded on every contributor and decides nothing, so
+/// the rule can be judged from provenance before it ever acts.
 #[test]
 fn every_contributor_records_the_gap_signature_without_it_changing_the_verdict() {
     let dir = tempfile::tempdir().expect("tmp");
@@ -570,9 +539,7 @@ fn every_contributor_records_the_gap_signature_without_it_changing_the_verdict()
         )
         .expect("row");
 
-    // ⚠ NOT merely that the key is there — serde writes it either way, so a
-    // measure that always answered `None` would pass that. The value has to be
-    // a number.
+    // serde writes the key even for `None`, so the value must be a number.
     assert!(
         !contributors.contains("\"gap_db\":null"),
         "twelve measured segments must produce a signature, got {contributors}"
@@ -587,8 +554,8 @@ fn every_contributor_records_the_gap_signature_without_it_changing_the_verdict()
     );
 }
 
-/// A source with too little history records NO signature, which is what keeps a
-/// new microphone from being judged on its first day.
+/// A source with too little history records no signature, so a new microphone
+/// is not judged on its first day.
 #[test]
 fn too_few_segments_record_no_gap_signature() {
     let dir = tempfile::tempdir().expect("tmp");

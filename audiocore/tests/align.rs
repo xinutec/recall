@@ -23,10 +23,10 @@ fn bursty(len: usize, seed: u64) -> Vec<f32> {
 
 #[test]
 fn a_late_stamped_copy_measures_a_negative_offset() {
-    // The June phone case: the same room, stamped d buckets LATE on the
-    // nominal timeline. The anchor must say "add a negative offset".
+    // The same room stamped d buckets late on the nominal timeline: the anchor
+    // must say "add a negative offset".
     let reference = bursty(600, 7);
-    let d = 39; // 3.9 s in buckets — the measured June skew
+    let d = 39; // 3.9 s in buckets, a phone skew seen in practice
     let mut late = vec![0.01f32; 600];
     late[d..].copy_from_slice(&reference[..600 - d]);
     let anchor = best_lag(&reference, &late, 150, BUCKET_S, 300).expect("verdict");

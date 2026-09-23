@@ -1,8 +1,5 @@
-//! Stage D4's ingest scanner: speech seconds per delivered segment.
-//!
-//! The real-speech case needs a real recording, and `recall` is a public repo
-//! whose .gitignore refuses audio — so that test skips where the fixture is
-//! absent (#1433). Everything that can run anywhere runs anywhere.
+//! The ingest scanner: speech seconds per delivered segment. Only the real-speech
+//! case needs a recording, and it skips where that fixture is absent.
 
 use recalld::speech::{self, UNKNOWN_SECONDS};
 use recalld::store;
@@ -118,8 +115,6 @@ fn a_source_with_only_silence_has_no_latest_speech() {
 fn real_speech_is_measured_and_becomes_the_source_latest_speech() {
     let fixture = Path::new("../tests/fixtures/speech/dialogue-en.flac");
     if !fixture.exists() {
-        // Absent by accident, not by policy: .gitignore's blanket *.flac took a
-        // fixture the generator script calls committed (#1433).
         eprintln!("skipping: speech fixture absent");
         return;
     }
@@ -148,8 +143,8 @@ fn real_speech_is_measured_and_becomes_the_source_latest_speech() {
 
 #[test]
 fn an_unmeasured_segment_still_counts_as_possible_speech() {
-    // The backlog scans BEHIND live audio. If "not looked at yet" were treated
-    // as silence, shipping this would black out every recorder at once.
+    // The backlog scans behind live audio. Treating "not looked at yet" as
+    // silence would black out every recorder at once.
     let dir = tempfile::tempdir().expect("tempdir");
     stored(dir.path(), "usb", "usb-20260905T120000.wav", &silent_wav(2));
     // deliberately NOT scanned

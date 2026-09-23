@@ -1,23 +1,12 @@
-//! The port agrees with `recall.identify` — on a corpus the PYTHON produced.
+//! The matcher against a corpus whose expected names and scores came from the
+//! Python matcher it ports, run end to end rather than re-derived in a generator.
 //!
-//! ⚠ The expected names and scores in the fixture came out of a real `Store`
-//! driven through the real `rematch_speaker_guesses`
-//! (`scripts/gen_identify_parity.py`, seed 20260915), not out of a
-//! re-implementation of its arithmetic in the generator. That distinction is the
-//! whole value: a generator that recomputed the softmax itself would pin what I
-//! believe the Python does.
+//! ⚠ The Python and its generator no longer exist, so the fixture cannot be
+//! regenerated: this is a regression test, not evidence that two implementations
+//! still agree.
 //!
-//! ⛔ **THE GENERATOR IS GONE.** `recall.identify` and the script were deleted on
-//! 2026-09-17 with the rest of the Mac's enrolment, so this fixture can no longer
-//! be REGENERATED — there is no second implementation left to disagree with. It
-//! has stopped being a parity check and is now a regression test that pins the
-//! Rust to what the Python did on the day it was retired. Keep it for that; do
-//! not read a passing run as evidence that two implementations still agree.
-//!
-//! ⚠ **The vectors are synthetic, and that is a real limitation.** This
-//! repository is public and the voiceprints are members of a household, so what
-//! this cannot show is that the two agree on real voices. A differential over the
-//! live archive is the evidence for that.
+//! The vectors are synthetic because the repository is public; agreement on real
+//! voices is `identify_differential`'s job.
 
 use recalld::identify::{Voiceprint, match_one};
 use serde::Deserialize;
@@ -71,8 +60,8 @@ fn every_case_matches_the_python_name_and_score() {
             ));
             continue;
         }
-        // The Python rounds to six places; so does the port. A difference beyond
-        // that is arithmetic drift, not rounding.
+        // Scores are rounded to six places; a difference beyond that is
+        // arithmetic drift, not rounding.
         if (got.score - case.expected_score).abs() > 1e-6 {
             disagreements.push(format!(
                 "{}: score {} != {}",
@@ -89,8 +78,8 @@ fn every_case_matches_the_python_name_and_score() {
     );
 }
 
-/// ⚠ The temperature is two spellings of one number. A change on either side that
-/// is not a change on both silently re-scores the whole archive.
+/// The fixture's temperature is the shipped one: changing it re-scores the whole
+/// archive.
 #[test]
 fn the_softmax_temperature_is_the_pythons() {
     assert!(
@@ -99,10 +88,8 @@ fn the_softmax_temperature_is_the_pythons() {
     );
 }
 
-/// Silence embeds to zeros. The Python guards the division with `+ 1e-12`; so
-/// does the port, and the answer must be a number rather than a NaN — a NaN
-/// compares false against everything and would quietly lose every comparison it
-/// entered.
+/// Silence embeds to zeros, and the score must still be a number: a NaN compares
+/// false against everything and quietly loses every comparison.
 #[test]
 fn an_embedding_of_silence_scores_a_number_not_a_nan() {
     let f = fixture();
@@ -123,9 +110,8 @@ fn an_embedding_of_silence_scores_a_number_not_a_nan() {
     assert!(got.score.is_finite(), "got {}", got.score);
 }
 
-/// Nobody enrolled means no guess — NOT a guess with a low score. The archive
-/// starts empty, and a confident-looking name on the first turn ever recorded
-/// would be worse than silence.
+/// Nobody enrolled means no guess, not a guess with a low score: the archive
+/// starts empty, and a name on the first turn ever recorded would be invented.
 #[test]
 fn with_nobody_enrolled_there_is_no_guess_at_all() {
     assert!(match_one(&[1.0, 0.0, 0.0], &[]).is_none());

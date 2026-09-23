@@ -6,8 +6,7 @@ use recalld::devices::{
 };
 use rusqlite::Connection;
 
-/// The clock the fixtures are written against. Fixed, so an age-eviction rule
-/// cannot make a test's outcome depend on the day it runs.
+/// A fixed clock, so age eviction does not make a result depend on the day.
 fn now() -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339("2026-09-07T12:00:00+00:00")
         .expect("iso")
@@ -95,8 +94,8 @@ fn beats_read_back_sorted_by_device_id() {
 
 #[test]
 fn a_malformed_entry_costs_that_device_its_line_and_no_more() {
-    // ⚠ This is read on a health endpoint's request path. One phone on a broken
-    // build must not blank the whole answer.
+    // Read on a health endpoint's request path: one phone on a broken build must
+    // not blank the whole answer.
     let conn = db();
     record_beat(
         &conn,
@@ -134,9 +133,8 @@ fn an_unreadable_setting_reads_as_no_beats_rather_than_failing() {
 
 #[test]
 fn a_flood_of_devices_evicts_the_least_recently_heard() {
-    // ⚠ The write endpoint is unauthenticated, so the device count is
-    // client-controlled. Without the cap a stray test post needs sqlite3 surgery
-    // in the pod to remove; with it, it ages out.
+    // The write endpoint is unauthenticated, so the device count is
+    // client-controlled; the cap lets a stray row age out.
     let conn = db();
     for i in 0..20 {
         record_beat(
@@ -163,8 +161,7 @@ fn a_flood_of_devices_evicts_the_least_recently_heard() {
 
 #[test]
 fn an_entry_that_cannot_be_read_is_evicted_before_a_readable_one() {
-    // It sorts oldest by having no `at` at all, which is what makes a malformed
-    // row self-clearing rather than permanent.
+    // With no `at` it sorts oldest, so a malformed row clears itself.
     let conn = db();
     for i in 0..16 {
         record_beat(
@@ -198,11 +195,8 @@ fn an_entry_that_cannot_be_read_is_evicted_before_a_readable_one() {
 
 #[test]
 fn the_outbox_is_capped_like_the_beats_are() {
-    // ⚠ This test used to assert the OPPOSITE, on the grounds that the Python
-    // capped only the beats and a port should mirror rather than improve. That
-    // was right for the port and wrong as a resting place: the row that needed
-    // sqlite3 by hand inside the pod in 2026-08-10 was an OUTBOX row. The
-    // asymmetry was the bug (#1408).
+    // The outbox is unauthenticated too, so a stray row there must age out as
+    // well.
     let conn = db();
     for i in 0..20 {
         record_report(
@@ -221,9 +215,8 @@ fn the_outbox_is_capped_like_the_beats_are() {
 
 #[test]
 fn a_device_silent_for_a_month_ages_out() {
-    // ⚠ The COUNT cap alone never removes anything while fewer than sixteen
-    // devices exist, which is why one stray row survived two attempts to be rid
-    // of it. A phone that has not beaten in a month is not a device any more.
+    // The count cap removes nothing below sixteen devices; a phone silent for a
+    // month is not a device any more.
     let conn = db();
     record_beat(&conn, &beat("current", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
     record_beat(&conn, &beat("ancient", "2026-06-01T09:00:00+00:00"), now()).expect("beat");
@@ -241,9 +234,8 @@ fn a_device_silent_for_a_month_ages_out() {
 
 #[test]
 fn an_unreadable_row_is_not_aged_out_on_a_failed_parse() {
-    // ⚠ It has no usable `at`, so age cannot judge it — and making it VANISH on
-    // the next write would hide a row worth seeing. The count cap already sorts
-    // it oldest, which is the right way for it to go.
+    // Age cannot judge a row with no usable `at`, and dropping it on the next
+    // write would hide a row worth seeing. The count cap removes it first.
     let conn = db();
     record_beat(&conn, &beat("good", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
     let mut map: serde_json::Value =
@@ -265,8 +257,7 @@ fn an_unreadable_row_is_not_aged_out_on_a_failed_parse() {
 
 #[test]
 fn a_device_can_be_forgotten_and_forgetting_an_absent_one_says_so() {
-    // ⚠ The supported way to undo a stray write. Before this, removing one row
-    // meant sqlite3 inside the pod — three times (#1408), the last of them mine.
+    // The supported way to undo a stray write.
     let conn = db();
     record_beat(
         &conn,
@@ -289,8 +280,7 @@ fn a_device_can_be_forgotten_and_forgetting_an_absent_one_says_so() {
 
 #[test]
 fn forgetting_an_outbox_row_leaves_the_beat_alone() {
-    // They are separate keys and a device may legitimately be in one and not the
-    // other; forgetting one must not silently drop the other.
+    // Separate keys: a device may be in one and not the other.
     let conn = db();
     record_beat(&conn, &beat("p", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
     record_report(&conn, &report("p", "2026-09-07T09:00:00+00:00"), now()).expect("report");
@@ -341,8 +331,8 @@ fn a_report_round_trips_with_its_reason_and_counts() {
 
 #[test]
 fn the_stored_json_is_spelled_the_way_python_writes_it() {
-    // ⚠ Both implementations write this column while the port is in flight, and
-    // the Python escapes non-ASCII and puts a space after `,` and `:`.
+    // One spelling per column, `json.dumps`': non-ASCII escaped and a space
+    // after `,` and `:`.
     let conn = db();
     let mut r = report("phone", "2026-09-07T09:00:00+00:00");
     r.reason = Some("kon niet uploaden — geërfde fout".into());
@@ -358,7 +348,7 @@ fn the_stored_json_is_spelled_the_way_python_writes_it() {
 
 #[test]
 fn a_beat_with_no_optional_flags_keeps_them_absent_rather_than_false() {
-    // None means "an app too old to say", which is not the same as False.
+    // None means "an app too old to say", not false.
     let conn = db();
     let mut b = beat("old-phone", "2026-09-07T09:00:00+00:00");
     b.charging = None;
@@ -449,8 +439,7 @@ async fn post(app: &axum::Router, path: &str, body: serde_json::Value) -> axum::
 
 #[tokio::test]
 async fn a_beat_posts_without_a_session_because_a_phone_cannot_sign_in() {
-    // ⚠ If this ever needs a cookie, every recorder goes silent and the fleet
-    // reads a dead house.
+    // A cookie requirement here would make every recorder read as dead.
     let dir = scratch();
     let app = gated(dir.path());
 
@@ -467,8 +456,8 @@ async fn a_beat_posts_without_a_session_because_a_phone_cannot_sign_in() {
 
 #[tokio::test]
 async fn the_beats_clock_is_the_servers_not_the_phones() {
-    // ⚠ A phone with a wrong clock would otherwise report itself permanently
-    // fresh, or permanently stale. The body carries no `at` at all, by design.
+    // A phone with a wrong clock would read permanently fresh or stale, so an
+    // `at` in the body is ignored.
     let dir = scratch();
     let app = gated(dir.path());
 
@@ -492,8 +481,7 @@ async fn the_beats_clock_is_the_servers_not_the_phones() {
 
 #[tokio::test]
 async fn an_unparseable_time_from_a_phone_is_dropped_not_a_500() {
-    // ⚠ Status, never control. An app on an older build costs its own DETAIL and
-    // nothing else — least of all the beat, which is the part that matters.
+    // A bad field costs only that detail, never the beat.
     let dir = scratch();
     let app = gated(dir.path());
 
@@ -552,8 +540,8 @@ async fn negative_counts_are_clamped_rather_than_refused() {
 
 #[tokio::test]
 async fn reading_the_beats_requires_a_session_unlike_writing_them() {
-    // The GET is fleetwatch's, which authenticates; only the phone's POST is
-    // exempt. An open read would hand the device inventory to anyone on the VPN.
+    // Only the phone's POST is exempt; an open read would hand the device
+    // inventory to anyone on the VPN.
     let dir = scratch();
     let app = gated(dir.path());
 
@@ -572,10 +560,8 @@ async fn reading_the_beats_requires_a_session_unlike_writing_them() {
 
 #[tokio::test]
 async fn a_beat_carrying_only_a_device_id_still_counts_as_alive() {
-    // ⚠ Every field but `device` is optional in the Python, and the reason is the
-    // point of the endpoint: an app on an older build must still register as
-    // alive. Requiring app/version/streaming 422s exactly the phone this exists
-    // to notice — which is what the Rust did until a Python test said otherwise.
+    // Every field but `device` is optional: an app on an older build must still
+    // register as alive, and a 422 would hide exactly the phone this is for.
     let dir = scratch();
     let app = gated(dir.path());
 
@@ -615,10 +601,9 @@ async fn an_outbox_report_carrying_only_a_device_id_is_accepted() {
 
 #[tokio::test]
 async fn forgetting_a_device_needs_a_session_unlike_writing_one() {
-    // ⚠ The POST is open because a phone cannot sign in. Forgetting is a
-    // person's act and the only one here that DESTROYS a reading rather than
-    // replacing it, so it is gated — otherwise anyone on the VPN could erase the
-    // evidence that a recorder had stopped.
+    // Forgetting destroys a reading rather than replacing it, so it is gated:
+    // otherwise anyone on the VPN could erase the evidence that a recorder
+    // stopped.
     let dir = scratch();
     let app = gated(dir.path());
 
@@ -687,17 +672,10 @@ async fn a_signed_in_person_can_forget_a_stray_row() {
     assert_eq!(devices, ["real"], "no sqlite3 in the pod required");
 }
 
-/// ⚠ **A cross-repo contract, pinned where it is declared.** Two other repos are
-/// built to this number and name it in their own comments — the Android mic app
-/// (`Heartbeat.EVERY_MINUTES`, asserted in `HeartbeatTest`) and the fleetwatch
-/// thresholds in `xinutec-infra/mac-mini/recall_mics.py`. It lived in
-/// `recall.mic_alive` until that module was deleted (#1496); the module could go
-/// because nothing imported it, but the VALUE could not, because two things
-/// outside this repo agree with it and neither can see a Python file that no
-/// longer exists.
-///
-/// This asserts the canonical side. The Android side asserts its own copy, so a
-/// change to either fails a suite rather than drifting quietly.
+/// ⚠ A cross-repo contract: the Android mic app (`Heartbeat.EVERY_MINUTES`,
+/// asserted in `HeartbeatTest`) and the fleetwatch thresholds in
+/// `xinutec-infra/mac-mini/recall_mics.py` are built to this number. This is the
+/// canonical side; a change must move all three.
 #[test]
 fn the_beat_cadence_is_the_one_the_phones_and_fleetwatch_were_built_to() {
     assert_eq!(

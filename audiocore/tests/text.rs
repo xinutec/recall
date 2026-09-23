@@ -1,34 +1,18 @@
-//! The text rules, against the Python they were ported from and against the
-//! shapes a reader needs to see spelled out.
+//! The text rules, against a frozen corpus and the shapes a reader needs spelled out.
 //!
-//! ⚠ **`recall.quality` AND ITS GENERATOR ARE DELETED** (2026-09-18), so the
-//! corpus below is a frozen record of the Python's behaviour rather than a live
-//! comparison, and it can never be regenerated. If a case in it ever looks
-//! wrong, the question is whether the RUST is right — there is nothing left to
-//! ask.
+//! The corpus holds verdicts from the implementation these rules replaced and
+//! cannot be regenerated; if a case looks wrong, judge the Rust on its merits.
+//! It pins edge cases hand-written examples miss: which match the character
+//! loop finds, where a word with a diaeresis splits, and stripping a turn that
+//! is punctuation at one end only.
 //!
-//! ⚠ The fixture's verdicts were produced BY the Python (`scripts/gen_quality_parity.py`,
-//! seed 20260912), so they pin the parts no hand-written case reaches: which
-//! match `re.search` returns for the character loop, where `\w` splits a word
-//! carrying a diaeresis, and what `str.strip(chars)` does to a turn that is
-//! punctuation at one end only.
+//! The texts are generated nonsense tokens in the archive's shapes, since the
+//! repository is public; they cannot show agreement on real rows.
 //!
-//! ⚠ **The corpus is GENERATED, not sampled from the archive, and that is a real
-//! limitation rather than a preference.** This repository is public and the
-//! archive is a household's conversations, so the texts are nonsense tokens in
-//! the shapes the archive contains. What it cannot prove is that the rules agree
-//! with the Python on REAL rows; the differential over the live archive is the
-//! evidence for that, and it belongs in a task rather than a committed file.
-//!
-//! Every threshold in `text.rs` was moved by one and this was checked to go red
-//! — twice it did not, and both times the corpus was at fault rather than the
-//! code: there was no five-letter token, so `RUN_WORD_MIN_LEN`'s split was
-//! unpinned, and the six-word phrases were drawn at random, so a repeated word
-//! let the run rule answer before the phrase rule could. One threshold resists
-//! the technique for a real reason: a character loop's match is always
-//! `repeats × unit` with repeats ≥ 4 and unit ≤ 8, so no match can be 11
-//! characters long and `CHAR_LOOP_MIN_LEN` = 11 is the SAME PROGRAM as 12. The
-//! ablation that pins it is 12 → 10.
+//! Moving any threshold in `text.rs` by one turns the corpus red, with one
+//! exception: a character loop's match is `repeats × unit` with repeats ≥ 4
+//! and unit ≤ 8, so no match is 11 characters long and `CHAR_LOOP_MIN_LEN` of
+//! 11 behaves as 12.
 
 use audiocore::text::{is_repetition_loop, is_wordless};
 use serde::Deserialize;
@@ -40,7 +24,7 @@ struct Case {
     wordless: bool,
 }
 
-// `loop` is a keyword, and the fixture is the Python's field name.
+// `loop` is a keyword, and it is the fixture's field name.
 impl Case {
     fn parse(raw: &str) -> Vec<Self> {
         #[derive(Deserialize)]
@@ -66,8 +50,7 @@ impl Case {
 fn the_rust_text_rules_match_the_python_ones_case_for_case() {
     let cases = Case::parse(include_str!("fixtures/quality-parity.json"));
     assert!(cases.len() >= 400, "the corpus must not silently shrink");
-    // A corpus that is all one verdict would pass a port that always answers
-    // that verdict, which is the failure mode a parity test exists to catch.
+    // A corpus of one verdict would pass rules that always answer it.
     let loops = cases.iter().filter(|c| c.loop_).count();
     let wordless = cases.iter().filter(|c| c.wordless).count();
     assert!(loops > 20 && loops < cases.len() - 20, "loops: {loops}");
@@ -91,11 +74,9 @@ fn the_rust_text_rules_match_the_python_ones_case_for_case() {
 
 #[test]
 fn the_string_the_two_copies_once_disagreed_about() {
-    // ⚠ Enough repeats of a SHORT unit to qualify, spanning under the minimum,
-    // followed by a genuine long loop. Searching on past the first match — the
-    // natural reading of a greedy `\1{3,}`, and what the doctor's copy did —
-    // answers "loop" here, where the Python returns. That disagreement meant a
-    // turn recalld had written read as unrestorable junk.
+    // Enough repeats of a short unit to qualify but spanning under the minimum,
+    // followed by a genuine long loop. Only the first match is judged, so
+    // searching on past it would answer "loop" here and disagree with the corpus.
     assert!(!is_repetition_loop("ababababxyzxyzxyzxyzxyz"));
 }
 
@@ -107,7 +88,7 @@ fn punctuation_only_turns_are_wordless() {
     assert!(is_wordless("\u{2026}"));
     assert!(is_wordless(""));
     assert!(!is_wordless("Ja."));
-    // Dutch is half this archive: an accented word is a word.
+    // An accented word is a word; much of the archive is Dutch.
     assert!(!is_wordless("héél"));
 }
 
@@ -137,8 +118,8 @@ fn a_repeated_phrase_is_a_loop() {
 fn a_spaceless_unit_repeated_four_times_is_a_loop() {
     assert!(is_repetition_loop("ASTASTASTAST"));
     assert!(is_repetition_loop("obaobaobaoba"));
-    // Three repeats of a 2-char unit is only 6 characters — under the floor,
-    // and the floor is what keeps "haha" and "bye bye" out of it.
+    // Three repeats of a 2-char unit is only 6 characters, under the floor
+    // that keeps laughter like "hahaha" out.
     assert!(!is_repetition_loop("hahaha"));
 }
 

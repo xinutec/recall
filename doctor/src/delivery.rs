@@ -15,6 +15,8 @@ use std::path::Path;
 
 const OPEN_GRACE_MINUTES: i64 = 3;
 const WARN_MINUTES: i64 = 30;
+// A segment must not age out of the grace straight into a warning.
+const _: () = assert!(OPEN_GRACE_MINUTES < WARN_MINUTES);
 const FAIL_HOURS: i64 = 6;
 const CONFLICTS_NAMED: usize = 3;
 

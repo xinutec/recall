@@ -1,9 +1,6 @@
-//! The runner against the REAL recalld router and a REAL shim subprocess.
-//!
-//! Only the model is substituted — a stub shim speaking the actual protocol —
-//! because a unit test has no business loading Whisper. Everything else is the
-//! pair that ships: recalld's own queue, its own blob store, its own auth gate,
-//! and the runner's own client and stdio driver.
+//! The runner against the real recalld router and a real shim subprocess.
+//! Only the model is substituted, by a stub shim speaking the real protocol;
+//! the queue, blob store, auth gate, client and stdio driver are the shipped ones.
 
 use recalld::app::{Config as ServerConfig, router};
 use runner::client::Client;
@@ -116,8 +113,8 @@ fn a_job_is_leased_transcribed_and_acked() {
 
 #[test]
 fn a_shim_refusal_is_reported_as_such_not_as_a_transport_failure() {
-    // The distinction the runner acts on: a refusal is the CLIP's fault and is
-    // recorded terminally; a transport failure is the SHIM's and is retried.
+    // A refusal is the clip's fault and is recorded terminally; a transport
+    // failure is the shim's and is retried.
     let dir = tempfile::tempdir().expect("tempdir");
     let (program, args) = stub_shim(
         "print(json.dumps({'id': msg['id'], 'ok': False, 'error': 'FileNotFoundError: x'}))",
@@ -163,9 +160,9 @@ fn model_and_prompt_reach_the_shim_when_given() {
 
 #[test]
 fn the_vocabulary_prompt_is_read_and_an_empty_one_is_no_biasing() {
-    // #1463: the runner carries the prompt because the shim may not fetch it.
-    // An EMPTY vocabulary must read as None — "send no initial_prompt" — rather
-    // than as an empty string, which would be an instruction to the model.
+    // The runner carries the prompt because the shim may not fetch it. An empty
+    // vocabulary reads as None (send no `initial_prompt`), since an empty string
+    // would still be an instruction to the model.
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
@@ -206,14 +203,9 @@ fn the_vocabulary_prompt_is_read_and_an_empty_one_is_no_biasing() {
     );
 }
 
-/// ⚠ **An idle runner must be distinguishable from a dead one**, and for a long
-/// time it was not: both stamped nothing, so the doctor's transcription-pulse
-/// check read a drained backlog as a stall — "last pass 1024 min ago" with the
-/// runner healthy and the queue simply empty. The doctor already renders
-/// `rows == 0` as "nothing to do"; it was never sent such a beat.
-///
-/// This drives the SHIPPED binary rather than a copy of its loop, because the
-/// property is about what the deployed agent writes.
+/// An idle runner must be distinguishable from a dead one, or the doctor reads
+/// an empty queue as a stall; it renders `rows == 0` as "nothing to do". Drives
+/// the shipped binary, because the property is about what the agent writes.
 #[test]
 fn a_runner_with_an_empty_queue_stamps_a_beat_saying_it_had_nothing_to_do() {
     let dir = tempfile::tempdir().expect("tempdir");

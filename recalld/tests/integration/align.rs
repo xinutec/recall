@@ -1,8 +1,5 @@
 //! Word-to-speaker alignment: the heart of the transcribe-then-assign pipeline.
-//!
-//! ⚠ These are `tests/test_align.py`'s cases, case for case. `recall.align` is
-//! still live, so the two implementations must agree: a case that passes here
-//! and not there is a divergence, not a Rust variant.
+//! These are the hand-written cases of the Python implementation it ports.
 
 use recalld::align::{AlignedTurn, MIN_TURN_S, SpeakerTurn, Word, assign_words_to_speakers};
 
@@ -154,11 +151,9 @@ fn confidence_is_the_mean_word_probability() {
 
 #[test]
 fn an_exactly_tied_neighbour_pair_absorbs_the_left_one() {
-    // The one branch neither the six cases above nor the 400 random ones reach:
-    // a sub-threshold run whose neighbours are EXACTLY equal in duration. Random
-    // float durations never tie, so the `>=` in `smooth` was unprotected —
-    // flipping it to `>` left every other test green. Python resolves the tie to
-    // the LEFT neighbour, and this pins that.
+    // A sub-threshold run whose neighbours are exactly equal in duration goes to
+    // the left one. Random float durations never tie, so only this test guards
+    // the `>=` in `smooth`.
     let turns = vec![
         turn("A", 0.0, 1.0),
         turn("B", 1.0, 1.25),

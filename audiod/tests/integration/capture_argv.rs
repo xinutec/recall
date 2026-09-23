@@ -1,9 +1,6 @@
-//! The ffmpeg argv the capture producers build.
-//!
-//! ⚠ **Untested until 2026-09-13, and that is how geb broke.** Swapping its
-//! stereo conference speakerphone for a mono capsule made `recall-capture`
-//! crash-loop: four restarts, four header-only stub files, no audio. The cause
-//! was option ORDER, which no test looked at.
+//! The ffmpeg argv the capture producers build. Option order matters: a
+//! misplaced channel flag makes a mono microphone refuse to open, and
+//! `recall-capture` then crash-loops writing header-only files.
 
 use audiod::capture_run::{alsa_argv, sox_argv};
 
@@ -15,14 +12,9 @@ fn before_input(argv: &[String]) -> Vec<String> {
 
 #[test]
 fn the_alsa_input_is_opened_with_the_channel_count_we_want() {
-    // ⚠ `-ac` AFTER `-i` downmixes what arrived; it does not tell the demuxer
-    // what to ask the device for. ffmpeg's ALSA demuxer defaults to TWO, and a
-    // mono-only microphone refuses:
-    //
-    //     [in#0] cannot set channel count to 2 (Invalid argument)
-    //
-    // Verified on geb: the same command with `-channels 1` before `-i` returns
-    // 95,988 bytes where the old form returns 0.
+    // `-ac` after `-i` only downmixes what arrived. ffmpeg's ALSA demuxer asks
+    // the device for two channels unless `-channels` precedes `-i`, and a
+    // mono-only microphone refuses with "cannot set channel count to 2".
     let argv = alsa_argv(Some("hw:CARD=Microphone,DEV=0"), 48_000, 1, None);
     let head = before_input(&argv);
     let at = head
@@ -34,8 +26,7 @@ fn the_alsa_input_is_opened_with_the_channel_count_we_want() {
 
 #[test]
 fn the_device_is_still_what_follows_minus_i() {
-    // The ordering fix must not shift the device onto the wrong flag — that
-    // would open ffmpeg's default input while looking entirely healthy.
+    // A device on the wrong flag would open ffmpeg's default input and look healthy.
     let argv = alsa_argv(Some("hw:CARD=Microphone,DEV=0"), 48_000, 1, None);
     let at = argv.iter().position(|a| a == "-i").expect("an -i");
     assert_eq!(argv[at + 1], "hw:CARD=Microphone,DEV=0");
@@ -43,8 +34,7 @@ fn the_device_is_still_what_follows_minus_i() {
 
 #[test]
 fn a_stereo_source_still_asks_for_two() {
-    // The count is carried, not hardcoded: the Mac's condenser is not geb's
-    // capsule, and a fix for one must not pin the other to mono.
+    // The channel count is carried, not hardcoded to mono.
     let argv = alsa_argv(Some("hw:CARD=Other,DEV=0"), 48_000, 2, None);
     let head = before_input(&argv);
     let at = head
@@ -56,8 +46,7 @@ fn a_stereo_source_still_asks_for_two() {
 
 #[test]
 fn sox_is_untouched_by_this() {
-    // The Mac captures through sox, where `-c` is a device option already and
-    // the ALSA demuxer's default never applied. Pinned so the fix stays scoped.
+    // The Mac captures through sox, where `-c` is already a device option.
     let argv = sox_argv(Some("USB Condenser Microphone"), 48_000, 1, None);
     let at = argv.iter().position(|a| a == "-c").expect("a -c");
     assert_eq!(argv[at + 1], "1");
@@ -69,11 +58,9 @@ use audiod::capture_run::beat_body;
 
 #[test]
 fn a_store_and_forward_recorder_beats_that_it_is_not_streaming() {
-    // ⚠ THE EIGHT-DAY LIE. geb's heartbeat sat at 2026-09-05 — the day it
-    // stopped being a streaming client — while the devices list showed it fine,
-    // because liveness there is derived from SEGMENTS ARRIVING. A recorder
-    // delivers nothing when it is paused and nothing when its microphone is
-    // dead, and those two must not look alike.
+    // Liveness cannot be derived from segments arriving: a recorder delivers
+    // nothing both when paused and when its microphone is dead, and those two
+    // must not look alike. So it beats on its own.
     let beat = beat_body("geb", true);
     assert_eq!(beat["device"], "geb");
     assert_eq!(beat["app"], "linux");
@@ -90,9 +77,8 @@ fn a_store_and_forward_recorder_beats_that_it_is_not_streaming() {
 
 #[test]
 fn a_producer_that_died_beats_mic_ok_false() {
-    // The one fact worth beating: a device that will not open. geb spent an
-    // hour crash-looping on `cannot set channel count to 2` and reported
-    // nothing at all, because delivery was the only channel it had.
+    // A device that will not open is the fact the beat exists to report;
+    // delivery alone says nothing when capture crash-loops.
     let beat = beat_body("geb", false);
     assert_eq!(beat["micOk"], false);
 }

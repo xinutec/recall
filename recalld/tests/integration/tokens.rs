@@ -36,10 +36,9 @@ fn the_env_carrier_parses_the_same_grammar() {
 
 #[test]
 fn the_custodial_wildcard_opens_every_source_write_only() {
-    // The Mac's backfill grant: its archive holds every device's master plus
-    // a new source per uploaded meeting, so its one token writes any source.
-    // Everything else about the plane is unchanged — an unknown bearer is
-    // still refused.
+    // The Mac's backfill grant: its archive holds every device's master plus a
+    // new source per uploaded meeting, so its one token writes any source. An
+    // unknown bearer is still refused.
     let tokens = load("* mac-token\npixel5 secret-b\n");
     assert_eq!(tokens.check("usb", "mac-token"), Verdict::Allowed);
     assert_eq!(

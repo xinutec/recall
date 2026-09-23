@@ -1,5 +1,4 @@
-//! Serving the built app. Each test is one of the three rules the handler exists
-//! for; two of them were bought by real incidents.
+//! Serving the built app: one test per rule the handler exists for.
 
 use axum::Router;
 use axum::body::Body;
@@ -75,9 +74,8 @@ async fn a_client_route_gets_the_shell_but_an_api_miss_gets_a_404() {
 
 #[tokio::test]
 async fn the_shell_is_never_cached_and_the_hashed_bundle_is_cached_hard() {
-    // Rule 2, and the reason it is a rule: index.html names the CURRENT bundles,
-    // so caching it means a deploy is not picked up until a hard refresh. That is
-    // the bug that served stale code from isis.
+    // Rule 2. index.html names the current bundles, so caching it means a deploy
+    // is not picked up until a hard refresh.
     let dir = tempfile::tempdir().expect("tempdir");
     let app = app(built(dir.path()));
 
