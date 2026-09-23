@@ -718,7 +718,7 @@ pub fn write_pass(
          WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM pass_ledger l
                            WHERE l.kind = ?1 AND l.filename = j.filename)
-         ORDER BY j.filename ASC",
+         ORDER BY s.start_utc ASC, j.filename ASC",
     )?;
     let jobs: Vec<(String, String, String)> = stmt
         .query_map(rusqlite::params![stream.kind], |r| {

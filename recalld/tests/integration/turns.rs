@@ -1749,3 +1749,41 @@ fn a_block_whose_session_was_deleted_is_decided_not_waited_for() {
         "a deleted session is decided once, not re-examined on every pass"
     );
 }
+
+#[test]
+fn a_limited_pass_takes_the_oldest_clip_across_sources_first() {
+    // Filename order is source order: every clip of `aaa` would drain before
+    // the older clips of `zzz`.
+    let (mut meaning, ingest, _dir) = planes_for_a_pass();
+    for (source, start) in [
+        ("aaa", "2026-09-11T11:00:00+00:00"),
+        ("zzz", "2026-09-11T10:00:00+00:00"),
+    ] {
+        let stamp = start[..19].replace(['-', ':'], "");
+        done_job(
+            &ingest,
+            PER_MIC.kind,
+            source,
+            &format!("{source}-{stamp}.flac"),
+            start,
+            &a_result("ik denk dat we dat morgen moeten doen"),
+        );
+        meaning
+            .execute(
+                "INSERT INTO audio_segments
+                     (source_id, path, start_utc, end_utc, sample_rate, channels)
+                 VALUES (?1, '/x', ?2, ?3, 16000, 1)",
+                (source, start, &minute_later(start)),
+            )
+            .expect("clip");
+    }
+
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, "now", 1).expect("pass");
+    assert_eq!(pass.turns, 1);
+    let written: String = meaning
+        .query_row("SELECT start_utc FROM transcript_segments", [], |r| {
+            r.get(0)
+        })
+        .expect("turn");
+    assert!(written.starts_with("2026-09-11T10:00"), "{written}");
+}

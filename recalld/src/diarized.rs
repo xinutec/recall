@@ -875,7 +875,7 @@ pub fn write_pass(
          WHERE d.kind = ?1 AND d.done_utc IS NOT NULL AND d.result IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM pass_ledger l
                            WHERE l.kind = ?1 AND l.filename = d.filename)
-         ORDER BY d.filename ASC",
+         ORDER BY s.start_utc ASC, d.filename ASC",
     )?;
     let jobs: Vec<(String, String, String, String)> = stmt
         .query_map(
