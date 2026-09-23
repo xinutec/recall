@@ -53,7 +53,8 @@ fn cosine(a: &[f64], b: &[f64]) -> f64 {
 /// reader decides. Hence a guess never goes in `speaker_label`.
 #[must_use]
 pub fn match_one(embedding: &[f64], voiceprints: &[Voiceprint]) -> Option<Guess> {
-    if embedding.is_empty() || voiceprints.is_empty() {
+    // A NaN ties every person, so the name would be row order: no guess.
+    if embedding.is_empty() || voiceprints.is_empty() || !embedding.iter().all(|x| x.is_finite()) {
         return None;
     }
     let e = normalise(embedding);

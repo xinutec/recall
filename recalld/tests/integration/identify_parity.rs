@@ -130,3 +130,20 @@ fn an_embedding_of_silence_scores_a_number_not_a_nan() {
 fn with_nobody_enrolled_there_is_no_guess_at_all() {
     assert!(match_one(&[1.0, 0.0, 0.0], &[]).is_none());
 }
+
+/// A span too short to embed comes back NaN. It ties every person, so any name
+/// would be the first print's by row order: no guess, like an empty corpus.
+#[test]
+fn an_embedding_that_is_not_a_number_gets_no_guess() {
+    let prints = [
+        Voiceprint {
+            person: "a".to_owned(),
+            vector: vec![1.0, 0.0],
+        },
+        Voiceprint {
+            person: "b".to_owned(),
+            vector: vec![0.0, 1.0],
+        },
+    ];
+    assert!(match_one(&[f64::NAN, 0.5], &prints).is_none());
+}

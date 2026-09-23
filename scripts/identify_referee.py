@@ -29,7 +29,7 @@ import argparse
 import json
 import math
 import sqlite3
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +37,9 @@ from pathlib import Path
 LABELLED = """t.speaker_label IS NOT NULL AND t.speaker_label NOT LIKE 'SPEAKER%'
     AND t.hidden_reason IS NULL AND t.superseded_by IS NULL"""
 MARGIN = 0.08
+CONTROL = "control: labelled turn span"
+WHISPER = "A: Whisper segment"
+PYANNOTE = "pyannote: aligned turn, cluster voiceprint"
 
 
 def instant(value: str) -> datetime:
@@ -109,6 +112,52 @@ def extract(db_path: Path, clips: Path, work: Path) -> None:
             print(clip.name, len(segments), "segments", flush=True)
 
 
+def extract_pyannote(db_path: Path, clips: Path, work: Path) -> None:
+    """Run the production diarize request and a word-timed transcription per
+    clip, stored as the runner stores job results, for `align_referee`."""
+    from recall import shim_asr, shim_voices  # noqa: PLC0415 - the ML env only
+
+    db = open_ro(db_path)
+    out_path = work / "pyannote.jsonl"
+    done = (
+        {json.loads(line)["audio_id"] for line in out_path.open()}
+        if out_path.exists()
+        else set()
+    )
+    rows = db.execute(
+        f"""SELECT DISTINCT a.id, a.path FROM transcript_segments t
+        JOIN audio_segments a ON a.id = t.audio_segment_id
+        JOIN sources s ON s.id = a.source_id
+        WHERE {LABELLED} AND s.kind IN ('coreaudio', 'tcp_pcm') ORDER BY a.id"""
+    ).fetchall()
+    with out_path.open("a") as out:
+        for audio_id, path in rows:
+            if audio_id in done:
+                continue
+            clip = str(clips / str(path).rsplit("/", 1)[1])
+            record = {"audio_id": audio_id}
+            for key, op, handle, args in (
+                ("transcribe", "transcribe", shim_asr.handle, {"words": True}),
+                ("diarize", "diarize", shim_voices.handle, {"embed": True}),
+            ):
+                try:
+                    result = handle(op, {"audio": clip, **args})
+                    record[key] = {"ok": True, "result": result}
+                except (ValueError, OSError, RuntimeError) as err:
+                    record[key] = {"ok": False, "error": str(err)}
+            out.write(json.dumps(record) + "\n")
+            out.flush()
+            print(Path(clip).name, flush=True)
+
+
+def usable(vector: list[float] | None) -> list[float] | None:
+    """A span too short to embed comes back NaN, which ties every person: it is
+    unnamed, not a coin-flip."""
+    if vector is None or not all(math.isfinite(x) for x in vector):
+        return None
+    return vector
+
+
 def unit(vector: list[float]) -> list[float]:
     norm = math.sqrt(sum(x * x for x in vector)) + 1e-12
     return [x / norm for x in vector]
@@ -129,9 +178,8 @@ class Scored:
     kind: str
 
 
-def score(db_path: Path, work: Path, leave_out_clip: bool) -> None:
-    """Score both arms and print the report."""
-    db = open_ro(db_path)
+def load_prints(db: sqlite3.Connection) -> list[Print]:
+    """Every enrolled print, with the clip span it was made from where known."""
     began = {
         i: instant(s) for i, s in db.execute("SELECT id, start_utc FROM audio_segments")
     }
@@ -147,7 +195,7 @@ def score(db_path: Path, work: Path, leave_out_clip: bool) -> None:
             (instant(e) - began[aid]).total_seconds(),
         )
 
-    prints = [
+    return [
         Print(person, unit(json.loads(vector)), span(ta, ts, te) or span(ca, cs, ce))
         for person, vector, ta, ts, te, ca, cs, ce in db.execute(
             """SELECT s.name, e.vector, t.audio_segment_id, t.start_utc, t.end_utc,
@@ -157,6 +205,12 @@ def score(db_path: Path, work: Path, leave_out_clip: bool) -> None:
                LEFT JOIN corrections c ON c.id = e.source_correction_id"""
         )
     ]
+
+
+def score(db_path: Path, work: Path, leave_out_clip: bool) -> None:
+    """Score both arms and print the report."""
+    db = open_ro(db_path)
+    prints = load_prints(db)
 
     def name(
         vector: list[float], aid: int, a: float, b: float
@@ -192,45 +246,75 @@ def score(db_path: Path, work: Path, leave_out_clip: bool) -> None:
         )
     )
     arms: dict[str, list[Scored]] = defaultdict(list)
-    labelled_s = transcribed_s = 0.0
+    # Per arm, per clip: the spans it named, for the labelled-seconds metric.
+    named: dict[str, dict[int, list[tuple[float, float, str | None]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    truth: dict[int, list[tuple[float, float, str]]] = {}
+
+    def unit_truth(aid: int, a: float, b: float) -> str | None:
+        cover: defaultdict[str, float] = defaultdict(float)
+        for ta, tb, who in truth[aid]:
+            cover[who] += max(0.0, min(tb, b) - max(ta, a))
+        if not cover:
+            return None
+        who = max(cover, key=lambda person: cover[person])
+        return who if cover[who] >= 0.5 * (b - a) else None
+
+    def score_unit(
+        arm: str, aid: int, a: float, b: float, vector: list[float] | None
+    ) -> None:
+        vector = usable(vector)
+        guess = name(vector, aid, a, b) if vector is not None else (None, 0.0)
+        named[arm][aid].append((a, b, guess[0]))
+        want = unit_truth(aid, a, b)
+        if want is not None and vector is not None:
+            arms[arm].append(Scored(guess[0] == want, b - a, guess[1], kind[aid]))
+
     for line in (work / "extract.jsonl").open():
         record = json.loads(line)
         aid = record["audio_id"]
+        truth[aid] = [(t["start"], t["end"], label[t["id"]]) for t in record["turns"]]
         for t in record["turns"]:
-            if t["vector"] is not None:
-                guess, margin = name(t["vector"], aid, t["start"], t["end"])
-                arms["control: labelled turn span"].append(
-                    Scored(
-                        guess == label[t["id"]],
-                        t["end"] - t["start"],
-                        margin,
-                        kind[aid],
-                    )
-                )
-        for s in record["segments"]:
-            seconds = s["end"] - s["start"]
-            transcribed_s += seconds
-            cover: Counter[str] = Counter()
+            score_unit(CONTROL, aid, t["start"], t["end"], t["vector"])
+        for seg in record["segments"]:
+            score_unit(WHISPER, aid, seg["start"], seg["end"], seg["vector"])
+    aligned = work / "aligned.jsonl"
+    if aligned.exists():
+        for line in aligned.open():
+            record = json.loads(line)
+            aid = record["audio_id"]
+            if aid not in truth:
+                continue
+            voice = {v["speaker"]: v["vector"] for v in record["voices"]}
             for t in record["turns"]:
-                overlap = min(t["end"], s["end"]) - max(t["start"], s["start"])
-                cover[label[t["id"]]] += max(0.0, overlap)
-            if not cover or s["vector"] is None:
-                continue
-            truth, overlap = cover.most_common(1)[0]
-            if overlap < 0.5 * seconds:
-                continue
-            labelled_s += seconds
-            guess, margin = name(s["vector"], aid, s["start"], s["end"])
-            arms["A: Whisper segment"].append(
-                Scored(guess == truth, seconds, margin, kind[aid])
-            )
+                vector = voice.get(t["speaker"])
+                score_unit(PYANNOTE, aid, t["start"], t["end"], vector)
 
-    print(
-        f"{len(prints)} prints; labelled Whisper speech"
-        f" {labelled_s:.0f}s of {transcribed_s:.0f}s"
-    )
+    labelled_s = sum(b - a for turns in truth.values() for a, b, _ in turns)
+    print(f"{len(prints)} prints; {len(truth)} clips; {labelled_s:.0f}s labelled")
     for arm, rows in arms.items():
         report(arm, rows)
+        covered, right = named_right(truth, named[arm])
+        print(
+            f"  labelled speech: {covered / labelled_s:.0%} covered,"
+            f" {right / labelled_s:.0%} named right"
+        )
+
+
+def named_right(
+    truth: dict[int, list[tuple[float, float, str]]],
+    spans: dict[int, list[tuple[float, float, str | None]]],
+) -> tuple[float, float]:
+    """Seconds of labelled speech an arm named at all, and named right."""
+    covered = right = 0.0
+    for aid, turns in truth.items():
+        for ta, tb, who in turns:
+            for a, b, guess in spans.get(aid, []):
+                overlap = max(0.0, min(tb, b) - max(ta, a))
+                covered += overlap
+                right += overlap if guess == who else 0.0
+    return covered, right
 
 
 def report(arm: str, rows: list[Scored]) -> None:
@@ -272,6 +356,10 @@ def main() -> None:
     ex.add_argument("--db", type=Path, required=True)
     ex.add_argument("--clips", type=Path, required=True)
     ex.add_argument("--work", type=Path, required=True)
+    ep = sub.add_parser("extract-pyannote")
+    ep.add_argument("--db", type=Path, required=True)
+    ep.add_argument("--clips", type=Path, required=True)
+    ep.add_argument("--work", type=Path, required=True)
     sc = sub.add_parser("score")
     sc.add_argument("--db", type=Path, required=True)
     sc.add_argument("--work", type=Path, required=True)
@@ -279,6 +367,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "extract":
         extract(args.db, args.clips, args.work)
+    elif args.command == "extract-pyannote":
+        extract_pyannote(args.db, args.clips, args.work)
     else:
         score(args.db, args.work, args.leave_out == "clip")
 
