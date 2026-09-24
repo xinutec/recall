@@ -256,6 +256,39 @@ pub struct Config {
 }
 
 impl Config {
+    /// [`Self::from_env`] over the process environment. Every key is read here
+    /// by its literal name, so the deploy-env contract sees each read.
+    #[must_use]
+    pub fn from_process_env() -> Option<Self> {
+        let read = [
+            (
+                "RECALL_SESSION_SECRET",
+                std::env::var("RECALL_SESSION_SECRET").ok(),
+            ),
+            ("NC_CLIENT_ID", std::env::var("NC_CLIENT_ID").ok()),
+            ("NC_CLIENT_SECRET", std::env::var("NC_CLIENT_SECRET").ok()),
+            ("NC_BASE_URL", std::env::var("NC_BASE_URL").ok()),
+            ("NC_INTERNAL_URL", std::env::var("NC_INTERNAL_URL").ok()),
+            ("NC_REDIRECT_URI", std::env::var("NC_REDIRECT_URI").ok()),
+            (
+                "RECALL_ALLOWED_USERS",
+                std::env::var("RECALL_ALLOWED_USERS").ok(),
+            ),
+            (
+                "RECALL_DEVICE_TOKEN",
+                std::env::var("RECALL_DEVICE_TOKEN").ok(),
+            ),
+        ];
+        Self::from_env(&|key| {
+            let hit = read.iter().find(|(name, _)| *name == key);
+            debug_assert!(
+                hit.is_some(),
+                "from_env asks for {key}, which is not read above"
+            );
+            hit.and_then(|(_, value)| value.clone())
+        })
+    }
+
     /// The gate goes up only when the whole OAuth triple is present. A partial
     /// configuration means off, not an error: half a gate would refuse everyone.
     #[must_use]

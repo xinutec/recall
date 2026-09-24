@@ -143,12 +143,11 @@ fn main() -> ExitCode {
     // The browsing plane is mounted only when SSO is configured. Absent means
     // ABSENT, not open: these routes serve household transcripts, so an
     // unconfigured recalld must not answer them at all.
-    let webauth = recalld::webauth::Config::from_env(&|k| std::env::var(k).ok()).map(|cfg| {
-        recalld::webauth::GateState {
+    let webauth =
+        recalld::webauth::Config::from_process_env().map(|cfg| recalld::webauth::GateState {
             cfg: std::sync::Arc::new(cfg),
             now: std::sync::Arc::new(|| chrono::Utc::now().timestamp()),
-        }
-    });
+        });
     if webauth.is_some() {
         tracing::info!("browsing plane mounted behind the Nextcloud SSO gate");
     }
