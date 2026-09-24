@@ -69,12 +69,7 @@ pub fn run_once(conn: &mut Connection, limit: usize, now: &str) -> rusqlite::Res
         };
         let stored = turn.stored.as_ref().map(|(n, s)| (n.as_str(), *s));
         if worth_writing(stored, &guess) {
-            tx.execute(
-                "UPDATE transcript_segments
-                    SET speaker_guess = ?1, speaker_score = ?2, speaker_matched_utc = ?3
-                  WHERE id = ?4",
-                rusqlite::params![guess.person, guess.score, now, turn.id],
-            )?;
+            crate::turn_store::set_match(&tx, turn.id, &guess.person, guess.score, now)?;
             pass.rewritten += 1;
         } else {
             stamp(&tx, turn.id, now)?;
@@ -86,11 +81,7 @@ pub fn run_once(conn: &mut Connection, limit: usize, now: &str) -> rusqlite::Res
 }
 
 fn stamp(conn: &Connection, id: i64, now: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE transcript_segments SET speaker_matched_utc = ?1 WHERE id = ?2",
-        rusqlite::params![now, id],
-    )?;
-    Ok(())
+    crate::turn_store::stamp_matched(conn, id, now)
 }
 
 /// Turns with an embedding whose guess predates the newest enrolment.

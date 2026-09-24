@@ -2,6 +2,7 @@
 //! the mounting rules: invariants that hold everywhere, including a fresh clone.
 
 use recalld::reads;
+use recalld::turn_store::Stage;
 use rusqlite::Connection;
 
 /// A hand-copied subset of the `recall.sqlite` tables these routes read.
@@ -162,7 +163,7 @@ fn the_tier_badge_reports_how_much_processing_a_turn_has_had() {
         ],
     );
 
-    let tiers: Vec<&str> = reads::timeline(&conn, 50, None)
+    let tiers: Vec<Stage> = reads::timeline(&conn, 50, None)
         .expect("timeline")
         .items
         .iter()
@@ -170,7 +171,13 @@ fn the_tier_badge_reports_how_much_processing_a_turn_has_had() {
         .collect();
     assert_eq!(
         tiers,
-        ["corrected", "live", "diarized", "transcribed", "diarized"]
+        [
+            Stage::Corrected,
+            Stage::Live,
+            Stage::Diarized,
+            Stage::Transcribed,
+            Stage::Diarized
+        ]
     );
 }
 

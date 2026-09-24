@@ -156,11 +156,7 @@ pub fn record(
         ],
     )?;
     if let Some(guess) = guess {
-        conn.execute(
-            "UPDATE transcript_segments SET speaker_guess = ?1, speaker_score = ?2
-             WHERE id = ?3",
-            rusqlite::params![guess.person, guess.score, turn_id],
-        )?;
+        crate::turn_store::set_guess(conn, turn_id, &guess.person, guess.score)?;
     }
     Ok(())
 }

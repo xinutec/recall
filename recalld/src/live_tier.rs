@@ -11,8 +11,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// The transcripts written by the instant tier rather than an archive pass.
-const LIVE_MODEL: &str = "live";
+use crate::turn_store::LIVE_MODEL;
 
 /// The numbers the doctor's live checks are computed from.
 ///

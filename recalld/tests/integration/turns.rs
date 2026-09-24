@@ -170,7 +170,8 @@ fn block_start_from(filename: &str) -> Option<chrono::DateTime<Utc>> {
 
 // ---- the write plan: the rules that can destroy a person's typed words ----
 
-use recalld::turns::{Corrected, Standing, plan};
+use recalld::turn_store::Protected;
+use recalld::turns::{Standing, plan};
 
 fn t(s: &str) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339(s)
@@ -200,7 +201,7 @@ fn a_room_turn_over_a_corrected_span_is_refused_with_a_reason() {
     let out = plan(
         vec![room_turn(A, B, "what the model heard")],
         &[],
-        &[Corrected {
+        &[Protected {
             start: t(A),
             end: t(B),
         }],
@@ -241,7 +242,7 @@ fn a_corrected_per_mic_turn_is_never_hidden_even_when_covered() {
                 end: t(D),
             }, // plain machine turn
         ],
-        &[Corrected {
+        &[Protected {
             start: t(A),
             end: t(B),
         }],
@@ -260,7 +261,7 @@ fn nothing_inserted_means_nothing_hidden() {
             start: t(A),
             end: t(B),
         }],
-        &[Corrected {
+        &[Protected {
             start: t(A),
             end: t(B),
         }],
@@ -369,7 +370,7 @@ fn a_touching_boundary_does_not_count_as_overlap() {
     let out = plan(
         vec![room_turn(A, B, "before the correction")],
         &[],
-        &[Corrected {
+        &[Protected {
             start: t(B),
             end: t(C),
         }],
@@ -534,7 +535,8 @@ fn a_blob_lives_under_root_ingest_source_not_root_source() {
 
 // ---- the write itself ----
 
-use recalld::turns::{COVERED_BY_ROOM, ROOM, write_block};
+use recalld::turn_store::HiddenReason;
+use recalld::turns::{ROOM, write_block};
 
 fn meaning_with_turns() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().expect("db");
@@ -641,7 +643,7 @@ fn hiding_names_a_reason_a_reader_can_act_on() {
             |r| r.get(0),
         )
         .expect("hidden");
-    assert_eq!(reason, COVERED_BY_ROOM);
+    assert_eq!(reason, HiddenReason::CoveredByRoom.to_string());
 }
 
 #[test]

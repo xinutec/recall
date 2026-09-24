@@ -8,7 +8,9 @@
 
 use crate::align::AlignedTurn;
 use crate::quality::is_repetition_loop;
+use crate::turn_store::{self, HiddenReason, NewTurn, Protected, Provenance};
 use chrono::{DateTime, Duration, Utc};
+use std::borrow::Cow;
 
 /// Languages spoken in the archive. A whole-block detection outside this set is
 /// the model hallucinating on unclear audio: the turns are kept but their
@@ -35,13 +37,6 @@ pub struct Existing {
     /// The stored `word_timings`, verbatim. Without them a turn can only be
     /// labelled, not divided between speakers.
     pub word_timings: Option<String>,
-}
-
-/// A span a person has corrected, in absolute time.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Corrected {
-    pub start: DateTime<Utc>,
-    pub end: DateTime<Utc>,
 }
 
 /// Why a swap was declined. Each names its arithmetic, because the refusal is
@@ -255,7 +250,7 @@ pub fn decide(
     block_start: DateTime<Utc>,
     aligned: Vec<AlignedTurn>,
     existing: &[Existing],
-    human: &[Corrected],
+    human: &[Protected],
 ) -> Swap {
     if aligned.is_empty() {
         return Swap::Keep(Refusal::NothingAligned);
@@ -511,10 +506,7 @@ fn attribute(
     let tx = conn.transaction()?;
     let mut named = 0;
     for (id, speaker) in to {
-        tx.execute(
-            "UPDATE transcript_segments SET speaker_cluster = ?1 WHERE id = ?2",
-            rusqlite::params![speaker, id],
-        )?;
+        turn_store::set_cluster(&tx, *id, speaker)?;
         // The voiceprint of this turn's speaker, not the block's: several
         // speakers can be named in one pass.
         if let Some(print) = prints.iter().find(|p| p.speaker == *speaker) {
@@ -561,11 +553,7 @@ pub fn apply(
     let trusted = reliable_language(language);
     let tx = conn.transaction()?;
     for id in hide {
-        tx.execute(
-            "UPDATE transcript_segments SET hidden_reason = ?1
-             WHERE id = ?2 AND hidden_reason IS NULL",
-            (hidden_reason, id),
-        )?;
+        turn_store::hide(&tx, *id, hidden_reason)?;
     }
     let mut written = 0;
     for turn in insert {
@@ -583,43 +571,35 @@ pub fn apply(
         // From `rebased`, not the shim's array: the rate rule reads the stored,
         // turn-relative encoding.
         let spans: Vec<(f64, f64)> = rebased.iter().map(|w| (w.s, w.e)).collect();
-        tx.execute(
-            "INSERT INTO transcript_segments
-                 (audio_segment_id, start_utc, end_utc, text, language,
-                  asr_confidence, asr_model, speaker_cluster, provenance,
-                  word_timings, created_utc)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            rusqlite::params![
-                audio_segment_id,
-                instant::python_isoformat_utc(at(block_start, turn.start)),
-                instant::python_isoformat_utc(at(block_start, turn.end)),
-                turn.text,
+        // Zero the confidence for an unexpected block language, a foreign
+        // script, or implausibly slow speech; the turn is kept. The script check
+        // catches the model contradicting its own `nl`/`en` label.
+        let confidence = if trusted
+            && !crate::quality::is_foreign_script(&turn.text)
+            && !crate::quality::is_implausibly_slow(&spans)
+        {
+            turn.confidence
+        } else {
+            0.0
+        };
+        let words = serde_json::to_string(&rebased)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+        let id = turn_store::insert(
+            &tx,
+            &NewTurn {
+                audio_segment_id: Some(audio_segment_id),
+                start_utc: &instant::python_isoformat_utc(at(block_start, turn.start)),
+                end_utc: &instant::python_isoformat_utc(at(block_start, turn.end)),
+                text: &turn.text,
                 language,
-                // Zero the confidence for an unexpected block language, a
-                // foreign script, or implausibly slow speech; the turn is kept.
-                // The script check catches the model contradicting its own
-                // `nl`/`en` label.
-                if trusted
-                    && !crate::quality::is_foreign_script(&turn.text)
-                    && !crate::quality::is_implausibly_slow(&spans)
-                {
-                    turn.confidence
-                } else {
-                    0.0
-                },
-                model,
-                turn.speaker,
-                provenance,
-                serde_json::to_string(&rebased).unwrap_or_else(|_| "[]".to_owned()),
-                now,
-            ],
-        )?;
-        let id = tx.last_insert_rowid();
-        // ⚠ `transcript_fts` is contentless FTS5, maintained here. Forgetting it
-        // fails nothing; the text is just unsearchable.
-        tx.execute(
-            "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
-            (id, &turn.text),
+                asr_confidence: Some(confidence),
+                asr_model: Some(model),
+                speaker_cluster: Some(&turn.speaker),
+                provenance: Some(provenance.clone()),
+                word_timings: Some(&words),
+                created_utc: Some(now),
+                ..NewTurn::default()
+            },
         )?;
         // ⚠ In the same transaction as the turn: `rematch::run_once` reads
         // `transcript_embeddings`, so a turn without its embedding can never be
@@ -647,9 +627,9 @@ pub struct Block<'a> {
     pub language: Option<&'a str>,
     pub model: &'a str,
     /// The stream's reversal key — see [`Stream::provenance`].
-    pub provenance: &'a str,
+    pub provenance: &'a Provenance,
     /// What this pass records on the turns it supersedes.
-    pub hidden_reason: &'a str,
+    pub hidden_reason: &'a HiddenReason,
     pub now: &'a str,
 }
 
@@ -667,8 +647,8 @@ pub struct Named<'a> {
 /// The machine turns standing on a block, and the spans a person has corrected
 /// inside it: the two things [`decide`] needs from the database.
 ///
-/// ⚠ Human turns are excluded: they are never hidden, and counting them would
-/// let the coverage guard treat a person's words as something to replace.
+/// ⚠ Turns a person owns are excluded: they are never hidden, and counting them
+/// would let the coverage guard treat a person's work as something to replace.
 ///
 /// # Errors
 /// If the database refuses.
@@ -676,11 +656,12 @@ pub fn standing(
     conn: &rusqlite::Connection,
     audio_segment_id: i64,
 ) -> rusqlite::Result<Vec<Existing>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT id, text, start_utc, end_utc, word_timings FROM transcript_segments
          WHERE audio_segment_id = ?1 AND superseded_by IS NULL
-           AND hidden_reason IS NULL AND asr_model <> 'human'",
-    )?;
+           AND hidden_reason IS NULL AND NOT {HUMAN_OWNED}",
+        HUMAN_OWNED = turn_store::HUMAN_OWNED,
+    ))?;
     let rows = stmt.query_map([audio_segment_id], |r| {
         Ok((
             r.get::<_, i64>(0)?,
@@ -711,43 +692,6 @@ pub fn standing(
     Ok(out)
 }
 
-/// Every corrected span overlapping `[from, to)`.
-///
-/// # Errors
-/// If the database refuses. A stored instant that will not parse is skipped
-/// rather than defaulted: a span at the epoch would protect nothing.
-pub fn corrections(
-    conn: &rusqlite::Connection,
-    from: DateTime<Utc>,
-    to: DateTime<Utc>,
-) -> rusqlite::Result<Vec<Corrected>> {
-    let mut stmt = conn.prepare(
-        "SELECT start_utc, end_utc FROM corrections
-         WHERE start_utc < ?2 AND end_utc > ?1",
-    )?;
-    let rows = stmt.query_map(
-        rusqlite::params![
-            instant::python_isoformat_utc(from),
-            instant::python_isoformat_utc(to)
-        ],
-        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-    )?;
-    let mut out = Vec::new();
-    for row in rows {
-        let (start, end) = row?;
-        if let (Ok(start), Ok(end)) = (
-            DateTime::parse_from_rfc3339(&start),
-            DateTime::parse_from_rfc3339(&end),
-        ) {
-            out.push(Corrected {
-                start: start.with_timezone(&Utc),
-                end: end.with_timezone(&Utc),
-            });
-        }
-    }
-    Ok(out)
-}
-
 // --- the pass ----------------------------------------------------------------
 
 /// Which stream a diarized pass refines, and what differs between streams.
@@ -756,7 +700,7 @@ pub fn corrections(
 /// ⚠ A `Stream` is the unit of reversal, like `turns::Stream`: `provenance` must
 /// name exactly the rows one pass wrote. The reversal in `main.rs` matches it
 /// exactly, not with `LIKE`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stream<'a> {
     /// The queue kind whose stored speaker spans this pass interprets.
     pub diarize_kind: &'a str,
@@ -765,16 +709,12 @@ pub struct Stream<'a> {
     /// What written rows record in `asr_model`.
     pub model: &'a str,
     /// What they record in `provenance`: the reversal key, naming this pass
-    /// alone.
-    ///
-    /// ⚠ Keep the `diarized-aligned` prefix: `reads`, `audio` and `assign` test
-    /// the `diarized` prefix, and without it these turns read as un-diarized.
-    /// Do not use `diarized-aligned (<model>)`: older rows already carry that
-    /// string with the same model name, and a reversal could not tell them apart.
-    pub provenance: &'a str,
-    /// What the turns it supersedes record in `hidden_reason`. Unique for the same
-    /// reason: un-hiding what this pass hid must not disturb anything else.
-    pub hidden_reason: &'a str,
+    /// alone. Not `DiarizedAligned(<model>)`: older rows carry that with the same
+    /// model name, and a reversal could not tell them apart.
+    pub provenance: Provenance,
+    /// What the turns it supersedes record. Unique for the same reason: un-hiding
+    /// what this pass hid must not disturb anything else.
+    pub hidden_reason: HiddenReason,
 }
 
 /// One microphone's clip.
@@ -786,8 +726,8 @@ pub const PER_MIC: Stream<'static> = Stream {
     diarize_kind: crate::queue::DIARIZE_SEGMENT,
     transcribe_kind: crate::queue::TRANSCRIBE_SEGMENT,
     model: crate::turns::SHIM_MODEL,
-    provenance: "diarized-aligned (per-mic runner)",
-    hidden_reason: "diarized (per-mic runner)",
+    provenance: Provenance::DiarizedAligned(Cow::Borrowed("per-mic runner")),
+    hidden_reason: HiddenReason::DiarizedBy(Cow::Borrowed("per-mic runner")),
 };
 
 /// The derived room stream. ⚠ Its writer is off.
@@ -800,8 +740,8 @@ pub const ROOM: Stream<'static> = Stream {
     diarize_kind: crate::queue::DIARIZE_ROOM,
     transcribe_kind: crate::queue::TRANSCRIBE_ROOM,
     model: crate::turns::ROOM_MODEL,
-    provenance: "diarized-aligned (room runner)",
-    hidden_reason: "diarized (room runner)",
+    provenance: Provenance::DiarizedAligned(Cow::Borrowed("room runner")),
+    hidden_reason: HiddenReason::DiarizedBy(Cow::Borrowed("room runner")),
 };
 
 /// What one diarized pass did.
@@ -933,7 +873,7 @@ pub fn write_pass(
         let block_end = DateTime::parse_from_rfc3339(&end_raw)
             .map_or_else(|_| at(block_start, 0.0), |t| t.with_timezone(&Utc));
         let existing = standing(meaning, audio_id)?;
-        let human = corrections(meaning, block_start, block_end)?;
+        let human = turn_store::protected_between(meaning, block_start, block_end)?;
         let aligned = assign_words_to_speakers(&words, &speakers, crate::align::MIN_TURN_S);
         let swap = decide(block_start, aligned, &existing, &human);
         pass.blocks += 1;
@@ -959,8 +899,8 @@ pub fn write_pass(
                     start: block_start,
                     language: language.as_deref(),
                     model,
-                    provenance: stream.provenance,
-                    hidden_reason: stream.hidden_reason,
+                    provenance: &stream.provenance,
+                    hidden_reason: &stream.hidden_reason,
                     now,
                 };
                 pass.turns += write_replacement(meaning, &swap, &block, &prints, &enrolled)?;

@@ -425,11 +425,12 @@ fn spawn_diarized_writer(root: PathBuf, stream: recalld::diarized::Stream<'stati
     tokio::spawn(async move {
         loop {
             let pass_root = root.clone();
+            let pass_stream = stream.clone();
             let done = tokio::task::spawn_blocking(move || {
                 let ingest = recalld::store::open(&pass_root)?;
                 let mut meaning = recalld::work::open_write(&pass_root)?;
                 let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
-                recalld::diarized::write_pass(&mut meaning, &ingest, &stream, &now, BATCH)
+                recalld::diarized::write_pass(&mut meaning, &ingest, &pass_stream, &now, BATCH)
             })
             .await;
             match done {
@@ -541,11 +542,12 @@ fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
     tokio::spawn(async move {
         loop {
             let pass_root = root.clone();
+            let pass_stream = stream.clone();
             let done = tokio::task::spawn_blocking(move || {
                 let ingest = recalld::store::open(&pass_root)?;
                 let mut meaning = recalld::work::open_write(&pass_root)?;
                 let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
-                recalld::turns::write_pass(&mut meaning, &ingest, &stream, &now, BATCH)
+                recalld::turns::write_pass(&mut meaning, &ingest, &pass_stream, &now, BATCH)
             })
             .await;
             match done {
@@ -554,7 +556,7 @@ fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
                 // one saying the audio is bad.
                 Ok(Ok(pass)) if pass.turns + pass.hidden + pass.refused + pass.swept > 0 => {
                     tracing::info!(
-                        stream = stream.provenance,
+                        stream = %stream.provenance,
                         blocks = pass.blocks,
                         turns = pass.turns,
                         hidden = pass.hidden,
@@ -566,9 +568,11 @@ fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
                 }
                 Ok(Ok(_)) => {}
                 Ok(Err(err)) => {
-                    tracing::warn!(%err, stream = stream.provenance, "turns: pass failed");
+                    tracing::warn!(%err, stream = %stream.provenance, "turns: pass failed");
                 }
-                Err(err) => tracing::error!(%err, stream = stream.provenance, "turns: task failed"),
+                Err(err) => {
+                    tracing::error!(%err, stream = %stream.provenance, "turns: task failed");
+                }
             }
             tokio::time::sleep(EVERY).await;
         }

@@ -39,6 +39,7 @@ pub mod speech;
 pub mod store;
 pub mod sync;
 pub mod tokens;
+pub mod turn_store;
 pub mod turns;
 pub mod upload;
 pub mod webauth;

@@ -193,14 +193,7 @@ pub fn name_voice(
     cluster: &str,
     name: Option<&str>,
 ) -> rusqlite::Result<usize> {
-    conn.execute(
-        "UPDATE transcript_segments SET speaker_label = ?1 WHERE id IN ( \
-             SELECT ts.id FROM transcript_segments ts \
-             JOIN audio_segments a ON a.id = ts.audio_segment_id \
-             WHERE a.source_id = ?2 AND ts.speaker_cluster = ?3 \
-               AND ts.superseded_by IS NULL)",
-        (name, source, cluster),
-    )
+    crate::turn_store::label_voice(conn, source, cluster, name)
 }
 
 // --- the transcript export --------------------------------------------------
@@ -463,10 +456,7 @@ pub fn delete_session(
             "DELETE FROM corrections WHERE audio_segment_id = ?1",
             [audio_id],
         )?;
-        tx.execute(
-            "DELETE FROM transcript_segments WHERE audio_segment_id = ?1",
-            [audio_id],
-        )?;
+        crate::turn_store::delete_for_audio(&tx, *audio_id)?;
     }
     tx.execute("DELETE FROM refine_requests WHERE source_id = ?1", [source])?;
     tx.execute("DELETE FROM audio_segments WHERE source_id = ?1", [source])?;

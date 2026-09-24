@@ -5,7 +5,7 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use recalld::align::{AlignedTurn, Word};
 use recalld::diarized::{
-    COVERAGE_REF_MIN_CHARS, Corrected, Existing, Refusal, Swap, decide, reliable_language,
+    COVERAGE_REF_MIN_CHARS, Existing, Refusal, Swap, decide, reliable_language,
 };
 
 fn base() -> DateTime<Utc> {
@@ -274,7 +274,7 @@ fn a_pass_that_aligns_nothing_keeps_what_is_there() {
 /// text stands.
 #[test]
 fn a_turn_inside_a_human_corrected_span_is_dropped() {
-    let human = [Corrected {
+    let human = [recalld::turn_store::Protected {
         start: base() + TimeDelta::seconds(1),
         end: base() + TimeDelta::seconds(3),
     }];
@@ -301,7 +301,7 @@ fn a_turn_inside_a_human_corrected_span_is_dropped() {
 /// never an empty block.
 #[test]
 fn a_block_entirely_inside_a_human_span_is_kept_not_emptied() {
-    let human = [Corrected {
+    let human = [recalld::turn_store::Protected {
         start: base(),
         end: base() + TimeDelta::seconds(60),
     }];
@@ -705,9 +705,9 @@ fn a_finished_diarization_replaces_the_room_turns_with_speaker_split_ones() {
             |r| r.get(0),
         )
         .expect("old turn still there");
-    assert_eq!(hidden.as_deref(), Some(ROOM.hidden_reason));
+    assert_eq!(hidden, Some(ROOM.hidden_reason.to_string()));
 
-    // The new ones carry the speaker and the provenance prefix readers test for.
+    // The new ones carry the speaker and a provenance the stage reads as diarized.
     let mut stmt = meaning
         .prepare(
             "SELECT text, speaker_cluster, provenance, word_timings FROM transcript_segments
@@ -722,11 +722,9 @@ fn a_finished_diarization_replaces_the_room_turns_with_speaker_split_ones() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].1, "SPEAKER_00");
     assert_eq!(rows[1].1, "SPEAKER_01");
-    assert!(
-        rows[0].2.starts_with("diarized-aligned"),
-        "three readers test this prefix: {}",
-        rows[0].2
-    );
+    let provenance: recalld::turn_store::Provenance =
+        rows[0].2.parse().expect("a known provenance");
+    assert!(provenance.is_diarized(), "{provenance}");
 
     // The stored word shape, checked as JSON: {s,e,w} is what the readers and
     // the boundary editor expect.
@@ -861,6 +859,34 @@ fn a_corrected_block_is_left_alone() {
     assert_eq!(hidden, None);
 }
 
+/// A name a person gave is theirs as much as a correction is: the pass must
+/// neither hide the turn nor write over its span.
+#[test]
+fn a_block_a_person_named_is_left_alone() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let mut meaning = meaning_plane(dir.path());
+    let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
+    let old = room_turn(&meaning, "een twee");
+    meaning
+        .execute(
+            "UPDATE transcript_segments SET speaker_label = 'Alex' WHERE id = ?1",
+            [old],
+        )
+        .expect("named");
+
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+
+    assert_eq!((pass.turns, pass.hidden), (0, 0));
+    let standing: i64 = meaning
+        .query_row(
+            "SELECT count(*) FROM transcript_segments WHERE hidden_reason IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(standing, 1, "the named turn, and nothing written over it");
+}
+
 /// A diarize job whose transcription has not finished has no words to align,
 /// so it waits rather than being retired.
 #[test]
@@ -967,8 +993,7 @@ fn mic_meaning(path: &std::path::Path) -> Connection {
     conn
 }
 
-/// A microphone clip's existing turn is superseded by speaker-split ones, with
-/// the provenance prefix readers test for.
+/// A microphone clip's existing turn is superseded by speaker-split ones.
 #[test]
 fn a_microphone_clips_turns_are_replaced_by_speaker_split_ones() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1017,7 +1042,7 @@ fn a_per_mic_turn_keeps_the_corpus_model_name_and_is_reversible_by_provenance() 
     assert_eq!(model, recalld::turns::SHIM_MODEL);
     // …while the provenance names this pass, so a reversal takes only its rows,
     // not those marked `diarized-aligned (<model>)`.
-    assert_eq!(provenance, PER_MIC.provenance);
+    assert_eq!(provenance, PER_MIC.provenance.to_string());
     assert_ne!(
         provenance,
         format!("diarized-aligned ({})", recalld::turns::SHIM_MODEL),
@@ -1065,13 +1090,10 @@ fn the_two_streams_write_provenances_that_cannot_match_each_other() {
     // itself tests its own copy.
     assert_ne!(PER_MIC.provenance, ROOM.provenance);
     assert_ne!(PER_MIC.hidden_reason, ROOM.hidden_reason);
-    for p in [PER_MIC.provenance, ROOM.provenance] {
-        assert!(
-            p.starts_with("diarized-aligned"),
-            "three readers test this prefix: {p}"
-        );
+    for p in [&PER_MIC.provenance, &ROOM.provenance] {
+        assert!(p.is_diarized(), "{p}");
         assert_ne!(
-            p,
+            p.to_string(),
             format!("diarized-aligned ({})", recalld::turns::SHIM_MODEL),
             "the older pass's string — a reversal could not tell the passes apart"
         );

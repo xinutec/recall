@@ -16,6 +16,7 @@
 //! Hiding is not safer than deleting: a hidden row is still in `transcript_fts`,
 //! still counted, and still seen by supersession.
 
+use crate::turn_store::{self, HiddenReason, NewTurn, Protected, Provenance};
 use audiocore::instant;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -114,13 +115,6 @@ pub struct Standing {
     pub end: DateTime<Utc>,
 }
 
-/// A span a person has corrected: the one thing not re-derivable from audio.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Corrected {
-    pub start: DateTime<Utc>,
-    pub end: DateTime<Utc>,
-}
-
 /// What a write would do, decided before anything is written.
 #[derive(Debug, Default, PartialEq)]
 pub struct Plan {
@@ -157,7 +151,7 @@ fn overlaps(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)
 /// also keeps room turns comparable with the per-mic corpus, which is swept of
 /// the same junk.
 #[must_use]
-pub fn plan(room: Vec<RoomTurn>, standing: &[Standing], human: &[Corrected]) -> Plan {
+pub fn plan(room: Vec<RoomTurn>, standing: &[Standing], human: &[Protected]) -> Plan {
     let hits_human = |span: (DateTime<Utc>, DateTime<Utc>)| {
         human.iter().any(|c| overlaps(span, (c.start, c.end)))
     };
@@ -466,22 +460,8 @@ fn registered_minutes(
     rows.collect()
 }
 
-/// Marks a per-mic turn hidden because a room turn now covers its minute.
-///
-/// A reason rather than a flag, so a reader can see why a turn is hidden.
-pub const COVERED_BY_ROOM: &str = "covered by the room stream";
-
-/// Marks a provisional LIVE turn hidden because the archive pass has reached it.
-///
-/// ⚠ The meaning-schema migrations write the same literal; a second spelling
-/// would make some hidden turns unfindable.
-pub const LIVE_RECONCILED: &str = "live-reconciled";
-
 /// Apply a [`Plan`] to one block in one transaction: the turns, their search
 /// rows and the hides land together or not at all.
-///
-/// ⚠ `transcript_fts` has no trigger; the writer inserts into it by hand.
-/// Forgetting fails nothing and leaves the text unsearchable.
 ///
 /// Idempotent by refusing: a block whose audio segment already carries turns is
 /// left alone and the caller gets `Ok(0)`, so a second pass neither duplicates
@@ -512,65 +492,48 @@ pub fn write_block(
     }
     let mut written = 0;
     for turn in &plan.insert {
-        tx.execute(
-            "INSERT INTO transcript_segments
-                 (audio_segment_id, start_utc, end_utc, text, language,
-                  language_confidence, asr_confidence, asr_model, provenance,
-                  word_timings, created_utc)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10)",
-            rusqlite::params![
-                audio_segment_id,
-                instant::python_isoformat_utc(turn.start),
-                instant::python_isoformat_utc(turn.end),
-                turn.text,
-                turn.language,
-                // Implausibly slow speech zeroes the confidence, as in
-                // `diarized`; `word_spans` reads both timing encodings.
-                turn.word_timings
-                    .as_deref()
-                    .map_or(turn.confidence, |timings| {
-                        if crate::quality::is_implausibly_slow(&crate::quality::word_spans(timings))
-                        {
-                            Some(0.0)
-                        } else {
-                            turn.confidence
-                        }
-                    }),
-                stream.model,
-                stream.provenance,
-                turn.word_timings,
-                now,
-            ],
-        )?;
-        let id = tx.last_insert_rowid();
-        tx.execute(
-            "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
-            (id, &turn.text),
+        let (start, end) = (
+            instant::python_isoformat_utc(turn.start),
+            instant::python_isoformat_utc(turn.end),
+        );
+        // Implausibly slow speech zeroes the confidence, as in `diarized`;
+        // `word_spans` reads both timing encodings.
+        let confidence = match turn.word_timings.as_deref() {
+            Some(timings)
+                if crate::quality::is_implausibly_slow(&crate::quality::word_spans(timings)) =>
+            {
+                Some(0.0)
+            }
+            _ => turn.confidence,
+        };
+        turn_store::insert(
+            &tx,
+            &NewTurn {
+                audio_segment_id: Some(audio_segment_id),
+                start_utc: &start,
+                end_utc: &end,
+                text: &turn.text,
+                language: turn.language.as_deref(),
+                asr_confidence: confidence,
+                asr_model: Some(stream.model),
+                provenance: Some(stream.provenance.clone()),
+                word_timings: turn.word_timings.as_deref(),
+                created_utc: Some(now),
+                ..NewTurn::default()
+            },
         )?;
         written += 1;
     }
     if stream.reconciles_live {
-        // By span, not audio segment: a live turn has no `audio_segment_id`,
-        // so only its start time relates it to this clip.
         let (from, to) = span;
-        tx.execute(
-            "UPDATE transcript_segments SET hidden_reason = ?1
-             WHERE asr_model = 'live' AND superseded_by IS NULL
-               AND hidden_reason IS NULL
-               AND start_utc >= ?2 AND start_utc < ?3",
-            rusqlite::params![
-                LIVE_RECONCILED,
-                instant::python_isoformat_utc(from),
-                instant::python_isoformat_utc(to),
-            ],
+        turn_store::reconcile_live(
+            &tx,
+            &instant::python_isoformat_utc(from),
+            &instant::python_isoformat_utc(to),
         )?;
     }
     for hidden in &plan.hide {
-        tx.execute(
-            "UPDATE transcript_segments SET hidden_reason = ?1
-             WHERE id = ?2 AND hidden_reason IS NULL",
-            (COVERED_BY_ROOM, hidden),
-        )?;
+        turn_store::hide(&tx, *hidden, &HiddenReason::CoveredByRoom)?;
     }
     tx.commit()?;
     Ok(written)
@@ -581,13 +544,12 @@ pub fn write_block(
 /// ⚠ A `Stream` is the unit of reversal: `DELETE FROM transcript_segments WHERE
 /// provenance = '<stream>'` must name exactly the rows its passes wrote, so
 /// `provenance` must be unique per stream and never NULL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stream<'a> {
     /// The queue job kind whose stored results this pass interprets.
     pub kind: &'a str,
-    /// What the written rows record in `transcript_segments.provenance`: the
-    /// reversal key.
-    pub provenance: &'a str,
+    /// What the written rows record in `provenance`: the reversal key.
+    pub provenance: Provenance,
     /// What they record in `asr_model`.
     pub model: &'a str,
     /// Whether writing turns for a clip also hides the provisional live turns
@@ -607,7 +569,7 @@ pub struct Stream<'a> {
 /// The derived one-microphone-per-minute stream (`transcribe-room`).
 pub const ROOM: Stream<'static> = Stream {
     kind: crate::queue::TRANSCRIBE_ROOM,
-    provenance: "room",
+    provenance: Provenance::Room,
     model: ROOM_MODEL,
     // The room stream is derived from microphones whose own pass reconciles the
     // live turns; doing it again would make the reversal ambiguous.
@@ -630,7 +592,7 @@ pub const SHIM_MODEL: &str = "mlx-community/whisper-large-v3-turbo";
 /// `asr_model` must not split it by writer. `provenance` says who wrote them.
 pub const PER_MIC: Stream<'static> = Stream {
     kind: crate::queue::TRANSCRIBE_SEGMENT,
-    provenance: "per-mic (runner)",
+    provenance: Provenance::PerMic,
     model: SHIM_MODEL,
     // This is the archive pass, so it reconciles live turns.
     reconciles_live: true,
@@ -786,7 +748,7 @@ pub fn write_pass(
         } else {
             Vec::new()
         };
-        let human = corrected_between(meaning, block_start, block_end)?;
+        let human = turn_store::protected_between(meaning, block_start, block_end)?;
         let decided = plan(turns, &standing, &human);
         pass.refused += decided.refused.len();
         pass.swept += decided.swept;
@@ -834,32 +796,6 @@ fn standing_between(
                 id: r.get(0)?,
                 start: parse_stamp(&r.get::<_, String>(1)?),
                 end: parse_stamp(&r.get::<_, String>(2)?),
-            })
-        },
-    )?;
-    rows.collect()
-}
-
-/// The corrected spans overlapping a span. `plan` checks the overlap again
-/// rather than trusting the SQL: this is the set whose loss is permanent.
-fn corrected_between(
-    conn: &rusqlite::Connection,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-) -> rusqlite::Result<Vec<Corrected>> {
-    let mut stmt = conn.prepare(
-        "SELECT start_utc, end_utc FROM corrections
-         WHERE start_utc < ?2 AND end_utc > ?1",
-    )?;
-    let rows = stmt.query_map(
-        rusqlite::params![
-            instant::python_isoformat_utc(start),
-            instant::python_isoformat_utc(end),
-        ],
-        |r| {
-            Ok(Corrected {
-                start: parse_stamp(&r.get::<_, String>(0)?),
-                end: parse_stamp(&r.get::<_, String>(1)?),
             })
         },
     )?;

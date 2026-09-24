@@ -9,20 +9,11 @@
 //! therefore drops its embedding, to be re-enrolled under the new name.
 
 use crate::route;
+use crate::turn_store::{self, HUMAN_MODEL, NewTurn, Provenance};
 use rusqlite::{Connection, Transaction};
 
-/// `asr_model` of a turn a person authored.
-const HUMAN_MODEL: &str = "human";
 /// Why a correction was hidden from the corpus by a human in review.
 const HIDE_REASON: &str = "review";
-
-/// Provenance stamped on the human turn that replaced `original_id`.
-///
-/// Written by [`apply_correction`] and matched by [`set_correction_speaker`]
-/// to find that live turn again.
-fn human_correction_provenance(original_id: i64) -> String {
-    format!("human correction of #{original_id}")
-}
 
 fn drop_voiceprint(tx: &Transaction, correction_id: i64) -> rusqlite::Result<()> {
     tx.execute(
@@ -56,11 +47,7 @@ pub fn set_correction_speaker(
         (speaker, correction_id),
     )?;
     if let Some(original) = original {
-        tx.execute(
-            "UPDATE transcript_segments SET speaker_label = ?1 \
-             WHERE provenance = ?2 AND asr_model = ?3 AND superseded_by IS NULL",
-            (speaker, human_correction_provenance(original), HUMAN_MODEL),
-        )?;
+        turn_store::label_correction(&tx, original, speaker)?;
     }
     drop_voiceprint(&tx, correction_id)?;
     tx.commit()
@@ -259,39 +246,28 @@ pub fn apply_correction(
     // A speaker given here wins; otherwise the turn keeps the name it had.
     let speaker_label = edit.speaker.map(str::to_owned).or(old.speaker_label);
 
-    tx.execute(
-        "INSERT INTO transcript_segments \
-            (audio_segment_id, start_utc, end_utc, text, language, language_confidence, \
-             asr_confidence, asr_model, speaker_label, speaker_id, speaker_cluster, \
-             provenance, created_utc) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        rusqlite::params![
-            old.audio_segment_id,
-            start,
-            end,
+    let new_id = turn_store::insert(
+        &tx,
+        &NewTurn {
+            audio_segment_id: old.audio_segment_id,
+            start_utc: start,
+            end_utc: end,
             text,
-            language,
-            old.language_confidence,
-            HUMAN_CONFIDENCE,
-            HUMAN_MODEL,
-            speaker_label,
-            old.speaker_id,
+            language: language.as_deref(),
+            language_confidence: old.language_confidence,
+            asr_confidence: Some(HUMAN_CONFIDENCE),
+            asr_model: Some(HUMAN_MODEL),
+            speaker_label: speaker_label.as_deref(),
+            speaker_id: old.speaker_id,
             // Carried forward so a corrected turn stays attributed to its voice
             // instead of falling back to unknown.
-            old.speaker_cluster,
-            human_correction_provenance(old.id),
-            now,
-        ],
+            speaker_cluster: old.speaker_cluster.as_deref(),
+            provenance: Some(Provenance::Correction(old.id)),
+            created_utc: Some(now),
+            ..NewTurn::default()
+        },
     )?;
-    let new_id = tx.last_insert_rowid();
-    tx.execute(
-        "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
-        (new_id, text),
-    )?;
-    tx.execute(
-        "UPDATE transcript_segments SET superseded_by = ?1 WHERE id = ?2",
-        (new_id, old.id),
-    )?;
+    turn_store::supersede(&tx, old.id, new_id)?;
     tx.execute(
         "INSERT INTO corrections \
             (transcript_segment_id, audio_segment_id, start_utc, end_utc, \

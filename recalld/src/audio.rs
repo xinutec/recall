@@ -56,13 +56,6 @@ pub struct Placement {
     pub precise: bool,
 }
 
-/// `asr_model` of the provisional live pass.
-const LIVE_MODEL: &str = "live";
-/// `asr_model` of a turn a human corrected.
-const HUMAN_MODEL: &str = "human";
-/// `provenance` prefix written by the diarized refine pass.
-const DIARIZED_MARKER: &str = "diarized";
-
 /// Where a turn's audio lives, or `None` if it has none.
 ///
 /// Times are offsets from the audio segment's own start: ffmpeg knows nothing
@@ -88,12 +81,16 @@ pub fn placement(conn: &Connection, transcript_id: i64) -> rusqlite::Result<Opti
     let asr_model: Option<String> = row.get(4)?;
     let provenance: Option<String> = row.get(5)?;
     let word_timings: Option<String> = row.get(6)?;
-    let diarized = provenance
-        .as_deref()
-        .unwrap_or("")
-        .starts_with(DIARIZED_MARKER)
-        && asr_model.as_deref() != Some(HUMAN_MODEL)
-        && asr_model.as_deref() != Some(LIVE_MODEL);
+    // Boundaries a diarized pass cut, not the tier: a turn named in place keeps
+    // the transcription's looser ones.
+    let aligned = provenance
+        .and_then(|raw| raw.parse::<crate::turn_store::Provenance>().ok())
+        .is_some_and(|p| p.is_diarized());
+    let diarized = aligned
+        && !matches!(
+            asr_model.as_deref(),
+            Some(crate::turn_store::HUMAN_MODEL | crate::turn_store::LIVE_MODEL)
+        );
     Ok(Some(Placement {
         path: PathBuf::from(row.get::<_, String>(0)?),
         audio_segment_id: row.get(1)?,

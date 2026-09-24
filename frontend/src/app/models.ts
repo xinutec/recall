@@ -1,6 +1,7 @@
 // Wire types, generated from recalld by ts-rs (scripts/gen-types.sh); the gate
 // fails on drift. Never edit ./generated.
 export type { Transcript } from './generated/Transcript';
+export type { Tier } from './generated/Tier';
 export type { TranscriptList } from './generated/TranscriptList';
 export type { Moment } from './generated/Moment';
 export type { Conversation } from './generated/Conversation';

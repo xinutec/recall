@@ -13,6 +13,7 @@
 //! with an accented character would cut in the wrong place or panic
 //! mid-character, so everything below works on `Vec<char>`.
 
+use crate::turn_store::{self, HiddenReason, NewTurn, Provenance, Stage};
 use audiocore::instant;
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction};
@@ -20,12 +21,6 @@ use rusqlite::{Connection, OptionalExtension, Transaction};
 /// Floor on a split piece's duration, so a collapsed cut never makes a
 /// zero-length, audio-less turn (a word that aligned to no audio).
 const MIN_PIECE_MS: i64 = 50;
-
-/// `provenance` prefix written by the diarized refine pass.
-const DIARIZED_MARKER: &str = "diarized";
-/// …and by the word-aligned one, which also keeps a turn out of the re-diarize
-/// work-list.
-const ALIGNED_MARKER: &str = "diarized-aligned";
 
 /// One word with its turn-relative timing, as stored: `{s,e,w}`. No
 /// `probability`: the stored shape does not carry one.
@@ -296,64 +291,32 @@ fn parse(stored: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(stored).map_or_else(|_| Utc::now(), |t| t.with_timezone(&Utc))
 }
 
-/// Hide a turn only if it is still current.
-///
-/// One atomic statement, so of several concurrent assigns (a double-tap) only
-/// the one that wins the claim splits the turn; otherwise each would insert its
-/// own set of pieces.
-fn claim_hidden(tx: &Transaction, id: i64, reason: &str) -> rusqlite::Result<bool> {
-    let changed = tx.execute(
-        "UPDATE transcript_segments SET hidden_reason = ?1 \
-         WHERE id = ?2 AND hidden_reason IS NULL AND superseded_by IS NULL",
-        (reason, id),
-    )?;
-    Ok(changed == 1)
-}
-
-fn set_turn_speaker(tx: &Transaction, id: i64, name: Option<&str>) -> rusqlite::Result<()> {
-    tx.execute(
-        "UPDATE transcript_segments SET speaker_label = ?1 WHERE id = ?2",
-        (name, id),
-    )?;
-    Ok(())
-}
-
 fn insert_piece(
     tx: &Transaction,
     turn: &Turn,
     piece: &Piece,
-    provenance: &str,
+    provenance: &Provenance,
     now: &str,
 ) -> rusqlite::Result<()> {
     let words = piece.words.as_deref().map(crate::pyjson::dump);
-    tx.execute(
-        "INSERT INTO transcript_segments \
-            (audio_segment_id, start_utc, end_utc, text, language, language_confidence, \
-             asr_confidence, asr_model, speaker_label, speaker_cluster, provenance, \
-             created_utc, word_timings) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        rusqlite::params![
-            turn.audio_segment_id,
-            instant::python_isoformat_utc(piece.start),
-            instant::python_isoformat_utc(piece.end),
-            piece.text,
-            turn.language,
-            turn.language_confidence,
-            turn.asr_confidence,
-            turn.asr_model,
-            piece.speaker,
-            turn.speaker_cluster,
-            provenance,
-            now,
-            words,
-        ],
-    )?;
-    let new_id = tx.last_insert_rowid();
-    // The index is maintained by the writer, not a trigger; a piece missing from
-    // it is simply unsearchable.
-    tx.execute(
-        "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
-        (new_id, &piece.text),
+    turn_store::insert(
+        tx,
+        &NewTurn {
+            audio_segment_id: turn.audio_segment_id,
+            start_utc: &instant::python_isoformat_utc(piece.start),
+            end_utc: &instant::python_isoformat_utc(piece.end),
+            text: &piece.text,
+            language: turn.language.as_deref(),
+            language_confidence: turn.language_confidence,
+            asr_confidence: turn.asr_confidence,
+            asr_model: turn.asr_model.as_deref(),
+            speaker_label: piece.speaker.as_deref(),
+            speaker_cluster: turn.speaker_cluster.as_deref(),
+            provenance: Some(provenance.clone()),
+            word_timings: words.as_deref(),
+            created_utc: Some(now),
+            ..NewTurn::default()
+        },
     )?;
     Ok(())
 }
@@ -376,25 +339,28 @@ fn recut(
     }
     if pieces.len() == 1 {
         // The whole turn is one speaker: relabel in place, no split.
-        set_turn_speaker(tx, turn_id, pieces[0].speaker.as_deref())?;
+        turn_store::set_label(tx, turn_id, pieces[0].speaker.as_deref())?;
         return Ok(1);
     }
     let pieces = min_width(pieces, turn.start, turn.end);
-    if !claim_hidden(tx, turn_id, &format!("split into pieces ({turn_id})"))? {
+    if !turn_store::claim(tx, turn_id, &HiddenReason::SplitInto(turn_id))? {
         // A concurrent split won. This caller must not also split it.
         return Ok(0);
     }
-    // Keep the parent's tier: pieces of a diarized turn carry the aligned
-    // marker, so the UI still shows them as finalized and they stay out of the
-    // re-diarize work-list.
-    let parent_diarized = turn
+    // Pieces keep the parent's stage, so the UI shows them as it showed the turn.
+    let parent = turn
         .provenance
         .as_deref()
-        .is_some_and(|p| p.starts_with(DIARIZED_MARKER));
-    let provenance = if parent_diarized {
-        format!("{ALIGNED_MARKER} split of #{turn_id}")
+        .and_then(|p| p.parse::<Provenance>().ok());
+    let stage = Stage::of(
+        turn.asr_model.as_deref(),
+        parent.as_ref(),
+        turn.speaker_cluster.is_some(),
+    );
+    let provenance = if stage == Stage::Diarized {
+        Provenance::DiarizedSplit(turn_id)
     } else {
-        format!("split of #{turn_id}")
+        Provenance::Split(turn_id)
     };
     for piece in &pieces {
         insert_piece(tx, &turn, piece, &provenance, now)?;
@@ -486,7 +452,7 @@ pub fn assign_span(
             now,
         )?;
         for mid in &ids[i + 1..j] {
-            set_turn_speaker(&tx, *mid, Some(name))?;
+            turn_store::set_label(&tx, *mid, Some(name))?;
             touched += 1;
         }
         touched + recut(&tx, end_turn, &[end_char], &[named, end_keep], now)?

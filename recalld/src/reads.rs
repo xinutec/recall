@@ -10,12 +10,7 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
-/// `asr_model` of a turn a human corrected — the top tier, never re-derived.
-const HUMAN_MODEL: &str = "human";
-/// `asr_model` of the provisional live pass.
-const LIVE_MODEL: &str = "live";
-/// `provenance` prefix of a diarized turn.
-const DIARIZED_MARKER: &str = "diarized";
+use crate::turn_store::{Provenance, Stage};
 
 /// One turn, in exactly the shape the Angular app already consumes.
 ///
@@ -38,8 +33,7 @@ pub struct TranscriptOut {
     pub confidence: Option<f64>,
     pub loudness: Option<f64>,
     pub model: Option<String>,
-    #[ts(type = "'live' | 'transcribed' | 'diarized' | 'corrected'")]
-    pub tier: &'static str,
+    pub tier: Stage,
     pub hidden: Option<String>,
     pub audio_url: String,
     pub source: Option<String>,
@@ -99,27 +93,19 @@ impl Segment {
         })
     }
 
-    /// Which analysis tier produced this turn — a UI badge showing how much
-    /// processing it has had.
-    fn tier(&self) -> &'static str {
-        if self.asr_model.as_deref() == Some(HUMAN_MODEL) {
-            return "corrected";
-        }
-        if self.asr_model.as_deref() == Some(LIVE_MODEL) {
-            return "live";
-        }
-        // A pass that keeps the boundaries names turns in place: it records the
-        // cluster and leaves the provenance alone.
-        if self.speaker_cluster.is_some()
-            || self
-                .provenance
-                .as_deref()
-                .unwrap_or("")
-                .starts_with(DIARIZED_MARKER)
-        {
-            return "diarized";
-        }
-        "transcribed"
+    /// How much processing this turn has had. A provenance no writer produces is
+    /// logged and read as none: the badge is display, and the audit reports it.
+    fn tier(&self) -> Stage {
+        let provenance = self.provenance.as_deref().and_then(|raw| {
+            raw.parse::<Provenance>()
+                .inspect_err(|err| tracing::warn!(id = self.id, %err, "turn provenance"))
+                .ok()
+        });
+        Stage::of(
+            self.asr_model.as_deref(),
+            provenance.as_ref(),
+            self.speaker_cluster.is_some(),
+        )
     }
 }
 

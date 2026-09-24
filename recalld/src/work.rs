@@ -175,10 +175,6 @@ pub struct LiveTurn {
 /// Degenerate text is dropped here rather than by each pusher: Whisper loops on
 /// the short, hard clips this tier is made of ("goog goog goog…"), and that is a
 /// property of the string. Dropped turns are not counted as stored.
-///
-/// ⚠ `transcript_fts` is contentless FTS5 with no trigger: skipping its insert
-/// fails nothing and makes the turn unsearchable. One transaction per turn, so
-/// a turn and its index row land together.
 pub fn ingest_live(
     conn: &mut Connection,
     turns: &[LiveTurn],
@@ -216,23 +212,17 @@ pub fn ingest_live(
             continue;
         }
         let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO transcript_segments \
-             (audio_segment_id, start_utc, end_utc, text, language, asr_model, created_utc) \
-             VALUES (NULL, ?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![
-                start,
-                end,
-                turn.text,
-                turn.language,
-                turn.asr_model,
-                delivered
-            ],
-        )?;
-        let id = tx.last_insert_rowid();
-        tx.execute(
-            "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
-            rusqlite::params![id, turn.text],
+        crate::turn_store::insert(
+            &tx,
+            &crate::turn_store::NewTurn {
+                start_utc: &start,
+                end_utc: &end,
+                text: &turn.text,
+                language: turn.language.as_deref(),
+                asr_model: Some(&turn.asr_model),
+                created_utc: Some(&delivered),
+                ..crate::turn_store::NewTurn::default()
+            },
         )?;
         tx.commit()?;
         stored += 1;
