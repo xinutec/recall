@@ -142,9 +142,15 @@ describe('Turns', () => {
     expect(changed).not.toHaveBeenCalled();
   });
 
-  it('only a settled line can be edited', async () => {
-    const { c } = await setup([moment([said(1, 'P', { tier: 'transcribed' })])]);
-    expect(c.editable(c.turns()[0])).toBe(false);
+  it('a transcribed line is editable, a live one is not', async () => {
+    const { c } = await setup([
+      moment([said(1, 'P', { tier: 'transcribed' })]),
+      moment([said(2, 'P', { tier: 'live' })]),
+    ]);
+    const [transcribed, live] = c.turns();
+    expect(c.editable(transcribed)).toBe(true);
+    expect(c.provisional(transcribed)).toBe(true);
+    expect(c.editable(live)).toBe(false);
   });
 
   it('Fix words opens on the tapped line and saves the new text', async () => {

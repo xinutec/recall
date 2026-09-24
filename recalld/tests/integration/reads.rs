@@ -150,6 +150,17 @@ fn the_tier_badge_reports_how_much_processing_a_turn_has_had() {
         "d",
         &[("asr_model", "mlx-whisper")],
     );
+    // Named in place: the pass ran and kept the boundaries.
+    turn(
+        &conn,
+        5,
+        "2026-09-01T10:00:04+00:00",
+        "e",
+        &[
+            ("asr_model", "mlx-whisper"),
+            ("speaker_cluster", "SPEAKER_00"),
+        ],
+    );
 
     let tiers: Vec<&str> = reads::timeline(&conn, 50, None)
         .expect("timeline")
@@ -157,7 +168,10 @@ fn the_tier_badge_reports_how_much_processing_a_turn_has_had() {
         .iter()
         .map(|i| i.tier)
         .collect();
-    assert_eq!(tiers, ["corrected", "live", "diarized", "transcribed"]);
+    assert_eq!(
+        tiers,
+        ["corrected", "live", "diarized", "transcribed", "diarized"]
+    );
 }
 
 #[test]

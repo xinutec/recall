@@ -71,7 +71,7 @@ carries the cookie.
 
 Fixing is in the web UI. The timeline (`/`) and a session (`/sessions/<id>`) show
 turns the same way: paragraphs per speaker, a guess in italics with its strength,
-grey lines still being processed. Every edit supersedes the old turn; nothing is
+grey lines not yet speaker-separated. Every edit supersedes the old turn; nothing is
 deleted, and a later pass never overwrites it.
 
 - **Who said a line**: tap it, then a name (or type a new one). This files a
@@ -82,8 +82,8 @@ deleted, and a later pass never overwrites it.
 - **Other mics**: a small number after a line counts the mics that heard it; tap
   the line, then *Other mics* to read and hear their versions. A wavy underline
   means the mics disagree on who spoke.
-- **Grey lines** are editable once they settle; an edit before then would be
-  replaced by the next pass.
+- **Grey lines** have no speakers separated yet. They are editable; every pass
+  keeps a correction. Only a live line, minutes old, waits for its transcription.
 
 ## What to trust (and what not to)
 

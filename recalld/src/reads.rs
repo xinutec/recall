@@ -108,11 +108,14 @@ impl Segment {
         if self.asr_model.as_deref() == Some(LIVE_MODEL) {
             return "live";
         }
-        if self
-            .provenance
-            .as_deref()
-            .unwrap_or("")
-            .starts_with(DIARIZED_MARKER)
+        // A pass that keeps the boundaries names turns in place: it records the
+        // cluster and leaves the provenance alone.
+        if self.speaker_cluster.is_some()
+            || self
+                .provenance
+                .as_deref()
+                .unwrap_or("")
+                .starts_with(DIARIZED_MARKER)
         {
             return "diarized";
         }

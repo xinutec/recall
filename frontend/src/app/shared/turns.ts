@@ -163,9 +163,15 @@ export class Turns implements OnDestroy {
     );
   }
 
-  /** Live and first-pass turns get replaced by the next pass; an edit would be lost. */
+  /** Every pass keeps a human correction, but a live line is minutes from being
+   * replaced by its transcription. */
   protected editable(t: Transcript): boolean {
-    return t.tier === 'diarized' || t.tier === 'corrected';
+    return t.tier !== 'live';
+  }
+
+  /** No speaker separation yet: shown grey, still editable. */
+  protected provisional(t: Transcript): boolean {
+    return t.tier === 'live' || t.tier === 'transcribed';
   }
 
   // --- playback

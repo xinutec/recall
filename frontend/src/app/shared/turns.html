@@ -35,7 +35,7 @@
             [attr.data-id]="t.id"
             [attr.data-source]="t.source"
             [class.sel]="selected() === t.id"
-            [class.provisional]="!editable(t)"
+            [class.provisional]="provisional(t)"
             [class.disputed]="disputed(t)"
             [attr.title]="disputed(t) ? 'The mics disagree on who said this' : null"
             (click)="selectTurn(t.id)"
@@ -127,7 +127,7 @@
       />
       <button matButton (click)="editText()"><mat-icon>edit</mat-icon> Fix words</button>
     } @else {
-      <span class="hint">Still being processed, editable once it settles.</span>
+      <span class="hint">Still being transcribed, editable in a minute or two.</span>
     }
     @if (alternates(t).length) {
       <button matButton (click)="comparing.set(!comparing())">
