@@ -1,0 +1,141 @@
+<datalist [id]="listId">
+  @for (name of roster(); track name) {
+    <option [value]="name"></option>
+  }
+</datalist>
+
+<div class="transcript" (mouseup)="onSelect()" (touchend)="onSelect()">
+  @for (run of runs(); track run.key) {
+    <div class="run" [class.named]="run.confirmed" [style.--c]="colourFor(run.speaker)">
+      <div class="who">
+        <button
+          matIconButton
+          class="play"
+          [class.on]="player.playing() === 'run:' + run.key"
+          (click)="togglePlay(run)"
+          [attr.aria-label]="player.playing() === 'run:' + run.key ? 'pause' : 'hear this speaker'"
+        >
+          <mat-icon>{{ player.playing() === 'run:' + run.key ? 'pause' : 'play_arrow' }}</mat-icon>
+        </button>
+        <span class="clock">{{ clock(run.start) }}</span>
+        <span class="name">{{ run.speaker }}</span>
+        @if (run.guess !== null) {
+          <span class="conf" title="An automatic guess, this likely">{{ pct(run.guess) }}</span>
+        }
+      </div>
+      <p class="body">
+        @for (t of run.turns; track t.id) {
+          @if (sourceTags().get(t.id); as src) {
+            <span class="src">{{ src }}</span>
+          }
+          <span
+            class="t"
+            role="button"
+            tabindex="0"
+            [attr.data-id]="t.id"
+            [attr.data-source]="t.source"
+            [class.sel]="selected() === t.id"
+            [class.provisional]="!editable(t)"
+            [class.disputed]="disputed(t)"
+            [attr.title]="disputed(t) ? 'The mics disagree on who said this' : null"
+            (click)="selectTurn(t.id)"
+            (keydown.enter)="selectTurn(t.id)"
+            >{{ t.text }} </span
+          >
+          @if (mics(t) > 1) {
+            <sup class="mics" [title]="'Heard by ' + mics(t) + ' mics'">{{ mics(t) }}</sup>
+          }
+        }
+      </p>
+    </div>
+  }
+</div>
+
+@if (editing() !== null) {
+  <div class="palette editor">
+    <mat-form-field appearance="outline" subscriptSizing="dynamic" class="edit">
+      <textarea
+        matInput
+        #ed
+        rows="3"
+        [ngModel]="editingText()"
+        (keydown.escape)="cancelEdit()"
+      ></textarea>
+    </mat-form-field>
+    <div class="actions">
+      <button matButton (click)="cancelEdit()">Cancel</button>
+      <button matButton="tonal" (click)="saveEdit(ed.value)">Save text</button>
+    </div>
+  </div>
+} @else if (span()) {
+  <div class="palette" role="toolbar">
+    <span class="hint">Assign “{{ spanText() }}” to</span>
+    @for (name of palette(); track name) {
+      <button matButton="tonal" [disabled]="busy()" (click)="assignSpan(name)">{{ name }}</button>
+    }
+    <input
+      #spanName
+      class="new-name"
+      [attr.list]="listId"
+      placeholder="or a new name…"
+      [disabled]="busy()"
+      (keydown.enter)="assignSpan(spanName.value); spanName.value = ''"
+    />
+    <button matButton (click)="clearSpan()">Cancel</button>
+  </div>
+} @else if (selectedTurn(); as t) {
+  <div class="palette" role="toolbar">
+    @if (comparing()) {
+      <div class="alternates">
+        @for (a of alternates(t); track a.id) {
+          <div class="alt">
+            <button
+              matIconButton
+              (click)="playTurn(a)"
+              [attr.aria-label]="player.playing() === 'turn:' + a.id ? 'pause' : 'hear this mic'"
+            >
+              <mat-icon>{{ player.playing() === 'turn:' + a.id ? 'pause' : 'play_arrow' }}</mat-icon>
+            </button>
+            <span class="src">{{ a.source }}</span>
+            @if (a.speaker) {
+              <span class="alt-who">{{ a.speaker }}</span>
+            }
+            <span class="alt-text">{{ a.text }}</span>
+          </div>
+        }
+      </div>
+    }
+    <button
+      matIconButton
+      (click)="playTurn(t)"
+      [attr.aria-label]="player.playing() === 'turn:' + t.id ? 'pause' : 'hear this line'"
+    >
+      <mat-icon>{{ player.playing() === 'turn:' + t.id ? 'pause' : 'play_arrow' }}</mat-icon>
+    </button>
+    @if (editable(t)) {
+      <span class="hint">said by</span>
+      @for (name of palette(); track name) {
+        <button matButton="tonal" [disabled]="busy()" (click)="assignTurn(name)">{{ name }}</button>
+      }
+      <input
+        #turnName
+        class="new-name"
+        [attr.list]="listId"
+        placeholder="new name…"
+        [disabled]="busy()"
+        (keydown.enter)="assignTurn(turnName.value); turnName.value = ''"
+      />
+      <button matButton (click)="editText()"><mat-icon>edit</mat-icon> Fix words</button>
+    } @else {
+      <span class="hint">Still being processed, editable once it settles.</span>
+    }
+    @if (alternates(t).length) {
+      <button matButton (click)="comparing.set(!comparing())">
+        <mat-icon>graphic_eq</mat-icon> {{ comparing() ? 'Hide' : 'Other' }} mics
+      </button>
+    }
+    <a matIconButton [routerLink]="['/review']" [queryParams]="{ ids: t.id }" aria-label="Link to this line">
+      <mat-icon>link</mat-icon>
+    </a>
+  </div>
+}

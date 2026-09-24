@@ -13,25 +13,18 @@ import {
   Session,
   SessionRenameRequest,
   SpeakerNames,
-  TurnSpeakerRequest,
   VoiceNameRequest,
   VocabularyRequest,
 } from './models';
 
-/**
- * Thin client over the FastAPI backend (src/recall/api.py).
- *
- * Reactive reads (status / search / review) are done with `httpResource` in the
- * components that own their query signals; this service holds the mutations
- * (correct / upload) and the audio-clip URL helper.
- */
+/** The writes, and the reads a component pages through itself. Reactive reads
+ * use `httpResource` in the component that owns the query. */
 @Injectable({ providedIn: 'root' })
 export class RecallApi {
   private readonly http = inject(HttpClient);
 
-  /** Whether the always-on capture is recording (or paused, with auto-resume time).
-   * With `known` (a stateToken) + `waitS`, the server long-polls: it holds the
-   * request until the state differs, so a change lands in ~RTT of the press. */
+  /** Capture state. With `known` and `waitS` the server holds the request until
+   * the state differs from `known`. */
   capture(known = '', waitS = 0): Observable<CaptureState> {
     const query = waitS > 0 ? `?wait=${waitS}&known=${encodeURIComponent(known)}` : '';
     return this.http.get<CaptureState>(`/api/capture${query}`);
@@ -45,9 +38,8 @@ export class RecallApi {
     return this.http.post<CaptureState>('/api/capture/resume', {});
   }
 
-  /** Recent turns grouped into conversations by silence gaps (`gap` seconds).
-   * Page back with `before` (oldest start seen) or forward with `after` (newest
-   * end seen). */
+  /** Turns grouped into conversations at silences of `gap` seconds. Page back
+   * with `before` (oldest start seen), forward with `after` (newest end seen). */
   conversations(
     limit: number,
     before?: string,
@@ -76,15 +68,12 @@ export class RecallApi {
     return this.http.post<CorrectResult>('/api/correct', body);
   }
 
-
-  /** The household roster — enrolled voices + assigned labels — for the quick-pick
-   * speaker chips. Names live in runtime enrolment data, never hard-coded here. */
+  /** Enrolled and assigned names. Runtime data, so no name is in the code. */
   speakers(): Observable<SpeakerNames> {
     return this.http.get<SpeakerNames>('/api/speakers');
   }
 
-  /** Add a term to the household vocabulary (biases the ASR from the next
-   * transcription — names, places, medical terms). */
+  /** Bias transcription towards a term from the next clip on. */
   addVocabularyTerm(term: string): Observable<CorrectResult> {
     const body: VocabularyRequest = { term };
     return this.http.post<CorrectResult>('/api/vocabulary', body);
@@ -94,13 +83,7 @@ export class RecallApi {
     return this.http.delete<Ok>(`/api/vocabulary/${id}`);
   }
 
-  /** Assign one turn to a person (display label only; `name` may be brand-new). */
-  setTurnSpeaker(id: number, name: string): Observable<Ok> {
-    const body: TurnSpeakerRequest = { name };
-    return this.http.post<Ok>(`/api/turn/${id}/speaker`, body);
-  }
-
-  /** Name (or clear) a diarization voice across a whole session — this enrols it. */
+  /** Name (or clear) a session voice on all its turns; this enrols it. */
   nameSessionVoice(source: string, cluster: string, name: string | null): Observable<Ok> {
     const body: VoiceNameRequest = { cluster, name };
     return this.http.post<Ok>(`/api/sessions/${encodeURIComponent(source)}/voice`, body);
@@ -111,8 +94,8 @@ export class RecallApi {
     return this.http.post<Ok>(`/api/correction/${id}/speaker`, { speaker });
   }
 
-  /** Assign a text span (across turns, with partial edges) to a speaker — the one
-   * gesture behind reassign / split / merge. Splits at the edges and relabels. */
+  /** Give a text span, across turns and with partial edges, to a speaker: the
+   * server splits at the edges. Reassign, split and merge are all this. */
   assignSpan(source: string, body: AssignSpanRequest): Observable<AssignResult> {
     return this.http.post<AssignResult>(
       `/api/sessions/${encodeURIComponent(source)}/assign`,
@@ -125,9 +108,7 @@ export class RecallApi {
     return this.http.post<Ok>(`/api/correction/${id}/hide`, {});
   }
 
-  /** Upload a conversation recording (e.g. a hospital appointment) as a new session.
-   * `start` is the recording's local start (ISO 8601); `title` optional. The file's
-   * container is kept as-is — the backend probes the real content. */
+  /** Upload a recording as a new session. `start` is when it was recorded. */
   createSession(file: File, title: string, start: string): Observable<Session> {
     const form = new FormData();
     form.append('audio', file, file.name);
@@ -145,9 +126,8 @@ export class RecallApi {
     return this.http.delete<Ok>(`/api/sessions/${encodeURIComponent(source)}`);
   }
 
-  /** Re-derive who-said-what for a whole session (idle-gated; never inline). */
+  /** Queue a session for diarizing again. */
   rediarizeSession(source: string): Observable<Ok> {
     return this.http.post<Ok>(`/api/sessions/${encodeURIComponent(source)}/rediarize`, {});
   }
-
 }

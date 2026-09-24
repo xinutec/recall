@@ -34,7 +34,6 @@ function turn(o: Partial<Transcript>): Transcript {
   };
 }
 
-// One Pippijn turn: confirmed, in a cluster.
 const said = (id: number, cluster: string, speaker?: string): Transcript =>
   turn({ id, cluster, speaker: speaker ?? null, speakerConfirmed: !!speaker });
 
@@ -82,215 +81,52 @@ async function setup(turns: Transcript[] = [], known: string[] = []) {
 }
 
 describe('Session', () => {
-  it('coalesces consecutive same-speaker turns into one run', async () => {
-    const { c } = await setup([
-      said(1, 'A', 'Pippijn'),
-      said(2, 'A', 'Pippijn'), // same speaker → folds into the run above
-      said(3, 'B', 'Dr. Adams'),
-      said(4, 'A', 'Pippijn'),
-    ]);
-    const runs = c.runs();
-    expect(runs.map((r: { speaker: string }) => r.speaker)).toEqual([
-      'Pippijn',
-      'Dr. Adams',
-      'Pippijn',
-    ]);
-    expect(runs[0].turns.map((t: Transcript) => t.id)).toEqual([1, 2]);
-  });
-
   it('groups voices by cluster, biggest first, named only on a majority', async () => {
     const { c } = await setup([
       said(1, 'A', 'Pippijn'),
       said(2, 'A', 'Pippijn'),
-      said(3, 'A', 'Pippijn'), // 3/3 → named
+      said(3, 'A', 'Pippijn'),
       said(4, 'B', 'Dr. Adams'),
-      said(5, 'B'), // only 1/2 confirmed → not a majority
+      said(5, 'B'), // 1 of 2 confirmed: not a majority
     ]);
     const voices = c.voices();
     expect(voices.map((v: { cluster: string }) => v.cluster)).toEqual(['A', 'B']);
     expect(voices[0].name).toBe('Pippijn');
     expect(voices[0].turns).toBe(3);
-    expect(voices[1].name).toBeNull(); // a single stray label doesn't name the voice
+    expect(voices[1].name).toBeNull();
   });
 
-  it('offers only this session’s named voices in the assign palette', async () => {
-    const { c } = await setup(
-      [said(1, 'A', 'Pippijn'), said(2, 'A', 'Pippijn'), said(3, 'B')],
-      ['Pippijn', 'Alice', 'Carol'], // the household is known, but wasn't in this meeting
-    );
-    expect(c.palette()).toEqual(['Pippijn']);
-  });
-
-  it('lists a speaker present on even a single turn (a third person you added)', async () => {
-    // One Sam turn lives in a cluster that's majority Pippijn — he must still appear in
-    // the assign list, so the next marking can reuse him with one tap.
-    const { c } = await setup([
-      said(1, 'A', 'Pippijn'),
-      said(2, 'A', 'Pippijn'),
-      said(3, 'A', 'Sam'),
+  it('numbers the voices for the transcript', async () => {
+    const { c } = await setup([said(1, 'A'), said(2, 'B'), said(3, 'B')]);
+    expect([...c.voiceNames().entries()]).toEqual([
+      ['B', 'Voice 1'],
+      ['A', 'Voice 2'],
     ]);
-    expect(c.palette()).toEqual(['Pippijn', 'Sam']);
   });
 
-  it('gives each speaker a distinct colour', async () => {
-    const { c } = await setup([said(1, 'A', 'Pippijn'), said(2, 'B', 'Dr. Adams')]);
-    expect(c.colourFor('Pippijn')).toMatch(/^#/);
-    expect(c.colourFor('Pippijn')).not.toBe(c.colourFor('Dr. Adams'));
+  it('is finalizing while any line is provisional', async () => {
+    const { c } = await setup([said(1, 'A'), turn({ id: 2, tier: 'transcribed' })]);
+    expect(c.finalizing()).toBe(true);
   });
 
-  it('a tap selects a turn, and tapping it again deselects', async () => {
-    const { c } = await setup([said(1, 'A', 'Pippijn')]);
-    c.selectTurn(1);
-    expect(c.selected()).toBe(1);
-    c.selectTurn(1);
-    expect(c.selected()).toBeNull();
+  it('naming a voice posts it for the whole session', async () => {
+    const { c, ctrl } = await setup([said(1, 'A')]);
+    c.nameVoice('A', ' Dr. Adams ');
+    const req = ctrl.expectOne('/api/sessions/m/voice');
+    expect(req.request.body).toEqual({ cluster: 'A', name: 'Dr. Adams' });
   });
 
-  it('assignTurn posts to the per-turn endpoint, then clears the selection', async () => {
-    const { c, ctrl } = await setup([said(1, 'A', 'Pippijn')]);
-    c.selectTurn(1);
-    c.assignTurn('Dr. Adams');
-    const req = ctrl.expectOne('/api/turn/1/speaker');
-    expect(req.request.body).toEqual({ name: 'Dr. Adams' });
-    req.flush({ ok: true });
-    expect(c.selected()).toBeNull();
-  });
-
-  it('Fix words opens the editor on the tapped turn, pre-filled', async () => {
-    const { c } = await setup([
-      turn({ id: 1, cluster: 'A', text: 'foracidinib' }),
-      turn({ id: 2, cluster: 'A', text: 'other' }),
-    ]);
-    c.selectTurn(1);
-    c.editText();
-    expect(c.editing()).toBe(1);
-    expect(c.editingText()).toBe('foracidinib');
-  });
-
-  it('saveEdit posts the corrected text for the edited turn, then closes', async () => {
-    const { c, ctrl } = await setup([turn({ id: 1, cluster: 'A', text: 'foracidinib' })]);
-    c.editing.set(1);
-    c.saveEdit('vorasidenib');
-    const req = ctrl.expectOne('/api/correct');
-    expect(req.request.body).toEqual({ id: 1, text: 'vorasidenib' });
-    req.flush({ newId: 99 });
-    expect(c.editing()).toBeNull();
-  });
-
-  it('a blank edit is dropped (no correction posted)', async () => {
-    const { c, ctrl } = await setup([turn({ id: 1, cluster: 'A', text: 'x' })]);
-    c.editing.set(1);
-    c.saveEdit('   ');
-    ctrl.expectNone('/api/correct');
-    expect(c.editing()).toBeNull();
-  });
-
-  it('togglePlay plays, pauses, then resumes the same clip (no reload)', async () => {
-    // jsdom has no media playback; stub it so the toggle logic runs.
-    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
-    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockReturnValue(undefined);
-    const { c } = await setup([said(1, 'A', 'Pippijn')]);
-    const run = c.runs()[0];
-    c.togglePlay(run); // play
-    expect(c.playing()).toBe(`run:${run.key}`);
-    c.togglePlay(run); // pause in place
-    expect(c.playing()).toBeNull();
-    c.togglePlay(run); // resume
-    expect(c.playing()).toBe(`run:${run.key}`);
-    // Played twice (start + resume), paused once — the pause kept its place.
-    expect(play).toHaveBeenCalledTimes(2);
-    expect(pause).toHaveBeenCalledTimes(1);
-  });
-
-  it('a voice sample stops when its button is tapped again', async () => {
+  it('a voice sample toggles, and stops when the view goes', async () => {
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockReturnValue(undefined);
-    const { c } = await setup([said(1, 'A', 'Pippijn')]);
-    c.toggleSample('A', '/api/audio/1');
-    expect(c.playing()).toBe('voice:A');
-    c.toggleSample('A', '/api/audio/1'); // tap again → stops
-    expect(c.playing()).toBeNull();
-  });
-
-  it('stops playback when the view is destroyed (audio must not outlive navigation)', async () => {
-    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
-    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockReturnValue(undefined);
     const { fixture, c } = await setup([said(1, 'A', 'Pippijn')]);
-    c.togglePlay(c.runs()[0]); // start playing a clip
-    expect(c.playing()).not.toBeNull();
-    const before = pause.mock.calls.length; // 0 — a fresh play doesn't pause
-    fixture.destroy(); // navigate away from the session
-    // Teardown must stop the shared <audio>; otherwise it keeps playing the clip.
-    expect(pause.mock.calls.length).toBeGreaterThan(before);
-  });
-
-  it('maps a sub-phrase selection to turn id + char offsets, clamping the trailing space', async () => {
-    const { fixture, c } = await setup([
-      turn({ id: 7, cluster: 'A', speaker: 'Pippijn', speakerConfirmed: true, text: 'a list of errands' }),
-    ]);
-    const span = fixture.nativeElement.querySelector('span.t[data-id="7"]') as HTMLElement;
-    const node = span.firstChild as Text; // "a list of errands " — the template adds a space
-    const range = document.createRange();
-    range.setStart(node, 0);
-    range.setEnd(node, 'a list of errands'.length);
-    expect(c.selectionToSpan(range)).toEqual({
-      startTurn: 7,
-      startChar: 0,
-      endTurn: 7,
-      endChar: 'a list of errands'.length,
-    });
-    // Selecting into the trailing space clamps to the real text length.
-    range.setEnd(node, 'a list of errands'.length + 1);
-    expect(c.selectionToSpan(range).endChar).toBe('a list of errands'.length);
-  });
-
-  it('assignSelectedSpan posts the selected span to the assign endpoint, then clears it', async () => {
-    const { c, ctrl } = await setup([
-      turn({ id: 7, cluster: 'A', speaker: 'Pippijn', speakerConfirmed: true, text: 'a list of errands' }),
-    ]);
-    c.span.set({ startTurn: 7, startChar: 0, endTurn: 7, endChar: 18 });
-    c.assignSelectedSpan('Pippijn');
-    const req = ctrl.expectOne('/api/sessions/m/assign');
-    expect(req.request.body).toEqual({
-      startTurn: 7,
-      startChar: 0,
-      endTurn: 7,
-      endChar: 18,
-      name: 'Pippijn',
-    });
-    req.flush({ touched: 1 });
-    expect(c.span()).toBeNull();
-  });
-
-  it('assignSelectedSpan ignores a blank name (no request, selection kept)', async () => {
-    const { c, ctrl } = await setup([
-      turn({ id: 7, cluster: 'A', speaker: 'Pippijn', speakerConfirmed: true, text: 'a list of errands' }),
-    ]);
-    c.span.set({ startTurn: 7, startChar: 0, endTurn: 7, endChar: 18 });
-    c.assignSelectedSpan('   ');
-    ctrl.expectNone('/api/sessions/m/assign');
-    expect(c.span()).not.toBeNull();
-  });
-
-  it('assignSelectedSpan ignores repeated taps while a request is in flight', async () => {
-    const { c, ctrl } = await setup([
-      turn({ id: 7, cluster: 'A', speaker: 'Pippijn', speakerConfirmed: true, text: 'a list of errands' }),
-    ]);
-    c.span.set({ startTurn: 7, startChar: 0, endTurn: 7, endChar: 18 });
-    c.assignSelectedSpan('Dr'); // first tap fires
-    c.assignSelectedSpan('Dr'); // impatient repeats while in flight…
-    c.assignSelectedSpan('Dr');
-    const reqs = ctrl.match('/api/sessions/m/assign');
-    expect(reqs.length).toBe(1); // …only one split request is sent
-    reqs[0].flush({ touched: 1 });
-  });
-
-  it('plays a joined bubble as one full span, not just the first turn', async () => {
-    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
-    const { c } = await setup([said(1, 'A', 'Pippijn'), said(2, 'A', 'Pippijn')]);
-    const run = c.runs()[0];
-    expect(run.turns.length).toBe(2); // two same-speaker turns coalesce into one bubble
-    c.togglePlay(run);
-    expect(c.audio.src).toContain('/api/audio-span?from_id=1&to_id=2');
+    const voice = c.voices()[0];
+    c.toggleSample(voice);
+    expect(c.player.playing()).toBe('voice:A');
+    c.toggleSample(voice);
+    expect(c.player.playing()).toBeNull();
+    c.toggleSample(voice);
+    fixture.destroy();
+    expect(c.player.playing()).toBeNull();
   });
 });

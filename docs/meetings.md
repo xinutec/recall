@@ -22,9 +22,8 @@ Two columns both get called "the speaker":
 
 - `speaker_cluster` is diarization's answer (`SPEAKER_00`, `SPEAKER_01`),
   written by the machine on every turn.
-- `speaker_label` is the name a person gave that voice in the session screen's
-  naming strip. One naming applies to every turn of that voice and enrols it,
-  so a clinician becomes matchable like any household voice.
+- `speaker_label` is the name a person gave: to a whole voice in the session
+  screen's "Who's speaking" strip, which enrols it, or to one line.
 
 A null `speaker_label` means nobody has named the voices yet, not that
 diarization failed. **Re-diarize** on a session re-queues its clips for the

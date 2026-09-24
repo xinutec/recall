@@ -98,10 +98,6 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
         )
         .route("/api/correct", post(labels_write::correct_route))
         .route(
-            "/api/turn/{id}/speaker",
-            post(labels_write::turn_speaker_route),
-        )
-        .route(
             "/api/correction/{id}/speaker",
             post(labels_write::correction_reassign_route),
         )

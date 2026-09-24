@@ -35,15 +35,15 @@ In production the Dockerfile does this build — the image is what Isis serves.
 ## Test
 
 ```sh
-npm test                                   # Vitest (via the pretest version stamp)
-npx playwright test                        # e2e specs in e2e/
+pnpm test                                  # Vitest (via the pretest version stamp)
+pnpm run e2e                               # Playwright specs in e2e/
 ```
 
 ## Layout
 
-- `src/app/features/` — one component per route: timeline (`''`), search, ask,
-  review, train, labels, cleanup, sessions, session (`sessions/:id`), compare,
-  compare-run (`compare/:id`) — plus the non-route `clip-trimmer` and `waveform`
-- `src/app/shared/` — reusable pieces (transcript card, confirm dialog)
+- `src/app/features/` — one component per route: timeline (`''`), search, review,
+  labels, sessions, session (`sessions/:id`)
+- `src/app/shared/` — `turns` (the speaker-paragraph view the timeline and a
+  session share), `player`, transcript card, confirm dialog
 - `src/app/recall-api.ts` — typed client for the backend mutations
 - `src/app/models.ts`, `format.ts` — API types and presentation helpers

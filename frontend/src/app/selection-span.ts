@@ -1,13 +1,5 @@
-/**
- * Map a DOM text selection onto transcript turns — the shared core of the
- * drag-select-and-assign gesture used by both the session view and the timeline.
- *
- * Each turn's text is rendered in a `span.t` carrying `data-id` (the turn id) and,
- * optionally, `data-source` (the recording it belongs to). This resolves a `Range`'s
- * endpoints back to turn ids + character offsets, and the single source the resulting
- * split must be posted to. A selection that crosses two sources can't be one split, so
- * it resolves to null.
- */
+/** Map a text selection onto turns: each turn is a `span.t` with `data-id` and
+ * `data-source`. */
 
 export interface SpanSel {
   readonly startTurn: number;
@@ -23,9 +15,7 @@ interface Endpoint {
 }
 
 function endpointFor(node: Node, offset: number): Endpoint | null {
-  // A Range endpoint can sit on any node — a text node, an element, or a
-  // comment. `as Element` covered the third case by declaring it away, and
-  // `closest` on a non-Element throws inside a selection handler.
+  // An endpoint can be a comment node, where `closest` would throw.
   const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node instanceof Element ? node : null;
   const span = el?.closest('span.t');
   const id = span instanceof HTMLElement ? span.dataset['id'] : undefined;
@@ -40,8 +30,8 @@ function endpointFor(node: Node, offset: number): Endpoint | null {
   };
 }
 
-/** The selected span plus the source it belongs to, or null if either endpoint isn't in
- * a turn or the selection crosses sources (which can't be split as one). */
+/** The span and its source; null outside a turn or across two sources, which one
+ * split cannot cover. */
 export function resolveSelection(
   range: Range,
 ): { span: SpanSel; source: string | null } | null {

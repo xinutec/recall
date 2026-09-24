@@ -1,6 +1,5 @@
-// The API's wire types, generated from recalld's structs by ts-rs into
-// ./generated (scripts/gen-types.sh); the gate fails when they drift. Do not
-// edit ./generated.
+// Wire types, generated from recalld by ts-rs (scripts/gen-types.sh); the gate
+// fails on drift. Never edit ./generated.
 export type { Transcript } from './generated/Transcript';
 export type { TranscriptList } from './generated/TranscriptList';
 export type { Moment } from './generated/Moment';
@@ -22,5 +21,4 @@ export type { VoiceNameRequest } from './generated/VoiceNameRequest';
 export type { AssignSpanRequest } from './generated/AssignSpanRequest';
 export type { AssignResult } from './generated/AssignResult';
 export type { CorrectRequest } from './generated/CorrectRequest';
-export type { TurnSpeakerRequest } from './generated/TurnSpeakerRequest';
 export type { TelemetryEvent } from './generated/TelemetryEvent';

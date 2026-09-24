@@ -24,22 +24,6 @@ fn human_correction_provenance(original_id: i64) -> String {
     format!("human correction of #{original_id}")
 }
 
-/// Set or clear the human speaker on one turn.
-///
-/// Display label only: no correction pair is recorded and no voiceprint changes,
-/// because this fixes a turn diarization put on the wrong voice rather than
-/// asserting anything about the words.
-pub fn set_turn_speaker(
-    conn: &Connection,
-    segment_id: i64,
-    name: Option<&str>,
-) -> rusqlite::Result<usize> {
-    conn.execute(
-        "UPDATE transcript_segments SET speaker_label = ?1 WHERE id = ?2",
-        (name, segment_id),
-    )
-}
-
 fn drop_voiceprint(tx: &Transaction, correction_id: i64) -> rusqlite::Result<()> {
     tx.execute(
         "DELETE FROM speaker_embeddings WHERE source_correction_id = ?1",
@@ -106,39 +90,9 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use std::sync::Arc;
 
-#[derive(Deserialize, ts_rs::TS)]
-#[ts(export, rename = "TurnSpeakerRequest")]
-pub struct TurnSpeakerIn {
-    #[ts(optional = nullable)]
-    name: Option<String>,
-}
-
 #[derive(Deserialize)]
 pub struct ReassignIn {
     speaker: String,
-}
-
-/// An empty name CLEARS the label rather than storing "", which would render as
-/// a speaker whose name is nothing.
-fn cleaned(name: Option<String>) -> Option<String> {
-    name.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty())
-}
-
-pub async fn turn_speaker_route(
-    State(st): State<Arc<reads::State>>,
-    Path(segment_id): Path<i64>,
-    Json(body): Json<TurnSpeakerIn>,
-) -> Response {
-    let root = st.root.clone();
-    let name = cleaned(body.name);
-    match route::blocking("turn speaker", move || {
-        set_turn_speaker(&work::open_write(&root)?, segment_id, name.as_deref())
-    })
-    .await
-    {
-        Ok(_) => route::ack(),
-        Err(response) => response,
-    }
 }
 
 pub async fn correction_reassign_route(

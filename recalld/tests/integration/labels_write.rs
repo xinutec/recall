@@ -1,6 +1,6 @@
 //! The labelling writes: names a person typed, which no pass can re-derive.
 
-use recalld::labels_write::{hide_correction, set_correction_speaker, set_turn_speaker};
+use recalld::labels_write::{hide_correction, set_correction_speaker};
 use rusqlite::Connection;
 
 fn db() -> Connection {
@@ -55,59 +55,6 @@ fn label_of(conn: &Connection, provenance: &str) -> Option<String> {
         |r| r.get(0),
     )
     .expect("read back")
-}
-
-#[test]
-fn setting_a_turn_speaker_touches_only_that_turn() {
-    let conn = db();
-    conn.execute(
-        "INSERT INTO transcript_segments (id, text) VALUES (1, 'a'), (2, 'b')",
-        [],
-    )
-    .expect("turns");
-
-    set_turn_speaker(&conn, 1, Some("Dr Lee")).expect("set");
-
-    let first: Option<String> = conn
-        .query_row(
-            "SELECT speaker_label FROM transcript_segments WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .expect("read");
-    let second: Option<String> = conn
-        .query_row(
-            "SELECT speaker_label FROM transcript_segments WHERE id=2",
-            [],
-            |r| r.get(0),
-        )
-        .expect("read");
-    assert_eq!(first.as_deref(), Some("Dr Lee"));
-    assert_eq!(second, None);
-}
-
-#[test]
-fn clearing_a_turn_speaker_stores_null_not_an_empty_name() {
-    let conn = db();
-    conn.execute(
-        "INSERT INTO transcript_segments (id, text, speaker_label) VALUES (1, 'a', 'Dr Lee')",
-        [],
-    )
-    .expect("turn");
-
-    set_turn_speaker(&conn, 1, None).expect("cleared");
-
-    let label: Option<String> = conn
-        .query_row(
-            "SELECT speaker_label FROM transcript_segments WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .expect("read");
-    assert_eq!(
-        label, None,
-        "a blank name would render as a speaker called nothing"
-    );
 }
 
 #[test]

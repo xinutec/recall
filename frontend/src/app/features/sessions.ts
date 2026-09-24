@@ -15,9 +15,7 @@ import { Session, SessionList } from '../models';
 import { RecallApi } from '../recall-api';
 import { dayLabel, timeOfDay } from '../format';
 
-/** Discrete uploaded recordings (e.g. doctor meetings) as a dated list: upload a
- * conversation, open one to read its transcript, rename it, re-derive who-said-what,
- * or delete a stray upload. */
+/** Uploaded recordings, such as appointments: upload, open, rename, re-diarize, delete. */
 @Component({
   selector: 'app-sessions',
   imports: [
@@ -44,11 +42,9 @@ export class Sessions {
   protected readonly empty = computed(() => !this.items().length && !this.data.isLoading());
 
   protected readonly uploading = signal(false);
-  // Inline rename: which session is being edited, and its working title.
   protected readonly editingId = signal<string | null>(null);
   protected readonly editTitle = signal('');
-  // Two-step delete: which session is awaiting confirmation (destructive, so never
-  // one-tap).
+  // Delete takes two taps.
   protected readonly confirmingId = signal<string | null>(null);
 
   protected readonly day = dayLabel;
@@ -58,9 +54,7 @@ export class Sessions {
     void this.router.navigate(['/sessions', id]);
   }
 
-  /** Upload the picked file as a new session. Its start time is the file's own
-   * last-modified stamp — i.e. when the recording was made — so it lands on the
-   * right day without asking. */
+  /** Upload the picked file, dated by its last-modified time: when it was recorded. */
   protected onFile(input: HTMLInputElement): void {
     const file = input.files?.[0];
     input.value = ''; // let the same file be re-picked after an error

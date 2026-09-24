@@ -69,29 +69,21 @@ carries the cookie.
 
 ## Editing in the app
 
-Reading is on the command line; fixing is in the web UI — the **timeline** (`/`, the
-day-by-day continuous capture) and the **session view** (`/sessions/<id>`, an uploaded
-meeting). Both share the same editing set; every edit is **versioned** (it supersedes the
-old turn, nothing is deleted) and a re-derivation pass never overwrites it.
+Fixing is in the web UI. The timeline (`/`) and a session (`/sessions/<id>`) show
+turns the same way: paragraphs per speaker, a guess in italics with its strength,
+grey lines still being processed. Every edit supersedes the old turn; nothing is
+deleted, and a later pass never overwrites it.
 
-- **Reassign a whole turn** — tap the speaker chip and pick a name (or type a new one).
-- **Split out a phrase** — drag-select the words someone else said; an assign bar opens,
-  tap or name the speaker, and that phrase is carved into its own turn. The cut snaps to
-  word boundaries and plays audio-exact where the turn has word timings; on older turns
-  without them it's a character estimate you then fine-tune by ear. A selection that
-  crosses two recordings (e.g. two mics) is refused — a split belongs to one source.
-- **Trim a boundary** — ⋮ → *Trim audio*, then nudge the start/end and replay until the
-  clip holds exactly the words. The timeline has a coarse 0.5s step and a fine 0.1s one,
-  and can pull a start earlier into a gap, down to the segment start.
-- **Coalescing** — consecutive turns by the *same confirmed speaker* read as one block:
-  the name shows once and continuations carry it dim (still tappable to re-tag). Only
-  confirmed speakers coalesce; unknown turns never do (two adjacent unknowns aren't
-  necessarily the same person).
-- **Refine this section** — an expanded timeline conversation has a *Refine this section*
-  action that queues an on-demand diarize-refine of that stretch. It's processed by the
-  idle-gated refine daemon (so the heavy pass stays off live capture), which re-derives
-  those segments — better transcription + re-split speakers — superseding the machine
-  turns; your corrections are untouched.
+- **Who said a line**: tap it, then a name (or type a new one). This files a
+  correction, so it also enrols the voice.
+- **Move a phrase**: drag across the words someone else said and pick the speaker.
+  The cut snaps to word boundaries. A selection across two mics is refused.
+- **Fix the words**: tap the line, then *Fix words*.
+- **Other mics**: a small number after a line counts the mics that heard it; tap
+  the line, then *Other mics* to read and hear their versions. A wavy underline
+  means the mics disagree on who spoke.
+- **Grey lines** are editable once they settle; an edit before then would be
+  replaced by the next pass.
 
 ## What to trust (and what not to)
 
@@ -101,5 +93,4 @@ old turn, nothing is deleted) and a re-derivation pass never overwrites it.
   **confirmed name** is reliable. A bare `SPEAKER_nn` only means "a distinct voice" —
   it is *not* verified to be one person throughout, and the diarization can mis-sort an
   individual turn. Treat any unconfirmed attribution as a hint, not a fact.
-- Corrections (names and text) are made in the web UI at `/sessions/<id>`; this command
-  reflects the current corrected state.
+- Corrections are made in the web UI; this command reflects the corrected state.

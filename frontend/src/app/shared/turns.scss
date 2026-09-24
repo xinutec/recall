@@ -1,0 +1,169 @@
+:host {
+  display: block;
+}
+
+.transcript {
+  // Only the turn text is selectable, so a drag that starts on a name selects nothing.
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.run {
+  margin-bottom: 0.85rem;
+  border-left: 2px solid color-mix(in srgb, var(--c, var(--mat-sys-outline-variant)) 65%, transparent);
+  padding-left: 0.65rem;
+
+  .who {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.15rem;
+
+    .play {
+      flex: 0 0 auto;
+      color: var(--mat-sys-on-surface-variant);
+
+      &.on {
+        color: var(--c, var(--mat-sys-primary));
+      }
+    }
+
+    .clock,
+    .conf {
+      flex: 0 0 auto;
+      font: var(--mat-sys-label-small);
+      font-variant-numeric: tabular-nums;
+      color: var(--mat-sys-on-surface-variant);
+    }
+
+    .name {
+      font: var(--mat-sys-body-small);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--c, var(--mat-sys-primary));
+    }
+  }
+
+  // A guess or an unnamed voice reads as provisional.
+  &:not(.named) .who .name {
+    font-weight: 600;
+    font-style: italic;
+  }
+
+  .body {
+    margin: 0;
+    line-height: 1.55;
+
+    .t {
+      cursor: text;
+      border-radius: 3px;
+      user-select: text;
+      -webkit-user-select: text;
+
+      &.sel {
+        background: color-mix(in srgb, var(--mat-sys-primary) 30%, transparent);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--mat-sys-primary) 30%, transparent);
+      }
+
+      &.provisional {
+        opacity: 0.55;
+      }
+
+      &.disputed {
+        text-decoration: underline wavy color-mix(in srgb, var(--mat-sys-error) 70%, transparent);
+        text-underline-offset: 3px;
+      }
+    }
+
+    .mics {
+      margin-inline-end: 0.3rem;
+      font: var(--mat-sys-label-small);
+      color: var(--mat-sys-primary);
+    }
+  }
+}
+
+.src {
+  margin-inline-end: 0.3rem;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  font: var(--mat-sys-label-small);
+  color: var(--mat-sys-on-surface-variant);
+  background: var(--mat-sys-surface-container-high);
+}
+
+.palette {
+  position: sticky;
+  bottom: 0;
+  // Above the phone's fixed bottom nav, not behind it.
+  :host-context(.with-bottom-nav) & {
+    inset-block-end: var(--bottom-nav-reserve);
+  }
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  margin-top: 0.5rem;
+  background: var(--mat-sys-surface-container-high);
+  border-radius: 10px;
+  box-shadow: 0 -2px 8px color-mix(in srgb, var(--mat-sys-shadow) 25%, transparent);
+
+  .hint {
+    font: var(--mat-sys-body-medium);
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  .new-name {
+    flex: 1 1 7rem;
+    min-width: 6rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--mat-sys-outline-variant);
+    border-radius: 6px;
+    background: var(--mat-sys-surface);
+    color: var(--mat-sys-on-surface);
+    font: inherit;
+  }
+
+  &.editor {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .edit {
+    width: 100%;
+
+    // A long line scrolls inside the field instead of pushing the buttons off screen.
+    textarea {
+      max-height: 30vh;
+    }
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.4rem;
+    justify-content: flex-end;
+  }
+}
+
+.alternates {
+  flex: 1 1 100%;
+  max-height: 40vh;
+  overflow-y: auto;
+
+  .alt {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font: var(--mat-sys-body-medium);
+  }
+
+  .alt-who {
+    font-weight: 600;
+  }
+
+  .alt-text {
+    min-width: 0;
+  }
+}
