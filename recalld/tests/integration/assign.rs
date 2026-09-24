@@ -252,7 +252,7 @@ fn assigning_a_whole_turn_relabels_it_without_splitting() {
             end_char: 11,
         },
         "Dr Lee",
-        NOW,
+        &crate::stamp(NOW),
     )
     .expect("assigned");
 
@@ -285,7 +285,7 @@ fn assigning_part_of_a_turn_splits_it_and_hides_the_original() {
             end_char: 17,
         },
         "Dr Lee",
-        NOW,
+        &crate::stamp(NOW),
     )
     .expect("assigned");
 
@@ -323,7 +323,7 @@ fn a_span_across_turns_splits_both_edges_and_relabels_the_middle() {
             end_char: 4,
         },
         "Dr Lee",
-        NOW,
+        &crate::stamp(NOW),
     )
     .expect("assigned");
 
@@ -360,7 +360,7 @@ fn a_right_to_left_selection_is_the_same_as_left_to_right() {
             end_char: 4,
         },
         "Dr Lee",
-        NOW,
+        &crate::stamp(NOW),
     )
     .expect("fwd");
     let backward = assign_span(
@@ -373,7 +373,7 @@ fn a_right_to_left_selection_is_the_same_as_left_to_right() {
             end_char: 6,
         },
         "Dr Lee",
-        NOW,
+        &crate::stamp(NOW),
     )
     .expect("back");
 
@@ -403,10 +403,10 @@ fn a_second_assign_on_an_already_split_turn_does_nothing() {
         end_char: 17,
     };
 
-    let first = assign_span(&mut conn, "m", span, "Dr Lee", NOW).expect("first");
+    let first = assign_span(&mut conn, "m", span, "Dr Lee", &crate::stamp(NOW)).expect("first");
     let before = current(&conn).len();
     // The second arrives holding the same now-hidden id.
-    let second = assign_span(&mut conn, "m", span, "Dr Lee", NOW).expect("second");
+    let second = assign_span(&mut conn, "m", span, "Dr Lee", &crate::stamp(NOW)).expect("second");
 
     assert_eq!(first, 1);
     assert_eq!(second, 0, "the stale id must be a no-op");
@@ -428,7 +428,7 @@ fn a_split_of_a_diarized_turn_stays_diarized_quality() {
             end_char: 17,
         },
         "Dr Lee",
-        NOW,
+        &crate::stamp(NOW),
     )
     .expect("assigned");
 
@@ -460,7 +460,7 @@ fn split_pieces_are_findable_by_search() {
             end_char: 19,
         },
         "Dr Lee",
-        NOW,
+        &crate::stamp(NOW),
     )
     .expect("assigned");
 
@@ -494,7 +494,7 @@ fn a_turn_from_another_session_is_refused_rather_than_split() {
             end_char: 5,
         },
         "Dr Lee",
-        NOW,
+        &crate::stamp(NOW),
     )
     .expect("call");
 

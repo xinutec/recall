@@ -64,3 +64,15 @@ fn a_zero_fraction_is_dropped_and_a_real_one_kept() {
         Some("2026-09-08T19:11:22.500000+00:00")
     );
 }
+
+#[test]
+fn a_stamp_is_the_stored_spelling_whatever_it_was_built_from() {
+    use audiocore::instant::Stamp;
+    let when = DateTime::from_timestamp(1_788_894_682, 0).unwrap();
+    assert_eq!(Stamp::of(when).as_str(), python_isoformat_utc(when));
+    assert_eq!(
+        Stamp::parse("2026-09-08T20:11:22+01:00").map(|s| s.to_string()),
+        Some("2026-09-08T19:11:22+00:00".to_owned())
+    );
+    assert_eq!(Stamp::parse("now"), None);
+}

@@ -9,6 +9,7 @@
 use crate::align::AlignedTurn;
 use crate::quality::is_repetition_loop;
 use crate::turn_store::{self, HiddenReason, NewTurn, Protected, Provenance};
+use audiocore::instant::Stamp;
 use audiocore::job::Kind;
 use chrono::{DateTime, Duration, Utc};
 use std::borrow::Cow;
@@ -585,13 +586,14 @@ pub fn apply(
         };
         let words = serde_json::to_string(&rebased)
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+        let (start, end) = (
+            Stamp::of(at(block_start, turn.start)),
+            Stamp::of(at(block_start, turn.end)),
+        );
         let id = turn_store::insert(
             &tx,
             &NewTurn {
                 audio_segment_id: Some(audio_segment_id),
-                start_utc: &instant::python_isoformat_utc(at(block_start, turn.start)),
-                end_utc: &instant::python_isoformat_utc(at(block_start, turn.end)),
-                text: &turn.text,
                 language,
                 asr_confidence: Some(confidence),
                 asr_model: Some(model),
@@ -599,7 +601,7 @@ pub fn apply(
                 provenance: Some(provenance.clone()),
                 word_timings: Some(&words),
                 created_utc: Some(now),
-                ..NewTurn::default()
+                ..NewTurn::at(&start, &end, &turn.text)
             },
         )?;
         // ⚠ In the same transaction as the turn: `rematch::run_once` reads
@@ -631,7 +633,7 @@ pub struct Block<'a> {
     pub provenance: &'a Provenance,
     /// What this pass records on the turns it supersedes.
     pub hidden_reason: &'a HiddenReason,
-    pub now: &'a str,
+    pub now: &'a Stamp,
 }
 
 /// What a pass needs to put a name to the speakers it writes: the clip's own
@@ -776,7 +778,7 @@ fn retire_if_permanently_unusable(
     kind: Kind,
     filename: &str,
     transcription: &str,
-    now: &str,
+    now: &Stamp,
 ) -> rusqlite::Result<bool> {
     if !has_word_timings(transcription) {
         return Ok(false);
@@ -801,7 +803,7 @@ pub fn write_pass(
     meaning: &mut rusqlite::Connection,
     ingest: &rusqlite::Connection,
     stream: &Stream,
-    now: &str,
+    now: &Stamp,
     limit: usize,
 ) -> rusqlite::Result<Pass> {
     let model = stream.model;

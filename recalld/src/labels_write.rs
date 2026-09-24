@@ -10,6 +10,7 @@
 
 use crate::route;
 use crate::turn_store::{self, HUMAN_MODEL, NewTurn, Provenance};
+use audiocore::instant::Stamp;
 use rusqlite::{Connection, Transaction};
 
 /// Why a correction was hidden from the corpus by a human in review.
@@ -130,8 +131,8 @@ const HUMAN_CONFIDENCE: f64 = 1.0;
 struct Original {
     id: i64,
     audio_segment_id: Option<i64>,
-    start_utc: String,
-    end_utc: String,
+    start_utc: Stamp,
+    end_utc: Stamp,
     text: String,
     language: Option<String>,
     language_confidence: Option<f64>,
@@ -216,7 +217,7 @@ pub fn apply_correction(
     conn: &mut Connection,
     segment_id: i64,
     corrected_text: &str,
-    now: &str,
+    now: &Stamp,
     edit: &Correction,
 ) -> Result<i64, CorrectError> {
     let text = corrected_text.trim();
@@ -234,14 +235,13 @@ pub fn apply_correction(
     // An overridden span is re-spelled in UTC, never stored as sent: these
     // columns are compared as text. See `audiocore::instant`.
     let start = match edit.start {
-        Some(value) => audiocore::instant::respell_utc(value).ok_or(CorrectError::BadSpan)?,
+        Some(value) => Stamp::parse(value).ok_or(CorrectError::BadSpan)?,
         None => old.start_utc.clone(),
     };
     let end = match edit.end {
-        Some(value) => audiocore::instant::respell_utc(value).ok_or(CorrectError::BadSpan)?,
+        Some(value) => Stamp::parse(value).ok_or(CorrectError::BadSpan)?,
         None => old.end_utc.clone(),
     };
-    let (start, end) = (start.as_str(), end.as_str());
     // A speaker given here wins; otherwise the turn keeps the name it had.
     let speaker_label = edit.speaker.map(str::to_owned).or(old.speaker_label);
 
@@ -249,9 +249,6 @@ pub fn apply_correction(
         &tx,
         &NewTurn {
             audio_segment_id: old.audio_segment_id,
-            start_utc: start,
-            end_utc: end,
-            text,
             language: language.as_deref(),
             language_confidence: old.language_confidence,
             asr_confidence: Some(HUMAN_CONFIDENCE),
@@ -263,7 +260,7 @@ pub fn apply_correction(
             speaker_cluster: old.speaker_cluster.as_deref(),
             provenance: Some(Provenance::Correction(old.id)),
             created_utc: Some(now),
-            ..NewTurn::default()
+            ..NewTurn::at(&start, &end, text)
         },
     )?;
     turn_store::supersede(&tx, old.id, new_id)?;
@@ -312,7 +309,7 @@ pub async fn correct_route(
     Json(body): Json<CorrectIn>,
 ) -> Response {
     let root = st.root.clone();
-    let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
+    let now = audiocore::instant::Stamp::now();
     let applied = tokio::task::spawn_blocking(move || {
         let mut conn = work::open_write(&root)?;
         apply_correction(

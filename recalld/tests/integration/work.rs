@@ -23,8 +23,8 @@ fn adding_the_same_term_twice_returns_the_same_id_rather_than_failing() {
     // prompt.
     let conn = db();
 
-    let first = work::add_term(&conn, "vorasidenib", NOW).expect("first");
-    let again = work::add_term(&conn, "vorasidenib", NOW).expect("again");
+    let first = work::add_term(&conn, "vorasidenib", &crate::stamp(NOW)).expect("first");
+    let again = work::add_term(&conn, "vorasidenib", &crate::stamp(NOW)).expect("again");
 
     assert_eq!(first, again);
     assert_eq!(work::vocabulary(&conn).expect("list").items.len(), 1);
@@ -36,8 +36,8 @@ fn a_term_is_trimmed_before_it_is_stored_and_matched() {
     // copies in the prompt.
     let conn = db();
 
-    let padded = work::add_term(&conn, "  EGA wing  ", NOW).expect("padded");
-    let plain = work::add_term(&conn, "EGA wing", NOW).expect("plain");
+    let padded = work::add_term(&conn, "  EGA wing  ", &crate::stamp(NOW)).expect("padded");
+    let plain = work::add_term(&conn, "EGA wing", &crate::stamp(NOW)).expect("plain");
 
     assert_eq!(padded, plain);
     let items = work::vocabulary(&conn).expect("list").items;
@@ -52,11 +52,11 @@ fn a_blank_term_is_refused_rather_than_stored() {
     let conn = db();
 
     assert!(matches!(
-        work::add_term(&conn, "   ", NOW),
+        work::add_term(&conn, "   ", &crate::stamp(NOW)),
         Err(TermError::Blank)
     ));
     assert!(matches!(
-        work::add_term(&conn, "", NOW),
+        work::add_term(&conn, "", &crate::stamp(NOW)),
         Err(TermError::Blank)
     ));
     assert!(work::vocabulary(&conn).expect("list").items.is_empty());
@@ -70,7 +70,8 @@ fn a_database_failure_is_not_reported_as_a_blank_term() {
     let conn = Connection::open_in_memory().expect("open");
     // No schema: every write fails at the table that is not there.
 
-    let err = work::add_term(&conn, "vorasidenib", NOW).expect_err("no vocabulary table");
+    let err =
+        work::add_term(&conn, "vorasidenib", &crate::stamp(NOW)).expect_err("no vocabulary table");
 
     assert!(matches!(err, TermError::Db(_)), "got {err:?}");
 }
@@ -81,7 +82,7 @@ fn terms_list_case_insensitively_so_the_page_reads_alphabetically() {
     // sorts above every lowercase one, which is most of what this list holds.
     let conn = db();
     for t in ["zebra", "Apple", "mango"] {
-        work::add_term(&conn, t, NOW).expect("add");
+        work::add_term(&conn, t, &crate::stamp(NOW)).expect("add");
     }
 
     let terms: Vec<_> = work::vocabulary(&conn)
@@ -97,7 +98,7 @@ fn terms_list_case_insensitively_so_the_page_reads_alphabetically() {
 #[test]
 fn deleting_a_term_removes_it_and_deleting_a_missing_one_is_quiet() {
     let conn = db();
-    let id = work::add_term(&conn, "vorasidenib", NOW).expect("add");
+    let id = work::add_term(&conn, "vorasidenib", &crate::stamp(NOW)).expect("add");
 
     work::delete_term(&conn, id).expect("delete");
     assert!(work::vocabulary(&conn).expect("list").items.is_empty());
@@ -124,5 +125,5 @@ fn the_write_connection_is_separate_from_the_read_only_one() {
     assert!(err.is_err(), "the read handle must not be able to write");
 
     let rw = work::open_write(dir.path()).expect("writable");
-    work::add_term(&rw, "vorasidenib", NOW).expect("the write handle must write");
+    work::add_term(&rw, "vorasidenib", &crate::stamp(NOW)).expect("the write handle must write");
 }

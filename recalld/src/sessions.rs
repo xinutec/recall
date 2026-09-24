@@ -10,6 +10,7 @@
 //! upload.
 
 use crate::{reads, route, work};
+use audiocore::instant::Stamp;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -418,7 +419,7 @@ pub async fn transcript_route(
 pub fn delete_session(
     conn: &mut Connection,
     source: &str,
-    now: &str,
+    now: &Stamp,
 ) -> Result<Vec<String>, SessionError> {
     require_upload(conn, source)?;
     let tx = conn.transaction()?;
@@ -476,7 +477,7 @@ pub async fn delete_route(
     Path(source): Path<String>,
 ) -> Response {
     let root = st.root.clone();
-    let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
+    let now = audiocore::instant::Stamp::now();
     let done = tokio::task::spawn_blocking(move || -> Result<(), SessionError> {
         let paths = {
             let mut conn = work::open_write(&root)?;

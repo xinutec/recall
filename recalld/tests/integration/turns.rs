@@ -570,7 +570,7 @@ fn a_written_turn_is_findable_by_search() {
     // makes the text unfindable by search.
     let mut conn = meaning_with_turns();
     assert_eq!(
-        write_block(&mut conn, 7, a_span(), &a_plan(), &ROOM, NOW).expect("write"),
+        write_block(&mut conn, 7, a_span(), &a_plan(), &ROOM, &crate::stamp(NOW)).expect("write"),
         1
     );
     let hits: i64 = conn
@@ -590,11 +590,11 @@ fn a_second_pass_refuses_rather_than_duplicating() {
     let mut conn = meaning_with_turns();
     let plan = a_plan();
     assert_eq!(
-        write_block(&mut conn, 7, a_span(), &plan, &ROOM, NOW).expect("first"),
+        write_block(&mut conn, 7, a_span(), &plan, &ROOM, &crate::stamp(NOW)).expect("first"),
         1
     );
     assert_eq!(
-        write_block(&mut conn, 7, a_span(), &plan, &ROOM, NOW).expect("again"),
+        write_block(&mut conn, 7, a_span(), &plan, &ROOM, &crate::stamp(NOW)).expect("again"),
         0
     );
     let n: i64 = conn
@@ -618,7 +618,7 @@ fn hiding_names_a_reason_a_reader_can_act_on() {
         refused: vec![],
         swept: 0,
     };
-    write_block(&mut conn, 7, a_span(), &plan, &ROOM, NOW).expect("write");
+    write_block(&mut conn, 7, a_span(), &plan, &ROOM, &crate::stamp(NOW)).expect("write");
     let reason: String = conn
         .query_row(
             "SELECT hidden_reason FROM transcript_segments WHERE id = 99",
@@ -645,7 +645,7 @@ fn an_empty_plan_writes_nothing_and_hides_nothing() {
         swept: 0,
     };
     assert_eq!(
-        write_block(&mut conn, 7, a_span(), &empty, &ROOM, NOW).expect("write"),
+        write_block(&mut conn, 7, a_span(), &empty, &ROOM, &crate::stamp(NOW)).expect("write"),
         0
     );
     let reason: Option<String> = conn
@@ -777,12 +777,12 @@ fn a_block_that_writes_nothing_is_decided_once_not_every_pass() {
         &a_result("momentum momentum momentum momentum"),
     );
 
-    let first = write_pass(&mut meaning, &ingest, &ROOM, NOW, 20).expect("first");
+    let first = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 20).expect("first");
     assert_eq!(first.blocks, 1, "the block is examined once");
     assert_eq!(first.swept, 1);
     assert_eq!(first.turns, 0);
 
-    let second = write_pass(&mut meaning, &ingest, &ROOM, NOW, 20).expect("second");
+    let second = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 20).expect("second");
     assert_eq!(
         second,
         Pass::default(),
@@ -804,7 +804,7 @@ fn a_written_block_is_retired_by_its_turns_and_not_by_the_ledger() {
     );
 
     assert_eq!(
-        write_pass(&mut meaning, &ingest, &ROOM, NOW, 20)
+        write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 20)
             .expect("first")
             .turns,
         1
@@ -818,7 +818,7 @@ fn a_written_block_is_retired_by_its_turns_and_not_by_the_ledger() {
     );
 
     assert_eq!(
-        write_pass(&mut meaning, &ingest, &ROOM, NOW, 20).expect("second"),
+        write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 20).expect("second"),
         Pass::default(),
         "and it is not rewritten while those turns stand"
     );
@@ -831,7 +831,7 @@ fn a_written_block_is_retired_by_its_turns_and_not_by_the_ledger() {
         )
         .expect("reverse");
     assert_eq!(
-        write_pass(&mut meaning, &ingest, &ROOM, NOW, 20)
+        write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 20)
             .expect("after reversal")
             .turns,
         1,
@@ -854,7 +854,7 @@ fn a_block_whose_audio_is_not_registered_yet_comes_back() {
         &a_result("wat zei je"),
     );
 
-    let early = write_pass(&mut meaning, &ingest, &ROOM, NOW, 20).expect("early");
+    let early = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 20).expect("early");
     assert_eq!(early.barren, 1);
     assert_eq!(early.blocks, 0);
     let ledgered: i64 = ingest
@@ -873,7 +873,7 @@ fn a_block_whose_audio_is_not_registered_yet_comes_back() {
         )
         .expect("block");
     assert_eq!(
-        write_pass(&mut meaning, &ingest, &ROOM, NOW, 20)
+        write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 20)
             .expect("later")
             .turns,
         1,
@@ -906,9 +906,9 @@ fn the_limit_counts_blocks_decided_not_rows_looked_at() {
 
     // Retire the five junk blocks first, one pass at a time.
     for _ in 0..5 {
-        write_pass(&mut meaning, &ingest, &ROOM, NOW, 1).expect("pass");
+        write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 1).expect("pass");
     }
-    let reached = write_pass(&mut meaning, &ingest, &ROOM, NOW, 1).expect("reach");
+    let reached = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 1).expect("reach");
     assert_eq!(
         reached.turns, 1,
         "the real block must be reachable past the decided ones"
@@ -993,7 +993,7 @@ fn a_per_mic_pass_writes_its_turns_and_hides_absolutely_nothing() {
         )
         .expect("other turn");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 20).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 20).expect("pass");
     assert_eq!(pass.turns, 1);
     assert_eq!(pass.hidden, 0, "a per-mic turn must hide nothing, ever");
 
@@ -1022,7 +1022,7 @@ fn a_per_mic_turn_records_the_provenance_that_takes_it_back_and_the_corpus_model
         "2026-09-11T10:01:00+00:00",
         &a_result("dit is echte spraak"),
     );
-    write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 20).expect("pass");
+    write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 20).expect("pass");
 
     let (model, provenance): (String, String) = meaning
         .query_row(
@@ -1071,7 +1071,7 @@ fn a_clip_the_mac_already_transcribed_is_left_alone() {
         )
         .expect("mac turn");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 20).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 20).expect("pass");
     assert_eq!(pass.turns, 0);
     let rows: i64 = meaning
         .query_row(
@@ -1107,7 +1107,7 @@ fn a_per_mic_turn_over_a_human_correction_is_refused_like_a_room_turn() {
         )
         .expect("correction");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 20).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 20).expect("pass");
     assert_eq!(pass.turns, 0);
     assert_eq!(pass.refused, 1);
 }
@@ -1139,7 +1139,7 @@ fn the_correction_window_is_the_clips_own_span_not_a_minute() {
         )
         .expect("correction");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 20).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 20).expect("pass");
     assert_eq!(
         pass.refused, 1,
         "a correction 3m18s into the clip is inside it, and must be seen"
@@ -1162,7 +1162,7 @@ fn the_source_is_read_from_the_ingest_plane_not_split_out_of_the_filename() {
         &a_result("dit is echte spraak"),
     );
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 20).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 20).expect("pass");
     assert_eq!(pass.turns, 1, "the hyphenated source must resolve");
 }
 
@@ -1192,7 +1192,7 @@ fn one_streams_refusal_does_not_retire_the_others_job() {
         )
         .expect("other verdict");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 20).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 20).expect("pass");
     assert_eq!(pass.turns, 1, "the per-mic job is still its own to decide");
 }
 
@@ -1284,7 +1284,8 @@ fn a_clip_is_registered_with_the_duration_it_actually_has() {
     let meaning = meaning_for_registration();
     let ingest = recalld::store::open(dir.path()).expect("ingest");
 
-    let pass = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("register");
+    let pass =
+        register_segments(&meaning, &ingest, dir.path(), &crate::stamp(NOW), 10).expect("register");
     assert_eq!(pass.added, 1);
 
     let (start, end, rate, channels): (String, String, i64, i64) = meaning
@@ -1313,7 +1314,7 @@ fn the_registered_path_is_the_ingest_copy_that_is_complete() {
     let name = ingest_blob(dir.path(), "usb", "20260913T100000", 1.0);
     let meaning = meaning_for_registration();
     let ingest = recalld::store::open(dir.path()).expect("ingest");
-    register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("register");
+    register_segments(&meaning, &ingest, dir.path(), &crate::stamp(NOW), 10).expect("register");
 
     let path: String = meaning
         .query_row("SELECT path FROM audio_segments", [], |r| r.get(0))
@@ -1342,7 +1343,8 @@ fn a_clip_already_registered_is_skipped_before_any_statement_runs() {
         .expect("existing");
     let ingest = recalld::store::open(dir.path()).expect("ingest");
 
-    let pass = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("register");
+    let pass =
+        register_segments(&meaning, &ingest, dir.path(), &crate::stamp(NOW), 10).expect("register");
     assert_eq!(pass.added, 0);
     let path: String = meaning
         .query_row("SELECT path FROM audio_segments", [], |r| r.get(0))
@@ -1369,11 +1371,13 @@ fn a_clip_ffmpeg_cannot_read_is_retired_not_retried_for_ever() {
         .expect("segment");
     let meaning = meaning_for_registration();
 
-    let first = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("first");
+    let first =
+        register_segments(&meaning, &ingest, dir.path(), &crate::stamp(NOW), 10).expect("first");
     assert_eq!(first.unreadable, 1);
     assert_eq!(first.added, 0);
 
-    let second = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("second");
+    let second =
+        register_segments(&meaning, &ingest, dir.path(), &crate::stamp(NOW), 10).expect("second");
     assert_eq!(
         second,
         recalld::turns::Registered::default(),
@@ -1399,7 +1403,8 @@ fn a_source_the_meaning_plane_cannot_type_waits_rather_than_being_guessed() {
     let meaning = meaning_for_registration(); // knows `usb` only
     let ingest = recalld::store::open(dir.path()).expect("ingest");
 
-    let pass = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("register");
+    let pass =
+        register_segments(&meaning, &ingest, dir.path(), &crate::stamp(NOW), 10).expect("register");
     assert_eq!(pass.waiting, 1);
     assert_eq!(pass.added, 0);
     let rows: i64 = meaning
@@ -1428,7 +1433,8 @@ fn a_row_whose_filename_changed_is_still_not_repointed() {
         .expect("existing");
     let ingest = recalld::store::open(dir.path()).expect("ingest");
 
-    let pass = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("register");
+    let pass =
+        register_segments(&meaning, &ingest, dir.path(), &crate::stamp(NOW), 10).expect("register");
     assert_eq!(pass.added, 0, "the unique constraint must absorb it");
     let (rows, path): (i64, String) = meaning
         .query_row("SELECT count(*), max(path) FROM audio_segments", [], |r| {
@@ -1470,7 +1476,7 @@ fn a_per_mic_write_hides_the_live_guess_it_replaces() {
         )
         .expect("live turn");
 
-    write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 20).expect("pass");
+    write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 20).expect("pass");
 
     let hidden: Option<String> = meaning
         .query_row(
@@ -1507,7 +1513,7 @@ fn a_live_turn_outside_the_clip_is_left_alone() {
         )
         .expect("later live turn");
 
-    write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 20).expect("pass");
+    write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 20).expect("pass");
 
     let hidden: Option<String> = meaning
         .query_row(
@@ -1537,7 +1543,8 @@ fn a_clip_whose_minute_a_sibling_already_holds_is_retired_not_reconsidered() {
     ingest_blob(dir.path(), "usb", "20260913T100000", 3.0);
     let twin = twin_blob(dir.path(), "usb", "20260913T100000", 3.0, "wav");
 
-    let first = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("first");
+    let first =
+        register_segments(&meaning, &ingest, dir.path(), &crate::stamp(NOW), 10).expect("first");
     assert_eq!(first.added, 1, "one of the two takes the row");
     assert_eq!(first.covered, 1, "the other is covered by its sibling");
     // The sibling's start time is in its name and the minute is registered,
@@ -1569,7 +1576,8 @@ fn a_clip_whose_minute_a_sibling_already_holds_is_retired_not_reconsidered() {
     );
 
     // The second pass does nothing: no probe, no insert.
-    let second = register_segments(&meaning, &ingest, dir.path(), "now", 10).expect("second");
+    let second =
+        register_segments(&meaning, &ingest, dir.path(), &crate::stamp(NOW), 10).expect("second");
     assert_eq!(
         (second.added, second.covered, second.retired, second.probed),
         (0, 0, 0, 0),
@@ -1636,14 +1644,14 @@ fn a_block_whose_session_was_deleted_is_decided_not_waited_for() {
         )
         .expect("tombstone");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 20).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 20).expect("pass");
     assert_eq!(pass.barren, 1);
     let outcome: String = ingest
         .query_row("SELECT outcome FROM pass_ledger", [], |r| r.get(0))
         .expect("one ledger row");
     assert_eq!(outcome, "deleted");
     assert_eq!(
-        write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 20).expect("again"),
+        write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 20).expect("again"),
         Pass::default(),
         "a deleted session is decided once, not re-examined on every pass"
     );
@@ -1677,7 +1685,7 @@ fn a_limited_pass_takes_the_oldest_clip_across_sources_first() {
             .expect("clip");
     }
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 1).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 1).expect("pass");
     assert_eq!(pass.turns, 1);
     let written: String = meaning
         .query_row("SELECT start_utc FROM transcript_segments", [], |r| {

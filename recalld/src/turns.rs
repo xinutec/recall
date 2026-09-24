@@ -18,6 +18,7 @@
 
 use crate::turn_store::{self, HiddenReason, NewTurn, Protected, Provenance};
 use audiocore::instant;
+use audiocore::instant::Stamp;
 use audiocore::job::Kind;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -337,7 +338,7 @@ pub fn register_segments(
     meaning: &rusqlite::Connection,
     ingest: &rusqlite::Connection,
     root: &std::path::Path,
-    now: &str,
+    now: &Stamp,
     limit: usize,
 ) -> rusqlite::Result<Registered> {
     // Uploads are excluded because `upload::register` writes their meaning-plane
@@ -502,7 +503,7 @@ pub fn write_block(
     span: (DateTime<Utc>, DateTime<Utc>),
     plan: &Plan,
     stream: &Stream,
-    now: &str,
+    now: &Stamp,
 ) -> rusqlite::Result<usize> {
     if plan.insert.is_empty() {
         return Ok(0);
@@ -518,10 +519,7 @@ pub fn write_block(
     }
     let mut written = 0;
     for turn in &plan.insert {
-        let (start, end) = (
-            instant::python_isoformat_utc(turn.start),
-            instant::python_isoformat_utc(turn.end),
-        );
+        let (start, end) = (Stamp::of(turn.start), Stamp::of(turn.end));
         // Implausibly slow speech zeroes the confidence, as in `diarized`;
         // `word_spans` reads both timing encodings.
         let confidence = match turn.word_timings.as_deref() {
@@ -536,16 +534,13 @@ pub fn write_block(
             &tx,
             &NewTurn {
                 audio_segment_id: Some(audio_segment_id),
-                start_utc: &start,
-                end_utc: &end,
-                text: &turn.text,
                 language: turn.language.as_deref(),
                 asr_confidence: confidence,
                 asr_model: Some(stream.model),
                 provenance: Some(stream.provenance.clone()),
                 word_timings: turn.word_timings.as_deref(),
                 created_utc: Some(now),
-                ..NewTurn::default()
+                ..NewTurn::at(&start, &end, &turn.text)
             },
         )?;
         written += 1;
@@ -669,7 +664,7 @@ pub fn ledger(
     kind: impl Into<PassKind>,
     filename: &str,
     outcome: &str,
-    now: &str,
+    now: &Stamp,
 ) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO pass_ledger (kind, filename, outcome, decided_utc)
@@ -694,7 +689,7 @@ pub fn write_pass(
     meaning: &mut rusqlite::Connection,
     ingest: &rusqlite::Connection,
     stream: &Stream,
-    now: &str,
+    now: &Stamp,
     limit: usize,
 ) -> rusqlite::Result<Pass> {
     // ⚠ The source is joined from the ingest plane, never parsed from the

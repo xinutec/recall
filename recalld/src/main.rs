@@ -254,7 +254,7 @@ fn spawn_rematcher(root: PathBuf) {
             let batch_root = root.clone();
             let done = tokio::task::spawn_blocking(move || {
                 let mut conn = recalld::work::open_write(&batch_root)?;
-                let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
+                let now = audiocore::instant::Stamp::now();
                 recalld::rematch::run_once(&mut conn, BATCH, &now)
             })
             .await;
@@ -364,7 +364,7 @@ fn spawn_enroller(root: PathBuf) {
                 let pass = recalld::enrol::write_pass(
                     &meaning,
                     &ingest,
-                    &audiocore::instant::python_isoformat_utc(now),
+                    &audiocore::instant::Stamp::of(now),
                     WRITE,
                 )?;
                 Ok::<_, rusqlite::Error>((queued, pass))
@@ -429,7 +429,7 @@ fn spawn_diarized_writer(root: PathBuf, stream: recalld::diarized::Stream<'stati
             let done = tokio::task::spawn_blocking(move || {
                 let ingest = recalld::store::open(&pass_root)?;
                 let mut meaning = recalld::work::open_write(&pass_root)?;
-                let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
+                let now = audiocore::instant::Stamp::now();
                 recalld::diarized::write_pass(&mut meaning, &ingest, &pass_stream, &now, BATCH)
             })
             .await;
@@ -546,7 +546,7 @@ fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
             let done = tokio::task::spawn_blocking(move || {
                 let ingest = recalld::store::open(&pass_root)?;
                 let mut meaning = recalld::work::open_write(&pass_root)?;
-                let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
+                let now = audiocore::instant::Stamp::now();
                 recalld::turns::write_pass(&mut meaning, &ingest, &pass_stream, &now, BATCH)
             })
             .await;
@@ -639,7 +639,7 @@ fn spawn_segment_registrar(root: PathBuf) {
             let done = tokio::task::spawn_blocking(move || {
                 let ingest = recalld::store::open(&pass_root)?;
                 let meaning = recalld::work::open_write(&pass_root)?;
-                let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
+                let now = audiocore::instant::Stamp::now();
                 recalld::turns::register_segments(&meaning, &ingest, &pass_root, &now, BATCH)
             })
             .await;

@@ -622,7 +622,7 @@ fn a_single_speaker_pass_names_the_turns_that_are_there_and_hides_nothing() {
     let b = room_turn(&meaning, "twee");
     let c = room_turn(&meaning, "drie");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.named, 3, "every turn the speaker covers");
     assert_eq!(pass.hidden, 0, "⚠ NOTHING may be hidden");
@@ -657,7 +657,7 @@ fn a_finished_diarization_replaces_the_room_turns_with_speaker_split_ones() {
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
     let old = room_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.blocks, 1);
     assert_eq!(pass.turns, 2, "one turn per speaker");
@@ -716,7 +716,7 @@ fn a_decided_block_leaves_a_ledger_row_and_is_not_decided_twice() {
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
     room_turn(&meaning, "een twee");
 
-    write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("first");
+    write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("first");
     let outcome: String = ingest
         .query_row(
             "SELECT outcome FROM pass_ledger WHERE kind = ?1 AND filename = ?2",
@@ -728,7 +728,7 @@ fn a_decided_block_leaves_a_ledger_row_and_is_not_decided_twice() {
 
     // A second pass does no work: a decision that writes no row is made again
     // for ever.
-    let again = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("second");
+    let again = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("second");
     assert_eq!(again, recalld::diarized::Pass::default());
 }
 
@@ -746,7 +746,7 @@ fn a_block_whose_pass_is_all_junk_keeps_its_transcript_and_is_not_retried() {
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, junk);
     let old = room_turn(&meaning, "a minute of Dutch about writing things down");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.turns, 0);
     assert_eq!(pass.hidden, 0);
@@ -780,7 +780,7 @@ fn one_looping_segment_no_longer_costs_the_clip_its_speakers() {
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_WITH_A_LOOPING_SEGMENT);
     room_turn(&meaning, "a minute of Dutch about writing things down");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
 
     assert!(pass.turns > 0, "the clean words must become turns");
     assert_eq!(pass.kept, 0, "this is no longer a refusal");
@@ -812,7 +812,7 @@ fn a_corrected_block_is_left_alone() {
         )
         .expect("correction");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.turns, 0);
     assert_eq!(pass.kept, 1);
@@ -841,7 +841,7 @@ fn a_block_a_person_named_is_left_alone() {
         )
         .expect("named");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!((pass.turns, pass.hidden), (0, 0));
     let standing: i64 = meaning
@@ -865,7 +865,7 @@ fn a_block_with_no_words_yet_waits_and_keeps_no_ledger_row() {
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, no_words);
     room_turn(&meaning, "hello");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.waiting, 1);
     assert_eq!(pass.blocks, 0);
@@ -886,7 +886,7 @@ fn a_block_with_no_audio_segment_waits() {
         .expect("unregister");
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.waiting, 1);
     let rows: i64 = ingest
@@ -910,7 +910,7 @@ fn a_diarization_with_no_transcription_is_not_picked_up() {
         )
         .expect("drop the transcription");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass, recalld::diarized::Pass::default());
 }
@@ -971,7 +971,7 @@ fn a_microphone_clips_turns_are_replaced_by_speaker_split_ones() {
     let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
     let old = room_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.turns, 2, "one per speaker");
     assert_eq!(pass.hidden, 1, "the flat turn is superseded");
@@ -998,7 +998,7 @@ fn a_per_mic_turn_keeps_the_corpus_model_name_and_is_reversible_by_provenance() 
     let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
     room_turn(&meaning, "een twee");
 
-    write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+    write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
 
     let (model, provenance): (String, String) = meaning
         .query_row(
@@ -1030,7 +1030,7 @@ fn the_per_mic_pass_does_not_touch_the_room_streams_jobs() {
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY); // ROOM jobs only
     room_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(
         pass,
@@ -1047,7 +1047,7 @@ fn the_room_pass_does_not_touch_the_per_mic_streams_jobs() {
     let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY); // PER-MIC jobs only
     room_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass, recalld::diarized::Pass::default());
 }
@@ -1155,7 +1155,7 @@ fn a_written_turn_carries_the_name_its_voiceprint_implies() {
     let ingest = mic_ingest(dir.path(), VOICED, WORDS_TODAY);
     room_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
     assert_eq!(pass.turns, 2);
 
     let mut stmt = meaning
@@ -1197,7 +1197,7 @@ fn a_written_turn_keeps_the_embedding_a_later_rematch_needs() {
     let ingest = mic_ingest(dir.path(), VOICED, WORDS_TODAY);
     room_turn(&meaning, "een twee");
 
-    write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+    write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
 
     let stored: i64 = meaning
         .query_row("SELECT count(*) FROM transcript_embeddings", [], |r| {
@@ -1216,7 +1216,7 @@ fn with_nobody_enrolled_turns_are_written_unnamed_rather_than_guessed_at() {
     let ingest = mic_ingest(dir.path(), VOICED, WORDS_TODAY);
     room_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
     assert_eq!(pass.turns, 2, "the turns are still written");
 
     let guessed: i64 = meaning
@@ -1238,7 +1238,7 @@ fn a_diarization_without_voiceprints_still_writes_its_turns() {
     let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY); // no "speakers"
     room_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, NOW, 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.turns, 2);
     let guessed: i64 = meaning
@@ -1266,7 +1266,7 @@ fn a_foreign_script_turn_keeps_its_text_and_loses_its_confidence() {
     let ingest = ingest_plane(dir.path(), ONE_SPEAKER, words);
     room_turn(&meaning, "een");
 
-    write_pass(&mut meaning, &ingest, &ROOM, NOW, 10).expect("pass");
+    write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
 
     let (text, confidence): (String, Option<f64>) = meaning
         .query_row(

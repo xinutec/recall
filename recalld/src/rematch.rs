@@ -4,6 +4,7 @@
 //! whatever voiceprints existed then; this pass re-asks after later enrolments.
 
 use crate::identify::{match_one, worth_writing};
+use audiocore::instant::Stamp;
 use rusqlite::Connection;
 
 /// What one pass did.
@@ -41,7 +42,7 @@ pub fn newest_enrolment(conn: &Connection) -> rusqlite::Result<Option<String>> {
 ///
 /// # Errors
 /// If the database refuses.
-pub fn run_once(conn: &mut Connection, limit: usize, now: &str) -> rusqlite::Result<Pass> {
+pub fn run_once(conn: &mut Connection, limit: usize, now: &Stamp) -> rusqlite::Result<Pass> {
     // Stamping against an empty corpus would mark every turn fresh, so the
     // first real enrolment would look already applied.
     let Some(newest) = newest_enrolment(conn)? else {
@@ -80,7 +81,7 @@ pub fn run_once(conn: &mut Connection, limit: usize, now: &str) -> rusqlite::Res
     Ok(pass)
 }
 
-fn stamp(conn: &Connection, id: i64, now: &str) -> rusqlite::Result<()> {
+fn stamp(conn: &Connection, id: i64, now: &Stamp) -> rusqlite::Result<()> {
     crate::turn_store::stamp_matched(conn, id, now)
 }
 

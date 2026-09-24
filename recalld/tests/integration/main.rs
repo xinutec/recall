@@ -45,3 +45,8 @@ mod turns;
 mod upload;
 mod webauth;
 mod work;
+
+/// A test's instant as the typed stamp the writers take.
+pub fn stamp(raw: &str) -> audiocore::instant::Stamp {
+    audiocore::instant::Stamp::parse(raw).expect("an instant")
+}

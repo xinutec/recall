@@ -232,8 +232,14 @@ fn diarized_meeting(source: &str) -> tempfile::TempDir {
                 )
                 .expect("job");
         }
-        recalld::turns::ledger(&ingest, Kind::DiarizeSegment, &filename, "aligned", NOW)
-            .expect("ledger row");
+        recalld::turns::ledger(
+            &ingest,
+            Kind::DiarizeSegment,
+            &filename,
+            "aligned",
+            &crate::stamp(NOW),
+        )
+        .expect("ledger row");
     }
     dir
 }
@@ -620,7 +626,7 @@ fn deleting_the_household_archive_is_refused_and_removes_nothing() {
     let mut conn = delete_db();
     populate(&conn, "usb", "coreaudio");
 
-    let err = delete_session(&mut conn, "usb", NOW).expect_err("must refuse");
+    let err = delete_session(&mut conn, "usb", &crate::stamp(NOW)).expect_err("must refuse");
 
     assert!(matches!(err, SessionError::NotAnUpload), "got {err:?}");
     assert_eq!(count(&conn, "sources"), 1);
@@ -634,7 +640,7 @@ fn deleting_a_meeting_removes_every_derived_row_and_returns_its_files() {
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
 
-    let paths = delete_session(&mut conn, "meeting-1", NOW).expect("deleted");
+    let paths = delete_session(&mut conn, "meeting-1", &crate::stamp(NOW)).expect("deleted");
 
     assert_eq!(paths, vec!["/data/meeting-1/clip.flac".to_owned()]);
     for table in [
@@ -657,7 +663,7 @@ fn a_deletion_is_tombstoned_so_a_later_push_cannot_resurrect_it() {
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
 
-    delete_session(&mut conn, "meeting-1", NOW).expect("deleted");
+    delete_session(&mut conn, "meeting-1", &crate::stamp(NOW)).expect("deleted");
 
     let (source, start): (String, String) = conn
         .query_row(
@@ -676,7 +682,7 @@ fn deleting_one_meeting_leaves_another_untouched() {
     populate(&conn, "meeting-1", "upload");
     populate(&conn, "meeting-2", "upload");
 
-    delete_session(&mut conn, "meeting-1", NOW).expect("deleted");
+    delete_session(&mut conn, "meeting-1", &crate::stamp(NOW)).expect("deleted");
 
     assert_eq!(count(&conn, "sources"), 1);
     assert_eq!(count(&conn, "transcript_segments"), 1);
@@ -691,7 +697,7 @@ fn deleting_a_session_that_does_not_exist_is_a_miss_not_a_wipe() {
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
 
-    let err = delete_session(&mut conn, "meeting-nope", NOW).expect_err("must fail");
+    let err = delete_session(&mut conn, "meeting-nope", &crate::stamp(NOW)).expect_err("must fail");
 
     assert!(matches!(err, SessionError::Missing), "got {err:?}");
     assert_eq!(count(&conn, "sources"), 1);
@@ -706,7 +712,7 @@ fn a_failed_delete_leaves_the_session_whole() {
     conn.execute("DROP TABLE refine_requests", [])
         .expect("drop");
 
-    let failed = delete_session(&mut conn, "meeting-1", NOW);
+    let failed = delete_session(&mut conn, "meeting-1", &crate::stamp(NOW));
 
     assert!(failed.is_err());
     assert_eq!(count(&conn, "sources"), 1, "rolled back");

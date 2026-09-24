@@ -5,7 +5,7 @@
 //! pass; the runner refuses to transcribe without it.
 
 use crate::{reads, route};
-use audiocore::instant;
+use audiocore::instant::Stamp;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -78,7 +78,7 @@ impl From<rusqlite::Error> for TermError {
 ///
 /// Idempotent: `ON CONFLICT DO NOTHING`, then read the id back, because the
 /// Labels page cannot know what is already in the list before it posts.
-pub fn add_term(conn: &Connection, term: &str, now: &str) -> Result<i64, TermError> {
+pub fn add_term(conn: &Connection, term: &str, now: &Stamp) -> Result<i64, TermError> {
     let cleaned = term.trim();
     if cleaned.is_empty() {
         // A blank term would be applied to every transcription as an empty prompt
@@ -119,7 +119,7 @@ pub async fn vocabulary_add_route(
     Json(body): Json<TermIn>,
 ) -> Response {
     let root = st.root.clone();
-    let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
+    let now = audiocore::instant::Stamp::now();
     let added =
         tokio::task::spawn_blocking(move || add_term(&open_write(&root)?, &body.term, &now));
     match added.await {
@@ -180,7 +180,7 @@ pub fn ingest_live(
     turns: &[LiveTurn],
     now: DateTime<Utc>,
 ) -> rusqlite::Result<usize> {
-    let delivered = instant::python_isoformat_utc(now);
+    let delivered = Stamp::of(now);
     // Read once, here rather than passed in: the same names biased the ASR
     // prompt, so the refusal and its cause cannot drift apart.
     let names = crate::labels::known_speaker_names(conn)?.names;
@@ -188,10 +188,7 @@ pub fn ingest_live(
     for turn in turns {
         // The stored spelling, so the presence check and the insert agree. A
         // turn re-spelled on the way in would never match its own earlier copy.
-        let Some(start) = instant::parse_utc(&turn.start).map(instant::python_isoformat_utc) else {
-            continue;
-        };
-        let Some(end) = instant::parse_utc(&turn.end).map(instant::python_isoformat_utc) else {
+        let (Some(start), Some(end)) = (Stamp::parse(&turn.start), Stamp::parse(&turn.end)) else {
             continue;
         };
         if crate::quality::is_repetition_loop(&turn.text)
@@ -215,13 +212,10 @@ pub fn ingest_live(
         crate::turn_store::insert(
             &tx,
             &crate::turn_store::NewTurn {
-                start_utc: &start,
-                end_utc: &end,
-                text: &turn.text,
                 language: turn.language.as_deref(),
                 asr_model: Some(&turn.asr_model),
                 created_utc: Some(&delivered),
-                ..crate::turn_store::NewTurn::default()
+                ..crate::turn_store::NewTurn::at(&start, &end, &turn.text)
             },
         )?;
         tx.commit()?;

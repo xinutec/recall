@@ -229,7 +229,7 @@ fn a_correction_supersedes_the_original_and_records_the_pair() {
         &mut conn,
         41,
         "  misheard words  ",
-        NOW,
+        &crate::stamp(NOW),
         &Correction::default(),
     )
     .expect("corrected");
@@ -281,7 +281,7 @@ fn a_corrected_turn_is_findable_by_search() {
         &mut conn,
         41,
         "vorasidenib dosage",
-        NOW,
+        &crate::stamp(NOW),
         &Correction::default(),
     )
     .expect("corrected");
@@ -300,8 +300,14 @@ fn a_corrected_turn_is_findable_by_search() {
 fn a_correction_carries_the_voice_forward_so_it_does_not_go_unknown() {
     let mut conn = correction_db();
 
-    let new_id =
-        apply_correction(&mut conn, 41, "fixed", NOW, &Correction::default()).expect("corrected");
+    let new_id = apply_correction(
+        &mut conn,
+        41,
+        "fixed",
+        &crate::stamp(NOW),
+        &Correction::default(),
+    )
+    .expect("corrected");
 
     let cluster: Option<String> = conn
         .query_row(
@@ -318,9 +324,22 @@ fn correcting_an_already_superseded_turn_is_refused() {
     // A double-tap, or a second tab holding a stale id, must not mint a second
     // current human turn and a duplicate corpus pair.
     let mut conn = correction_db();
-    apply_correction(&mut conn, 41, "first", NOW, &Correction::default()).expect("first");
+    apply_correction(
+        &mut conn,
+        41,
+        "first",
+        &crate::stamp(NOW),
+        &Correction::default(),
+    )
+    .expect("first");
 
-    let again = apply_correction(&mut conn, 41, "second", NOW, &Correction::default());
+    let again = apply_correction(
+        &mut conn,
+        41,
+        "second",
+        &crate::stamp(NOW),
+        &Correction::default(),
+    );
 
     assert!(
         matches!(again, Err(CorrectError::AlreadySuperseded(41))),
@@ -340,7 +359,13 @@ fn correcting_an_already_superseded_turn_is_refused() {
 fn a_blank_correction_is_refused_before_anything_is_written() {
     let mut conn = correction_db();
 
-    let refused = apply_correction(&mut conn, 41, "   ", NOW, &Correction::default());
+    let refused = apply_correction(
+        &mut conn,
+        41,
+        "   ",
+        &crate::stamp(NOW),
+        &Correction::default(),
+    );
 
     assert!(
         matches!(refused, Err(CorrectError::Blank)),
@@ -356,7 +381,13 @@ fn a_blank_correction_is_refused_before_anything_is_written() {
 fn correcting_a_turn_that_does_not_exist_names_the_id() {
     let mut conn = correction_db();
 
-    let refused = apply_correction(&mut conn, 999, "text", NOW, &Correction::default());
+    let refused = apply_correction(
+        &mut conn,
+        999,
+        "text",
+        &crate::stamp(NOW),
+        &Correction::default(),
+    );
 
     assert!(
         matches!(refused, Err(CorrectError::Missing(999))),
@@ -374,7 +405,7 @@ fn an_overridden_span_and_language_reach_both_the_turn_and_the_pair() {
         &mut conn,
         41,
         "gecorrigeerd",
-        NOW,
+        &crate::stamp(NOW),
         &Correction {
             speaker: Some("Dr Lee"),
             start: Some("2026-07-03T09:51:01+00:00"),
@@ -417,7 +448,14 @@ fn the_pair_carries_the_original_audio_confidence_not_the_human_one() {
     // enrol as a voice; storing 1.0 would lose the only signal that says so.
     let mut conn = correction_db();
 
-    apply_correction(&mut conn, 41, "fixed", NOW, &Correction::default()).expect("corrected");
+    apply_correction(
+        &mut conn,
+        41,
+        "fixed",
+        &crate::stamp(NOW),
+        &Correction::default(),
+    )
+    .expect("corrected");
 
     let audio: f64 = conn
         .query_row("SELECT audio_confidence FROM corrections", [], |r| r.get(0))
@@ -433,7 +471,13 @@ fn a_failed_correction_leaves_no_orphan_turn_behind() {
     let mut conn = correction_db();
     conn.execute("DROP TABLE corrections", []).expect("drop");
 
-    let failed = apply_correction(&mut conn, 41, "fixed", NOW, &Correction::default());
+    let failed = apply_correction(
+        &mut conn,
+        41,
+        "fixed",
+        &crate::stamp(NOW),
+        &Correction::default(),
+    );
 
     assert!(failed.is_err());
     let turns: i64 = conn
@@ -461,7 +505,7 @@ fn an_overridden_span_is_respelled_the_way_every_stored_row_is() {
         &mut conn,
         41,
         "fixed",
-        NOW,
+        &crate::stamp(NOW),
         &Correction {
             start: Some("2026-07-03T09:51:01Z"),
             end: Some("2026-07-03T09:51:03.5+00:00"),
@@ -496,7 +540,7 @@ fn a_non_utc_offset_is_converted_to_the_stored_spelling() {
         &mut conn,
         41,
         "fixed",
-        NOW,
+        &crate::stamp(NOW),
         &Correction {
             start: Some("2026-07-03T10:51:01+01:00"),
             ..Correction::default()
@@ -522,7 +566,7 @@ fn a_malformed_span_is_refused_rather_than_stored_verbatim() {
         &mut conn,
         41,
         "fixed",
-        NOW,
+        &crate::stamp(NOW),
         &Correction {
             start: Some("last tuesday"),
             ..Correction::default()

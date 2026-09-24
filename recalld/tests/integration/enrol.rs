@@ -290,7 +290,13 @@ fn an_embedded_span_becomes_a_reference_voiceprint() {
         }]),
     );
 
-    let pass = write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+    let pass = write_pass(
+        &conn,
+        &ingest,
+        &crate::stamp("2026-09-10T12:10:00+00:00"),
+        10,
+    )
+    .expect("pass");
     assert_eq!(pass.prints, 1);
     assert_eq!(enrolled_names(&conn), vec![("Alice".to_owned(), 10)]);
     // The turn is enrolled, so it leaves the work-list by itself.
@@ -319,7 +325,13 @@ fn a_turn_renamed_while_the_runner_worked_is_not_filed_under_the_old_name() {
     )
     .expect("rename");
 
-    write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+    write_pass(
+        &conn,
+        &ingest,
+        &crate::stamp("2026-09-10T12:10:00+00:00"),
+        10,
+    )
+    .expect("pass");
     assert_eq!(enrolled_names(&conn), vec![("Bob".to_owned(), 10)]);
 }
 
@@ -343,7 +355,13 @@ fn a_turn_hidden_while_the_runner_worked_enrols_nothing() {
     )
     .expect("hide");
 
-    let pass = write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+    let pass = write_pass(
+        &conn,
+        &ingest,
+        &crate::stamp("2026-09-10T12:10:00+00:00"),
+        10,
+    )
+    .expect("pass");
     assert_eq!((pass.prints, pass.stale), (0, 1));
     assert!(enrolled_names(&conn).is_empty());
 }
@@ -365,7 +383,13 @@ fn an_empty_vector_is_refused_rather_than_enrolled() {
         }]),
     );
 
-    let pass = write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+    let pass = write_pass(
+        &conn,
+        &ingest,
+        &crate::stamp("2026-09-10T12:10:00+00:00"),
+        10,
+    )
+    .expect("pass");
     assert_eq!((pass.prints, pass.stale), (0, 1));
     assert!(enrolled_names(&conn).is_empty());
 }
@@ -379,9 +403,21 @@ fn a_clip_that_enrols_nothing_is_still_ledgered() {
     let ingest = ingest_at(dir.path());
     finished(&ingest, "usb-20260910T100000.wav", "not json at all");
 
-    let first = write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+    let first = write_pass(
+        &conn,
+        &ingest,
+        &crate::stamp("2026-09-10T12:10:00+00:00"),
+        10,
+    )
+    .expect("pass");
     assert_eq!(first.clips, 1);
-    let again = write_pass(&conn, &ingest, "2026-09-10T12:20:00+00:00", 10).expect("pass");
+    let again = write_pass(
+        &conn,
+        &ingest,
+        &crate::stamp("2026-09-10T12:20:00+00:00"),
+        10,
+    )
+    .expect("pass");
     assert_eq!(again.clips, 0, "a decided clip must not come back");
 }
 
@@ -398,12 +434,24 @@ fn a_replayed_result_does_not_enrol_the_same_turn_twice() {
         vector: vec![1.0],
     }]);
     finished(&ingest, "usb-20260910T100000.wav", &payload);
-    write_pass(&conn, &ingest, "2026-09-10T12:10:00+00:00", 10).expect("pass");
+    write_pass(
+        &conn,
+        &ingest,
+        &crate::stamp("2026-09-10T12:10:00+00:00"),
+        10,
+    )
+    .expect("pass");
 
     ingest
         .execute("DELETE FROM pass_ledger", [])
         .expect("forget the ledger");
-    let pass = write_pass(&conn, &ingest, "2026-09-10T12:20:00+00:00", 10).expect("pass");
+    let pass = write_pass(
+        &conn,
+        &ingest,
+        &crate::stamp("2026-09-10T12:20:00+00:00"),
+        10,
+    )
+    .expect("pass");
     assert_eq!((pass.prints, pass.stale), (0, 1));
     assert_eq!(enrolled_names(&conn).len(), 1);
 }

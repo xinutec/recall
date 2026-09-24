@@ -5,6 +5,7 @@
 //! recognise is the bug this closes: a pass naming turns in place set only the
 //! cluster, and the tier, read from the provenance, called them undiarized.
 
+use audiocore::instant::Stamp;
 use std::borrow::Cow;
 use std::fmt;
 
@@ -214,12 +215,12 @@ pub fn protected_between(
     Ok(out)
 }
 
-/// A turn to insert. Instants are already spelled (`audiocore::instant`).
-#[derive(Debug, Clone, Default)]
+/// A turn to insert.
+#[derive(Debug, Clone)]
 pub struct NewTurn<'a> {
     pub audio_segment_id: Option<i64>,
-    pub start_utc: &'a str,
-    pub end_utc: &'a str,
+    pub start_utc: &'a Stamp,
+    pub end_utc: &'a Stamp,
     pub text: &'a str,
     pub language: Option<&'a str>,
     pub language_confidence: Option<f64>,
@@ -231,7 +232,29 @@ pub struct NewTurn<'a> {
     /// `None` only for a live turn.
     pub provenance: Option<Provenance>,
     pub word_timings: Option<&'a str>,
-    pub created_utc: Option<&'a str>,
+    pub created_utc: Option<&'a Stamp>,
+}
+
+impl<'a> NewTurn<'a> {
+    /// A turn with only what every turn has; the rest are set by struct update.
+    pub const fn at(start_utc: &'a Stamp, end_utc: &'a Stamp, text: &'a str) -> Self {
+        Self {
+            audio_segment_id: None,
+            start_utc,
+            end_utc,
+            text,
+            language: None,
+            language_confidence: None,
+            asr_confidence: None,
+            asr_model: None,
+            speaker_label: None,
+            speaker_id: None,
+            speaker_cluster: None,
+            provenance: None,
+            word_timings: None,
+            created_utc: None,
+        }
+    }
 }
 
 /// Insert a turn and its search-index row, returning its id.
@@ -251,8 +274,8 @@ pub fn insert(conn: &Connection, turn: &NewTurn<'_>) -> rusqlite::Result<i64> {
             "audio_segment_id",
             turn.audio_segment_id.map(Value::Integer),
         ),
-        ("start_utc", text(Some(turn.start_utc))),
-        ("end_utc", text(Some(turn.end_utc))),
+        ("start_utc", Some(Value::Text(turn.start_utc.to_string()))),
+        ("end_utc", Some(Value::Text(turn.end_utc.to_string()))),
         ("text", text(Some(turn.text))),
         ("language", text(turn.language)),
         (
@@ -266,7 +289,10 @@ pub fn insert(conn: &Connection, turn: &NewTurn<'_>) -> rusqlite::Result<i64> {
         ("speaker_cluster", text(turn.speaker_cluster)),
         ("provenance", provenance.map(Value::Text)),
         ("word_timings", text(turn.word_timings)),
-        ("created_utc", text(turn.created_utc)),
+        (
+            "created_utc",
+            turn.created_utc.map(|t| Value::Text(t.to_string())),
+        ),
     ]
     .into_iter()
     .filter_map(|(name, value)| value.map(|v| (name, v)))
@@ -429,7 +455,7 @@ pub fn set_match(
     id: i64,
     person: &str,
     score: f64,
-    now: &str,
+    now: &Stamp,
 ) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE transcript_segments
@@ -444,7 +470,7 @@ pub fn set_match(
 ///
 /// # Errors
 /// If the database refuses.
-pub fn stamp_matched(conn: &Connection, id: i64, now: &str) -> rusqlite::Result<()> {
+pub fn stamp_matched(conn: &Connection, id: i64, now: &Stamp) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE transcript_segments SET speaker_matched_utc = ?1 WHERE id = ?2",
         rusqlite::params![now, id],

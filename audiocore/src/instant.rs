@@ -74,3 +74,56 @@ where
             .ok_or_else(|| serde::de::Error::custom(format!("not an instant: {text}"))),
     }
 }
+
+/// An instant in the stored spelling.
+///
+/// Built only from a real instant, so a writer taking one cannot be handed a
+/// placeholder or another spelling; a string parameter accepted `"now"`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Stamp(String);
+
+impl Stamp {
+    pub fn of(when: DateTime<Utc>) -> Self {
+        Self(python_isoformat_utc(when))
+    }
+
+    pub fn now() -> Self {
+        Self::of(Utc::now())
+    }
+
+    /// Any spelling [`parse`] reads, converted; `None` if it is not an instant.
+    pub fn parse(raw: &str) -> Option<Self> {
+        respell_utc(raw).map(Self)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<DateTime<Utc>> for Stamp {
+    fn from(when: DateTime<Utc>) -> Self {
+        Self::of(when)
+    }
+}
+
+impl std::fmt::Display for Stamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl rusqlite::ToSql for Stamp {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.0.as_str().into())
+    }
+}
+
+impl rusqlite::types::FromSql for Stamp {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        Self::parse(raw).ok_or_else(|| {
+            rusqlite::types::FromSqlError::Other(format!("not an instant: {raw:?}").into())
+        })
+    }
+}

@@ -3,6 +3,7 @@
 //! print corpus has saturated (#1648), so this keeps up with new labels rather
 //! than raising a number.
 
+use audiocore::instant::Stamp;
 use audiocore::job::Kind;
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::Connection;
@@ -229,7 +230,12 @@ fn still_wanted(meaning: &Connection, segment_id: i64) -> rusqlite::Result<Optio
 ///
 /// # Errors
 /// If the meaning plane refuses.
-fn enrol_one(meaning: &Connection, person: &str, print: &Print, now: &str) -> rusqlite::Result<()> {
+fn enrol_one(
+    meaning: &Connection,
+    person: &str,
+    print: &Print,
+    now: &Stamp,
+) -> rusqlite::Result<()> {
     meaning.execute(
         "INSERT OR IGNORE INTO speakers (name) VALUES (?1)",
         [person],
@@ -261,7 +267,7 @@ fn enrol_one(meaning: &Connection, person: &str, print: &Print, now: &str) -> ru
 pub fn write_pass(
     meaning: &Connection,
     ingest: &Connection,
-    now: &str,
+    now: &Stamp,
     limit: usize,
 ) -> rusqlite::Result<Enrolled> {
     let candidates: Vec<(String, String)> = {

@@ -14,7 +14,7 @@
 //! mid-character, so everything below works on `Vec<char>`.
 
 use crate::turn_store::{self, HiddenReason, NewTurn, Provenance, Stage};
-use audiocore::instant;
+use audiocore::instant::Stamp;
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
@@ -296,16 +296,14 @@ fn insert_piece(
     turn: &Turn,
     piece: &Piece,
     provenance: &Provenance,
-    now: &str,
+    now: &Stamp,
 ) -> rusqlite::Result<()> {
     let words = piece.words.as_deref().map(crate::pyjson::dump);
+    let (start, end) = (Stamp::of(piece.start), Stamp::of(piece.end));
     turn_store::insert(
         tx,
         &NewTurn {
             audio_segment_id: turn.audio_segment_id,
-            start_utc: &instant::python_isoformat_utc(piece.start),
-            end_utc: &instant::python_isoformat_utc(piece.end),
-            text: &piece.text,
             language: turn.language.as_deref(),
             language_confidence: turn.language_confidence,
             asr_confidence: turn.asr_confidence,
@@ -315,7 +313,7 @@ fn insert_piece(
             provenance: Some(provenance.clone()),
             word_timings: words.as_deref(),
             created_utc: Some(now),
-            ..NewTurn::default()
+            ..NewTurn::at(&start, &end, &piece.text)
         },
     )?;
     Ok(())
@@ -328,7 +326,7 @@ fn recut(
     turn_id: i64,
     cuts: &[usize],
     speakers: &[Option<String>],
-    now: &str,
+    now: &Stamp,
 ) -> rusqlite::Result<i64> {
     let Some(turn) = load_turn(tx, turn_id)? else {
         return Ok(0);
@@ -399,7 +397,7 @@ pub fn assign_span(
     source: &str,
     span: Span,
     name: &str,
-    now: &str,
+    now: &Stamp,
 ) -> rusqlite::Result<i64> {
     let tx = conn.transaction()?;
     let ids = session_turn_ids(&tx, source)?;
@@ -500,7 +498,7 @@ pub async fn assign_route(
         return (StatusCode::BAD_REQUEST, "name required").into_response();
     }
     let root = st.root.clone();
-    let now = audiocore::instant::python_isoformat_utc(chrono::Utc::now());
+    let now = audiocore::instant::Stamp::now();
     let span = Span {
         start_turn: body.start_turn,
         start_char: body.start_char,
