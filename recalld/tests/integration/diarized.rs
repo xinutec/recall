@@ -2,6 +2,7 @@
 //! Each case pins a guard, so one that looks redundant still is not;
 //! `diarized` carries the reasoning.
 
+use audiocore::job::Kind;
 use chrono::{DateTime, TimeDelta, Utc};
 use recalld::align::{AlignedTurn, Word};
 use recalld::diarized::{
@@ -611,8 +612,8 @@ fn ingest_plane(path: &std::path::Path, voices: &str, transcription: &str) -> Co
     )
     .expect("segment");
     for (kind, result) in [
-        (recalld::queue::TRANSCRIBE_ROOM, transcription),
-        (recalld::queue::DIARIZE_ROOM, voices),
+        (audiocore::job::Kind::TranscribeRoom, transcription),
+        (audiocore::job::Kind::DiarizeRoom, voices),
     ] {
         conn.execute(
             "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
@@ -753,7 +754,7 @@ fn a_decided_block_leaves_a_ledger_row_and_is_not_decided_twice() {
     let outcome: String = ingest
         .query_row(
             "SELECT outcome FROM pass_ledger WHERE kind = ?1 AND filename = ?2",
-            (recalld::queue::DIARIZE_ROOM, BLOCK),
+            (audiocore::job::Kind::DiarizeRoom, BLOCK),
             |r| r.get(0),
         )
         .expect("a ledger row");
@@ -939,7 +940,7 @@ fn a_diarization_with_no_transcription_is_not_picked_up() {
     ingest
         .execute(
             "DELETE FROM jobs WHERE kind = ?1",
-            [recalld::queue::TRANSCRIBE_ROOM],
+            [audiocore::job::Kind::TranscribeRoom],
         )
         .expect("drop the transcription");
 
@@ -973,8 +974,8 @@ fn mic_ingest(path: &std::path::Path, voices: &str, transcription: &str) -> Conn
     )
     .expect("segment");
     for (kind, result) in [
-        (recalld::queue::TRANSCRIBE_SEGMENT, transcription),
-        (recalld::queue::DIARIZE_SEGMENT, voices),
+        (audiocore::job::Kind::TranscribeSegment, transcription),
+        (audiocore::job::Kind::DiarizeSegment, voices),
     ] {
         conn.execute(
             "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
@@ -1103,13 +1104,13 @@ fn the_two_streams_write_provenances_that_cannot_match_each_other() {
 /// The kinds a runner may be handed must not overlap between streams either.
 #[test]
 fn the_two_streams_draw_from_different_queue_kinds() {
-    let kinds: Vec<&str> = vec![
+    let kinds: Vec<Kind> = vec![
         PER_MIC.diarize_kind,
         PER_MIC.transcribe_kind,
         ROOM.diarize_kind,
         ROOM.transcribe_kind,
     ];
-    let unique: std::collections::HashSet<&&str> = kinds.iter().collect();
+    let unique: std::collections::HashSet<&Kind> = kinds.iter().collect();
     assert_eq!(
         unique.len(),
         kinds.len(),

@@ -1,7 +1,8 @@
 //! The job queue: derive, lease newest first, done; a lapsed lease re-offers.
 
+use audiocore::job::Kind;
 use chrono::{DateTime, Duration, Utc};
-use recalld::queue::{DIARIZE_ROOM, TRANSCRIBE_ROOM, done, lease};
+use recalld::queue::{done, lease};
 use recalld::store;
 
 fn room_row(root: &std::path::Path, stamp: &str) {
@@ -28,23 +29,23 @@ fn newest_first_lease_done_and_lapse() {
     room_row(dir.path(), "20260905T100000");
     room_row(dir.path(), "20260905T110000");
     // Newest first.
-    let first = lease(dir.path(), now, &[TRANSCRIBE_ROOM])
+    let first = lease(dir.path(), now, &[Kind::TranscribeRoom])
         .expect("lease")
         .expect("job");
     assert_eq!(first.filename, "room-20260905T110000.flac");
     // The leased job is not re-offered while its lease holds…
-    let second = lease(dir.path(), now, &[TRANSCRIBE_ROOM])
+    let second = lease(dir.path(), now, &[Kind::TranscribeRoom])
         .expect("lease")
         .expect("job");
     assert_eq!(second.filename, "room-20260905T100000.flac");
     assert!(
-        lease(dir.path(), now, &[TRANSCRIBE_ROOM])
+        lease(dir.path(), now, &[Kind::TranscribeRoom])
             .expect("lease")
             .is_none()
     );
     // …but a lapsed lease re-offers, and done retires for good.
     let later = now + Duration::minutes(20);
-    let again = lease(dir.path(), later, &[TRANSCRIBE_ROOM])
+    let again = lease(dir.path(), later, &[Kind::TranscribeRoom])
         .expect("lease")
         .expect("job");
     assert_eq!(again.filename, "room-20260905T110000.flac");
@@ -53,7 +54,7 @@ fn newest_first_lease_done_and_lapse() {
     let last = lease(
         dir.path(),
         later + Duration::minutes(20),
-        &[TRANSCRIBE_ROOM],
+        &[Kind::TranscribeRoom],
     )
     .expect("lease")
     .expect("job");
@@ -69,14 +70,14 @@ fn a_job_nobody_finishes_is_retired_after_its_attempts_are_spent() {
     room_row(dir.path(), "20260905T100000");
     let mut now = start;
     for attempt in 1..=queue::MAX_ATTEMPTS {
-        let job = lease(dir.path(), now, &[TRANSCRIBE_ROOM])
+        let job = lease(dir.path(), now, &[Kind::TranscribeRoom])
             .expect("lease")
             .unwrap_or_else(|| panic!("attempt {attempt} must still be offered"));
         assert_eq!(job.filename, "room-20260905T100000.flac");
         now += Duration::minutes(20);
     }
     assert!(
-        lease(dir.path(), now, &[TRANSCRIBE_ROOM])
+        lease(dir.path(), now, &[Kind::TranscribeRoom])
             .expect("lease")
             .is_none(),
         "spent: not offered again"
@@ -177,22 +178,22 @@ fn a_diarize_job_appears_only_once_the_words_exist() {
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     room_row(dir.path(), "20260911T100000");
 
-    let job = lease(dir.path(), now, &[TRANSCRIBE_ROOM])
+    let job = lease(dir.path(), now, &[Kind::TranscribeRoom])
         .expect("lease")
         .expect("job");
-    assert_eq!(job.kind, TRANSCRIBE_ROOM);
+    assert_eq!(job.kind, Kind::TranscribeRoom);
     assert!(
         !kinds_queued(dir.path())
             .iter()
-            .any(|(kind, _)| kind == DIARIZE_ROOM),
+            .any(|(kind, _)| kind == Kind::DiarizeRoom.as_str()),
         "no diarize job before the block is transcribed"
     );
 
     assert!(done(dir.path(), job.id, TRANSCRIBED, now).expect("done"));
-    let next = lease(dir.path(), now, &[DIARIZE_ROOM])
+    let next = lease(dir.path(), now, &[Kind::DiarizeRoom])
         .expect("lease")
         .expect("job");
-    assert_eq!(next.kind, DIARIZE_ROOM);
+    assert_eq!(next.kind, Kind::DiarizeRoom);
     assert_eq!(next.filename, "room-20260911T100000.flac");
 }
 
@@ -203,13 +204,13 @@ fn a_refused_transcription_derives_no_diarization() {
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     room_row(dir.path(), "20260911T100000");
-    let job = lease(dir.path(), now, &[TRANSCRIBE_ROOM])
+    let job = lease(dir.path(), now, &[Kind::TranscribeRoom])
         .expect("lease")
         .expect("job");
     assert!(done(dir.path(), job.id, REFUSED, now).expect("done"));
 
     assert!(
-        lease(dir.path(), now, &[DIARIZE_ROOM])
+        lease(dir.path(), now, &[Kind::DiarizeRoom])
             .expect("lease")
             .is_none(),
         "a refused clip must not be queued for diarization"
@@ -223,29 +224,29 @@ fn a_runner_is_never_handed_a_kind_it_cannot_do() {
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     room_row(dir.path(), "20260911T100000");
-    let job = lease(dir.path(), now, &[TRANSCRIBE_ROOM])
+    let job = lease(dir.path(), now, &[Kind::TranscribeRoom])
         .expect("lease")
         .expect("job");
     assert!(done(dir.path(), job.id, TRANSCRIBED, now).expect("done"));
 
     // Only a diarize job is now outstanding, and an asr-only runner sees nothing.
     assert!(
-        lease(dir.path(), now, &[TRANSCRIBE_ROOM])
+        lease(dir.path(), now, &[Kind::TranscribeRoom])
             .expect("lease")
             .is_none()
     );
     // An empty capability list leases nothing, not everything.
     assert!(lease(dir.path(), now, &[]).expect("lease").is_none());
     // A runner that can do both takes it.
-    let both = lease(dir.path(), now, &[TRANSCRIBE_ROOM, DIARIZE_ROOM])
+    let both = lease(dir.path(), now, &[Kind::TranscribeRoom, Kind::DiarizeRoom])
         .expect("lease")
         .expect("job");
-    assert_eq!(both.kind, DIARIZE_ROOM);
+    assert_eq!(both.kind, Kind::DiarizeRoom);
 }
 
 // ---- per-mic transcribe jobs ----
 
-use recalld::queue::{self, TRANSCRIBE_SEGMENT, derive_segment_jobs};
+use recalld::queue::{self, derive_segment_jobs};
 
 fn mic_row(root: &std::path::Path, source: &str, stamp: &str) -> String {
     let name = format!("{source}-{stamp}.opus");
@@ -334,7 +335,7 @@ fn a_segment_that_already_has_turns_gets_no_job() {
     let queued: String = ingest
         .query_row(
             "SELECT filename FROM jobs WHERE kind = ?1",
-            [TRANSCRIBE_SEGMENT],
+            [Kind::TranscribeSegment],
             |r| r.get(0),
         )
         .expect("job");
@@ -380,7 +381,7 @@ fn the_derivation_is_bounded_and_newest_first() {
     let newest: String = ingest
         .query_row(
             "SELECT filename FROM jobs WHERE kind = ?1 ORDER BY filename DESC LIMIT 1",
-            [TRANSCRIBE_SEGMENT],
+            [Kind::TranscribeSegment],
             |r| r.get(0),
         )
         .expect("job");
@@ -439,7 +440,7 @@ fn an_uploaded_meeting_is_leased_by_the_same_runner_as_a_microphone() {
             .prepare("SELECT filename FROM jobs WHERE kind = ?1 ORDER BY filename")
             .expect("prepare");
         let rows = stmt
-            .query_map([TRANSCRIBE_SEGMENT], |r| r.get::<_, String>(0))
+            .query_map([Kind::TranscribeSegment], |r| r.get::<_, String>(0))
             .expect("rows");
         rows.collect::<Result<_, _>>().expect("collect")
     };
@@ -527,12 +528,12 @@ fn a_lease_picks_the_newest_clip_across_sources_not_the_alphabetical_one() {
         ingest
             .execute(
                 "INSERT INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, ?3)",
-                (TRANSCRIBE_SEGMENT, &filename, iso),
+                (Kind::TranscribeSegment, &filename, iso),
             )
             .expect("job");
     }
 
-    let job = queue::lease(dir.path(), now, &[TRANSCRIBE_SEGMENT])
+    let job = queue::lease(dir.path(), now, &[Kind::TranscribeSegment])
         .expect("lease")
         .expect("a job");
     assert!(
@@ -554,12 +555,12 @@ fn a_job_whose_blob_the_ingest_plane_has_forgotten_is_not_leasable() {
         .execute(
             "INSERT INTO jobs (kind, filename, created_utc)
              VALUES (?1, 'usb-20260913T100000.opus', '2026-09-13T10:00:00Z')",
-            [TRANSCRIBE_SEGMENT],
+            [Kind::TranscribeSegment],
         )
         .expect("job");
 
     assert!(
-        queue::lease(dir.path(), now, &[TRANSCRIBE_SEGMENT])
+        queue::lease(dir.path(), now, &[Kind::TranscribeSegment])
             .expect("lease")
             .is_none()
     );

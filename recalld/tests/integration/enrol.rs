@@ -1,9 +1,9 @@
 //! Voiceprint enrolment's work-list: which named turns become reference
 //! vectors, and which clip each is cut from.
 
+use audiocore::job::Kind;
 use chrono::{DateTime, Utc};
 use recalld::enrol::{Span, derive_jobs, pending, spans_for};
-use recalld::queue::ENROLL_SPEAKER;
 use recalld::store;
 
 fn at(iso: &str) -> DateTime<Utc> {
@@ -174,7 +174,7 @@ fn the_job_names_the_ingest_filename_even_when_the_extensions_differ() {
     let queued: String = ingest
         .query_row(
             "SELECT filename FROM jobs WHERE kind = ?1",
-            [ENROLL_SPEAKER],
+            [Kind::EnrollSpeaker],
             |r| r.get(0),
         )
         .expect("job");
@@ -244,7 +244,7 @@ fn finished(ingest: &rusqlite::Connection, filename: &str, result: &str) {
         .execute(
             "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
              VALUES (?1, ?2, 'done', '2026-09-10T12:00:00Z', '2026-09-10T12:05:00Z', ?3)",
-            rusqlite::params![ENROLL_SPEAKER, filename, result],
+            rusqlite::params![Kind::EnrollSpeaker, filename, result],
         )
         .expect("job");
 }
@@ -432,7 +432,7 @@ fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
 
     let mut enrol_job = recalld::queue::Job {
         id: 1,
-        kind: ENROLL_SPEAKER.to_owned(),
+        kind: Kind::EnrollSpeaker,
         filename: "usb-20260910T100000.wav".to_owned(),
         source: "usb".to_owned(),
         spans: Vec::new(),
@@ -453,7 +453,7 @@ fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
     );
 
     let mut diarize_job = recalld::queue::Job {
-        kind: "diarize-segment".to_owned(),
+        kind: Kind::DiarizeSegment,
         spans: Vec::new(),
         ..enrol_job.clone()
     };
@@ -475,7 +475,7 @@ fn a_lease_of_another_kind_does_not_need_the_meaning_plane_at_all() {
     let empty = tempfile::tempdir().expect("tempdir");
     let mut job = recalld::queue::Job {
         id: 1,
-        kind: "transcribe-segment".to_owned(),
+        kind: Kind::TranscribeSegment,
         filename: "usb-20260910T100000.wav".to_owned(),
         source: "usb".to_owned(),
         spans: Vec::new(),
@@ -498,8 +498,8 @@ fn enrolment_outranks_capture_time_or_it_would_never_be_leased() {
     );
     delivered(dir.path(), "usb-20260910T100000.wav");
     for (kind, filename) in [
-        ("diarize-segment", "usb-20260912T100000.wav"),
-        (ENROLL_SPEAKER, "usb-20260910T100000.wav"),
+        (Kind::DiarizeSegment, "usb-20260912T100000.wav"),
+        (Kind::EnrollSpeaker, "usb-20260910T100000.wav"),
     ] {
         ingest
             .execute(
@@ -513,12 +513,13 @@ fn enrolment_outranks_capture_time_or_it_would_never_be_leased() {
     let job = recalld::queue::lease(
         dir.path(),
         at("2026-09-12T12:00:00Z"),
-        &["diarize-segment", ENROLL_SPEAKER],
+        &[Kind::DiarizeSegment, Kind::EnrollSpeaker],
     )
     .expect("lease")
     .expect("a job");
     assert_eq!(
-        job.kind, ENROLL_SPEAKER,
+        job.kind,
+        Kind::EnrollSpeaker,
         "the older clip's print comes first"
     );
 }

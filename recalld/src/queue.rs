@@ -8,25 +8,12 @@
 
 use crate::room::ROOM_SOURCE;
 use crate::store;
+use audiocore::job::Kind;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::Path;
 
-/// The room stream's transcription, one block at a time.
-pub const TRANSCRIBE_ROOM: &str = "transcribe-room";
-/// Who spoke when over a room block whose words already exist.
-pub const DIARIZE_ROOM: &str = "diarize-room";
-/// One microphone's clip, or an uploaded meeting, transcribed by the `asr` shim.
-pub const TRANSCRIBE_SEGMENT: &str = "transcribe-segment";
-/// Who spoke when over one microphone's clip. The per-mic twin of
-/// [`DIARIZE_ROOM`], and the one whose pass replaces turns rather than adding
-/// them, because those clips already carry a transcript.
-pub const DIARIZE_SEGMENT: &str = "diarize-segment";
-/// Turn a human-named turn into a reference voiceprint. The one kind whose
-/// work-list lives in the meaning plane: it is derived from what a person typed,
-/// so its candidates change when nobody is recording ([`crate::enrol`]).
-pub const ENROLL_SPEAKER: &str = "enroll-speaker";
 const LEASE_TTL_S: i64 = 10 * 60;
 /// Leases a job may take before it is retired as failed. A runner that dies
 /// mid-job lets its lease lapse and the job is offered again; a clip that kills
@@ -37,14 +24,14 @@ pub const MAX_ATTEMPTS: i64 = 3;
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Job {
     pub id: i64,
-    pub kind: String,
+    pub kind: Kind,
     /// The blob to work on, fetchable via `/ingest/v1/blob/<source>/<filename>`.
     pub filename: String,
     /// Which recorder it came from: the `<source>` in the blob URL. Carried, not
     /// derived: `meeting-20260907-0905` is a source id, and no split of a filename
     /// on a hyphen is safe.
     pub source: String,
-    /// For [`ENROLL_SPEAKER`] only: which stretches of the clip to embed. Filled at
+    /// For [`Kind::EnrollSpeaker`] only: which stretches of the clip to embed. Filled at
     /// lease time from the meaning plane, so a voice renamed since the job was
     /// derived is embedded under its current name. Empty and omitted for every
     /// other kind.
@@ -70,7 +57,7 @@ pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<us
            AND (p.filename IS NULL OR p.speech_seconds != 0.0)
            AND NOT EXISTS (SELECT 1 FROM jobs j
                            WHERE j.kind = ?1 AND j.filename = s.filename)",
-        (TRANSCRIBE_ROOM, iso(now), ROOM_SOURCE),
+        (Kind::TranscribeRoom, iso(now), ROOM_SOURCE),
     )?;
     Ok(inserted + derive_diarize_jobs(conn, now)? + derive_diarize_segment_jobs(conn, now)?)
 }
@@ -130,7 +117,7 @@ pub fn derive_segment_jobs(
                                WHERE j.kind = ?2 AND j.filename = s.filename)
              ORDER BY s.start_utc DESC",
         )?;
-        let rows = stmt.query_map((ROOM_SOURCE, TRANSCRIBE_SEGMENT), |r| {
+        let rows = stmt.query_map((ROOM_SOURCE, Kind::TranscribeSegment), |r| {
             Ok((r.get(0)?, r.get(1)?))
         })?;
         rows.collect::<Result<_, _>>()?
@@ -146,7 +133,7 @@ pub fn derive_segment_jobs(
         }
         inserted += ingest.execute(
             "INSERT OR IGNORE INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, ?3)",
-            (TRANSCRIBE_SEGMENT, &filename, iso(now)),
+            (Kind::TranscribeSegment, &filename, iso(now)),
         )?;
     }
     Ok(inserted)
@@ -165,7 +152,7 @@ fn derive_diarize_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Resul
            AND json_valid(j.result) AND json_extract(j.result, '$.ok') = 1
            AND NOT EXISTS (SELECT 1 FROM jobs d
                            WHERE d.kind = ?1 AND d.filename = j.filename)",
-        (DIARIZE_ROOM, iso(now), TRANSCRIBE_ROOM),
+        (Kind::DiarizeRoom, iso(now), Kind::TranscribeRoom),
     )
 }
 
@@ -178,7 +165,7 @@ fn derive_diarize_segment_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlit
            AND json_valid(j.result) AND json_extract(j.result, '$.ok') = 1
            AND NOT EXISTS (SELECT 1 FROM jobs d
                            WHERE d.kind = ?1 AND d.filename = j.filename)",
-        (DIARIZE_SEGMENT, iso(now), TRANSCRIBE_SEGMENT),
+        (Kind::DiarizeSegment, iso(now), Kind::TranscribeSegment),
     )
 }
 
@@ -189,7 +176,7 @@ fn derive_diarize_segment_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlit
 /// `kinds` is what the runner can do, not what exists: a runner holds one shim's
 /// weights, and a job it cannot do would cycle through its attempts against a
 /// process that can never do it. An empty `kinds` leases nothing.
-pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Result<Option<Job>> {
+pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[Kind]) -> rusqlite::Result<Option<Job>> {
     let conn = store::open(root)?;
     derive_jobs(&conn, now)?;
     retire_exhausted(&conn, now)?;
@@ -215,8 +202,9 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[&str]) -> rusqlite::Resul
            AND (j.leased_until IS NULL OR j.leased_until < ?1)
            AND j.done_utc IS NULL
            AND j.kind IN ({places})
-         ORDER BY (j.kind = '{ENROLL_SPEAKER}') DESC, s.start_utc DESC, j.filename DESC
-         LIMIT 1"
+         ORDER BY (j.kind = '{enroll}') DESC, s.start_utc DESC, j.filename DESC
+         LIMIT 1",
+        enroll = Kind::EnrollSpeaker.as_str(),
     );
     let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(kinds.len() + 1);
     let stamp = iso(now);

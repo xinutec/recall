@@ -18,6 +18,7 @@
 
 use crate::turn_store::{self, HiddenReason, NewTurn, Protected, Provenance};
 use audiocore::instant;
+use audiocore::job::Kind;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
@@ -260,9 +261,34 @@ pub fn register_blocks(
     Ok(added)
 }
 
-/// The ledger kind the segment registrar records its outcomes under. Not a queue
-/// kind: no runner leases it, but the ledger is keyed on `(kind, filename)`.
-pub const REGISTER_SEGMENT: &str = "register-segment";
+/// Which pass decided a clip: a job kind's, or registration's, which has no job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassKind {
+    Job(Kind),
+    Register,
+}
+
+impl PassKind {
+    /// The stored spelling in `pass_ledger.kind`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Job(kind) => kind.as_str(),
+            Self::Register => "register-segment",
+        }
+    }
+}
+
+impl From<Kind> for PassKind {
+    fn from(kind: Kind) -> Self {
+        Self::Job(kind)
+    }
+}
+
+impl rusqlite::ToSql for PassKind {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
 
 /// What one registrar pass did.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -338,7 +364,7 @@ pub fn register_segments(
                                WHERE l.kind = ?2 AND l.filename = s.filename)
              ORDER BY s.start_utc DESC",
         )?;
-        let rows = stmt.query_map((crate::room::ROOM_SOURCE, REGISTER_SEGMENT), |r| {
+        let rows = stmt.query_map((crate::room::ROOM_SOURCE, PassKind::Register), |r| {
             Ok((r.get(0)?, r.get(1)?))
         })?;
         rows.collect::<Result<_, _>>()?
@@ -355,7 +381,7 @@ pub fn register_segments(
         if have.contains(&filename) {
             ledger(
                 ingest,
-                REGISTER_SEGMENT,
+                PassKind::Register,
                 &filename,
                 "already-registered",
                 now,
@@ -371,7 +397,7 @@ pub fn register_segments(
         }
         let Some(start) = audiocore::names::parse_segment_start(&filename) else {
             out.unreadable += 1;
-            ledger(ingest, REGISTER_SEGMENT, &filename, "unnameable", now)?;
+            ledger(ingest, PassKind::Register, &filename, "unnameable", now)?;
             continue;
         };
         // A sibling already holds this minute, so the insert could only be
@@ -381,7 +407,7 @@ pub fn register_segments(
             out.covered += 1;
             ledger(
                 ingest,
-                REGISTER_SEGMENT,
+                PassKind::Register,
                 &filename,
                 "covered-by-sibling",
                 now,
@@ -395,7 +421,7 @@ pub fn register_segments(
             // Permanent: e.g. a header-only file from a dead capture holds no
             // audio and never will.
             out.unreadable += 1;
-            ledger(ingest, REGISTER_SEGMENT, &filename, "unreadable", now)?;
+            ledger(ingest, PassKind::Register, &filename, "unreadable", now)?;
             continue;
         };
         let end = start + Duration::microseconds((media.duration_s * 1e6).round() as i64);
@@ -427,7 +453,7 @@ pub fn register_segments(
         } else {
             "covered-by-sibling"
         };
-        ledger(ingest, REGISTER_SEGMENT, &filename, outcome, now)?;
+        ledger(ingest, PassKind::Register, &filename, outcome, now)?;
     }
     Ok(out)
 }
@@ -547,7 +573,7 @@ pub fn write_block(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stream<'a> {
     /// The queue job kind whose stored results this pass interprets.
-    pub kind: &'a str,
+    pub kind: Kind,
     /// What the written rows record in `provenance`: the reversal key.
     pub provenance: Provenance,
     /// What they record in `asr_model`.
@@ -568,7 +594,7 @@ pub struct Stream<'a> {
 
 /// The derived one-microphone-per-minute stream (`transcribe-room`).
 pub const ROOM: Stream<'static> = Stream {
-    kind: crate::queue::TRANSCRIBE_ROOM,
+    kind: Kind::TranscribeRoom,
     provenance: Provenance::Room,
     model: ROOM_MODEL,
     // The room stream is derived from microphones whose own pass reconciles the
@@ -591,7 +617,7 @@ pub const SHIM_MODEL: &str = "mlx-community/whisper-large-v3-turbo";
 /// these rows join the existing per-microphone corpus, and filtering on
 /// `asr_model` must not split it by writer. `provenance` says who wrote them.
 pub const PER_MIC: Stream<'static> = Stream {
-    kind: crate::queue::TRANSCRIBE_SEGMENT,
+    kind: Kind::TranscribeSegment,
     provenance: Provenance::PerMic,
     model: SHIM_MODEL,
     // This is the archive pass, so it reconciles live turns.
@@ -640,7 +666,7 @@ pub fn tombstoned_block(
 /// must therefore clear both the turns and these rows.
 pub fn ledger(
     conn: &rusqlite::Connection,
-    kind: &str,
+    kind: impl Into<PassKind>,
     filename: &str,
     outcome: &str,
     now: &str,
@@ -648,7 +674,7 @@ pub fn ledger(
     conn.execute(
         "INSERT OR REPLACE INTO pass_ledger (kind, filename, outcome, decided_utc)
          VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![kind, filename, outcome, now],
+        rusqlite::params![kind.into(), filename, outcome, now],
     )?;
     Ok(())
 }

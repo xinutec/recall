@@ -3,7 +3,7 @@
 //! print corpus has saturated (#1648), so this keeps up with new labels rather
 //! than raising a number.
 
-use crate::queue::ENROLL_SPEAKER;
+use audiocore::job::Kind;
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -115,7 +115,7 @@ pub fn spans_for(meaning: &Connection, filename: &str) -> rusqlite::Result<Vec<S
 /// # Errors
 /// If the meaning plane refuses.
 pub fn attach_spans(root: &std::path::Path, job: &mut crate::queue::Job) -> rusqlite::Result<()> {
-    if job.kind != ENROLL_SPEAKER {
+    if job.kind != Kind::EnrollSpeaker {
         return Ok(());
     }
     job.spans = spans_for(&crate::reads::open(root)?, &job.filename)?;
@@ -147,7 +147,7 @@ pub fn derive_jobs(
                                WHERE j.kind = ?1 AND j.filename = s.filename)
              ORDER BY s.start_utc DESC",
         )?;
-        let rows = stmt.query_map([ENROLL_SPEAKER], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map([Kind::EnrollSpeaker], |r| r.get::<_, String>(0))?;
         rows.collect::<Result<_, _>>()?
     };
     let mut inserted = 0;
@@ -161,7 +161,7 @@ pub fn derive_jobs(
         inserted += ingest.execute(
             "INSERT OR IGNORE INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, ?3)",
             (
-                ENROLL_SPEAKER,
+                Kind::EnrollSpeaker,
                 &filename,
                 now.to_rfc3339_opts(SecondsFormat::Secs, true),
             ),
@@ -272,7 +272,7 @@ pub fn write_pass(
                                WHERE l.kind = ?1 AND l.filename = j.filename)
              ORDER BY j.filename ASC",
         )?;
-        let rows = stmt.query_map([ENROLL_SPEAKER], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let rows = stmt.query_map([Kind::EnrollSpeaker], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect::<Result<_, _>>()?
     };
 
@@ -283,11 +283,11 @@ pub fn write_pass(
         }
         pass.clips += 1;
         let Ok(reply) = serde_json::from_str::<Reply>(&result) else {
-            crate::turns::ledger(ingest, ENROLL_SPEAKER, &filename, "unreadable", now)?;
+            crate::turns::ledger(ingest, Kind::EnrollSpeaker, &filename, "unreadable", now)?;
             continue;
         };
         let Some(body) = reply.result.filter(|_| reply.ok) else {
-            crate::turns::ledger(ingest, ENROLL_SPEAKER, &filename, "refused", now)?;
+            crate::turns::ledger(ingest, Kind::EnrollSpeaker, &filename, "refused", now)?;
             continue;
         };
         let mut wrote = 0;
@@ -308,7 +308,7 @@ pub fn write_pass(
         }
         pass.prints += wrote;
         let outcome = if wrote > 0 { "enrolled" } else { "nothing" };
-        crate::turns::ledger(ingest, ENROLL_SPEAKER, &filename, outcome, now)?;
+        crate::turns::ledger(ingest, Kind::EnrollSpeaker, &filename, outcome, now)?;
     }
     Ok(pass)
 }

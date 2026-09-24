@@ -10,6 +10,7 @@ pub mod capture_log;
 pub mod decode;
 pub mod envelope;
 pub mod instant;
+pub mod job;
 pub mod names;
 pub mod text;
 pub mod vad;

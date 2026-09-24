@@ -8,6 +8,7 @@
 //! `transcribe-room` results are stored but not yet interpreted: the room
 //! stream waits on the referee.
 
+use audiocore::job::Kind;
 use chrono::Utc;
 use runner::client::{Client, Job, Span};
 use runner::pulse::stamp_pulse;
@@ -21,12 +22,12 @@ const BACKOFF: Duration = Duration::from_mins(1);
 /// What each shim can be given, keyed by the name it reports in `hello` rather
 /// than inferred from argv, so a runner pointed at the wrong module does not
 /// lease work it will fail. An unknown name is fatal.
-fn kinds_for(shim_name: &str) -> Option<&'static [&'static str]> {
+fn kinds_for(shim_name: &str) -> Option<&'static [Kind]> {
     match shim_name {
         // The lease orders by capture time across kinds (`queue::lease`), so a
         // room block and a microphone clip from the same minute compete on
         // equal terms.
-        "asr" => Some(&["transcribe-room", "transcribe-segment"]),
+        "asr" => Some(&[Kind::TranscribeRoom, Kind::TranscribeSegment]),
         // ⚠ Not `diarize-room`: room jobs are queued for every transcribed
         // block whether or not anything reads them, and leasing them would
         // spend the GPU on results nothing consumes. This list, not the queue,
@@ -34,7 +35,7 @@ fn kinds_for(shim_name: &str) -> Option<&'static [&'static str]> {
         //
         // `enroll-speaker` shares the process because both are pyannote; a
         // separate runner would load the weights twice.
-        "voices" => Some(&["diarize-segment", "enroll-speaker"]),
+        "voices" => Some(&[Kind::DiarizeSegment, Kind::EnrollSpeaker]),
         _ => None,
     }
 }
@@ -136,7 +137,7 @@ fn embed_spans(
 fn one(
     client: &Client,
     shim: &mut Shim,
-    kinds: &[&str],
+    kinds: &[Kind],
     scratch: &Path,
     prompt: Option<&str>,
     pulse: Option<&Path>,
@@ -156,19 +157,15 @@ fn one(
     tracing::info!(id, %kind, %source, %filename, "leased");
     let clip = scratch.join(&filename);
     client.fetch_blob(&source, &filename, &clip)?;
-    // Only kinds this runner asked for should arrive; anything else is refused
-    // rather than run through the wrong model.
-    let outcome = match kind.as_str() {
+    // Exhaustive: a new kind does not compile until it is given work here.
+    let outcome = match kind {
         // Both transcription kinds are the same work; which stream the result
         // feeds is recalld's concern.
-        "transcribe-room" | "transcribe-segment" => shim.transcribe(&clip, None, prompt),
-        "diarize-room" | "diarize-segment" => shim.diarize(&clip),
+        Kind::TranscribeRoom | Kind::TranscribeSegment => shim.transcribe(&clip, None, prompt),
+        Kind::DiarizeRoom | Kind::DiarizeSegment => shim.diarize(&clip),
         // One model call per named turn, composed here. A refused span costs
         // only its print; the fleet re-derives it while its turn is unenrolled.
-        "enroll-speaker" => embed_spans(shim, &clip, &spans),
-        other => Err(shim::Error::Refused(format!(
-            "runner cannot do job kind {other}"
-        ))),
+        Kind::EnrollSpeaker => embed_spans(shim, &clip, &spans),
     };
     // The scratch copy is removed whatever the outcome.
     let _ = std::fs::remove_file(&clip);
@@ -244,7 +241,7 @@ fn main() {
     // Fatal if unreachable, but only for a transcribing runner: unbiased
     // transcripts would have to be redone. An empty vocabulary is `None`, no
     // biasing. Diarization does not use it.
-    let prompt = if kinds.contains(&"transcribe-room") {
+    let prompt = if kinds.contains(&Kind::TranscribeRoom) {
         match client.prompt() {
             Ok(prompt) => {
                 tracing::info!(

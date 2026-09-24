@@ -382,14 +382,21 @@ impl LeaseQuery {
     /// send the parameter holds only the `asr` shim, and would burn a
     /// `diarize-room` job's attempts failing it. recalld and the runner deploy
     /// separately, so this default must suit an older runner.
-    fn kinds(&self) -> Vec<String> {
+    ///
+    /// A kind this recalld does not know is dropped, not an error: a newer
+    /// runner may ask for one, and the kinds it shares still lease.
+    fn kinds(&self) -> Vec<audiocore::job::Kind> {
         match self.kinds.as_deref() {
-            None => vec![crate::queue::TRANSCRIBE_ROOM.to_owned()],
+            None => vec![audiocore::job::Kind::TranscribeRoom],
             Some(list) => list
                 .split(',')
                 .map(str::trim)
                 .filter(|k| !k.is_empty())
-                .map(ToOwned::to_owned)
+                .filter_map(|k| {
+                    k.parse()
+                        .inspect_err(|err| tracing::warn!(%err, "lease query"))
+                        .ok()
+                })
                 .collect(),
         }
     }
@@ -409,8 +416,7 @@ pub async fn lease_job(
     let kinds = query.kinds();
     let handle =
         tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<crate::queue::Job>> {
-            let borrowed: Vec<&str> = kinds.iter().map(String::as_str).collect();
-            let leased = crate::queue::lease(&config.root, Utc::now(), &borrowed)?;
+            let leased = crate::queue::lease(&config.root, Utc::now(), &kinds)?;
             // An enrolment job names a clip; its spans say which stretches to
             // embed, and they live in the meaning plane which `lease` cannot
             // reach. Attached here so the runner needs no second round trip.

@@ -1,5 +1,6 @@
 //! What a finished room job means — and, just as much, what it does NOT mean.
 
+use audiocore::job::Kind;
 use chrono::{TimeZone, Utc};
 use recalld::turns::{Barren, interpret};
 
@@ -736,7 +737,7 @@ fn done_room_job(
 ) {
     done_job(
         ingest,
-        "transcribe-room",
+        Kind::TranscribeRoom,
         "room",
         filename,
         start_utc,
@@ -756,7 +757,7 @@ fn done_room_job(
 /// them to learn the source, and every real job derives from a `segments` row.
 fn done_job(
     ingest: &rusqlite::Connection,
-    kind: &str,
+    kind: Kind,
     source: &str,
     filename: &str,
     start_utc: &str,
@@ -878,7 +879,7 @@ fn a_block_whose_audio_is_not_registered_yet_comes_back() {
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_job(
         &ingest,
-        "transcribe-room",
+        Kind::TranscribeRoom,
         "room",
         "room-20260911T100000.flac",
         "2026-09-11T10:00:00+00:00",
@@ -961,7 +962,7 @@ fn done_mic_job(
 ) {
     done_job(
         ingest,
-        "transcribe-segment",
+        Kind::TranscribeSegment,
         source,
         filename,
         start_utc,
@@ -1254,7 +1255,7 @@ fn a_per_mic_turn_names_the_model_the_shim_will_actually_load() {
 
 // ---- the segment registrar ----
 
-use recalld::turns::{REGISTER_SEGMENT, register_segments};
+use recalld::turns::{PassKind, register_segments};
 
 /// An ingest-plane blob and a real audio file where the registrar looks for
 /// it. Real, because the pass decodes it to measure the duration.
@@ -1417,7 +1418,7 @@ fn a_clip_ffmpeg_cannot_read_is_retired_not_retried_for_ever() {
     let outcome: String = ingest
         .query_row(
             "SELECT outcome FROM pass_ledger WHERE kind = ?1",
-            [REGISTER_SEGMENT],
+            [PassKind::Register],
             |r| r.get(0),
         )
         .expect("ledger");
@@ -1586,7 +1587,7 @@ fn a_clip_whose_minute_a_sibling_already_holds_is_retired_not_reconsidered() {
     let ledgered: i64 = ingest
         .query_row(
             "SELECT count(*) FROM pass_ledger WHERE kind = ?1",
-            [REGISTER_SEGMENT],
+            [PassKind::Register],
             |r| r.get(0),
         )
         .expect("count");
@@ -1594,7 +1595,7 @@ fn a_clip_whose_minute_a_sibling_already_holds_is_retired_not_reconsidered() {
     let outcome: String = ingest
         .query_row(
             "SELECT outcome FROM pass_ledger WHERE kind = ?1 AND filename = ?2",
-            (REGISTER_SEGMENT, &twin),
+            (PassKind::Register, &twin),
             |r| r.get(0),
         )
         .expect("the twin's row");
@@ -1657,7 +1658,7 @@ fn a_block_whose_session_was_deleted_is_decided_not_waited_for() {
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_job(
         &ingest,
-        "transcribe-segment",
+        Kind::TranscribeSegment,
         "meeting-20260917-1500",
         "meeting-20260917-1500-20260917T150000.opus",
         "2026-09-17T15:00:00+00:00",

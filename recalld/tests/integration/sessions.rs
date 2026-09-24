@@ -3,6 +3,7 @@
 //! ⚠ Rename and re-diarize reach the sources table, so the guards keep the
 //! household capture archive unreachable through a path meant for meetings.
 
+use audiocore::job::Kind;
 use recalld::sessions::{
     self, ExportTurn, SessionError, clean_transcript, name_voice, rediarize, rename,
 };
@@ -240,7 +241,7 @@ fn diarized_meeting(source: &str) -> tempfile::TempDir {
                 )
                 .expect("job");
         }
-        recalld::turns::ledger(&ingest, "diarize-segment", &filename, "aligned", NOW)
+        recalld::turns::ledger(&ingest, Kind::DiarizeSegment, &filename, "aligned", NOW)
             .expect("ledger row");
     }
     dir

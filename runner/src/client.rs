@@ -8,7 +8,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Job {
     pub id: i64,
-    pub kind: String,
+    pub kind: audiocore::job::Kind,
     /// The blob to work on, under `source`.
     pub filename: String,
     /// Which recorder it came from, as recalld serves it. Never guessed here.
@@ -88,7 +88,8 @@ impl Client {
     ///
     /// # Errors
     /// If recalld is unreachable or answers something unreadable.
-    pub fn lease(&self, kinds: &[&str]) -> Result<Option<Job>, Error> {
+    pub fn lease(&self, kinds: &[audiocore::job::Kind]) -> Result<Option<Job>, Error> {
+        let kinds: Vec<&str> = kinds.iter().map(|k| k.as_str()).collect();
         let url = format!("{}/work/v1/lease?kinds={}", self.base, kinds.join(","));
         let response = self
             .auth(self.agent.put(&url))

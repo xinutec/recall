@@ -169,12 +169,12 @@ pub fn rediarize(
         "UPDATE jobs SET state = 'queued', leased_until = NULL, done_utc = NULL, result = NULL
          WHERE kind = ?1 AND done_utc IS NOT NULL
            AND filename IN (SELECT filename FROM segments WHERE source = ?2)",
-        (crate::queue::DIARIZE_SEGMENT, source),
+        (audiocore::job::Kind::DiarizeSegment, source),
     )?;
     tx.execute(
         "DELETE FROM pass_ledger WHERE kind = ?1
            AND filename IN (SELECT filename FROM segments WHERE source = ?2)",
-        (crate::queue::DIARIZE_SEGMENT, source),
+        (audiocore::job::Kind::DiarizeSegment, source),
     )?;
     tx.commit()?;
     Ok(requeued)

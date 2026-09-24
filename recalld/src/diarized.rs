@@ -9,6 +9,7 @@
 use crate::align::AlignedTurn;
 use crate::quality::is_repetition_loop;
 use crate::turn_store::{self, HiddenReason, NewTurn, Protected, Provenance};
+use audiocore::job::Kind;
 use chrono::{DateTime, Duration, Utc};
 use std::borrow::Cow;
 
@@ -703,9 +704,9 @@ pub fn standing(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stream<'a> {
     /// The queue kind whose stored speaker spans this pass interprets.
-    pub diarize_kind: &'a str,
+    pub diarize_kind: Kind,
     /// The kind whose stored result carries the WORDS to align them against.
-    pub transcribe_kind: &'a str,
+    pub transcribe_kind: Kind,
     /// What written rows record in `asr_model`.
     pub model: &'a str,
     /// What they record in `provenance`: the reversal key, naming this pass
@@ -723,8 +724,8 @@ pub struct Stream<'a> {
 /// existing per-microphone corpus, and a reader filtering on `asr_model` must
 /// see one archive. Provenance carries who wrote it instead.
 pub const PER_MIC: Stream<'static> = Stream {
-    diarize_kind: crate::queue::DIARIZE_SEGMENT,
-    transcribe_kind: crate::queue::TRANSCRIBE_SEGMENT,
+    diarize_kind: Kind::DiarizeSegment,
+    transcribe_kind: Kind::TranscribeSegment,
     model: crate::turns::SHIM_MODEL,
     provenance: Provenance::DiarizedAligned(Cow::Borrowed("per-mic runner")),
     hidden_reason: HiddenReason::DiarizedBy(Cow::Borrowed("per-mic runner")),
@@ -737,8 +738,8 @@ pub const PER_MIC: Stream<'static> = Stream {
 /// transcript of every minute, not a better one. It stays off until the room
 /// stream is shown to beat the per-mic one.
 pub const ROOM: Stream<'static> = Stream {
-    diarize_kind: crate::queue::DIARIZE_ROOM,
-    transcribe_kind: crate::queue::TRANSCRIBE_ROOM,
+    diarize_kind: Kind::DiarizeRoom,
+    transcribe_kind: Kind::TranscribeRoom,
     model: crate::turns::ROOM_MODEL,
     provenance: Provenance::DiarizedAligned(Cow::Borrowed("room runner")),
     hidden_reason: HiddenReason::DiarizedBy(Cow::Borrowed("room runner")),
@@ -772,7 +773,7 @@ pub struct Pass {
 /// If the ledger refuses.
 fn retire_if_permanently_unusable(
     ingest: &rusqlite::Connection,
-    kind: &str,
+    kind: Kind,
     filename: &str,
     transcription: &str,
     now: &str,

@@ -85,10 +85,10 @@ fn a_job_is_leased_transcribed_and_acked() {
     let mut shim = Shim::spawn(&program, &args).expect("shim");
 
     let job = client
-        .lease(&["transcribe-room"])
+        .lease(&[audiocore::job::Kind::TranscribeRoom])
         .expect("lease")
         .expect("a job");
-    assert_eq!(job.kind, "transcribe-room");
+    assert_eq!(job.kind, audiocore::job::Kind::TranscribeRoom);
     assert_eq!(job.filename, "room-20260906T100000.flac");
 
     // The blob comes from recalld's own store, over its own auth gate.
@@ -105,7 +105,7 @@ fn a_job_is_leased_transcribed_and_acked() {
     // Retiring is terminal: the queue must not hand the same job out again.
     assert!(
         client
-            .lease(&["transcribe-room"])
+            .lease(&[audiocore::job::Kind::TranscribeRoom])
             .expect("second lease")
             .is_none()
     );

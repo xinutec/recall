@@ -443,16 +443,16 @@ fn spawn_diarized_writer(root: PathBuf, stream: recalld::diarized::Stream<'stati
                         hidden = pass.hidden,
                         kept = pass.kept,
                         waiting = pass.waiting,
-                        stream = stream.diarize_kind,
+                        stream = %stream.diarize_kind,
                         "diarized: written"
                     );
                 }
                 Ok(Ok(_)) => {}
                 Ok(Err(err)) => {
-                    tracing::warn!(%err, stream = stream.diarize_kind, "diarized: pass failed");
+                    tracing::warn!(%err, stream = %stream.diarize_kind, "diarized: pass failed");
                 }
                 Err(err) => {
-                    tracing::error!(%err, stream = stream.diarize_kind, "diarized: task failed");
+                    tracing::error!(%err, stream = %stream.diarize_kind, "diarized: task failed");
                 }
             }
             tokio::time::sleep(EVERY).await;
