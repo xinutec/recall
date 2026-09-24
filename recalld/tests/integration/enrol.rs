@@ -10,24 +10,22 @@ fn at(iso: &str) -> DateTime<Utc> {
     iso.parse().expect("t")
 }
 
-/// The meaning plane's shape, in its own timestamp spelling (`+00:00`).
-const SCHEMA: &str = "CREATE TABLE audio_segments (
-             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
-             start_utc TEXT NOT NULL);
-         CREATE TABLE transcript_segments (
-             id INTEGER PRIMARY KEY, audio_segment_id INTEGER, start_utc TEXT NOT NULL,
-             end_utc TEXT NOT NULL, speaker_label TEXT, superseded_by INTEGER,
-             hidden_reason TEXT);
-         CREATE TABLE speaker_embeddings (
-             id INTEGER PRIMARY KEY, speaker_id INTEGER, vector TEXT NOT NULL,
-             created_utc TEXT NOT NULL, source_correction_id INTEGER,
-             source_segment_id INTEGER);
-         INSERT INTO audio_segments (id, source_id, path, start_utc) VALUES
-             (1, 'usb', '/data/usb/usb-20260910T100000.opus', '2026-09-10T10:00:00+00:00');";
+/// The meaning plane with clip 1 and one enrolled speaker, in the stored spelling.
+fn seed(conn: &rusqlite::Connection) {
+    recalld::meaning_schema::ensure(conn).expect("schema");
+    conn.execute_batch(
+        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'usb', 'coreaudio');
+         INSERT INTO speakers (id, name) VALUES (1, 'Someone');
+         INSERT INTO audio_segments (id, source_id, path, start_utc, end_utc, sample_rate, channels)
+         VALUES (1, 'usb', '/data/usb/usb-20260910T100000.opus', '2026-09-10T10:00:00+00:00',
+                 '2026-09-10T10:01:00+00:00', 16000, 1);",
+    )
+    .expect("clip 1");
+}
 
 fn meaning() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().expect("mem");
-    conn.execute_batch(SCHEMA).expect("schema");
+    seed(&conn);
     conn
 }
 
@@ -38,9 +36,14 @@ fn turn(conn: &rusqlite::Connection, id: i64, label: Option<&str>, offset: f64, 
     let end = start + chrono::Duration::milliseconds((secs * 1000.0) as i64);
     conn.execute(
         "INSERT INTO transcript_segments
-             (id, audio_segment_id, start_utc, end_utc, speaker_label)
-         VALUES (?1, 1, ?2, ?3, ?4)",
-        rusqlite::params![id, start.to_rfc3339(), end.to_rfc3339(), label],
+             (id, audio_segment_id, start_utc, end_utc, text, asr_model, speaker_label)
+         VALUES (?1, 1, ?2, ?3, 'x', 'whisper', ?4)",
+        rusqlite::params![
+            id,
+            audiocore::instant::python_isoformat_utc(start),
+            audiocore::instant::python_isoformat_utc(end),
+            label
+        ],
     )
     .expect("turn");
 }
@@ -94,8 +97,8 @@ fn a_turn_already_enrolled_is_not_offered_again() {
     let conn = meaning();
     turn(&conn, 10, Some("Alice"), 0.0, 4.0);
     conn.execute(
-        "INSERT INTO speaker_embeddings (vector, created_utc, source_segment_id)
-         VALUES ('[1.0]', '2026-09-10T11:00:00+00:00', 10)",
+        "INSERT INTO speaker_embeddings (speaker_id, vector, created_utc, source_segment_id)
+         VALUES (1, '[1.0]', '2026-09-10T11:00:00+00:00', 10)",
         [],
     )
     .expect("print");
@@ -113,7 +116,7 @@ fn the_work_list_matches_the_pythons_own_exclusions() {
     turn(&conn, 3, Some("Alice"), 10.0, 0.5); // under a second: a useless print
     turn(&conn, 4, Some("Alice"), 20.0, 4.0); // the only one that qualifies
     conn.execute(
-        "UPDATE transcript_segments SET superseded_by = 9 WHERE id = 1",
+        "UPDATE transcript_segments SET superseded_by = 4 WHERE id = 1",
         [],
     )
     .expect("supersede");
@@ -137,7 +140,7 @@ fn a_turn_hidden_or_superseded_teaches_nothing() {
     )
     .expect("hide");
     conn.execute(
-        "UPDATE transcript_segments SET superseded_by = 5 WHERE id = 2",
+        "UPDATE transcript_segments SET superseded_by = 1 WHERE id = 2",
         [],
     )
     .expect("supersede");
@@ -276,8 +279,6 @@ fn enrolled_names(conn: &rusqlite::Connection) -> Vec<(String, i64)> {
 fn an_embedded_span_becomes_a_reference_voiceprint() {
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning();
-    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
-        .expect("speakers");
     turn(&conn, 10, Some("Alice"), 0.0, 4.0);
     let ingest = ingest_at(dir.path());
     finished(
@@ -302,8 +303,6 @@ fn a_turn_renamed_while_the_runner_worked_is_not_filed_under_the_old_name() {
     // job carries no name: the label is read here.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning();
-    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
-        .expect("speakers");
     turn(&conn, 10, Some("Alice"), 0.0, 4.0);
     let ingest = ingest_at(dir.path());
     finished(
@@ -328,8 +327,6 @@ fn a_turn_renamed_while_the_runner_worked_is_not_filed_under_the_old_name() {
 fn a_turn_hidden_while_the_runner_worked_enrols_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning();
-    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
-        .expect("speakers");
     turn(&conn, 10, Some("Alice"), 0.0, 4.0);
     let ingest = ingest_at(dir.path());
     finished(
@@ -357,8 +354,6 @@ fn an_empty_vector_is_refused_rather_than_enrolled() {
     // against everyone and becomes somebody's best match on quiet audio.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning();
-    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
-        .expect("speakers");
     turn(&conn, 10, Some("Alice"), 0.0, 4.0);
     let ingest = ingest_at(dir.path());
     finished(
@@ -381,8 +376,6 @@ fn a_clip_that_enrols_nothing_is_still_ledgered() {
     // row would be re-made every pass.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning();
-    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
-        .expect("speakers");
     let ingest = ingest_at(dir.path());
     finished(&ingest, "usb-20260910T100000.wav", "not json at all");
 
@@ -398,8 +391,6 @@ fn a_replayed_result_does_not_enrol_the_same_turn_twice() {
     // `still_wanted` stops the turn being enrolled again even if it did.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning();
-    conn.execute_batch("CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT UNIQUE);")
-        .expect("speakers");
     turn(&conn, 10, Some("Alice"), 0.0, 4.0);
     let ingest = ingest_at(dir.path());
     let payload = reply(&[Print {
@@ -426,7 +417,7 @@ fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
     {
         let conn =
             rusqlite::Connection::open(dir.path().join("recall.sqlite")).expect("meaning file");
-        conn.execute_batch(SCHEMA).expect("schema");
+        seed(&conn);
         turn(&conn, 10, Some("Alice"), 2.0, 4.0);
     }
 

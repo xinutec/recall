@@ -15,8 +15,7 @@ fn now() -> chrono::DateTime<chrono::Utc> {
 
 fn db() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
-    conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
-        .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn
 }
 
@@ -418,8 +417,7 @@ fn gated(root: &std::path::Path) -> axum::Router {
 fn scratch() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
-    conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
-        .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     recalld::store::open(dir.path()).expect("ingest db");
     dir
 }

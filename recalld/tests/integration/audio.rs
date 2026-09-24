@@ -7,17 +7,12 @@ use rusqlite::Connection;
 use std::path::PathBuf;
 
 fn schema(conn: &Connection) {
-    conn.execute_batch(
-        "CREATE TABLE audio_segments (
-            id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
-            sample_rate INTEGER NOT NULL, channels INTEGER NOT NULL);
-         CREATE TABLE transcript_segments (
-            id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
-            asr_model TEXT, provenance TEXT, word_timings TEXT);",
+    recalld::meaning_schema::ensure(conn).expect("schema");
+    conn.execute(
+        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'USB', 'tcp_pcm')",
+        [],
     )
-    .expect("schema");
+    .expect("source");
 }
 
 fn recording(conn: &Connection, id: i64, path: &str, start: &str) {
@@ -31,8 +26,8 @@ fn recording(conn: &Connection, id: i64, path: &str, start: &str) {
 
 fn turn(conn: &Connection, id: i64, seg: i64, start: &str, end: &str, extra: &[(&str, &str)]) {
     conn.execute(
-        "INSERT INTO transcript_segments (id, audio_segment_id, start_utc, end_utc, text)
-         VALUES (?1, ?2, ?3, ?4, 'x')",
+        "INSERT INTO transcript_segments (id, audio_segment_id, start_utc, end_utc, text, asr_model)
+         VALUES (?1, ?2, ?3, ?4, 'x', 'whisper')",
         (id, seg, start, end),
     )
     .expect("turn");
@@ -67,7 +62,7 @@ fn a_rough_phrase_gets_a_wide_window_so_it_is_listenable() {
         10,
         1,
         "2026-06-13T12:00:20+00:00",
-        "2026-06-13T12:00:20.5+00:00",
+        "2026-06-13T12:00:20.500000+00:00",
         &[],
     );
 
@@ -133,7 +128,7 @@ fn a_human_correction_is_not_treated_as_diarized() {
         13,
         1,
         "2026-06-13T12:00:40+00:00",
-        "2026-06-13T12:00:40.4+00:00",
+        "2026-06-13T12:00:40.400000+00:00",
         &[
             ("asr_model", "human"),
             ("provenance", "human correction of #12"),
@@ -153,8 +148,8 @@ fn the_window_never_starts_before_the_file() {
         &conn,
         14,
         1,
-        "2026-06-13T12:00:00.2+00:00",
-        "2026-06-13T12:00:00.6+00:00",
+        "2026-06-13T12:00:00.200000+00:00",
+        "2026-06-13T12:00:00.600000+00:00",
         &[],
     );
 
@@ -168,8 +163,8 @@ fn the_window_never_starts_before_the_file() {
 fn a_turn_with_no_audio_segment_is_absent_not_an_error() {
     let conn = db();
     conn.execute(
-        "INSERT INTO transcript_segments (id, audio_segment_id, start_utc, end_utc, text)
-         VALUES (99, NULL, '2026-06-13T12:00:00+00:00', '2026-06-13T12:00:01+00:00', 'x')",
+        "INSERT INTO transcript_segments (id, audio_segment_id, start_utc, end_utc, text, asr_model)
+         VALUES (99, NULL, '2026-06-13T12:00:00+00:00', '2026-06-13T12:00:01+00:00', 'x', 'live')",
         (),
     )
     .expect("orphan turn");

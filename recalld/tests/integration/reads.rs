@@ -5,30 +5,16 @@ use recalld::reads;
 use recalld::turn_store::Stage;
 use rusqlite::Connection;
 
-/// A hand-copied subset of the `recall.sqlite` tables these routes read.
+/// The real `recall.sqlite` schema, built by the migration ladder.
 fn schema(conn: &Connection) {
-    conn.execute_batch(
-        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
-         CREATE TABLE audio_segments (
-            id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
-            sample_rate INTEGER NOT NULL, channels INTEGER NOT NULL);
-         CREATE TABLE transcript_segments (
-            id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
-            language TEXT, asr_confidence REAL, asr_model TEXT, loudness REAL,
-            speaker_label TEXT, speaker_id INTEGER, speaker_guess TEXT,
-            speaker_score REAL, speaker_cluster TEXT, superseded_by INTEGER,
-            provenance TEXT, hidden_reason TEXT, word_timings TEXT);
-         CREATE VIRTUAL TABLE transcript_fts USING fts5(text, content='');",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(conn).expect("schema");
 }
 
 #[allow(clippy::too_many_arguments)]
 fn turn(conn: &Connection, id: i64, start: &str, text: &str, extra: &[(&str, &str)]) {
     conn.execute(
-        "INSERT INTO transcript_segments (id, start_utc, end_utc, text) VALUES (?1, ?2, ?2, ?3)",
+        "INSERT INTO transcript_segments (id, start_utc, end_utc, text, asr_model)
+         VALUES (?1, ?2, ?2, ?3, 'whisper')",
         (id, start, text),
     )
     .expect("turn");

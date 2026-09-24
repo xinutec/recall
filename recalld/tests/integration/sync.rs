@@ -20,8 +20,7 @@ fn at(offset_s: i64) -> chrono::DateTime<chrono::Utc> {
 
 fn store() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        .unwrap();
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn
 }
 

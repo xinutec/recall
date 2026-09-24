@@ -548,48 +548,14 @@ const BLOCK_START: &str = "2026-09-06T09:45:00+00:00";
 /// The meaning plane, with the columns this pass touches.
 fn meaning_plane(path: &std::path::Path) -> Connection {
     let conn = Connection::open(path.join("recall.sqlite")).expect("meaning");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn.execute_batch(
-        "CREATE TABLE audio_segments (
-             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
-             start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
-             sample_rate INTEGER NOT NULL, channels INTEGER NOT NULL
-         );
-         CREATE TABLE deleted_segments (
-             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL,
-             start_utc TEXT NOT NULL, deleted_utc TEXT NOT NULL
-         );
-         CREATE TABLE transcript_segments (
-             id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
-             start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
-             language TEXT, language_confidence REAL, asr_confidence REAL,
-             asr_model TEXT NOT NULL, speaker_label TEXT, speaker_id INTEGER,
-             superseded_by INTEGER, created_utc TEXT, provenance TEXT,
-             hidden_reason TEXT, loudness REAL, speaker_guess TEXT,
-             speaker_score REAL, speaker_cluster TEXT, word_timings TEXT
-         );
-         CREATE VIRTUAL TABLE transcript_fts USING fts5(text);
-         CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
-         CREATE TABLE speaker_embeddings (
-             id INTEGER PRIMARY KEY, speaker_id INTEGER NOT NULL,
-             vector TEXT NOT NULL, created_utc TEXT NOT NULL,
-             source_correction_id INTEGER, source_segment_id INTEGER
-         );
-         CREATE TABLE transcript_embeddings (
-             segment_id INTEGER PRIMARY KEY REFERENCES transcript_segments(id),
-             vector     TEXT NOT NULL
-         );
-         CREATE TABLE corrections (
-             id INTEGER PRIMARY KEY, transcript_segment_id INTEGER,
-             audio_segment_id INTEGER, start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
-             original_text TEXT NOT NULL, corrected_text TEXT NOT NULL,
-             language TEXT, created_utc TEXT NOT NULL, speaker TEXT,
-             hidden_reason TEXT, audio_confidence REAL
-         );
+        "INSERT INTO sources (id, name, kind) VALUES ('room', 'room', 'room');
          INSERT INTO audio_segments (id, source_id, path, start_utc, end_utc, sample_rate, channels)
          VALUES (1, 'room', '/x.flac', '2026-09-06T09:45:00+00:00',
                  '2026-09-06T09:46:00+00:00', 16000, 1);",
     )
-    .expect("schema");
+    .expect("the block");
     conn
 }
 
@@ -989,8 +955,11 @@ fn mic_ingest(path: &std::path::Path, voices: &str, transcription: &str) -> Conn
 
 fn mic_meaning(path: &std::path::Path) -> Connection {
     let conn = meaning_plane(path);
-    conn.execute("UPDATE audio_segments SET source_id = 'usb'", ())
-        .expect("mic source");
+    conn.execute_batch(
+        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'usb', 'coreaudio');
+         UPDATE audio_segments SET source_id = 'usb';",
+    )
+    .expect("mic source");
     conn
 }
 

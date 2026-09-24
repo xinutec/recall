@@ -276,17 +276,12 @@ fn mic_row(root: &std::path::Path, source: &str, stamp: &str) -> String {
     name
 }
 
-/// A meaning plane with the shape `derive_segment_jobs` reads.
+/// The meaning plane `derive_segment_jobs` reads, with three sources.
 fn meaning_plane() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().expect("mem");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn.execute_batch(
-        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
-         CREATE TABLE audio_segments (
-             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
-             start_utc TEXT NOT NULL);
-         CREATE TABLE transcript_segments (
-             id INTEGER PRIMARY KEY, audio_segment_id INTEGER, text TEXT NOT NULL);
-         INSERT INTO sources (id, name, kind) VALUES
+        "INSERT INTO sources (id, name, kind) VALUES
              ('usb', 'usb', 'coreaudio'),
              ('geb', 'geb', 'tcp_pcm'),
              ('room', 'Room', 'derived');",
@@ -299,15 +294,17 @@ fn meaning_plane() -> rusqlite::Connection {
 fn already_transcribed(meaning: &rusqlite::Connection, source: &str, filename: &str, start: &str) {
     meaning
         .execute(
-            "INSERT INTO audio_segments (source_id, path, start_utc) VALUES (?1, ?2, ?3)",
+            "INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels)
+             VALUES (?1, ?2, ?3, ?3, 16000, 1)",
             (source, format!("/data/{source}/{filename}"), start),
         )
         .expect("audio");
     let id = meaning.last_insert_rowid();
     meaning
         .execute(
-            "INSERT INTO transcript_segments (audio_segment_id, text) VALUES (?1, 'some words')",
-            [id],
+            "INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc, text, asr_model)
+             VALUES (?1, ?2, ?2, 'some words', 'whisper')",
+            (id, start),
         )
         .expect("turn");
 }
@@ -579,17 +576,18 @@ fn a_clip_transcribed_under_another_extension_gets_no_second_job() {
     // The ingest row is `.opus` (`mic_row`); the turns hang off a `.wav` path.
     meaning
         .execute(
-            "INSERT INTO audio_segments (source_id, path, start_utc)
+            "INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels)
              VALUES ('usb', '/data/usb/usb-20260910T203720.wav',
-                     '2026-09-10T20:37:20+00:00')",
+                     '2026-09-10T20:37:20+00:00', '2026-09-10T20:38:20+00:00', 16000, 1)",
             [],
         )
         .expect("audio");
     let id = meaning.last_insert_rowid();
     meaning
         .execute(
-            "INSERT INTO transcript_segments (audio_segment_id, text)
-             VALUES (?1, 'already transcribed')",
+            "INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc, text, asr_model)
+             VALUES (?1, '2026-09-10T20:37:20+00:00', '2026-09-10T20:37:25+00:00',
+                     'already transcribed', 'whisper')",
             [id],
         )
         .expect("turn");

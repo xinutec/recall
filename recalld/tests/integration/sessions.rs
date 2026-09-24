@@ -12,18 +12,7 @@ use rusqlite::Connection;
 const NOW: &str = "2026-09-07T09:00:00+00:00";
 
 fn schema(conn: &Connection) {
-    conn.execute_batch(
-        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
-         CREATE TABLE audio_segments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL,
-            path TEXT, start_utc TEXT NOT NULL, end_utc TEXT NOT NULL);
-         CREATE TABLE transcript_segments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, audio_segment_id INTEGER,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
-            speaker_label TEXT, speaker_cluster TEXT,
-            superseded_by INTEGER, hidden_reason TEXT);",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(conn).expect("schema");
 }
 
 fn source(conn: &Connection, id: &str, kind: &str) {
@@ -36,7 +25,8 @@ fn source(conn: &Connection, id: &str, kind: &str) {
 
 fn segment(conn: &Connection, source: &str, start: &str, end: &str) -> i64 {
     conn.execute(
-        "INSERT INTO audio_segments (source_id, path, start_utc, end_utc) VALUES (?1, 'x', ?2, ?3)",
+        "INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels)
+         VALUES (?1, 'x', ?2, ?3, 16000, 1)",
         (source, start, end),
     )
     .expect("segment");
@@ -53,8 +43,9 @@ fn turn(
 ) {
     conn.execute(
         "INSERT INTO transcript_segments
-             (audio_segment_id, start_utc, end_utc, text, speaker_label, speaker_cluster)
-         VALUES (?1, ?2, ?2, ?3, ?4, ?5)",
+             (audio_segment_id, start_utc, end_utc, text, asr_model, speaker_label,
+              speaker_cluster)
+         VALUES (?1, ?2, ?2, ?3, 'whisper', ?4, ?5)",
         (seg, start, text, label, cluster),
     )
     .expect("turn");
@@ -354,9 +345,10 @@ fn naming_a_voice_labels_every_turn_of_that_cluster_including_hidden_ones() {
     );
     conn.execute(
         "INSERT INTO transcript_segments
-             (audio_segment_id, start_utc, end_utc, text, speaker_cluster, hidden_reason)
+             (audio_segment_id, start_utc, end_utc, text, asr_model, speaker_cluster,
+              hidden_reason)
          VALUES (?1, '2026-07-03T09:53:00+00:00', '2026-07-03T09:53:00+00:00', 'c',
-                 'SPEAKER_00', 'silence')",
+                 'whisper', 'SPEAKER_00', 'silence')",
         [m],
     )
     .expect("hidden turn");
@@ -388,12 +380,27 @@ fn a_superseded_turn_is_not_renamed_by_a_voice_naming() {
     );
     conn.execute(
         "INSERT INTO transcript_segments
-             (audio_segment_id, start_utc, end_utc, text, speaker_cluster, superseded_by)
+             (audio_segment_id, start_utc, end_utc, text, asr_model, speaker_cluster,
+              superseded_by)
          VALUES (?1, '2026-07-03T09:51:00+00:00', '2026-07-03T09:51:00+00:00', 'old',
-                 'SPEAKER_00', 99)",
+                 'whisper', 'SPEAKER_00', NULL)",
         [m],
     )
     .expect("superseded turn");
+    let old = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO transcript_segments
+             (audio_segment_id, start_utc, end_utc, text, asr_model, provenance)
+         VALUES (?1, '2026-07-03T09:51:00+00:00', '2026-07-03T09:51:00+00:00', 'new',
+                 'human', 'human correction of #' || ?2)",
+        (m, old),
+    )
+    .expect("its correction");
+    conn.execute(
+        "UPDATE transcript_segments SET superseded_by = last_insert_rowid() WHERE id = ?1",
+        [old],
+    )
+    .expect("superseded");
 
     let updated = name_voice(&conn, "meeting-1", "SPEAKER_00", Some("Dr Smith")).expect("named");
 
@@ -537,34 +544,11 @@ fn the_export_date_is_the_first_bubble_start() {
 
 use recalld::sessions::delete_session;
 
-/// The full cascade's tables, copied from the production schema: a delete that
-/// missed a table would pass against a schema that lacks it.
+/// The production schema: a delete that missed a table would pass against a
+/// schema that lacks it.
 fn delete_db() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
-    conn.execute_batch(
-        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
-         CREATE TABLE audio_segments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL,
-            path TEXT NOT NULL, start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
-            UNIQUE (source_id, start_utc));
-         CREATE TABLE transcript_segments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, audio_segment_id INTEGER,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
-            speaker_label TEXT, speaker_cluster TEXT, superseded_by INTEGER,
-            hidden_reason TEXT);
-         CREATE TABLE transcript_embeddings (segment_id INTEGER, vec BLOB);
-         CREATE TABLE transcript_lineage (derived_id INTEGER, source_id INTEGER);
-         CREATE TABLE corrections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, audio_segment_id INTEGER,
-            transcript_segment_id INTEGER, corrected_text TEXT);
-         CREATE TABLE refine_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, created_utc TEXT NOT NULL);
-         CREATE TABLE deleted_segments (
-            source_id TEXT NOT NULL, start_utc TEXT NOT NULL, deleted_utc TEXT NOT NULL,
-            UNIQUE (source_id, start_utc));",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn
 }
 
@@ -575,41 +559,52 @@ fn populate(conn: &Connection, source: &str, kind: &str) -> i64 {
     )
     .expect("source");
     conn.execute(
-        "INSERT INTO audio_segments (source_id, path, start_utc, end_utc)
-         VALUES (?1, ?2, '2026-07-03T09:50:00+00:00', '2026-07-03T10:20:00+00:00')",
+        "INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels)
+         VALUES (?1, ?2, '2026-07-03T09:50:00+00:00', '2026-07-03T10:20:00+00:00', 16000, 1)",
         (source, format!("/data/{source}/clip.flac")),
     )
     .expect("segment");
     let audio_id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc, text)
-         VALUES (?1, '2026-07-03T09:51:00+00:00', '2026-07-03T09:51:05+00:00', 'hello')",
+        "INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc, text, asr_model)
+         VALUES (?1, '2026-07-03T09:51:00+00:00', '2026-07-03T09:51:05+00:00', 'hello',
+                 'whisper')",
         [audio_id],
     )
     .expect("turn");
     let turn_id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO transcript_embeddings (segment_id) VALUES (?1)",
+        "INSERT INTO transcript_embeddings (segment_id, vector) VALUES (?1, '[1.0]')",
         [turn_id],
     )
     .expect("embedding");
     conn.execute(
-        "INSERT INTO transcript_lineage (derived_id, source_id) VALUES (?1, 99)",
+        "INSERT INTO transcript_lineage (derived_id, source_id) VALUES (?1, ?1)",
         [turn_id],
     )
     .expect("lineage");
     conn.execute(
-        "INSERT INTO corrections (audio_segment_id, transcript_segment_id, corrected_text)
-         VALUES (?1, ?2, 'fixed')",
+        "INSERT INTO corrections
+             (audio_segment_id, transcript_segment_id, start_utc, end_utc, original_text,
+              corrected_text, created_utc)
+         VALUES (?1, ?2, '2026-07-03T09:51:00+00:00', '2026-07-03T09:51:05+00:00', 'hello',
+                 'fixed', '2026-07-03T11:00:00+00:00')",
         (audio_id, turn_id),
     )
     .expect("correction");
     conn.execute(
         "INSERT INTO refine_requests (source_id, start_utc, end_utc, created_utc)
-         VALUES (?1, '2026-07-03T09:50:00+00:00', '2026-07-03T10:20:00+00:00', 'x')",
+         VALUES (?1, '2026-07-03T09:50:00+00:00', '2026-07-03T10:20:00+00:00',
+                 '2026-07-03T11:00:00+00:00')",
         [source],
     )
     .expect("refine");
+    conn.execute(
+        "INSERT INTO diarize_skips (audio_segment_id, reason, created_utc)
+         VALUES (?1, 'too short', '2026-07-03T11:00:00+00:00')",
+        [audio_id],
+    )
+    .expect("skip");
     audio_id
 }
 

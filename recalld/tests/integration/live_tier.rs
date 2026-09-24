@@ -1,5 +1,6 @@
 //! What the fleet can say about the instant feed, out of both planes at once.
 
+use audiocore::instant::python_isoformat_utc;
 use recalld::live_tier::live_health;
 use recalld::store;
 use rusqlite::Connection;
@@ -8,19 +9,10 @@ use std::path::Path;
 const WINDOW_SINCE: &str = "2026-09-21T11:40:00+00:00";
 const WINDOW_UNTIL: &str = "2026-09-21T12:00:00+00:00";
 
-/// The meaning plane, with only the columns these reads touch.
+/// The meaning plane, built by the real migration ladder.
 fn meaning(root: &Path) -> Connection {
     let conn = Connection::open(root.join("recall.sqlite")).expect("db");
-    conn.execute_batch(
-        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
-         CREATE TABLE audio_segments (
-             id INTEGER PRIMARY KEY, source_id TEXT, path TEXT,
-             start_utc TEXT, end_utc TEXT);
-         CREATE TABLE transcript_segments (
-             id INTEGER PRIMARY KEY, asr_model TEXT,
-             start_utc TEXT, end_utc TEXT, created_utc TEXT);",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn
 }
 
@@ -40,8 +32,9 @@ fn clip(root: &Path, source_id: &str, name: &str, minute: u32, speech: Option<f6
     Connection::open(root.join("recall.sqlite"))
         .expect("db")
         .execute(
-            "INSERT INTO audio_segments (source_id, path, start_utc, end_utc)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO audio_segments
+                 (source_id, path, start_utc, end_utc, sample_rate, channels)
+             VALUES (?1, ?2, ?3, ?4, 16000, 1)",
             [
                 source_id,
                 &format!("/data/ingest/{source_id}/{name}"),
@@ -78,16 +71,15 @@ fn clip(root: &Path, source_id: &str, name: &str, minute: u32, speech: Option<f6
 
 /// A turn ending 30 s into `minute`, stored `lag_s` after it ended.
 fn turn(conn: &Connection, model: &str, minute: u32, lag_s: i64) {
-    let end = chrono::DateTime::parse_from_rfc3339(&format!("2026-09-21T11:{minute:02}:30+00:00"))
-        .expect("an instant");
+    let end = at(&format!("2026-09-21T11:{minute:02}:30+00:00"));
     conn.execute(
-        "INSERT INTO transcript_segments (asr_model, start_utc, end_utc, created_utc)
-         VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO transcript_segments (asr_model, start_utc, end_utc, created_utc, text)
+         VALUES (?1, ?2, ?3, ?4, 'x')",
         [
             model,
             &format!("2026-09-21T11:{minute:02}:00+00:00"),
-            &end.to_rfc3339(),
-            &(end + chrono::Duration::seconds(lag_s)).to_rfc3339(),
+            &python_isoformat_utc(end),
+            &python_isoformat_utc(end + chrono::Duration::seconds(lag_s)),
         ],
     )
     .expect("turn");

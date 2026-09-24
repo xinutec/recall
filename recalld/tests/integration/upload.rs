@@ -135,20 +135,7 @@ fn an_absent_start_means_now_and_a_malformed_one_is_refused() {
 
 fn db() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
-    conn.execute_batch(
-        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
-                               port INTEGER);
-         CREATE TABLE audio_segments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL, path TEXT,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, sample_rate INTEGER,
-            channels INTEGER,
-            -- ⚠ As in meaning_schema, and load-bearing: without it the
-            -- INSERT OR IGNORE has nothing to ignore against and a re-upload
-            -- silently duplicates the segment. A test schema that omitted it
-            -- would pass while testing a table this product does not have.
-            UNIQUE (source_id, start_utc));",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn
 }
 
@@ -365,15 +352,7 @@ fn cookie() -> String {
 fn scratch() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
-    conn.execute_batch(
-        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
-                               port INTEGER);
-         CREATE TABLE audio_segments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL, path TEXT,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, sample_rate INTEGER,
-            channels INTEGER, UNIQUE (source_id, start_utc));",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     recalld::store::open(dir.path()).expect("ingest db");
     dir
 }

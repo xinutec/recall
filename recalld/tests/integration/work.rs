@@ -5,21 +5,7 @@ use recalld::work::{self, TermError};
 use rusqlite::Connection;
 
 fn schema(conn: &Connection) {
-    // A copy of the tables in `meaning_schema`. The UNIQUE on `term` is what
-    // makes the add idempotent, so the copy must keep it.
-    conn.execute_batch(
-        "CREATE TABLE vocabulary (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            term TEXT NOT NULL UNIQUE,
-            created_utc TEXT NOT NULL);
-         CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
-         CREATE TABLE refine_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_id TEXT NOT NULL REFERENCES sources(id),
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
-            created_utc TEXT NOT NULL, done_utc TEXT);",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(conn).expect("schema");
 }
 
 fn db() -> Connection {

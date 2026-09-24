@@ -5,44 +5,48 @@ use rusqlite::Connection;
 
 fn db() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
-    conn.execute_batch(
-        "CREATE TABLE transcript_segments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL,
-            asr_model TEXT, speaker_label TEXT, provenance TEXT, superseded_by INTEGER);
-         CREATE TABLE corrections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, transcript_segment_id INTEGER,
-            speaker TEXT, hidden_reason TEXT);
-         CREATE TABLE speaker_embeddings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, source_correction_id INTEGER);",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn
 }
+
+/// Every seeded row's span and creation time; these tests look at neither.
+const AT: &str = "2026-07-03T09:51:00+00:00";
 
 /// The shape the correction path leaves behind: an original turn, the human turn
 /// that superseded it (found again by provenance), the corpus pair, and the
 /// voiceprint enrolled from the clip.
 fn corrected(conn: &Connection, original: i64, speaker: &str) -> i64 {
     conn.execute(
-        "INSERT INTO transcript_segments (id, text, asr_model) VALUES (?1, 'old', 'whisper')",
-        [original],
+        "INSERT INTO transcript_segments (id, start_utc, end_utc, text, asr_model)
+         VALUES (?1, ?2, ?2, 'old', 'whisper')",
+        (original, AT),
     )
     .expect("original");
     conn.execute(
-        "INSERT INTO transcript_segments (text, asr_model, speaker_label, provenance)
-         VALUES ('new', 'human', ?1, ?2)",
-        (speaker, format!("human correction of #{original}")),
+        "INSERT INTO transcript_segments
+             (start_utc, end_utc, text, asr_model, speaker_label, provenance)
+         VALUES (?3, ?3, 'new', 'human', ?1, ?2)",
+        (speaker, format!("human correction of #{original}"), AT),
     )
     .expect("human turn");
     conn.execute(
-        "INSERT INTO corrections (transcript_segment_id, speaker) VALUES (?1, ?2)",
-        (original, speaker),
+        "INSERT INTO corrections
+             (transcript_segment_id, start_utc, end_utc, original_text, corrected_text,
+              created_utc, speaker)
+         VALUES (?1, ?3, ?3, 'old', 'new', ?3, ?2)",
+        (original, speaker, AT),
     )
     .expect("pair");
     let correction_id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO speaker_embeddings (source_correction_id) VALUES (?1)",
-        [correction_id],
+        "INSERT OR IGNORE INTO speakers (name) VALUES (?1)",
+        [speaker],
+    )
+    .expect("speaker");
+    conn.execute(
+        "INSERT INTO speaker_embeddings (speaker_id, vector, created_utc, source_correction_id)
+         SELECT id, '[1.0]', ?2, ?1 FROM speakers WHERE name = ?3",
+        (correction_id, AT, speaker),
     )
     .expect("voiceprint");
     correction_id
@@ -92,9 +96,11 @@ fn reassigning_does_not_touch_a_superseded_turn_carrying_the_same_provenance() {
     let mut conn = db();
     let correction = corrected(&conn, 41, "Alex");
     conn.execute(
-        "INSERT INTO transcript_segments (text, asr_model, speaker_label, provenance, superseded_by)
-         VALUES ('older', 'human', 'Alex', 'human correction of #41', 999)",
-        [],
+        "INSERT INTO transcript_segments
+             (start_utc, end_utc, text, asr_model, speaker_label, provenance, superseded_by)
+         VALUES (?1, ?1, 'older', 'human', 'Alex', 'human correction of #41',
+                 (SELECT id FROM transcript_segments WHERE text = 'new'))",
+        [AT],
     )
     .expect("superseded human turn");
 
@@ -102,7 +108,7 @@ fn reassigning_does_not_touch_a_superseded_turn_carrying_the_same_provenance() {
 
     let stale: String = conn
         .query_row(
-            "SELECT speaker_label FROM transcript_segments WHERE superseded_by = 999",
+            "SELECT speaker_label FROM transcript_segments WHERE text = 'older'",
             [],
             |r| r.get(0),
         )
@@ -116,8 +122,11 @@ fn reassigning_a_correction_with_no_live_turn_still_moves_the_pair() {
     // fix.
     let mut conn = db();
     conn.execute(
-        "INSERT INTO corrections (transcript_segment_id, speaker) VALUES (NULL, 'Alex')",
-        [],
+        "INSERT INTO corrections
+             (transcript_segment_id, start_utc, end_utc, original_text, corrected_text,
+              created_utc, speaker)
+         VALUES (NULL, ?1, ?1, 'old', 'new', ?1, 'Alex')",
+        [AT],
     )
     .expect("orphan pair");
     let correction = conn.last_insert_rowid();
@@ -193,25 +202,13 @@ const NOW: &str = "2026-09-07T12:00:00+00:00";
 
 fn correction_db() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn.execute_batch(
-        "CREATE TABLE transcript_segments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, audio_segment_id INTEGER,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
-            language TEXT, language_confidence REAL, asr_confidence REAL,
-            asr_model TEXT, speaker_label TEXT, speaker_id INTEGER,
-            speaker_cluster TEXT, provenance TEXT, created_utc TEXT,
-            superseded_by INTEGER, hidden_reason TEXT, word_timings TEXT);
-         CREATE VIRTUAL TABLE transcript_fts USING fts5(text, content='');
-         CREATE TABLE corrections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, transcript_segment_id INTEGER,
-            audio_segment_id INTEGER, start_utc TEXT, end_utc TEXT,
-            original_text TEXT, corrected_text TEXT, language TEXT,
-            created_utc TEXT, speaker TEXT, audio_confidence REAL,
-            hidden_reason TEXT);
-         CREATE TABLE speaker_embeddings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, source_correction_id INTEGER);",
+        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'usb', 'coreaudio');
+         INSERT INTO audio_segments (id, source_id, path, start_utc, end_utc, sample_rate, channels)
+         VALUES (7, 'usb', '/x.opus', '2026-07-03T09:51:00+00:00', '2026-07-03T09:52:00+00:00', 16000, 1);",
     )
-    .expect("schema");
+    .expect("the clip");
     conn.execute(
         "INSERT INTO transcript_segments
              (id, audio_segment_id, start_utc, end_utc, text, language,

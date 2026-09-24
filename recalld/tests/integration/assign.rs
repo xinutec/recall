@@ -196,23 +196,14 @@ fn a_collapsed_cut_is_widened_to_a_playable_span() {
 
 fn db() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn.execute_batch(
-        "CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT, kind TEXT);
-         CREATE TABLE audio_segments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL,
-            start_utc TEXT, end_utc TEXT);
-         CREATE TABLE transcript_segments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, audio_segment_id INTEGER,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
-            language TEXT, language_confidence REAL, asr_confidence REAL,
-            asr_model TEXT, speaker_label TEXT, speaker_cluster TEXT,
-            provenance TEXT, created_utc TEXT, word_timings TEXT,
-            superseded_by INTEGER, hidden_reason TEXT);
-         CREATE VIRTUAL TABLE transcript_fts USING fts5(text, content='');
-         INSERT INTO sources (id, name, kind) VALUES ('m', 'm', 'upload');
-         INSERT INTO audio_segments (id, source_id) VALUES (7, 'm');",
+        "INSERT INTO sources (id, name, kind) VALUES ('m', 'm', 'upload');
+         INSERT INTO audio_segments (id, source_id, path, start_utc, end_utc, sample_rate, channels)
+         VALUES (7, 'm', '/m.ogg', '2026-01-15T10:00:00+00:00', '2026-01-15T11:00:00+00:00',
+                 48000, 1);",
     )
-    .expect("schema");
+    .expect("the recording");
     conn
 }
 

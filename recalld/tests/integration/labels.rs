@@ -8,25 +8,7 @@ use recalld::labels::{
 use rusqlite::Connection;
 
 fn schema(conn: &Connection) {
-    conn.execute_batch(
-        "CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
-         CREATE TABLE audio_segments (
-            id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, path TEXT NOT NULL,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
-            sample_rate INTEGER NOT NULL, channels INTEGER NOT NULL);
-         CREATE TABLE transcript_segments (
-            id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, text TEXT NOT NULL,
-            speaker_label TEXT, superseded_by INTEGER, hidden_reason TEXT);
-         CREATE TABLE corrections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            transcript_segment_id INTEGER, audio_segment_id INTEGER,
-            start_utc TEXT NOT NULL, end_utc TEXT NOT NULL,
-            original_text TEXT NOT NULL, corrected_text TEXT NOT NULL,
-            language TEXT, created_utc TEXT NOT NULL,
-            speaker TEXT, hidden_reason TEXT, audio_confidence REAL);",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(conn).expect("schema");
 }
 
 fn db() -> Connection {
@@ -54,9 +36,9 @@ fn the_roster_never_offers_a_diarization_cluster_tag_as_a_name() {
     conn.execute("INSERT INTO speakers (id, name) VALUES (1, 'Pippijn')", ())
         .expect("speaker");
     conn.execute(
-        "INSERT INTO transcript_segments (id, start_utc, end_utc, text, speaker_label)
-         VALUES (1, '2026-06-14T18:00:00+00:00', '2026-06-14T18:00:01+00:00', 'x', 'SPEAKER_01'),
-                (2, '2026-06-14T18:00:01+00:00', '2026-06-14T18:00:02+00:00', 'y', 'Dr Lee')",
+        "INSERT INTO transcript_segments (id, start_utc, end_utc, text, asr_model, speaker_label)
+         VALUES (1, '2026-06-14T18:00:00+00:00', '2026-06-14T18:00:01+00:00', 'x', 'whisper', 'SPEAKER_01'),
+                (2, '2026-06-14T18:00:01+00:00', '2026-06-14T18:00:02+00:00', 'y', 'whisper', 'Dr Lee')",
         (),
     )
     .expect("turns");

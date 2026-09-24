@@ -9,11 +9,10 @@ fn at(offset_s: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_788_894_682 + offset_s, 0).expect("a real instant")
 }
 
-/// A settings table: all this state lives in it.
+/// The meaning plane, whose settings table holds all this state.
 fn store(rows: &[(&str, &str)]) -> Connection {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        .unwrap();
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     for (k, v) in rows {
         conn.execute("INSERT INTO settings VALUES (?1, ?2)", [k, v])
             .unwrap();
@@ -236,13 +235,7 @@ use recalld::capture::{compute_resume_by, intent_pause, intent_resume, record_co
 
 fn writable() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(
-        "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-         CREATE TABLE capture_events (
-             id INTEGER PRIMARY KEY, utc TEXT NOT NULL, kind TEXT NOT NULL,
-             source_id TEXT, detail TEXT);",
-    )
-    .unwrap();
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn
 }
 
@@ -435,15 +428,8 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path().to_path_buf();
     recalld::store::open(&root).expect("ingest db");
-    // The meaning-plane tables the capture state lives in.
     let conn = recalld::work::open_write(&root).expect("recall db");
-    conn.execute_batch(
-        "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-         CREATE TABLE capture_events (
-             id INTEGER PRIMARY KEY, utc TEXT NOT NULL, kind TEXT NOT NULL,
-             source_id TEXT, detail TEXT);",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     drop(conn);
 
     let app = recalld::app::router(std::sync::Arc::new(recalld::app::Config {

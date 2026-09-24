@@ -3,22 +3,9 @@
 use recalld::labels::initial_prompt;
 use rusqlite::Connection;
 
-/// The meaning-plane tables these reads touch.
 fn store() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(
-        "CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
-         CREATE TABLE vocabulary (
-             id INTEGER PRIMARY KEY, term TEXT NOT NULL UNIQUE,
-             created_utc TEXT NOT NULL);
-         CREATE TABLE audio_segments (
-             id INTEGER PRIMARY KEY, source_id TEXT NOT NULL);
-         CREATE TABLE transcript_segments (
-             id INTEGER PRIMARY KEY, audio_segment_id INTEGER,
-             speaker_label TEXT, speaker_cluster TEXT,
-             superseded_by INTEGER, hidden_reason TEXT);",
-    )
-    .unwrap();
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn
 }
 

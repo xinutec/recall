@@ -459,6 +459,12 @@ pub fn delete_session(
         crate::turn_store::delete_for_audio(&tx, *audio_id)?;
     }
     tx.execute("DELETE FROM refine_requests WHERE source_id = ?1", [source])?;
+    // Foreign keys are enforced: a row still pointing at a clip refuses its delete.
+    tx.execute(
+        "DELETE FROM diarize_skips WHERE audio_segment_id IN
+             (SELECT id FROM audio_segments WHERE source_id = ?1)",
+        [source],
+    )?;
     tx.execute("DELETE FROM audio_segments WHERE source_id = ?1", [source])?;
     tx.execute("DELETE FROM sources WHERE id = ?1", [source])?;
     tx.commit()?;

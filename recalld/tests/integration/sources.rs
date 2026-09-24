@@ -294,14 +294,13 @@ fn root_with(sources: &[(&str, &str, &str)]) -> (tempfile::TempDir, std::path::P
     let root = dir.path().to_path_buf();
     recalld::store::open(&root).expect("ingest db");
     let conn = recalld::work::open_write(&root).expect("recall db");
-    conn.execute_batch(
-        "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-         CREATE TABLE sources (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);",
-    )
-    .expect("schema");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     for (id, name, kind) in sources {
-        conn.execute("INSERT INTO sources VALUES (?1, ?2, ?3)", [id, name, kind])
-            .expect("source");
+        conn.execute(
+            "INSERT INTO sources (id, name, kind) VALUES (?1, ?2, ?3)",
+            [id, name, kind],
+        )
+        .expect("source");
     }
     drop(conn);
     (dir, root)
