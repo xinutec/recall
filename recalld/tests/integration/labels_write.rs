@@ -491,8 +491,8 @@ fn an_overridden_span_is_respelled_the_way_every_stored_row_is() {
 }
 
 #[test]
-fn a_non_utc_offset_is_kept_rather_than_rebased() {
-    // Converting would write a spelling this table has never contained.
+fn a_non_utc_offset_is_converted_to_the_stored_spelling() {
+    // Compared as text, a `+01:00` stamp would sort an hour away from its moment.
     let mut conn = correction_db();
 
     let new_id = apply_correction(
@@ -514,7 +514,7 @@ fn a_non_utc_offset_is_kept_rather_than_rebased() {
             |r| r.get(0),
         )
         .expect("new turn");
-    assert_eq!(start, "2026-07-03T10:51:01+01:00");
+    assert_eq!(start, "2026-07-03T09:51:01+00:00");
 }
 
 #[test]

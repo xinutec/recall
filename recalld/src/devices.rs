@@ -134,7 +134,7 @@ fn when(value: Option<&serde_json::Value>) -> Option<String> {
         Some(serde_json::Value::String(s)) => s.clone(),
         Some(other) => other.to_string(),
     };
-    instant::python_isoformat(&text)
+    instant::respell_utc(&text)
 }
 
 fn text_of(value: Option<&serde_json::Value>, max: usize) -> String {
@@ -412,7 +412,7 @@ pub struct ReportsOut {
 /// A client-supplied instant, or `None` if it will not parse. Dropped, never
 /// refused: the beat is what matters.
 fn client_instant(value: Option<&str>) -> Option<String> {
-    instant::python_isoformat(value?)
+    instant::respell_utc(value?)
 }
 
 pub async fn heartbeat_post_route(
@@ -421,7 +421,7 @@ pub async fn heartbeat_post_route(
 ) -> Response {
     let root = st.root.clone();
     // The SERVER's clock. See the module note.
-    let at = instant::python_isoformat(&Utc::now().to_rfc3339()).unwrap_or_default();
+    let at = instant::python_isoformat_utc(Utc::now());
     let beat = Beat {
         device: body.device,
         app: body.app,
@@ -448,7 +448,7 @@ pub async fn outbox_post_route(
     Json(body): Json<OutboxIn>,
 ) -> Response {
     let root = st.root.clone();
-    let at = instant::python_isoformat(&Utc::now().to_rfc3339()).unwrap_or_default();
+    let at = instant::python_isoformat_utc(Utc::now());
     let report = Report {
         device: body.device,
         // Clamped, not refused: a negative count is a client bug, not a reason to

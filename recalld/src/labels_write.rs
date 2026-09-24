@@ -231,15 +231,14 @@ pub fn apply_correction(
         return Err(CorrectError::AlreadySuperseded(segment_id));
     }
     let language = edit.language.map(str::to_owned).or(old.language);
-    // ⚠ An overridden span is re-spelled, not stored as sent: these columns are
-    // compared as text, so `...01Z` among `...01+00:00` rows would sort wrongly.
-    // See `audiocore::instant`.
+    // An overridden span is re-spelled in UTC, never stored as sent: these
+    // columns are compared as text. See `audiocore::instant`.
     let start = match edit.start {
-        Some(value) => audiocore::instant::python_isoformat(value).ok_or(CorrectError::BadSpan)?,
+        Some(value) => audiocore::instant::respell_utc(value).ok_or(CorrectError::BadSpan)?,
         None => old.start_utc.clone(),
     };
     let end = match edit.end {
-        Some(value) => audiocore::instant::python_isoformat(value).ok_or(CorrectError::BadSpan)?,
+        Some(value) => audiocore::instant::respell_utc(value).ok_or(CorrectError::BadSpan)?,
         None => old.end_utc.clone(),
     };
     let (start, end) = (start.as_str(), end.as_str());

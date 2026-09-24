@@ -133,7 +133,7 @@ pub fn intent_until(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<O
     if parsed.with_timezone(&Utc) <= now {
         return Ok(None);
     }
-    Ok(audiocore::instant::python_isoformat(&raw))
+    Ok(audiocore::instant::respell_utc(&raw))
 }
 
 /// The Mac's last-reported state if it is fresh, else `None` — meaning the Mac

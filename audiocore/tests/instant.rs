@@ -1,6 +1,6 @@
 //! The archive's timestamp spelling, and reading the spellings it holds.
 
-use audiocore::instant::{parse, parse_utc, python_isoformat, python_isoformat_utc};
+use audiocore::instant::{parse, parse_utc, python_isoformat_utc, respell_utc};
 use chrono::DateTime;
 
 #[test]
@@ -31,8 +31,9 @@ fn a_non_utc_offset_names_the_same_instant_and_is_kept_when_respelled() {
         3600
     );
     assert_eq!(
-        python_isoformat("2026-09-08T20:11:22+01:00").as_deref(),
-        Some("2026-09-08T20:11:22+01:00")
+        respell_utc("2026-09-08T20:11:22+01:00").as_deref(),
+        Some("2026-09-08T19:11:22+00:00"),
+        "another offset is converted, never kept"
     );
 }
 
@@ -40,7 +41,7 @@ fn a_non_utc_offset_names_the_same_instant_and_is_kept_when_respelled() {
 fn junk_is_none_rather_than_a_panic() {
     assert!(parse("").is_none());
     assert!(parse("not a time").is_none());
-    assert!(python_isoformat("not a time").is_none());
+    assert!(respell_utc("not a time").is_none());
 }
 
 #[test]
@@ -55,11 +56,11 @@ fn a_zero_fraction_is_dropped_and_a_real_one_kept() {
         "2026-09-08T19:11:22.164504+00:00"
     );
     assert_eq!(
-        python_isoformat("2026-09-08T19:11:22Z").as_deref(),
+        respell_utc("2026-09-08T19:11:22Z").as_deref(),
         Some("2026-09-08T19:11:22+00:00")
     );
     assert_eq!(
-        python_isoformat("2026-09-08T19:11:22.500Z").as_deref(),
+        respell_utc("2026-09-08T19:11:22.500Z").as_deref(),
         Some("2026-09-08T19:11:22.500000+00:00")
     );
 }

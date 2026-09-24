@@ -301,7 +301,7 @@ pub fn started_at(raw: &str) -> Result<DateTime<Utc>, UploadError> {
     if raw.is_empty() {
         return Ok(Utc::now());
     }
-    let normalised = instant::python_isoformat(raw).ok_or(UploadError::BadStart)?;
+    let normalised = instant::respell_utc(raw).ok_or(UploadError::BadStart)?;
     DateTime::parse_from_rfc3339(&normalised)
         .map(|t| t.with_timezone(&Utc))
         .map_err(|_| UploadError::BadStart)

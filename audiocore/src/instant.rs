@@ -2,9 +2,10 @@
 //!
 //! Stored timestamps are compared and ordered as text (`WHERE start_utc <
 //! ?1`), so two spellings of one moment are two different values. The one
-//! spelling is Python's `datetime.isoformat()`: `+00:00` rather than `Z`, no
-//! fraction when it is zero and six digits when it is not, a non-UTC offset
-//! kept rather than converted.
+//! spelling is Python's `datetime.isoformat()` of a UTC instant: `+00:00`
+//! rather than `Z`, no fraction when it is zero and six digits when it is not.
+//! Any other offset is converted. The meaning plane refuses a write in any other
+//! spelling (migration v47).
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 
@@ -22,11 +23,11 @@ pub fn python_isoformat_utc(when: DateTime<Utc>) -> String {
     when.to_rfc3339_opts(format_for(when.timestamp_subsec_micros()), false)
 }
 
-/// Re-spell an instant in the stored form, or `None` if it does not parse.
+/// Re-spell an instant in the stored form, converted to UTC, or `None` if it
+/// does not parse.
 #[must_use]
-pub fn python_isoformat(value: &str) -> Option<String> {
-    let parsed = parse(value)?;
-    Some(parsed.to_rfc3339_opts(format_for(parsed.timestamp_subsec_micros()), false))
+pub fn respell_utc(value: &str) -> Option<String> {
+    parse(value).map(|t| python_isoformat_utc(t.with_timezone(&Utc)))
 }
 
 /// Parse an instant as `datetime.fromisoformat` does: `Z` or an offset, or no

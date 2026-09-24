@@ -176,3 +176,35 @@ fn a_value_that_is_not_an_instant_stops_the_migration_and_changes_nothing() {
         .expect("room row");
     assert_eq!(room, "2026-09-03T10:00:00.000000+00:00");
 }
+
+/// The stored spelling is enforced by the database, not by each writer's care.
+#[test]
+fn an_instant_in_another_spelling_is_refused_and_the_stored_one_accepted() {
+    let conn = rusqlite::Connection::open_in_memory().expect("db");
+    ensure(&conn).expect("migrate");
+    let insert = |at: &str| {
+        conn.execute(
+            "INSERT INTO vocabulary (term, created_utc) VALUES (?1, ?2)",
+            (format!("t{at}"), at),
+        )
+    };
+    for bad in [
+        "2026-09-24T10:00:00Z",
+        "2026-09-24T11:00:00+01:00",
+        "2026-09-24 10:00:00+00:00",
+        "2026-09-24T10:00:00.000+00:00",
+    ] {
+        assert!(insert(bad).is_err(), "{bad} was stored");
+    }
+    let whole = chrono::DateTime::from_timestamp(1_790_000_000, 0).expect("whole");
+    let fraction = chrono::DateTime::from_timestamp(1_790_000_000, 1_000).expect("fraction");
+    for good in [whole, fraction] {
+        let spelled = audiocore::instant::python_isoformat_utc(good);
+        insert(&spelled).unwrap_or_else(|err| panic!("{spelled}: {err}"));
+    }
+    let moved = conn.execute(
+        "UPDATE vocabulary SET created_utc = '2026-09-24T10:00:00Z'",
+        [],
+    );
+    assert!(moved.is_err(), "an update is held to it too");
+}
