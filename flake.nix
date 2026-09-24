@@ -108,7 +108,8 @@
         # `ruff check`. The gate builds it into `.venv` in one row (gate.dhall).
         devEnv = mlPythonSet.mkVirtualEnv "recall-dev-env" uvWorkspace.deps.all;
 
-        # The devshell's interpreter: no ML, mypy and pytest for the gate.
+        # The devshell's interpreter: no ML, mypy and pytest for the gate; also
+        # `packages.dev-python` below.
         devPython = python.withPackages (ps: [ ps.mypy ps.pytest ]);
 
         # The binaries the agents shell out to by bare name. ⚠ Exposed as a package
@@ -244,6 +245,10 @@
         packages.audiod = audiodPkg;
         packages.ml-env = mlEnv;
         packages.dev-env = devEnv;
+        # volume's gate runs mypy and its Python tests through this: a pinned
+        # interpreter already in the store, where `nixpkgs#mypy` would unpack the
+        # ambient channel. Removing it breaks volume's gate, not this one.
+        packages.dev-python = devPython;
         packages.agent-tools = agentTools;
         # ⚠ The ONNX runtime the speech agent must dlopen, exported so
         # home-manager reaches the SAME one this flake's tests run silero
