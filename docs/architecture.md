@@ -106,7 +106,14 @@ both; the schema of the second is a migration ladder
 (`recalld::meaning_schema`), that of the first one `ensure`
 (`recalld::ingest_schema`). Every instant in the meaning plane is text in one
 spelling (`audiocore::instant`), because instants are compared and ordered as
-text; migration v46 rewrote the rows written before that held.
+text. Writers take it as a `Stamp`, which only a real instant builds, and
+triggers (v47) refuse any other spelling. Foreign keys are enforced.
+
+Every write to the turn table goes through `recalld::turn_store`, a test fails
+the build otherwise. It owns the typed provenance, the stage the app shows
+(live, transcribed, diarized, corrected) and the rule for what a person owns:
+a turn they corrected or named. No pass hides such a turn or writes over its
+span.
 
 A recording machine keeps no database of meaning. Beside its segments,
 `audiod` appends the capture log (`capture-events.jsonl`, the format in
@@ -177,7 +184,8 @@ push to and the port the browser uses. It owns:
   re-derives speaker guesses when the voiceprints have grown. Every terminal
   decision that writes nothing leaves a ledger row, or the clip sits at the
   head of the queue for ever. Every row a pass writes carries a provenance that
-  names the pass, so a pass can be taken back.
+  names the pass, so a pass can be taken back. Job kinds are one enum
+  (`audiocore::job::Kind`) shared with the runner.
 - **The browsing API and the app.** Timeline, search, playback, corrections,
   sessions, labels, the capture control, behind the Nextcloud sign-in. The
   frontend's types are generated from the route structs (`ts-rs`); the gate
