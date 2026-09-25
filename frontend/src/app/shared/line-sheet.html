@@ -1,0 +1,145 @@
+<header class="head">
+  <button
+    matIconButton
+    (click)="play()"
+    [attr.aria-label]="playing() ? 'pause' : 'hear this line'"
+  >
+    <mat-icon>{{ playing() ? 'pause' : 'play_arrow' }}</mat-icon>
+  </button>
+  <span class="clock">{{ clock(t.start) }}</span>
+  <span class="who" [class.guess]="!data.confirmed">{{ data.speaker }}</span>
+  @if (t.source) {
+    <span class="src">{{ t.source }}</span>
+  }
+  @if (mode() !== 'main') {
+    <button matButton class="back" (click)="open('main')">Back</button>
+  }
+</header>
+
+<ng-template #names>
+  <mat-chip-listbox
+    aria-label="Said by"
+    [disabled]="busy()"
+    (change)="choose($event.value)"
+  >
+    @for (n of data.names; track n) {
+      <mat-chip-option
+        [value]="n"
+        [selected]="mode() === 'main' && data.confirmed && n === data.speaker"
+        >{{ n }}</mat-chip-option
+      >
+    }
+  </mat-chip-listbox>
+  <mat-form-field appearance="outline" subscriptSizing="dynamic" class="new">
+    <mat-label>Someone else</mat-label>
+    <input
+      matInput
+      #name
+      #trig="matAutocompleteTrigger"
+      [matAutocomplete]="auto"
+      [disabled]="busy()"
+      (input)="typed.set(name.value)"
+      (keydown.enter)="trig.activeOption ? null : choose(name.value)"
+    />
+    <mat-autocomplete #auto (optionSelected)="choose($event.option.value)">
+      @for (n of suggestions(); track n) {
+        <mat-option [value]="n">{{ n }}</mat-option>
+      }
+    </mat-autocomplete>
+  </mat-form-field>
+</ng-template>
+
+@switch (mode()) {
+  @case ('main') {
+    <p class="line">{{ t.text }}</p>
+    @if (editable) {
+      <h3 class="label">Said by</h3>
+      <ng-container [ngTemplateOutlet]="names" />
+    } @else {
+      <p class="hint">Still being transcribed, editable in a minute or two.</p>
+    }
+    <mat-action-list>
+      @if (editable && words.length > 1) {
+        <button mat-list-item (click)="open('part')">
+          <mat-icon matListItemIcon>call_split</mat-icon>
+          <span matListItemTitle>Part of it was someone else</span>
+        </button>
+      }
+      @if (editable) {
+        <button mat-list-item (click)="open('edit')">
+          <mat-icon matListItemIcon>edit</mat-icon>
+          <span matListItemTitle>Fix words</span>
+        </button>
+      }
+      @if (data.alternates.length) {
+        <button mat-list-item (click)="open('mics')">
+          <mat-icon matListItemIcon>graphic_eq</mat-icon>
+          <span matListItemTitle>Other mics ({{ data.alternates.length }})</span>
+        </button>
+      }
+      <button mat-list-item (click)="copy()">
+        <mat-icon matListItemIcon>content_copy</mat-icon>
+        <span matListItemTitle>Copy words</span>
+      </button>
+      <a mat-list-item [routerLink]="['/review']" [queryParams]="{ ids: t.id }">
+        <mat-icon matListItemIcon>link</mat-icon>
+        <span matListItemTitle>Open this line on its own</span>
+      </a>
+    </mat-action-list>
+  }
+  @case ('part') {
+    <p class="hint">Tap the first and the last word someone else said.</p>
+    <p class="words">
+      @for (w of words; track $index) {
+        <button
+          type="button"
+          class="w"
+          [class.on]="inPart($index)"
+          [attr.aria-pressed]="inPart($index)"
+          (click)="pick($index)"
+        >
+          {{ w.text }}
+        </button>
+      }
+    </p>
+    @if (partText()) {
+      <h3 class="label">“{{ partText() }}” was said by</h3>
+      <ng-container [ngTemplateOutlet]="names" />
+    }
+  }
+  @case ('edit') {
+    <mat-form-field appearance="outline" subscriptSizing="dynamic" class="edit">
+      <mat-label>Words</mat-label>
+      <textarea
+        matInput
+        #ed
+        cdkTextareaAutosize
+        cdkAutosizeMinRows="3"
+        cdkAutosizeMaxRows="10"
+        [value]="t.text"
+      ></textarea>
+    </mat-form-field>
+    <div class="actions">
+      <button matButton (click)="open('main')">Cancel</button>
+      <button matButton="filled" [disabled]="busy()" (click)="saveText(ed.value)">Save</button>
+    </div>
+  }
+  @case ('mics') {
+    <mat-list>
+      @for (a of data.alternates; track a.id) {
+        <mat-list-item lines="3">
+          <button
+            matIconButton
+            matListItemMeta
+            (click)="play(a)"
+            [attr.aria-label]="playing(a) ? 'pause' : 'hear this mic'"
+          >
+            <mat-icon>{{ playing(a) ? 'pause' : 'play_arrow' }}</mat-icon>
+          </button>
+          <span matListItemTitle>{{ a.source }}{{ a.speaker ? ' · ' + a.speaker : '' }}</span>
+          <span matListItemLine class="alt-text">{{ a.text }}</span>
+        </mat-list-item>
+      }
+    </mat-list>
+  }
+}

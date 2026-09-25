@@ -98,43 +98,26 @@ const LONG = Array.from({ length: 40 }, (_, i) => {
     : turn(i + 1, 'Dr. Lee', 'SPEAKER_00', `Right, and the answer to ${i + 1} is as follows.`);
 });
 
-test('Fix words is reachable, not hidden behind the bottom nav (Pixel 9)', async ({ page }) => {
+async function tapFixWords(page: Page, text: string): Promise<void> {
+  const line = page.locator('span.t', { hasText: text });
+  await expect(line).toBeVisible();
+  await line.click();
+  const fix = page.getByRole('button', { name: /fix words/i });
+  // No scrolling: the sheet comes to the thumb, wherever the line is.
+  await expect(fix).toBeInViewport();
+  await fix.click();
+  await expect(page.getByLabel('Words')).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'Save' })).toBeInViewport();
+}
+
+test('Fix words opens in the sheet, on screen (Pixel 9)', async ({ page }) => {
   await mockApi(page, SHORT);
   await page.goto('/sessions/test');
-
-  const line = page.locator('span.t', { hasText: 'a list of errands' });
-  await expect(line).toBeVisible();
-
-  await line.click();
-  const fix = page.getByRole('button', { name: /fix words/i });
-  await expect(fix).toBeVisible();
-
-  await fix.scrollIntoViewIfNeeded();
-  await expect(fix).toBeInViewport();
-  const fixBox = await fix.boundingBox();
-  const navBox = await page.locator('nav.bottom-nav').boundingBox();
-  expect(fixBox).not.toBeNull();
-  expect(navBox).not.toBeNull();
-  expect(fixBox!.y + fixBox!.height).toBeLessThanOrEqual(navBox!.y);
+  await tapFixWords(page, 'a list of errands');
 });
 
-test('Fix words stays on screen after selecting a line in a long transcript', async ({ page }) => {
+test('Fix words is on screen for a line at the top of a long transcript', async ({ page }) => {
   await mockApi(page, LONG);
   await page.goto('/sessions/test');
-
-  // Tap a line near the TOP of a long transcript. The selection toolbar must come to
-  // the user — visible in the viewport without hunting to the bottom of the page.
-  const line = page.locator('span.t', { hasText: 'My very first question' });
-  await expect(line).toBeVisible();
-  await line.click();
-
-  const fix = page.getByRole('button', { name: /fix words/i });
-  await expect(fix).toBeVisible();
-  // No scrollIntoView: it should already be on screen, above the bottom nav.
-  await expect(fix).toBeInViewport();
-  const fixBox = await fix.boundingBox();
-  const navBox = await page.locator('nav.bottom-nav').boundingBox();
-  expect(fixBox).not.toBeNull();
-  expect(navBox).not.toBeNull();
-  expect(fixBox!.y + fixBox!.height).toBeLessThanOrEqual(navBox!.y);
+  await tapFixWords(page, 'My very first question');
 });

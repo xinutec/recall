@@ -75,57 +75,31 @@ async function mockApi(page: Page): Promise<() => unknown> {
   return () => captured.body;
 }
 
-// Selects "a list of errands" at the start of Dr. Lee's turn and fires the handler.
-async function selectPhrase(page: Page): Promise<void> {
-  await page.locator('span.t[data-id="2"]').waitFor();
-  await page.evaluate(() => {
-    const span = document.querySelector('span.t[data-id="2"]')!;
-    const node = span.firstChild!;
-    const range = document.createRange();
-    range.setStart(node, 0);
-    range.setEnd(node, 'a list of errands'.length);
-    const sel = window.getSelection()!;
-    sel.removeAllRanges();
-    sel.addRange(range);
-    document
-      .querySelector('.transcript')!
-      .dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-  });
+// Opens Dr. Lee's line and picks "a list of errands", its first four words.
+async function pickPhrase(page: Page): Promise<void> {
+  await page.locator('span.t', { hasText: 'a list of errands' }).click();
+  await page.getByRole('button', { name: /part of it was someone else/i }).click();
+  await page.getByRole('button', { name: 'a', exact: true }).click();
+  await page.getByRole('button', { name: 'errands', exact: true }).click();
+  await expect(page.getByText('“a list of errands” was said by')).toBeVisible();
 }
 
-test('drag-select a phrase and assign it to an existing speaker (Pixel 9)', async ({ page }) => {
+const PART = { startTurn: 2, startChar: 0, endTurn: 2, endChar: 17 };
+
+test('give part of a line to an existing speaker (Pixel 9)', async ({ page }) => {
   const assign = await mockApi(page);
   await page.goto('/sessions/test');
-  await selectPhrase(page);
-
-  const bar = page.locator('.palette[role="toolbar"]');
-  await expect(bar).toContainText('a list of errands');
-  await bar.getByRole('button', { name: 'Pippijn' }).click();
-
-  expect(assign()).toEqual({
-    startTurn: 2,
-    startChar: 0,
-    endTurn: 2,
-    endChar: 17,
-    name: 'Pippijn',
-  });
+  await pickPhrase(page);
+  await page.getByRole('option', { name: 'Pippijn' }).click();
+  await expect.poll(assign).toEqual({ ...PART, name: 'Pippijn' });
 });
 
-test('assign a phrase to a brand-new speaker via the name field (Pixel 9)', async ({ page }) => {
+test('give part of a line to a brand-new speaker (Pixel 9)', async ({ page }) => {
   const assign = await mockApi(page);
   await page.goto('/sessions/test');
-  await selectPhrase(page);
-
-  // The session only knows Pippijn / Dr. Lee; introduce a third person by name.
-  const input = page.locator('.palette[role="toolbar"] input.new-name');
-  await input.fill('Sam');
-  await input.press('Enter');
-
-  expect(assign()).toEqual({
-    startTurn: 2,
-    startChar: 0,
-    endTurn: 2,
-    endChar: 17,
-    name: 'Sam',
-  });
+  await pickPhrase(page);
+  const field = page.getByRole('combobox', { name: 'Someone else' });
+  await field.fill('Sam');
+  await field.press('Enter');
+  await expect.poll(assign).toEqual({ ...PART, name: 'Sam' });
 });

@@ -74,14 +74,16 @@ turns the same way: paragraphs per speaker, a guess in italics with its strength
 grey lines not yet speaker-separated. Every edit supersedes the old turn; nothing is
 deleted, and a later pass never overwrites it.
 
-- **Who said a line**: tap it, then a name (or type a new one). This files a
+Tapping a line opens its sheet at the bottom of the screen:
+
+- **Who said it**: tap a name, or type one under *Someone else*. This files a
   correction, so it also enrols the voice.
-- **Move a phrase**: drag across the words someone else said and pick the speaker.
-  The cut snaps to word boundaries. A selection across two mics is refused.
-- **Fix the words**: tap the line, then *Fix words*.
-- **Other mics**: a small number after a line counts the mics that heard it; tap
-  the line, then *Other mics* to read and hear their versions. A wavy underline
-  means the mics disagree on who spoke.
+- **Part of it was someone else**: tap the first and the last word they said, then
+  the name. A phrase across two lines takes one split per line.
+- **Fix words**, **Copy words**, and a link to the line on its own.
+- **Other mics**: a small number after a line counts the mics that heard it; the
+  sheet lists their versions to read and hear. A wavy underline means the mics
+  disagree on who spoke.
 - **Grey lines** have no speakers separated yet. They are editable; every pass
   keeps a correction. Only a live line, minutes old, waits for its transcription.
 

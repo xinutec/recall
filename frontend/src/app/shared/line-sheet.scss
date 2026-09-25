@@ -1,0 +1,98 @@
+:host {
+  display: block;
+  padding-bottom: 0.5rem;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: -0.5rem;
+
+  .clock {
+    font: var(--mat-sys-label-medium);
+    font-variant-numeric: tabular-nums;
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  .who {
+    font: var(--mat-sys-title-small);
+
+    &.guess {
+      font-style: italic;
+    }
+  }
+
+  .src {
+    padding: 0 0.3rem;
+    border-radius: 4px;
+    font: var(--mat-sys-label-small);
+    color: var(--mat-sys-on-surface-variant);
+    background: var(--mat-sys-surface-container-highest);
+  }
+
+  .back {
+    margin-left: auto;
+  }
+}
+
+.line {
+  margin: 0.25rem 0 0.75rem;
+  font: var(--mat-sys-body-large);
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.label {
+  margin: 0.5rem 0 0.25rem;
+  font: var(--mat-sys-title-small);
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.hint {
+  font: var(--mat-sys-body-medium);
+  color: var(--mat-sys-on-surface-variant);
+}
+
+.new,
+.edit {
+  width: 100%;
+  margin-top: 0.5rem;
+}
+
+.words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  max-height: 40vh;
+  overflow-y: auto;
+
+  // Word-sized targets, big enough for a thumb.
+  .w {
+    min-height: 40px;
+    padding: 0 0.55rem;
+    border: 1px solid var(--mat-sys-outline-variant);
+    border-radius: 8px;
+    background: none;
+    color: var(--mat-sys-on-surface);
+    font: var(--mat-sys-body-large);
+    cursor: pointer;
+
+    &.on {
+      border-color: var(--mat-sys-primary);
+      background: var(--mat-sys-primary-container);
+      color: var(--mat-sys-on-primary-container);
+    }
+  }
+}
+
+.actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+.alt-text {
+  white-space: normal;
+}

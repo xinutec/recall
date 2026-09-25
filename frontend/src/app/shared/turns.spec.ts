@@ -1,12 +1,11 @@
 import { TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
-import { provideHttpClient } from '@angular/common/http';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { provideRouter } from '@angular/router';
-import { MatSnackBar } from '@angular/material/snack-bar';
+import { MatBottomSheet } from '@angular/material/bottom-sheet';
+import { Subject } from 'rxjs';
 import { vi } from 'vitest';
 
 import { Turns, runsOf } from './turns';
+import { LineSheetData } from './line-sheet';
 import { Player } from './player';
 import { Moment, Transcript } from '../models';
 
@@ -44,14 +43,17 @@ const moment = (primary: Transcript[], alternates: Transcript[] = []): Moment =>
 });
 
 async function setup(moments: Moment[], roster: string[] = []) {
-  const open = vi.fn();
+  const closed = new Subject<boolean | undefined>();
+  const sheet = {
+    open: vi.fn((_: unknown, config: { data: LineSheetData }) => {
+      void config;
+      return { afterDismissed: () => closed };
+    }),
+  };
   TestBed.configureTestingModule({
     providers: [
       provideZonelessChangeDetection(),
-      provideHttpClient(),
-      provideHttpClientTesting(),
-      provideRouter([]),
-      { provide: MatSnackBar, useValue: { open } },
+      { provide: MatBottomSheet, useValue: sheet },
     ],
   });
   const fixture = TestBed.createComponent(Turns);
@@ -61,11 +63,10 @@ async function setup(moments: Moment[], roster: string[] = []) {
   fixture.componentInstance.changed.subscribe(changed);
   fixture.detectChanges();
   await fixture.whenStable();
-  const ctrl = TestBed.inject(HttpTestingController);
   const player = TestBed.inject(Player);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the component's private state, reached in a test
   const c = fixture.componentInstance as any;
-  return { fixture, c, ctrl, changed, open, player };
+  return { fixture, c, changed, sheet, closed, player };
 }
 
 function stubMedia() {
@@ -114,110 +115,28 @@ describe('Turns', () => {
     expect(c.colourFor('P')).not.toBe(c.colourFor('D'));
   });
 
-  it('a tap selects a line, and a second tap clears it', async () => {
-    const { c } = await setup([moment([said(1, 'P')])]);
-    c.selectTurn(1);
+  it('a tap opens the line’s sheet, and a write there refreshes', async () => {
+    const { c, changed, sheet, closed } = await setup([moment([said(1, 'P', { text: 'hallo' })])]);
+    const t = c.turns()[0];
+    c.openLine(t);
     expect(c.selected()).toBe(1);
-    c.selectTurn(1);
-    expect(c.selected()).toBeNull();
-  });
-
-  it('saying who files a correction that keeps the words', async () => {
-    const { c, ctrl, changed } = await setup([moment([said(1, 'P', { text: 'hallo' })])]);
-    c.selectTurn(1);
-    c.assignTurn('D');
-    const req = ctrl.expectOne('/api/correct');
-    expect(req.request.body).toEqual({ id: 1, text: 'hallo', speaker: 'D' });
-    req.flush({ newId: 9 });
+    const data = sheet.open.mock.calls[0][1].data;
+    expect(data).toMatchObject({ turn: t, speaker: 'P', confirmed: true, names: ['P'] });
+    closed.next(true);
     expect(c.selected()).toBeNull();
     expect(changed).toHaveBeenCalled();
   });
 
-  it('a failed write says so and emits nothing', async () => {
-    const { c, ctrl, changed, open } = await setup([moment([said(1, 'P')])]);
-    c.selectTurn(1);
-    c.assignTurn('D');
-    ctrl.expectOne('/api/correct').flush('no', { status: 500, statusText: 'x' });
-    expect(open).toHaveBeenCalled();
+  it('closing the sheet without a write refreshes nothing', async () => {
+    const { c, changed, closed } = await setup([moment([said(1, 'P')])]);
+    c.openLine(c.turns()[0]);
+    closed.next(undefined);
     expect(changed).not.toHaveBeenCalled();
   });
 
-  it('a transcribed line is editable, a live one is not', async () => {
-    const { c } = await setup([
-      moment([said(1, 'P', { tier: 'transcribed' })]),
-      moment([said(2, 'P', { tier: 'live' })]),
-    ]);
-    const [transcribed, live] = c.turns();
-    expect(c.editable(transcribed)).toBe(true);
-    expect(c.provisional(transcribed)).toBe(true);
-    expect(c.editable(live)).toBe(false);
-  });
-
-  it('Fix words opens on the tapped line and saves the new text', async () => {
-    const { c, ctrl } = await setup([moment([said(1, 'P', { text: 'foracidinib' })])]);
-    c.selectTurn(1);
-    c.editText();
-    expect(c.editingText()).toBe('foracidinib');
-    c.saveEdit('vorasidenib');
-    const req = ctrl.expectOne('/api/correct');
-    expect(req.request.body).toEqual({ id: 1, text: 'vorasidenib' });
-    req.flush({ newId: 99 });
-    expect(c.editing()).toBeNull();
-  });
-
-  it('a blank edit posts nothing', async () => {
-    const { c, ctrl } = await setup([moment([said(1, 'P')])]);
-    c.editing.set(1);
-    c.saveEdit('   ');
-    ctrl.expectNone('/api/correct');
-  });
-
-  it('maps a selection to turn and offsets, clamping the trailing space', async () => {
-    const text = 'a list of errands';
-    const { fixture, c } = await setup([moment([said(7, 'P', { text })])]);
-    const node = fixture.nativeElement.querySelector('span.t[data-id="7"]').firstChild as Text;
-    const range = document.createRange();
-    range.setStart(node, 0);
-    range.setEnd(node, text.length + 1);
-    vi.spyOn(window, 'getSelection').mockReturnValue({
-      isCollapsed: false,
-      rangeCount: 1,
-      getRangeAt: () => range,
-      toString: () => text,
-    } as unknown as Selection);
-    c.onSelect();
-    expect(c.span()).toEqual({ startTurn: 7, startChar: 0, endTurn: 7, endChar: text.length });
-    expect(c.spanSource()).toBe('m');
-  });
-
-  it('moves a selected phrase to the turn’s source, once however often tapped', async () => {
-    const { c, ctrl } = await setup([moment([said(7, 'P')])]);
-    c.span.set({ startTurn: 7, startChar: 0, endTurn: 7, endChar: 5 });
-    c.spanSource.set('usb');
-    c.assignSpan('D');
-    c.assignSpan('D');
-    const reqs = ctrl.match('/api/sessions/usb/assign');
-    expect(reqs.length).toBe(1);
-    expect(reqs[0].request.body).toEqual({
-      startTurn: 7,
-      startChar: 0,
-      endTurn: 7,
-      endChar: 5,
-      name: 'D',
-    });
-    reqs[0].flush({ touched: 1 });
-    expect(c.span()).toBeNull();
-  });
-
-  it('does not move a phrase without a name or a source', async () => {
-    const { c, ctrl } = await setup([moment([said(7, 'P')])]);
-    c.span.set({ startTurn: 7, startChar: 0, endTurn: 7, endChar: 5 });
-    c.spanSource.set('usb');
-    c.assignSpan('   ');
-    c.spanSource.set(null);
-    c.assignSpan('D');
-    ctrl.expectNone(() => true);
-    expect(c.span()).not.toBeNull();
+  it('a transcribed line is grey', async () => {
+    const { c } = await setup([moment([said(1, 'P', { tier: 'transcribed' })])]);
+    expect(c.provisional(c.turns()[0])).toBe(true);
   });
 
   it('plays a run as one span, pauses, then resumes in place', async () => {

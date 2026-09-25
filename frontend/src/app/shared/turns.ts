@@ -8,22 +8,16 @@ import {
   output,
   signal,
 } from '@angular/core';
-import { RouterLink } from '@angular/router';
-import { FormsModule } from '@angular/forms';
+import { MatBottomSheet } from '@angular/material/bottom-sheet';
 import { MatButtonModule } from '@angular/material/button';
-import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
-import { MatInputModule } from '@angular/material/input';
-import { MatSnackBar } from '@angular/material/snack-bar';
 
 import { Moment, Transcript } from '../models';
-import { RecallApi } from '../recall-api';
-import { resolveSelection, SpanSel } from '../selection-span';
 import { timeOfDaySeconds } from '../format';
+import { LineSheet, LineSheetData } from './line-sheet';
 import { Player } from './player';
 
-/** Consecutive turns shown under one speaker. The turns stay separate spans, so a
- * selection can still split inside the run. */
+/** Consecutive turns shown under one speaker. Each turn stays its own tap target. */
 export interface Run {
   readonly key: number;
   readonly speaker: string;
@@ -63,22 +57,12 @@ export function runsOf(
   return out;
 }
 
-let views = 0;
-
 const COLOURS = ['#8ab4f8', '#fbbc04', '#81c995', '#f28b82', '#c58af9', '#78d9ec', '#ff8bcb'];
 
-/** A stretch of turns as speaker paragraphs, with every way to fix them: say who
- * said a line, move a selected phrase, fix the words, hear it, compare the mics. */
+/** A stretch of turns as speaker paragraphs. Tapping a line opens its sheet. */
 @Component({
   selector: 'app-turns',
-  imports: [
-    RouterLink,
-    FormsModule,
-    MatButtonModule,
-    MatFormFieldModule,
-    MatIconModule,
-    MatInputModule,
-  ],
+  imports: [MatButtonModule, MatIconModule],
   templateUrl: './turns.html',
   styleUrl: './turns.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -92,12 +76,9 @@ export class Turns implements OnDestroy {
   /** A write landed; the parent refetches. */
   readonly changed = output();
 
-  private readonly api = inject(RecallApi);
-  private readonly snack = inject(MatSnackBar);
+  private readonly sheet = inject(MatBottomSheet);
   protected readonly player = inject(Player);
   protected readonly clock = timeOfDaySeconds;
-  /** Several views share a page, so the name list needs its own id. */
-  protected readonly listId = `names-${++views}`;
 
   protected readonly turns = computed(() => this.moments().flatMap((m) => m.primary));
   protected readonly runs = computed(() => runsOf(this.turns(), this.voiceNames()));
@@ -163,12 +144,6 @@ export class Turns implements OnDestroy {
     );
   }
 
-  /** Every pass keeps a human correction, but a live line is minutes from being
-   * replaced by its transcription. */
-  protected editable(t: Transcript): boolean {
-    return t.tier !== 'live';
-  }
-
   /** No speaker separation yet: shown grey, still editable. */
   protected provisional(t: Transcript): boolean {
     return t.tier === 'live' || t.tier === 'transcribed';
@@ -184,10 +159,6 @@ export class Turns implements OnDestroy {
     this.player.toggle(`run:${run.key}`, this.player.clip(span), each);
   }
 
-  protected playTurn(t: Transcript): void {
-    this.player.toggle(`turn:${t.id}`, this.player.clip(t.audioUrl));
-  }
-
   ngOnDestroy(): void {
     // Stop only this view's clip: the timeline shows several views at once.
     const id = Number(this.player.playing()?.split(':')[1]);
@@ -197,109 +168,29 @@ export class Turns implements OnDestroy {
     if (mine) this.player.stop();
   }
 
-  // --- selecting
+  // --- a line
 
+  /** The line whose sheet is open, marked in the text. */
   protected readonly selected = signal<number | null>(null);
-  protected readonly selectedTurn = computed(
-    () => this.turns().find((t) => t.id === this.selected()) ?? null,
-  );
-  protected readonly comparing = signal(false);
 
-  protected readonly span = signal<SpanSel | null>(null);
-  protected readonly spanSource = signal<string | null>(null);
-  protected readonly spanText = signal('');
-
-  /** A tap selects a line, a second tap clears it. A drag selection wins. */
-  protected selectTurn(id: number): void {
-    if (this.span()) return;
-    this.comparing.set(false);
-    this.selected.update((cur) => (cur === id ? null : id));
-  }
-
-  protected onSelect(): void {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-      this.span.set(null);
-      return;
-    }
-    const r = resolveSelection(sel.getRangeAt(0));
-    this.span.set(r?.span ?? null);
-    this.spanSource.set(r?.source ?? null);
-    this.spanText.set(r ? sel.toString().trim() : '');
-  }
-
-  protected clearSpan(): void {
-    window.getSelection()?.removeAllRanges();
-    this.span.set(null);
-  }
-
-  // --- writing
-
-  /** Guards every write against a double tap firing it twice. */
-  protected readonly busy = signal(false);
-
-  protected assignSpan(name: string): void {
-    const span = this.span();
-    const source = this.spanSource();
-    const who = name.trim();
-    if (!span || !source || !who || this.busy()) return;
-    this.busy.set(true);
-    this.api.assignSpan(source, { ...span, name: who }).subscribe({
-      next: () => {
-        this.clearSpan();
-        this.done();
-      },
-      error: () => this.fail(),
-    });
-  }
-
-  /** Say who said the selected line. A correction, so it also enrols the voice. */
-  protected assignTurn(name: string): void {
-    const t = this.selectedTurn();
-    const who = name.trim();
-    if (!t || !who || this.busy()) return;
-    this.busy.set(true);
-    this.api.correct(t.id, t.text, { speaker: who }).subscribe({
-      next: () => {
+  protected openLine(t: Transcript): void {
+    const { name, confirmed } = speakerOf(t, this.voiceNames());
+    const known = [...new Set([...this.palette(), ...this.roster()])];
+    const data: LineSheetData = {
+      turn: t,
+      speaker: name,
+      confirmed,
+      names: this.palette(),
+      known,
+      alternates: this.alternates(t),
+    };
+    this.selected.set(t.id);
+    this.sheet
+      .open<LineSheet, LineSheetData, boolean>(LineSheet, { data })
+      .afterDismissed()
+      .subscribe((wrote) => {
         this.selected.set(null);
-        this.done();
-      },
-      error: () => this.fail(),
-    });
-  }
-
-  protected readonly editing = signal<number | null>(null);
-  protected readonly editingText = computed(
-    () => this.turns().find((t) => t.id === this.editing())?.text ?? '',
-  );
-
-  protected editText(): void {
-    this.editing.set(this.selected());
-  }
-
-  protected cancelEdit(): void {
-    this.editing.set(null);
-  }
-
-  protected saveEdit(text: string): void {
-    const id = this.editing();
-    this.editing.set(null);
-    this.selected.set(null);
-    if (id === null || !text.trim() || this.busy()) return;
-    this.busy.set(true);
-    this.api.correct(id, text.trim()).subscribe({
-      next: () => this.done(),
-      error: () => this.fail(),
-    });
-  }
-
-  private done(): void {
-    this.busy.set(false);
-    this.changed.emit();
-  }
-
-  private fail(): void {
-    this.busy.set(false);
-    this.snack.open('Could not save, try again', 'OK', { duration: 4000 });
+        if (wrote) this.changed.emit();
+      });
   }
 }
