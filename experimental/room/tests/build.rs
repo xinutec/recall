@@ -3,9 +3,9 @@
 //! microphone hearing best for itself rather than the most sensitive one.
 
 use chrono::{DateTime, Duration, Utc};
-use recalld::levels::scan_once;
-use recalld::room::{BuildSummary, ROOM_SOURCE, RoomConfig, build_once, verdict_of};
 use recalld::store;
+use room::levels::scan_once;
+use room::{BuildSummary, ROOM_SOURCE, RoomConfig, build_once, verdict_of};
 use std::f32::consts::PI;
 use std::path::Path;
 
@@ -17,6 +17,7 @@ fn config() -> RoomConfig {
         reference_window: 100,
         // Tests seed a short history; production keeps its higher floor.
         min_reference_rows: 3,
+        window: None,
     }
 }
 
@@ -101,7 +102,7 @@ fn level_evidence_without_speech_evidence_is_not_enough_to_rank() {
     // because a recorded verdict is terminal (a_judged_block_is_never_rejudged).
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
-    scan_once(dir.path(), 100).expect("levels");
+    scan_once(dir.path(), 100, None).expect("levels");
     let summary = build_once(dir.path(), &config(), now_after(block)).expect("build");
     assert_eq!(summary.built, 0, "{summary:?}");
     assert!(summary.deferred > 0, "{summary:?}");
@@ -114,10 +115,35 @@ fn level_evidence_without_speech_evidence_is_not_enough_to_rank() {
 }
 
 #[test]
+fn a_window_builds_only_the_blocks_inside_it() {
+    // The seeded history has blocks at 10:00 and 11:00; the window takes 11:00.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let block = seed_two_devices(dir.path());
+    scan_once(dir.path(), 100, None).expect("levels");
+    seed_speech(dir.path());
+    let windowed = RoomConfig {
+        window: Some((block, block + Duration::minutes(1))),
+        ..config()
+    };
+    build_once(dir.path(), &windowed, now_after(block)).expect("build");
+    let conn = store::open(dir.path()).expect("db");
+    assert!(
+        verdict_of(&conn, "2026-09-05T11:00:00Z")
+            .expect("q")
+            .is_some()
+    );
+    assert_eq!(
+        verdict_of(&conn, "2026-09-05T10:00:00Z").expect("q"),
+        None,
+        "outside the window: not judged"
+    );
+}
+
+#[test]
 fn the_room_blob_carries_the_winners_audio() {
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
-    scan_once(dir.path(), 100).expect("levels");
+    scan_once(dir.path(), 100, None).expect("levels");
     seed_speech(dir.path());
     build_once(dir.path(), &config(), now_after(block)).expect("build");
     let blob = dir
@@ -153,7 +179,7 @@ fn no_verdict_on_partial_evidence() {
     let conn = store::open(dir.path()).expect("db");
     assert_eq!(verdict_of(&conn, "2026-09-05T11:00:00Z").expect("q"), None);
     // Once measured, the same pass shape builds it.
-    scan_once(dir.path(), 100).expect("levels");
+    scan_once(dir.path(), 100, None).expect("levels");
     seed_speech(dir.path());
     let after = build_once(dir.path(), &config(), now_after(block)).expect("build");
     assert!(after.built >= 1);
@@ -166,7 +192,7 @@ fn no_reference_means_deferred_not_degraded() {
     let dir = tempfile::tempdir().expect("tempdir");
     // One segment only: measured, but far under min_reference_rows.
     stored(dir.path(), "solo", "20260905T110000", 0.3);
-    scan_once(dir.path(), 100).expect("levels");
+    scan_once(dir.path(), 100, None).expect("levels");
     let block = DateTime::parse_from_rfc3339("2026-09-05T11:00:00Z")
         .expect("t")
         .with_timezone(&Utc);
@@ -183,7 +209,7 @@ fn no_reference_means_deferred_not_degraded() {
 fn an_unsettled_block_is_not_judged() {
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
-    scan_once(dir.path(), 100).expect("levels");
+    scan_once(dir.path(), 100, None).expect("levels");
     // "Now" is one minute after the block: inside the settling window.
     let summary = build_once(dir.path(), &config(), block + Duration::minutes(1)).expect("build");
     let conn = store::open(dir.path()).expect("db");
@@ -197,7 +223,7 @@ fn an_unsettled_block_is_not_judged() {
 fn a_judged_block_is_never_rejudged() {
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
-    scan_once(dir.path(), 100).expect("levels");
+    scan_once(dir.path(), 100, None).expect("levels");
     seed_speech(dir.path());
     let first = build_once(dir.path(), &config(), now_after(block)).expect("build");
     let second = build_once(dir.path(), &config(), now_after(block)).expect("build");
@@ -212,7 +238,7 @@ fn calibration_chooses_the_device_hearing_best_for_itself() {
     // is the one that suddenly hears something, though `loud` is louder.
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
-    scan_once(dir.path(), 100).expect("levels");
+    scan_once(dir.path(), 100, None).expect("levels");
 
     seed_speech(dir.path());
 
@@ -235,7 +261,7 @@ fn calibration_chooses_the_device_hearing_best_for_itself() {
 
 // ---- gated sources are removed before the rank (filter parked) ----
 
-use recalld::room::GATED_MAX;
+use room::GATED_MAX;
 
 /// A gating source: bursts separated by true digital silence, which a
 /// speakerphone emits and no analogue front end can.
@@ -288,7 +314,7 @@ fn the_loudest_source_loses_when_it_is_gating() {
     let root = dir.path();
     stored_gated(root, "geb", "20260911T100000", 0.9);
     stored(root, "usb", "20260911T100000", 0.3);
-    scan_once(root, 100).expect("levels");
+    scan_once(root, 100, None).expect("levels");
 
     let block = DateTime::parse_from_str("20260911T100000+0000", "%Y%m%dT%H%M%S%z")
         .expect("stamp")
@@ -314,7 +340,7 @@ fn a_minute_where_every_source_gates_builds_nothing() {
     let root = dir.path();
     stored_gated(root, "geb", "20260911T100000", 0.9);
     stored_gated(root, "pixel5", "20260911T100000", 0.5);
-    scan_once(root, 100).expect("levels");
+    scan_once(root, 100, None).expect("levels");
 
     let block = DateTime::parse_from_str("20260911T100000+0000", "%Y%m%dT%H%M%S%z")
         .expect("stamp")
@@ -336,7 +362,7 @@ fn a_segment_measured_before_the_detector_defers_the_block() {
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path();
     stored(root, "usb", "20260911T100000", 0.3);
-    scan_once(root, 100).expect("levels");
+    scan_once(root, 100, None).expect("levels");
     let conn = store::open(root).expect("db");
     conn.execute("UPDATE segment_levels SET gated = NULL", [])
         .expect("blank it");
@@ -358,13 +384,13 @@ fn the_backfill_re_measures_a_row_whose_gate_reading_is_missing() {
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path();
     stored(root, "usb", "20260911T100000", 0.3);
-    scan_once(root, 100).expect("levels");
+    scan_once(root, 100, None).expect("levels");
     let conn = store::open(root).expect("db");
     conn.execute("UPDATE segment_levels SET gated = NULL", [])
         .expect("blank it");
 
     assert_eq!(
-        scan_once(root, 100).expect("backfill"),
+        scan_once(root, 100, None).expect("backfill"),
         1,
         "it must revisit"
     );
@@ -429,7 +455,7 @@ fn a_block_the_winner_barely_recorded_is_refused_not_padded() {
     let block = DateTime::parse_from_rfc3339("2026-09-05T11:00:00Z")
         .expect("t")
         .with_timezone(&Utc);
-    scan_once(dir.path(), 100).expect("levels");
+    scan_once(dir.path(), 100, None).expect("levels");
     seed_speech(dir.path());
 
     build_once(dir.path(), &config(), now_after(block)).expect("build");
@@ -458,7 +484,7 @@ fn a_fully_covered_block_still_builds_and_records_its_coverage() {
     let block = DateTime::parse_from_rfc3339("2026-09-05T11:00:00Z")
         .expect("t")
         .with_timezone(&Utc);
-    scan_once(dir.path(), 100).expect("levels");
+    scan_once(dir.path(), 100, None).expect("levels");
     seed_speech(dir.path());
 
     build_once(dir.path(), &config(), now_after(block)).expect("build");
@@ -472,50 +498,6 @@ fn a_fully_covered_block_still_builds_and_records_its_coverage() {
 }
 
 #[test]
-fn coverage_is_backfilled_for_blocks_judged_before_it_was_measured() {
-    // Blocks judged before coverage was measured read NULL, meaning unknown,
-    // not fully covered.
-    let dir = tempfile::tempdir().expect("tmp");
-    for i in 0..4 {
-        stored(dir.path(), "usb", &format!("20260905T1000{i:02}"), 0.5);
-    }
-    stored_short(dir.path(), "usb", "20260905T110050", 0.5, 10.0);
-    let block = DateTime::parse_from_rfc3339("2026-09-05T11:00:00Z")
-        .expect("t")
-        .with_timezone(&Utc);
-    scan_once(dir.path(), 100).expect("levels");
-    seed_speech(dir.path());
-    build_once(dir.path(), &config(), now_after(block)).expect("build");
-
-    // Blank the column, as on a database from before it existed.
-    let conn = store::open(dir.path()).expect("db");
-    conn.execute("UPDATE room_blocks SET coverage = NULL", [])
-        .expect("clear");
-
-    let measured = recalld::room::backfill_coverage(dir.path(), 100).expect("backfill");
-    assert!(measured > 0, "there were blocks to measure");
-    let (verdict, coverage) = block_row(dir.path(), block);
-    assert_eq!(verdict, "sparse", "the verdict is not rewritten");
-    assert!(
-        coverage.expect("measured") < 0.25,
-        "ten seconds of sixty is about 0.17"
-    );
-
-    assert_eq!(
-        recalld::room::backfill_coverage(dir.path(), 100).expect("again"),
-        0,
-        "a measured block is not measured again"
-    );
-}
-
-// --- the per-source gate signature -------------------------------------------
-//
-// The signature is the speech-to-floor gap in `processed.rs`. `quiet_run_s` is
-// stored as evidence but no rule reads it.
-
-/// The gap signature is recorded on every contributor and decides nothing, so
-/// the rule can be judged from provenance before it ever acts.
-#[test]
 fn every_contributor_records_the_gap_signature_without_it_changing_the_verdict() {
     let dir = tempfile::tempdir().expect("tmp");
     for i in 0..12 {
@@ -525,7 +507,7 @@ fn every_contributor_records_the_gap_signature_without_it_changing_the_verdict()
     let block = DateTime::parse_from_rfc3339("2026-09-05T11:00:00Z")
         .expect("t")
         .with_timezone(&Utc);
-    scan_once(dir.path(), 100).expect("levels");
+    scan_once(dir.path(), 100, None).expect("levels");
     seed_speech(dir.path());
 
     build_once(dir.path(), &config(), now_after(block)).expect("build");
@@ -563,7 +545,7 @@ fn too_few_segments_record_no_gap_signature() {
     let block = DateTime::parse_from_rfc3339("2026-09-05T11:00:00Z")
         .expect("t")
         .with_timezone(&Utc);
-    scan_once(dir.path(), 100).expect("levels");
+    scan_once(dir.path(), 100, None).expect("levels");
     seed_speech(dir.path());
 
     build_once(dir.path(), &config(), now_after(block)).expect("build");

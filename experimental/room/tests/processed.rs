@@ -1,7 +1,7 @@
 //! The processed-audio check. The levels in these fixtures are measured medians
 //! from `segment_levels` on a real day, not numbers invented to pass.
 
-use recalld::processed::{Levels, MIN_SEGMENTS, gaps, processed_sources, processed_with_evidence};
+use room::processed::{Levels, MIN_SEGMENTS, gaps, processed_sources, processed_with_evidence};
 
 fn many(source: &str, speech_db: f32, floor_db: f32, n: usize) -> Vec<Levels> {
     (0..n)

@@ -2,8 +2,8 @@
 //! one device order correctly, the scanner is idempotent, and the per-device
 //! reference comes from the rows.
 
-use recalld::levels::{scan_once, speech_reference_db};
 use recalld::store;
+use room::levels::{scan_once, speech_reference_db};
 use std::f32::consts::PI;
 use std::path::Path;
 
@@ -49,7 +49,7 @@ fn levels_order_by_how_loud_the_device_heard() {
     let dir = tempfile::tempdir().expect("tempdir");
     stored_segment(dir.path(), "usb", "usb-20260905T120000.wav", 0.5);
     stored_segment(dir.path(), "usb", "usb-20260905T120100.wav", 0.005);
-    assert_eq!(scan_once(dir.path(), 100).expect("scan"), 2);
+    assert_eq!(scan_once(dir.path(), 100, None).expect("scan"), 2);
     let conn = store::open(dir.path()).expect("db");
     let loud: f64 = conn
         .query_row(
@@ -73,8 +73,8 @@ fn levels_order_by_how_loud_the_device_heard() {
 fn the_scanner_measures_each_blob_exactly_once() {
     let dir = tempfile::tempdir().expect("tempdir");
     stored_segment(dir.path(), "usb", "usb-20260905T120000.wav", 0.2);
-    assert_eq!(scan_once(dir.path(), 100).expect("scan"), 1);
-    assert_eq!(scan_once(dir.path(), 100).expect("rescan"), 0);
+    assert_eq!(scan_once(dir.path(), 100, None).expect("scan"), 1);
+    assert_eq!(scan_once(dir.path(), 100, None).expect("rescan"), 0);
 }
 
 #[test]
@@ -97,8 +97,8 @@ fn an_undecodable_blob_is_recorded_not_retried_forever() {
         },
     )
     .expect("row");
-    assert_eq!(scan_once(dir.path(), 100).expect("scan"), 1);
-    assert_eq!(scan_once(dir.path(), 100).expect("rescan"), 0);
+    assert_eq!(scan_once(dir.path(), 100, None).expect("scan"), 1);
+    assert_eq!(scan_once(dir.path(), 100, None).expect("rescan"), 0);
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn the_device_reference_is_a_query_over_its_own_rows() {
             *amp,
         );
     }
-    scan_once(dir.path(), 100).expect("scan");
+    scan_once(dir.path(), 100, None).expect("scan");
     // The reference only counts segments the VAD says carry speech, and silero
     // does not call tone bursts speech, so the speech rows are written directly.
     // Under test is the quantile over a source's own rows, not the detector.
@@ -143,7 +143,7 @@ fn the_device_reference_is_a_query_over_its_own_rows() {
 
 // ---- the gate detector ----
 
-use recalld::levels::{GATE_DB, gated_fraction};
+use room::levels::{GATE_DB, gated_fraction};
 
 #[test]
 fn a_calm_room_is_not_a_gate_however_quiet_it_is() {
@@ -209,7 +209,7 @@ fn the_scanner_stores_the_gate_measurement() {
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path();
     stored_segment(root, "usb", "usb-20260911T100000.wav", 0.2);
-    assert_eq!(scan_once(root, 10).expect("scan"), 1);
+    assert_eq!(scan_once(root, 10, None).expect("scan"), 1);
     let conn = store::open(root).expect("db");
     let gated: Option<f64> = conn
         .query_row(
@@ -282,7 +282,7 @@ fn a_database_from_before_the_detector_gains_the_column() {
     recalld::ingest_schema::ensure(&conn).expect("idempotent");
 }
 
-use recalld::levels::quiet_run_seconds;
+use room::levels::quiet_run_seconds;
 
 /// Decode a stored fixture exactly as `measure` does.
 fn fixture_pcm(name: &str) -> Option<Vec<u8>> {

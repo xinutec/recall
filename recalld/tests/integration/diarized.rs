@@ -2,7 +2,6 @@
 //! Each case pins a guard, so one that looks redundant still is not;
 //! `diarized` carries the reasoning.
 
-use audiocore::job::Kind;
 use chrono::{DateTime, TimeDelta, Utc};
 use recalld::align::{AlignedTurn, Word};
 use recalld::diarized::{
@@ -538,11 +537,11 @@ fn a_refused_diarization_is_not_mistaken_for_an_empty_one() {
 // mocked: two real SQLite files, the real join across the ingest and meaning
 // planes, the real transaction.
 
-use recalld::diarized::{PER_MIC, ROOM, write_pass};
+use recalld::diarized::{HIDDEN_REASON, PROVENANCE, write_pass};
 use rusqlite::Connection;
 
 const NOW: &str = "2026-09-15T18:00:00+00:00";
-const BLOCK: &str = "room-20260906T094500.flac";
+const BLOCK: &str = "usb-20260906T094500.flac";
 const BLOCK_START: &str = "2026-09-06T09:45:00+00:00";
 
 /// The meaning plane, with the columns this pass touches.
@@ -550,9 +549,9 @@ fn meaning_plane(path: &std::path::Path) -> Connection {
     let conn = Connection::open(path.join("recall.sqlite")).expect("meaning");
     recalld::meaning_schema::ensure(&conn).expect("schema");
     conn.execute_batch(
-        "INSERT INTO sources (id, name, kind) VALUES ('room', 'room', 'room');
+        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'usb', 'coreaudio');
          INSERT INTO audio_segments (id, source_id, path, start_utc, end_utc, sample_rate, channels)
-         VALUES (1, 'room', '/x.flac', '2026-09-06T09:45:00+00:00',
+         VALUES (1, 'usb', '/x.flac', '2026-09-06T09:45:00+00:00',
                  '2026-09-06T09:46:00+00:00', 16000, 1);",
     )
     .expect("the block");
@@ -573,13 +572,13 @@ fn ingest_plane(path: &std::path::Path, voices: &str, transcription: &str) -> Co
     recalld::ingest_schema::ensure(&conn).expect("jobs");
     conn.execute(
         "INSERT INTO segments (source, filename, start_utc, bytes, sha256, received_utc)
-         VALUES ('room', ?1, ?2, 1, 'x', ?2)",
+         VALUES ('usb', ?1, ?2, 1, 'x', ?2)",
         (BLOCK, BLOCK_START),
     )
     .expect("segment");
     for (kind, result) in [
-        (audiocore::job::Kind::TranscribeRoom, transcription),
-        (audiocore::job::Kind::DiarizeRoom, voices),
+        (audiocore::job::Kind::TranscribeSegment, transcription),
+        (audiocore::job::Kind::DiarizeSegment, voices),
     ] {
         conn.execute(
             "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
@@ -591,12 +590,13 @@ fn ingest_plane(path: &std::path::Path, voices: &str, transcription: &str) -> Co
     conn
 }
 
-fn room_turn(conn: &Connection, text: &str) -> i64 {
+/// A turn already standing on the clip, as the transcription pass wrote it.
+fn standing_turn(conn: &Connection, text: &str) -> i64 {
     conn.execute(
         "INSERT INTO transcript_segments
              (audio_segment_id, start_utc, end_utc, text, asr_model, provenance, created_utc)
          VALUES (1, '2026-09-06T09:45:00+00:00', '2026-09-06T09:46:00+00:00', ?1,
-                 'whisper', 'room', ?2)",
+                 'whisper', 'per-mic (runner)', ?2)",
         (text, NOW),
     )
     .expect("turn");
@@ -618,11 +618,11 @@ fn a_single_speaker_pass_names_the_turns_that_are_there_and_hides_nothing() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut meaning = meaning_plane(dir.path());
     let ingest = ingest_plane(dir.path(), ONE_SPEAKER, WORDS_TODAY);
-    let a = room_turn(&meaning, "een");
-    let b = room_turn(&meaning, "twee");
-    let c = room_turn(&meaning, "drie");
+    let a = standing_turn(&meaning, "een");
+    let b = standing_turn(&meaning, "twee");
+    let c = standing_turn(&meaning, "drie");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.named, 3, "every turn the speaker covers");
     assert_eq!(pass.hidden, 0, "⚠ NOTHING may be hidden");
@@ -655,9 +655,9 @@ fn a_finished_diarization_replaces_the_room_turns_with_speaker_split_ones() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut meaning = meaning_plane(dir.path());
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
-    let old = room_turn(&meaning, "een twee");
+    let old = standing_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.blocks, 1);
     assert_eq!(pass.turns, 2, "one turn per speaker");
@@ -672,7 +672,7 @@ fn a_finished_diarization_replaces_the_room_turns_with_speaker_split_ones() {
             |r| r.get(0),
         )
         .expect("old turn still there");
-    assert_eq!(hidden, Some(ROOM.hidden_reason.to_string()));
+    assert_eq!(hidden, Some(HIDDEN_REASON.to_string()));
 
     // The new ones carry the speaker and a provenance the stage reads as diarized.
     let mut stmt = meaning
@@ -714,13 +714,13 @@ fn a_decided_block_leaves_a_ledger_row_and_is_not_decided_twice() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut meaning = meaning_plane(dir.path());
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
-    room_turn(&meaning, "een twee");
+    standing_turn(&meaning, "een twee");
 
-    write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("first");
+    write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("first");
     let outcome: String = ingest
         .query_row(
             "SELECT outcome FROM pass_ledger WHERE kind = ?1 AND filename = ?2",
-            (audiocore::job::Kind::DiarizeRoom, BLOCK),
+            (audiocore::job::Kind::DiarizeSegment, BLOCK),
             |r| r.get(0),
         )
         .expect("a ledger row");
@@ -728,12 +728,12 @@ fn a_decided_block_leaves_a_ledger_row_and_is_not_decided_twice() {
 
     // A second pass does no work: a decision that writes no row is made again
     // for ever.
-    let again = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("second");
+    let again = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("second");
     assert_eq!(again, recalld::diarized::Pass::default());
 }
 
 /// The whole transcription is a repetition loop, so nothing is written and the
-/// room transcript stays. The refusal is `all-segments-looped`, caught before
+/// standing transcript stays. The refusal is `all-segments-looped`, caught before
 /// alignment, and still leaves a ledger row: the stored result will not change.
 #[test]
 fn a_block_whose_pass_is_all_junk_keeps_its_transcript_and_is_not_retried() {
@@ -744,9 +744,9 @@ fn a_block_whose_pass_is_all_junk_keeps_its_transcript_and_is_not_retried() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut meaning = meaning_plane(dir.path());
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, junk);
-    let old = room_turn(&meaning, "a minute of Dutch about writing things down");
+    let old = standing_turn(&meaning, "a minute of Dutch about writing things down");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.turns, 0);
     assert_eq!(pass.hidden, 0);
@@ -778,9 +778,9 @@ fn one_looping_segment_no_longer_costs_the_clip_its_speakers() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut meaning = meaning_plane(dir.path());
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_WITH_A_LOOPING_SEGMENT);
-    room_turn(&meaning, "a minute of Dutch about writing things down");
+    standing_turn(&meaning, "a minute of Dutch about writing things down");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert!(pass.turns > 0, "the clean words must become turns");
     assert_eq!(pass.kept, 0, "this is no longer a refusal");
@@ -800,7 +800,7 @@ fn a_corrected_block_is_left_alone() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut meaning = meaning_plane(dir.path());
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
-    let old = room_turn(&meaning, "what the machine heard");
+    let old = standing_turn(&meaning, "what the machine heard");
     meaning
         .execute(
             "INSERT INTO corrections
@@ -812,7 +812,7 @@ fn a_corrected_block_is_left_alone() {
         )
         .expect("correction");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.turns, 0);
     assert_eq!(pass.kept, 1);
@@ -833,7 +833,7 @@ fn a_block_a_person_named_is_left_alone() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut meaning = meaning_plane(dir.path());
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
-    let old = room_turn(&meaning, "een twee");
+    let old = standing_turn(&meaning, "een twee");
     meaning
         .execute(
             "UPDATE transcript_segments SET speaker_label = 'Alex' WHERE id = ?1",
@@ -841,7 +841,7 @@ fn a_block_a_person_named_is_left_alone() {
         )
         .expect("named");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!((pass.turns, pass.hidden), (0, 0));
     let standing: i64 = meaning
@@ -863,9 +863,9 @@ fn a_block_with_no_words_yet_waits_and_keeps_no_ledger_row() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut meaning = meaning_plane(dir.path());
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, no_words);
-    room_turn(&meaning, "hello");
+    standing_turn(&meaning, "hello");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.waiting, 1);
     assert_eq!(pass.blocks, 0);
@@ -886,7 +886,7 @@ fn a_block_with_no_audio_segment_waits() {
         .expect("unregister");
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.waiting, 1);
     let rows: i64 = ingest
@@ -906,11 +906,11 @@ fn a_diarization_with_no_transcription_is_not_picked_up() {
     ingest
         .execute(
             "DELETE FROM jobs WHERE kind = ?1",
-            [audiocore::job::Kind::TranscribeRoom],
+            [audiocore::job::Kind::TranscribeSegment],
         )
         .expect("drop the transcription");
 
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass, recalld::diarized::Pass::default());
 }
@@ -921,57 +921,15 @@ fn a_diarization_with_no_transcription_is_not_picked_up() {
 // hiding what a person can read and writing over it. That is why `decide` has
 // the guards it has.
 
-/// The ingest plane with a per-mic clip and its two finished jobs.
-fn mic_ingest(path: &std::path::Path, voices: &str, transcription: &str) -> Connection {
-    let conn = Connection::open(path.join("ingest.sqlite")).expect("ingest");
-    conn.execute_batch(
-        "CREATE TABLE segments (
-             source TEXT NOT NULL, filename TEXT NOT NULL, start_utc TEXT NOT NULL,
-             bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, received_utc TEXT NOT NULL,
-             sent_utc TEXT, PRIMARY KEY (source, filename)
-         );",
-    )
-    .expect("segments");
-    recalld::ingest_schema::ensure(&conn).expect("jobs");
-    conn.execute(
-        "INSERT INTO segments (source, filename, start_utc, bytes, sha256, received_utc)
-         VALUES ('usb', 'usb-20260906T094500.flac', ?1, 1, 'x', ?1)",
-        [BLOCK_START],
-    )
-    .expect("segment");
-    for (kind, result) in [
-        (audiocore::job::Kind::TranscribeSegment, transcription),
-        (audiocore::job::Kind::DiarizeSegment, voices),
-    ] {
-        conn.execute(
-            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
-             VALUES (?1, 'usb-20260906T094500.flac', 'done', ?2, ?2, ?3)",
-            (kind, NOW, result),
-        )
-        .expect("job");
-    }
-    conn
-}
-
-fn mic_meaning(path: &std::path::Path) -> Connection {
-    let conn = meaning_plane(path);
-    conn.execute_batch(
-        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'usb', 'coreaudio');
-         UPDATE audio_segments SET source_id = 'usb';",
-    )
-    .expect("mic source");
-    conn
-}
-
 /// A microphone clip's existing turn is superseded by speaker-split ones.
 #[test]
 fn a_microphone_clips_turns_are_replaced_by_speaker_split_ones() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut meaning = mic_meaning(dir.path());
-    let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
-    let old = room_turn(&meaning, "een twee");
+    let mut meaning = meaning_plane(dir.path());
+    let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
+    let old = standing_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.turns, 2, "one per speaker");
     assert_eq!(pass.hidden, 1, "the flat turn is superseded");
@@ -994,11 +952,11 @@ fn a_microphone_clips_turns_are_replaced_by_speaker_split_ones() {
 #[test]
 fn a_per_mic_turn_keeps_the_corpus_model_name_and_is_reversible_by_provenance() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut meaning = mic_meaning(dir.path());
-    let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
-    room_turn(&meaning, "een twee");
+    let mut meaning = meaning_plane(dir.path());
+    let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
+    standing_turn(&meaning, "een twee");
 
-    write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
+    write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     let (model, provenance): (String, String) = meaning
         .query_row(
@@ -1012,7 +970,7 @@ fn a_per_mic_turn_keeps_the_corpus_model_name_and_is_reversible_by_provenance() 
     assert_eq!(model, recalld::turns::SHIM_MODEL);
     // …while the provenance names this pass, so a reversal takes only its rows,
     // not those marked `diarized-aligned (<model>)`.
-    assert_eq!(provenance, PER_MIC.provenance.to_string());
+    assert_eq!(provenance, PROVENANCE.to_string());
     assert_ne!(
         provenance,
         format!("diarized-aligned ({})", recalld::turns::SHIM_MODEL),
@@ -1020,70 +978,15 @@ fn a_per_mic_turn_keeps_the_corpus_model_name_and_is_reversible_by_provenance() 
     );
 }
 
-/// The two streams share the code, the shim and the model; a pass that picked
-/// up the other's jobs would align one clip's words against another's
-/// speakers. The ledger and the join are both per kind.
+/// The provenance must name this pass's rows alone, or a reversal cannot take
+/// them back without taking the older diarized corpus too.
 #[test]
-fn the_per_mic_pass_does_not_touch_the_room_streams_jobs() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut meaning = meaning_plane(dir.path());
-    let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY); // ROOM jobs only
-    room_turn(&meaning, "een twee");
-
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
-
-    assert_eq!(
-        pass,
-        recalld::diarized::Pass::default(),
-        "room jobs are not per-mic work"
-    );
-}
-
-/// The converse, so neither test can pass by the pass doing nothing.
-#[test]
-fn the_room_pass_does_not_touch_the_per_mic_streams_jobs() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut meaning = mic_meaning(dir.path());
-    let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY); // PER-MIC jobs only
-    room_turn(&meaning, "een twee");
-
-    let pass = write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
-
-    assert_eq!(pass, recalld::diarized::Pass::default());
-}
-
-/// A stream's provenance must name its own rows alone, or a reversal cannot
-/// take one back without taking the other.
-#[test]
-fn the_two_streams_write_provenances_that_cannot_match_each_other() {
-    // Read from the streams, never rebuilt here: a test that builds the strings
-    // itself tests its own copy.
-    assert_ne!(PER_MIC.provenance, ROOM.provenance);
-    assert_ne!(PER_MIC.hidden_reason, ROOM.hidden_reason);
-    for p in [&PER_MIC.provenance, &ROOM.provenance] {
-        assert!(p.is_diarized(), "{p}");
-        assert_ne!(
-            p.to_string(),
-            format!("diarized-aligned ({})", recalld::turns::SHIM_MODEL),
-            "the older pass's string — a reversal could not tell the passes apart"
-        );
-    }
-}
-
-/// The kinds a runner may be handed must not overlap between streams either.
-#[test]
-fn the_two_streams_draw_from_different_queue_kinds() {
-    let kinds: Vec<Kind> = vec![
-        PER_MIC.diarize_kind,
-        PER_MIC.transcribe_kind,
-        ROOM.diarize_kind,
-        ROOM.transcribe_kind,
-    ];
-    let unique: std::collections::HashSet<&Kind> = kinds.iter().collect();
-    assert_eq!(
-        unique.len(),
-        kinds.len(),
-        "a kind is claimed twice: {kinds:?}"
+fn the_pass_writes_a_provenance_no_older_pass_wrote() {
+    assert!(PROVENANCE.is_diarized(), "{PROVENANCE}");
+    assert_ne!(
+        PROVENANCE.to_string(),
+        format!("diarized-aligned ({})", recalld::turns::SHIM_MODEL),
+        "the older pass's string: a reversal could not tell the passes apart"
     );
 }
 
@@ -1150,12 +1053,12 @@ fn enrol_two(conn: &Connection) {
 #[test]
 fn a_written_turn_carries_the_name_its_voiceprint_implies() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut meaning = mic_meaning(dir.path());
+    let mut meaning = meaning_plane(dir.path());
     enrol_two(&meaning);
-    let ingest = mic_ingest(dir.path(), VOICED, WORDS_TODAY);
-    room_turn(&meaning, "een twee");
+    let ingest = ingest_plane(dir.path(), VOICED, WORDS_TODAY);
+    standing_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
     assert_eq!(pass.turns, 2);
 
     let mut stmt = meaning
@@ -1192,12 +1095,12 @@ fn a_written_turn_carries_the_name_its_voiceprint_implies() {
 #[test]
 fn a_written_turn_keeps_the_embedding_a_later_rematch_needs() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut meaning = mic_meaning(dir.path());
+    let mut meaning = meaning_plane(dir.path());
     enrol_two(&meaning);
-    let ingest = mic_ingest(dir.path(), VOICED, WORDS_TODAY);
-    room_turn(&meaning, "een twee");
+    let ingest = ingest_plane(dir.path(), VOICED, WORDS_TODAY);
+    standing_turn(&meaning, "een twee");
 
-    write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
+    write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     let stored: i64 = meaning
         .query_row("SELECT count(*) FROM transcript_embeddings", [], |r| {
@@ -1212,11 +1115,11 @@ fn a_written_turn_keeps_the_embedding_a_later_rematch_needs() {
 #[test]
 fn with_nobody_enrolled_turns_are_written_unnamed_rather_than_guessed_at() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut meaning = mic_meaning(dir.path());
-    let ingest = mic_ingest(dir.path(), VOICED, WORDS_TODAY);
-    room_turn(&meaning, "een twee");
+    let mut meaning = meaning_plane(dir.path());
+    let ingest = ingest_plane(dir.path(), VOICED, WORDS_TODAY);
+    standing_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
     assert_eq!(pass.turns, 2, "the turns are still written");
 
     let guessed: i64 = meaning
@@ -1233,12 +1136,12 @@ fn with_nobody_enrolled_turns_are_written_unnamed_rather_than_guessed_at() {
 #[test]
 fn a_diarization_without_voiceprints_still_writes_its_turns() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut meaning = mic_meaning(dir.path());
+    let mut meaning = meaning_plane(dir.path());
     enrol_two(&meaning);
-    let ingest = mic_ingest(dir.path(), TWO_SPEAKERS, WORDS_TODAY); // no "speakers"
-    room_turn(&meaning, "een twee");
+    let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY); // no "speakers"
+    standing_turn(&meaning, "een twee");
 
-    let pass = write_pass(&mut meaning, &ingest, &PER_MIC, &crate::stamp(NOW), 10).expect("pass");
+    let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.turns, 2);
     let guessed: i64 = meaning
@@ -1264,9 +1167,9 @@ fn a_foreign_script_turn_keeps_its_text_and_loses_its_confidence() {
                    {"start": 1.0, "end": 2.0, "text": " не правиш нищо", "probability": 0.9}]}
     ]}}"#;
     let ingest = ingest_plane(dir.path(), ONE_SPEAKER, words);
-    room_turn(&meaning, "een");
+    standing_turn(&meaning, "een");
 
-    write_pass(&mut meaning, &ingest, &ROOM, &crate::stamp(NOW), 10).expect("pass");
+    write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     let (text, confidence): (String, Option<f64>) = meaning
         .query_row(

@@ -12,9 +12,10 @@
 //! Bounded batches, oldest first. A segment's levels are facts about its bytes,
 //! so a statistic, once measured, is never recomputed.
 
-use crate::store;
 use audiocore::decode;
 use audiocore::envelope::{level_quantile_db, rms_buckets_at};
+use chrono::{DateTime, Utc};
+use recalld::store;
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -141,7 +142,11 @@ fn bucket_db(rms: f32) -> f32 {
 /// rows were written. A blob that cannot be decoded is recorded at
 /// `NEG_INFINITY` rather than retried forever — absence of a reading is
 /// itself a reading, and the row is what stops the scanner revisiting it.
-pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
+pub fn scan_once(
+    root: &Path,
+    batch: usize,
+    window: Option<(DateTime<Utc>, DateTime<Utc>)>,
+) -> rusqlite::Result<usize> {
     let conn = store::open(root)?;
     let pending: Vec<(String, String)> = {
         let mut stmt = conn.prepare(
@@ -149,13 +154,35 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
             // rows that lack it. A row left NULL makes the room builder, which
             // refuses to rank on partial evidence, defer every block it touches.
             // A new statistic column must be added here.
-            "SELECT s.filename, s.source FROM segments s
+            "SELECT s.filename, s.source, s.start_utc FROM segments s
              LEFT JOIN segment_levels l ON l.filename = s.filename
              WHERE l.filename IS NULL OR l.gated IS NULL OR l.quiet_run_s IS NULL
-             ORDER BY s.start_utc, s.filename LIMIT ?1",
+             ORDER BY s.start_utc, s.filename",
         )?;
-        let rows = stmt.query_map([batch as u32], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        rows.collect::<Result<_, _>>()?
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        // A copy holds blobs for its window only; outside it, a missing blob
+        // is not fetched, not unreadable, and must not be measured as silence.
+        let mut wanted = Vec::new();
+        for row in rows {
+            let (filename, source, start) = row?;
+            let inside = window.is_none_or(|(from, to)| {
+                DateTime::parse_from_rfc3339(&start)
+                    .is_ok_and(|t| t.with_timezone(&Utc) >= from && t.with_timezone(&Utc) < to)
+            });
+            if inside {
+                wanted.push((filename, source));
+            }
+            if wanted.len() >= batch {
+                break;
+            }
+        }
+        wanted
     };
     let mut written = 0;
     for (filename, source) in pending {

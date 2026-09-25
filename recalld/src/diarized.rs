@@ -392,7 +392,7 @@ struct TranscribedSegment {
     words: Vec<Word>,
 }
 
-/// The speaker spans a stored `diarize-room` result carries.
+/// The speaker spans a stored `diarize-segment` result carries.
 ///
 /// # Errors
 /// `None` when the shim refused or the body is not this shape. Both are
@@ -420,7 +420,7 @@ pub fn voices(stored: &str) -> Option<(Vec<SpeakerTurn>, Vec<SpeakerVoice>)> {
     Some((body.turns, body.speakers))
 }
 
-/// Every word a stored `transcribe-room` result carries, in order, with the
+/// Every word a stored `transcribe-segment` result carries, in order, with the
 /// block's detected language.
 ///
 /// Words, not segments: alignment assigns each word to whoever was speaking at
@@ -629,7 +629,7 @@ pub struct Block<'a> {
     /// [`HOUSEHOLD_LANGUAGES`] a turn loses its confidence.
     pub language: Option<&'a str>,
     pub model: &'a str,
-    /// The stream's reversal key — see [`Stream::provenance`].
+    /// The pass's reversal key — see [`PROVENANCE`].
     pub provenance: &'a Provenance,
     /// What this pass records on the turns it supersedes.
     pub hidden_reason: &'a HiddenReason,
@@ -697,55 +697,13 @@ pub fn standing(
 
 // --- the pass ----------------------------------------------------------------
 
-/// Which stream a diarized pass refines, and what differs between streams.
-/// Everything else in this module is shared.
-///
-/// ⚠ A `Stream` is the unit of reversal, like `turns::Stream`: `provenance` must
-/// name exactly the rows one pass wrote. The reversal in `main.rs` matches it
-/// exactly, not with `LIKE`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Stream<'a> {
-    /// The queue kind whose stored speaker spans this pass interprets.
-    pub diarize_kind: Kind,
-    /// The kind whose stored result carries the WORDS to align them against.
-    pub transcribe_kind: Kind,
-    /// What written rows record in `asr_model`.
-    pub model: &'a str,
-    /// What they record in `provenance`: the reversal key, naming this pass
-    /// alone. Not `DiarizedAligned(<model>)`: older rows carry that with the same
-    /// model name, and a reversal could not tell them apart.
-    pub provenance: Provenance,
-    /// What the turns it supersedes record. Unique for the same reason: un-hiding
-    /// what this pass hid must not disturb anything else.
-    pub hidden_reason: HiddenReason,
-}
-
-/// One microphone's clip.
-///
-/// `model` is the shim's own default, not a decorated name: these rows join the
-/// existing per-microphone corpus, and a reader filtering on `asr_model` must
-/// see one archive. Provenance carries who wrote it instead.
-pub const PER_MIC: Stream<'static> = Stream {
-    diarize_kind: Kind::DiarizeSegment,
-    transcribe_kind: Kind::TranscribeSegment,
-    model: crate::turns::SHIM_MODEL,
-    provenance: Provenance::DiarizedAligned(Cow::Borrowed("per-mic runner")),
-    hidden_reason: HiddenReason::DiarizedBy(Cow::Borrowed("per-mic runner")),
-};
-
-/// The derived room stream. ⚠ Its writer is off.
-///
-/// Its clips carry no turns, so a pass over them adds rather than replaces, and
-/// nothing hides the per-mic turns it duplicates: the result is a second
-/// transcript of every minute, not a better one. It stays off until the room
-/// stream is shown to beat the per-mic one.
-pub const ROOM: Stream<'static> = Stream {
-    diarize_kind: Kind::DiarizeRoom,
-    transcribe_kind: Kind::TranscribeRoom,
-    model: crate::turns::ROOM_MODEL,
-    provenance: Provenance::DiarizedAligned(Cow::Borrowed("room runner")),
-    hidden_reason: HiddenReason::DiarizedBy(Cow::Borrowed("room runner")),
-};
+/// What this pass's rows record in `provenance`: the reversal key, naming this
+/// pass alone. Not `DiarizedAligned(<model>)`: older rows carry that with the
+/// same model name, and a reversal could not tell them apart.
+pub const PROVENANCE: Provenance = Provenance::DiarizedAligned(Cow::Borrowed("per-mic runner"));
+/// What the turns it supersedes record. Unique for the same reason: un-hiding
+/// what this pass hid must not disturb anything else.
+pub const HIDDEN_REASON: HiddenReason = HiddenReason::DiarizedBy(Cow::Borrowed("per-mic runner"));
 
 /// What one diarized pass did.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -802,11 +760,10 @@ fn retire_if_permanently_unusable(
 pub fn write_pass(
     meaning: &mut rusqlite::Connection,
     ingest: &rusqlite::Connection,
-    stream: &Stream,
     now: &Stamp,
     limit: usize,
 ) -> rusqlite::Result<Pass> {
-    let model = stream.model;
+    let model = crate::turns::SHIM_MODEL;
     // The diarize job and the transcription it aligns against, joined on the
     // shared filename so the two results cannot get out of step.
     let mut stmt = ingest.prepare(
@@ -822,12 +779,12 @@ pub fn write_pass(
     )?;
     let jobs: Vec<(String, String, String, String)> = stmt
         .query_map(
-            rusqlite::params![stream.diarize_kind, stream.transcribe_kind],
+            rusqlite::params![Kind::DiarizeSegment, Kind::TranscribeSegment],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?
         .collect::<Result<_, _>>()?;
 
-    let kind = stream.diarize_kind;
+    let kind = Kind::DiarizeSegment;
     // Loaded once per pass, not per block, so the cost of naming does not scale
     // with the backlog.
     let enrolled = crate::identify::enrolled(meaning)?;
@@ -855,7 +812,7 @@ pub fn write_pass(
             // Transient, unless the session was deleted and the audio is never
             // coming.
             if crate::turns::tombstoned_block(meaning, &source, block_start)? {
-                crate::turns::ledger(ingest, stream.diarize_kind, &filename, "deleted", now)?;
+                crate::turns::ledger(ingest, kind, &filename, "deleted", now)?;
             } else {
                 pass.waiting += 1;
             }
@@ -902,8 +859,8 @@ pub fn write_pass(
                     start: block_start,
                     language: language.as_deref(),
                     model,
-                    provenance: &stream.provenance,
-                    hidden_reason: &stream.hidden_reason,
+                    provenance: &PROVENANCE,
+                    hidden_reason: &HIDDEN_REASON,
                     now,
                 };
                 pass.turns += write_replacement(meaning, &swap, &block, &prints, &enrolled)?;

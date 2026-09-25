@@ -211,35 +211,6 @@ async fn bind_all(binds: &[String]) -> Option<Vec<tokio::net::TcpListener>> {
     Some(listeners)
 }
 
-/// Measure levels for every delivered segment in bounded batches. Its ffmpeg
-/// children and sqlite writes run under `spawn_blocking`, and WAL keeps it from
-/// blocking an upload.
-fn spawn_level_scanner(root: PathBuf) {
-    const BATCH: usize = 200;
-    const IDLE: std::time::Duration = std::time::Duration::from_secs(30);
-    const BACKOFF: std::time::Duration = std::time::Duration::from_mins(1);
-    tokio::spawn(async move {
-        loop {
-            let batch_root = root.clone();
-            let wrote =
-                tokio::task::spawn_blocking(move || recalld::levels::scan_once(&batch_root, BATCH))
-                    .await;
-            match wrote {
-                Ok(Ok(0)) => tokio::time::sleep(IDLE).await,
-                Ok(Ok(n)) => tracing::info!(measured = n, "levels: batch complete"),
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "levels: scan failed; backing off");
-                    tokio::time::sleep(BACKOFF).await;
-                }
-                Err(err) => {
-                    tracing::error!(%err, "levels: task failed; backing off");
-                    tokio::time::sleep(BACKOFF).await;
-                }
-            }
-        }
-    });
-}
-
 /// Re-derive stored speaker guesses when the voiceprint corpus has grown.
 ///
 /// This rewrites the record, so it runs in bounded batches and logs every batch
@@ -280,64 +251,24 @@ fn spawn_rematcher(root: PathBuf) {
     });
 }
 
-/// Measure coverage for room blocks that have none recorded. Once every block is
-/// measured, each pass finds nothing and sleeps.
-fn spawn_coverage_backfill(root: PathBuf) {
-    const BATCH: usize = 50;
-    const IDLE: std::time::Duration = std::time::Duration::from_mins(30);
-    tokio::spawn(async move {
-        loop {
-            let batch_root = root.clone();
-            let done = tokio::task::spawn_blocking(move || {
-                recalld::room::backfill_coverage(&batch_root, BATCH)
-            })
-            .await;
-            match done {
-                Ok(Ok(0)) => tokio::time::sleep(IDLE).await,
-                Ok(Ok(n)) => tracing::info!(measured = n, "room: coverage backfilled"),
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "room: coverage backfill failed; backing off");
-                    tokio::time::sleep(IDLE).await;
-                }
-                Err(err) => {
-                    tracing::error!(%err, "room: coverage task failed; backing off");
-                    tokio::time::sleep(IDLE).await;
-                }
-            }
-        }
-    });
-}
-
 /// Start every background pass the daemon runs. Which passes are on is the most
 /// important fact about a deployed recalld, so the list lives on one screen with
 /// the reasons beside it.
 fn spawn_background_passes(root: &std::path::Path) {
     let root = root.to_path_buf();
     let root = &root;
-    spawn_level_scanner(root.clone());
     spawn_speech_scanner(root.clone());
     spawn_rematcher(root.clone());
-    spawn_coverage_backfill(root.clone());
-    spawn_room_builder(root.clone());
-    spawn_room_registrar(root.clone());
-    // OFF. Room turns read worse than the per-mic turns they hid, mostly
-    // English where the microphones heard Dutch. The cause is one language
-    // label per clip, which fails a microphone's clip the same way. Re-enable
-    // once language is decided per piece, and the room stream is shown to beat
-    // per-mic on spontaneous speech.
-    // spawn_turn_writer(root.clone(), recalld::turns::ROOM);
+    // The room stream is an experiment, run by hand (`experimental/room`).
     //
-    // The per-mic stream only fills clips that have no turns. It hides no
-    // per-mic turn (only live guesses on the same span), so its worst case is a
-    // transcript where there was silence, deletable by its provenance. Idle
-    // until a runner leases `transcribe-segment`.
-    spawn_turn_writer(root.clone(), recalld::turns::PER_MIC);
-    //
+    // Fills clips that have no turns. It hides only the live guesses on the
+    // same span, so its worst case is a transcript where there was silence,
+    // deletable by its provenance.
+    spawn_turn_writer(root.clone());
     // The only running loop that replaces a transcript somebody reads, so it
     // must stay the only such writer: two writers each hiding what the other
-    // wrote leave a corpus nobody can reason about. `diarized::ROOM` stays off;
-    // the reason is on the constant.
-    spawn_diarized_writer(root.clone(), recalld::diarized::PER_MIC);
+    // wrote leave a corpus nobody can reason about.
+    spawn_diarized_writer(root.clone());
     spawn_segment_registrar(root.clone());
     spawn_segment_deriver(root.clone());
     spawn_enroller(root.clone());
@@ -396,10 +327,9 @@ fn spawn_enroller(root: PathBuf) {
 /// The only loop that replaces a transcript: it hides turns somebody can read
 /// and writes new ones over them. `diarized::decide` makes the whole decision on
 /// data before a row is touched, and either replaces or keeps. Idle until a
-/// runner leases the stream's diarize kind.
+/// runner leases `diarize-segment`.
 ///
-/// To reverse it, both planes (shown for [`recalld::diarized::PER_MIC`]; the room
-/// stream's strings say `room runner` and its kind is `diarize-room`):
+/// To reverse it, both planes:
 ///
 /// ```sql
 /// -- recall.sqlite: un-hide first, then delete. Deleting first makes the
@@ -419,18 +349,17 @@ fn spawn_enroller(root: PathBuf) {
 ///
 /// A small batch on a slow cadence, so a bad verdict is noticed while it covers
 /// dozens of blocks rather than hundreds.
-fn spawn_diarized_writer(root: PathBuf, stream: recalld::diarized::Stream<'static>) {
+fn spawn_diarized_writer(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
     const BATCH: usize = 20;
     tokio::spawn(async move {
         loop {
             let pass_root = root.clone();
-            let pass_stream = stream.clone();
             let done = tokio::task::spawn_blocking(move || {
                 let ingest = recalld::store::open(&pass_root)?;
                 let mut meaning = recalld::work::open_write(&pass_root)?;
                 let now = audiocore::instant::Stamp::now();
-                recalld::diarized::write_pass(&mut meaning, &ingest, &pass_stream, &now, BATCH)
+                recalld::diarized::write_pass(&mut meaning, &ingest, &now, BATCH)
             })
             .await;
             match done {
@@ -443,16 +372,15 @@ fn spawn_diarized_writer(root: PathBuf, stream: recalld::diarized::Stream<'stati
                         hidden = pass.hidden,
                         kept = pass.kept,
                         waiting = pass.waiting,
-                        stream = %stream.diarize_kind,
                         "diarized: written"
                     );
                 }
                 Ok(Ok(_)) => {}
                 Ok(Err(err)) => {
-                    tracing::warn!(%err, stream = %stream.diarize_kind, "diarized: pass failed");
+                    tracing::warn!(%err, "diarized: pass failed");
                 }
                 Err(err) => {
-                    tracing::error!(%err, stream = %stream.diarize_kind, "diarized: task failed");
+                    tracing::error!(%err, "diarized: task failed");
                 }
             }
             tokio::time::sleep(EVERY).await;
@@ -506,60 +434,41 @@ fn spawn_speech_scanner(root: PathBuf) {
 
 /// Turn stored transcription results into turns people read.
 ///
-/// One function for both streams; they differ only in their
-/// [`recalld::turns::Stream`]:
+/// Fills gaps only: a clip that already carries turns is refused before a row
+/// is touched. It hides the live guesses on the span it writes, as
+/// `live-reconciled`.
 ///
-/// - [`recalld::turns::ROOM`] writes room turns and hides the per-mic turns they
-///   cover. Off.
-/// - [`recalld::turns::PER_MIC`] fills gaps only: a clip that already carries
-///   turns is refused before a row is touched. It hides the live guesses on the
-///   span it writes, as `live-reconciled`.
-///
-/// To reverse either, both planes. In `recall.sqlite` the provenance names the
-/// stream's rows alone, and deleting them makes those clips eligible again:
+/// To reverse it, both planes. Deleting the turns makes those clips eligible
+/// again; clips that wrote nothing are held only in the ledger:
 ///
 /// ```sql
-/// UPDATE transcript_segments SET hidden_reason = NULL
-///  WHERE hidden_reason = 'covered by the room stream';
-/// DELETE FROM transcript_segments WHERE provenance = 'room';
-/// -- or, for the per-mic stream:
 /// DELETE FROM transcript_segments WHERE provenance = 'per-mic (runner)';
-/// ```
-///
-/// ⚠ Clips that wrote nothing are held only in the `ingest.sqlite` ledger, under
-/// the stream's kind. Skip this and the reversal looks complete while every
-/// refused or swept clip is never reconsidered:
-///
-/// ```sql
-/// DELETE FROM pass_ledger WHERE kind = 'transcribe-room';  -- or 'transcribe-segment'
+/// DELETE FROM pass_ledger WHERE kind = 'transcribe-segment';
 /// ```
 ///
 /// A small batch on a slow cadence, so a bad verdict is noticed while it covers
 /// dozens of clips rather than hundreds.
-fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
+fn spawn_turn_writer(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
     const BATCH: usize = 20;
     tokio::spawn(async move {
         loop {
             let pass_root = root.clone();
-            let pass_stream = stream.clone();
             let done = tokio::task::spawn_blocking(move || {
                 let ingest = recalld::store::open(&pass_root)?;
                 let mut meaning = recalld::work::open_write(&pass_root)?;
                 let now = audiocore::instant::Stamp::now();
-                recalld::turns::write_pass(&mut meaning, &ingest, &pass_stream, &now, BATCH)
+                recalld::turns::write_pass(&mut meaning, &ingest, &now, BATCH)
             })
             .await;
             match done {
                 // `swept` is in the guard: a clip whose turns are all repetition
-                // loops writes, hides and refuses nothing, and that pass is the
-                // one saying the audio is bad.
-                Ok(Ok(pass)) if pass.turns + pass.hidden + pass.refused + pass.swept > 0 => {
+                // loops writes and refuses nothing, and that pass is the one
+                // saying the audio is bad.
+                Ok(Ok(pass)) if pass.turns + pass.refused + pass.swept > 0 => {
                     tracing::info!(
-                        stream = %stream.provenance,
                         blocks = pass.blocks,
                         turns = pass.turns,
-                        hidden = pass.hidden,
                         refused = pass.refused,
                         swept = pass.swept,
                         barren = pass.barren,
@@ -568,10 +477,10 @@ fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
                 }
                 Ok(Ok(_)) => {}
                 Ok(Err(err)) => {
-                    tracing::warn!(%err, stream = %stream.provenance, "turns: pass failed");
+                    tracing::warn!(%err, "turns: pass failed");
                 }
                 Err(err) => {
-                    tracing::error!(%err, stream = %stream.provenance, "turns: task failed");
+                    tracing::error!(%err, "turns: task failed");
                 }
             }
             tokio::time::sleep(EVERY).await;
@@ -582,8 +491,8 @@ fn spawn_turn_writer(root: PathBuf, stream: recalld::turns::Stream<'static>) {
 /// Derive `transcribe-segment` jobs for microphone clips that have no turns.
 ///
 /// A timer rather than a step in `queue::lease`: a lease is a frequent request,
-/// and deriving spans both planes and scans the ingest one. The room's
-/// `derive_jobs` is in `lease` because it is one indexed statement.
+/// and deriving spans both planes and scans the ingest one. The diarize jobs
+/// derive in `lease` because that is one indexed statement.
 ///
 /// The batch bound is the throttle: queuing the whole backlog at once would hand
 /// a runner days of work the moment it learned the kind.
@@ -615,7 +524,7 @@ fn spawn_segment_deriver(root: PathBuf) {
 /// it is transcribed.
 ///
 /// Bounded because it decodes: `upload::probe` reads the whole file, competing
-/// with the room builder and with capture.
+/// with capture.
 ///
 /// To reverse it (registration hides nothing, it only makes clips eligible),
 /// both planes:
@@ -665,69 +574,6 @@ fn spawn_segment_registrar(root: PathBuf) {
                 Err(err) => tracing::error!(%err, "segment register: task failed"),
             }
             tokio::time::sleep(EVERY).await;
-        }
-    });
-}
-
-/// Register built room blocks in the meaning plane, so their turns have audio.
-///
-/// Its own loop because it spans both planes, and the builder touches only
-/// `ingest.sqlite`. Idempotent: the first pass backfills every block ever built,
-/// and a pass that inserts nothing is the normal case.
-fn spawn_room_registrar(root: PathBuf) {
-    const EVERY: std::time::Duration = std::time::Duration::from_mins(5);
-    tokio::spawn(async move {
-        loop {
-            let pass_root = root.clone();
-            let done = tokio::task::spawn_blocking(move || {
-                let ingest = recalld::store::open(&pass_root)?;
-                let meaning = recalld::work::open_write(&pass_root)?;
-                let room_dir = recalld::store::source_dir(&pass_root, recalld::room::ROOM_SOURCE);
-                recalld::turns::register_blocks(&meaning, &ingest, &room_dir)
-            })
-            .await;
-            match done {
-                Ok(Ok(0)) => {}
-                Ok(Ok(added)) => tracing::info!(added, "room: blocks registered for playback"),
-                Ok(Err(err)) => tracing::warn!(%err, "room register: pass failed"),
-                Err(err) => tracing::error!(%err, "room register: task failed"),
-            }
-            tokio::time::sleep(EVERY).await;
-        }
-    });
-}
-
-/// Build settled room blocks, recording terminal verdicts only. Chases the level
-/// scanner: a block whose evidence is incomplete defers to the next pass.
-fn spawn_room_builder(root: PathBuf) {
-    const IDLE: std::time::Duration = std::time::Duration::from_mins(1);
-    tokio::spawn(async move {
-        loop {
-            let pass_root = root.clone();
-            let config = recalld::room::RoomConfig::default();
-            let built = tokio::task::spawn_blocking(move || {
-                recalld::room::build_once(&pass_root, &config, chrono::Utc::now())
-            })
-            .await;
-            match built {
-                Ok(Ok(summary)) if summary.built + summary.silent > 0 => {
-                    tracing::info!(
-                        built = summary.built,
-                        silent = summary.silent,
-                        deferred = summary.deferred,
-                        "room: pass complete"
-                    );
-                }
-                Ok(Ok(_)) => tokio::time::sleep(IDLE).await,
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "room: pass failed; backing off");
-                    tokio::time::sleep(IDLE).await;
-                }
-                Err(err) => {
-                    tracing::error!(%err, "room: task failed; backing off");
-                    tokio::time::sleep(IDLE).await;
-                }
-            }
         }
     });
 }

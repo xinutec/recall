@@ -2,7 +2,7 @@
 //!
 //! The ingest plane (docs/architecture.md, stage A): recorders PUT closed
 //! segments and verify sha-256 receipts; the store is append-only; read is a
-//! separate credential. On top of it: VAD, the room builder, the work queue and
+//! separate credential. On top of it: VAD, the work queue and
 //! the browsing API.
 
 pub mod align;
@@ -20,17 +20,14 @@ pub mod ingest_schema;
 pub mod labels;
 pub mod labels_write;
 pub mod latin_ranges;
-pub mod levels;
 pub mod live_tier;
 pub mod meaning_schema;
-pub mod processed;
 pub mod pyjson;
 pub mod quality;
 pub mod queue;
 pub mod reads;
 pub mod rematch;
 pub mod reports;
-pub mod room;
 pub mod route;
 pub mod sessions;
 pub mod sources;

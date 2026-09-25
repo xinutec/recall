@@ -9,6 +9,15 @@
 #   doctor     the Mac's health agent, reporting to fleetwatch
 #   recalld    the fleet's system-of-record daemon on Isis
 #   runner     the Mac's job orchestration against recalld's queue
+#   experimental/room  the room stream, run by hand, never deployed (#1388)
 [workspace]
 resolver = "3"
-members = ["audiocore", "audiod", "cli", "doctor", "recalld", "runner"]
+members = [
+    "audiocore",
+    "audiod",
+    "cli",
+    "doctor",
+    "experimental/room",
+    "recalld",
+    "runner",
+]

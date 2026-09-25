@@ -24,15 +24,7 @@ const BACKOFF: Duration = Duration::from_mins(1);
 /// lease work it will fail. An unknown name is fatal.
 fn kinds_for(shim_name: &str) -> Option<&'static [Kind]> {
     match shim_name {
-        // The lease orders by capture time across kinds (`queue::lease`), so a
-        // room block and a microphone clip from the same minute compete on
-        // equal terms.
-        "asr" => Some(&[Kind::TranscribeRoom, Kind::TranscribeSegment]),
-        // ⚠ Not `diarize-room`: room jobs are queued for every transcribed
-        // block whether or not anything reads them, and leasing them would
-        // spend the GPU on results nothing consumes. This list, not the queue,
-        // is the consumption switch.
-        //
+        "asr" => Some(&[Kind::TranscribeSegment]),
         // `enroll-speaker` shares the process because both are pyannote; a
         // separate runner would load the weights twice.
         "voices" => Some(&[Kind::DiarizeSegment, Kind::EnrollSpeaker]),
@@ -159,10 +151,8 @@ fn one(
     client.fetch_blob(&source, &filename, &clip)?;
     // Exhaustive: a new kind does not compile until it is given work here.
     let outcome = match kind {
-        // Both transcription kinds are the same work; which stream the result
-        // feeds is recalld's concern.
-        Kind::TranscribeRoom | Kind::TranscribeSegment => shim.transcribe(&clip, None, prompt),
-        Kind::DiarizeRoom | Kind::DiarizeSegment => shim.diarize(&clip),
+        Kind::TranscribeSegment => shim.transcribe(&clip, None, prompt),
+        Kind::DiarizeSegment => shim.diarize(&clip),
         // One model call per named turn, composed here. A refused span costs
         // only its print; the fleet re-derives it while its turn is unenrolled.
         Kind::EnrollSpeaker => embed_spans(shim, &clip, &spans),
@@ -241,7 +231,7 @@ fn main() {
     // Fatal if unreachable, but only for a transcribing runner: unbiased
     // transcripts would have to be redone. An empty vocabulary is `None`, no
     // biasing. Diarization does not use it.
-    let prompt = if kinds.contains(&Kind::TranscribeRoom) {
+    let prompt = if kinds.contains(&Kind::TranscribeSegment) {
         match client.prompt() {
             Ok(prompt) => {
                 tracing::info!(

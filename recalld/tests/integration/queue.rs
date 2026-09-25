@@ -5,6 +5,7 @@ use chrono::{DateTime, Duration, Utc};
 use recalld::queue::{done, lease};
 use recalld::store;
 
+/// A room block from when the room stream ran in production: history now.
 fn room_row(root: &std::path::Path, stamp: &str) {
     let conn = store::open(root).expect("db");
     store::insert(
@@ -22,43 +23,45 @@ fn room_row(root: &std::path::Path, stamp: &str) {
     .expect("row");
 }
 
+/// A usb clip with its transcription job queued, as `derive_segment_jobs` leaves it.
+fn queued(root: &std::path::Path, stamp: &str) -> String {
+    let name = mic_row(root, "usb", stamp);
+    store::open(root)
+        .expect("db")
+        .execute(
+            "INSERT INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, '2026-09-05T00:00:00Z')",
+            (Kind::TranscribeSegment, &name),
+        )
+        .expect("job");
+    name
+}
+
+const ASR: &[Kind] = &[Kind::TranscribeSegment];
+const VOICES: &[Kind] = &[Kind::DiarizeSegment];
+
 #[test]
 fn newest_first_lease_done_and_lapse() {
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
-    room_row(dir.path(), "20260905T100000");
-    room_row(dir.path(), "20260905T110000");
+    let older = queued(dir.path(), "20260905T100000");
+    let newer = queued(dir.path(), "20260905T110000");
     // Newest first.
-    let first = lease(dir.path(), now, &[Kind::TranscribeRoom])
-        .expect("lease")
-        .expect("job");
-    assert_eq!(first.filename, "room-20260905T110000.flac");
+    let first = lease(dir.path(), now, ASR).expect("lease").expect("job");
+    assert_eq!(first.filename, newer);
     // The leased job is not re-offered while its lease holds…
-    let second = lease(dir.path(), now, &[Kind::TranscribeRoom])
-        .expect("lease")
-        .expect("job");
-    assert_eq!(second.filename, "room-20260905T100000.flac");
-    assert!(
-        lease(dir.path(), now, &[Kind::TranscribeRoom])
-            .expect("lease")
-            .is_none()
-    );
+    let second = lease(dir.path(), now, ASR).expect("lease").expect("job");
+    assert_eq!(second.filename, older);
+    assert!(lease(dir.path(), now, ASR).expect("lease").is_none());
     // …but a lapsed lease re-offers, and done retires for good.
     let later = now + Duration::minutes(20);
-    let again = lease(dir.path(), later, &[Kind::TranscribeRoom])
-        .expect("lease")
-        .expect("job");
-    assert_eq!(again.filename, "room-20260905T110000.flac");
+    let again = lease(dir.path(), later, ASR).expect("lease").expect("job");
+    assert_eq!(again.filename, newer);
     assert!(done(dir.path(), again.id, "{}", later).expect("done"));
     assert!(!done(dir.path(), again.id, "{}", later).expect("idempotent"));
-    let last = lease(
-        dir.path(),
-        later + Duration::minutes(20),
-        &[Kind::TranscribeRoom],
-    )
-    .expect("lease")
-    .expect("job");
-    assert_eq!(last.filename, "room-20260905T100000.flac");
+    let last = lease(dir.path(), later + Duration::minutes(20), ASR)
+        .expect("lease")
+        .expect("job");
+    assert_eq!(last.filename, older);
 }
 
 #[test]
@@ -67,26 +70,24 @@ fn a_job_nobody_finishes_is_retired_after_its_attempts_are_spent() {
     // re-offered for ever. After the cap it is recorded as a failure.
     let dir = tempfile::tempdir().expect("tempdir");
     let start: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
-    room_row(dir.path(), "20260905T100000");
+    let name = queued(dir.path(), "20260905T100000");
     let mut now = start;
     for attempt in 1..=queue::MAX_ATTEMPTS {
-        let job = lease(dir.path(), now, &[Kind::TranscribeRoom])
+        let job = lease(dir.path(), now, ASR)
             .expect("lease")
             .unwrap_or_else(|| panic!("attempt {attempt} must still be offered"));
-        assert_eq!(job.filename, "room-20260905T100000.flac");
+        assert_eq!(job.filename, name);
         now += Duration::minutes(20);
     }
     assert!(
-        lease(dir.path(), now, &[Kind::TranscribeRoom])
-            .expect("lease")
-            .is_none(),
+        lease(dir.path(), now, ASR).expect("lease").is_none(),
         "spent: not offered again"
     );
     let (state, result): (String, String) = store::open(dir.path())
         .expect("db")
         .query_row(
-            "SELECT state, result FROM jobs WHERE filename = 'room-20260905T100000.flac'",
-            [],
+            "SELECT state, result FROM jobs WHERE filename = ?1",
+            [&name],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("row");
@@ -101,56 +102,33 @@ fn a_job_nobody_finishes_is_retired_after_its_attempts_are_spent() {
 fn a_segment_measured_as_silent_gets_no_transcription_job() {
     // Transcribing silence returns invented text, not nothing.
     let dir = tempfile::tempdir().expect("tempdir");
-    let conn = store::open(dir.path()).expect("db");
-    recalld::ingest_schema::ensure(&conn).expect("jobs schema");
-    for (name, seconds) in [
-        ("room-20260906T100000.flac", Some(0.0)),
-        ("room-20260906T100100.flac", Some(12.0)),
-        ("room-20260906T100200.flac", None),
-    ] {
-        store::insert(
-            &conn,
-            &store::Row {
-                source: "room".to_owned(),
-                filename: name.to_owned(),
-                start_utc: "2026-09-06T10:00:00Z".to_owned(),
-                bytes: 1,
-                sha256: "x".to_owned(),
-                received_utc: "2026-09-06T10:00:30Z".to_owned(),
-                sent_utc: None,
-            },
-        )
-        .expect("row");
-        if let Some(seconds) = seconds {
-            conn.execute(
+    let silent = mic_row(dir.path(), "usb", "20260906T100000");
+    let speech = mic_row(dir.path(), "usb", "20260906T100100");
+    let unmeasured = mic_row(dir.path(), "usb", "20260906T100200");
+    let ingest = store::open(dir.path()).expect("db");
+    for (name, seconds) in [(&silent, 0.0), (&speech, 12.0)] {
+        ingest
+            .execute(
                 "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc)
-                 VALUES (?1, 'room', ?2, '2026-09-06T10:01:00Z')",
+                 VALUES (?1, 'usb', ?2, '2026-09-06T10:01:00Z')",
                 (name, seconds),
             )
             .expect("speech row");
-        }
     }
-    let now = chrono::DateTime::parse_from_rfc3339("2026-09-06T10:30:00Z")
-        .expect("t")
-        .with_timezone(&chrono::Utc);
-    recalld::queue::derive_jobs(&conn, now).expect("derive");
-    let mut queued: Vec<String> = conn
-        .prepare("SELECT filename FROM jobs ORDER BY filename")
+    let now: DateTime<Utc> = "2026-09-06T10:30:00Z".parse().expect("t");
+    derive_segment_jobs(&ingest, &meaning_plane(), now, 100).expect("derive");
+    let mut queued: Vec<String> = ingest
+        .prepare("SELECT filename FROM jobs")
         .expect("prep")
         .query_map([], |r| r.get(0))
         .expect("query")
         .collect::<Result<_, _>>()
         .expect("rows");
     queued.sort();
+    // Unmeasured is queued too: not yet measured is not silent.
     assert_eq!(
         queued,
-        vec![
-            // speech: queued.
-            "room-20260906T100100.flac".to_owned(),
-            // unmeasured: queued too. Not yet measured is not silent, and a
-            // host without a detector must still do work.
-            "room-20260906T100200.flac".to_owned(),
-        ],
+        vec![speech, unmeasured],
         "the SILENT segment must not be queued"
     );
 }
@@ -176,43 +154,34 @@ fn a_diarize_job_appears_only_once_the_words_exist() {
     // job derives from a succeeded transcription, never from the segment.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
-    room_row(dir.path(), "20260911T100000");
+    let name = queued(dir.path(), "20260911T100000");
 
-    let job = lease(dir.path(), now, &[Kind::TranscribeRoom])
-        .expect("lease")
-        .expect("job");
-    assert_eq!(job.kind, Kind::TranscribeRoom);
+    let job = lease(dir.path(), now, ASR).expect("lease").expect("job");
     assert!(
         !kinds_queued(dir.path())
             .iter()
-            .any(|(kind, _)| kind == Kind::DiarizeRoom.as_str()),
-        "no diarize job before the block is transcribed"
+            .any(|(kind, _)| kind == Kind::DiarizeSegment.as_str()),
+        "no diarize job before the clip is transcribed"
     );
 
     assert!(done(dir.path(), job.id, TRANSCRIBED, now).expect("done"));
-    let next = lease(dir.path(), now, &[Kind::DiarizeRoom])
-        .expect("lease")
-        .expect("job");
-    assert_eq!(next.kind, Kind::DiarizeRoom);
-    assert_eq!(next.filename, "room-20260911T100000.flac");
+    let next = lease(dir.path(), now, VOICES).expect("lease").expect("job");
+    assert_eq!(next.kind, Kind::DiarizeSegment);
+    assert_eq!(next.filename, name);
 }
 
 #[test]
 fn a_refused_transcription_derives_no_diarization() {
-    // A refused block means the clip is the problem (`turns::Barren::Refused`);
-    // diarizing it would spend GPU to learn that again.
+    // A refused clip is the problem (`turns::Barren::Refused`); diarizing it
+    // would spend GPU to learn that again.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
-    room_row(dir.path(), "20260911T100000");
-    let job = lease(dir.path(), now, &[Kind::TranscribeRoom])
-        .expect("lease")
-        .expect("job");
+    queued(dir.path(), "20260911T100000");
+    let job = lease(dir.path(), now, ASR).expect("lease").expect("job");
     assert!(done(dir.path(), job.id, REFUSED, now).expect("done"));
 
     assert!(
-        lease(dir.path(), now, &[Kind::DiarizeRoom])
-            .expect("lease")
-            .is_none(),
+        lease(dir.path(), now, VOICES).expect("lease").is_none(),
         "a refused clip must not be queued for diarization"
     );
 }
@@ -223,25 +192,50 @@ fn a_runner_is_never_handed_a_kind_it_cannot_do() {
     // attempts.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
-    room_row(dir.path(), "20260911T100000");
-    let job = lease(dir.path(), now, &[Kind::TranscribeRoom])
-        .expect("lease")
-        .expect("job");
+    queued(dir.path(), "20260911T100000");
+    let job = lease(dir.path(), now, ASR).expect("lease").expect("job");
     assert!(done(dir.path(), job.id, TRANSCRIBED, now).expect("done"));
 
     // Only a diarize job is now outstanding, and an asr-only runner sees nothing.
-    assert!(
-        lease(dir.path(), now, &[Kind::TranscribeRoom])
-            .expect("lease")
-            .is_none()
-    );
+    assert!(lease(dir.path(), now, ASR).expect("lease").is_none());
     // An empty capability list leases nothing, not everything.
     assert!(lease(dir.path(), now, &[]).expect("lease").is_none());
     // A runner that can do both takes it.
-    let both = lease(dir.path(), now, &[Kind::TranscribeRoom, Kind::DiarizeRoom])
-        .expect("lease")
-        .expect("job");
-    assert_eq!(both.kind, Kind::DiarizeRoom);
+    let both = lease(
+        dir.path(),
+        now,
+        &[Kind::TranscribeSegment, Kind::DiarizeSegment],
+    )
+    .expect("lease")
+    .expect("job");
+    assert_eq!(both.kind, Kind::DiarizeSegment);
+}
+
+#[test]
+fn the_retired_room_streams_open_jobs_are_closed_not_deleted() {
+    // Production queued a room job every minute; nothing takes them now.
+    let dir = tempfile::tempdir().expect("tempdir");
+    room_row(dir.path(), "20260905T100000");
+    let conn = store::open(dir.path()).expect("db");
+    conn.execute_batch(
+        "INSERT INTO jobs (kind, filename, created_utc) VALUES
+             ('transcribe-room', 'room-20260905T100000.flac', '2026-09-05T10:01:00Z'),
+             ('diarize-room', 'room-20260905T100000.flac', '2026-09-05T10:02:00Z');",
+    )
+    .expect("jobs");
+    recalld::ingest_schema::ensure(&conn).expect("reopen");
+    let rows: Vec<(String, String)> = conn
+        .prepare("SELECT state, result FROM jobs ORDER BY kind")
+        .expect("prep")
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(rows.len(), 2, "kept as history");
+    for (state, result) in rows {
+        assert_eq!(state, "done");
+        assert!(result.contains("room stream retired"), "{result}");
+    }
 }
 
 // ---- per-mic transcribe jobs ----
@@ -344,8 +338,8 @@ fn a_segment_that_already_has_turns_gets_no_job() {
 
 #[test]
 fn room_blocks_are_not_derived_as_per_mic_work() {
-    // The room stream has its own kind; deriving both would transcribe one blob
-    // twice.
+    // The room stream's old blocks stay in the store as history, and are no
+    // microphone's clips.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
     room_row(dir.path(), "20260905T100000");

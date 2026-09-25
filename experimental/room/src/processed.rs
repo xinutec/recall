@@ -151,7 +151,7 @@ pub fn levels_between(
          WHERE s.start_utc >= ?1 AND s.start_utc < ?2 AND l.source != ?3",
     )?;
     let rows = stmt.query_map(
-        rusqlite::params![since, until, crate::room::ROOM_SOURCE],
+        rusqlite::params![since, until, recalld::store::ROOM_SOURCE],
         |row| {
             Ok(Levels {
                 source: row.get(0)?,

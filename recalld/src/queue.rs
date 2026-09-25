@@ -6,8 +6,7 @@
 //! the job is offered again. Newest clip first: "what are they saying now"
 //! outranks backfill.
 
-use crate::room::ROOM_SOURCE;
-use crate::store;
+use crate::store::{self, ROOM_SOURCE};
 use audiocore::job::Kind;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension};
@@ -43,23 +42,23 @@ fn iso(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// Derive queued jobs for room segments that have none. Idempotent; the
-/// belt that makes a lost enqueue impossible.
+/// Derive the diarize job for every clip whose transcription succeeded.
+/// Idempotent, and cheap enough to run on every lease.
+///
+/// Diarization alone attributes nothing; it is the alignment against words that
+/// makes turns, and a clip the ASR refused would only cost the GPU the same
+/// answer again. Not gated on speech: a silent clip never gets a transcription
+/// job, so it cannot reach here.
 pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
-    // A segment measured silent gets no job: transcribing silence returns
-    // inventions, not nothing. An unmeasured segment still gets one, because "not
-    // looked at yet" is not evidence of silence.
-    let inserted = conn.execute(
+    conn.execute(
         "INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
-         SELECT ?1, s.filename, ?2 FROM segments s
-         LEFT JOIN segment_speech p ON p.filename = s.filename
-         WHERE s.source = ?3
-           AND (p.filename IS NULL OR p.speech_seconds != 0.0)
-           AND NOT EXISTS (SELECT 1 FROM jobs j
-                           WHERE j.kind = ?1 AND j.filename = s.filename)",
-        (Kind::TranscribeRoom, iso(now), ROOM_SOURCE),
-    )?;
-    Ok(inserted + derive_diarize_jobs(conn, now)? + derive_diarize_segment_jobs(conn, now)?)
+         SELECT ?1, j.filename, ?2 FROM jobs j
+         WHERE j.kind = ?3 AND j.done_utc IS NOT NULL
+           AND json_valid(j.result) AND json_extract(j.result, '$.ok') = 1
+           AND NOT EXISTS (SELECT 1 FROM jobs d
+                           WHERE d.kind = ?1 AND d.filename = j.filename)",
+        (Kind::DiarizeSegment, iso(now), Kind::TranscribeSegment),
+    )
 }
 
 /// A clip's identity without its container: the same recording can exist under
@@ -103,7 +102,7 @@ pub fn derive_segment_jobs(
     // register that clip's audio either, so the job could only go barren.
     let known: std::collections::HashSet<String> = {
         let mut stmt = meaning.prepare("SELECT id FROM sources WHERE kind != ?1")?;
-        let rows = stmt.query_map([crate::room::ROOM_KIND], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map([crate::store::ROOM_KIND], |r| r.get::<_, String>(0))?;
         rows.collect::<Result<_, _>>()?
     };
 
@@ -137,36 +136,6 @@ pub fn derive_segment_jobs(
         )?;
     }
     Ok(inserted)
-}
-
-/// Derive a diarization job for every block whose transcription succeeded.
-/// Diarization alone attributes nothing; it is the alignment against words that
-/// makes turns, and a clip the ASR refused would only cost the GPU the same
-/// answer again. Not gated on speech: a silent block never gets a transcription
-/// job, so it cannot reach here.
-fn derive_diarize_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
-    conn.execute(
-        "INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
-         SELECT ?1, j.filename, ?2 FROM jobs j
-         WHERE j.kind = ?3 AND j.done_utc IS NOT NULL
-           AND json_valid(j.result) AND json_extract(j.result, '$.ok') = 1
-           AND NOT EXISTS (SELECT 1 FROM jobs d
-                           WHERE d.kind = ?1 AND d.filename = j.filename)",
-        (Kind::DiarizeRoom, iso(now), Kind::TranscribeRoom),
-    )
-}
-
-/// The same, for one microphone's clip.
-fn derive_diarize_segment_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
-    conn.execute(
-        "INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
-         SELECT ?1, j.filename, ?2 FROM jobs j
-         WHERE j.kind = ?3 AND j.done_utc IS NOT NULL
-           AND json_valid(j.result) AND json_extract(j.result, '$.ok') = 1
-           AND NOT EXISTS (SELECT 1 FROM jobs d
-                           WHERE d.kind = ?1 AND d.filename = j.filename)",
-        (Kind::DiarizeSegment, iso(now), Kind::TranscribeSegment),
-    )
 }
 
 /// Lease the newest available job of a kind the caller can do: queued, or

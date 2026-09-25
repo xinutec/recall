@@ -48,8 +48,7 @@ phones (Kotlin/Swift)      geb + machines (audiod)      Mac USB mic (audiod)
  ┌─ Isis — recalld (Rust): the system of record ──────────────────────────┐
  │  ingest plane: append-only blob store + ingest.sqlite  (no delete      │
  │  speech detection at ingest → evidence, liveness        endpoint      │
- │  room builder: align + select one microphone per minute  exists)      │
- │  work queue → jobs out, results in → turns                            │
+ │  work queue → jobs out, results in → turns               exists)      │
  │  browsing API + Nextcloud sign-in + the Angular app                   │
  └──────────────┬──────────────────────────────▲──────────────────────────┘
       odin restic nightly              the Mac POLLS (one-way WireGuard)
@@ -64,8 +63,8 @@ Principles:
    the receipt, keep anyway until local cache pressure evicts the oldest
    verified segment. No recorder deletes because a server said so.
 2. **Isis is the system of record and the only always-on service.** One Rust
-   daemon, `recalld`, owns the ingest plane, the room stream, the queue, the
-   passes that write turns, and the browsing API.
+   daemon, `recalld`, owns the ingest plane, the queue, the passes that
+   write turns, and the browsing API.
 3. **The Mac is a stateless GPU worker.** If it dies, every other recorder
    keeps recording and delivering; the loss is its own microphone going
    forward plus its own unuploaded cache.
@@ -99,8 +98,8 @@ on the golden ASR check, never by a calendar.
 ## Two planes, two databases
 
 `ingest.sqlite` is the **audio plane**: one row per delivered blob, speech
-seconds and level evidence per blob, room blocks, the job queue and the passes'
-ledger. `recall.sqlite` is the **meaning plane**: sources, audio segments,
+seconds per blob, the job queue and the passes' ledger, and the room stream's
+history (levels, room blocks, room jobs). `recall.sqlite` is the **meaning plane**: sources, audio segments,
 turns, corrections, speakers and voiceprints, and the FTS index. recalld owns
 both; the schema of the second is a migration ladder
 (`recalld::meaning_schema`), that of the first one `ensure`
@@ -162,20 +161,14 @@ push to and the port the browser uses. It owns:
   place, the directory fsynced, the row inserted, then the receipt goes out.
   A re-PUT of identical bytes is idempotent; a different blob under a taken
   name is 409 and the stored one is untouched.
-- **Speech and level evidence per blob.** Silero (`audiocore::vad`, the same
-  detector the Mac runs) measures speech seconds; a level scanner measures the
-  speech and floor quantiles per segment, from which each device's reference is
-  a query rather than a typed number. A segment measured silent gets no
+- **Speech evidence per blob.** Silero (`audiocore::vad`, the same detector the
+  Mac runs) measures speech seconds. A segment measured silent gets no
   transcription job: transcribing silence returns inventions, not nothing.
-- **The room builder.** One microphone per minute, chosen by level, aligned by
-  envelope correlation. Built and transcribed in shadow; its turns are not yet
-  written for the household to read (#1388).
 - **The work queue.** Jobs are derived from the blobs, never enqueued, so a
   missed enqueue cannot strand audio. A lease is time-bounded; a runner that
   dies lets it lapse; a job nobody finishes is retired after three leases. Kinds:
   `transcribe-segment` and `diarize-segment` for every microphone clip and
-  uploaded meeting, `enroll-speaker` for turns a person has named, and the room
-  pair. Enrolment outranks capture time in the lease, or a label would wait
+  uploaded meeting, `enroll-speaker` for turns a person has named. Enrolment outranks capture time in the lease, or a label would wait
   behind days of backlog.
 - **The passes.** `turns` writes the transcript of a clip that has none;
   `diarized` aligns the words to the speaker spans and labels the turns that
@@ -268,7 +261,9 @@ Isis.
 - **Combining microphones lost; selecting the best one tied it.** On 38
   corrections, the best single mic scored 0.229 median WER against 0.348 and
   0.437 for two fusion arms, 14 worse against 4 better; a control showed the
-  pipeline itself cost nothing. The room stream is selection.
+  pipeline itself cost nothing. The room stream is selection. It is an
+  experiment run by hand on a copy of the data (`experimental/room`, #1388),
+  not part of production.
 - **Enhance the selected mic, do not stitch mics.** By ear, the best microphone
   through DeepFilterNet was the clearest version of every minute tried.
 - **Denoising hurts far-field ASR.** Two denoisers measured worse; raw is best.

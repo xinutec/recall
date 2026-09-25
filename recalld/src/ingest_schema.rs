@@ -79,7 +79,31 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
     )?;
     add_column(conn, "segment_levels", "gated")?;
     add_column(conn, "segment_levels", "quiet_run_s")?;
-    add_column(conn, "room_blocks", "coverage")
+    add_column(conn, "room_blocks", "coverage")?;
+    retire_room_jobs(conn)
+}
+
+/// The room stream left production (`experimental/room`), and its job kinds
+/// with it. Its unfinished jobs are closed as failures, not deleted, so the
+/// queue keeps its history.
+///
+/// Read first: an UPDATE takes the write lock even when it matches nothing, and
+/// every open runs this.
+fn retire_room_jobs(conn: &Connection) -> rusqlite::Result<()> {
+    let kinds = ("transcribe-room", "diarize-room");
+    let open: bool = conn
+        .prepare("SELECT 1 FROM jobs WHERE kind IN (?1, ?2) AND done_utc IS NULL")?
+        .exists(kinds)?;
+    if open {
+        conn.execute(
+            r#"UPDATE jobs SET state = 'done',
+                   done_utc = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                   result = '{"ok":false,"error":"room stream retired"}'
+               WHERE kind IN (?1, ?2) AND done_utc IS NULL"#,
+            kinds,
+        )?;
+    }
+    Ok(())
 }
 
 /// Add a REAL column to a table that already exists. `table` and `name` are

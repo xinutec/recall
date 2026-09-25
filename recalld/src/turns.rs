@@ -1,31 +1,27 @@
 //! Turns finished transcription jobs into transcript rows.
 //!
 //! The runner retires each job with the shim's reply as opaque JSON
-//! (`queue::done`); this reads it. A [`Stream`] says which job kind a pass
-//! drains, what its rows record as provenance and model, and whether a written
-//! turn hides what it covers. Everything else is shared.
+//! (`queue::done`); this reads it.
 //!
-//! [`ROOM`] drains `transcribe-room` and is the only stream that hides: a room
-//! turn stands in for the microphones on that minute. Its writer is not started
-//! (the call in `main` is commented out). [`PER_MIC`] drains
-//! `transcribe-segment`, hides nothing, and fills clips that have no turns.
+//! One stream: each microphone's own clip (`transcribe-segment`). A pass fills
+//! clips that have no turns and hides nothing but the live guesses it replaces.
 //!
-//! Every row a pass writes is deletable by `provenance = '<stream>'` and by
-//! nothing else; a NULL provenance could not be taken back.
+//! Every row a pass writes is deletable by `provenance = 'per-mic (runner)'`
+//! and by nothing else; a NULL provenance could not be taken back.
 //!
 //! Hiding is not safer than deleting: a hidden row is still in `transcript_fts`,
 //! still counted, and still seen by supersession.
 
-use crate::turn_store::{self, HiddenReason, NewTurn, Protected, Provenance};
+use crate::turn_store::{self, NewTurn, Protected, Provenance};
 use audiocore::instant;
 use audiocore::instant::Stamp;
 use audiocore::job::Kind;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
-/// One turn a room block's transcript implies, in the archive's own terms.
+/// One turn a clip's transcript implies, in the archive's own terms.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RoomTurn {
+pub struct ClipTurn {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub text: String,
@@ -40,7 +36,7 @@ pub struct RoomTurn {
 pub enum Barren {
     /// The shim reported failure (`ok: false`). The clip is the problem.
     Refused,
-    /// Valid JSON, no segments — a block with nothing said in it.
+    /// Valid JSON, no segments — a clip with nothing said in it.
     NothingSaid,
     /// The stored result is not the shape this understands.
     Unreadable(String),
@@ -69,7 +65,7 @@ struct Segment {
     words: Option<serde_json::Value>,
 }
 
-/// Seconds-from-block-start to an absolute instant.
+/// Seconds-from-clip-start to an absolute instant.
 fn at(block_start: DateTime<Utc>, offset_s: f64) -> DateTime<Utc> {
     block_start + Duration::milliseconds((offset_s * 1000.0).round() as i64)
 }
@@ -82,19 +78,19 @@ fn at(block_start: DateTime<Utc>, offset_s: f64) -> DateTime<Utc> {
 /// A segment with no alphanumeric character, or with no duration, is dropped
 /// here: near-silence comes back as invented text (e.g. "Thank you." or a run of
 /// tildes), not as nothing.
-pub fn interpret(block_start: DateTime<Utc>, stored: &str) -> Result<Vec<RoomTurn>, Barren> {
+pub fn interpret(block_start: DateTime<Utc>, stored: &str) -> Result<Vec<ClipTurn>, Barren> {
     let reply: Reply =
         serde_json::from_str(stored).map_err(|e| Barren::Unreadable(e.to_string()))?;
     if !reply.ok {
         return Err(Barren::Refused);
     }
     let outcome = reply.result.ok_or(Barren::NothingSaid)?;
-    let turns: Vec<RoomTurn> = outcome
+    let turns: Vec<ClipTurn> = outcome
         .segments
         .into_iter()
         .filter(|s| s.text.chars().any(char::is_alphanumeric))
         .filter(|s| s.end > s.start)
-        .map(|s| RoomTurn {
+        .map(|s| ClipTurn {
             start: at(block_start, s.start),
             end: at(block_start, s.end),
             text: s.text.trim().to_owned(),
@@ -109,25 +105,14 @@ pub fn interpret(block_start: DateTime<Utc>, stored: &str) -> Result<Vec<RoomTur
     Ok(turns)
 }
 
-/// A machine turn already standing on this block's minute, per microphone.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Standing {
-    pub id: i64,
-    pub start: DateTime<Utc>,
-    pub end: DateTime<Utc>,
-}
-
 /// What a write would do, decided before anything is written.
 #[derive(Debug, Default, PartialEq)]
 pub struct Plan {
-    /// Room turns to insert.
-    pub insert: Vec<RoomTurn>,
-    /// Per-mic turn ids to hide, because a written room turn covers them.
-    pub hide: Vec<i64>,
-    /// Room turns declined, and why, so a refusal is visible rather than silent.
+    pub insert: Vec<ClipTurn>,
+    /// Turns declined, and why, so a refusal is visible rather than silent.
     pub refused: Vec<String>,
-    /// Room turns swept by the quality rules (loops, wordless text). Kept apart
-    /// from `refused`: a refusal means a person's words are in the way, a sweep
+    /// Turns swept by the quality rules (loops, wordless text). Apart from
+    /// `refused`: a refusal means a person's words are in the way, a sweep
     /// means the model failed.
     pub swept: usize,
 }
@@ -136,36 +121,24 @@ fn overlaps(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)
     a.0 < b.1 && a.1 > b.0
 }
 
-/// Decide the write for one block. Pure, so the rules that protect a person's
+/// Decide the write for one clip. Pure, so the rules that protect a person's
 /// typed words are testable without a database.
 ///
-/// 1. A room turn overlapping a corrected span is refused: the human text stands.
-/// 2. A per-mic turn overlapping a corrected span is never hidden, even when a
-///    room turn covers it.
-/// 3. Only a per-mic turn covered by an inserted room turn is hidden.
-/// 4. If nothing will be inserted, nothing is hidden. A pass replaces a
-///    transcript or keeps it; it never empties one.
-/// 5. A room turn that is a repetition loop or wordless is swept before any of
-///    the above, so it can neither be written nor hide anything.
-///
-/// ⚠ Rule 5 must run before the hide set is built: a block whose room turns are
-/// all junk then inserts nothing, so rule 4 keeps its per-mic transcript. It
-/// also keeps room turns comparable with the per-mic corpus, which is swept of
-/// the same junk.
+/// 1. A repetition loop or wordless turn is swept.
+/// 2. A turn overlapping a person-owned span is refused: the person's text stands.
 #[must_use]
-pub fn plan(room: Vec<RoomTurn>, standing: &[Standing], human: &[Protected]) -> Plan {
-    let hits_human = |span: (DateTime<Utc>, DateTime<Utc>)| {
-        human.iter().any(|c| overlaps(span, (c.start, c.end)))
-    };
-
+pub fn plan(turns: Vec<ClipTurn>, human: &[Protected]) -> Plan {
     let mut out = Plan::default();
-    for turn in room {
+    for turn in turns {
         if crate::quality::is_repetition_loop(&turn.text) || crate::quality::is_wordless(&turn.text)
         {
             out.swept += 1;
             continue;
         }
-        if hits_human((turn.start, turn.end)) {
+        if human
+            .iter()
+            .any(|c| overlaps((turn.start, turn.end), (c.start, c.end)))
+        {
             out.refused.push(format!(
                 "human-corrected span {}..{} — the person's text stands",
                 turn.start.to_rfc3339(),
@@ -175,91 +148,7 @@ pub fn plan(room: Vec<RoomTurn>, standing: &[Standing], human: &[Protected]) -> 
         }
         out.insert.push(turn);
     }
-
-    // Rule 4: no insert, no hide.
-    if out.insert.is_empty() {
-        return out;
-    }
-
-    for candidate in standing {
-        let span = (candidate.start, candidate.end);
-        if hits_human(span) {
-            continue; // rule 2
-        }
-        if out
-            .insert
-            .iter()
-            .any(|written| overlaps(span, (written.start, written.end)))
-        {
-            out.hide.push(candidate.id);
-        }
-    }
     out
-}
-
-/// The room stream's shape, from the builder's encode (`-ar 16000 -ac 1`). These
-/// become `audio_segments.sample_rate`/`channels`; a wrong pair plays every room
-/// clip at the wrong speed.
-pub const ROOM_RATE: i64 = 16_000;
-pub const ROOM_CHANNELS: i64 = 1;
-
-/// Register built room blocks in the meaning plane, so their turns have audio.
-///
-/// `transcript_segments.audio_segment_id` is nullable, but a room turn without
-/// one could not be played: `/api/audio/{id}` plays a turn from that id.
-///
-/// The room stream is built on this host, so these rows have no counterpart in
-/// the Mac's archive.
-///
-/// Idempotent by `UNIQUE (source_id, start_utc)`, so the backfill can be re-run.
-///
-/// # Errors
-/// If either database refuses the read or the write.
-pub fn register_blocks(
-    meaning: &rusqlite::Connection,
-    ingest: &rusqlite::Connection,
-    room_dir: &std::path::Path,
-) -> rusqlite::Result<usize> {
-    // The FK target. The room source is not a device: it has no recorder and no
-    // `.alive` marker; its audio is whichever microphone won the minute.
-    meaning.execute(
-        "INSERT OR IGNORE INTO sources (id, name, kind) VALUES (?1, ?2, ?3)",
-        (crate::room::ROOM_SOURCE, "Room", crate::room::ROOM_KIND),
-    )?;
-
-    let mut stmt = ingest
-        .prepare("SELECT filename, start_utc FROM segments WHERE source = ?1 ORDER BY start_utc")?;
-    let rows = stmt.query_map([crate::room::ROOM_SOURCE], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-
-    let mut added = 0;
-    for row in rows {
-        let (filename, start_raw) = row?;
-        let Ok(start) = DateTime::parse_from_rfc3339(&start_raw) else {
-            // No honest end time without a start. Skipped rather than rounded.
-            tracing::warn!(%filename, %start_raw, "room register: unparseable start");
-            continue;
-        };
-        let start = start.with_timezone(&Utc);
-        // Asserted, not measured: the builder cuts a UTC-aligned grid of
-        // `room::BLOCK_S`.
-        let end = start + Duration::seconds(crate::room::BLOCK_S);
-        added += meaning.execute(
-            "INSERT OR IGNORE INTO audio_segments
-                 (source_id, path, start_utc, end_utc, sample_rate, channels)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![
-                crate::room::ROOM_SOURCE,
-                room_dir.join(&filename).to_string_lossy(),
-                instant::python_isoformat_utc(start),
-                instant::python_isoformat_utc(end),
-                ROOM_RATE,
-                ROOM_CHANNELS,
-            ],
-        )?;
-    }
-    Ok(added)
 }
 
 /// Which pass decided a clip: a job kind's, or registration's, which has no job.
@@ -346,7 +235,7 @@ pub fn register_segments(
     let mics: std::collections::HashSet<String> = {
         let mut stmt =
             meaning.prepare("SELECT id FROM sources WHERE kind NOT IN ('upload', ?1)")?;
-        let rows = stmt.query_map([crate::room::ROOM_KIND], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map([crate::store::ROOM_KIND], |r| r.get::<_, String>(0))?;
         rows.collect::<Result<_, _>>()?
     };
     // Read once into sets rather than looked up per candidate; see
@@ -365,7 +254,7 @@ pub fn register_segments(
                                WHERE l.kind = ?2 AND l.filename = s.filename)
              ORDER BY s.start_utc DESC",
         )?;
-        let rows = stmt.query_map((crate::room::ROOM_SOURCE, PassKind::Register), |r| {
+        let rows = stmt.query_map((crate::store::ROOM_SOURCE, PassKind::Register), |r| {
             Ok((r.get(0)?, r.get(1)?))
         })?;
         rows.collect::<Result<_, _>>()?
@@ -487,10 +376,10 @@ fn registered_minutes(
     rows.collect()
 }
 
-/// Apply a [`Plan`] to one block in one transaction: the turns, their search
-/// rows and the hides land together or not at all.
+/// Apply a [`Plan`] to one clip in one transaction: the turns, their search
+/// rows and the live guesses they replace land together or not at all.
 ///
-/// Idempotent by refusing: a block whose audio segment already carries turns is
+/// Idempotent by refusing: a clip whose audio segment already carries turns is
 /// left alone and the caller gets `Ok(0)`, so a second pass neither duplicates
 /// turns nor overwrites an edited minute.
 ///
@@ -502,7 +391,6 @@ pub fn write_block(
     audio_segment_id: i64,
     span: (DateTime<Utc>, DateTime<Utc>),
     plan: &Plan,
-    stream: &Stream,
     now: &Stamp,
 ) -> rusqlite::Result<usize> {
     if plan.insert.is_empty() {
@@ -536,8 +424,8 @@ pub fn write_block(
                 audio_segment_id: Some(audio_segment_id),
                 language: turn.language.as_deref(),
                 asr_confidence: confidence,
-                asr_model: Some(stream.model),
-                provenance: Some(stream.provenance.clone()),
+                asr_model: Some(SHIM_MODEL),
+                provenance: Some(Provenance::PerMic),
                 word_timings: turn.word_timings.as_deref(),
                 created_utc: Some(now),
                 ..NewTurn::at(&start, &end, &turn.text)
@@ -545,58 +433,17 @@ pub fn write_block(
         )?;
         written += 1;
     }
-    if stream.reconciles_live {
-        let (from, to) = span;
-        turn_store::reconcile_live(
-            &tx,
-            &instant::python_isoformat_utc(from),
-            &instant::python_isoformat_utc(to),
-        )?;
-    }
-    for hidden in &plan.hide {
-        turn_store::hide(&tx, *hidden, &HiddenReason::CoveredByRoom)?;
-    }
+    // The archive turn supersedes the live guess; without this the timeline
+    // shows both.
+    let (from, to) = span;
+    turn_store::reconcile_live(
+        &tx,
+        &instant::python_isoformat_utc(from),
+        &instant::python_isoformat_utc(to),
+    )?;
     tx.commit()?;
     Ok(written)
 }
-
-/// Which transcription stream a pass drains, and what differs between streams.
-///
-/// ⚠ A `Stream` is the unit of reversal: `DELETE FROM transcript_segments WHERE
-/// provenance = '<stream>'` must name exactly the rows its passes wrote, so
-/// `provenance` must be unique per stream and never NULL.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Stream<'a> {
-    /// The queue job kind whose stored results this pass interprets.
-    pub kind: Kind,
-    /// What the written rows record in `provenance`: the reversal key.
-    pub provenance: Provenance,
-    /// What they record in `asr_model`.
-    pub model: &'a str,
-    /// Whether writing turns for a clip also hides the provisional live turns
-    /// on the same span.
-    ///
-    /// Required for the stream that acts as the archive pass: the archive turn
-    /// supersedes the live guess, and without this the timeline shows both.
-    pub reconciles_live: bool,
-    /// Whether a written turn hides the per-mic turns it covers.
-    ///
-    /// True for the room stream alone, which is why [`plan`]'s rules 2 to 4
-    /// exist. A per-mic pass fills clips that have no turns, so it has nothing
-    /// to hide.
-    pub hides_covered: bool,
-}
-
-/// The derived one-microphone-per-minute stream (`transcribe-room`).
-pub const ROOM: Stream<'static> = Stream {
-    kind: Kind::TranscribeRoom,
-    provenance: Provenance::Room,
-    model: ROOM_MODEL,
-    // The room stream is derived from microphones whose own pass reconciles the
-    // live turns; doing it again would make the reversal ambiguous.
-    reconciles_live: false,
-    hides_covered: true,
-};
 
 /// What the `asr` shim loads when the caller names no model:
 /// `recall.asr.DEFAULT_MODEL`.
@@ -606,29 +453,17 @@ pub const ROOM: Stream<'static> = Stream {
 /// `asr.py` and fails on a mismatch.
 pub const SHIM_MODEL: &str = "mlx-community/whisper-large-v3-turbo";
 
-/// One microphone's own clip (`transcribe-segment`).
-///
-/// `model` is the shim's real default, not a decorated name like [`ROOM`]'s:
-/// these rows join the existing per-microphone corpus, and filtering on
-/// `asr_model` must not split it by writer. `provenance` says who wrote them.
-pub const PER_MIC: Stream<'static> = Stream {
-    kind: Kind::TranscribeSegment,
-    provenance: Provenance::PerMic,
-    model: SHIM_MODEL,
-    // This is the archive pass, so it reconciles live turns.
-    reconciles_live: true,
-    hides_covered: false,
-};
+/// The job kind a pass drains.
+pub const KIND: Kind = Kind::TranscribeSegment;
 
 /// What one pass did, for the log line.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Pass {
     pub blocks: usize,
     pub turns: usize,
-    pub hidden: usize,
     pub refused: usize,
     pub barren: usize,
-    /// Turns the quality rules swept (see [`plan`] rule 5).
+    /// Turns the quality rules swept (see [`plan`] rule 1).
     pub swept: usize,
 }
 
@@ -657,7 +492,7 @@ pub fn tombstoned_block(
 /// reading the table, never branched on.
 ///
 /// `write_pass` ledgers only clips it wrote nothing for: written turns are their
-/// own record, so deleting a stream's turns re-enables those clips. A reversal
+/// own record, so deleting the pass's turns re-enables those clips. A reversal
 /// must therefore clear both the turns and these rows.
 pub fn ledger(
     conn: &rusqlite::Connection,
@@ -688,7 +523,6 @@ pub fn ledger(
 pub fn write_pass(
     meaning: &mut rusqlite::Connection,
     ingest: &rusqlite::Connection,
-    stream: &Stream,
     now: &Stamp,
     limit: usize,
 ) -> rusqlite::Result<Pass> {
@@ -704,7 +538,7 @@ pub fn write_pass(
          ORDER BY s.start_utc ASC, j.filename ASC",
     )?;
     let jobs: Vec<(String, String, String)> = stmt
-        .query_map(rusqlite::params![stream.kind], |r| {
+        .query_map(rusqlite::params![KIND], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })?
         .collect::<Result<_, _>>()?;
@@ -717,7 +551,7 @@ pub fn write_pass(
         let Some(block_start) = audiocore::names::parse_segment_start(&filename) else {
             // Permanent: a name that is not a segment name never becomes one.
             pass.barren += 1;
-            ledger(ingest, stream.kind, &filename, "unnameable", now)?;
+            ledger(ingest, KIND, &filename, "unnameable", now)?;
             continue;
         };
         // The clip's audio segment. Absent means it is not registered yet: wait,
@@ -734,7 +568,7 @@ pub fn write_pass(
             pass.barren += 1;
             // Unless the block was deleted: then the audio is never coming.
             if tombstoned_block(meaning, &source, block_start)? {
-                ledger(ingest, stream.kind, &filename, "deleted", now)?;
+                ledger(ingest, KIND, &filename, "deleted", now)?;
             }
             continue;
         };
@@ -751,86 +585,30 @@ pub fn write_pass(
         let Ok(turns) = interpret(block_start, &result) else {
             // Permanent: the stored result will not change.
             pass.barren += 1;
-            ledger(ingest, stream.kind, &filename, "unreadable", now)?;
+            ledger(ingest, KIND, &filename, "unreadable", now)?;
             continue;
         };
-        // ⚠ The end comes from the clip's own row, not the room grid: a
-        // microphone clip can be short, and a correction window that ends early
-        // cannot see a correction it is about to overwrite.
+        // ⚠ The end comes from the clip's own row: a clip can be short, and a
+        // correction window that ends early cannot see a correction it is
+        // about to overwrite.
         let Ok(block_end) = DateTime::parse_from_rfc3339(&end_raw) else {
             pass.barren += 1;
-            ledger(ingest, stream.kind, &filename, "unspanned", now)?;
+            ledger(ingest, KIND, &filename, "unspanned", now)?;
             continue;
         };
         let block_end = block_end.with_timezone(&Utc);
-        // Read only for a stream that can hide: it is a scan per clip.
-        let standing = if stream.hides_covered {
-            standing_between(meaning, block_start, block_end)?
-        } else {
-            Vec::new()
-        };
         let human = turn_store::protected_between(meaning, block_start, block_end)?;
-        let decided = plan(turns, &standing, &human);
+        let decided = plan(turns, &human);
         pass.refused += decided.refused.len();
         pass.swept += decided.swept;
-        pass.hidden += decided.hide.len();
-        let written = write_block(
-            meaning,
-            audio_id,
-            (block_start, block_end),
-            &decided,
-            stream,
-            now,
-        )?;
+        let written = write_block(meaning, audio_id, (block_start, block_end), &decided, now)?;
         pass.turns += written;
         pass.blocks += 1;
         if written == 0 {
             // Decided but left no trace in the meaning plane; without this row
             // every later pass would reach it first.
-            ledger(ingest, stream.kind, &filename, "nothing-to-write", now)?;
+            ledger(ingest, KIND, &filename, "nothing-to-write", now)?;
         }
     }
     Ok(pass)
 }
-
-/// The visible per-mic turns overlapping a span. Room turns are excluded.
-fn standing_between(
-    conn: &rusqlite::Connection,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-) -> rusqlite::Result<Vec<Standing>> {
-    let mut stmt = conn.prepare(
-        "SELECT t.id, t.start_utc, t.end_utc FROM transcript_segments t
-         JOIN audio_segments a ON a.id = t.audio_segment_id
-         WHERE a.source_id != ?1 AND t.hidden_reason IS NULL
-           AND t.superseded_by IS NULL
-           AND t.start_utc < ?3 AND t.end_utc > ?2",
-    )?;
-    let rows = stmt.query_map(
-        rusqlite::params![
-            crate::room::ROOM_SOURCE,
-            instant::python_isoformat_utc(start),
-            instant::python_isoformat_utc(end),
-        ],
-        |r| {
-            Ok(Standing {
-                id: r.get(0)?,
-                start: parse_stamp(&r.get::<_, String>(1)?),
-                end: parse_stamp(&r.get::<_, String>(2)?),
-            })
-        },
-    )?;
-    rows.collect()
-}
-
-/// An unparseable stamp becomes `DateTime::MIN_UTC`. A span with both ends
-/// unreadable then overlaps nothing; one with only its start unreadable reaches
-/// back to the start of time.
-fn parse_stamp(raw: &str) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(raw).map_or(DateTime::<Utc>::MIN_UTC, |t| t.with_timezone(&Utc))
-}
-
-/// What a room turn records as its model.
-///
-/// The `asr` shim's default, named here because the queue carries no model field.
-pub const ROOM_MODEL: &str = "mlx-whisper/large-v3-turbo (room)";

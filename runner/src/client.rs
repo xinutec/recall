@@ -83,7 +83,7 @@ impl Client {
     /// none.
     ///
     /// `kinds` is always sent, although recalld treats an absent list as
-    /// `transcribe-room` alone; relying on that default would tie any other
+    /// `transcribe-segment` alone; relying on that default would tie any other
     /// runner's correctness to recalld's.
     ///
     /// # Errors

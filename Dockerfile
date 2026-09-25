@@ -66,6 +66,7 @@ COPY doctor/ doctor/
 COPY recalld/ recalld/
 COPY runner/ runner/
 COPY cli/ cli/
+COPY experimental/ experimental/
 RUN cargo build --release --locked -p recalld
 
 # --- runtime ---

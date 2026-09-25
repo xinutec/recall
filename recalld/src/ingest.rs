@@ -369,7 +369,7 @@ pub async fn get_blob(
     }
 }
 
-/// What a runner says it can do (`?kinds=transcribe-room,diarize-room`).
+/// What a runner says it can do (`?kinds=transcribe-segment,enroll-speaker`).
 #[derive(Debug, Deserialize, Default)]
 pub struct LeaseQuery {
     kinds: Option<String>,
@@ -378,16 +378,15 @@ pub struct LeaseQuery {
 impl LeaseQuery {
     /// The kinds to offer.
     ///
-    /// ⚠ Absent means `transcribe-room` alone, not "all": a runner that does not
-    /// send the parameter holds only the `asr` shim, and would burn a
-    /// `diarize-room` job's attempts failing it. recalld and the runner deploy
-    /// separately, so this default must suit an older runner.
+    /// ⚠ Absent means `transcribe-segment` alone, not "all": a runner that does
+    /// not send the parameter holds only the `asr` shim, and would burn a
+    /// diarize job's attempts failing it.
     ///
     /// A kind this recalld does not know is dropped, not an error: a newer
     /// runner may ask for one, and the kinds it shares still lease.
     fn kinds(&self) -> Vec<audiocore::job::Kind> {
         match self.kinds.as_deref() {
-            None => vec![audiocore::job::Kind::TranscribeRoom],
+            None => vec![audiocore::job::Kind::TranscribeSegment],
             Some(list) => list
                 .split(',')
                 .map(str::trim)

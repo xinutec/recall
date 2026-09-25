@@ -143,6 +143,8 @@
               # The terminal client. Not deployed as an agent, but a workspace
               # member — cargo cannot load the graph without it.
               ./cli
+              # Experiments run by hand; members, so built and tested, never agents.
+              ./experimental
               # The one licence-clean speech clip (#1433). ⚠ Not pointless: every
               # OTHER fixture here is gitignored audio, so this entry is the only
               # way a committed clip reaches the sandbox.

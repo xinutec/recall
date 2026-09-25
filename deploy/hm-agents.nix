@@ -411,11 +411,6 @@ in
   # `shim_voices` instead of `shim_asr`. The shim NAMES ITSELF over the protocol,
   # so the runner discovers it can do `diarize-segment` rather than being told.
   #
-  # ⚠ It leases `diarize-segment` ONLY (`kinds_for`): `diarize-room` jobs are
-  # derived for every transcribed block whether or not anything consumes them, and
-  # `queue::lease` orders across kinds by capture time, so leasing both spends half
-  # of every pass on results nothing reads.
-  #
   # `Nice = 15`, below recall-runner's 10 — diarization is re-derivable where the
   # archive pass is not. ⚠ No `--pulse`: a second process stamping the archive
   # heartbeat would make a stalled transcriber look healthy.

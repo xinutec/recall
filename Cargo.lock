@@ -1123,6 +1123,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "room"
+version = "0.1.0"
+dependencies = [
+ "audiocore",
+ "chrono",
+ "hex",
+ "recalld",
+ "runner",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "rsqlite-vfs"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

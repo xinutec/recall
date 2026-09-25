@@ -4,10 +4,9 @@
 microphone. Its loop, turn-count and character proxies have each been read wrong
 once; the only measurement that settles it is WER against text a person wrote.
 
-⚠ **The room arm is not in `transcript_segments`.** The room turn writer is off,
-so the room's words live only in the stored `transcribe-room` job result. This
-reads that, which is why the comparison is possible at all without switching the
-writer on first.
+⚠ **The room arm is not in `transcript_segments`.** No room turn was ever kept,
+so the room's words live in the stored `transcribe-room` job results (history)
+or in a lab run's output file.
 
 Three constraints inherited from `rank_referee.py`, each of which produced a
 wrong answer when missed:
@@ -42,9 +41,12 @@ answers neither question.
 
 Every database is opened read-only; only the report is written.
 
-Usage:
+Usage, on production's room history or on a lab run (`experimental/room`):
   python3 scripts/room_referee.py \
       --db <fleet recall.sqlite> --ingest <fleet ingest.sqlite> --out /tmp/room.json
+  python3 scripts/room_referee.py \
+      --db <fleet recall.sqlite> --room-results room.jsonl --arm pieces \
+      --out /tmp/room.json
 """
 
 from __future__ import annotations
@@ -54,9 +56,11 @@ import json
 import sqlite3
 import statistics
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -149,29 +153,55 @@ def mic_heard(
     return joined or None
 
 
-def room_heard(
-    ingest: sqlite3.Connection, start: datetime, end: datetime, tol: float
-) -> tuple[str, str] | None:
-    """(winner, what the ROOM said) over the span, from the stored job result.
+Lookup = Callable[[str], "tuple[str, dict[str, Any]] | None"]
+"""A block's start to (winner, transcription result), or None when not built."""
 
-    ⚠ Segment offsets in the result are relative to the block's own start, so the
+
+def stored_room(ingest: sqlite3.Connection) -> Lookup:
+    """The room as production transcribed it, from the stored job results."""
+
+    def look(block: str) -> tuple[str, dict[str, Any]] | None:
+        row = ingest.execute(
+            """SELECT r.winner, j.result FROM room_blocks r
+                 JOIN jobs j ON j.filename = r.filename
+                            AND j.kind = 'transcribe-room' AND j.result IS NOT NULL
+                WHERE r.start_utc = ? AND r.verdict LIKE 'built%'""",
+            (block,),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            body = json.loads(row[1]).get("result") or {}
+        except (json.JSONDecodeError, AttributeError):
+            return None
+        return str(row[0]), body
+
+    return look
+
+
+def lab_room(path: Path, arm: str) -> Lookup:
+    """One arm of `experimental/room`'s output (`room transcribe --out`)."""
+    table: dict[str, tuple[str, dict[str, Any]]] = {}
+    for line in path.read_text().splitlines():
+        entry = json.loads(line)
+        if entry.get("arm") == arm:
+            table[entry["block"]] = (str(entry["winner"]), entry.get("result") or {})
+    return table.get
+
+
+def room_heard(
+    look: Lookup, start: datetime, end: datetime, tol: float
+) -> tuple[str, str] | None:
+    """(winner, what the ROOM said) over the span.
+
+    ⚠ Segment offsets in a result are relative to the block's own start, so the
     span is converted into block-relative seconds before overlap is tested.
     """
     block = _block_of(start)
-    row = ingest.execute(
-        """SELECT r.winner, j.result FROM room_blocks r
-             JOIN jobs j ON j.filename = r.filename
-                        AND j.kind = 'transcribe-room' AND j.result IS NOT NULL
-            WHERE r.start_utc = ? AND r.verdict LIKE 'built%'""",
-        (block,),
-    ).fetchone()
-    if row is None:
+    found = look(block)
+    if found is None:
         return None
-    winner, raw = row
-    try:
-        body = json.loads(raw).get("result") or {}
-    except (json.JSONDecodeError, AttributeError):
-        return None
+    winner, body = found
     block_start = _utc(block)
     lo = (start - block_start).total_seconds() - tol
     hi = (end - block_start).total_seconds() + tol
@@ -184,11 +214,11 @@ def room_heard(
         and float(s["start"]) < hi
     ]
     joined = " ".join(t for t in said if t)
-    return (str(winner), joined) if joined else None
+    return (winner, joined) if joined else None
 
 
 def load_cases(
-    db: sqlite3.Connection, ingest: sqlite3.Connection, tol: float
+    db: sqlite3.Connection, look: Lookup, tol: float
 ) -> tuple[list[Case], dict[str, int]]:
     skipped: dict[str, int] = {
         "no_mic_text": 0,
@@ -217,7 +247,7 @@ def load_cases(
         if mic is None:
             skipped["no_mic_text"] += 1
             continue
-        room = room_heard(ingest, start, end, tol)
+        room = room_heard(look, start, end, tol)
         if room is None:
             skipped["no_room_text"] += 1
             continue
@@ -268,15 +298,30 @@ def report(cases: list[Case]) -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", required=True, type=Path)
-    parser.add_argument("--ingest", required=True, type=Path)
+    parser.add_argument("--ingest", type=Path, help="needed without --room-results")
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE_S)
+    parser.add_argument(
+        "--room-results",
+        type=Path,
+        help="score experimental/room's output instead of production's history",
+    )
+    parser.add_argument("--arm", default="whole", choices=["whole", "pieces"])
     args = parser.parse_args()
 
     db = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
-    ingest = sqlite3.connect(f"file:{args.ingest}?mode=ro", uri=True)
-    cases, skipped = load_cases(db, ingest, args.tolerance)
+    if args.room_results:
+        look = lab_room(args.room_results, args.arm)
+        room = f"{args.room_results} ({args.arm})"
+    elif args.ingest:
+        ingest = sqlite3.connect(f"file:{args.ingest}?mode=ro", uri=True)
+        look = stored_room(ingest)
+        room = "production's stored room transcripts"
+    else:
+        parser.error("give --ingest, or --room-results for a lab run")
+    cases, skipped = load_cases(db, look, args.tolerance)
     out = {
+        "room": room,
         "tolerance_s": args.tolerance,
         "cases": len(cases),
         "skipped": skipped,

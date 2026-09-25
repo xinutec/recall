@@ -1,6 +1,8 @@
-//! The room builder (docs/architecture.md). For each UTC-aligned minute, pick
-//! one microphone and carry its audio whole into a `room` segment the queue can
-//! hand to transcription. Selection, never fusion: per-block choice tied the
+//! The room builder, an experiment (#1388): never run in production. It works
+//! on a local copy of the fleet's data (see `README.md`).
+//!
+//! For each UTC-aligned minute, pick one microphone and carry its audio whole
+//! into a `room` segment. Selection, never fusion: per-block choice tied the
 //! best single microphone in the WER bake-off while every fusion lost, so this
 //! reproduces the measured behaviour, hard cuts at block boundaries included.
 //!
@@ -13,10 +15,13 @@
 //!   `sparse`, `all-gated`), each with its contributors, so a source that
 //!   delivers after the settling window is a recorded absence, not a silent one.
 
-use crate::levels;
-use crate::store;
+pub mod levels;
+pub mod pieces;
+pub mod processed;
+
 use audiocore::decode;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use recalld::store;
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -25,11 +30,7 @@ use std::io::Write;
 use std::path::Path;
 
 /// The synthetic source every built block lands under.
-pub const ROOM_SOURCE: &str = "room";
-/// The room source's kind in the meaning plane, which tells it apart from a
-/// recorder: it has no microphone, no `.alive` marker, and inherits whichever
-/// source won the minute.
-pub const ROOM_KIND: &str = "derived";
+pub use recalld::store::ROOM_SOURCE;
 /// The block grid: one minute, UTC-aligned.
 pub const BLOCK_S: i64 = 60;
 /// ASR's input shape — what the room stream exists to feed.
@@ -55,6 +56,8 @@ pub struct RoomConfig {
     /// Fewer measured rows than this and a source has no reference yet —
     /// unrankable, never defaulted.
     pub min_reference_rows: u32,
+    /// Only blocks starting in `[from, to)`; `None` takes every block.
+    pub window: Option<(DateTime<Utc>, DateTime<Utc>)>,
 }
 
 impl Default for RoomConfig {
@@ -65,6 +68,7 @@ impl Default for RoomConfig {
             reference_quantile: 0.05,
             reference_window: 2_000,
             min_reference_rows: 50,
+            window: None,
         }
     }
 }
@@ -167,7 +171,10 @@ fn candidate_blocks(
             let covers = seg_start < block + Duration::seconds(BLOCK_S)
                 && seg_start + Duration::seconds(BLOCK_S) > block;
             let settled = block + Duration::seconds(BLOCK_S) + config.settle <= now;
-            if covers && settled && !judged.contains(&iso(block)) {
+            let wanted = config
+                .window
+                .is_none_or(|(from, to)| block >= from && block < to);
+            if covers && settled && wanted && !judged.contains(&iso(block)) {
                 blocks.insert(block);
             }
         }
@@ -514,46 +521,4 @@ pub fn verdict_of(conn: &Connection, block_start_utc: &str) -> rusqlite::Result<
         |r| r.get(0),
     )
     .optional()
-}
-
-/// Fill `coverage` for blocks judged before it was measured.
-///
-/// Records how much of each block its winner actually recorded and changes
-/// nothing else, verdicts included. The result is the distribution needed to
-/// decide about blocks built without a coverage measurement.
-///
-/// # Errors
-/// If the database refuses.
-pub fn backfill_coverage(root: &Path, limit: usize) -> rusqlite::Result<usize> {
-    let conn = store::open(root)?;
-    let pending: Vec<(String, String)> = {
-        let mut stmt = conn.prepare(
-            "SELECT start_utc, winner FROM room_blocks
-              WHERE coverage IS NULL AND winner IS NOT NULL
-              ORDER BY start_utc DESC LIMIT ?1",
-        )?;
-        let rows = stmt.query_map([u32::try_from(limit).unwrap_or(u32::MAX)], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })?;
-        rows.collect::<Result<_, _>>()?
-    };
-    let mut written = 0;
-    for (start_utc, winner) in pending {
-        let Ok(block) = DateTime::parse_from_rfc3339(&start_utc) else {
-            continue;
-        };
-        let window = decode::window_covered(
-            &root.join("ingest"),
-            &winner,
-            block.with_timezone(&Utc),
-            BLOCK_S as usize,
-            RATE,
-        );
-        conn.execute(
-            "UPDATE room_blocks SET coverage = ?1 WHERE start_utc = ?2",
-            rusqlite::params![f64::from(window.coverage), start_utc],
-        )?;
-        written += 1;
-    }
-    Ok(written)
 }

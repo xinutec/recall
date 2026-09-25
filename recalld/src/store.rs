@@ -32,6 +32,12 @@ pub struct Row {
     pub sent_utc: Option<String>,
 }
 
+/// The room stream's source and its meaning-plane kind. The stream is an
+/// experiment now (`experimental/room`); its old rows stay as history, and every
+/// pass here skips them.
+pub const ROOM_SOURCE: &str = "room";
+pub const ROOM_KIND: &str = "derived";
+
 /// Where a source's delivered blobs live: `<root>/ingest/<source>/`.
 ///
 /// Use this rather than spelling the path out: nothing type-checks a `join`,

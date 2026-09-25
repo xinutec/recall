@@ -11,10 +11,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
-    /// The room stream's transcription, one block at a time.
-    TranscribeRoom,
-    /// Who spoke when over a room block whose words already exist.
-    DiarizeRoom,
     /// One microphone's clip, or an uploaded meeting, transcribed.
     TranscribeSegment,
     /// Who spoke when over one microphone's clip.
@@ -24,9 +20,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Self; 5] = [
-        Self::TranscribeRoom,
-        Self::DiarizeRoom,
+    pub const ALL: [Self; 3] = [
         Self::TranscribeSegment,
         Self::DiarizeSegment,
         Self::EnrollSpeaker,
@@ -35,8 +29,6 @@ impl Kind {
     /// The stored and wire spelling.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::TranscribeRoom => "transcribe-room",
-            Self::DiarizeRoom => "diarize-room",
             Self::TranscribeSegment => "transcribe-segment",
             Self::DiarizeSegment => "diarize-segment",
             Self::EnrollSpeaker => "enroll-speaker",

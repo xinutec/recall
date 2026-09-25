@@ -35,16 +35,17 @@ fn serve(root: &Path) -> String {
     format!("http://{}", rx.recv().expect("addr"))
 }
 
-/// Register a room blob so the queue derives a job for it.
-fn room_segment(root: &Path, name: &str, bytes: &[u8]) {
-    let dir = root.join("ingest").join("room");
+/// Store a microphone clip with a queued transcription job. The job is seeded,
+/// not derived: deriving needs the meaning plane, which this test does not use.
+fn queued_clip(root: &Path, name: &str, bytes: &[u8]) {
+    let dir = root.join("ingest").join("usb");
     std::fs::create_dir_all(&dir).expect("mkdir");
     std::fs::write(dir.join(name), bytes).expect("blob");
     let conn = recalld::store::open(root).expect("db");
     recalld::store::insert(
         &conn,
         &recalld::store::Row {
-            source: "room".to_owned(),
+            source: "usb".to_owned(),
             filename: name.to_owned(),
             start_utc: "2026-09-06T10:00:00Z".to_owned(),
             bytes: bytes.len() as u64,
@@ -54,6 +55,11 @@ fn room_segment(root: &Path, name: &str, bytes: &[u8]) {
         },
     )
     .expect("row");
+    conn.execute(
+        "INSERT INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, '2026-09-06T10:01:00Z')",
+        (audiocore::job::Kind::TranscribeSegment, name),
+    )
+    .expect("job");
 }
 
 /// A shim that speaks the real protocol and answers whatever it is told to.
@@ -74,7 +80,7 @@ fn stub_shim(behaviour: &str) -> (String, Vec<String>) {
 #[test]
 fn a_job_is_leased_transcribed_and_acked() {
     let dir = tempfile::tempdir().expect("tempdir");
-    room_segment(dir.path(), "room-20260906T100000.flac", b"audio bytes");
+    queued_clip(dir.path(), "usb-20260906T100000.flac", b"audio bytes");
     let base = serve(dir.path());
     let client = Client::new(&base, READ_TOKEN);
 
@@ -85,16 +91,16 @@ fn a_job_is_leased_transcribed_and_acked() {
     let mut shim = Shim::spawn(&program, &args).expect("shim");
 
     let job = client
-        .lease(&[audiocore::job::Kind::TranscribeRoom])
+        .lease(&[audiocore::job::Kind::TranscribeSegment])
         .expect("lease")
         .expect("a job");
-    assert_eq!(job.kind, audiocore::job::Kind::TranscribeRoom);
-    assert_eq!(job.filename, "room-20260906T100000.flac");
+    assert_eq!(job.kind, audiocore::job::Kind::TranscribeSegment);
+    assert_eq!(job.filename, "usb-20260906T100000.flac");
 
     // The blob comes from recalld's own store, over its own auth gate.
     let clip = dir.path().join("fetched.flac");
     client
-        .fetch_blob("room", &job.filename, &clip)
+        .fetch_blob("usb", &job.filename, &clip)
         .expect("blob");
     assert_eq!(std::fs::read(&clip).expect("read"), b"audio bytes");
 
@@ -105,7 +111,7 @@ fn a_job_is_leased_transcribed_and_acked() {
     // Retiring is terminal: the queue must not hand the same job out again.
     assert!(
         client
-            .lease(&[audiocore::job::Kind::TranscribeRoom])
+            .lease(&[audiocore::job::Kind::TranscribeSegment])
             .expect("second lease")
             .is_none()
     );
