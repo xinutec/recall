@@ -48,7 +48,7 @@ const page = (items: Conversation[], hasMore = false): ConversationPage => ({ it
 function setup(
   opts: {
     before?: string;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a test payload of any shape
     conversations?: any;
   } = {},
 ) {
@@ -75,7 +75,7 @@ function setup(
   if (opts.before !== undefined) {
     fixture.componentRef.setInput('before', opts.before);
   }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the component's private state, reached in a test
   const c = fixture.componentInstance as any;
   return {
     fixture,

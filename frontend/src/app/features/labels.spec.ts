@@ -43,7 +43,7 @@ function setup(speaker = '') {
   });
   const fixture = TestBed.createComponent(Labels);
   fixture.componentRef.setInput('speaker', speaker);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the component's private state, reached in a test
   const c = fixture.componentInstance as any;
   return {
     fixture,
@@ -103,7 +103,7 @@ describe('Labels', () => {
       ],
     });
     const fixture = TestBed.createComponent(Labels);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the component's private state, reached in a test
     const c = fixture.componentInstance as any;
     c.reassign(5, 'Alice');
     expect(open).toHaveBeenCalled();

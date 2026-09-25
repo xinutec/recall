@@ -129,7 +129,11 @@ impl Utterance {
 
 /// Samples in a span of silence, capped at [`BRIDGE_SECONDS`] so a nonsense
 /// span cannot exhaust memory.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "capped at BRIDGE_SECONDS (doc above)"
+)]
 fn samples_in(seconds: f64) -> usize {
     (seconds.clamp(0.0, BRIDGE_SECONDS) * f64::from(vad::RATE)) as usize
 }
@@ -232,7 +236,7 @@ fn seconds_of(windows: usize) -> f64 {
 }
 
 /// Windows as a number. Exact in practice: 2^53 windows is millions of years.
-#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss, reason = "exact in practice (doc above)")]
 fn windows_to_f64(windows: usize) -> f64 {
     windows as f64
 }

@@ -151,7 +151,10 @@ pub async fn log_route(
     ok()
 }
 
-#[allow(clippy::unused_async)]
+#[allow(
+    clippy::unused_async,
+    reason = "axum's handler signature; nothing here awaits"
+)]
 pub async fn telemetry_route(Json(events): Json<Vec<TelemetryEvent>>) -> Response {
     for e in events.iter().take(MAX_EVENTS) {
         // `at` is an integer, so it needs no flattening — only the free-text

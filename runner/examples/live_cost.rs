@@ -43,7 +43,11 @@ fn cut(path: &Path) -> Vec<Utterance> {
     out
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "example sizes: seconds of audio, far inside range"
+)]
 fn millis(windows: usize) -> i64 {
     (windows as f64 * audiocore::vad::window_seconds() * 1000.0) as i64
 }

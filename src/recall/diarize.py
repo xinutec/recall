@@ -145,7 +145,7 @@ def pyannote_diarize(
     waveform = torch.from_numpy(samples).unsqueeze(0)
     # pyannote is untyped, so the cached pipeline arrives here as an `object` and
     # calling it needs the same ignore `speakerid.pyannote_embed` uses.
-    result = pipeline({"waveform": waveform, "sample_rate": rate})  # type: ignore[operator]
+    result = pipeline({"waveform": waveform, "sample_rate": rate})  # type: ignore[operator]  # pyannote is untyped (above)
     # pyannote 4.x returns a DiarizeOutput; its exclusive (non-overlapping)
     # diarization is the clean one for per-turn transcript attribution. Older
     # pyannote returns an Annotation directly.

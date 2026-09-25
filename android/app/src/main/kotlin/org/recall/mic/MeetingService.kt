@@ -138,7 +138,7 @@ class MeetingService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(this)
             } else {
-                @Suppress("DEPRECATION")
+                @Suppress("DEPRECATION") // the Context-less constructor is all there is below S
                 MediaRecorder()
             }
         return runCatching {

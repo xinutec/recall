@@ -89,7 +89,11 @@ fn cases(root: &Path) -> Vec<Case> {
     out
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "example sizes: seconds of audio, far inside range"
+)]
 fn span(case: &Case) -> Option<Vec<f32>> {
     let pcm = decode::decode_s16(&case.clip, RATE)?;
     let all = decode::to_f32(&pcm);

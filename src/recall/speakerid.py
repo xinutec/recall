@@ -93,5 +93,5 @@ def pyannote_embed(
     token = hf_token or os.environ.get("HF_TOKEN")
     inference = _inference(model, token)
     waveform = _decode_mono(Path(audio))
-    vector = inference({"waveform": waveform, "sample_rate": _EMBED_RATE})  # type: ignore[operator]
+    vector = inference({"waveform": waveform, "sample_rate": _EMBED_RATE})  # type: ignore[operator]  # pyannote's Inference is untyped
     return [float(x) for x in vector]

@@ -121,7 +121,7 @@ pub fn details(asked: &[i64], turns: &[Turn]) -> String {
         .zip(asked.iter().copied().chain(std::iter::repeat(0)))
         .map(|(t, asked_id)| {
             // A turn lasts seconds, far inside f64's exact-integer range.
-            #[allow(clippy::cast_precision_loss)]
+            #[allow(clippy::cast_precision_loss, reason = "a turn lasts seconds (above)")]
             let duration = local(&t.end)
                 .zip(local(&t.start))
                 .map_or(0.0, |(e, s)| (e - s).num_milliseconds() as f64 / 1000.0);

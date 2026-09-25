@@ -36,7 +36,10 @@ fn report_fresh() -> Duration {
 /// contract: `stateToken` is a hash over this object, so a renamed or reordered
 /// field changes every client's long-poll. The bools are the wire shape, so an
 /// enum would change the contract rather than tidy it.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the bools are the wire shape (doc above)"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[ts(export)]
 pub struct CaptureState {
@@ -59,7 +62,10 @@ pub struct CaptureState {
 /// fields except `stateToken`, keys sorted, `, ` and `: ` separators. The struct's
 /// field order is the sorted key order; a wrong spelling does not fail, it turns
 /// every long-poll into a busy poll.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the bools are the wire shape (doc above)"
+)]
 #[derive(Serialize)]
 struct TokenPayload<'a> {
     #[serde(rename = "desiredPausedUntil")]

@@ -67,7 +67,10 @@ pub struct Sources {
 // Four bools, because the route sends four: `running` is what the recorders
 // are doing, `desired_running` what they were asked to do, and `settled`
 // whether those agree. What a combination means is the server's call.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "four bools because the route sends four (above)"
+)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capture {

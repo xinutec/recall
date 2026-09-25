@@ -196,7 +196,7 @@ def _report_by_origin(cases: list[Case]) -> None:
     mush. What CAN be compared is cross against cross: each arm scored only
     against truth derived from the OTHER one.
     """
-    from recall.wer import word_error_rate  # noqa: PLC0415
+    from recall.wer import word_error_rate  # noqa: PLC0415  lazy, scoring only
 
     origins = sorted({c.origin_source for c in cases})
     print("\nBY THE MICROPHONE THE HUMAN EDITED — self-scores are flattered:")
@@ -292,8 +292,8 @@ def main() -> None:
         )
 
     if results:
-        raws = [float(r["wer_raw"]) for r in results]  # type: ignore[arg-type]
-        cals = [float(r["wer_calibrated"]) for r in results]  # type: ignore[arg-type]
+        raws = [float(r["wer_raw"]) for r in results]  # type: ignore[arg-type]  # the rows are dict[str, object]; wer_* are floats by construction
+        cals = [float(r["wer_calibrated"]) for r in results]  # type: ignore[arg-type]  # the rows are dict[str, object]; wer_* are floats by construction
         better = sum(1 for r, c in zip(raws, cals, strict=True) if c < r)
         worse = sum(1 for r, c in zip(raws, cals, strict=True) if c > r)
         # Median: the mean moved 25x between two runs of identical audio when a

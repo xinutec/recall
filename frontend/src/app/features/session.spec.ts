@@ -75,7 +75,7 @@ async function setup(turns: Transcript[] = [], known: string[] = []) {
   ctrl.match((r) => r.url.includes('/api/speakers')).forEach((r) => r.flush({ names: known }));
   await fixture.whenStable();
   fixture.detectChanges();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the component's private state, reached in a test
   const c = fixture.componentInstance as any;
   return { fixture, c, ctrl };
 }

@@ -10,7 +10,10 @@ fn schema(conn: &Connection) {
     recalld::meaning_schema::ensure(conn).expect("schema");
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a fixture row, every column spelled"
+)]
 fn turn(conn: &Connection, id: i64, start: &str, text: &str, extra: &[(&str, &str)]) {
     conn.execute(
         "INSERT INTO transcript_segments (id, start_utc, end_utc, text, asr_model)

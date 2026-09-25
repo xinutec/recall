@@ -81,7 +81,7 @@ fn usage() -> ExitCode {
     ExitCode::FAILURE
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "one probe, read top to bottom")]
 fn main() -> ExitCode {
     let mut root = None;
     let mut reference = None;

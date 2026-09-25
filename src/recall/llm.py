@@ -71,8 +71,8 @@ class ChatModel(Protocol):
 def load_mlx_chat(model: str = DEFAULT_LLM) -> ChatModel:
     """Load `model` (lazy heavy import) and return a chat-templated generator."""
     import mlx.core as mx  # noqa: PLC0415 - heavy ML import stays lazy
-    from mlx_lm import generate, load  # noqa: PLC0415
-    from mlx_lm.models.cache import (  # noqa: PLC0415
+    from mlx_lm import generate, load  # noqa: PLC0415  heavy ML import stays lazy
+    from mlx_lm.models.cache import (  # noqa: PLC0415  heavy ML import stays lazy
         load_prompt_cache,
         make_prompt_cache,
         save_prompt_cache,
@@ -89,7 +89,7 @@ def load_mlx_chat(model: str = DEFAULT_LLM) -> ChatModel:
         # verify that shape at the boundary rather than trusting an annotation,
         # which read `str` for months without anyone noticing because mlx-lm's
         # generate accepts either.
-        ids = tokenizer.apply_chat_template(  # type: ignore[no-untyped-call]
+        ids = tokenizer.apply_chat_template(  # type: ignore[no-untyped-call]  # mlx-lm is untyped
             messages, add_generation_prompt=True
         )
         if isinstance(ids, (list, str)):
@@ -105,7 +105,7 @@ def load_mlx_chat(model: str = DEFAULT_LLM) -> ChatModel:
         back to the full prompt with no cache — the cache is speed, never an answer.
         """
         prefix_msg = [{"role": "system", "content": system}]
-        prefix = tokenizer.apply_chat_template(prefix_msg)  # type: ignore[no-untyped-call]
+        prefix = tokenizer.apply_chat_template(prefix_msg)  # type: ignore[no-untyped-call]  # mlx-lm is untyped
         # The system turn is a literal token-prefix of the full prompt (verified,
         # not assumed — a template that injected a default or reordered would break
         # the split silently). Below the threshold the disk round-trip is a loss.
@@ -120,7 +120,7 @@ def load_mlx_chat(model: str = DEFAULT_LLM) -> ChatModel:
         path = _prefix_cache_dir() / f"{key}.safetensors"
         try:
             if path.exists():
-                cache = load_prompt_cache(str(path))  # type: ignore[no-untyped-call]
+                cache = load_prompt_cache(str(path))  # type: ignore[no-untyped-call]  # mlx-lm is untyped
                 path.touch()  # mark used, for TTL pruning
                 _log.info(
                     "prefix cache HIT %s: prefill %d tok (was %d)",

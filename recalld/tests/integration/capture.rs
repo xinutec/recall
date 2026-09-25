@@ -21,7 +21,10 @@ fn store(rows: &[(&str, &str)]) -> Connection {
 }
 
 // Mirrors CaptureState's own field order; the bools are the contract.
-#[allow(clippy::fn_params_excessive_bools)]
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "mirrors CaptureState's field order (above)"
+)]
 fn state(
     running: bool,
     paused: Option<&str>,

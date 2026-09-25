@@ -79,7 +79,10 @@ fn file(path: &Path, cache: &str) -> Response {
 ///
 /// `async` with no await: axum requires the handler signature, and reading a
 /// built asset off local disk is not worth a blocking-pool hop.
-#[allow(clippy::unused_async)]
+#[allow(
+    clippy::unused_async,
+    reason = "axum requires the async signature (doc above)"
+)]
 pub async fn serve(State(fe): State<Arc<Frontend>>, uri: axum::http::Uri) -> Response {
     let path = uri.path();
     // Rule 1.

@@ -85,7 +85,7 @@ object Heartbeat {
     fun version(ctx: Context): String =
         runCatching {
             val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
-            @Suppress("DEPRECATION")
+            @Suppress("DEPRECATION") // versionCode is display-only; longVersionCode needs API 28
             "${info.versionName} (${info.versionCode})"
         }.getOrDefault("?")
 

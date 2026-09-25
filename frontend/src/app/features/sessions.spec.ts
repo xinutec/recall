@@ -36,7 +36,7 @@ function setup(createOk = true) {
     ],
   });
   const fixture = TestBed.createComponent(Sessions);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the component's private state, reached in a test
   const c = fixture.componentInstance as any;
   return { fixture, c, navigate, open, createSession, renameSession, deleteSession, rediarizeSession };
 }

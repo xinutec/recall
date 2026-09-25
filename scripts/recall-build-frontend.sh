@@ -19,7 +19,7 @@
 #     real terminal it exits cleanly first try; both guards are harmless there.
 set -euo pipefail
 
-# shellcheck disable=SC1091
+# shellcheck disable=SC1091 # the nix profile, absent where nix is not installed
 source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
 
 # Decline the Angular CLI's first-run analytics-consent prompt so it never blocks a

@@ -63,7 +63,7 @@ async function setup(moments: Moment[], roster: string[] = []) {
   await fixture.whenStable();
   const ctrl = TestBed.inject(HttpTestingController);
   const player = TestBed.inject(Player);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the component's private state, reached in a test
   const c = fixture.componentInstance as any;
   return { fixture, c, ctrl, changed, open, player };
 }
@@ -231,7 +231,7 @@ describe('Turns', () => {
     c.togglePlay(run);
     expect(play).toHaveBeenCalledTimes(2);
     expect(pause).toHaveBeenCalledTimes(1);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the player's private audio element, in a test
     expect((player as any).audio.src).toContain('/api/audio-span?from_id=1&to_id=2');
     player.stop();
   });

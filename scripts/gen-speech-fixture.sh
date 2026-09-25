@@ -13,7 +13,7 @@
 #   ./scripts/gen-speech-fixture.sh
 set -euo pipefail
 
-# shellcheck disable=SC1091
+# shellcheck disable=SC1091 # the nix profile, absent where nix is not installed
 source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
 
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

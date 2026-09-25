@@ -166,7 +166,7 @@ class ShareActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
         } else {
-            @Suppress("DEPRECATION")
+            @Suppress("DEPRECATION") // the typed overload needs TIRAMISU (branch above)
             intent.getParcelableExtra(Intent.EXTRA_STREAM)
         }
 
