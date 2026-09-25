@@ -256,7 +256,21 @@ fn transcribe(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// The decoder is ffmpeg, and a missing one reads as silence rather than an
+/// error: every block would be judged `no-audio`, on the record.
+fn require_ffmpeg() {
+    let found = std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if !found {
+        eprintln!("room: ffmpeg is not on PATH; run inside `nix develop`");
+        std::process::exit(1);
+    }
+}
+
 fn main() {
+    require_ffmpeg();
     let mut cli = std::env::args().skip(1);
     let command = cli.next().unwrap_or_else(|| usage());
     let args = parse(cli);
