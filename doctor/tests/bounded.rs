@@ -60,7 +60,17 @@ fn the_child_starts_off_the_callers_working_directory() {
     // hang the child before it ran a line.
     let (program, args) = sh("pwd");
     let answer = run(&program, &args, Duration::from_secs(10), &[]).unwrap();
-    assert_eq!(answer.stdout.as_deref(), Some("/\n"));
+    // It timed out once, at load 11 in the nix sandbox (#1480), and a pipe
+    // leaked to a concurrent child is refuted (0 of 400). Say enough to tell a
+    // slow `sh` from a wedged one next time.
+    assert_eq!(
+        answer.stdout.as_deref(),
+        Some("/\n"),
+        "after {:.1}s, state {:?}, stderr {:?}",
+        answer.seconds,
+        doctor::bounded::process_state(answer.pid),
+        answer.stderr
+    );
 }
 
 /// A hanging child never reaches EOF, so output must be kept as it arrives.
