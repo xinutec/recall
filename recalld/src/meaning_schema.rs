@@ -500,6 +500,14 @@ pub const MIGRATIONS: &[&str] = &[
     -- said, as for a speaker fix, whose text is the machine's.
     ALTER TABLE corrections ADD COLUMN words_checked INTEGER;
 "#,
+    // v49
+    r#"
+    -- Left from the Python archive: nothing has written them since the port,
+    -- and production held no rows.
+    DROP TABLE transcript_lineage;
+    DROP TABLE diarize_skips;
+    DROP TABLE unreadable_captures;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

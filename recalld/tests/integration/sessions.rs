@@ -585,11 +585,6 @@ fn populate(conn: &Connection, source: &str, kind: &str) -> i64 {
     )
     .expect("embedding");
     conn.execute(
-        "INSERT INTO transcript_lineage (derived_id, source_id) VALUES (?1, ?1)",
-        [turn_id],
-    )
-    .expect("lineage");
-    conn.execute(
         "INSERT INTO corrections
              (audio_segment_id, transcript_segment_id, start_utc, end_utc, original_text,
               corrected_text, created_utc)
@@ -605,12 +600,6 @@ fn populate(conn: &Connection, source: &str, kind: &str) -> i64 {
         [source],
     )
     .expect("refine");
-    conn.execute(
-        "INSERT INTO diarize_skips (audio_segment_id, reason, created_utc)
-         VALUES (?1, 'too short', '2026-07-03T11:00:00+00:00')",
-        [audio_id],
-    )
-    .expect("skip");
     audio_id
 }
 
@@ -648,7 +637,6 @@ fn deleting_a_meeting_removes_every_derived_row_and_returns_its_files() {
         "audio_segments",
         "transcript_segments",
         "transcript_embeddings",
-        "transcript_lineage",
         "corrections",
         "refine_requests",
     ] {
