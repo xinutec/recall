@@ -357,7 +357,11 @@ async fn a_response_missing_what_it_must_carry_is_an_error_not_an_empty_identity
     let app = Router::new()
         .route(
             "/index.php/apps/oauth2/api/v1/token",
-            post(|| async { axum::Json(serde_json::json!({"token_type": "Bearer"})) }),
+            // ⚠ The body is read, not ignored. A server that closes with the
+            // request unread RESETS the connection, and on macOS ureq's
+            // per-read `set_read_timeout` then fails with EINVAL: 12 of 4,400
+            // calls failed that way, 0 of 4,400 with the body read (#1480).
+            post(|_form: String| async { axum::Json(serde_json::json!({"token_type": "Bearer"})) }),
         )
         .route(
             "/ocs/v2.php/cloud/user",
