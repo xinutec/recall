@@ -12,6 +12,7 @@ import { MatSnackBar } from '@angular/material/snack-bar';
 import { Transcript, TranscriptList } from '../models';
 import { RecallApi } from '../recall-api';
 import { formatClock, formatConfidence, formatDuration } from '../format';
+import { PlayButton } from '../shared/play-button';
 
 /**
  * Lowest-confidence transcripts first; edit the text to file a human correction
@@ -20,6 +21,7 @@ import { formatClock, formatConfidence, formatDuration } from '../format';
 @Component({
   selector: 'app-review',
   imports: [
+    PlayButton,
     MatCardModule,
     MatButtonModule,
     MatFormFieldModule,

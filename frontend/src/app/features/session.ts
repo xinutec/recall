@@ -5,12 +5,14 @@ import {
   inject,
   input,
   OnDestroy,
+  signal,
 } from '@angular/core';
 import { httpResource } from '@angular/common/http';
 import { RouterLink } from '@angular/router';
-import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
+import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatIconModule } from '@angular/material/icon';
+import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
@@ -36,9 +38,10 @@ interface Voice {
   selector: 'app-session',
   imports: [
     RouterLink,
-    FormsModule,
     MatButtonModule,
+    MatAutocompleteModule,
     MatIconModule,
+    MatSlideToggleModule,
     MatProgressBarModule,
     MatFormFieldModule,
     MatInputModule,
@@ -113,8 +116,27 @@ export class Session implements OnDestroy {
     this.player.toggle(`voice:${v.cluster}`, v.sampleUrl);
   }
 
-  protected nameVoice(cluster: string, name: string): void {
-    this.api.nameSessionVoice(this.id(), cluster, name.trim()).subscribe({
+  /** What the focused name field holds, to narrow its suggestions. */
+  protected readonly typed = signal('');
+  protected readonly suggestions = computed(() => {
+    const q = this.typed().trim().toLowerCase();
+    return this.knownNames().filter((n) => n.toLowerCase().includes(q));
+  });
+
+  /** A blur with the suggestions open waits for them to close: the tap may be
+   * picking one. Closing with the field still focused is typing, not leaving. */
+  protected closed(v: Voice, field: HTMLInputElement): void {
+    if (document.activeElement !== field) this.nameVoice(v, field.value);
+  }
+
+  /** Last name posted per voice, so a pick and the close after it post once. */
+  private readonly sent = new Map<string, string>();
+
+  protected nameVoice(v: Voice, name: string): void {
+    const who = name.trim();
+    if (who === (this.sent.get(v.cluster) ?? v.name ?? '')) return;
+    this.sent.set(v.cluster, who);
+    this.api.nameSessionVoice(this.id(), v.cluster, who).subscribe({
       next: () => this.reload(),
       error: () => this.snack.open('Could not save, try again', 'OK', { duration: 4000 }),
     });

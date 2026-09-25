@@ -111,9 +111,16 @@ describe('Session', () => {
 
   it('naming a voice posts it for the whole session', async () => {
     const { c, ctrl } = await setup([said(1, 'A')]);
-    c.nameVoice('A', ' Dr. Adams ');
+    c.nameVoice(c.voices()[0], ' Dr. Adams ');
     const req = ctrl.expectOne('/api/sessions/m/voice');
     expect(req.request.body).toEqual({ cluster: 'A', name: 'Dr. Adams' });
+  });
+
+  it('leaving a voice field unchanged posts nothing', async () => {
+    const { c, ctrl } = await setup([said(1, 'A')]);
+    const v = c.voices()[0];
+    c.nameVoice(v, v.name ?? '');
+    ctrl.expectNone('/api/sessions/m/voice');
   });
 
   it('a voice sample toggles, and stops when the view goes', async () => {

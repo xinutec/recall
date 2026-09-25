@@ -1,0 +1,3 @@
+<button matIconButton (click)="toggle()" [attr.aria-label]="on() ? 'pause' : label()">
+  <mat-icon>{{ on() ? 'pause' : 'play_arrow' }}</mat-icon>
+</button>

@@ -28,6 +28,7 @@
     <mat-card appearance="outlined" class="turn">
       <mat-card-content>
         <div class="meta">
+          <app-play-button [url]="t.audioUrl" label="hear this line" />
           <span class="clock"><mat-icon inline>schedule</mat-icon> {{ clock(t) }}</span>
           <mat-chip-set aria-label="turn details">
             @if (t.speaker) {
@@ -46,8 +47,6 @@
             }
           </mat-chip-set>
         </div>
-
-        <audio controls preload="none" [src]="t.audioUrl"></audio>
 
         <mat-form-field appearance="outline" class="edit">
           <mat-label>Transcript</mat-label>

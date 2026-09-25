@@ -7,16 +7,13 @@
           <mat-icon>vertical_align_bottom</mat-icon> Jump to latest
         </button>
       }
-      <button
-        matButton
+      <mat-slide-toggle
         class="enhance"
-        [attr.aria-pressed]="player.enhance()"
-        (click)="player.enhance.set(!player.enhance())"
+        [checked]="player.enhance()"
+        (change)="player.enhance.set($event.checked)"
         title="Denoise before playing, a few seconds per clip"
+        >Clear audio</mat-slide-toggle
       >
-        <mat-icon>{{ player.enhance() ? 'check_box' : 'check_box_outline_blank' }}</mat-icon>
-        Clear audio
-      </button>
       <button matIconButton aria-label="Refresh" [disabled]="loading()" (click)="refresh()">
         <mat-icon>refresh</mat-icon>
       </button>

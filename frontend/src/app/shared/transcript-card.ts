@@ -5,11 +5,12 @@ import { MatIconModule } from '@angular/material/icon';
 
 import { Transcript } from '../models';
 import { formatClock, formatConfidence, formatDuration } from '../format';
+import { PlayButton } from './play-button';
 
 /** Read-only display of a single transcript turn with inline audio playback. */
 @Component({
   selector: 'app-transcript-card',
-  imports: [MatCardModule, MatChipsModule, MatIconModule],
+  imports: [PlayButton, MatCardModule, MatChipsModule, MatIconModule],
   templateUrl: './transcript-card.html',
   styleUrl: './transcript-card.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,

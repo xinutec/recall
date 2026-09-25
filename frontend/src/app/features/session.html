@@ -6,16 +6,13 @@
     } @else {
       <h2>Session</h2>
     }
-    <button
-      matButton
+    <mat-slide-toggle
       class="enhance"
-      [attr.aria-pressed]="player.enhance()"
-      (click)="player.enhance.set(!player.enhance())"
+      [checked]="player.enhance()"
+      (change)="player.enhance.set($event.checked)"
       title="Denoise before playing, a few seconds per clip"
+      >Clear audio</mat-slide-toggle
     >
-      <mat-icon>{{ player.enhance() ? 'check_box' : 'check_box_outline_blank' }}</mat-icon>
-      Clear audio
-    </button>
   </header>
 
   @if (data.isLoading()) {
@@ -35,11 +32,6 @@
   } @else if (voices().length) {
     <section class="cast">
       <h3>Who's speaking</h3>
-      <datalist id="session-names">
-        @for (name of knownNames(); track name) {
-          <option [value]="name"></option>
-        }
-      </datalist>
       <div class="voices">
         @for (v of voices(); track v.cluster) {
           <div class="voice">
@@ -53,11 +45,26 @@
             <mat-form-field appearance="outline" subscriptSizing="dynamic">
               <input
                 matInput
-                list="session-names"
-                [ngModel]="v.name ?? ''"
+                #field
+                #trig="matAutocompleteTrigger"
+                [matAutocomplete]="names"
+                [value]="v.name ?? ''"
                 [placeholder]="voiceNames().get(v.cluster) ?? 'who?'"
-                (change)="nameVoice(v.cluster, $any($event.target).value)"
+                [attr.aria-label]="'Name for ' + (voiceNames().get(v.cluster) ?? 'this voice')"
+                (focus)="typed.set('')"
+                (input)="typed.set(field.value)"
+                (blur)="trig.panelOpen ? null : nameVoice(v, field.value)"
+                (keydown.enter)="field.blur()"
               />
+              <mat-autocomplete
+                #names
+                (optionSelected)="nameVoice(v, $event.option.value)"
+                (closed)="closed(v, field)"
+              >
+                @for (name of suggestions(); track name) {
+                  <mat-option [value]="name">{{ name }}</mat-option>
+                }
+              </mat-autocomplete>
             </mat-form-field>
           </div>
         }

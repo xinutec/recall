@@ -24,14 +24,14 @@ h2 {
   gap: 0.5rem;
   margin-block-end: 1rem;
 
-  .pick {
-    cursor: pointer;
-
-    b {
-      color: var(--mat-sys-primary);
-      font-variant-numeric: tabular-nums;
-    }
+  b {
+    color: var(--mat-sys-primary);
+    font-variant-numeric: tabular-nums;
   }
+}
+
+.playmode {
+  margin-block-end: 1rem;
 }
 
 .label {
@@ -59,12 +59,6 @@ h2 {
 
   .text {
     margin: 0.3rem 0;
-  }
-
-  audio {
-    inline-size: 100%;
-    block-size: 2.2rem;
-    margin-block: 0.4rem;
   }
 
   .actions {

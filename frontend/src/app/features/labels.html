@@ -46,30 +46,25 @@
 
 
   <div class="filter">
-    <mat-chip-set>
+    <mat-chip-listbox aria-label="Show one voice" (change)="pick($event.value ?? '')">
       @for (name of speakers(); track name) {
-        <mat-chip [highlighted]="speaker() === name" (click)="pick(name)" class="pick">
+        <mat-chip-option [value]="name" [selected]="speaker() === name">
           {{ name }} <b>{{ speakerCount(name) }}</b>
-        </mat-chip>
+        </mat-chip-option>
       }
-    </mat-chip-set>
-    @if (speaker()) {
-      <button matButton (click)="pick('')">Show all</button>
-    }
+    </mat-chip-listbox>
   </div>
 
-  <!-- dev-lint: allow-unstyled-class deferred; pre-existing dev-lint debt -->
-  <div class="playmode">
-    <span class="lbl">Play</span>
-    <mat-chip-set>
-      <mat-chip [highlighted]="!context()" (click)="setContext(false)" class="pick">
-        exact cut
-      </mat-chip>
-      <mat-chip [highlighted]="context()" (click)="setContext(true)" class="pick">
-        with context
-      </mat-chip>
-    </mat-chip-set>
-  </div>
+  <mat-button-toggle-group
+    class="playmode"
+    aria-label="What to play"
+    hideSingleSelectionIndicator
+    [value]="context()"
+    (change)="setContext($event.value)"
+  >
+    <mat-button-toggle [value]="false">Exact cut</mat-button-toggle>
+    <mat-button-toggle [value]="true">With context</mat-button-toggle>
+  </mat-button-toggle-group>
 
   @if (results.isLoading()) {
     <mat-progress-bar mode="indeterminate" />
@@ -83,6 +78,7 @@
     <mat-card appearance="outlined" class="label">
       <mat-card-content>
         <div class="meta">
+          <app-play-button [url]="audioSrc(label)" label="hear this clip" />
           <span class="clock"><mat-icon inline>schedule</mat-icon> {{ clock(label.start) }}</span>
           @if (label.speaker) {
             <mat-chip class="who">{{ label.speaker }}</mat-chip>
@@ -92,7 +88,6 @@
           }
         </div>
         <p class="text">{{ label.text }}</p>
-        <audio controls preload="none" [src]="audioSrc(label)"></audio>
         <div class="actions">
           <span class="lbl">Re-tag:</span>
           @for (name of speakers(); track name) {

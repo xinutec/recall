@@ -3,6 +3,7 @@ import { httpResource } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
 import { MatCardModule } from '@angular/material/card';
 import { MatButtonModule } from '@angular/material/button';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatChipsModule } from '@angular/material/chips';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
@@ -14,6 +15,7 @@ import { MatSnackBar } from '@angular/material/snack-bar';
 import { Label, LabelList, VocabularyList } from '../models';
 import { RecallApi } from '../recall-api';
 import { formatClock } from '../format';
+import { PlayButton } from '../shared/play-button';
 
 /**
  * Review/audit the labelled fragments: filter by voice, play each, re-tag a
@@ -22,8 +24,10 @@ import { formatClock } from '../format';
 @Component({
   selector: 'app-labels',
   imports: [
+    PlayButton,
     MatCardModule,
     MatButtonModule,
+    MatButtonToggleModule,
     MatChipsModule,
     MatFormFieldModule,
     MatIconModule,

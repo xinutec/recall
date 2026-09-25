@@ -121,3 +121,41 @@ test('Fix words is on screen for a line at the top of a long transcript', async 
   await page.goto('/sessions/test');
   await tapFixWords(page, 'My very first question');
 });
+
+test('naming a voice from a suggestion saves only that name (Pixel 9)', async ({ page }) => {
+  await mockApi(page, SHORT);
+  const posted: unknown[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().endsWith('/voice')) posted.push(r.postDataJSON());
+  });
+  await page.goto('/sessions/test');
+  const field = page.getByRole('combobox', { name: 'Name for Voice 1' });
+  await field.fill('Dr');
+  await page.getByRole('option', { name: 'Dr. Lee' }).click();
+  await expect.poll(() => posted).toEqual([{ cluster: 'SPEAKER_01', name: 'Dr. Lee' }]);
+  // Tapping away afterwards changes nothing.
+  await page.locator('h3', { hasText: "Who's speaking" }).click();
+  await page.waitForTimeout(200);
+  expect(posted).toHaveLength(1);
+});
+
+test('a typed name is saved on tapping away, with or without suggestions open', async ({ page }) => {
+  await mockApi(page, SHORT);
+  const posted: unknown[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().endsWith('/voice')) posted.push(r.postDataJSON());
+  });
+  await page.goto('/sessions/test');
+  const heading = page.locator('h3', { hasText: "Who's speaking" });
+  await page.getByRole('combobox', { name: 'Name for Voice 1' }).fill('Sam');
+  await heading.click();
+  await page.getByRole('combobox', { name: 'Name for Voice 2' }).fill('Pip');
+  await expect(page.getByRole('option', { name: 'Pippijn' })).toBeVisible();
+  await heading.click();
+  await expect
+    .poll(() => posted)
+    .toEqual([
+      { cluster: 'SPEAKER_01', name: 'Sam' },
+      { cluster: 'SPEAKER_00', name: 'Pip' },
+    ]);
+});

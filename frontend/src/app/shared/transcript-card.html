@@ -2,6 +2,7 @@
 <mat-card appearance="outlined" class="turn">
   <mat-card-content>
     <div class="meta">
+      <app-play-button [url]="t.audioUrl" label="hear this line" />
       <span class="clock">
         <mat-icon inline>schedule</mat-icon>
         {{ clock(t) }}
@@ -29,7 +30,5 @@
     </div>
 
     <p class="text">{{ t.text }}</p>
-
-    <audio controls preload="none" [src]="t.audioUrl"></audio>
   </mat-card-content>
 </mat-card>

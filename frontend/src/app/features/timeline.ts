@@ -12,6 +12,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatChipsModule } from '@angular/material/chips';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 
@@ -41,7 +42,14 @@ const PAGE = 200;
  */
 @Component({
   selector: 'app-timeline',
-  imports: [MatButtonModule, MatIconModule, MatChipsModule, MatProgressBarModule, Turns],
+  imports: [
+    MatButtonModule,
+    MatIconModule,
+    MatSlideToggleModule,
+    MatChipsModule,
+    MatProgressBarModule,
+    Turns,
+  ],
   templateUrl: './timeline.html',
   styleUrl: './timeline.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
