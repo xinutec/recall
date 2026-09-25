@@ -77,10 +77,34 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
              PRIMARY KEY (kind, filename)
          );",
     )?;
-    add_column(conn, "segment_levels", "gated")?;
-    add_column(conn, "segment_levels", "quiet_run_s")?;
-    add_column(conn, "room_blocks", "coverage")?;
+    add_column(conn, "segment_levels", "gated", "REAL")?;
+    add_column(conn, "segment_levels", "quiet_run_s", "REAL")?;
+    add_column(conn, "room_blocks", "coverage", "REAL")?;
+    // A decision's counts, as JSON; `outcome` is one word (`ledger::Outcome`).
+    add_column(conn, "pass_ledger", "detail", "TEXT")?;
+    split_old_outcomes(conn)?;
     retire_room_jobs(conn)
+}
+
+/// Rows written before `detail` put their counts in the outcome as a sentence
+/// ("attributed: 10 turn(s) named in place ..."). The word stays the outcome;
+/// the whole sentence moves to `detail`, so nothing is lost.
+///
+/// Read first, like [`retire_room_jobs`]: every open runs this.
+fn split_old_outcomes(conn: &Connection) -> rusqlite::Result<()> {
+    let old: bool = conn
+        .prepare("SELECT 1 FROM pass_ledger WHERE instr(outcome, ':') > 0")?
+        .exists([])?;
+    if old {
+        conn.execute(
+            "UPDATE pass_ledger
+                SET detail = json_object('was', outcome),
+                    outcome = substr(outcome, 1, instr(outcome, ':') - 1)
+              WHERE instr(outcome, ':') > 0",
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 /// The room stream left production (`experimental/room`), and its job kinds
@@ -106,9 +130,9 @@ fn retire_room_jobs(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Add a REAL column to a table that already exists. `table` and `name` are
-/// literals from this file, never input.
-fn add_column(conn: &Connection, table: &str, name: &str) -> rusqlite::Result<()> {
+/// Add a column to a table that already exists. Every argument is a literal
+/// from this file, never input.
+fn add_column(conn: &Connection, table: &str, name: &str, ty: &str) -> rusqlite::Result<()> {
     let present: bool = conn
         .prepare(&format!(
             "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"
@@ -117,5 +141,5 @@ fn add_column(conn: &Connection, table: &str, name: &str) -> rusqlite::Result<()
     if present {
         return Ok(());
     }
-    conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {name} REAL"))
+    conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {name} {ty}"))
 }

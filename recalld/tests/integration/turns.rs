@@ -877,7 +877,8 @@ fn a_per_mic_turn_names_the_model_the_shim_will_actually_load() {
 
 // ---- the segment registrar ----
 
-use recalld::turns::{PassKind, register_segments};
+use recalld::ledger::PassKind;
+use recalld::turns::register_segments;
 
 /// An ingest-plane blob and a real audio file where the registrar looks for
 /// it. Real, because the pass decodes it to measure the duration.

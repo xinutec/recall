@@ -12,6 +12,7 @@
 //! Hiding is not safer than deleting: a hidden row is still in `transcript_fts`,
 //! still counted, and still seen by supersession.
 
+use crate::ledger::{Outcome, PassKind, record};
 use crate::turn_store::{self, NewTurn, Protected, Provenance};
 use audiocore::instant;
 use audiocore::instant::Stamp;
@@ -45,11 +46,11 @@ pub enum Barren {
 #[derive(Deserialize)]
 struct Reply {
     ok: bool,
-    result: Option<Outcome>,
+    result: Option<Transcription>,
 }
 
 #[derive(Deserialize)]
-struct Outcome {
+struct Transcription {
     language: Option<String>,
     #[serde(default)]
     segments: Vec<Segment>,
@@ -151,35 +152,6 @@ pub fn plan(turns: Vec<ClipTurn>, human: &[Protected]) -> Plan {
     out
 }
 
-/// Which pass decided a clip: a job kind's, or registration's, which has no job.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PassKind {
-    Job(Kind),
-    Register,
-}
-
-impl PassKind {
-    /// The stored spelling in `pass_ledger.kind`.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Job(kind) => kind.as_str(),
-            Self::Register => "register-segment",
-        }
-    }
-}
-
-impl From<Kind> for PassKind {
-    fn from(kind: Kind) -> Self {
-        Self::Job(kind)
-    }
-}
-
-impl rusqlite::ToSql for PassKind {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
 /// What one registrar pass did.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Registered {
@@ -267,15 +239,10 @@ pub fn register_segments(
         if probes >= limit {
             break;
         }
+        let decided = |outcome| record(ingest, PassKind::Register, &filename, outcome, None, now);
         // Already registered. Terminal, so ledgered.
         if have.contains(&filename) {
-            ledger(
-                ingest,
-                PassKind::Register,
-                &filename,
-                "already-registered",
-                now,
-            )?;
+            decided(Outcome::AlreadyRegistered)?;
             out.retired += 1;
             continue;
         }
@@ -287,7 +254,7 @@ pub fn register_segments(
         }
         let Some(start) = audiocore::names::parse_segment_start(&filename) else {
             out.unreadable += 1;
-            ledger(ingest, PassKind::Register, &filename, "unnameable", now)?;
+            decided(Outcome::Unnameable)?;
             continue;
         };
         // A sibling already holds this minute, so the insert could only be
@@ -295,13 +262,7 @@ pub fn register_segments(
         let minute = (source.clone(), instant::python_isoformat_utc(start));
         if minutes.contains(&minute) {
             out.covered += 1;
-            ledger(
-                ingest,
-                PassKind::Register,
-                &filename,
-                "covered-by-sibling",
-                now,
-            )?;
+            decided(Outcome::CoveredBySibling)?;
             continue;
         }
         let path = crate::store::source_dir(root, &source).join(&filename);
@@ -311,7 +272,7 @@ pub fn register_segments(
             // Permanent: e.g. a header-only file from a dead capture holds no
             // audio and never will.
             out.unreadable += 1;
-            ledger(ingest, PassKind::Register, &filename, "unreadable", now)?;
+            decided(Outcome::Unreadable)?;
             continue;
         };
         let end = start + Duration::microseconds((media.duration_s * 1e6).round() as i64);
@@ -339,11 +300,11 @@ pub fn register_segments(
             out.covered += 1;
         }
         let outcome = if inserted == 1 {
-            "registered"
+            Outcome::Registered
         } else {
-            "covered-by-sibling"
+            Outcome::CoveredBySibling
         };
-        ledger(ingest, PassKind::Register, &filename, outcome, now)?;
+        decided(outcome)?;
     }
     Ok(out)
 }
@@ -488,27 +449,6 @@ pub fn tombstoned_block(
         .is_some())
 }
 
-/// Record a pass's terminal decision on a clip. `outcome` is for a person
-/// reading the table, never branched on.
-///
-/// `write_pass` ledgers only clips it wrote nothing for: written turns are their
-/// own record, so deleting the pass's turns re-enables those clips. A reversal
-/// must therefore clear both the turns and these rows.
-pub fn ledger(
-    conn: &rusqlite::Connection,
-    kind: impl Into<PassKind>,
-    filename: &str,
-    outcome: &str,
-    now: &Stamp,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT OR REPLACE INTO pass_ledger (kind, filename, outcome, decided_utc)
-         VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![kind.into(), filename, outcome, now],
-    )?;
-    Ok(())
-}
-
 /// Turn stored job results into visible turns, one clip at a time:
 /// [`interpret`] → [`plan`] → [`write_block`].
 ///
@@ -551,7 +491,7 @@ pub fn write_pass(
         let Some(block_start) = audiocore::names::parse_segment_start(&filename) else {
             // Permanent: a name that is not a segment name never becomes one.
             pass.barren += 1;
-            ledger(ingest, KIND, &filename, "unnameable", now)?;
+            record(ingest, KIND, &filename, Outcome::Unnameable, None, now)?;
             continue;
         };
         // The clip's audio segment. Absent means it is not registered yet: wait,
@@ -568,7 +508,7 @@ pub fn write_pass(
             pass.barren += 1;
             // Unless the block was deleted: then the audio is never coming.
             if tombstoned_block(meaning, &source, block_start)? {
-                ledger(ingest, KIND, &filename, "deleted", now)?;
+                record(ingest, KIND, &filename, Outcome::Deleted, None, now)?;
             }
             continue;
         };
@@ -585,7 +525,7 @@ pub fn write_pass(
         let Ok(turns) = interpret(block_start, &result) else {
             // Permanent: the stored result will not change.
             pass.barren += 1;
-            ledger(ingest, KIND, &filename, "unreadable", now)?;
+            record(ingest, KIND, &filename, Outcome::Unreadable, None, now)?;
             continue;
         };
         // ⚠ The end comes from the clip's own row: a clip can be short, and a
@@ -593,7 +533,7 @@ pub fn write_pass(
         // about to overwrite.
         let Ok(block_end) = DateTime::parse_from_rfc3339(&end_raw) else {
             pass.barren += 1;
-            ledger(ingest, KIND, &filename, "unspanned", now)?;
+            record(ingest, KIND, &filename, Outcome::Unspanned, None, now)?;
             continue;
         };
         let block_end = block_end.with_timezone(&Utc);
@@ -607,7 +547,7 @@ pub fn write_pass(
         if written == 0 {
             // Decided but left no trace in the meaning plane; without this row
             // every later pass would reach it first.
-            ledger(ingest, KIND, &filename, "nothing-to-write", now)?;
+            record(ingest, KIND, &filename, Outcome::NothingToWrite, None, now)?;
         }
     }
     Ok(pass)

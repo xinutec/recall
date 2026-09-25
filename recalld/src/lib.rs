@@ -20,6 +20,7 @@ pub mod ingest_schema;
 pub mod labels;
 pub mod labels_write;
 pub mod latin_ranges;
+pub mod ledger;
 pub mod live_tier;
 pub mod meaning_schema;
 pub mod pyjson;

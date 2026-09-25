@@ -3,6 +3,7 @@
 //! print corpus has saturated (#1648), so this keeps up with new labels rather
 //! than raising a number.
 
+use crate::ledger::{Outcome, record};
 use audiocore::instant::Stamp;
 use audiocore::job::Kind;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -289,11 +290,25 @@ pub fn write_pass(
         }
         pass.clips += 1;
         let Ok(reply) = serde_json::from_str::<Reply>(&result) else {
-            crate::turns::ledger(ingest, Kind::EnrollSpeaker, &filename, "unreadable", now)?;
+            record(
+                ingest,
+                Kind::EnrollSpeaker,
+                &filename,
+                Outcome::Unreadable,
+                None,
+                now,
+            )?;
             continue;
         };
         let Some(body) = reply.result.filter(|_| reply.ok) else {
-            crate::turns::ledger(ingest, Kind::EnrollSpeaker, &filename, "refused", now)?;
+            record(
+                ingest,
+                Kind::EnrollSpeaker,
+                &filename,
+                Outcome::Refused,
+                None,
+                now,
+            )?;
             continue;
         };
         let mut wrote = 0;
@@ -313,8 +328,12 @@ pub fn write_pass(
             }
         }
         pass.prints += wrote;
-        let outcome = if wrote > 0 { "enrolled" } else { "nothing" };
-        crate::turns::ledger(ingest, Kind::EnrollSpeaker, &filename, outcome, now)?;
+        let outcome = if wrote > 0 {
+            Outcome::Enrolled
+        } else {
+            Outcome::NothingEnrolled
+        };
+        record(ingest, Kind::EnrollSpeaker, &filename, outcome, None, now)?;
     }
     Ok(pass)
 }

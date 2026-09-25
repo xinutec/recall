@@ -640,18 +640,19 @@ fn a_single_speaker_pass_names_the_turns_that_are_there_and_hides_nothing() {
         assert_eq!(cluster.as_deref(), Some("SPEAKER_00"), "and is named");
     }
 
-    let outcome: String = ingest
+    let (outcome, detail): (String, String) = ingest
         .query_row(
-            "SELECT outcome FROM pass_ledger WHERE filename = ?1",
+            "SELECT outcome, detail FROM pass_ledger WHERE filename = ?1",
             [BLOCK],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("a ledger row");
-    assert!(outcome.starts_with("attributed:"), "got {outcome}");
+    assert_eq!(outcome, "attributed");
+    assert_eq!(detail, r#"{"turns":3,"speakers":1}"#, "the counts, apart");
 }
 
 #[test]
-fn a_finished_diarization_replaces_the_room_turns_with_speaker_split_ones() {
+fn a_finished_diarization_replaces_the_turns_with_speaker_split_ones() {
     let dir = tempfile::tempdir().expect("tmp");
     let mut meaning = meaning_plane(dir.path());
     let ingest = ingest_plane(dir.path(), TWO_SPEAKERS, WORDS_TODAY);
@@ -767,7 +768,7 @@ fn a_block_whose_pass_is_all_junk_keeps_its_transcript_and_is_not_retried() {
             |r| r.get(0),
         )
         .expect("a ledger row for the refusal");
-    assert!(outcome.starts_with("all-segments-looped"), "got {outcome}");
+    assert_eq!(outcome, "all-segments-looped");
 }
 
 /// A clip with one hallucinated segment beside real speech is still

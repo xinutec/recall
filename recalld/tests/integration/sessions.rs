@@ -232,11 +232,12 @@ fn diarized_meeting(source: &str) -> tempfile::TempDir {
                 )
                 .expect("job");
         }
-        recalld::turns::ledger(
+        recalld::ledger::record(
             &ingest,
             Kind::DiarizeSegment,
             &filename,
-            "aligned",
+            recalld::ledger::Outcome::Aligned,
+            None,
             &crate::stamp(NOW),
         )
         .expect("ledger row");

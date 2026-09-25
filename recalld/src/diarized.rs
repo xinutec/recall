@@ -7,6 +7,7 @@
 //! empties one.
 
 use crate::align::AlignedTurn;
+use crate::ledger::{Outcome, record};
 use crate::quality::is_repetition_loop;
 use crate::turn_store::{self, HiddenReason, NewTurn, Protected, Provenance};
 use audiocore::instant::Stamp;
@@ -67,29 +68,28 @@ pub enum Refusal {
     },
 }
 
-impl std::fmt::Display for Refusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NothingAligned => write!(f, "nothing-aligned"),
-            Self::AllFiltered { loops, corrected } => write!(
-                f,
-                "all-turns-filtered: {loops} repetition loop(s), {corrected} inside a \
-                 human-corrected span"
+impl Refusal {
+    /// How the ledger records it: the outcome, and its counts.
+    pub fn recorded(&self) -> (Outcome, Option<serde_json::Value>) {
+        match *self {
+            Self::NothingAligned => (Outcome::NothingAligned, None),
+            Self::AllFiltered { loops, corrected } => (
+                Outcome::AllTurnsFiltered,
+                Some(serde_json::json!({ "loops": loops, "corrected": corrected })),
             ),
-            Self::Coverage { existing, new } => write!(
-                f,
-                "coverage-guard: new {new} chars < {:.0}% of existing {existing}",
-                MIN_COVERAGE_RATIO * 100.0
+            Self::Coverage { existing, new } => (
+                Outcome::CoverageGuard,
+                Some(serde_json::json!({ "new_chars": new, "existing_chars": existing })),
             ),
             Self::Undiscriminating {
                 produced,
                 existing,
                 speakers,
-            } => write!(
-                f,
-                "undiscriminating: {speakers} speaker(s) over {produced} turn(s) against \
-                 {existing} existing — nothing to add but a name, and re-segmenting \
-                 would spend boundaries to buy it"
+            } => (
+                Outcome::Undiscriminating,
+                Some(serde_json::json!({
+                    "produced": produced, "existing": existing, "speakers": speakers
+                })),
             ),
         }
     }
@@ -741,11 +741,12 @@ fn retire_if_permanently_unusable(
     if !has_word_timings(transcription) {
         return Ok(false);
     }
-    crate::turns::ledger(
+    record(
         ingest,
         kind,
         filename,
-        "all-segments-looped: the transcription carries no usable words",
+        Outcome::AllSegmentsLooped,
+        None,
         now,
     )?;
     Ok(true)
@@ -794,12 +795,12 @@ pub fn write_pass(
             break;
         }
         let Some(block_start) = audiocore::names::parse_segment_start(&filename) else {
-            crate::turns::ledger(ingest, kind, &filename, "unnameable", now)?;
+            record(ingest, kind, &filename, Outcome::Unnameable, None, now)?;
             continue;
         };
         let Some((speakers, prints)) = voices(&stored_voices) else {
             // The shim refused, or sent an unknown shape. Both permanent.
-            crate::turns::ledger(ingest, kind, &filename, "unreadable", now)?;
+            record(ingest, kind, &filename, Outcome::Unreadable, None, now)?;
             pass.kept += 1;
             continue;
         };
@@ -812,7 +813,7 @@ pub fn write_pass(
             // Transient, unless the session was deleted and the audio is never
             // coming.
             if crate::turns::tombstoned_block(meaning, &source, block_start)? {
-                crate::turns::ledger(ingest, kind, &filename, "deleted", now)?;
+                record(ingest, kind, &filename, Outcome::Deleted, None, now)?;
             } else {
                 pass.waiting += 1;
             }
@@ -839,19 +840,23 @@ pub fn write_pass(
         pass.blocks += 1;
         match &swap {
             Swap::Keep(why) => {
-                crate::turns::ledger(ingest, kind, &filename, &why.to_string(), now)?;
+                let (outcome, detail) = why.recorded();
+                record(ingest, kind, &filename, outcome, detail.as_ref(), now)?;
                 pass.kept += 1;
             }
             Swap::Attribute { to } => {
                 pass.named += attribute(meaning, to, &prints, &enrolled)?;
                 let speakers: std::collections::BTreeSet<&str> =
                     to.iter().map(|(_, s)| s.as_str()).collect();
-                let why = format!(
-                    "attributed: {} turn(s) named in place across {} speaker(s)",
-                    to.len(),
-                    speakers.len()
-                );
-                crate::turns::ledger(ingest, kind, &filename, &why, now)?;
+                let detail = serde_json::json!({ "turns": to.len(), "speakers": speakers.len() });
+                record(
+                    ingest,
+                    kind,
+                    &filename,
+                    Outcome::Attributed,
+                    Some(&detail),
+                    now,
+                )?;
             }
             Swap::Replace { hide, .. } => {
                 let block = Block {
@@ -865,7 +870,7 @@ pub fn write_pass(
                 };
                 pass.turns += write_replacement(meaning, &swap, &block, &prints, &enrolled)?;
                 pass.hidden += hide.len();
-                crate::turns::ledger(ingest, kind, &filename, "aligned", now)?;
+                record(ingest, kind, &filename, Outcome::Aligned, None, now)?;
             }
         }
     }
