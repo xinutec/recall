@@ -58,3 +58,8 @@ overrides:
   browserslist: ^4.28.7
   fast-uri: ^3.1.6
   hono: ^4.13.5
+
+# The catalog names only versions a day old (dev-lint tables/deps.dhall);
+# strict, so a younger install fails instead of writing itself an exclusion.
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
