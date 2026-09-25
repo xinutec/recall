@@ -113,6 +113,11 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
         for line in answer.stderr.lines().filter(|l| !l.trim().is_empty()) {
             eprintln!("  it had said: {line}");
         }
+        // Who else was on the disk at that second (#1412): waiting in `U`, or a
+        // known bulk writer in any state.
+        for line in bounded::disk_suspects_now(20) {
+            eprintln!("  on the disk then: {line}");
+        }
         return (Vec::new(), archive::archive_check(None, ""));
     };
     if answer.status != Some(0) {

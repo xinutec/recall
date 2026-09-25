@@ -156,3 +156,27 @@ fn a_live_pid_is_named_and_never_read_as_gone() {
         State::Gone => panic!("this process is running, so it cannot be gone"),
     }
 }
+
+use doctor::bounded::disk_suspects;
+
+#[test]
+fn a_stall_names_who_waits_on_the_disk_and_the_bulk_writers() {
+    let ps = "\
+    1 Ss    0.0 /sbin/launchd
+  501 U     2.1 /usr/libexec/doctor
+  502 R    98.0 /home/example/.rustup/toolchains/stable/bin/rustc
+  503 S     0.3 /Applications/Safari.app/Contents/MacOS/Safari
+  504 U+    0.0 /System/Library/Frameworks/CoreServices.framework/mds_stores
+  505 S     1.0 /usr/bin/ld with space
+";
+    assert_eq!(
+        disk_suspects(ps, 10),
+        vec![
+            "501 U 2.1% doctor",
+            "504 U+ 0.0% mds_stores",
+            "502 R 98.0% rustc",
+        ],
+        "waiting first, then writers; an unrelated sleeper is left out"
+    );
+    assert_eq!(disk_suspects(ps, 1).len(), 1, "capped");
+}

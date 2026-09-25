@@ -208,6 +208,66 @@ impl State {
     }
 }
 
+/// Processes that write to disk in bulk. Named so they are reported at a stall
+/// even when not in `U` at that instant: a build between writes is `R` or `S`.
+const HEAVY_WRITERS: &[&str] = &[
+    "cargo",
+    "rustc",
+    "ld",
+    "ld64",
+    "clang",
+    "nix",
+    "nix-daemon",
+    "restic",
+    "rsync",
+    "git",
+    "mds_stores",
+    "mdworker_shared",
+    "backupd",
+];
+
+/// From `ps -A -o pid=,state=,%cpu=,comm=`: every process waiting on a disk
+/// (`U`), then every known heavy writer, as `pid state cpu% name`. Names only,
+/// never arguments. At most `cap` lines.
+///
+/// `U` names who was blocked on the disk that second, which includes a busy
+/// writer much of the time but is not a byte count.
+#[must_use]
+pub fn disk_suspects(ps_output: &str, cap: usize) -> Vec<String> {
+    let mut waiting = Vec::new();
+    let mut writers = Vec::new();
+    for line in ps_output.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(pid), Some(state), Some(cpu)) = (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let comm = fields.collect::<Vec<_>>().join(" ");
+        let name = comm.rsplit('/').next().unwrap_or(&comm);
+        let row = format!("{pid} {state} {cpu}% {name}");
+        if state.starts_with('U') {
+            waiting.push(row);
+        } else if HEAVY_WRITERS.contains(&name) {
+            writers.push(row);
+        }
+    }
+    waiting.extend(writers);
+    waiting.truncate(cap);
+    waiting
+}
+
+/// [`disk_suspects`] for this machine now; empty when `ps` cannot be asked.
+#[must_use]
+pub fn disk_suspects_now(cap: usize) -> Vec<String> {
+    Command::new("ps")
+        .args(["-A", "-o", "pid=,state=,%cpu=,comm="])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| disk_suspects(&String::from_utf8_lossy(&out.stdout), cap))
+        .unwrap_or_default()
+}
+
 /// Ask `ps` what state `pid` is in.
 #[must_use]
 pub fn process_state(pid: u32) -> State {
