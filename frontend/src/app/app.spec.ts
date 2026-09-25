@@ -82,9 +82,9 @@ describe('App', () => {
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('.brand')?.textContent).toContain('recall');
     const links = [...el.querySelectorAll('.links a')];
-    expect(links.length).toBe(3);
+    expect(links.length).toBe(4);
     const navText = el.querySelector('.links')?.textContent ?? '';
-    for (const label of ['Timeline', 'Sessions', 'Search']) {
+    for (const label of ['Timeline', 'Sessions', 'Check', 'Search']) {
       expect(navText).toContain(label);
     }
     // Ask, Compare and Train were cut with the product's scope (architecture.md).

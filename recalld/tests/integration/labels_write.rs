@@ -396,6 +396,36 @@ fn correcting_a_turn_that_does_not_exist_names_the_id() {
 }
 
 #[test]
+fn words_checked_is_recorded_even_when_the_text_is_unchanged() {
+    let checked = |text: &str, words_checked: bool| {
+        let mut conn = correction_db();
+        apply_correction(
+            &mut conn,
+            41,
+            text,
+            &crate::stamp(NOW),
+            &Correction {
+                words_checked,
+                ..Correction::default()
+            },
+        )
+        .expect("corrected");
+        conn.query_row(
+            "SELECT words_checked FROM corrections WHERE transcript_segment_id = 41",
+            [],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .expect("pair")
+    };
+    assert_eq!(checked("mis heard words", true), Some(1));
+    assert_eq!(
+        checked("mis heard words", false),
+        None,
+        "not said is NULL, never 0"
+    );
+}
+
+#[test]
 fn an_overridden_span_and_language_reach_both_the_turn_and_the_pair() {
     // The boundary editor trims a clip to exactly one speaker, and a
     // mis-detected language is fixed in the same gesture.
@@ -411,6 +441,7 @@ fn an_overridden_span_and_language_reach_both_the_turn_and_the_pair() {
             start: Some("2026-07-03T09:51:01+00:00"),
             end: Some("2026-07-03T09:51:03+00:00"),
             language: Some("nl"),
+            ..Correction::default()
         },
     )
     .expect("corrected");

@@ -1,0 +1,84 @@
+.page {
+  display: block;
+  max-inline-size: 720px;
+  margin-inline: auto;
+}
+
+h2 {
+  margin-block-end: 0.5rem;
+}
+
+.day {
+  width: 100%;
+  margin-block-end: 0.75rem;
+}
+
+.hint {
+  font: var(--mat-sys-body-medium);
+  color: var(--mat-sys-on-surface-variant);
+
+  &.error {
+    color: var(--mat-sys-error);
+  }
+}
+
+.progress {
+  display: flex;
+  justify-content: space-between;
+  margin-block-end: 0.25rem;
+  font: var(--mat-sys-label-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--mat-sys-on-surface-variant);
+}
+
+// The lines around this one, for a sentence cut in two.
+.context {
+  margin: 0.75rem 0.25rem;
+  font: var(--mat-sys-body-medium);
+  color: var(--mat-sys-on-surface-variant);
+  opacity: 0.8;
+}
+
+.line .meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: -0.5rem 0 0.25rem -0.75rem;
+
+  .clock {
+    font: var(--mat-sys-label-medium);
+    font-variant-numeric: tabular-nums;
+    color: var(--mat-sys-on-surface-variant);
+  }
+
+  .src {
+    padding: 0 0.3rem;
+    border-radius: 4px;
+    font: var(--mat-sys-label-small);
+    color: var(--mat-sys-on-surface-variant);
+    background: var(--mat-sys-surface-container-high);
+  }
+
+  .who {
+    font: var(--mat-sys-label-large);
+  }
+}
+
+.edit {
+  width: 100%;
+
+  textarea {
+    font: var(--mat-sys-body-large);
+  }
+}
+
+.words {
+  font: var(--mat-sys-body-large);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-block-start: 0.75rem;
+}

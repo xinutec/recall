@@ -67,87 +67,18 @@ fn session() -> String {
     .expect("cookie")
 }
 
-/// The minimum `recall.sqlite` the read routes need, plus one turn.
-///
-/// The schema is hand-written rather than built by
-/// `recalld::meaning_schema::ensure`, so it can drift from production's.
+/// Production's `recall.sqlite` schema, plus one turn.
 fn archive(root: &Path, text: &str, speaker: Option<&str>, guess: Option<(&str, f64)>) -> i64 {
     let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("db");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
     conn.execute_batch(
-        "CREATE TABLE audio_segments (
-             id          INTEGER PRIMARY KEY,
-             source_id   TEXT NOT NULL,
-             path        TEXT NOT NULL,
-             start_utc   TEXT NOT NULL,
-             end_utc     TEXT NOT NULL,
-             sample_rate INTEGER NOT NULL,
-             channels    INTEGER NOT NULL,
-             transcribed_utc TEXT, mean_volume REAL, envelope BLOB,
-             speech_s REAL, structure REAL, pushed_utc TEXT,
-             UNIQUE (source_id, start_utc)
-         );
-         CREATE TABLE speakers (id INTEGER PRIMARY KEY, name TEXT);
-         CREATE TABLE transcript_segments (
-             id                  INTEGER PRIMARY KEY,
-             audio_segment_id    INTEGER REFERENCES audio_segments(id),
-             start_utc           TEXT NOT NULL,
-             end_utc             TEXT NOT NULL,
-             text                TEXT NOT NULL,
-             language            TEXT,
-             language_confidence REAL,
-             asr_confidence      REAL,
-             asr_model           TEXT NOT NULL,
-             speaker_label       TEXT,
-             speaker_id          INTEGER REFERENCES speakers(id),
-             superseded_by       INTEGER REFERENCES transcript_segments(id),
-             created_utc         TEXT,
-             provenance          TEXT,
-             hidden_reason       TEXT,
-             loudness            REAL,
-             speaker_guess       TEXT,
-             speaker_score       REAL,
-             speaker_cluster     TEXT,
-             word_timings        TEXT
-         );
-         CREATE VIRTUAL TABLE transcript_fts USING fts5(text);
-         CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-         CREATE TABLE capture_events (
-             id INTEGER PRIMARY KEY, utc TEXT NOT NULL, kind TEXT NOT NULL,
-             source_id TEXT, detail TEXT
-         );
-         CREATE TABLE corrections (
-             id                    INTEGER PRIMARY KEY,
-             transcript_segment_id INTEGER REFERENCES transcript_segments(id),
-             audio_segment_id      INTEGER REFERENCES audio_segments(id),
-             start_utc             TEXT NOT NULL,
-             end_utc               TEXT NOT NULL,
-             original_text         TEXT NOT NULL,
-             corrected_text        TEXT NOT NULL,
-             language              TEXT,
-             created_utc           TEXT NOT NULL,
-             speaker               TEXT,
-             hidden_reason         TEXT,
-             audio_confidence      REAL
-         );
-         CREATE TABLE speaker_embeddings (
-             id          INTEGER PRIMARY KEY,
-             speaker_id  INTEGER NOT NULL REFERENCES speakers(id),
-             vector      TEXT NOT NULL,
-             created_utc TEXT NOT NULL,
-             source_correction_id INTEGER,
-             source_segment_id    INTEGER
-         );
-         CREATE TABLE sources (
-             id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
-             port INTEGER, event_db REAL, noise_shape BLOB
-         );
-         INSERT INTO sources (id, name, kind) VALUES ('usb', 'USB mic', 'coreaudio');
+        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'USB mic', 'coreaudio');
          INSERT INTO audio_segments
              (id, source_id, path, start_utc, end_utc, sample_rate, channels)
          VALUES (1, 'usb', '/x.flac', '2026-09-10T12:00:00+00:00',
                  '2026-09-10T12:00:04+00:00', 16000, 1);",
     )
-    .expect("schema");
+    .expect("seed");
     conn.execute(
         "INSERT INTO transcript_segments
              (audio_segment_id, start_utc, end_utc, text, language, asr_confidence,

@@ -30,10 +30,9 @@ equally accurate, and the size of that advantage cannot be recovered from this
 data. Fresh ground truth written against AUDIO — #1461 — is therefore necessary
 rather than merely convenient.
 
-⚠ 62% of this archive's corrections changed no text at all: 456 of 471 carry a
-speaker label, so most are attributions. Without `--changed-only` the per-mic arm
-scores a median 0.0 by construction, because for those cases the truth IS its own
-text.
+Only words a person heard count: a correction marked `words_checked`, or one
+whose text changed. Most older corrections are speaker fixes that left the
+machine's words, and for those the per-mic arm would score 0.0 by construction.
 
 ⚠ And one of its own: the two arms are reported SEPARATELY for blocks the
 correction's own microphone won and blocks it did not. Where it won, both arms
@@ -189,26 +188,26 @@ def room_heard(
 
 
 def load_cases(
-    db: sqlite3.Connection, ingest: sqlite3.Connection, tol: float, changed_only: bool
+    db: sqlite3.Connection, ingest: sqlite3.Connection, tol: float
 ) -> tuple[list[Case], dict[str, int]]:
     skipped: dict[str, int] = {
         "no_mic_text": 0,
         "no_room_text": 0,
         "a_meeting": 0,
-        "text_unchanged": 0,
+        "words_not_heard": 0,
     }
     cases: list[Case] = []
     rows = db.execute(
         """SELECT c.id, c.start_utc, c.end_utc, c.corrected_text, a.source_id,
-                  c.original_text
+                  c.original_text, c.words_checked
              FROM corrections c JOIN audio_segments a ON a.id = c.audio_segment_id
             WHERE c.corrected_text <> '' ORDER BY c.start_utc"""
     ).fetchall()
-    for cid, raw_start, raw_end, truth, source, original in rows:
-        if changed_only and normalize_text(str(original or "")) == normalize_text(
+    for cid, raw_start, raw_end, truth, source, original, checked in rows:
+        if checked != 1 and normalize_text(str(original or "")) == normalize_text(
             str(truth)
         ):
-            skipped["text_unchanged"] += 1
+            skipped["words_not_heard"] += 1
             continue
         if str(source).startswith("meeting-"):
             skipped["a_meeting"] += 1
@@ -272,21 +271,11 @@ def main() -> int:
     parser.add_argument("--ingest", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE_S)
-    parser.add_argument(
-        "--changed-only",
-        action="store_true",
-        help=(
-            "Keep only corrections whose TEXT changed. ⚠ 62%% of this archive's "
-            "corrections are speaker labels that left the words alone, and for "
-            "those the truth IS the microphone's own text, so the per-mic arm "
-            "scores zero by construction."
-        ),
-    )
     args = parser.parse_args()
 
     db = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     ingest = sqlite3.connect(f"file:{args.ingest}?mode=ro", uri=True)
-    cases, skipped = load_cases(db, ingest, args.tolerance, args.changed_only)
+    cases, skipped = load_cases(db, ingest, args.tolerance)
     out = {
         "tolerance_s": args.tolerance,
         "cases": len(cases),

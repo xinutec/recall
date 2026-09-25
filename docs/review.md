@@ -87,6 +87,18 @@ Tapping a line opens its sheet at the bottom of the screen:
 - **Grey lines** have no speakers separated yet. They are editable; every pass
   keeps a correction. Only a live line, minutes old, waits for its transcription.
 
+## Checking words
+
+*Check* (`/check`) goes through a day one line at a time. Each line plays by
+itself; fix the words, or tap *Words are right*. Enter saves, *Skip* is for a
+line you can't make out. Where several mics heard a moment, the page takes them
+in turn, because a check scores the mic whose text was edited.
+
+Both answers file a correction marked `words_checked`: a person heard the words
+and vouches for them. The referees (`scripts/rank_referee.py`,
+`scripts/room_referee.py`) count only those, and changed text; a speaker fix
+keeps the machine's words and is not evidence about them.
+
 ## What to trust (and what not to)
 
 - The **text** is automatic speech recognition (Whisper). It mishears — especially

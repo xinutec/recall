@@ -494,6 +494,12 @@ pub const MIGRATIONS: &[&str] = &[
     WHEN NOT ((NEW.recorded_utc IS NULL OR NEW.recorded_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.recorded_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'))
     BEGIN SELECT RAISE(ABORT, 'unreadable_captures: an instant not in the stored spelling'); END;
     "#,
+    // v48
+    r#"
+    -- 1: a person listened and vouches for the words, changed or not. NULL: not
+    -- said, as for a speaker fix, whose text is the machine's.
+    ALTER TABLE corrections ADD COLUMN words_checked INTEGER;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

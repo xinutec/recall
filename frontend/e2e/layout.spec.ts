@@ -173,7 +173,7 @@ const sessionsList = {
 
 
 const screenMocks: Record<string, unknown> = {
-  '/api/review': reviewItems,
+  '/api/transcripts': reviewItems,
   '/api/search': searchItems,
   '/api/corrections': correctionsList,
   '/api/sessions': sessionsList,
@@ -187,7 +187,7 @@ const screenMocks: Record<string, unknown> = {
 const screens: { path: string; anchor: string }[] = [
   { path: '/', anchor: '.turns' },
   { path: '/search', anchor: '.search-field' },
-  { path: '/review', anchor: '.page' },
+  { path: '/check?ids=21', anchor: '.line' },
   { path: '/labels', anchor: '.vocab' },
   { path: '/sessions', anchor: '.page' },
 ];

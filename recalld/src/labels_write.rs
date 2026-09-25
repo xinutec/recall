@@ -173,6 +173,8 @@ pub struct Correction<'a> {
     pub end: Option<&'a str>,
     /// A mis-detected language, e.g. Dutch heard as English.
     pub language: Option<&'a str>,
+    /// The person listened and vouches for the words, even if unchanged.
+    pub words_checked: bool,
 }
 
 fn load_original(tx: &Transaction, segment_id: i64) -> Result<Original, CorrectError> {
@@ -268,8 +270,8 @@ pub fn apply_correction(
         "INSERT INTO corrections \
             (transcript_segment_id, audio_segment_id, start_utc, end_utc, \
              original_text, corrected_text, language, created_utc, speaker, \
-             audio_confidence) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             audio_confidence, words_checked) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         rusqlite::params![
             old.id,
             old.audio_segment_id,
@@ -283,6 +285,7 @@ pub fn apply_correction(
             // The clip's audio quality, carried onto the pair: a readable label
             // on faint audio is still good ASR data but too degraded to enrol.
             old.asr_confidence,
+            edit.words_checked.then_some(1),
         ],
     )?;
     tx.commit()?;
@@ -302,6 +305,8 @@ pub struct CorrectIn {
     end: Option<String>,
     #[ts(optional = nullable)]
     language: Option<String>,
+    #[ts(optional = nullable)]
+    checked: Option<bool>,
 }
 
 pub async fn correct_route(
@@ -322,6 +327,7 @@ pub async fn correct_route(
                 start: body.start.as_deref(),
                 end: body.end.as_deref(),
                 language: body.language.as_deref(),
+                words_checked: body.checked == Some(true),
             },
         )
     });

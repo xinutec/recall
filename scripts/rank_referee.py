@@ -143,7 +143,11 @@ def load_cases(
     minutes: int,
     tolerance_s: float,
 ) -> tuple[list[Case], dict[str, int]]:
-    """Corrections in the window whose block the two ranks DISAGREE about."""
+    """Corrections in the window whose block the two ranks DISAGREE about.
+
+    Only words a person heard: checked, or changed. A speaker fix leaves the
+    machine's text, which would score its own mic perfect.
+    """
     end = start + timedelta(minutes=minutes)
     rows = db.execute(
         """SELECT c.id, c.corrected_text, ts.start_utc, ts.end_utc, a.source_id
@@ -151,6 +155,7 @@ def load_cases(
              JOIN transcript_segments ts ON ts.id = c.transcript_segment_id
              JOIN audio_segments a ON a.id = ts.audio_segment_id
             WHERE ts.start_utc >= ? AND ts.end_utc <= ?
+              AND (c.words_checked = 1 OR c.corrected_text <> c.original_text)
             ORDER BY ts.start_utc""",
         (start.isoformat(), end.isoformat()),
     ).fetchall()

@@ -1,0 +1,98 @@
+<section class="page">
+  <h2>Check words</h2>
+
+  @if (!ids()) {
+    <mat-form-field appearance="outline" subscriptSizing="dynamic" class="day">
+      <mat-label>Day</mat-label>
+      <mat-select [value]="day() || null" (selectionChange)="pickDay($event.value)">
+        @for (d of days; track d.key) {
+          <mat-option [value]="d.key">{{ d.label }}</mat-option>
+        }
+      </mat-select>
+    </mat-form-field>
+  }
+
+  @if (loading()) {
+    <mat-progress-bar mode="indeterminate" />
+  } @else if (failed()) {
+    <p class="hint error">Could not load the lines, try again.</p>
+  } @else if (!day() && !ids()) {
+    <p class="hint">
+      Pick a day. Each line plays by itself: fix any wrong words, or tap
+      <b>Words are right</b>.
+    </p>
+  } @else if (!lines().length) {
+    <p class="hint">Nothing left to check here.</p>
+  } @else if (current(); as t) {
+    <div class="progress">
+      <span>Line {{ at() + 1 }} of {{ lines().length }}</span>
+      <span>{{ checked().size }} checked</span>
+    </div>
+    <mat-progress-bar mode="determinate" [value]="progress()" />
+
+    @if (before(); as b) {
+      <p class="context">{{ b.text }}</p>
+    }
+
+    <mat-card appearance="outlined" class="line">
+      <mat-card-content>
+        <div class="meta">
+          <button
+            matIconButton
+            class="play"
+            (click)="play(t)"
+            [attr.aria-label]="playing(t) ? 'pause' : 'hear it again'"
+          >
+            <mat-icon>{{ playing(t) ? 'pause' : 'replay' }}</mat-icon>
+          </button>
+          <span class="clock">{{ clock(t.start) }}</span>
+          @if (t.source) {
+            <span class="src">{{ t.source }}</span>
+          }
+          @if (t.speaker) {
+            <span class="who">{{ t.speaker }}</span>
+          }
+        </div>
+        @if (checked().get(t.id); as words) {
+          <p class="words">{{ words }}</p>
+          <p class="hint"><mat-icon inline>check</mat-icon> Checked</p>
+        } @else {
+          <mat-form-field appearance="outline" subscriptSizing="dynamic" class="edit">
+            <mat-label>What was said</mat-label>
+            <textarea
+              matInput
+              cdkTextareaAutosize
+              cdkAutosizeMinRows="2"
+              cdkAutosizeMaxRows="8"
+              [value]="draft()"
+              (input)="draft.set($any($event.target).value)"
+              (keydown.enter)="$event.preventDefault(); confirm()"
+            ></textarea>
+          </mat-form-field>
+        }
+      </mat-card-content>
+    </mat-card>
+
+    <div class="actions">
+      <button matButton [disabled]="at() === 0" (click)="back()">Back</button>
+      <button matButton (click)="next()">Skip</button>
+      <button
+        matButton="filled"
+        [disabled]="busy() || !draft().trim() || checked().has(t.id)"
+        (click)="confirm()"
+      >
+        {{ dirty() ? 'Save' : 'Words are right' }}
+      </button>
+    </div>
+
+    @if (after(); as a) {
+      <p class="context">{{ a.text }}</p>
+    }
+  } @else {
+    <p class="hint done">
+      <mat-icon inline>task_alt</mat-icon>
+      Done: {{ checked().size }} of {{ lines().length }} lines checked.
+    </p>
+    <button matButton (click)="back()">Back to the last line</button>
+  }
+</section>
