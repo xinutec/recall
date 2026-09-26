@@ -6,7 +6,7 @@ import { provideRouter } from '@angular/router';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { vi } from 'vitest';
 
-import { Check, dayWindow, pickLines } from './check';
+import { Check, dayWindow, otherMics, pickLines } from './check';
 import { Moment, Transcript } from '../models';
 
 function line(id: number, source: string, o: Partial<Transcript> = {}): Transcript {
@@ -58,6 +58,16 @@ describe('pickLines', () => {
       moment(line(5, 'usb', { tier: 'transcribed' })),
     ]);
     expect(picked.map((t) => t.id)).toEqual([5]);
+  });
+});
+
+describe('otherMics', () => {
+  it('gives each line the same moment as the other mics heard it', () => {
+    const others = otherMics([
+      moment(line(1, 'usb'), line(2, 'geb'), line(3, 'pixel9', { tier: 'live' })),
+    ]);
+    expect(others.get(1)?.map((t) => t.id)).toEqual([2]);
+    expect(others.get(2)?.map((t) => t.id)).toEqual([1]);
   });
 });
 

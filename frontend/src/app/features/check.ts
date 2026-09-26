@@ -18,6 +18,7 @@ import { MatCardModule } from '@angular/material/card';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
+import { MatListModule } from '@angular/material/list';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSnackBar } from '@angular/material/snack-bar';
@@ -56,8 +57,27 @@ export function dayWindow(day: string): { after: string; before: string } {
   return { after: spell(new Date(y, m - 1, d)), before: spell(new Date(y, m - 1, d + 1)) };
 }
 
+/** What each picked line's moment sounded like on the other mics, by line id.
+ * Names and quiet words are where the mics disagree, and one often has it. */
+export function otherMics(moments: readonly Moment[]): Map<number, Transcript[]> {
+  const out = new Map<number, Transcript[]>();
+  for (const m of moments) {
+    const heard = [...m.primary, ...m.alternates].filter((t) => t.tier !== 'live' && t.text.trim());
+    for (const t of heard) {
+      out.set(
+        t.id,
+        heard.filter((o) => o.source !== t.source),
+      );
+    }
+  }
+  return out;
+}
+
 const DAYS = 14;
 const PAGE = 1000;
+/** Seconds played either side of a line: Whisper often ends a line early, and
+ * played tight its last word is cut. */
+const PAD_S = 1;
 
 /** Line by line through a day: each plays by itself, and a person fixes the
  * words, says they are right, or says nobody spoke. Each is filed as words heard
@@ -71,6 +91,7 @@ const PAGE = 1000;
     MatFormFieldModule,
     MatIconModule,
     MatInputModule,
+    MatListModule,
     MatProgressBarModule,
     MatSelectModule,
   ],
@@ -104,6 +125,7 @@ export class Check {
   });
 
   protected readonly lines = signal<Transcript[]>([]);
+  private readonly others = signal<ReadonlyMap<number, Transcript[]>>(new Map());
   protected readonly at = signal(0);
   protected readonly loading = signal(false);
   protected readonly failed = signal(false);
@@ -114,6 +136,10 @@ export class Check {
   protected readonly current = computed(() => this.lines()[this.at()] ?? null);
   protected readonly before = computed(() => this.lines()[this.at() - 1] ?? null);
   protected readonly after = computed(() => this.lines()[this.at() + 1] ?? null);
+  protected readonly elsewhere = computed(() => {
+    const t = this.current();
+    return (t && this.others().get(t.id)) ?? [];
+  });
   /** The words being filed; each line starts from its own. */
   protected readonly draft = linkedSignal(() => this.current()?.text ?? '');
   protected readonly dirty = computed(
@@ -147,6 +173,7 @@ export class Check {
 
   private async load(day: string, ids: string): Promise<void> {
     this.lines.set([]);
+    this.others.set(new Map());
     this.at.set(0);
     this.failed.set(false);
     if (!day && !ids) return;
@@ -177,6 +204,7 @@ export class Check {
       if (!page.hasMore || !last || last.end <= cursor) break;
       cursor = last.end;
     }
+    this.others.set(otherMics(moments));
     return pickLines(moments);
   }
 
@@ -186,14 +214,24 @@ export class Check {
     return filed === undefined ? t.text : (filed ?? 'Nobody spoke');
   }
 
+  private padded(t: Transcript): string {
+    return `${t.audioUrl}${t.audioUrl.includes('?') ? '&' : '?'}pad=${PAD_S}`;
+  }
+
   protected play(t: Transcript, fresh = false): void {
-    const key = `clip:${t.audioUrl}`;
+    const url = this.padded(t);
+    const key = `clip:${url}`;
     if (fresh && this.player.playing() === key) return;
-    this.player.toggle(key, this.player.clip(t.audioUrl));
+    this.player.toggle(key, this.player.clip(url));
   }
 
   protected playing(t: Transcript): boolean {
-    return this.player.playing() === `clip:${t.audioUrl}`;
+    return this.player.playing() === `clip:${this.padded(t)}`;
+  }
+
+  /** Start from another mic's words: the draft becomes them, to be fixed. */
+  protected take(o: Transcript): void {
+    this.draft.set(o.text.trim());
   }
 
   /** File the words as heard: fixed, or confirmed unchanged. Enter does it;

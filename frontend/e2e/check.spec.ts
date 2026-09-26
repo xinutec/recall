@@ -145,3 +145,24 @@ test('a mis-tapped Nobody spoke is undone from the snackbar (Pixel 9)', async ({
   await expect(page.getByText('0 checked')).toBeVisible();
   expect(posted).toEqual([{ noSpeech: { id: 1 } }, { undo: { id: 1 } }]);
 });
+
+test('the other mics are offered, and a line plays with a margin (Pixel 9)', async ({ page }) => {
+  await mockApi(page);
+  const audio: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/api/audio/')) audio.push(new URL(r.url()).search);
+  });
+  await page.goto('/check');
+  await page.getByRole('combobox', { name: 'Day' }).click();
+  await page.getByRole('option', { name: 'Today' }).click();
+  await expect(page.getByText('Line 1 of 3')).toBeVisible();
+
+  const other = page.getByRole('button', { name: /I have already made a list of errors/ });
+  await expect(other).toBeVisible();
+  await other.click();
+  await expect(page.getByRole('textbox', { name: 'What was said' })).toHaveValue(
+    'I have already made a list of errors.',
+  );
+  await expect(page.getByRole('button', { name: 'Save' })).toBeVisible();
+  await expect.poll(() => audio).toContain('?pad=1');
+});

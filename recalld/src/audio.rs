@@ -205,6 +205,23 @@ pub struct AudioQuery {
     /// Denoise before normalising — costs seconds of wait; see [`render`].
     #[serde(default)]
     enhance: bool,
+    /// Seconds of lead-in and lead-out, replacing the tier's padding: checking
+    /// a line's words needs the one Whisper's early end clipped. At most
+    /// [`MAX_PAD_S`].
+    pad: Option<f64>,
+}
+
+/// The widest `pad` a caller may ask for: past it the clip is mostly the
+/// neighbouring lines.
+const MAX_PAD_S: f64 = 3.0;
+
+/// The window to play for one turn, with the caller's padding if given.
+#[must_use]
+pub fn padded_window(p: &Placement, pad: Option<f64>) -> (f64, f64) {
+    match pad.filter(|pad| pad.is_finite()) {
+        Some(pad) => clip_window(p.start_s, p.end_s, pad.clamp(0.0, MAX_PAD_S), 0.0),
+        None => window_for(p),
+    }
 }
 
 /// Why a clip could not be produced.
@@ -278,7 +295,7 @@ pub async fn audio_route(
     let rendered = tokio::task::spawn_blocking(move || {
         render_blocking(&root, q.enhance, |conn| {
             Ok(placement(conn, id)?.map(|p| {
-                let (start, end) = window_for(&p);
+                let (start, end) = padded_window(&p, q.pad);
                 (p.path.clone(), start, end)
             }))
         })

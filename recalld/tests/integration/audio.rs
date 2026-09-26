@@ -230,3 +230,31 @@ fn clip_window_expands_about_the_midpoint_not_the_start() {
     assert!((start - 95.5).abs() < 1e-6, "start {start}");
     assert!((end - 105.5).abs() < 1e-6, "end {end}");
 }
+
+#[test]
+fn a_caller_padding_widens_a_tight_turn_for_checking_its_words() {
+    // Whisper's segment end is often early; played tight, the last word is cut.
+    let p = Placement {
+        path: PathBuf::from("/x.opus"),
+        audio_segment_id: 1,
+        start_s: 10.0,
+        end_s: 13.0,
+        precise: true,
+    };
+    assert_eq!(audio::padded_window(&p, None), audio::window_for(&p));
+    let (start, end) = audio::padded_window(&p, Some(1.0));
+    assert!(
+        (start - 9.0).abs() < 1e-9 && (end - 14.0).abs() < 1e-9,
+        "{start}..{end}"
+    );
+    // Capped, and never before the file.
+    let (start, end) = audio::padded_window(&p, Some(60.0));
+    assert!(
+        (start - 7.0).abs() < 1e-9 && (end - 16.0).abs() < 1e-9,
+        "{start}..{end}"
+    );
+    assert_eq!(
+        audio::padded_window(&p, Some(f64::NAN)),
+        audio::window_for(&p)
+    );
+}

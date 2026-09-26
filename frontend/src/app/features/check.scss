@@ -93,3 +93,9 @@ h2 {
   gap: 0.5rem;
   margin-block-start: 0.75rem;
 }
+
+.label {
+  margin: 0.75rem 0 0;
+  font: var(--mat-sys-title-small);
+  color: var(--mat-sys-on-surface-variant);
+}

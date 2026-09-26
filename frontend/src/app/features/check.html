@@ -93,6 +93,19 @@
     @if (after(); as a) {
       <p class="context">{{ filedAs(a) }}</p>
     }
+
+    @if (elsewhere().length && !checked().has(t.id)) {
+      <h3 class="label">Other mics heard</h3>
+      <mat-action-list>
+        @for (o of elsewhere(); track o.id) {
+          <button mat-list-item lines="3" (click)="take(o)">
+            <span matListItemTitle>{{ o.source }}</span>
+            <span>{{ o.text.trim() }}</span>
+          </button>
+        }
+      </mat-action-list>
+      <p class="hint">Tap one to start from its words.</p>
+    }
   } @else {
     <p class="hint done">
       <mat-icon inline>task_alt</mat-icon>
