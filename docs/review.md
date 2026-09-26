@@ -97,6 +97,10 @@ with a second either side, since Whisper often ends a line before its last
 word. Below it, *Other mics heard* lists the same moment on the other mics;
 tap one to start from its words, which helps with names.
 
+*Said by* sets who spoke: tap a name, or type one under *Someone else*. A name
+differing from the confirmed one is a change, filed with the words (and, like
+any name a person gives, it enrols that voice).
+
 *Nobody spoke* is for words the model invented over silence. It hides the line
 and files the correction with empty text, so the span stays protected and a
 later pass cannot write the same words back. The line sheet on a session or the

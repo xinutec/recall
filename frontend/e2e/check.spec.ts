@@ -71,6 +71,9 @@ async function mockApi(page: Page): Promise<unknown[]> {
       posted.push(route.request().postDataJSON());
       return route.fulfill({ json: { newId: 100 + posted.length } });
     }
+    if (url.includes('/api/speakers')) {
+      return route.fulfill({ json: { names: ['Pippijn', 'Dr. Lee'] } });
+    }
     if (url.includes('/api/no-speech')) {
       const body: unknown = route.request().postDataJSON();
       posted.push(url.endsWith('/undo') ? { undo: body } : { noSpeech: body });
@@ -200,5 +203,25 @@ test('an accidental Words are right is undone, from the message or later (Pixel 
     { undoCheck: { id: 1 } },
     { id: 1, text, checked: true },
     { undoCheck: { id: 1 } },
+  ]);
+});
+
+test('a line said by someone else is filed with their name (Pixel 9)', async ({ page }) => {
+  const posted = await mockApi(page);
+  await page.goto('/check');
+  await page.getByRole('combobox', { name: 'Day' }).click();
+  await page.getByRole('option', { name: 'Today' }).click();
+  await expect(page.getByText('Line 1 of 3')).toBeVisible();
+
+  const field = page.getByRole('combobox', { name: 'Someone else' });
+  await expect(field).toBeInViewport();
+  await field.fill('Dr');
+  await page.getByRole('option', { name: 'Dr. Lee' }).click();
+  // A different speaker is a change: the words stand, the name is new.
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('Line 2 of 3')).toBeVisible();
+
+  expect(posted).toEqual([
+    { id: 1, text: 'I have already made a list of errands.', checked: true, speaker: 'Dr. Lee' },
   ]);
 });

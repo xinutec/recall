@@ -1,0 +1,22 @@
+<mat-chip-listbox aria-label="Said by" [disabled]="disabled()" (change)="choose($event.value)">
+  @for (n of names(); track n) {
+    <mat-chip-option [value]="n" [selected]="n === selected()">{{ n }}</mat-chip-option>
+  }
+</mat-chip-listbox>
+<mat-form-field appearance="outline" subscriptSizing="dynamic" class="new">
+  <mat-label>Someone else</mat-label>
+  <input
+    matInput
+    #name
+    #trig="matAutocompleteTrigger"
+    [matAutocomplete]="auto"
+    [disabled]="disabled()"
+    (input)="typed.set(name.value)"
+    (keydown.enter)="trig.activeOption ? null : choose(name.value)"
+  />
+  <mat-autocomplete #auto (optionSelected)="choose($event.option.value)">
+    @for (n of suggestions(); track n) {
+      <mat-option [value]="n">{{ n }}</mat-option>
+    }
+  </mat-autocomplete>
+</mat-form-field>

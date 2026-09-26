@@ -11,7 +11,7 @@ import {
 } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
-import { Observable, firstValueFrom } from 'rxjs';
+import { Observable, firstValueFrom, tap } from 'rxjs';
 import { TextFieldModule } from '@angular/cdk/text-field';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -27,6 +27,8 @@ import { Moment, Transcript, TranscriptList } from '../models';
 import { RecallApi } from '../recall-api';
 import { dayKey, timeOfDaySeconds } from '../format';
 import { Player } from '../shared/player';
+import { SaidBy } from '../shared/said-by';
+import { Speakers } from '../shared/speakers';
 
 /** One line per moment, never live and never one already corrected. Where several
  * mics heard the moment, the one checked least so far: a check scores the mic
@@ -48,6 +50,17 @@ export function pickLines(moments: readonly Moment[]): Transcript[] {
     out.push(best);
   }
   return out;
+}
+
+function without<V>(m: ReadonlyMap<number, V>, id: number): Map<number, V> {
+  const left = new Map(m);
+  left.delete(id);
+  return left;
+}
+
+/** The speaker a person confirmed for `t`, or null for a guess or nobody. */
+function confirmedSpeaker(t: Transcript | null): string | null {
+  return t?.speakerConfirmed ? t.speaker : null;
 }
 
 /** A local day as the server's instant spelling: [start, end). */
@@ -94,6 +107,7 @@ const PAD_S = 1;
     MatListModule,
     MatProgressBarModule,
     MatSelectModule,
+    SaidBy,
   ],
   templateUrl: './check.html',
   styleUrl: './check.scss',
@@ -125,6 +139,18 @@ export class Check {
   });
 
   protected readonly lines = signal<Transcript[]>([]);
+  private readonly speakers = inject(Speakers);
+  /** Everyone recall knows by name, for the field's suggestions. */
+  private readonly roster = this.speakers.names;
+  /** Names in play: the day's named speakers, else everyone known. */
+  protected readonly names = computed(() => {
+    const named = new Set<string>();
+    for (const t of this.lines()) {
+      if (t.speaker && !t.speaker.startsWith('SPEAKER_')) named.add(t.speaker);
+    }
+    return named.size ? [...named] : this.roster();
+  });
+  protected readonly known = computed(() => [...new Set([...this.names(), ...this.roster()])]);
   private readonly others = signal<ReadonlyMap<number, Transcript[]>>(new Map());
   protected readonly at = signal(0);
   protected readonly loading = signal(false);
@@ -142,14 +168,21 @@ export class Check {
   });
   /** The words being filed; each line starts from its own. */
   protected readonly draft = linkedSignal(() => this.current()?.text ?? '');
+  /** Who said it, as a person said; each line starts from its confirmed name. */
+  protected readonly who = linkedSignal(() => confirmedSpeaker(this.current()));
+  /** Who each line was filed as said by, this visit. */
+  private readonly filedWho = signal<ReadonlyMap<number, string>>(new Map());
   protected readonly dirty = computed(
-    () => this.draft().trim() !== (this.current()?.text ?? '').trim(),
+    () =>
+      this.draft().trim() !== (this.current()?.text ?? '').trim() ||
+      this.who() !== confirmedSpeaker(this.current()),
   );
   protected readonly progress = computed(() =>
     this.lines().length ? (100 * this.at()) / this.lines().length : 0,
   );
 
   constructor() {
+    this.speakers.refresh();
     effect(() => {
       const day = this.day();
       const ids = this.ids();
@@ -240,7 +273,25 @@ export class Check {
     const t = this.current();
     const text = this.draft().trim();
     if (!t || !text) return;
-    this.file(t, text, this.api.correct(t.id, text, { checked: true }));
+    const who = this.who();
+    const speaker = who !== confirmedSpeaker(t) ? who : null;
+    const write = this.api.correct(t.id, text, { checked: true, ...(speaker ? { speaker } : {}) });
+    this.file(
+      t,
+      text,
+      write.pipe(
+        tap(() => {
+          if (!speaker) return;
+          this.filedWho.update((m) => new Map(m).set(t.id, speaker));
+          this.speakers.refresh();
+        }),
+      ),
+    );
+  }
+
+  /** The name shown for `t`: as filed, as being chosen, or as the machine has it. */
+  protected shownWho(t: Transcript): string | null {
+    return this.filedWho().get(t.id) ?? (t === this.current() ? this.who() : null) ?? t.speaker;
   }
 
   /** Nothing was said: the words are the model's invention. */
@@ -263,11 +314,8 @@ export class Check {
     const undo = filed === null ? this.api.undoNoSpeech(t.id) : this.api.undoCorrection(t.id);
     undo.subscribe({
       next: () => {
-        this.checked.update((m) => {
-          const left = new Map(m);
-          left.delete(t.id);
-          return left;
-        });
+        this.checked.update((m) => without(m, t.id));
+        this.filedWho.update((m) => without(m, t.id));
         this.at.set(this.lines().indexOf(t));
       },
       error: () => this.snack.open('Could not undo', 'OK', { duration: 4000 }),

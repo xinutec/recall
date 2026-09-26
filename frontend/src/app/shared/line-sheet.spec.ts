@@ -156,10 +156,4 @@ describe('LineSheet', () => {
     const body = ctrl.expectOne('/api/sessions/usb/assign').request.body;
     expect([body.startChar, body.endChar]).toEqual([10, 17]);
   });
-
-  it('suggests known names matching what was typed', async () => {
-    const { c } = await setup();
-    c.typed.set('sa');
-    expect(c.suggestions()).toEqual(['Sam']);
-  });
 });

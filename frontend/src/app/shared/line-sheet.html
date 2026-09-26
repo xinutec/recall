@@ -12,41 +12,18 @@
   }
 </header>
 
-<ng-template #names>
-  <mat-chip-listbox aria-label="Said by" [disabled]="busy()" (change)="choose($event.value)">
-    @for (n of data.names; track n) {
-      <mat-chip-option
-        [value]="n"
-        [selected]="mode() === 'main' && data.confirmed && n === data.speaker"
-        >{{ n }}</mat-chip-option
-      >
-    }
-  </mat-chip-listbox>
-  <mat-form-field appearance="outline" subscriptSizing="dynamic" class="new">
-    <mat-label>Someone else</mat-label>
-    <input
-      matInput
-      #name
-      #trig="matAutocompleteTrigger"
-      [matAutocomplete]="auto"
-      [disabled]="busy()"
-      (input)="typed.set(name.value)"
-      (keydown.enter)="trig.activeOption ? null : choose(name.value)"
-    />
-    <mat-autocomplete #auto (optionSelected)="choose($event.option.value)">
-      @for (n of suggestions(); track n) {
-        <mat-option [value]="n">{{ n }}</mat-option>
-      }
-    </mat-autocomplete>
-  </mat-form-field>
-</ng-template>
-
 @switch (mode()) {
   @case ('main') {
     <p class="line">{{ t.text }}</p>
     @if (editable) {
       <h3 class="label">Said by</h3>
-      <ng-container [ngTemplateOutlet]="names" />
+      <app-said-by
+        [names]="data.names"
+        [known]="data.known"
+        [selected]="data.confirmed ? data.speaker : null"
+        [disabled]="busy()"
+        (chosen)="choose($event)"
+      />
     } @else {
       <p class="hint">Still being transcribed, editable in a minute or two.</p>
     }
@@ -100,7 +77,12 @@
     </p>
     @if (partText()) {
       <h3 class="label">“{{ partText() }}” was said by</h3>
-      <ng-container [ngTemplateOutlet]="names" />
+      <app-said-by
+        [names]="data.names"
+        [known]="data.known"
+        [disabled]="busy()"
+        (chosen)="choose($event)"
+      />
     }
   }
   @case ('edit') {

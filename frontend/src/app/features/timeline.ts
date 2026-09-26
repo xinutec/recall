@@ -19,6 +19,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { Conversation } from '../models';
 import { RecallApi } from '../recall-api';
 import { Player } from '../shared/player';
+import { Speakers } from '../shared/speakers';
 import { Turns } from '../shared/turns';
 import { dayKey, dayLabel, timeOfDay } from '../format';
 
@@ -61,7 +62,8 @@ export class Timeline {
   protected readonly player = inject(Player);
 
   /** Fetched, so real names stay out of the code. */
-  protected readonly speakers = signal<readonly string[]>([]);
+  private readonly roster = inject(Speakers);
+  protected readonly speakers = this.roster.names;
 
   readonly before = input('', { transform: (value: string | undefined) => value ?? '' });
 
@@ -107,11 +109,7 @@ export class Timeline {
   protected coverageDone = (day: Day): boolean => day.pending === 0 && day.diarized > 0;
 
   constructor() {
-    // dev-lint: allow-component-list — a small name lookup, cheap to refetch.
-    this.api.speakers().subscribe({
-      next: (r) => this.speakers.set(r.names),
-      error: () => undefined,
-    });
+    this.roster.refresh();
     effect(() => {
       const cursor = this.before();
       untracked(() => {

@@ -1,12 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { NgTemplateOutlet } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { Observable } from 'rxjs';
 import { TextFieldModule } from '@angular/cdk/text-field';
-import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MAT_BOTTOM_SHEET_DATA, MatBottomSheetRef } from '@angular/material/bottom-sheet';
 import { MatButtonModule } from '@angular/material/button';
-import { MatChipsModule } from '@angular/material/chips';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
@@ -17,6 +14,7 @@ import { Transcript } from '../models';
 import { RecallApi } from '../recall-api';
 import { timeOfDaySeconds } from '../format';
 import { Player } from './player';
+import { SaidBy } from './said-by';
 
 export interface LineSheetData {
   readonly turn: Transcript;
@@ -66,16 +64,14 @@ export type LineSheetResult = 'wrote' | 'hidden';
 @Component({
   selector: 'app-line-sheet',
   imports: [
-    NgTemplateOutlet,
     RouterLink,
     TextFieldModule,
-    MatAutocompleteModule,
     MatButtonModule,
-    MatChipsModule,
     MatFormFieldModule,
     MatIconModule,
     MatInputModule,
     MatListModule,
+    SaidBy,
   ],
   templateUrl: './line-sheet.html',
   styleUrl: './line-sheet.scss',
@@ -95,12 +91,6 @@ export class LineSheet {
   protected readonly mode = signal<Mode>('main');
   protected readonly busy = signal(false);
 
-  protected readonly typed = signal('');
-  protected readonly suggestions = computed(() => {
-    const q = this.typed().trim().toLowerCase();
-    return this.data.known.filter((n) => n.toLowerCase().includes(q));
-  });
-
   protected play(t: Transcript = this.t): void {
     this.player.toggle(`turn:${t.id}`, this.player.clip(t.audioUrl));
   }
@@ -110,7 +100,6 @@ export class LineSheet {
   }
 
   protected open(mode: Mode): void {
-    this.typed.set('');
     this.from.set(null);
     this.to.set(null);
     this.mode.set(mode);
