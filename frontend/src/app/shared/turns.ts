@@ -11,10 +11,12 @@ import {
 import { MatBottomSheet } from '@angular/material/bottom-sheet';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatSnackBar } from '@angular/material/snack-bar';
 
 import { Moment, Transcript } from '../models';
+import { RecallApi } from '../recall-api';
 import { timeOfDaySeconds } from '../format';
-import { LineSheet, LineSheetData } from './line-sheet';
+import { LineSheet, LineSheetData, LineSheetResult } from './line-sheet';
 import { Player } from './player';
 
 /** Consecutive turns shown under one speaker. Each turn stays its own tap target. */
@@ -77,6 +79,8 @@ export class Turns implements OnDestroy {
   readonly changed = output();
 
   private readonly sheet = inject(MatBottomSheet);
+  private readonly snack = inject(MatSnackBar);
+  private readonly api = inject(RecallApi);
   protected readonly player = inject(Player);
   protected readonly clock = timeOfDaySeconds;
 
@@ -139,9 +143,7 @@ export class Turns implements OnDestroy {
 
   /** Another mic's version names a different speaker for this moment. */
   protected disputed(t: Transcript): boolean {
-    return (
-      !!t.speaker && this.alternates(t).some((a) => !!a.speaker && a.speaker !== t.speaker)
-    );
+    return !!t.speaker && this.alternates(t).some((a) => !!a.speaker && a.speaker !== t.speaker);
   }
 
   /** No speaker separation yet: shown grey, still editable. */
@@ -186,11 +188,24 @@ export class Turns implements OnDestroy {
     };
     this.selected.set(t.id);
     this.sheet
-      .open<LineSheet, LineSheetData, boolean>(LineSheet, { data })
+      .open<LineSheet, LineSheetData, LineSheetResult>(LineSheet, { data })
       .afterDismissed()
-      .subscribe((wrote) => {
+      .subscribe((result) => {
         this.selected.set(null);
-        if (wrote) this.changed.emit();
+        if (result) this.changed.emit();
+        if (result === 'hidden') this.offerUndo(t);
+      });
+  }
+
+  private offerUndo(t: Transcript): void {
+    this.snack
+      .open('Line hidden', 'Undo', { duration: 8000 })
+      .onAction()
+      .subscribe(() => {
+        this.api.undoNoSpeech(t.id).subscribe({
+          next: () => this.changed.emit(),
+          error: () => this.snack.open('Could not undo', 'OK', { duration: 4000 }),
+        });
       });
   }
 }

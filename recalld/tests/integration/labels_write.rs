@@ -612,7 +612,7 @@ fn a_malformed_span_is_refused_rather_than_stored_verbatim() {
 
 // ---- nobody spoke ----
 
-use recalld::labels_write::mark_no_speech;
+use recalld::labels_write::{mark_no_speech, undo_no_speech};
 
 fn invented(conn: &Connection) -> i64 {
     conn.execute(
@@ -696,4 +696,39 @@ fn nobody_spoke_twice_is_refused() {
         .query_row("SELECT COUNT(*) FROM corrections", [], |r| r.get(0))
         .expect("count");
     assert_eq!(pairs, 1, "a double tap stores one pair");
+}
+
+#[test]
+fn undoing_nobody_spoke_shows_the_turn_and_frees_the_span() {
+    // A mis-tap must leave nothing behind: a pair left over would still keep
+    // every later pass off the span.
+    let mut conn = db();
+    let id = invented(&conn);
+    mark_no_speech(&mut conn, id, &now()).expect("mark");
+    undo_no_speech(&mut conn, id).expect("undo");
+    let (hidden, pairs): (Option<String>, i64) = conn
+        .query_row(
+            "SELECT (SELECT hidden_reason FROM transcript_segments WHERE id = ?1),
+                    (SELECT COUNT(*) FROM corrections)",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("read");
+    assert_eq!((hidden, pairs), (None, 0));
+}
+
+#[test]
+fn only_nobody_spoke_can_be_undone() {
+    // Undo must not show a turn hidden for any other reason.
+    let mut conn = db();
+    let id = invented(&conn);
+    conn.execute(
+        "UPDATE transcript_segments SET hidden_reason = 'silent minute' WHERE id = ?1",
+        [id],
+    )
+    .expect("hide");
+    assert!(matches!(
+        undo_no_speech(&mut conn, id),
+        Err(CorrectError::NotNobodySpoke(i)) if i == id
+    ));
 }

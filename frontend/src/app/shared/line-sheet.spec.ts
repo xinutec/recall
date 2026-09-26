@@ -84,7 +84,7 @@ describe('LineSheet', () => {
     const req = ctrl.expectOne('/api/correct');
     expect(req.request.body).toEqual({ id: 7, text: 'a list of errands', speaker: 'D' });
     req.flush({ newId: 9 });
-    expect(dismiss).toHaveBeenCalledWith(true);
+    expect(dismiss).toHaveBeenCalledWith('wrote');
   });
 
   it('re-picking the confirmed speaker writes nothing', async () => {
@@ -145,7 +145,7 @@ describe('LineSheet', () => {
       name: 'Sam',
     });
     reqs[0].flush({ touched: 1 });
-    expect(dismiss).toHaveBeenCalledWith(true);
+    expect(dismiss).toHaveBeenCalledWith('wrote');
   });
 
   it('a single picked word is a part too', async () => {

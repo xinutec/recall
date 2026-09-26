@@ -122,11 +122,14 @@ test('Fix words is on screen for a line at the top of a long transcript', async 
   await tapFixWords(page, 'My very first question');
 });
 
-test('Nobody spoke files that line and closes the sheet (Pixel 9)', async ({ page }) => {
+test('Nobody spoke closes the sheet and can be undone (Pixel 9)', async ({ page }) => {
   await mockApi(page, SHORT);
   const posted: unknown[] = [];
   page.on('request', (r) => {
-    if (r.method() === 'POST' && r.url().endsWith('/api/no-speech')) posted.push(r.postDataJSON());
+    if (r.method() === 'POST' && r.url().includes('/api/no-speech')) {
+      const body: unknown = r.postDataJSON();
+      posted.push({ [r.url().endsWith('/undo') ? 'undo' : 'hide']: body });
+    }
   });
   await page.goto('/sessions/test');
   await page.locator('span.t', { hasText: 'I have already made' }).click();
@@ -134,7 +137,8 @@ test('Nobody spoke files that line and closes the sheet (Pixel 9)', async ({ pag
   await expect(nobody).toBeInViewport();
   await nobody.click();
   await expect(nobody).toBeHidden();
-  expect(posted).toEqual([{ id: 1 }]);
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect.poll(() => posted).toEqual([{ hide: { id: 1 } }, { undo: { id: 1 } }]);
 });
 
 test('naming a voice from a suggestion saves only that name (Pixel 9)', async ({ page }) => {

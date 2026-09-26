@@ -146,6 +146,9 @@ pub enum HiddenReason {
     SplitInto(i64),
     /// A person listened and nobody spoke: the model invented the words.
     NobodySpoke,
+    /// The speech pass measured the clip silent (0 s). Written once, in bulk,
+    /// for turns from before the queue waited for that measurement (#1782).
+    SilentMinute,
 }
 
 impl fmt::Display for HiddenReason {
@@ -156,6 +159,7 @@ impl fmt::Display for HiddenReason {
             Self::DiarizedBy(by) => write!(f, "diarized ({by})"),
             Self::SplitInto(id) => write!(f, "split into pieces ({id})"),
             Self::NobodySpoke => f.write_str("nobody spoke"),
+            Self::SilentMinute => f.write_str("silent minute"),
         }
     }
 }
@@ -327,6 +331,19 @@ pub fn hide(conn: &Connection, id: i64, reason: &HiddenReason) -> rusqlite::Resu
         "UPDATE transcript_segments SET hidden_reason = ?1
          WHERE id = ?2 AND hidden_reason IS NULL",
         (reason.to_string(), id),
+    )?;
+    Ok(changed == 1)
+}
+
+/// Show a turn again that was hidden for `reason`. Returns whether it was.
+///
+/// # Errors
+/// If the database refuses.
+pub fn unhide(conn: &Connection, id: i64, reason: &HiddenReason) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "UPDATE transcript_segments SET hidden_reason = NULL
+         WHERE id = ?1 AND hidden_reason = ?2 AND superseded_by IS NULL",
+        (id, reason.to_string()),
     )?;
     Ok(changed == 1)
 }

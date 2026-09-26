@@ -97,7 +97,8 @@ in turn, because a check scores the mic whose text was edited.
 *Nobody spoke* is for words the model invented over silence. It hides the line
 and files the correction with empty text, so the span stays protected and a
 later pass cannot write the same words back. The line sheet on a session or the
-timeline has it too.
+timeline has it too, and both offer *Undo* for a mis-tap, which shows the line
+again and drops the correction.
 
 Every answer files a correction marked `words_checked`: a person heard the words
 and vouches for them. The referees (`scripts/rank_referee.py`,

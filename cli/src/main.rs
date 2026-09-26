@@ -29,7 +29,7 @@ fn usage() -> ! {
          \x20 capture                      whether the recorders are running\n\
          \x20 correct <id> <text> --apply             replace a turn's text\n\
          \x20 correct --session <id> --fix OLD=>NEW    ...by the words instead\n\
-         \x20 no-speech <id> --apply                  nobody spoke: hide the turn\n\
+         \x20 no-speech <id> [--undo] --apply         nobody spoke: hide the turn\n\
          \n\
          --api defaults to {DEFAULT_API}, the system of record. There is no\n\
          option to read a local database: a second answer nobody can tell from\n\
@@ -316,9 +316,22 @@ fn correct_by_id(api: &Api, args: &[String], apply: bool) -> Result<bool, Error>
 /// filed as the model's invention.
 fn no_speech(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
     let apply = take_flag(args, "--apply");
+    let undo = take_flag(args, "--undo");
     let Some(id) = args.first().and_then(|a| a.parse::<i64>().ok()) else {
         usage()
     };
+    if undo {
+        // A hidden turn is not in the reads, so there is nothing to show first.
+        if apply {
+            api.undo_no_speech(id)?;
+            println!("#{id} shown again");
+        } else {
+            println!(
+                "#{id} would be shown again\n\nDRY-RUN only — nothing written. Re-run with --apply to commit."
+            );
+        }
+        return Ok(true);
+    }
     let Some(current) = api.transcripts(&[id])?.into_iter().next() else {
         println!("no turn {id}");
         return Ok(false);

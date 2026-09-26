@@ -414,6 +414,20 @@ impl Api {
             .map_err(|e| self.refused(&e))?;
         Ok(())
     }
+
+    /// Take back [`Api::no_speech`]: the turn shows again.
+    ///
+    /// # Errors
+    /// As [`Api::correct`]; a turn not hidden as nobody spoke is a 400.
+    pub fn undo_no_speech(&self, id: i64) -> Result<(), Error> {
+        self.signed(
+            self.agent
+                .post(&format!("{}/api/no-speech/undo", self.base)),
+        )
+        .send_json(serde_json::json!({ "id": id }))
+        .map_err(|e| self.refused(&e))?;
+        Ok(())
+    }
 }
 
 /// Percent-encode a query-string value: everything but RFC 3986 unreserved

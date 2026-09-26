@@ -68,7 +68,7 @@ async function mockApi(page: Page): Promise<unknown[]> {
     }
     if (url.includes('/api/no-speech')) {
       const body: unknown = route.request().postDataJSON();
-      posted.push({ noSpeech: body });
+      posted.push(url.endsWith('/undo') ? { undo: body } : { noSpeech: body });
       return route.fulfill({ json: { ok: true } });
     }
     return route.fulfill({ json: {} });
@@ -116,10 +116,32 @@ test('a line nobody spoke is filed as such, not as words (Pixel 9)', async ({ pa
   await expect(nobody).toBeInViewport();
   await nobody.click();
   await expect(page.getByText('Line 2 of 3')).toBeVisible();
+  // The line before now reads as filed, not as the model wrote it.
+  await expect(page.locator('.context').first()).toHaveText('Nobody spoke');
 
   await page.getByRole('button', { name: 'Back' }).click();
-  await expect(page.getByText('Nobody spoke', { exact: true })).toBeVisible();
+  await expect(page.getByText('Line 1 of 3')).toBeVisible();
+  await expect(page.locator('.line .words')).toHaveText('Nobody spoke');
   await expect(page.getByText('1 checked')).toBeVisible();
 
   expect(posted).toEqual([{ noSpeech: { id: 1 } }]);
+});
+
+test('a mis-tapped Nobody spoke is undone from the snackbar (Pixel 9)', async ({ page }) => {
+  const posted = await mockApi(page);
+  await page.goto('/check');
+  await page.getByRole('combobox', { name: 'Day' }).click();
+  await page.getByRole('option', { name: 'Today' }).click();
+
+  await page.getByRole('button', { name: 'Nobody spoke' }).click();
+  await expect(page.getByText('Line 2 of 3')).toBeVisible();
+  await page.getByRole('button', { name: 'Undo' }).click();
+
+  // Back on the line, open for checking again.
+  await expect(page.getByText('Line 1 of 3')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'What was said' })).toHaveValue(
+    'I have already made a list of errands.',
+  );
+  await expect(page.getByText('0 checked')).toBeVisible();
+  expect(posted).toEqual([{ noSpeech: { id: 1 } }, { undo: { id: 1 } }]);
 });

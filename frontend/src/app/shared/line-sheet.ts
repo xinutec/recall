@@ -56,8 +56,13 @@ export function wordsOf(text: string): Word[] {
 
 type Mode = 'main' | 'part' | 'edit' | 'mics';
 
+/** What the sheet did before closing: `hidden` is nobody spoke, which the caller
+ * offers to undo. */
+export type LineSheetResult = 'wrote' | 'hidden';
+
 /** Everything to do with one line: hear it, say who said it, give part of it to
- * someone else, fix its words or say nobody spoke, compare the mics. Closes with `true` after a write. */
+ * someone else, fix its words or say nobody spoke, compare the mics. Closes with
+ * a {@link LineSheetResult} after a write. */
 @Component({
   selector: 'app-line-sheet',
   imports: [
@@ -78,7 +83,7 @@ type Mode = 'main' | 'part' | 'edit' | 'mics';
 })
 export class LineSheet {
   protected readonly data = inject<LineSheetData>(MAT_BOTTOM_SHEET_DATA);
-  private readonly ref = inject<MatBottomSheetRef<LineSheet, boolean>>(MatBottomSheetRef);
+  private readonly ref = inject<MatBottomSheetRef<LineSheet, LineSheetResult>>(MatBottomSheetRef);
   private readonly api = inject(RecallApi);
   private readonly snack = inject(MatSnackBar);
   protected readonly player = inject(Player);
@@ -186,7 +191,7 @@ export class LineSheet {
 
   /** The words are the model's invention: hide the line. */
   protected nobodySpoke(): void {
-    this.write(this.api.noSpeech(this.t.id));
+    this.write(this.api.noSpeech(this.t.id), 'hidden');
   }
 
   protected copy(): void {
@@ -197,11 +202,11 @@ export class LineSheet {
   // --- writing
 
   /** One write at a time, so a double tap can't file it twice. */
-  private write(call: Observable<unknown>): void {
+  private write(call: Observable<unknown>, result: LineSheetResult = 'wrote'): void {
     if (this.busy()) return;
     this.busy.set(true);
     call.subscribe({
-      next: () => this.ref.dismiss(true),
+      next: () => this.ref.dismiss(result),
       error: () => {
         this.busy.set(false);
         this.snack.open('Could not save, try again', 'OK', { duration: 4000 });

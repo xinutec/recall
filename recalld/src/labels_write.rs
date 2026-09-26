@@ -154,6 +154,8 @@ pub enum CorrectError {
     AlreadySuperseded(i64),
     /// That turn is already hidden.
     Hidden(i64),
+    /// That turn was not hidden as nobody spoke, so there is nothing to undo.
+    NotNobodySpoke(i64),
     /// The overridden start or end is not an ISO-8601 instant.
     BadSpan,
     Db(rusqlite::Error),
@@ -235,7 +237,7 @@ pub fn apply_correction(
         // SECOND current human turn and a duplicate corpus pair.
         return Err(CorrectError::AlreadySuperseded(segment_id));
     }
-    let language = edit.language.map(str::to_owned).or(old.language);
+    let language = edit.language.or(old.language.as_deref());
     // An overridden span is re-spelled in UTC, never stored as sent: these
     // columns are compared as text. See `audiocore::instant`.
     let start = match edit.start {
@@ -247,17 +249,17 @@ pub fn apply_correction(
         None => old.end_utc.clone(),
     };
     // A speaker given here wins; otherwise the turn keeps the name it had.
-    let speaker_label = edit.speaker.map(str::to_owned).or(old.speaker_label);
+    let speaker_label = edit.speaker.or(old.speaker_label.as_deref());
 
     let new_id = turn_store::insert(
         &tx,
         &NewTurn {
             audio_segment_id: old.audio_segment_id,
-            language: language.as_deref(),
+            language,
             language_confidence: old.language_confidence,
             asr_confidence: Some(HUMAN_CONFIDENCE),
             asr_model: Some(HUMAN_MODEL),
-            speaker_label: speaker_label.as_deref(),
+            speaker_label,
             speaker_id: old.speaker_id,
             // Carried forward so a corrected turn stays attributed to its voice
             // instead of falling back to unknown.
@@ -268,6 +270,35 @@ pub fn apply_correction(
         },
     )?;
     turn_store::supersede(&tx, old.id, new_id)?;
+    insert_pair(
+        &tx,
+        &old,
+        &Pair {
+            start: &start,
+            end: &end,
+            text,
+            language,
+            speaker: edit.speaker,
+            words_checked: edit.words_checked,
+        },
+        now,
+    )?;
+    tx.commit()?;
+    Ok(new_id)
+}
+
+/// A corpus pair: what the machine wrote and what a person says was said.
+struct Pair<'a> {
+    start: &'a Stamp,
+    end: &'a Stamp,
+    /// Empty when nobody spoke.
+    text: &'a str,
+    language: Option<&'a str>,
+    speaker: Option<&'a str>,
+    words_checked: bool,
+}
+
+fn insert_pair(tx: &Transaction, old: &Original, pair: &Pair, now: &Stamp) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT INTO corrections \
             (transcript_segment_id, audio_segment_id, start_utc, end_utc, \
@@ -277,21 +308,20 @@ pub fn apply_correction(
         rusqlite::params![
             old.id,
             old.audio_segment_id,
-            start,
-            end,
+            pair.start,
+            pair.end,
             old.text,
-            text,
-            language,
+            pair.text,
+            pair.language,
             now,
-            edit.speaker,
+            pair.speaker,
             // The clip's audio quality, carried onto the pair: a readable label
             // on faint audio is still good ASR data but too degraded to enrol.
             old.asr_confidence,
-            edit.words_checked.then_some(1),
+            pair.words_checked.then_some(1),
         ],
     )?;
-    tx.commit()?;
-    Ok(new_id)
+    Ok(())
 }
 
 /// A person listened and nobody spoke: the turn's words are the model's
@@ -318,22 +348,38 @@ pub fn mark_no_speech(
     if !turn_store::claim(&tx, old.id, &HiddenReason::NobodySpoke)? {
         return Err(CorrectError::Hidden(segment_id));
     }
+    insert_pair(
+        &tx,
+        &old,
+        &Pair {
+            start: &old.start_utc,
+            end: &old.end_utc,
+            text: "",
+            language: old.language.as_deref(),
+            speaker: None,
+            words_checked: true,
+        },
+        now,
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Take back a [`mark_no_speech`]: the turn shows again and the pair goes.
+///
+/// Deleted, not hidden: the pair was a mis-tap, not a judgement, and a hidden
+/// pair would still protect the span.
+///
+/// # Errors
+/// [`CorrectError::NotNobodySpoke`] when the turn is not hidden that way.
+pub fn undo_no_speech(conn: &mut Connection, segment_id: i64) -> Result<(), CorrectError> {
+    let tx = conn.transaction()?;
+    if !turn_store::unhide(&tx, segment_id, &HiddenReason::NobodySpoke)? {
+        return Err(CorrectError::NotNobodySpoke(segment_id));
+    }
     tx.execute(
-        "INSERT INTO corrections \
-            (transcript_segment_id, audio_segment_id, start_utc, end_utc, \
-             original_text, corrected_text, language, created_utc, \
-             audio_confidence, words_checked) \
-         VALUES (?1, ?2, ?3, ?4, ?5, '', ?6, ?7, ?8, 1)",
-        rusqlite::params![
-            old.id,
-            old.audio_segment_id,
-            old.start_utc,
-            old.end_utc,
-            old.text,
-            old.language,
-            now,
-            old.asr_confidence,
-        ],
+        "DELETE FROM corrections WHERE transcript_segment_id = ?1 AND corrected_text = ''",
+        [segment_id],
     )?;
     tx.commit()?;
     Ok(())
@@ -408,6 +454,22 @@ pub async fn no_speech_route(
     }
 }
 
+pub async fn undo_no_speech_route(
+    State(st): State<Arc<reads::State>>,
+    Json(body): Json<NoSpeechIn>,
+) -> Response {
+    let root = st.root.clone();
+    let applied = tokio::task::spawn_blocking(move || {
+        let mut conn = work::open_write(&root)?;
+        undo_no_speech(&mut conn, body.id)
+    });
+    match applied.await {
+        Ok(Ok(())) => route::ack(),
+        Ok(Err(err)) => refused("undo no speech", err),
+        Err(err) => route::faulted("undo no speech task", &err),
+    }
+}
+
 /// A refused write, as the caller's to fix (each says which) or a fault.
 fn refused(what: &str, err: CorrectError) -> Response {
     match err {
@@ -430,6 +492,11 @@ fn refused(what: &str, err: CorrectError) -> Response {
         CorrectError::Hidden(id) => (
             StatusCode::BAD_REQUEST,
             format!("turn #{id} is already hidden"),
+        )
+            .into_response(),
+        CorrectError::NotNobodySpoke(id) => (
+            StatusCode::BAD_REQUEST,
+            format!("turn #{id} is not hidden as nobody spoke"),
         )
             .into_response(),
         CorrectError::Db(err) => route::faulted(what, &err),

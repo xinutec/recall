@@ -108,8 +108,8 @@ export class Check {
   protected readonly loading = signal(false);
   protected readonly failed = signal(false);
   protected readonly busy = signal(false);
-  /** Line id to the words filed for it this visit; empty when nobody spoke. */
-  protected readonly checked = signal<ReadonlyMap<number, string>>(new Map());
+  /** Line id to the words filed for it this visit; null when nobody spoke. */
+  protected readonly checked = signal<ReadonlyMap<number, string | null>>(new Map());
 
   protected readonly current = computed(() => this.lines()[this.at()] ?? null);
   protected readonly before = computed(() => this.lines()[this.at() - 1] ?? null);
@@ -180,6 +180,12 @@ export class Check {
     return pickLines(moments);
   }
 
+  /** A line as it now stands: the words filed for it this visit, if any. */
+  protected filedAs(t: Transcript): string {
+    const filed = this.checked().get(t.id);
+    return filed === undefined ? t.text : (filed ?? 'Nobody spoke');
+  }
+
   protected play(t: Transcript, fresh = false): void {
     const key = `clip:${t.audioUrl}`;
     if (fresh && this.player.playing() === key) return;
@@ -199,14 +205,36 @@ export class Check {
     this.file(t, text, this.api.correct(t.id, text, { checked: true }));
   }
 
-  /** Nothing was said: the words are the model's invention. */
+  /** Nothing was said: the words are the model's invention. Undoable, since a
+   * mis-tap would otherwise hide a real line with no way back here. */
   protected nobodySpoke(): void {
     const t = this.current();
-    if (t) this.file(t, '', this.api.noSpeech(t.id));
+    if (t) this.file(t, null, this.api.noSpeech(t.id));
   }
 
-  /** `words` is what the line now says, empty for nobody spoke. */
-  private file(t: Transcript, words: string, write: Observable<unknown>): void {
+  private offerUndo(t: Transcript): void {
+    this.snack
+      .open('Line hidden', 'Undo', { duration: 8000 })
+      .onAction()
+      .subscribe(() => this.undo(t));
+  }
+
+  private undo(t: Transcript): void {
+    this.api.undoNoSpeech(t.id).subscribe({
+      next: () => {
+        this.checked.update((m) => {
+          const left = new Map(m);
+          left.delete(t.id);
+          return left;
+        });
+        this.at.set(this.lines().indexOf(t));
+      },
+      error: () => this.snack.open('Could not undo', 'OK', { duration: 4000 }),
+    });
+  }
+
+  /** `words` is what the line now says, null for nobody spoke. */
+  private file(t: Transcript, words: string | null, write: Observable<unknown>): void {
     if (this.busy() || this.checked().has(t.id)) return;
     this.busy.set(true);
     write.subscribe({
@@ -214,6 +242,7 @@ export class Check {
         this.busy.set(false);
         this.checked.update((m) => new Map(m).set(t.id, words));
         this.next();
+        if (words === null) this.offerUndo(t);
       },
       error: () => {
         this.busy.set(false);

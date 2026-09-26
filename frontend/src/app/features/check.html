@@ -31,7 +31,7 @@
     <mat-progress-bar mode="determinate" [value]="progress()" />
 
     @if (before(); as b) {
-      <p class="context">{{ b.text }}</p>
+      <p class="context">{{ filedAs(b) }}</p>
     }
 
     <mat-card appearance="outlined" class="line">
@@ -53,12 +53,9 @@
             <span class="who">{{ t.speaker }}</span>
           }
         </div>
-        @if (checked().has(t.id)) {
-          @if (checked().get(t.id); as words) {
-            <p class="words">{{ words }}</p>
-          } @else {
-            <p class="words silent">Nobody spoke</p>
-          }
+        @let filed = checked().get(t.id);
+        @if (filed !== undefined) {
+          <p class="words" [class.silent]="filed === null">{{ filed ?? 'Nobody spoke' }}</p>
           <p class="hint"><mat-icon inline>check</mat-icon> Checked</p>
         } @else {
           <mat-form-field appearance="outline" subscriptSizing="dynamic" class="edit">
@@ -94,7 +91,7 @@
     </div>
 
     @if (after(); as a) {
-      <p class="context">{{ a.text }}</p>
+      <p class="context">{{ filedAs(a) }}</p>
     }
   } @else {
     <p class="hint done">

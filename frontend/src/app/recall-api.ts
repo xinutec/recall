@@ -75,6 +75,12 @@ export class RecallApi {
     return this.http.post<Ok>('/api/no-speech', body);
   }
 
+  /** Take back a nobody spoke: the line shows again. */
+  undoNoSpeech(id: number): Observable<Ok> {
+    const body: NoSpeechRequest = { id };
+    return this.http.post<Ok>('/api/no-speech/undo', body);
+  }
+
   /** Enrolled and assigned names. Runtime data, so no name is in the code. */
   speakers(): Observable<SpeakerNames> {
     return this.http.get<SpeakerNames>('/api/speakers');

@@ -75,6 +75,13 @@ body {
   // below the toolbar adds it to its offset. 0 in a normal browser tab.
   --safe-top: env(safe-area-inset-top, 0px);
 }
+
+// A snackbar lives in the overlay container, outside `.with-bottom-nav`, so the
+// rule above misses it: without this it covers the nav it should sit above.
+body:has(.bottom-nav) .mat-mdc-snack-bar-container {
+  margin-block-end: var(--bottom-nav-reserve);
+}
+
 /* You can add global styles to this file, and also import other style files */
 
 // Destructive-action buttons: M3 ignores `color="warn"`, so tint via the
