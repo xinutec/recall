@@ -103,34 +103,50 @@ fn a_segment_measured_as_silent_gets_no_transcription_job() {
     // Transcribing silence returns invented text, not nothing.
     let dir = tempfile::tempdir().expect("tempdir");
     let silent = mic_row(dir.path(), "usb", "20260906T100000");
+    measured(dir.path(), &silent, 0.0);
     let speech = mic_row(dir.path(), "usb", "20260906T100100");
-    let unmeasured = mic_row(dir.path(), "usb", "20260906T100200");
+    let undecodable = mic_row(dir.path(), "usb", "20260906T100200");
+    measured(dir.path(), &undecodable, recalld::speech::UNKNOWN_SECONDS);
     let ingest = store::open(dir.path()).expect("db");
-    for (name, seconds) in [(&silent, 0.0), (&speech, 12.0)] {
-        ingest
-            .execute(
-                "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc)
-                 VALUES (?1, 'usb', ?2, '2026-09-06T10:01:00Z')",
-                (name, seconds),
-            )
-            .expect("speech row");
-    }
     let now: DateTime<Utc> = "2026-09-06T10:30:00Z".parse().expect("t");
     derive_segment_jobs(&ingest, &meaning_plane(), now, 100).expect("derive");
-    let mut queued: Vec<String> = ingest
+    let mut queued = queued_names(&ingest);
+    queued.sort();
+    assert_eq!(
+        queued,
+        vec![speech, undecodable],
+        "the SILENT segment must not be queued"
+    );
+}
+
+#[test]
+fn a_segment_waits_for_its_speech_measurement() {
+    // The job used to go ahead while the measurement was pending, and the
+    // silent minutes among them came back as "Thank you."
+    let dir = tempfile::tempdir().expect("tempdir");
+    let clip = unmeasured_row(dir.path(), "usb", "20260906T100000");
+    let ingest = store::open(dir.path()).expect("db");
+    let now: DateTime<Utc> = "2026-09-06T10:30:00Z".parse().expect("t");
+    derive_segment_jobs(&ingest, &meaning_plane(), now, 100).expect("derive");
+    assert_eq!(
+        queued_names(&ingest),
+        Vec::<String>::new(),
+        "queued before measured"
+    );
+
+    measured(dir.path(), &clip, 12.0);
+    derive_segment_jobs(&ingest, &meaning_plane(), now, 100).expect("derive");
+    assert_eq!(queued_names(&ingest), vec![clip], "measured speech queues");
+}
+
+fn queued_names(ingest: &rusqlite::Connection) -> Vec<String> {
+    ingest
         .prepare("SELECT filename FROM jobs")
         .expect("prep")
         .query_map([], |r| r.get(0))
         .expect("query")
         .collect::<Result<_, _>>()
-        .expect("rows");
-    queued.sort();
-    // Unmeasured is queued too: not yet measured is not silent.
-    assert_eq!(
-        queued,
-        vec![speech, unmeasured],
-        "the SILENT segment must not be queued"
-    );
+        .expect("rows")
 }
 
 /// The ASR shim's result envelope, trimmed to what the derivation reads.
@@ -242,7 +258,27 @@ fn the_retired_room_streams_open_jobs_are_closed_not_deleted() {
 
 use recalld::queue::{self, derive_segment_jobs};
 
+/// A clip the speech pass has measured as twelve seconds of speech.
 fn mic_row(root: &std::path::Path, source: &str, stamp: &str) -> String {
+    let name = unmeasured_row(root, source, stamp);
+    measured(root, &name, 12.0);
+    name
+}
+
+fn measured(root: &std::path::Path, name: &str, seconds: f64) {
+    let source = name.split('-').next().expect("source");
+    store::open(root)
+        .expect("db")
+        .execute(
+            "INSERT OR REPLACE INTO segment_speech (filename, source, speech_seconds, computed_utc)
+             VALUES (?1, ?2, ?3, '2026-09-06T10:01:00Z')",
+            (name, source, seconds),
+        )
+        .expect("speech row");
+}
+
+/// A clip the speech pass has not reached yet.
+fn unmeasured_row(root: &std::path::Path, source: &str, stamp: &str) -> String {
     let name = format!("{source}-{stamp}.opus");
     let conn = store::open(root).expect("db");
     store::insert(

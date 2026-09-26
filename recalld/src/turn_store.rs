@@ -144,6 +144,8 @@ pub enum HiddenReason {
     DiarizedBy(Cow<'static, str>),
     /// A person split it: `split into pieces (<id>)`.
     SplitInto(i64),
+    /// A person listened and nobody spoke: the model invented the words.
+    NobodySpoke,
 }
 
 impl fmt::Display for HiddenReason {
@@ -153,6 +155,7 @@ impl fmt::Display for HiddenReason {
             Self::CoveredByRoom => f.write_str("covered by the room stream"),
             Self::DiarizedBy(by) => write!(f, "diarized ({by})"),
             Self::SplitInto(id) => write!(f, "split into pieces ({id})"),
+            Self::NobodySpoke => f.write_str("nobody spoke"),
         }
     }
 }

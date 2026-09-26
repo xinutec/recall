@@ -29,6 +29,7 @@ fn usage() -> ! {
          \x20 capture                      whether the recorders are running\n\
          \x20 correct <id> <text> --apply             replace a turn's text\n\
          \x20 correct --session <id> --fix OLD=>NEW    ...by the words instead\n\
+         \x20 no-speech <id> --apply                  nobody spoke: hide the turn\n\
          \n\
          --api defaults to {DEFAULT_API}, the system of record. There is no\n\
          option to read a local database: a second answer nobody can tell from\n\
@@ -87,6 +88,7 @@ fn run(api: &Api, command: &str, mut args: Vec<String>) -> Result<bool, Error> {
         "sources" => sources(api),
         "capture" => capture(api),
         "correct" => correct(api, &mut args),
+        "no-speech" => no_speech(api, &mut args),
         _ => usage(),
     }
 }
@@ -258,7 +260,7 @@ fn capture(api: &Api) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// ⚠ The one write. It reaches the corrections corpus, the only part of the
+/// ⚠ A write. It reaches the corrections corpus, the only part of the
 /// archive not re-derivable from audio, so it is a dry run unless `--apply` is
 /// given, and the change is printed either way.
 ///
@@ -306,6 +308,27 @@ fn correct_by_id(api: &Api, args: &[String], apply: bool) -> Result<bool, Error>
     if apply {
         let new_id = api.correct(current.id, text)?;
         println!("   -> applied as new turn #{new_id}");
+    }
+    Ok(true)
+}
+
+/// ⚠ The other write, gated like `correct`: the turn is hidden and its words
+/// filed as the model's invention.
+fn no_speech(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
+    let apply = take_flag(args, "--apply");
+    let Some(id) = args.first().and_then(|a| a.parse::<i64>().ok()) else {
+        usage()
+    };
+    let Some(current) = api.transcripts(&[id])?.into_iter().next() else {
+        println!("no turn {id}");
+        return Ok(false);
+    };
+    show_change(&current, "(nobody spoke)");
+    if apply {
+        api.no_speech(current.id)?;
+        println!("   -> hidden");
+    } else {
+        println!("\nDRY-RUN only — nothing written. Re-run with --apply to commit.");
     }
     Ok(true)
 }

@@ -9,6 +9,7 @@ import {
   ConversationPage,
   CorrectRequest,
   CorrectResult,
+  NoSpeechRequest,
   Ok,
   Session,
   SessionRenameRequest,
@@ -68,6 +69,12 @@ export class RecallApi {
     return this.http.post<CorrectResult>('/api/correct', body);
   }
 
+  /** Nobody spoke: hide the line, and file that its words were invented. */
+  noSpeech(id: number): Observable<Ok> {
+    const body: NoSpeechRequest = { id };
+    return this.http.post<Ok>('/api/no-speech', body);
+  }
+
   /** Enrolled and assigned names. Runtime data, so no name is in the code. */
   speakers(): Observable<SpeakerNames> {
     return this.http.get<SpeakerNames>('/api/speakers');
@@ -97,10 +104,7 @@ export class RecallApi {
   /** Give a text span, across turns and with partial edges, to a speaker: the
    * server splits at the edges. Reassign, split and merge are all this. */
   assignSpan(source: string, body: AssignSpanRequest): Observable<AssignResult> {
-    return this.http.post<AssignResult>(
-      `/api/sessions/${encodeURIComponent(source)}/assign`,
-      body,
-    );
+    return this.http.post<AssignResult>(`/api/sessions/${encodeURIComponent(source)}/assign`, body);
   }
 
   /** Soft-remove a bad label from the corpus. */

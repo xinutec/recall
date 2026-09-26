@@ -162,8 +162,9 @@ push to and the port the browser uses. It owns:
   A re-PUT of identical bytes is idempotent; a different blob under a taken
   name is 409 and the stored one is untouched.
 - **Speech evidence per blob.** Silero (`audiocore::vad`, the same detector the
-  Mac runs) measures speech seconds. A segment measured silent gets no
-  transcription job: transcribing silence returns inventions, not nothing.
+  Mac runs) measures speech seconds. A segment gets a transcription job only
+  once measured, and none if measured silent: transcribing silence returns
+  inventions ("Thank you."), not nothing.
 - **The work queue.** Jobs are derived from the blobs, never enqueued, so a
   missed enqueue cannot strand audio. A lease is time-bounded; a runner that
   dies lets it lapse; a job nobody finishes is retired after three leases. Kinds:

@@ -4,8 +4,8 @@
 //! The level scanner measures how loud a segment is; this measures whether
 //! anyone was talking. Liveness wants "someone is speaking" rather than "bytes
 //! arrived"; the room builder's reference level wants speech-bearing segments;
-//! and the queue refuses to transcribe a segment measured silent, because a
-//! model asked about silence invents text.
+//! and the queue waits for this measurement and refuses a segment measured
+//! silent, because a model asked about silence invents text.
 //!
 //! Bounded batches, one row per blob, like the level scanner, but newest first:
 //! liveness and the reference both read recent rows, and oldest-first would

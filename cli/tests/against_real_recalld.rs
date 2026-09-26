@@ -239,6 +239,27 @@ fn a_correction_is_applied_and_the_old_id_then_answers_with_the_new_turn() {
     );
 }
 
+/// Nobody spoke: the turn leaves the archive's reads, and a second go is refused
+/// rather than filing a second pair.
+#[test]
+fn nobody_spoke_hides_the_turn_and_cannot_be_filed_twice() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let id = archive(dir.path(), "Thank you.", None, None);
+    let api = Api::new(&serve(dir.path()), Some(session()));
+
+    assert_eq!(
+        api.search("Thank", 10).expect("search").len(),
+        1,
+        "found before"
+    );
+    api.no_speech(id).expect("no speech");
+    assert!(
+        api.search("Thank", 10).expect("search").is_empty(),
+        "a hidden turn is not found"
+    );
+    assert!(api.no_speech(id).is_err(), "already hidden");
+}
+
 /// `sources` and `capture` are device-exempt, so `recall-cli capture` can check
 /// the pause without a session.
 #[test]

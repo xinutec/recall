@@ -74,6 +74,17 @@ h2 {
 
 .words {
   font: var(--mat-sys-body-large);
+
+  &.silent {
+    font-style: italic;
+    color: var(--mat-sys-on-surface-variant);
+  }
+}
+
+// Under the words, apart from the buttons that file them.
+.nobody {
+  margin-block-start: 0.25rem;
+  margin-inline-start: -0.75rem;
 }
 
 .actions {

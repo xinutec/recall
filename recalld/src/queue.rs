@@ -74,6 +74,11 @@ fn stem(path: &str) -> String {
 /// yet, bounded by `limit` so a backlog queues in bites rather than days of GPU
 /// work in one statement.
 ///
+/// ⚠ Only a clip the speech pass has measured, and not as silent. The job used
+/// to go ahead while the measurement was pending (up to two minutes), and a
+/// silent minute handed to Whisper comes back as "Thank you." Undecodable
+/// (`UNKNOWN_SECONDS`) still queues: the transcriber may read what VAD could not.
+///
 /// The join across the planes is on the filename: the two planes spell the same
 /// instant differently, and `start_utc` compared as text matches nothing.
 pub fn derive_segment_jobs(
@@ -109,9 +114,9 @@ pub fn derive_segment_jobs(
     let candidates: Vec<(String, String)> = {
         let mut stmt = ingest.prepare(
             "SELECT s.filename, s.source FROM segments s
-             LEFT JOIN segment_speech p ON p.filename = s.filename
+             JOIN segment_speech p ON p.filename = s.filename
              WHERE s.source != ?1
-               AND (p.filename IS NULL OR p.speech_seconds != 0.0)
+               AND p.speech_seconds != 0.0
                AND NOT EXISTS (SELECT 1 FROM jobs j
                                WHERE j.kind = ?2 AND j.filename = s.filename)
              ORDER BY s.start_utc DESC",

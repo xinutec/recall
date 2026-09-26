@@ -386,7 +386,7 @@ impl Api {
 
     /// Replace a turn's text with a person's own words.
     ///
-    /// The one write in this crate. It reaches the corrections corpus, the only
+    /// One of the two writes in this crate. It reaches the corrections corpus, the only
     /// part of the archive not re-derivable from audio; `recall-cli correct`
     /// requires `--apply` and prints the change first.
     ///
@@ -401,6 +401,18 @@ impl Api {
         let body: NewId = serde_json::from_reader(response.into_reader())
             .map_err(|e| Error::Body(e.to_string()))?;
         Ok(body.new_id)
+    }
+
+    /// Say nobody spoke: the turn is hidden and its words filed as invented.
+    /// The other write; `recall-cli no-speech` requires `--apply`.
+    ///
+    /// # Errors
+    /// As [`Api::correct`].
+    pub fn no_speech(&self, id: i64) -> Result<(), Error> {
+        self.signed(self.agent.post(&format!("{}/api/no-speech", self.base)))
+            .send_json(serde_json::json!({ "id": id }))
+            .map_err(|e| self.refused(&e))?;
+        Ok(())
     }
 }
 

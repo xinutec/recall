@@ -11,7 +11,7 @@ import {
 } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
-import { firstValueFrom } from 'rxjs';
+import { Observable, firstValueFrom } from 'rxjs';
 import { TextFieldModule } from '@angular/cdk/text-field';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -59,8 +59,8 @@ export function dayWindow(day: string): { after: string; before: string } {
 const DAYS = 14;
 const PAGE = 1000;
 
-/** Line by line through a day: each plays by itself, and a person either fixes
- * the words or says they are right. Either way the check is filed as words heard
+/** Line by line through a day: each plays by itself, and a person fixes the
+ * words, says they are right, or says nobody spoke. Each is filed as words heard
  * and vouched for, which is what scoring the transcripts needs (#1461). */
 @Component({
   selector: 'app-check',
@@ -108,7 +108,7 @@ export class Check {
   protected readonly loading = signal(false);
   protected readonly failed = signal(false);
   protected readonly busy = signal(false);
-  /** Line id to the words filed for it, this visit. */
+  /** Line id to the words filed for it this visit; empty when nobody spoke. */
   protected readonly checked = signal<ReadonlyMap<number, string>>(new Map());
 
   protected readonly current = computed(() => this.lines()[this.at()] ?? null);
@@ -195,12 +195,24 @@ export class Check {
   protected confirm(): void {
     const t = this.current();
     const text = this.draft().trim();
-    if (!t || !text || this.busy() || this.checked().has(t.id)) return;
+    if (!t || !text) return;
+    this.file(t, text, this.api.correct(t.id, text, { checked: true }));
+  }
+
+  /** Nothing was said: the words are the model's invention. */
+  protected nobodySpoke(): void {
+    const t = this.current();
+    if (t) this.file(t, '', this.api.noSpeech(t.id));
+  }
+
+  /** `words` is what the line now says, empty for nobody spoke. */
+  private file(t: Transcript, words: string, write: Observable<unknown>): void {
+    if (this.busy() || this.checked().has(t.id)) return;
     this.busy.set(true);
-    this.api.correct(t.id, text, { checked: true }).subscribe({
+    write.subscribe({
       next: () => {
         this.busy.set(false);
-        this.checked.update((m) => new Map(m).set(t.id, text));
+        this.checked.update((m) => new Map(m).set(t.id, words));
         this.next();
       },
       error: () => {

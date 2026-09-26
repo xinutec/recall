@@ -1,9 +1,5 @@
 <header class="head">
-  <button
-    matIconButton
-    (click)="play()"
-    [attr.aria-label]="playing() ? 'pause' : 'hear this line'"
-  >
+  <button matIconButton (click)="play()" [attr.aria-label]="playing() ? 'pause' : 'hear this line'">
     <mat-icon>{{ playing() ? 'pause' : 'play_arrow' }}</mat-icon>
   </button>
   <span class="clock">{{ clock(t.start) }}</span>
@@ -17,11 +13,7 @@
 </header>
 
 <ng-template #names>
-  <mat-chip-listbox
-    aria-label="Said by"
-    [disabled]="busy()"
-    (change)="choose($event.value)"
-  >
+  <mat-chip-listbox aria-label="Said by" [disabled]="busy()" (change)="choose($event.value)">
     @for (n of data.names; track n) {
       <mat-chip-option
         [value]="n"
@@ -69,6 +61,10 @@
         <button mat-list-item (click)="open('edit')">
           <mat-icon matListItemIcon>edit</mat-icon>
           <span matListItemTitle>Fix words</span>
+        </button>
+        <button mat-list-item [disabled]="busy()" (click)="nobodySpoke()">
+          <mat-icon matListItemIcon>voice_over_off</mat-icon>
+          <span matListItemTitle>Nobody spoke</span>
         </button>
       }
       @if (data.alternates.length) {

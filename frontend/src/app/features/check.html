@@ -53,8 +53,12 @@
             <span class="who">{{ t.speaker }}</span>
           }
         </div>
-        @if (checked().get(t.id); as words) {
-          <p class="words">{{ words }}</p>
+        @if (checked().has(t.id)) {
+          @if (checked().get(t.id); as words) {
+            <p class="words">{{ words }}</p>
+          } @else {
+            <p class="words silent">Nobody spoke</p>
+          }
           <p class="hint"><mat-icon inline>check</mat-icon> Checked</p>
         } @else {
           <mat-form-field appearance="outline" subscriptSizing="dynamic" class="edit">
@@ -69,6 +73,10 @@
               (keydown.enter)="$event.preventDefault(); confirm()"
             ></textarea>
           </mat-form-field>
+          <button matButton class="nobody" [disabled]="busy()" (click)="nobodySpoke()">
+            <mat-icon>voice_over_off</mat-icon>
+            Nobody spoke
+          </button>
         }
       </mat-card-content>
     </mat-card>

@@ -609,3 +609,91 @@ fn a_malformed_span_is_refused_rather_than_stored_verbatim() {
         "got {refused:?}"
     );
 }
+
+// ---- nobody spoke ----
+
+use recalld::labels_write::mark_no_speech;
+
+fn invented(conn: &Connection) -> i64 {
+    conn.execute(
+        "INSERT INTO transcript_segments (start_utc, end_utc, text, asr_model, asr_confidence)
+         VALUES ('2026-09-19T14:42:30+00:00', '2026-09-19T14:42:33+00:00',
+                 'Thank you.', 'whisper', 0.58)",
+        [],
+    )
+    .expect("turn");
+    conn.last_insert_rowid()
+}
+
+fn now() -> audiocore::instant::Stamp {
+    audiocore::instant::Stamp::parse(AT).expect("stamp")
+}
+
+#[test]
+fn nobody_spoke_hides_the_turn_and_writes_no_new_one() {
+    let mut conn = db();
+    let id = invented(&conn);
+    mark_no_speech(&mut conn, id, &now()).expect("mark");
+    let (hidden, current): (Option<String>, i64) = conn
+        .query_row(
+            "SELECT (SELECT hidden_reason FROM transcript_segments WHERE id = ?1),
+                    (SELECT COUNT(*) FROM transcript_segments
+                      WHERE superseded_by IS NULL AND hidden_reason IS NULL)",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("read");
+    assert_eq!(hidden.as_deref(), Some("nobody spoke"));
+    assert_eq!(current, 0, "no turn stands in for the invented one");
+}
+
+#[test]
+fn nobody_spoke_is_a_checked_pair_with_empty_text() {
+    // The pair is an ASR label: this audio transcribes to nothing.
+    let mut conn = db();
+    let id = invented(&conn);
+    mark_no_speech(&mut conn, id, &now()).expect("mark");
+    let (original, corrected, checked): (String, String, Option<i64>) = conn
+        .query_row(
+            "SELECT original_text, corrected_text, words_checked FROM corrections
+              WHERE transcript_segment_id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .expect("pair");
+    assert_eq!(
+        (original.as_str(), corrected.as_str(), checked),
+        ("Thank you.", "", Some(1))
+    );
+}
+
+#[test]
+fn nobody_spoke_protects_the_span_from_the_next_pass() {
+    // Without this a re-transcription writes the same "Thank you." back.
+    let mut conn = db();
+    let id = invented(&conn);
+    mark_no_speech(&mut conn, id, &now()).expect("mark");
+    let at = |s: &str| s.parse::<chrono::DateTime<chrono::Utc>>().expect("t");
+    let spans = recalld::turn_store::protected_between(
+        &conn,
+        at("2026-09-19T14:42:00Z"),
+        at("2026-09-19T14:43:00Z"),
+    )
+    .expect("spans");
+    assert_eq!(spans.len(), 1, "{spans:?}");
+}
+
+#[test]
+fn nobody_spoke_twice_is_refused() {
+    let mut conn = db();
+    let id = invented(&conn);
+    mark_no_speech(&mut conn, id, &now()).expect("first");
+    assert!(matches!(
+        mark_no_speech(&mut conn, id, &now()),
+        Err(CorrectError::Hidden(i)) if i == id
+    ));
+    let pairs: i64 = conn
+        .query_row("SELECT COUNT(*) FROM corrections", [], |r| r.get(0))
+        .expect("count");
+    assert_eq!(pairs, 1, "a double tap stores one pair");
+}

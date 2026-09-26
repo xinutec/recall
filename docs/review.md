@@ -94,7 +94,12 @@ itself; fix the words, or tap *Words are right*. Enter saves, *Skip* is for a
 line you can't make out. Where several mics heard a moment, the page takes them
 in turn, because a check scores the mic whose text was edited.
 
-Both answers file a correction marked `words_checked`: a person heard the words
+*Nobody spoke* is for words the model invented over silence. It hides the line
+and files the correction with empty text, so the span stays protected and a
+later pass cannot write the same words back. The line sheet on a session or the
+timeline has it too.
+
+Every answer files a correction marked `words_checked`: a person heard the words
 and vouches for them. The referees (`scripts/rank_referee.py`,
 `scripts/room_referee.py`) count only those, and changed text; a speaker fix
 keeps the machine's words and is not evidence about them.

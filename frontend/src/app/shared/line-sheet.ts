@@ -57,7 +57,7 @@ export function wordsOf(text: string): Word[] {
 type Mode = 'main' | 'part' | 'edit' | 'mics';
 
 /** Everything to do with one line: hear it, say who said it, give part of it to
- * someone else, fix its words, compare the mics. Closes with `true` after a write. */
+ * someone else, fix its words or say nobody spoke, compare the mics. Closes with `true` after a write. */
 @Component({
   selector: 'app-line-sheet',
   imports: [
@@ -182,6 +182,11 @@ export class LineSheet {
     const fixed = text.trim();
     if (!fixed || fixed === this.t.text) return;
     this.write(this.api.correct(this.t.id, fixed));
+  }
+
+  /** The words are the model's invention: hide the line. */
+  protected nobodySpoke(): void {
+    this.write(this.api.noSpeech(this.t.id));
   }
 
   protected copy(): void {

@@ -9,7 +9,7 @@
 //! therefore drops its embedding, to be re-enrolled under the new name.
 
 use crate::route;
-use crate::turn_store::{self, HUMAN_MODEL, NewTurn, Provenance};
+use crate::turn_store::{self, HUMAN_MODEL, HiddenReason, NewTurn, Provenance};
 use audiocore::instant::Stamp;
 use rusqlite::{Connection, Transaction};
 
@@ -152,6 +152,8 @@ pub enum CorrectError {
     Missing(i64),
     /// That turn has already been replaced.
     AlreadySuperseded(i64),
+    /// That turn is already hidden.
+    Hidden(i64),
     /// The overridden start or end is not an ISO-8601 instant.
     BadSpan,
     Db(rusqlite::Error),
@@ -292,6 +294,51 @@ pub fn apply_correction(
     Ok(new_id)
 }
 
+/// A person listened and nobody spoke: the turn's words are the model's
+/// invention, typically "Thank you." on a silent minute.
+///
+/// The turn is hidden and the pair stored with empty text. The pair's span is
+/// what keeps a later pass from writing the same invention back
+/// ([`turn_store::protected_between`]), and it is an ASR label: this audio
+/// should transcribe to nothing.
+///
+/// # Errors
+/// [`CorrectError::Missing`], [`CorrectError::AlreadySuperseded`] or
+/// [`CorrectError::Hidden`] when the turn is not current.
+pub fn mark_no_speech(
+    conn: &mut Connection,
+    segment_id: i64,
+    now: &Stamp,
+) -> Result<(), CorrectError> {
+    let tx = conn.transaction()?;
+    let old = load_original(&tx, segment_id)?;
+    if old.superseded_by.is_some() {
+        return Err(CorrectError::AlreadySuperseded(segment_id));
+    }
+    if !turn_store::claim(&tx, old.id, &HiddenReason::NobodySpoke)? {
+        return Err(CorrectError::Hidden(segment_id));
+    }
+    tx.execute(
+        "INSERT INTO corrections \
+            (transcript_segment_id, audio_segment_id, start_utc, end_utc, \
+             original_text, corrected_text, language, created_utc, \
+             audio_confidence, words_checked) \
+         VALUES (?1, ?2, ?3, ?4, ?5, '', ?6, ?7, ?8, 1)",
+        rusqlite::params![
+            old.id,
+            old.audio_segment_id,
+            old.start_utc,
+            old.end_utc,
+            old.text,
+            old.language,
+            now,
+            old.asr_confidence,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 #[derive(Deserialize, ts_rs::TS)]
 #[ts(export, rename = "CorrectRequest")]
 pub struct CorrectIn {
@@ -333,24 +380,58 @@ pub async fn correct_route(
     });
     match applied.await {
         Ok(Ok(new_id)) => Json(route::NewId { new_id }).into_response(),
-        // These three are the caller's to fix, and each says which.
-        Ok(Err(CorrectError::Blank)) => {
+        Ok(Err(err)) => refused("correct", err),
+        Err(err) => route::faulted("correct task", &err),
+    }
+}
+
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(export, rename = "NoSpeechRequest")]
+pub struct NoSpeechIn {
+    id: i64,
+}
+
+pub async fn no_speech_route(
+    State(st): State<Arc<reads::State>>,
+    Json(body): Json<NoSpeechIn>,
+) -> Response {
+    let root = st.root.clone();
+    let now = audiocore::instant::Stamp::now();
+    let applied = tokio::task::spawn_blocking(move || {
+        let mut conn = work::open_write(&root)?;
+        mark_no_speech(&mut conn, body.id, &now)
+    });
+    match applied.await {
+        Ok(Ok(())) => route::ack(),
+        Ok(Err(err)) => refused("no speech", err),
+        Err(err) => route::faulted("no speech task", &err),
+    }
+}
+
+/// A refused write, as the caller's to fix (each says which) or a fault.
+fn refused(what: &str, err: CorrectError) -> Response {
+    match err {
+        CorrectError::Blank => {
             (StatusCode::BAD_REQUEST, "corrected text must not be blank").into_response()
         }
-        Ok(Err(CorrectError::Missing(id))) => (
+        CorrectError::Missing(id) => (
             StatusCode::BAD_REQUEST,
             format!("no transcript segment with id {id}"),
         )
             .into_response(),
-        Ok(Err(CorrectError::BadSpan)) => {
+        CorrectError::BadSpan => {
             (StatusCode::BAD_REQUEST, "start and end must be ISO-8601").into_response()
         }
-        Ok(Err(CorrectError::AlreadySuperseded(id))) => (
+        CorrectError::AlreadySuperseded(id) => (
             StatusCode::BAD_REQUEST,
             format!("turn #{id} was already superseded - correct the current version"),
         )
             .into_response(),
-        Ok(Err(CorrectError::Db(err))) => route::faulted("correct", &err),
-        Err(err) => route::faulted("correct task", &err),
+        CorrectError::Hidden(id) => (
+            StatusCode::BAD_REQUEST,
+            format!("turn #{id} is already hidden"),
+        )
+            .into_response(),
+        CorrectError::Db(err) => route::faulted(what, &err),
     }
 }

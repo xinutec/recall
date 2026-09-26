@@ -66,6 +66,11 @@ async function mockApi(page: Page): Promise<unknown[]> {
       posted.push(route.request().postDataJSON());
       return route.fulfill({ json: { newId: 100 + posted.length } });
     }
+    if (url.includes('/api/no-speech')) {
+      const body: unknown = route.request().postDataJSON();
+      posted.push({ noSpeech: body });
+      return route.fulfill({ json: { ok: true } });
+    }
     return route.fulfill({ json: {} });
   });
   return posted;
@@ -98,4 +103,23 @@ test('checks a day line by line, alternating mics (Pixel 9)', async ({ page }) =
     { id: 1, text: 'I have already made a list of errands.', checked: true },
     { id: 4, text: 'The pharmacy closes early on Fridays.', checked: true },
   ]);
+});
+
+test('a line nobody spoke is filed as such, not as words (Pixel 9)', async ({ page }) => {
+  const posted = await mockApi(page);
+  await page.goto('/check');
+  await page.getByRole('combobox', { name: 'Day' }).click();
+  await page.getByRole('option', { name: 'Today' }).click();
+
+  await expect(page.getByText('Line 1 of 3')).toBeVisible();
+  const nobody = page.getByRole('button', { name: 'Nobody spoke' });
+  await expect(nobody).toBeInViewport();
+  await nobody.click();
+  await expect(page.getByText('Line 2 of 3')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Back' }).click();
+  await expect(page.getByText('Nobody spoke', { exact: true })).toBeVisible();
+  await expect(page.getByText('1 checked')).toBeVisible();
+
+  expect(posted).toEqual([{ noSpeech: { id: 1 } }]);
 });

@@ -22,4 +22,5 @@ export type { VoiceNameRequest } from './generated/VoiceNameRequest';
 export type { AssignSpanRequest } from './generated/AssignSpanRequest';
 export type { AssignResult } from './generated/AssignResult';
 export type { CorrectRequest } from './generated/CorrectRequest';
+export type { NoSpeechRequest } from './generated/NoSpeechRequest';
 export type { TelemetryEvent } from './generated/TelemetryEvent';
