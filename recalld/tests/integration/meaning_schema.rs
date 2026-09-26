@@ -208,3 +208,41 @@ fn an_instant_in_another_spelling_is_refused_and_the_stored_one_accepted() {
     );
     assert!(moved.is_err(), "an update is held to it too");
 }
+
+#[test]
+fn words_a_person_typed_or_vouched_for_are_marked_on_their_turn() {
+    // Rung 50 reads the corrections already filed: a check or a changed text
+    // marks the person's turn, a speaker fix (the machine's words) does not.
+    // A database one rung short: the top built, then its last rung taken off.
+    let conn = rusqlite::Connection::open_in_memory().expect("db");
+    ensure(&conn).expect("schema");
+    conn.execute_batch(
+        "ALTER TABLE transcript_segments DROP COLUMN words_checked;
+         PRAGMA user_version = 49;",
+    )
+    .expect("one rung short");
+    conn.execute_batch(
+        "INSERT INTO transcript_segments (id, start_utc, end_utc, text, asr_model, provenance)
+         VALUES (11, '2026-09-19T10:00:00+00:00', '2026-09-19T10:00:02+00:00', 'a', 'human', 'human correction of #1'),
+                (12, '2026-09-19T10:00:02+00:00', '2026-09-19T10:00:04+00:00', 'B', 'human', 'human correction of #2'),
+                (13, '2026-09-19T10:00:04+00:00', '2026-09-19T10:00:06+00:00', 'c', 'human', 'human correction of #3');
+         INSERT INTO transcript_segments (id, start_utc, end_utc, text, asr_model, superseded_by)
+         VALUES (1, '2026-09-19T10:00:00+00:00', '2026-09-19T10:00:02+00:00', 'a', 'whisper', 11),
+                (2, '2026-09-19T10:00:02+00:00', '2026-09-19T10:00:04+00:00', 'b', 'whisper', 12),
+                (3, '2026-09-19T10:00:04+00:00', '2026-09-19T10:00:06+00:00', 'c', 'whisper', 13);
+         INSERT INTO corrections (transcript_segment_id, start_utc, end_utc, original_text, corrected_text, created_utc, words_checked)
+         VALUES (1, '2026-09-19T10:00:00+00:00', '2026-09-19T10:00:02+00:00', 'a', 'a', '2026-09-26T12:00:00+00:00', 1),
+                (2, '2026-09-19T10:00:02+00:00', '2026-09-19T10:00:04+00:00', 'b', 'B', '2026-09-26T12:00:00+00:00', NULL),
+                (3, '2026-09-19T10:00:04+00:00', '2026-09-19T10:00:06+00:00', 'c', 'c', '2026-09-26T12:00:00+00:00', NULL);",
+    )
+    .expect("rows at rung 49");
+    ensure(&conn).expect("climb");
+    let marked: Vec<(i64, Option<i64>)> = conn
+        .prepare("SELECT id, words_checked FROM transcript_segments WHERE id > 10 ORDER BY id")
+        .expect("prep")
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(marked, vec![(11, Some(1)), (12, Some(1)), (13, None)]);
+}

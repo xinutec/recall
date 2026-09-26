@@ -19,6 +19,7 @@ function turn(o: Partial<Transcript>): Transcript {
     language: 'en',
     speaker: 'P',
     speakerConfirmed: true,
+    wordsChecked: false,
     speakerConfidence: null,
     confidence: null,
     loudness: null,
@@ -115,7 +116,7 @@ describe('LineSheet', () => {
     ctrl.expectNone('/api/correct');
     c.saveText('vorasidenib');
     const req = ctrl.expectOne('/api/correct');
-    expect(req.request.body).toEqual({ id: 7, text: 'vorasidenib' });
+    expect(req.request.body).toEqual({ id: 7, text: 'vorasidenib', checked: true });
   });
 
   it('two taps pick a range of words, a third starts over', async () => {
@@ -155,5 +156,14 @@ describe('LineSheet', () => {
     c.choose('D');
     const body = ctrl.expectOne('/api/sessions/usb/assign').request.body;
     expect([body.startChar, body.endChar]).toEqual([10, 17]);
+  });
+
+  it('words are right files a check, as Check does', async () => {
+    const { c, ctrl, dismiss } = await setup();
+    c.wordsRight();
+    const req = ctrl.expectOne('/api/correct');
+    expect(req.request.body).toEqual({ id: 7, text: 'a list of errands', checked: true });
+    req.flush({ newId: 9 });
+    expect(dismiss).toHaveBeenCalledWith('wrote');
   });
 });

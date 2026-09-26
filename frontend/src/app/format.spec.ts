@@ -10,6 +10,7 @@ function turn(start: string, end: string): Transcript {
     language: null,
     speaker: null,
     speakerConfirmed: false,
+    wordsChecked: false,
     speakerConfidence: null,
     confidence: null,
     loudness: null,

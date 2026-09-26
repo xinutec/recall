@@ -508,6 +508,18 @@ pub const MIGRATIONS: &[&str] = &[
     DROP TABLE diarize_skips;
     DROP TABLE unreadable_captures;
 "#,
+    // v50
+    r#"
+    -- 1 on a person's turn whose words they typed or vouched for: where it was
+    -- done does not matter, and a speaker fix (the machine's words, renamed)
+    -- stays NULL. What Check skips.
+    ALTER TABLE transcript_segments ADD COLUMN words_checked INTEGER;
+    UPDATE transcript_segments SET words_checked = 1
+     WHERE asr_model = 'human'
+       AND EXISTS (SELECT 1 FROM corrections c
+                   WHERE transcript_segments.provenance = 'human correction of #' || c.transcript_segment_id
+                     AND (c.words_checked = 1 OR c.corrected_text <> c.original_text));
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

@@ -108,10 +108,13 @@ Every answer can be taken back: the message after it offers *Undo*, and a line
 already checked shows *Undo check* when you go *Back* to it. Undo deletes the
 correction rather than hiding it, since a mis-tap was never a judgement.
 
-Every answer files a correction marked `words_checked`: a person heard the words
-and vouches for them. The referees (`scripts/rank_referee.py`,
-`scripts/room_referee.py`) count only those, and changed text; a speaker fix
-keeps the machine's words and is not evidence about them.
+The same three answers are in the line sheet on a session or the timeline, and
+they are stored the same way wherever given: each files a correction marked
+`words_checked` (a person heard the words and vouches for them), and the person's
+turn carries `words_checked` too. Check skips a moment once any of its lines has
+it, so a day can be worked in a session first and finished in Check. A speaker
+fix keeps the machine's words: it leaves the line to be checked, and the
+referees (`scripts/rank_referee.py`, `scripts/room_referee.py`) do not count it.
 
 ## What to trust (and what not to)
 

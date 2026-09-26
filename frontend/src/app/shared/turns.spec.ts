@@ -18,6 +18,7 @@ function turn(o: Partial<Transcript>): Transcript {
     language: 'en',
     speaker: null,
     speakerConfirmed: false,
+    wordsChecked: false,
     speakerConfidence: null,
     confidence: null,
     loudness: null,
@@ -51,10 +52,7 @@ async function setup(moments: Moment[], roster: string[] = []) {
     }),
   };
   TestBed.configureTestingModule({
-    providers: [
-      provideZonelessChangeDetection(),
-      { provide: MatBottomSheet, useValue: sheet },
-    ],
+    providers: [provideZonelessChangeDetection(), { provide: MatBottomSheet, useValue: sheet }],
   });
   const fixture = TestBed.createComponent(Turns);
   fixture.componentRef.setInput('moments', moments);

@@ -28,13 +28,13 @@
       <p class="hint">Still being transcribed, editable in a minute or two.</p>
     }
     <mat-action-list>
-      @if (editable && words.length > 1) {
-        <button mat-list-item (click)="open('part')">
-          <mat-icon matListItemIcon>call_split</mat-icon>
-          <span matListItemTitle>Part of it was someone else</span>
-        </button>
-      }
       @if (editable) {
+        @if (!t.wordsChecked) {
+          <button mat-list-item [disabled]="busy()" (click)="wordsRight()">
+            <mat-icon matListItemIcon>check</mat-icon>
+            <span matListItemTitle>Words are right</span>
+          </button>
+        }
         <button mat-list-item (click)="open('edit')">
           <mat-icon matListItemIcon>edit</mat-icon>
           <span matListItemTitle>Fix words</span>
@@ -42,6 +42,12 @@
         <button mat-list-item [disabled]="busy()" (click)="nobodySpoke()">
           <mat-icon matListItemIcon>voice_over_off</mat-icon>
           <span matListItemTitle>Nobody spoke</span>
+        </button>
+      }
+      @if (editable && words.length > 1) {
+        <button mat-list-item (click)="open('part')">
+          <mat-icon matListItemIcon>call_split</mat-icon>
+          <span matListItemTitle>Part of it was someone else</span>
         </button>
       }
       @if (data.alternates.length) {

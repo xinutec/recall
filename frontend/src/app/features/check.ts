@@ -28,15 +28,17 @@ import { RecallApi } from '../recall-api';
 import { dayKey, timeOfDaySeconds } from '../format';
 import { Player } from '../shared/player';
 
-/** One line per moment, never live and never one already corrected. Where several
- * mics heard the moment, the one checked least so far: a check scores the mic
- * whose words were edited, so both of two competing mics need checking. */
+/** One line per moment, never live, and none where a person already checked or
+ * fixed the words, wherever they did it (a line only renamed still needs its
+ * words checked). Where several mics heard the moment, the one checked least so
+ * far: a check scores the mic whose words were edited, so both of two competing
+ * mics need checking. */
 export function pickLines(moments: readonly Moment[]): Transcript[] {
   const counts = new Map<string, number>();
   const out: Transcript[] = [];
   for (const m of moments) {
     const all = [...m.primary, ...m.alternates];
-    if (all.some((t) => t.tier === 'corrected')) continue;
+    if (all.some((t) => t.wordsChecked)) continue;
     const candidates = all.filter((t) => t.tier !== 'live' && t.text.trim());
     let best: Transcript | undefined;
     for (const t of candidates) {

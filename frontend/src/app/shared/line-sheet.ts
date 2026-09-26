@@ -59,7 +59,7 @@ type Mode = 'main' | 'part' | 'edit' | 'mics';
 export type LineSheetResult = 'wrote' | 'hidden';
 
 /** Everything to do with one line: hear it, say who said it, give part of it to
- * someone else, fix its words or say nobody spoke, compare the mics. Closes with
+ * someone else, say its words are right, fix them or say nobody spoke, compare the mics. Closes with
  * a {@link LineSheetResult} after a write. */
 @Component({
   selector: 'app-line-sheet',
@@ -172,10 +172,15 @@ export class LineSheet {
 
   // --- words
 
+  /** Filed as Check files it, so a line checked here is done there too. */
+  protected wordsRight(): void {
+    this.write(this.api.correct(this.t.id, this.t.text, { checked: true }));
+  }
+
   protected saveText(text: string): void {
     const fixed = text.trim();
     if (!fixed || fixed === this.t.text) return;
-    this.write(this.api.correct(this.t.id, fixed));
+    this.write(this.api.correct(this.t.id, fixed, { checked: true }));
   }
 
   /** The words are the model's invention: hide the line. */

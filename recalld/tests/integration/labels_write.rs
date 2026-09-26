@@ -817,3 +817,59 @@ fn a_check_corrected_again_since_is_not_taken_back() {
         Err(CorrectError::NotCorrected(41))
     ));
 }
+
+#[test]
+fn a_turn_is_words_checked_when_confirmed_or_retyped_not_when_renamed() {
+    let words_checked = |conn: &Connection, id: i64| -> Option<i64> {
+        conn.query_row(
+            "SELECT words_checked FROM transcript_segments WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .expect("turn")
+    };
+    let mut conn = correction_db();
+    let renamed = apply_correction(
+        &mut conn,
+        41,
+        "mis heard words",
+        &crate::stamp(NOW),
+        &Correction {
+            speaker: Some("Dr. 1"),
+            ..Correction::default()
+        },
+    )
+    .expect("renamed");
+    assert_eq!(
+        words_checked(&conn, renamed),
+        None,
+        "the machine's words, renamed"
+    );
+
+    let confirmed = apply_correction(
+        &mut conn,
+        renamed,
+        "mis heard words",
+        &crate::stamp(NOW),
+        &Correction {
+            words_checked: true,
+            ..Correction::default()
+        },
+    )
+    .expect("confirmed");
+    assert_eq!(words_checked(&conn, confirmed), Some(1));
+
+    let retyped = apply_correction(
+        &mut conn,
+        confirmed,
+        "misheard words",
+        &crate::stamp(NOW),
+        &Correction::default(),
+    )
+    .expect("retyped");
+    assert_eq!(
+        words_checked(&conn, retyped),
+        Some(1),
+        "typed words are vouched for"
+    );
+}

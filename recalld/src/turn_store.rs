@@ -240,6 +240,8 @@ pub struct NewTurn<'a> {
     pub provenance: Option<Provenance>,
     pub word_timings: Option<&'a str>,
     pub created_utc: Option<&'a Stamp>,
+    /// A person typed or vouched for these words.
+    pub words_checked: bool,
 }
 
 impl<'a> NewTurn<'a> {
@@ -260,6 +262,7 @@ impl<'a> NewTurn<'a> {
             provenance: None,
             word_timings: None,
             created_utc: None,
+            words_checked: false,
         }
     }
 }
@@ -299,6 +302,10 @@ pub fn insert(conn: &Connection, turn: &NewTurn<'_>) -> rusqlite::Result<i64> {
         (
             "created_utc",
             turn.created_utc.map(|t| Value::Text(t.to_string())),
+        ),
+        (
+            "words_checked",
+            turn.words_checked.then_some(Value::Integer(1)),
         ),
     ]
     .into_iter()

@@ -276,6 +276,7 @@ fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment
         provenance: None,
         hidden_reason: None,
         source_id: Some("usb".to_owned()),
+        words_checked: false,
     }
 }
 

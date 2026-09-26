@@ -506,3 +506,25 @@ fn a_confident_turn_stays_out_of_the_review_queue() {
             .is_empty()
     );
 }
+
+#[test]
+fn a_line_says_whether_a_person_vouched_for_its_words() {
+    // What lets Check skip a line wherever its words were checked, and only then.
+    let conn = db();
+    turn(
+        &conn,
+        1,
+        "2026-09-01T10:00:00+00:00",
+        "checked",
+        &[("words_checked", "1")],
+    );
+    turn(&conn, 2, "2026-09-01T10:00:01+00:00", "not", &[]);
+    let page = reads::timeline(&conn, 50, None).expect("timeline");
+    let by_text: std::collections::BTreeMap<_, _> = page
+        .items
+        .iter()
+        .map(|t| (t.text.as_str(), t.words_checked))
+        .collect();
+    assert_eq!(by_text.get("checked"), Some(&true));
+    assert_eq!(by_text.get("not"), Some(&false));
+}

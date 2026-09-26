@@ -9,4 +9,8 @@ import type { Tier } from "./Tier";
  * one ("a guess, this strong"), so these serialise as `null` rather than being
  * skipped.
  */
-export type Transcript = { id: number, start: string, end: string, text: string, language: string | null, speaker: string | null, speakerConfirmed: boolean, speakerConfidence: number | null, confidence: number | null, loudness: number | null, model: string | null, tier: Tier, hidden: string | null, audioUrl: string, source: string | null, cluster: string | null, };
+export type Transcript = { id: number, start: string, end: string, text: string, language: string | null, speaker: string | null, speakerConfirmed: boolean, speakerConfidence: number | null, confidence: number | null, loudness: number | null, model: string | null, tier: Tier, hidden: string | null, audioUrl: string, source: string | null, cluster: string | null, 
+/**
+ * A person typed or vouched for these words, wherever they did it.
+ */
+wordsChecked: boolean, };

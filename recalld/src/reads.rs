@@ -38,6 +38,8 @@ pub struct TranscriptOut {
     pub audio_url: String,
     pub source: Option<String>,
     pub cluster: Option<String>,
+    /// A person typed or vouched for these words, wherever they did it.
+    pub words_checked: bool,
 }
 
 #[derive(Debug, Serialize, PartialEq, ts_rs::TS)]
@@ -70,6 +72,7 @@ pub struct Segment {
     pub provenance: Option<String>,
     pub hidden_reason: Option<String>,
     pub source_id: Option<String>,
+    pub words_checked: bool,
 }
 
 impl Segment {
@@ -90,6 +93,7 @@ impl Segment {
             provenance: row.get("provenance")?,
             hidden_reason: row.get("hidden_reason")?,
             source_id: row.get("source_id")?,
+            words_checked: row.get::<_, Option<i64>>("words_checked")? == Some(1),
         })
     }
 
@@ -152,6 +156,7 @@ pub fn to_out_with(
         audio_url: format!("/api/audio/{}", segment.id),
         source: segment.source_id.clone(),
         cluster: segment.speaker_cluster.clone(),
+        words_checked: segment.words_checked,
     }
 }
 

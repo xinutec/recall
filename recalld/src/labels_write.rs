@@ -268,6 +268,9 @@ pub fn apply_correction(
             speaker_cluster: old.speaker_cluster.as_deref(),
             provenance: Some(Provenance::Correction(old.id)),
             created_utc: Some(now),
+            // Typed words are vouched for; a renamed speaker leaves them the
+            // machine's.
+            words_checked: edit.words_checked || text != old.text,
             ..NewTurn::at(&start, &end, text)
         },
     )?;

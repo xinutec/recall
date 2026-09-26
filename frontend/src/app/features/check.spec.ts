@@ -19,6 +19,7 @@ function line(id: number, source: string, o: Partial<Transcript> = {}): Transcri
     language: 'en',
     speaker: null,
     speakerConfirmed: false,
+    wordsChecked: false,
     speakerConfidence: null,
     confidence: null,
     loudness: null,
@@ -51,9 +52,14 @@ describe('pickLines', () => {
     expect(picked.map((t) => t.source)).toEqual(['usb', 'pixel9', 'usb', 'pixel9']);
   });
 
-  it('skips a moment already corrected, a live line, and a blank one', () => {
+  it("offers a line only renamed, since its words are still the machine's", () => {
+    const picked = pickLines([moment(line(1, 'usb', { tier: 'corrected', speaker: 'Dr. 1' }))]);
+    expect(picked.map((t) => t.id)).toEqual([1]);
+  });
+
+  it('skips a moment whose words were checked, a live line, and a blank one', () => {
     const picked = pickLines([
-      moment(line(1, 'usb', { tier: 'corrected' }), line(2, 'pixel9')),
+      moment(line(1, 'usb', { tier: 'corrected', wordsChecked: true }), line(2, 'pixel9')),
       moment(line(3, 'usb', { tier: 'live' })),
       moment(line(4, 'usb', { text: '  ' })),
       moment(line(5, 'usb', { tier: 'transcribed' })),
@@ -102,9 +108,7 @@ describe('Check', () => {
     fixture.componentRef.setInput('ids', ids);
     fixture.detectChanges();
     const ctrl = TestBed.inject(HttpTestingController);
-    ctrl
-      .expectOne('/api/transcripts?ids=1%2C2')
-      .flush({ items: [line(1, 'usb'), line(2, 'usb')] });
+    ctrl.expectOne('/api/transcripts?ids=1%2C2').flush({ items: [line(1, 'usb'), line(2, 'usb')] });
     await fixture.whenStable();
     fixture.detectChanges();
     await fixture.whenStable();

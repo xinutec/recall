@@ -1,10 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
-import {
-  HttpTestingController,
-  provideHttpClientTesting,
-} from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { vi } from 'vitest';
@@ -21,6 +18,7 @@ function turn(o: Partial<Transcript>): Transcript {
     language: 'en',
     speaker: null,
     speakerConfirmed: false,
+    wordsChecked: false,
     speakerConfidence: null,
     confidence: null,
     loudness: null,
