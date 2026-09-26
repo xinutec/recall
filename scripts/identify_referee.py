@@ -1,11 +1,16 @@
 """Naming household speech by voiceprint alone, refereed against human labels (#1711).
 
-Two arms over the same human-labelled household turns (device sources only;
+Arms over the same human-labelled household turns (device sources only;
 meetings keep pyannote):
 
   control   embed each labelled turn's own span and name it
   A         embed each Whisper segment of the clip and name it; a segment's truth
             is the label covering at least half of it
+  A'        the same segments named by the mean of sliding windows inside them
+            (`extract-windows`), which the next two cut:
+  split     A' cut where the mean voice before and after differs most, if by
+            more than `--threshold`, recursively
+  ceiling   A' cut at the labelled edges: what a perfect detector would give
 
 Both name with the production rule (`recalld::identify::match_one`: the person
 whose best print is nearest; ported here and checked against the census's
@@ -19,8 +24,11 @@ Usage:
   # needs the ML environment, ffmpeg and HF_TOKEN; writes <work>/extract.jsonl
   <ml-env python> scripts/identify_referee.py extract \
       --db <snapshot> --clips <dir> --work <dir>
+  <ml-env python> scripts/identify_referee.py extract-windows \
+      --db <snapshot> --clips <dir> --work <dir>
   python3 scripts/identify_referee.py score \
-      --db <snapshot> --work <dir> [--leave-out clip]
+      --db <snapshot> --work <dir> [--leave-out clip] \
+      [--threshold T --shortest S --half even|odd]
 """
 
 from __future__ import annotations
@@ -30,14 +38,19 @@ import json
 import math
 import sqlite3
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import pairwise
 from pathlib import Path
 
 LABELLED = """t.speaker_label IS NOT NULL AND t.speaker_label NOT LIKE 'SPEAKER%'
     AND t.hidden_reason IS NULL AND t.superseded_by IS NULL"""
 MARGIN = 0.08
 CONTROL = "control: labelled turn span"
+MEAN = "A': Whisper segment, window mean"
+ORACLE = "ceiling: A' cut at the labelled edges"
+SPLIT = "split: A' cut where the voice changes"
 WHISPER = "A: Whisper segment"
 PYANNOTE = "pyannote: aligned turn, cluster voiceprint"
 
@@ -151,6 +164,64 @@ def extract_pyannote(db_path: Path, clips: Path, work: Path) -> None:
             print(Path(clip).name, flush=True)
 
 
+WINDOW_S = 1.5
+HOP_S = 0.5
+
+
+def extract_windows(db_path: Path, clips: Path, work: Path) -> None:
+    """Embed sliding windows over each labelled clip, once, so split rules can be
+    tried offline. The production model, run in pyannote's sliding mode on the
+    decode production uses."""
+    import os  # noqa: PLC0415 - extract only
+
+    from pyannote.audio import Inference, Model  # noqa: PLC0415 - the ML env only
+
+    from recall.speakerid import (  # noqa: PLC0415 - same
+        _EMBED_RATE,  # pyright: ignore[reportPrivateUsage]
+        _decode_mono,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    model = Model.from_pretrained(
+        "pyannote/embedding", token=os.environ.get("HF_TOKEN")
+    )
+    if model is None:
+        msg = "could not load pyannote/embedding (HF token/terms?)"
+        raise RuntimeError(msg)
+    sliding = Inference(model, window="sliding", duration=WINDOW_S, step=HOP_S)
+    db = open_ro(db_path)
+    out_path = work / "windows.jsonl"
+    done = (
+        {json.loads(line)["audio_id"] for line in out_path.open()}
+        if out_path.exists()
+        else set()
+    )
+    rows = db.execute(
+        f"""SELECT DISTINCT a.id, a.path FROM transcript_segments t
+        JOIN audio_segments a ON a.id = t.audio_segment_id
+        JOIN sources s ON s.id = a.source_id
+        WHERE {LABELLED} AND s.kind IN ('coreaudio', 'tcp_pcm') ORDER BY a.id"""
+    ).fetchall()
+    with out_path.open("a") as out:
+        for audio_id, path in rows:
+            if audio_id in done:
+                continue
+            clip = clips / str(path).rsplit("/", 1)[1]
+            feature = sliding(
+                {"waveform": _decode_mono(clip), "sample_rate": _EMBED_RATE}
+            )
+            windows = [
+                {
+                    "start": round(float(frame.start), 3),
+                    "end": round(float(frame.end), 3),
+                    "vector": [round(float(x), 5) for x in vector],
+                }
+                for frame, vector in feature
+            ]
+            out.write(json.dumps({"audio_id": audio_id, "windows": windows}) + "\n")
+            out.flush()
+            print(clip.name, len(windows), "windows", flush=True)
+
+
 def usable(vector: list[float] | None) -> list[float] | None:
     """A span too short to embed comes back NaN, which ties every person: it is
     unnamed, not a coin-flip."""
@@ -208,8 +279,125 @@ def load_prints(db: sqlite3.Connection) -> list[Print]:
     ]
 
 
-def score(db_path: Path, work: Path, leave_out_clip: bool) -> None:
-    """Score both arms and print the report."""
+Window = tuple[float, float, list[float]]
+
+
+def mean_of(windows: list[Window], a: float, b: float) -> list[float] | None:
+    """The mean unit vector of the windows centred in [a, b), or of the window
+    centred nearest when the span is shorter than a hop."""
+    inside = [w for w in windows if a <= (w[0] + w[1]) / 2 < b]
+    if not inside and windows:
+        mid = (a + b) / 2
+        inside = [min(windows, key=lambda w: abs((w[0] + w[1]) / 2 - mid))]
+    if not inside:
+        return None
+    return [sum(xs) / len(inside) for xs in zip(*(w[2] for w in inside), strict=True)]
+
+
+def cosine(u: list[float], v: list[float]) -> float:
+    return sum(x * y for x, y in zip(unit(u), unit(v), strict=True))
+
+
+def voice_changes(
+    windows: list[Window], a: float, b: float, threshold: float, shortest: float
+) -> list[float]:
+    """Cut points inside [a, b), by binary segmentation: cut where the mean voice
+    before and after differ most, if by more than `threshold` in cosine distance,
+    and recurse. No piece shorter than `shortest` seconds."""
+    inside = [w for w in windows if a <= (w[0] + w[1]) / 2 < b]
+    best: tuple[float, float] | None = None
+    for k in range(1, len(inside)):
+        cut = (inside[k - 1][1] + inside[k][0]) / 2
+        if cut - a < shortest or b - cut < shortest:
+            continue
+        left = mean_of(inside[:k], a, cut)
+        right = mean_of(inside[k:], cut, b)
+        if left is None or right is None:
+            continue
+        distance = 1.0 - cosine(left, right)
+        if best is None or distance > best[0]:
+            best = (distance, cut)
+    if best is None or best[0] <= threshold:
+        return []
+    cut = best[1]
+    return [
+        *voice_changes(windows, a, cut, threshold, shortest),
+        cut,
+        *voice_changes(windows, cut, b, threshold, shortest),
+    ]
+
+
+def pieces(a: float, b: float, cuts: list[float]) -> list[tuple[float, float]]:
+    edges = [a, *sorted(c for c in cuts if a < c < b), b]
+    return list(pairwise(edges))
+
+
+ScoreUnit = Callable[[str, int, float, float, list[float] | None], None]
+
+
+def score_windows(
+    work: Path,
+    truth: dict[int, list[tuple[float, float, str]]],
+    segments: dict[int, list[tuple[float, float]]],
+    split: Split,
+    score_unit: ScoreUnit,
+) -> None:
+    """The window arms: each Whisper segment whole, cut by the detector, and cut
+    at the labelled edges, every piece named by the mean of its windows."""
+    windowed = work / "windows.jsonl"
+    if not windowed.exists():
+        return
+    for line in windowed.open():
+        record = json.loads(line)
+        aid = record["audio_id"]
+        if aid not in truth:
+            continue
+        windows: list[Window] = [
+            (w["start"], w["end"], w["vector"])
+            for w in record["windows"]
+            if usable(w["vector"]) is not None
+        ]
+        edges = [x for ta, tb, _ in truth[aid] for x in (ta, tb)]
+        for a, b in segments[aid]:
+            cuts = {
+                MEAN: [],
+                ORACLE: edges,
+                SPLIT: voice_changes(windows, a, b, split.threshold, split.shortest),
+            }
+            for arm, at in cuts.items():
+                for pa, pb in pieces(a, b, at):
+                    score_unit(arm, aid, pa, pb, mean_of(windows, pa, pb))
+
+
+def score_aligned(
+    work: Path, truth: dict[int, list[tuple[float, float, str]]], score_unit: ScoreUnit
+) -> None:
+    """The pyannote arm: each aligned turn, named by its cluster's voiceprint."""
+    aligned = work / "aligned.jsonl"
+    if aligned.exists():
+        for line in aligned.open():
+            record = json.loads(line)
+            aid = record["audio_id"]
+            if aid not in truth:
+                continue
+            voice = {v["speaker"]: v["vector"] for v in record["voices"]}
+            for t in record["turns"]:
+                vector = voice.get(t["speaker"])
+                score_unit(PYANNOTE, aid, t["start"], t["end"], vector)
+
+
+@dataclass
+class Split:
+    """The change detector's settings, and which clips to score: tune on one
+    half by audio id, report on the other."""
+
+    threshold: float = 0.3
+    shortest: float = 1.0
+    half: str = "all"
+
+
+def score(db_path: Path, work: Path, leave_out_clip: bool, split: Split) -> None:
+    """Score every arm and print the report."""
     db = open_ro(db_path)
     prints = load_prints(db)
 
@@ -272,25 +460,23 @@ def score(db_path: Path, work: Path, leave_out_clip: bool) -> None:
         if want is not None and vector is not None:
             arms[arm].append(Scored(guess[0] == want, b - a, guess[1], kind[aid]))
 
+    def wanted(aid: int) -> bool:
+        return split.half == "all" or (aid % 2 == 0) == (split.half == "even")
+
+    segments: dict[int, list[tuple[float, float]]] = {}
     for line in (work / "extract.jsonl").open():
         record = json.loads(line)
         aid = record["audio_id"]
+        if not wanted(aid):
+            continue
         truth[aid] = [(t["start"], t["end"], label[t["id"]]) for t in record["turns"]]
+        segments[aid] = [(seg["start"], seg["end"]) for seg in record["segments"]]
         for t in record["turns"]:
             score_unit(CONTROL, aid, t["start"], t["end"], t["vector"])
         for seg in record["segments"]:
             score_unit(WHISPER, aid, seg["start"], seg["end"], seg["vector"])
-    aligned = work / "aligned.jsonl"
-    if aligned.exists():
-        for line in aligned.open():
-            record = json.loads(line)
-            aid = record["audio_id"]
-            if aid not in truth:
-                continue
-            voice = {v["speaker"]: v["vector"] for v in record["voices"]}
-            for t in record["turns"]:
-                vector = voice.get(t["speaker"])
-                score_unit(PYANNOTE, aid, t["start"], t["end"], vector)
+    score_windows(work, truth, segments, split, score_unit)
+    score_aligned(work, truth, score_unit)
 
     labelled_s = sum(b - a for turns in truth.values() for a, b, _ in turns)
     print(f"{len(prints)} prints; {len(truth)} clips; {labelled_s:.0f}s labelled")
@@ -361,17 +547,31 @@ def main() -> None:
     ep.add_argument("--db", type=Path, required=True)
     ep.add_argument("--clips", type=Path, required=True)
     ep.add_argument("--work", type=Path, required=True)
+    ew = sub.add_parser("extract-windows")
+    ew.add_argument("--db", type=Path, required=True)
+    ew.add_argument("--clips", type=Path, required=True)
+    ew.add_argument("--work", type=Path, required=True)
     sc = sub.add_parser("score")
     sc.add_argument("--db", type=Path, required=True)
     sc.add_argument("--work", type=Path, required=True)
     sc.add_argument("--leave-out", choices=["overlap", "clip"], default="overlap")
+    sc.add_argument("--threshold", type=float, default=Split.threshold)
+    sc.add_argument("--shortest", type=float, default=Split.shortest)
+    sc.add_argument("--half", choices=["all", "even", "odd"], default="all")
     args = parser.parse_args()
     if args.command == "extract":
         extract(args.db, args.clips, args.work)
     elif args.command == "extract-pyannote":
         extract_pyannote(args.db, args.clips, args.work)
+    elif args.command == "extract-windows":
+        extract_windows(args.db, args.clips, args.work)
     else:
-        score(args.db, args.work, args.leave_out == "clip")
+        score(
+            args.db,
+            args.work,
+            args.leave_out == "clip",
+            Split(args.threshold, args.shortest, args.half),
+        )
 
 
 if __name__ == "__main__":

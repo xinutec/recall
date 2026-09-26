@@ -201,6 +201,7 @@ fn a_turn_over_a_corrected_span_is_refused_with_a_reason() {
             start: t(A),
             end: t(B),
         }],
+        None,
     );
     assert!(out.insert.is_empty(), "{:?}", out.insert);
     assert_eq!(out.refused.len(), 1);
@@ -221,6 +222,7 @@ fn a_looping_turn_is_swept_and_never_written() {
             clip_turn(C, D, "ik denk dat we dat morgen moeten doen"),
         ],
         &[],
+        None,
     );
     assert_eq!(out.swept, 1);
     assert_eq!(out.insert.len(), 1, "the real sentence survives the sweep");
@@ -229,9 +231,62 @@ fn a_looping_turn_is_swept_and_never_written() {
 
 #[test]
 fn a_wordless_turn_is_swept_too() {
-    let out = plan(vec![clip_turn(A, B, "...")], &[]);
+    let out = plan(vec![clip_turn(A, B, "...")], &[], None);
     assert_eq!(out.swept, 1);
     assert!(out.insert.is_empty());
+}
+
+#[test]
+fn what_the_model_writes_over_silence_is_recognised() {
+    use recalld::quality::is_silence_phrase;
+    for invented in [
+        "Thank you.",
+        " thank you. Thank you. ",
+        "Thank thank you.",
+        "Thanks for watching!",
+        "I'll see you next time.",
+        "you",
+        "Dank u wel.",
+        "ご視聴ありがとうございました",
+    ] {
+        assert!(is_silence_phrase(invented), "{invented:?}");
+    }
+    // Short real words stay: in a quiet minute they may have been said.
+    for said in [
+        "No.",
+        "Ja",
+        "Okay.",
+        "Thank you for the tea",
+        "you know",
+        "...",
+    ] {
+        assert!(!is_silence_phrase(said), "{said:?}");
+    }
+}
+
+#[test]
+fn only_a_near_silent_minute_sweeps_a_silence_phrase() {
+    use recalld::quality::is_invented_over_silence;
+    assert!(is_invented_over_silence("Thank you.", Some(0.256)));
+    // A minute with speech: the thanks may be real.
+    assert!(!is_invented_over_silence("Thank you.", Some(1.0)));
+    // Not measured, or undecodable: nothing is known, so nothing is swept.
+    assert!(!is_invented_over_silence("Thank you.", None));
+    assert!(!is_invented_over_silence(
+        "Thank you.",
+        Some(recalld::speech::UNKNOWN_SECONDS)
+    ));
+}
+
+#[test]
+fn a_near_silent_minutes_thank_you_is_swept_and_its_no_kept() {
+    let turns = || vec![clip_turn(A, B, "Thank you."), clip_turn(C, D, "No.")];
+    let quiet = plan(turns(), &[], Some(0.3));
+    assert_eq!(quiet.swept, 1);
+    assert_eq!(quiet.insert.len(), 1);
+    assert_eq!(quiet.insert[0].text, "No.");
+    let spoken = plan(turns(), &[], Some(12.0));
+    assert_eq!((spoken.swept, spoken.insert.len()), (0, 2));
 }
 
 #[test]
@@ -244,6 +299,7 @@ fn a_touching_boundary_does_not_count_as_overlap() {
             start: t(B),
             end: t(C),
         }],
+        None,
     );
     assert_eq!(out.insert.len(), 1, "{:?}", out.refused);
 }

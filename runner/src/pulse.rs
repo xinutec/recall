@@ -50,35 +50,66 @@ fn body(started: DateTime<Utc>, finished: DateTime<Utc>, rows: usize) -> String 
 fn offer(path: PathBuf, body: String) {
     let slot = writer();
     if let Ok(mut held) = slot.0.lock() {
-        *held = Some((path, body));
-        slot.1.notify_one();
+        held.next = Some((path, body));
+        slot.1.notify_all();
     }
 }
 
-type Slot = Arc<(Mutex<Option<(PathBuf, String)>>, Condvar)>;
+/// Wait, at most `limit`, for the last offered beat to land. Returns whether it
+/// did.
+///
+/// For a process about to exit: the writer is a background thread, so `--once`
+/// could otherwise exit before its beat is written, which a loaded machine does
+/// (#1480; `a_runner_with_an_empty_queue_stamps_a_beat…` in
+/// `tests/against_real_recalld.rs`). Bounded for the reason the writer is a
+/// thread at all: `open()` on the archive volume can hang.
+#[must_use]
+pub fn settle(limit: std::time::Duration) -> bool {
+    let slot = writer();
+    let Ok(held) = slot.0.lock() else {
+        return false;
+    };
+    slot.1
+        .wait_timeout_while(held, limit, |state| state.next.is_some() || state.writing)
+        .is_ok_and(|(_, waited)| !waited.timed_out())
+}
+
+/// What the writer has to do: the beat waiting, and whether one is being written.
+#[derive(Default)]
+struct State {
+    next: Option<(PathBuf, String)>,
+    writing: bool,
+}
+
+type Slot = Arc<(Mutex<State>, Condvar)>;
 
 /// The one background thread every stamp goes through.
 ///
-/// It may block for ever inside `fs::write`, so nothing joins or waits on it.
+/// It may block for ever inside `fs::write`, so nothing joins it, and
+/// [`settle`] waits for it only up to a limit.
 fn writer() -> &'static Slot {
     static WRITER: OnceLock<Slot> = OnceLock::new();
     WRITER.get_or_init(|| {
-        let slot: Slot = Arc::new((Mutex::new(None), Condvar::new()));
+        let slot: Slot = Arc::new((Mutex::new(State::default()), Condvar::new()));
         let mine = Arc::clone(&slot);
         std::thread::spawn(move || {
             loop {
                 let Ok(mut held) = mine.0.lock() else { return };
-                while held.is_none() {
+                while held.next.is_none() {
                     let Ok(next) = mine.1.wait(held) else { return };
                     held = next;
                 }
-                let Some((path, body)) = held.take() else {
+                let Some((path, body)) = held.next.take() else {
                     continue;
                 };
+                held.writing = true;
                 drop(held); // Before the write, which may never return.
                 if let Err(err) = write_atomically(&path, &body) {
                     tracing::warn!(%err, path = %path.display(), "could not stamp the pulse");
                 }
+                let Ok(mut held) = mine.0.lock() else { return };
+                held.writing = false;
+                mine.1.notify_all();
             }
         });
         slot

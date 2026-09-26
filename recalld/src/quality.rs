@@ -9,6 +9,62 @@
 
 pub use audiocore::text::{is_repetition_loop, is_wordless, trim_wordless};
 
+/// Measured speech under which a minute counts as near-silent, in seconds. The
+/// speech pass's floor is one 0.256 s blip, and in minutes under a second the
+/// commonest lines on this archive were "Thank you." and video sign-offs
+/// (2026-09-26, #1461).
+pub const NEAR_SILENT_S: f64 = 1.0;
+
+/// What Whisper writes over silence: thanks in several languages, "you", "bye",
+/// and the sign-offs of the videos it was trained on. Lowercased, punctuation
+/// gone, one space between words.
+const SILENCE_PHRASES: &[&str] = &[
+    "you",
+    "bye",
+    "see you next time",
+    "i'll see you next time",
+    "thanks for watching",
+    "dank u wel",
+    "vielen dank",
+    "gracias",
+    "obrigado",
+    "merci",
+    "продолжение следует",
+    "ご視聴ありがとうございました",
+];
+
+/// Words a "thank you" can be made of, repeated or cut short by the model.
+const THANKS_WORDS: &[&str] = &["thank", "thanks", "you", "very", "much", "so"];
+
+/// True if `text` is a phrase the model writes over silence (see
+/// [`SILENCE_PHRASES`]), or thanks and nothing else: "Thank you.",
+/// "Thank you. Thank you.", "thank thank you".
+///
+/// Only meaningful with [`NEAR_SILENT_S`]: in a minute with speech, "Thank you."
+/// is as likely said as invented.
+#[must_use]
+pub fn is_silence_phrase(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.is_empty() {
+        return false;
+    }
+    let thanks = words.iter().any(|w| w.starts_with("thank"))
+        && words.iter().all(|w| THANKS_WORDS.contains(w));
+    thanks || SILENCE_PHRASES.contains(&words.join(" ").as_str())
+}
+
+/// A segment to sweep because its minute is near-silent and its text is what
+/// the model invents there. `speech` is the minute's measured speech; unmeasured
+/// or undecodable (negative) is not near-silent.
+#[must_use]
+pub fn is_invented_over_silence(text: &str, speech: Option<f64>) -> bool {
+    speech.is_some_and(|s| (0.0..NEAR_SILENT_S).contains(&s)) && is_silence_phrase(text)
+}
+
 /// True if `text` is nothing but one of `names`: "Anna.", " anna ", "Anna!".
 ///
 /// The cost of the vocabulary prompt: it lists the household's names so Whisper

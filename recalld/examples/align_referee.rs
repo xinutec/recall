@@ -18,7 +18,7 @@ fn main() {
     for line in std::io::BufReader::new(input).lines() {
         let record: serde_json::Value = serde_json::from_str(&line.expect("line")).expect("json");
         let (Some((words, _)), Some((speakers, prints))) = (
-            words_of(&record["transcribe"].to_string()),
+            words_of(&record["transcribe"].to_string(), None),
             voices(&record["diarize"].to_string()),
         ) else {
             continue;

@@ -18,6 +18,8 @@ use std::time::Duration;
 
 const IDLE: Duration = Duration::from_secs(20);
 const BACKOFF: Duration = Duration::from_mins(1);
+/// How long a `--once` runner waits for its last beat before exiting.
+const PULSE_SETTLE: Duration = Duration::from_secs(2);
 
 /// What each shim can be given, keyed by the name it reports in `hello` rather
 /// than inferred from argv, so a runner pointed at the wrong module does not
@@ -261,11 +263,13 @@ fn main() {
             // `--once` means one job, not until the queue empties.
             Ok(true) => {
                 if config.once {
+                    let _landed = runner::pulse::settle(PULSE_SETTLE);
                     return;
                 }
             }
             Ok(false) => {
                 if config.once {
+                    let _landed = runner::pulse::settle(PULSE_SETTLE);
                     return;
                 }
                 std::thread::sleep(IDLE);

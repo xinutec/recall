@@ -187,7 +187,10 @@ push to and the port the browser uses. It owns:
 
 Quality rules run where rows are written: a repetition loop or a wordless turn
 is refused at the write (`audiocore::text`, shared with the doctor so both
-judge the same text the same way); a whole-clip language outside the
+judge the same text the same way); so is a phrase Whisper writes over
+silence ("Thank you.", video sign-offs) in a minute with under a second of
+measured speech (`recalld::quality::is_invented_over_silence`); a whole-clip
+language outside the
 household's two zeroes a turn's confidence rather than hiding it. Confidence,
 length and the language label alone are never grounds to hide: the commonest
 low-confidence turns are quiet real agreement, and most turns labelled a

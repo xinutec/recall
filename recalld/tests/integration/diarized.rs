@@ -459,7 +459,8 @@ const WORDS_WITH_A_LOOPING_SEGMENT: &str = r#"{"ok": true, "result": {"language"
 
 #[test]
 fn a_looping_segment_is_dropped_without_taking_the_clips_real_words_with_it() {
-    let (words, _) = words_of(WORDS_WITH_A_LOOPING_SEGMENT).expect("the clean segment survives");
+    let (words, _) =
+        words_of(WORDS_WITH_A_LOOPING_SEGMENT, None).expect("the clean segment survives");
 
     assert_eq!(
         words.len(),
@@ -470,6 +471,22 @@ fn a_looping_segment_is_dropped_without_taking_the_clips_real_words_with_it() {
     assert_eq!(words[1].text, " twee");
 }
 
+/// A near-silent clip's "Thank you." gives no words to align, so the diarized
+/// pass cannot write back what the transcription pass swept.
+#[test]
+fn a_near_silent_clips_thank_you_yields_no_words_to_align() {
+    let thanks = r#"{"ok": true, "result": {"language": "en", "segments": [
+        {"start": 3.0, "end": 5.0, "text": " Thank you.",
+         "words": [{"start": 3.0, "end": 3.4, "text": " Thank", "probability": 0.6},
+                   {"start": 3.4, "end": 5.0, "text": " you.", "probability": 0.6}]}
+    ]}}"#;
+    assert!(words_of(thanks, Some(0.256)).is_none());
+    assert!(
+        words_of(thanks, Some(12.0)).is_some(),
+        "said in a spoken minute"
+    );
+}
+
 /// A clip that is nothing but a loop still yields nothing: the guard is
 /// narrowed to the segment, not loosened.
 #[test]
@@ -478,12 +495,12 @@ fn a_clip_that_is_all_loop_still_yields_no_words() {
         {"start": 0.0, "end": 2.0, "text": " wawawawawawawawawawawawawawa",
          "words": [{"start": 0.0, "end": 1.0, "text": " wawawawawawawa", "probability": 0.2}]}
     ]}}"#;
-    assert!(words_of(all_loop).is_none());
+    assert!(words_of(all_loop, None).is_none());
 }
 
 #[test]
 fn the_current_shim_spelling_yields_its_words() {
-    let (words, language) = words_of(WORDS_TODAY).expect("words");
+    let (words, language) = words_of(WORDS_TODAY, None).expect("words");
     assert_eq!(words.len(), 2);
     assert_eq!(words[0].text, " een");
     assert!((words[0].probability - 0.9).abs() < f64::EPSILON);
@@ -494,7 +511,7 @@ fn the_current_shim_spelling_yields_its_words() {
 /// indistinguishable from blocks where nothing was said.
 #[test]
 fn a_result_stored_with_the_older_word_key_still_yields_its_words() {
-    let (words, _) = words_of(WORDS_STORED_EARLIER).expect("words");
+    let (words, _) = words_of(WORDS_STORED_EARLIER, None).expect("words");
     assert_eq!(words.len(), 2);
     assert_eq!(words[0].text, "een");
     assert!(
@@ -505,14 +522,14 @@ fn a_result_stored_with_the_older_word_key_still_yields_its_words() {
 
 #[test]
 fn a_refused_transcription_yields_no_words_rather_than_an_error() {
-    assert!(words_of(r#"{"ok": false, "error": "no such file"}"#).is_none());
+    assert!(words_of(r#"{"ok": false, "error": "no such file"}"#, None).is_none());
 }
 
 #[test]
 fn a_transcription_with_no_word_timings_yields_nothing_to_align() {
     let no_words = r#"{"ok": true, "result": {"language": "en", "segments": [
         {"start": 0.0, "end": 2.0, "text": "hello", "words": null}]}}"#;
-    assert!(words_of(no_words).is_none());
+    assert!(words_of(no_words, None).is_none());
 }
 
 #[test]

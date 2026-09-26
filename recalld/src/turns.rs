@@ -112,7 +112,8 @@ pub struct Plan {
     pub insert: Vec<ClipTurn>,
     /// Turns declined, and why, so a refusal is visible rather than silent.
     pub refused: Vec<String>,
-    /// Turns swept by the quality rules (loops, wordless text). Apart from
+    /// Turns swept by the quality rules (loops, wordless text, words invented
+    /// over near-silence). Apart from
     /// `refused`: a refusal means a person's words are in the way, a sweep
     /// means the model failed.
     pub swept: usize,
@@ -125,13 +126,16 @@ fn overlaps(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)
 /// Decide the write for one clip. Pure, so the rules that protect a person's
 /// typed words are testable without a database.
 ///
-/// 1. A repetition loop or wordless turn is swept.
+/// 1. A repetition loop or wordless turn is swept, and so is what the model
+///    writes over silence when the clip's measured `speech` is near-silent.
 /// 2. A turn overlapping a person-owned span is refused: the person's text stands.
 #[must_use]
-pub fn plan(turns: Vec<ClipTurn>, human: &[Protected]) -> Plan {
+pub fn plan(turns: Vec<ClipTurn>, human: &[Protected], speech: Option<f64>) -> Plan {
     let mut out = Plan::default();
     for turn in turns {
-        if crate::quality::is_repetition_loop(&turn.text) || crate::quality::is_wordless(&turn.text)
+        if crate::quality::is_repetition_loop(&turn.text)
+            || crate::quality::is_wordless(&turn.text)
+            || crate::quality::is_invented_over_silence(&turn.text, speech)
         {
             out.swept += 1;
             continue;
@@ -538,7 +542,8 @@ pub fn write_pass(
         };
         let block_end = block_end.with_timezone(&Utc);
         let human = turn_store::protected_between(meaning, block_start, block_end)?;
-        let decided = plan(turns, &human);
+        let speech = crate::speech::seconds_of(ingest, &filename)?;
+        let decided = plan(turns, &human, speech);
         pass.refused += decided.refused.len();
         pass.swept += decided.swept;
         let written = write_block(meaning, audio_id, (block_start, block_end), &decided, now)?;

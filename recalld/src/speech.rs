@@ -71,6 +71,22 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     Ok(written)
 }
 
+/// The measured speech in one blob, in seconds; `None` until the pass has
+/// measured it.
+///
+/// # Errors
+/// On database failure.
+pub fn seconds_of(ingest: &Connection, filename: &str) -> rusqlite::Result<Option<f64>> {
+    use rusqlite::OptionalExtension as _;
+    ingest
+        .query_row(
+            "SELECT speech_seconds FROM segment_speech WHERE filename = ?1",
+            [filename],
+            |r| r.get(0),
+        )
+        .optional()
+}
+
 /// This source's newest segment that could be someone talking, as its capture
 /// stamp.
 ///
