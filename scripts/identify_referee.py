@@ -37,6 +37,7 @@ import argparse
 import json
 import math
 import sqlite3
+import subprocess
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -285,7 +286,8 @@ def extract_pieces(db_path: Path, clips: Path, work: Path, shortest: float) -> N
                     "embed", {"audio": str(clip), "start": a, "end": b}
                 )
                 vector = answer.get("vector") if isinstance(answer, dict) else None
-            except (ValueError, OSError, RuntimeError):
+            except (ValueError, OSError, RuntimeError, subprocess.CalledProcessError):
+                # An unsliceable span is a piece with no print, not a stopped run.
                 vector = None
             record = {"audio_id": aid, "start": a, "end": b, "vector": vector}
             out.write(json.dumps(record) + "\n")
@@ -399,9 +401,14 @@ def voice_changes(
     ]
 
 
+SHORTEST_PIECE_S = 0.05
+
+
 def pieces(a: float, b: float, cuts: list[float]) -> list[tuple[float, float]]:
+    """`[a, b)` cut at `cuts`, less any sliver too short to hold a voice (a cut
+    landing on a labelled edge's own rounding)."""
     edges = [a, *sorted(c for c in cuts if a < c < b), b]
-    return list(pairwise(edges))
+    return [(x, y) for x, y in pairwise(edges) if y - x >= SHORTEST_PIECE_S]
 
 
 ScoreUnit = Callable[[str, int, float, float, list[float] | None], None]
