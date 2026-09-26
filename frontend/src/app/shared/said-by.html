@@ -11,10 +11,16 @@
     #trig="matAutocompleteTrigger"
     [matAutocomplete]="auto"
     [disabled]="disabled()"
+    (focus)="fresh()"
     (input)="typed.set(name.value)"
-    (keydown.enter)="trig.activeOption ? null : choose(name.value)"
+    (keydown.enter)="trig.activeOption ? null : take(name)"
+    (blur)="trig.panelOpen ? null : take(name)"
   />
-  <mat-autocomplete #auto (optionSelected)="choose($event.option.value)">
+  <mat-autocomplete
+    #auto
+    (optionSelected)="take(name, $event.option.value)"
+    (closed)="closed(name)"
+  >
     @for (n of suggestions(); track n) {
       <mat-option [value]="n">{{ n }}</mat-option>
     }

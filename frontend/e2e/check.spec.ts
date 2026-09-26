@@ -225,3 +225,28 @@ test('a line said by someone else is filed with their name (Pixel 9)', async ({ 
     { id: 1, text: 'I have already made a list of errands.', checked: true, speaker: 'Dr. Lee' },
   ]);
 });
+
+test('a typed name counts without Enter, and is a chip from then on (Pixel 9)', async ({
+  page,
+}) => {
+  const posted = await mockApi(page);
+  await page.goto('/check');
+  await page.getByRole('combobox', { name: 'Day' }).click();
+  await page.getByRole('option', { name: 'Today' }).click();
+  await expect(page.getByText('Line 1 of 3')).toBeVisible();
+
+  // Typed, then straight to the button: the way it was lost before.
+  await page.getByRole('combobox', { name: 'Someone else' }).fill('Dr. 1');
+  await page.getByRole('button', { name: /Save|Words are right/ }).click();
+  await expect(page.getByText('Line 2 of 3')).toBeVisible();
+
+  // One tap now.
+  await page.getByRole('option', { name: 'Dr. 1' }).click();
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('Line 3 of 3')).toBeVisible();
+
+  expect(posted).toEqual([
+    { id: 1, text: 'I have already made a list of errands.', checked: true, speaker: 'Dr. 1' },
+    { id: 4, text: 'The farmacy closes early on fridays.', checked: true, speaker: 'Dr. 1' },
+  ]);
+});

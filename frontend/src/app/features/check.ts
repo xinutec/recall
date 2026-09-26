@@ -148,8 +148,11 @@ export class Check {
     for (const t of this.lines()) {
       if (t.speaker && !t.speaker.startsWith('SPEAKER_')) named.add(t.speaker);
     }
-    return named.size ? [...named] : this.roster();
+    const base = named.size ? [...named] : this.roster();
+    return [...new Set([...base, ...this.added()])];
   });
+  /** Names given this visit, offered as chips from then on. */
+  private readonly added = signal<readonly string[]>([]);
   protected readonly known = computed(() => [...new Set([...this.names(), ...this.roster()])]);
   private readonly others = signal<ReadonlyMap<number, Transcript[]>>(new Map());
   protected readonly at = signal(0);
@@ -287,6 +290,11 @@ export class Check {
         }),
       ),
     );
+  }
+
+  protected pick(name: string): void {
+    this.who.set(name);
+    if (!this.names().includes(name)) this.added.update((a) => [...a, name]);
   }
 
   /** The name shown for `t`: as filed, as being chosen, or as the machine has it. */

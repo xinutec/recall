@@ -28,8 +28,34 @@ export class SaidBy {
     return this.known().filter((n) => n.toLowerCase().includes(q));
   });
 
+  /** The last name sent since the field was entered: a pick is followed by the
+   * panel closing and the field losing focus, and each would send it again. */
+  private last = '';
+
+  protected fresh(): void {
+    this.last = '';
+    this.typed.set('');
+  }
+
+  /** A chip. */
   protected choose(name: string | undefined): void {
     const who = name?.trim();
     if (who) this.chosen.emit(who);
+  }
+
+  /** The field: on Enter, a suggestion, or leaving it. A typed name counts
+   * without Enter, or tapping Save straight after typing loses it. */
+  protected take(field: HTMLInputElement, value = field.value): void {
+    const who = value.trim();
+    field.value = '';
+    this.typed.set('');
+    if (!who || who === this.last) return;
+    this.last = who;
+    this.chosen.emit(who);
+  }
+
+  /** The panel closed with nothing picked while focus moved elsewhere. */
+  protected closed(field: HTMLInputElement): void {
+    if (document.activeElement !== field) this.take(field);
   }
 }

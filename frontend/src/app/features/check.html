@@ -79,7 +79,7 @@
             [known]="known()"
             [selected]="who()"
             [disabled]="busy()"
-            (chosen)="who.set($event)"
+            (chosen)="pick($event)"
           />
           <button matButton class="nobody" [disabled]="busy()" (click)="nobodySpoke()">
             <mat-icon>voice_over_off</mat-icon>
