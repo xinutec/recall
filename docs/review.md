@@ -89,17 +89,14 @@ Tapping a line opens its sheet at the bottom of the screen:
 
 ## Checking words
 
-*Check* (`/check`) goes through a day one line at a time. Each line plays by
+*Check* (`/check`) goes through a day one line at a time. It asks about the
+words only; who spoke is named in a session or on the timeline. Each line plays by
 itself; fix the words, or tap *Words are right*. Enter saves, *Skip* is for a
 line you can't make out. Where several mics heard a moment, the page takes them
 in turn, because a check scores the mic whose text was edited. A line plays
 with a second either side, since Whisper often ends a line before its last
 word. Below it, *Other mics heard* lists the same moment on the other mics;
 tap one to start from its words, which helps with names.
-
-*Said by* sets who spoke: tap a name, or type one under *Someone else*. A name
-differing from the confirmed one is a change, filed with the words (and, like
-any name a person gives, it enrols that voice).
 
 *Nobody spoke* is for words the model invented over silence. It hides the line
 and files the correction with empty text, so the span stays protected and a

@@ -49,9 +49,6 @@
           @if (t.source) {
             <span class="src">{{ t.source }}</span>
           }
-          @if (shownWho(t); as who) {
-            <span class="who">{{ who }}</span>
-          }
         </div>
         @let filed = checked().get(t.id);
         @if (filed !== undefined) {
@@ -73,14 +70,6 @@
               (keydown.enter)="$event.preventDefault(); confirm()"
             ></textarea>
           </mat-form-field>
-          <h3 class="label">Said by</h3>
-          <app-said-by
-            [names]="names()"
-            [known]="known()"
-            [selected]="who()"
-            [disabled]="busy()"
-            (chosen)="pick($event)"
-          />
           <button matButton class="nobody" [disabled]="busy()" (click)="nobodySpoke()">
             <mat-icon>voice_over_off</mat-icon>
             Nobody spoke
