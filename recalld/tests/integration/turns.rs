@@ -165,6 +165,8 @@ fn every_stored_result_interprets_or_names_why_not() {
 
 // ---- the write plan: the rules that can destroy a person's typed words ----
 
+use audiocore::vad::Region;
+use recalld::quality::Heard;
 use recalld::turn_store::Protected;
 use recalld::turns::plan;
 
@@ -201,7 +203,8 @@ fn a_turn_over_a_corrected_span_is_refused_with_a_reason() {
             start: t(A),
             end: t(B),
         }],
-        None,
+        &Heard::default(),
+        t(A),
     );
     assert!(out.insert.is_empty(), "{:?}", out.insert);
     assert_eq!(out.refused.len(), 1);
@@ -222,7 +225,8 @@ fn a_looping_turn_is_swept_and_never_written() {
             clip_turn(C, D, "ik denk dat we dat morgen moeten doen"),
         ],
         &[],
-        None,
+        &Heard::default(),
+        t(A),
     );
     assert_eq!(out.swept, 1);
     assert_eq!(out.insert.len(), 1, "the real sentence survives the sweep");
@@ -231,7 +235,7 @@ fn a_looping_turn_is_swept_and_never_written() {
 
 #[test]
 fn a_wordless_turn_is_swept_too() {
-    let out = plan(vec![clip_turn(A, B, "...")], &[], None);
+    let out = plan(vec![clip_turn(A, B, "...")], &[], &Heard::default(), t(A));
     assert_eq!(out.swept, 1);
     assert!(out.insert.is_empty());
 }
@@ -264,29 +268,75 @@ fn what_the_model_writes_over_silence_is_recognised() {
     }
 }
 
+fn heard(seconds: f64, regions: &[(f64, f64)]) -> Heard {
+    Heard {
+        seconds: Some(seconds),
+        regions: Some(
+            regions
+                .iter()
+                .map(|&(start, end)| Region { start, end })
+                .collect(),
+        ),
+    }
+}
+
 #[test]
-fn only_a_near_silent_minute_sweeps_a_silence_phrase() {
-    use recalld::quality::is_invented_over_silence;
-    assert!(is_invented_over_silence("Thank you.", Some(0.256)));
-    // A minute with speech: the thanks may be real.
-    assert!(!is_invented_over_silence("Thank you.", Some(1.0)));
-    // Not measured, or undecodable: nothing is known, so nothing is swept.
-    assert!(!is_invented_over_silence("Thank you.", None));
-    assert!(!is_invented_over_silence(
-        "Thank you.",
-        Some(recalld::speech::UNKNOWN_SECONDS)
-    ));
+fn a_silence_phrase_is_invented_only_where_no_speech_was_heard() {
+    // Speech 20-30 s and 40-42 s into the clip, 12 s in all.
+    let spoken = heard(12.0, &[(20.0, 30.0), (40.0, 42.0)]);
+    assert!(
+        spoken.invented("Thank you.", 3.0, 5.0),
+        "outside the speech"
+    );
+    assert!(!spoken.invented("Thank you.", 29.0, 31.0), "overlapping it");
+    assert!(
+        !spoken.invented("I'll be there at five.", 3.0, 5.0),
+        "not a stock phrase"
+    );
+    // A near-silent clip, even before its regions are placed.
+    let quiet = Heard {
+        seconds: Some(0.3),
+        regions: None,
+    };
+    assert!(quiet.invented("Thank you.", 29.0, 31.0));
+    // Nothing known, or the clip could not be decoded: nothing is swept.
+    assert!(!Heard::default().invented("Thank you.", 3.0, 5.0));
+    let unknown = Heard {
+        seconds: Some(recalld::speech::UNKNOWN_SECONDS),
+        regions: None,
+    };
+    assert!(!unknown.invented("Thank you.", 3.0, 5.0));
 }
 
 #[test]
 fn a_near_silent_minutes_thank_you_is_swept_and_its_no_kept() {
     let turns = || vec![clip_turn(A, B, "Thank you."), clip_turn(C, D, "No.")];
-    let quiet = plan(turns(), &[], Some(0.3));
-    assert_eq!(quiet.swept, 1);
-    assert_eq!(quiet.insert.len(), 1);
-    assert_eq!(quiet.insert[0].text, "No.");
-    let spoken = plan(turns(), &[], Some(12.0));
-    assert_eq!((spoken.swept, spoken.insert.len()), (0, 2));
+    let quiet = Heard {
+        seconds: Some(0.3),
+        regions: None,
+    };
+    let out = plan(turns(), &[], &quiet, t(A));
+    assert_eq!(out.swept, 1);
+    assert_eq!(out.insert.len(), 1);
+    assert_eq!(out.insert[0].text, "No.");
+}
+
+#[test]
+fn a_thank_you_where_nobody_spoke_is_swept_and_one_said_is_kept() {
+    // A..B is 0-10 s and C..D 20-30 s into the clip; speech only in the second.
+    let out = plan(
+        vec![clip_turn(A, B, "Thank you."), clip_turn(C, D, "Thank you.")],
+        &[],
+        &heard(10.0, &[(20.0, 30.0)]),
+        t(A),
+    );
+    assert_eq!(out.swept, 1);
+    assert_eq!(out.insert.len(), 1);
+    assert_eq!(
+        out.insert[0].start,
+        t(C),
+        "the thanks said while speaking stays"
+    );
 }
 
 #[test]
@@ -299,7 +349,8 @@ fn a_touching_boundary_does_not_count_as_overlap() {
             start: t(B),
             end: t(C),
         }],
-        None,
+        &Heard::default(),
+        t(A),
     );
     assert_eq!(out.insert.len(), 1, "{:?}", out.refused);
 }

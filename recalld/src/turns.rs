@@ -13,6 +13,7 @@
 //! still counted, and still seen by supersession.
 
 use crate::ledger::{Outcome, PassKind, record};
+use crate::quality::Heard;
 use crate::turn_store::{self, NewTurn, Protected, Provenance};
 use audiocore::instant;
 use audiocore::instant::Stamp;
@@ -127,15 +128,21 @@ fn overlaps(a: (DateTime<Utc>, DateTime<Utc>), b: (DateTime<Utc>, DateTime<Utc>)
 /// typed words are testable without a database.
 ///
 /// 1. A repetition loop or wordless turn is swept, and so is what the model
-///    writes over silence when the clip's measured `speech` is near-silent.
+///    writes over silence where the clip `heard` none ([`Heard::invented`]).
 /// 2. A turn overlapping a person-owned span is refused: the person's text stands.
 #[must_use]
-pub fn plan(turns: Vec<ClipTurn>, human: &[Protected], speech: Option<f64>) -> Plan {
+pub fn plan(
+    turns: Vec<ClipTurn>,
+    human: &[Protected],
+    heard: &Heard,
+    block_start: DateTime<Utc>,
+) -> Plan {
+    let offset = |t: DateTime<Utc>| (t - block_start).as_seconds_f64();
     let mut out = Plan::default();
     for turn in turns {
         if crate::quality::is_repetition_loop(&turn.text)
             || crate::quality::is_wordless(&turn.text)
-            || crate::quality::is_invented_over_silence(&turn.text, speech)
+            || heard.invented(&turn.text, offset(turn.start), offset(turn.end))
         {
             out.swept += 1;
             continue;
@@ -542,8 +549,8 @@ pub fn write_pass(
         };
         let block_end = block_end.with_timezone(&Utc);
         let human = turn_store::protected_between(meaning, block_start, block_end)?;
-        let speech = crate::speech::seconds_of(ingest, &filename)?;
-        let decided = plan(turns, &human, speech);
+        let heard = crate::speech::heard(ingest, &filename)?;
+        let decided = plan(turns, &human, &heard, block_start);
         pass.refused += decided.refused.len();
         pass.swept += decided.swept;
         let written = write_block(meaning, audio_id, (block_start, block_end), &decided, now)?;

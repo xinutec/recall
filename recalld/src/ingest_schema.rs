@@ -80,6 +80,10 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
     add_column(conn, "segment_levels", "gated", "REAL")?;
     add_column(conn, "segment_levels", "quiet_run_s", "REAL")?;
     add_column(conn, "room_blocks", "coverage", "REAL")?;
+    // Where the speech is, as JSON `[[start, end], ...]` in seconds from the
+    // blob's start; JSON `null` when it could not be decoded. NULL means not
+    // looked for yet (`speech::scan_once` backfills it).
+    add_column(conn, "segment_speech", "regions", "TEXT")?;
     // A decision's counts, as JSON; `outcome` is one word (`ledger::Outcome`).
     add_column(conn, "pass_ledger", "detail", "TEXT")?;
     split_old_outcomes(conn)?;

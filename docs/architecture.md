@@ -162,9 +162,11 @@ push to and the port the browser uses. It owns:
   A re-PUT of identical bytes is idempotent; a different blob under a taken
   name is 409 and the stored one is untouched.
 - **Speech evidence per blob.** Silero (`audiocore::vad`, the same detector the
-  Mac runs) measures speech seconds. A segment gets a transcription job only
-  once measured, and none if measured silent: transcribing silence returns
-  inventions ("Thank you."), not nothing.
+  Mac runs) measures speech seconds, and where they fall (`regions`). A
+  segment gets a transcription job only once measured, and none if measured
+  silent: transcribing silence returns inventions ("Thank you."), not nothing.
+  Rows from before `regions` existed are backfilled with whatever room a batch
+  has left after new clips.
 - **The work queue.** Jobs are derived from the blobs, never enqueued, so a
   missed enqueue cannot strand audio. A lease is time-bounded; a runner that
   dies lets it lapse; a job nobody finishes is retired after three leases. Kinds:
@@ -188,8 +190,9 @@ push to and the port the browser uses. It owns:
 Quality rules run where rows are written: a repetition loop or a wordless turn
 is refused at the write (`audiocore::text`, shared with the doctor so both
 judge the same text the same way); so is a phrase Whisper writes over
-silence ("Thank you.", video sign-offs) in a minute with under a second of
-measured speech (`recalld::quality::is_invented_over_silence`); a whole-clip
+silence ("Thank you.", video sign-offs) where the clip heard no speech: none
+inside the line's own span, or under a second in the whole minute
+(`recalld::quality::Heard::invented`); a whole-clip
 language outside the
 household's two zeroes a turn's confidence rather than hiding it. Confidence,
 length and the language label alone are never grounds to hide: the commonest

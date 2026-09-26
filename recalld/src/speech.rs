@@ -12,13 +12,16 @@
 //! leave them waiting hours behind the archive backfill.
 
 use crate::store;
-use audiocore::vad::Detector;
+use audiocore::vad::{Detector, Region};
 use rusqlite::Connection;
 use std::path::Path;
 
 pub use audiocore::vad::UNKNOWN_SECONDS;
 
 /// Measure up to `batch` unmeasured segments, NEWEST first; returns rows written.
+/// Room left in the batch goes to measured segments whose regions were never
+/// stored (they predate the column), so a new clip is never queued behind the
+/// backfill: the transcription queue waits on its measurement.
 ///
 /// The detector is loaded once per batch: construction costs ~2 s against
 /// ~0.5 s of detection per clip.
@@ -29,17 +32,15 @@ pub use audiocore::vad::UNKNOWN_SECONDS;
 /// revisiting it forever.
 pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     let conn = store::open(root)?;
-    let pending: Vec<(String, String)> = {
-        let mut stmt = conn.prepare(
-            "SELECT s.filename, s.source FROM segments s
-             LEFT JOIN segment_speech p ON p.filename = s.filename
-             WHERE p.filename IS NULL
-             ORDER BY s.start_utc DESC, s.filename DESC LIMIT ?1",
-        )?;
-        let rows = stmt.query_map([batch as u32], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        rows.collect::<Result<_, _>>()?
-    };
-    if pending.is_empty() {
+    let pending = unmeasured(&conn, batch)?;
+    // A segment measured silent has no regions; no need to look again.
+    conn.execute(
+        "UPDATE segment_speech SET regions = '[]'
+         WHERE regions IS NULL AND speech_seconds = 0",
+        [],
+    )?;
+    let backfill = unplaced(&conn, batch - pending.len())?;
+    if pending.is_empty() && backfill.is_empty() {
         return Ok(0);
     }
     let mut detector = match Detector::load() {
@@ -53,38 +54,102 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     };
     let mut written = 0;
     for (filename, source) in pending {
-        let path = root.join("ingest").join(&source).join(&filename);
-        let seconds = detector.speech_seconds(&path).unwrap_or(UNKNOWN_SECONDS);
+        let found = detector.speech_regions(&root.join("ingest").join(&source).join(&filename));
+        let seconds = found.as_ref().map_or(UNKNOWN_SECONDS, |regions| {
+            regions.iter().map(Region::seconds).sum()
+        });
         conn.execute(
             "INSERT OR IGNORE INTO segment_speech
-                 (filename, source, speech_seconds, computed_utc)
-             VALUES (?1, ?2, ?3, ?4)",
+                 (filename, source, speech_seconds, computed_utc, regions)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             (
                 &filename,
                 &source,
                 seconds,
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                regions_json(found.ok().as_deref())?,
             ),
+        )?;
+        written += 1;
+    }
+    for (filename, source) in backfill {
+        let found = detector.speech_regions(&root.join("ingest").join(&source).join(&filename));
+        // Only the regions: the stored total came from the same detector, and
+        // the queue has already acted on it.
+        conn.execute(
+            "UPDATE segment_speech SET regions = ?2 WHERE filename = ?1 AND regions IS NULL",
+            (&filename, regions_json(found.ok().as_deref())?),
         )?;
         written += 1;
     }
     Ok(written)
 }
 
-/// The measured speech in one blob, in seconds; `None` until the pass has
-/// measured it.
+fn unmeasured(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.filename, s.source FROM segments s
+         LEFT JOIN segment_speech p ON p.filename = s.filename
+         WHERE p.filename IS NULL
+         ORDER BY s.start_utc DESC, s.filename DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([limit as u32], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
+}
+
+/// Measured segments whose regions were never stored, newest first.
+fn unplaced(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<(String, String)>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(
+        "SELECT p.filename, p.source FROM segment_speech p
+         JOIN segments s ON s.filename = p.filename
+         WHERE p.regions IS NULL
+         ORDER BY s.start_utc DESC, p.filename DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([limit as u32], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
+}
+
+/// The stored spelling of a blob's regions; JSON `null` for "could not look".
+fn regions_json(regions: Option<&[Region]>) -> rusqlite::Result<String> {
+    let spans: Option<Vec<[f64; 2]>> =
+        regions.map(|found| found.iter().map(|r| [r.start, r.end]).collect());
+    serde_json::to_string(&spans).map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))
+}
+
+/// Stored regions, or `None` for JSON `null` (could not look) or garbage.
+fn parse_regions(json: &str) -> Option<Vec<Region>> {
+    let spans: Option<Vec<[f64; 2]>> = serde_json::from_str(json).ok()?;
+    Some(
+        spans?
+            .into_iter()
+            .map(|[start, end]| Region { start, end })
+            .collect(),
+    )
+}
+
+/// What the pass found in one blob, for the write-time sweep: how much speech,
+/// and where. Each is `None` until measured.
 ///
 /// # Errors
 /// On database failure.
-pub fn seconds_of(ingest: &Connection, filename: &str) -> rusqlite::Result<Option<f64>> {
+pub fn heard(ingest: &Connection, filename: &str) -> rusqlite::Result<crate::quality::Heard> {
     use rusqlite::OptionalExtension as _;
-    ingest
+    let row: Option<(f64, Option<String>)> = ingest
         .query_row(
-            "SELECT speech_seconds FROM segment_speech WHERE filename = ?1",
+            "SELECT speech_seconds, regions FROM segment_speech WHERE filename = ?1",
             [filename],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .optional()
+        .optional()?;
+    let Some((seconds, regions)) = row else {
+        return Ok(crate::quality::Heard::default());
+    };
+    Ok(crate::quality::Heard {
+        seconds: Some(seconds),
+        regions: regions.as_deref().and_then(parse_regions),
+    })
 }
 
 /// This source's newest segment that could be someone talking, as its capture

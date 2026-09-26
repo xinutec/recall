@@ -8,6 +8,7 @@
 //! `audiocore::text`, so writing a turn and restoring one cannot disagree.
 
 pub use audiocore::text::{is_repetition_loop, is_wordless, trim_wordless};
+use audiocore::vad::Region;
 
 /// Measured speech under which a minute counts as near-silent, in seconds. The
 /// speech pass's floor is one 0.256 s blip, and in minutes under a second the
@@ -40,8 +41,8 @@ const THANKS_WORDS: &[&str] = &["thank", "thanks", "you", "very", "much", "so"];
 /// [`SILENCE_PHRASES`]), or thanks and nothing else: "Thank you.",
 /// "Thank you. Thank you.", "thank thank you".
 ///
-/// Only meaningful with [`NEAR_SILENT_S`]: in a minute with speech, "Thank you."
-/// is as likely said as invented.
+/// Only meaningful where no speech was heard ([`Heard::invented`]): where there
+/// was, "Thank you." is as likely said as invented.
 #[must_use]
 pub fn is_silence_phrase(text: &str) -> bool {
     let lower = text.to_lowercase();
@@ -57,12 +58,48 @@ pub fn is_silence_phrase(text: &str) -> bool {
     thanks || SILENCE_PHRASES.contains(&words.join(" ").as_str())
 }
 
-/// A segment to sweep because its minute is near-silent and its text is what
-/// the model invents there. `speech` is the minute's measured speech; unmeasured
-/// or undecodable (negative) is not near-silent.
+/// What the speech pass found in a clip, for the write-time sweep.
+#[derive(Debug, Clone, Default)]
+pub struct Heard {
+    /// Seconds of speech in the whole clip; negative when it could not look.
+    pub seconds: Option<f64>,
+    /// Where that speech is, seconds from the clip's start. `None` until the
+    /// pass has placed it.
+    pub regions: Option<Vec<Region>>,
+}
+
+impl Heard {
+    /// True if `text`, spanning `[start, end)` seconds into the clip, is what
+    /// the model writes over silence and the clip heard none there: the whole
+    /// clip is near-silent, or no speech falls inside the span.
+    ///
+    /// On 19 September, 20 of the 21 lines a person marked "nobody spoke" had
+    /// no speech inside their span, and every line they vouched for had some.
+    /// Other text with none inside is kept: a phone's suppression hides quiet
+    /// speech from the detector, and another mic confirmed 30% of such lines.
+    #[must_use]
+    pub fn invented(&self, text: &str, start: f64, end: f64) -> bool {
+        if !is_silence_phrase(text) {
+            return false;
+        }
+        let near_silent = self
+            .seconds
+            .is_some_and(|s| (0.0..NEAR_SILENT_S).contains(&s));
+        let none_here = self
+            .regions
+            .as_deref()
+            .is_some_and(|regions| speech_inside(regions, start, end) <= 0.0);
+        near_silent || none_here
+    }
+}
+
+/// Seconds of `regions` inside `[start, end)`.
 #[must_use]
-pub fn is_invented_over_silence(text: &str, speech: Option<f64>) -> bool {
-    speech.is_some_and(|s| (0.0..NEAR_SILENT_S).contains(&s)) && is_silence_phrase(text)
+pub fn speech_inside(regions: &[Region], start: f64, end: f64) -> f64 {
+    regions
+        .iter()
+        .map(|r| (r.end.min(end) - r.start.max(start)).max(0.0))
+        .sum()
 }
 
 /// True if `text` is nothing but one of `names`: "Anna.", " anna ", "Anna!".

@@ -8,7 +8,7 @@
 
 use crate::align::AlignedTurn;
 use crate::ledger::{Outcome, record};
-use crate::quality::is_repetition_loop;
+use crate::quality::{Heard, is_repetition_loop};
 use crate::turn_store::{self, HiddenReason, NewTurn, Protected, Provenance};
 use audiocore::instant::Stamp;
 use audiocore::job::Kind;
@@ -385,9 +385,12 @@ struct Stored {
 #[derive(Deserialize)]
 struct TranscribedSegment {
     /// The segment's own text, read only to judge whether the model looped on
-    /// it. The turns are built from `words`.
+    /// it or invented it over silence. The turns are built from `words`.
     #[serde(default)]
     text: String,
+    /// Seconds into the clip; absent in results stored without them.
+    start: Option<f64>,
+    end: Option<f64>,
     #[serde(default)]
     words: Vec<Word>,
 }
@@ -427,14 +430,14 @@ pub fn voices(stored: &str) -> Option<(Vec<SpeakerTurn>, Vec<SpeakerVoice>)> {
 /// its midpoint. A result with no word timings yields `None`, and the caller
 /// keeps the transcript it has.
 ///
-/// ⚠ A segment the model looped on, one without words, or one it invented over
-/// a near-silent clip (`speech`, as [`crate::quality::is_invented_over_silence`])
-/// contributes nothing.
+/// ⚠ A segment the model looped on, one without words, or one it invented where
+/// the clip `heard` no speech ([`crate::quality::Heard::invented`]) contributes
+/// nothing.
 /// The quality rule applies per segment, as in `turns::plan`, not to the
 /// finished turn: alignment often collapses a clip into one turn, and one looped
 /// segment would then condemn the clean ones around it.
 #[must_use]
-pub fn words_of(stored: &str, speech: Option<f64>) -> Option<(Vec<Word>, Option<String>)> {
+pub fn words_of(stored: &str, heard: &Heard) -> Option<(Vec<Word>, Option<String>)> {
     let reply: Reply<Transcription> = serde_json::from_str(stored).ok()?;
     if !reply.ok {
         return None;
@@ -446,12 +449,23 @@ pub fn words_of(stored: &str, speech: Option<f64>) -> Option<(Vec<Word>, Option<
         .filter(|s| {
             !(crate::quality::is_repetition_loop(&s.text)
                 || crate::quality::is_wordless(&s.text)
-                || crate::quality::is_invented_over_silence(&s.text, speech))
+                || invented(s, heard))
         })
         .flat_map(|s| s.words)
         .filter(|w| w.end > w.start)
         .collect();
     (!words.is_empty()).then_some((words, outcome.language))
+}
+
+/// Whether `heard` says the model invented this segment. Its span is the one
+/// stored, or its words' when a result was stored without one.
+fn invented(segment: &TranscribedSegment, heard: &Heard) -> bool {
+    let first = segment.words.first().map(|w| w.start);
+    let last = segment.words.last().map(|w| w.end);
+    match (segment.start.or(first), segment.end.or(last)) {
+        (Some(start), Some(end)) => heard.invented(&segment.text, start, end),
+        _ => false,
+    }
 }
 
 /// Did this stored transcription carry ANY word timings, before the quality
@@ -824,8 +838,8 @@ pub fn write_pass(
             continue;
         };
         // No usable words: retire the permanent case, wait on the transient one.
-        let speech = crate::speech::seconds_of(ingest, &filename)?;
-        let Some((words, language)) = words_of(&transcription, speech) else {
+        let heard = crate::speech::heard(ingest, &filename)?;
+        let Some((words, language)) = words_of(&transcription, &heard) else {
             if retire_if_permanently_unusable(ingest, kind, &filename, &transcription, now)? {
                 pass.kept += 1;
             } else {

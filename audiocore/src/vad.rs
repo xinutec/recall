@@ -221,18 +221,26 @@ impl Detector {
         Ok(regions_from_probabilities(&self.probabilities(samples)?))
     }
 
-    /// Seconds of speech in a stored segment of any container.
+    /// Where the speech is in a stored segment of any container, in seconds
+    /// from its start.
     ///
     /// # Errors
     /// `Undecodable` if ffmpeg produced nothing: "we could not look" is never
     /// zero speech.
-    pub fn speech_seconds(&mut self, path: &Path) -> Result<f64, Error> {
+    pub fn speech_regions(&mut self, path: &Path) -> Result<Vec<Region>, Error> {
         let pcm = decode::decode_s16(path, RATE).ok_or(Error::Undecodable)?;
         if pcm.is_empty() {
             return Err(Error::Undecodable);
         }
-        let samples = decode::to_f32(&pcm);
-        Ok(self.regions(&samples)?.iter().map(Region::seconds).sum())
+        self.regions(&decode::to_f32(&pcm))
+    }
+
+    /// Seconds of speech in a stored segment of any container.
+    ///
+    /// # Errors
+    /// As [`Detector::speech_regions`].
+    pub fn speech_seconds(&mut self, path: &Path) -> Result<f64, Error> {
+        Ok(self.speech_regions(path)?.iter().map(Region::seconds).sum())
     }
 }
 
