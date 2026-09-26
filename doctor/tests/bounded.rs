@@ -4,6 +4,41 @@ use doctor::bounded::run;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Why a child that should have answered did not: how long, what state the
+/// kernel has it in, and which processes hold the far end of this test
+/// process's pipes. A read end only reaches EOF once every copy of the write
+/// end is closed, and these tests fail waiting out the whole bound (#1480).
+fn stuck(answer: &doctor::bounded::Answer) -> String {
+    let lsof = |args: &[&str]| {
+        std::process::Command::new("lsof")
+            .args(args)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let me = std::process::id().to_string();
+    let mine = lsof(&["-nP", "-p", &me]);
+    // `PIPE 0x<this end> 16384 ->0x<the other end>`
+    let peers: Vec<&str> = mine
+        .lines()
+        .filter(|l| l.contains("PIPE"))
+        .filter_map(|l| l.split("->").nth(1))
+        .map(str::trim)
+        .collect();
+    let holders: Vec<String> = lsof(&["-nP"])
+        .lines()
+        .filter(|l| l.contains("PIPE") && peers.iter().any(|p| l.contains(p)))
+        .map(str::to_owned)
+        .collect();
+    format!(
+        "after {:.1}s, child {} in state {:?}; far ends of this process's pipes held by:\n{}",
+        answer.seconds,
+        answer.pid,
+        doctor::bounded::process_state(answer.pid),
+        holders.join("\n")
+    )
+}
+
 fn sh(script: &str) -> (PathBuf, Vec<String>) {
     (
         PathBuf::from("/bin/sh"),
@@ -15,10 +50,10 @@ fn sh(script: &str) -> (PathBuf, Vec<String>) {
 fn a_prompt_child_is_read_and_reaped() {
     let (program, args) = sh("echo hello; echo trouble >&2; exit 3");
     let answer = run(&program, &args, Duration::from_secs(10), &[]).unwrap();
+    assert!(answer.answered(), "{}", stuck(&answer));
     assert_eq!(answer.stdout.as_deref(), Some("hello\n"));
     assert_eq!(answer.stderr, "trouble\n");
     assert_eq!(answer.status, Some(3));
-    assert!(answer.answered());
 }
 
 #[test]
@@ -106,7 +141,7 @@ fn a_child_that_finishes_reports_both_streams_whole() {
     )
     .expect("spawn");
 
-    assert!(answer.answered());
+    assert!(answer.answered(), "{}", stuck(&answer));
     assert_eq!(answer.stdout.as_deref().map(str::trim), Some("out"));
     assert_eq!(answer.stderr.trim(), "err");
 }

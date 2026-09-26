@@ -48,6 +48,8 @@ LABELLED = """t.speaker_label IS NOT NULL AND t.speaker_label NOT LIKE 'SPEAKER%
     AND t.hidden_reason IS NULL AND t.superseded_by IS NULL"""
 MARGIN = 0.08
 CONTROL = "control: labelled turn span"
+ORACLE_EMBED = "ceiling+: cut at the labelled edges, each piece embedded"
+SPLIT_EMBED = "split+: cut where the voice changes, each piece embedded"
 MEAN = "A': Whisper segment, window mean"
 ORACLE = "ceiling: A' cut at the labelled edges"
 SPLIT = "split: A' cut where the voice changes"
@@ -222,6 +224,76 @@ def extract_windows(db_path: Path, clips: Path, work: Path) -> None:
             print(clip.name, len(windows), "windows", flush=True)
 
 
+THRESHOLDS = (0.3, 0.45, 0.6, 0.75, 0.9)
+EMBEDDED = "pieces.jsonl"
+
+
+def span_key(aid: int, a: float, b: float) -> tuple[int, float, float]:
+    return (aid, round(a, 3), round(b, 3))
+
+
+def load_windows(work: Path) -> dict[int, list[Window]]:
+    out: dict[int, list[Window]] = {}
+    for line in (work / "windows.jsonl").open():
+        record = json.loads(line)
+        out[record["audio_id"]] = [
+            (w["start"], w["end"], w["vector"])
+            for w in record["windows"]
+            if usable(w["vector"]) is not None
+        ]
+    return out
+
+
+def candidate_pieces(work: Path, shortest: float) -> set[tuple[int, float, float]]:
+    """Every piece an arm could name: each Whisper segment cut at the labelled
+    edges, and cut by the detector at each of `THRESHOLDS`."""
+    windows = load_windows(work)
+    spans: set[tuple[int, float, float]] = set()
+    for line in (work / "extract.jsonl").open():
+        record = json.loads(line)
+        aid = record["audio_id"]
+        edges = [x for t in record["turns"] for x in (t["start"], t["end"])]
+        for seg in record["segments"]:
+            a, b = seg["start"], seg["end"]
+            cuts = [edges] + [
+                voice_changes(windows.get(aid, []), a, b, t, shortest)
+                for t in THRESHOLDS
+            ]
+            for at in cuts:
+                spans.update(span_key(aid, pa, pb) for pa, pb in pieces(a, b, at))
+    return spans
+
+
+def extract_pieces(db_path: Path, clips: Path, work: Path, shortest: float) -> None:
+    """Embed every candidate piece as production embeds a span, once each."""
+    from recall import shim_voices  # noqa: PLC0415 - the ML env only
+
+    paths = dict(open_ro(db_path).execute("SELECT id, path FROM audio_segments"))
+    out_path = work / EMBEDDED
+    done = set()
+    if out_path.exists():
+        for line in out_path.open():
+            r = json.loads(line)
+            done.add(span_key(r["audio_id"], r["start"], r["end"]))
+    todo = sorted(candidate_pieces(work, shortest) - done)
+    print(len(todo), "pieces to embed", flush=True)
+    with out_path.open("a") as out:
+        for n, (aid, a, b) in enumerate(todo, 1):
+            clip = clips / str(paths[aid]).rsplit("/", 1)[1]
+            try:
+                answer = shim_voices.handle(
+                    "embed", {"audio": str(clip), "start": a, "end": b}
+                )
+                vector = answer.get("vector") if isinstance(answer, dict) else None
+            except (ValueError, OSError, RuntimeError):
+                vector = None
+            record = {"audio_id": aid, "start": a, "end": b, "vector": vector}
+            out.write(json.dumps(record) + "\n")
+            if n % 100 == 0:
+                out.flush()
+                print(n, "embedded", flush=True)
+
+
 def usable(vector: list[float] | None) -> list[float] | None:
     """A span too short to embed comes back NaN, which ties every person: it is
     unnamed, not a coin-flip."""
@@ -347,6 +419,11 @@ def score_windows(
     windowed = work / "windows.jsonl"
     if not windowed.exists():
         return
+    embedded: dict[tuple[int, float, float], list[float] | None] = {}
+    if (work / EMBEDDED).exists():
+        for line in (work / EMBEDDED).open():
+            r = json.loads(line)
+            embedded[span_key(r["audio_id"], r["start"], r["end"])] = r["vector"]
     for line in windowed.open():
         record = json.loads(line)
         aid = record["audio_id"]
@@ -359,14 +436,16 @@ def score_windows(
         ]
         edges = [x for ta, tb, _ in truth[aid] for x in (ta, tb)]
         for a, b in segments[aid]:
-            cuts = {
-                MEAN: [],
-                ORACLE: edges,
-                SPLIT: voice_changes(windows, a, b, split.threshold, split.shortest),
-            }
+            detected = voice_changes(windows, a, b, split.threshold, split.shortest)
+            cuts = {MEAN: [], ORACLE: edges, SPLIT: detected}
             for arm, at in cuts.items():
                 for pa, pb in pieces(a, b, at):
                     score_unit(arm, aid, pa, pb, mean_of(windows, pa, pb))
+            if embedded:
+                for arm, at in ((ORACLE_EMBED, edges), (SPLIT_EMBED, detected)):
+                    for pa, pb in pieces(a, b, at):
+                        vector = embedded.get(span_key(aid, pa, pb))
+                        score_unit(arm, aid, pa, pb, vector)
 
 
 def score_aligned(
@@ -414,7 +493,7 @@ def score(db_path: Path, work: Path, leave_out_clip: bool, split: Split) -> None
                 and (leave_out_clip or (src[1] < b and src[2] > a))
             ):
                 continue
-            sim = sum(x * y for x, y in zip(e, p.vector, strict=True))
+            sim = math.sumprod(e, p.vector)
             best[p.person] = max(best.get(p.person, -9.0), sim)
         if not best:
             return None, 0.0
@@ -551,6 +630,11 @@ def main() -> None:
     ew.add_argument("--db", type=Path, required=True)
     ew.add_argument("--clips", type=Path, required=True)
     ew.add_argument("--work", type=Path, required=True)
+    xp = sub.add_parser("extract-pieces")
+    xp.add_argument("--db", type=Path, required=True)
+    xp.add_argument("--clips", type=Path, required=True)
+    xp.add_argument("--work", type=Path, required=True)
+    xp.add_argument("--shortest", type=float, default=Split.shortest)
     sc = sub.add_parser("score")
     sc.add_argument("--db", type=Path, required=True)
     sc.add_argument("--work", type=Path, required=True)
@@ -565,6 +649,8 @@ def main() -> None:
         extract_pyannote(args.db, args.clips, args.work)
     elif args.command == "extract-windows":
         extract_windows(args.db, args.clips, args.work)
+    elif args.command == "extract-pieces":
+        extract_pieces(args.db, args.clips, args.work, args.shortest)
     else:
         score(
             args.db,

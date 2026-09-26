@@ -17,7 +17,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 /// The child's working directory. The parent's cwd is often the archive
@@ -90,7 +90,19 @@ pub fn run(
     for (key, value) in extra_env {
         command.env(key, value);
     }
-    let mut child = command.spawn()?;
+    let mut child = {
+        // ⚠ One spawn at a time in this process. On macOS a pipe is made and
+        // marked close-on-exec in two steps, so a child spawned by another
+        // thread in between inherits this child's write end, and the read end
+        // reaches EOF only when THAT process exits: a prompt child reads as
+        // hung for the whole bound (#1480, caught with a `sleep 30` holding
+        // another test's pipe). Held for the spawn only, never the wait.
+        static SPAWN: Mutex<()> = Mutex::new(());
+        let _one = SPAWN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        command.spawn()?
+    };
     let pid = child.id();
     let out = drain(child.stdout.take().expect("stdout was piped"));
     let err = drain(child.stderr.take().expect("stderr was piped"));
