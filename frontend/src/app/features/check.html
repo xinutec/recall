@@ -56,7 +56,10 @@
         @let filed = checked().get(t.id);
         @if (filed !== undefined) {
           <p class="words" [class.silent]="filed === null">{{ filed ?? 'Nobody spoke' }}</p>
-          <p class="hint"><mat-icon inline>check</mat-icon> Checked</p>
+          <div class="filed">
+            <p class="hint"><mat-icon inline>check</mat-icon> Checked</p>
+            <button matButton [disabled]="busy()" (click)="undo(t)">Undo check</button>
+          </div>
         } @else {
           <mat-form-field appearance="outline" subscriptSizing="dynamic" class="edit">
             <mat-label>What was said</mat-label>

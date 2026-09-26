@@ -43,6 +43,30 @@ pub struct Config {
     pub frontend: Option<PathBuf>,
 }
 
+/// The labelling writes: what a person says a line's words are, and taking it
+/// back.
+fn labelling() -> Router<Arc<reads::State>> {
+    Router::new()
+        .route("/api/correct", post(labels_write::correct_route))
+        .route(
+            "/api/correct/undo",
+            post(labels_write::undo_correction_route),
+        )
+        .route("/api/no-speech", post(labels_write::no_speech_route))
+        .route(
+            "/api/no-speech/undo",
+            post(labels_write::undo_no_speech_route),
+        )
+        .route(
+            "/api/correction/{id}/speaker",
+            post(labels_write::correction_reassign_route),
+        )
+        .route(
+            "/api/correction/{id}/hide",
+            post(labels_write::correction_hide_route),
+        )
+}
+
 /// The browsing plane, behind the SSO gate.
 fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router {
     let capture_root = root.clone();
@@ -96,20 +120,7 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
             "/api/devices/outbox/{device}",
             delete(devices::outbox_forget_route),
         )
-        .route("/api/correct", post(labels_write::correct_route))
-        .route("/api/no-speech", post(labels_write::no_speech_route))
-        .route(
-            "/api/no-speech/undo",
-            post(labels_write::undo_no_speech_route),
-        )
-        .route(
-            "/api/correction/{id}/speaker",
-            post(labels_write::correction_reassign_route),
-        )
-        .route(
-            "/api/correction/{id}/hide",
-            post(labels_write::correction_hide_route),
-        )
+        .merge(labelling())
         .route("/api/sessions/{source}/assign", post(assign::assign_route))
         .route(
             "/api/sessions",

@@ -4,6 +4,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
 import { MatSnackBar } from '@angular/material/snack-bar';
+import { NEVER } from 'rxjs';
 import { vi } from 'vitest';
 
 import { Check, dayWindow, otherMics, pickLines } from './check';
@@ -86,7 +87,8 @@ describe('Check', () => {
   async function setup(ids: string) {
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockReturnValue(undefined);
-    const open = vi.fn();
+    // Each message offers an action; nothing in these tests takes it.
+    const open = vi.fn(() => ({ onAction: () => NEVER }));
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),

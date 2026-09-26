@@ -103,6 +103,10 @@ later pass cannot write the same words back. The line sheet on a session or the
 timeline has it too, and both offer *Undo* for a mis-tap, which shows the line
 again and drops the correction.
 
+Every answer can be taken back: the message after it offers *Undo*, and a line
+already checked shows *Undo check* when you go *Back* to it. Undo deletes the
+correction rather than hiding it, since a mis-tap was never a judgement.
+
 Every answer files a correction marked `words_checked`: a person heard the words
 and vouches for them. The referees (`scripts/rank_referee.py`,
 `scripts/room_referee.py`) count only those, and changed text; a speaker fix

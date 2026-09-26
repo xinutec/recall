@@ -156,6 +156,8 @@ pub enum CorrectError {
     Hidden(i64),
     /// That turn was not hidden as nobody spoke, so there is nothing to undo.
     NotNobodySpoke(i64),
+    /// That turn carries no correction that can still be taken back.
+    NotCorrected(i64),
     /// The overridden start or end is not an ISO-8601 instant.
     BadSpan,
     Db(rusqlite::Error),
@@ -385,6 +387,53 @@ pub fn undo_no_speech(conn: &mut Connection, segment_id: i64) -> Result<(), Corr
     Ok(())
 }
 
+/// Take back a correction of `segment_id`: the person's turn goes, the
+/// machine's shows again, and the pair and any voiceprint enrolled from either
+/// go with them. For a mis-tap, so the words a person typed are deleted rather
+/// than hidden: they were never meant.
+///
+/// # Errors
+/// [`CorrectError::NotCorrected`] unless the turn is replaced by a current,
+/// visible correction of itself; one corrected again since is refused.
+pub fn undo_correction(conn: &mut Connection, segment_id: i64) -> Result<(), CorrectError> {
+    use rusqlite::OptionalExtension as _;
+    let tx = conn.transaction()?;
+    let old = load_original(&tx, segment_id)?;
+    let provenance = Provenance::Correction(segment_id).to_string();
+    let human: Option<i64> = tx
+        .query_row(
+            "SELECT id FROM transcript_segments
+             WHERE id = ?1 AND provenance = ?2
+               AND superseded_by IS NULL AND hidden_reason IS NULL",
+            rusqlite::params![old.superseded_by, provenance],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let pair: Option<i64> = tx
+        .query_row(
+            "SELECT id FROM corrections WHERE transcript_segment_id = ?1 ORDER BY id DESC",
+            [segment_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let (Some(human), Some(pair)) = (human, pair) else {
+        return Err(CorrectError::NotCorrected(segment_id));
+    };
+    drop_voiceprint(&tx, pair)?;
+    tx.execute(
+        "DELETE FROM speaker_embeddings WHERE source_segment_id = ?1",
+        [human],
+    )?;
+    tx.execute(
+        "DELETE FROM transcript_embeddings WHERE segment_id = ?1",
+        [human],
+    )?;
+    tx.execute("DELETE FROM corrections WHERE id = ?1", [pair])?;
+    turn_store::unsupersede(&tx, segment_id, human)?;
+    tx.commit()?;
+    Ok(())
+}
+
 #[derive(Deserialize, ts_rs::TS)]
 #[ts(export, rename = "CorrectRequest")]
 pub struct CorrectIn {
@@ -431,15 +480,16 @@ pub async fn correct_route(
     }
 }
 
+/// One line, by id: nobody spoke, and taking back a check.
 #[derive(Deserialize, ts_rs::TS)]
-#[ts(export, rename = "NoSpeechRequest")]
-pub struct NoSpeechIn {
+#[ts(export, rename = "LineRequest")]
+pub struct LineIn {
     id: i64,
 }
 
 pub async fn no_speech_route(
     State(st): State<Arc<reads::State>>,
-    Json(body): Json<NoSpeechIn>,
+    Json(body): Json<LineIn>,
 ) -> Response {
     let root = st.root.clone();
     let now = audiocore::instant::Stamp::now();
@@ -456,7 +506,7 @@ pub async fn no_speech_route(
 
 pub async fn undo_no_speech_route(
     State(st): State<Arc<reads::State>>,
-    Json(body): Json<NoSpeechIn>,
+    Json(body): Json<LineIn>,
 ) -> Response {
     let root = st.root.clone();
     let applied = tokio::task::spawn_blocking(move || {
@@ -467,6 +517,22 @@ pub async fn undo_no_speech_route(
         Ok(Ok(())) => route::ack(),
         Ok(Err(err)) => refused("undo no speech", err),
         Err(err) => route::faulted("undo no speech task", &err),
+    }
+}
+
+pub async fn undo_correction_route(
+    State(st): State<Arc<reads::State>>,
+    Json(body): Json<LineIn>,
+) -> Response {
+    let root = st.root.clone();
+    let applied = tokio::task::spawn_blocking(move || {
+        let mut conn = work::open_write(&root)?;
+        undo_correction(&mut conn, body.id)
+    });
+    match applied.await {
+        Ok(Ok(())) => route::ack(),
+        Ok(Err(err)) => refused("undo correction", err),
+        Err(err) => route::faulted("undo correction task", &err),
     }
 }
 
@@ -497,6 +563,11 @@ fn refused(what: &str, err: CorrectError) -> Response {
         CorrectError::NotNobodySpoke(id) => (
             StatusCode::BAD_REQUEST,
             format!("turn #{id} is not hidden as nobody spoke"),
+        )
+            .into_response(),
+        CorrectError::NotCorrected(id) => (
+            StatusCode::BAD_REQUEST,
+            format!("turn #{id} has no correction that can be taken back"),
         )
             .into_response(),
         CorrectError::Db(err) => route::faulted(what, &err),

@@ -99,3 +99,10 @@ h2 {
   font: var(--mat-sys-title-small);
   color: var(--mat-sys-on-surface-variant);
 }
+
+// "Checked", with the way back beside it.
+.filed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}

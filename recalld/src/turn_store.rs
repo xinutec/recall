@@ -381,6 +381,23 @@ pub fn reconcile_live(conn: &Connection, from: &str, to: &str) -> rusqlite::Resu
     )
 }
 
+/// Undo [`supersede`]: `old` is current again and `replacement` is deleted.
+/// Unlinked first, since `old` points at the row about to go.
+///
+/// # Errors
+/// If the database refuses.
+pub fn unsupersede(conn: &Connection, old: i64, replacement: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE transcript_segments SET superseded_by = NULL WHERE id = ?1",
+        [old],
+    )?;
+    conn.execute(
+        "DELETE FROM transcript_segments WHERE id = ?1",
+        [replacement],
+    )?;
+    Ok(())
+}
+
 /// Point `old` at the turn that replaces it.
 ///
 /// # Errors

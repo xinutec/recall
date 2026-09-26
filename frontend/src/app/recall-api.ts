@@ -9,7 +9,7 @@ import {
   ConversationPage,
   CorrectRequest,
   CorrectResult,
-  NoSpeechRequest,
+  LineRequest,
   Ok,
   Session,
   SessionRenameRequest,
@@ -69,15 +69,22 @@ export class RecallApi {
     return this.http.post<CorrectResult>('/api/correct', body);
   }
 
+  /** Take back a correction or a check of line `id`, which shows as the
+   * machine wrote it again. */
+  undoCorrection(id: number): Observable<Ok> {
+    const body: LineRequest = { id };
+    return this.http.post<Ok>('/api/correct/undo', body);
+  }
+
   /** Nobody spoke: hide the line, and file that its words were invented. */
   noSpeech(id: number): Observable<Ok> {
-    const body: NoSpeechRequest = { id };
+    const body: LineRequest = { id };
     return this.http.post<Ok>('/api/no-speech', body);
   }
 
   /** Take back a nobody spoke: the line shows again. */
   undoNoSpeech(id: number): Observable<Ok> {
-    const body: NoSpeechRequest = { id };
+    const body: LineRequest = { id };
     return this.http.post<Ok>('/api/no-speech/undo', body);
   }
 

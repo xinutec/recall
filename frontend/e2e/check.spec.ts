@@ -62,6 +62,11 @@ async function mockApi(page: Page): Promise<unknown[]> {
         },
       });
     }
+    if (url.includes('/api/correct/undo')) {
+      const body: unknown = route.request().postDataJSON();
+      posted.push({ undoCheck: body });
+      return route.fulfill({ json: { ok: true } });
+    }
     if (url.includes('/api/correct')) {
       posted.push(route.request().postDataJSON());
       return route.fulfill({ json: { newId: 100 + posted.length } });
@@ -165,4 +170,35 @@ test('the other mics are offered, and a line plays with a margin (Pixel 9)', asy
   );
   await expect(page.getByRole('button', { name: 'Save' })).toBeVisible();
   await expect.poll(() => audio).toContain('?pad=1');
+});
+
+test('an accidental Words are right is undone, from the message or later (Pixel 9)', async ({
+  page,
+}) => {
+  const posted = await mockApi(page);
+  await page.goto('/check');
+  await page.getByRole('combobox', { name: 'Day' }).click();
+  await page.getByRole('option', { name: 'Today' }).click();
+
+  await page.getByRole('button', { name: 'Words are right' }).click();
+  await expect(page.getByText('Line 2 of 3')).toBeVisible();
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByText('Line 1 of 3')).toBeVisible();
+  await expect(page.getByText('0 checked')).toBeVisible();
+
+  // Checked again, noticed only after moving on: Back, then Undo check.
+  await page.getByRole('button', { name: 'Words are right' }).click();
+  await expect(page.getByText('Line 2 of 3')).toBeVisible();
+  await page.getByRole('button', { name: 'Back' }).click();
+  await page.getByRole('button', { name: 'Undo check' }).click();
+  await expect(page.getByRole('textbox', { name: 'What was said' })).toBeVisible();
+  await expect(page.getByText('0 checked')).toBeVisible();
+
+  const text = 'I have already made a list of errands.';
+  expect(posted).toEqual([
+    { id: 1, text, checked: true },
+    { undoCheck: { id: 1 } },
+    { id: 1, text, checked: true },
+    { undoCheck: { id: 1 } },
+  ]);
 });

@@ -243,22 +243,25 @@ export class Check {
     this.file(t, text, this.api.correct(t.id, text, { checked: true }));
   }
 
-  /** Nothing was said: the words are the model's invention. Undoable, since a
-   * mis-tap would otherwise hide a real line with no way back here. */
+  /** Nothing was said: the words are the model's invention. */
   protected nobodySpoke(): void {
     const t = this.current();
     if (t) this.file(t, null, this.api.noSpeech(t.id));
   }
 
-  private offerUndo(t: Transcript): void {
+  private offerUndo(t: Transcript, words: string | null): void {
     this.snack
-      .open('Line hidden', 'Undo', { duration: 8000 })
+      .open(words === null ? 'Line hidden' : 'Checked', 'Undo', { duration: 8000 })
       .onAction()
       .subscribe(() => this.undo(t));
   }
 
-  private undo(t: Transcript): void {
-    this.api.undoNoSpeech(t.id).subscribe({
+  /** Take back what was filed for `t`, a mis-tap included, and go back to it. */
+  protected undo(t: Transcript): void {
+    const filed = this.checked().get(t.id);
+    if (filed === undefined || this.busy()) return;
+    const undo = filed === null ? this.api.undoNoSpeech(t.id) : this.api.undoCorrection(t.id);
+    undo.subscribe({
       next: () => {
         this.checked.update((m) => {
           const left = new Map(m);
@@ -280,7 +283,7 @@ export class Check {
         this.busy.set(false);
         this.checked.update((m) => new Map(m).set(t.id, words));
         this.next();
-        if (words === null) this.offerUndo(t);
+        this.offerUndo(t, words);
       },
       error: () => {
         this.busy.set(false);

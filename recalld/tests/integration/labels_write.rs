@@ -732,3 +732,88 @@ fn only_nobody_spoke_can_be_undone() {
         Err(CorrectError::NotNobodySpoke(i)) if i == id
     ));
 }
+
+// ---- taking back a check ----
+
+use recalld::labels_write::undo_correction;
+
+fn checked(conn: &mut Connection) -> i64 {
+    apply_correction(
+        conn,
+        41,
+        "mis heard words",
+        &crate::stamp(NOW),
+        &Correction {
+            words_checked: true,
+            ..Correction::default()
+        },
+    )
+    .expect("checked")
+}
+
+#[test]
+fn undoing_a_check_leaves_the_line_as_the_machine_wrote_it() {
+    let mut conn = correction_db();
+    let human = checked(&mut conn);
+    conn.execute(
+        "INSERT INTO speakers (id, name) VALUES (1, 'Sam');
+         ",
+        [],
+    )
+    .expect("speaker");
+    conn.execute(
+        "INSERT INTO speaker_embeddings (speaker_id, vector, created_utc, source_segment_id)
+         VALUES (1, '[1.0]', ?1, ?2)",
+        (NOW, human),
+    )
+    .expect("a voiceprint enrolled from the checked turn");
+
+    undo_correction(&mut conn, 41).expect("undone");
+
+    let (superseded, humans, pairs, prints): (Option<i64>, i64, i64, i64) = conn
+        .query_row(
+            "SELECT (SELECT superseded_by FROM transcript_segments WHERE id = 41),
+                    (SELECT COUNT(*) FROM transcript_segments WHERE asr_model = 'human'),
+                    (SELECT COUNT(*) FROM corrections),
+                    (SELECT COUNT(*) FROM speaker_embeddings)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .expect("read");
+    assert_eq!((superseded, humans, pairs, prints), (None, 0, 0, 0));
+}
+
+#[test]
+fn a_check_can_be_undone_once_and_a_line_never_checked_not_at_all() {
+    let mut conn = correction_db();
+    assert!(matches!(
+        undo_correction(&mut conn, 41),
+        Err(CorrectError::NotCorrected(41))
+    ));
+    checked(&mut conn);
+    undo_correction(&mut conn, 41).expect("undone");
+    assert!(matches!(
+        undo_correction(&mut conn, 41),
+        Err(CorrectError::NotCorrected(41))
+    ));
+}
+
+#[test]
+fn a_check_corrected_again_since_is_not_taken_back() {
+    // Undo is for the mis-tap just made. A later edit replaced the checked
+    // turn, and taking back the first would orphan it.
+    let mut conn = correction_db();
+    let human = checked(&mut conn);
+    apply_correction(
+        &mut conn,
+        human,
+        "misheard words",
+        &crate::stamp(NOW),
+        &Correction::default(),
+    )
+    .expect("edited again");
+    assert!(matches!(
+        undo_correction(&mut conn, 41),
+        Err(CorrectError::NotCorrected(41))
+    ));
+}
