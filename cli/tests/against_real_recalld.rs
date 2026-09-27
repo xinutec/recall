@@ -510,3 +510,74 @@ fn every_turn_of_a_source_is_visible_to_a_correction_not_only_the_spine() {
         "got: {ids:?}"
     );
 }
+
+/// The clip, finished, in the ingest plane, so it can be asked for again.
+fn transcribed_clip(root: &Path, name: &str) {
+    let ingest = recalld::store::open(root).expect("ingest");
+    ingest
+        .execute(
+            "INSERT INTO segments (source, filename, start_utc, bytes, sha256, received_utc)
+             VALUES ('usb', ?1, '2026-09-10T12:00:00Z', 1, 'x', '2026-09-10T12:00:00Z')",
+            [name],
+        )
+        .expect("segment");
+    ingest
+        .execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES (?1, ?2, 'done', '2026-09-10T12:01:00Z', '2026-09-10T12:02:00Z', '{}')",
+            ("transcribe-segment", name),
+        )
+        .expect("job");
+}
+
+#[test]
+fn a_retranscription_is_queued_by_name_and_one_still_waiting_can_be_cancelled() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "old words", None, None);
+    transcribed_clip(dir.path(), "usb-20260910T120000.flac");
+    let api = Api::new(&serve(dir.path()), Some(session()));
+    assert!(
+        api.retranscribe_candidates(1.0)
+            .expect("candidates")
+            .is_empty(),
+        "an empty result lost nothing"
+    );
+
+    let asked = api
+        .retranscribe(&[
+            "usb-20260910T120000.flac".to_owned(),
+            "usb-20260910T120100.flac".to_owned(),
+        ])
+        .expect("retranscribe");
+    assert_eq!(asked.queued, ["usb-20260910T120000.flac"]);
+    assert_eq!(
+        asked.skipped,
+        ["usb-20260910T120100.flac"],
+        "never transcribed"
+    );
+    assert_eq!(
+        api.undo_retranscribe("usb-20260910T120000.flac")
+            .expect("undo"),
+        "cancelled"
+    );
+    assert!(
+        api.undo_retranscribe("usb-20260910T120000.flac").is_err(),
+        "nothing left to take back"
+    );
+}
+
+#[test]
+fn the_cli_batches_to_the_servers_limit() {
+    assert_eq!(
+        cli::api::RETRANSCRIBE_BATCH,
+        recalld::retranscribe::MAX_PER_REQUEST
+    );
+}
+
+#[test]
+fn a_retranscription_needs_a_session() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    archive(dir.path(), "old words", None, None);
+    let api = Api::new(&serve(dir.path()), None);
+    assert!(api.retranscribe(&["x".to_owned()]).is_err());
+}

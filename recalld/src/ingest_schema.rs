@@ -75,6 +75,13 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
              outcome     TEXT NOT NULL,
              decided_utc TEXT NOT NULL,
              PRIMARY KEY (kind, filename)
+         );
+
+         -- Clips a person asked to transcribe again (`retranscribe`). The row
+         -- holds the speaker pass off the clip until its new lines are written.
+         CREATE TABLE IF NOT EXISTS retranscribe_requests (
+             filename      TEXT PRIMARY KEY REFERENCES segments (filename),
+             requested_utc TEXT NOT NULL
          );",
     )?;
     add_column(conn, "segment_levels", "gated", "REAL")?;

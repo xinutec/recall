@@ -8,7 +8,7 @@
 use crate::tokens::Tokens;
 use crate::{
     assign, audio, capture, conversations, devices, ingest, labels, labels_write, reads, reports,
-    sessions, sources, spa, sync, upload, webauth, work,
+    retranscribe, sessions, sources, spa, sync, upload, webauth, work,
 };
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -68,6 +68,11 @@ fn labelling() -> Router<Arc<reads::State>> {
             "/api/correction/{id}/hide",
             post(labels_write::correction_hide_route),
         )
+        .route(
+            "/api/retranscribe",
+            post(retranscribe::request_route).get(retranscribe::candidates_route),
+        )
+        .route("/api/retranscribe/undo", post(retranscribe::undo_route))
 }
 
 /// The browsing plane, behind the SSO gate.

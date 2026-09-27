@@ -149,6 +149,11 @@ pub enum HiddenReason {
     /// The speech pass measured the clip silent (0 s). Written once, in bulk,
     /// for turns from before the queue waited for that measurement (#1782).
     SilentMinute,
+    /// The clip was transcribed again and these lines gave way to the new ones
+    /// (`retranscribe`); taking it back shows them again.
+    SetAside,
+    /// A re-transcription was taken back: its lines gave way to the old ones.
+    RetranscriptionUndone,
 }
 
 impl fmt::Display for HiddenReason {
@@ -160,6 +165,8 @@ impl fmt::Display for HiddenReason {
             Self::SplitInto(id) => write!(f, "split into pieces ({id})"),
             Self::NobodySpoke => f.write_str("nobody spoke"),
             Self::SilentMinute => f.write_str("silent minute"),
+            Self::SetAside => f.write_str("set aside for re-transcription"),
+            Self::RetranscriptionUndone => f.write_str("re-transcription undone"),
         }
     }
 }
@@ -340,6 +347,42 @@ pub fn hide(conn: &Connection, id: i64, reason: &HiddenReason) -> rusqlite::Resu
         (reason.to_string(), id),
     )?;
     Ok(changed == 1)
+}
+
+/// Hide every current turn of one clip a machine wrote, for `reason`; a
+/// person's turns stay. Returns how many.
+///
+/// # Errors
+/// If the database refuses.
+pub fn hide_machine_turns(
+    conn: &Connection,
+    audio_segment_id: i64,
+    reason: &HiddenReason,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        &format!(
+            "UPDATE transcript_segments SET hidden_reason = ?1
+             WHERE audio_segment_id = ?2 AND superseded_by IS NULL
+               AND hidden_reason IS NULL AND NOT {HUMAN_OWNED}"
+        ),
+        (reason.to_string(), audio_segment_id),
+    )
+}
+
+/// Show again every turn of one clip hidden for `reason`. Returns how many.
+///
+/// # Errors
+/// If the database refuses.
+pub fn unhide_all(
+    conn: &Connection,
+    audio_segment_id: i64,
+    reason: &HiddenReason,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE transcript_segments SET hidden_reason = NULL
+         WHERE audio_segment_id = ?1 AND hidden_reason = ?2 AND superseded_by IS NULL",
+        (audio_segment_id, reason.to_string()),
+    )
 }
 
 /// Show a turn again that was hidden for `reason`. Returns whether it was.

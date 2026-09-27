@@ -14,7 +14,7 @@
 
 use crate::ledger::{Outcome, PassKind, record};
 use crate::quality::Heard;
-use crate::turn_store::{self, NewTurn, Protected, Provenance};
+use crate::turn_store::{self, HiddenReason, NewTurn, Protected, Provenance};
 use audiocore::instant;
 use audiocore::instant::Stamp;
 use audiocore::job::Kind;
@@ -353,7 +353,10 @@ fn registered_minutes(
 ///
 /// Idempotent by refusing: a clip whose audio segment already carries turns is
 /// left alone and the caller gets `Ok(0)`, so a second pass neither duplicates
-/// turns nor overwrites an edited minute.
+/// turns nor overwrites an edited minute. With `again` (the clip was asked to
+/// be transcribed again) its machine lines are set aside instead, in the same
+/// transaction; a person's lines stay, and `plan` already writes around them.
+/// An empty plan sets nothing aside.
 ///
 /// # Errors
 /// If the transaction cannot be taken or any statement fails. Nothing is left
@@ -364,18 +367,23 @@ pub fn write_block(
     span: (DateTime<Utc>, DateTime<Utc>),
     plan: &Plan,
     now: &Stamp,
+    again: bool,
 ) -> rusqlite::Result<usize> {
     if plan.insert.is_empty() {
         return Ok(0);
     }
     let tx = conn.transaction()?;
-    let already: i64 = tx.query_row(
-        "SELECT count(*) FROM transcript_segments WHERE audio_segment_id = ?1",
-        [audio_segment_id],
-        |row| row.get(0),
-    )?;
-    if already > 0 {
-        return Ok(0);
+    if again {
+        turn_store::hide_machine_turns(&tx, audio_segment_id, &HiddenReason::SetAside)?;
+    } else {
+        let already: i64 = tx.query_row(
+            "SELECT count(*) FROM transcript_segments WHERE audio_segment_id = ?1",
+            [audio_segment_id],
+            |row| row.get(0),
+        )?;
+        if already > 0 {
+            return Ok(0);
+        }
     }
     let mut written = 0;
     for turn in &plan.insert {
@@ -524,13 +532,15 @@ pub fn write_pass(
             continue;
         };
         // Already written. Derived rather than ledgered, so deleting the turns
-        // makes the clip eligible again.
+        // makes the clip eligible again. A clip asked to be transcribed again
+        // is written over: its machine lines are set aside.
+        let again = crate::retranscribe::is_requested(ingest, &filename)?;
         let written_already: i64 = meaning.query_row(
             "SELECT count(*) FROM transcript_segments WHERE audio_segment_id = ?1",
             [audio_id],
             |r| r.get(0),
         )?;
-        if written_already > 0 {
+        if written_already > 0 && !again {
             continue;
         }
         let Ok(turns) = interpret(block_start, &result) else {
@@ -553,9 +563,20 @@ pub fn write_pass(
         let decided = plan(turns, &human, &heard, block_start);
         pass.refused += decided.refused.len();
         pass.swept += decided.swept;
-        let written = write_block(meaning, audio_id, (block_start, block_end), &decided, now)?;
+        let written = write_block(
+            meaning,
+            audio_id,
+            (block_start, block_end),
+            &decided,
+            now,
+            again,
+        )?;
         pass.turns += written;
         pass.blocks += 1;
+        if again {
+            // Only now: the speaker pass must see the new lines, not an empty clip.
+            crate::retranscribe::written(ingest, &filename)?;
+        }
         if written == 0 {
             // Decided but left no trace in the meaning plane; without this row
             // every later pass would reach it first.

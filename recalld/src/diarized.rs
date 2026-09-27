@@ -770,6 +770,22 @@ fn retire_if_permanently_unusable(
     Ok(true)
 }
 
+/// The diarize jobs ready to decide, each with the transcription it aligns
+/// against, joined on the shared filename so the two results cannot get out of
+/// step. A clip asked to be transcribed again waits for its new lines, or this
+/// pass writes its own onto an empty clip (`retranscribe`).
+const FINISHED: &str = "SELECT d.filename, d.result, t.result, s.source
+         FROM jobs d
+         JOIN jobs t ON t.filename = d.filename AND t.kind = ?2
+                    AND t.done_utc IS NOT NULL AND t.result IS NOT NULL
+         JOIN segments s ON s.filename = d.filename
+         WHERE d.kind = ?1 AND d.done_utc IS NOT NULL AND d.result IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM pass_ledger l
+                           WHERE l.kind = ?1 AND l.filename = d.filename)
+           AND NOT EXISTS (SELECT 1 FROM retranscribe_requests r
+                           WHERE r.filename = d.filename)
+         ORDER BY s.start_utc ASC, d.filename ASC";
+
 /// Drain the finished diarize jobs into speaker-aligned turns.
 ///
 /// Every swap goes through [`decide`] first and every terminal decision leaves a
@@ -783,19 +799,7 @@ pub fn write_pass(
     limit: usize,
 ) -> rusqlite::Result<Pass> {
     let model = crate::turns::SHIM_MODEL;
-    // The diarize job and the transcription it aligns against, joined on the
-    // shared filename so the two results cannot get out of step.
-    let mut stmt = ingest.prepare(
-        "SELECT d.filename, d.result, t.result, s.source
-         FROM jobs d
-         JOIN jobs t ON t.filename = d.filename AND t.kind = ?2
-                    AND t.done_utc IS NOT NULL AND t.result IS NOT NULL
-         JOIN segments s ON s.filename = d.filename
-         WHERE d.kind = ?1 AND d.done_utc IS NOT NULL AND d.result IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM pass_ledger l
-                           WHERE l.kind = ?1 AND l.filename = d.filename)
-         ORDER BY s.start_utc ASC, d.filename ASC",
-    )?;
+    let mut stmt = ingest.prepare(FINISHED)?;
     let jobs: Vec<(String, String, String, String)> = stmt
         .query_map(
             rusqlite::params![Kind::DiarizeSegment, Kind::TranscribeSegment],

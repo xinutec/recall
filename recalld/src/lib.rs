@@ -29,6 +29,7 @@ pub mod queue;
 pub mod reads;
 pub mod rematch;
 pub mod reports;
+pub mod retranscribe;
 pub mod route;
 pub mod sessions;
 pub mod sources;

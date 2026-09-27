@@ -171,6 +171,25 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Clips per re-transcription request: the server's limit
+/// (`recalld::retranscribe::MAX_PER_REQUEST`, which a test holds this to).
+pub const RETRANSCRIBE_BATCH: usize = 1000;
+
+/// What a re-transcription request did with each clip it named.
+#[derive(Debug, Deserialize)]
+pub struct Requested {
+    pub queued: Vec<String>,
+    /// No finished transcription to redo.
+    pub skipped: Vec<String>,
+}
+
+/// A clip that lost speech to a repetition loop.
+#[derive(Debug, Deserialize)]
+pub struct Candidate {
+    pub filename: String,
+    pub looped_speech_s: f64,
+}
+
 /// Where a saved browsing session lives, under `$HOME`.
 ///
 /// ⚠ The CLI needs a credential, not an exemption: adding the transcript
@@ -413,6 +432,44 @@ impl Api {
             .send_json(serde_json::json!({ "id": id }))
             .map_err(|e| self.refused(&e))?;
         Ok(())
+    }
+
+    /// Transcribe clips again, by filename: back in Whisper's queue; when the
+    /// new words land their machine lines are set aside and a person's stay.
+    ///
+    /// # Errors
+    /// As [`Api::correct`]; more than a batch is a 400.
+    pub fn retranscribe(&self, filenames: &[String]) -> Result<Requested, Error> {
+        let response = self
+            .signed(self.agent.post(&format!("{}/api/retranscribe", self.base)))
+            .send_json(serde_json::json!({ "filenames": filenames }))
+            .map_err(|e| self.refused(&e))?;
+        serde_json::from_reader(response.into_reader()).map_err(|e| Error::Body(e.to_string()))
+    }
+
+    /// Clips whose stored transcription lost more than `min_speech_s` of
+    /// measured speech to a repetition loop, most lost first.
+    ///
+    /// # Errors
+    /// As [`Api::correct`].
+    pub fn retranscribe_candidates(&self, min_speech_s: f64) -> Result<Vec<Candidate>, Error> {
+        self.get(&format!("/api/retranscribe?min_speech_s={min_speech_s}"))
+    }
+
+    /// Take back [`Api::retranscribe`] for one clip: `cancelled` if it was
+    /// still waiting, `restored` if its old lines show again.
+    ///
+    /// # Errors
+    /// As [`Api::correct`]; a clip with nothing set aside is a 400.
+    pub fn undo_retranscribe(&self, filename: &str) -> Result<String, Error> {
+        let response = self
+            .signed(
+                self.agent
+                    .post(&format!("{}/api/retranscribe/undo", self.base)),
+            )
+            .send_json(serde_json::json!({ "filename": filename }))
+            .map_err(|e| self.refused(&e))?;
+        serde_json::from_reader(response.into_reader()).map_err(|e| Error::Body(e.to_string()))
     }
 
     /// Take back [`Api::no_speech`]: the turn shows again.

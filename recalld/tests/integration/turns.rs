@@ -405,7 +405,7 @@ fn a_written_turn_is_findable_by_search() {
     // makes the text unfindable by search.
     let mut conn = meaning_with_turns();
     assert_eq!(
-        write_block(&mut conn, 7, a_span(), &a_plan(), &crate::stamp(NOW)).expect("write"),
+        write_block(&mut conn, 7, a_span(), &a_plan(), &crate::stamp(NOW), false).expect("write"),
         1
     );
     let hits: i64 = conn
@@ -425,11 +425,11 @@ fn a_second_pass_refuses_rather_than_duplicating() {
     let mut conn = meaning_with_turns();
     let plan = a_plan();
     assert_eq!(
-        write_block(&mut conn, 7, a_span(), &plan, &crate::stamp(NOW)).expect("first"),
+        write_block(&mut conn, 7, a_span(), &plan, &crate::stamp(NOW), false).expect("first"),
         1
     );
     assert_eq!(
-        write_block(&mut conn, 7, a_span(), &plan, &crate::stamp(NOW)).expect("again"),
+        write_block(&mut conn, 7, a_span(), &plan, &crate::stamp(NOW), false).expect("again"),
         0
     );
     let n: i64 = conn

@@ -208,6 +208,16 @@ would write fewer turns than it hides labels instead (`Swap::Attribute`), and a
 proven, unwired split (`diarized::split_at_speaker_changes`). `Swap::Replace`
 still exists for the rest.
 
+### Transcribing a clip again
+
+The turns pass writes a clip once. A clip whose words are wrong (a Whisper
+loop, #1764) is asked for again by name (`retranscribe`, `recall-cli
+retranscribe`): its transcription goes back in the queue, and when the new words
+land the pass sets the clip's machine lines aside (hidden, not deleted) and
+writes the new ones around every span a person owns. The speaker pass waits for
+those lines: released earlier, it writes its own lines onto an empty clip and
+the turns pass then skips it. A request can be taken back, before or after.
+
 ### Speaker attribution: identification, not diarization
 
 For the household, the question per stretch of speech is which of a few known
@@ -229,6 +239,10 @@ path it is handed. `asr` wraps mlx-whisper (large-v3-turbo, word timings);
 `voices` wraps pyannote (diarization and embeddings). The vocabulary the
 transcriber is biased with is read from the fleet at startup and handed to the
 shim per job; a runner that cannot read it refuses to transcribe unbiased.
+mlx-whisper's temperature fallback is patched to draw fresh noise per token
+(`recall.asr.unfreeze_sampling`): as shipped, its compiled sampler froze one
+random key per process, and the fallback meant to escape a repetition loop made
+them (#1764).
 
 `recall-live` is the instant feed: it reads the tap the segmenter publishes,
 cuts at pauses with the same detector, transcribes each utterance as the

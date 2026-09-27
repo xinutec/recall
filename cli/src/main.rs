@@ -30,6 +30,9 @@ fn usage() -> ! {
          \x20 correct <id> <text> --apply             replace a turn's text\n\
          \x20 correct --session <id> --fix OLD=>NEW    ...by the words instead\n\
          \x20 no-speech <id> [--undo] --apply         nobody spoke: hide the turn\n\
+         \x20 retranscribe <file>... | --from LIST [--undo] --apply\n\
+         \x20                              transcribe clips again; a person's lines stay\n\
+         \x20 retranscribe --candidates [--min S]   clips that lost speech to a loop\n\
          \n\
          --api defaults to {DEFAULT_API}, the system of record. There is no\n\
          option to read a local database: a second answer nobody can tell from\n\
@@ -89,6 +92,7 @@ fn run(api: &Api, command: &str, mut args: Vec<String>) -> Result<bool, Error> {
         "capture" => capture(api),
         "correct" => correct(api, &mut args),
         "no-speech" => no_speech(api, &mut args),
+        "retranscribe" => retranscribe(api, &mut args),
         _ => usage(),
     }
 }
@@ -314,6 +318,70 @@ fn correct_by_id(api: &Api, args: &[String], apply: bool) -> Result<bool, Error>
 
 /// ⚠ The other write, gated like `correct`: the turn is hidden and its words
 /// filed as the model's invention.
+/// The clips to transcribe again: named, or one per line in `--from LIST`.
+fn retranscribe(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
+    if take_flag(args, "--candidates") {
+        let min = take_value(args, "--min").map_or(Ok(1.0), |v| v.parse::<f64>());
+        let Ok(min) = min else { usage() };
+        let found = api.retranscribe_candidates(min)?;
+        let total: f64 = found.iter().map(|c| c.looped_speech_s).sum();
+        for c in &found {
+            println!("{}\t{:.1}", c.filename, c.looped_speech_s);
+        }
+        eprintln!(
+            "{} clip(s), {:.0} min of speech under loops",
+            found.len(),
+            total / 60.0
+        );
+        return Ok(!found.is_empty());
+    }
+    let apply = take_flag(args, "--apply");
+    let undo = take_flag(args, "--undo");
+    let mut clips = std::mem::take(args);
+    if let Some(list) = take_value(&mut clips, "--from") {
+        let Ok(text) = std::fs::read_to_string(&list) else {
+            eprintln!("cannot read {list}");
+            std::process::exit(2)
+        };
+        // The first column: `--candidates` prints the seconds beside each name.
+        clips.extend(
+            text.lines()
+                .filter_map(|l| l.split_whitespace().next())
+                .map(str::to_owned),
+        );
+    }
+    if clips.is_empty() {
+        usage()
+    }
+    if !apply {
+        let verb = if undo {
+            "taken back"
+        } else {
+            "transcribed again"
+        };
+        println!("{} clip(s) would be {verb}, from {}", clips.len(), clips[0]);
+        println!("\nDRY-RUN only — nothing written. Re-run with --apply to commit.");
+        return Ok(true);
+    }
+    if undo {
+        for clip in &clips {
+            println!("{clip}: {}", api.undo_retranscribe(clip)?);
+        }
+        return Ok(true);
+    }
+    let (mut queued, mut skipped) = (0, Vec::new());
+    for batch in clips.chunks(cli::api::RETRANSCRIBE_BATCH) {
+        let done = api.retranscribe(batch)?;
+        queued += done.queued.len();
+        skipped.extend(done.skipped);
+    }
+    println!("{queued} clip(s) back in Whisper's queue");
+    for clip in &skipped {
+        println!("skipped (no finished transcription): {clip}");
+    }
+    Ok(skipped.is_empty())
+}
+
 fn no_speech(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
     let apply = take_flag(args, "--apply");
     let undo = take_flag(args, "--undo");

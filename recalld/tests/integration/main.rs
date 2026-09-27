@@ -28,6 +28,7 @@ mod queue;
 mod reads;
 mod rematch;
 mod reports;
+mod retranscribe;
 mod script;
 mod sessions;
 mod sources;
