@@ -11,6 +11,10 @@ meetings keep pyannote):
   split     A' cut where the mean voice before and after differs most, if by
             more than `--threshold`, recursively
   ceiling   A' cut at the labelled edges: what a perfect detector would give
+  pool      neighbouring segments joined while their voices agree (cosine to
+            the run's mean >= `--pool-threshold`, gaps up to 2 s), each run
+            embedded once and naming all its segments (`extract-pools`)
+  pool ceiling  the same, joined by the true label: the best pooling can do
 
 Both name with the production rule (`recalld::identify::match_one`: the person
 whose best print is nearest; ported here and checked against the census's
@@ -25,6 +29,8 @@ Usage:
   <ml-env python> scripts/identify_referee.py extract \
       --db <snapshot> --clips <dir> --work <dir>
   <ml-env python> scripts/identify_referee.py extract-windows \
+      --db <snapshot> --clips <dir> --work <dir>
+  <ml-env python> scripts/identify_referee.py extract-pools \
       --db <snapshot> --clips <dir> --work <dir>
   python3 scripts/identify_referee.py score \
       --db <snapshot> --work <dir> [--leave-out clip] \
@@ -44,6 +50,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
+from typing import Any, Protocol
 
 LABELLED = """t.speaker_label IS NOT NULL AND t.speaker_label NOT LIKE 'SPEAKER%'
     AND t.hidden_reason IS NULL AND t.superseded_by IS NULL"""
@@ -56,6 +63,8 @@ ORACLE = "ceiling: A' cut at the labelled edges"
 SPLIT = "split: A' cut where the voice changes"
 WHISPER = "A: Whisper segment"
 PYANNOTE = "pyannote: aligned turn, cluster voiceprint"
+POOL = "pool: neighbouring segments whose voices agree, embedded as one"
+POOL_ORACLE = "pool ceiling: neighbouring segments with the same label, embedded as one"
 
 
 def instant(value: str) -> datetime:
@@ -233,6 +242,16 @@ def span_key(aid: int, a: float, b: float) -> tuple[int, float, float]:
     return (aid, round(a, 3), round(b, 3))
 
 
+def load_spans(path: Path) -> dict[tuple[int, float, float], list[float] | None]:
+    """Embedded spans by key; empty when the file was never written."""
+    spans: dict[tuple[int, float, float], list[float] | None] = {}
+    if path.exists():
+        for line in path.open():
+            r = json.loads(line)
+            spans[span_key(r["audio_id"], r["start"], r["end"])] = r["vector"]
+    return spans
+
+
 def load_windows(work: Path) -> dict[int, list[Window]]:
     out: dict[int, list[Window]] = {}
     for line in (work / "windows.jsonl").open():
@@ -267,17 +286,23 @@ def candidate_pieces(work: Path, shortest: float) -> set[tuple[int, float, float
 
 def extract_pieces(db_path: Path, clips: Path, work: Path, shortest: float) -> None:
     """Embed every candidate piece as production embeds a span, once each."""
+    embed_spans(db_path, clips, work / EMBEDDED, candidate_pieces(work, shortest))
+
+
+def embed_spans(
+    db_path: Path, clips: Path, out_path: Path, wanted: set[tuple[int, float, float]]
+) -> None:
+    """Embed each span in `wanted` not yet in `out_path`, appending; resumable."""
     from recall import shim_voices  # noqa: PLC0415 - the ML env only
 
     paths = dict(open_ro(db_path).execute("SELECT id, path FROM audio_segments"))
-    out_path = work / EMBEDDED
     done = set()
     if out_path.exists():
         for line in out_path.open():
             r = json.loads(line)
             done.add(span_key(r["audio_id"], r["start"], r["end"]))
-    todo = sorted(candidate_pieces(work, shortest) - done)
-    print(len(todo), "pieces to embed", flush=True)
+    todo = sorted(wanted - done)
+    print(len(todo), "spans to embed", flush=True)
     with out_path.open("a") as out:
         for n, (aid, a, b) in enumerate(todo, 1):
             clip = clips / str(paths[aid]).rsplit("/", 1)[1]
@@ -287,13 +312,108 @@ def extract_pieces(db_path: Path, clips: Path, work: Path, shortest: float) -> N
                 )
                 vector = answer.get("vector") if isinstance(answer, dict) else None
             except (ValueError, OSError, RuntimeError, subprocess.CalledProcessError):
-                # An unsliceable span is a piece with no print, not a stopped run.
+                # An unsliceable span is a span with no print, not a stopped run.
                 vector = None
             record = {"audio_id": aid, "start": a, "end": b, "vector": vector}
             out.write(json.dumps(record) + "\n")
             if n % 100 == 0:
                 out.flush()
                 print(n, "embedded", flush=True)
+    print("ALL-DONE", flush=True)
+
+
+POOL_THRESHOLDS = (0.2, 0.35, 0.5, 0.65, 0.8)
+POOLED = "pools.jsonl"
+POOL_GAP_S = 2.0
+"""Silence between two segments a pool may span; a longer one is a new turn."""
+
+Segment = tuple[float, float, list[float] | None]
+Record = dict[str, Any]
+"""One clip's line of `extract.jsonl`."""
+
+
+def pools_by(
+    segments: list[Segment], joins: Callable[[list[int], int], bool]
+) -> list[list[int]]:
+    """Runs of neighbouring segments, each next one joining while `joins` says
+    so and the gap is short; a segment with no print stands alone."""
+    runs: list[list[int]] = []
+    for i, (a, _b, vector) in enumerate(segments):
+        last = runs[-1] if runs else None
+        if (
+            last is not None
+            and usable(vector) is not None
+            and usable(segments[last[-1]][2]) is not None
+            and a - segments[last[-1]][1] <= POOL_GAP_S
+            and joins(last, i)
+        ):
+            last.append(i)
+        else:
+            runs.append([i])
+    return runs
+
+
+def voices_agree(
+    segments: list[Segment], threshold: float
+) -> Callable[[list[int], int], bool]:
+    """Join while the next segment is near the run's mean voice."""
+
+    def joins(run: list[int], i: int) -> bool:
+        vectors = [unit(segments[j][2] or []) for j in run]
+        mean = unit([sum(xs) for xs in zip(*vectors, strict=True)])
+        return cosine(mean, unit(segments[i][2] or [])) >= threshold
+
+    return joins
+
+
+def same_label(labels: list[str | None]) -> Callable[[list[int], int], bool]:
+    """Join while the true label stays the same: the best any pooling could do."""
+    return lambda run, i: labels[i] is not None and labels[i] == labels[run[-1]]
+
+
+def segment_labels(record: Record, label: dict[int, str]) -> list[str | None]:
+    """Each segment's truth as `score` judges it: the label over half of it."""
+    out: list[str | None] = []
+    for seg in record["segments"]:
+        a, b = seg["start"], seg["end"]
+        cover: defaultdict[str, float] = defaultdict(float)
+        for t in record["turns"]:
+            cover[label[t["id"]]] += max(0.0, min(t["end"], b) - max(t["start"], a))
+        who = max(cover, key=lambda p: cover[p]) if cover else None
+        out.append(who if who is not None and cover[who] >= 0.5 * (b - a) else None)
+    return out
+
+
+def segments_of(record: Record) -> list[Segment]:
+    return [(s["start"], s["end"], s["vector"]) for s in record["segments"]]
+
+
+def candidate_pools(db_path: Path, work: Path) -> set[tuple[int, float, float]]:
+    """Every pool of two or more segments either pool arm could name."""
+    label = dict(
+        open_ro(db_path).execute(
+            "SELECT id, speaker_label FROM transcript_segments"
+            " WHERE speaker_label IS NOT NULL"
+        )
+    )
+    spans: set[tuple[int, float, float]] = set()
+    for line in (work / "extract.jsonl").open():
+        record = json.loads(line)
+        segs = segments_of(record)
+        rules = [voices_agree(segs, t) for t in POOL_THRESHOLDS]
+        rules.append(same_label(segment_labels(record, label)))
+        for joins in rules:
+            for run in pools_by(segs, joins):
+                if len(run) > 1:
+                    spans.add(
+                        span_key(record["audio_id"], segs[run[0]][0], segs[run[-1]][1])
+                    )
+    return spans
+
+
+def extract_pools(db_path: Path, clips: Path, work: Path) -> None:
+    """Embed every candidate pool as production embeds a span, once each."""
+    embed_spans(db_path, clips, work / POOLED, candidate_pools(db_path, work))
 
 
 def usable(vector: list[float] | None) -> list[float] | None:
@@ -411,7 +531,18 @@ def pieces(a: float, b: float, cuts: list[float]) -> list[tuple[float, float]]:
     return [(x, y) for x, y in pairwise(edges) if y - x >= SHORTEST_PIECE_S]
 
 
-ScoreUnit = Callable[[str, int, float, float, list[float] | None], None]
+class ScoreUnit(Protocol):
+    """Name the span `[a, b]` of clip `aid` by `vector` and score it for `arm`."""
+
+    def __call__(  # noqa: PLR0913, PLR0917 - a span, its print, and where the print came from
+        self,
+        arm: str,
+        aid: int,
+        a: float,
+        b: float,
+        vector: list[float] | None,
+        made_from: tuple[float, float] | None = None,
+    ) -> None: ...
 
 
 def score_windows(
@@ -426,11 +557,7 @@ def score_windows(
     windowed = work / "windows.jsonl"
     if not windowed.exists():
         return
-    embedded: dict[tuple[int, float, float], list[float] | None] = {}
-    if (work / EMBEDDED).exists():
-        for line in (work / EMBEDDED).open():
-            r = json.loads(line)
-            embedded[span_key(r["audio_id"], r["start"], r["end"])] = r["vector"]
+    embedded = load_spans(work / EMBEDDED)
     for line in windowed.open():
         record = json.loads(line)
         aid = record["audio_id"]
@@ -453,6 +580,30 @@ def score_windows(
                     for pa, pb in pieces(a, b, at):
                         vector = embedded.get(span_key(aid, pa, pb))
                         score_unit(arm, aid, pa, pb, vector)
+
+
+def score_pools(
+    record: Record,
+    label: dict[int, str],
+    pooled: dict[tuple[int, float, float], list[float] | None],
+    threshold: float,
+    score_unit: ScoreUnit,
+) -> None:
+    """The pool arms: each segment named by the print of the pool it falls in,
+    leaving out prints made anywhere in that pool's span."""
+    aid = record["audio_id"]
+    segs = segments_of(record)
+    rules = (
+        (POOL, voices_agree(segs, threshold)),
+        (POOL_ORACLE, same_label(segment_labels(record, label))),
+    )
+    for arm, joins in rules:
+        for run in pools_by(segs, joins):
+            pa, pb = segs[run[0]][0], segs[run[-1]][1]
+            one = len(run) == 1
+            vector = segs[run[0]][2] if one else pooled.get(span_key(aid, pa, pb))
+            for i in run:
+                score_unit(arm, aid, segs[i][0], segs[i][1], vector, (pa, pb))
 
 
 def score_aligned(
@@ -480,6 +631,7 @@ class Split:
     threshold: float = 0.3
     shortest: float = 1.0
     half: str = "all"
+    pool_threshold: float = 0.5
 
 
 def score(db_path: Path, work: Path, leave_out_clip: bool, split: Split) -> None:
@@ -536,11 +688,19 @@ def score(db_path: Path, work: Path, leave_out_clip: bool, split: Split) -> None
         who = max(cover, key=lambda person: cover[person])
         return who if cover[who] >= 0.5 * (b - a) else None
 
-    def score_unit(
-        arm: str, aid: int, a: float, b: float, vector: list[float] | None
+    def score_unit(  # noqa: PLR0913, PLR0917 - as ScoreUnit
+        arm: str,
+        aid: int,
+        a: float,
+        b: float,
+        vector: list[float] | None,
+        made_from: tuple[float, float] | None = None,
     ) -> None:
+        """Name `[a, b]` by `vector`, leaving out prints from the audio the
+        vector was made from (`made_from`, the span itself by default)."""
         vector = usable(vector)
-        guess = name(vector, aid, a, b) if vector is not None else (None, 0.0)
+        la, lb = made_from or (a, b)
+        guess = name(vector, aid, la, lb) if vector is not None else (None, 0.0)
         named[arm][aid].append((a, b, guess[0]))
         want = unit_truth(aid, a, b)
         if want is not None and vector is not None:
@@ -548,6 +708,8 @@ def score(db_path: Path, work: Path, leave_out_clip: bool, split: Split) -> None
 
     def wanted(aid: int) -> bool:
         return split.half == "all" or (aid % 2 == 0) == (split.half == "even")
+
+    pooled = load_spans(work / POOLED)
 
     segments: dict[int, list[tuple[float, float]]] = {}
     for line in (work / "extract.jsonl").open():
@@ -561,11 +723,23 @@ def score(db_path: Path, work: Path, leave_out_clip: bool, split: Split) -> None
             score_unit(CONTROL, aid, t["start"], t["end"], t["vector"])
         for seg in record["segments"]:
             score_unit(WHISPER, aid, seg["start"], seg["end"], seg["vector"])
+        if pooled:
+            score_pools(record, label, pooled, split.pool_threshold, score_unit)
     score_windows(work, truth, segments, split, score_unit)
     score_aligned(work, truth, score_unit)
 
+    report_all(len(prints), truth, arms, named)
+
+
+def report_all(
+    prints: int,
+    truth: dict[int, list[tuple[float, float, str]]],
+    arms: dict[str, list[Scored]],
+    named: dict[str, dict[int, list[tuple[float, float, str | None]]]],
+) -> None:
+    """Every arm's report, with the labelled seconds it named right."""
     labelled_s = sum(b - a for turns in truth.values() for a, b, _ in turns)
-    print(f"{len(prints)} prints; {len(truth)} clips; {labelled_s:.0f}s labelled")
+    print(f"{prints} prints; {len(truth)} clips; {labelled_s:.0f}s labelled")
     for arm, rows in arms.items():
         report(arm, rows)
         covered, right = named_right(truth, named[arm])
@@ -642,6 +816,10 @@ def main() -> None:
     xp.add_argument("--clips", type=Path, required=True)
     xp.add_argument("--work", type=Path, required=True)
     xp.add_argument("--shortest", type=float, default=Split.shortest)
+    xo = sub.add_parser("extract-pools")
+    xo.add_argument("--db", type=Path, required=True)
+    xo.add_argument("--clips", type=Path, required=True)
+    xo.add_argument("--work", type=Path, required=True)
     sc = sub.add_parser("score")
     sc.add_argument("--db", type=Path, required=True)
     sc.add_argument("--work", type=Path, required=True)
@@ -649,6 +827,7 @@ def main() -> None:
     sc.add_argument("--threshold", type=float, default=Split.threshold)
     sc.add_argument("--shortest", type=float, default=Split.shortest)
     sc.add_argument("--half", choices=["all", "even", "odd"], default="all")
+    sc.add_argument("--pool-threshold", type=float, default=Split.pool_threshold)
     args = parser.parse_args()
     if args.command == "extract":
         extract(args.db, args.clips, args.work)
@@ -658,12 +837,14 @@ def main() -> None:
         extract_windows(args.db, args.clips, args.work)
     elif args.command == "extract-pieces":
         extract_pieces(args.db, args.clips, args.work, args.shortest)
+    elif args.command == "extract-pools":
+        extract_pools(args.db, args.clips, args.work)
     else:
         score(
             args.db,
             args.work,
             args.leave_out == "clip",
-            Split(args.threshold, args.shortest, args.half),
+            Split(args.threshold, args.shortest, args.half, args.pool_threshold),
         )
 
 
