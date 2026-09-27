@@ -11,6 +11,7 @@ import {
   expectNoTextOverlaps,
   expectNoOccludedControls,
   expectNoClippedIcons,
+  expectRecoversFromMissingBundle,
 } from '@xinutec/ui-harness';
 
 // Hermetic: every /api call is mocked — no real data, no backend. A rich session
@@ -220,3 +221,10 @@ for (const { path, anchor } of screens) {
     await expectNoClippedIcons(page, testInfo);
   });
 }
+
+// A service worker can serve an index naming a bundle a later deploy removed, and
+// the app's own update handling is inside that bundle (#1825). The recovery is
+// inline in `src/index.html`; this is the check that it is there and works.
+test('a bundle a deploy removed reloads into the app, not a blank screen', async ({ page }) => {
+  await expectRecoversFromMissingBundle(page, '/', 'h2:text-is("Timeline")');
+});

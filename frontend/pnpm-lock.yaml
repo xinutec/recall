@@ -62,8 +62,8 @@ importers:
         specifier: ^1.63.0
         version: 1.63.0
       '@xinutec/ui-harness':
-        specifier: github:xinutec/ui-harness#c57aca71aa6064adefb87263f3c4ce6f74e48606
-        version: https://codeload.github.com/xinutec/ui-harness/tar.gz/c57aca71aa6064adefb87263f3c4ce6f74e48606(@playwright/test@1.63.0)
+        specifier: github:xinutec/ui-harness#23b871c4268a467a9f5fb906191607fbf1962093
+        version: https://codeload.github.com/xinutec/ui-harness/tar.gz/23b871c4268a467a9f5fb906191607fbf1962093(@playwright/test@1.63.0)
       angular-eslint:
         specifier: ^22.5.0
         version: 22.5.0(chokidar@5.0.0)(eslint@10.11.0)(typescript-eslint@8.70.1(eslint@10.11.0)(typescript@6.0.3))(typescript@6.0.3)
@@ -1663,6 +1663,9 @@ packages:
   '@types/node@24.13.3':
     resolution: {integrity: sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==}
 
+  '@types/node@24.19.0':
+    resolution: {integrity: sha512-zY+5tKxXdhGh1PYI0ac+7juvEu4OI6vWtVVoj5i2m42jxAY1U+zHGt6QCyOFwykdP62sM3MJ9stoYYUw5aCWew==}
+
   '@typescript-eslint/eslint-plugin@8.70.1':
     resolution: {integrity: sha512-nDNrUQ/4ruSNYbu749TRY7cfrzPtoLHEXSNBI8aaNY32LlZCajixqRf3FqcKC4p5Cam4VOHYx/t+i5+nKXvrqA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
@@ -1794,8 +1797,8 @@ packages:
   '@vitest/utils@4.1.11':
     resolution: {integrity: sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ==}
 
-  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/c57aca71aa6064adefb87263f3c4ce6f74e48606':
-    resolution: {gitHosted: true, integrity: sha512-6mfKlealQ2QtG76OJiCdgUsK0XXuzxk8SHNetF5hiSloGXg3DjNlDoOma9hRl9NZp3rgy7xSEcWw9YcwCbMBhQ==, tarball: https://codeload.github.com/xinutec/ui-harness/tar.gz/c57aca71aa6064adefb87263f3c4ce6f74e48606}
+  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/23b871c4268a467a9f5fb906191607fbf1962093':
+    resolution: {gitHosted: true, integrity: sha512-wz+Mt96VMSuR4nJ+3795EC7Z2cGMOCgMRlCRZjAHiPGpzSi+Z9zBjvnqtCDxNekbT+/v8JqHNvEEOEymdoU4PA==, tarball: https://codeload.github.com/xinutec/ui-harness/tar.gz/23b871c4268a467a9f5fb906191607fbf1962093}
     version: 0.1.0
     peerDependencies:
       '@playwright/test': '>=1.61.0'
@@ -3000,6 +3003,9 @@ packages:
 
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
+
+  undici-types@7.24.6:
+    resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
   undici@8.10.2:
     resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
@@ -4459,6 +4465,11 @@ snapshots:
   '@types/node@24.13.3':
     dependencies:
       undici-types: 7.18.2
+    optional: true
+
+  '@types/node@24.19.0':
+    dependencies:
+      undici-types: 7.24.6
 
   '@typescript-eslint/eslint-plugin@8.70.1(@typescript-eslint/parser@8.70.1(eslint@10.11.0)(typescript@6.0.3))(eslint@10.11.0)(typescript@6.0.3)':
     dependencies:
@@ -4647,9 +4658,9 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
 
-  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/c57aca71aa6064adefb87263f3c4ce6f74e48606(@playwright/test@1.63.0)':
+  '@xinutec/ui-harness@https://codeload.github.com/xinutec/ui-harness/tar.gz/23b871c4268a467a9f5fb906191607fbf1962093(@playwright/test@1.63.0)':
     dependencies:
-      '@types/node': 24.13.3
+      '@types/node': 24.19.0
     optionalDependencies:
       '@playwright/test': 1.63.0
 
@@ -5939,7 +5950,10 @@ snapshots:
 
   typescript@6.0.3: {}
 
-  undici-types@7.18.2: {}
+  undici-types@7.18.2:
+    optional: true
+
+  undici-types@7.24.6: {}
 
   undici@8.10.2: {}
 

@@ -9,6 +9,31 @@
     <link rel="icon" type="image/svg+xml" href="icon.svg" />
     <link rel="icon" type="image/x-icon" href="favicon.ico" />
     <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <script>
+      // A deploy removed the bundle this page names: see @xinutec/ui-harness,
+      // MISSING_BUNDLE_RECOVERY. Drop the service worker and its caches, and reload.
+      addEventListener('error', function (e) {
+        var s = e.target;
+        if (!(s instanceof HTMLScriptElement) || !/\/main-[^/]*\.js$/.test(s.src)) return;
+        try {
+          var last = Number(sessionStorage.getItem('missing-bundle-reload')) || 0;
+          if (Date.now() - last < 60000) return;
+          sessionStorage.setItem('missing-bundle-reload', String(Date.now()));
+        } catch (_) {
+          return;
+        }
+        var sw = navigator.serviceWorker;
+        Promise.all([
+          sw && sw.getRegistrations().then(function (all) {
+            return Promise.all(all.map(function (r) { return r.unregister(); }));
+          }),
+          window.caches && caches.keys().then(function (keys) {
+            return Promise.all(keys.filter(function (k) { return k.indexOf('ngsw:') === 0; })
+              .map(function (k) { return caches.delete(k); }));
+          }),
+        ]).finally(function () { location.reload(); });
+      }, true);
+    </script>
     <link rel="manifest" href="manifest.webmanifest" />
     <!-- Self-hosted (public/fonts/): the app must render on a LAN with no internet. -->
     <link href="fonts/fonts.css" rel="stylesheet" />
