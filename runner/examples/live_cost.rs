@@ -77,7 +77,7 @@ fn run(shim: &mut Shim, clips: &[Utterance]) -> (f64, Vec<String>) {
             .expect("a scratch clip");
         audiocore::wav::write_mono16(file.path(), RATE, &clip.samples).expect("write");
         let result = shim
-            .transcribe(file.path(), None, None)
+            .transcribe(file.path(), None, None, None)
             .expect("transcribe");
         said.extend(spoken(&result).map(|(text, _)| text));
     }

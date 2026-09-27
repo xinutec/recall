@@ -147,13 +147,14 @@ fn one(
         filename,
         source,
         spans,
+        speech,
     } = job;
     tracing::info!(id, %kind, %source, %filename, "leased");
     let clip = scratch.join(&filename);
     client.fetch_blob(&source, &filename, &clip)?;
     // Exhaustive: a new kind does not compile until it is given work here.
     let outcome = match kind {
-        Kind::TranscribeSegment => shim.transcribe(&clip, None, prompt),
+        Kind::TranscribeSegment => shim.transcribe(&clip, None, prompt, speech),
         Kind::DiarizeSegment => shim.diarize(&clip),
         // One model call per named turn, composed here. A refused span costs
         // only its print; the fleet re-derives it while its turn is unenrolled.

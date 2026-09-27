@@ -205,7 +205,8 @@ impl Shim {
         )
     }
 
-    /// Transcribe one clip.
+    /// Transcribe one clip, or only `window` of it. Times in the answer are
+    /// from the clip's start either way.
     ///
     /// # Errors
     /// Whatever `request` reports.
@@ -214,11 +215,16 @@ impl Shim {
         audio: &Path,
         model: Option<&str>,
         initial_prompt: Option<&str>,
+        window: Option<crate::client::Window>,
     ) -> Result<serde_json::Value, Error> {
         let mut args = serde_json::json!({
             "audio": audio.to_string_lossy(),
             "words": true,
         });
+        if let Some(window) = window {
+            args["start"] = serde_json::json!(window.start_s);
+            args["end"] = serde_json::json!(window.end_s);
+        }
         if let Some(model) = model {
             args["model"] = serde_json::json!(model);
         }

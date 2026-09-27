@@ -36,6 +36,11 @@ pub struct Job {
     /// other kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<crate::enrol::Span>,
+    /// For [`Kind::TranscribeSegment`] only: the stretch holding speech, so the
+    /// runner transcribes that and not the silence around it. Omitted when the
+    /// clip is unmeasured or could not be decoded: those go whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech: Option<crate::speech::Window>,
 }
 
 fn iso(t: DateTime<Utc>) -> String {
@@ -186,7 +191,7 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[Kind]) -> rusqlite::Resul
     for kind in kinds {
         params.push(kind);
     }
-    let job: Option<Job> = conn
+    let mut job: Option<Job> = conn
         .query_row(&sql, params.as_slice(), |r| {
             Ok(Job {
                 id: r.get(0)?,
@@ -196,9 +201,15 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[Kind]) -> rusqlite::Resul
                 // Filled by the caller that can reach the meaning plane; this
                 // one holds only the ingest connection.
                 spans: Vec::new(),
+                speech: None,
             })
         })
         .optional()?;
+    if let Some(job) = &mut job
+        && job.kind == Kind::TranscribeSegment
+    {
+        job.speech = crate::speech::window(&conn, &job.filename)?;
+    }
     if let Some(job) = &job {
         conn.execute(
             "UPDATE jobs SET state = 'leased', leased_until = ?1,

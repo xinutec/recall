@@ -104,7 +104,9 @@ fn a_job_is_leased_transcribed_and_acked() {
         .expect("blob");
     assert_eq!(std::fs::read(&clip).expect("read"), b"audio bytes");
 
-    let result = shim.transcribe(&clip, None, None).expect("transcribe");
+    let result = shim
+        .transcribe(&clip, None, None, None)
+        .expect("transcribe");
     assert_eq!(result["segments"][0]["text"], "hello there");
 
     client.finish(job.id, &result.to_string()).expect("finish");
@@ -128,7 +130,7 @@ fn a_shim_refusal_is_reported_as_such_not_as_a_transport_failure() {
     let mut shim = Shim::spawn(&program, &args).expect("shim");
     let clip = dir.path().join("a.flac");
     std::fs::write(&clip, b"x").expect("clip");
-    match shim.transcribe(&clip, None, None) {
+    match shim.transcribe(&clip, None, None, None) {
         Err(shim::Error::Refused(why)) => assert!(why.contains("FileNotFoundError")),
         other => panic!("expected a refusal, got {other:?}"),
     }
@@ -141,7 +143,7 @@ fn a_dead_shim_is_reported_as_closed_so_the_caller_can_respawn() {
     std::fs::write(&clip, b"x").expect("clip");
     // Exits immediately: stdout closes with no answer.
     let mut shim = Shim::spawn("python3", &["-c".to_owned(), "pass".to_owned()]).expect("shim");
-    match shim.transcribe(&clip, None, None) {
+    match shim.transcribe(&clip, None, None, None) {
         Err(shim::Error::Closed | shim::Error::Write(_)) => {}
         other => panic!("expected a closed pipe, got {other:?}"),
     }
@@ -156,12 +158,48 @@ fn model_and_prompt_reach_the_shim_when_given() {
     let clip = dir.path().join("a.flac");
     std::fs::write(&clip, b"x").expect("clip");
     let echoed = shim
-        .transcribe(&clip, Some("whisper-small"), Some("Pippijn, Kat"))
+        .transcribe(&clip, Some("whisper-small"), Some("Pippijn, Kat"), None)
         .expect("transcribe");
     assert_eq!(echoed["op"], "transcribe");
     assert_eq!(echoed["model"], "whisper-small");
     assert_eq!(echoed["initial_prompt"], "Pippijn, Kat");
     assert_eq!(echoed["words"], true);
+    assert!(echoed.get("start").is_none(), "no window, the whole clip");
+}
+
+#[test]
+fn the_speech_window_travels_from_the_lease_to_the_shim() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let name = "usb-20260906T100000.flac";
+    queued_clip(dir.path(), name, b"audio bytes");
+    recalld::store::open(dir.path())
+        .expect("db")
+        .execute(
+            "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc, regions)
+             VALUES (?1, 'usb', 4.0, '2026-09-06T10:02:00Z', '[[16.0,20.0]]')",
+            [name],
+        )
+        .expect("speech");
+    let client = Client::new(&serve(dir.path()), READ_TOKEN);
+    let job = client
+        .lease(&[audiocore::job::Kind::TranscribeSegment])
+        .expect("lease")
+        .expect("a job");
+    let window = job.speech.expect("a window");
+    assert_eq!((window.start_s, window.end_s), (15.0, 21.0));
+
+    let (program, args) =
+        stub_shim("print(json.dumps({'id': msg['id'], 'ok': True, 'result': msg}))");
+    let mut shim = Shim::spawn(&program, &args).expect("shim");
+    let clip = dir.path().join("a.flac");
+    std::fs::write(&clip, b"x").expect("clip");
+    let echoed = shim
+        .transcribe(&clip, None, None, job.speech)
+        .expect("transcribe");
+    assert_eq!(
+        (echoed["start"].as_f64(), echoed["end"].as_f64()),
+        (Some(15.0), Some(21.0))
+    );
 }
 
 #[test]

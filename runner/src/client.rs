@@ -17,6 +17,17 @@ pub struct Job {
     /// from its start. Absent for every other kind.
     #[serde(default)]
     pub spans: Vec<Span>,
+    /// For `transcribe-segment`: the stretch holding speech, in seconds from the
+    /// clip's start. Absent: transcribe the whole clip.
+    #[serde(default)]
+    pub speech: Option<Window>,
+}
+
+/// A stretch of a clip, as recalld serves it.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+pub struct Window {
+    pub start_s: f64,
+    pub end_s: f64,
 }
 
 /// One stretch of a clip to embed, as recalld serves it. It carries no name:

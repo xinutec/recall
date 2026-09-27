@@ -12,7 +12,7 @@ import math
 import subprocess
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import mean
@@ -301,8 +301,37 @@ def _extract_words(segment: dict[str, object]) -> tuple[Word, ...]:
     )
 
 
+@dataclass(frozen=True)
+class Excerpt:
+    """A stretch of a clip, in seconds from its start."""
+
+    path: Path
+    start: float
+    end: float
+
+
+def shifted(result: AsrResult, offset: float) -> AsrResult:
+    """`result` with every time moved `offset` seconds later: a window's answer
+    put back on its clip's clock."""
+    return replace(
+        result,
+        segments=tuple(
+            replace(
+                s,
+                start=s.start + offset,
+                end=s.end + offset,
+                words=tuple(
+                    replace(w, start=w.start + offset, end=w.end + offset)
+                    for w in s.words
+                ),
+            )
+            for s in result.segments
+        ),
+    )
+
+
 def mlx_transcribe(
-    audio: Path,
+    audio: Path | Excerpt,
     *,
     model: str = DEFAULT_MODEL,
     language: str | None = None,
@@ -317,8 +346,20 @@ def mlx_transcribe(
     toward the household vocabulary — names it has seen in the prompt get spelled
     right. The prompt is built by the FLEET (`recalld::labels::initial_prompt`)
     and handed to the shim per job; the Python that used to build it is gone.
+
+    An `Excerpt` is transcribed alone, cut in memory, and its times come back on
+    the whole clip's clock. Long silence around the speech, with a prompt, can
+    send Whisper into a loop that loses the speech (#1764).
     """
     import mlx_whisper  # noqa: PLC0415 - lazy: mlx-whisper is an optional heavy dep
+
+    source: str | np.ndarray = str(audio)
+    offset = 0.0
+    if isinstance(audio, Excerpt):
+        rate = 16000  # what Whisper decodes to anyway
+        pcm = decode_pcm_f32(audio.path, sample_rate=rate)
+        source = pcm[int(audio.start * rate) : int(audio.end * rate)]
+        offset = audio.start
 
     # Anti-hallucination decoding. condition_on_previous_text=False stops a
     # repetition loop from feeding itself across windows; the temperature
@@ -327,7 +368,7 @@ def mlx_transcribe(
     # input has real context — hence we transcribe whole segments, never tiny
     # isolated slices.
     raw = mlx_whisper.transcribe(
-        str(audio),
+        source,
         path_or_hf_repo=model,
         language=language,
         initial_prompt=initial_prompt,
@@ -349,6 +390,7 @@ def mlx_transcribe(
         )
         for s in raw["segments"]
     )
-    return AsrResult(
+    result = AsrResult(
         language=str(raw["language"]), language_confidence=None, segments=segments
     )
+    return shifted(result, offset) if offset else result
