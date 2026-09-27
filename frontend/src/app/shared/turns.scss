@@ -68,6 +68,12 @@
         opacity: 0.55;
       }
 
+      // Hidden, shown only on request: struck through so it can't read as said.
+      &.gone {
+        opacity: 0.5;
+        text-decoration: line-through;
+      }
+
       &.disputed {
         text-decoration: underline wavy color-mix(in srgb, var(--mat-sys-error) 70%, transparent);
         text-underline-offset: 3px;

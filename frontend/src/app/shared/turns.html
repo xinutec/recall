@@ -29,6 +29,7 @@
             [attr.data-id]="t.id"
             [class.sel]="selected() === t.id"
             [class.provisional]="provisional(t)"
+            [class.gone]="t.hidden"
             [class.disputed]="disputed(t)"
             [attr.title]="disputed(t) ? 'The mics disagree on who said this' : null"
             (click)="openLine(t)"

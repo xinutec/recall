@@ -166,4 +166,22 @@ describe('LineSheet', () => {
     req.flush({ newId: 9 });
     expect(dismiss).toHaveBeenCalledWith('wrote');
   });
+
+  it('a line hidden as nobody spoke says so and can be taken back, nothing else', async () => {
+    const { c, el, ctrl, dismiss } = await setup({ hidden: 'nobody spoke' });
+    expect(el.textContent).toContain('Hidden: nobody spoke.');
+    expect(el.textContent).not.toContain('Fix words');
+    expect(el.textContent).not.toContain('Said by');
+    c.someoneSpoke();
+    const req = ctrl.expectOne('/api/no-speech/undo');
+    expect(req.request.body).toEqual({ id: 7 });
+    req.flush({ ok: true });
+    expect(dismiss).toHaveBeenCalledWith('wrote');
+  });
+
+  it('a line recall hid itself shows why, with no take-back', async () => {
+    const { el } = await setup({ hidden: 'silent minute' });
+    expect(el.textContent).toContain('Hidden: silent minute.');
+    expect(el.textContent).not.toContain('Someone spoke');
+  });
 });

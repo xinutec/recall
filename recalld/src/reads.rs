@@ -167,14 +167,14 @@ pub fn iso(stored: &str) -> String {
     stored.to_owned()
 }
 
-/// The visible-turn projection both queries share: current (not superseded), not
-/// hidden, and carrying the capturing source.
+/// The current-turn projection both page queries share: not superseded, and
+/// carrying the capturing source. [`recent`] adds the hidden filter unless asked.
 ///
 /// LEFT JOIN, not JOIN: a correction can exist with no audio segment, and the
 /// timeline must still show it.
-const SELECT_VISIBLE: &str = "SELECT t.*, a.source_id FROM transcript_segments t \
+const SELECT_CURRENT: &str = "SELECT t.*, a.source_id FROM transcript_segments t \
      LEFT JOIN audio_segments a ON t.audio_segment_id = a.id \
-     WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL";
+     WHERE t.superseded_by IS NULL";
 
 /// Open `recall.sqlite` read-only, so a read route cannot write the record.
 pub fn open(root: &Path) -> rusqlite::Result<Connection> {
@@ -296,9 +296,12 @@ pub struct Window<'a> {
     pub before: Option<&'a str>,
     pub after: Option<&'a str>,
     pub source: Option<&'a str>,
+    /// Hidden turns too, each carrying its reason, so a person can take a hide back.
+    pub hidden: bool,
 }
 
-/// Current, visible turns for one page, including the boundary instant's ties.
+/// Current turns for one page (visible ones unless `window.hidden`), including
+/// the boundary instant's ties.
 ///
 /// ⚠ A full page extends past `limit`. The cursor is a bare start time and turns
 /// share one often (co-located mics, corrections), so a page cut mid-group would
@@ -307,6 +310,9 @@ pub struct Window<'a> {
 pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result<Vec<Segment>> {
     let mut filters = String::new();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if !window.hidden {
+        filters.push_str(" AND t.hidden_reason IS NULL");
+    }
     if let Some(source) = window.source {
         filters.push_str(" AND a.source_id = ?");
         params.push(Box::new(source.to_owned()));
@@ -328,7 +334,7 @@ pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result
     };
 
     let sql =
-        format!("{SELECT_VISIBLE}{filters} ORDER BY t.start_utc {order}, t.id {order} LIMIT ?");
+        format!("{SELECT_CURRENT}{filters} ORDER BY t.start_utc {order}, t.id {order} LIMIT ?");
     let mut page_params = borrowed(&params);
     let limit_box: Box<dyn rusqlite::ToSql> = Box::new(limit);
     page_params.push(limit_box.as_ref());
@@ -351,7 +357,7 @@ pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result
             .collect();
         let marks = vec!["?"; seen.len()].join(",");
         let tie_sql = format!(
-            "{SELECT_VISIBLE}{filters} AND t.start_utc = ? AND t.id NOT IN ({marks}) \
+            "{SELECT_CURRENT}{filters} AND t.start_utc = ? AND t.id NOT IN ({marks}) \
              ORDER BY t.id {order}"
         );
         let mut tie_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();

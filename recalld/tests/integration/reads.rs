@@ -73,6 +73,42 @@ fn a_superseded_or_hidden_turn_is_never_shown() {
 }
 
 #[test]
+fn asked_for_hidden_turns_a_page_shows_them_with_their_reason_but_never_a_superseded_one() {
+    // A person can only take a hide back if they can see the line; a
+    // superseded turn is history, not something hidden.
+    let conn = db();
+    turn(&conn, 1, "2026-09-01T10:00:00+00:00", "current", &[]);
+    turn(
+        &conn,
+        2,
+        "2026-09-01T10:00:01+00:00",
+        "old",
+        &[("superseded_by", "1")],
+    );
+    turn(
+        &conn,
+        3,
+        "2026-09-01T10:00:02+00:00",
+        "thanks",
+        &[("hidden_reason", "nobody spoke")],
+    );
+    let window = |hidden| reads::Window {
+        hidden,
+        ..reads::Window::default()
+    };
+
+    let all = reads::recent(&conn, 50, window(true)).expect("recent");
+    let shown: Vec<(i64, Option<&str>)> = all
+        .iter()
+        .map(|s| (s.id, s.hidden_reason.as_deref()))
+        .collect();
+    assert_eq!(shown, [(3, Some("nobody spoke")), (1, None)]);
+
+    let visible = reads::recent(&conn, 50, window(false)).expect("recent");
+    assert_eq!(visible.iter().map(|s| s.id).collect::<Vec<_>>(), [1]);
+}
+
+#[test]
 fn a_human_label_wins_and_drops_the_score_a_guess_keeps_it() {
     // The UI renders "Alice 31%" for a guess and a bare name for a confirmation.
     // Collapsing the two would either hide useful weak guesses or present a

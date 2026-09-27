@@ -442,6 +442,9 @@ pub struct ConversationsQuery {
     #[serde(default = "default_gap")]
     gap: f64,
     source: Option<String>,
+    /// Include hidden turns, for taking a hide back.
+    #[serde(default)]
+    hidden: bool,
 }
 
 const fn default_limit() -> i64 {
@@ -476,6 +479,7 @@ pub async fn conversations_route(
                 before: q.before.as_deref(),
                 after: q.after.as_deref(),
                 source: q.source.as_deref(),
+                hidden: q.hidden,
             },
         )?;
         // Forward paging reads oldest-first; every other page is newest-first

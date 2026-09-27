@@ -107,6 +107,15 @@ describe('Session', () => {
     expect(c.finalizing()).toBe(true);
   });
 
+  it('fetches hidden lines only when asked, and leaves them out of the voices', async () => {
+    const { c, ctrl, fixture } = await setup([said(1, 'A'), { ...said(2, 'B'), hidden: 'nobody spoke' }]);
+    expect(c.voices().map((v: { cluster: string }) => v.cluster)).toEqual(['A']);
+    c.showHidden.set(true);
+    fixture.detectChanges();
+    const req = ctrl.expectOne((r) => r.url.includes('/api/conversations'));
+    expect(req.request.url).toContain('hidden=true');
+  });
+
   it('naming a voice posts it for the whole session', async () => {
     const { c, ctrl } = await setup([said(1, 'A')]);
     c.nameVoice(c.voices()[0], ' Dr. Adams ');

@@ -180,3 +180,36 @@ test('a typed name is saved on tapping away, with or without suggestions open', 
       { cluster: 'SPEAKER_00', name: 'Pip' },
     ]);
 });
+
+test('a hidden line shows on request and "Someone spoke" takes it back (Pixel 9)', async ({
+  page,
+}) => {
+  const hidden = { ...turn(3, 'Pippijn', 'SPEAKER_01', 'Thank you.'), hidden: 'nobody spoke' };
+  await page.route('**/api/**', (route: Route) => {
+    const url = route.request().url();
+    if (url.includes('/api/conversations')) {
+      const asked = new URL(url).searchParams.get('hidden') === 'true';
+      return route.fulfill({ json: makePage(asked ? [...SHORT, hidden] : SHORT) });
+    }
+    if (url.includes('/api/speakers')) return route.fulfill({ json: { names: [] } });
+    return route.fulfill({ json: {} });
+  });
+  const undone: unknown[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().endsWith('/api/no-speech/undo')) {
+      undone.push(r.postDataJSON());
+    }
+  });
+  await page.goto('/sessions/test');
+  const line = page.locator('span.t', { hasText: 'Thank you.' });
+  await expect(page.locator('span.t', { hasText: 'I have already made' })).toBeVisible();
+  await expect(line).toHaveCount(0);
+  await page.getByRole('switch', { name: 'Hidden lines' }).click();
+  await expect(line).toHaveClass(/gone/);
+  await line.click();
+  await expect(page.getByText('Hidden: nobody spoke.')).toBeVisible();
+  const back = page.getByRole('button', { name: 'Someone spoke' });
+  await expect(back).toBeInViewport();
+  await back.click();
+  await expect.poll(() => undone).toEqual([{ id: 3 }]);
+});

@@ -15,7 +15,9 @@
 @switch (mode()) {
   @case ('main') {
     <p class="line">{{ t.text }}</p>
-    @if (editable) {
+    @if (t.hidden) {
+      <p class="hint">Hidden: {{ t.hidden }}.</p>
+    } @else if (editable) {
       <h3 class="label">Said by</h3>
       <app-said-by
         [names]="data.names"
@@ -28,6 +30,12 @@
       <p class="hint">Still being transcribed, editable in a minute or two.</p>
     }
     <mat-action-list>
+      @if (undoable) {
+        <button mat-list-item [disabled]="busy()" (click)="someoneSpoke()">
+          <mat-icon matListItemIcon>record_voice_over</mat-icon>
+          <span matListItemTitle>Someone spoke</span>
+        </button>
+      }
       @if (editable) {
         @if (!t.wordsChecked) {
           <button mat-list-item [disabled]="busy()" (click)="wordsRight()">

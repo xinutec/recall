@@ -72,10 +72,13 @@
     </section>
   }
 
-  @if (turns().length) {
-    <p class="howto">
-      Tap a line to hear it, say who said it, or fix its words.
-    </p>
+  @if (moments().length) {
+    <div class="howto">
+      <p>Tap a line to hear it, say who said it, or fix its words.</p>
+      <mat-slide-toggle [checked]="showHidden()" (change)="showHidden.set($event.checked)"
+        >Hidden lines</mat-slide-toggle
+      >
+    </div>
     <app-turns
       [moments]="moments()"
       [roster]="knownNames()"

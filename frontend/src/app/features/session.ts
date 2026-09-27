@@ -58,9 +58,13 @@ export class Session implements OnDestroy {
   private readonly api = inject(RecallApi);
   protected readonly player = inject(Player);
 
+  /** Hidden lines shown too, greyed, so a hide can be taken back. */
+  protected readonly showHidden = signal(false);
+
   // A recording is bounded, so one fetch holds all of it.
   protected readonly data = httpResource<ConversationPage>(() => {
     const params = new URLSearchParams({ source: this.id(), limit: '5000' });
+    if (this.showHidden()) params.set('hidden', 'true');
     return `/api/conversations?${params.toString()}`;
   });
   private readonly speakerNames = httpResource<SpeakerNames>(() => '/api/speakers');
@@ -69,7 +73,12 @@ export class Session implements OnDestroy {
   protected readonly moments = computed(() =>
     (this.data.value()?.items ?? []).flatMap((c) => c.moments),
   );
-  protected readonly turns = computed(() => this.moments().flatMap((m) => m.primary));
+  /** The visible lines: the voices and the status count only these. */
+  protected readonly turns = computed(() =>
+    this.moments()
+      .flatMap((m) => m.primary)
+      .filter((t) => !t.hidden),
+  );
   protected readonly start = computed(() => this.turns()[0]?.start ?? null);
   protected readonly empty = computed(() => !this.turns().length && !this.data.isLoading());
 
