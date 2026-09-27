@@ -604,6 +604,9 @@ async fn login_redirects_to_nextcloud_and_the_cookie_it_later_sets_is_httponly()
     let cookie = resp.headers().get("set-cookie").unwrap().to_str().unwrap();
     assert!(cookie.contains("Max-Age=0"), "{cookie}");
     assert!(cookie.contains("Path=/"), "{cookie}");
+    // recall is https-only behind the front door (#1799), so the cookie is
+    // Secure, and logout shares login's attributes.
+    assert!(cookie.contains("Secure"), "{cookie}");
 }
 
 /// `/api/me` is the SPA's login probe; its shape is what the app reads.

@@ -583,10 +583,12 @@ pub struct CallbackQuery {
 
 /// The cookie attributes, in one place so login and logout cannot disagree.
 ///
-/// ⚠ Not `Secure`: recall answers over plain http on the `WireGuard` address, so
-/// a `Secure` cookie would never be sent and sign-in would loop.
+/// `Secure`: recall is served only as `https://recall.xinutec.org` (#1799). A
+/// browser treats `http://localhost` as secure too, so the dev server keeps working.
+const COOKIE_ATTRS: &str = "Path=/; HttpOnly; Secure; SameSite=Lax";
+
 fn set_cookie(token: &str) -> String {
-    format!("{COOKIE_NAME}={token}; Max-Age={SESSION_TTL_SECS}; Path=/; HttpOnly; SameSite=Lax")
+    format!("{COOKIE_NAME}={token}; Max-Age={SESSION_TTL_SECS}; {COOKIE_ATTRS}")
 }
 
 /// The OAuth flow (`/login`, `/auth/callback`, `/logout`) and `/api/me`.
@@ -610,7 +612,7 @@ pub fn routes(st: GateState) -> Router {
                 (
                     [(
                         header::SET_COOKIE,
-                        format!("{COOKIE_NAME}=; Max-Age=0; Path=/"),
+                        format!("{COOKIE_NAME}=; Max-Age=0; {COOKIE_ATTRS}"),
                     )],
                     Redirect("/".to_owned()),
                 )
