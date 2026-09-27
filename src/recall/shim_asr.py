@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Protocol
 
 from recall import shim
-from recall.asr import DEFAULT_MODEL, AsrResult, Excerpt, mlx_transcribe
+from recall.asr import DEFAULT_MODEL, AsrResult, mlx_transcribe
 from recall.shim import JsonDict, JsonValue
 
 
@@ -29,7 +29,7 @@ class Transcribe(Protocol):
 
     def __call__(
         self,
-        audio: Path | Excerpt,
+        audio: Path,
         /,
         *,
         model: str,
@@ -89,16 +89,8 @@ def handle(
         # A clear refusal beats whatever the model would say about a missing
         # file, and the runner can ack and move on.
         raise FileNotFoundError(audio)
-    # A window (seconds from the clip's start) is transcribed alone: the
-    # silence around speech can send Whisper into a loop (#1764).
-    start, end = args.get("start"), args.get("end")
-    audio_in: Path | Excerpt = path
-    if start is not None or end is not None:
-        if not isinstance(start, int | float) or not isinstance(end, int | float):
-            raise ValueError("a window needs both start and end, in seconds")
-        audio_in = Excerpt(path, float(start), float(end))
     result = transcribe(
-        audio_in,
+        path,
         model=str(args.get("model") or DEFAULT_MODEL),
         language=str(args["language"]) if args.get("language") else None,
         words=bool(args.get("words", False)),

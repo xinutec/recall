@@ -661,37 +661,3 @@ fn an_old_outcome_sentence_is_split_into_its_word_and_its_detail() {
         ]
     );
 }
-
-#[test]
-fn a_transcription_lease_carries_the_padded_speech_and_a_clip_not_yet_placed_goes_whole() {
-    // Whisper over long silence with the household prompt can loop and lose the
-    // speech (#1764); the runner transcribes only this stretch.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
-    let unplaced = queued(dir.path(), "20260905T100000");
-    let measured = queued(dir.path(), "20260905T110000");
-    store::open(dir.path())
-        .expect("db")
-        .execute(
-            "UPDATE segment_speech SET regions = '[[0.5,2.0],[16.0,20.0]]' WHERE filename = ?1",
-            [&measured],
-        )
-        .expect("speech");
-
-    let job = lease(dir.path(), now, ASR).expect("lease").expect("job");
-    assert_eq!(job.filename, measured);
-    assert_eq!(
-        job.speech,
-        Some(recalld::speech::Window {
-            start_s: 0.0,
-            end_s: 21.0
-        }),
-        "padded by a second, never before the clip's start"
-    );
-
-    let job = lease(dir.path(), now, ASR).expect("lease").expect("job");
-    assert_eq!(job.filename, unplaced);
-    assert_eq!(job.speech, None);
-    let body = serde_json::to_string(&job).expect("json");
-    assert!(!body.contains("speech"), "no window, no field: {body}");
-}

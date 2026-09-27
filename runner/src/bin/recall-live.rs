@@ -82,7 +82,7 @@ fn handle(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let clip = tempfile::Builder::new().suffix(".wav").tempfile()?;
     audiocore::wav::write_mono16(clip.path(), audiocore::vad::RATE, &utterance.samples)?;
-    let result = shim.transcribe(clip.path(), None, prompt, None)?;
+    let result = shim.transcribe(clip.path(), None, prompt)?;
     let Some((text, language)) = spoken(&result) else {
         return Ok(());
     };

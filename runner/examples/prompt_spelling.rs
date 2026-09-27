@@ -103,7 +103,7 @@ fn span(case: &Case) -> Option<Vec<f32>> {
 }
 
 fn spelled(shim: &mut Shim, clip: &Path, prompt: Option<&str>, wanted: &[String]) -> bool {
-    let Ok(result) = shim.transcribe(clip, None, prompt, None) else {
+    let Ok(result) = shim.transcribe(clip, None, prompt) else {
         return false;
     };
     spoken(&result).is_some_and(|(text, _)| {

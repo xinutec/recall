@@ -109,7 +109,7 @@ fn run(
             .expect("scratch");
         audiocore::wav::write_mono16(file.path(), RATE, clip).expect("write");
         let result = shim
-            .transcribe(file.path(), None, prompt, None)
+            .transcribe(file.path(), None, prompt)
             .expect("transcribe");
         if let Some((text, _)) = spoken(&result) {
             said += 1;

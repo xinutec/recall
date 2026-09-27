@@ -199,7 +199,7 @@ fn transcribe_pieces(
             continue;
         }
         wav::write_mono16(scratch, vad::RATE, &samples[from..to])?;
-        let result = shim.transcribe(scratch, None, prompt, None)?;
+        let result = shim.transcribe(scratch, None, prompt)?;
         segments.extend(in_block_time(&result, piece.start));
     }
     Ok(json!({ "segments": segments }))
@@ -245,7 +245,7 @@ fn transcribe(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             Some(detector) => {
                 transcribe_pieces(&mut shim, detector, &clip, &scratch, prompt.as_deref())?
             }
-            None => shim.transcribe(&clip, None, prompt.as_deref(), None)?,
+            None => shim.transcribe(&clip, None, prompt.as_deref())?,
         };
         let line = json!({ "block": start, "winner": winner, "arm": arm, "result": result });
         writeln!(file, "{line}")?;

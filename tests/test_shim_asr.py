@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from recall.asr import AsrResult, AsrSegment, Excerpt, Word, shifted
+from recall.asr import AsrResult, AsrSegment, Word
 from recall.shim import JsonValue
 from recall.shim_asr import Transcribe, handle, result_to_json
 
@@ -51,7 +51,7 @@ def fake_result() -> AsrResult:
 
 def recorder(captured: dict[str, object]) -> Transcribe:
     def transcribe(
-        audio: Path | Excerpt,
+        audio: Path,
         /,
         *,
         model: str,
@@ -104,38 +104,10 @@ def test_defaults_are_applied_when_the_caller_omits_them(tmp_path: Path) -> None
     clip.write_bytes(b"x")
     seen: dict[str, object] = {}
     handle("transcribe", {"audio": str(clip)}, transcribe=recorder(seen))
-    assert seen["audio"] == clip  # the whole clip, no window
     assert seen["model"]  # DEFAULT_MODEL
     assert seen["language"] is None  # auto-detect
     assert seen["words"] is False
     assert seen["initial_prompt"] is None
-
-
-def test_a_window_reaches_the_model(tmp_path: Path) -> None:
-    clip = tmp_path / "a.flac"
-    clip.write_bytes(b"x")
-    seen: dict[str, object] = {}
-    handle(
-        "transcribe",
-        {"audio": str(clip), "start": 15, "end": 21.5},
-        transcribe=recorder(seen),
-    )
-    assert seen["audio"] == Excerpt(clip, 15.0, 21.5)
-
-
-def test_half_a_window_is_refused(tmp_path: Path) -> None:
-    clip = tmp_path / "a.flac"
-    clip.write_bytes(b"x")
-    with pytest.raises(ValueError, match="both start and end"):
-        handle("transcribe", {"audio": str(clip), "start": 15})
-
-
-def test_a_windows_answer_is_put_back_on_the_clips_clock() -> None:
-    moved = shifted(fake_result(), 15.0)
-    assert (moved.segments[0].start, moved.segments[0].end) == (15.0, 16.5)
-    word = moved.segments[0].words[0]
-    assert (word.start, word.end, word.text) == (15.0, 15.5, "hallo")
-    assert moved.language == "nl"
 
 
 def test_a_missing_clip_is_refused_clearly(tmp_path: Path) -> None:

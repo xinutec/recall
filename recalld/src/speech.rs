@@ -129,37 +129,6 @@ fn parse_regions(json: &str) -> Option<Vec<Region>> {
     )
 }
 
-/// Margin kept either side of the measured speech: a detector's edge can clip
-/// the onset of the first word.
-pub const WINDOW_PAD_S: f64 = 1.0;
-
-/// The stretch of a clip to transcribe, in seconds from its start.
-///
-/// Whisper given long silence around the speech, with the household prompt, can
-/// loop and lose the speech entirely (#1764); the same clip cut to its speech
-/// comes out right.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
-pub struct Window {
-    pub start_s: f64,
-    pub end_s: f64,
-}
-
-/// First speech to last, padded by [`WINDOW_PAD_S`]; `None` when there is no
-/// measurement to cut by, so the clip goes whole.
-///
-/// # Errors
-/// On database failure.
-pub fn window(ingest: &Connection, filename: &str) -> rusqlite::Result<Option<Window>> {
-    let regions = heard(ingest, filename)?.regions.unwrap_or_default();
-    Ok(match (regions.first(), regions.last()) {
-        (Some(first), Some(last)) => Some(Window {
-            start_s: (first.start - WINDOW_PAD_S).max(0.0),
-            end_s: last.end + WINDOW_PAD_S,
-        }),
-        _ => None,
-    })
-}
-
 /// What the pass found in one blob, for the write-time sweep: how much speech,
 /// and where. Each is `None` until measured.
 ///
