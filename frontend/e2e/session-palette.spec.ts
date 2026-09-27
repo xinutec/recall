@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
+import { expectBackClosesOverlay, expectUpInTheBar } from '@xinutec/ui-harness';
 
 // Hermetic: every /api call is mocked here, so the e2e touches no real data.
 
@@ -212,4 +213,18 @@ test('a hidden line shows on request and "Someone spoke" takes it back (Pixel 9)
   await expect(back).toBeInViewport();
   await back.click();
   await expect.poll(() => undone).toEqual([{ id: 3 }]);
+});
+
+// The scaffold's wiring, which its own tests cannot see: the session declares up,
+// so the bar leads with the arrow and names it; and a line's sheet is opened
+// through Sheets, so back closes the sheet and leaves the session where it was.
+test('a session leads with the way up, and back closes a line sheet (Pixel 9)', async ({
+  page,
+}) => {
+  await mockApi(page, SHORT);
+  await page.goto('/sessions/test');
+  await expectUpInTheBar(page);
+  await expectBackClosesOverlay(page, async () => {
+    await page.locator('span.t', { hasText: 'I have already made' }).click();
+  });
 });

@@ -1,11 +1,6 @@
 <section class="page">
+  <!-- The way back and the session's name are the bar's (the route declares up). -->
   <header class="head">
-    <a matButton routerLink="/sessions"><mat-icon>arrow_back</mat-icon> Sessions</a>
-    @if (start(); as s) {
-      <h2>{{ day(s) }} · {{ time(s) }}</h2>
-    } @else {
-      <h2>Session</h2>
-    }
     <mat-slide-toggle
       class="enhance"
       [checked]="player.enhance()"

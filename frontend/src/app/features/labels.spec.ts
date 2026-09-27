@@ -1,8 +1,9 @@
 import { TestBed } from '@angular/core/testing';
-import { provideZonelessChangeDetection } from '@angular/core';
+import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { ActivatedRoute, Router } from '@angular/router';
+import { Place } from '@xinutec/ui-scaffold';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { of, throwError } from 'rxjs';
 import { vi } from 'vitest';
@@ -28,6 +29,8 @@ function setup(speaker = '') {
       provideHttpClientTesting(),
       { provide: Router, useValue: { navigate } },
       { provide: ActivatedRoute, useValue: {} },
+      // The bar's state reads the router, a stub here; only the title is used.
+      { provide: Place, useValue: { title: signal(undefined) } },
       {
         provide: RecallApi,
         useValue: {
@@ -98,6 +101,8 @@ describe('Labels', () => {
         provideHttpClientTesting(),
         { provide: Router, useValue: { navigate: vi.fn() } },
         { provide: ActivatedRoute, useValue: {} },
+      // The bar's state reads the router, a stub here; only the title is used.
+      { provide: Place, useValue: { title: signal(undefined) } },
         { provide: RecallApi, useValue: { reassignCorrection } },
         { provide: MatSnackBar, useValue: { open } },
       ],

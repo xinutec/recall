@@ -42,6 +42,9 @@ importers:
       '@angular/service-worker':
         specifier: ^22.1.7
         version: 22.1.7(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2))(rxjs@7.8.2)
+      '@xinutec/ui-scaffold':
+        specifier: github:xinutec/ui-harness#23b871c4268a467a9f5fb906191607fbf1962093&path:/scaffold
+        version: https://codeload.github.com/xinutec/ui-harness/tar.gz/23b871c4268a467a9f5fb906191607fbf1962093#path:/scaffold(6ce7364639554e0024b74f69fbe5c661)
       rxjs:
         specifier: ~7.8.2
         version: 7.8.2
@@ -1805,6 +1808,17 @@ packages:
     peerDependenciesMeta:
       '@playwright/test':
         optional: true
+
+  '@xinutec/ui-scaffold@https://codeload.github.com/xinutec/ui-harness/tar.gz/23b871c4268a467a9f5fb906191607fbf1962093#path:/scaffold':
+    resolution: {gitHosted: true, integrity: sha512-wz+Mt96VMSuR4nJ+3795EC7Z2cGMOCgMRlCRZjAHiPGpzSi+Z9zBjvnqtCDxNekbT+/v8JqHNvEEOEymdoU4PA==, path: /scaffold, tarball: https://codeload.github.com/xinutec/ui-harness/tar.gz/23b871c4268a467a9f5fb906191607fbf1962093}
+    version: 0.1.0
+    peerDependencies:
+      '@angular/cdk': ^22.1.7
+      '@angular/common': ^22.1.7
+      '@angular/core': ^22.1.7
+      '@angular/material': ^22.1.7
+      '@angular/router': ^22.1.7
+      rxjs: ~7.8.2
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
@@ -4663,6 +4677,16 @@ snapshots:
       '@types/node': 24.19.0
     optionalDependencies:
       '@playwright/test': 1.63.0
+
+  '@xinutec/ui-scaffold@https://codeload.github.com/xinutec/ui-harness/tar.gz/23b871c4268a467a9f5fb906191607fbf1962093#path:/scaffold(6ce7364639554e0024b74f69fbe5c661)':
+    dependencies:
+      '@angular/cdk': 22.1.7(@angular/common@22.1.7(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2))(@angular/forms@22.1.7(@angular/common@22.1.7(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2))(@angular/platform-browser@22.1.7(@angular/common@22.1.7(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2)))(rxjs@7.8.2))(@angular/platform-browser@22.1.7(@angular/common@22.1.7(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2)))(rxjs@7.8.2)
+      '@angular/common': 22.1.7(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2))(rxjs@7.8.2)
+      '@angular/core': 22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2)
+      '@angular/material': 22.1.7(98d61717a67593c786c69e18d869e5f4)
+      '@angular/router': 22.1.7(@angular/common@22.1.7(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2))(@angular/platform-browser@22.1.7(@angular/common@22.1.7(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2)))(rxjs@7.8.2)
+      rxjs: 7.8.2
+      tslib: 2.8.1
 
   accepts@2.0.0:
     dependencies:

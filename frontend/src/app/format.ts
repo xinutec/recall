@@ -37,6 +37,20 @@ export function dayLabel(iso: string): string {
   });
 }
 
+/** A day short enough for a phone's top bar beside a time: "Thu 15 Jan 2026". */
+export function shortDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) {
+    return iso;
+  }
+  return d.toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
 /** Stable local-day key (YYYY-MM-DD in the viewer's timezone) for grouping. */
 export function dayKey(iso: string): string {
   const d = new Date(iso);

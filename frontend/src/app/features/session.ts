@@ -8,7 +8,7 @@ import {
   signal,
 } from '@angular/core';
 import { httpResource } from '@angular/common/http';
-import { RouterLink } from '@angular/router';
+import { scaffoldTitle } from '@xinutec/ui-scaffold';
 import { MatButtonModule } from '@angular/material/button';
 import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatIconModule } from '@angular/material/icon';
@@ -22,7 +22,7 @@ import { ConversationPage, SpeakerNames, Transcript } from '../models';
 import { RecallApi } from '../recall-api';
 import { Player } from '../shared/player';
 import { Turns } from '../shared/turns';
-import { dayLabel, timeOfDay } from '../format';
+import { shortDay, timeOfDay } from '../format';
 
 /** A diarization voice: its cluster, the name most of its turns carry, and a
  * sample to recognise it by. */
@@ -37,7 +37,6 @@ interface Voice {
 @Component({
   selector: 'app-session',
   imports: [
-    RouterLink,
     MatButtonModule,
     MatAutocompleteModule,
     MatIconModule,
@@ -81,6 +80,14 @@ export class Session implements OnDestroy {
   );
   protected readonly start = computed(() => this.turns()[0]?.start ?? null);
   protected readonly empty = computed(() => !this.turns().length && !this.data.isLoading());
+
+  constructor() {
+    // Its day and time once the lines arrive; until then a stand-in.
+    scaffoldTitle(() => {
+      const s = this.start();
+      return s ? `${shortDay(s)} · ${timeOfDay(s)}` : { text: 'Session', provisional: true };
+    });
+  }
 
   protected readonly finalizing = computed(() =>
     this.turns().some((t) => t.tier === 'live' || t.tier === 'transcribed'),
@@ -159,7 +166,4 @@ export class Session implements OnDestroy {
   ngOnDestroy(): void {
     if (this.player.playing()?.startsWith('voice:')) this.player.stop();
   }
-
-  protected readonly day = dayLabel;
-  protected readonly time = timeOfDay;
 }

@@ -3,12 +3,12 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { BreakpointObserver, Breakpoints } from '@angular/cdk/layout';
 import { map, timeout } from 'rxjs';
-import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatIconModule } from '@angular/material/icon';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { Scaffold } from '@xinutec/ui-scaffold';
 
 import { AuthState } from './auth';
 import { BUILD_INFO } from './build-info';
@@ -41,12 +41,12 @@ const CAPTURE_PLAIN_POLL_MS = 5_000;
     RouterOutlet,
     RouterLink,
     RouterLinkActive,
-    MatToolbarModule,
     MatButtonModule,
     MatCardModule,
     MatIconModule,
     MatMenuModule,
     MatTooltipModule,
+    Scaffold,
   ],
   templateUrl: './app.html',
   styleUrl: './app.scss',
@@ -63,7 +63,7 @@ export class App {
   private readonly telemetry = inject(Telemetry);
   private readonly swUpdates = inject(SwUpdates);
 
-  /** Phone-sized viewport → bottom nav; otherwise nav lives in the top toolbar. */
+  /** Phone-sized viewport → bottom nav; otherwise a rail beside the content. */
   protected readonly handset = toSignal(
     this.breakpoints.observe(Breakpoints.Handset).pipe(map((state) => state.matches)),
     { initialValue: false },
@@ -76,7 +76,7 @@ export class App {
     { path: '/search', label: 'Search', icon: 'search', exact: false },
   ];
 
-  /** Secondary pages — in the hamburger menu, keeping the nav to five slots. */
+  /** Screens drilled into from the menu, each declaring its way up. */
   protected readonly more: readonly NavItem[] = [
     { path: '/labels', label: 'Labels', icon: 'label', exact: false },
   ];

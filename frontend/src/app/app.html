@@ -12,51 +12,10 @@
   </div>
 }
 
-<mat-toolbar class="bar">
-  <!-- dev-lint: allow-unstyled-class .ham-btn is a unit-test selector (app.spec.ts) -->
-  <button matIconButton class="ham-btn" [matMenuTriggerFor]="moreMenu" aria-label="More pages">
-    <mat-icon>menu</mat-icon>
-  </button>
-  <mat-menu #moreMenu="matMenu">
-    @for (item of more; track item.path) {
-      <a mat-menu-item [routerLink]="item.path">
-        <mat-icon>{{ item.icon }}</mat-icon>
-        <span>{{ item.label }}</span>
-      </a>
-    }
-    @if (handset()) {
-      <!-- On a phone the stamp lives here, not in a footer: the footer sits in the
-           scrolled column and the bottom nav is fixed over its last 57px, so any
-           page whose content happens to end in that band draws the stamp behind
-           the nav. A menu is an overlay opened deliberately, so it cannot collide. -->
-      <div class="version menu-version" [title]="builtAt">
-        build {{ build.sha }}
-        @if (builtAt) {
-          · {{ builtAt }}
-        }
-      </div>
-    }
-  </mat-menu>
-  <a routerLink="/" class="brand">
-    <mat-icon>graphic_eq</mat-icon>
-    <span>recall</span>
-  </a>
-  <span class="spacer"></span>
-  @if (!handset()) {
-    <nav class="links">
-      @for (item of nav; track item.path) {
-        <a
-          matButton
-          [routerLink]="item.path"
-          routerLinkActive="active"
-          [routerLinkActiveOptions]="{ exact: item.exact }"
-        >
-          <mat-icon>{{ item.icon }}</mat-icon>
-          {{ item.label }}
-        </a>
-      }
-    </nav>
-  }
+<!-- The bar every fleet app draws (@xinutec/ui-scaffold): the menu and "recall" on
+     a main screen, an arrow up and the screen's name on one drilled into. -->
+<ui-scaffold class="bar" title="recall" [menu]="moreMenu">
+  <!-- On every screen: recording is the household's control, never a page's. -->
   <button
     matIconButton
     class="capture-toggle"
@@ -78,7 +37,24 @@
       {{ transitioning() ? 'sync' : paused() ? 'mic_off' : 'mic' }}
     </mat-icon>
   </button>
-</mat-toolbar>
+</ui-scaffold>
+
+<mat-menu #moreMenu="matMenu">
+  @for (item of more; track item.path) {
+    <a mat-menu-item [routerLink]="item.path">
+      <mat-icon>{{ item.icon }}</mat-icon>
+      <span>{{ item.label }}</span>
+    </a>
+  }
+  <!-- The build stamp lives here on every screen size: a footer in the scrolled
+       column would sit behind the fixed bottom nav on a phone. -->
+  <div class="version" [title]="builtAt">
+    build {{ build.sha }}
+    @if (builtAt) {
+      · {{ builtAt }}
+    }
+  </div>
+</mat-menu>
 
 @if (unreachable()) {
   <div class="paused-banner unreachable" role="status">
@@ -113,31 +89,24 @@
   </div>
 }
 
-<main class="content" [class.with-bottom-nav]="handset()">
+<main class="content" [class.with-bottom-nav]="handset()" [class.with-rail]="!handset()">
   <router-outlet />
-  @if (!handset()) {
-    <footer class="version" [title]="builtAt">
-      build {{ build.sha }}
-      @if (builtAt) {
-        · {{ builtAt }}
-      }
-    </footer>
-  }
 </main>
 
-@if (handset()) {
-  <nav class="bottom-nav">
-    @for (item of nav; track item.path) {
-      <a
-        class="item"
-        [routerLink]="item.path"
-        routerLinkActive="active"
-        [routerLinkActiveOptions]="{ exact: item.exact }"
-        [attr.aria-label]="item.label"
-      >
-        <mat-icon>{{ item.icon }}</mat-icon>
-        <span class="label">{{ item.label }}</span>
-      </a>
-    }
-  </nav>
-}
+<!-- The main screens: a bottom bar on a phone, a rail beside the content on a wide
+     screen (Material 3's navigation bar and rail). -->
+<nav [class]="handset() ? 'bottom-nav' : 'rail'" aria-label="Main screens">
+  @for (item of nav; track item.path) {
+    <a
+      class="item"
+      [routerLink]="item.path"
+      routerLinkActive="active"
+      #rla="routerLinkActive"
+      [routerLinkActiveOptions]="{ exact: item.exact }"
+      [attr.aria-current]="rla.isActive ? 'page' : null"
+    >
+      <span class="ind"><mat-icon>{{ item.icon }}</mat-icon></span>
+      <span class="label">{{ item.label }}</span>
+    </a>
+  }
+</nav>

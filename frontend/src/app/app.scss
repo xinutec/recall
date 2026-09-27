@@ -1,3 +1,5 @@
+$rail-w: 220px;
+
 :host {
   display: flex;
   flex-direction: column;
@@ -54,34 +56,17 @@
   height: 3rem;
 }
 
+// The scaffold's bar, pinned: the surface through Material's own token, and the
+// edge-to-edge inset (viewport-fit=cover) as padding above it. The toolbar keeps
+// its own height, which `--toolbar-h` names for the sticky offsets below it.
 .bar {
   position: sticky;
   top: 0;
   z-index: 10;
-  gap: 0.5rem;
-  // Edge-to-edge (viewport-fit=cover): drop the toolbar content below the status
-  // bar / notch; the toolbar's own background fills the inset strip above it. Let
-  // the bar grow by the inset rather than squeezing its fixed height.
+  display: block;
   padding-block-start: var(--safe-top, 0px);
-  block-size: auto;
-  // Include the inset so the bar's bottom lands exactly at the banner/day-header
-  // sticky offset (toolbar-h + safe-top). Without it the bar is only content+inset
-  // tall, shorter than that offset, and sticky shoves the banner down — a gap.
-  min-block-size: calc(var(--toolbar-h) + var(--safe-top, 0px));
-}
-
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: inherit;
-  text-decoration: none;
-  font: var(--mat-sys-title-medium);
-  font-weight: 600;
-}
-
-.spacer {
-  flex: 1 1 auto;
+  background: var(--mat-sys-surface-container);
+  --mat-toolbar-container-background-color: var(--mat-sys-surface-container);
 }
 
 .capture-toggle.paused {
@@ -145,6 +130,11 @@
   }
 }
 
+// Beside the rail on a wide screen, not under it.
+:host:has(.rail) .paused-banner {
+  margin-inline-start: $rail-w;
+}
+
 @keyframes rec-pulse {
   0%,
   100% {
@@ -152,16 +142,6 @@
   }
   50% {
     opacity: 0.3;
-  }
-}
-
-.links {
-  display: flex;
-  gap: 0.25rem;
-
-  a.active {
-    font-weight: 700;
-    text-decoration: underline;
   }
 }
 
@@ -173,57 +153,105 @@
   &.with-bottom-nav {
     padding-block-end: var(--bottom-nav-reserve);
   }
+
+  &.with-rail {
+    margin-inline-start: $rail-w;
+  }
 }
 
 .version {
   display: block;
-  margin-block-start: 2rem;
-  text-align: center;
+  padding: 0.5rem 1rem;
+  white-space: nowrap;
   font: var(--mat-sys-label-small);
   font-variant-numeric: tabular-nums;
-  opacity: 0.4;
+  opacity: 0.6;
   user-select: text;
+}
 
-  // Inside the overflow menu it is a caption, not a page footer.
-  &.menu-version {
-    margin-block-start: 0;
-    padding: 0.5rem 1rem;
-    white-space: nowrap;
+// Material 3's navigation bar (phone) and a drawer-style rail (wide), as life
+// draws them: the icon sits in a pill that fills on the active screen.
+.bottom-nav,
+.rail {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  background: var(--mat-sys-surface-container);
+
+  .item {
+    display: flex;
+    align-items: center;
+    text-decoration: none;
+    color: var(--mat-sys-on-surface-variant);
+
+    .ind {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      transition: background 0.15s;
+    }
+
+    &.active {
+      color: var(--mat-sys-on-surface);
+
+      .label {
+        font-weight: 700;
+      }
+    }
   }
 }
 
-// Material 3 bottom navigation bar (no shipped component yet — minimal markup).
 .bottom-nav {
-  position: fixed;
   inset-inline: 0;
   inset-block-end: 0;
-  z-index: 20;
-  display: flex;
-  justify-content: space-around;
-  align-items: stretch;
-  background: var(--mat-sys-surface-container, var(--mat-sys-surface));
   border-block-start: 1px solid var(--mat-sys-outline-variant);
   padding-block-end: env(safe-area-inset-bottom, 0px);
 
   .item {
     flex: 1 1 0;
-    display: flex;
     flex-direction: column;
-    align-items: center;
     justify-content: center;
     gap: 2px;
-    min-block-size: 56px;
-    text-decoration: none;
-    color: var(--mat-sys-on-surface-variant, inherit);
-    font: var(--mat-sys-label-small);
+    min-block-size: 60px;
 
-    mat-icon {
-      transition: color 0.15s ease;
+    .ind {
+      inline-size: 56px;
+      block-size: 30px;
+    }
+
+    .label {
+      font: var(--mat-sys-label-medium);
+    }
+
+    &.active .ind {
+      background: var(--mat-sys-secondary-container);
+      color: var(--mat-sys-on-secondary-container);
+    }
+  }
+}
+
+.rail {
+  inset-block: calc(var(--toolbar-h) + var(--safe-top, 0px)) 0;
+  inset-inline-start: 0;
+  inline-size: $rail-w;
+  flex-direction: column;
+  padding-block-start: 0.5rem;
+  border-inline-end: 1px solid var(--mat-sys-outline-variant);
+
+  .item {
+    gap: 1rem;
+    padding: 0.85rem 1.5rem;
+    margin-inline-end: 0.5rem;
+    border-radius: 0 999px 999px 0;
+
+    .label {
+      font: var(--mat-sys-label-large);
     }
 
     &.active {
-      color: var(--mat-sys-primary);
-      font-weight: 600;
+      background: var(--mat-sys-secondary-container);
+      color: var(--mat-sys-on-secondary-container);
     }
   }
 }

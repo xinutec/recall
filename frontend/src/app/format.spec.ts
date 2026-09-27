@@ -1,4 +1,10 @@
-import { durationUntil, formatConfidence, formatDuration, timeOfDaySeconds } from './format';
+import {
+  durationUntil,
+  formatConfidence,
+  formatDuration,
+  shortDay,
+  timeOfDaySeconds,
+} from './format';
 import { Transcript } from './models';
 
 function turn(start: string, end: string): Transcript {
@@ -24,6 +30,13 @@ function turn(start: string, end: string): Transcript {
 }
 
 describe('format', () => {
+  it('shortDay is short enough for a bar beside a time, and keeps the year', () => {
+    const day = shortDay('2026-01-15T12:00:00Z');
+    expect(day).toContain('2026');
+    expect(day.length).toBeLessThanOrEqual(17);
+    expect(shortDay('not a date')).toBe('not a date');
+  });
+
   it('renders confidence as a rounded percentage', () => {
     expect(formatConfidence(0.873)).toBe('87%');
     expect(formatConfidence(null)).toBe('');

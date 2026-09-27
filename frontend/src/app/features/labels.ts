@@ -11,6 +11,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatSnackBar } from '@angular/material/snack-bar';
+import { scaffoldTitle } from '@xinutec/ui-scaffold';
 
 import { Label, LabelList, VocabularyList } from '../models';
 import { RecallApi } from '../recall-api';
@@ -44,6 +45,10 @@ export class Labels {
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   private readonly snack = inject(MatSnackBar);
+
+  constructor() {
+    scaffoldTitle(() => 'Review labels');
+  }
 
   // The household vocabulary: proper nouns the ASR is biased toward. Managed
   // here because this is the curation page — a new term applies from the next

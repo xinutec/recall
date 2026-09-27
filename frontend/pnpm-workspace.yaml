@@ -4,7 +4,8 @@
 # work without one.
 #
 # @xinutec/ui-harness ships TypeScript and builds itself in `prepare`, so pnpm
-# must be allowed to run it. The key is the resolved codeload URL rather than
+# must be allowed to run it. (@xinutec/ui-scaffold, from the same repo, ships its
+# build and needs no entry.) The key is the resolved codeload URL rather than
 # the package name, because pnpm keys a git dependency by its full spec — so
 # this line has to move whenever the harness commit does. Note the commit here
 # is not the one the other frontends pin; each repo's lockfile decides.

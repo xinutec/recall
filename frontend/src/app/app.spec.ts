@@ -76,14 +76,15 @@ describe('App', () => {
     expect(fixture.componentInstance).toBeTruthy();
   });
 
-  it('renders the brand and every primary nav link', async () => {
+  it('names the app in the bar and lists every main screen', async () => {
     const { fixture } = setup();
     await fixture.whenStable();
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.brand')?.textContent).toContain('recall');
-    const links = [...el.querySelectorAll('.links a')];
-    expect(links.length).toBe(4);
-    const navText = el.querySelector('.links')?.textContent ?? '';
+    expect(el.querySelector('ui-scaffold h1')?.textContent).toContain('recall');
+    // jsdom does not match the handset breakpoint, so the screens are in the rail.
+    const nav = el.querySelector('nav[aria-label="Main screens"]');
+    expect(nav?.querySelectorAll('a').length).toBe(4);
+    const navText = nav?.textContent ?? '';
     for (const label of ['Timeline', 'Sessions', 'Check', 'Search']) {
       expect(navText).toContain(label);
     }
@@ -94,31 +95,21 @@ describe('App', () => {
     expect(navText).not.toContain('Train');
   });
 
-  it('hamburger menu holds the secondary pages (Labels)', async () => {
+  it('the menu holds Labels and the build stamp', async () => {
     const { fixture } = setup();
     await fixture.whenStable();
     const el = fixture.nativeElement as HTMLElement;
-    const ham = el.querySelector<HTMLButtonElement>('.ham-btn');
-    expect(ham).toBeTruthy();
-    ham?.click();
+    el.querySelector<HTMLButtonElement>('ui-scaffold button[aria-label="Menu"]')?.click();
     await fixture.whenStable();
     // mat-menu renders into the CDK overlay, outside the component element.
-    const items = [...document.querySelectorAll('.cdk-overlay-container [mat-menu-item]')];
-    const texts = items.map((i) => i.textContent ?? '');
+    const overlay = document.querySelector('.cdk-overlay-container');
+    const texts = [...(overlay?.querySelectorAll('[mat-menu-item]') ?? [])].map(
+      (i) => i.textContent ?? '',
+    );
     expect(texts.some((t) => t.includes('Labels'))).toBe(true);
     expect(texts.some((t) => t.includes('Compare'))).toBe(false);
-  });
-
-  it('shows the build stamp so a stale cache is visible at a glance', async () => {
-    const { fixture } = setup();
-    await fixture.whenStable();
-    // Desktop width here (jsdom does not match the handset breakpoint), so the stamp
-    // is the page footer. On a phone it moves into the overflow menu instead: the
-    // fixed bottom nav is drawn over the end of the scrolled column, so any page
-    // ending in that band drew the stamp behind it. The layout harness caught that,
-    // not this test — geometry is not something jsdom can see.
-    const footer = (fixture.nativeElement as HTMLElement).querySelector('.version');
-    expect(footer?.textContent).toContain(BUILD_INFO.sha);
+    // The stamp makes a stale cache visible at a glance, on every screen size.
+    expect(overlay?.querySelector('.version')?.textContent).toContain(BUILD_INFO.sha);
   });
 
   it('shows the paused banner only when capture is paused', () => {

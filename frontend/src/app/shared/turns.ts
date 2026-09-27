@@ -8,10 +8,10 @@ import {
   output,
   signal,
 } from '@angular/core';
-import { MatBottomSheet } from '@angular/material/bottom-sheet';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatSnackBar } from '@angular/material/snack-bar';
+import { Sheets } from '@xinutec/ui-scaffold';
 
 import { Moment, Transcript } from '../models';
 import { RecallApi } from '../recall-api';
@@ -78,7 +78,8 @@ export class Turns implements OnDestroy {
   /** A write landed; the parent refetches. */
   readonly changed = output();
 
-  private readonly sheet = inject(MatBottomSheet);
+  // Through the scaffold: the phone's back gesture closes the sheet, not the page.
+  private readonly sheet = inject(Sheets);
   private readonly snack = inject(MatSnackBar);
   private readonly api = inject(RecallApi);
   protected readonly player = inject(Player);

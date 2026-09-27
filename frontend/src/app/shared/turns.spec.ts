@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
-import { MatBottomSheet } from '@angular/material/bottom-sheet';
+import { Sheets } from '@xinutec/ui-scaffold';
 import { Subject } from 'rxjs';
 import { vi } from 'vitest';
 
@@ -52,7 +52,7 @@ async function setup(moments: Moment[], roster: string[] = []) {
     }),
   };
   TestBed.configureTestingModule({
-    providers: [provideZonelessChangeDetection(), { provide: MatBottomSheet, useValue: sheet }],
+    providers: [provideZonelessChangeDetection(), { provide: Sheets, useValue: sheet }],
   });
   const fixture = TestBed.createComponent(Turns);
   fixture.componentRef.setInput('moments', moments);
