@@ -146,7 +146,7 @@ fn main() {
     // household's real glossary and the credential must not live in the repo.
     let token = std::env::var("RECALL_SYNC_TOKEN")
         .expect("RECALL_SYNC_TOKEN must be set — the glossary is behind the sync plane");
-    let client = runner::client::Client::new("http://10.100.0.2:8001", &token);
+    let client = runner::client::Client::new("https://recall.xinutec.org", &token);
     let prompt = client
         .prompt()
         .expect("the household glossary")

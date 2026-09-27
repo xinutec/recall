@@ -208,6 +208,7 @@ async fn serve(token: Option<&str>) -> (tempfile::TempDir, String) {
         tokens: None,
         read_token: None,
         max_body_bytes: recalld::app::DEFAULT_MAX_BODY,
+        trusted_proxies: Vec::new(),
         // The sync plane is exempt from the SSO gate; left absent so the tests
         // show that.
         webauth: None,

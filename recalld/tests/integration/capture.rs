@@ -406,6 +406,43 @@ fn an_unknown_peer_is_named_rather_than_left_blank() {
     );
 }
 
+use recalld::capture::client_host;
+
+#[test]
+fn behind_the_named_proxy_the_audit_names_the_real_client() {
+    // isis's front door connects from the node, so the peer is the same for
+    // every caller; the header it sets is the only address that says who.
+    let proxy: std::net::IpAddr = "10.42.0.1".parse().unwrap();
+    assert_eq!(
+        client_host(Some(proxy), Some("10.100.0.12"), &[proxy]).as_deref(),
+        Some("10.100.0.12")
+    );
+}
+
+#[test]
+fn a_forwarded_header_from_anyone_else_is_ignored() {
+    // Any caller can send the header; only the named proxy is believed.
+    let proxy: std::net::IpAddr = "10.42.0.1".parse().unwrap();
+    let peer: std::net::IpAddr = "10.100.0.5".parse().unwrap();
+    assert_eq!(
+        client_host(Some(peer), Some("10.100.0.12"), &[proxy]).as_deref(),
+        Some("10.100.0.5")
+    );
+}
+
+#[test]
+fn a_proxy_without_a_usable_header_is_still_named() {
+    let proxy: std::net::IpAddr = "10.42.0.1".parse().unwrap();
+    assert_eq!(
+        client_host(Some(proxy), None, &[proxy]).as_deref(),
+        Some("10.42.0.1")
+    );
+    assert_eq!(
+        client_host(Some(proxy), Some("not an address"), &[proxy]).as_deref(),
+        Some("10.42.0.1")
+    );
+}
+
 #[test]
 fn the_audit_write_cannot_refuse_the_control_action() {
     // Silencing the microphone must not depend on a bookkeeping write. The
@@ -440,6 +477,7 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
         tokens: None,
         read_token: None,
         max_body_bytes: recalld::app::DEFAULT_MAX_BODY,
+        trusted_proxies: Vec::new(),
         // ⚠ Not None: without webauth the browsing plane, capture routes
         // included, is absent rather than open.
         webauth: Some(recalld::webauth::GateState {

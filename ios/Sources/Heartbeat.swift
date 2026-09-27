@@ -26,7 +26,6 @@ import Foundation
 /// Best-effort and silent, like `OutboxReport` on Android: a liveness report that
 /// raised its own failures would be the tail wagging the dog.
 enum Heartbeat {
-    private static let port = 8000
     private static let timeout: TimeInterval = 8
 
     /// How often to beat. The grader's thresholds are expressed in multiples of this
@@ -168,7 +167,7 @@ enum Heartbeat {
     }
 
     private static func post(_ payload: [String: Any], to host: String) async -> Bool {
-        guard let url = URL(string: "http://\(host):\(port)/api/devices/heartbeat")
+        guard let url = URL(string: "\(ApiBase.of(host))/api/devices/heartbeat")
         else { return false }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
             return false

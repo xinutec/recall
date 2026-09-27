@@ -13,10 +13,14 @@ enum Prefs {
         static let ingestToken = "ingest_token"
     }
 
-    /// Isis (the fleet control plane) over WireGuard: a stable address, so it's the
-    /// out-of-the-box default and existing installs self-heal without reconfiguration.
-    /// The stream still goes to the recorder `host`; only the API moved here.
-    static let defaultControlHost = "10.100.0.2"
+    /// Isis (the fleet control plane), a name its front door serves on the VPN only:
+    /// the out-of-the-box default. The stream still goes to the recorder `host`; only
+    /// the API moved here. Read through `ApiBase`, which also takes a bare host.
+    static let defaultControlHost = "https://recall.xinutec.org"
+
+    /// The default before the front door (#1799). Stored on installs that edited the
+    /// field, so it reads as "unset" rather than as a choice.
+    private static let oldDefaultControlHost = "10.100.0.2"
 
     /// Recorder host the PCM stream connects to (the Mac's ingest, on the home LAN).
     /// Empty until the user sets it.
@@ -30,16 +34,18 @@ enum Prefs {
     /// and the PCM ingest on different machines. Empty/unset falls back to
     /// `defaultControlHost`, so the controls and panel work out of the box.
     static var controlHost: String {
-        get {
-            let h = d.string(forKey: Key.controlHost) ?? ""
-            return h.isEmpty ? defaultControlHost : h
-        }
+        get { effectiveControlHost(d.string(forKey: Key.controlHost) ?? "") }
         set { d.set(newValue, forKey: Key.controlHost) }
     }
 
-    /// recalld's ingest plane (docs/architecture.md): same host as the control
-    /// plane, its own port. Not user-set until a reason appears.
-    static let ingestBase = "http://10.100.0.2:8001"
+    /// What a stored control setting means: unset and the old default both mean the fleet.
+    static func effectiveControlHost(_ stored: String) -> String {
+        stored.isEmpty || stored == oldDefaultControlHost ? defaultControlHost : stored
+    }
+
+    /// recalld's ingest plane (docs/architecture.md): the same server as the
+    /// control plane. Not user-set until a reason appears.
+    static let ingestBase = "https://recall.xinutec.org"
 
     /// The fourth credential plane's per-device bearer: `PUT` this phone's own
     /// segments to recalld, and nothing else. Empty = send no header.

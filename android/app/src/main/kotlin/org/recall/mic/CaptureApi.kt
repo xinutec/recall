@@ -106,10 +106,9 @@ fun parseSources(body: String): List<SourceStatus> =
  * fail and the panels stay hidden rather than showing stale state.
  */
 object CaptureApi {
-    private const val API_PORT = 8000 // `recall api --port 8000`
     private const val TIMEOUT_MS = 4000
 
-    private fun endpoint(host: String, path: String) = "http://$host:$API_PORT/api$path"
+    private fun endpoint(host: String, path: String) = "${ApiBase.of(host)}/api$path"
 
     /** With [waitS] + [known] (the last stateToken) the server long-polls: the request
      * hangs until the household state changes, so a press anywhere lands here in ~RTT.

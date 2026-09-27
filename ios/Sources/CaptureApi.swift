@@ -18,11 +18,10 @@ struct SourceStatus: Identifiable, Equatable {
 /// true state even while the stream port is closed. If Isis is unreachable, calls just
 /// fail and the panels stay hidden rather than showing stale state.
 enum CaptureApi {
-    private static let port = 8000
     private static let timeout: TimeInterval = 4
 
     private static func url(_ host: String, _ path: String) -> URL? {
-        URL(string: "http://\(host):\(port)/api\(path)")
+        URL(string: "\(ApiBase.of(host))/api\(path)")
     }
 
     // MARK: capture pause

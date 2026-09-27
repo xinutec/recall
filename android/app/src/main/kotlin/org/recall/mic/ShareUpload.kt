@@ -39,8 +39,6 @@ data class UploadedSession(
  */
 
 object ShareUpload {
-    private const val API_PORT = 8000 // `recall api --port 8000`, as CaptureApi
-
     // The recorder encodes the local start in the filename, e.g. 2026_07_03_09_50_50_1.mp3.
     private val RECORDER_STAMP = Regex("""(\d{4})_(\d{2})_(\d{2})_(\d{2})_(\d{2})_(\d{2})""")
 
@@ -115,7 +113,7 @@ object ShareUpload {
                 val boundary = "----recall${System.nanoTime()}"
                 val conn =
                     (
-                        URL("http://$host:$API_PORT/api/sessions").openConnection()
+                        URL("${ApiBase.of(host)}/api/sessions").openConnection()
                             as HttpURLConnection
                     ).apply {
                         requestMethod = "POST"

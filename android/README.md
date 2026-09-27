@@ -33,7 +33,8 @@ killed by Doze/the OOM killer). The phone is the TCP **client**; recall listens.
   when capture is paused it shows the resume time with snooze/resume, mirroring the
   web app. The pause state is one shared value (`MicState.capture`) that both the
   screen and the notification render, polled from the recall web API via
-  `CaptureApi` (host `:8000`) — reachable only on the home LAN, same as streaming.
+  `CaptureApi` (the control setting, `https://recall.xinutec.org` by default; a bare
+  host means `http://<host>:8000`, see `ApiBase`) — reachable over the VPN.
 - **Home-only recording:** the service connects to the recall host *before* opening
   the mic, so it records only when that host is reachable. The host is a private
   home-LAN address, reachable only on the home network — so off it (mobile data,

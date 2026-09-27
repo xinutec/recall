@@ -358,6 +358,25 @@ use std::sync::Arc;
 pub struct Control {
     pub root: std::path::PathBuf,
     pub webauth: Option<Arc<crate::webauth::Config>>,
+    pub trusted_proxies: Vec<std::net::IpAddr>,
+}
+
+/// Who connected, for the audit: the peer, unless the peer is a named proxy
+/// with a parseable `X-Real-IP`. isis's front door connects from the node for
+/// every caller, so its header is the only address that says who. Anyone
+/// else's header is ignored, since any caller can send one.
+#[must_use]
+pub fn client_host(
+    peer: Option<std::net::IpAddr>,
+    real_ip: Option<&str>,
+    trusted: &[std::net::IpAddr],
+) -> Option<String> {
+    let peer = peer?;
+    let forwarded = real_ip.and_then(|h| h.trim().parse::<std::net::IpAddr>().ok());
+    match forwarded {
+        Some(client) if trusted.contains(&peer) => Some(client.to_string()),
+        _ => Some(peer.to_string()),
+    }
 }
 
 /// The process-global "capture intent changed" signal. A `watch` channel rather
@@ -530,10 +549,12 @@ enum Intent {
 
 async fn control(st: Arc<Control>, intent: Intent, request: axum::extract::Request) -> Response {
     let (parts, _) = request.into_parts();
-    let host = parts
+    let peer = parts
         .extensions
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|info| info.0.ip().to_string());
+        .map(|info| info.0.ip());
+    let real_ip = parts.headers.get("x-real-ip").and_then(|v| v.to_str().ok());
+    let host = client_host(peer, real_ip, &st.trusted_proxies);
     let asker = Asker::from(&parts, host);
     let cfg = st.webauth.clone();
     let root = st.root.clone();

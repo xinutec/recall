@@ -35,7 +35,6 @@ import java.time.format.DateTimeFormatter
  * failures would be the tail wagging the dog.
  */
 object Heartbeat {
-    private const val API_PORT = 8000 // `recall api --port 8000`, as CaptureApi
     private const val TIMEOUT_MS = 8000
 
     /**
@@ -182,7 +181,7 @@ object Heartbeat {
         runCatching {
             val conn =
                 (
-                    URL("http://$host:$API_PORT/api/devices/heartbeat")
+                    URL("${ApiBase.of(host)}/api/devices/heartbeat")
                         .openConnection() as HttpURLConnection
                 ).apply {
                     requestMethod = "POST"

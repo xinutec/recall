@@ -41,9 +41,10 @@ let
   src = ../.;
 
   out = "/Volumes/Backup/recall";
-  fleet = "http://10.100.0.2:8000";
-  # recalld's ingest plane on the same host (docs/architecture.md, stage A).
-  ingest = "http://10.100.0.2:8001";
+  # recalld on Isis, a name its front door serves on the VPN only.
+  fleet = "https://recall.xinutec.org";
+  # recalld's ingest plane, the same server (docs/architecture.md, stage A).
+  ingest = "https://recall.xinutec.org";
   logs = "/Users/pippijn/Library/Logs/recall";
 
   # The ML stack (mlx-whisper, pyannote, torch) as a STORE PATH, built from uv.lock's
@@ -168,7 +169,7 @@ in
   home.file."Library/Logs/recall/.keep".text = "";
 
   # NO recall-api here — the Mac serves no UI or control plane (the Isis split). Isis
-  # (10.100.0.2:8000) is the system of record and the only web UI / control surface; the
+  # (recall.xinutec.org) is the system of record and the only web UI / control surface; the
   # Mac is capture, all MLX, and the protected master archive. Browsers and the phone web
   # app point at Isis; pause/resume is mirrored down by recall-capture-mirror. Work that
   # needs the GPU reaches the Mac by its own poll of recalld's queue — Isis cannot dial a

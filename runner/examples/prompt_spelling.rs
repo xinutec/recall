@@ -120,7 +120,7 @@ fn main() {
     assert!(!cases.is_empty(), "no name-bearing corrections with audio");
 
     let token = std::env::var("RECALL_SYNC_TOKEN").expect("RECALL_SYNC_TOKEN must be set");
-    let client = runner::client::Client::new("http://10.100.0.2:8001", &token);
+    let client = runner::client::Client::new("https://recall.xinutec.org", &token);
     let prompt = client
         .prompt()
         .expect("glossary")

@@ -36,6 +36,7 @@ fn serve(root: &Path) -> String {
         tokens: None,
         read_token: None,
         max_body_bytes: 16 * 1024 * 1024,
+        trusted_proxies: Vec::new(),
         webauth: Some(webauth),
         sync_token: None,
         frontend: None,

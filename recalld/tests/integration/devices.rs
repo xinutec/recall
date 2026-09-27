@@ -396,6 +396,7 @@ fn gated(root: &std::path::Path) -> axum::Router {
         tokens: None,
         read_token: None,
         max_body_bytes: DEFAULT_MAX_BODY,
+        trusted_proxies: Vec::new(),
         webauth: Some(GateState {
             cfg: Arc::new(webauth::Config {
                 session_secret: SECRET.into(),

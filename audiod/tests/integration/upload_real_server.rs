@@ -19,6 +19,7 @@ fn serve(server_root: &Path, tokens_text: &str) -> String {
         tokens: Some(Tokens::load(&tokens_path).expect("parse")),
         read_token: None,
         max_body_bytes: 16 * 1024 * 1024,
+        trusted_proxies: Vec::new(),
         // The uploader speaks only to the ingest plane; the browsing credential is absent.
         webauth: None,
         sync_token: None,

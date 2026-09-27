@@ -423,6 +423,7 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
         tokens: None,
         read_token: None,
         max_body_bytes: recalld::app::DEFAULT_MAX_BODY,
+        trusted_proxies: Vec::new(),
         // Not None: the browsing plane is only mounted when SSO is configured.
         webauth: Some(recalld::webauth::GateState {
             cfg: std::sync::Arc::new(recalld::webauth::Config {

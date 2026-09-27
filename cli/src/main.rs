@@ -7,7 +7,7 @@ use cli::api::{Api, Error};
 use cli::render;
 
 /// The fleet: the system of record, and the only thing this talks to.
-const DEFAULT_API: &str = "http://10.100.0.2:8000";
+const DEFAULT_API: &str = "https://recall.xinutec.org";
 const DEFAULT_LIMIT: i64 = 100;
 /// A conversation breaks after a silence longer than this. Matches
 /// `recalld::conversations::DEFAULT_GAP_SECONDS`, but sent explicitly.

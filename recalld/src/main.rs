@@ -12,6 +12,9 @@
 //!
 //! `RECALL_SYNC_TOKEN` (env, optional) decides whether the `/sync/*` routes are
 //! mounted at all.
+//!
+//! `RECALLD_TRUSTED_PROXIES` (env, optional, comma-separated) names the peers
+//! whose `X-Real-IP` the capture audit records instead of their own address.
 
 use recalld::app::{Config, DEFAULT_MAX_BODY, router};
 use recalld::tokens::Tokens;
@@ -61,6 +64,28 @@ fn parse_args() -> Option<Args> {
         tokens_path,
         frontend,
     })
+}
+
+/// `RECALLD_TRUSTED_PROXIES`: comma-separated addresses whose `X-Real-IP` the
+/// capture audit believes. `None` (and a message) on a typo, which fails startup:
+/// a silently empty list would name every pause after the node.
+fn trusted_proxies() -> Option<Vec<std::net::IpAddr>> {
+    let Ok(text) = std::env::var("RECALLD_TRUSTED_PROXIES") else {
+        return Some(Vec::new());
+    };
+    match text
+        .split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::parse)
+        .collect()
+    {
+        Ok(list) => Some(list),
+        Err(err) => {
+            eprintln!("recalld: RECALLD_TRUSTED_PROXIES does not parse: {err}");
+            None
+        }
+    }
 }
 
 /// Serve one bound listener with connect info. The capture-control plane carries
@@ -136,6 +161,9 @@ fn main() -> ExitCode {
     let sync_token = std::env::var("RECALL_SYNC_TOKEN")
         .ok()
         .filter(|t| !t.is_empty());
+    let Some(trusted_proxies) = trusted_proxies() else {
+        return ExitCode::FAILURE;
+    };
     if let Err(complaint) = prepare_planes(&root) {
         eprintln!("recalld: {complaint}");
         return ExitCode::FAILURE;
@@ -156,6 +184,7 @@ fn main() -> ExitCode {
         tokens,
         read_token,
         max_body_bytes: DEFAULT_MAX_BODY,
+        trusted_proxies,
         webauth,
         sync_token,
         frontend,

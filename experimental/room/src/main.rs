@@ -45,7 +45,7 @@ fn instant(raw: &str) -> DateTime<Utc> {
 
 fn parse(mut cli: impl Iterator<Item = String>) -> Args {
     let (mut root, mut from, mut to, mut out) = (None, None, None, None);
-    let mut url = "http://10.100.0.2:8001".to_owned();
+    let mut url = "https://recall.xinutec.org".to_owned();
     let mut pieces = false;
     let mut shim = (
         "python".to_owned(),

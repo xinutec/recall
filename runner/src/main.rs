@@ -56,7 +56,7 @@ fn usage() -> ! {
 }
 
 fn parse_args() -> Config {
-    let mut base = "http://10.100.0.2:8001".to_owned();
+    let mut base = "https://recall.xinutec.org".to_owned();
     let mut program = "python".to_owned();
     let mut args = vec!["-m".to_owned(), "recall.shim_asr".to_owned()];
     let mut once = false;

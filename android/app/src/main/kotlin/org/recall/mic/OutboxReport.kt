@@ -29,8 +29,6 @@ import java.time.format.DateTimeFormatter
  * `recall doctor --post` on the Mac, which does the same thing for the same reason.
  */
 object OutboxReport {
-    private const val API_PORT = 8000 // `recall api --port 8000`, as ShareUpload
-
     /** POST the outbox state. Returns whether it landed; nothing depends on it. */
     suspend fun send(
         host: String,
@@ -53,7 +51,7 @@ object OutboxReport {
                         .toString()
                 val conn =
                     (
-                        URL("http://$host:$API_PORT/api/devices/outbox").openConnection()
+                        URL("${ApiBase.of(host)}/api/devices/outbox").openConnection()
                             as HttpURLConnection
                     ).apply {
                         requestMethod = "POST"

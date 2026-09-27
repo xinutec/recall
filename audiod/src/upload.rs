@@ -21,7 +21,7 @@ pub const OPEN_GRACE: Duration = Duration::from_mins(3);
 pub struct Config {
     /// The archive root — the same `--root` capture and ingest use.
     pub root: PathBuf,
-    /// recalld's base URL, e.g. `http://10.100.0.2:8001`.
+    /// recalld's base URL, e.g. `https://recall.xinutec.org`.
     pub base_url: String,
     /// The ingest bearer token; `None` sends no header (an open dev server).
     pub token: Option<String>,

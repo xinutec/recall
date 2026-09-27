@@ -28,14 +28,18 @@ object Prefs {
     private const val KEY_ENABLED = "enabled"
     private const val MAX_ID_LEN = 40
 
-    // Isis (the fleet control plane) over WireGuard: a stable address, so it's the
-    // out-of-the-box default and existing installs self-heal without reconfiguration.
-    // The stream still goes to the recorder [host]; only the API moved here.
-    const val DEFAULT_CONTROL_HOST = "10.100.0.2"
+    // Isis (the fleet control plane), a name its front door serves on the VPN only:
+    // the out-of-the-box default. The stream still goes to the recorder [host]; only
+    // the API moved here. Read through [ApiBase], which also takes a bare host.
+    const val DEFAULT_CONTROL_HOST = "https://recall.xinutec.org"
 
-    // recalld's ingest plane (recall/docs/architecture.md, stage A): same host as
-    // the control plane, its own port. Not user-set until a reason appears.
-    const val INGEST_BASE = "http://10.100.0.2:8001"
+    // The default before the front door (#1799). Stored on installs that saved the
+    // settings screen, so it reads as "unset" rather than as a choice.
+    private const val OLD_DEFAULT_CONTROL_HOST = "10.100.0.2"
+
+    // recalld's ingest plane (recall/docs/architecture.md, stage A): the same server
+    // as the control plane. Not user-set until a reason appears.
+    const val INGEST_BASE = "https://recall.xinutec.org"
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -47,7 +51,11 @@ object Prefs {
     /** The capture-API host (Isis). Empty/unset falls back to [DEFAULT_CONTROL_HOST], so
      * the pause controls and Devices panel work out of the box against the fleet. */
     fun controlHost(ctx: Context): String =
-        (prefs(ctx).getString(KEY_CONTROL_HOST, "") ?: "").ifEmpty { DEFAULT_CONTROL_HOST }
+        effectiveControlHost(prefs(ctx).getString(KEY_CONTROL_HOST, "") ?: "")
+
+    /** What a stored control setting means: unset and the old default both mean the fleet. */
+    fun effectiveControlHost(stored: String): String =
+        if (stored.isEmpty() || stored == OLD_DEFAULT_CONTROL_HOST) DEFAULT_CONTROL_HOST else stored
 
     fun saveControlHost(ctx: Context, controlHost: String) {
         prefs(ctx).edit().putString(KEY_CONTROL_HOST, controlHost).apply()

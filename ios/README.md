@@ -14,7 +14,7 @@ auto-registers the device on first connect — **no backend changes needed**.
 | Port | TCP `9999`, `noDelay` on |
 | Capture | **held continuously** while "on" (see *Always-on* below) — PCM is forwarded only while connected, dropped otherwise. This *diverges* from Android's connect-then-open-mic; iOS needs the session held to survive backgrounding. |
 | Reconnect | 5 s connect timeout, 2 s retry, infinite — same as Android |
-| Pause vs unreachable | resolved via `GET http://<host>:8000/api/capture` (the API is the authority) |
+| Pause vs unreachable | resolved via `GET <control>/api/capture`, `https://recall.xinutec.org` by default (the API is the authority; `ApiBase` as on Android) |
 | Device id | `<sanitised-model>-<8hex>` derived once, **unless a fixed pre-set id is given** via `Prefs.presetID` (this build ships `"iphone11"`, like the Pixels' `pixel9`/`pixel5`). Persisted in UserDefaults. |
 | Pause banner | shows household state with **Pause** / **Still away (24h)** / **Resume now** (POST `/api/capture/pause`,`/resume`), exactly as Android |
 | Devices panel | fleet liveness from `/api/sources`, self highlighted, "active / Ns ago" labels |

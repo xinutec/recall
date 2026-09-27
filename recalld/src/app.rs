@@ -41,6 +41,9 @@ pub struct Config {
     /// The built Angular app. `None` = not served (the default, and what every
     /// test and dev run uses).
     pub frontend: Option<PathBuf>,
+    /// Peers whose `X-Real-IP` the capture audit believes: isis's front door,
+    /// which connects from the node for every caller. Empty = believe nobody.
+    pub trusted_proxies: Vec<std::net::IpAddr>,
 }
 
 /// The labelling writes: what a person says a line's words are, and taking it
@@ -68,7 +71,12 @@ fn labelling() -> Router<Arc<reads::State>> {
 }
 
 /// The browsing plane, behind the SSO gate.
-fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router {
+fn browsing(
+    st: webauth::GateState,
+    root: PathBuf,
+    log_path: PathBuf,
+    trusted_proxies: Vec<std::net::IpAddr>,
+) -> Router {
     let capture_root = root.clone();
     let read = Arc::new(reads::State { root });
     Router::new()
@@ -153,6 +161,7 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
                 .with_state(Arc::new(capture::Control {
                     root: capture_root,
                     webauth: Some(st.cfg.clone()),
+                    trusted_proxies,
                 })),
         )
         // Client reports carry their own state (a log path), not the database's.
@@ -169,10 +178,14 @@ fn browsing(st: webauth::GateState, root: PathBuf, log_path: PathBuf) -> Router 
 pub fn router(config: Arc<Config>) -> Router {
     let limit = config.max_body_bytes;
     let frontend = config.frontend.clone();
-    let browsing_plane = config
-        .webauth
-        .clone()
-        .map(|st| browsing(st, config.root.clone(), config.root.join("logs/client.log")));
+    let browsing_plane = config.webauth.clone().map(|st| {
+        browsing(
+            st,
+            config.root.clone(),
+            config.root.join("logs/client.log"),
+            config.trusted_proxies.clone(),
+        )
+    });
     let sync_gate = config.sync_token.clone().map(|expected| {
         Arc::new(sync::Gate {
             expected,
