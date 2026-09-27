@@ -72,7 +72,7 @@ recalld runs in one container on Isis, binding both `:8000` (the app, behind the
 Nextcloud sign-in) and `:8001` (ingest and the queue). Shipping a change: push
 to `main`, CI builds `xinutec/recall:latest`, then
 `ssh root@10.100.0.2 'kubectl -n recall rollout restart deployment/recall'`.
-The web app is at `http://10.100.0.2:8000` over the VPN: timeline, search with
+The web app is at `https://recall.xinutec.org` over the VPN (isis's front door serves the name on the tunnel address only): timeline, search with
 playback, review, sessions, labels, the capture control.
 
 ```sh

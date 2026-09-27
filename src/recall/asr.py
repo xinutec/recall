@@ -14,6 +14,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
+from functools import partial
 from pathlib import Path
 from statistics import mean
 from typing import TYPE_CHECKING, Protocol
@@ -330,6 +331,34 @@ def shifted(result: AsrResult, offset: float) -> AsrResult:
     )
 
 
+_UNFROZEN: set[object] = set()
+"""The sampler `unfreeze_sampling` installed: a compiled function takes no marker."""
+
+
+def unfreeze_sampling() -> None:
+    """Make mlx-whisper's temperature fallback draw fresh noise per token.
+
+    ⚠ Its `categorical` is `@mx.compile`d without the random state as an input,
+    so the compile freezes one key: every draw in a process repeats it. The
+    fallback meant to escape a repetition loop then feeds the same noise to
+    every token and makes loops instead. Measured on four stuck clips, three
+    fresh processes each: 7 of 15 looped as shipped, 0 of 15 with the state
+    threaded through (#1764). Idempotent.
+    """
+    import mlx.core as mx  # noqa: PLC0415 - lazy, as mlx_whisper
+    from mlx_whisper import decoding  # noqa: PLC0415 - lazy, as mlx_whisper
+
+    if decoding.categorical in _UNFROZEN:
+        return
+
+    @partial(mx.compile, inputs=mx.random.state, outputs=mx.random.state)
+    def categorical(logits: mx.array, temp: float) -> mx.array:
+        return mx.random.categorical(logits / temp)
+
+    _UNFROZEN.add(categorical)
+    decoding.categorical = categorical
+
+
 def mlx_transcribe(
     audio: Path | Excerpt,
     *,
@@ -352,6 +381,8 @@ def mlx_transcribe(
     send Whisper into a loop that loses the speech (#1764).
     """
     import mlx_whisper  # noqa: PLC0415 - lazy: mlx-whisper is an optional heavy dep
+
+    unfreeze_sampling()
 
     source: str | np.ndarray = str(audio)
     offset = 0.0

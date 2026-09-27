@@ -32,12 +32,12 @@ class MainActivity : WebShellActivity() {
     }
 
     private companion object {
-        // Isis's WireGuard address (10.100.0.2) — the fleet system of record; the recall
-        // API serves the built Angular UI here on :8000, WG-bound so it's reachable over
-        // the VPN whether home or away. Pause/resume on this UI drives the capture intent
-        // the Mac mirrors. Hardcoded — this app is single-purpose.
-        const val RECALL_AUTHORITY = "10.100.0.2:8000"
-        const val RECALL_URL = "http://$RECALL_AUTHORITY/"
+        // recalld on Isis, the fleet system of record, at a name Isis's front door serves
+        // on the VPN only, so it works whether home or away. Pause/resume on this UI
+        // drives the capture intent the Mac mirrors. Hardcoded — this app is
+        // single-purpose.
+        const val RECALL_AUTHORITY = "recall.xinutec.org"
+        const val RECALL_URL = "https://$RECALL_AUTHORITY/"
 
         // The Nextcloud identity provider the sign-in bounces through. Its one-shot
         // /login and /auth/callback hops are never restore points — the shell's

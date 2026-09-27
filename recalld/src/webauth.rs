@@ -312,7 +312,7 @@ impl Config {
                     get("NC_BASE_URL").unwrap_or_else(|| "https://dash.xinutec.org".to_owned())
                 }),
             redirect_uri: get("NC_REDIRECT_URI")
-                .unwrap_or_else(|| "http://10.100.0.2:8000/auth/callback".to_owned()),
+                .unwrap_or_else(|| "https://recall.xinutec.org/auth/callback".to_owned()),
             allowed_users: get("RECALL_ALLOWED_USERS")
                 .unwrap_or_else(|| "pippijn".to_owned())
                 .split(',')

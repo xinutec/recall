@@ -233,3 +233,17 @@ def test_every_derived_copy_builder_refuses_stdin() -> None:
         assert "-nostdin" in argv, argv
         # Before the first -i: ffmpeg only honours it as an input option.
         assert argv.index("-nostdin") < argv.index("-i"), argv
+
+
+def test_the_temperature_fallback_draws_fresh_noise_each_time() -> None:
+    # As shipped, mlx-whisper's compiled sampler froze one random key, so every
+    # draw in a process repeated and the loop-escaping fallback made loops.
+    mx = pytest.importorskip("mlx.core")
+    decoding = pytest.importorskip("mlx_whisper.decoding")
+    from recall.asr import unfreeze_sampling  # noqa: PLC0415 - needs mlx
+
+    unfreeze_sampling()
+    unfreeze_sampling()  # idempotent
+    flat = mx.zeros((1, 1000))
+    draws = {decoding.categorical(flat, 1.0).item() for _ in range(8)}
+    assert len(draws) > 1, draws

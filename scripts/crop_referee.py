@@ -160,9 +160,9 @@ def transcribe(
     ]
 
 
-def run(work: Path) -> None:
+def run(work: Path, results: str) -> None:
     prompt = prompt_of((work / "terms.txt").read_text())
-    out = work / RESULTS
+    out = work / results
     done = set()
     if out.exists():
         done = {
@@ -209,8 +209,8 @@ def heard_over(words: list[dict[str, Any]], start: float, end: float) -> str:
     )
 
 
-def score(work: Path) -> None:
-    rows = [json.loads(line) for line in (work / RESULTS).read_text().splitlines()]
+def score(work: Path, results: str) -> None:
+    rows = [json.loads(line) for line in (work / results).read_text().splitlines()]
     by_group: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
         lambda: defaultdict(list)
     )
@@ -257,14 +257,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=("run", "score", "list"))
     parser.add_argument("--work", type=Path, required=True)
+    parser.add_argument(
+        "--results", default=RESULTS, help="file under --work, to keep runs apart"
+    )
     args = parser.parse_args()
     if args.command == "list":
         for case in cases(args.work):
             print(case["clip"])
     elif args.command == "run":
-        run(args.work)
+        run(args.work, args.results)
     else:
-        score(args.work)
+        score(args.work, args.results)
     return 0
 
 

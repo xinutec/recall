@@ -180,7 +180,7 @@ pub const SESSION_FILE: &str = ".config/recall/session";
 
 /// What to tell someone whose request was refused for want of a session.
 pub const HOW_TO_SIGN_IN: &str = concat!(
-    "no session — sign in at http://10.100.0.2:8000/ in a browser, then save the
+    "no session — sign in at https://recall.xinutec.org/ in a browser, then save the
 ",
     "value of the `recall_session` cookie:
 ",

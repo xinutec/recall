@@ -1,6 +1,6 @@
 # recall web viewer (Android)
 
-The recall web UI (the Angular SPA the recall API serves at `http://<host>:8000`)
+The recall web UI (the Angular SPA recalld serves)
 presented as a native-feeling app: a single full-screen **WebView**, no address
 bar, no tabs, a home-screen icon. It avoids browser chrome while showing the UI
 exactly as designed (the system WebView is Chromium, so it renders like Chrome).
@@ -12,8 +12,8 @@ or updating one never touches the other.
 
 ## What it does
 
-- Loads `http://10.100.0.2:8000/` (Isis's WireGuard address, the fleet system of
-  record) — the host is **hardcoded** (`MainActivity.RECALL_URL`); this app is
+- Loads `https://recall.xinutec.org/` (recalld on Isis, the fleet system of record,
+  a name its front door serves on the VPN only) — the host is **hardcoded** (`MainActivity.RECALL_URL`); this app is
   single-purpose. Being on the VPN, it works whether home or away, and pause/resume
   on this UI drives the capture intent the Mac mirrors.
 - JavaScript + DOM storage on (Angular), media playback without a gesture (so the
@@ -24,8 +24,7 @@ or updating one never touches the other.
   tracks the Material light/dark theme). The WebView no longer underlaps the bars,
   so the page's own `env(safe-area-inset-*)` collapse to 0 and add nothing on top.
 
-It needs only `INTERNET` and cleartext (HTTP over the WireGuard tunnel to a private
-address) — no other permissions.
+It needs only `INTERNET` — no other permissions, and no cleartext.
 
 ## Build & install
 

@@ -56,7 +56,7 @@ read-only rootfs + `/tmp` emptyDir, seccomp, probes, limits), `03-service` (Clus
    sign-in, add three more keys to the same `recall-secret`: `NC_CLIENT_ID` +
    `NC_CLIENT_SECRET` (from an OAuth 2.0 client registered on **dash.xinutec.org →
    Settings → Security → OAuth 2.0 clients**, redirect URI
-   `http://10.100.0.2:8000/auth/callback`), and `SESSION_SECRET` (a random cookie-signing
+   `https://recall.xinutec.org/auth/callback`), and `SESSION_SECRET` (a random cookie-signing
    key, e.g. `openssl rand -hex 32`). All three raise the gate; missing any of them leaves
    the UI open. `RECALL_ALLOWED_USERS` (plain env in the Deployment, default `pippijn`)
    restricts who may enter after a valid sign-in. The recording plane stays login-free:
