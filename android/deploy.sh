@@ -21,6 +21,9 @@ cd "$(dirname "$0")"
 PHONES=(
   "pixel9|192.168.1.253:5555|10.100.0.12:5555|4C070DLAQ001L1"   # living room, but carried
   "pixel5|192.168.1.242:5555|10.100.0.10:5555|15271FDD40043S"
+  # LineageOS: Wireless debugging only (random port, TLS-paired with this Mac on
+  # 2026-09-27), so 5555 refuses and the serial's mDNS lookup finds the port.
+  "oneplus6t|192.168.1.28:5555|10.100.0.8:5555|83bf636e"
 )
 
 ADB="$ANDROID_HOME/platform-tools/adb"
