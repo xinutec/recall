@@ -106,9 +106,11 @@ fn a_job_is_leased_transcribed_and_acked() {
     assert_eq!(std::fs::read(&clip).expect("read"), b"audio bytes");
 
     let result = shim.transcribe(&clip, None, None).expect("transcribe");
-    assert_eq!(result["segments"][0]["text"], "hello there");
+    assert_eq!(result.reply.segments[0].text, "hello there");
 
-    client.finish(job.id, &result.to_string()).expect("finish");
+    client
+        .finish(job.id, &result.raw.to_string())
+        .expect("finish");
     // Retiring is terminal: the queue must not hand the same job out again.
     assert!(
         client
@@ -159,10 +161,10 @@ fn model_and_prompt_reach_the_shim_when_given() {
     let echoed = shim
         .transcribe(&clip, Some("whisper-small"), Some("Pippijn, Kat"))
         .expect("transcribe");
-    assert_eq!(echoed["op"], "transcribe");
-    assert_eq!(echoed["model"], "whisper-small");
-    assert_eq!(echoed["initial_prompt"], "Pippijn, Kat");
-    assert_eq!(echoed["words"], true);
+    assert_eq!(echoed.raw["op"], "transcribe");
+    assert_eq!(echoed.raw["model"], "whisper-small");
+    assert_eq!(echoed.raw["initial_prompt"], "Pippijn, Kat");
+    assert_eq!(echoed.raw["words"], true);
 }
 
 #[test]
@@ -251,4 +253,21 @@ fn a_runner_with_an_empty_queue_stamps_a_beat_saying_it_had_nothing_to_do() {
         beat["finished"].is_string(),
         "finished must be present, or the doctor reads a pass that never ended"
     );
+}
+
+#[test]
+fn a_reply_outside_the_contract_is_refused_not_stored() {
+    // The runner stores what a shim says; one that answers in a shape the fleet
+    // cannot read must fail the job with a reason, not reach the archive.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (program, args) = stub_shim(
+        "print(json.dumps({'id': msg['id'], 'ok': True, 'result': {'segments': 'none'}}))",
+    );
+    let mut shim = Shim::spawn(&program, &args).expect("shim");
+    let clip = dir.path().join("a.flac");
+    std::fs::write(&clip, b"x").expect("clip");
+    match shim.transcribe(&clip, None, None) {
+        Err(shim::Error::Refused(why)) => assert!(why.contains("outside the contract"), "{why}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
 }

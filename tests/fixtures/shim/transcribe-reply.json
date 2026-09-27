@@ -1,0 +1,28 @@
+{
+  "language": "en",
+  "language_confidence": null,
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 1.5,
+      "text": " hello there",
+      "avg_logprob": -0.25,
+      "no_speech_prob": 0.01,
+      "confidence": 0.7788007830714049,
+      "words": [
+        {
+          "start": 0.0,
+          "end": 0.5,
+          "text": " hello",
+          "probability": 0.875
+        },
+        {
+          "start": 0.5,
+          "end": 1.5,
+          "text": " there",
+          "probability": 0.75
+        }
+      ]
+    }
+  ]
+}

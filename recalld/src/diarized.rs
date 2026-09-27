@@ -340,35 +340,10 @@ pub fn reliable_language(language: Option<&str>) -> bool {
 
 use crate::align::{SpeakerTurn, Word, assign_words_to_speakers};
 use audiocore::instant;
-use serde::Deserialize;
-
-#[derive(Deserialize)]
-struct Reply<T> {
-    ok: bool,
-    result: Option<T>,
-}
-
-#[derive(Deserialize)]
-struct Voices {
-    #[serde(default)]
-    turns: Vec<SpeakerTurn>,
-    #[serde(default)]
-    speakers: Vec<SpeakerVoice>,
-}
+use audiocore::shim::{Stored as StoredReply, asr, voices::Diarization};
 
 /// One voiceprint the shim built for a speaker in this clip.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct SpeakerVoice {
-    pub speaker: String,
-    pub vector: Vec<f64>,
-}
-
-#[derive(Deserialize)]
-struct Transcription {
-    language: Option<String>,
-    #[serde(default)]
-    segments: Vec<TranscribedSegment>,
-}
+pub use audiocore::shim::voices::SpeakerVoice;
 
 /// One word as `transcript_segments.word_timings` stores it.
 ///
@@ -380,19 +355,6 @@ struct Stored {
     s: f64,
     e: f64,
     w: String,
-}
-
-#[derive(Deserialize)]
-struct TranscribedSegment {
-    /// The segment's own text, read only to judge whether the model looped on
-    /// it or invented it over silence. The turns are built from `words`.
-    #[serde(default)]
-    text: String,
-    /// Seconds into the clip; absent in results stored without them.
-    start: Option<f64>,
-    end: Option<f64>,
-    #[serde(default)]
-    words: Vec<Word>,
 }
 
 /// The speaker spans a stored `diarize-segment` result carries.
@@ -415,11 +377,7 @@ pub fn speaker_turns(stored: &str) -> Option<Vec<SpeakerTurn>> {
 /// `None` when the shim refused or the body is not this shape. Both permanent.
 #[must_use]
 pub fn voices(stored: &str) -> Option<(Vec<SpeakerTurn>, Vec<SpeakerVoice>)> {
-    let reply: Reply<Voices> = serde_json::from_str(stored).ok()?;
-    if !reply.ok {
-        return None;
-    }
-    let body = reply.result?;
+    let body = StoredReply::<Diarization>::parse(stored).ok()?.answer()?;
     Some((body.turns, body.speakers))
 }
 
@@ -438,20 +396,16 @@ pub fn voices(stored: &str) -> Option<(Vec<SpeakerTurn>, Vec<SpeakerVoice>)> {
 /// segment would then condemn the clean ones around it.
 #[must_use]
 pub fn words_of(stored: &str, heard: &Heard) -> Option<(Vec<Word>, Option<String>)> {
-    let reply: Reply<Transcription> = serde_json::from_str(stored).ok()?;
-    if !reply.ok {
-        return None;
-    }
-    let outcome = reply.result?;
+    let outcome = StoredReply::<asr::Reply>::parse(stored).ok()?.answer()?;
     let words: Vec<Word> = outcome
         .segments
-        .into_iter()
+        .iter()
         .filter(|s| {
             !(crate::quality::is_repetition_loop(&s.text)
                 || crate::quality::is_wordless(&s.text)
                 || invented(s, heard))
         })
-        .flat_map(|s| s.words)
+        .flat_map(|s| s.words.iter().flatten().map(Word::from))
         .filter(|w| w.end > w.start)
         .collect();
     (!words.is_empty()).then_some((words, outcome.language))
@@ -459,9 +413,10 @@ pub fn words_of(stored: &str, heard: &Heard) -> Option<(Vec<Word>, Option<String
 
 /// Whether `heard` says the model invented this segment. Its span is the one
 /// stored, or its words' when a result was stored without one.
-fn invented(segment: &TranscribedSegment, heard: &Heard) -> bool {
-    let first = segment.words.first().map(|w| w.start);
-    let last = segment.words.last().map(|w| w.end);
+fn invented(segment: &asr::Segment, heard: &Heard) -> bool {
+    let words = segment.words.as_deref().unwrap_or_default();
+    let first = words.first().map(|w| w.start);
+    let last = words.last().map(|w| w.end);
     match (segment.start.or(first), segment.end.or(last)) {
         (Some(start), Some(end)) => heard.invented(&segment.text, start, end),
         _ => false,
@@ -477,13 +432,14 @@ fn invented(segment: &TranscribedSegment, heard: &Heard) -> bool {
 /// head of the queue.
 #[must_use]
 pub fn has_word_timings(stored: &str) -> bool {
-    let Ok(reply) = serde_json::from_str::<Reply<Transcription>>(stored) else {
-        return false;
-    };
-    reply.ok
-        && reply
-            .result
-            .is_some_and(|t| t.segments.iter().any(|s| !s.words.is_empty()))
+    StoredReply::<asr::Reply>::parse(stored)
+        .ok()
+        .and_then(StoredReply::answer)
+        .is_some_and(|t| {
+            t.segments
+                .iter()
+                .any(|s| s.words.as_ref().is_some_and(|w| !w.is_empty()))
+        })
 }
 
 /// The replace arm's write, lifted out so `write_pass` stays under one screen.

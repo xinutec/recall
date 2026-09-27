@@ -363,23 +363,16 @@ pub fn channel() -> (SyncSender<Utterance>, Receiver<Utterance>) {
 /// `None` when there are no words, which is normal: silero heard a voice and
 /// the model found nothing in it.
 #[must_use]
-pub fn spoken(result: &serde_json::Value) -> Option<(String, Option<String>)> {
-    let text = result
-        .get("segments")?
-        .as_array()?
+pub fn spoken(reply: &audiocore::shim::asr::Reply) -> Option<(String, Option<String>)> {
+    let text = reply
+        .segments
         .iter()
-        .filter_map(|s| s.get("text")?.as_str())
-        .map(str::trim)
+        .map(|s| s.text.trim())
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    let text = text.trim().to_owned();
     if text.is_empty() {
         return None;
     }
-    let language = result
-        .get("language")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
-    Some((text, language))
+    Some((text, reply.language.clone()))
 }

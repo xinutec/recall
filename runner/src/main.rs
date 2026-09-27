@@ -9,6 +9,7 @@
 //! stream waits on the referee.
 
 use audiocore::job::Kind;
+use audiocore::shim::{Stored, voices};
 use chrono::Utc;
 use runner::client::{Client, Job, Span};
 use runner::pulse::stamp_pulse;
@@ -100,16 +101,16 @@ fn embed_spans(
     shim: &mut Shim,
     clip: &Path,
     spans: &[Span],
-) -> Result<serde_json::Value, shim::Error> {
+) -> Result<(serde_json::Value, usize), shim::Error> {
     let mut prints = Vec::new();
     for span in spans {
         match shim.embed(clip, span.start_s, span.end_s) {
             Ok(answer) => {
-                if let Some(vector) = answer.get("vector") {
-                    prints.push(serde_json::json!({
-                        "segment_id": span.segment_id,
-                        "vector": vector,
-                    }));
+                if let Some(vector) = answer.reply.vector {
+                    prints.push(voices::Print {
+                        segment_id: span.segment_id,
+                        vector,
+                    });
                 }
             }
             Err(shim::Error::Refused(why)) => {
@@ -120,7 +121,15 @@ fn embed_spans(
             Err(other) => return Err(other),
         }
     }
-    Ok(serde_json::json!({ "prints": prints }))
+    let rows = prints.len();
+    let result = serde_json::to_value(voices::Prints { prints })
+        .map_err(|e| shim::Error::Protocol(e.to_string()))?;
+    Ok((result, rows))
+}
+
+/// A job's result as the fleet stores it (`audiocore::shim::Stored`).
+fn stored(result: &Stored<serde_json::Value>) -> Result<String, serde_json::Error> {
+    serde_json::to_string(result)
 }
 
 /// Do one job. `Ok(false)` means the queue was empty.
@@ -153,8 +162,10 @@ fn one(
     client.fetch_blob(&source, &filename, &clip)?;
     // Exhaustive: a new kind does not compile until it is given work here.
     let outcome = match kind {
-        Kind::TranscribeSegment => shim.transcribe(&clip, None, prompt),
-        Kind::DiarizeSegment => shim.diarize(&clip),
+        Kind::TranscribeSegment => shim
+            .transcribe(&clip, None, prompt)
+            .map(|a| (a.raw, a.reply.segments.len())),
+        Kind::DiarizeSegment => shim.diarize(&clip).map(|a| (a.raw, a.reply.turns.len())),
         // One model call per named turn, composed here. A refused span costs
         // only its print; the fleet re-derives it while its turn is unenrolled.
         Kind::EnrollSpeaker => embed_spans(shim, &clip, &spans),
@@ -162,19 +173,15 @@ fn one(
     // The scratch copy is removed whatever the outcome.
     let _ = std::fs::remove_file(&clip);
     match outcome {
-        Ok(result) => {
-            // Each kind names its result list differently: `segments` (asr),
-            // `turns` (diarize), `prints` (enrol). A new kind needs its key here,
-            // or its `rows` is always 0.
-            let rows = ["segments", "turns", "prints"]
-                .iter()
-                .filter_map(|key| result.get(*key))
-                .filter_map(serde_json::Value::as_array)
-                .map(Vec::len)
-                .sum::<usize>();
+        // Stored as the shim sent it; the rows come from the typed reply.
+        Ok((result, rows)) => {
             client.finish(
                 id,
-                &serde_json::json!({ "ok": true, "result": result }).to_string(),
+                &stored(&Stored {
+                    ok: true,
+                    result: Some(result),
+                    error: None,
+                })?,
             )?;
             tracing::info!(id, rows, "done");
             stamp_pulse(pulse, started, rows);
@@ -187,7 +194,11 @@ fn one(
             tracing::warn!(id, %why, "shim refused; recording the failure");
             client.finish(
                 id,
-                &serde_json::json!({ "ok": false, "error": why }).to_string(),
+                &stored(&Stored {
+                    ok: false,
+                    result: None,
+                    error: Some(why),
+                })?,
             )?;
             // A refusal is a completed pass, not a stall.
             stamp_pulse(pulse, started, 0);

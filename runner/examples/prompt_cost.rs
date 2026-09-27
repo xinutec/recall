@@ -111,7 +111,7 @@ fn run(
         let result = shim
             .transcribe(file.path(), None, prompt)
             .expect("transcribe");
-        if let Some((text, _)) = spoken(&result) {
+        if let Some((text, _)) = spoken(&result.reply) {
             said += 1;
             if says_a_name(&text, known) {
                 reached += 1;

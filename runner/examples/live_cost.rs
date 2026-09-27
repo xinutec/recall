@@ -79,7 +79,7 @@ fn run(shim: &mut Shim, clips: &[Utterance]) -> (f64, Vec<String>) {
         let result = shim
             .transcribe(file.path(), None, None)
             .expect("transcribe");
-        said.extend(spoken(&result).map(|(text, _)| text));
+        said.extend(spoken(&result.reply).map(|(text, _)| text));
     }
     (started.elapsed().as_secs_f64(), said)
 }

@@ -76,25 +76,6 @@ pub struct Candidate {
     pub looped_speech_s: f64,
 }
 
-#[derive(serde::Deserialize)]
-struct Stored {
-    ok: bool,
-    result: Option<Heard>,
-}
-
-#[derive(serde::Deserialize)]
-struct Heard {
-    #[serde(default)]
-    segments: Vec<Said>,
-}
-
-#[derive(serde::Deserialize)]
-struct Said {
-    start: f64,
-    end: f64,
-    text: String,
-}
-
 /// Every clip with more than `min_speech_s` of measured speech under segments
 /// the passes drop as loops (`quality::is_repetition_loop`), most lost first.
 /// Clips already waiting are left out. Reads the stored results only: the
@@ -114,10 +95,9 @@ pub fn candidates(ingest: &Connection, min_speech_s: f64) -> rusqlite::Result<Ve
     let mut out = Vec::new();
     for row in rows {
         let (filename, raw) = row?;
-        let Ok(Stored {
-            ok: true,
-            result: Some(heard),
-        }) = serde_json::from_str(&raw)
+        let Some(heard) = audiocore::shim::Stored::<audiocore::shim::asr::Reply>::parse(&raw)
+            .ok()
+            .and_then(audiocore::shim::Stored::answer)
         else {
             continue;
         };
@@ -125,7 +105,7 @@ pub fn candidates(ingest: &Connection, min_speech_s: f64) -> rusqlite::Result<Ve
             .segments
             .iter()
             .filter(|s| crate::quality::is_repetition_loop(&s.text))
-            .map(|s| (s.start, s.end))
+            .filter_map(|s| Some((s.start?, s.end?)))
             .collect();
         if looped.is_empty() {
             continue;

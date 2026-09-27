@@ -1,0 +1,32 @@
+{
+  "turns": [
+    {
+      "speaker": "SPEAKER_00",
+      "start": 0.0,
+      "end": 2.5
+    },
+    {
+      "speaker": "SPEAKER_01",
+      "start": 2.5,
+      "end": 4.0
+    }
+  ],
+  "speakers": [
+    {
+      "speaker": "SPEAKER_00",
+      "seconds": 2.5,
+      "vector": [
+        0.5,
+        -0.25
+      ]
+    },
+    {
+      "speaker": "SPEAKER_01",
+      "seconds": 1.5,
+      "vector": [
+        0.5,
+        -0.25
+      ]
+    }
+  ]
+}

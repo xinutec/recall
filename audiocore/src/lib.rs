@@ -12,6 +12,7 @@ pub mod envelope;
 pub mod instant;
 pub mod job;
 pub mod names;
+pub mod shim;
 pub mod text;
 pub mod vad;
 pub mod wav;

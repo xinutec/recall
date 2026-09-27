@@ -1,5 +1,8 @@
 //! Driving a model shim: a long-lived child speaking JSON over stdio.
 
+use audiocore::shim::{Hello, Response, asr, voices};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -133,19 +136,13 @@ impl Shim {
         if read == 0 {
             return Err(Error::Closed);
         }
-        let parsed: serde_json::Value = serde_json::from_str(&response)
+        let parsed: Response = serde_json::from_str(&response)
             .map_err(|e| Error::Protocol(format!("{e}; {}", shape_of(&response))))?;
-        if parsed.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-            let why = parsed
-                .get("error")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("no reason given");
-            return Err(Error::Refused(why.to_owned()));
+        if !parsed.ok {
+            let why = parsed.error.unwrap_or_else(|| "no reason given".to_owned());
+            return Err(Error::Refused(why));
         }
-        Ok(parsed
-            .get("result")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null))
+        Ok(parsed.result.unwrap_or(serde_json::Value::Null))
     }
 
     /// Ask the shim what it is. Answered by the protocol layer, so it works
@@ -156,11 +153,29 @@ impl Shim {
     /// Whatever `request` reports, or `Protocol` if the answer has no name.
     pub fn hello(&mut self) -> Result<String, Error> {
         let answer = self.request("hello", &serde_json::json!({}))?;
-        answer
-            .get("shim")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| Error::Protocol("hello did not name the shim".to_owned()))
+        serde_json::from_value::<Hello>(answer)
+            .map(|hello| hello.shim)
+            .map_err(|_| Error::Protocol("hello did not name the shim".to_owned()))
+    }
+
+    /// Send a typed request and read a typed reply, keeping the reply as it
+    /// came: the runner stores what the shim said, not its reading of it.
+    ///
+    /// A reply that does not read as `T` is the shim breaking the contract
+    /// (`audiocore::shim`), and is refused like any answer the job cannot use.
+    ///
+    /// # Errors
+    /// Whatever `request` reports, or `Refused` for a reply outside the contract.
+    pub fn ask<Q: Serialize, T: DeserializeOwned>(
+        &mut self,
+        op: &str,
+        request: &Q,
+    ) -> Result<Answer<T>, Error> {
+        let args = serde_json::to_value(request).map_err(|e| Error::Write(e.to_string()))?;
+        let raw = self.request(op, &args)?;
+        let reply = T::deserialize(&raw)
+            .map_err(|e| Error::Refused(format!("{op} reply outside the contract: {e}")))?;
+        Ok(Answer { raw, reply })
     }
 
     /// Diarize one clip, and embed each speaker found in it.
@@ -173,12 +188,13 @@ impl Shim {
     /// parameters.
     ///
     /// # Errors
-    /// Whatever `request` reports.
-    pub fn diarize(&mut self, audio: &Path) -> Result<serde_json::Value, Error> {
-        self.request(
-            "diarize",
-            &serde_json::json!({ "audio": audio.to_string_lossy(), "embed": true }),
-        )
+    /// Whatever [`Shim::ask`] reports.
+    pub fn diarize(&mut self, audio: &Path) -> Result<Answer<voices::Diarization>, Error> {
+        let request = voices::Diarize {
+            audio: audio.to_string_lossy().into_owned(),
+            embed: true,
+        };
+        self.ask(voices::DIARIZE, &request)
     }
 
     /// Embed one stretch of a clip into the vector that names a voice.
@@ -188,45 +204,48 @@ impl Shim {
     /// cutting, since it already decodes the audio.
     ///
     /// # Errors
-    /// Whatever `request` reports.
+    /// Whatever [`Shim::ask`] reports.
     pub fn embed(
         &mut self,
         audio: &Path,
         start_s: f64,
         end_s: f64,
-    ) -> Result<serde_json::Value, Error> {
-        self.request(
-            "embed",
-            &serde_json::json!({
-                "audio": audio.to_string_lossy(),
-                "start": start_s,
-                "end": end_s,
-            }),
-        )
+    ) -> Result<Answer<voices::Embedding>, Error> {
+        let request = voices::Embed {
+            audio: audio.to_string_lossy().into_owned(),
+            start: start_s,
+            end: end_s,
+        };
+        self.ask(voices::EMBED, &request)
     }
 
     /// Transcribe one clip.
     ///
     /// # Errors
-    /// Whatever `request` reports.
+    /// Whatever [`Shim::ask`] reports.
     pub fn transcribe(
         &mut self,
         audio: &Path,
         model: Option<&str>,
         initial_prompt: Option<&str>,
-    ) -> Result<serde_json::Value, Error> {
-        let mut args = serde_json::json!({
-            "audio": audio.to_string_lossy(),
-            "words": true,
-        });
-        if let Some(model) = model {
-            args["model"] = serde_json::json!(model);
-        }
-        if let Some(prompt) = initial_prompt {
-            args["initial_prompt"] = serde_json::json!(prompt);
-        }
-        self.request("transcribe", &args)
+    ) -> Result<Answer<asr::Reply>, Error> {
+        let request = asr::Request {
+            audio: audio.to_string_lossy().into_owned(),
+            words: true,
+            model: model.map(str::to_owned),
+            language: None,
+            initial_prompt: initial_prompt.map(str::to_owned),
+        };
+        self.ask(asr::OP, &request)
     }
+}
+
+/// A shim's reply, as it came and as read.
+#[derive(Debug, Clone)]
+pub struct Answer<T> {
+    /// What the shim sent: what the fleet stores.
+    pub raw: serde_json::Value,
+    pub reply: T,
 }
 
 impl Drop for Shim {

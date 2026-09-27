@@ -125,13 +125,14 @@ fn the_tap_is_read_from_the_socket_audiod_publishes_on() {
 
 #[test]
 fn the_shim_reply_becomes_one_line_of_text() {
-    let reply = serde_json::json!({
+    let reply: audiocore::shim::asr::Reply = serde_json::from_value(serde_json::json!({
         "language": "nl",
         "segments": [
             {"start": 0.0, "end": 1.0, "text": " Goedemorgen "},
             {"start": 1.0, "end": 2.0, "text": "allemaal."},
         ],
-    });
+    }))
+    .expect("a reply");
     assert_eq!(
         spoken(&reply),
         Some(("Goedemorgen allemaal.".to_owned(), Some("nl".to_owned())))
@@ -147,7 +148,9 @@ fn a_reply_with_nothing_said_in_it_is_not_a_turn() {
         serde_json::json!({"language": "en", "segments": [{"text": "   "}]}),
         serde_json::json!({"language": "en"}),
     ] {
-        assert_eq!(spoken(&reply), None, "{reply}");
+        let typed: audiocore::shim::asr::Reply =
+            serde_json::from_value(reply.clone()).expect("a reply");
+        assert_eq!(spoken(&typed), None, "{reply}");
     }
 }
 

@@ -174,24 +174,9 @@ pub fn derive_jobs(
 
 // --- writing what the runner embedded ----------------------------------------
 
-#[derive(Deserialize)]
-struct Reply {
-    ok: bool,
-    result: Option<Prints>,
-}
-
-#[derive(Deserialize)]
-struct Prints {
-    #[serde(default)]
-    prints: Vec<Print>,
-}
-
 /// One embedded span as the runner sends it back.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Print {
-    pub segment_id: i64,
-    pub vector: Vec<f64>,
-}
+pub use audiocore::shim::voices::Print;
+use audiocore::shim::{Stored, voices::Prints};
 
 /// What one pass did, for the log line.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -289,7 +274,7 @@ pub fn write_pass(
             break;
         }
         pass.clips += 1;
-        let Ok(reply) = serde_json::from_str::<Reply>(&result) else {
+        let Ok(reply) = Stored::<Prints>::parse(&result) else {
             record(
                 ingest,
                 Kind::EnrollSpeaker,

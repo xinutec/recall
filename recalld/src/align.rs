@@ -33,6 +33,17 @@ pub struct Word {
     pub probability: f64,
 }
 
+impl From<&audiocore::shim::asr::Word> for Word {
+    fn from(word: &audiocore::shim::asr::Word) -> Self {
+        Self {
+            start: word.start,
+            end: word.end,
+            text: word.text.clone(),
+            probability: word.probability.unwrap_or_else(unscored),
+        }
+    }
+}
+
 /// Probability for a word that has none. Not zero: an absent score means
 /// "not measured", and zeros would drag the turn's mean confidence down.
 const fn unscored() -> f64 {
@@ -41,12 +52,7 @@ const fn unscored() -> f64 {
 
 /// A contiguous span attributed to one relative speaker, as the `voices` shim
 /// reports it. Clip-relative, like the words.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SpeakerTurn {
-    pub speaker: String,
-    pub start: f64,
-    pub end: f64,
-}
+pub use audiocore::shim::voices::SpeakerTurn;
 
 /// A run of consecutive words attributed to one relative speaker.
 #[derive(Debug, Clone, PartialEq)]

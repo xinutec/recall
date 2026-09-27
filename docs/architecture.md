@@ -239,6 +239,12 @@ path it is handed. `asr` wraps mlx-whisper (large-v3-turbo, word timings);
 `voices` wraps pyannote (diarization and embeddings). The vocabulary the
 transcriber is biased with is read from the fleet at startup and handed to the
 shim per job; a runner that cannot read it refuses to transcribe unbiased.
+Every message between the runner and a shim is defined once, in
+`audiocore::shim`: the runner builds requests from it, refuses a reply that does
+not read as it, and stores the reply as the shim sent it; the fleet reads stored
+results through the same types. `tests/fixtures/shim/` holds one example of each
+message, which the Python shims' tests must produce and accept and the Rust
+tests must read and write, so a shape changed on one side alone fails a test.
 mlx-whisper's temperature fallback is patched to draw fresh noise per token
 (`recall.asr.unfreeze_sampling`): as shipped, its compiled sampler froze one
 random key per process, and the fallback meant to escape a repetition loop made

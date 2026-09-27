@@ -18,8 +18,8 @@ use crate::turn_store::{self, HiddenReason, NewTurn, Protected, Provenance};
 use audiocore::instant;
 use audiocore::instant::Stamp;
 use audiocore::job::Kind;
+use audiocore::shim::asr;
 use chrono::{DateTime, Duration, Utc};
-use serde::Deserialize;
 
 /// One turn a clip's transcript implies, in the archive's own terms.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,29 +44,6 @@ pub enum Barren {
     Unreadable(String),
 }
 
-#[derive(Deserialize)]
-struct Reply {
-    ok: bool,
-    result: Option<Transcription>,
-}
-
-#[derive(Deserialize)]
-struct Transcription {
-    language: Option<String>,
-    #[serde(default)]
-    segments: Vec<Segment>,
-}
-
-#[derive(Deserialize)]
-struct Segment {
-    start: f64,
-    end: f64,
-    text: String,
-    confidence: Option<f64>,
-    #[serde(default)]
-    words: Option<serde_json::Value>,
-}
-
 /// Seconds-from-clip-start to an absolute instant.
 fn at(block_start: DateTime<Utc>, offset_s: f64) -> DateTime<Utc> {
     block_start + Duration::milliseconds((offset_s * 1000.0).round() as i64)
@@ -81,26 +58,38 @@ fn at(block_start: DateTime<Utc>, offset_s: f64) -> DateTime<Utc> {
 /// here: near-silence comes back as invented text (e.g. "Thank you." or a run of
 /// tildes), not as nothing.
 pub fn interpret(block_start: DateTime<Utc>, stored: &str) -> Result<Vec<ClipTurn>, Barren> {
-    let reply: Reply =
-        serde_json::from_str(stored).map_err(|e| Barren::Unreadable(e.to_string()))?;
+    let reply = audiocore::shim::Stored::<asr::Reply>::parse(stored)
+        .map_err(|e| Barren::Unreadable(e.to_string()))?;
     if !reply.ok {
         return Err(Barren::Refused);
     }
     let outcome = reply.result.ok_or(Barren::NothingSaid)?;
-    let turns: Vec<ClipTurn> = outcome
-        .segments
-        .into_iter()
-        .filter(|s| s.text.chars().any(char::is_alphanumeric))
-        .filter(|s| s.end > s.start)
-        .map(|s| ClipTurn {
-            start: at(block_start, s.start),
-            end: at(block_start, s.end),
+    let mut turns = Vec::new();
+    for s in &outcome.segments {
+        // A turn is placed in time; a result without segment times cannot be.
+        let (Some(start), Some(end)) = (s.start, s.end) else {
+            return Err(Barren::Unreadable("a segment without its times".to_owned()));
+        };
+        if !s.text.chars().any(char::is_alphanumeric) || end <= start {
+            continue;
+        }
+        // Written in the shim's own spelling, so the stored timings read as the
+        // reply did (`quality::timed_words`).
+        let word_timings = s
+            .words
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| Barren::Unreadable(e.to_string()))?;
+        turns.push(ClipTurn {
+            start: at(block_start, start),
+            end: at(block_start, end),
             text: s.text.trim().to_owned(),
             language: outcome.language.clone(),
             confidence: s.confidence,
-            word_timings: s.words.as_ref().map(std::string::ToString::to_string),
-        })
-        .collect();
+            word_timings,
+        });
+    }
     if turns.is_empty() {
         return Err(Barren::NothingSaid);
     }

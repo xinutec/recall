@@ -153,6 +153,10 @@
               # languages. ⚠ The sandbox has no `tests/` beyond what is named here,
               # so leaving it out fails the BUILD rather than the test.
               ./tests/fixtures/worker-heartbeat.json
+              # The runner-shim contract (#1830): one example of every message,
+              # read by audiocore/tests/shim.rs and produced by the Python shims'
+              # tests. Same reason as above: unnamed, the sandbox has none.
+              ./tests/fixtures/shim
               # The ASR model contract, for the same reason one entry up: the
               # queue carries no model field, so `turns::SHIM_MODEL` has to name
               # what the shim will load, and `recall.asr.DEFAULT_MODEL` is what

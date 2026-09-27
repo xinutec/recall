@@ -106,7 +106,7 @@ fn spelled(shim: &mut Shim, clip: &Path, prompt: Option<&str>, wanted: &[String]
     let Ok(result) = shim.transcribe(clip, None, prompt) else {
         return false;
     };
-    spoken(&result).is_some_and(|(text, _)| {
+    spoken(&result.reply).is_some_and(|(text, _)| {
         let lower = text.to_lowercase();
         wanted
             .iter()
