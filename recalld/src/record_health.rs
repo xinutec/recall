@@ -4,25 +4,24 @@
 //! The fleet measures, the doctor grades (`doctor/src/record.rs`), as for the
 //! live tier.
 
+use crate::same_speech::{COPY_SECONDS, same_span};
 use audiocore::record_health::{Doubled, DoubledMinute, Fault, Faults, RecordHealth};
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use std::path::Path;
 
 crate::statements! {
-    /// Minutes since ?1 whose speech one mic shows from two clips: starts
-    /// within ?2 seconds, overlapping by more than half the shorter, both with
-    /// lines showing. Newest first.
-    DOUBLED: Meaning =
-        "SELECT a.source_id, a.start_utc FROM audio_segments a
+    /// Pairs of one mic's clips since ?1 starting within ?2 seconds of each
+    /// other, both with lines showing: the candidates [`doubled_minutes`]
+    /// holds to [`same_span`]. Newest first.
+    COPY_CANDIDATES: Meaning =
+        "SELECT a.source_id, a.start_utc, a.end_utc, b.start_utc, b.end_utc
+         FROM audio_segments a
          JOIN audio_segments b
            ON b.source_id = a.source_id AND b.id > a.id
           AND b.start_utc BETWEEN strftime('%Y-%m-%dT%H:%M:%S', a.start_utc, printf('-%d seconds', ?2))
                               AND strftime('%Y-%m-%dT%H:%M:%S', a.start_utc, printf('+%d seconds', ?2 + 1))
          WHERE a.start_utc >= ?1
-           AND julianday(min(a.end_utc, b.end_utc)) - julianday(max(a.start_utc, b.start_utc))
-             > min(julianday(a.end_utc) - julianday(a.start_utc),
-                   julianday(b.end_utc) - julianday(b.start_utc)) / 2
            AND EXISTS (SELECT 1 FROM transcript_segments t WHERE t.audio_segment_id = a.id
                          AND t.superseded_by IS NULL AND t.hidden_reason IS NULL)
            AND EXISTS (SELECT 1 FROM transcript_segments t WHERE t.audio_segment_id = b.id
@@ -63,20 +62,39 @@ pub fn faults_since(log: &Path, since: DateTime<Utc>) -> std::io::Result<Faults>
 /// # Errors
 /// If the database refuses.
 pub fn doubled_minutes(meaning: &Connection, since: DateTime<Utc>) -> rusqlite::Result<Doubled> {
-    let mut stmt = DOUBLED.prepare(meaning)?;
+    let parse = |raw: &str| audiocore::instant::parse_utc(raw);
+    let mut stmt = COPY_CANDIDATES.prepare(meaning)?;
     let rows = stmt.query_map(
         (
             audiocore::instant::python_isoformat_utc(since),
-            crate::queue::COPY_SECONDS,
+            COPY_SECONDS,
         ),
         |r| {
-            Ok(DoubledMinute {
-                source: r.get(0)?,
-                start_utc: r.get(1)?,
-            })
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+            ))
         },
     )?;
-    let minutes: Vec<DoubledMinute> = rows.collect::<rusqlite::Result<_>>()?;
+    let mut minutes = Vec::new();
+    for row in rows {
+        let (source, a_start, a_end, b_start, b_end) = row?;
+        let spans = (
+            parse(&a_start).zip(parse(&a_end)),
+            parse(&b_start).zip(parse(&b_end)),
+        );
+        if let (Some(a), Some(b)) = spans
+            && same_span(a, b)
+        {
+            minutes.push(DoubledMinute {
+                source,
+                start_utc: a_start,
+            });
+        }
+    }
     Ok(Doubled {
         count: minutes.len(),
         last: minutes.into_iter().next(),

@@ -59,14 +59,6 @@ export function runsOf(
   return out;
 }
 
-/** Two lines are the same speech when they overlap by more than half of the
- * shorter one. */
-export function sameSpeech(a: Transcript, b: Transcript): boolean {
-  const [as, ae, bs, be] = [a.start, a.end, b.start, b.end].map((x) => Date.parse(x));
-  const overlap = Math.min(ae, be) - Math.max(as, bs);
-  return overlap > 0 && overlap > Math.min(ae - as, be - bs) / 2;
-}
-
 const COLOURS = ['#8ab4f8', '#fbbc04', '#81c995', '#f28b82', '#c58af9', '#78d9ec', '#ff8bcb'];
 
 /** A stretch of turns as speaker paragraphs. Tapping a line opens its sheet. */
@@ -147,11 +139,9 @@ export class Turns implements OnDestroy {
     return new Set([t.source, ...this.alternates(t).map((a) => a.source)]).size;
   }
 
-  /** The other mics' versions of this line: what overlaps more than half of
-   * the shorter of the two. A moment can span a whole call, and a neighbour
-   * that only brushes the line is another sentence. */
+  /** The other mics' versions of this line: its moment's, one line each. */
   protected alternates(t: Transcript): readonly Transcript[] {
-    return (this.momentOf().get(t.id)?.alternates ?? []).filter((a) => sameSpeech(t, a));
+    return this.momentOf().get(t.id)?.alternates ?? [];
   }
 
   /** Another mic's version names someone else, and one of the two names is a

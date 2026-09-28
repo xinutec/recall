@@ -31,6 +31,24 @@ fn from_clip(mut t: Turn, clip: i64) -> Turn {
     t
 }
 
+/// Every moment's shown lines, in order.
+fn shown(moments: &[recalld::conversations::Moment]) -> Vec<usize> {
+    moments
+        .iter()
+        .flat_map(|m| m.primary.iter().copied())
+        .collect()
+}
+
+/// Every moment's other versions, sorted.
+fn versions(moments: &[recalld::conversations::Moment]) -> Vec<usize> {
+    let mut all: Vec<usize> = moments
+        .iter()
+        .flat_map(|m| m.alternates.iter().copied())
+        .collect();
+    all.sort_unstable();
+    all
+}
+
 fn scored(mut t: Turn, confidence: f64) -> Turn {
     t.asr_confidence = Some(confidence);
     t
@@ -106,6 +124,73 @@ fn one_utterance_heard_by_three_mics_folds_into_one_moment() {
 }
 
 #[test]
+fn each_shown_sentence_is_a_moment_with_the_other_mics_versions_of_it() {
+    // A call is one stretch of overlapping speech; its sentences are still
+    // compared one by one, not against the whole call.
+    let turns = vec![
+        scored(turn(1, 0, 5, "usb"), 0.9),
+        scored(turn(2, 1, 6, "pixel"), 0.4),
+        scored(turn(3, 5, 10, "usb"), 0.9),
+        scored(turn(4, 6, 11, "pixel"), 0.4),
+    ];
+    let group: Vec<usize> = (0..turns.len()).collect();
+
+    let moments = cluster_moments(&turns, &group);
+
+    assert_eq!(moments.len(), 2);
+    assert_eq!(
+        (moments[0].primary.clone(), moments[0].alternates.clone()),
+        (vec![0], vec![1])
+    );
+    assert_eq!(
+        (moments[1].primary.clone(), moments[1].alternates.clone()),
+        (vec![2], vec![3])
+    );
+}
+
+#[test]
+fn a_version_goes_with_the_sentence_it_overlaps_most() {
+    // Phone clocks lag a few seconds, so another mic's line straddles two of
+    // the shown ones; it is shown with one of them, never twice.
+    let turns = vec![
+        scored(turn(1, 0, 5, "usb"), 0.9),
+        scored(turn(2, 3, 9, "pixel"), 0.4),
+        scored(turn(3, 5, 10, "usb"), 0.9),
+    ];
+    let group: Vec<usize> = (0..turns.len()).collect();
+
+    let moments = cluster_moments(&turns, &group);
+
+    assert_eq!(moments[0].alternates, Vec::<usize>::new());
+    assert_eq!(
+        moments[1].alternates,
+        vec![1],
+        "4 s with the second, 2 with the first"
+    );
+}
+
+#[test]
+fn speech_the_shown_mic_missed_is_still_shown_once() {
+    // pixel links the stretch; geb alone heard 12-16, after usb's lines end.
+    let turns = vec![
+        scored(turn(1, 0, 8, "usb"), 0.9),
+        scored(turn(2, 6, 13, "pixel"), 0.3),
+        scored(turn(3, 12, 16, "geb"), 0.8),
+        scored(turn(4, 12, 16, "pixel"), 0.3),
+    ];
+    let group: Vec<usize> = (0..turns.len()).collect();
+
+    let moments = cluster_moments(&turns, &group);
+
+    assert_eq!(
+        shown(&moments),
+        vec![0, 2],
+        "usb's line, then geb's, the clearer of the two"
+    );
+    assert_eq!(moments[1].alternates, vec![3]);
+}
+
+#[test]
 fn the_spine_is_the_mic_that_heard_best_not_the_one_that_said_most() {
     // Two middling lines do not outweigh one better one: a mic that splits or
     // repeats more would otherwise win on volume.
@@ -133,7 +218,7 @@ fn on_equal_quality_the_finer_speaker_split_wins() {
 
     let moments = cluster_moments(&turns, &group);
 
-    assert_eq!(moments[0].primary, vec![1, 2]);
+    assert_eq!(shown(&moments), vec![1, 2]);
 }
 
 #[test]
@@ -166,9 +251,8 @@ fn a_mics_second_copy_of_the_same_minute_is_set_aside() {
 
     let moments = cluster_moments(&turns, &group);
 
-    assert_eq!(moments.len(), 1);
-    assert_eq!(moments[0].primary, vec![2, 4], "the better copy");
-    assert_eq!(moments[0].alternates, vec![0, 1, 3]);
+    assert_eq!(shown(&moments), vec![2, 4], "the better copy");
+    assert_eq!(versions(&moments), vec![0, 1, 3]);
 }
 
 #[test]
@@ -181,7 +265,7 @@ fn a_mics_next_minute_is_not_mistaken_for_a_copy() {
 
     let moments = cluster_moments(&turns, &group);
 
-    assert_eq!(moments[0].primary, vec![0, 1]);
+    assert_eq!(shown(&moments), vec![0, 1]);
 }
 
 #[test]

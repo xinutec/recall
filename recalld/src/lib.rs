@@ -32,6 +32,7 @@ pub mod rematch;
 pub mod reports;
 pub mod retranscribe;
 pub mod route;
+pub mod same_speech;
 pub mod sessions;
 pub mod sources;
 pub mod spa;

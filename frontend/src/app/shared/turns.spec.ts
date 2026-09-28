@@ -175,18 +175,13 @@ describe('Turns', () => {
     expect(c.alternates(usb)).toEqual([phone]);
   });
 
-  it('compares a line only with the other mics’ versions of it', async () => {
-    const at = (from: number, to: number) => ({
-      start: `2026-01-15T10:33:${String(from).padStart(2, '0')}Z`,
-      end: `2026-01-15T10:33:${String(to).padStart(2, '0')}Z`,
-    });
-    const first = said(1, 'P', { source: 'usb', ...at(0, 10) });
-    const second = said(2, 'P', { source: 'usb', ...at(10, 20) });
-    const same = said(3, 'D', { source: 'phone', ...at(1, 10) });
-    const later = said(4, 'D', { source: 'phone', ...at(9, 20) });
-    const copy = said(5, 'P', { source: 'usb', ...at(0, 10) });
-    const { c } = await setup([moment([first, second], [same, later, copy])]);
-    // A neighbour that only brushes the line is another sentence.
+  it('shows a line’s own moment’s versions, counting its mic once', async () => {
+    const first = said(1, 'P', { source: 'usb' });
+    const second = said(2, 'P', { source: 'usb' });
+    const same = said(3, 'D', { source: 'phone' });
+    const copy = said(5, 'P', { source: 'usb' });
+    const later = said(4, 'D', { source: 'phone' });
+    const { c } = await setup([moment([first], [same, copy]), moment([second], [later])]);
     expect(c.alternates(first)).toEqual([same, copy]);
     // The mic's own second copy is not a second mic.
     expect(c.mics(first)).toBe(2);

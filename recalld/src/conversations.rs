@@ -9,6 +9,7 @@
 //! The folding is pure (no database): it reads only spans, sources and
 //! confidences, so tests construct turns directly.
 
+use crate::same_speech::{overlap, same_span, seconds as seconds_between};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
@@ -32,19 +33,6 @@ pub struct Turn {
     pub speaker_score: Option<f64>,
     /// The clip it came from: a mic's two clips of one span are copies.
     pub audio_segment_id: Option<i64>,
-}
-
-/// Seconds between two instants, exactly.
-///
-/// Microseconds, not `num_seconds()`: the gap threshold is any float, and
-/// truncating would put turns on the wrong side of it.
-fn seconds_between(from: DateTime<Utc>, to: DateTime<Utc>) -> f64 {
-    let delta = to - from;
-    delta.num_microseconds().map_or_else(
-        // Only for spans beyond ~292 000 years, which are an enormous gap anyway.
-        || delta.num_seconds() as f64,
-        |micros| micros as f64 / 1_000_000.0,
-    )
 }
 
 /// Split chronologically-ordered turns into conversations on silence gaps.
@@ -75,24 +63,27 @@ pub fn segment_conversations(turns: &[Turn], gap_seconds: f64) -> Vec<Vec<usize>
     conversations
 }
 
-/// One wall-clock moment: the best source's turns, and the other sources'
-/// overlapping versions of the same speech.
+/// One sentence as shown: a line of the mic that heard its stretch best, or a
+/// line only other mics heard, with every other mic's version of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Moment {
-    /// The spine's turns, with its segmentation kept so a multi-speaker split
-    /// survives the fold.
+    /// The shown line.
     pub primary: Vec<usize>,
-    /// Every other source's overlapping turns, for the compare view.
+    /// The other mics' versions of it, and its mic's second copy, for the
+    /// compare view.
     pub alternates: Vec<usize>,
 }
 
-/// Fold one conversation's turns into moments.
+/// Fold one conversation's turns into moments, one per shown line.
 ///
-/// A merge-overlapping-intervals sweep: every turn overlapping the cluster's
-/// running span joins it, so one utterance heard by several mics becomes one
-/// moment while sequential utterances stay separate.
+/// First a merge-overlapping-intervals sweep cuts the conversation into
+/// stretches of overlapping speech, and each stretch is shown from the mic
+/// that heard it best ([`spine`]). Every other line then goes with the shown
+/// line it overlaps most: phone clocks lag a few seconds, so another mic's
+/// version straddles two sentences and must land in one. A line that overlaps
+/// no shown line is speech that mic missed, and is shown too, once.
 pub fn cluster_moments(turns: &[Turn], group: &[usize]) -> Vec<Moment> {
-    let mut clusters: Vec<Vec<usize>> = Vec::new();
+    let mut stretches: Vec<Vec<usize>> = Vec::new();
     let mut current: Vec<usize> = Vec::new();
     let mut running_end: Option<DateTime<Utc>> = None;
     for &index in group {
@@ -104,7 +95,7 @@ pub fn cluster_moments(turns: &[Turn], group: &[usize]) -> Vec<Moment> {
             }
             _ => {
                 if !current.is_empty() {
-                    clusters.push(std::mem::take(&mut current));
+                    stretches.push(std::mem::take(&mut current));
                 }
                 current = vec![index];
                 running_end = Some(turn.end);
@@ -112,12 +103,66 @@ pub fn cluster_moments(turns: &[Turn], group: &[usize]) -> Vec<Moment> {
         }
     }
     if !current.is_empty() {
-        clusters.push(current);
+        stretches.push(current);
     }
-    clusters
-        .into_iter()
-        .map(|cluster| to_moment(turns, &cluster))
+    stretches
+        .iter()
+        .flat_map(|stretch| moments_of(turns, stretch))
         .collect()
+}
+
+fn span(turn: &Turn) -> (DateTime<Utc>, DateTime<Utc>) {
+    (turn.start, turn.end)
+}
+
+/// One stretch's moments, in order.
+fn moments_of(turns: &[Turn], stretch: &[usize]) -> Vec<Moment> {
+    let (shown, rest) = spine(turns, stretch);
+    let mut moments: Vec<Moment> = shown
+        .iter()
+        .map(|&i| Moment {
+            primary: vec![i],
+            alternates: Vec::new(),
+        })
+        .collect();
+    let mut missed: Vec<usize> = Vec::new();
+    for &other in &rest {
+        // The most overlapped shown line; the first on a tie, hence `>`.
+        let mut best: Option<(usize, f64)> = None;
+        for (k, moment) in moments.iter().enumerate() {
+            let shared = overlap(span(&turns[other]), span(&turns[moment.primary[0]]));
+            if shared > 0.0 && best.is_none_or(|(_, most)| shared > most) {
+                best = Some((k, shared));
+            }
+        }
+        match best {
+            Some((k, _)) => moments[k].alternates.push(other),
+            None => missed.push(other),
+        }
+    }
+    // What the shown mic missed: the best-heard version is shown, the others
+    // of the same span go with it. Stable, so equals keep their order.
+    missed.sort_by(|&a, &b| quality(turns, &[b]).total_cmp(&quality(turns, &[a])));
+    let mut found: Vec<Moment> = Vec::new();
+    for other in missed {
+        let heard = span(&turns[other]);
+        match found
+            .iter_mut()
+            .find(|m| same_span(heard, span(&turns[m.primary[0]])))
+        {
+            Some(moment) => moment.alternates.push(other),
+            None => found.push(Moment {
+                primary: vec![other],
+                alternates: Vec::new(),
+            }),
+        }
+    }
+    moments.extend(found);
+    for moment in &mut moments {
+        moment.alternates.sort_by_key(|&i| turns[i].start);
+    }
+    moments.sort_by_key(|m| turns[m.primary[0]].start);
+    moments
 }
 
 /// How long a turn lasts, at least a millisecond so a zero-length turn still
@@ -168,9 +213,8 @@ fn covered(turns: &[Turn], indices: &[usize]) -> f64 {
 /// A phone's minute arrives twice (the Mac's .flac of its stream and the
 /// phone's own .wav copy, the same samples) and both are
 /// transcribed, so one mic can hold two clips over the same seconds. A clip is
-/// a copy when more than half of the shorter one's span overlaps a clip kept
-/// already; the better-heard clip is kept first. A mic's next minute touches
-/// its last one by a second at most, and stays.
+/// a copy when its span is the [`same_span`] as a clip kept already; the
+/// better-heard clip is kept first.
 fn without_copies(turns: &[Turn], indices: &[usize]) -> (Vec<usize>, Vec<usize>) {
     let mut clips: Vec<(Option<i64>, Vec<usize>)> = Vec::new();
     for &i in indices {
@@ -193,12 +237,7 @@ fn without_copies(turns: &[Turn], indices: &[usize]) -> (Vec<usize>, Vec<usize>)
         let Some((start, end)) = span(&members) else {
             continue;
         };
-        let length = seconds_between(start, end);
-        let copy = kept.iter().any(|&(from, to)| {
-            let overlap = seconds_between(start.max(from), end.min(to));
-            let shorter = length.min(seconds_between(from, to));
-            overlap > 0.0 && overlap > shorter / 2.0
-        });
+        let copy = kept.iter().any(|&kept| same_span((start, end), kept));
         if copy {
             copies.extend(members);
         } else {
@@ -209,7 +248,9 @@ fn without_copies(turns: &[Turn], indices: &[usize]) -> (Vec<usize>, Vec<usize>)
     (shown, copies)
 }
 
-fn to_moment(turns: &[Turn], cluster: &[usize]) -> Moment {
+/// The stretch's shown lines, from the mic that heard it best, and the rest:
+/// the other mics' lines and the shown mic's second copies.
+fn spine(turns: &[Turn], cluster: &[usize]) -> (Vec<usize>, Vec<usize>) {
     // First-appearance order of each source; the tie rule below depends on it.
     let mut order: Vec<Option<&str>> = Vec::new();
     let mut by_source: HashMap<Option<&str>, Vec<usize>> = HashMap::new();
@@ -225,8 +266,8 @@ fn to_moment(turns: &[Turn], cluster: &[usize]) -> Moment {
         .map(|&source| (source, without_copies(turns, &by_source[&source])))
         .collect();
 
-    // Spine = the mic that heard the moment best: its duration-weighted
-    // confidence, scaled by how much of the moment it covers, so neither saying
+    // Spine = the mic that heard the stretch best: its duration-weighted
+    // confidence, scaled by how much of the stretch it covers, so neither saying
     // more nor catching a clear fragment wins. Ties go to more turns, the finer
     // speaker split.
     //
@@ -260,17 +301,13 @@ fn to_moment(turns: &[Turn], cluster: &[usize]) -> Moment {
     let (shown, copies) = &split[&best];
     let mut primary = shown.clone();
     primary.sort_by_key(|&i| turns[i].start);
-    let mut alternates: Vec<usize> = order
+    let rest: Vec<usize> = order
         .iter()
         .filter(|&&source| source != best)
         .flat_map(|source| by_source[source].iter().copied())
         .chain(copies.iter().copied())
         .collect();
-    alternates.sort_by_key(|&i| turns[i].start);
-    Moment {
-        primary,
-        alternates,
-    }
+    (primary, rest)
 }
 
 /// For each spine turn, the most confident speaker guess among it and the

@@ -6,6 +6,7 @@
 //! the job is offered again. Newest clip first: "what are they saying now"
 //! outranks backfill.
 
+use crate::same_speech::COPY_SECONDS;
 use crate::store::{self, ROOM_SOURCE};
 use audiocore::job::Kind;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
@@ -50,7 +51,7 @@ crate::statements! {
     /// Measured clips with no transcription job, and none for another copy of
     /// the same minute: a phone's minute arrives twice, the Mac's `.flac` of
     /// its stream and the phone's own `.wav` copy, the same samples stamped a
-    /// few seconds apart ([`COPY_SECONDS`] either side). Newest first; on one
+    /// few seconds apart ([`COPY_SECONDS`](crate::same_speech::COPY_SECONDS) either side). Newest first; on one
     /// stamp `.wav` before `.flac`, a tie-break only.
     UNQUEUED_SPEECH: Ingest =
         "SELECT s.filename, s.source, s.start_utc FROM segments s
@@ -132,10 +133,6 @@ fn stem(path: &str) -> String {
         .map_or(name, |(base, _)| base)
         .to_owned()
 }
-
-/// How far apart a phone's two files of one minute can be stamped: up to
-/// three seconds seen, a minute's clips about sixty apart.
-pub const COPY_SECONDS: i64 = 5;
 
 /// Derive a transcribe job for each microphone clip or upload that has no turns
 /// yet, bounded by `limit` so a backlog queues in bites rather than days of GPU
