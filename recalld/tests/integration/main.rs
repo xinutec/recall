@@ -30,6 +30,7 @@ mod live_tier;
 mod meaning_schema;
 mod queue;
 mod reads;
+mod record_health;
 mod rematch;
 mod reports;
 mod retranscribe;

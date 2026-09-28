@@ -168,6 +168,13 @@ fn main() -> ExitCode {
         eprintln!("recalld: {complaint}");
         return ExitCode::FAILURE;
     }
+    // Beside the app's own client log; the doctor counts what lands here.
+    let logs = root.join("logs");
+    if let Err(err) = std::fs::create_dir_all(&logs) {
+        eprintln!("recalld: cannot create {}: {err}", logs.display());
+        return ExitCode::FAILURE;
+    }
+    recalld::route::keep_faults_in(logs.join(recalld::record_health::FAULT_LOG));
     // The browsing plane is mounted only when SSO is configured. Absent means
     // ABSENT, not open: these routes serve household transcripts, so an
     // unconfigured recalld must not answer them at all.

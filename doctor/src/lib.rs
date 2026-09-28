@@ -19,4 +19,5 @@ pub mod delivery;
 pub mod fleetwatch;
 pub mod live;
 pub mod loss;
+pub mod record;
 pub mod source;

@@ -8,7 +8,7 @@
 
 use chrono::Utc;
 use doctor::check::{Check, Verdict};
-use doctor::{agents, archive, bounded, capture, deaf, fleetwatch, live};
+use doctor::{agents, archive, bounded, capture, deaf, fleetwatch, live, record};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -140,8 +140,8 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
     }
 }
 
-/// The checks whose evidence is on the fleet (the live tier's two and the deaf
-/// microphone), asked of it and graded here.
+/// The checks whose evidence is on the fleet (the live tier's two, the deaf
+/// microphone, and the record's faults), asked of it and graded here.
 ///
 /// In the parent, not the bounded child: the child survives an unresponsive
 /// volume, and behind the same bound a slow fleet would read as a stalled disk.
@@ -150,6 +150,7 @@ fn live_checks(config: &Config, now: chrono::DateTime<Utc>, out: &Path) -> Vec<C
     let Some(fleet) = live::Fleet::new(config.fleet.as_deref(), token.as_deref()) else {
         let mut checks = live::unconfigured();
         checks.push(deaf::unconfigured());
+        checks.extend(record::unconfigured());
         return checks;
     };
     let fetched = live::fetch(&fleet, now, capture::live_lag_window());
@@ -159,6 +160,7 @@ fn live_checks(config: &Config, now: chrono::DateTime<Utc>, out: &Path) -> Vec<C
         now,
         deaf::window(),
     )));
+    checks.extend(record::record_checks(&record::fetch(&fleet, now)));
     checks
 }
 

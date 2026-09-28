@@ -259,6 +259,35 @@ pub async fn live_health_route(
     .await
 }
 
+/// The window `GET /sync/record/health` measures.
+#[derive(Deserialize)]
+pub struct RecordHealthQuery {
+    pub since: String,
+}
+
+/// `GET /sync/record/health`: requests that failed on our side, and minutes a
+/// mic shows twice, since `since`, for the doctor to grade.
+pub async fn record_health_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<RecordHealthQuery>,
+) -> Response {
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if let Err(refusal) = check(bearer(presented), &st.expected) {
+        return refusal.into_response();
+    }
+    let Some(since) = audiocore::instant::parse(&q.since) else {
+        return (StatusCode::BAD_REQUEST, "unparseable window bound").into_response();
+    };
+    let root = st.root.clone();
+    crate::route::json("sync record health", move || {
+        crate::record_health::measure(&root, since.into())
+    })
+    .await
+}
+
 /// The window `GET /sync/heard` measures.
 #[derive(Deserialize)]
 pub struct HeardQuery {
@@ -352,5 +381,9 @@ pub fn routes(gate: Arc<Gate>) -> Router {
         .route("/sync/live", post(live_route))
         .route("/sync/live/health", axum::routing::get(live_health_route))
         .route("/sync/heard", axum::routing::get(heard_route))
+        .route(
+            "/sync/record/health",
+            axum::routing::get(record_health_route),
+        )
         .with_state(gate)
 }

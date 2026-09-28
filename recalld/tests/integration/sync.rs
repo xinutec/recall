@@ -679,3 +679,18 @@ async fn a_window_bound_that_is_not_an_instant_is_refused() {
     let (status, _) = live_health(&addr, Some("sekrit"), "yesterday").await;
     assert_eq!(status, 400);
 }
+
+#[tokio::test]
+async fn the_record_health_answers_the_doctor_and_nobody_else() {
+    let (_dir, addr) = serve(Some("sekrit")).await;
+    let path = "/sync/record/health?since=2026-09-28T00:00:00Z";
+
+    let (status, body) = get(&addr, path, Some("sekrit")).await;
+    let (refused, _) = get(&addr, path, Some("wrong")).await;
+
+    assert_eq!(status, 200, "{body}");
+    let health: audiocore::record_health::RecordHealth =
+        serde_json::from_str(&body).expect("the doctor's shape");
+    assert_eq!(health, audiocore::record_health::RecordHealth::default());
+    assert_eq!(refused, 401);
+}

@@ -12,6 +12,7 @@ pub mod envelope;
 pub mod instant;
 pub mod job;
 pub mod names;
+pub mod record_health;
 pub mod shim;
 pub mod text;
 pub mod vad;
