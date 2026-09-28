@@ -153,7 +153,7 @@ fn a_mic_that_heard_only_part_of_the_moment_is_not_the_spine() {
 
 #[test]
 fn a_mics_second_copy_of_the_same_minute_is_set_aside() {
-    // A phone uploads each minute twice (compressed and lossless), both
+    // A phone's minute arrives twice (the Mac's .flac and the phone's .wav), both
     // transcribed. The spine shows one copy; the other is an alternate.
     let turns = vec![
         from_clip(scored(turn(1, 0, 10, "usb"), 0.5), 20),

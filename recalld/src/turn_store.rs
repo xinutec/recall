@@ -213,7 +213,8 @@ pub enum HiddenReason {
     SetAside,
     /// A re-transcription was taken back: its lines gave way to the old ones.
     RetranscriptionUndone,
-    /// The mic sent this minute twice (compressed and lossless) and both were
+    /// The mic's minute arrived twice (the Mac's .flac and the phone's .wav, the
+    /// same samples) and both were
     /// transcribed; these lines are the copy not kept.
     SecondCopy,
 }

@@ -666,7 +666,7 @@ fn an_old_outcome_sentence_is_split_into_its_word_and_its_detail() {
     );
 }
 
-/// A phone sends each minute twice, compressed and lossless, the two files'
+/// A phone's minute arrives twice (the Mac's .flac and the phone's .wav), the two files'
 /// stamps up to a second apart. One transcription per minute; two would put
 /// every sentence on the timeline twice.
 fn copy_row(root: &std::path::Path, stamp: &str, ext: &str) -> String {

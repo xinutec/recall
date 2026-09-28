@@ -165,7 +165,8 @@ fn covered(turns: &[Turn], indices: &[usize]) -> f64 {
 
 /// One mic's turns with a second copy of the same span set aside.
 ///
-/// A phone uploads each minute twice (compressed and lossless) and both are
+/// A phone's minute arrives twice (the Mac's .flac of its stream and the
+/// phone's own .wav copy, the same samples) and both are
 /// transcribed, so one mic can hold two clips over the same seconds. A clip is
 /// a copy when more than half of the shorter one's span overlaps a clip kept
 /// already; the better-heard clip is kept first. A mic's next minute touches

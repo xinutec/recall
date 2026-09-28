@@ -48,9 +48,10 @@ crate::statements! {
     NON_ROOM_SOURCES: Meaning =
         "SELECT id FROM sources WHERE kind != ?1";
     /// Measured clips with no transcription job, and none for another copy of
-    /// the same minute: a phone sends each minute compressed and lossless, the
-    /// stamps a few seconds apart ([`COPY_SECONDS`] either side). Newest
-    /// first, and on one stamp `.wav` before `.flac`.
+    /// the same minute: a phone's minute arrives twice, the Mac's `.flac` of
+    /// its stream and the phone's own `.wav` copy, the same samples stamped a
+    /// few seconds apart ([`COPY_SECONDS`] either side). Newest first; on one
+    /// stamp `.wav` before `.flac`, a tie-break only.
     UNQUEUED_SPEECH: Ingest =
         "SELECT s.filename, s.source, s.start_utc FROM segments s
              JOIN segment_speech p ON p.filename = s.filename
@@ -181,8 +182,8 @@ pub fn derive_segment_jobs(
         rows.collect::<Result<_, _>>()?
     };
 
-    // Copies both unqueued meet here; the first one taken, the lossless one
-    // by the order above, stands for the minute.
+    // Copies both unqueued meet here; the first one taken (by the order
+    // above) stands for the minute.
     let mut taken: Vec<(String, DateTime<Utc>)> = Vec::new();
     let mut inserted = 0;
     for (filename, source, start) in candidates {
