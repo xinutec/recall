@@ -69,7 +69,7 @@ pub fn request(
 ) -> rusqlite::Result<Requested> {
     let mut out = Requested::default();
     for filename in filenames {
-        let tx = ingest.unchecked_transaction()?;
+        let tx = crate::sql::write_shared(ingest)?;
         let requeued = REQUEUE.execute(&tx, (Kind::TranscribeSegment, filename))?;
         if requeued == 0 {
             out.skipped.push(filename.clone());
@@ -160,7 +160,7 @@ pub fn is_requested(ingest: &Connection, filename: &str) -> rusqlite::Result<boo
 /// # Errors
 /// If the ingest plane refuses.
 pub fn written(ingest: &Connection, filename: &str) -> rusqlite::Result<()> {
-    let tx = ingest.unchecked_transaction()?;
+    let tx = crate::sql::write_shared(ingest)?;
     DROP_REQUEST.execute(&tx, [filename])?;
     CLEAR_LEDGER.execute(&tx, (Kind::DiarizeSegment, filename))?;
     tx.commit()
@@ -227,7 +227,7 @@ pub fn undo(
         )
         .optional()?
         .ok_or(UndoError::Missing)?;
-    let tx = meaning.transaction()?;
+    let tx = crate::sql::write(meaning)?;
     let set_aside: i64 = SET_ASIDE.query_row(
         &tx,
         rusqlite::params![audio_id, HiddenReason::SetAside.to_string()],

@@ -1,5 +1,6 @@
 # Every statement is a declared `sql::Sql`, run through its methods, so the
-# schema test can prepare all of them (src/sql.rs). These take raw text.
+# schema test can prepare all of them (src/sql.rs); the first eight take raw
+# text. A write transaction begins through sql::write, holding the lock.
 disallowed-methods = [
     { path = "rusqlite::Connection::execute", reason = "declare it in a statements! block (src/sql.rs)" },
     { path = "rusqlite::Connection::execute_batch", reason = "declare it in a statements! block (src/sql.rs)" },
@@ -9,4 +10,6 @@ disallowed-methods = [
     { path = "rusqlite::Connection::prepare", reason = "declare it in a statements! block (src/sql.rs)" },
     { path = "rusqlite::Connection::prepare_cached", reason = "declare it in a statements! block (src/sql.rs)" },
     { path = "rusqlite::Connection::prepare_with_flags", reason = "declare it in a statements! block (src/sql.rs)" },
+    { path = "rusqlite::Connection::transaction", reason = "use sql::write, which takes the write lock when it begins" },
+    { path = "rusqlite::Connection::unchecked_transaction", reason = "use sql::write_shared, which takes the write lock when it begins" },
 ]

@@ -7,7 +7,7 @@
 //! migrated schema of the database it names, so a renamed column fails the
 //! gate instead of the pass that first runs it.
 
-use rusqlite::{Connection, Params, Row, Statement};
+use rusqlite::{Connection, Params, Row, Statement, Transaction, TransactionBehavior};
 
 /// Which database a statement is written for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +59,21 @@ impl Sql {
     pub fn prepare<'c>(&self, conn: &'c Connection) -> rusqlite::Result<Statement<'c>> {
         conn.prepare(self.text)
     }
+}
+
+/// A write transaction, holding the write lock from its first statement.
+///
+/// ⚠ Not rusqlite's default (deferred): a transaction that reads first and
+/// writes later cannot take the lock over a view another writer changed in
+/// between, and fails at once ("database is locked") instead of waiting out
+/// the busy timeout. Clippy refuses the default (`recalld/clippy.toml`).
+pub fn write(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
+    conn.transaction_with_behavior(TransactionBehavior::Immediate)
+}
+
+/// [`write`](fn@write) on a shared connection, for a caller holding only `&Connection`.
+pub fn write_shared(conn: &Connection) -> rusqlite::Result<Transaction<'_>> {
+    Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
 }
 
 /// Declare a module's statements, each with the database it runs against:

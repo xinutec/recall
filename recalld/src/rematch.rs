@@ -69,7 +69,7 @@ pub fn run_once(conn: &mut Connection, limit: usize, now: &Stamp) -> rusqlite::R
     }
 
     let mut pass = Pass::default();
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     for turn in stale {
         pass.examined += 1;
         // No match today is not evidence the old name was wrong.

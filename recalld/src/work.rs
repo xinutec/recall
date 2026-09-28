@@ -210,7 +210,7 @@ pub fn ingest_live(
         if present.is_some() {
             continue;
         }
-        let tx = conn.transaction()?;
+        let tx = crate::sql::write(conn)?;
         crate::turn_store::insert(
             &tx,
             &crate::turn_store::NewTurn {

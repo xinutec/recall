@@ -68,7 +68,7 @@ pub fn set_correction_speaker(
     correction_id: i64,
     speaker: &str,
 ) -> rusqlite::Result<()> {
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     let original: Option<i64> = CORRECTED_TURN
         .query_row(&tx, [correction_id], |r| r.get(0))
         .ok();
@@ -85,7 +85,7 @@ pub fn set_correction_speaker(
 /// Hidden, not deleted: the pair records that a person judged this clip, even
 /// when the judgement was that it is unusable.
 pub fn hide_correction(conn: &mut Connection, correction_id: i64) -> rusqlite::Result<()> {
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     HIDE_CORRECTION.execute(&tx, (HIDE_REASON, correction_id))?;
     drop_voiceprint(&tx, correction_id)?;
     tx.commit()
@@ -249,7 +249,7 @@ pub fn apply_correction(
     if text.is_empty() {
         return Err(CorrectError::Blank);
     }
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     let old = load_original(&tx, segment_id)?;
     if old.superseded_by.is_some() {
         // A double-tap, or a second tab correcting a stale id, would mint a
@@ -358,7 +358,7 @@ pub fn mark_no_speech(
     segment_id: i64,
     now: &Stamp,
 ) -> Result<(), CorrectError> {
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     let old = load_original(&tx, segment_id)?;
     if old.superseded_by.is_some() {
         return Err(CorrectError::AlreadySuperseded(segment_id));
@@ -391,7 +391,7 @@ pub fn mark_no_speech(
 /// # Errors
 /// [`CorrectError::NotNobodySpoke`] when the turn is not hidden that way.
 pub fn undo_no_speech(conn: &mut Connection, segment_id: i64) -> Result<(), CorrectError> {
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     if !turn_store::unhide(&tx, segment_id, &HiddenReason::NobodySpoke)? {
         return Err(CorrectError::NotNobodySpoke(segment_id));
     }
@@ -410,7 +410,7 @@ pub fn undo_no_speech(conn: &mut Connection, segment_id: i64) -> Result<(), Corr
 /// visible correction of itself; one corrected again since is refused.
 pub fn undo_correction(conn: &mut Connection, segment_id: i64) -> Result<(), CorrectError> {
     use rusqlite::OptionalExtension as _;
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     let old = load_original(&tx, segment_id)?;
     let provenance = Provenance::Correction(segment_id).to_string();
     let human: Option<i64> = CURRENT_CORRECTION_TURN

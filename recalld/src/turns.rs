@@ -385,7 +385,7 @@ pub fn write_block(
     if plan.insert.is_empty() {
         return Ok(0);
     }
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     if again {
         turn_store::hide_machine_turns(&tx, audio_segment_id, &HiddenReason::SetAside)?;
     } else {

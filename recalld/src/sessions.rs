@@ -194,7 +194,7 @@ pub fn rediarize(
     if clips == 0 {
         return Err(SessionError::NoAudio);
     }
-    let tx = ingest.unchecked_transaction()?;
+    let tx = crate::sql::write_shared(ingest)?;
     let requeued = REQUEUE_DIARIZE.execute(&tx, (audiocore::job::Kind::DiarizeSegment, source))?;
     CLEAR_DIARIZE_LEDGER.execute(&tx, (audiocore::job::Kind::DiarizeSegment, source))?;
     tx.commit()?;
@@ -435,7 +435,7 @@ pub fn delete_session(
     now: &Stamp,
 ) -> Result<Vec<String>, SessionError> {
     require_upload(conn, source)?;
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     let segments: Vec<(i64, String, String)> = {
         let mut stmt = SESSION_AUDIO.prepare(&tx)?;
         let rows = stmt.query_map([source], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;

@@ -505,7 +505,7 @@ fn attribute(
     prints: &[SpeakerVoice],
     enrolled: &[crate::identify::Voiceprint],
 ) -> rusqlite::Result<usize> {
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     let mut named = 0;
     for (id, speaker) in to {
         turn_store::set_cluster(&tx, *id, speaker)?;
@@ -553,7 +553,7 @@ pub fn apply(
         return Ok(0);
     }
     let trusted = reliable_language(language);
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     for id in hide {
         turn_store::hide(&tx, *id, hidden_reason)?;
     }

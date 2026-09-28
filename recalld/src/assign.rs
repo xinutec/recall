@@ -401,7 +401,7 @@ pub fn assign_span(
     name: &str,
     now: &Stamp,
 ) -> rusqlite::Result<i64> {
-    let tx = conn.transaction()?;
+    let tx = crate::sql::write(conn)?;
     let ids = session_turn_ids(&tx, source)?;
     let (Some(i), Some(j)) = (
         ids.iter().position(|id| *id == span.start_turn),

@@ -202,7 +202,12 @@ const NOW: &str = "2026-09-07T12:00:00+00:00";
 
 fn correction_db() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
-    recalld::meaning_schema::ensure(&conn).expect("schema");
+    seed_correction(&conn);
+    conn
+}
+
+fn seed_correction(conn: &Connection) {
+    recalld::meaning_schema::ensure(conn).expect("schema");
     conn.execute_batch(
         "INSERT INTO sources (id, name, kind) VALUES ('usb', 'usb', 'coreaudio');
          INSERT INTO audio_segments (id, source_id, path, start_utc, end_utc, sample_rate, channels)
@@ -218,7 +223,47 @@ fn correction_db() -> Connection {
         [],
     )
     .expect("original turn");
-    conn
+}
+
+/// A background pass writes between a save's first read and its first write.
+/// Started as a reader, the save could not take the write lock over a view
+/// that changed under it and failed at once ("database is locked") instead
+/// of waiting its turn.
+#[test]
+fn a_correction_waits_for_a_background_write_instead_of_failing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let conn = recalld::work::open_write(dir.path()).expect("open");
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .expect("wal");
+        seed_correction(&conn);
+    }
+    let (locked, wait) = std::sync::mpsc::channel();
+    let root = dir.path().to_owned();
+    let pass = std::thread::spawn(move || {
+        let mut conn = recalld::work::open_write(&root).expect("open");
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .expect("the pass's lock");
+        tx.execute("UPDATE sources SET name = 'usb mic' WHERE id = 'usb'", [])
+            .expect("the pass's write");
+        locked.send(()).expect("signal");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        tx.commit().expect("the pass commits");
+    });
+    wait.recv().expect("the pass holds the lock");
+    let mut conn = recalld::work::open_write(dir.path()).expect("open");
+
+    let saved = apply_correction(
+        &mut conn,
+        41,
+        "misheard words",
+        &crate::stamp(NOW),
+        &Correction::default(),
+    );
+
+    pass.join().expect("the pass");
+    assert!(saved.is_ok(), "{saved:?}");
 }
 
 #[test]
