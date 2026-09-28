@@ -279,7 +279,11 @@ fn measured(root: &std::path::Path, name: &str, seconds: f64) {
 
 /// A clip the speech pass has not reached yet.
 fn unmeasured_row(root: &std::path::Path, source: &str, stamp: &str) -> String {
-    let name = format!("{source}-{stamp}.opus");
+    unmeasured_file(root, source, stamp, "opus")
+}
+
+fn unmeasured_file(root: &std::path::Path, source: &str, stamp: &str, ext: &str) -> String {
+    let name = format!("{source}-{stamp}.{ext}");
     let conn = store::open(root).expect("db");
     store::insert(
         &conn,
@@ -660,4 +664,53 @@ fn an_old_outcome_sentence_is_split_into_its_word_and_its_detail() {
             ("aligned".to_owned(), None),
         ]
     );
+}
+
+/// A phone sends each minute twice, compressed and lossless, the two files'
+/// stamps up to a second apart. One transcription per minute; two would put
+/// every sentence on the timeline twice.
+fn copy_row(root: &std::path::Path, stamp: &str, ext: &str) -> String {
+    let name = unmeasured_file(root, "geb", stamp, ext);
+    measured(root, &name, 12.0);
+    name
+}
+
+#[test]
+fn a_phones_two_copies_of_one_minute_get_one_job_the_lossless_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-28T14:00:00Z".parse().expect("t");
+    copy_row(dir.path(), "20260928T131615", "flac");
+    let wav = copy_row(dir.path(), "20260928T131616", "wav");
+    let ingest = store::open(dir.path()).expect("db");
+
+    derive_segment_jobs(&ingest, &meaning_plane(), now, 100).expect("derive");
+
+    assert_eq!(queued_names(&ingest), vec![wav]);
+}
+
+#[test]
+fn a_copy_arriving_after_its_twin_was_queued_gets_no_job() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-28T14:00:00Z".parse().expect("t");
+    let flac = copy_row(dir.path(), "20260928T131614", "flac");
+    let ingest = store::open(dir.path()).expect("db");
+    derive_segment_jobs(&ingest, &meaning_plane(), now, 100).expect("derive");
+    copy_row(dir.path(), "20260928T131614", "wav");
+
+    derive_segment_jobs(&ingest, &meaning_plane(), now, 100).expect("derive");
+
+    assert_eq!(queued_names(&ingest), vec![flac]);
+}
+
+#[test]
+fn a_mics_next_minute_is_not_a_copy() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-28T14:00:00Z".parse().expect("t");
+    copy_row(dir.path(), "20260928T131615", "flac");
+    copy_row(dir.path(), "20260928T131715", "flac");
+    let ingest = store::open(dir.path()).expect("db");
+
+    let queued = derive_segment_jobs(&ingest, &meaning_plane(), now, 100).expect("derive");
+
+    assert_eq!(queued, 2);
 }

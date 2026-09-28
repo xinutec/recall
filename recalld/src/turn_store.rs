@@ -213,6 +213,9 @@ pub enum HiddenReason {
     SetAside,
     /// A re-transcription was taken back: its lines gave way to the old ones.
     RetranscriptionUndone,
+    /// The mic sent this minute twice (compressed and lossless) and both were
+    /// transcribed; these lines are the copy not kept.
+    SecondCopy,
 }
 
 impl fmt::Display for HiddenReason {
@@ -226,6 +229,7 @@ impl fmt::Display for HiddenReason {
             Self::SilentMinute => f.write_str("silent minute"),
             Self::SetAside => f.write_str("set aside for re-transcription"),
             Self::RetranscriptionUndone => f.write_str("re-transcription undone"),
+            Self::SecondCopy => f.write_str("a second copy of the same minute"),
         }
     }
 }

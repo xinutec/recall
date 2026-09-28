@@ -47,14 +47,24 @@ crate::statements! {
              WHERE a.source_id != ?1";
     NON_ROOM_SOURCES: Meaning =
         "SELECT id FROM sources WHERE kind != ?1";
+    /// Measured clips with no transcription job, and none for another copy of
+    /// the same minute: a phone sends each minute compressed and lossless, the
+    /// stamps a few seconds apart ([`COPY_SECONDS`] either side). Newest
+    /// first, and on one stamp `.wav` before `.flac`.
     UNQUEUED_SPEECH: Ingest =
-        "SELECT s.filename, s.source FROM segments s
+        "SELECT s.filename, s.source, s.start_utc FROM segments s
              JOIN segment_speech p ON p.filename = s.filename
              WHERE s.source != ?1
                AND p.speech_seconds != 0.0
                AND NOT EXISTS (SELECT 1 FROM jobs j
                                WHERE j.kind = ?2 AND j.filename = s.filename)
-             ORDER BY s.start_utc DESC";
+               AND NOT EXISTS (SELECT 1 FROM segments o
+                               JOIN jobs j ON j.filename = o.filename AND j.kind = ?2
+                               WHERE o.source = s.source AND o.filename != s.filename
+                                 AND o.start_utc BETWEEN
+                                     strftime('%Y-%m-%dT%H:%M:%SZ', s.start_utc, printf('-%d seconds', ?3))
+                                     AND strftime('%Y-%m-%dT%H:%M:%SZ', s.start_utc, printf('+%d seconds', ?3)))
+             ORDER BY s.start_utc DESC, s.filename DESC";
     DERIVE_JOB: Ingest =
         "INSERT OR IGNORE INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, ?3)";
     LEASE_JOB: Ingest =
@@ -122,6 +132,10 @@ fn stem(path: &str) -> String {
         .to_owned()
 }
 
+/// How far apart a phone's two files of one minute can be stamped: up to
+/// three seconds seen, a minute's clips about sixty apart.
+pub const COPY_SECONDS: i64 = 5;
+
 /// Derive a transcribe job for each microphone clip or upload that has no turns
 /// yet, bounded by `limit` so a backlog queues in bites rather than days of GPU
 /// work in one statement.
@@ -159,21 +173,34 @@ pub fn derive_segment_jobs(
         rows.collect::<Result<_, _>>()?
     };
 
-    let candidates: Vec<(String, String)> = {
+    let candidates: Vec<(String, String, String)> = {
         let mut stmt = UNQUEUED_SPEECH.prepare(ingest)?;
-        let rows = stmt.query_map((ROOM_SOURCE, Kind::TranscribeSegment), |r| {
-            Ok((r.get(0)?, r.get(1)?))
+        let rows = stmt.query_map((ROOM_SOURCE, Kind::TranscribeSegment, COPY_SECONDS), |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })?;
         rows.collect::<Result<_, _>>()?
     };
 
+    // Copies both unqueued meet here; the first one taken, the lossless one
+    // by the order above, stands for the minute.
+    let mut taken: Vec<(String, DateTime<Utc>)> = Vec::new();
     let mut inserted = 0;
-    for (filename, source) in candidates {
+    for (filename, source, start) in candidates {
         if inserted >= limit {
             break;
         }
         if have.contains(&stem(&filename)) || !known.contains(&source) {
             continue;
+        }
+        let start = DateTime::parse_from_rfc3339(&start).map(|t| t.with_timezone(&Utc));
+        if let Ok(start) = start {
+            let copy = taken
+                .iter()
+                .any(|(s, t)| *s == source && (*t - start).num_seconds().abs() <= COPY_SECONDS);
+            if copy {
+                continue;
+            }
+            taken.push((source.clone(), start));
         }
         inserted += DERIVE_JOB.execute(ingest, (Kind::TranscribeSegment, &filename, iso(now)))?;
     }

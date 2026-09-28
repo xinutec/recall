@@ -125,6 +125,7 @@ fn every_hidden_reason_keeps_its_stored_spelling() {
             HiddenReason::RetranscriptionUndone,
             "re-transcription undone",
         ),
+        (HiddenReason::SecondCopy, "a second copy of the same minute"),
     ];
     for (reason, stored) in all {
         // A new reason fails to compile here until it is listed above.
@@ -136,7 +137,8 @@ fn every_hidden_reason_keeps_its_stored_spelling() {
             | HiddenReason::NobodySpoke
             | HiddenReason::SilentMinute
             | HiddenReason::SetAside
-            | HiddenReason::RetranscriptionUndone => {}
+            | HiddenReason::RetranscriptionUndone
+            | HiddenReason::SecondCopy => {}
         }
         assert_eq!(reason.to_string(), stored);
     }
