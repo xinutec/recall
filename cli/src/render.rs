@@ -281,7 +281,7 @@ pub fn conversations(day: &str, items: &[Conversation]) -> String {
 /// shows a specific mic's version.
 #[must_use]
 pub fn conversation(title: &str, conv: &Conversation) -> String {
-    let primary: Vec<&Turn> = conv.moments.iter().flat_map(|m| m.primary.iter()).collect();
+    let primary: Vec<&Turn> = conv.moments.iter().map(|m| &m.primary).collect();
     let mut header = format!("# {title}");
     if let Some(first) = primary.first() {
         header.push_str(&when(&first.start, "  (%a %d %b %Y %H:%M)"));

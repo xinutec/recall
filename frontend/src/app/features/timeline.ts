@@ -91,7 +91,7 @@ export class Timeline {
       let diarized = 0;
       let pending = 0;
       // Primary turns only: alternates are the same moment on other mics.
-      for (const t of conversations.flatMap((c) => c.moments).flatMap((m) => m.primary)) {
+      for (const t of conversations.flatMap((c) => c.moments).map((m) => m.primary)) {
         if (t.tier === 'diarized') diarized++;
         else if (t.tier === 'transcribed') pending++;
       }

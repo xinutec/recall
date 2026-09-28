@@ -48,7 +48,13 @@ function pageOf(turns: Transcript[]): ConversationPage {
             turnCount: turns.length,
             speakers: [],
             preview: 'x',
-            moments: [{ start, end, primary: turns, alternates: [], sources: ['m'] }],
+            moments: turns.map((t) => ({
+              start: t.start,
+              end: t.end,
+              primary: t,
+              alternates: [],
+              sources: ['m'],
+            })),
           },
         ]
       : [],
@@ -109,7 +115,10 @@ describe('Session', () => {
   });
 
   it('fetches hidden lines only when asked, and leaves them out of the voices', async () => {
-    const { c, ctrl, fixture } = await setup([said(1, 'A'), { ...said(2, 'B'), hidden: 'nobody spoke', hiddenAs: 'nobodySpoke' }]);
+    const { c, ctrl, fixture } = await setup([
+      said(1, 'A'),
+      { ...said(2, 'B'), hidden: 'nobody spoke', hiddenAs: 'nobodySpoke' },
+    ]);
     expect(c.voices().map((v: { cluster: string }) => v.cluster)).toEqual(['A']);
     c.showHidden.set(true);
     fixture.detectChanges();

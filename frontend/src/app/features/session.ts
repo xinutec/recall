@@ -75,7 +75,7 @@ export class Session implements OnDestroy {
   /** The visible lines: the voices and the status count only these. */
   protected readonly turns = computed(() =>
     this.moments()
-      .flatMap((m) => m.primary)
+      .map((m) => m.primary)
       .filter((t) => !t.hidden),
   );
   protected readonly start = computed(() => this.turns()[0]?.start ?? null);
@@ -98,7 +98,10 @@ export class Session implements OnDestroy {
     const byCluster = new Map<string, { counts: Map<string, number>; turns: Transcript[] }>();
     for (const t of this.turns()) {
       if (!t.cluster) continue;
-      const e = byCluster.get(t.cluster) ?? { counts: new Map<string, number>(), turns: [] as Transcript[] };
+      const e = byCluster.get(t.cluster) ?? {
+        counts: new Map<string, number>(),
+        turns: [] as Transcript[],
+      };
       byCluster.set(t.cluster, e);
       e.turns.push(t);
       if (t.speakerConfirmed && t.speaker) {

@@ -107,6 +107,18 @@ fn serve_one(
     });
 }
 
+/// Keep every request answered with a 500 beside the app's own client log,
+/// where the doctor counts them (`GET /sync/record/health`).
+fn keep_faults(root: &std::path::Path) -> Result<(), String> {
+    let faults = recalld::record_health::fault_log(root);
+    if let Some(logs) = faults.parent() {
+        std::fs::create_dir_all(logs)
+            .map_err(|err| format!("cannot create {}: {err}", logs.display()))?;
+    }
+    recalld::route::keep_faults_in(faults);
+    Ok(())
+}
+
 /// Open both planes and bring the meaning schema up to date, or say what is wrong
 /// in a line a human can act on. Failing to start is deliberate: every read route
 /// assumes those tables exist.
@@ -168,13 +180,10 @@ fn main() -> ExitCode {
         eprintln!("recalld: {complaint}");
         return ExitCode::FAILURE;
     }
-    // Beside the app's own client log; the doctor counts what lands here.
-    let logs = root.join("logs");
-    if let Err(err) = std::fs::create_dir_all(&logs) {
-        eprintln!("recalld: cannot create {}: {err}", logs.display());
+    if let Err(complaint) = keep_faults(&root) {
+        eprintln!("recalld: {complaint}");
         return ExitCode::FAILURE;
     }
-    recalld::route::keep_faults_in(logs.join(recalld::record_health::FAULT_LOG));
     // The browsing plane is mounted only when SSO is configured. Absent means
     // ABSENT, not open: these routes serve household transcripts, so an
     // unconfigured recalld must not answer them at all.

@@ -24,11 +24,11 @@ fn fault() -> Response {
 
 /// Where faults are kept, one JSON line each, for the doctor to count
 /// (`GET /sync/record/health`). Set once, at startup.
-static FAULT_LOG: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+static KEPT_IN: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 /// Keep every fault in `path` from now on. The first call wins.
 pub fn keep_faults_in(path: std::path::PathBuf) {
-    let _ = FAULT_LOG.set(path);
+    let _ = KEPT_IN.set(path);
 }
 
 /// Log a fault, and keep it where the doctor looks. A fault log that cannot
@@ -36,7 +36,7 @@ pub fn keep_faults_in(path: std::path::PathBuf) {
 /// already, and this must not fail it twice.
 fn record(what: &str, err: &dyn std::fmt::Display) {
     tracing::warn!("{what} failed: {err}");
-    let Some(path) = FAULT_LOG.get() else {
+    let Some(path) = KEPT_IN.get() else {
         return;
     };
     let line = audiocore::record_health::Fault {

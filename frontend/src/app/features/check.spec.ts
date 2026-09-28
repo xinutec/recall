@@ -37,7 +37,7 @@ function line(id: number, source: string, o: Partial<Transcript> = {}): Transcri
 const moment = (primary: Transcript, ...alternates: Transcript[]): Moment => ({
   start: primary.start,
   end: primary.end,
-  primary: [primary],
+  primary,
   alternates,
   sources: [primary, ...alternates].map((t) => t.source ?? ''),
 });

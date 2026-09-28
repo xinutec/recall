@@ -1,5 +1,6 @@
-//! When two spans are the same speech: one rule for the timeline's fold, the
-//! queue and the doctor's doubled-minute count.
+//! When two spans are the same speech: [`same_span`] for the timeline's fold
+//! and the doctor's doubled-minute count, and [`COPY_SECONDS`] for the queue,
+//! which knows only when a clip starts.
 
 use chrono::{DateTime, Utc};
 

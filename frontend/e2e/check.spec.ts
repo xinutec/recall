@@ -37,7 +37,7 @@ const moments = [
 ].map(([a, b]) => ({
   start: '',
   end: '',
-  primary: [a],
+  primary: a,
   alternates: [b],
   sources: ['usb', 'pixel9'],
 }));

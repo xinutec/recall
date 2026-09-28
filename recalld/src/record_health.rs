@@ -29,8 +29,10 @@ crate::statements! {
          ORDER BY a.start_utc DESC";
 }
 
-/// The fault log's name, in the data root's `logs/`.
-pub const FAULT_LOG: &str = "faults.jsonl";
+/// Where the faults [`crate::route`] keeps are, under the data root.
+pub fn fault_log(root: &Path) -> std::path::PathBuf {
+    root.join("logs").join("faults.jsonl")
+}
 
 /// The faults kept since `since`. No log yet is no faults; a line that does
 /// not read is skipped, since a torn last line must not hide the rest.
@@ -104,10 +106,18 @@ pub fn doubled_minutes(meaning: &Connection, since: DateTime<Utc>) -> rusqlite::
 /// Both, for the route.
 ///
 /// # Errors
-/// If the database refuses or the fault log cannot be read.
+/// If the database refuses.
 pub fn measure(root: &Path, since: DateTime<Utc>) -> rusqlite::Result<RecordHealth> {
-    let faults = faults_since(&root.join("logs").join(FAULT_LOG), since)
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+    // A log that cannot be read is reported as a fault of its own, so the
+    // doctor says so rather than the route failing on it.
+    let faults = faults_since(&fault_log(root), since).unwrap_or_else(|err| Faults {
+        count: 1,
+        last: Some(Fault {
+            utc: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            what: "reading the fault log".to_owned(),
+            error: err.to_string(),
+        }),
+    });
     let meaning = crate::reads::open(root)?;
     Ok(RecordHealth {
         faults,

@@ -2,7 +2,7 @@
 //! and minutes a mic has shown twice (`recalld::record_health`).
 
 use chrono::{DateTime, Utc};
-use recalld::record_health::{doubled_minutes, faults_since};
+use recalld::record_health::{doubled_minutes, fault_log, faults_since, measure};
 
 fn at(raw: &str) -> DateTime<Utc> {
     raw.parse().expect("an instant")
@@ -136,5 +136,25 @@ fn a_mics_next_minute_and_an_old_double_are_not_counted() {
             .expect("count")
             .count,
         0
+    );
+}
+
+/// An unreadable log is reported as a fault, not as a route that fails: the
+/// doctor then says what is wrong instead of skipping.
+#[test]
+fn a_fault_log_that_cannot_be_read_is_itself_a_fault() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let conn = recalld::work::open_write(dir.path()).expect("recall db");
+    recalld::meaning_schema::ensure(&conn).expect("schema");
+    drop(conn);
+    // A directory where the log should be: reading it fails.
+    std::fs::create_dir_all(fault_log(dir.path())).expect("a directory in the way");
+
+    let health = measure(dir.path(), at("2026-09-28T00:00:00Z")).expect("measured");
+
+    assert_eq!(health.faults.count, 1);
+    assert_eq!(
+        health.faults.last.expect("named").what,
+        "reading the fault log"
     );
 }

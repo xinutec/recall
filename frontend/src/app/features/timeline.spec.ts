@@ -20,7 +20,7 @@ function conv(start: string, end = start, extra: Partial<Conversation> = {}): Co
       {
         start,
         end,
-        primary: [{ id: 1, start, end, text: 'x', audioUrl: '/a' } as never],
+        primary: { id: 1, start, end, text: 'x', audioUrl: '/a' } as never,
         alternates: [],
         sources: ['usb'],
       },
@@ -36,7 +36,7 @@ const moments = (...tiers: string[]) =>
       ({
         start: `2026-06-13T00:0${i}:00Z`,
         end: `2026-06-13T00:0${i}:00Z`,
-        primary: [{ id: i, tier } as never],
+        primary: { id: i, tier } as never,
         alternates: [],
         sources: ['usb'],
       }) as never,

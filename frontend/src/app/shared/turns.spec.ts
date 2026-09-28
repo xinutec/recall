@@ -36,13 +36,16 @@ function turn(o: Partial<Transcript>): Transcript {
 const said = (id: number, speaker: string | null, o: Partial<Transcript> = {}): Transcript =>
   turn({ id, speaker, speakerConfirmed: !!speaker, audioUrl: `/api/audio/${id}`, ...o });
 
-const moment = (primary: Transcript[], alternates: Transcript[] = []): Moment => ({
-  start: primary[0].start,
-  end: primary[0].end,
+const line = (primary: Transcript, alternates: Transcript[] = []): Moment => ({
+  start: primary.start,
+  end: primary.end,
   primary,
   alternates,
-  sources: [...new Set([...primary, ...alternates].map((t) => t.source ?? ''))],
+  sources: [...new Set([primary, ...alternates].map((t) => t.source ?? ''))],
 });
+
+/** One moment per line, as the server folds a mic's lines. */
+const lines = (...shown: Transcript[]): Moment[] => shown.map((t) => line(t));
 
 async function setup(moments: Moment[], roster: string[] = []) {
   const closed = new Subject<boolean | undefined>();
@@ -101,21 +104,21 @@ describe('Turns', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('offers the names in view, else the roster', async () => {
-    const named = await setup([moment([said(1, 'P'), said(2, null)])], ['A', 'B']);
+    const named = await setup(lines(said(1, 'P'), said(2, null)), ['A', 'B']);
     expect(named.c.palette()).toEqual(['P']);
     TestBed.resetTestingModule();
-    const bare = await setup([moment([said(1, null)])], ['A', 'B']);
+    const bare = await setup(lines(said(1, null)), ['A', 'B']);
     expect(bare.c.palette()).toEqual(['A', 'B']);
   });
 
   it('gives each speaker a distinct colour', async () => {
-    const { c } = await setup([moment([said(1, 'P'), said(2, 'D')])]);
+    const { c } = await setup(lines(said(1, 'P'), said(2, 'D')));
     expect(c.colourFor('P')).toMatch(/^#/);
     expect(c.colourFor('P')).not.toBe(c.colourFor('D'));
   });
 
   it('a tap opens the line’s sheet, and a write there refreshes', async () => {
-    const { c, changed, sheet, closed } = await setup([moment([said(1, 'P', { text: 'hallo' })])]);
+    const { c, changed, sheet, closed } = await setup(lines(said(1, 'P', { text: 'hallo' })));
     const t = c.turns()[0];
     c.openLine(t);
     expect(c.selected()).toBe(1);
@@ -127,20 +130,20 @@ describe('Turns', () => {
   });
 
   it('closing the sheet without a write refreshes nothing', async () => {
-    const { c, changed, closed } = await setup([moment([said(1, 'P')])]);
+    const { c, changed, closed } = await setup(lines(said(1, 'P')));
     c.openLine(c.turns()[0]);
     closed.next(undefined);
     expect(changed).not.toHaveBeenCalled();
   });
 
   it('a transcribed line is grey', async () => {
-    const { c } = await setup([moment([said(1, 'P', { tier: 'transcribed' })])]);
+    const { c } = await setup(lines(said(1, 'P', { tier: 'transcribed' })));
     expect(c.provisional(c.turns()[0])).toBe(true);
   });
 
   it('plays a run as one span, pauses, then resumes in place', async () => {
     const { play, pause } = stubMedia();
-    const { c, player } = await setup([moment([said(1, 'P'), said(2, 'P')])]);
+    const { c, player } = await setup(lines(said(1, 'P'), said(2, 'P')));
     const run = c.runs()[0];
     c.togglePlay(run);
     expect(player.playing()).toBe('run:1');
@@ -156,9 +159,9 @@ describe('Turns', () => {
 
   it('stops its own clip when destroyed, and leaves another view’s alone', async () => {
     stubMedia();
-    const { fixture, c, player } = await setup([moment([said(1, 'P')])]);
+    const { fixture, c, player } = await setup(lines(said(1, 'P')));
     const other = TestBed.createComponent(Turns);
-    other.componentRef.setInput('moments', [moment([said(2, 'P')])]);
+    other.componentRef.setInput('moments', lines(said(2, 'P')));
     other.detectChanges();
     c.togglePlay(c.runs()[0]);
     other.destroy();
@@ -170,7 +173,7 @@ describe('Turns', () => {
   it('flags a line the mics disagree on, and counts the mics', async () => {
     const usb = said(1, 'P', { source: 'usb' });
     const phone = said(2, 'D', { source: 'phone' });
-    const { c } = await setup([moment([usb], [phone])]);
+    const { c } = await setup([line(usb, [phone])]);
     expect(c.disputed(usb)).toBe(true);
     expect(c.mics(usb)).toBe(2);
     expect(c.alternates(usb)).toEqual([phone]);
@@ -182,7 +185,7 @@ describe('Turns', () => {
     const same = said(3, 'D', { source: 'phone' });
     const copy = said(5, 'P', { source: 'usb' });
     const later = said(4, 'D', { source: 'phone' });
-    const { c } = await setup([moment([first], [same, copy]), moment([second], [later])]);
+    const { c } = await setup([line(first, [same, copy]), line(second, [later])]);
     expect(c.alternates(first)).toEqual([same, copy]);
     // The mic's own second copy is not a second mic.
     expect(c.mics(first)).toBe(2);
@@ -192,26 +195,26 @@ describe('Turns', () => {
   it('does not flag a machine guess that differs from a person’s name', async () => {
     const named = said(1, 'P', { source: 'usb' });
     const guessed = said(2, null, { source: 'phone', speaker: 'D', speakerConfirmed: false });
-    const { c } = await setup([moment([named], [guessed])]);
+    const { c } = await setup([line(named, [guessed])]);
     expect(c.disputed(named)).toBe(false);
   });
 
   it('flags only a disagreement with a confirmed name', async () => {
     const usb = said(1, null, { source: 'usb', speaker: 'P', speakerConfirmed: false });
     const phone = said(2, null, { source: 'phone', speaker: 'D', speakerConfirmed: false });
-    const { c } = await setup([moment([usb], [phone])]);
+    const { c } = await setup([line(usb, [phone])]);
     // Two guesses that differ are two guesses, not a finding.
     expect(c.disputed(usb)).toBe(false);
   });
 
   it('tags the mic where it changes, only when several are in view', async () => {
-    const one = await setup([moment([said(1, 'P'), said(2, 'P')])]);
+    const one = await setup(lines(said(1, 'P'), said(2, 'P')));
     expect(one.c.sourceTags().size).toBe(0);
     TestBed.resetTestingModule();
     const two = await setup([
-      moment([said(1, 'P', { source: 'usb' })]),
-      moment([said(2, 'P', { source: 'usb' })]),
-      moment([said(3, 'P', { source: 'phone' })]),
+      line(said(1, 'P', { source: 'usb' })),
+      line(said(2, 'P', { source: 'usb' })),
+      line(said(3, 'P', { source: 'phone' })),
     ]);
     expect([...two.c.sourceTags().entries()]).toEqual([
       [1, 'usb'],

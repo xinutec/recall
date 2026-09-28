@@ -85,12 +85,12 @@ export class Turns implements OnDestroy {
   protected readonly player = inject(Player);
   protected readonly clock = timeOfDaySeconds;
 
-  protected readonly turns = computed(() => this.moments().flatMap((m) => m.primary));
+  protected readonly turns = computed(() => this.moments().map((m) => m.primary));
   protected readonly runs = computed(() => runsOf(this.turns(), this.voiceNames()));
 
   private readonly momentOf = computed(() => {
     const out = new Map<number, Moment>();
-    for (const m of this.moments()) for (const t of m.primary) out.set(t.id, m);
+    for (const m of this.moments()) out.set(m.primary.id, m);
     return out;
   });
 
@@ -173,9 +173,7 @@ export class Turns implements OnDestroy {
   ngOnDestroy(): void {
     // Stop only this view's clip: the timeline shows several views at once.
     const id = Number(this.player.playing()?.split(':')[1]);
-    const mine = this.moments().some((m) =>
-      [...m.primary, ...m.alternates].some((t) => t.id === id),
-    );
+    const mine = this.moments().some((m) => [m.primary, ...m.alternates].some((t) => t.id === id));
     if (mine) this.player.stop();
   }
 

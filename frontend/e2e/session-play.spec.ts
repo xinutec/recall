@@ -39,15 +39,13 @@ const conversationPage = {
       turnCount: 2,
       speakers: ['Pippijn'],
       preview: 'x',
-      moments: [
-        {
-          start: '2026-01-15T09:35:50Z',
-          end: '2026-01-15T09:36:10Z',
-          primary: turns,
-          alternates: [],
-          sources: ['m'],
-        },
-      ],
+      moments: turns.map((t) => ({
+        start: '2026-01-15T09:35:50Z',
+        end: '2026-01-15T09:36:10Z',
+        primary: t,
+        alternates: [],
+        sources: ['m'],
+      })),
     },
   ],
   hasMore: false,

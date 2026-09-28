@@ -33,10 +33,7 @@ fn from_clip(mut t: Turn, clip: i64) -> Turn {
 
 /// Every moment's shown lines, in order.
 fn shown(moments: &[recalld::conversations::Moment]) -> Vec<usize> {
-    moments
-        .iter()
-        .flat_map(|m| m.primary.iter().copied())
-        .collect()
+    moments.iter().map(|m| m.primary).collect()
 }
 
 /// Every moment's other versions, sorted.
@@ -118,9 +115,9 @@ fn one_utterance_heard_by_three_mics_folds_into_one_moment() {
     let moments = cluster_moments(&turns, &group);
 
     assert_eq!(moments.len(), 2, "two utterances, not four turns");
-    assert_eq!(moments[0].primary, vec![0], "the clearest mic is the spine");
+    assert_eq!(moments[0].primary, 0, "the clearest mic is the spine");
     assert_eq!(moments[0].alternates, vec![1, 2]);
-    assert_eq!(moments[1].primary, vec![3]);
+    assert_eq!(moments[1].primary, 3);
 }
 
 #[test]
@@ -139,12 +136,12 @@ fn each_shown_sentence_is_a_moment_with_the_other_mics_versions_of_it() {
 
     assert_eq!(moments.len(), 2);
     assert_eq!(
-        (moments[0].primary.clone(), moments[0].alternates.clone()),
-        (vec![0], vec![1])
+        (moments[0].primary, moments[0].alternates.clone()),
+        (0, vec![1])
     );
     assert_eq!(
-        (moments[1].primary.clone(), moments[1].alternates.clone()),
-        (vec![2], vec![3])
+        (moments[1].primary, moments[1].alternates.clone()),
+        (2, vec![3])
     );
 }
 
@@ -203,7 +200,7 @@ fn the_spine_is_the_mic_that_heard_best_not_the_one_that_said_most() {
 
     let moments = cluster_moments(&turns, &group);
 
-    assert_eq!(moments[0].primary, vec![0], "0.55 beats 0.3");
+    assert_eq!(moments[0].primary, 0, "0.55 beats 0.3");
     assert_eq!(moments[0].alternates, vec![1, 2]);
 }
 
@@ -233,7 +230,7 @@ fn a_mic_that_heard_only_part_of_the_moment_is_not_the_spine() {
 
     let moments = cluster_moments(&turns, &group);
 
-    assert_eq!(moments[0].primary, vec![0]);
+    assert_eq!(moments[0].primary, 0);
 }
 
 #[test]
@@ -282,8 +279,7 @@ fn a_tied_spine_goes_to_the_first_source_seen_not_the_last() {
     let moments = cluster_moments(&turns, &group);
 
     assert_eq!(
-        moments[0].primary,
-        vec![0],
+        moments[0].primary, 0,
         "usb appeared first, so usb is the spine"
     );
 }
@@ -297,10 +293,10 @@ fn a_missing_guess_is_filled_from_the_most_confident_overlapping_mic() {
         guessed(turn(4, 50, 60, "pixel"), "Robin", 0.9), // no overlap: ignored
     ];
 
-    let chosen = best_colocated_guess(&turns, &[0], &[1, 2, 3]);
+    let chosen = best_colocated_guess(&turns, 0, &[1, 2, 3]);
 
     assert_eq!(
-        chosen[&1],
+        chosen,
         (Some("Sam".to_owned()), Some(0.7)),
         "the strongest co-located guess, and not the non-overlapping one"
     );
@@ -318,10 +314,10 @@ fn an_existing_guess_is_strengthened_by_agreement_but_never_flipped() {
         guessed(turn(3, 2, 8, "oneplus"), "Sam", 0.95), // disagrees, strongest
     ];
 
-    let chosen = best_colocated_guess(&turns, &[0], &[1, 2]);
+    let chosen = best_colocated_guess(&turns, 0, &[1, 2]);
 
     assert_eq!(
-        chosen[&1],
+        chosen,
         (Some("Alex".to_owned()), Some(0.8)),
         "Alex at the corroborated strength — never Sam, however confident"
     );
@@ -334,9 +330,9 @@ fn a_weaker_agreeing_mic_does_not_lower_the_confidence() {
         guessed(turn(2, 1, 9, "pixel"), "Alex", 0.2),
     ];
 
-    let chosen = best_colocated_guess(&turns, &[0], &[1]);
+    let chosen = best_colocated_guess(&turns, 0, &[1]);
 
-    assert_eq!(chosen[&1], (Some("Alex".to_owned()), Some(0.8)));
+    assert_eq!(chosen, (Some("Alex".to_owned()), Some(0.8)));
 }
 
 #[test]
@@ -370,7 +366,7 @@ fn a_turn_with_no_source_still_folds() {
     let moments = cluster_moments(&turns, &[0, 1]);
 
     assert_eq!(moments.len(), 1);
-    assert_eq!(moments[0].primary.len() + moments[0].alternates.len(), 2);
+    assert_eq!(1 + moments[0].alternates.len(), 2);
 }
 
 #[test]

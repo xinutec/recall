@@ -2,9 +2,9 @@
 //! stream of turns browsable.
 //!
 //! Two groupings, in order. A *conversation* is a maximal run with no silence
-//! longer than `gap` between turns. Inside one, a *moment* folds the several
-//! microphones that heard the same utterance into one card, since every source
-//! transcribes the room independently.
+//! longer than `gap` between turns. Inside one, each line shown is a *moment*,
+//! carrying the other microphones' versions of the same speech, since every
+//! source transcribes the room independently.
 //!
 //! The folding is pure (no database): it reads only spans, sources and
 //! confidences, so tests construct turns directly.
@@ -63,12 +63,12 @@ pub fn segment_conversations(turns: &[Turn], gap_seconds: f64) -> Vec<Vec<usize>
     conversations
 }
 
-/// One sentence as shown: a line of the mic that heard its stretch best, or a
-/// line only other mics heard, with every other mic's version of it.
+/// One line as shown: a line of the mic that heard its stretch best, or a line
+/// only other mics heard, with every other mic's version of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Moment {
     /// The shown line.
-    pub primary: Vec<usize>,
+    pub primary: usize,
     /// The other mics' versions of it, and its mic's second copy, for the
     /// compare view.
     pub alternates: Vec<usize>,
@@ -121,7 +121,7 @@ fn moments_of(turns: &[Turn], stretch: &[usize]) -> Vec<Moment> {
     let mut moments: Vec<Moment> = shown
         .iter()
         .map(|&i| Moment {
-            primary: vec![i],
+            primary: i,
             alternates: Vec::new(),
         })
         .collect();
@@ -130,7 +130,7 @@ fn moments_of(turns: &[Turn], stretch: &[usize]) -> Vec<Moment> {
         // The most overlapped shown line; the first on a tie, hence `>`.
         let mut best: Option<(usize, f64)> = None;
         for (k, moment) in moments.iter().enumerate() {
-            let shared = overlap(span(&turns[other]), span(&turns[moment.primary[0]]));
+            let shared = overlap(span(&turns[other]), span(&turns[moment.primary]));
             if shared > 0.0 && best.is_none_or(|(_, most)| shared > most) {
                 best = Some((k, shared));
             }
@@ -148,11 +148,11 @@ fn moments_of(turns: &[Turn], stretch: &[usize]) -> Vec<Moment> {
         let heard = span(&turns[other]);
         match found
             .iter_mut()
-            .find(|m| same_span(heard, span(&turns[m.primary[0]])))
+            .find(|m| same_span(heard, span(&turns[m.primary])))
         {
             Some(moment) => moment.alternates.push(other),
             None => found.push(Moment {
-                primary: vec![other],
+                primary: other,
                 alternates: Vec::new(),
             }),
         }
@@ -161,7 +161,7 @@ fn moments_of(turns: &[Turn], stretch: &[usize]) -> Vec<Moment> {
     for moment in &mut moments {
         moment.alternates.sort_by_key(|&i| turns[i].start);
     }
-    moments.sort_by_key(|m| turns[m.primary[0]].start);
+    moments.sort_by_key(|m| turns[m.primary].start);
     moments
 }
 
@@ -210,11 +210,11 @@ fn covered(turns: &[Turn], indices: &[usize]) -> f64 {
 
 /// One mic's turns with a second copy of the same span set aside.
 ///
-/// A phone's minute arrives twice (the Mac's .flac of its stream and the
-/// phone's own .wav copy, the same samples) and both are
-/// transcribed, so one mic can hold two clips over the same seconds. A clip is
-/// a copy when its span is the [`same_span`] as a clip kept already; the
-/// better-heard clip is kept first.
+/// A phone's minute arrives twice (the Mac's `.flac` of its stream and the
+/// phone's own `.wav`, the same samples) and both are transcribed, so one mic
+/// can hold two clips over the same seconds. A clip is a copy when its span is
+/// the [`same_span`] as a clip kept already; the better-heard clip is kept
+/// first.
 fn without_copies(turns: &[Turn], indices: &[usize]) -> (Vec<usize>, Vec<usize>) {
     let mut clips: Vec<(Option<i64>, Vec<usize>)> = Vec::new();
     for &i in indices {
@@ -250,11 +250,11 @@ fn without_copies(turns: &[Turn], indices: &[usize]) -> (Vec<usize>, Vec<usize>)
 
 /// The stretch's shown lines, from the mic that heard it best, and the rest:
 /// the other mics' lines and the shown mic's second copies.
-fn spine(turns: &[Turn], cluster: &[usize]) -> (Vec<usize>, Vec<usize>) {
+fn spine(turns: &[Turn], stretch: &[usize]) -> (Vec<usize>, Vec<usize>) {
     // First-appearance order of each source; the tie rule below depends on it.
     let mut order: Vec<Option<&str>> = Vec::new();
     let mut by_source: HashMap<Option<&str>, Vec<usize>> = HashMap::new();
-    for &index in cluster {
+    for &index in stretch {
         let source = turns[index].source_id.as_deref();
         if !by_source.contains_key(&source) {
             order.push(source);
@@ -273,7 +273,7 @@ fn spine(turns: &[Turn], cluster: &[usize]) -> (Vec<usize>, Vec<usize>) {
     //
     // ⚠ On a full tie the first source wins, hence the strict `>` loop:
     // `max_by_key` would keep the last.
-    let span = covered(turns, cluster);
+    let span = covered(turns, stretch);
     let key = |source: Option<&str>| {
         let shown = &split[&source].0;
         let coverage = if span > 0.0 {
@@ -310,9 +310,9 @@ fn spine(turns: &[Turn], cluster: &[usize]) -> (Vec<usize>, Vec<usize>) {
     (primary, rest)
 }
 
-/// For each spine turn, the most confident speaker guess among it and the
+/// The most confident speaker guess for a shown line, among it and its
 /// time-overlapping alternates (the same speech caught by other microphones).
-/// The spine is chosen for the cleanest transcription, but another mic may
+/// The line is chosen for the cleanest transcription, but another mic may
 /// carry a stronger voiceprint match.
 ///
 /// ⚠ A missing guess is filled from the most confident overlapping version; an
@@ -322,52 +322,45 @@ fn spine(turns: &[Turn], cluster: &[usize]) -> (Vec<usize>, Vec<usize>) {
 /// a human label.
 pub fn best_colocated_guess(
     turns: &[Turn],
-    primary: &[usize],
+    line: usize,
     alternates: &[usize],
-) -> HashMap<i64, (Option<String>, Option<f64>)> {
-    let mut chosen = HashMap::new();
-    for &index in primary {
-        let turn = &turns[index];
-        let overlapping: Vec<&Turn> = alternates
-            .iter()
-            .map(|&i| &turns[i])
-            .filter(|alt| {
-                alt.speaker_guess.is_some() && alt.start < turn.end && alt.end > turn.start
-            })
-            .collect();
-        let (mut guess, mut score) = (turn.speaker_guess.clone(), turn.speaker_score);
-        match &guess {
-            None => {
-                // Nothing of our own: fill from the most confident co-located
-                // version. First maximum again, for the reason in `to_moment`.
-                let mut best: Option<&&Turn> = None;
-                for alt in &overlapping {
-                    let strength = alt.speaker_score.unwrap_or(-1.0);
-                    let beaten = best.is_none_or(|b| strength > b.speaker_score.unwrap_or(-1.0));
-                    if beaten {
-                        best = Some(alt);
-                    }
-                }
-                if let Some(best) = best {
-                    guess.clone_from(&best.speaker_guess);
-                    score = best.speaker_score;
+) -> (Option<String>, Option<f64>) {
+    let turn = &turns[line];
+    let overlapping: Vec<&Turn> = alternates
+        .iter()
+        .map(|&i| &turns[i])
+        .filter(|alt| alt.speaker_guess.is_some() && alt.start < turn.end && alt.end > turn.start)
+        .collect();
+    let (mut guess, mut score) = (turn.speaker_guess.clone(), turn.speaker_score);
+    match &guess {
+        None => {
+            // Nothing of our own: fill from the most confident co-located
+            // version; the first on a tie, as in [`spine`].
+            let mut best: Option<&&Turn> = None;
+            for alt in &overlapping {
+                let strength = alt.speaker_score.unwrap_or(-1.0);
+                if best.is_none_or(|b| strength > b.speaker_score.unwrap_or(-1.0)) {
+                    best = Some(alt);
                 }
             }
-            Some(name) => {
-                for alt in &overlapping {
-                    let agrees = alt.speaker_guess.as_deref() == Some(name.as_str());
-                    if let Some(strength) = alt.speaker_score
-                        && agrees
-                        && score.is_none_or(|s| strength > s)
-                    {
-                        score = Some(strength);
-                    }
+            if let Some(best) = best {
+                guess.clone_from(&best.speaker_guess);
+                score = best.speaker_score;
+            }
+        }
+        Some(name) => {
+            for alt in &overlapping {
+                let agrees = alt.speaker_guess.as_deref() == Some(name.as_str());
+                if let Some(strength) = alt.speaker_score
+                    && agrees
+                    && score.is_none_or(|s| strength > s)
+                {
+                    score = Some(strength);
                 }
             }
         }
-        chosen.insert(turn.id, (guess, score));
     }
-    chosen
+    (guess, score)
 }
 
 // --- the HTTP surface -------------------------------------------------------
@@ -379,14 +372,14 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// One wall-clock moment as the app renders it: the best mic's turn(s), its
-/// speaker split kept, plus the other mics' overlapping versions for compare.
+/// One shown line as the app renders it, with the other mics' versions of it
+/// for compare.
 #[derive(Debug, Serialize, PartialEq, ts_rs::TS)]
 #[ts(export, rename = "Moment")]
 pub struct MomentOut {
     pub start: String,
     pub end: String,
-    pub primary: Vec<reads::TranscriptOut>,
+    pub primary: reads::TranscriptOut,
     pub alternates: Vec<reads::TranscriptOut>,
     pub sources: Vec<String>,
 }
@@ -485,34 +478,25 @@ fn moment_out(
     kept: &[usize],
     moment: &Moment,
 ) -> MomentOut {
-    let guesses = best_colocated_guess(turns, &moment.primary, &moment.alternates);
     let row = |i: usize| &segments[kept[i]];
+    let line = row(moment.primary);
+    let guess = best_colocated_guess(turns, moment.primary, &moment.alternates);
     // ⚠ Emit the stored text (`reads::iso`), never a re-formatted instant:
     // chrono trims trailing fraction zeros (.960 for .960000), which would
     // change every timestamp on the wire.
     MomentOut {
-        start: extreme(turns, &moment.primary, |t| t.start, false)
-            .map(|i| reads::iso(&row(i).start_utc))
-            .unwrap_or_default(),
-        end: extreme(turns, &moment.primary, |t| t.end, true)
-            .map(|i| reads::iso(&row(i).end_utc))
-            .unwrap_or_default(),
-        primary: moment
-            .primary
-            .iter()
-            .map(|&i| reads::to_out_with(row(i), guesses.get(&turns[i].id).cloned()))
-            .collect(),
+        start: reads::iso(&line.start_utc),
+        end: reads::iso(&line.end_utc),
+        primary: reads::to_out_with(line, Some(guess)),
         alternates: moment
             .alternates
             .iter()
             .map(|&i| reads::to_out_with(row(i), None))
             .collect(),
         sources: distinct(
-            moment
-                .primary
-                .iter()
-                .chain(moment.alternates.iter())
-                .map(|&i| turns[i].source_id.as_deref()),
+            std::iter::once(moment.primary)
+                .chain(moment.alternates.iter().copied())
+                .map(|i| turns[i].source_id.as_deref()),
         ),
     }
 }
@@ -526,10 +510,7 @@ fn conversation_out(
     let row = |i: usize| &segments[kept[i]];
     let moments = cluster_moments(turns, group);
     // What a person reads: the spine's lines, not every mic's copy.
-    let shown: Vec<usize> = moments
-        .iter()
-        .flat_map(|m| m.primary.iter().copied())
-        .collect();
+    let shown: Vec<usize> = moments.iter().map(|m| m.primary).collect();
     let preview = shown
         .iter()
         .map(|&i| row(i))

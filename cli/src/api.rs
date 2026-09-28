@@ -115,13 +115,13 @@ pub struct Export {
     pub turns: Vec<Bubble>,
 }
 
-/// The several microphones that heard one utterance, folded into one card.
+/// One shown line, with the other microphones' versions of it.
 #[derive(Debug, Deserialize)]
 pub struct Moment {
     pub start: String,
     pub end: String,
     /// The best mic's version — what a reader should read.
-    pub primary: Vec<Turn>,
+    pub primary: Turn,
     /// The other mics' overlapping versions, for comparison.
     pub alternates: Vec<Turn>,
     pub sources: Vec<String>,
@@ -373,7 +373,7 @@ impl Api {
             .items
             .into_iter()
             .flat_map(|c| c.moments)
-            .flat_map(|m| m.primary.into_iter().chain(m.alternates))
+            .flat_map(|m| std::iter::once(m.primary).chain(m.alternates))
             .collect();
         turns.sort_by(|a, b| a.start.cmp(&b.start).then(a.id.cmp(&b.id)));
         Ok(turns)

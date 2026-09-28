@@ -37,7 +37,7 @@ export function pickLines(moments: readonly Moment[]): Transcript[] {
   const counts = new Map<string, number>();
   const out: Transcript[] = [];
   for (const m of moments) {
-    const all = [...m.primary, ...m.alternates];
+    const all = [m.primary, ...m.alternates];
     if (all.some((t) => t.wordsChecked)) continue;
     const candidates = all.filter((t) => t.tier !== 'live' && t.text.trim());
     let best: Transcript | undefined;
@@ -64,7 +64,7 @@ export function dayWindow(day: string): { after: string; before: string } {
 export function otherMics(moments: readonly Moment[]): Map<number, Transcript[]> {
   const out = new Map<number, Transcript[]>();
   for (const m of moments) {
-    const heard = [...m.primary, ...m.alternates].filter((t) => t.tier !== 'live' && t.text.trim());
+    const heard = [m.primary, ...m.alternates].filter((t) => t.tier !== 'live' && t.text.trim());
     for (const t of heard) {
       out.set(
         t.id,

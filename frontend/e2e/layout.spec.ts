@@ -69,15 +69,13 @@ function pageOf(items: unknown[]) {
         turnCount: items.length,
         speakers: ['Pippijn', 'Alex'],
         preview: 'x',
-        moments: [
-          {
-            start: '2026-01-15T09:35:50Z',
-            end: '2026-01-15T09:36:10Z',
-            primary: items,
-            alternates: [],
-            sources: ['m'],
-          },
-        ],
+        moments: items.map((t) => ({
+          start: '2026-01-15T09:35:50Z',
+          end: '2026-01-15T09:36:10Z',
+          primary: t,
+          alternates: [],
+          sources: ['m'],
+        })),
       },
     ],
     hasMore: false,
@@ -93,7 +91,8 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/**', (route: Route) => {
     const url = route.request().url();
     if (url.includes('/api/conversations')) return route.fulfill({ json: conversationPage });
-    if (url.includes('/api/speakers')) return route.fulfill({ json: { names: ['Pippijn', 'Alex'] } });
+    if (url.includes('/api/speakers'))
+      return route.fulfill({ json: { names: ['Pippijn', 'Alex'] } });
     if (url.includes('/voices')) return route.fulfill({ json: { suggestions: {} } });
     return route.fulfill({ json: {} });
   });
@@ -136,7 +135,8 @@ test('finalizing banner keeps its icon whole', async ({ page }, testInfo) => {
 // the same failure classes, per screen, over rich-enough mocked data that the
 // phone column is actually stressed (a long turn, a long label, a long span).
 
-const LONG = 'a considerably longer stretch of household conversation that would overflow a phone column if the layout ever stopped wrapping it correctly';
+const LONG =
+  'a considerably longer stretch of household conversation that would overflow a phone column if the layout ever stopped wrapping it correctly';
 
 const reviewItems = { items: [turn(21, 'Pippijn', 'SPEAKER_01', LONG)] };
 
@@ -172,9 +172,6 @@ const sessionsList = {
   ],
 };
 
-
-
-
 const screenMocks: Record<string, unknown> = {
   '/api/transcripts': reviewItems,
   '/api/search': searchItems,
@@ -183,8 +180,26 @@ const screenMocks: Record<string, unknown> = {
   '/api/quiet/scan': { running: false, measured: 10, total: 10, analysed: 10, toAnalyse: 10 },
   '/api/vocabulary': { items: [{ id: 1, term: 'vorasidenib' }] },
   '/api/context': { text: 'A household context paragraph.' },
-  '/api/capture': { running: true, desiredRunning: true, settled: true, micReachable: true, pausedUntil: null, desiredPausedUntil: null, stateToken: 'x' },
-  '/api/sources': { items: [{ id: 'usb', name: 'usb', kind: 'coreaudio', active: true, lastActive: '2026-01-15T09:35:50Z' }] },
+  '/api/capture': {
+    running: true,
+    desiredRunning: true,
+    settled: true,
+    micReachable: true,
+    pausedUntil: null,
+    desiredPausedUntil: null,
+    stateToken: 'x',
+  },
+  '/api/sources': {
+    items: [
+      {
+        id: 'usb',
+        name: 'usb',
+        kind: 'coreaudio',
+        active: true,
+        lastActive: '2026-01-15T09:35:50Z',
+      },
+    ],
+  },
 };
 
 const screens: { path: string; anchor: string }[] = [
@@ -219,7 +234,12 @@ for (const { path, anchor } of screens) {
     // :not([disabled]): a disabled Material button has pointer-events none, so
     // the centre-point probe reads its own ancestor and calls it occluded — but a
     // control that cannot be tapped anyway has no occlusion to answer for.
-    await expectNoOccludedControls(page, testInfo, 'button:not([disabled]), a[href], [role="button"]', ['.t']);
+    await expectNoOccludedControls(
+      page,
+      testInfo,
+      'button:not([disabled]), a[href], [role="button"]',
+      ['.t'],
+    );
     await expectNoClippedIcons(page, testInfo);
   });
 }

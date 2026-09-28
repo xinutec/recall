@@ -101,8 +101,8 @@ describe('Labels', () => {
         provideHttpClientTesting(),
         { provide: Router, useValue: { navigate: vi.fn() } },
         { provide: ActivatedRoute, useValue: {} },
-      // The bar's state reads the router, a stub here; only the title is used.
-      { provide: Place, useValue: { title: signal(undefined) } },
+        // The bar's state reads the router, a stub here; only the title is used.
+        { provide: Place, useValue: { title: signal(undefined) } },
         { provide: RecallApi, useValue: { reassignCorrection } },
         { provide: MatSnackBar, useValue: { open } },
       ],

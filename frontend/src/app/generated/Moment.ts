@@ -2,7 +2,7 @@
 import type { Transcript } from "./Transcript";
 
 /**
- * One wall-clock moment as the app renders it: the best mic's turn(s), its
- * speaker split kept, plus the other mics' overlapping versions for compare.
+ * One shown line as the app renders it, with the other mics' versions of it
+ * for compare.
  */
-export type Moment = { start: string, end: string, primary: Array<Transcript>, alternates: Array<Transcript>, sources: Array<string>, };
+export type Moment = { start: string, end: string, primary: Transcript, alternates: Array<Transcript>, sources: Array<string>, };

@@ -54,15 +54,13 @@ function makePage(turns: FakeTurn[]): unknown {
         turnCount: turns.length,
         speakers: ['Pippijn', 'Dr. Lee'],
         preview: 'x',
-        moments: [
-          {
-            start: turns[0].start,
-            end: turns[turns.length - 1].end,
-            primary: turns,
-            alternates: [],
-            sources: ['m'],
-          },
-        ],
+        moments: turns.map((t) => ({
+          start: turns[0].start,
+          end: turns[turns.length - 1].end,
+          primary: t,
+          alternates: [],
+          sources: ['m'],
+        })),
       },
     ],
     hasMore: false,
@@ -187,7 +185,11 @@ test('a typed name is saved on tapping away, with or without suggestions open', 
 test('a hidden line shows on request and "Someone spoke" takes it back (Pixel 9)', async ({
   page,
 }) => {
-  const hidden = { ...turn(3, 'Pippijn', 'SPEAKER_01', 'Thank you.'), hidden: 'nobody spoke', hiddenAs: 'nobodySpoke' };
+  const hidden = {
+    ...turn(3, 'Pippijn', 'SPEAKER_01', 'Thank you.'),
+    hidden: 'nobody spoke',
+    hiddenAs: 'nobodySpoke',
+  };
   await page.route('**/api/**', (route: Route) => {
     const url = route.request().url();
     if (url.includes('/api/conversations')) {
