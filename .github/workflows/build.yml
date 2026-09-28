@@ -42,11 +42,11 @@ jobs:
       # must move together. Bump this and flake.nix in the same commit.
       - uses: astral-sh/ruff-action@v3
         with:
-          version: "0.15.20"
+          version: "0.16.8"
           args: check
       - uses: astral-sh/ruff-action@v3
         with:
-          version: "0.15.20"
+          version: "0.16.8"
           args: format --check
 
   image:
