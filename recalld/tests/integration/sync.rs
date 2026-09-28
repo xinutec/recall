@@ -320,17 +320,43 @@ async fn an_unauthenticated_report_cannot_move_the_state() {
     );
 }
 
+/// The status of a `POST /sync/capture` sent over a bare socket.
+///
+/// ⚠ Not ureq: an empty response body makes ureq hand the socket back to its
+/// pool with a syscall that fails (EINVAL) once the server has closed it, and
+/// ureq panics on that instead of returning an error. The absent route's 404
+/// is empty.
+async fn raw_post_status(addr: &str, token: &str, body: &str) -> u16 {
+    use std::io::{Read, Write};
+    let (addr, token, body) = (addr.to_owned(), token.to_owned(), body.to_owned());
+    tokio::task::spawn_blocking(move || {
+        let mut stream = std::net::TcpStream::connect(&addr).expect("connect");
+        write!(
+            stream,
+            "POST /sync/capture HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {token}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .expect("request");
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply).expect("reply");
+        reply
+            .split_whitespace()
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .expect("a status line")
+    })
+    .await
+    .expect("request")
+}
+
 #[tokio::test]
 async fn without_a_configured_token_the_route_is_absent_not_open() {
     // An unconfigured token does not mean "open": the route is not mounted.
     let (_dir, addr) = serve(None).await;
 
-    let (status, _) = post(
-        &addr,
-        Some("sekrit"),
-        serde_json::json!({"running": true, "pausedUntil": null}),
-    )
-    .await;
+    let status =
+        raw_post_status(&addr, "sekrit", r#"{"running": true, "pausedUntil": null}"#).await;
 
     assert_eq!(status, 404, "an unconfigured sync plane must not answer");
 }
