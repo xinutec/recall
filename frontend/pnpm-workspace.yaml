@@ -49,6 +49,7 @@ allowBuilds:
 #
 # ⚠ FLOORS COME FROM CHECKING EACH ALERT'S VULNERABLE RANGE against the version
 # pnpm actually installed. Do not read the alert list and stop: every alert names
+# dev-lint: allow-doc-path the path GitHub's alerts still name, deleted on purpose
 # `frontend/package-lock.json`, long deleted, and that stale path makes the whole
 # list look ignorable while some of it is real (#1505). Most alerted packages
 # need no floor — the range already admits the fix, so `pnpm update` moves

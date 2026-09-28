@@ -11,7 +11,7 @@ live cluster had been running for nine days. A `kubectl apply` from this directo
 have deleted working single sign-on. That is why there is now exactly one copy.
 
 ⚠ **Deploy with `kubes/deploy.sh recall`**, or equivalently `recall/k8s/sync.sh`,
-which is a three-line wrapper that `exec`s it. `scripts/apply.sh` was named here
+which is a three-line wrapper that `exec`s it. The old apply script was named here
 until 2026-08-23 and was **deleted 2026-08-16** — `plan-run deploy` replaced it.
 The cluster comes from the model (`dhall/clusters.json`: `recall: isis.xinutec.org`),
 so it is never passed by hand.

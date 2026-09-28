@@ -1,5 +1,6 @@
 # Dependabot has never read this repo's real lockfile.
 #
+# dev-lint: allow-doc-path the path GitHub's alerts still name, deleted on purpose
 # ⚠ Every alert on this repo names `frontend/package-lock.json`, which was
 # DELETED when the frontend moved to pnpm. The dependency graph kept a snapshot
 # of it and goes on matching NEW advisories against that snapshot, so this is not
