@@ -21,6 +21,7 @@ mod conversations;
 mod devices;
 mod diarized;
 mod enrol;
+mod http;
 mod identify_differential;
 mod identify_parity;
 mod ingest;

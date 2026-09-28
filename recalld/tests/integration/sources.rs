@@ -8,13 +8,6 @@ use std::collections::HashMap;
 
 /// A one-shot HTTP agent with no connection pool.
 ///
-/// ⚠ `ureq::get`/`ureq::post` share one global pool across parallel tests, and
-/// ureq panics returning a socket that another test's server has dropped. With
-/// no idle connections there is nothing to hand back.
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().max_idle_connections(0).build()
-}
-
 fn now() -> DateTime<Utc> {
     // 2026-09-09T12:00:00Z, the instant `CASES` was computed at.
     DateTime::from_timestamp(1_788_998_400, 0).expect("a real instant")
@@ -450,16 +443,9 @@ async fn the_route_is_mounted_and_answers_without_a_session() {
     });
 
     // No session cookie, deliberately.
-    let body = tokio::task::spawn_blocking(move || {
-        agent()
-            .get(&format!("http://{addr}/api/sources"))
-            .call()
-            .expect("the route is mounted AND ungated")
-            .into_string()
-            .expect("body")
-    })
-    .await
-    .expect("request");
+    let (status, body) =
+        crate::http::request(&addr.to_string(), "GET", "/api/sources", &[], None).await;
+    assert_eq!(status, 200, "the route is mounted AND ungated: {body}");
 
     let parsed: serde_json::Value = serde_json::from_str(&body).expect("json");
     let items = parsed["items"].as_array().expect("items");

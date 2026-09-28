@@ -7,13 +7,6 @@ use rusqlite::Connection;
 
 /// A one-shot HTTP agent with no connection pool.
 ///
-/// ⚠ `ureq::get`/`ureq::post` share one global pool across parallel tests, and
-/// ureq panics returning a socket that another test's server has dropped. With
-/// no idle connections there is nothing to hand back.
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().max_idle_connections(0).build()
-}
-
 fn at(offset_s: i64) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(1_788_894_682 + offset_s, 0).expect("a real instant")
 }
@@ -227,21 +220,19 @@ async fn serve(token: Option<&str>) -> (tempfile::TempDir, String) {
 
 /// `POST /sync/capture` with a bearer token, returning (status, body).
 async fn post(addr: &str, token: Option<&str>, body: serde_json::Value) -> (u16, String) {
-    let url = format!("http://{addr}/sync/capture");
-    let token = token.map(ToOwned::to_owned);
-    tokio::task::spawn_blocking(move || {
-        let mut req = agent().post(&url);
-        if let Some(token) = token {
-            req = req.set("Authorization", &format!("Bearer {token}"));
-        }
-        match req.send_json(body) {
-            Ok(res) => (res.status(), res.into_string().unwrap_or_default()),
-            Err(ureq::Error::Status(code, res)) => (code, res.into_string().unwrap_or_default()),
-            Err(err) => panic!("transport: {err}"),
-        }
-    })
+    let bearer = token.map(|t| format!("Bearer {t}"));
+    let mut headers = vec![("Content-Type", "application/json")];
+    if let Some(bearer) = &bearer {
+        headers.push(("Authorization", bearer));
+    }
+    crate::http::request(
+        addr,
+        "POST",
+        "/sync/capture",
+        &headers,
+        Some(&body.to_string()),
+    )
     .await
-    .expect("request")
 }
 
 /// Over HTTP, because passing unit tests say nothing about whether a route is
@@ -320,43 +311,17 @@ async fn an_unauthenticated_report_cannot_move_the_state() {
     );
 }
 
-/// The status of a `POST /sync/capture` sent over a bare socket.
-///
-/// ⚠ Not ureq: an empty response body makes ureq hand the socket back to its
-/// pool with a syscall that fails (EINVAL) once the server has closed it, and
-/// ureq panics on that instead of returning an error. The absent route's 404
-/// is empty.
-async fn raw_post_status(addr: &str, token: &str, body: &str) -> u16 {
-    use std::io::{Read, Write};
-    let (addr, token, body) = (addr.to_owned(), token.to_owned(), body.to_owned());
-    tokio::task::spawn_blocking(move || {
-        let mut stream = std::net::TcpStream::connect(&addr).expect("connect");
-        write!(
-            stream,
-            "POST /sync/capture HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {token}\r\n\
-             Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )
-        .expect("request");
-        let mut reply = String::new();
-        stream.read_to_string(&mut reply).expect("reply");
-        reply
-            .split_whitespace()
-            .nth(1)
-            .and_then(|code| code.parse().ok())
-            .expect("a status line")
-    })
-    .await
-    .expect("request")
-}
-
 #[tokio::test]
 async fn without_a_configured_token_the_route_is_absent_not_open() {
     // An unconfigured token does not mean "open": the route is not mounted.
     let (_dir, addr) = serve(None).await;
 
-    let status =
-        raw_post_status(&addr, "sekrit", r#"{"running": true, "pausedUntil": null}"#).await;
+    let (status, _) = post(
+        &addr,
+        Some("sekrit"),
+        serde_json::json!({"running": true, "pausedUntil": null}),
+    )
+    .await;
 
     assert_eq!(status, 404, "an unconfigured sync plane must not answer");
 }
@@ -503,21 +468,12 @@ async fn a_writer_holding_the_lock_delays_the_handshake_rather_than_failing_it()
 
 /// `GET` one of the sync plane's read routes.
 async fn get(addr: &str, path: &str, token: Option<&str>) -> (u16, String) {
-    let url = format!("http://{addr}{path}");
-    let token = token.map(ToOwned::to_owned);
-    tokio::task::spawn_blocking(move || {
-        let mut req = agent().get(&url);
-        if let Some(token) = token {
-            req = req.set("Authorization", &format!("Bearer {token}"));
-        }
-        match req.call() {
-            Ok(res) => (res.status(), res.into_string().unwrap_or_default()),
-            Err(ureq::Error::Status(code, res)) => (code, res.into_string().unwrap_or_default()),
-            Err(err) => panic!("transport: {err}"),
-        }
-    })
-    .await
-    .expect("request")
+    let bearer = token.map(|t| format!("Bearer {t}"));
+    let headers: Vec<(&str, &str)> = bearer
+        .iter()
+        .map(|b| ("Authorization", b.as_str()))
+        .collect();
+    crate::http::request(addr, "GET", path, &headers, None).await
 }
 
 /// Reach and gate for the listed read routes: an ungated one would hand the
@@ -602,25 +558,11 @@ async fn a_wait_that_elapses_with_no_change_returns_the_intent_it_started_with()
 
 /// `GET /sync/live/health` with the stamps spelled the way a caller sends them.
 async fn live_health(addr: &str, token: Option<&str>, since: &str) -> (u16, String) {
-    let url = format!("http://{addr}/sync/live/health");
-    let (token, since) = (token.map(ToOwned::to_owned), since.to_owned());
-    tokio::task::spawn_blocking(move || {
-        let mut req = agent()
-            .get(&url)
-            .query("lag_since", &since)
-            .query("window_since", &since)
-            .query("window_until", "2026-09-21T12:00:00+00:00");
-        if let Some(token) = token {
-            req = req.set("Authorization", &format!("Bearer {token}"));
-        }
-        match req.call() {
-            Ok(res) => (res.status(), res.into_string().unwrap_or_default()),
-            Err(ureq::Error::Status(code, res)) => (code, res.into_string().unwrap_or_default()),
-            Err(err) => panic!("transport: {err}"),
-        }
-    })
-    .await
-    .expect("request")
+    let since = crate::http::query(since);
+    let until = crate::http::query("2026-09-21T12:00:00+00:00");
+    let path =
+        format!("/sync/live/health?lag_since={since}&window_since={since}&window_until={until}");
+    get(addr, &path, token).await
 }
 
 #[tokio::test]

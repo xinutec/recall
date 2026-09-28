@@ -507,20 +507,9 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
 
     // No session cookie: the mic apps long-poll GET /api/capture with no
     // credential, so it must stay device-exempt.
-    let body = tokio::task::spawn_blocking(move || {
-        // Not `ureq::get`: its process-wide pool is shared by parallel tests
-        // against short-lived servers.
-        ureq::AgentBuilder::new()
-            .max_idle_connections(0)
-            .build()
-            .get(&format!("http://{addr}/api/capture"))
-            .call()
-            .expect("the route is mounted AND ungated")
-            .into_string()
-            .expect("a body")
-    })
-    .await
-    .expect("task");
+    let (status, body) =
+        crate::http::request(&addr.to_string(), "GET", "/api/capture", &[], None).await;
+    assert_eq!(status, 200, "the route is mounted AND ungated: {body}");
 
     // The shape of the capture contract, not just an answer.
     let state: serde_json::Value = serde_json::from_str(&body).expect("json");
