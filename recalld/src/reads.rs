@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::turn_store::{Provenance, Stage};
+use crate::turn_store::{HiddenKind, Provenance, Stage};
 
 /// The current-turn projection the page queries share: not superseded, and
 /// carrying the capturing source.
@@ -101,6 +101,8 @@ pub struct TranscriptOut {
     pub model: Option<String>,
     pub tier: Stage,
     pub hidden: Option<String>,
+    /// What kind of hide `hidden` is; the app checks this, never the spelling.
+    pub hidden_as: Option<HiddenKind>,
     pub audio_url: String,
     pub source: Option<String>,
     pub cluster: Option<String>,
@@ -222,6 +224,7 @@ pub fn to_out_with(
         model: segment.asr_model.clone(),
         tier: segment.tier(),
         hidden: segment.hidden_reason.clone(),
+        hidden_as: segment.hidden_reason.as_deref().map(HiddenKind::of),
         audio_url: format!("/api/audio/{}", segment.id),
         source: segment.source_id.clone(),
         cluster: segment.speaker_cluster.clone(),

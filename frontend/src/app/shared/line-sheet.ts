@@ -54,9 +54,6 @@ export function wordsOf(text: string): Word[] {
 
 type Mode = 'main' | 'part' | 'edit' | 'mics';
 
-/** The hidden reason a person's "Nobody spoke" writes: the one hide they can take back. */
-export const NOBODY_SPOKE = 'nobody spoke';
-
 /** What the sheet did before closing: `hidden` is nobody spoke, which the caller
  * offers to undo. */
 export type LineSheetResult = 'wrote' | 'hidden';
@@ -92,7 +89,8 @@ export class LineSheet {
   /** A live line is minutes from being replaced by its transcription; a hidden
    * one is shown only to be taken back. */
   protected readonly editable = this.t.tier !== 'live' && !this.t.hidden;
-  protected readonly undoable = this.t.hidden === NOBODY_SPOKE;
+  /** A person's "Nobody spoke" is the one hide they can take back. */
+  protected readonly undoable = this.t.hiddenAs === 'nobodySpoke';
   protected readonly mode = signal<Mode>('main');
   protected readonly busy = signal(false);
 

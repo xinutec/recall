@@ -17,6 +17,7 @@ function turn(id: number, speaker: string, cluster: string, text: string): unkno
     model: 'diarized',
     tier: 'diarized',
     hidden: null,
+    hiddenAs: null,
     audioUrl: `/api/audio/${id}`,
     source: 'm',
     cluster,

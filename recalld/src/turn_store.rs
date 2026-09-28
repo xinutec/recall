@@ -213,10 +213,80 @@ pub enum HiddenReason {
     SetAside,
     /// A re-transcription was taken back: its lines gave way to the old ones.
     RetranscriptionUndone,
-    /// The mic's minute arrived twice (the Mac's .flac and the phone's .wav, the
-    /// same samples) and both were
-    /// transcribed; these lines are the copy not kept.
+    /// The mic's minute arrived twice (the Mac's `.flac` and the phone's
+    /// `.wav`, the same samples) and both were transcribed; these lines are
+    /// the copy not kept.
     SecondCopy,
+}
+
+/// Which kind of hide a stored `hidden_reason` is, for the app: the stored
+/// text is a spelling, and a person can take back only some kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum HiddenKind {
+    LiveReconciled,
+    CoveredByRoom,
+    Diarized,
+    Split,
+    NobodySpoke,
+    SilentMinute,
+    SetAside,
+    RetranscriptionUndone,
+    SecondCopy,
+    /// Written by an older pass or typed by hand in a past repair.
+    Other,
+}
+
+impl HiddenReason {
+    #[must_use]
+    pub fn kind(&self) -> HiddenKind {
+        match self {
+            Self::LiveReconciled => HiddenKind::LiveReconciled,
+            Self::CoveredByRoom => HiddenKind::CoveredByRoom,
+            Self::DiarizedBy(_) => HiddenKind::Diarized,
+            Self::SplitInto(_) => HiddenKind::Split,
+            Self::NobodySpoke => HiddenKind::NobodySpoke,
+            Self::SilentMinute => HiddenKind::SilentMinute,
+            Self::SetAside => HiddenKind::SetAside,
+            Self::RetranscriptionUndone => HiddenKind::RetranscriptionUndone,
+            Self::SecondCopy => HiddenKind::SecondCopy,
+        }
+    }
+}
+
+impl HiddenKind {
+    /// The kind of a stored reason, read against [`HiddenReason`]'s own
+    /// spellings so there is one list of them.
+    #[must_use]
+    pub fn of(stored: &str) -> Self {
+        let fixed = [
+            HiddenReason::LiveReconciled,
+            HiddenReason::CoveredByRoom,
+            HiddenReason::NobodySpoke,
+            HiddenReason::SilentMinute,
+            HiddenReason::SetAside,
+            HiddenReason::RetranscriptionUndone,
+            HiddenReason::SecondCopy,
+        ];
+        if let Some(reason) = fixed.iter().find(|r| r.to_string() == stored) {
+            return reason.kind();
+        }
+        // `diarized (<by>)`, `split into pieces (<id>)`: the spelling around
+        // an empty argument, less its closing parenthesis, is the prefix.
+        let carrying = [
+            HiddenReason::DiarizedBy(Cow::Borrowed("")),
+            HiddenReason::SplitInto(0),
+        ];
+        for reason in carrying {
+            let spelled = reason.to_string();
+            let prefix = spelled.trim_end_matches(|c: char| c == ')' || c.is_ascii_digit());
+            if stored.starts_with(prefix) && stored.ends_with(')') {
+                return reason.kind();
+            }
+        }
+        Self::Other
+    }
 }
 
 impl fmt::Display for HiddenReason {

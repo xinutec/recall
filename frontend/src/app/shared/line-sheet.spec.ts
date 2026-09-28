@@ -26,6 +26,7 @@ function turn(o: Partial<Transcript>): Transcript {
     model: 'diarized',
     tier: 'diarized',
     hidden: null,
+    hiddenAs: null,
     audioUrl: '/api/audio/7',
     source: 'usb',
     cluster: null,
@@ -168,7 +169,7 @@ describe('LineSheet', () => {
   });
 
   it('a line hidden as nobody spoke says so and can be taken back, nothing else', async () => {
-    const { c, el, ctrl, dismiss } = await setup({ hidden: 'nobody spoke' });
+    const { c, el, ctrl, dismiss } = await setup({ hidden: 'nobody spoke', hiddenAs: 'nobodySpoke' });
     expect(el.textContent).toContain('Hidden: nobody spoke.');
     expect(el.textContent).not.toContain('Fix words');
     expect(el.textContent).not.toContain('Said by');

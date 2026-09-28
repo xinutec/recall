@@ -17,6 +17,7 @@ function line(id: number, source: string, text: string): unknown {
     model: 'diarized',
     tier: 'diarized',
     hidden: null,
+    hiddenAs: null,
     audioUrl: `/api/audio/${id}`,
     source,
     cluster: null,

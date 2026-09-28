@@ -25,6 +25,7 @@ function turn(o: Partial<Transcript>): Transcript {
     model: 'diarized',
     tier: 'diarized',
     hidden: null,
+    hiddenAs: null,
     audioUrl: '/a',
     source: 'm',
     cluster: null,

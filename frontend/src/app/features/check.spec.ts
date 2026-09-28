@@ -26,6 +26,7 @@ function line(id: number, source: string, o: Partial<Transcript> = {}): Transcri
     model: 'diarized',
     tier: 'diarized',
     hidden: null,
+    hiddenAs: null,
     audioUrl: `/api/audio/${id}`,
     source,
     cluster: null,

@@ -23,6 +23,7 @@ function turn(start: string, end: string): Transcript {
     model: 'live',
     tier: 'live',
     hidden: null,
+    hiddenAs: null,
     audioUrl: '',
     source: null,
     cluster: null,

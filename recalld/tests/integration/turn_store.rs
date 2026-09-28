@@ -1,5 +1,6 @@
 use recalld::turn_store::{
-    HUMAN_MODEL, HUMAN_OWNED, HiddenReason, LIVE_MODEL, Provenance, Stage, is_human_owned,
+    HUMAN_MODEL, HUMAN_OWNED, HiddenKind, HiddenReason, LIVE_MODEL, Provenance, Stage,
+    is_human_owned,
 };
 #[test]
 fn every_provenance_reads_back_as_written() {
@@ -141,5 +142,22 @@ fn every_hidden_reason_keeps_its_stored_spelling() {
             | HiddenReason::SecondCopy => {}
         }
         assert_eq!(reason.to_string(), stored);
+        assert_eq!(HiddenKind::of(stored), reason.kind(), "{stored}");
+    }
+}
+
+/// Spellings no current writer produces read as `Other`, never as a kind a
+/// person could take back.
+#[test]
+fn an_older_spelling_is_another_kind() {
+    for stored in [
+        "reprocessed (mlx-community/whisper-large-v3-turbo)",
+        "superseded by sync push",
+        "no speech in span",
+        "nobody spoke!",
+        "diarized",
+        "",
+    ] {
+        assert_eq!(HiddenKind::of(stored), HiddenKind::Other, "{stored:?}");
     }
 }

@@ -25,6 +25,7 @@ function turn(o: Partial<Transcript>): Transcript {
     model: 'diarized',
     tier: 'diarized',
     hidden: null,
+    hiddenAs: null,
     audioUrl: '/a',
     source: 'm',
     cluster: null,
@@ -108,7 +109,7 @@ describe('Session', () => {
   });
 
   it('fetches hidden lines only when asked, and leaves them out of the voices', async () => {
-    const { c, ctrl, fixture } = await setup([said(1, 'A'), { ...said(2, 'B'), hidden: 'nobody spoke' }]);
+    const { c, ctrl, fixture } = await setup([said(1, 'A'), { ...said(2, 'B'), hidden: 'nobody spoke', hiddenAs: 'nobodySpoke' }]);
     expect(c.voices().map((v: { cluster: string }) => v.cluster)).toEqual(['A']);
     c.showHidden.set(true);
     fixture.detectChanges();

@@ -38,6 +38,7 @@ function turn(
     model: tier,
     tier,
     hidden: null,
+    hiddenAs: null,
     audioUrl: `/api/audio/${id}`,
     source: 'm',
     cluster,
@@ -153,6 +154,7 @@ const correctionsList = {
       audioUrl: '/api/correction/1/audio',
       audioConfidence: 0.4,
       hidden: null,
+      hiddenAs: null,
     },
   ],
 };

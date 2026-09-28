@@ -17,6 +17,7 @@ interface FakeTurn {
   model: string;
   tier: string;
   hidden: string | null;
+  hiddenAs: string | null;
   audioUrl: string;
   source: string;
   cluster: string;
@@ -37,6 +38,7 @@ function turn(id: number, speaker: string, cluster: string, text: string): FakeT
     model: 'diarized',
     tier: 'diarized', // diarized => session is "ready", so the palette is offered
     hidden: null,
+    hiddenAs: null,
     audioUrl: `/api/audio/${id}`,
     source: 'm',
     cluster,
@@ -185,7 +187,7 @@ test('a typed name is saved on tapping away, with or without suggestions open', 
 test('a hidden line shows on request and "Someone spoke" takes it back (Pixel 9)', async ({
   page,
 }) => {
-  const hidden = { ...turn(3, 'Pippijn', 'SPEAKER_01', 'Thank you.'), hidden: 'nobody spoke' };
+  const hidden = { ...turn(3, 'Pippijn', 'SPEAKER_01', 'Thank you.'), hidden: 'nobody spoke', hiddenAs: 'nobodySpoke' };
   await page.route('**/api/**', (route: Route) => {
     const url = route.request().url();
     if (url.includes('/api/conversations')) {
