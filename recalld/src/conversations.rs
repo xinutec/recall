@@ -30,6 +30,8 @@ pub struct Turn {
     pub asr_confidence: Option<f64>,
     pub speaker_guess: Option<String>,
     pub speaker_score: Option<f64>,
+    /// The clip it came from: a mic's two clips of one span are copies.
+    pub audio_segment_id: Option<i64>,
 }
 
 /// Seconds between two instants, exactly.
@@ -118,16 +120,96 @@ pub fn cluster_moments(turns: &[Turn], group: &[usize]) -> Vec<Moment> {
         .collect()
 }
 
-/// Summed ASR confidence, treating a missing score as zero.
-fn confidence(turns: &[Turn], indices: &[usize]) -> f64 {
-    indices
+/// How long a turn lasts, at least a millisecond so a zero-length turn still
+/// weighs something.
+fn duration(turn: &Turn) -> f64 {
+    seconds_between(turn.start, turn.end).max(0.001)
+}
+
+/// ASR confidence weighted by duration, a missing score counting as zero: how
+/// well these turns were heard, whatever their number.
+fn quality(turns: &[Turn], indices: &[usize]) -> f64 {
+    let total: f64 = indices.iter().map(|&i| duration(&turns[i])).sum();
+    let heard: f64 = indices
         .iter()
-        .map(|&i| turns[i].asr_confidence.unwrap_or(0.0))
-        .sum()
+        .map(|&i| turns[i].asr_confidence.unwrap_or(0.0) * duration(&turns[i]))
+        .sum();
+    if total > 0.0 { heard / total } else { 0.0 }
+}
+
+/// Seconds covered by the union of these turns' spans.
+fn covered(turns: &[Turn], indices: &[usize]) -> f64 {
+    let mut spans: Vec<(DateTime<Utc>, DateTime<Utc>)> = indices
+        .iter()
+        .map(|&i| (turns[i].start, turns[i].end))
+        .collect();
+    spans.sort();
+    let mut total = 0.0;
+    let mut open: Option<(DateTime<Utc>, DateTime<Utc>)> = None;
+    for (start, end) in spans {
+        match open {
+            Some((from, to)) if start <= to => open = Some((from, to.max(end))),
+            _ => {
+                if let Some((from, to)) = open {
+                    total += seconds_between(from, to);
+                }
+                open = Some((start, end));
+            }
+        }
+    }
+    if let Some((from, to)) = open {
+        total += seconds_between(from, to);
+    }
+    total
+}
+
+/// One mic's turns with a second copy of the same span set aside.
+///
+/// A phone uploads each minute twice (compressed and lossless) and both are
+/// transcribed, so one mic can hold two clips over the same seconds. A clip is
+/// a copy when more than half of the shorter one's span overlaps a clip kept
+/// already; the better-heard clip is kept first. A mic's next minute touches
+/// its last one by a second at most, and stays.
+fn without_copies(turns: &[Turn], indices: &[usize]) -> (Vec<usize>, Vec<usize>) {
+    let mut clips: Vec<(Option<i64>, Vec<usize>)> = Vec::new();
+    for &i in indices {
+        let clip = turns[i].audio_segment_id;
+        match clips.iter_mut().find(|(c, _)| *c == clip) {
+            Some((_, members)) => members.push(i),
+            None => clips.push((clip, vec![i])),
+        }
+    }
+    let span = |members: &[usize]| {
+        let start = members.iter().map(|&i| turns[i].start).min();
+        let end = members.iter().map(|&i| turns[i].end).max();
+        start.zip(end)
+    };
+    // Stable, so equal clips keep the order they were heard in.
+    clips.sort_by(|a, b| quality(turns, &b.1).total_cmp(&quality(turns, &a.1)));
+    let mut kept: Vec<(DateTime<Utc>, DateTime<Utc>)> = Vec::new();
+    let (mut shown, mut copies) = (Vec::new(), Vec::new());
+    for (_, members) in clips {
+        let Some((start, end)) = span(&members) else {
+            continue;
+        };
+        let length = seconds_between(start, end);
+        let copy = kept.iter().any(|&(from, to)| {
+            let overlap = seconds_between(start.max(from), end.min(to));
+            let shorter = length.min(seconds_between(from, to));
+            overlap > 0.0 && overlap > shorter / 2.0
+        });
+        if copy {
+            copies.extend(members);
+        } else {
+            kept.push((start, end));
+            shown.extend(members);
+        }
+    }
+    (shown, copies)
 }
 
 fn to_moment(turns: &[Turn], cluster: &[usize]) -> Moment {
-    // First-appearance order of each source; both tie rules below depend on it.
+    // First-appearance order of each source; the tie rule below depends on it.
     let mut order: Vec<Option<&str>> = Vec::new();
     let mut by_source: HashMap<Option<&str>, Vec<usize>> = HashMap::new();
     for &index in cluster {
@@ -137,37 +219,51 @@ fn to_moment(turns: &[Turn], cluster: &[usize]) -> Moment {
         }
         by_source.entry(source).or_default().push(index);
     }
+    let split: HashMap<Option<&str>, (Vec<usize>, Vec<usize>)> = order
+        .iter()
+        .map(|&source| (source, without_copies(turns, &by_source[&source])))
+        .collect();
 
-    // Spine = the source with the highest summed confidence (cleaner audio
-    // scores higher); ties go to the one with more turns, i.e. the finer
+    // Spine = the mic that heard the moment best: its duration-weighted
+    // confidence, scaled by how much of the moment it covers, so neither saying
+    // more nor catching a clear fragment wins. Ties go to more turns, the finer
     // speaker split.
     //
     // ⚠ On a full tie the first source wins, hence the strict `>` loop:
     // `max_by_key` would keep the last.
+    let span = covered(turns, cluster);
+    let key = |source: Option<&str>| {
+        let shown = &split[&source].0;
+        let coverage = if span > 0.0 {
+            covered(turns, shown) / span
+        } else {
+            1.0
+        };
+        (quality(turns, shown) * coverage, shown.len())
+    };
     let mut best = order[0];
-    let mut best_key = (confidence(turns, &by_source[&best]), by_source[&best].len());
+    let mut best_key = key(best);
     for &source in &order[1..] {
-        let key = (
-            confidence(turns, &by_source[&source]),
-            by_source[&source].len(),
-        );
-        let better = key
+        let candidate = key(source);
+        let better = candidate
             .0
             .total_cmp(&best_key.0)
-            .then(key.1.cmp(&best_key.1))
+            .then(candidate.1.cmp(&best_key.1))
             .is_gt();
         if better {
             best = source;
-            best_key = key;
+            best_key = candidate;
         }
     }
 
-    let mut primary = by_source[&best].clone();
+    let (shown, copies) = &split[&best];
+    let mut primary = shown.clone();
     primary.sort_by_key(|&i| turns[i].start);
     let mut alternates: Vec<usize> = order
         .iter()
         .filter(|&&source| source != best)
         .flat_map(|source| by_source[source].iter().copied())
+        .chain(copies.iter().copied())
         .collect();
     alternates.sort_by_key(|&i| turns[i].start);
     Moment {
@@ -317,6 +413,7 @@ fn turns_of(segments: &[reads::Segment]) -> (Vec<Turn>, Vec<usize>) {
             asr_confidence: segment.asr_confidence,
             speaker_guess: segment.speaker_guess.clone(),
             speaker_score: segment.speaker_score,
+            audio_segment_id: segment.audio_segment_id,
         });
         kept.push(index);
     }
@@ -389,13 +486,19 @@ fn conversation_out(
     group: &[usize],
 ) -> ConversationOut {
     let row = |i: usize| &segments[kept[i]];
-    let preview = group
+    let moments = cluster_moments(turns, group);
+    // What a person reads: the spine's lines, not every mic's copy.
+    let shown: Vec<usize> = moments
+        .iter()
+        .flat_map(|m| m.primary.iter().copied())
+        .collect();
+    let preview = shown
         .iter()
         .map(|&i| row(i))
         .find(|s| {
             !s.text.trim().is_empty() && s.asr_confidence.unwrap_or(0.0) >= PREVIEW_MIN_CONFIDENCE
         })
-        .or_else(|| group.first().map(|&i| row(i)))
+        .or_else(|| shown.first().map(|&i| row(i)))
         .map(|s| s.text.clone())
         .unwrap_or_default();
     ConversationOut {
@@ -406,10 +509,10 @@ fn conversation_out(
         end: extreme(turns, group, |t| t.end, true)
             .map(|i| reads::iso(&row(i).end_utc))
             .unwrap_or_default(),
-        turn_count: group.len(),
+        turn_count: shown.len(),
         speakers: distinct(group.iter().map(|&i| turns[i].speaker_label.as_deref())),
         preview,
-        moments: cluster_moments(turns, group)
+        moments: moments
             .iter()
             .map(|moment| moment_out(segments, turns, kept, moment))
             .collect(),

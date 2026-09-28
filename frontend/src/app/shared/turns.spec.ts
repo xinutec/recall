@@ -175,6 +175,32 @@ describe('Turns', () => {
     expect(c.alternates(usb)).toEqual([phone]);
   });
 
+  it('compares a line only with the other mics’ versions of it', async () => {
+    const at = (from: number, to: number) => ({
+      start: `2026-01-15T10:33:${String(from).padStart(2, '0')}Z`,
+      end: `2026-01-15T10:33:${String(to).padStart(2, '0')}Z`,
+    });
+    const first = said(1, 'P', { source: 'usb', ...at(0, 10) });
+    const second = said(2, 'P', { source: 'usb', ...at(10, 20) });
+    const same = said(3, 'D', { source: 'phone', ...at(1, 10) });
+    const later = said(4, 'D', { source: 'phone', ...at(9, 20) });
+    const copy = said(5, 'P', { source: 'usb', ...at(0, 10) });
+    const { c } = await setup([moment([first, second], [same, later, copy])]);
+    // A neighbour that only brushes the line is another sentence.
+    expect(c.alternates(first)).toEqual([same, copy]);
+    // The mic's own second copy is not a second mic.
+    expect(c.mics(first)).toBe(2);
+    expect(c.alternates(second)).toEqual([later]);
+  });
+
+  it('flags only a disagreement with a confirmed name', async () => {
+    const usb = said(1, null, { source: 'usb', speaker: 'P', speakerConfirmed: false });
+    const phone = said(2, null, { source: 'phone', speaker: 'D', speakerConfirmed: false });
+    const { c } = await setup([moment([usb], [phone])]);
+    // Two guesses that differ are two guesses, not a finding.
+    expect(c.disputed(usb)).toBe(false);
+  });
+
   it('tags the mic where it changes, only when several are in view', async () => {
     const one = await setup([moment([said(1, 'P'), said(2, 'P')])]);
     expect(one.c.sourceTags().size).toBe(0);

@@ -138,6 +138,8 @@ pub struct Segment {
     pub provenance: Option<String>,
     pub hidden_reason: Option<String>,
     pub source_id: Option<String>,
+    /// The clip it was transcribed from.
+    pub audio_segment_id: Option<i64>,
     pub words_checked: bool,
 }
 
@@ -159,6 +161,7 @@ impl Segment {
             provenance: row.get("provenance")?,
             hidden_reason: row.get("hidden_reason")?,
             source_id: row.get("source_id")?,
+            audio_segment_id: row.get("audio_segment_id")?,
             words_checked: row.get::<_, Option<i64>>("words_checked")? == Some(1),
         })
     }

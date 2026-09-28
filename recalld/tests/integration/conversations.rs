@@ -21,7 +21,14 @@ fn turn(id: i64, start: i64, end: i64, source: &str) -> Turn {
         asr_confidence: None,
         speaker_guess: None,
         speaker_score: None,
+        audio_segment_id: None,
     }
+}
+
+/// The same turn, from a named clip of its mic.
+fn from_clip(mut t: Turn, clip: i64) -> Turn {
+    t.audio_segment_id = Some(clip);
+    t
 }
 
 fn scored(mut t: Turn, confidence: f64) -> Turn {
@@ -99,9 +106,9 @@ fn one_utterance_heard_by_three_mics_folds_into_one_moment() {
 }
 
 #[test]
-fn the_spine_is_the_source_with_the_highest_summed_confidence() {
-    // Two turns from a middling mic beat one turn from a slightly better one,
-    // because the sum is what is compared — the finer speaker split wins.
+fn the_spine_is_the_mic_that_heard_best_not_the_one_that_said_most() {
+    // Two middling lines do not outweigh one better one: a mic that splits or
+    // repeats more would otherwise win on volume.
     let turns = vec![
         scored(turn(1, 0, 10, "usb"), 0.55),
         scored(turn(2, 0, 4, "pixel"), 0.3),
@@ -111,8 +118,70 @@ fn the_spine_is_the_source_with_the_highest_summed_confidence() {
 
     let moments = cluster_moments(&turns, &group);
 
-    assert_eq!(moments[0].primary, vec![1, 2], "0.6 beats 0.55");
-    assert_eq!(moments[0].alternates, vec![0]);
+    assert_eq!(moments[0].primary, vec![0], "0.55 beats 0.3");
+    assert_eq!(moments[0].alternates, vec![1, 2]);
+}
+
+#[test]
+fn on_equal_quality_the_finer_speaker_split_wins() {
+    let turns = vec![
+        scored(turn(1, 0, 10, "usb"), 0.5),
+        scored(turn(2, 0, 4, "pixel"), 0.5),
+        scored(turn(3, 4, 10, "pixel"), 0.5),
+    ];
+    let group: Vec<usize> = (0..turns.len()).collect();
+
+    let moments = cluster_moments(&turns, &group);
+
+    assert_eq!(moments[0].primary, vec![1, 2]);
+}
+
+#[test]
+fn a_mic_that_heard_only_part_of_the_moment_is_not_the_spine() {
+    // geb is clearer but caught five seconds of thirty; showing it would drop
+    // the rest of what was said.
+    let turns = vec![
+        scored(turn(1, 0, 30, "usb"), 0.6),
+        scored(turn(2, 0, 5, "geb"), 0.9),
+    ];
+    let group = vec![0, 1];
+
+    let moments = cluster_moments(&turns, &group);
+
+    assert_eq!(moments[0].primary, vec![0]);
+}
+
+#[test]
+fn a_mics_second_copy_of_the_same_minute_is_set_aside() {
+    // A phone uploads each minute twice (compressed and lossless), both
+    // transcribed. The spine shows one copy; the other is an alternate.
+    let turns = vec![
+        from_clip(scored(turn(1, 0, 10, "usb"), 0.5), 20),
+        from_clip(scored(turn(2, 0, 5, "pixel"), 0.8), 10),
+        from_clip(scored(turn(3, 1, 5, "pixel"), 0.9), 11),
+        from_clip(scored(turn(4, 5, 10, "pixel"), 0.8), 10),
+        from_clip(scored(turn(5, 5, 10, "pixel"), 0.9), 11),
+    ];
+    let group: Vec<usize> = (0..turns.len()).collect();
+
+    let moments = cluster_moments(&turns, &group);
+
+    assert_eq!(moments.len(), 1);
+    assert_eq!(moments[0].primary, vec![2, 4], "the better copy");
+    assert_eq!(moments[0].alternates, vec![0, 1, 3]);
+}
+
+#[test]
+fn a_mics_next_minute_is_not_mistaken_for_a_copy() {
+    let turns = vec![
+        from_clip(scored(turn(1, 0, 60, "usb"), 0.8), 10),
+        from_clip(scored(turn(2, 59, 120, "usb"), 0.7), 11),
+    ];
+    let group = vec![0, 1];
+
+    let moments = cluster_moments(&turns, &group);
+
+    assert_eq!(moments[0].primary, vec![0, 1]);
 }
 
 #[test]
@@ -276,6 +345,7 @@ fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment
         provenance: None,
         hidden_reason: None,
         source_id: Some("usb".to_owned()),
+        audio_segment_id: None,
         words_checked: false,
     }
 }
@@ -309,6 +379,39 @@ fn a_conversation_reports_its_span_its_turn_count_and_its_confirmed_speakers() {
     assert_eq!(conv.end, reads_iso(12));
     // Distinct, first-seen order, and nothing for the unnamed turn.
     assert_eq!(conv.speakers, vec!["Carol".to_owned(), "Alice".to_owned()]);
+}
+
+fn from_mic(mut s: recalld::reads::Segment, mic: &str) -> recalld::reads::Segment {
+    s.source_id = Some(mic.to_owned());
+    s
+}
+
+/// The count is of lines a person sees: one sentence heard by two mics is one.
+#[test]
+fn the_turn_count_is_of_the_lines_shown_not_every_mics_copy() {
+    let segments = vec![
+        confident(segment(1, 0, 5, "hello there"), 0.9),
+        from_mic(confident(segment(2, 0, 5, "hello hair"), 0.4), "pixel"),
+    ];
+
+    let out = fold(&segments, 60.0, 200);
+
+    assert_eq!(out.items[0].turn_count, 1);
+}
+
+#[test]
+fn the_preview_is_from_the_mic_shown() {
+    let segments = vec![
+        from_mic(
+            confident(segment(1, 0, 5, "mumbled words here"), 0.6),
+            "pixel",
+        ),
+        confident(segment(2, 0, 5, "Alex speaking"), 0.9),
+    ];
+
+    let out = fold(&segments, 60.0, 200);
+
+    assert_eq!(out.items[0].preview, "Alex speaking");
 }
 
 /// A card is headed by its first line above `PREVIEW_MIN_CONFIDENCE`, so a

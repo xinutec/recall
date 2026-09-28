@@ -59,6 +59,14 @@ export function runsOf(
   return out;
 }
 
+/** Two lines are the same speech when they overlap by more than half of the
+ * shorter one. */
+export function sameSpeech(a: Transcript, b: Transcript): boolean {
+  const [as, ae, bs, be] = [a.start, a.end, b.start, b.end].map((x) => Date.parse(x));
+  const overlap = Math.min(ae, be) - Math.max(as, bs);
+  return overlap > 0 && overlap > Math.min(ae - as, be - bs) / 2;
+}
+
 const COLOURS = ['#8ab4f8', '#fbbc04', '#81c995', '#f28b82', '#c58af9', '#78d9ec', '#ff8bcb'];
 
 /** A stretch of turns as speaker paragraphs. Tapping a line opens its sheet. */
@@ -134,17 +142,27 @@ export class Turns implements OnDestroy {
     return `${Math.round(value * 100)}%`;
   }
 
+  /** The mics that heard this line: its own and those with a version of it. */
   protected mics(t: Transcript): number {
-    return this.momentOf().get(t.id)?.sources.length ?? 1;
+    return new Set([t.source, ...this.alternates(t).map((a) => a.source)]).size;
   }
 
+  /** The other mics' versions of this line: what overlaps more than half of
+   * the shorter of the two. A moment can span a whole call, and a neighbour
+   * that only brushes the line is another sentence. */
   protected alternates(t: Transcript): readonly Transcript[] {
-    return this.momentOf().get(t.id)?.alternates ?? [];
+    return (this.momentOf().get(t.id)?.alternates ?? []).filter((a) => sameSpeech(t, a));
   }
 
-  /** Another mic's version names a different speaker for this moment. */
+  /** Another mic's version names someone else, and one of the two names is a
+   * person's: two machine guesses that differ are not a finding. */
   protected disputed(t: Transcript): boolean {
-    return !!t.speaker && this.alternates(t).some((a) => !!a.speaker && a.speaker !== t.speaker);
+    return (
+      !!t.speaker &&
+      this.alternates(t).some(
+        (a) => !!a.speaker && a.speaker !== t.speaker && (a.speakerConfirmed || t.speakerConfirmed),
+      )
+    );
   }
 
   /** No speaker separation yet: shown grey, still editable. */
