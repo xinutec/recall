@@ -137,7 +137,7 @@ fn regions_json(regions: Option<&[Region]>) -> rusqlite::Result<String> {
 }
 
 /// Stored regions, or `None` for JSON `null` (could not look) or garbage.
-fn parse_regions(json: &str) -> Option<Vec<Region>> {
+pub fn parse_regions(json: &str) -> Option<Vec<Region>> {
     let spans: Option<Vec<[f64; 2]>> = serde_json::from_str(json).ok()?;
     Some(
         spans?
