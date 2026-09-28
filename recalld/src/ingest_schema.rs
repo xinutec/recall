@@ -5,6 +5,11 @@
 //! `ALTER`s below are for. Every open goes through this, so no pass can meet a
 //! table another pass was meant to have created.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the schema itself: it runs on every open, so every test runs it"
+)]
+
 use rusqlite::Connection;
 
 pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {

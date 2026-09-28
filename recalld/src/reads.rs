@@ -12,6 +12,72 @@ use std::time::Duration;
 
 use crate::turn_store::{Provenance, Stage};
 
+/// The current-turn projection the page queries share: not superseded, and
+/// carrying the capturing source.
+///
+/// LEFT JOIN, not JOIN: a correction can exist with no audio segment, and the
+/// timeline must still show it.
+macro_rules! current {
+    () => {
+        "SELECT t.*, a.source_id FROM transcript_segments t \
+         LEFT JOIN audio_segments a ON t.audio_segment_id = a.id \
+         WHERE t.superseded_by IS NULL AND (?1 OR t.hidden_reason IS NULL) \
+           AND t.start_utc < COALESCE(?3, '9999') AND t.start_utc > COALESCE(?4, '')"
+    };
+}
+
+macro_rules! ties {
+    () => {
+        " AND t.start_utc = ?5 AND t.id NOT IN (SELECT value FROM json_each(?6))"
+    };
+}
+
+crate::statements! {
+    SEARCH: Meaning =
+        "SELECT ts.*, a.source_id FROM transcript_segments ts \
+         JOIN transcript_fts ON transcript_fts.rowid = ts.id \
+         LEFT JOIN audio_segments a ON a.id = ts.audio_segment_id \
+         WHERE transcript_fts MATCH ?1 AND ts.superseded_by IS NULL \
+           AND ts.hidden_reason IS NULL \
+         ORDER BY ts.start_utc \
+         LIMIT ?2";
+    SUPERSEDED_BY: Meaning =
+        "SELECT superseded_by FROM transcript_segments WHERE id = ?1";
+    BY_ID: Meaning =
+        "SELECT t.*, a.source_id FROM transcript_segments t \
+         LEFT JOIN audio_segments a ON a.id = t.audio_segment_id WHERE t.id = ?1";
+    REVIEW: Meaning =
+        "SELECT t.*, a.source_id FROM transcript_segments t \
+         LEFT JOIN audio_segments a ON a.id = t.audio_segment_id \
+         WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL \
+           AND (t.asr_confidence IS NULL OR t.asr_confidence < ?1) \
+         ORDER BY t.asr_confidence IS NOT NULL, t.asr_confidence ASC, t.start_utc \
+         LIMIT ?2";
+
+    // The page queries. ?1 shows hidden turns too; ?3/?4 bound the start
+    // (NULL: open) and stay index ranges; ?2 is a source filter of its own,
+    // because as a NULL-able test it stops SQLite reaching a session's turns
+    // through its audio (6x slower on a small meeting).
+    PAGE_NEWEST: Meaning =
+        current!(), " ORDER BY t.start_utc DESC, t.id DESC LIMIT ?5";
+    PAGE_OLDEST: Meaning =
+        current!(), " ORDER BY t.start_utc ASC, t.id ASC LIMIT ?5";
+    SOURCE_PAGE_NEWEST: Meaning =
+        current!(), " AND a.source_id = ?2 ORDER BY t.start_utc DESC, t.id DESC LIMIT ?5";
+    SOURCE_PAGE_OLDEST: Meaning =
+        current!(), " AND a.source_id = ?2 ORDER BY t.start_utc ASC, t.id ASC LIMIT ?5";
+    // The rest of a page's last instant: ?5 the instant, ?6 the ids already
+    // on the page as a JSON array.
+    TIES_NEWEST: Meaning =
+        current!(), ties!(), " ORDER BY t.id DESC";
+    TIES_OLDEST: Meaning =
+        current!(), ties!(), " ORDER BY t.id ASC";
+    SOURCE_TIES_NEWEST: Meaning =
+        current!(), " AND a.source_id = ?2", ties!(), " ORDER BY t.id DESC";
+    SOURCE_TIES_OLDEST: Meaning =
+        current!(), " AND a.source_id = ?2", ties!(), " ORDER BY t.id ASC";
+}
+
 /// One turn, in exactly the shape the Angular app already consumes.
 ///
 /// `camelCase` and the explicit `Option`s are the contract: the UI distinguishes
@@ -167,15 +233,6 @@ pub fn iso(stored: &str) -> String {
     stored.to_owned()
 }
 
-/// The current-turn projection both page queries share: not superseded, and
-/// carrying the capturing source. [`recent`] adds the hidden filter unless asked.
-///
-/// LEFT JOIN, not JOIN: a correction can exist with no audio segment, and the
-/// timeline must still show it.
-const SELECT_CURRENT: &str = "SELECT t.*, a.source_id FROM transcript_segments t \
-     LEFT JOIN audio_segments a ON t.audio_segment_id = a.id \
-     WHERE t.superseded_by IS NULL";
-
 /// Open `recall.sqlite` read-only, so a read route cannot write the record.
 pub fn open(root: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open_with_flags(
@@ -192,15 +249,7 @@ pub fn open(root: &Path) -> rusqlite::Result<Connection> {
 pub fn search(conn: &Connection, query: &str, limit: i64) -> rusqlite::Result<ItemsOut> {
     // The FTS join is what makes this a search rather than a scan; ts.* keeps the
     // row shape identical to the timeline's.
-    let mut stmt = conn.prepare(
-        "SELECT ts.*, a.source_id FROM transcript_segments ts \
-         JOIN transcript_fts ON transcript_fts.rowid = ts.id \
-         LEFT JOIN audio_segments a ON a.id = ts.audio_segment_id \
-         WHERE transcript_fts MATCH ?1 AND ts.superseded_by IS NULL \
-           AND ts.hidden_reason IS NULL \
-         ORDER BY ts.start_utc \
-         LIMIT ?2",
-    )?;
+    let mut stmt = SEARCH.prepare(conn)?;
     let rows = stmt.query_map((query, limit), Segment::from_row)?;
     let mut items = Vec::new();
     for row in rows {
@@ -225,12 +274,8 @@ pub fn current_version(conn: &Connection, id: i64) -> rusqlite::Result<Option<Tr
         if !seen.insert(at) {
             return Ok(None); // a cycle: report absent rather than spin
         }
-        let next: Option<Option<i64>> = conn
-            .query_row(
-                "SELECT superseded_by FROM transcript_segments WHERE id = ?1",
-                [at],
-                |r| r.get(0),
-            )
+        let next: Option<Option<i64>> = SUPERSEDED_BY
+            .query_row(conn, [at], |r| r.get(0))
             .optional()?;
         match next {
             None => return Ok(None), // no such turn
@@ -238,10 +283,7 @@ pub fn current_version(conn: &Connection, id: i64) -> rusqlite::Result<Option<Tr
             Some(Some(newer)) => at = newer,
         }
     }
-    let mut stmt = conn.prepare(
-        "SELECT t.*, a.source_id FROM transcript_segments t \
-         LEFT JOIN audio_segments a ON a.id = t.audio_segment_id WHERE t.id = ?1",
-    )?;
+    let mut stmt = BY_ID.prepare(conn)?;
     let mut rows = stmt.query([at])?;
     let Some(row) = rows.next()? else {
         return Ok(None);
@@ -270,14 +312,7 @@ pub fn transcripts(conn: &Connection, ids: &[i64]) -> rusqlite::Result<ItemsOut>
 ///
 /// NULL confidence sorts first: a turn nobody has scored is the most suspect.
 pub fn review(conn: &Connection, max_confidence: f64, limit: i64) -> rusqlite::Result<ItemsOut> {
-    let mut stmt = conn.prepare(
-        "SELECT t.*, a.source_id FROM transcript_segments t \
-         LEFT JOIN audio_segments a ON a.id = t.audio_segment_id \
-         WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL \
-           AND (t.asr_confidence IS NULL OR t.asr_confidence < ?1) \
-         ORDER BY t.asr_confidence IS NOT NULL, t.asr_confidence ASC, t.start_utc \
-         LIMIT ?2",
-    )?;
+    let mut stmt = REVIEW.prepare(conn)?;
     let rows = stmt.query_map((max_confidence, limit), Segment::from_row)?;
     let mut items = Vec::new();
     for row in rows {
@@ -308,39 +343,21 @@ pub struct Window<'a> {
 /// make the next strict-`<` page skip the rest of it. Callers therefore test
 /// `len >= limit` for has-more, not `==`.
 pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result<Vec<Segment>> {
-    let mut filters = String::new();
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if !window.hidden {
-        filters.push_str(" AND t.hidden_reason IS NULL");
-    }
-    if let Some(source) = window.source {
-        filters.push_str(" AND a.source_id = ?");
-        params.push(Box::new(source.to_owned()));
-    }
-    if let Some(before) = window.before {
-        filters.push_str(" AND t.start_utc < ?");
-        params.push(Box::new(before.to_owned()));
-    }
-    if let Some(after) = window.after {
-        filters.push_str(" AND t.start_utc > ?");
-        params.push(Box::new(after.to_owned()));
-    }
     // Forward paging reads oldest-first; every other case newest-first. The id
     // tiebreak makes same-instant order deterministic, and matches the tie pass.
-    let order = if window.after.is_some() {
-        "ASC"
-    } else {
-        "DESC"
+    let (page, ties) = match (window.source.is_some(), window.after.is_some()) {
+        (false, false) => (PAGE_NEWEST, TIES_NEWEST),
+        (false, true) => (PAGE_OLDEST, TIES_OLDEST),
+        (true, false) => (SOURCE_PAGE_NEWEST, SOURCE_TIES_NEWEST),
+        (true, true) => (SOURCE_PAGE_OLDEST, SOURCE_TIES_OLDEST),
     };
-
-    let sql =
-        format!("{SELECT_CURRENT}{filters} ORDER BY t.start_utc {order}, t.id {order} LIMIT ?");
-    let mut page_params = borrowed(&params);
-    let limit_box: Box<dyn rusqlite::ToSql> = Box::new(limit);
-    page_params.push(limit_box.as_ref());
-    let mut stmt = conn.prepare(&sql)?;
-    let mut segments: Vec<Segment> = stmt
-        .query_map(page_params.as_slice(), Segment::from_row)?
+    let filters = (window.hidden, window.source, window.before, window.after);
+    let mut segments: Vec<Segment> = page
+        .prepare(conn)?
+        .query_map(
+            rusqlite::params![filters.0, filters.1, filters.2, filters.3, limit],
+            Segment::from_row,
+        )?
         .collect::<rusqlite::Result<_>>()?;
 
     // At limit 0 an empty page must not trigger a tie pass with no boundary.
@@ -355,28 +372,17 @@ pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result
             .filter(|s| s.start_utc == boundary)
             .map(|s| s.id)
             .collect();
-        let marks = vec!["?"; seen.len()].join(",");
-        let tie_sql = format!(
-            "{SELECT_CURRENT}{filters} AND t.start_utc = ? AND t.id NOT IN ({marks}) \
-             ORDER BY t.id {order}"
-        );
-        let mut tie_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        tie_params.push(Box::new(boundary));
-        for id in &seen {
-            tie_params.push(Box::new(*id));
-        }
-        let mut refs = borrowed(&params);
-        refs.extend(tie_params.iter().map(std::convert::AsRef::as_ref));
-        let mut tie_stmt = conn.prepare(&tie_sql)?;
-        for tie in tie_stmt.query_map(refs.as_slice(), Segment::from_row)? {
+        let seen = serde_json::to_string(&seen)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+        let mut stmt = ties.prepare(conn)?;
+        for tie in stmt.query_map(
+            rusqlite::params![filters.0, filters.1, filters.2, filters.3, boundary, seen],
+            Segment::from_row,
+        )? {
             segments.push(tie?);
         }
     }
     Ok(segments)
-}
-
-fn borrowed(params: &[Box<dyn rusqlite::ToSql>]) -> Vec<&dyn rusqlite::ToSql> {
-    params.iter().map(std::convert::AsRef::as_ref).collect()
 }
 
 /// One page of the timeline older than `before` (or the newest page), in

@@ -15,6 +15,11 @@ use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
 use std::collections::HashMap;
 
+crate::statements! {
+    SOURCES: Meaning =
+        "SELECT id, name, kind FROM sources ORDER BY id";
+}
+
 /// How a source's PCM stream is produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceKind {
@@ -196,7 +201,7 @@ pub fn source_statuses<S: std::hash::BuildHasher, T: std::hash::BuildHasher>(
 /// An unknown kind in the database is an error here rather than a string that
 /// silently never matches downstream.
 pub fn source_rows(conn: &Connection) -> rusqlite::Result<Vec<SourceRow>> {
-    let mut stmt = conn.prepare("SELECT id, name, kind FROM sources ORDER BY id")?;
+    let mut stmt = SOURCES.prepare(conn)?;
     let rows = stmt.query_map([], |r| {
         let raw: String = r.get(2)?;
         let kind = SourceKind::parse(&raw).ok_or_else(|| {

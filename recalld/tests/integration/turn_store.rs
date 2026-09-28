@@ -1,5 +1,5 @@
 use recalld::turn_store::{
-    HUMAN_MODEL, HUMAN_OWNED, LIVE_MODEL, Provenance, Stage, is_human_owned,
+    HUMAN_MODEL, HUMAN_OWNED, HiddenReason, LIVE_MODEL, Provenance, Stage, is_human_owned,
 };
 #[test]
 fn every_provenance_reads_back_as_written() {
@@ -82,7 +82,6 @@ fn a_person_owns_what_the_predicate_says() {
 
 #[test]
 fn the_turn_table_has_one_writer() {
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let writes = [
         "INSERT INTO transcript_segments",
         "INSERT OR REPLACE INTO transcript_segments",
@@ -91,29 +90,54 @@ fn the_turn_table_has_one_writer() {
         "INSERT INTO transcript_fts",
     ];
     let mut offenders = Vec::new();
-    for entry in std::fs::read_dir(&src).expect("src") {
-        let path = entry.expect("entry").path();
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        // The schema's migrations rewrite the table by design.
-        if name == "turn_store.rs" || name == "meaning_schema.rs" {
+    for (module, statements) in recalld::sql::ALL {
+        if *module == "turn_store" {
             continue;
         }
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
-        // Comments dropped and whitespace squashed, so SQL split over lines
-        // still matches.
-        let code = text
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .flat_map(str::split_whitespace)
-            .filter(|token| *token != "\\")
-            .collect::<Vec<_>>()
-            .join(" ");
-        if writes.iter().any(|w| code.contains(w)) {
-            offenders.push(name.to_owned());
+        for sql in *statements {
+            let text = sql.text().split_whitespace().collect::<Vec<_>>().join(" ");
+            if writes.iter().any(|w| text.contains(w)) {
+                offenders.push(format!("{module}: {text}"));
+            }
         }
     }
     assert!(
         offenders.is_empty(),
         "write turns through turn_store: {offenders:?}"
     );
+}
+
+/// Stored rows carry these spellings, and taking a hide back matches on them.
+#[test]
+fn every_hidden_reason_keeps_its_stored_spelling() {
+    let all = [
+        (HiddenReason::LiveReconciled, "live-reconciled"),
+        (HiddenReason::CoveredByRoom, "covered by the room stream"),
+        (
+            HiddenReason::DiarizedBy("per-mic runner".into()),
+            "diarized (per-mic runner)",
+        ),
+        (HiddenReason::SplitInto(39916), "split into pieces (39916)"),
+        (HiddenReason::NobodySpoke, "nobody spoke"),
+        (HiddenReason::SilentMinute, "silent minute"),
+        (HiddenReason::SetAside, "set aside for re-transcription"),
+        (
+            HiddenReason::RetranscriptionUndone,
+            "re-transcription undone",
+        ),
+    ];
+    for (reason, stored) in all {
+        // A new reason fails to compile here until it is listed above.
+        match reason {
+            HiddenReason::LiveReconciled
+            | HiddenReason::CoveredByRoom
+            | HiddenReason::DiarizedBy(_)
+            | HiddenReason::SplitInto(_)
+            | HiddenReason::NobodySpoke
+            | HiddenReason::SilentMinute
+            | HiddenReason::SetAside
+            | HiddenReason::RetranscriptionUndone => {}
+        }
+        assert_eq!(reason.to_string(), stored);
+    }
 }

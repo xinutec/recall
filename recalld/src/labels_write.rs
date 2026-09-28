@@ -13,14 +13,47 @@ use crate::turn_store::{self, HUMAN_MODEL, HiddenReason, NewTurn, Provenance};
 use audiocore::instant::Stamp;
 use rusqlite::{Connection, Transaction};
 
+crate::statements! {
+    DROP_VOICEPRINT: Meaning =
+        "DELETE FROM speaker_embeddings WHERE source_correction_id = ?1";
+    CORRECTED_TURN: Meaning =
+        "SELECT transcript_segment_id FROM corrections WHERE id = ?1";
+    SET_SPEAKER: Meaning =
+        "UPDATE corrections SET speaker = ?1 WHERE id = ?2";
+    HIDE_CORRECTION: Meaning =
+        "UPDATE corrections SET hidden_reason = ?1 WHERE id = ?2";
+    LOAD_ORIGINAL: Meaning =
+        "SELECT id, audio_segment_id, start_utc, end_utc, text, language, \
+                language_confidence, asr_confidence, speaker_label, speaker_id, \
+                speaker_cluster, superseded_by \
+         FROM transcript_segments WHERE id = ?1";
+    INSERT_PAIR: Meaning =
+        "INSERT INTO corrections \
+            (transcript_segment_id, audio_segment_id, start_utc, end_utc, \
+             original_text, corrected_text, language, created_utc, speaker, \
+             audio_confidence, words_checked) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+    DROP_NOBODY_SPOKE_PAIR: Meaning =
+        "DELETE FROM corrections WHERE transcript_segment_id = ?1 AND corrected_text = ''";
+    CURRENT_CORRECTION_TURN: Meaning =
+        "SELECT id FROM transcript_segments
+             WHERE id = ?1 AND provenance = ?2
+               AND superseded_by IS NULL AND hidden_reason IS NULL";
+    NEWEST_PAIR: Meaning =
+        "SELECT id FROM corrections WHERE transcript_segment_id = ?1 ORDER BY id DESC";
+    DROP_SEGMENT_VOICEPRINT: Meaning =
+        "DELETE FROM speaker_embeddings WHERE source_segment_id = ?1";
+    DROP_TURN_EMBEDDING: Meaning =
+        "DELETE FROM transcript_embeddings WHERE segment_id = ?1";
+    DELETE_PAIR: Meaning =
+        "DELETE FROM corrections WHERE id = ?1";
+}
+
 /// Why a correction was hidden from the corpus by a human in review.
 const HIDE_REASON: &str = "review";
 
 fn drop_voiceprint(tx: &Transaction, correction_id: i64) -> rusqlite::Result<()> {
-    tx.execute(
-        "DELETE FROM speaker_embeddings WHERE source_correction_id = ?1",
-        [correction_id],
-    )?;
+    DROP_VOICEPRINT.execute(tx, [correction_id])?;
     Ok(())
 }
 
@@ -36,17 +69,10 @@ pub fn set_correction_speaker(
     speaker: &str,
 ) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
-    let original: Option<i64> = tx
-        .query_row(
-            "SELECT transcript_segment_id FROM corrections WHERE id = ?1",
-            [correction_id],
-            |r| r.get(0),
-        )
+    let original: Option<i64> = CORRECTED_TURN
+        .query_row(&tx, [correction_id], |r| r.get(0))
         .ok();
-    tx.execute(
-        "UPDATE corrections SET speaker = ?1 WHERE id = ?2",
-        (speaker, correction_id),
-    )?;
+    SET_SPEAKER.execute(&tx, (speaker, correction_id))?;
     if let Some(original) = original {
         turn_store::label_correction(&tx, original, speaker)?;
     }
@@ -60,10 +86,7 @@ pub fn set_correction_speaker(
 /// when the judgement was that it is unusable.
 pub fn hide_correction(conn: &mut Connection, correction_id: i64) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
-    tx.execute(
-        "UPDATE corrections SET hidden_reason = ?1 WHERE id = ?2",
-        (HIDE_REASON, correction_id),
-    )?;
+    HIDE_CORRECTION.execute(&tx, (HIDE_REASON, correction_id))?;
     drop_voiceprint(&tx, correction_id)?;
     tx.commit()
 }
@@ -184,13 +207,8 @@ pub struct Correction<'a> {
 }
 
 fn load_original(tx: &Transaction, segment_id: i64) -> Result<Original, CorrectError> {
-    tx.query_row(
-        "SELECT id, audio_segment_id, start_utc, end_utc, text, language, \
-                language_confidence, asr_confidence, speaker_label, speaker_id, \
-                speaker_cluster, superseded_by \
-         FROM transcript_segments WHERE id = ?1",
-        [segment_id],
-        |r| {
+    LOAD_ORIGINAL
+        .query_row(tx, [segment_id], |r| {
             Ok(Original {
                 id: r.get(0)?,
                 audio_segment_id: r.get(1)?,
@@ -205,12 +223,11 @@ fn load_original(tx: &Transaction, segment_id: i64) -> Result<Original, CorrectE
                 speaker_cluster: r.get(10)?,
                 superseded_by: r.get(11)?,
             })
-        },
-    )
-    .map_err(|err| match err {
-        rusqlite::Error::QueryReturnedNoRows => CorrectError::Missing(segment_id),
-        other => CorrectError::Db(other),
-    })
+        })
+        .map_err(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => CorrectError::Missing(segment_id),
+            other => CorrectError::Db(other),
+        })
 }
 
 /// Replace a turn with a human-authored one and record the corpus pair.
@@ -304,12 +321,8 @@ struct Pair<'a> {
 }
 
 fn insert_pair(tx: &Transaction, old: &Original, pair: &Pair, now: &Stamp) -> rusqlite::Result<()> {
-    tx.execute(
-        "INSERT INTO corrections \
-            (transcript_segment_id, audio_segment_id, start_utc, end_utc, \
-             original_text, corrected_text, language, created_utc, speaker, \
-             audio_confidence, words_checked) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+    INSERT_PAIR.execute(
+        tx,
         rusqlite::params![
             old.id,
             old.audio_segment_id,
@@ -382,10 +395,7 @@ pub fn undo_no_speech(conn: &mut Connection, segment_id: i64) -> Result<(), Corr
     if !turn_store::unhide(&tx, segment_id, &HiddenReason::NobodySpoke)? {
         return Err(CorrectError::NotNobodySpoke(segment_id));
     }
-    tx.execute(
-        "DELETE FROM corrections WHERE transcript_segment_id = ?1 AND corrected_text = ''",
-        [segment_id],
-    )?;
+    DROP_NOBODY_SPOKE_PAIR.execute(&tx, [segment_id])?;
     tx.commit()?;
     Ok(())
 }
@@ -403,35 +413,21 @@ pub fn undo_correction(conn: &mut Connection, segment_id: i64) -> Result<(), Cor
     let tx = conn.transaction()?;
     let old = load_original(&tx, segment_id)?;
     let provenance = Provenance::Correction(segment_id).to_string();
-    let human: Option<i64> = tx
-        .query_row(
-            "SELECT id FROM transcript_segments
-             WHERE id = ?1 AND provenance = ?2
-               AND superseded_by IS NULL AND hidden_reason IS NULL",
-            rusqlite::params![old.superseded_by, provenance],
-            |r| r.get(0),
-        )
+    let human: Option<i64> = CURRENT_CORRECTION_TURN
+        .query_row(&tx, rusqlite::params![old.superseded_by, provenance], |r| {
+            r.get(0)
+        })
         .optional()?;
-    let pair: Option<i64> = tx
-        .query_row(
-            "SELECT id FROM corrections WHERE transcript_segment_id = ?1 ORDER BY id DESC",
-            [segment_id],
-            |r| r.get(0),
-        )
+    let pair: Option<i64> = NEWEST_PAIR
+        .query_row(&tx, [segment_id], |r| r.get(0))
         .optional()?;
     let (Some(human), Some(pair)) = (human, pair) else {
         return Err(CorrectError::NotCorrected(segment_id));
     };
     drop_voiceprint(&tx, pair)?;
-    tx.execute(
-        "DELETE FROM speaker_embeddings WHERE source_segment_id = ?1",
-        [human],
-    )?;
-    tx.execute(
-        "DELETE FROM transcript_embeddings WHERE segment_id = ?1",
-        [human],
-    )?;
-    tx.execute("DELETE FROM corrections WHERE id = ?1", [pair])?;
+    DROP_SEGMENT_VOICEPRINT.execute(&tx, [human])?;
+    DROP_TURN_EMBEDDING.execute(&tx, [human])?;
+    DELETE_PAIR.execute(&tx, [pair])?;
     turn_store::unsupersede(&tx, segment_id, human)?;
     tx.commit()?;
     Ok(())

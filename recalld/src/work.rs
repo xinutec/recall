@@ -17,6 +17,20 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+crate::statements! {
+    VOCABULARY: Meaning =
+        "SELECT id, term FROM vocabulary ORDER BY term COLLATE NOCASE";
+    ADD_TERM: Meaning =
+        "INSERT INTO vocabulary (term, created_utc) VALUES (?1, ?2) ON CONFLICT(term) DO NOTHING";
+    TERM_ID: Meaning =
+        "SELECT id FROM vocabulary WHERE term = ?1";
+    DELETE_TERM: Meaning =
+        "DELETE FROM vocabulary WHERE id = ?1";
+    LIVE_TURN_EXISTS: Meaning =
+        "SELECT 1 FROM transcript_segments \
+                 WHERE asr_model = 'live' AND start_utc = ?1 AND text = ?2 LIMIT 1";
+}
+
 /// Open `recall.sqlite` for writing.
 ///
 /// Separate from [`reads::open`], so a bug in a read path cannot write. The
@@ -44,7 +58,7 @@ pub struct VocabularyOut {
 
 /// The terms, ordered case-insensitively — the order the Labels page renders.
 pub fn vocabulary(conn: &Connection) -> rusqlite::Result<VocabularyOut> {
-    let mut stmt = conn.prepare("SELECT id, term FROM vocabulary ORDER BY term COLLATE NOCASE")?;
+    let mut stmt = VOCABULARY.prepare(conn)?;
     let rows = stmt.query_map([], |r| {
         Ok(Term {
             id: r.get(0)?,
@@ -85,19 +99,12 @@ pub fn add_term(conn: &Connection, term: &str, now: &Stamp) -> Result<i64, TermE
         // fragment and could never be found again to delete.
         return Err(TermError::Blank);
     }
-    conn.execute(
-        "INSERT INTO vocabulary (term, created_utc) VALUES (?1, ?2) ON CONFLICT(term) DO NOTHING",
-        (cleaned, now),
-    )?;
-    Ok(conn.query_row(
-        "SELECT id FROM vocabulary WHERE term = ?1",
-        [cleaned],
-        |r| r.get(0),
-    )?)
+    ADD_TERM.execute(conn, (cleaned, now))?;
+    Ok(TERM_ID.query_row(conn, [cleaned], |r| r.get(0))?)
 }
 
 pub fn delete_term(conn: &Connection, id: i64) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM vocabulary WHERE id = ?1", [id])?;
+    DELETE_TERM.execute(conn, [id])?;
     Ok(())
 }
 
@@ -197,13 +204,8 @@ pub fn ingest_live(
         {
             continue;
         }
-        let present: Option<i64> = conn
-            .query_row(
-                "SELECT 1 FROM transcript_segments \
-                 WHERE asr_model = 'live' AND start_utc = ?1 AND text = ?2 LIMIT 1",
-                rusqlite::params![start, turn.text],
-                |r| r.get(0),
-            )
+        let present: Option<i64> = LIVE_TURN_EXISTS
+            .query_row(conn, rusqlite::params![start, turn.text], |r| r.get(0))
             .optional()?;
         if present.is_some() {
             continue;

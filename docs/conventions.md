@@ -10,6 +10,13 @@ A rule two crates need lives in `audiocore`, not beside a caller. Doc comments
 say what a thing is for today; history is in git. An intra-doc link that does
 not resolve fails the gate.
 
+recalld's SQL is declared, never inline: each statement is a constant in its
+module's `statements!` block, naming the database it runs against, and runs
+through that constant (`recalld/src/sql.rs`). Clippy refuses rusqlite's
+text-taking methods outside it, and a test prepares every statement against
+the migrated schema, so a renamed column fails the gate. A statement whose
+shape varies is written as one statement per shape, not built at run time.
+
 ## Typing (strict)
 
 The Python is the model floor and is fully, strictly typed.

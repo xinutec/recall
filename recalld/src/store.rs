@@ -10,6 +10,26 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
+crate::statements! {
+    INSERT: Ingest =
+        "INSERT INTO segments
+             (filename, source, start_utc, bytes, sha256, received_utc, sent_utc)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+    LOOKUP: Ingest =
+        "SELECT source, filename, start_utc, bytes, sha256, received_utc, sent_utc
+         FROM segments WHERE filename = ?1";
+    // ?2 bounds the start (NULL: from the first). The source (?1) has a
+    // statement of its own so it can reach its rows by `segments_source_start`.
+    LIST: Ingest =
+        "SELECT source, filename, start_utc, bytes, sha256, received_utc, sent_utc
+         FROM segments WHERE start_utc >= COALESCE(?2, '')
+         ORDER BY start_utc, filename LIMIT ?3";
+    LIST_SOURCE: Ingest =
+        "SELECT source, filename, start_utc, bytes, sha256, received_utc, sent_utc
+         FROM segments WHERE source = ?1 AND start_utc >= COALESCE(?2, '')
+         ORDER BY start_utc, filename LIMIT ?3";
+}
+
 /// A byte count column, read as the i64 SQLite stores and returned as u64. A
 /// negative value is an out-of-range error naming the column.
 fn byte_count(r: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<u64> {
@@ -57,10 +77,8 @@ pub fn open(root: &Path) -> rusqlite::Result<Connection> {
 }
 
 pub fn insert(conn: &Connection, row: &Row) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO segments
-             (filename, source, start_utc, bytes, sha256, received_utc, sent_utc)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    INSERT.execute(
+        conn,
         (
             &row.filename,
             &row.source,
@@ -76,11 +94,8 @@ pub fn insert(conn: &Connection, row: &Row) -> rusqlite::Result<()> {
 }
 
 pub fn lookup(conn: &Connection, filename: &str) -> rusqlite::Result<Option<Row>> {
-    conn.query_row(
-        "SELECT source, filename, start_utc, bytes, sha256, received_utc, sent_utc
-         FROM segments WHERE filename = ?1",
-        [filename],
-        |r| {
+    LOOKUP
+        .query_row(conn, [filename], |r| {
             Ok(Row {
                 source: r.get(0)?,
                 filename: r.get(1)?,
@@ -90,9 +105,8 @@ pub fn lookup(conn: &Connection, filename: &str) -> rusqlite::Result<Option<Row>
                 received_utc: r.get(5)?,
                 sent_utc: r.get(6)?,
             })
-        },
-    )
-    .optional()
+        })
+        .optional()
 }
 
 /// The read side's listing: everything, one source's, or one source's since
@@ -103,23 +117,9 @@ pub fn list(
     since: Option<&str>,
     limit: u32,
 ) -> rusqlite::Result<Vec<Row>> {
-    let mut sql = String::from(
-        "SELECT source, filename, start_utc, bytes, sha256, received_utc, sent_utc
-         FROM segments WHERE 1=1",
-    );
-    let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
-    if let Some(source) = source.as_ref() {
-        sql.push_str(" AND source = ?");
-        params.push(source);
-    }
-    if let Some(since) = since.as_ref() {
-        sql.push_str(" AND start_utc >= ?");
-        params.push(since);
-    }
-    sql.push_str(" ORDER BY start_utc, filename LIMIT ?");
-    params.push(&limit);
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params.as_slice(), |r| {
+    let sql = if source.is_some() { LIST_SOURCE } else { LIST };
+    let mut stmt = sql.prepare(conn)?;
+    let rows = stmt.query_map(rusqlite::params![source, since, limit], |r| {
         Ok(Row {
             source: r.get(0)?,
             filename: r.get(1)?,

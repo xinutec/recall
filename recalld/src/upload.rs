@@ -20,6 +20,20 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+crate::statements! {
+    UPSERT_SOURCE: Meaning =
+        "INSERT INTO sources (id, name, kind, port) VALUES (?1, ?2, ?3, NULL) \
+         ON CONFLICT(id) DO UPDATE SET \
+             kind = excluded.kind, \
+             port = excluded.port, \
+             name = CASE WHEN sources.name = sources.id \
+                         THEN excluded.name ELSE sources.name END";
+    ADD_AUDIO_SEGMENT: Meaning =
+        "INSERT OR IGNORE INTO audio_segments \
+             (source_id, path, start_utc, end_utc, sample_rate, channels) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+}
+
 /// Containers a recording might arrive in: phone voice memos are m4a, most
 /// recorders export mp3.
 ///
@@ -265,20 +279,10 @@ pub fn register(
     started: DateTime<Utc>,
     media: Media,
 ) -> Result<(), UploadError> {
-    conn.execute(
-        "INSERT INTO sources (id, name, kind, port) VALUES (?1, ?2, ?3, NULL) \
-         ON CONFLICT(id) DO UPDATE SET \
-             kind = excluded.kind, \
-             port = excluded.port, \
-             name = CASE WHEN sources.name = sources.id \
-                         THEN excluded.name ELSE sources.name END",
-        (source, name, UPLOAD_KIND),
-    )?;
+    UPSERT_SOURCE.execute(conn, (source, name, UPLOAD_KIND))?;
     let end = started + chrono::Duration::microseconds((media.duration_s * 1e6).round() as i64);
-    conn.execute(
-        "INSERT OR IGNORE INTO audio_segments \
-             (source_id, path, start_utc, end_utc, sample_rate, channels) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    ADD_AUDIO_SEGMENT.execute(
+        conn,
         rusqlite::params![
             source,
             path.to_string_lossy(),

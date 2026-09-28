@@ -10,6 +10,52 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+crate::statements! {
+    PENDING: Meaning =
+        "SELECT a.path, t.id, t.start_utc, t.end_utc, a.start_utc
+         FROM transcript_segments t
+         JOIN audio_segments a ON a.id = t.audio_segment_id
+         WHERE t.speaker_label IS NOT NULL
+           AND t.speaker_label NOT LIKE 'SPEAKER%'
+           AND t.superseded_by IS NULL
+           AND t.hidden_reason IS NULL
+           AND t.id NOT IN (
+             SELECT source_segment_id FROM speaker_embeddings
+             WHERE source_segment_id IS NOT NULL)
+         ORDER BY t.start_utc DESC";
+    UNDERIVED: Ingest =
+        "SELECT s.filename FROM segments s
+             WHERE NOT EXISTS (SELECT 1 FROM jobs j
+                               WHERE j.kind = ?1 AND j.filename = s.filename)
+             ORDER BY s.start_utc DESC";
+    DERIVE_JOB: Ingest =
+        "INSERT OR IGNORE INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, ?3)";
+    STILL_WANTED: Meaning =
+        "SELECT t.speaker_label FROM transcript_segments t
+             WHERE t.id = ?1
+               AND t.speaker_label IS NOT NULL
+               AND t.speaker_label NOT LIKE 'SPEAKER%'
+               AND t.superseded_by IS NULL
+               AND t.hidden_reason IS NULL
+               AND t.id NOT IN (
+                 SELECT source_segment_id FROM speaker_embeddings
+                 WHERE source_segment_id IS NOT NULL)";
+    ADD_SPEAKER: Meaning =
+        "INSERT OR IGNORE INTO speakers (name) VALUES (?1)";
+    SPEAKER_ID: Meaning =
+        "SELECT id FROM speakers WHERE name = ?1";
+    ADD_EMBEDDING: Meaning =
+        "INSERT INTO speaker_embeddings
+             (speaker_id, vector, created_utc, source_correction_id, source_segment_id)
+         VALUES (?1, ?2, ?3, NULL, ?4)";
+    FINISHED: Ingest =
+        "SELECT j.filename, j.result FROM jobs j
+             WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM pass_ledger l
+                               WHERE l.kind = ?1 AND l.filename = j.filename)
+             ORDER BY j.filename ASC";
+}
+
 /// A turn shorter than this enrols a useless print.
 const MIN_SECONDS: f64 = 1.0;
 
@@ -38,19 +84,7 @@ fn stem(path: &str) -> String {
 /// # Errors
 /// If the meaning plane refuses.
 pub fn pending(meaning: &Connection) -> rusqlite::Result<Vec<(String, Span)>> {
-    let mut stmt = meaning.prepare(
-        "SELECT a.path, t.id, t.start_utc, t.end_utc, a.start_utc
-         FROM transcript_segments t
-         JOIN audio_segments a ON a.id = t.audio_segment_id
-         WHERE t.speaker_label IS NOT NULL
-           AND t.speaker_label NOT LIKE 'SPEAKER%'
-           AND t.superseded_by IS NULL
-           AND t.hidden_reason IS NULL
-           AND t.id NOT IN (
-             SELECT source_segment_id FROM speaker_embeddings
-             WHERE source_segment_id IS NOT NULL)
-         ORDER BY t.start_utc DESC",
-    )?;
+    let mut stmt = PENDING.prepare(meaning)?;
     let rows = stmt.query_map([], |r| {
         Ok((
             stem(&r.get::<_, String>(0)?),
@@ -143,12 +177,7 @@ pub fn derive_jobs(
         return Ok(0);
     }
     let candidates: Vec<String> = {
-        let mut stmt = ingest.prepare(
-            "SELECT s.filename FROM segments s
-             WHERE NOT EXISTS (SELECT 1 FROM jobs j
-                               WHERE j.kind = ?1 AND j.filename = s.filename)
-             ORDER BY s.start_utc DESC",
-        )?;
+        let mut stmt = UNDERIVED.prepare(ingest)?;
         let rows = stmt.query_map([Kind::EnrollSpeaker], |r| r.get::<_, String>(0))?;
         rows.collect::<Result<_, _>>()?
     };
@@ -160,8 +189,8 @@ pub fn derive_jobs(
         if !wanted.contains(&stem(&filename)) {
             continue;
         }
-        inserted += ingest.execute(
-            "INSERT OR IGNORE INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, ?3)",
+        inserted += DERIVE_JOB.execute(
+            ingest,
             (
                 Kind::EnrollSpeaker,
                 &filename,
@@ -191,20 +220,8 @@ pub struct Enrolled {
 /// Whose voice a segment is now, or `None` if it should no longer be enrolled.
 /// Re-read at write time: a person can re-assign a turn while the model runs.
 fn still_wanted(meaning: &Connection, segment_id: i64) -> rusqlite::Result<Option<String>> {
-    meaning
-        .query_row(
-            "SELECT t.speaker_label FROM transcript_segments t
-             WHERE t.id = ?1
-               AND t.speaker_label IS NOT NULL
-               AND t.speaker_label NOT LIKE 'SPEAKER%'
-               AND t.superseded_by IS NULL
-               AND t.hidden_reason IS NULL
-               AND t.id NOT IN (
-                 SELECT source_segment_id FROM speaker_embeddings
-                 WHERE source_segment_id IS NOT NULL)",
-            [segment_id],
-            |r| r.get::<_, String>(0),
-        )
+    STILL_WANTED
+        .query_row(meaning, [segment_id], |r| r.get::<_, String>(0))
         .map(Some)
         .or_else(|err| match err {
             rusqlite::Error::QueryReturnedNoRows => Ok(None),
@@ -222,18 +239,10 @@ fn enrol_one(
     print: &Print,
     now: &Stamp,
 ) -> rusqlite::Result<()> {
-    meaning.execute(
-        "INSERT OR IGNORE INTO speakers (name) VALUES (?1)",
-        [person],
-    )?;
-    let speaker_id: i64 =
-        meaning.query_row("SELECT id FROM speakers WHERE name = ?1", [person], |r| {
-            r.get(0)
-        })?;
-    meaning.execute(
-        "INSERT INTO speaker_embeddings
-             (speaker_id, vector, created_utc, source_correction_id, source_segment_id)
-         VALUES (?1, ?2, ?3, NULL, ?4)",
+    ADD_SPEAKER.execute(meaning, [person])?;
+    let speaker_id: i64 = SPEAKER_ID.query_row(meaning, [person], |r| r.get(0))?;
+    ADD_EMBEDDING.execute(
+        meaning,
         rusqlite::params![
             speaker_id,
             serde_json::to_string(&print.vector).unwrap_or_else(|_| "[]".to_owned()),
@@ -257,13 +266,7 @@ pub fn write_pass(
     limit: usize,
 ) -> rusqlite::Result<Enrolled> {
     let candidates: Vec<(String, String)> = {
-        let mut stmt = ingest.prepare(
-            "SELECT j.filename, j.result FROM jobs j
-             WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
-               AND NOT EXISTS (SELECT 1 FROM pass_ledger l
-                               WHERE l.kind = ?1 AND l.filename = j.filename)
-             ORDER BY j.filename ASC",
-        )?;
+        let mut stmt = FINISHED.prepare(ingest)?;
         let rows = stmt.query_map([Kind::EnrollSpeaker], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect::<Result<_, _>>()?
     };

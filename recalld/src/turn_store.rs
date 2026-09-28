@@ -11,6 +11,65 @@ use std::fmt;
 
 use rusqlite::Connection;
 
+crate::statements! {
+    PROTECTED_BETWEEN: Meaning =
+        "SELECT start_utc, end_utc FROM corrections WHERE start_utc < ?2 AND end_utc > ?1
+         UNION ALL
+         SELECT start_utc, end_utc FROM transcript_segments
+          WHERE start_utc < ?2 AND end_utc > ?1
+            AND superseded_by IS NULL AND hidden_reason IS NULL AND ", crate::human_owned!();
+    INSERT: Meaning =
+        "INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc, text,
+             language, language_confidence, asr_confidence, asr_model, speaker_label,
+             speaker_id, speaker_cluster, provenance, word_timings, created_utc,
+             words_checked)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
+    INDEX_TEXT: Meaning = "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)";
+    HIDE: Meaning =
+        "UPDATE transcript_segments SET hidden_reason = ?1
+         WHERE id = ?2 AND hidden_reason IS NULL";
+    HIDE_MACHINE_TURNS: Meaning =
+        "UPDATE transcript_segments SET hidden_reason = ?1
+         WHERE audio_segment_id = ?2 AND superseded_by IS NULL
+           AND hidden_reason IS NULL AND NOT ", crate::human_owned!();
+    UNHIDE_ALL: Meaning =
+        "UPDATE transcript_segments SET hidden_reason = NULL
+         WHERE audio_segment_id = ?1 AND hidden_reason = ?2 AND superseded_by IS NULL";
+    UNHIDE: Meaning =
+        "UPDATE transcript_segments SET hidden_reason = NULL
+         WHERE id = ?1 AND hidden_reason = ?2 AND superseded_by IS NULL";
+    CLAIM: Meaning =
+        "UPDATE transcript_segments SET hidden_reason = ?1
+         WHERE id = ?2 AND hidden_reason IS NULL AND superseded_by IS NULL";
+    RECONCILE_LIVE: Meaning =
+        "UPDATE transcript_segments SET hidden_reason = ?1
+         WHERE asr_model = ?2 AND superseded_by IS NULL AND hidden_reason IS NULL
+           AND start_utc >= ?3 AND start_utc < ?4";
+    UNLINK: Meaning = "UPDATE transcript_segments SET superseded_by = NULL WHERE id = ?1";
+    DELETE: Meaning = "DELETE FROM transcript_segments WHERE id = ?1";
+    SUPERSEDE: Meaning = "UPDATE transcript_segments SET superseded_by = ?1 WHERE id = ?2";
+    SET_CLUSTER: Meaning = "UPDATE transcript_segments SET speaker_cluster = ?1 WHERE id = ?2";
+    SET_LABEL: Meaning = "UPDATE transcript_segments SET speaker_label = ?1 WHERE id = ?2";
+    LABEL_CORRECTION: Meaning =
+        "UPDATE transcript_segments SET speaker_label = ?1
+         WHERE provenance = ?2 AND asr_model = ?3 AND superseded_by IS NULL";
+    LABEL_VOICE: Meaning =
+        "UPDATE transcript_segments SET speaker_label = ?1 WHERE id IN (
+             SELECT ts.id FROM transcript_segments ts
+             JOIN audio_segments a ON a.id = ts.audio_segment_id
+             WHERE a.source_id = ?2 AND ts.speaker_cluster = ?3
+               AND ts.superseded_by IS NULL)";
+    SET_GUESS: Meaning =
+        "UPDATE transcript_segments SET speaker_guess = ?1, speaker_score = ?2 WHERE id = ?3";
+    SET_MATCH: Meaning =
+        "UPDATE transcript_segments
+            SET speaker_guess = ?1, speaker_score = ?2, speaker_matched_utc = ?3
+          WHERE id = ?4";
+    STAMP_MATCHED: Meaning =
+        "UPDATE transcript_segments SET speaker_matched_utc = ?1 WHERE id = ?2";
+    DELETE_FOR_AUDIO: Meaning = "DELETE FROM transcript_segments WHERE audio_segment_id = ?1";
+}
+
 /// `asr_model` of a turn a person wrote.
 pub const HUMAN_MODEL: &str = "human";
 /// `asr_model` of the provisional live pass.
@@ -174,7 +233,17 @@ impl fmt::Display for HiddenReason {
 /// SQL for "a person owns this turn": they wrote its words or named its
 /// speaker. No pass hides such a turn or writes over its span.
 /// `a_person_owns_what_the_predicate_says` ties it to [`is_human_owned`].
-pub const HUMAN_OWNED: &str = "(asr_model = 'human' OR speaker_label IS NOT NULL)";
+///
+/// A macro so a [`statements!`](crate::statements) block can `concat!` it.
+#[macro_export]
+macro_rules! human_owned {
+    () => {
+        "(asr_model = 'human' OR speaker_label IS NOT NULL)"
+    };
+}
+
+/// [`human_owned!`] as a value.
+pub const HUMAN_OWNED: &str = human_owned!();
 
 /// The same rule in Rust.
 pub fn is_human_owned(asr_model: Option<&str>, speaker_label: Option<&str>) -> bool {
@@ -199,14 +268,7 @@ pub fn protected_between(
     from: chrono::DateTime<chrono::Utc>,
     to: chrono::DateTime<chrono::Utc>,
 ) -> rusqlite::Result<Vec<Protected>> {
-    let sql = format!(
-        "SELECT start_utc, end_utc FROM corrections WHERE start_utc < ?2 AND end_utc > ?1
-         UNION ALL
-         SELECT start_utc, end_utc FROM transcript_segments
-          WHERE start_utc < ?2 AND end_utc > ?1
-            AND superseded_by IS NULL AND hidden_reason IS NULL AND {HUMAN_OWNED}"
-    );
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = PROTECTED_BETWEEN.prepare(conn)?;
     let rows = stmt.query_map(
         rusqlite::params![
             audiocore::instant::python_isoformat_utc(from),
@@ -282,57 +344,29 @@ impl<'a> NewTurn<'a> {
 /// # Errors
 /// If the database refuses.
 pub fn insert(conn: &Connection, turn: &NewTurn<'_>) -> rusqlite::Result<i64> {
-    use rusqlite::types::Value;
-    let text = |v: Option<&str>| v.map(|s| Value::Text(s.to_owned()));
-    let provenance = turn.provenance.as_ref().map(ToString::to_string);
-    // Only the columns this turn has: an absent one is NULL either way.
-    let columns: Vec<(&str, Value)> = [
-        (
-            "audio_segment_id",
-            turn.audio_segment_id.map(Value::Integer),
-        ),
-        ("start_utc", Some(Value::Text(turn.start_utc.to_string()))),
-        ("end_utc", Some(Value::Text(turn.end_utc.to_string()))),
-        ("text", text(Some(turn.text))),
-        ("language", text(turn.language)),
-        (
-            "language_confidence",
-            turn.language_confidence.map(Value::Real),
-        ),
-        ("asr_confidence", turn.asr_confidence.map(Value::Real)),
-        ("asr_model", text(turn.asr_model)),
-        ("speaker_label", text(turn.speaker_label)),
-        ("speaker_id", turn.speaker_id.map(Value::Integer)),
-        ("speaker_cluster", text(turn.speaker_cluster)),
-        ("provenance", provenance.map(Value::Text)),
-        ("word_timings", text(turn.word_timings)),
-        (
-            "created_utc",
-            turn.created_utc.map(|t| Value::Text(t.to_string())),
-        ),
-        (
-            "words_checked",
-            turn.words_checked.then_some(Value::Integer(1)),
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(name, value)| value.map(|v| (name, v)))
-    .collect();
-    let names: Vec<&str> = columns.iter().map(|(n, _)| *n).collect();
-    let marks: Vec<String> = (1..=columns.len()).map(|i| format!("?{i}")).collect();
-    conn.execute(
-        &format!(
-            "INSERT INTO transcript_segments ({}) VALUES ({})",
-            names.join(", "),
-            marks.join(", ")
-        ),
-        rusqlite::params_from_iter(columns.into_iter().map(|(_, v)| v)),
+    INSERT.execute(
+        conn,
+        rusqlite::params![
+            turn.audio_segment_id,
+            turn.start_utc,
+            turn.end_utc,
+            turn.text,
+            turn.language,
+            turn.language_confidence,
+            turn.asr_confidence,
+            turn.asr_model,
+            turn.speaker_label,
+            turn.speaker_id,
+            turn.speaker_cluster,
+            turn.provenance.as_ref().map(ToString::to_string),
+            turn.word_timings,
+            turn.created_utc,
+            // NULL, not 0: only a person's check is recorded.
+            turn.words_checked.then_some(1),
+        ],
     )?;
     let id = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
-        (id, turn.text),
-    )?;
+    INDEX_TEXT.execute(conn, (id, turn.text))?;
     Ok(id)
 }
 
@@ -341,11 +375,7 @@ pub fn insert(conn: &Connection, turn: &NewTurn<'_>) -> rusqlite::Result<i64> {
 /// # Errors
 /// If the database refuses.
 pub fn hide(conn: &Connection, id: i64, reason: &HiddenReason) -> rusqlite::Result<bool> {
-    let changed = conn.execute(
-        "UPDATE transcript_segments SET hidden_reason = ?1
-         WHERE id = ?2 AND hidden_reason IS NULL",
-        (reason.to_string(), id),
-    )?;
+    let changed = HIDE.execute(conn, (reason.to_string(), id))?;
     Ok(changed == 1)
 }
 
@@ -359,14 +389,7 @@ pub fn hide_machine_turns(
     audio_segment_id: i64,
     reason: &HiddenReason,
 ) -> rusqlite::Result<usize> {
-    conn.execute(
-        &format!(
-            "UPDATE transcript_segments SET hidden_reason = ?1
-             WHERE audio_segment_id = ?2 AND superseded_by IS NULL
-               AND hidden_reason IS NULL AND NOT {HUMAN_OWNED}"
-        ),
-        (reason.to_string(), audio_segment_id),
-    )
+    HIDE_MACHINE_TURNS.execute(conn, (reason.to_string(), audio_segment_id))
 }
 
 /// Show again every turn of one clip hidden for `reason`. Returns how many.
@@ -378,11 +401,7 @@ pub fn unhide_all(
     audio_segment_id: i64,
     reason: &HiddenReason,
 ) -> rusqlite::Result<usize> {
-    conn.execute(
-        "UPDATE transcript_segments SET hidden_reason = NULL
-         WHERE audio_segment_id = ?1 AND hidden_reason = ?2 AND superseded_by IS NULL",
-        (audio_segment_id, reason.to_string()),
-    )
+    UNHIDE_ALL.execute(conn, (audio_segment_id, reason.to_string()))
 }
 
 /// Show a turn again that was hidden for `reason`. Returns whether it was.
@@ -390,11 +409,7 @@ pub fn unhide_all(
 /// # Errors
 /// If the database refuses.
 pub fn unhide(conn: &Connection, id: i64, reason: &HiddenReason) -> rusqlite::Result<bool> {
-    let changed = conn.execute(
-        "UPDATE transcript_segments SET hidden_reason = NULL
-         WHERE id = ?1 AND hidden_reason = ?2 AND superseded_by IS NULL",
-        (id, reason.to_string()),
-    )?;
+    let changed = UNHIDE.execute(conn, (id, reason.to_string()))?;
     Ok(changed == 1)
 }
 
@@ -404,11 +419,7 @@ pub fn unhide(conn: &Connection, id: i64, reason: &HiddenReason) -> rusqlite::Re
 /// # Errors
 /// If the database refuses.
 pub fn claim(conn: &Connection, id: i64, reason: &HiddenReason) -> rusqlite::Result<bool> {
-    let changed = conn.execute(
-        "UPDATE transcript_segments SET hidden_reason = ?1
-         WHERE id = ?2 AND hidden_reason IS NULL AND superseded_by IS NULL",
-        (reason.to_string(), id),
-    )?;
+    let changed = CLAIM.execute(conn, (reason.to_string(), id))?;
     Ok(changed == 1)
 }
 
@@ -418,10 +429,8 @@ pub fn claim(conn: &Connection, id: i64, reason: &HiddenReason) -> rusqlite::Res
 /// # Errors
 /// If the database refuses.
 pub fn reconcile_live(conn: &Connection, from: &str, to: &str) -> rusqlite::Result<usize> {
-    conn.execute(
-        "UPDATE transcript_segments SET hidden_reason = ?1
-         WHERE asr_model = ?2 AND superseded_by IS NULL AND hidden_reason IS NULL
-           AND start_utc >= ?3 AND start_utc < ?4",
+    RECONCILE_LIVE.execute(
+        conn,
         rusqlite::params![
             HiddenReason::LiveReconciled.to_string(),
             LIVE_MODEL,
@@ -437,14 +446,8 @@ pub fn reconcile_live(conn: &Connection, from: &str, to: &str) -> rusqlite::Resu
 /// # Errors
 /// If the database refuses.
 pub fn unsupersede(conn: &Connection, old: i64, replacement: i64) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE transcript_segments SET superseded_by = NULL WHERE id = ?1",
-        [old],
-    )?;
-    conn.execute(
-        "DELETE FROM transcript_segments WHERE id = ?1",
-        [replacement],
-    )?;
+    UNLINK.execute(conn, [old])?;
+    DELETE.execute(conn, [replacement])?;
     Ok(())
 }
 
@@ -453,10 +456,7 @@ pub fn unsupersede(conn: &Connection, old: i64, replacement: i64) -> rusqlite::R
 /// # Errors
 /// If the database refuses.
 pub fn supersede(conn: &Connection, old: i64, new: i64) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE transcript_segments SET superseded_by = ?1 WHERE id = ?2",
-        (new, old),
-    )?;
+    SUPERSEDE.execute(conn, (new, old))?;
     Ok(())
 }
 
@@ -465,10 +465,7 @@ pub fn supersede(conn: &Connection, old: i64, new: i64) -> rusqlite::Result<()> 
 /// # Errors
 /// If the database refuses.
 pub fn set_cluster(conn: &Connection, id: i64, cluster: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE transcript_segments SET speaker_cluster = ?1 WHERE id = ?2",
-        (cluster, id),
-    )?;
+    SET_CLUSTER.execute(conn, (cluster, id))?;
     Ok(())
 }
 
@@ -477,10 +474,7 @@ pub fn set_cluster(conn: &Connection, id: i64, cluster: &str) -> rusqlite::Resul
 /// # Errors
 /// If the database refuses.
 pub fn set_label(conn: &Connection, id: i64, name: Option<&str>) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE transcript_segments SET speaker_label = ?1 WHERE id = ?2",
-        (name, id),
-    )?;
+    SET_LABEL.execute(conn, (name, id))?;
     Ok(())
 }
 
@@ -489,9 +483,8 @@ pub fn set_label(conn: &Connection, id: i64, name: Option<&str>) -> rusqlite::Re
 /// # Errors
 /// If the database refuses.
 pub fn label_correction(conn: &Connection, original: i64, speaker: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE transcript_segments SET speaker_label = ?1
-         WHERE provenance = ?2 AND asr_model = ?3 AND superseded_by IS NULL",
+    LABEL_CORRECTION.execute(
+        conn,
         (
             speaker,
             Provenance::Correction(original).to_string(),
@@ -511,14 +504,7 @@ pub fn label_voice(
     cluster: &str,
     name: Option<&str>,
 ) -> rusqlite::Result<usize> {
-    conn.execute(
-        "UPDATE transcript_segments SET speaker_label = ?1 WHERE id IN (
-             SELECT ts.id FROM transcript_segments ts
-             JOIN audio_segments a ON a.id = ts.audio_segment_id
-             WHERE a.source_id = ?2 AND ts.speaker_cluster = ?3
-               AND ts.superseded_by IS NULL)",
-        (name, source, cluster),
-    )
+    LABEL_VOICE.execute(conn, (name, source, cluster))
 }
 
 /// Store a voiceprint's guess for a turn.
@@ -526,10 +512,7 @@ pub fn label_voice(
 /// # Errors
 /// If the database refuses.
 pub fn set_guess(conn: &Connection, id: i64, person: &str, score: f64) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE transcript_segments SET speaker_guess = ?1, speaker_score = ?2 WHERE id = ?3",
-        rusqlite::params![person, score, id],
-    )?;
+    SET_GUESS.execute(conn, rusqlite::params![person, score, id])?;
     Ok(())
 }
 
@@ -544,12 +527,7 @@ pub fn set_match(
     score: f64,
     now: &Stamp,
 ) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE transcript_segments
-            SET speaker_guess = ?1, speaker_score = ?2, speaker_matched_utc = ?3
-          WHERE id = ?4",
-        rusqlite::params![person, score, now, id],
-    )?;
+    SET_MATCH.execute(conn, rusqlite::params![person, score, now, id])?;
     Ok(())
 }
 
@@ -558,10 +536,7 @@ pub fn set_match(
 /// # Errors
 /// If the database refuses.
 pub fn stamp_matched(conn: &Connection, id: i64, now: &Stamp) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE transcript_segments SET speaker_matched_utc = ?1 WHERE id = ?2",
-        rusqlite::params![now, id],
-    )?;
+    STAMP_MATCHED.execute(conn, rusqlite::params![now, id])?;
     Ok(())
 }
 
@@ -570,8 +545,5 @@ pub fn stamp_matched(conn: &Connection, id: i64, now: &Stamp) -> rusqlite::Resul
 /// # Errors
 /// If the database refuses.
 pub fn delete_for_audio(conn: &Connection, audio_segment_id: i64) -> rusqlite::Result<usize> {
-    conn.execute(
-        "DELETE FROM transcript_segments WHERE audio_segment_id = ?1",
-        [audio_segment_id],
-    )
+    DELETE_FOR_AUDIO.execute(conn, [audio_segment_id])
 }

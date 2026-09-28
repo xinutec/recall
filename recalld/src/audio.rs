@@ -20,6 +20,17 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+crate::statements! {
+    PLACEMENT: Meaning =
+        "SELECT a.path, a.id, \
+                (julianday(t.start_utc) - julianday(a.start_utc)) * 86400.0, \
+                (julianday(t.end_utc)   - julianday(a.start_utc)) * 86400.0, \
+                t.asr_model, t.provenance, t.word_timings \
+         FROM transcript_segments t \
+         JOIN audio_segments a ON a.id = t.audio_segment_id \
+         WHERE t.id = ?1";
+}
+
 /// Lead-in/-out for a rough whole-phrase turn.
 const PAD_S: f64 = 1.5;
 /// Minimum length for a rough turn, so even a one-word turn is listenable.
@@ -65,15 +76,7 @@ pub struct Placement {
 /// 10 µs of error, far below the millisecond precision `-ss` is formatted to.
 /// Tests comparing these seconds need a tolerance, not equality.
 pub fn placement(conn: &Connection, transcript_id: i64) -> rusqlite::Result<Option<Placement>> {
-    let mut stmt = conn.prepare(
-        "SELECT a.path, a.id, \
-                (julianday(t.start_utc) - julianday(a.start_utc)) * 86400.0, \
-                (julianday(t.end_utc)   - julianday(a.start_utc)) * 86400.0, \
-                t.asr_model, t.provenance, t.word_timings \
-         FROM transcript_segments t \
-         JOIN audio_segments a ON a.id = t.audio_segment_id \
-         WHERE t.id = ?1",
-    )?;
+    let mut stmt = PLACEMENT.prepare(conn)?;
     let mut rows = stmt.query([transcript_id])?;
     let Some(row) = rows.next()? else {
         return Ok(None);

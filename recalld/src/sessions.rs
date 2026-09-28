@@ -18,6 +18,63 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+crate::statements! {
+    SESSIONS: Meaning =
+        "SELECT s.id, s.name, MIN(a.start_utc), MAX(a.end_utc), COUNT(t.id), \
+                GROUP_CONCAT(DISTINCT CASE \
+                    WHEN t.id IS NULL THEN NULL \
+                    WHEN t.speaker_label IS NOT NULL \
+                         AND t.speaker_label NOT LIKE 'SPEAKER_%' \
+                         THEN t.speaker_label \
+                    ELSE 'unknown' \
+                END) \
+         FROM sources s \
+         JOIN audio_segments a ON a.source_id = s.id \
+         LEFT JOIN transcript_segments t \
+                ON t.audio_segment_id = a.id \
+               AND t.superseded_by IS NULL AND t.hidden_reason IS NULL \
+         WHERE s.kind = ?1 \
+         GROUP BY s.id \
+         ORDER BY MIN(a.start_utc) DESC";
+    SOURCE_KIND: Meaning =
+        "SELECT kind FROM sources WHERE id = ?1";
+    RENAME: Meaning =
+        "UPDATE sources SET name = ?1 WHERE id = ?2";
+    CLIP_COUNT: Ingest =
+        "SELECT count(*) FROM segments WHERE source = ?1";
+    REQUEUE_DIARIZE: Ingest =
+        "UPDATE jobs SET state = 'queued', leased_until = NULL, done_utc = NULL, result = NULL
+         WHERE kind = ?1 AND done_utc IS NOT NULL
+           AND filename IN (SELECT filename FROM segments WHERE source = ?2)";
+    CLEAR_DIARIZE_LEDGER: Ingest =
+        "DELETE FROM pass_ledger WHERE kind = ?1
+           AND filename IN (SELECT filename FROM segments WHERE source = ?2)";
+    SESSION_TURNS: Meaning =
+        "SELECT t.start_utc, t.text, t.speaker_label, t.speaker_cluster \
+         FROM transcript_segments t \
+         JOIN audio_segments a ON a.id = t.audio_segment_id \
+         WHERE a.source_id = ?1 AND t.superseded_by IS NULL \
+           AND t.hidden_reason IS NULL \
+         ORDER BY t.start_utc";
+    SESSION_AUDIO: Meaning =
+        "SELECT id, path, start_utc FROM audio_segments WHERE source_id = ?1";
+    REMEMBER_DELETED: Meaning =
+        "INSERT OR IGNORE INTO deleted_segments (source_id, start_utc, deleted_utc) \
+             VALUES (?1, ?2, ?3)";
+    CLIP_TURNS: Meaning =
+        "SELECT id FROM transcript_segments WHERE audio_segment_id = ?1";
+    DROP_TURN_EMBEDDING: Meaning =
+        "DELETE FROM transcript_embeddings WHERE segment_id = ?1";
+    DROP_CORRECTIONS: Meaning =
+        "DELETE FROM corrections WHERE audio_segment_id = ?1";
+    DROP_REFINE_REQUESTS: Meaning =
+        "DELETE FROM refine_requests WHERE source_id = ?1";
+    DROP_AUDIO: Meaning =
+        "DELETE FROM audio_segments WHERE source_id = ?1";
+    DROP_SOURCE: Meaning =
+        "DELETE FROM sources WHERE id = ?1";
+}
+
 /// A source that arrived as a file rather than a live microphone.
 const UPLOAD_KIND: &str = "upload";
 
@@ -49,24 +106,7 @@ pub struct SessionsOut {
 /// as "unknown". Voiceprint guesses have no trustworthy threshold (see
 /// [`crate::identify::match_one`]).
 pub fn sessions(conn: &Connection) -> rusqlite::Result<SessionsOut> {
-    let mut stmt = conn.prepare(
-        "SELECT s.id, s.name, MIN(a.start_utc), MAX(a.end_utc), COUNT(t.id), \
-                GROUP_CONCAT(DISTINCT CASE \
-                    WHEN t.id IS NULL THEN NULL \
-                    WHEN t.speaker_label IS NOT NULL \
-                         AND t.speaker_label NOT LIKE 'SPEAKER_%' \
-                         THEN t.speaker_label \
-                    ELSE 'unknown' \
-                END) \
-         FROM sources s \
-         JOIN audio_segments a ON a.source_id = s.id \
-         LEFT JOIN transcript_segments t \
-                ON t.audio_segment_id = a.id \
-               AND t.superseded_by IS NULL AND t.hidden_reason IS NULL \
-         WHERE s.kind = ?1 \
-         GROUP BY s.id \
-         ORDER BY MIN(a.start_utc) DESC",
-    )?;
+    let mut stmt = SESSIONS.prepare(conn)?;
     let rows = stmt.query_map([UPLOAD_KIND], |r| {
         let names: Option<String> = r.get(5)?;
         // Sorted, not first-seen: this is a list to scan, and GROUP_CONCAT's
@@ -123,11 +163,7 @@ impl SessionError {
 
 /// Refuse anything that is not an uploaded meeting.
 fn require_upload(conn: &Connection, source: &str) -> Result<(), SessionError> {
-    let kind: Option<String> = conn
-        .query_row("SELECT kind FROM sources WHERE id = ?1", [source], |r| {
-            r.get(0)
-        })
-        .ok();
+    let kind: Option<String> = SOURCE_KIND.query_row(conn, [source], |r| r.get(0)).ok();
     match kind.as_deref() {
         None => Err(SessionError::Missing),
         Some(UPLOAD_KIND) => Ok(()),
@@ -137,10 +173,7 @@ fn require_upload(conn: &Connection, source: &str) -> Result<(), SessionError> {
 
 pub fn rename(conn: &Connection, source: &str, title: &str) -> Result<(), SessionError> {
     require_upload(conn, source)?;
-    conn.execute(
-        "UPDATE sources SET name = ?1 WHERE id = ?2",
-        (title, source),
-    )?;
+    RENAME.execute(conn, (title, source))?;
     Ok(())
 }
 
@@ -157,26 +190,13 @@ pub fn rediarize(
     source: &str,
 ) -> Result<usize, SessionError> {
     require_upload(meaning, source)?;
-    let clips: i64 = ingest.query_row(
-        "SELECT count(*) FROM segments WHERE source = ?1",
-        [source],
-        |r| r.get(0),
-    )?;
+    let clips: i64 = CLIP_COUNT.query_row(ingest, [source], |r| r.get(0))?;
     if clips == 0 {
         return Err(SessionError::NoAudio);
     }
     let tx = ingest.unchecked_transaction()?;
-    let requeued = tx.execute(
-        "UPDATE jobs SET state = 'queued', leased_until = NULL, done_utc = NULL, result = NULL
-         WHERE kind = ?1 AND done_utc IS NOT NULL
-           AND filename IN (SELECT filename FROM segments WHERE source = ?2)",
-        (audiocore::job::Kind::DiarizeSegment, source),
-    )?;
-    tx.execute(
-        "DELETE FROM pass_ledger WHERE kind = ?1
-           AND filename IN (SELECT filename FROM segments WHERE source = ?2)",
-        (audiocore::job::Kind::DiarizeSegment, source),
-    )?;
+    let requeued = REQUEUE_DIARIZE.execute(&tx, (audiocore::job::Kind::DiarizeSegment, source))?;
+    CLEAR_DIARIZE_LEDGER.execute(&tx, (audiocore::job::Kind::DiarizeSegment, source))?;
     tx.commit()?;
     Ok(requeued)
 }
@@ -233,14 +253,7 @@ fn who(turn: &ExportTurn) -> String {
 }
 
 fn session_turns(conn: &Connection, source: &str) -> rusqlite::Result<Vec<ExportTurn>> {
-    let mut stmt = conn.prepare(
-        "SELECT t.start_utc, t.text, t.speaker_label, t.speaker_cluster \
-         FROM transcript_segments t \
-         JOIN audio_segments a ON a.id = t.audio_segment_id \
-         WHERE a.source_id = ?1 AND t.superseded_by IS NULL \
-           AND t.hidden_reason IS NULL \
-         ORDER BY t.start_utc",
-    )?;
+    let mut stmt = SESSION_TURNS.prepare(conn)?;
     let rows = stmt.query_map([source], |r| {
         Ok(ExportTurn {
             start_utc: r.get(0)?,
@@ -424,40 +437,28 @@ pub fn delete_session(
     require_upload(conn, source)?;
     let tx = conn.transaction()?;
     let segments: Vec<(i64, String, String)> = {
-        let mut stmt =
-            tx.prepare("SELECT id, path, start_utc FROM audio_segments WHERE source_id = ?1")?;
+        let mut stmt = SESSION_AUDIO.prepare(&tx)?;
         let rows = stmt.query_map([source], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
     for (_, _, start_utc) in &segments {
-        tx.execute(
-            "INSERT OR IGNORE INTO deleted_segments (source_id, start_utc, deleted_utc) \
-             VALUES (?1, ?2, ?3)",
-            (source, start_utc, now),
-        )?;
+        REMEMBER_DELETED.execute(&tx, (source, start_utc, now))?;
     }
     for (audio_id, _, _) in &segments {
         let turn_ids: Vec<i64> = {
-            let mut stmt =
-                tx.prepare("SELECT id FROM transcript_segments WHERE audio_segment_id = ?1")?;
+            let mut stmt = CLIP_TURNS.prepare(&tx)?;
             let rows = stmt.query_map([audio_id], |r| r.get(0))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
         for turn_id in turn_ids {
-            tx.execute(
-                "DELETE FROM transcript_embeddings WHERE segment_id = ?1",
-                [turn_id],
-            )?;
+            DROP_TURN_EMBEDDING.execute(&tx, [turn_id])?;
         }
-        tx.execute(
-            "DELETE FROM corrections WHERE audio_segment_id = ?1",
-            [audio_id],
-        )?;
+        DROP_CORRECTIONS.execute(&tx, [audio_id])?;
         crate::turn_store::delete_for_audio(&tx, *audio_id)?;
     }
-    tx.execute("DELETE FROM refine_requests WHERE source_id = ?1", [source])?;
-    tx.execute("DELETE FROM audio_segments WHERE source_id = ?1", [source])?;
-    tx.execute("DELETE FROM sources WHERE id = ?1", [source])?;
+    DROP_REFINE_REQUESTS.execute(&tx, [source])?;
+    DROP_AUDIO.execute(&tx, [source])?;
+    DROP_SOURCE.execute(&tx, [source])?;
     tx.commit()?;
     Ok(segments.into_iter().map(|(_, path, _)| path).collect())
 }

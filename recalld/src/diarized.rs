@@ -15,6 +15,32 @@ use audiocore::job::Kind;
 use chrono::{DateTime, Duration, Utc};
 use std::borrow::Cow;
 
+crate::statements! {
+    CURRENT_MACHINE_TURNS: Meaning =
+        "SELECT id, text, start_utc, end_utc, word_timings FROM transcript_segments
+         WHERE audio_segment_id = ?1 AND superseded_by IS NULL
+           AND hidden_reason IS NULL AND NOT ", crate::human_owned!();
+    /// The diarize jobs ready to decide, each with the transcription it aligns
+    /// against, joined on the shared filename so the two results cannot get out of
+    /// step. A clip asked to be transcribed again waits for its new lines, or this
+    /// pass writes its own onto an empty clip (`retranscribe`).
+    FINISHED: Ingest =
+        "SELECT d.filename, d.result, t.result, s.source
+         FROM jobs d
+         JOIN jobs t ON t.filename = d.filename AND t.kind = ?2
+                    AND t.done_utc IS NOT NULL AND t.result IS NOT NULL
+         JOIN segments s ON s.filename = d.filename
+         WHERE d.kind = ?1 AND d.done_utc IS NOT NULL AND d.result IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM pass_ledger l
+                           WHERE l.kind = ?1 AND l.filename = d.filename)
+           AND NOT EXISTS (SELECT 1 FROM retranscribe_requests r
+                           WHERE r.filename = d.filename)
+         ORDER BY s.start_utc ASC, d.filename ASC";
+    AUDIO_SEGMENT: Meaning =
+        "SELECT id, end_utc FROM audio_segments
+             WHERE source_id = ?1 AND start_utc = ?2";
+}
+
 /// Languages spoken in the archive. A whole-block detection outside this set is
 /// the model hallucinating on unclear audio: the turns are kept but their
 /// confidence is zeroed.
@@ -633,12 +659,7 @@ pub fn standing(
     conn: &rusqlite::Connection,
     audio_segment_id: i64,
 ) -> rusqlite::Result<Vec<Existing>> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT id, text, start_utc, end_utc, word_timings FROM transcript_segments
-         WHERE audio_segment_id = ?1 AND superseded_by IS NULL
-           AND hidden_reason IS NULL AND NOT {HUMAN_OWNED}",
-        HUMAN_OWNED = turn_store::HUMAN_OWNED,
-    ))?;
+    let mut stmt = CURRENT_MACHINE_TURNS.prepare(conn)?;
     let rows = stmt.query_map([audio_segment_id], |r| {
         Ok((
             r.get::<_, i64>(0)?,
@@ -726,22 +747,6 @@ fn retire_if_permanently_unusable(
     Ok(true)
 }
 
-/// The diarize jobs ready to decide, each with the transcription it aligns
-/// against, joined on the shared filename so the two results cannot get out of
-/// step. A clip asked to be transcribed again waits for its new lines, or this
-/// pass writes its own onto an empty clip (`retranscribe`).
-const FINISHED: &str = "SELECT d.filename, d.result, t.result, s.source
-         FROM jobs d
-         JOIN jobs t ON t.filename = d.filename AND t.kind = ?2
-                    AND t.done_utc IS NOT NULL AND t.result IS NOT NULL
-         JOIN segments s ON s.filename = d.filename
-         WHERE d.kind = ?1 AND d.done_utc IS NOT NULL AND d.result IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM pass_ledger l
-                           WHERE l.kind = ?1 AND l.filename = d.filename)
-           AND NOT EXISTS (SELECT 1 FROM retranscribe_requests r
-                           WHERE r.filename = d.filename)
-         ORDER BY s.start_utc ASC, d.filename ASC";
-
 /// Drain the finished diarize jobs into speaker-aligned turns.
 ///
 /// Every swap goes through [`decide`] first and every terminal decision leaves a
@@ -755,7 +760,7 @@ pub fn write_pass(
     limit: usize,
 ) -> rusqlite::Result<Pass> {
     let model = crate::turns::SHIM_MODEL;
-    let mut stmt = ingest.prepare(FINISHED)?;
+    let mut stmt = FINISHED.prepare(ingest)?;
     let jobs: Vec<(String, String, String, String)> = stmt
         .query_map(
             rusqlite::params![Kind::DiarizeSegment, Kind::TranscribeSegment],
@@ -782,9 +787,8 @@ pub fn write_pass(
             pass.kept += 1;
             continue;
         };
-        let Ok((audio_id, end_raw)) = meaning.query_row(
-            "SELECT id, end_utc FROM audio_segments
-             WHERE source_id = ?1 AND start_utc = ?2",
+        let Ok((audio_id, end_raw)) = AUDIO_SEGMENT.query_row(
+            meaning,
             rusqlite::params![source, instant::python_isoformat_utc(block_start)],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
         ) else {

@@ -16,6 +16,43 @@ use audiocore::vad::{Detector, Region};
 use rusqlite::Connection;
 use std::path::Path;
 
+crate::statements! {
+    SILENT_REGIONS: Ingest =
+        "UPDATE segment_speech SET regions = '[]'
+         WHERE regions IS NULL AND speech_seconds = 0";
+    RECORD: Ingest =
+        "INSERT OR IGNORE INTO segment_speech
+                 (filename, source, speech_seconds, computed_utc, regions)
+             VALUES (?1, ?2, ?3, ?4, ?5)";
+    SET_REGIONS: Ingest =
+        "UPDATE segment_speech SET regions = ?2 WHERE filename = ?1 AND regions IS NULL";
+    UNMEASURED: Ingest =
+        "SELECT s.filename, s.source FROM segments s
+         LEFT JOIN segment_speech p ON p.filename = s.filename
+         WHERE p.filename IS NULL
+         ORDER BY s.start_utc DESC, s.filename DESC LIMIT ?1";
+    UNPLACED: Ingest =
+        "SELECT p.filename, p.source FROM segment_speech p
+         JOIN segments s ON s.filename = p.filename
+         WHERE p.regions IS NULL
+         ORDER BY s.start_utc DESC, p.filename DESC LIMIT ?1";
+    HEARD: Ingest =
+        "SELECT speech_seconds, regions FROM segment_speech WHERE filename = ?1";
+    LATEST_SPEECH: Ingest =
+        "SELECT MAX(s.start_utc) FROM segments s
+         LEFT JOIN segment_speech p ON p.filename = s.filename
+         WHERE s.source = ?1
+           AND (p.filename IS NULL OR p.speech_seconds != 0.0)";
+    LIVENESS: Ingest =
+        "SELECT s.source,
+                MAX(s.start_utc),
+                MAX(CASE WHEN p.filename IS NULL OR p.speech_seconds != 0.0
+                         THEN s.start_utc END)
+         FROM segments s
+         LEFT JOIN segment_speech p ON p.filename = s.filename
+         GROUP BY s.source";
+}
+
 pub use audiocore::vad::UNKNOWN_SECONDS;
 
 /// Measure up to `batch` unmeasured segments, NEWEST first; returns rows written.
@@ -34,11 +71,7 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     let conn = store::open(root)?;
     let pending = unmeasured(&conn, batch)?;
     // A segment measured silent has no regions; no need to look again.
-    conn.execute(
-        "UPDATE segment_speech SET regions = '[]'
-         WHERE regions IS NULL AND speech_seconds = 0",
-        [],
-    )?;
+    SILENT_REGIONS.execute(&conn, [])?;
     let backfill = unplaced(&conn, batch - pending.len())?;
     if pending.is_empty() && backfill.is_empty() {
         return Ok(0);
@@ -58,10 +91,8 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
         let seconds = found.as_ref().map_or(UNKNOWN_SECONDS, |regions| {
             regions.iter().map(Region::seconds).sum()
         });
-        conn.execute(
-            "INSERT OR IGNORE INTO segment_speech
-                 (filename, source, speech_seconds, computed_utc, regions)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+        RECORD.execute(
+            &conn,
             (
                 &filename,
                 &source,
@@ -76,22 +107,14 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
         let found = detector.speech_regions(&root.join("ingest").join(&source).join(&filename));
         // Only the regions: the stored total came from the same detector, and
         // the queue has already acted on it.
-        conn.execute(
-            "UPDATE segment_speech SET regions = ?2 WHERE filename = ?1 AND regions IS NULL",
-            (&filename, regions_json(found.ok().as_deref())?),
-        )?;
+        SET_REGIONS.execute(&conn, (&filename, regions_json(found.ok().as_deref())?))?;
         written += 1;
     }
     Ok(written)
 }
 
 fn unmeasured(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<(String, String)>> {
-    let mut stmt = conn.prepare(
-        "SELECT s.filename, s.source FROM segments s
-         LEFT JOIN segment_speech p ON p.filename = s.filename
-         WHERE p.filename IS NULL
-         ORDER BY s.start_utc DESC, s.filename DESC LIMIT ?1",
-    )?;
+    let mut stmt = UNMEASURED.prepare(conn)?;
     let rows = stmt.query_map([limit as u32], |r| Ok((r.get(0)?, r.get(1)?)))?;
     rows.collect()
 }
@@ -101,12 +124,7 @@ fn unplaced(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<(String, St
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let mut stmt = conn.prepare(
-        "SELECT p.filename, p.source FROM segment_speech p
-         JOIN segments s ON s.filename = p.filename
-         WHERE p.regions IS NULL
-         ORDER BY s.start_utc DESC, p.filename DESC LIMIT ?1",
-    )?;
+    let mut stmt = UNPLACED.prepare(conn)?;
     let rows = stmt.query_map([limit as u32], |r| Ok((r.get(0)?, r.get(1)?)))?;
     rows.collect()
 }
@@ -136,12 +154,8 @@ fn parse_regions(json: &str) -> Option<Vec<Region>> {
 /// On database failure.
 pub fn heard(ingest: &Connection, filename: &str) -> rusqlite::Result<crate::quality::Heard> {
     use rusqlite::OptionalExtension as _;
-    let row: Option<(f64, Option<String>)> = ingest
-        .query_row(
-            "SELECT speech_seconds, regions FROM segment_speech WHERE filename = ?1",
-            [filename],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+    let row: Option<(f64, Option<String>)> = HEARD
+        .query_row(ingest, [filename], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     let Some((seconds, regions)) = row else {
         return Ok(crate::quality::Heard::default());
@@ -162,12 +176,7 @@ pub fn heard(ingest: &Connection, filename: &str) -> rusqlite::Result<crate::qua
 /// # Errors
 /// On database failure.
 pub fn latest_speech_utc(conn: &Connection, source: &str) -> rusqlite::Result<Option<String>> {
-    let mut stmt = conn.prepare(
-        "SELECT MAX(s.start_utc) FROM segments s
-         LEFT JOIN segment_speech p ON p.filename = s.filename
-         WHERE s.source = ?1
-           AND (p.filename IS NULL OR p.speech_seconds != 0.0)",
-    )?;
+    let mut stmt = LATEST_SPEECH.prepare(conn)?;
     let found: Option<String> = stmt.query_row([source], |r| r.get(0))?;
     Ok(found)
 }
@@ -182,15 +191,7 @@ pub fn latest_speech_utc(conn: &Connection, source: &str) -> rusqlite::Result<Op
 /// # Errors
 /// On database failure.
 pub fn liveness_by_source(conn: &Connection) -> rusqlite::Result<Vec<(String, String, String)>> {
-    let mut stmt = conn.prepare(
-        "SELECT s.source,
-                MAX(s.start_utc),
-                MAX(CASE WHEN p.filename IS NULL OR p.speech_seconds != 0.0
-                         THEN s.start_utc END)
-         FROM segments s
-         LEFT JOIN segment_speech p ON p.filename = s.filename
-         GROUP BY s.source",
-    )?;
+    let mut stmt = LIVENESS.prepare(conn)?;
     let rows = stmt.query_map([], |r| {
         let delivered: String = r.get(1)?;
         // No speech-bearing segment: the empty string rather than an invented

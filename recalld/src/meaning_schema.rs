@@ -3,6 +3,11 @@
 //! The integration test builds from empty and diffs against a dump of the live
 //! fleet database.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the schema itself: it runs on every open, so every test runs it"
+)]
+
 use rusqlite::Connection;
 
 /// Entry i migrates version i to version i+1. APPEND ONLY — editing a shipped

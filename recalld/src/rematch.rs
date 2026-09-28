@@ -7,6 +7,18 @@ use crate::identify::{match_one, worth_writing};
 use audiocore::instant::Stamp;
 use rusqlite::Connection;
 
+crate::statements! {
+    NEWEST_ENROLMENT: Meaning =
+        "SELECT MAX(created_utc) FROM speaker_embeddings";
+    STALE: Meaning =
+        "SELECT t.id, e.vector, t.speaker_guess, t.speaker_score
+           FROM transcript_segments t
+           JOIN transcript_embeddings e ON e.segment_id = t.id
+          WHERE t.speaker_matched_utc IS NULL OR t.speaker_matched_utc < ?1
+          ORDER BY t.id DESC
+          LIMIT ?2";
+}
+
 /// What one pass did.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Pass {
@@ -29,9 +41,7 @@ struct Stale {
 /// # Errors
 /// If the database refuses.
 pub fn newest_enrolment(conn: &Connection) -> rusqlite::Result<Option<String>> {
-    conn.query_row("SELECT MAX(created_utc) FROM speaker_embeddings", [], |r| {
-        r.get::<_, Option<String>>(0)
-    })
+    NEWEST_ENROLMENT.query_row(conn, [], |r| r.get::<_, Option<String>>(0))
 }
 
 /// Re-derive up to `limit` stale guesses.
@@ -90,14 +100,7 @@ fn stamp(conn: &Connection, id: i64, now: &Stamp) -> rusqlite::Result<()> {
 /// Hidden and superseded turns are included: both can still be read, so a stale
 /// name on them is the same fault, merely less visible.
 fn pending(conn: &Connection, newest: &str, limit: usize) -> rusqlite::Result<Vec<Stale>> {
-    let mut stmt = conn.prepare(
-        "SELECT t.id, e.vector, t.speaker_guess, t.speaker_score
-           FROM transcript_segments t
-           JOIN transcript_embeddings e ON e.segment_id = t.id
-          WHERE t.speaker_matched_utc IS NULL OR t.speaker_matched_utc < ?1
-          ORDER BY t.id DESC
-          LIMIT ?2",
-    )?;
+    let mut stmt = STALE.prepare(conn)?;
     let rows = stmt.query_map(
         rusqlite::params![newest, u32::try_from(limit).unwrap_or(u32::MAX)],
         |r| {

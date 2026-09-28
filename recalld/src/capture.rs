@@ -14,6 +14,16 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+crate::statements! {
+    SETTING: Meaning =
+        "SELECT value FROM settings WHERE key = ?1";
+    SET_SETTING: Meaning =
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+    RECORD_EVENT: Meaning =
+        "INSERT INTO capture_events (utc, kind, source_id, detail) VALUES (?1, ?2, NULL, ?3)";
+}
+
 /// ISO resume-by; blank or absent means running.
 const INTENT_KEY: &str = "capture_intent";
 /// What the Mac last reported it had actually applied.
@@ -115,10 +125,9 @@ pub struct Reported {
 }
 
 fn setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
-    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
-        row.get::<_, String>(0)
-    })
-    .optional()
+    SETTING
+        .query_row(conn, [key], |row| row.get::<_, String>(0))
+        .optional()
 }
 
 /// The desired resume-by, or `None` when running. An elapsed intent reads as
@@ -291,11 +300,7 @@ pub fn compute_resume_by(now: DateTime<Utc>, minutes: Option<i64>) -> DateTime<U
 }
 
 fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO settings (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        [key, value],
-    )?;
+    SET_SETTING.execute(conn, [key, value])?;
     Ok(())
 }
 
@@ -332,8 +337,8 @@ pub fn record_control_origin(
     verb: &str,
     origin: &str,
 ) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO capture_events (utc, kind, source_id, detail) VALUES (?1, ?2, NULL, ?3)",
+    RECORD_EVENT.execute(
+        conn,
         rusqlite::params![
             audiocore::instant::python_isoformat_utc(now),
             "control_request",

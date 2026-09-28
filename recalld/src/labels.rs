@@ -10,6 +10,31 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+crate::statements! {
+    CORRECTIONS_BY: Meaning =
+        "SELECT id, start_utc, corrected_text, speaker, language FROM corrections \
+         WHERE hidden_reason IS NULL AND speaker = ?1 ORDER BY id DESC LIMIT ?2";
+    CORRECTIONS: Meaning =
+        "SELECT id, start_utc, corrected_text, speaker, language FROM corrections \
+         WHERE hidden_reason IS NULL ORDER BY id DESC LIMIT ?1";
+    SPEAKER_NAMES: Meaning =
+        "SELECT name FROM speakers \
+         UNION \
+         SELECT DISTINCT speaker_label FROM transcript_segments \
+         WHERE speaker_label IS NOT NULL AND speaker_label NOT LIKE 'SPEAKER%' \
+         ORDER BY name COLLATE NOCASE";
+    LABEL_COUNTS: Meaning =
+        "SELECT COALESCE(speaker, ''), COUNT(*) FROM corrections \
+         WHERE hidden_reason IS NULL GROUP BY 1";
+    CORRECTION_AUDIO: Meaning =
+        "SELECT a.path, \
+                (julianday(c.start_utc) - julianday(a.start_utc)) * 86400.0, \
+                (julianday(c.end_utc)   - julianday(a.start_utc)) * 86400.0 \
+         FROM corrections c \
+         JOIN audio_segments a ON a.id = c.audio_segment_id \
+         WHERE c.id = ?1 AND c.audio_segment_id IS NOT NULL";
+}
+
 /// Lead-in and lead-out when a fragment is played with context.
 const PAD_S: f64 = 1.5;
 /// Minimum length for a context clip, so a short fragment is listenable.
@@ -25,13 +50,7 @@ pub struct SpeakerNames {
 /// Diarization's cluster tags (`SPEAKER_00`) are excluded: they are not people,
 /// and offering them as autocomplete would spread them into the roster.
 pub fn known_speaker_names(conn: &Connection) -> rusqlite::Result<SpeakerNames> {
-    let mut stmt = conn.prepare(
-        "SELECT name FROM speakers \
-         UNION \
-         SELECT DISTINCT speaker_label FROM transcript_segments \
-         WHERE speaker_label IS NOT NULL AND speaker_label NOT LIKE 'SPEAKER%' \
-         ORDER BY name COLLATE NOCASE",
-    )?;
+    let mut stmt = SPEAKER_NAMES.prepare(conn)?;
     let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
     let mut names = Vec::new();
     for row in rows {
@@ -75,13 +94,11 @@ pub fn list_corrections(
     limit: i64,
 ) -> rusqlite::Result<Vec<Label>> {
     let sql = if speaker.is_some() {
-        "SELECT id, start_utc, corrected_text, speaker, language FROM corrections \
-         WHERE hidden_reason IS NULL AND speaker = ?1 ORDER BY id DESC LIMIT ?2"
+        CORRECTIONS_BY
     } else {
-        "SELECT id, start_utc, corrected_text, speaker, language FROM corrections \
-         WHERE hidden_reason IS NULL ORDER BY id DESC LIMIT ?1"
+        CORRECTIONS
     };
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = sql.prepare(conn)?;
     let to_label = |r: &rusqlite::Row| -> rusqlite::Result<Label> {
         let id: i64 = r.get(0)?;
         Ok(Label {
@@ -104,10 +121,7 @@ pub fn list_corrections(
 pub fn corrections_by_speaker(
     conn: &Connection,
 ) -> rusqlite::Result<std::collections::BTreeMap<String, i64>> {
-    let mut stmt = conn.prepare(
-        "SELECT COALESCE(speaker, ''), COUNT(*) FROM corrections \
-         WHERE hidden_reason IS NULL GROUP BY 1",
-    )?;
+    let mut stmt = LABEL_COUNTS.prepare(conn)?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
     rows.collect()
 }
@@ -117,14 +131,7 @@ pub fn correction_placement(
     conn: &Connection,
     correction_id: i64,
 ) -> rusqlite::Result<Option<(std::path::PathBuf, f64, f64)>> {
-    let mut stmt = conn.prepare(
-        "SELECT a.path, \
-                (julianday(c.start_utc) - julianday(a.start_utc)) * 86400.0, \
-                (julianday(c.end_utc)   - julianday(a.start_utc)) * 86400.0 \
-         FROM corrections c \
-         JOIN audio_segments a ON a.id = c.audio_segment_id \
-         WHERE c.id = ?1 AND c.audio_segment_id IS NOT NULL",
-    )?;
+    let mut stmt = CORRECTION_AUDIO.prepare(conn)?;
     let mut rows = stmt.query([correction_id])?;
     let Some(row) = rows.next()? else {
         return Ok(None);

@@ -35,6 +35,7 @@ pub mod sessions;
 pub mod sources;
 pub mod spa;
 pub mod speech;
+pub mod sql;
 pub mod store;
 pub mod sync;
 pub mod tokens;

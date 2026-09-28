@@ -20,6 +20,33 @@ use crate::turn_store::{self, HiddenReason};
 use audiocore::job::Kind;
 use rusqlite::{Connection, OptionalExtension};
 
+crate::statements! {
+    REQUEUE: Ingest =
+        "UPDATE jobs SET state = 'queued', leased_until = NULL, done_utc = NULL,
+                             result = NULL, attempts = 0
+             WHERE kind = ?1 AND filename = ?2 AND done_utc IS NOT NULL";
+    REQUEST: Ingest =
+        "INSERT OR REPLACE INTO retranscribe_requests (filename, requested_utc)
+             VALUES (?1, ?2)";
+    CANDIDATES: Ingest =
+        "SELECT j.filename, j.result FROM jobs j
+         WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM retranscribe_requests r WHERE r.filename = j.filename)";
+    IS_REQUESTED: Ingest =
+        "SELECT 1 FROM retranscribe_requests WHERE filename = ?1";
+    CLEAR_LEDGER: Ingest =
+        "DELETE FROM pass_ledger WHERE kind = ?1 AND filename = ?2";
+    DROP_REQUEST: Ingest =
+        "DELETE FROM retranscribe_requests WHERE filename = ?1";
+    SEGMENT: Ingest =
+        "SELECT source, start_utc FROM segments WHERE filename = ?1";
+    AUDIO_SEGMENT: Meaning =
+        "SELECT id FROM audio_segments WHERE source_id = ?1 AND start_utc = ?2";
+    SET_ASIDE: Meaning =
+        "SELECT count(*) FROM transcript_segments
+         WHERE audio_segment_id = ?1 AND hidden_reason = ?2 AND superseded_by IS NULL";
+}
+
 /// What [`request`] did with each name it was given.
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Requested {
@@ -43,25 +70,13 @@ pub fn request(
     let mut out = Requested::default();
     for filename in filenames {
         let tx = ingest.unchecked_transaction()?;
-        let requeued = tx.execute(
-            "UPDATE jobs SET state = 'queued', leased_until = NULL, done_utc = NULL,
-                             result = NULL, attempts = 0
-             WHERE kind = ?1 AND filename = ?2 AND done_utc IS NOT NULL",
-            (Kind::TranscribeSegment, filename),
-        )?;
+        let requeued = REQUEUE.execute(&tx, (Kind::TranscribeSegment, filename))?;
         if requeued == 0 {
             out.skipped.push(filename.clone());
             continue;
         }
-        tx.execute(
-            "DELETE FROM pass_ledger WHERE kind = ?1 AND filename = ?2",
-            (Kind::TranscribeSegment, filename),
-        )?;
-        tx.execute(
-            "INSERT OR REPLACE INTO retranscribe_requests (filename, requested_utc)
-             VALUES (?1, ?2)",
-            (filename, now.to_string()),
-        )?;
+        CLEAR_LEDGER.execute(&tx, (Kind::TranscribeSegment, filename))?;
+        REQUEST.execute(&tx, (filename, now.to_string()))?;
         tx.commit()?;
         out.queued.push(filename.clone());
     }
@@ -84,11 +99,7 @@ pub struct Candidate {
 /// # Errors
 /// If the ingest plane refuses.
 pub fn candidates(ingest: &Connection, min_speech_s: f64) -> rusqlite::Result<Vec<Candidate>> {
-    let mut stmt = ingest.prepare(
-        "SELECT j.filename, j.result FROM jobs j
-         WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM retranscribe_requests r WHERE r.filename = j.filename)",
-    )?;
+    let mut stmt = CANDIDATES.prepare(ingest)?;
     let rows = stmt.query_map([Kind::TranscribeSegment], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
     })?;
@@ -137,12 +148,8 @@ pub fn candidates(ingest: &Connection, min_speech_s: f64) -> rusqlite::Result<Ve
 /// # Errors
 /// If the ingest plane refuses.
 pub fn is_requested(ingest: &Connection, filename: &str) -> rusqlite::Result<bool> {
-    Ok(ingest
-        .query_row(
-            "SELECT 1 FROM retranscribe_requests WHERE filename = ?1",
-            [filename],
-            |r| r.get::<_, i64>(0),
-        )
+    Ok(IS_REQUESTED
+        .query_row(ingest, [filename], |r| r.get::<_, i64>(0))
         .optional()?
         .is_some())
 }
@@ -154,14 +161,8 @@ pub fn is_requested(ingest: &Connection, filename: &str) -> rusqlite::Result<boo
 /// If the ingest plane refuses.
 pub fn written(ingest: &Connection, filename: &str) -> rusqlite::Result<()> {
     let tx = ingest.unchecked_transaction()?;
-    tx.execute(
-        "DELETE FROM retranscribe_requests WHERE filename = ?1",
-        [filename],
-    )?;
-    tx.execute(
-        "DELETE FROM pass_ledger WHERE kind = ?1 AND filename = ?2",
-        (Kind::DiarizeSegment, filename),
-    )?;
+    DROP_REQUEST.execute(&tx, [filename])?;
+    CLEAR_LEDGER.execute(&tx, (Kind::DiarizeSegment, filename))?;
     tx.commit()
 }
 
@@ -204,27 +205,20 @@ pub fn undo(
     ingest: &Connection,
     filename: &str,
 ) -> Result<Undone, UndoError> {
-    let cancelled = ingest.execute(
-        "DELETE FROM retranscribe_requests WHERE filename = ?1",
-        [filename],
-    )?;
+    let cancelled = DROP_REQUEST.execute(ingest, [filename])?;
     if cancelled > 0 {
         return Ok(Undone::Cancelled);
     }
-    let (source, start): (String, String) = ingest
-        .query_row(
-            "SELECT source, start_utc FROM segments WHERE filename = ?1",
-            [filename],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+    let (source, start): (String, String) = SEGMENT
+        .query_row(ingest, [filename], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?
         .ok_or(UndoError::Missing)?;
     let block_start = chrono::DateTime::parse_from_rfc3339(&start)
         .map_err(|_| UndoError::Missing)?
         .with_timezone(&chrono::Utc);
-    let audio_id: i64 = meaning
+    let audio_id: i64 = AUDIO_SEGMENT
         .query_row(
-            "SELECT id FROM audio_segments WHERE source_id = ?1 AND start_utc = ?2",
+            meaning,
             rusqlite::params![
                 source,
                 audiocore::instant::python_isoformat_utc(block_start)
@@ -234,9 +228,8 @@ pub fn undo(
         .optional()?
         .ok_or(UndoError::Missing)?;
     let tx = meaning.transaction()?;
-    let set_aside: i64 = tx.query_row(
-        "SELECT count(*) FROM transcript_segments
-         WHERE audio_segment_id = ?1 AND hidden_reason = ?2 AND superseded_by IS NULL",
+    let set_aside: i64 = SET_ASIDE.query_row(
+        &tx,
         rusqlite::params![audio_id, HiddenReason::SetAside.to_string()],
         |r| r.get(0),
     )?;

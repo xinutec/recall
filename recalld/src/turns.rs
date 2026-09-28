@@ -21,6 +21,39 @@ use audiocore::job::Kind;
 use audiocore::shim::asr;
 use chrono::{DateTime, Duration, Utc};
 
+crate::statements! {
+    CAPTURE_SOURCES: Meaning =
+        "SELECT id FROM sources WHERE kind NOT IN ('upload', ?1)";
+    UNWRITTEN: Ingest =
+        "SELECT s.filename, s.source FROM segments s
+             WHERE s.source != ?1
+               AND NOT EXISTS (SELECT 1 FROM pass_ledger l
+                               WHERE l.kind = ?2 AND l.filename = s.filename)
+             ORDER BY s.start_utc DESC";
+    ADD_AUDIO_SEGMENT: Meaning =
+        "INSERT OR IGNORE INTO audio_segments
+                 (source_id, path, start_utc, end_utc, sample_rate, channels)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+    AUDIO_PATHS: Meaning =
+        "SELECT path FROM audio_segments";
+    AUDIO_STARTS: Meaning =
+        "SELECT source_id, start_utc FROM audio_segments";
+    WAS_DELETED: Meaning =
+        "SELECT 1 FROM deleted_segments WHERE source_id = ?1 AND start_utc = ?2";
+    FINISHED: Ingest =
+        "SELECT j.filename, j.result, s.source FROM jobs j
+         JOIN segments s ON s.filename = j.filename
+         WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM pass_ledger l
+                           WHERE l.kind = ?1 AND l.filename = j.filename)
+         ORDER BY s.start_utc ASC, j.filename ASC";
+    AUDIO_SEGMENT: Meaning =
+        "SELECT id, end_utc FROM audio_segments
+             WHERE source_id = ?1 AND start_utc = ?2";
+    TURN_COUNT: Meaning =
+        "SELECT count(*) FROM transcript_segments WHERE audio_segment_id = ?1";
+}
+
 /// One turn a clip's transcript implies, in the archive's own terms.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipTurn {
@@ -205,8 +238,7 @@ pub fn register_segments(
     // Uploads are excluded because `upload::register` writes their meaning-plane
     // rows; they are transcribed like any microphone clip.
     let mics: std::collections::HashSet<String> = {
-        let mut stmt =
-            meaning.prepare("SELECT id FROM sources WHERE kind NOT IN ('upload', ?1)")?;
+        let mut stmt = CAPTURE_SOURCES.prepare(meaning)?;
         let rows = stmt.query_map([crate::store::ROOM_KIND], |r| r.get::<_, String>(0))?;
         rows.collect::<Result<_, _>>()?
     };
@@ -219,13 +251,7 @@ pub fn register_segments(
     // behind a backfill, and the ledger retires what cannot be read, so nothing
     // starves.
     let candidates: Vec<(String, String)> = {
-        let mut stmt = ingest.prepare(
-            "SELECT s.filename, s.source FROM segments s
-             WHERE s.source != ?1
-               AND NOT EXISTS (SELECT 1 FROM pass_ledger l
-                               WHERE l.kind = ?2 AND l.filename = s.filename)
-             ORDER BY s.start_utc DESC",
-        )?;
+        let mut stmt = UNWRITTEN.prepare(ingest)?;
         let rows = stmt.query_map((crate::store::ROOM_SOURCE, PassKind::Register), |r| {
             Ok((r.get(0)?, r.get(1)?))
         })?;
@@ -276,10 +302,8 @@ pub fn register_segments(
             continue;
         };
         let end = start + Duration::microseconds((media.duration_s * 1e6).round() as i64);
-        let inserted = meaning.execute(
-            "INSERT OR IGNORE INTO audio_segments
-                 (source_id, path, start_utc, end_utc, sample_rate, channels)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        let inserted = ADD_AUDIO_SEGMENT.execute(
+            meaning,
             rusqlite::params![
                 source,
                 path.to_string_lossy(),
@@ -314,7 +338,7 @@ pub fn register_segments(
 fn registered_names(
     meaning: &rusqlite::Connection,
 ) -> rusqlite::Result<std::collections::HashSet<String>> {
-    let mut stmt = meaning.prepare("SELECT path FROM audio_segments")?;
+    let mut stmt = AUDIO_PATHS.prepare(meaning)?;
     let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
     let mut set = std::collections::HashSet::new();
     for path in rows {
@@ -332,7 +356,7 @@ fn registered_names(
 fn registered_minutes(
     meaning: &rusqlite::Connection,
 ) -> rusqlite::Result<std::collections::HashSet<(String, String)>> {
-    let mut stmt = meaning.prepare("SELECT source_id, start_utc FROM audio_segments")?;
+    let mut stmt = AUDIO_STARTS.prepare(meaning)?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
     rows.collect()
 }
@@ -365,11 +389,7 @@ pub fn write_block(
     if again {
         turn_store::hide_machine_turns(&tx, audio_segment_id, &HiddenReason::SetAside)?;
     } else {
-        let already: i64 = tx.query_row(
-            "SELECT count(*) FROM transcript_segments WHERE audio_segment_id = ?1",
-            [audio_segment_id],
-            |row| row.get(0),
-        )?;
+        let already: i64 = TURN_COUNT.query_row(&tx, [audio_segment_id], |row| row.get(0))?;
         if already > 0 {
             return Ok(0);
         }
@@ -447,9 +467,9 @@ pub fn tombstoned_block(
     block_start: DateTime<Utc>,
 ) -> rusqlite::Result<bool> {
     use rusqlite::OptionalExtension;
-    Ok(meaning
+    Ok(WAS_DELETED
         .query_row(
-            "SELECT 1 FROM deleted_segments WHERE source_id = ?1 AND start_utc = ?2",
+            meaning,
             rusqlite::params![source, instant::python_isoformat_utc(block_start)],
             |r| r.get::<_, i64>(0),
         )
@@ -477,14 +497,7 @@ pub fn write_pass(
     // ⚠ The source is joined from the ingest plane, never parsed from the
     // filename: `meeting-20260907-0905` is a source id, and no split of a
     // filename on a hyphen is safe.
-    let mut stmt = ingest.prepare(
-        "SELECT j.filename, j.result, s.source FROM jobs j
-         JOIN segments s ON s.filename = j.filename
-         WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM pass_ledger l
-                           WHERE l.kind = ?1 AND l.filename = j.filename)
-         ORDER BY s.start_utc ASC, j.filename ASC",
-    )?;
+    let mut stmt = FINISHED.prepare(ingest)?;
     let jobs: Vec<(String, String, String)> = stmt
         .query_map(rusqlite::params![KIND], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -507,9 +520,8 @@ pub fn write_pass(
         //
         // ⚠ Not ledgered: this is the one transient barren cause, and a row
         // would retire the clip for being examined too early.
-        let Ok((audio_id, end_raw)) = meaning.query_row(
-            "SELECT id, end_utc FROM audio_segments
-             WHERE source_id = ?1 AND start_utc = ?2",
+        let Ok((audio_id, end_raw)) = AUDIO_SEGMENT.query_row(
+            meaning,
             rusqlite::params![source, instant::python_isoformat_utc(block_start)],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
         ) else {
@@ -524,11 +536,7 @@ pub fn write_pass(
         // makes the clip eligible again. A clip asked to be transcribed again
         // is written over: its machine lines are set aside.
         let again = crate::retranscribe::is_requested(ingest, &filename)?;
-        let written_already: i64 = meaning.query_row(
-            "SELECT count(*) FROM transcript_segments WHERE audio_segment_id = ?1",
-            [audio_id],
-            |r| r.get(0),
-        )?;
+        let written_already: i64 = TURN_COUNT.query_row(meaning, [audio_id], |r| r.get(0))?;
         if written_already > 0 && !again {
             continue;
         }

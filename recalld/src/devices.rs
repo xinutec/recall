@@ -14,6 +14,14 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+crate::statements! {
+    SETTING: Meaning =
+        "SELECT value FROM settings WHERE key = ?1";
+    SET_SETTING: Meaning =
+        "INSERT INTO settings (key, value) VALUES (?1, ?2) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+}
+
 const BEATS_KEY: &str = "device_mic_heartbeats";
 const REPORTS_KEY: &str = "device_outbox_reports";
 
@@ -69,21 +77,13 @@ pub struct Report {
 }
 
 fn get_setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
-    let raw: Option<String> = conn
-        .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
-            r.get(0)
-        })
-        .optional()?;
+    let raw: Option<String> = SETTING.query_row(conn, [key], |r| r.get(0)).optional()?;
     // A blank value is unset.
     Ok(raw.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty()))
 }
 
 fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO settings (key, value) VALUES (?1, ?2) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (key, value),
-    )?;
+    SET_SETTING.execute(conn, (key, value))?;
     Ok(())
 }
 

@@ -9,6 +9,12 @@ use audiocore::instant::Stamp;
 use audiocore::job::Kind;
 use rusqlite::types::ToSqlOutput;
 
+crate::statements! {
+    RECORD: Ingest =
+        "INSERT OR REPLACE INTO pass_ledger (kind, filename, outcome, detail, decided_utc)
+         VALUES (?1, ?2, ?3, ?4, ?5)";
+}
+
 /// Which pass decided a clip: a job kind's, or registration's, which has no job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassKind {
@@ -124,9 +130,8 @@ pub fn record(
     detail: Option<&serde_json::Value>,
     now: &Stamp,
 ) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT OR REPLACE INTO pass_ledger (kind, filename, outcome, detail, decided_utc)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+    RECORD.execute(
+        conn,
         rusqlite::params![
             kind.into(),
             filename,

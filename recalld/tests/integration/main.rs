@@ -7,6 +7,10 @@
 //!
 //! Adding a test file means adding its `mod` here; cargo does not auto-discover
 //! inside this directory.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "tests seed and read rows with SQL of their own; the ban is for the daemon"
+)]
 
 mod align;
 mod align_parity;
@@ -35,6 +39,7 @@ mod sources;
 mod spa;
 mod speaking_rate;
 mod speech;
+mod sql;
 mod sync;
 mod sync_reads;
 mod tokens;

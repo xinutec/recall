@@ -18,6 +18,20 @@ use audiocore::instant::Stamp;
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
+crate::statements! {
+    LOAD_TURN: Meaning =
+        "SELECT id, audio_segment_id, start_utc, end_utc, text, language, \
+                language_confidence, asr_confidence, asr_model, speaker_label, \
+                speaker_cluster, provenance, word_timings \
+         FROM transcript_segments WHERE id = ?1";
+    SESSION_TURN_IDS: Meaning =
+        "SELECT ts.id FROM transcript_segments ts \
+         JOIN audio_segments a ON a.id = ts.audio_segment_id \
+         WHERE a.source_id = ?1 AND ts.superseded_by IS NULL \
+           AND ts.hidden_reason IS NULL \
+         ORDER BY ts.start_utc";
+}
+
 /// Floor on a split piece's duration, so a collapsed cut never makes a
 /// zero-length, audio-less turn (a word that aligned to no audio).
 const MIN_PIECE_MS: i64 = 50;
@@ -255,13 +269,8 @@ pub fn min_width(
 // --- the store half ----------------------------------------------------------
 
 fn load_turn(tx: &Transaction, id: i64) -> rusqlite::Result<Option<Turn>> {
-    tx.query_row(
-        "SELECT id, audio_segment_id, start_utc, end_utc, text, language, \
-                language_confidence, asr_confidence, asr_model, speaker_label, \
-                speaker_cluster, provenance, word_timings \
-         FROM transcript_segments WHERE id = ?1",
-        [id],
-        |r| {
+    LOAD_TURN
+        .query_row(tx, [id], |r| {
             let start: String = r.get(2)?;
             let end: String = r.get(3)?;
             let raw: Option<String> = r.get(12)?;
@@ -282,9 +291,8 @@ fn load_turn(tx: &Transaction, id: i64) -> rusqlite::Result<Option<Turn>> {
                 // interpolated path — worse cuts, not a failed assignment.
                 words: raw.and_then(|v| serde_json::from_str(&v).ok()),
             })
-        },
-    )
-    .optional()
+        })
+        .optional()
 }
 
 fn parse(stored: &str) -> DateTime<Utc> {
@@ -367,13 +375,7 @@ fn recut(
 }
 
 fn session_turn_ids(tx: &Transaction, source: &str) -> rusqlite::Result<Vec<i64>> {
-    let mut stmt = tx.prepare(
-        "SELECT ts.id FROM transcript_segments ts \
-         JOIN audio_segments a ON a.id = ts.audio_segment_id \
-         WHERE a.source_id = ?1 AND ts.superseded_by IS NULL \
-           AND ts.hidden_reason IS NULL \
-         ORDER BY ts.start_utc",
-    )?;
+    let mut stmt = SESSION_TURN_IDS.prepare(tx)?;
     let rows = stmt.query_map([source], |r| r.get(0))?;
     rows.collect()
 }

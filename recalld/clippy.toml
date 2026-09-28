@@ -1,0 +1,12 @@
+# Every statement is a declared `sql::Sql`, run through its methods, so the
+# schema test can prepare all of them (src/sql.rs). These take raw text.
+disallowed-methods = [
+    { path = "rusqlite::Connection::execute", reason = "declare it in a statements! block (src/sql.rs)" },
+    { path = "rusqlite::Connection::execute_batch", reason = "declare it in a statements! block (src/sql.rs)" },
+    { path = "rusqlite::Connection::query_row", reason = "declare it in a statements! block (src/sql.rs)" },
+    { path = "rusqlite::Connection::query_one", reason = "declare it in a statements! block (src/sql.rs)" },
+    { path = "rusqlite::Connection::query_row_and_then", reason = "declare it in a statements! block (src/sql.rs)" },
+    { path = "rusqlite::Connection::prepare", reason = "declare it in a statements! block (src/sql.rs)" },
+    { path = "rusqlite::Connection::prepare_cached", reason = "declare it in a statements! block (src/sql.rs)" },
+    { path = "rusqlite::Connection::prepare_with_flags", reason = "declare it in a statements! block (src/sql.rs)" },
+]

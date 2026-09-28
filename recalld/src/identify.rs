@@ -11,6 +11,14 @@
 //! cosine: 0.7 against a 0.68 runner-up and 0.7 against a 0.2 mean opposite
 //! things.
 
+crate::statements! {
+    ENROLLED: Meaning =
+        "SELECT s.name, e.vector FROM speakers s
+         JOIN speaker_embeddings e ON e.speaker_id = s.id";
+    STORE_EMBEDDING: Meaning =
+        "INSERT OR REPLACE INTO transcript_embeddings (segment_id, vector) VALUES (?1, ?2)";
+}
+
 /// Softmax temperature. The fixture in `tests/integration/identify_parity.rs`
 /// pins it.
 pub const SOFTMAX_TEMPERATURE: f64 = 0.1;
@@ -120,10 +128,7 @@ pub fn worth_writing(stored: Option<(&str, Option<f64>)>, fresh: &Guess) -> bool
 /// # Errors
 /// If the database refuses.
 pub fn enrolled(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<Voiceprint>> {
-    let mut stmt = conn.prepare(
-        "SELECT s.name, e.vector FROM speakers s
-         JOIN speaker_embeddings e ON e.speaker_id = s.id",
-    )?;
+    let mut stmt = ENROLLED.prepare(conn)?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
     let mut out = Vec::new();
     for row in rows {
@@ -148,8 +153,8 @@ pub fn record(
     embedding: &[f64],
     guess: Option<&Guess>,
 ) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT OR REPLACE INTO transcript_embeddings (segment_id, vector) VALUES (?1, ?2)",
+    STORE_EMBEDDING.execute(
+        conn,
         rusqlite::params![
             turn_id,
             serde_json::to_string(embedding).unwrap_or_default()
