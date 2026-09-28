@@ -67,7 +67,7 @@
               <span class="who unknown">unknown</span>
             }
           </span>
-          <span class="count">{{ conv.turnCount }} turns</span>
+          <span class="count">{{ conv.turnCount }} {{ conv.turnCount === 1 ? 'turn' : 'turns' }}</span>
           @if (!isExpanded(conv)) {
             <span class="preview">{{ conv.preview }}</span>
           }

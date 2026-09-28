@@ -54,7 +54,7 @@
               </div>
               <div class="title">{{ s.title }}</div>
               <div class="meta">
-                <span class="count">{{ s.turnCount }} turns</span>
+                <span class="count">{{ s.turnCount }} {{ s.turnCount === 1 ? 'turn' : 'turns' }}</span>
                 @for (who of s.speakers; track who) {
                   <mat-chip class="who">{{ who }}</mat-chip>
                 }

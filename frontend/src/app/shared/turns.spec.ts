@@ -188,6 +188,13 @@ describe('Turns', () => {
     expect(c.alternates(second)).toEqual([later]);
   });
 
+  it('does not flag a machine guess that differs from a person’s name', async () => {
+    const named = said(1, 'P', { source: 'usb' });
+    const guessed = said(2, null, { source: 'phone', speaker: 'D', speakerConfirmed: false });
+    const { c } = await setup([moment([named], [guessed])]);
+    expect(c.disputed(named)).toBe(false);
+  });
+
   it('flags only a disagreement with a confirmed name', async () => {
     const usb = said(1, null, { source: 'usb', speaker: 'P', speakerConfirmed: false });
     const phone = said(2, null, { source: 'phone', speaker: 'D', speakerConfirmed: false });

@@ -144,14 +144,14 @@ export class Turns implements OnDestroy {
     return this.momentOf().get(t.id)?.alternates ?? [];
   }
 
-  /** Another mic's version names someone else, and one of the two names is a
-   * person's: two machine guesses that differ are not a finding. */
+  /** A person named this line, and named another mic's version of it someone
+   * else. A machine guess that differs from a person's name is not a finding:
+   * the person's name is the answer. */
   protected disputed(t: Transcript): boolean {
     return (
       !!t.speaker &&
-      this.alternates(t).some(
-        (a) => !!a.speaker && a.speaker !== t.speaker && (a.speakerConfirmed || t.speakerConfirmed),
-      )
+      t.speakerConfirmed &&
+      this.alternates(t).some((a) => !!a.speaker && a.speakerConfirmed && a.speaker !== t.speaker)
     );
   }
 
