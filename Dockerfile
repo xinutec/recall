@@ -41,7 +41,7 @@ RUN pnpm run build
 # dlopens Debian's baseline build because ort's prebuilt needs AVX2 — which
 # SIGILLs on isis (Ivy Bridge, 2012). Harmonising this to bookworm takes the
 # speech detector off the air (#1629).
-FROM rust:1-slim-trixie AS recalld
+FROM rust:1.98-slim-trixie AS recalld
 WORKDIR /build
 # The whole Rust workspace (stage D1): cargo needs every member's manifest and
 # sources to load the graph, but `-p recalld` compiles only recalld and its
