@@ -1,0 +1,9 @@
+{
+  "customSyntax": "postcss-scss",
+  "rules": {
+    "color-no-hex": true,
+    "declaration-property-value-disallowed-list": {
+      "/color/": ["/rgba?\\(/", "/hsla?\\(/"]
+    }
+  }
+}
