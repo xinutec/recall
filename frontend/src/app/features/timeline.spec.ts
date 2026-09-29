@@ -55,7 +55,7 @@ function setup(
   const navigate = vi.fn().mockResolvedValue(true);
   const open = vi.fn();
   const conversations = opts.conversations ?? vi.fn(() => of(page([])));
-  const speakers = vi.fn(() => of({ names: ['Alice', 'Bob', 'Carol', 'Pippijn'] }));
+  const speakers = vi.fn(() => of({ names: ['Alice', 'Bob', 'Carol', 'Oskar'] }));
   TestBed.configureTestingModule({
     providers: [
       provideZonelessChangeDetection(),

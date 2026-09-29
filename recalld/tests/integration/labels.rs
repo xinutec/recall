@@ -33,7 +33,7 @@ fn the_roster_never_offers_a_diarization_cluster_tag_as_a_name() {
     // A diarization tag is not a person. Offered for autocomplete, it spreads
     // into the roster one accepted suggestion at a time.
     let conn = db();
-    conn.execute("INSERT INTO speakers (id, name) VALUES (1, 'Pippijn')", ())
+    conn.execute("INSERT INTO speakers (id, name) VALUES (1, 'Oskar')", ())
         .expect("speaker");
     conn.execute(
         "INSERT INTO transcript_segments (id, start_utc, end_utc, text, asr_model, speaker_label)
@@ -45,7 +45,7 @@ fn the_roster_never_offers_a_diarization_cluster_tag_as_a_name() {
 
     let names = known_speaker_names(&conn).expect("roster").names;
 
-    assert!(names.contains(&"Pippijn".to_string()));
+    assert!(names.contains(&"Oskar".to_string()));
     assert!(names.contains(&"Dr Lee".to_string()));
     assert!(
         !names.iter().any(|n| n.starts_with("SPEAKER")),
@@ -72,8 +72,8 @@ fn a_hidden_correction_stays_out_of_the_review_list() {
     // A label is hidden because it was a mistake feeding the voiceprints; listing
     // it again invites re-confirming it.
     let conn = db();
-    correction(&conn, 1, Some("Pippijn"), None);
-    correction(&conn, 2, Some("Pippijn"), Some("wrong speaker"));
+    correction(&conn, 1, Some("Oskar"), None);
+    correction(&conn, 2, Some("Oskar"), Some("wrong speaker"));
 
     let items = list_corrections(&conn, None, 200).expect("list");
 
@@ -85,7 +85,7 @@ fn a_hidden_correction_stays_out_of_the_review_list() {
 fn corrections_are_newest_first_and_filterable_by_voice() {
     let conn = db();
     correction(&conn, 1, Some("Alex"), None);
-    correction(&conn, 2, Some("Pippijn"), None);
+    correction(&conn, 2, Some("Oskar"), None);
     correction(&conn, 3, Some("Alex"), None);
 
     let all = list_corrections(&conn, None, 200).expect("all");
@@ -102,7 +102,7 @@ fn corrections_are_newest_first_and_filterable_by_voice() {
 #[test]
 fn each_label_carries_the_url_that_plays_it() {
     let conn = db();
-    correction(&conn, 7, Some("Pippijn"), None);
+    correction(&conn, 7, Some("Oskar"), None);
 
     let items = list_corrections(&conn, None, 200).expect("list");
 

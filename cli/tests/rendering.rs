@@ -32,31 +32,31 @@ fn turn() -> Turn {
 #[test]
 fn a_confirmed_name_wins_and_carries_no_score() {
     let t = Turn {
-        speaker: Some("Pippijn".to_owned()),
+        speaker: Some("Oskar".to_owned()),
         speaker_confirmed: true,
         speaker_confidence: Some(0.4),
         ..turn()
     };
-    assert_eq!(attribution(&t), "Pippijn");
-    assert_eq!(who(&t), "Pippijn");
+    assert_eq!(attribution(&t), "Oskar");
+    assert_eq!(who(&t), "Oskar");
 }
 
 /// Search shows an unconfirmed guess with its strength; it is the only signal most hits have.
 #[test]
 fn a_search_hit_shows_an_unconfirmed_guess_with_its_strength() {
     let t = Turn {
-        speaker: Some("Pippijn".to_owned()),
+        speaker: Some("Oskar".to_owned()),
         speaker_confidence: Some(0.764),
         ..turn()
     };
-    assert_eq!(attribution(&t), "Pippijn ~76%");
+    assert_eq!(attribution(&t), "Oskar ~76%");
 }
 
 /// A read-through transcript must not assert the same unconfirmed name.
 #[test]
 fn a_transcript_never_asserts_an_unconfirmed_guess() {
     let t = Turn {
-        speaker: Some("Pippijn".to_owned()),
+        speaker: Some("Oskar".to_owned()),
         speaker_confidence: Some(0.764),
         ..turn()
     };
@@ -66,10 +66,10 @@ fn a_transcript_never_asserts_an_unconfirmed_guess() {
 #[test]
 fn a_guess_with_no_score_gets_no_percentage() {
     let t = Turn {
-        speaker: Some("Pippijn".to_owned()),
+        speaker: Some("Oskar".to_owned()),
         ..turn()
     };
-    assert_eq!(attribution(&t), "Pippijn");
+    assert_eq!(attribution(&t), "Oskar");
 }
 
 #[test]

@@ -27,8 +27,8 @@ function turn(id: number, speaker: string, cluster: string, text: string): unkno
 // Two same-speaker turns coalesce into ONE bubble (run) — the case where the play
 // button must span both turns, not just the first.
 const turns = [
-  turn(1, 'Pippijn', 'SPEAKER_01', 'I have already made a list of errands.'),
-  turn(2, 'Pippijn', 'SPEAKER_01', 'The first one is about the molecular pathology.'),
+  turn(1, 'Oskar', 'SPEAKER_01', 'I have already made a list of errands.'),
+  turn(2, 'Oskar', 'SPEAKER_01', 'The first one is about the molecular pathology.'),
 ];
 
 const conversationPage = {
@@ -37,7 +37,7 @@ const conversationPage = {
       start: '2026-01-15T09:35:50Z',
       end: '2026-01-15T09:36:10Z',
       turnCount: 2,
-      speakers: ['Pippijn'],
+      speakers: ['Oskar'],
       preview: 'x',
       moments: turns.map((t) => ({
         start: '2026-01-15T09:35:50Z',
@@ -57,7 +57,7 @@ test('the bubble play button requests the full joined span (Pixel 9)', async ({ 
   await page.route('**/api/**', (route: Route) => {
     const url = route.request().url();
     if (url.includes('/api/conversations')) return route.fulfill({ json: conversationPage });
-    if (url.includes('/api/speakers')) return route.fulfill({ json: { names: ['Pippijn'] } });
+    if (url.includes('/api/speakers')) return route.fulfill({ json: { names: ['Oskar'] } });
     if (url.includes('/voices')) return route.fulfill({ json: { suggestions: {} } });
     return route.fulfill({ json: {} });
   });

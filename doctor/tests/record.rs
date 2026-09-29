@@ -1,5 +1,5 @@
 //! The record's own faults, graded: a failed request and a minute shown twice
-//! are each a failure for Pippijn to hear about, not for him to find.
+//! are each a failure for the user to hear about, not for them to find.
 
 use audiocore::record_health::{Doubled, DoubledMinute, Fault, Faults, RecordHealth};
 use doctor::check::Verdict;

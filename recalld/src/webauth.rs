@@ -314,6 +314,7 @@ impl Config {
             redirect_uri: get("NC_REDIRECT_URI")
                 .unwrap_or_else(|| "https://recall.xinutec.org/auth/callback".to_owned()),
             allowed_users: get("RECALL_ALLOWED_USERS")
+                // dev-lint: allow-pii one account by default: recall holds private audio
                 .unwrap_or_else(|| "pippijn".to_owned())
                 .split(',')
                 .map(|s| s.trim().to_owned())

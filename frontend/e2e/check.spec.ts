@@ -9,7 +9,7 @@ function line(id: number, source: string, text: string): unknown {
     end: '2026-09-19T10:00:0' + (id + 1) + '+00:00',
     text,
     language: 'en',
-    speaker: 'Pippijn',
+    speaker: 'Oskar',
     speakerConfirmed: true,
     speakerConfidence: null,
     confidence: 0.9,

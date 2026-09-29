@@ -211,6 +211,8 @@
             lib = nixpkgs.lib;
             hm = import ./deploy/hm-agents.nix {
               inherit pkgs lib;
+              # Only the log directory reads it; home-manager supplies the real one.
+              config.home.homeDirectory = "/home/user";
               recall.packages.${system} = {
                 ml-env = mlEnv;
                 agent-tools = agentTools;

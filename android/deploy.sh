@@ -52,7 +52,7 @@ LOCAL_MD5=$(md5 -q "$APK")
 # So a phone that is awake, on the LAN and pingable can still refuse :5555 on every
 # address it owns, which reads exactly like a phone that is away (measured 2026-08-14:
 # pixel5 pinged on both addresses with :5555 shut, while it was in fact listening on
-# :39345). The port is advertised, so look it up rather than asking Pippijn to.
+# :39345). The port is advertised, so look it up rather than asking the user to.
 #
 # ⚠ mDNS is link-local, so this only rescues a phone on the HOME LAN — a phone that is
 # out of the house does not advertise here, and for it the VPN address is the only way in.

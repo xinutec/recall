@@ -17,7 +17,7 @@ the built copy in the store, not the working tree. The Mac's data root is
 
 `deploy/hm-agents.nix` defines them; home-manager installs them. Apply a change
 with: commit here, then in `~/.config/home-manager` run
-`nix flake update recall && home-manager switch --flake .#pippijn`. An agent
+`nix flake update recall && home-manager switch --flake .#$USER`. An agent
 runs the pinned store revision, so editing the tree changes nothing until that
 switch. Restart one with `launchctl kickstart -k gui/$(id -u)/<label>`. Logs are
 in `~/Library/Logs/recall/<agent>.{out,err}.log`; `recall-logrotate` caps them.

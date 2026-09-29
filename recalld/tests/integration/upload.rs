@@ -341,8 +341,8 @@ const NOW: i64 = 1_788_000_000;
 /// A signed-in browser's cookie: uploading is a gated browsing-plane write.
 fn cookie() -> String {
     let session = Session {
-        user_id: "pippijn".into(),
-        display_name: "Pippijn".into(),
+        user_id: "user".into(),
+        display_name: "Oskar".into(),
     };
     format!(
         "{COOKIE_NAME}={}",

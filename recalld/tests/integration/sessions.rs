@@ -470,7 +470,7 @@ fn consecutive_turns_by_one_speaker_merge_into_a_single_bubble() {
         export(
             "2026-07-03T09:51:09+00:00",
             "fine thanks",
-            Some("Pippijn"),
+            Some("Oskar"),
             None,
         ),
     ];
@@ -481,7 +481,7 @@ fn consecutive_turns_by_one_speaker_merge_into_a_single_bubble() {
     assert_eq!(out.turns[0].text, "hello there how are you");
     assert_eq!(out.turns[0].speaker, "Dr Smith");
     assert_eq!(out.turns[1].text, "fine thanks");
-    assert_eq!(out.speakers, vec!["Dr Smith", "Pippijn"]);
+    assert_eq!(out.speakers, vec!["Dr Smith", "Oskar"]);
 }
 
 #[test]

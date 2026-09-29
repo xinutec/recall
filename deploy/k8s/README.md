@@ -1,6 +1,7 @@
 # recall on Isis (k3s) — deployment notes
 
 Status: **LIVE since 2026-07-17.** The manifests no longer live here — they are in the
+<!-- dev-lint: allow-pii the repository's name -->
 `pippijn` monorepo at `code/kubes/recall/k8s/`, rendered from the typed Dhall model
 (`dhall/apps/recall.dhall`). This file is kept for the setup and rationale below
 (secrets, WireGuard exposure, backup), not as a source of manifests.
@@ -31,6 +32,7 @@ ASR, diarization, and the LLM.
 now: a Debian base, the `recalld` binary, the built Angular frontend, and the media
 tools recalld shells out to (ffmpeg, ffprobe, sox, flac, deep-filter).
 
+<!-- dev-lint: allow-pii the repository's name -->
 Manifests (in `pippijn:code/kubes/recall/k8s/`): `00-namespace`, `01-pvc` (the SQLite DB +
 audio under `/data`), `02-deployment` (hardened: non-root uid 1000, dropped caps,
 read-only rootfs + `/tmp` emptyDir, seccomp, probes, limits), `03-service` (ClusterIP),
@@ -58,7 +60,7 @@ read-only rootfs + `/tmp` emptyDir, seccomp, probes, limits), `03-service` (Clus
    Settings → Security → OAuth 2.0 clients**, redirect URI
    `https://recall.xinutec.org/auth/callback`), and `SESSION_SECRET` (a random cookie-signing
    key, e.g. `openssl rand -hex 32`). All three raise the gate; missing any of them leaves
-   the UI open. `RECALL_ALLOWED_USERS` (plain env in the Deployment, default `pippijn`)
+   the UI open. `RECALL_ALLOWED_USERS` (plain env in the Deployment, default one account)
    restricts who may enter after a valid sign-in. The recording plane stays login-free:
    `/sync/*` keeps its bearer token, and the iOS mic app's capture endpoints
    (`/api/capture`, `/api/sources`, `/api/capture/pause|resume`) are exempt — a headless
@@ -66,7 +68,7 @@ read-only rootfs + `/tmp` emptyDir, seccomp, probes, limits), `03-service` (Clus
 4. **WireGuard exposure** — do NOT add an nginx Ingress. Expose the Service over WireGuard
    only: a MetalLB address from a `wg0`-only pool, or a NodePort firewalled to `wg0`. That
    is the real network gate; the public ingress is not one.
-5. ~~**Move the manifests to `kubes/recall/k8s/`** and add a `sync.sh`~~ — **DONE.** They
+5. ~~**Move the manifests to `kubes/recall/k8s/`** and add a `sync.sh`~~ — **DONE.** They <!-- dev-lint: allow-pii the repository's name -->
    live at `pippijn:code/kubes/recall/k8s/` with `sync.sh` + `secret.sh` (the `sync.sh`
    is now a wrapper on `kubes/deploy.sh`, not its own copy of the procedure). The copies that
    used to sit here were deleted 2026-07-26 (see the status note at the top). The Mac

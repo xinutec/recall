@@ -159,11 +159,11 @@ fn model_and_prompt_reach_the_shim_when_given() {
     let clip = dir.path().join("a.flac");
     std::fs::write(&clip, b"x").expect("clip");
     let echoed = shim
-        .transcribe(&clip, Some("whisper-small"), Some("Pippijn, Kat"))
+        .transcribe(&clip, Some("whisper-small"), Some("Oskar, Kat"))
         .expect("transcribe");
     assert_eq!(echoed.raw["op"], "transcribe");
     assert_eq!(echoed.raw["model"], "whisper-small");
-    assert_eq!(echoed.raw["initial_prompt"], "Pippijn, Kat");
+    assert_eq!(echoed.raw["initial_prompt"], "Oskar, Kat");
     assert_eq!(echoed.raw["words"], true);
 }
 
@@ -180,7 +180,7 @@ fn the_vocabulary_prompt_is_read_and_an_empty_one_is_no_biasing() {
                 .route(
                     "/sync/vocabulary/prompt",
                     axum::routing::get(|| async {
-                        axum::Json(serde_json::json!({"prompt": "Pippijn, Kat"}))
+                        axum::Json(serde_json::json!({"prompt": "Oskar, Kat"}))
                     }),
                 )
                 .route(
@@ -201,7 +201,7 @@ fn the_vocabulary_prompt_is_read_and_an_empty_one_is_no_biasing() {
     let prompt = runner::client::Client::new(&base, "any")
         .prompt()
         .expect("fetch");
-    assert_eq!(prompt.as_deref(), Some("Pippijn, Kat"));
+    assert_eq!(prompt.as_deref(), Some("Oskar, Kat"));
 
     let empty = runner::client::Client::new(&format!("{base}/empty"), "any")
         .prompt()

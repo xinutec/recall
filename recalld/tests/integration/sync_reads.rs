@@ -32,10 +32,10 @@ fn the_glossary_prompt_matches_what_the_python_built() {
     let conn = store();
     glossary(
         &conn,
-        &["Pippijn", "Michiel", "Zebra"],
+        &["Oskar", "Lotte", "Zebra"],
         &[
             "apple",
-            "Michiel",
+            "Lotte",
             "banana",
             &"x".repeat(580),
             "never-reached",
@@ -44,7 +44,7 @@ fn the_glossary_prompt_matches_what_the_python_built() {
 
     assert_eq!(
         initial_prompt(&conn).unwrap().as_deref(),
-        Some("Michiel, Pippijn, Zebra, apple, banana, never-reached")
+        Some("Lotte, Oskar, Zebra, apple, banana, never-reached")
     );
 }
 

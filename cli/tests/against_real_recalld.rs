@@ -60,8 +60,8 @@ fn session() -> String {
     recalld::webauth::make_session_cookie(
         SECRET,
         &recalld::webauth::Session {
-            user_id: "pippijn".to_owned(),
-            display_name: "Pippijn".to_owned(),
+            user_id: "user".to_owned(),
+            display_name: "Oskar".to_owned(),
         },
         1_700_000_000,
     )
@@ -150,12 +150,12 @@ fn an_unconfirmed_guess_arrives_with_its_score_and_is_shown_as_one() {
         dir.path(),
         "marmalade on the windowsill",
         None,
-        Some(("Pippijn", 0.76)),
+        Some(("Oskar", 0.76)),
     );
     let api = Api::new(&serve(dir.path()), Some(session()));
 
     let hits = api.search("marmalade", 10).expect("search");
-    assert_eq!(render::attribution(&hits[0]), "Pippijn ~76%");
+    assert_eq!(render::attribution(&hits[0]), "Oskar ~76%");
     // The read-through transcript must not assert it.
     assert_eq!(render::who(&hits[0]), "SPEAKER_01");
 }
@@ -166,14 +166,14 @@ fn a_confirmed_name_reaches_both_renderings() {
     archive(
         dir.path(),
         "marmalade on the windowsill",
-        Some("Pippijn"),
+        Some("Oskar"),
         Some(("Someone Else", 0.9)),
     );
     let api = Api::new(&serve(dir.path()), Some(session()));
 
     let hits = api.search("marmalade", 10).expect("search");
-    assert_eq!(render::attribution(&hits[0]), "Pippijn");
-    assert_eq!(render::who(&hits[0]), "Pippijn");
+    assert_eq!(render::attribution(&hits[0]), "Oskar");
+    assert_eq!(render::who(&hits[0]), "Oskar");
 }
 
 #[test]
@@ -319,7 +319,7 @@ fn an_uploaded_session_is_listed_with_its_turn_count() {
     archive(
         dir.path(),
         "marmalade on the windowsill",
-        Some("Pippijn"),
+        Some("Oskar"),
         None,
     );
     as_upload_session(dir.path(), "Tuesday call");
@@ -330,7 +330,7 @@ fn an_uploaded_session_is_listed_with_its_turn_count() {
     assert_eq!(items[0].id, "usb");
     assert_eq!(items[0].title, "Tuesday call");
     assert_eq!(items[0].turn_count, 1);
-    assert_eq!(items[0].speakers, vec!["Pippijn".to_owned()]);
+    assert_eq!(items[0].speakers, vec!["Oskar".to_owned()]);
 
     let rendered = render::sessions(&items);
     assert!(
@@ -349,7 +349,7 @@ fn a_session_does_not_list_a_guessed_speaker_as_a_participant() {
         dir.path(),
         "marmalade on the windowsill",
         None,
-        Some(("Pippijn", 0.95)),
+        Some(("Oskar", 0.95)),
     );
     as_upload_session(dir.path(), "Tuesday call");
     let api = Api::new(&serve(dir.path()), Some(session()));
@@ -368,7 +368,7 @@ fn a_session_transcript_reads_through_with_its_speaker() {
     archive(
         dir.path(),
         "marmalade on the windowsill",
-        Some("Pippijn"),
+        Some("Oskar"),
         None,
     );
     as_upload_session(dir.path(), "Tuesday call");
@@ -377,11 +377,11 @@ fn a_session_transcript_reads_through_with_its_speaker() {
     let export = api.session_transcript("usb").expect("transcript");
     assert_eq!(export.session, "usb");
     assert_eq!(export.turns.len(), 1);
-    assert_eq!(export.turns[0].speaker, "Pippijn");
+    assert_eq!(export.turns[0].speaker, "Oskar");
 
     let rendered = render::export(&export);
     assert!(
-        rendered.contains("Pippijn: marmalade on the windowsill"),
+        rendered.contains("Oskar: marmalade on the windowsill"),
         "got:\n{rendered}"
     );
 }

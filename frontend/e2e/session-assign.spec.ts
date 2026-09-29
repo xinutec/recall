@@ -25,7 +25,7 @@ function turn(id: number, speaker: string, cluster: string, text: string): unkno
 }
 
 const turns = [
-  turn(1, 'Pippijn', 'SPEAKER_01', 'I have already made'),
+  turn(1, 'Oskar', 'SPEAKER_01', 'I have already made'),
   turn(
     2,
     'Dr. Lee',
@@ -40,7 +40,7 @@ const conversationPage = {
       start: '2026-01-15T09:35:50Z',
       end: '2026-01-15T09:35:55Z',
       turnCount: 2,
-      speakers: ['Pippijn', 'Dr. Lee'],
+      speakers: ['Oskar', 'Dr. Lee'],
       preview: 'x',
       moments: turns.map((t) => ({
         start: '2026-01-15T09:35:50Z',
@@ -61,7 +61,7 @@ async function mockApi(page: Page): Promise<() => unknown> {
     const url = route.request().url();
     if (url.includes('/api/conversations')) return route.fulfill({ json: conversationPage });
     if (url.includes('/api/speakers')) {
-      return route.fulfill({ json: { names: ['Pippijn', 'Dr. Lee'] } });
+      return route.fulfill({ json: { names: ['Oskar', 'Dr. Lee'] } });
     }
     if (url.includes('/voices')) return route.fulfill({ json: { suggestions: {} } });
     return route.fulfill({ json: {} });
@@ -89,8 +89,8 @@ test('give part of a line to an existing speaker (Pixel 9)', async ({ page }) =>
   const assign = await mockApi(page);
   await page.goto('/sessions/test');
   await pickPhrase(page);
-  await page.getByRole('option', { name: 'Pippijn' }).click();
-  await expect.poll(assign).toEqual({ ...PART, name: 'Pippijn' });
+  await page.getByRole('option', { name: 'Oskar' }).click();
+  await expect.poll(assign).toEqual({ ...PART, name: 'Oskar' });
 });
 
 test('give part of a line to a brand-new speaker (Pixel 9)', async ({ page }) => {

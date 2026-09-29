@@ -28,7 +28,7 @@ source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
 # — that still occurs with this set; the retry loop is what handles that one.)
 export NG_CLI_ANALYTICS=false
 
-FRONTEND=/Users/pippijn/Code/recall/frontend
+FRONTEND="$(cd "$(dirname "$0")/.." && pwd)/frontend"
 DIST="$FRONTEND/dist/recall-web"           # what `recall api` serves (…/browser)
 STAGE="$FRONTEND/dist/.recall-web-staging" # built here first, swapped in on success
 ATTEMPTS="${RECALL_BUILD_ATTEMPTS:-6}"

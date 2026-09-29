@@ -52,7 +52,7 @@ function makePage(turns: FakeTurn[]): unknown {
         start: turns[0].start,
         end: turns[turns.length - 1].end,
         turnCount: turns.length,
-        speakers: ['Pippijn', 'Dr. Lee'],
+        speakers: ['Oskar', 'Dr. Lee'],
         preview: 'x',
         moments: turns.map((t) => ({
           start: turns[0].start,
@@ -73,7 +73,7 @@ async function mockApi(page: Page, turns: FakeTurn[]): Promise<void> {
     const url = route.request().url();
     if (url.includes('/api/conversations')) return route.fulfill({ json: conversationPage });
     if (url.includes('/api/speakers')) {
-      return route.fulfill({ json: { names: ['Pippijn', 'Dr. Lee'] } });
+      return route.fulfill({ json: { names: ['Oskar', 'Dr. Lee'] } });
     }
     if (url.includes('/voices')) return route.fulfill({ json: { suggestions: {} } });
     return route.fulfill({ json: {} });
@@ -81,7 +81,7 @@ async function mockApi(page: Page, turns: FakeTurn[]): Promise<void> {
 }
 
 const SHORT = [
-  turn(1, 'Pippijn', 'SPEAKER_01', 'I have already made'),
+  turn(1, 'Oskar', 'SPEAKER_01', 'I have already made'),
   turn(
     2,
     'Dr. Lee',
@@ -93,9 +93,9 @@ const SHORT = [
 // Long enough that the transcript scrolls well past one screen — the case where an
 // in-flow toolbar would land far below the tapped line.
 const LONG = Array.from({ length: 40 }, (_, i) => {
-  if (i === 0) return turn(1, 'Pippijn', 'SPEAKER_01', 'My very first question for you today.');
+  if (i === 0) return turn(1, 'Oskar', 'SPEAKER_01', 'My very first question for you today.');
   return i % 2 === 0
-    ? turn(i + 1, 'Pippijn', 'SPEAKER_01', `Point number ${i + 1} that I wanted to raise today.`)
+    ? turn(i + 1, 'Oskar', 'SPEAKER_01', `Point number ${i + 1} that I wanted to raise today.`)
     : turn(i + 1, 'Dr. Lee', 'SPEAKER_00', `Right, and the answer to ${i + 1} is as follows.`);
 });
 
@@ -171,14 +171,14 @@ test('a typed name is saved on tapping away, with or without suggestions open', 
   const heading = page.locator('h3', { hasText: "Who's speaking" });
   await page.getByRole('combobox', { name: 'Name for Voice 1' }).fill('Sam');
   await heading.click();
-  await page.getByRole('combobox', { name: 'Name for Voice 2' }).fill('Pip');
-  await expect(page.getByRole('option', { name: 'Pippijn' })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Name for Voice 2' }).fill('Osk');
+  await expect(page.getByRole('option', { name: 'Oskar' })).toBeVisible();
   await heading.click();
   await expect
     .poll(() => posted)
     .toEqual([
       { cluster: 'SPEAKER_01', name: 'Sam' },
-      { cluster: 'SPEAKER_00', name: 'Pip' },
+      { cluster: 'SPEAKER_00', name: 'Osk' },
     ]);
 });
 
@@ -186,7 +186,7 @@ test('a hidden line shows on request and "Someone spoke" takes it back (Pixel 9)
   page,
 }) => {
   const hidden = {
-    ...turn(3, 'Pippijn', 'SPEAKER_01', 'Thank you.'),
+    ...turn(3, 'Oskar', 'SPEAKER_01', 'Thank you.'),
     hidden: 'nobody spoke',
     hiddenAs: 'nobodySpoke',
   };

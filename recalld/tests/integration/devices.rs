@@ -380,8 +380,8 @@ const SECRET: &str = "test-secret-not-a-real-one";
 /// The cookie a signed-in browser holds.
 fn cookie() -> String {
     let session = recalld::webauth::Session {
-        user_id: "pippijn".into(),
-        display_name: "Pippijn".into(),
+        user_id: "user".into(),
+        display_name: "Oskar".into(),
     };
     format!(
         "{}={}",

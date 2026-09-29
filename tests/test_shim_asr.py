@@ -84,7 +84,7 @@ def test_a_transcribe_request_reaches_the_model_with_its_arguments(
             "model": "mlx-community/whisper-small",
             "language": "nl",
             "words": True,
-            "initial_prompt": "Pippijn, Kat",
+            "initial_prompt": "Oskar, Kat",
         },
         transcribe=recorder(seen),
     )
@@ -93,7 +93,7 @@ def test_a_transcribe_request_reaches_the_model_with_its_arguments(
     assert seen["language"] == "nl"
     assert seen["words"] is True
     # Vocabulary biasing is CARRIED, not fetched: the shim reads no database.
-    assert seen["initial_prompt"] == "Pippijn, Kat"
+    assert seen["initial_prompt"] == "Oskar, Kat"
     assert as_dict(out)["language"] == "nl"
     assert segment(out)["text"] == "hallo daar"
     assert as_dict(as_list(segment(out)["words"])[0])["text"] == "hallo"

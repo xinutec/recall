@@ -51,7 +51,7 @@ logs/
 # them the better drift instrument. Regenerating them in CI is not an option:
 # `say` is macOS-only and CI runs Ubuntu, so committing is the only way a clone
 # can run the Dutch ASR check and the Dutch VAD test. Committed 2026-09-09 on
-# Pippijn's explicit go-ahead, the blunt no-audio rule above being his to waive.
+# the user's explicit go-ahead, the blunt no-audio rule above being theirs to waive.
 !tests/fixtures/speech/dialogue-en.flac
 !tests/fixtures/speech/dialogue-nl.flac
 *.sqlite

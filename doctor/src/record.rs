@@ -2,7 +2,7 @@
 //! server failed, and minutes a microphone shows twice.
 //!
 //! Both went unnoticed for days before (failed saves in the app's log from 26
-//! Sept, doubled phone minutes since early Sept) until Pippijn met them. Any
+//! Sept, doubled phone minutes since early Sept) until the user met them. Any
 //! of either is a failure: each is a bug, and none is expected.
 
 use crate::check::{Check, Verdict, check};

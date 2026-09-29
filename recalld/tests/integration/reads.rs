@@ -361,8 +361,8 @@ async fn mounted_transcripts_are_refused_without_a_session_and_served_with_one()
     let token = webauth::make_session_cookie(
         SECRET,
         &webauth::Session {
-            user_id: "pippijn".into(),
-            display_name: "Pippijn".into(),
+            user_id: "user".into(),
+            display_name: "Oskar".into(),
         },
         NOW,
     )

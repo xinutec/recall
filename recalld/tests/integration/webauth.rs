@@ -12,8 +12,8 @@ const NOW: i64 = 1_788_000_000;
 
 fn session() -> Session {
     Session {
-        user_id: "pippijn".into(),
-        display_name: "Pippijn".into(),
+        user_id: "user".into(),
+        display_name: "Oskar".into(),
     }
 }
 
@@ -182,8 +182,8 @@ fn a_device_token_opens_exactly_one_route_and_no_other() {
 fn the_allowlist_narrows_who_may_enter_after_a_valid_sign_in() {
     // A valid Nextcloud sign-in is not enough once an allowlist is set.
     let mut c = cfg(None);
-    c.allowed_users = ["pippijn".to_owned()].into_iter().collect();
-    assert!(c.permits("pippijn"));
+    c.allowed_users = ["user".to_owned()].into_iter().collect();
+    assert!(c.permits("user"));
     assert!(!c.permits("someone-else"));
 
     // Empty means any authenticated user.
@@ -243,8 +243,8 @@ fn the_authorize_url_carries_the_state_and_escapes_its_parameters() {
 #[test]
 fn a_cookie_minted_by_the_python_verifies_here() {
     const PY_COOKIE: &str = concat!(
-        "eyJleHAiOjE3ODg2MDQ4MDAsIm5hbWUiOiJQaXBwaWpuIiwidWlkIjoicGlwcGlqbiJ9",
-        ".xJ3IAn7Hu1_0YZ0BAdcLf5hhoOCtjysRHe_DKpZCEpY"
+        "eyJleHAiOjE3ODg2MDQ4MDAsIm5hbWUiOiJPc2thciIsInVpZCI6InVzZXIifQ",
+        ".7fjekMYy1v39uIibrzrGG2vuGOJVwJ3PocatcUsasrk"
     );
     const PY_STATE: &str = concat!(
         "eyJleHAiOjE3ODgwMDA2MDAsInJ0IjoiL3Nlc3Npb25zLzQyIn0",
@@ -253,8 +253,8 @@ fn a_cookie_minted_by_the_python_verifies_here() {
 
     let s = read_session_cookie(SECRET, Some(PY_COOKIE), NOW)
         .expect("the Python's cookie must verify here");
-    assert_eq!(s.user_id, "pippijn");
-    assert_eq!(s.display_name, "Pippijn");
+    assert_eq!(s.user_id, "user");
+    assert_eq!(s.display_name, "Oskar");
 
     assert_eq!(
         read_state(SECRET, PY_STATE, NOW).as_deref(),
@@ -326,7 +326,7 @@ async fn a_code_is_exchanged_for_a_token_and_the_user_is_resolved() {
                 assert_eq!(headers.get("authorization").unwrap(), "Bearer tok-123");
                 assert_eq!(headers.get("ocs-apirequest").unwrap(), "true");
                 axum::Json(serde_json::json!({
-                    "ocs": {"data": {"id": "pippijn", "displayname": "Pippijn"}}
+                    "ocs": {"data": {"id": "user", "displayname": "Oskar"}}
                 }))
             }),
         );
@@ -346,8 +346,8 @@ async fn a_code_is_exchanged_for_a_token_and_the_user_is_resolved() {
         .await
         .unwrap()
         .expect("userinfo");
-    assert_eq!(session.user_id, "pippijn");
-    assert_eq!(session.display_name, "Pippijn");
+    assert_eq!(session.user_id, "user");
+    assert_eq!(session.display_name, "Oskar");
 }
 
 #[tokio::test]
@@ -392,7 +392,7 @@ async fn a_user_with_no_display_name_falls_back_to_their_id() {
     let app = Router::new().route(
         "/ocs/v2.php/cloud/user",
         get(|| async {
-            axum::Json(serde_json::json!({"ocs": {"data": {"id": "pippijn", "displayname": ""}}}))
+            axum::Json(serde_json::json!({"ocs": {"data": {"id": "user", "displayname": ""}}}))
         }),
     );
     let base = serve(app).await;
@@ -401,7 +401,7 @@ async fn a_user_with_no_display_name_falls_back_to_their_id() {
         .await
         .unwrap()
         .expect("userinfo");
-    assert_eq!(s.display_name, "pippijn");
+    assert_eq!(s.display_name, "user");
 }
 
 #[test]

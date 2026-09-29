@@ -223,7 +223,7 @@ state worth catching bright green.
 
 `streaming` and `charging` are carried but **never graded**: every honest app reports
 `streaming: false` while the household is paused, a carried phone is off charge all day,
-and a room phone gets switched off on purpose — Pippijn silences the pixel9 to type on
+and a room phone gets switched off on purpose — the user silences the pixel9 to type on
 it. They say what the app was doing when the beats stopped. `micOk` **is** graded — it
 is a fault, not a mode: the app kept running but the audio engine would not open, which
 used to show up as silence and is now named (#887).

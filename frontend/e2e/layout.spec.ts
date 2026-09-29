@@ -47,8 +47,8 @@ function turn(
 
 // Synthetic speakers/content only — no real names (see scripts/check-pii.sh).
 const turns = [
-  turn(1, 'Pippijn', 'SPEAKER_01', 'I have already made a list of errands for the afternoon.'),
-  turn(2, 'Pippijn', 'SPEAKER_01', 'The first one is picking up a parcel from the depot.'),
+  turn(1, 'Oskar', 'SPEAKER_01', 'I have already made a list of errands for the afternoon.'),
+  turn(2, 'Oskar', 'SPEAKER_01', 'The first one is picking up a parcel from the depot.'),
   turn(3, 'Alex', 'SPEAKER_02', 'Let us go through them one by one so nothing is missed.'),
 ];
 
@@ -57,7 +57,7 @@ const turns = [
 // the finalized one. That length is the variable that clips the icon, so the state has
 // to be rendered to be checked.
 const provisionalTurns = [
-  turn(1, 'Pippijn', 'SPEAKER_01', 'I have already made a list of errands.', 'live'),
+  turn(1, 'Oskar', 'SPEAKER_01', 'I have already made a list of errands.', 'live'),
 ];
 
 function pageOf(items: unknown[]) {
@@ -67,7 +67,7 @@ function pageOf(items: unknown[]) {
         start: '2026-01-15T09:35:50Z',
         end: '2026-01-15T09:36:10Z',
         turnCount: items.length,
-        speakers: ['Pippijn', 'Alex'],
+        speakers: ['Oskar', 'Alex'],
         preview: 'x',
         moments: items.map((t) => ({
           start: '2026-01-15T09:35:50Z',
@@ -92,7 +92,7 @@ test.beforeEach(async ({ page }) => {
     const url = route.request().url();
     if (url.includes('/api/conversations')) return route.fulfill({ json: conversationPage });
     if (url.includes('/api/speakers'))
-      return route.fulfill({ json: { names: ['Pippijn', 'Alex'] } });
+      return route.fulfill({ json: { names: ['Oskar', 'Alex'] } });
     if (url.includes('/voices')) return route.fulfill({ json: { suggestions: {} } });
     return route.fulfill({ json: {} });
   });
@@ -138,7 +138,7 @@ test('finalizing banner keeps its icon whole', async ({ page }, testInfo) => {
 const LONG =
   'a considerably longer stretch of household conversation that would overflow a phone column if the layout ever stopped wrapping it correctly';
 
-const reviewItems = { items: [turn(21, 'Pippijn', 'SPEAKER_01', LONG)] };
+const reviewItems = { items: [turn(21, 'Oskar', 'SPEAKER_01', LONG)] };
 
 const searchItems = { items: [turn(31, 'Alex', 'SPEAKER_02', LONG)] };
 
@@ -146,7 +146,7 @@ const correctionsList = {
   items: [
     {
       id: 1,
-      speaker: 'Pippijn',
+      speaker: 'Oskar',
       original: 'a shorter original line',
       corrected: LONG,
       start: '2026-01-15T09:35:50Z',
@@ -167,7 +167,7 @@ const sessionsList = {
       start: '2026-01-15T09:35:50Z',
       end: '2026-01-15T10:36:10Z',
       turnCount: 42,
-      speakers: ['Pippijn', 'Alex'],
+      speakers: ['Oskar', 'Alex'],
     },
   ],
 };

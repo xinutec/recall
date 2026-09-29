@@ -88,15 +88,15 @@ async function setup(turns: Transcript[] = [], known: string[] = []) {
 describe('Session', () => {
   it('groups voices by cluster, biggest first, named only on a majority', async () => {
     const { c } = await setup([
-      said(1, 'A', 'Pippijn'),
-      said(2, 'A', 'Pippijn'),
-      said(3, 'A', 'Pippijn'),
+      said(1, 'A', 'Oskar'),
+      said(2, 'A', 'Oskar'),
+      said(3, 'A', 'Oskar'),
       said(4, 'B', 'Dr. Adams'),
       said(5, 'B'), // 1 of 2 confirmed: not a majority
     ]);
     const voices = c.voices();
     expect(voices.map((v: { cluster: string }) => v.cluster)).toEqual(['A', 'B']);
-    expect(voices[0].name).toBe('Pippijn');
+    expect(voices[0].name).toBe('Oskar');
     expect(voices[0].turns).toBe(3);
     expect(voices[1].name).toBeNull();
   });
@@ -143,7 +143,7 @@ describe('Session', () => {
   it('a voice sample toggles, and stops when the view goes', async () => {
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockReturnValue(undefined);
-    const { fixture, c } = await setup([said(1, 'A', 'Pippijn')]);
+    const { fixture, c } = await setup([said(1, 'A', 'Oskar')]);
     const voice = c.voices()[0];
     c.toggleSample(voice);
     expect(c.player.playing()).toBe('voice:A');
