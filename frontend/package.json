@@ -41,7 +41,7 @@
     "@xinutec/ui-harness": "github:xinutec/ui-harness#23b871c4268a467a9f5fb906191607fbf1962093",
     "angular-eslint": "^22.5.0",
     "eslint": "^10.11.0",
-    "jsdom": "^30.1.0",
+    "jsdom": "^30.1.1",
     "prettier": "^3.9.9",
     "stylelint": "^17.14.0",
     "stylelint-config-recommended-scss": "^17.0.1",
