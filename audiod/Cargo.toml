@@ -41,6 +41,7 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 audiocore = { path = "../audiocore" }
 # preserve_order: the disconnect stats JSON keeps its written key order, so a
 # shadow-period diff against the Python server's log lines stays readable.

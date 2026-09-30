@@ -1,5 +1,5 @@
 //! recall-audiod: the audio-plane daemon (docs/architecture.md). One binary,
-//! one subcommand per agent (see `usage`):
+//! one subcommand per agent (see `--help`):
 //!
 //! * `ingest`: the network-mic ingest server.
 //! * `capture`: the local-mic capture pipeline.
@@ -11,126 +11,158 @@
 //! * `pause`, `resume`: the break-glass control.
 
 use chrono::Utc;
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-fn usage() -> ExitCode {
-    eprintln!(
-        "usage: audiod ingest --root <data-root> [--port <port>]\n\
-        \x20      audiod capture-mirror --root <data-root> --url <base> [--once]\n\
-        \x20      audiod capture --root <data-root> --id <source> [--device <name>] [--seconds <n>] [--codec opus|flac]\n\
-        \x20      audiod upload --root <data-root> --url <base> [--token-file <path>] [--max <n>]\n\
-        \x20      audiod beat-relay --url <fleet> [--port <port>]\n\
-        \x20      audiod pause-mirror --root <data-root> --url <base>\n\
-        \x20      audiod logrotate\n\
-        \n\
-        \x20  the break-glass control, when the fleet cannot be reached:\n\
-        \x20      audiod pause --root <data-root> [--minutes <n>]\n\
-        \x20      audiod resume --root <data-root>"
-    );
-    ExitCode::FAILURE
+/// The audio-plane daemon: one subcommand per agent.
+#[derive(Parser)]
+#[command(name = "audiod")]
+struct Cli {
+    #[command(subcommand)]
+    mode: Mode,
 }
 
-/// Everything the command line can say, parsed once.
-struct Args {
-    mode: Option<String>,
-    once: bool,
-    root: Option<PathBuf>,
-    port: Option<u16>,
-    id: Option<String>,
-    device: Option<String>,
-    seconds: Option<u64>,
-    url: Option<String>,
-    producer: audiod::capture_run::Producer,
-    token_file: Option<PathBuf>,
-    max: usize,
-    /// `pause` only: how long, or None for the full cap.
-    minutes: Option<i64>,
-    codec: audiod::segmenter::Codec,
+#[derive(Subcommand)]
+enum Mode {
+    /// The network-mic ingest server.
+    Ingest {
+        #[command(flatten)]
+        root: Root,
+        /// [default: the ingest port]
+        #[arg(long)]
+        port: Option<u16>,
+        #[command(flatten)]
+        codec: CodecArg,
+    },
+    /// The local-mic capture pipeline.
+    Capture {
+        #[command(flatten)]
+        root: Root,
+        /// The source's name.
+        #[arg(long)]
+        id: String,
+        /// The input device [default: the system's].
+        #[arg(long)]
+        device: Option<String>,
+        /// Segment length, in seconds [default: the segmenter's].
+        #[arg(long)]
+        seconds: Option<u64>,
+        #[arg(long, value_enum, default_value_t = ProducerArg::Sox)]
+        producer: ProducerArg,
+        #[command(flatten)]
+        codec: CodecArg,
+        /// The fleet's control plane, for the pause it reports.
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// The Mac's pause mirror, which reports what it applied.
+    CaptureMirror {
+        #[command(flatten)]
+        root: Root,
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        token_file: Option<PathBuf>,
+        /// One exchange, then exit.
+        #[arg(long)]
+        once: bool,
+    },
+    /// The pause mirror for a recorder that reports nothing.
+    PauseMirror {
+        #[command(flatten)]
+        root: Root,
+        #[arg(long)]
+        url: String,
+    },
+    /// One store-and-forward delivery pass (stage B).
+    Upload {
+        #[command(flatten)]
+        root: Root,
+        #[arg(long)]
+        url: String,
+        /// [default: `RECALL_INGEST_TOKEN`]
+        #[arg(long)]
+        token_file: Option<PathBuf>,
+        /// Segments per pass.
+        #[arg(long, default_value_t = 500)]
+        max: usize,
+    },
+    /// The LAN heartbeat fallback. Stores nothing, so it takes no root.
+    BeatRelay {
+        /// The fleet.
+        #[arg(long)]
+        url: String,
+        /// [default: the relay port]
+        #[arg(long)]
+        port: Option<u16>,
+    },
+    /// Bound the agents' log files.
+    Logrotate,
+    /// Break-glass, when the fleet cannot be reached: stop recording.
+    Pause {
+        #[command(flatten)]
+        root: Root,
+        /// How long [default: the full cap].
+        #[arg(long)]
+        minutes: Option<i64>,
+    },
+    /// Break-glass: record again.
+    Resume {
+        #[command(flatten)]
+        root: Root,
+    },
 }
 
-/// Parse argv. `None` means the arguments do not name a run.
-fn parse_args() -> Option<Args> {
-    let mut args = std::env::args().skip(1);
-    let mode = args.next();
-    let mut root: Option<PathBuf> = None;
-    // ⚠ Whether --port was given, not just its value: ingest and beat-relay
-    // default to different ports, so one pre-seeded default would hand one of
-    // them the other's.
-    let mut port: Option<u16> = None;
-    let mut id: Option<String> = None;
-    let mut device: Option<String> = None;
-    let mut seconds: Option<u64> = None;
-    let mut url: Option<String> = None;
-    let mut producer = audiod::capture_run::Producer::Sox;
-    let mut token_file: Option<PathBuf> = None;
-    let mut max: usize = 500;
-    // None = the full MAX_PAUSE. `pause` is the only reader (audiod::pause).
-    let mut minutes: Option<i64> = None;
-    let mut codec = audiod::segmenter::CaptureConfig::default().codec;
-    let mut once = false;
-    while let Some(arg) = args.next() {
-        // ⚠ Before the value fetch: every other flag takes a value, and a bare
-        // `--once` would otherwise swallow the next argument.
-        if arg == "--once" {
-            once = true;
-            continue;
-        }
-        // A flag with no value is not a run; `main` turns None into usage.
-        let value = args.next()?;
-        match arg.as_str() {
-            "--root" => root = Some(PathBuf::from(value)),
-            "--port" => match value.parse() {
-                Ok(parsed) => port = Some(parsed),
-                Err(_) => return None,
-            },
-            "--id" => id = Some(value),
-            "--device" => device = Some(value),
-            "--url" => url = Some(value),
-            "--producer" => match value.as_str() {
-                "sox" => producer = audiod::capture_run::Producer::Sox,
-                "alsa" => producer = audiod::capture_run::Producer::Alsa,
-                _ => return None,
-            },
-            "--token-file" => token_file = Some(PathBuf::from(value)),
-            "--max" => match value.parse() {
-                Ok(parsed) => max = parsed,
-                Err(_) => return None,
-            },
-            "--minutes" => match value.parse() {
-                Ok(parsed) => minutes = Some(parsed),
-                Err(_) => return None,
-            },
-            "--seconds" => match value.parse() {
-                Ok(parsed) => seconds = Some(parsed),
-                Err(_) => return None,
-            },
-            // Lossless is the prerequisite for combining microphones, not a
-            // quality preference: Opus destroys phase, so two Opus streams of
-            // one room cannot be summed coherently however well aligned.
-            "--codec" => match value.as_str() {
-                "opus" => codec = audiod::segmenter::Codec::Libopus,
-                "flac" => codec = audiod::segmenter::Codec::Flac,
-                _ => return None,
-            },
-            _ => return None,
+#[derive(clap::Args)]
+struct Root {
+    /// The data root.
+    #[arg(long = "root", value_name = "DATA_ROOT")]
+    path: PathBuf,
+}
+
+#[derive(clap::Args)]
+struct CodecArg {
+    /// Lossless is the prerequisite for combining microphones, not a quality
+    /// preference: Opus destroys phase, so two Opus streams of one room cannot
+    /// be summed coherently however well aligned.
+    #[arg(long = "codec", value_enum, default_value_t = CodecName::Flac)]
+    name: CodecName,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CodecName {
+    Opus,
+    Flac,
+}
+
+impl CodecArg {
+    fn config(&self) -> audiod::segmenter::CaptureConfig {
+        let codec = match self.name {
+            CodecName::Opus => audiod::segmenter::Codec::Libopus,
+            CodecName::Flac => audiod::segmenter::Codec::Flac,
+        };
+        audiod::segmenter::CaptureConfig {
+            codec,
+            bitrate: codec.default_bitrate().map(Into::into),
+            ..audiod::segmenter::CaptureConfig::default()
         }
     }
-    Some(Args {
-        mode,
-        once,
-        root,
-        port,
-        id,
-        device,
-        seconds,
-        url,
-        producer,
-        token_file,
-        max,
-        minutes,
-        codec,
-    })
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ProducerArg {
+    Sox,
+    Alsa,
+}
+
+impl From<ProducerArg> for audiod::capture_run::Producer {
+    fn from(p: ProducerArg) -> Self {
+        match p {
+            ProducerArg::Sox => Self::Sox,
+            ProducerArg::Alsa => Self::Alsa,
+        }
+    }
 }
 
 /// Where launchd points the agents' stdio (`deploy/hm-agents.nix`).
@@ -169,92 +201,61 @@ fn main() -> ExitCode {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    let Some(Args {
-        mode,
-        once,
-        root,
-        port,
-        id,
-        device,
-        seconds,
-        url,
-        producer,
-        token_file,
-        max,
-        minutes,
-        codec,
-    }) = parse_args()
-    else {
-        return usage();
-    };
-
-    // Above the root check on purpose — see `run_beat_relay`.
-    if mode.as_deref() == Some("beat-relay") {
-        return run_beat_relay(url.as_deref(), port);
-    }
-    // Also above it: the logs are not in the data root.
-    if mode.as_deref() == Some("logrotate") {
-        return run_logrotate(&logs_dir());
-    }
-    let Some(root) = root else {
-        return usage();
-    };
-    let config = audiod::segmenter::CaptureConfig {
-        codec,
-        bitrate: codec.default_bitrate().map(Into::into),
-        ..audiod::segmenter::CaptureConfig::default()
-    };
-    match mode.as_deref() {
-        Some("ingest") => audiod::server::serve(
-            &root,
+    match Cli::parse().mode {
+        Mode::BeatRelay { url, port } => run_beat_relay(&url, port),
+        Mode::Logrotate => run_logrotate(&logs_dir()),
+        Mode::Ingest { root, port, codec } => audiod::server::serve(
+            &root.path,
             port.unwrap_or(audiod::wire::DEFAULT_INGEST_PORT),
-            &config,
+            &codec.config(),
         ),
-        Some("capture") => {
-            let Some(id) = id else {
-                return usage();
-            };
-            audiod::capture_run::serve_paused_aware(
-                &root,
-                &id,
-                device.as_deref(),
-                producer,
-                &config,
-                seconds,
-                url.as_deref(),
-            )
-        }
-        Some("pause-mirror") => {
-            let Some(url) = url else {
-                return usage();
-            };
-            audiod::pause_mirror::run(&root, &url)
-        }
+        Mode::Capture {
+            root,
+            id,
+            device,
+            seconds,
+            producer,
+            codec,
+            url,
+        } => audiod::capture_run::serve_paused_aware(
+            &root.path,
+            &id,
+            device.as_deref(),
+            producer.into(),
+            &codec.config(),
+            seconds,
+            url.as_deref(),
+        ),
+        Mode::PauseMirror { root, url } => audiod::pause_mirror::run(&root.path, &url),
         // The Mac's mirror: reports what it applied, then long-polls for
         // intent. The report is how the fleet knows a pause took hold.
-        Some("capture-mirror") => match url {
-            None => usage(),
-            Some(url) => run_capture_mirror(&root, &url, token_file, once),
-        },
-        Some("upload") => {
-            let Some(url) = url else {
-                return usage();
-            };
-            run_upload(root, url, token_file, max)
-        }
+        Mode::CaptureMirror {
+            root,
+            url,
+            token_file,
+            once,
+        } => run_capture_mirror(&root.path, &url, token_file, once),
+        Mode::Upload {
+            root,
+            url,
+            token_file,
+            max,
+        } => run_upload(root.path, url, token_file, max),
         // The household's break-glass control. Here rather than in
         // `recall-cli`, which would need the network the emergency is about.
-        Some("pause") => match audiod::pause::pause(&root, Utc::now(), minutes) {
-            Ok(until) => {
-                println!("paused until {}", until.to_rfc3339());
-                ExitCode::SUCCESS
+        Mode::Pause { root, minutes } => {
+            match audiod::pause::pause(&root.path, Utc::now(), minutes) {
+                Ok(until) => {
+                    println!("paused until {}", until.to_rfc3339());
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("audiod pause: {err} — the pause did NOT take");
+                    ExitCode::FAILURE
+                }
             }
-            Err(err) => {
-                eprintln!("audiod pause: {err} — the pause did NOT take");
-                ExitCode::FAILURE
-            }
-        },
-        Some("resume") => match audiod::pause::resume(&root) {
+        }
+        Mode::Resume { root } => match audiod::pause::resume(&root.path) {
             Ok(()) => {
                 println!("resumed");
                 ExitCode::SUCCESS
@@ -264,7 +265,6 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        _ => usage(),
     }
 }
 
@@ -272,12 +272,8 @@ fn main() -> ExitCode {
 /// Not gated on the pause, unlike `ingest`: a pause is exactly when the
 /// heartbeat is the only signal there is.
 ///
-/// Dispatched before the `--root` check: the relay stores nothing, so it has
-/// no data root.
-fn run_beat_relay(url: Option<&str>, port: Option<u16>) -> ExitCode {
-    let Some(url) = url else {
-        return usage();
-    };
+/// It takes no `--root`: the relay stores nothing.
+fn run_beat_relay(url: &str, port: Option<u16>) -> ExitCode {
     let port = port.unwrap_or(audiod::beat_relay::DEFAULT_RELAY_PORT);
     let err = audiod::beat_relay::serve(port, url);
     eprintln!("audiod: beat-relay stopped: {err}");

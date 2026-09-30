@@ -3,11 +3,20 @@
 
 use audiocore::decode;
 use audiocore::vad::{Detector, Region, detection_gain};
+use clap::Parser;
 use std::path::Path;
+
+/// How loud a stored segment is, how far the detector lifts it, and how much
+#[derive(Parser)]
+struct Cli {
+    /// Stored segments.
+    #[arg(required = true)]
+    files: Vec<String>,
+}
 
 fn main() {
     let mut det = Detector::load().expect("detector");
-    for arg in std::env::args().skip(1) {
+    for arg in Cli::parse().files {
         let path = Path::new(&arg);
         let Some(pcm) = decode::decode_s16(path, 16_000) else {
             println!("{arg}: undecodable");

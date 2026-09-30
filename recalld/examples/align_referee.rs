@@ -7,12 +7,20 @@
 //!
 //! Usage: `cargo run --example align_referee -- <work dir>`
 
+use clap::Parser;
 use recalld::align::{MIN_TURN_S, assign_words_to_speakers};
 use recalld::diarized::{voices, words_of};
 use std::io::{BufRead, Write};
 
+/// The production alignment over stored diarize and transcribe results (#1711).
+#[derive(Parser)]
+struct Cli {
+    /// Holds `pyannote.jsonl`; `aligned.jsonl` is written beside it.
+    work: std::path::PathBuf,
+}
+
 fn main() {
-    let work = std::path::PathBuf::from(std::env::args().nth(1).expect("work dir"));
+    let work = Cli::parse().work;
     let input = std::fs::File::open(work.join("pyannote.jsonl")).expect("pyannote.jsonl");
     let mut out = std::fs::File::create(work.join("aligned.jsonl")).expect("aligned.jsonl");
     for line in std::io::BufReader::new(input).lines() {

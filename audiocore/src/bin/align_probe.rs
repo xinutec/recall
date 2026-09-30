@@ -12,6 +12,7 @@ use audiocore::align::best_lag;
 use audiocore::envelope::{BUCKET_S, DECODE_RATE, rms_buckets};
 use audiocore::names::{parse_segment_start, segment_glob};
 use chrono::{DateTime, Duration, Utc};
+use clap::Parser;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -73,47 +74,42 @@ fn window_pcm(root: &Path, source: &str, start: DateTime<Utc>, seconds: usize) -
     buf
 }
 
-fn usage() -> ExitCode {
-    eprintln!(
-        "usage: align-probe --root <archive> --reference <source> --sources <a,b,..> \
-         --start <RFC3339> --minutes <n>"
-    );
-    ExitCode::FAILURE
+/// Offline tier-1 alignment probe: per wall-clock block, how far each source
+/// sits from the reference.
+#[derive(Parser)]
+#[command(name = "align-probe")]
+struct Cli {
+    /// The archive.
+    #[arg(long)]
+    root: std::path::PathBuf,
+    /// The source the others are measured against.
+    #[arg(long)]
+    reference: String,
+    /// The sources to align, comma-separated.
+    #[arg(long, value_delimiter = ',', required = true)]
+    sources: Vec<String>,
+    /// An RFC 3339 instant.
+    #[arg(long, value_parser = instant)]
+    start: DateTime<Utc>,
+    #[arg(long, default_value_t = 10)]
+    minutes: usize,
+}
+
+fn instant(raw: &str) -> Result<DateTime<Utc>, String> {
+    DateTime::parse_from_rfc3339(raw)
+        .map(|t| t.with_timezone(&Utc))
+        .map_err(|e| format!("not an RFC 3339 instant: {e}"))
 }
 
 #[allow(clippy::too_many_lines, reason = "one probe, read top to bottom")]
 fn main() -> ExitCode {
-    let mut root = None;
-    let mut reference = None;
-    let mut sources: Vec<String> = Vec::new();
-    let mut start: Option<DateTime<Utc>> = None;
-    let mut minutes = 10usize;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        let Some(value) = args.next() else {
-            return usage();
-        };
-        match arg.as_str() {
-            "--root" => root = Some(std::path::PathBuf::from(value)),
-            "--reference" => reference = Some(value),
-            "--sources" => sources = value.split(',').map(str::to_owned).collect(),
-            "--start" => match DateTime::parse_from_rfc3339(&value) {
-                Ok(t) => start = Some(t.with_timezone(&Utc)),
-                Err(_) => return usage(),
-            },
-            "--minutes" => match value.parse() {
-                Ok(n) => minutes = n,
-                Err(_) => return usage(),
-            },
-            _ => return usage(),
-        }
-    }
-    let (Some(root), Some(reference), Some(start)) = (root, reference, start) else {
-        return usage();
-    };
-    if sources.is_empty() {
-        return usage();
-    }
+    let Cli {
+        root,
+        reference,
+        sources,
+        start,
+        minutes,
+    } = Cli::parse();
 
     let seconds = minutes * 60;
     let ref_env = rms_buckets(&window_pcm(&root, &reference, start, seconds));

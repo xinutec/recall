@@ -10,6 +10,7 @@
 
 use audiocore::instant::python_isoformat_utc;
 use chrono::Utc;
+use clap::Parser;
 use runner::client::{Client, LiveTurn};
 use runner::live::{self, Cutter, LIVE_MODEL, Tap, Utterance, spoken};
 use runner::shim::{self, Shim};
@@ -30,41 +31,42 @@ struct Config {
     args: Vec<String>,
 }
 
-fn usage() -> ! {
-    eprintln!(
-        "usage: recall-live [--url <recalld>] [--tap <udp url>]\n\
-        \x20                  [--shim <program> [args...]]\n\
-         \n\
-         RECALL_SYNC_TOKEN must be set: the instant feed writes to the meaning\n\
-         plane, which is the sync plane's credential, never a device token."
-    );
-    std::process::exit(2)
+/// The instant feed: audiod's live tap, cut at the pauses, each utterance
+/// transcribed the moment the speaker stops and pushed to the fleet.
+/// `RECALL_SYNC_TOKEN` must be set: the instant feed writes to the meaning
+/// plane, which is the sync plane's credential, never a device token.
+#[derive(Parser)]
+#[command(name = "recall-live")]
+struct Cli {
+    /// The recall server.
+    #[arg(long, default_value = "https://recall.xinutec.org")]
+    url: String,
+    /// The UDP tap to listen on.
+    #[arg(long, value_name = "UDP_URL", default_value = live::TAP)]
+    tap: String,
+    /// The shim and its arguments: everything after it, verbatim [default:
+    /// `python -m recall.shim_asr`].
+    #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "PROGRAM [ARGS]")]
+    shim: Vec<String>,
 }
 
 fn parse_args() -> Config {
-    let mut base = "https://recall.xinutec.org".to_owned();
-    let mut tap = live::TAP.to_owned();
-    let mut program = "python".to_owned();
-    let mut args = vec!["-m".to_owned(), "recall.shim_asr".to_owned()];
-    let mut cli = std::env::args().skip(1);
-    while let Some(arg) = cli.next() {
-        match arg.as_str() {
-            "--url" => base = cli.next().unwrap_or_else(|| usage()),
-            "--tap" => tap = cli.next().unwrap_or_else(|| usage()),
-            "--shim" => {
-                program = cli.next().unwrap_or_else(|| usage());
-                args = cli.by_ref().collect();
-            }
-            _ => usage(),
-        }
-    }
+    let cli = Cli::parse();
     let Ok(token) = std::env::var("RECALL_SYNC_TOKEN") else {
-        usage()
+        eprintln!("recall-live: RECALL_SYNC_TOKEN must be set");
+        std::process::exit(2)
+    };
+    let (program, args) = match cli.shim.split_first() {
+        Some((program, args)) => (program.clone(), args.to_vec()),
+        None => (
+            "python".to_owned(),
+            vec!["-m".to_owned(), "recall.shim_asr".to_owned()],
+        ),
     };
     Config {
-        base,
+        base: cli.url,
         token,
-        tap,
+        tap: cli.tap,
         program,
         args,
     }

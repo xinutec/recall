@@ -11,6 +11,7 @@
 use audiocore::job::Kind;
 use audiocore::shim::{Stored, voices};
 use chrono::Utc;
+use clap::Parser;
 use runner::client::{Client, Job, Span};
 use runner::pulse::stamp_pulse;
 use runner::shim::{self, Shim};
@@ -46,49 +47,47 @@ struct Config {
     pulse: Option<std::path::PathBuf>,
 }
 
-fn usage() -> ! {
-    eprintln!(
-        "usage: runner --url <recalld> [--shim <program> [args...]] [--once]\n\
-         \n\
-         RECALL_SYNC_TOKEN must be set: the runner reads blobs and the queue,\n\
-         which is the read plane, never a device token."
-    );
-    std::process::exit(2)
+/// Lease work from recalld and run it through a Python shim.
+/// `RECALL_SYNC_TOKEN` must be set: the runner reads blobs and the queue, which
+/// is the read plane, never a device token.
+#[derive(Parser)]
+#[command(name = "runner")]
+struct Cli {
+    /// The recall server.
+    #[arg(long, default_value = "https://recall.xinutec.org")]
+    url: String,
+    /// One job, then exit.
+    #[arg(long)]
+    once: bool,
+    /// Where to stamp the archive's pulse (`<archive root>/worker-heartbeat.json`).
+    #[arg(long, value_name = "FILE")]
+    pulse: Option<std::path::PathBuf>,
+    /// The shim and its arguments: everything after it, verbatim [default:
+    /// `python -m recall.shim_asr`].
+    #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "PROGRAM [ARGS]")]
+    shim: Vec<String>,
 }
 
 fn parse_args() -> Config {
-    let mut base = "https://recall.xinutec.org".to_owned();
-    let mut program = "python".to_owned();
-    let mut args = vec!["-m".to_owned(), "recall.shim_asr".to_owned()];
-    let mut once = false;
-    let mut pulse: Option<std::path::PathBuf> = None;
-    let mut cli = std::env::args().skip(1);
-    while let Some(arg) = cli.next() {
-        match arg.as_str() {
-            "--url" => base = cli.next().unwrap_or_else(|| usage()),
-            "--once" => once = true,
-            "--pulse" => {
-                pulse = Some(std::path::PathBuf::from(
-                    cli.next().unwrap_or_else(|| usage()),
-                ));
-            }
-            "--shim" => {
-                program = cli.next().unwrap_or_else(|| usage());
-                args = cli.by_ref().collect();
-            }
-            _ => usage(),
-        }
-    }
+    let cli = Cli::parse();
     let Ok(token) = std::env::var("RECALL_SYNC_TOKEN") else {
-        usage()
+        eprintln!("runner: RECALL_SYNC_TOKEN must be set");
+        std::process::exit(2)
+    };
+    let (program, args) = match cli.shim.split_first() {
+        Some((program, args)) => (program.clone(), args.to_vec()),
+        None => (
+            "python".to_owned(),
+            vec!["-m".to_owned(), "recall.shim_asr".to_owned()],
+        ),
     };
     Config {
-        base,
+        base: cli.url,
         token,
         program,
         args,
-        once,
-        pulse,
+        once: cli.once,
+        pulse: cli.pulse,
     }
 }
 

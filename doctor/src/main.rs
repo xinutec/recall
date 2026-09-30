@@ -7,59 +7,35 @@
 //!   the lot, and with `--post` sends it to fleetwatch.
 
 use chrono::Utc;
+use clap::Parser;
 use doctor::check::{Check, Verdict};
 use doctor::{agents, archive, bounded, capture, deaf, fleetwatch, live, record};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+/// The Mac's health agent: the archive's checks, launchd's and the fleet's.
+#[derive(Parser)]
+#[command(name = "doctor")]
 struct Config {
+    /// The archive root.
+    #[arg(long)]
     out: PathBuf,
+    /// Read the archive and print its checks as JSON: the child half, not
+    /// meant to be run by hand.
+    #[arg(long)]
     collect: bool,
+    /// Send the verdicts to fleetwatch (token from `RECALL_FLEETWATCH_TOKEN`
+    /// or `~/.config/fleetwatch/token`).
+    #[arg(long)]
     post: bool,
+    /// Fleetwatch.
+    #[arg(long, default_value = fleetwatch::DEFAULT_URL)]
     url: String,
-    /// Where the fleet is. Absent, the fleet checks skip rather than guess an
+    /// The fleet's base URL, for the live tier's own numbers (bearer from
+    /// `RECALL_SYNC_TOKEN`). Absent, the fleet checks skip rather than guess an
     /// address.
+    #[arg(long)]
     fleet: Option<String>,
-}
-
-fn usage() -> ! {
-    eprintln!(
-        "usage: doctor --out <archive root> [--post] [--collect] [--url <fleetwatch>]\n\
-         \n\
-         --post   send the verdicts to fleetwatch (token from\n\
-         \x20        RECALL_FLEETWATCH_TOKEN or ~/.config/fleetwatch/token)\n\
-         --fleet  the fleet's base URL, for the live tier's own numbers\n\
-         \x20        (bearer from RECALL_SYNC_TOKEN)\n\
-         --collect  read the archive and print its checks as JSON — the child\n\
-         \x20          half; not meant to be run by hand"
-    );
-    std::process::exit(2)
-}
-
-fn parse_args() -> Config {
-    let mut out = None;
-    let mut collect = false;
-    let mut post = false;
-    let mut url = fleetwatch::DEFAULT_URL.to_owned();
-    let mut fleet = None;
-    let mut cli = std::env::args().skip(1);
-    while let Some(arg) = cli.next() {
-        match arg.as_str() {
-            "--out" => out = Some(PathBuf::from(cli.next().unwrap_or_else(|| usage()))),
-            "--url" => url = cli.next().unwrap_or_else(|| usage()),
-            "--fleet" => fleet = Some(cli.next().unwrap_or_else(|| usage())),
-            "--collect" => collect = true,
-            "--post" => post = true,
-            _ => usage(),
-        }
-    }
-    Config {
-        out: out.unwrap_or_else(|| usage()),
-        collect,
-        post,
-        url,
-        fleet,
-    }
 }
 
 /// What `--collect` prints: the child's own timing plus its verdicts.
@@ -188,7 +164,7 @@ fn home() -> PathBuf {
 }
 
 fn main() {
-    let config = parse_args();
+    let config = Config::parse();
     let now = Utc::now();
 
     if config.collect {

@@ -5,6 +5,7 @@
 //! Exact zeros do not survive lossy coding; near-zero runs do (#1526).
 
 use audiocore::decode;
+use clap::Parser;
 use std::path::Path;
 
 fn longest_run(x: &[i16], limit: i16) -> usize {
@@ -28,8 +29,16 @@ fn s16(pcm: &[u8]) -> Vec<i16> {
         .collect()
 }
 
+/// Does a gate survive the archive — lossy coding, then the 16 kHz decode the
+#[derive(Parser)]
+struct Cli {
+    /// Stored segments.
+    #[arg(required = true)]
+    files: Vec<String>,
+}
+
 fn main() {
-    for arg in std::env::args().skip(1) {
+    for arg in Cli::parse().files {
         let path = Path::new(&arg);
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         let Some((native_rate, _)) = decode::stream_shape(path) else {

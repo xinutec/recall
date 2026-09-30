@@ -3,6 +3,7 @@
 
 use audiocore::{decode, vad, wav};
 use chrono::{DateTime, Duration, Utc};
+use clap::{Parser, Subcommand};
 use recalld::store;
 use room::RoomConfig;
 use room::pieces::{in_block_time, pieces};
@@ -13,77 +14,68 @@ use std::collections::HashSet;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
-fn usage() -> ! {
-    eprintln!(
-        "usage:
-  room fetch      --root DIR --from T --to T [--url URL]
-  room build      --root DIR --from T --to T
-  room transcribe --root DIR --from T --to T --out FILE [--pieces] [--url URL]
-                  [--shim PROGRAM ARGS...]
-
-DIR holds a copy of the fleet's ingest.sqlite; clips land in DIR/ingest/<source>/.
-T is an ISO-8601 instant. fetch and transcribe read RECALL_SYNC_TOKEN."
-    );
-    std::process::exit(2)
+/// Room experiments over a copy of the fleet's ingest.sqlite. Clips land in
+/// ROOT/ingest/<source>/; fetch and transcribe read `RECALL_SYNC_TOKEN`.
+#[derive(Parser)]
+#[command(name = "room")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
 }
 
+#[derive(Subcommand)]
+enum Command {
+    /// Fetch the window's clips from the fleet.
+    Fetch {
+        #[command(flatten)]
+        args: Args,
+    },
+    /// Build the window's room audio.
+    Build {
+        #[command(flatten)]
+        args: Args,
+    },
+    /// Transcribe the window.
+    Transcribe {
+        #[command(flatten)]
+        args: Args,
+        #[arg(long)]
+        out: PathBuf,
+        /// Transcribe the pieces, not the whole.
+        #[arg(long)]
+        pieces: bool,
+        /// The shim and its arguments: everything after it, verbatim [default:
+        /// `python -m recall.shim_asr`].
+        #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "PROGRAM [ARGS]")]
+        shim: Vec<String>,
+    },
+}
+
+/// The window every verb works on.
+#[derive(clap::Args)]
 struct Args {
+    /// Holds a copy of the fleet's ingest.sqlite.
+    #[arg(long, value_name = "DIR")]
     root: PathBuf,
+    /// An ISO-8601 instant.
+    #[arg(long, value_name = "T", value_parser = instant)]
     from: DateTime<Utc>,
+    #[arg(long, value_name = "T", value_parser = instant)]
     to: DateTime<Utc>,
+    #[arg(long, default_value = "https://recall.xinutec.org")]
     url: String,
-    out: Option<PathBuf>,
-    pieces: bool,
-    shim: (String, Vec<String>),
 }
 
-fn instant(raw: &str) -> DateTime<Utc> {
+fn instant(raw: &str) -> Result<DateTime<Utc>, String> {
     DateTime::parse_from_rfc3339(raw)
-        .unwrap_or_else(|_| usage())
-        .with_timezone(&Utc)
-}
-
-fn parse(mut cli: impl Iterator<Item = String>) -> Args {
-    let (mut root, mut from, mut to, mut out) = (None, None, None, None);
-    let mut url = "https://recall.xinutec.org".to_owned();
-    let mut pieces = false;
-    let mut shim = (
-        "python".to_owned(),
-        vec!["-m".to_owned(), "recall.shim_asr".to_owned()],
-    );
-    while let Some(arg) = cli.next() {
-        let mut value = || cli.next().unwrap_or_else(|| usage());
-        match arg.as_str() {
-            "--root" => root = Some(PathBuf::from(value())),
-            "--from" => from = Some(instant(&value())),
-            "--to" => to = Some(instant(&value())),
-            "--url" => url = value(),
-            "--out" => out = Some(PathBuf::from(value())),
-            "--pieces" => pieces = true,
-            "--shim" => {
-                let program = value();
-                shim = (program, cli.by_ref().collect());
-            }
-            _ => usage(),
-        }
-    }
-    let (Some(root), Some(from), Some(to)) = (root, from, to) else {
-        usage()
-    };
-    Args {
-        root,
-        from,
-        to,
-        url,
-        out,
-        pieces,
-        shim,
-    }
+        .map(|t| t.with_timezone(&Utc))
+        .map_err(|e| format!("not an ISO-8601 instant: {e}"))
 }
 
 fn client(url: &str) -> Client {
     let Ok(token) = std::env::var("RECALL_SYNC_TOKEN") else {
-        usage()
+        eprintln!("room: RECALL_SYNC_TOKEN must be set");
+        std::process::exit(2)
     };
     Client::new(url, &token)
 }
@@ -205,9 +197,13 @@ fn transcribe_pieces(
     Ok(json!({ "segments": segments }))
 }
 
-fn transcribe(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(out) = &args.out else { usage() };
-    let arm = if args.pieces { "pieces" } else { "whole" };
+fn transcribe(
+    args: &Args,
+    out: &Path,
+    pieces: bool,
+    shim: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let arm = if pieces { "pieces" } else { "whole" };
     let conn = store::open(&args.root)?;
     let mut stmt = conn.prepare(
         "SELECT start_utc, winner, filename FROM room_blocks
@@ -219,9 +215,11 @@ fn transcribe(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let done = done_already(out);
     // The vocabulary, as the runner fetches it: production transcribes with it.
     let prompt = client(&args.url).prompt()?;
-    let (program, shim_args) = &args.shim;
+    let default = ["python", "-m", "recall.shim_asr"].map(String::from);
+    let command = if shim.is_empty() { &default[..] } else { shim };
+    let (program, shim_args) = (&command[0], &command[1..]);
     let mut shim = Shim::spawn(program, shim_args)?;
-    let mut detector = if args.pieces {
+    let mut detector = if pieces {
         Some(vad::Detector::load()?)
     } else {
         None
@@ -271,17 +269,19 @@ fn require_ffmpeg() {
 
 fn main() {
     require_ffmpeg();
-    let mut cli = std::env::args().skip(1);
-    let command = cli.next().unwrap_or_else(|| usage());
-    let args = parse(cli);
-    let done = match command.as_str() {
-        "fetch" => fetch(&args),
-        "build" => build(&args),
-        "transcribe" => transcribe(&args),
-        _ => usage(),
+    let command = Cli::parse().command;
+    let (name, done) = match &command {
+        Command::Fetch { args } => ("fetch", fetch(args)),
+        Command::Build { args } => ("build", build(args)),
+        Command::Transcribe {
+            args,
+            out,
+            pieces,
+            shim,
+        } => ("transcribe", transcribe(args, out, *pieces, shim)),
     };
     if let Err(err) = done {
-        eprintln!("room {command}: {err}");
+        eprintln!("room {name}: {err}");
         std::process::exit(1);
     }
 }

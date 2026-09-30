@@ -6,6 +6,7 @@ publish = false
 description = "The room stream, an experiment: run by hand on a copy of the fleet's data, never deployed (#1388)."
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 audiocore = { path = "../../audiocore" }
 recalld = { path = "../../recalld" }
 runner = { path = "../../runner" }

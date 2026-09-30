@@ -7,6 +7,7 @@
 //! Input: `filename|source|minute|quiet_run_s|text`, one line per transcribed
 //! segment, dumped from the fleet's ingest plane.
 
+use clap::Parser;
 use recalld::quality::is_repetition_loop;
 use std::collections::BTreeMap;
 
@@ -18,8 +19,15 @@ struct Tally {
     looping_clips: std::collections::BTreeSet<String>,
 }
 
+/// Repetition loops per source, using the production rule.
+#[derive(Parser)]
+struct Cli {
+    /// The dump, `clip|source|..|quiet|body` per line.
+    dump: String,
+}
+
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: loop_census <dump>");
+    let path = Cli::parse().dump;
     let text = std::fs::read_to_string(path).expect("dump");
     let mut by_kind: BTreeMap<String, Tally> = BTreeMap::new();
 

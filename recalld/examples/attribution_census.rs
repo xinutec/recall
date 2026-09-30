@@ -14,6 +14,7 @@
 //!   turns.psv   id|label|seconds|visible|current|_|vector
 //! ```
 
+use clap::Parser;
 use recalld::identify::{Voiceprint, match_one};
 use std::collections::BTreeMap;
 
@@ -32,9 +33,18 @@ struct Print {
     source_turn: i64,
 }
 
+/// Attribution accuracy with the population stated (#1470).
+#[derive(Parser)]
+struct Cli {
+    /// The voiceprints, `person|..|vector` per line.
+    prints: String,
+    /// The turns.
+    turns: String,
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let (prints_path, turns_path) = (&args[0], &args[1]);
+    let cli = Cli::parse();
+    let (prints_path, turns_path) = (&cli.prints, &cli.turns);
 
     let prints: Vec<Print> = std::fs::read_to_string(prints_path)
         .expect("prints")

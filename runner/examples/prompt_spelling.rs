@@ -15,6 +15,7 @@
 //! correction text is ever echoed.
 
 use audiocore::{decode, vad::RATE};
+use clap::Parser;
 use runner::live::spoken;
 use runner::shim::Shim;
 use std::path::{Path, PathBuf};
@@ -114,8 +115,16 @@ fn spelled(shim: &mut Shim, clip: &Path, prompt: Option<&str>, wanted: &[String]
     })
 }
 
+/// What the vocabulary prompt BUYS: household names spelled right (#1665).
+#[derive(Parser)]
+struct Cli {
+    /// The archive root.
+    #[arg(default_value = ROOT)]
+    root: String,
+}
+
 fn main() {
-    let root = std::env::args().nth(1).unwrap_or_else(|| ROOT.to_owned());
+    let root = Cli::parse().root;
     let cases = cases(Path::new(&root));
     assert!(!cases.is_empty(), "no name-bearing corrections with audio");
 

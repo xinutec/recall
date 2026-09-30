@@ -16,54 +16,33 @@
 //! `RECALLD_TRUSTED_PROXIES` (env, optional, comma-separated) names the peers
 //! whose `X-Real-IP` the capture audit records instead of their own address.
 
+use clap::Parser;
 use recalld::app::{Config, DEFAULT_MAX_BODY, router};
 use recalld::tokens::Tokens;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-fn usage() -> ExitCode {
-    eprintln!(
-        "usage: recalld --root <data-root> [--bind <addr:port>]... [--tokens <file>] \
-         [--frontend <dir>]"
-    );
-    ExitCode::FAILURE
-}
-
-/// Everything the command line says, or `None` if it does not parse.
+/// The recall server: the archive, its API and the web app.
+#[derive(Parser)]
+#[command(name = "recalld")]
 struct Args {
+    /// The data root.
+    #[arg(long, value_name = "DATA_ROOT")]
     root: PathBuf,
+    /// An address to serve on; repeatable.
+    #[arg(
+        long = "bind",
+        value_name = "ADDR:PORT",
+        default_value = "127.0.0.1:8001"
+    )]
     binds: Vec<String>,
+    /// The ingest token table [default: `RECALLD_INGEST_TOKENS`].
+    #[arg(long = "tokens", value_name = "FILE")]
     tokens_path: Option<PathBuf>,
+    /// The built web app to serve.
+    #[arg(long, value_name = "DIR")]
     frontend: Option<PathBuf>,
-}
-
-fn parse_args() -> Option<Args> {
-    let mut args = std::env::args().skip(1);
-    let mut root: Option<PathBuf> = None;
-    let mut binds: Vec<String> = Vec::new();
-    let mut tokens_path: Option<PathBuf> = None;
-    let mut frontend: Option<PathBuf> = None;
-    while let Some(arg) = args.next() {
-        let value = args.next()?;
-        match arg.as_str() {
-            "--root" => root = Some(PathBuf::from(value)),
-            "--bind" => binds.push(value),
-            "--tokens" => tokens_path = Some(PathBuf::from(value)),
-            "--frontend" => frontend = Some(PathBuf::from(value)),
-            _ => return None,
-        }
-    }
-    let root = root?;
-    if binds.is_empty() {
-        binds.push(String::from("127.0.0.1:8001"));
-    }
-    Some(Args {
-        root,
-        binds,
-        tokens_path,
-        frontend,
-    })
 }
 
 /// `RECALLD_TRUSTED_PROXIES`: comma-separated addresses whose `X-Real-IP` the
@@ -138,15 +117,12 @@ fn main() -> ExitCode {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    let Some(Args {
+    let Args {
         root,
         binds,
         tokens_path,
         frontend,
-    }) = parse_args()
-    else {
-        return usage();
-    };
+    } = Args::parse();
     // A configured-but-unreadable token table fails closed at startup: an
     // open ingest plane must be a choice, never the residue of a typo.
     let tokens = match (tokens_path, std::env::var("RECALLD_INGEST_TOKENS")) {

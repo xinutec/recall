@@ -35,6 +35,7 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 # ⚠ Not "the doctor may as well depend on things now". The text rules that
 # decide whether a hidden turn is worth restoring are the SAME rules recalld
 # used to decide whether to write it, and they may not disagree; a copy of them

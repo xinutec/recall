@@ -17,6 +17,7 @@ todo = "deny"
 unimplemented = "deny"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 # The silero detector and WAV writing: the live tier must hear exactly what
 # the archive hears, or one of them cuts an utterance the other keeps.
 audiocore = { path = "../audiocore" }

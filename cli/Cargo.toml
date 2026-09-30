@@ -20,6 +20,7 @@ name = "recall-cli"
 path = "src/main.rs"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 # Blocking HTTP, like `runner`: a person typing a command waits for one answer,
 # so an async runtime would buy nothing and cost a dependency.
 ureq = { version = "2", features = ["json"] }

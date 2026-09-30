@@ -19,6 +19,7 @@
 use audiocore::decode;
 use audiocore::vad::{RATE, WINDOW};
 use chrono::{TimeDelta, Utc};
+use clap::Parser;
 use runner::live::{Cutter, Utterance, spoken};
 use runner::shim::Shim;
 use std::path::Path;
@@ -94,8 +95,15 @@ fn report(name: &str, clips: &[Utterance], seconds: f64, said: &[String]) {
     println!("  {}", said.join(" "));
 }
 
+/// What batching the live tier's calls actually costs and buys, on real audio.
+#[derive(Parser)]
+struct Cli {
+    /// Audio to cut and transcribe [default: the public-domain fixture].
+    clips: Vec<String>,
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = Cli::parse().clips;
     let paths: Vec<&Path> = if args.is_empty() {
         vec![Path::new(FIXTURE)]
     } else {

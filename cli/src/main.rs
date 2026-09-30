@@ -1,8 +1,8 @@
 //! Argument parsing and dispatch for `recall-cli`.
-//!
-//! Hand-rolled, like `runner` and `audiod`: the workspace carries no argument
-//! parser.
 
+use std::path::PathBuf;
+
+use clap::{ArgGroup, Parser, Subcommand};
 use cli::api::{Api, Error};
 use cli::render;
 
@@ -13,97 +13,182 @@ const DEFAULT_LIMIT: i64 = 100;
 /// `recalld::conversations::DEFAULT_GAP_SECONDS`, but sent explicitly.
 const DEFAULT_GAP: f64 = 300.0;
 
-fn usage() -> ! {
-    eprintln!(
-        "usage: recall-cli [--api <url>] <command> [args]\n\
-         \n\
-         commands:\n\
-         \x20 search <query> [--limit N]   full-text search the archive\n\
-         \x20 show <id> [<id>...]          diagnostic dump of specific turns\n\
-         \x20 timeline [--limit N]         the newest turns\n\
-         \x20 review [--limit N]           turns the model was least sure of\n\
-         \x20 sessions                     every uploaded session\n\
-         \x20 transcript <session>         one session, read through\n\
-         \x20 day <YYYY-MM-DD> [--conv N]  a day's conversations, or read one\n\
-         \x20 sources                      every recorder the fleet knows\n\
-         \x20 capture                      whether the recorders are running\n\
-         \x20 correct <id> <text> --apply             replace a turn's text\n\
-         \x20 correct --session <id> --fix OLD=>NEW    ...by the words instead\n\
-         \x20 no-speech <id> [--undo] --apply         nobody spoke: hide the turn\n\
-         \x20 retranscribe <file>... | --from LIST [--undo] --apply\n\
-         \x20                              transcribe clips again; a person's lines stay\n\
-         \x20 retranscribe --candidates [--min S]   clips that lost speech to a loop\n\
-         \n\
-         --api defaults to {DEFAULT_API}, the system of record. There is no\n\
-         option to read a local database: a second answer nobody can tell from\n\
-         the first is what this replaced.\n\
-         \n\
-         Reading transcripts needs a browsing session; `capture` and `sources`\n\
-         do not.\n\
-         \n\
-         {}",
-        cli::api::HOW_TO_SIGN_IN
-    );
-    std::process::exit(2)
+/// Read and correct the recall archive, at the system of record.
+///
+/// There is no option to read a local database: a second answer nobody can
+/// tell from the first is what this replaced. Reading transcripts needs a
+/// browsing session; `capture` and `sources` do not.
+#[derive(Parser)]
+#[command(name = "recall-cli", after_help = cli::api::HOW_TO_SIGN_IN)]
+struct Cli {
+    /// The system of record [default: `RECALL_API`, else the fleet].
+    #[arg(long, value_name = "URL")]
+    api: Option<String>,
+    #[command(subcommand)]
+    command: Command,
 }
 
-/// Pull `--limit N` out of the remaining arguments, leaving the rest.
-fn take_limit(args: &mut Vec<String>) -> i64 {
-    let Some(at) = args.iter().position(|a| a == "--limit") else {
-        return DEFAULT_LIMIT;
-    };
-    let Some(value) = args.get(at + 1).and_then(|v| v.parse().ok()) else {
-        usage()
-    };
-    args.drain(at..=at + 1);
-    value
+#[derive(Subcommand)]
+enum Command {
+    /// Full-text search the archive.
+    Search {
+        #[arg(required = true, allow_hyphen_values = true)]
+        query: Vec<String>,
+        #[command(flatten)]
+        limit: Limit,
+    },
+    /// Diagnostic dump of specific turns.
+    Show {
+        #[arg(required = true)]
+        ids: Vec<i64>,
+    },
+    /// The newest turns.
+    Timeline {
+        #[command(flatten)]
+        limit: Limit,
+    },
+    /// Turns the model was least sure of.
+    Review {
+        #[command(flatten)]
+        limit: Limit,
+    },
+    /// Every uploaded session.
+    Sessions,
+    /// One session, read through.
+    Transcript { session: String },
+    /// A day's conversations, or read one.
+    Day {
+        /// YYYY-MM-DD, `today` or `yesterday`.
+        date: String,
+        /// Read conversation N, or `last`.
+        #[arg(long, value_parser = conversation)]
+        conv: Option<Conv>,
+        #[command(flatten)]
+        limit: Limit,
+    },
+    /// Every recorder the fleet knows.
+    Sources,
+    /// Whether the recorders are running.
+    Capture,
+    /// Replace a turn's text: by id, or by the words within a session.
+    #[command(group(ArgGroup::new("form").required(true).args(["id", "session"])))]
+    Correct {
+        #[arg(requires = "text", conflicts_with = "session")]
+        id: Option<i64>,
+        text: Option<String>,
+        #[arg(long, requires = "fix")]
+        session: Option<String>,
+        /// OLD=>NEW; repeatable.
+        #[arg(long, value_name = "OLD=>NEW", value_parser = fix, requires = "session")]
+        fix: Vec<(String, String)>,
+        #[command(flatten)]
+        apply: Apply,
+    },
+    /// Nobody spoke: hide the turn.
+    NoSpeech {
+        id: i64,
+        /// Show it again.
+        #[arg(long)]
+        undo: bool,
+        #[command(flatten)]
+        apply: Apply,
+    },
+    /// Transcribe clips again; a person's lines stay.
+    #[command(group(ArgGroup::new("clips_from").args(["clips", "from", "candidates"]).required(true)))]
+    Retranscribe {
+        clips: Vec<String>,
+        /// The clips, one per line (the first column, so `--candidates`
+        /// output reads as it is).
+        #[arg(long, value_name = "LIST")]
+        from: Option<PathBuf>,
+        /// Take a retranscription back.
+        #[arg(long)]
+        undo: bool,
+        /// List the clips that lost speech to a loop, instead.
+        #[arg(long, conflicts_with_all = ["clips", "from", "undo", "apply"])]
+        candidates: bool,
+        /// With `--candidates`, the least looped speech, in seconds.
+        #[arg(long, default_value_t = 1.0, requires = "candidates")]
+        min: f64,
+        #[command(flatten)]
+        apply: Apply,
+    },
 }
 
-/// Pull `--flag VALUE` out of the remaining arguments, leaving the rest.
-fn take_value(args: &mut Vec<String>, flag: &str) -> Option<String> {
-    let at = args.iter().position(|a| a == flag)?;
-    let value = args.get(at + 1).cloned();
-    if value.is_none() {
-        usage()
+#[derive(clap::Args)]
+struct Limit {
+    #[arg(long = "limit", default_value_t = DEFAULT_LIMIT)]
+    n: i64,
+}
+
+#[derive(clap::Args)]
+struct Apply {
+    /// Write; without it, a dry run.
+    #[arg(long = "apply")]
+    yes: bool,
+}
+
+#[derive(Clone)]
+enum Conv {
+    Last,
+    Nth(usize),
+}
+
+fn conversation(raw: &str) -> Result<Conv, String> {
+    match raw {
+        "last" => Ok(Conv::Last),
+        n => n
+            .parse()
+            .map(Conv::Nth)
+            .map_err(|_| format!("a number or 'last', not {n:?}")),
     }
-    args.drain(at..=at + 1);
-    value
 }
 
-fn take_flag(args: &mut Vec<String>, flag: &str) -> bool {
-    let Some(at) = args.iter().position(|a| a == flag) else {
-        return false;
-    };
-    args.remove(at);
-    true
+fn fix(raw: &str) -> Result<(String, String), String> {
+    raw.split_once("=>")
+        .map(|(old, new)| (old.to_owned(), new.to_owned()))
+        .ok_or_else(|| format!("OLD=>NEW, not {raw:?}"))
 }
 
 /// `Ok(false)` means nothing matched, which exits 1 so scripts can branch on it.
-fn run(api: &Api, command: &str, mut args: Vec<String>) -> Result<bool, Error> {
+fn run(api: &Api, command: Command) -> Result<bool, Error> {
     match command {
-        "search" => search(api, &mut args),
-        "show" => show(api, &args),
-        "timeline" => timeline(api, &mut args),
-        "review" => review(api, &mut args),
-        "sessions" => sessions(api),
-        "transcript" => transcript(api, &args),
-        "day" => day(api, &mut args),
-        "sources" => sources(api),
-        "capture" => capture(api),
-        "correct" => correct(api, &mut args),
-        "no-speech" => no_speech(api, &mut args),
-        "retranscribe" => retranscribe(api, &mut args),
-        _ => usage(),
+        Command::Search { query, limit } => search(api, &query.join(" "), limit.n),
+        Command::Show { ids } => show(api, &ids),
+        Command::Timeline { limit } => timeline(api, limit.n),
+        Command::Review { limit } => review(api, limit.n),
+        Command::Sessions => sessions(api),
+        Command::Transcript { session } => transcript(api, &session),
+        Command::Day { date, conv, limit } => day(api, &date, conv, limit.n),
+        Command::Sources => sources(api),
+        Command::Capture => capture(api),
+        Command::Correct {
+            id,
+            text,
+            session,
+            fix,
+            apply,
+        } => correct(api, id.zip(text), session, &fix, apply.yes),
+        Command::NoSpeech { id, undo, apply } => no_speech(api, id, undo, apply.yes),
+        Command::Retranscribe {
+            clips,
+            from,
+            undo,
+            candidates,
+            min,
+            apply,
+        } => {
+            if candidates {
+                retranscribe_candidates(api, min)
+            } else {
+                retranscribe(api, clips, from, undo, apply.yes)
+            }
+        }
     }
 }
 
-fn search(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
-    let limit = take_limit(args);
-    let query = args.join(" ");
-    if query.is_empty() {
-        usage()
-    }
-    let hits = api.search(&query, limit)?;
+fn search(api: &Api, query: &str, limit: i64) -> Result<bool, Error> {
+    let hits = api.search(query, limit)?;
     if hits.is_empty() {
         println!("no matches for {query:?}");
         return Ok(false);
@@ -114,28 +199,17 @@ fn search(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
     Ok(true)
 }
 
-fn show(api: &Api, args: &[String]) -> Result<bool, Error> {
-    let mut ids = Vec::new();
-    for arg in args {
-        match arg.parse::<i64>() {
-            Ok(id) => ids.push(id),
-            Err(_) => usage(),
-        }
-    }
-    if ids.is_empty() {
-        usage()
-    }
-    let turns = api.transcripts(&ids)?;
+fn show(api: &Api, ids: &[i64]) -> Result<bool, Error> {
+    let turns = api.transcripts(ids)?;
     if turns.is_empty() {
         println!("no turns found for {ids:?}");
         return Ok(false);
     }
-    println!("{}", render::details(&ids, &turns));
+    println!("{}", render::details(ids, &turns));
     Ok(true)
 }
 
-fn timeline(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
-    let limit = take_limit(args);
+fn timeline(api: &Api, limit: i64) -> Result<bool, Error> {
     let page = api.timeline(limit, None)?;
     if page.items.is_empty() {
         println!("no turns");
@@ -148,8 +222,7 @@ fn timeline(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
     Ok(true)
 }
 
-fn review(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
-    let limit = take_limit(args);
+fn review(api: &Api, limit: i64) -> Result<bool, Error> {
     let turns = api.review(limit)?;
     if turns.is_empty() {
         println!("nothing waiting for review");
@@ -167,8 +240,7 @@ fn sessions(api: &Api) -> Result<bool, Error> {
     Ok(!items.is_empty())
 }
 
-fn transcript(api: &Api, args: &[String]) -> Result<bool, Error> {
-    let Some(source) = args.first() else { usage() };
+fn transcript(api: &Api, source: &str) -> Result<bool, Error> {
     let export = api.session_transcript(source)?;
     if export.turns.is_empty() {
         println!("no transcript for session {source:?}");
@@ -181,13 +253,8 @@ fn transcript(api: &Api, args: &[String]) -> Result<bool, Error> {
 /// A day of the always-on stream: list its conversations, or read one.
 ///
 /// The window is the local day, not the UTC one (see [`cli::day`]).
-fn day(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
-    let which = take_value(args, "--conv");
-    let limit = take_limit(args);
-    let Some(date) = args.first().cloned() else {
-        usage()
-    };
-    let Some((after, before)) = cli::day::bounds(&date) else {
+fn day(api: &Api, date: &str, which: Option<Conv>, limit: i64) -> Result<bool, Error> {
+    let Some((after, before)) = cli::day::bounds(date) else {
         eprintln!("day must be YYYY-MM-DD, 'today' or 'yesterday', not {date:?}");
         std::process::exit(2)
     };
@@ -197,19 +264,15 @@ fn day(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
         return Ok(false);
     }
     let Some(which) = which else {
-        println!("{}", render::conversations(&date, &found.items));
+        println!("{}", render::conversations(date, &found.items));
         if found.has_more {
             println!("\n… the page filled; raise --limit to see the rest of the day");
         }
         return Ok(true);
     };
-    let n = if which == "last" {
-        found.items.len()
-    } else if let Ok(n) = which.parse::<usize>() {
-        n
-    } else {
-        eprintln!("--conv must be a number or 'last', not {which:?}");
-        std::process::exit(2)
+    let n = match which {
+        Conv::Last => found.items.len(),
+        Conv::Nth(n) => n,
     };
     let Some(conv) = n.checked_sub(1).and_then(|i| found.items.get(i)) else {
         println!("no conversation {n} on {date} (have {})", found.items.len());
@@ -274,22 +337,19 @@ fn capture(api: &Api) -> Result<bool, Error> {
 ///     correct --session <id> --fix "OLD=>NEW" [--fix ...]
 ///
 /// The second corrects by the visible words, without looking up an id.
-fn correct(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
-    let apply = take_flag(args, "--apply");
-    let session = take_value(args, "--session");
-    let mut fixes = Vec::new();
-    while let Some(raw) = take_value(args, "--fix") {
-        let Some((old, new)) = raw.split_once("=>") else {
-            eprintln!("--fix must be OLD=>NEW, not {raw:?}");
-            std::process::exit(2)
-        };
-        fixes.push((old.to_owned(), new.to_owned()));
-    }
-    let outcome = match session {
-        Some(session) => correct_by_substring(api, &session, &fixes, apply),
-        None if fixes.is_empty() => correct_by_id(api, args, apply),
-        // Mixing the forms would mean guessing which the caller meant.
-        None => usage(),
+/// By id and text, or by `OLD=>NEW` fixes within a session; clap refuses a
+/// mix, which would mean guessing which the caller meant.
+fn correct(
+    api: &Api,
+    by_id: Option<(i64, String)>,
+    session: Option<String>,
+    fixes: &[(String, String)],
+    apply: bool,
+) -> Result<bool, Error> {
+    let outcome = match (by_id, session) {
+        (Some((id, text)), _) => correct_by_id(api, id, &text, apply),
+        (None, Some(session)) => correct_by_substring(api, &session, fixes, apply),
+        (None, None) => unreachable!("clap requires one form"),
     }?;
     if !apply {
         println!("\nDRY-RUN only — nothing written. Re-run with --apply to commit.");
@@ -297,13 +357,7 @@ fn correct(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
     Ok(outcome)
 }
 
-fn correct_by_id(api: &Api, args: &[String], apply: bool) -> Result<bool, Error> {
-    let (Some(id), Some(text)) = (
-        args.first().and_then(|a| a.parse::<i64>().ok()),
-        args.get(1),
-    ) else {
-        usage()
-    };
+fn correct_by_id(api: &Api, id: i64, text: &str, apply: bool) -> Result<bool, Error> {
     let Some(current) = api.transcripts(&[id])?.into_iter().next() else {
         println!("no turn {id}");
         return Ok(false);
@@ -319,28 +373,30 @@ fn correct_by_id(api: &Api, args: &[String], apply: bool) -> Result<bool, Error>
 /// ⚠ The other write, gated like `correct`: the turn is hidden and its words
 /// filed as the model's invention.
 /// The clips to transcribe again: named, or one per line in `--from LIST`.
-fn retranscribe(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
-    if take_flag(args, "--candidates") {
-        let min = take_value(args, "--min").map_or(Ok(1.0), |v| v.parse::<f64>());
-        let Ok(min) = min else { usage() };
-        let found = api.retranscribe_candidates(min)?;
-        let total: f64 = found.iter().map(|c| c.looped_speech_s).sum();
-        for c in &found {
-            println!("{}\t{:.1}", c.filename, c.looped_speech_s);
-        }
-        eprintln!(
-            "{} clip(s), {:.0} min of speech under loops",
-            found.len(),
-            total / 60.0
-        );
-        return Ok(!found.is_empty());
+fn retranscribe_candidates(api: &Api, min: f64) -> Result<bool, Error> {
+    let found = api.retranscribe_candidates(min)?;
+    let total: f64 = found.iter().map(|c| c.looped_speech_s).sum();
+    for c in &found {
+        println!("{}\t{:.1}", c.filename, c.looped_speech_s);
     }
-    let apply = take_flag(args, "--apply");
-    let undo = take_flag(args, "--undo");
-    let mut clips = std::mem::take(args);
-    if let Some(list) = take_value(&mut clips, "--from") {
+    eprintln!(
+        "{} clip(s), {:.0} min of speech under loops",
+        found.len(),
+        total / 60.0
+    );
+    Ok(!found.is_empty())
+}
+
+fn retranscribe(
+    api: &Api,
+    mut clips: Vec<String>,
+    from: Option<PathBuf>,
+    undo: bool,
+    apply: bool,
+) -> Result<bool, Error> {
+    if let Some(list) = from {
         let Ok(text) = std::fs::read_to_string(&list) else {
-            eprintln!("cannot read {list}");
+            eprintln!("cannot read {}", list.display());
             std::process::exit(2)
         };
         // The first column: `--candidates` prints the seconds beside each name.
@@ -351,7 +407,8 @@ fn retranscribe(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
         );
     }
     if clips.is_empty() {
-        usage()
+        eprintln!("no clips named");
+        std::process::exit(2)
     }
     if !apply {
         let verb = if undo {
@@ -382,12 +439,7 @@ fn retranscribe(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
     Ok(skipped.is_empty())
 }
 
-fn no_speech(api: &Api, args: &mut Vec<String>) -> Result<bool, Error> {
-    let apply = take_flag(args, "--apply");
-    let undo = take_flag(args, "--undo");
-    let Some(id) = args.first().and_then(|a| a.parse::<i64>().ok()) else {
-        usage()
-    };
+fn no_speech(api: &Api, id: i64, undo: bool, apply: bool) -> Result<bool, Error> {
     if undo {
         // A hidden turn is not in the reads, so there is nothing to show first.
         if apply {
@@ -422,9 +474,6 @@ fn correct_by_substring(
     fixes: &[(String, String)],
     apply: bool,
 ) -> Result<bool, Error> {
-    if fixes.is_empty() {
-        usage()
-    }
     let turns = api.source_turns(session, 1000)?;
     if turns.is_empty() {
         println!("no current turns for session {session:?}");
@@ -467,21 +516,13 @@ fn show_change(turn: &cli::api::Turn, corrected: &str) {
 }
 
 fn main() {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let mut base = std::env::var("RECALL_API").unwrap_or_else(|_| DEFAULT_API.to_owned());
-    if args.first().is_some_and(|a| a == "--api") {
-        if args.len() < 2 {
-            usage()
-        }
-        base = args.remove(1);
-        args.remove(0);
-    }
-    if args.is_empty() {
-        usage()
-    }
-    let command = args.remove(0);
+    let cli = Cli::parse();
+    let base = cli
+        .api
+        .or_else(|| std::env::var("RECALL_API").ok())
+        .unwrap_or_else(|| DEFAULT_API.to_owned());
     let api = Api::new(&base, Api::saved_session());
-    match run(&api, &command, args) {
+    match run(&api, cli.command) {
         Ok(true) => {}
         Ok(false) => std::process::exit(1),
         Err(err) => {

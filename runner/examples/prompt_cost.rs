@@ -19,6 +19,7 @@
 
 use audiocore::decode;
 use audiocore::vad::RATE;
+use clap::Parser;
 use runner::live::spoken;
 use runner::shim::Shim;
 use std::path::Path;
@@ -121,10 +122,16 @@ fn run(
     (said, reached)
 }
 
+/// What the vocabulary prompt buys and what it costs, on short clips (#1665).
+#[derive(Parser)]
+struct Cli {
+    /// The archive's database, for the enrolled names.
+    #[arg(default_value = ARCHIVE)]
+    archive: String,
+}
+
 fn main() {
-    let db = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| ARCHIVE.to_owned());
+    let db = Cli::parse().archive;
     let names = names(Path::new(&db));
     assert!(!names.is_empty(), "no enrolled names to search for");
     println!(
