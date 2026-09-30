@@ -82,9 +82,9 @@ jobs:
           # recalld is the whole program now. A binary that will not start — a
           # glibc mismatch between the build stage and the runtime base is the way
           # that happens — crash-loops on Isis and nowhere earlier. Bare argv prints
-          # usage, which is proof it links and runs.
+          # usage, which is proof it links and runs. clap's wording since bc9a65f.
           docker run --rm xinutec/recall:ci \
-            sh -c 'recalld 2>&1 | grep -q "usage: recalld"'
+            sh -c 'recalld 2>&1 | grep -q "Usage: recalld"'
           # The web UI is half the point of the fleet tier; an image with no bundle is
           # a working API serving 404s.
           docker run --rm xinutec/recall:ci \
