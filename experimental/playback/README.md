@@ -76,4 +76,6 @@ digits by Whisper, which counts against every arm alike: compare arms, do not
 read the absolute rate as the transcriber's.
 
 The played window's lines are machine transcripts of test speech in the
-household's record: hide them once scored.
+household's record: once scored, hide the window's shown machine lines with
+`hidden_reason = 'test speech played into the house'` (`HiddenReason::PlayedTest`),
+after a snapshot. The audio stays.

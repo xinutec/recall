@@ -217,6 +217,9 @@ pub enum HiddenReason {
     /// `.wav`, the same samples) and both were transcribed; these lines are
     /// the copy not kept.
     SecondCopy,
+    /// Test speech played through the house's speakers
+    /// (`experimental/playback`), not the household.
+    PlayedTest,
 }
 
 /// Which kind of hide a stored `hidden_reason` is, for the app: the stored
@@ -234,6 +237,7 @@ pub enum HiddenKind {
     SetAside,
     RetranscriptionUndone,
     SecondCopy,
+    PlayedTest,
     /// Written by an older pass or typed by hand in a past repair.
     Other,
 }
@@ -251,6 +255,7 @@ impl HiddenReason {
             Self::SetAside => HiddenKind::SetAside,
             Self::RetranscriptionUndone => HiddenKind::RetranscriptionUndone,
             Self::SecondCopy => HiddenKind::SecondCopy,
+            Self::PlayedTest => HiddenKind::PlayedTest,
         }
     }
 }
@@ -268,6 +273,7 @@ impl HiddenKind {
             HiddenReason::SetAside,
             HiddenReason::RetranscriptionUndone,
             HiddenReason::SecondCopy,
+            HiddenReason::PlayedTest,
         ];
         if let Some(reason) = fixed.iter().find(|r| r.to_string() == stored) {
             return reason.kind();
@@ -301,6 +307,7 @@ impl fmt::Display for HiddenReason {
             Self::SetAside => f.write_str("set aside for re-transcription"),
             Self::RetranscriptionUndone => f.write_str("re-transcription undone"),
             Self::SecondCopy => f.write_str("a second copy of the same minute"),
+            Self::PlayedTest => f.write_str("test speech played into the house"),
         }
     }
 }

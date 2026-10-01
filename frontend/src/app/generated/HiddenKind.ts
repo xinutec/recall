@@ -4,4 +4,4 @@
  * Which kind of hide a stored `hidden_reason` is, for the app: the stored
  * text is a spelling, and a person can take back only some kinds.
  */
-export type HiddenKind = "liveReconciled" | "coveredByRoom" | "diarized" | "split" | "nobodySpoke" | "silentMinute" | "setAside" | "retranscriptionUndone" | "secondCopy" | "other";
+export type HiddenKind = "liveReconciled" | "coveredByRoom" | "diarized" | "split" | "nobodySpoke" | "silentMinute" | "setAside" | "retranscriptionUndone" | "secondCopy" | "playedTest" | "other";
