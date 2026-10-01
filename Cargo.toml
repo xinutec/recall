@@ -10,6 +10,7 @@
 #   recalld    the fleet's system-of-record daemon on Isis
 #   runner     the Mac's job orchestration against recalld's queue
 #   experimental/room  the room stream, run by hand, never deployed (#1388)
+#   experimental/playback  known speech played into the house, scored per mic (#1388)
 [workspace]
 resolver = "3"
 members = [
@@ -18,6 +19,7 @@ members = [
     "cli",
     "doctor",
     "experimental/room",
+    "experimental/playback",
     "recalld",
     "runner",
 ]

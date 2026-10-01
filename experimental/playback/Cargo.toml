@@ -1,0 +1,33 @@
+[package]
+name = "playback"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Known speech played into the house and scored per microphone: run by hand, never deployed (#1388)."
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+audiocore = { path = "../../audiocore" }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+# Sample and second arithmetic moves between integer and float at a few deliberate sites.
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
