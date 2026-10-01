@@ -41,6 +41,52 @@ pub fn pieces(regions: Vec<Region>) -> Vec<Region> {
     merged
 }
 
+/// A stretch of a minute decoded as one, in one language.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Run {
+    pub start: f64,
+    pub end: f64,
+    /// `None`: no piece said, so the model detects it.
+    pub language: Option<String>,
+}
+
+/// Neighbouring pieces in the same language joined into runs that tile the
+/// whole minute, `[0, minute)`: a boundary sits mid-pause between two
+/// languages, so no audio is cut away, which is what loses quiet words when
+/// only the pieces are decoded. A minute with no pieces is one run.
+pub fn runs(pieces: &[(Region, Option<String>)], minute: f64) -> Vec<Run> {
+    let mut out: Vec<Run> = Vec::new();
+    let mut previous_end = 0.0;
+    for (piece, language) in pieces {
+        match out.last_mut() {
+            Some(last) if last.language == *language => {}
+            Some(last) => {
+                let boundary = f64::midpoint(previous_end, piece.start);
+                last.end = boundary;
+                out.push(Run {
+                    start: boundary,
+                    end: minute,
+                    language: language.clone(),
+                });
+            }
+            None => out.push(Run {
+                start: 0.0,
+                end: minute,
+                language: language.clone(),
+            }),
+        }
+        previous_end = piece.end;
+    }
+    if out.is_empty() {
+        out.push(Run {
+            start: 0.0,
+            end: minute,
+            language: None,
+        });
+    }
+    out
+}
+
 /// A piece's transcription moved from piece time to block time: every segment
 /// and word start and end shifted by `offset`, and the piece's own language
 /// guess kept on each segment, since that is the point of cutting.

@@ -41,9 +41,10 @@ enum Command {
         args: Args,
         #[arg(long)]
         out: PathBuf,
-        /// Transcribe the pieces, not the whole.
-        #[arg(long)]
-        pieces: bool,
+        /// What is decoded: the whole minute, its pieces cut at pauses, or
+        /// runs of pieces in one language, each decoded whole in that language.
+        #[arg(long, value_enum, default_value_t = Arm::Whole)]
+        arm: Arm,
         /// The shim and its arguments: everything after it, verbatim [default:
         /// `python -m recall.shim_asr`].
         #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "PROGRAM [ARGS]")]
@@ -197,13 +198,75 @@ fn transcribe_pieces(
     Ok(json!({ "segments": segments }))
 }
 
+/// What `transcribe` decodes for each block.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Arm {
+    Whole,
+    Pieces,
+    Runs,
+}
+
+impl Arm {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Whole => "whole",
+            Self::Pieces => "pieces",
+            Self::Runs => "runs",
+        }
+    }
+}
+
+/// Each piece decoded once for its language, then runs of one language
+/// ([`room::pieces::runs`]) decoded whole with that language forced.
+fn transcribe_runs(
+    shim: &mut Shim,
+    detector: &mut vad::Detector,
+    clip: &Path,
+    scratch: &Path,
+    prompt: Option<&str>,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let pcm = decode::decode_s16(clip, vad::RATE).ok_or("cannot decode the block")?;
+    let samples = decode::to_f32(&pcm);
+    let rate = f64::from(vad::RATE);
+    let slice = |start: f64, end: f64| {
+        let from = (start * rate) as usize;
+        let to = ((end * rate) as usize).min(samples.len());
+        &samples[from.min(to)..to]
+    };
+    let mut languages = Vec::new();
+    for piece in pieces(detector.regions(&samples)?) {
+        let audio = slice(piece.start, piece.end);
+        if audio.is_empty() {
+            continue;
+        }
+        wav::write_mono16(scratch, vad::RATE, audio)?;
+        let result = shim.transcribe(scratch, None, prompt)?.raw;
+        let language = result["language"].as_str().map(String::from);
+        languages.push((piece, language));
+    }
+    let mut segments = Vec::new();
+    for run in room::pieces::runs(&languages, samples.len() as f64 / rate) {
+        let audio = slice(run.start, run.end);
+        if audio.is_empty() {
+            continue;
+        }
+        wav::write_mono16(scratch, vad::RATE, audio)?;
+        let result = shim
+            .transcribe_in(scratch, run.language.as_deref(), prompt)?
+            .raw;
+        segments.extend(in_block_time(&result, run.start));
+    }
+    Ok(json!({ "segments": segments }))
+}
+
 fn transcribe(
     args: &Args,
     out: &Path,
-    pieces: bool,
+    arm: Arm,
     shim: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let arm = if pieces { "pieces" } else { "whole" };
+    let pieces = arm != Arm::Whole;
+    let arm_name = arm.name();
     let conn = store::open(&args.root)?;
     let mut stmt = conn.prepare(
         "SELECT start_utc, winner, filename FROM room_blocks
@@ -235,22 +298,25 @@ fn transcribe(
             continue;
         };
         let t = t.with_timezone(&Utc);
-        if t < args.from || t >= args.to || done.contains(&(start.clone(), arm.to_owned())) {
+        if t < args.from || t >= args.to || done.contains(&(start.clone(), arm_name.to_owned())) {
             continue;
         }
         let clip = store::source_dir(&args.root, store::ROOM_SOURCE).join(&filename);
-        let result = match &mut detector {
-            Some(detector) => {
+        let result = match (&mut detector, arm) {
+            (Some(detector), Arm::Pieces) => {
                 transcribe_pieces(&mut shim, detector, &clip, &scratch, prompt.as_deref())?
             }
-            None => shim.transcribe(&clip, None, prompt.as_deref())?.raw,
+            (Some(detector), Arm::Runs) => {
+                transcribe_runs(&mut shim, detector, &clip, &scratch, prompt.as_deref())?
+            }
+            _ => shim.transcribe(&clip, None, prompt.as_deref())?.raw,
         };
-        let line = json!({ "block": start, "winner": winner, "arm": arm, "result": result });
+        let line = json!({ "block": start, "winner": winner, "arm": arm_name, "result": result });
         writeln!(file, "{line}")?;
         written += 1;
     }
     let _ = std::fs::remove_file(&scratch);
-    println!("transcribed {written} block(s) as {arm}");
+    println!("transcribed {written} block(s) as {arm_name}");
     Ok(())
 }
 
@@ -276,9 +342,9 @@ fn main() {
         Command::Transcribe {
             args,
             out,
-            pieces,
+            arm,
             shim,
-        } => ("transcribe", transcribe(args, out, *pieces, shim)),
+        } => ("transcribe", transcribe(args, out, *arm, shim)),
     };
     if let Err(err) = done {
         eprintln!("room {name}: {err}");
