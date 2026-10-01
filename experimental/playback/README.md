@@ -31,7 +31,9 @@ household's decision, made before `play` and after it.
    ]
    ```
 
-   `device` is the `CoreAudio` output's name. Turns go round the voices in
+   `device` is the `CoreAudio` output's name. `{"mix": [<voices>, ...]}`
+   alternates turns between sources, e.g. English readers and FLEURS Dutch,
+   for speech that switches language turn by turn. Turns go round the voices in
    order, 4 to 15 s each, 0.4 to 1.5 s apart, peaks at -3 dBFS; the device's
    own volume is left as it is.
 

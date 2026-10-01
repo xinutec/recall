@@ -93,6 +93,12 @@ fn pools(
                 lang,
             )?]
         }
+        Voices::Mix(sources) => plan::interleave(
+            sources
+                .iter()
+                .map(|v| pools(v, librispeech, fleurs))
+                .collect::<Result<_>>()?,
+        ),
     })
 }
 

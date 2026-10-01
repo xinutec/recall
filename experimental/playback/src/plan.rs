@@ -25,6 +25,41 @@ pub enum Voices {
     Librispeech(Vec<String>),
     /// A FLEURS language; FLEURS names no speakers, so turns are its utterances in a shuffled order.
     Fleurs(String),
+    /// Turns alternating between the listed sources, for speech that switches
+    /// language from turn to turn as a bilingual household does.
+    Mix(Vec<Voices>),
+}
+
+/// The voice pools of a [`Voices::Mix`], interleaved so turns alternate
+/// between its sources: each source is spread over as many pools as the
+/// largest has, so a single FLEURS pool beside two readers is heard on
+/// every second turn, not every third.
+pub fn interleave<T>(sources: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
+    let n = sources.iter().map(Vec::len).max().unwrap_or(0);
+    let spread: Vec<Vec<Vec<T>>> = sources
+        .into_iter()
+        .map(|pools| {
+            if pools.len() >= n {
+                return pools;
+            }
+            let mut out: Vec<Vec<T>> = (0..n).map(|_| Vec::new()).collect();
+            for (i, item) in pools.into_iter().flatten().enumerate() {
+                out[i % n].push(item);
+            }
+            out
+        })
+        .collect();
+    let mut columns: Vec<std::vec::IntoIter<Vec<T>>> =
+        spread.into_iter().map(Vec::into_iter).collect();
+    let mut out = Vec::new();
+    for _ in 0..n {
+        for column in &mut columns {
+            if let Some(pool) = column.next() {
+                out.push(pool);
+            }
+        }
+    }
+    out
 }
 
 /// One part as asked for: which loudspeaker, how long, whose voices.

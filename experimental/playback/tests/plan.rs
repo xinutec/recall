@@ -1,5 +1,5 @@
 use playback::corpus::Utterance;
-use playback::plan::{PartSpec, RATE, Rng, Voices, lay_out, normalise_peak, wav};
+use playback::plan::{PartSpec, RATE, Rng, Voices, interleave, lay_out, normalise_peak, wav};
 
 fn utterance(voice: &str, i: usize) -> Utterance {
     Utterance {
@@ -84,4 +84,29 @@ fn wav_header_describes_the_samples() {
     assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), RATE);
     assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 6);
     assert_eq!(bytes.len(), 50);
+}
+
+#[test]
+fn a_mix_alternates_its_sources_turn_by_turn() {
+    let readers = vec![vec!["a1", "a2"], vec!["b1", "b2"]];
+    let fleurs = vec![vec!["n1", "n2", "n3", "n4"]];
+    let pools = interleave(vec![readers, fleurs]);
+    assert_eq!(
+        pools,
+        [
+            vec!["a1", "a2"],
+            vec!["n1", "n3"],
+            vec!["b1", "b2"],
+            vec!["n2", "n4"]
+        ]
+    );
+}
+
+#[test]
+fn a_mix_reads_from_json() {
+    let spec: PartSpec = serde_json::from_str(
+        r#"{"name":"m","device":"D","seconds":10,"voices":{"mix":[{"librispeech":["1"]},{"fleurs":"nl_nl"}]}}"#,
+    )
+    .unwrap();
+    assert!(matches!(spec.voices, Voices::Mix(ref v) if v.len() == 2));
 }
