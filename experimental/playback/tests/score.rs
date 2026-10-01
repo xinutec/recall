@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use playback::plan::{Part, Plan, Turn};
-use playback::score::{Line, Played, score, total};
+use playback::score::{Line, Played, room_lines, score, total};
 
 fn at(s: i64) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 1, 12, 0, 0).unwrap() + Duration::seconds(s)
@@ -92,4 +92,20 @@ fn lines_go_to_the_part_holding_their_midpoint_and_strays_are_invented() {
     assert_eq!(other_two.errors.deletions, 3);
     assert_eq!(total(&report, "mic").reference, 6);
     assert!((report.silent_seconds - (210.0 - 60.0)).abs() < 1e-9);
+}
+
+#[test]
+fn room_output_becomes_one_source_per_arm_on_the_wall_clock() {
+    let jsonl = concat!(
+        r#"{"block":"2026-10-01T12:01:00Z","winner":"usb","arm":"whole","result":{"segments":[{"start":1.5,"end":4.0,"text":" red green"}]}}"#,
+        "\n",
+        r#"{"block":"2026-10-01T12:01:00Z","winner":"usb","arm":"pieces","result":{"segments":[]}}"#,
+        "\n",
+    );
+    let lines = room_lines(jsonl).unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].source, "room-whole");
+    assert_eq!(lines[0].start, at(61) + Duration::milliseconds(500));
+    assert_eq!(lines[0].end, at(64));
+    assert!(room_lines("{\"arm\":\"whole\"}").is_err());
 }

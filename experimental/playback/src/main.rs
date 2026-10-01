@@ -59,6 +59,10 @@ enum Command {
         /// Seconds before the first part and after the last that count as silence.
         #[arg(long, default_value_t = 40)]
         margin: i64,
+        /// The room lab's output (`room transcribe --out`), scored as one
+        /// source per arm beside the microphones; repeatable.
+        #[arg(long)]
+        room: Vec<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -246,7 +250,7 @@ fn pct(rate: Option<f64>) -> String {
     rate.map_or_else(|| "-".into(), |r| format!("{:.1}%", r * 100.0))
 }
 
-fn score(dir: &Path, db: &Path, margin: i64, json: bool) -> Result<()> {
+fn score(dir: &Path, db: &Path, margin: i64, room: &[PathBuf], json: bool) -> Result<()> {
     let plan = read_plan(dir)?;
     let played = read_played(dir)?;
     let first = played
@@ -263,7 +267,10 @@ fn score(dir: &Path, db: &Path, margin: i64, json: bool) -> Result<()> {
         first - Duration::seconds(margin),
         last + Duration::seconds(margin),
     );
-    let lines = lines(db, from, to)?;
+    let mut lines = lines(db, from, to)?;
+    for file in room {
+        lines.extend(score::room_lines(&std::fs::read_to_string(file)?)?);
+    }
     let report = score::score(&plan, &played, &lines, from, to);
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -323,8 +330,9 @@ fn main() {
             dir,
             db,
             margin,
+            room,
             json,
-        } => score(&dir, &db, margin, json),
+        } => score(&dir, &db, margin, &room, json),
     };
     if let Err(err) = done {
         eprintln!("playback: {err}");
