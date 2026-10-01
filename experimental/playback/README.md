@@ -45,7 +45,10 @@ household's decision, made before `play` and after it.
 
 4. With capture running, play: silence, then each part followed by silence
    (`--gap`, 45 s), through `sox`. Each part's start goes to
-   `DIR/played.jsonl`.
+   `DIR/played.jsonl`. The Mac ramps its output up over about half a second
+   when playback starts, so each part opens with `--lead` (0.5 s) of silence
+   before its first turn's own gap. Whether the ramp counts silence is
+   untested: the score shows whether each part's first words were heard.
 
    ```sh
    playback play --dir DIR

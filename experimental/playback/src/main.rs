@@ -41,9 +41,10 @@ enum Command {
         /// Seconds of silence before the first part and after each.
         #[arg(long, default_value_t = 45)]
         gap: u64,
-        /// Silence prepended to each part, so a Bluetooth speaker waking up
-        /// does not swallow the first words; the logged start skips it.
-        #[arg(long, default_value_t = 2.0)]
+        /// Silence prepended to each part: the Mac ramps its output up over
+        /// about half a second when playback starts, and the first turn's own
+        /// gap (0.4 s or more) follows it. The logged start skips it.
+        #[arg(long, default_value_t = 0.5)]
         lead: f64,
         #[arg(long, default_value = "sox")]
         sox: String,
