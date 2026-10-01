@@ -228,7 +228,7 @@ impl Watchdog {
 /// until the pause fires or the producer ends. The fan-out live tap rides the
 /// segmenter (`fanout` in `build_segment_argv`), so recall-live never opens
 /// the device.
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "the capture loop in one piece (doc above)"
 )]

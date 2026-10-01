@@ -90,7 +90,7 @@ fn cases(root: &Path) -> Vec<Case> {
     out
 }
 
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "example sizes: seconds of audio, far inside range"

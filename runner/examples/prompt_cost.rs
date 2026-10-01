@@ -54,7 +54,7 @@ fn says_a_name(text: &str, names: &[String]) -> bool {
         .any(|n| lower.contains(&n.trim().to_lowercase()))
 }
 
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "example sizes: seconds of audio, far inside range"
@@ -75,7 +75,7 @@ fn cut(samples: &[f32], seconds: f64) -> Vec<&[f32]> {
 ///
 /// ⓘ Overlapping by a half-hop, so a 48-second fixture yields enough quiet
 /// fragments to say anything at all.
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "example sizes: seconds of audio, far inside range"

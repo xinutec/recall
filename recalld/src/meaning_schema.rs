@@ -12,7 +12,7 @@ use rusqlite::Connection;
 
 /// Entry i migrates version i to version i+1. APPEND ONLY — editing a shipped
 /// entry changes nothing on a database that already passed it.
-#[allow(clippy::needless_raw_string_hashes, reason = "uniform by construction")]
+#[expect(clippy::needless_raw_string_hashes, reason = "uniform by construction")]
 pub const MIGRATIONS: &[&str] = &[
     // v1
     r#"

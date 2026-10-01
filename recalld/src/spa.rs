@@ -79,7 +79,7 @@ fn file(path: &Path, cache: &str) -> Response {
 ///
 /// `async` with no await: axum requires the handler signature, and reading a
 /// built asset off local disk is not worth a blocking-pool hop.
-#[allow(
+#[expect(
     clippy::unused_async,
     reason = "axum requires the async signature (doc above)"
 )]

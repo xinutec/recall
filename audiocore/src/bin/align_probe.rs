@@ -101,7 +101,6 @@ fn instant(raw: &str) -> Result<DateTime<Utc>, String> {
         .map_err(|e| format!("not an RFC 3339 instant: {e}"))
 }
 
-#[allow(clippy::too_many_lines, reason = "one probe, read top to bottom")]
 fn main() -> ExitCode {
     let Cli {
         root,
