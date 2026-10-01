@@ -284,7 +284,7 @@ fn score(dir: &Path, db: &Path, margin: i64, room: &[PathBuf], json: bool) -> Re
     }
     let names: Vec<&str> = played.iter().map(|p| p.part.as_str()).collect();
     print!(
-        "{:12} {:>7} {:>6} {:>6} {:>6}",
+        "{:16} {:>7} {:>6} {:>6} {:>6}",
         "source", "WER", "sub", "del", "ins"
     );
     for n in &names {
@@ -294,7 +294,7 @@ fn score(dir: &Path, db: &Path, margin: i64, room: &[PathBuf], json: bool) -> Re
     for inv in &report.invented {
         let t = score::total(&report, &inv.source);
         print!(
-            "{:12} {:>7} {:>6} {:>6} {:>6}",
+            "{:16} {:>7} {:>6} {:>6} {:>6}",
             inv.source,
             pct(t.rate()),
             t.substitutions,

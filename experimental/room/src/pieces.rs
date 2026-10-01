@@ -22,17 +22,36 @@ pub const MIN_PIECE_S: f64 = 3.0;
 ///
 /// A minute whose only region is a fragment keeps it: there is no neighbour.
 pub fn pieces(regions: Vec<Region>) -> Vec<Region> {
+    pieces_by(regions, JOIN_PAUSE_S, MIN_PIECE_S)
+}
+
+/// Where the language is guessed for [`runs`]: a pause between two turns can
+/// be well under [`JOIN_PAUSE_S`], and a piece holding an English and a Dutch
+/// turn gets one guess, which then decodes the other turn as a TRANSLATION
+/// (playback run 2: "de amerikanen en de vrije fransen" came back as "The
+/// Americans and the brave Frenchmen"). Finer stretches cost only the guess:
+/// a run is still decoded whole.
+pub const LANGUAGE_JOIN_PAUSE_S: f64 = 0.3;
+/// A stretch shorter than this is too little for a language guess.
+pub const LANGUAGE_MIN_PIECE_S: f64 = 1.0;
+
+/// The stretches whose language [`runs`] groups by.
+pub fn language_pieces(regions: Vec<Region>) -> Vec<Region> {
+    pieces_by(regions, LANGUAGE_JOIN_PAUSE_S, LANGUAGE_MIN_PIECE_S)
+}
+
+fn pieces_by(regions: Vec<Region>, join: f64, min: f64) -> Vec<Region> {
     let mut joined: Vec<Region> = Vec::new();
     for r in regions {
         match joined.last_mut() {
-            Some(last) if r.start - last.end < JOIN_PAUSE_S => last.end = r.end,
+            Some(last) if r.start - last.end < join => last.end = r.end,
             _ => joined.push(r),
         }
     }
     let mut merged: Vec<Region> = Vec::new();
     for piece in joined {
         match merged.last_mut() {
-            Some(last) if piece.seconds() < MIN_PIECE_S || last.seconds() < MIN_PIECE_S => {
+            Some(last) if piece.seconds() < min || last.seconds() < min => {
                 last.end = piece.end;
             }
             _ => merged.push(piece),

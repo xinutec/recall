@@ -216,7 +216,7 @@ impl Arm {
     }
 }
 
-/// Each piece decoded once for its language, then runs of one language
+/// Each stretch ([`room::pieces::language_pieces`]) decoded once for its language, then runs of one language
 /// ([`room::pieces::runs`]) decoded whole with that language forced.
 fn transcribe_runs(
     shim: &mut Shim,
@@ -234,7 +234,7 @@ fn transcribe_runs(
         &samples[from.min(to)..to]
     };
     let mut languages = Vec::new();
-    for piece in pieces(detector.regions(&samples)?) {
+    for piece in room::pieces::language_pieces(detector.regions(&samples)?) {
         let audio = slice(piece.start, piece.end);
         if audio.is_empty() {
             continue;
