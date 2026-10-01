@@ -54,17 +54,22 @@ household's decision, made before `play` and after it.
    playback play --dir DIR
    ```
 
-5. Once the window is transcribed, copy the fleet's `recall.sqlite` with
-   sqlite's `.backup` (read-only, never the live file) and score:
+5. Wait until every minute of the window has lines in `recall.sqlite`, not
+   only until its jobs are done: the turn writer adds them in batches, up to
+   an hour after a minute's job finished. Then copy the window's
+   `audio_segments` and their `transcript_segments` into a small file (sqlite
+   `ATTACH` the fleet's file read-only, `CREATE TABLE ... AS SELECT`) and score:
 
    ```sh
-   playback score --dir DIR --db recall.sqlite [--shown] [--json]
+   playback score --dir DIR --db window.sqlite [--json]
    ```
 
    Per source: word error rate over all parts, its substitutions, deletions
    and insertions, the rate per part, and words "invented": in lines that sit
-   in no part, said while nothing was played. `--shown` scores only the lines
-   the household is shown.
+   in no part, said while nothing was played. Only shown lines count: the line
+   diarization rewrote is hidden and its rewrite shown, so both would count the
+   same speech twice. A phone's clock can sit a few seconds off, so a line at a
+   part's very edge can land in the silence and read as invented: check those.
 
 Numbers are spelled as words in `LibriSpeech`'s reference and usually as
 digits by Whisper, which counts against every arm alike: compare arms, do not

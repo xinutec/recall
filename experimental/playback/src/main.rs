@@ -59,9 +59,6 @@ enum Command {
         /// Seconds before the first part and after the last that count as silence.
         #[arg(long, default_value_t = 40)]
         margin: i64,
-        /// Only lines the household is shown, rather than every machine line.
-        #[arg(long)]
-        shown: bool,
         #[arg(long)]
         json: bool,
     },
@@ -202,21 +199,18 @@ fn read_played(dir: &Path) -> Result<Vec<Played>> {
     Ok(out)
 }
 
-fn lines(db: &Path, from: DateTime<Utc>, to: DateTime<Utc>, shown: bool) -> Result<Vec<Line>> {
+/// The lines the household is shown. A hidden line is not an extra hearing:
+/// diarization hides the line it rewrote, and the rewrite is shown, so counting
+/// both would score the same speech twice.
+fn lines(db: &Path, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<Line>> {
     let conn =
         rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let sql = format!(
+    let mut stmt = conn.prepare(
         "SELECT a.source_id, t.start_utc, t.end_utc, t.text
            FROM transcript_segments t JOIN audio_segments a ON a.id = t.audio_segment_id
-          WHERE t.superseded_by IS NULL AND t.asr_model != 'human'
-            AND t.end_utc > ?1 AND t.start_utc < ?2 {}",
-        if shown {
-            "AND t.hidden_reason IS NULL"
-        } else {
-            ""
-        }
-    );
-    let mut stmt = conn.prepare(&sql)?;
+          WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL AND t.asr_model != 'human'
+            AND t.end_utc > ?1 AND t.start_utc < ?2",
+    )?;
     let rows = stmt.query_map(
         [
             instant::python_isoformat_utc(from),
@@ -252,7 +246,7 @@ fn pct(rate: Option<f64>) -> String {
     rate.map_or_else(|| "-".into(), |r| format!("{:.1}%", r * 100.0))
 }
 
-fn score(dir: &Path, db: &Path, margin: i64, shown: bool, json: bool) -> Result<()> {
+fn score(dir: &Path, db: &Path, margin: i64, json: bool) -> Result<()> {
     let plan = read_plan(dir)?;
     let played = read_played(dir)?;
     let first = played
@@ -269,7 +263,7 @@ fn score(dir: &Path, db: &Path, margin: i64, shown: bool, json: bool) -> Result<
         first - Duration::seconds(margin),
         last + Duration::seconds(margin),
     );
-    let lines = lines(db, from, to, shown)?;
+    let lines = lines(db, from, to)?;
     let report = score::score(&plan, &played, &lines, from, to);
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -329,9 +323,8 @@ fn main() {
             dir,
             db,
             margin,
-            shown,
             json,
-        } => score(&dir, &db, margin, shown, json),
+        } => score(&dir, &db, margin, json),
     };
     if let Err(err) = done {
         eprintln!("playback: {err}");
