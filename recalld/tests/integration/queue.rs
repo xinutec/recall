@@ -574,6 +574,74 @@ fn a_lease_picks_the_newest_clip_across_sources_not_the_alphabetical_one() {
     );
 }
 
+/// The lease carries where the speech pass heard speech, so a runner can cut
+/// the minute into language runs with the fleet's own detector; a minute with
+/// no stored regions leases with none and is decoded whole.
+#[test]
+fn a_transcribe_lease_carries_the_minutes_speech_regions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-13T12:00:00Z".parse().expect("t");
+    let ingest = store::open(dir.path()).expect("db");
+    for (source, stamp, iso, regions) in [
+        (
+            "usb",
+            "20260913T100000",
+            "2026-09-13T10:00:00Z",
+            Some("[[1.5,4.0],[10.0,22.25]]"),
+        ),
+        ("geb", "20260913T090000", "2026-09-13T09:00:00Z", None),
+    ] {
+        let filename = format!("{source}-{stamp}.opus");
+        store::insert(
+            &ingest,
+            &store::Row {
+                source: source.into(),
+                filename: filename.clone(),
+                start_utc: iso.into(),
+                bytes: 1,
+                sha256: "x".into(),
+                received_utc: iso.into(),
+                sent_utc: None,
+            },
+        )
+        .expect("segment");
+        ingest
+            .execute(
+                "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc, regions)
+                 VALUES (?1, ?2, 12.0, ?3, ?4)",
+                (&filename, source, iso, regions),
+            )
+            .expect("speech");
+        ingest
+            .execute(
+                "INSERT INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, ?3)",
+                (Kind::TranscribeSegment, &filename, iso),
+            )
+            .expect("job");
+    }
+    let first = queue::lease(dir.path(), now, &[Kind::TranscribeSegment])
+        .expect("lease")
+        .expect("a job");
+    assert_eq!(first.filename, "usb-20260913T100000.opus");
+    assert_eq!(first.regions, vec![[1.5, 4.0], [10.0, 22.25]]);
+    let wire = serde_json::to_value(&first).expect("json");
+    assert_eq!(
+        wire["regions"],
+        serde_json::json!([[1.5, 4.0], [10.0, 22.25]])
+    );
+
+    let second = queue::lease(dir.path(), now, &[Kind::TranscribeSegment])
+        .expect("lease")
+        .expect("a job");
+    assert!(second.regions.is_empty());
+    assert!(
+        serde_json::to_value(&second)
+            .expect("json")
+            .get("regions")
+            .is_none()
+    );
+}
+
 #[test]
 fn a_job_whose_blob_the_ingest_plane_has_forgotten_is_not_leasable() {
     // A job with no `segments` row names a blob nothing can fetch; leasing it

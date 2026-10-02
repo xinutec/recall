@@ -1,12 +1,13 @@
 //! `room`: the room stream by hand, on a local copy of the fleet's data. Never
 //! run against production; see `README.md`.
 
+use audiocore::language_runs::{runs, shifted, stretches};
 use audiocore::{decode, vad, wav};
 use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, Subcommand};
 use recalld::store;
 use room::RoomConfig;
-use room::pieces::{in_block_time, pieces};
+use room::pieces::pieces;
 use runner::client::Client;
 use runner::shim::Shim;
 use serde_json::{Value, json};
@@ -193,7 +194,7 @@ fn transcribe_pieces(
         }
         wav::write_mono16(scratch, vad::RATE, &samples[from..to])?;
         let result = shim.transcribe(scratch, None, prompt)?.raw;
-        segments.extend(in_block_time(&result, piece.start));
+        segments.extend(shifted(&result, piece.start));
     }
     Ok(json!({ "segments": segments }))
 }
@@ -216,8 +217,8 @@ impl Arm {
     }
 }
 
-/// Each stretch ([`room::pieces::language_pieces`]) decoded once for its language, then runs of one language
-/// ([`room::pieces::runs`]) decoded whole with that language forced.
+/// Each stretch's language detected ([`stretches`]), then runs of one
+/// language ([`runs`]) decoded whole with that language forced.
 fn transcribe_runs(
     shim: &mut Shim,
     detector: &mut vad::Detector,
@@ -234,18 +235,17 @@ fn transcribe_runs(
         &samples[from.min(to)..to]
     };
     let mut languages = Vec::new();
-    for piece in room::pieces::language_pieces(detector.regions(&samples)?) {
+    for piece in stretches(detector.regions(&samples)?) {
         let audio = slice(piece.start, piece.end);
         if audio.is_empty() {
             continue;
         }
         wav::write_mono16(scratch, vad::RATE, audio)?;
-        let result = shim.transcribe(scratch, None, prompt)?.raw;
-        let language = result["language"].as_str().map(String::from);
-        languages.push((piece, language));
+        let language = shim.detect_language(scratch)?.reply.language;
+        languages.push((piece, Some(language)));
     }
     let mut segments = Vec::new();
-    for run in room::pieces::runs(&languages, samples.len() as f64 / rate) {
+    for run in runs(&languages, samples.len() as f64 / rate) {
         let audio = slice(run.start, run.end);
         if audio.is_empty() {
             continue;
@@ -254,7 +254,7 @@ fn transcribe_runs(
         let result = shim
             .transcribe_in(scratch, run.language.as_deref(), prompt)?
             .raw;
-        segments.extend(in_block_time(&result, run.start));
+        segments.extend(shifted(&result, run.start));
     }
     Ok(json!({ "segments": segments }))
 }

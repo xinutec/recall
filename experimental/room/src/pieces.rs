@@ -4,8 +4,8 @@
 //! gets one label for both, which collapses the minority. On read speech every
 //! piece came back in its own language and every line complete (#1388).
 
+use audiocore::language_runs::join_regions;
 use audiocore::vad::Region;
-use serde_json::{Value, json};
 
 /// A pause shorter than this is within an utterance, not between two. Matched
 /// to the live tier's bridge, the only pause length this system has measured.
@@ -22,111 +22,5 @@ pub const MIN_PIECE_S: f64 = 3.0;
 ///
 /// A minute whose only region is a fragment keeps it: there is no neighbour.
 pub fn pieces(regions: Vec<Region>) -> Vec<Region> {
-    pieces_by(regions, JOIN_PAUSE_S, MIN_PIECE_S)
-}
-
-/// Where the language is guessed for [`runs`]: a pause between two turns can
-/// be well under [`JOIN_PAUSE_S`], and a piece holding an English and a Dutch
-/// turn gets one guess, which then decodes the other turn as a TRANSLATION
-/// (playback run 2: "de amerikanen en de vrije fransen" came back as "The
-/// Americans and the brave Frenchmen"). Finer stretches cost only the guess:
-/// a run is still decoded whole.
-pub const LANGUAGE_JOIN_PAUSE_S: f64 = 0.3;
-/// A stretch shorter than this is too little for a language guess.
-pub const LANGUAGE_MIN_PIECE_S: f64 = 1.0;
-
-/// The stretches whose language [`runs`] groups by.
-pub fn language_pieces(regions: Vec<Region>) -> Vec<Region> {
-    pieces_by(regions, LANGUAGE_JOIN_PAUSE_S, LANGUAGE_MIN_PIECE_S)
-}
-
-fn pieces_by(regions: Vec<Region>, join: f64, min: f64) -> Vec<Region> {
-    let mut joined: Vec<Region> = Vec::new();
-    for r in regions {
-        match joined.last_mut() {
-            Some(last) if r.start - last.end < join => last.end = r.end,
-            _ => joined.push(r),
-        }
-    }
-    let mut merged: Vec<Region> = Vec::new();
-    for piece in joined {
-        match merged.last_mut() {
-            Some(last) if piece.seconds() < min || last.seconds() < min => {
-                last.end = piece.end;
-            }
-            _ => merged.push(piece),
-        }
-    }
-    merged
-}
-
-/// A stretch of a minute decoded as one, in one language.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Run {
-    pub start: f64,
-    pub end: f64,
-    /// `None`: no piece said, so the model detects it.
-    pub language: Option<String>,
-}
-
-/// Neighbouring pieces in the same language joined into runs that tile the
-/// whole minute, `[0, minute)`: a boundary sits mid-pause between two
-/// languages, so no audio is cut away, which is what loses quiet words when
-/// only the pieces are decoded. A minute with no pieces is one run.
-pub fn runs(pieces: &[(Region, Option<String>)], minute: f64) -> Vec<Run> {
-    let mut out: Vec<Run> = Vec::new();
-    let mut previous_end = 0.0;
-    for (piece, language) in pieces {
-        match out.last_mut() {
-            Some(last) if last.language == *language => {}
-            Some(last) => {
-                let boundary = f64::midpoint(previous_end, piece.start);
-                last.end = boundary;
-                out.push(Run {
-                    start: boundary,
-                    end: minute,
-                    language: language.clone(),
-                });
-            }
-            None => out.push(Run {
-                start: 0.0,
-                end: minute,
-                language: language.clone(),
-            }),
-        }
-        previous_end = piece.end;
-    }
-    if out.is_empty() {
-        out.push(Run {
-            start: 0.0,
-            end: minute,
-            language: None,
-        });
-    }
-    out
-}
-
-/// A piece's transcription moved from piece time to block time: every segment
-/// and word start and end shifted by `offset`, and the piece's own language
-/// guess kept on each segment, since that is the point of cutting.
-pub fn in_block_time(result: &Value, offset: f64) -> Vec<Value> {
-    let language = result.get("language").cloned().unwrap_or(Value::Null);
-    let shift = |v: &mut Value| {
-        for key in ["start", "end"] {
-            if let Some(t) = v[key].as_f64() {
-                v[key] = json!(t + offset);
-            }
-        }
-    };
-    let mut out = Vec::new();
-    for seg in result["segments"].as_array().into_iter().flatten() {
-        let mut seg = seg.clone();
-        shift(&mut seg);
-        if let Some(words) = seg.get_mut("words").and_then(Value::as_array_mut) {
-            words.iter_mut().for_each(shift);
-        }
-        seg["language"] = language.clone();
-        out.push(seg);
-    }
-    out
+    join_regions(regions, JOIN_PAUSE_S, MIN_PIECE_S)
 }

@@ -73,6 +73,8 @@ crate::statements! {
         "UPDATE jobs SET state = 'leased', leased_until = ?1,
                              attempts = attempts + 1
              WHERE id = ?2";
+    /// Where the speech pass heard speech in a blob, as stored.
+    SPEECH_REGIONS: Ingest = "SELECT regions FROM segment_speech WHERE filename = ?1";
     RETIRE_EXHAUSTED: Ingest =
         "UPDATE jobs SET state = 'done', done_utc = ?1, result = ?2
          WHERE done_utc IS NULL AND attempts >= ?3
@@ -105,6 +107,13 @@ pub struct Job {
     /// other kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<crate::enrol::Span>,
+    /// For [`Kind::TranscribeSegment`] only: where the speech pass heard speech,
+    /// `[start, end]` seconds from the clip's start, so a runner can decode the
+    /// clip in language runs (`audiocore::language_runs`) with the fleet's own
+    /// detector. Empty when unmeasured or for every other kind, and the clip is
+    /// then decoded whole.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<[f64; 2]>,
 }
 
 fn iso(t: DateTime<Utc>) -> String {
@@ -230,13 +239,27 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[Kind]) -> rusqlite::Resul
                 // Filled by the caller that can reach the meaning plane; this
                 // one holds only the ingest connection.
                 spans: Vec::new(),
+                regions: Vec::new(),
             })
         })
         .optional()?;
-    if let Some(job) = &job {
-        LEASE_JOB.execute(&conn, (iso(now + Duration::seconds(LEASE_TTL_S)), job.id))?;
+    let Some(mut job) = job else {
+        return Ok(None);
+    };
+    LEASE_JOB.execute(&conn, (iso(now + Duration::seconds(LEASE_TTL_S)), job.id))?;
+    if job.kind == Kind::TranscribeSegment {
+        let stored: Option<Option<String>> = SPEECH_REGIONS
+            .query_row(&conn, [&job.filename], |r| r.get(0))
+            .optional()?;
+        job.regions = stored
+            .flatten()
+            .and_then(|json| crate::speech::parse_regions(&json))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| [r.start, r.end])
+            .collect();
     }
-    Ok(job)
+    Ok(Some(job))
 }
 
 /// Retire every job whose leases are spent and lapsed, as a failure the passes

@@ -118,7 +118,7 @@ pub fn interpret(block_start: DateTime<Utc>, stored: &str) -> Result<Vec<ClipTur
             start: at(block_start, start),
             end: at(block_start, end),
             text: s.text.trim().to_owned(),
-            language: outcome.language.clone(),
+            language: s.language.clone().or_else(|| outcome.language.clone()),
             confidence: s.confidence,
             word_timings,
         });

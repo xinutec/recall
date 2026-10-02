@@ -67,6 +67,23 @@ pub mod asr {
 
     /// The op name.
     pub const OP: &str = "transcribe";
+    /// The language-only op: one encoder pass and one decoder step.
+    pub const DETECT: &str = "detect-language";
+
+    /// The language spoken in one clip's first 30 s.
+    #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+    pub struct Detect {
+        pub audio: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub model: Option<String>,
+    }
+
+    /// The most probable language and its probability.
+    #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+    pub struct Detected {
+        pub language: String,
+        pub probability: f64,
+    }
 
     /// Transcribe one clip.
     #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -109,6 +126,10 @@ pub mod asr {
         pub no_speech_prob: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub confidence: Option<f64>,
+        /// This segment's language, when a result decoded its minute in runs
+        /// of different languages; absent, the reply's `language` holds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub language: Option<String>,
         /// `None` when the result carries no word timings at all, which is not
         /// the same as a segment with none.
         #[serde(default)]

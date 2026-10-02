@@ -17,6 +17,10 @@ pub struct Job {
     /// from its start. Absent for every other kind.
     #[serde(default)]
     pub spans: Vec<Span>,
+    /// For `transcribe-segment`: where the fleet's speech pass heard speech,
+    /// `[start, end]` seconds from the clip's start. Empty: decode it whole.
+    #[serde(default)]
+    pub regions: Vec<[f64; 2]>,
 }
 
 /// One stretch of a clip to embed, as recalld serves it. It carries no name:

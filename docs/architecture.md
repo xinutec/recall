@@ -172,7 +172,10 @@ push to and the port the browser uses. It owns:
   dies lets it lapse; a job nobody finishes is retired after three leases. Kinds:
   `transcribe-segment` and `diarize-segment` for every microphone clip and
   uploaded meeting, `enroll-speaker` for turns a person has named. Enrolment outranks capture time in the lease, or a label would wait
-  behind days of backlog.
+  behind days of backlog. A `transcribe-segment` lease carries the clip's
+  speech `regions`, so a runner started with `--language-runs` can decode it
+  in language runs (below); without the flag, or without regions, a clip is
+  decoded whole.
 - **The passes.** `turns` writes the transcript of a clip that has none;
   `diarized` aligns the words to the speaker spans and labels the turns that
   exist, or replaces them with speaker-split ones, and never writes fewer turns
@@ -295,6 +298,16 @@ Isis.
   through DeepFilterNet was the clearest version of every minute tried.
 - **Denoising hurts far-field ASR.** Two denoisers measured worse; raw is best.
   The quality lever is more and closer microphones.
+- **A minute holding two languages is decoded in runs, not in one.** Whisper
+  decodes a window in one language and TRANSLATES the other's turns into
+  fluent, wrong sentences. `audiocore::language_runs` guesses the language of
+  each speech stretch (split at 0.3 s pauses, the shim's `detect-language`)
+  and cuts the minute only where it changes; each run is decoded whole in its
+  language. Played nl/en speech switching every turn (`experimental/playback`):
+  33.8% word errors as whole minutes, 7.4% as runs; on one mic's own
+  minutes 47.2% and 6.8%, for about twice the transcription time of a spoken
+  minute. The Mac's runner runs with `--language-runs`; without the flag a
+  clip is decoded whole.
 - **Never transcribe short isolated clips.** Whisper needs context or it
   hallucinates and mis-detects the language. Pause-bounded utterances are not
   short isolated clips; fragments that begin or end mid-speech are.

@@ -393,10 +393,14 @@ in
           set +a
         fi
 
+        # --language-runs: a minute holding two languages is cut where the
+        # language changes and each run decoded in it, instead of the minority
+        # being TRANSLATED (#1388); it cuts clips with agent-tools' ffmpeg.
         exec env RUST_LOG=info \
           ${
             recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
           }/bin/runner --pulse ${out}/worker-heartbeat.json \
+            --language-runs \
             --shim ${venvPython} -m recall.shim_asr
       '';
     };

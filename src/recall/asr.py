@@ -330,6 +330,32 @@ def unfreeze_sampling() -> None:
     decoding.categorical = categorical
 
 
+def mlx_detect_language(
+    audio: Path, *, model: str = DEFAULT_MODEL
+) -> tuple[str, float]:
+    """The language spoken in `audio`'s first 30 s, and its probability.
+
+    The step `mlx_transcribe` takes before decoding, alone: one encoder pass
+    and one decoder step, a fraction of a transcription. For a stretch whose
+    language decides how a longer run around it is decoded (#1388).
+    """
+    import mlx.core as mx  # noqa: PLC0415 - lazy, as mlx_whisper
+    from mlx_whisper.audio import (  # noqa: PLC0415 - lazy, as mlx_whisper
+        N_FRAMES,
+        N_SAMPLES,
+        log_mel_spectrogram,
+        pad_or_trim,
+    )
+    from mlx_whisper.transcribe import ModelHolder  # noqa: PLC0415 - lazy
+
+    whisper = ModelHolder.get_model(model, mx.float16)
+    mel = log_mel_spectrogram(str(audio), n_mels=whisper.dims.n_mels, padding=N_SAMPLES)
+    window = pad_or_trim(mel, N_FRAMES, axis=-2).astype(mx.float16)
+    _, probs = whisper.detect_language(window)
+    language = max(probs, key=probs.__getitem__)
+    return str(language), float(probs[language])
+
+
 def mlx_transcribe(
     audio: Path,
     *,
