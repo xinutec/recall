@@ -40,6 +40,7 @@
       "artifacts": [],
       "cwd": ".",
       "env": {},
+      "lane": "python",
       "name": "ruff check (lint)",
       "timeout_s": 300
     },
@@ -56,6 +57,7 @@
       "artifacts": [],
       "cwd": ".",
       "env": {},
+      "lane": "python",
       "name": "ruff format --check (formatting)",
       "timeout_s": 300
     },
@@ -115,6 +117,7 @@
       "artifacts": [],
       "cwd": ".",
       "env": {},
+      "lane": "python",
       "name": "the venv is a store path (nix builds it, uv does not)",
       "timeout_s": 1800
     },
@@ -129,6 +132,7 @@
       "artifacts": [],
       "cwd": ".",
       "env": {},
+      "lane": "nix",
       "name": "the launchd agents build (what home-manager deploys)",
       "timeout_s": 2400
     },
@@ -143,6 +147,7 @@
       "artifacts": [],
       "cwd": ".",
       "env": {},
+      "lane": "python",
       "name": "mypy --strict (types)",
       "timeout_s": 900
     },
@@ -189,6 +194,7 @@
       "artifacts": [],
       "cwd": ".",
       "env": {},
+      "lane": "python",
       "name": "shim import surface (devshell python, no ML deps)",
       "timeout_s": 300
     },
@@ -205,6 +211,7 @@
       "artifacts": [],
       "cwd": ".",
       "env": {},
+      "lane": "python",
       "name": "pytest (backend)",
       "timeout_s": 3600
     },
@@ -356,6 +363,7 @@
       "env": {
         "CI": "true"
       },
+      "lane": "frontend",
       "name": "frontend deps match the lockfile",
       "timeout_s": 900
     },
@@ -374,6 +382,7 @@
       "env": {
         "CI": "true"
       },
+      "lane": "frontend",
       "name": "frontend lint (eslint, type-aware)",
       "timeout_s": 900
     },
@@ -392,6 +401,7 @@
       "env": {
         "CI": "true"
       },
+      "lane": "frontend",
       "name": "frontend typecheck (e2e)",
       "timeout_s": 900
     },
@@ -418,6 +428,7 @@
       "env": {
         "CI": "true"
       },
+      "lane": "frontend",
       "name": "frontend build (Angular strict templates)",
       "timeout_s": 1800
     },
@@ -431,6 +442,7 @@
       "artifacts": [],
       "cwd": "frontend",
       "env": {},
+      "lane": "frontend",
       "name": "restore public/ assets into the scratch build",
       "timeout_s": 120
     },
@@ -450,6 +462,7 @@
         "CI": "true",
         "RECALL_E2E_DIST": "dist/.verify-build/browser"
       },
+      "lane": "frontend",
       "name": "frontend layout harness (playwright, phone width)",
       "timeout_s": 1800
     },
@@ -469,6 +482,7 @@
         "CI": "true",
         "NG_BUILD_MAX_WORKERS": "1"
       },
+      "lane": "frontend",
       "name": "frontend unit tests (vitest, jsdom)",
       "timeout_s": 1800
     },
@@ -485,6 +499,7 @@
       "artifacts": [],
       "cwd": "android",
       "env": {},
+      "lane": "android",
       "name": "ktlint (android/)",
       "timeout_s": 900
     },
@@ -502,6 +517,7 @@
       "artifacts": [],
       "cwd": "android",
       "env": {},
+      "lane": "android",
       "name": "android :app assembleDebug",
       "timeout_s": 1800
     },
@@ -519,6 +535,7 @@
       "artifacts": [],
       "cwd": "android",
       "env": {},
+      "lane": "android",
       "name": "android :app unit tests",
       "timeout_s": 1800
     },
@@ -533,6 +550,7 @@
       "artifacts": [],
       "cwd": ".",
       "env": {},
+      "lane": "nix",
       "name": "dev-lint",
       "timeout_s": 900
     },

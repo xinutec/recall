@@ -58,6 +58,11 @@ let scratch = "dist/.verify-build"
 
 in  { name = "recall"
     , checks =
+        {-  **Lanes, run beside each other** (2026-10-02; all 32 rows had run in
+            one): cargo in the main lane; python (the venv before pytest, which
+            runs from it); the frontend, in table order; android; and the nix
+            agents build with dev-lint. No row reads another lane's output.
+        -}
       [ {-  The denylist lives in the encrypted data root, never in the repo —
             committing it would be the violation it guards against. A missing
             one now fails; see the script's header for why that changed.
@@ -80,11 +85,13 @@ in  { name = "recall"
         }
       , G.Check::{
         , name = "ruff check (lint)"
+        , lane = Some "python"
         , argv = G.inDevShell [ "ruff", "check" ]
         , timeout_s = 300
         }
       , G.Check::{
         , name = "ruff format --check (formatting)"
+        , lane = Some "python"
         , argv = G.inDevShell [ "ruff", "format", "--check" ]
         , timeout_s = 300
         }
@@ -144,6 +151,7 @@ in  { name = "recall"
         -}
         G.Check::{
         , name = "the venv is a store path (nix builds it, uv does not)"
+        , lane = Some "python"
         , argv =
             [ "nix", "build", "--no-warn-dirty", ".#dev-env", "--out-link", ".venv" ]
         , timeout_s = 1800
@@ -166,6 +174,7 @@ in  { name = "recall"
         -}
         G.Check::{
         , name = "the launchd agents build (what home-manager deploys)"
+        , lane = Some "nix"
         , argv = [ "nix", "build", "--no-warn-dirty", "--no-link", ".#agents" ]
         , {-  ⚠ 2400, not 900, and the reason is contention rather than slowness.
               A change to `audiocore` invalidates `audiod`, so this row does a
@@ -182,6 +191,7 @@ in  { name = "recall"
         -}
         G.Check::{
         , name = "mypy --strict (types)"
+        , lane = Some "python"
         , argv = G.inDevShell [ "mypy" ]
         , timeout_s = 900
         }
@@ -224,6 +234,7 @@ in  { name = "recall"
         -}
         G.Check::{
         , name = "shim import surface (devshell python, no ML deps)"
+        , lane = Some "python"
         , argv =
             G.inDevShell
               [ "python"
@@ -237,6 +248,7 @@ in  { name = "recall"
         -}
         G.Check::{
         , name = "pytest (backend)"
+        , lane = Some "python"
         , argv = G.inDevShell [ ".venv/bin/python", "-m", "pytest" ]
         , timeout_s = 3600
         }
@@ -278,6 +290,7 @@ in  { name = "recall"
         -}
         G.Check::{
         , name = "frontend deps match the lockfile"
+        , lane = Some "frontend"
         , cwd = "frontend"
         , argv = G.inDevShell [ "pnpm", "install", "--frozen-lockfile" ]
         , env = G.nonInteractive
@@ -285,6 +298,7 @@ in  { name = "recall"
         }
       , G.Check::{
         , name = "frontend lint (eslint, type-aware)"
+        , lane = Some "frontend"
         , cwd = "frontend"
         , argv = G.inDevShell [ "pnpm", "run", "lint" ]
         , env = G.nonInteractive
@@ -292,6 +306,7 @@ in  { name = "recall"
         }
       , G.Check::{
         , name = "frontend typecheck (e2e)"
+        , lane = Some "frontend"
         , cwd = "frontend"
         , argv = G.inDevShell [ "pnpm", "run", "typecheck:e2e" ]
         , env = G.nonInteractive
@@ -303,6 +318,7 @@ in  { name = "recall"
         -}
         G.Check::{
         , name = "frontend build (Angular strict templates)"
+        , lane = Some "frontend"
         , cwd = "frontend"
         , argv =
             G.ngBuild
@@ -322,6 +338,7 @@ in  { name = "recall"
         -}
         G.Check::{
         , name = "restore public/ assets into the scratch build"
+        , lane = Some "frontend"
         , cwd = "frontend"
         , argv = [ "cp", "-R", "public/.", "${scratch}/browser/" ]
         , timeout_s = 120
@@ -333,6 +350,7 @@ in  { name = "recall"
         -}
         G.Check::{
         , name = "frontend layout harness (playwright, phone width)"
+        , lane = Some "frontend"
         , cwd = "frontend"
         , argv = G.inDevShell [ "pnpm", "run", "e2e" ]
         , env = G.nonInteractive # toMap { RECALL_E2E_DIST = "${scratch}/browser" }
@@ -340,6 +358,7 @@ in  { name = "recall"
         }
       , G.Check::{
         , name = "frontend unit tests (vitest, jsdom)"
+        , lane = Some "frontend"
         , cwd = "frontend"
         , argv = G.inDevShell [ "pnpm", "test", "--watch=false" ]
         , env = G.nonInteractive # G.oneAngularWorker
@@ -349,12 +368,14 @@ in  { name = "recall"
         -}
         G.Check::{
         , name = "ktlint (android/)"
+        , lane = Some "android"
         , cwd = "android"
         , argv = G.inShell "..#android" [ "ktlint", "app/src/**/*.kt" ]
         , timeout_s = 900
         }
       , G.Check::{
         , name = "android :app assembleDebug"
+        , lane = Some "android"
         , cwd = "android"
         , argv =
             G.inShell
@@ -366,6 +387,7 @@ in  { name = "recall"
         -}
         G.Check::{
         , name = "android :app unit tests"
+        , lane = Some "android"
         , cwd = "android"
         , argv =
             G.inShell
@@ -376,7 +398,7 @@ in  { name = "recall"
       , {-  Strict, no baseline: the bare-dict-route debt was cleared via
             TypedDicts, so any new violation fails.
         -}
-        G.devLint "../"
+        G.devLint "../" // { lane = Some "nix" }
       , G.checkTable "../dev-lint"
       ]
     }
