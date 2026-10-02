@@ -306,8 +306,11 @@ Isis.
   language. Played nl/en speech switching every turn (`experimental/playback`):
   33.8% word errors as whole minutes, 7.4% as runs; on one mic's own
   minutes 47.2% and 6.8%, for about twice the transcription time of a spoken
-  minute. The Mac's runner runs with `--language-runs`; without the flag a
-  clip is decoded whole.
+  minute. The runner's `--language-runs` is OFF: on household audio the
+  language guess on stretches under a few seconds is mostly noise (240 minutes:
+  56% of sub-2 s stretches guessed English, 18% a third language), and a
+  spurious run forces speech into the wrong language. Without the flag a clip
+  is decoded whole.
 - **Never transcribe short isolated clips.** Whisper needs context or it
   hallucinates and mis-detects the language. Pause-bounded utterances are not
   short isolated clips; fragments that begin or end mid-speech are.
