@@ -13,7 +13,7 @@
 
 use crate::pyjson;
 use audiocore::instant;
-use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, SubsecRound, TimeZone, Timelike, Utc};
 use chrono_tz::Europe::London;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
@@ -300,15 +300,22 @@ pub fn is_supported(suffix: &str) -> bool {
     AUDIO_SUFFIXES.contains(&suffix)
 }
 
-/// The client's `start`, or now.
+/// The client's `start`, or now, to the whole second.
+///
+/// ⚠ The second is not cosmetic: the stored filename carries whole seconds, and
+/// the turns writer finds the clip's audio row by the start it parses from that
+/// name. A fraction here made the row unfindable and the session's transcript
+/// was never written.
 pub fn started_at(raw: &str) -> Result<DateTime<Utc>, UploadError> {
-    if raw.is_empty() {
-        return Ok(Utc::now());
-    }
-    let normalised = instant::respell_utc(raw).ok_or(UploadError::BadStart)?;
-    DateTime::parse_from_rfc3339(&normalised)
-        .map(|t| t.with_timezone(&Utc))
-        .map_err(|_| UploadError::BadStart)
+    let started = if raw.is_empty() {
+        Utc::now()
+    } else {
+        let normalised = instant::respell_utc(raw).ok_or(UploadError::BadStart)?;
+        DateTime::parse_from_rfc3339(&normalised)
+            .map(|t| t.with_timezone(&Utc))
+            .map_err(|_| UploadError::BadStart)?
+    };
+    Ok(started.trunc_subsecs(0))
 }
 
 /// The session as the list renders it, for the response.

@@ -413,6 +413,51 @@ async fn a_real_recording_uploads_and_becomes_a_session() {
     );
 }
 
+/// The turns writer finds a clip's audio row by the start its FILENAME
+/// carries, which has whole seconds. An upload with no `start` was stamped
+/// "now" to the microsecond, its row never matched, and its transcript was
+/// never written: transcribed, then waiting for ever with no error.
+#[tokio::test]
+async fn an_upload_without_a_start_is_stored_at_the_second_its_filename_carries() {
+    let dir = scratch();
+    let clip = dir.path().join("meeting.flac");
+    if !make_flac(&clip, 2.0) {
+        eprintln!("skipped: no ffmpeg on this host");
+        return;
+    }
+    let bytes = std::fs::read(&clip).expect("read");
+    let (ctype, body) = multipart("meeting.flac", &bytes, "", "");
+    let response = gated(dir.path())
+        .oneshot(
+            Request::post("/api/sessions")
+                .header("content-type", ctype)
+                .header("cookie", cookie())
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("call");
+    assert_eq!(response.status(), 200);
+
+    let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
+    let (start, path): (String, String) = conn
+        .query_row("SELECT start_utc, path FROM audio_segments", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .expect("row");
+    let named = audiocore::names::parse_segment_start(&path).expect("a segment name");
+    assert_eq!(start, audiocore::instant::python_isoformat_utc(named));
+}
+
+#[test]
+fn a_start_is_kept_to_the_second() {
+    assert_eq!(
+        started_at("2026-07-03T09:50:00.250+01:00").expect("fraction"),
+        at("2026-07-03T08:50:00+00:00")
+    );
+    assert_eq!(started_at("").expect("now").timestamp_subsec_nanos(), 0);
+}
+
 #[tokio::test]
 async fn a_file_that_is_not_audio_is_refused_and_leaves_nothing_behind() {
     // Named .flac, so the suffix gate passes and the probe refuses. A file left
