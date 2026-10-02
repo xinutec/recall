@@ -37,14 +37,6 @@ fn the_requests_are_what_the_shims_read() {
         serde_json::to_value(&transcribe).expect("write"),
         example("transcribe-request.json")
     );
-    let detect = asr::Detect {
-        audio: "usb-20260906T090000.flac".to_owned(),
-        model: None,
-    };
-    assert_eq!(
-        serde_json::to_value(&detect).expect("write"),
-        example("detect-request.json")
-    );
     let diarize = voices::Diarize {
         audio: "usb-20260906T090000.flac".to_owned(),
         embed: true,
@@ -70,9 +62,6 @@ fn the_replies_read_whole() {
     let words = heard.segments[0].words.as_ref().expect("words");
     assert_eq!(words.len(), 2);
     assert_eq!(words[1].text, " there");
-
-    let detected: asr::Detected = round_trips("detect-reply.json");
-    assert_eq!(detected.language, "nl");
 
     let spoke: voices::Diarization = round_trips("diarize-reply.json");
     assert_eq!(spoke.turns.len(), 2);

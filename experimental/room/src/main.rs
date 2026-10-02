@@ -1,13 +1,12 @@
 //! `room`: the room stream by hand, on a local copy of the fleet's data. Never
 //! run against production; see `README.md`.
 
-use audiocore::language_runs::{runs, shifted, stretches};
 use audiocore::{decode, vad, wav};
 use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, Subcommand};
 use recalld::store;
 use room::RoomConfig;
-use room::pieces::pieces;
+use room::pieces::{in_block_time, pieces};
 use runner::client::Client;
 use runner::shim::Shim;
 use serde_json::{Value, json};
@@ -42,10 +41,9 @@ enum Command {
         args: Args,
         #[arg(long)]
         out: PathBuf,
-        /// What is decoded: the whole minute, its pieces cut at pauses, or
-        /// runs of pieces in one language, each decoded whole in that language.
-        #[arg(long, value_enum, default_value_t = Arm::Whole)]
-        arm: Arm,
+        /// Transcribe the pieces, not the whole.
+        #[arg(long)]
+        pieces: bool,
         /// The shim and its arguments: everything after it, verbatim [default:
         /// `python -m recall.shim_asr`].
         #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "PROGRAM [ARGS]")]
@@ -194,67 +192,7 @@ fn transcribe_pieces(
         }
         wav::write_mono16(scratch, vad::RATE, &samples[from..to])?;
         let result = shim.transcribe(scratch, None, prompt)?.raw;
-        segments.extend(shifted(&result, piece.start));
-    }
-    Ok(json!({ "segments": segments }))
-}
-
-/// What `transcribe` decodes for each block.
-#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-enum Arm {
-    Whole,
-    Pieces,
-    Runs,
-}
-
-impl Arm {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Whole => "whole",
-            Self::Pieces => "pieces",
-            Self::Runs => "runs",
-        }
-    }
-}
-
-/// Each stretch's language detected ([`stretches`]), then runs of one
-/// language ([`runs`]) decoded whole with that language forced.
-fn transcribe_runs(
-    shim: &mut Shim,
-    detector: &mut vad::Detector,
-    clip: &Path,
-    scratch: &Path,
-    prompt: Option<&str>,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    let pcm = decode::decode_s16(clip, vad::RATE).ok_or("cannot decode the block")?;
-    let samples = decode::to_f32(&pcm);
-    let rate = f64::from(vad::RATE);
-    let slice = |start: f64, end: f64| {
-        let from = (start * rate) as usize;
-        let to = ((end * rate) as usize).min(samples.len());
-        &samples[from.min(to)..to]
-    };
-    let mut languages = Vec::new();
-    for piece in stretches(detector.regions(&samples)?) {
-        let audio = slice(piece.start, piece.end);
-        if audio.is_empty() {
-            continue;
-        }
-        wav::write_mono16(scratch, vad::RATE, audio)?;
-        let language = shim.detect_language(scratch)?.reply.language;
-        languages.push((piece, Some(language)));
-    }
-    let mut segments = Vec::new();
-    for run in runs(&languages, samples.len() as f64 / rate) {
-        let audio = slice(run.start, run.end);
-        if audio.is_empty() {
-            continue;
-        }
-        wav::write_mono16(scratch, vad::RATE, audio)?;
-        let result = shim
-            .transcribe_in(scratch, run.language.as_deref(), prompt)?
-            .raw;
-        segments.extend(shifted(&result, run.start));
+        segments.extend(in_block_time(&result, piece.start));
     }
     Ok(json!({ "segments": segments }))
 }
@@ -262,11 +200,10 @@ fn transcribe_runs(
 fn transcribe(
     args: &Args,
     out: &Path,
-    arm: Arm,
+    pieces: bool,
     shim: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let pieces = arm != Arm::Whole;
-    let arm_name = arm.name();
+    let arm = if pieces { "pieces" } else { "whole" };
     let conn = store::open(&args.root)?;
     let mut stmt = conn.prepare(
         "SELECT start_utc, winner, filename FROM room_blocks
@@ -298,25 +235,22 @@ fn transcribe(
             continue;
         };
         let t = t.with_timezone(&Utc);
-        if t < args.from || t >= args.to || done.contains(&(start.clone(), arm_name.to_owned())) {
+        if t < args.from || t >= args.to || done.contains(&(start.clone(), arm.to_owned())) {
             continue;
         }
         let clip = store::source_dir(&args.root, store::ROOM_SOURCE).join(&filename);
-        let result = match (&mut detector, arm) {
-            (Some(detector), Arm::Pieces) => {
+        let result = match &mut detector {
+            Some(detector) => {
                 transcribe_pieces(&mut shim, detector, &clip, &scratch, prompt.as_deref())?
             }
-            (Some(detector), Arm::Runs) => {
-                transcribe_runs(&mut shim, detector, &clip, &scratch, prompt.as_deref())?
-            }
-            _ => shim.transcribe(&clip, None, prompt.as_deref())?.raw,
+            None => shim.transcribe(&clip, None, prompt.as_deref())?.raw,
         };
-        let line = json!({ "block": start, "winner": winner, "arm": arm_name, "result": result });
+        let line = json!({ "block": start, "winner": winner, "arm": arm, "result": result });
         writeln!(file, "{line}")?;
         written += 1;
     }
     let _ = std::fs::remove_file(&scratch);
-    println!("transcribed {written} block(s) as {arm_name}");
+    println!("transcribed {written} block(s) as {arm}");
     Ok(())
 }
 
@@ -342,9 +276,9 @@ fn main() {
         Command::Transcribe {
             args,
             out,
-            arm,
+            pieces,
             shim,
-        } => ("transcribe", transcribe(args, out, *arm, shim)),
+        } => ("transcribe", transcribe(args, out, *pieces, shim)),
     };
     if let Err(err) = done {
         eprintln!("room {name}: {err}");

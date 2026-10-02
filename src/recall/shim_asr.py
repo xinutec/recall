@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Protocol
 
 from recall import shim
-from recall.asr import DEFAULT_MODEL, AsrResult, mlx_detect_language, mlx_transcribe
+from recall.asr import DEFAULT_MODEL, AsrResult, mlx_transcribe
 from recall.shim import JsonDict, JsonValue
 
 
@@ -37,13 +37,6 @@ class Transcribe(Protocol):
         words: bool,
         initial_prompt: str | None,
     ) -> AsrResult: ...
-
-
-class Detect(Protocol):
-    """What the shim needs of a language detector; the real one is
-    `mlx_detect_language`."""
-
-    def __call__(self, audio: Path, /, *, model: str) -> tuple[str, float]: ...
 
 
 NAME = "asr"
@@ -82,15 +75,11 @@ def result_to_json(result: AsrResult) -> JsonDict:
 
 
 def handle(
-    op: str,
-    args: JsonDict,
-    *,
-    transcribe: Transcribe = mlx_transcribe,
-    detect: Detect = mlx_detect_language,
+    op: str, args: JsonDict, *, transcribe: Transcribe = mlx_transcribe
 ) -> JsonValue:
-    """Answer one request. The model calls are injected so the protocol and the
+    """Answer one request. `transcribe` is injected so the protocol and the
     argument handling are testable without Apple Silicon or 1.5 GB of weights."""
-    if op not in ("transcribe", "detect-language"):
+    if op != "transcribe":
         raise ValueError(f"unknown op: {op}")
     audio = args.get("audio")
     if not isinstance(audio, str) or not audio:
@@ -100,13 +89,9 @@ def handle(
         # A clear refusal beats whatever the model would say about a missing
         # file, and the runner can ack and move on.
         raise FileNotFoundError(audio)
-    model = str(args.get("model") or DEFAULT_MODEL)
-    if op == "detect-language":
-        language, probability = detect(path, model=model)
-        return {"language": language, "probability": probability}
     result = transcribe(
         path,
-        model=model,
+        model=str(args.get("model") or DEFAULT_MODEL),
         language=str(args["language"]) if args.get("language") else None,
         words=bool(args.get("words", False)),
         initial_prompt=(

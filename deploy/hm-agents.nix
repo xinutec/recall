@@ -393,10 +393,6 @@ in
           set +a
         fi
 
-        # No --language-runs (#1388): on household audio the language guess on
-        # 1-3 s stretches is mostly noise (56% "en" under 2 s), and a spurious
-        # run would force a Dutch stretch into English, the translation it is
-        # meant to stop. Off until its thresholds are set from household audio.
         exec env RUST_LOG=info \
           ${
             recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod

@@ -28,15 +28,11 @@ fleet.
    room build --root DIR --from ... --to ...
    ```
 
-4. Transcribe with the ASR shim and the fleet's vocabulary, as one arm of
-   three (`--arm`, see `src/pieces.rs`): `whole` minutes; `pieces` cut at
-   pauses, each with its own language guess; or `runs`, the pieces' languages
-   used to split the minute only where the language changes, each run decoded
-   whole in its language. The `pieces` and `runs` arms need ONNX Runtime for
-   the speech detector (`nix develop` provides it).
+4. Transcribe, as whole minutes or cut at pauses (`--pieces`, see
+   `src/pieces.rs`), with the ASR shim and the fleet's vocabulary:
 
    ```sh
-   room transcribe --root DIR --from ... --to ... --out room.jsonl --arm runs \
+   room transcribe --root DIR --from ... --to ... --out room.jsonl --pieces \
        --shim <ml-env python> -m recall.shim_asr
    ```
 

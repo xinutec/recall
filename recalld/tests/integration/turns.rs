@@ -49,19 +49,6 @@ fn the_text_is_trimmed_and_the_language_rides_along() {
     assert_eq!(turns[0].confidence, Some(0.91));
 }
 
-/// A minute decoded in language runs: a segment's own language beats the
-/// minute's, and one without falls back to it.
-#[test]
-fn a_segments_own_language_beats_the_minutes() {
-    let runs = r#"{"ok": true, "result": {"language": "nl", "segments": [
-      {"start": 1.0, "end": 2.0, "text": " hello there", "language": "en"},
-      {"start": 3.0, "end": 4.0, "text": " hallo daar"}
-    ]}}"#;
-    let turns = interpret(block(), runs).expect("turns");
-    assert_eq!(turns[0].language.as_deref(), Some("en"));
-    assert_eq!(turns[1].language.as_deref(), Some("nl"));
-}
-
 #[test]
 fn word_timings_are_carried_verbatim_or_absent_never_invented() {
     let turns = interpret(block(), REAL_SHAPE).expect("turns");

@@ -475,7 +475,6 @@ fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
         filename: "usb-20260910T100000.wav".to_owned(),
         source: "usb".to_owned(),
         spans: Vec::new(),
-        regions: Vec::new(),
     };
     recalld::enrol::attach_spans(dir.path(), &mut enrol_job).expect("attach");
     assert_eq!(
@@ -519,7 +518,6 @@ fn a_lease_of_another_kind_does_not_need_the_meaning_plane_at_all() {
         filename: "usb-20260910T100000.wav".to_owned(),
         source: "usb".to_owned(),
         spans: Vec::new(),
-        regions: Vec::new(),
     };
     recalld::enrol::attach_spans(empty.path(), &mut job).expect("no meaning plane, no problem");
 }

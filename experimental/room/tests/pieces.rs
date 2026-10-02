@@ -1,5 +1,5 @@
 use audiocore::vad::Region;
-use room::pieces::pieces;
+use room::pieces::{in_block_time, pieces};
 
 fn r(start: f64, end: f64) -> Region {
     Region { start, end }
@@ -31,4 +31,18 @@ fn a_fragment_opening_the_minute_joins_the_piece_after_it() {
 fn a_lone_fragment_is_kept_for_the_caller_to_judge() {
     let out = pieces(vec![r(10.0, 10.8)]);
     assert_eq!(spans(&out), vec![(10.0, 10.8)]);
+}
+
+#[test]
+fn a_pieces_times_move_to_block_time_and_keep_its_language() {
+    let result = serde_json::json!({
+        "language": "nl",
+        "segments": [{"start": 1.0, "end": 2.5, "text": " hallo",
+                      "words": [{"start": 1.0, "end": 2.5, "text": " hallo"}]}],
+    });
+    let out = in_block_time(&result, 30.0);
+    assert_eq!(out[0]["start"], 31.0);
+    assert_eq!(out[0]["end"], 32.5);
+    assert_eq!(out[0]["words"][0]["start"], 31.0);
+    assert_eq!(out[0]["language"], "nl");
 }

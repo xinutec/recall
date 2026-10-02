@@ -45,7 +45,6 @@ struct Config {
     /// Where to stamp the archive's pulse (`<archive root>/worker-heartbeat.json`).
     /// Absent means do not stamp, for a runner that is not beside the archive.
     pulse: Option<std::path::PathBuf>,
-    language_runs: bool,
 }
 
 /// Lease work from recalld and run it through a Python shim.
@@ -63,11 +62,6 @@ struct Cli {
     /// Where to stamp the archive's pulse (`<archive root>/worker-heartbeat.json`).
     #[arg(long, value_name = "FILE")]
     pulse: Option<std::path::PathBuf>,
-    /// Transcribe each minute in language runs (`runner::runs`): a minute
-    /// holding two languages is cut where the language changes, instead of
-    /// decoded in one and the other translated. Off: each minute decoded whole.
-    #[arg(long)]
-    language_runs: bool,
     /// The shim and its arguments: everything after it, verbatim [default:
     /// `python -m recall.shim_asr`].
     #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "PROGRAM [ARGS]")]
@@ -94,7 +88,6 @@ fn parse_args() -> Config {
         args,
         once: cli.once,
         pulse: cli.pulse,
-        language_runs: cli.language_runs,
     }
 }
 
@@ -150,7 +143,6 @@ fn one(
     scratch: &Path,
     prompt: Option<&str>,
     pulse: Option<&Path>,
-    language_runs: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let started = Utc::now();
     let Some(job) = client.lease(kinds)? else {
@@ -163,19 +155,12 @@ fn one(
         filename,
         source,
         spans,
-        regions,
     } = job;
     tracing::info!(id, %kind, %source, %filename, "leased");
     let clip = scratch.join(&filename);
     client.fetch_blob(&source, &filename, &clip)?;
     // Exhaustive: a new kind does not compile until it is given work here.
     let outcome = match kind {
-        Kind::TranscribeSegment if language_runs => {
-            let cut = scratch.join("run.wav");
-            let outcome = runner::runs::transcribe(shim, &clip, &regions, &cut, prompt);
-            let _ = std::fs::remove_file(&cut);
-            outcome
-        }
         Kind::TranscribeSegment => shim
             .transcribe(&clip, None, prompt)
             .map(|a| (a.raw, a.reply.segments.len())),
@@ -275,7 +260,7 @@ fn main() {
     } else {
         None
     };
-    tracing::info!(url = %config.base, shim = %name, kinds = ?kinds, language_runs = config.language_runs, "runner: polling");
+    tracing::info!(url = %config.base, shim = %name, kinds = ?kinds, "runner: polling");
     loop {
         match one(
             &client,
@@ -284,7 +269,6 @@ fn main() {
             &scratch,
             prompt.as_deref(),
             config.pulse.as_deref(),
-            config.language_runs,
         ) {
             // `--once` means one job, not until the queue empties.
             Ok(true) => {

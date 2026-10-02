@@ -93,19 +93,6 @@ def test_the_transcribe_request_is_read_and_the_reply_is_the_example(
     matches("transcribe-reply.json", reply)
 
 
-def test_the_detect_request_is_read_and_the_reply_is_the_example(clip: Path) -> None:
-    seen: dict[str, object] = {}
-
-    def detect(audio: Path, /, *, model: str) -> tuple[str, float]:
-        seen.update(audio=audio)
-        return "nl", 0.875
-
-    request = fixture("detect-request.json")
-    reply = asr("detect-language", with_clip(request, clip), detect=detect)
-    assert seen == {"audio": clip}
-    matches("detect-reply.json", reply)
-
-
 def test_the_diarize_request_is_read_and_the_reply_is_the_example(
     clip: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
