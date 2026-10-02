@@ -40,6 +40,14 @@ struct Cli {
     prints: String,
     /// The turns.
     turns: String,
+    /// Turns by voices certainly NOT enrolled (played test speech), same
+    /// format; scored against the full corpus for `--scores`.
+    #[arg(long)]
+    strangers: Option<String>,
+    /// Write `kind|score` per scored turn: `right`/`wrong` for visible + current
+    /// labelled turns (leave-one-out), `stranger` for `--strangers`.
+    #[arg(long)]
+    scores: Option<String>,
 }
 
 fn main() {
@@ -64,24 +72,7 @@ fn main() {
         })
         .collect();
 
-    let turns: Vec<Turn> = std::fs::read_to_string(turns_path)
-        .expect("turns")
-        .lines()
-        .filter_map(|line| {
-            let f: Vec<&str> = line.splitn(7, '|').collect();
-            if f.len() < 7 {
-                return None;
-            }
-            Some(Turn {
-                id: f[0].parse().ok()?,
-                label: f[1].to_owned(),
-                seconds: f[2].parse().ok()?,
-                visible: f[3] == "visible",
-                current: f[4] == "current",
-                vector: serde_json::from_str(f[6]).ok()?,
-            })
-        })
-        .collect();
+    let turns = read_turns(turns_path);
 
     let people: std::collections::BTreeSet<&str> =
         prints.iter().map(|p| p.print.person.as_str()).collect();
@@ -140,6 +131,61 @@ fn main() {
     }
 
     by_length(&turns, &score);
+
+    if let Some(out) = &cli.scores {
+        write_scores(out, &prints, &turns, cli.strangers.as_deref());
+    }
+}
+
+/// Each turn's best guess and its score: leave-one-out for the household's
+/// labelled turns, the full corpus for strangers (none of them was enrolled).
+fn write_scores(out: &str, prints: &[Print], turns: &[Turn], strangers: Option<&str>) {
+    let mut lines = Vec::new();
+    for t in turns.iter().filter(|t| t.visible && t.current) {
+        let corpus: Vec<Voiceprint> = prints
+            .iter()
+            .filter(|p| p.source_turn != t.id)
+            .map(|p| p.print.clone())
+            .collect();
+        if let Some(guess) = match_one(&t.vector, &corpus) {
+            let kind = if guess.person == t.label {
+                "right"
+            } else {
+                "wrong"
+            };
+            lines.push(format!("{kind}|{}", guess.score));
+        }
+    }
+    if let Some(path) = strangers {
+        let corpus: Vec<Voiceprint> = prints.iter().map(|p| p.print.clone()).collect();
+        for t in read_turns(path) {
+            if let Some(guess) = match_one(&t.vector, &corpus) {
+                lines.push(format!("stranger|{}", guess.score));
+            }
+        }
+    }
+    std::fs::write(out, lines.join("\n") + "\n").expect("scores");
+}
+
+fn read_turns(path: &str) -> Vec<Turn> {
+    std::fs::read_to_string(path)
+        .expect("turns")
+        .lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.splitn(7, '|').collect();
+            if f.len() < 7 {
+                return None;
+            }
+            Some(Turn {
+                id: f[0].parse().ok()?,
+                label: f[1].to_owned(),
+                seconds: f[2].parse().ok()?,
+                visible: f[3] == "visible",
+                current: f[4] == "current",
+                vector: serde_json::from_str(f[6]).ok()?,
+            })
+        })
+        .collect()
 }
 
 /// Accuracy rises steeply with turn length, which is what separated the two
