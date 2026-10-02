@@ -45,7 +45,7 @@ for i in $(seq 1 "$iterations"); do
 
     out="$scratch/run-$i.log"
     started=$SECONDS
-    if nix build --no-warn-dirty --no-link -L .#agents > "$out" 2>&1; then
+    if nix build --no-warn-dirty --no-link -L .#sandbox-tests > "$out" 2>&1; then
         status=0
     else
         status=$?

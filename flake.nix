@@ -134,9 +134,10 @@
         };
 
         # The Rust audio-plane daemon (audiod/, docs/architecture.md), built from the
-        # workspace. The build RUNS THE TESTS, so a deployed audiod is one whose suite
-        # passed in the sandbox. The fileset is exactly the Rust workspace, so a
-        # Python or frontend edit does not rebuild it.
+        # workspace. The fileset is exactly the Rust workspace, so a Python or
+        # frontend edit does not rebuild it. The deployed build runs no tests: the
+        # gate's `cargo test` runs the same suite on every commit, and re-running it
+        # here cost each Rust commit ~75 s. The sandbox arm is `sandbox-tests`.
         craneLib = crane.mkLib pkgs;
         rustCommon = {
           pname = "audiod";
@@ -186,10 +187,10 @@
               ./src/recall/asr.py
             ];
           };
-          # The whole workspace builds and tests (audiocore + recalld ride
-          # along — they are audiod's own test dependencies anyway); the
-          # installed output carries every workspace binary, of which the
-          # agents run bin/audiod.
+          # The whole workspace builds (audiocore + recalld ride along); the
+          # installed output carries every workspace binary, of which the agents
+          # run bin/audiod. On here so the cached dependencies include the test
+          # ones `sandboxTests` needs; `audiodPkg` turns it off.
           doCheck = true;
           # The watchdog tests decode real files through ffmpeg — the same
           # binary the daemon spawns at runtime, so the sandboxed suite
@@ -211,7 +212,17 @@
         # Only Cargo.lock and the members' Cargo.toml reach this derivation (crane
         # stubs the sources), so a Rust edit reuses it and compiles only ours.
         cargoArtifacts = craneLib.buildDepsOnly rustCommon;
-        audiodPkg = craneLib.buildPackage (rustCommon // { inherit cargoArtifacts; });
+        audiodPkg = craneLib.buildPackage (
+          rustCommon
+          // {
+            inherit cargoArtifacts;
+            # dev-lint: allow-docheck-false the gate's `cargo test` runs this suite on every commit; the sandbox arm is sandboxTests
+            doCheck = false;
+          }
+        );
+        # The workspace suite inside the nix sandbox (no network, no `ps`), where
+        # environment assumptions surface; `scripts/sandbox_sampler.sh` builds it.
+        sandboxTests = craneLib.cargoTest (rustCommon // { inherit cargoArtifacts; });
 
         # Everything home-manager will actually run, as ONE buildable output: a farm
         # of the launchd wrappers named in deploy/hm-agents.nix, keyed by label.
@@ -269,6 +280,7 @@
       in
       {
         packages.audiod = audiodPkg;
+        packages.sandbox-tests = sandboxTests;
         packages.ml-env = mlEnv;
         packages.dev-env = devEnv;
         # volume's gate runs mypy and its Python tests through this: a pinned
