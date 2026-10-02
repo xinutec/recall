@@ -7,6 +7,7 @@
 //! combining them, can be scored with nobody at home.
 
 pub mod corpus;
+pub mod diarization;
 pub mod plan;
 pub mod score;
 pub mod wer;

@@ -4,6 +4,7 @@ use audiocore::instant;
 use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, Subcommand};
 use playback::corpus::{self, Utterance};
+use playback::diarization;
 use playback::plan::{self, PartSpec, Plan, Rng, Voices};
 use playback::score::{self, Line, Played};
 use std::io::{BufRead, Write};
@@ -48,6 +49,20 @@ enum Command {
         lead: f64,
         #[arg(long, default_value = "sox")]
         sox: String,
+    },
+    /// Score the fleet's diarization of the played window against who spoke.
+    Diarization {
+        #[arg(long)]
+        dir: PathBuf,
+        /// The window's `diarize-segment` jobs, a JSON array of
+        /// `{"filename", "source", "result"}` (sqlite3 -json over ingest.sqlite).
+        #[arg(long)]
+        results: PathBuf,
+        /// Trim each reference turn to where its source recording has speech
+        /// (the fleet's detector on the clean audio): a recording's leading
+        /// silence and inner pauses are not speech a diarizer should cover.
+        #[arg(long)]
+        vad: bool,
     },
     /// Score every microphone's lines in a copy of recall.sqlite against DIR's plan.
     Score {
@@ -317,6 +332,110 @@ fn score(dir: &Path, db: &Path, margin: i64, room: &[PathBuf], json: bool) -> Re
     Ok(())
 }
 
+/// Who spoke when, from the plan as played: only turns with a known reader.
+fn reference_turns(
+    plan: &Plan,
+    played: &[Played],
+    mut detector: Option<&mut audiocore::vad::Detector>,
+) -> Result<Vec<diarization::Turn>> {
+    let mut out = Vec::new();
+    for p in played {
+        let Some(part) = plan.parts.iter().find(|x| x.name == p.part) else {
+            continue;
+        };
+        for t in part
+            .turns
+            .iter()
+            .filter(|t| t.speaker.starts_with("librispeech-"))
+        {
+            let start = p.start + score::seconds(t.offset);
+            let spans = match detector.as_deref_mut() {
+                Some(d) => {
+                    let pcm =
+                        audiocore::decode::decode_s16(Path::new(&t.audio), audiocore::vad::RATE)
+                            .ok_or_else(|| format!("cannot decode {}", t.audio))?;
+                    d.regions(&audiocore::decode::to_f32(&pcm))?
+                        .into_iter()
+                        .map(|r| (r.start, r.end))
+                        .collect()
+                }
+                None => vec![(0.0, t.duration)],
+            };
+            for (s, e) in spans {
+                out.push(diarization::Turn {
+                    start: start + score::seconds(s),
+                    end: start + score::seconds(e),
+                    speaker: t.speaker.clone(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn diarize(dir: &Path, results: &Path, vad: bool) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        filename: String,
+        source: String,
+        result: String,
+    }
+    let plan = read_plan(dir)?;
+    let mut detector = if vad {
+        Some(audiocore::vad::Detector::load()?)
+    } else {
+        None
+    };
+    let reference = reference_turns(&plan, &read_played(dir)?, detector.as_mut())?;
+    let rows: Vec<Row> = serde_json::from_slice(&std::fs::read(results)?)?;
+    let mut clips = Vec::new();
+    for row in rows {
+        let start = audiocore::names::parse_segment_start(&row.filename)
+            .ok_or_else(|| format!("no start in {}", row.filename))?;
+        let stored: serde_json::Value = serde_json::from_str(&row.result)?;
+        let mut turns = Vec::new();
+        for t in stored["result"]["turns"].as_array().into_iter().flatten() {
+            let (Some(s), Some(e), Some(who)) = (
+                t["start"].as_f64(),
+                t["end"].as_f64(),
+                t["speaker"].as_str(),
+            ) else {
+                return Err(format!("{}: a turn without times or speaker", row.filename).into());
+            };
+            turns.push(diarization::Turn {
+                start: start + score::seconds(s),
+                end: start + score::seconds(e),
+                speaker: who.to_owned(),
+            });
+        }
+        clips.push(diarization::Clip {
+            source: row.source,
+            turns,
+        });
+    }
+    println!(
+        "{:12} {:>8} {:>10} {:>9} {:>7} {:>7} {:>11}",
+        "source", "speech", "uncovered", "confused", "turns", "mixed", "miscounted"
+    );
+    for (source, s) in diarization::score(&reference, &clips) {
+        let pct = |x: f64| format!("{:.1}%", 100.0 * x / s.reference_s.max(f64::EPSILON));
+        println!(
+            "{source:12} {:>7.0}s {:>10} {:>9} {:>7} {:>7} {:>5}/{:<5}",
+            s.reference_s,
+            pct(s.uncovered_s),
+            pct(s.confused_s),
+            s.turns,
+            s.mixed_turns,
+            s.clips_miscounted,
+            s.clips
+        );
+    }
+    println!(
+        "uncovered, confused: share of played speech by a known reader; mixed: turns spanning two readers >= 1 s each"
+    );
+    Ok(())
+}
+
 fn main() {
     let done = match Cli::parse().command {
         Command::Build {
@@ -332,6 +451,7 @@ fn main() {
             lead,
             sox,
         } => play(&dir, gap, lead, &sox),
+        Command::Diarization { dir, results, vad } => diarize(&dir, &results, vad),
         Command::Score {
             dir,
             db,

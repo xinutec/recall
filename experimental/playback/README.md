@@ -76,6 +76,20 @@ household's decision, made before `play` and after it.
    same speech twice. A phone's clock can sit a few seconds off, so a line at a
    part's very edge can land in the silence and read as invented: check those.
 
+6. Score the fleet's diarization of the window against who was played
+   (`LibriSpeech` turns only; FLEURS names no speakers). Export the window's
+   `diarize-segment` jobs from `ingest.sqlite` as a JSON array of
+   `{filename, source, result}` (`sqlite3 -json`), then:
+
+   ```sh
+   playback diarization --dir DIR --results diarize.json [--vad]
+   ```
+
+   Per source: speech no turn covers, time a label sits on a reader other than
+   its own, turns spanning two readers, and minutes whose label count differs
+   from the readers heard. `--vad` trims each played turn to where its
+   recording has speech, so leading silence and pauses do not count as missed.
+
 Numbers are spelled as words in `LibriSpeech`'s reference and usually as
 digits by Whisper, which counts against every arm alike: compare arms, do not
 read the absolute rate as the transcriber's.
