@@ -1,5 +1,7 @@
 # Android / Gradle build artifacts
 .gradle/
+# Kotlin daemon state and crash logs.
+.kotlin/
 build/
 app/build/
 local.properties
