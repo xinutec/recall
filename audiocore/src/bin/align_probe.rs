@@ -101,7 +101,20 @@ fn instant(raw: &str) -> Result<DateTime<Utc>, String> {
         .map_err(|e| format!("not an RFC 3339 instant: {e}"))
 }
 
+/// The decoder is ffmpeg, and a missing one reads as silence: every block would
+/// report no correlation, which looks like a measurement.
+fn ffmpeg_found() -> bool {
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
 fn main() -> ExitCode {
+    if !ffmpeg_found() {
+        eprintln!("align-probe: ffmpeg is not on PATH; run inside `nix develop`");
+        return ExitCode::FAILURE;
+    }
     let Cli {
         root,
         reference,
