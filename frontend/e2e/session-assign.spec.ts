@@ -1,8 +1,10 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
+import type { AssignResult, ConversationPage, SpeakerNames, Transcript } from '../src/app/models';
+
 // Hermetic: every /api call is mocked — no real data, no backend.
 
-function turn(id: number, speaker: string, cluster: string, text: string): unknown {
+function turn(id: number, speaker: string, cluster: string, text: string): Transcript {
   return {
     id,
     start: '2026-01-15T09:35:50Z',
@@ -21,6 +23,7 @@ function turn(id: number, speaker: string, cluster: string, text: string): unkno
     audioUrl: `/api/audio/${id}`,
     source: 'm',
     cluster,
+    wordsChecked: false,
   };
 }
 
@@ -52,7 +55,7 @@ const conversationPage = {
     },
   ],
   hasMore: false,
-};
+} satisfies ConversationPage;
 
 // Mocks the API and returns a getter for the captured assign-span POST body.
 async function mockApi(page: Page): Promise<() => unknown> {
@@ -61,15 +64,14 @@ async function mockApi(page: Page): Promise<() => unknown> {
     const url = route.request().url();
     if (url.includes('/api/conversations')) return route.fulfill({ json: conversationPage });
     if (url.includes('/api/speakers')) {
-      return route.fulfill({ json: { names: ['Oskar', 'Dr. Lee'] } });
+      return route.fulfill({ json: { names: ['Oskar', 'Dr. Lee'] } satisfies SpeakerNames });
     }
-    if (url.includes('/voices')) return route.fulfill({ json: { suggestions: {} } });
-    return route.fulfill({ json: {} });
+    return route.fulfill({ status: 204, body: '' });
   });
   // Registered after the catch-all, so it wins for the assign POST.
   await page.route('**/api/sessions/*/assign', async (route: Route) => {
     captured.body = route.request().postDataJSON();
-    await route.fulfill({ json: { touched: 1 } });
+    await route.fulfill({ json: { touched: 1 } satisfies AssignResult });
   });
   return () => captured.body;
 }

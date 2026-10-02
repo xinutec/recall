@@ -13,7 +13,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { scaffoldTitle } from '@xinutec/ui-scaffold';
 
-import { Label, LabelList, VocabularyList } from '../models';
+import { Label, LabelList, SpeakerNames, VocabularyList } from '../models';
 import { RecallApi } from '../recall-api';
 import { formatClock } from '../format';
 import { PlayButton } from '../shared/play-button';
@@ -85,7 +85,7 @@ export class Labels {
   readonly speaker = input('', { transform: (value: string | undefined) => value ?? '' });
   /** Quick-pick roster from runtime enrolment (not hard-coded — keeps real names
    * out of the codebase, per the design's privacy promise). */
-  private readonly roster = httpResource<{ names: string[] }>(() => '/api/speakers');
+  private readonly roster = httpResource<SpeakerNames>(() => '/api/speakers');
   protected readonly speakers = computed(() => this.roster.value()?.names ?? []);
   protected readonly clock = (start: string): string => formatClock(start);
 

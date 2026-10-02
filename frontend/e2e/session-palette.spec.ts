@@ -1,29 +1,12 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { expectBackClosesOverlay, expectUpInTheBar } from '@xinutec/ui-harness';
 
+import type { CaptureState, ConversationPage, Ok, SpeakerNames, Transcript } from '../src/app/models';
+
 // Hermetic: every /api call is mocked here, so the e2e touches no real data.
 
-interface FakeTurn {
-  id: number;
-  start: string;
-  end: string;
-  text: string;
-  language: string;
-  speaker: string;
-  speakerConfirmed: boolean;
-  speakerConfidence: number | null;
-  confidence: number | null;
-  loudness: number | null;
-  model: string;
-  tier: string;
-  hidden: string | null;
-  hiddenAs: string | null;
-  audioUrl: string;
-  source: string;
-  cluster: string;
-}
 
-function turn(id: number, speaker: string, cluster: string, text: string): FakeTurn {
+function turn(id: number, speaker: string, cluster: string, text: string): Transcript {
   return {
     id,
     start: '2026-01-15T09:35:50Z',
@@ -42,10 +25,22 @@ function turn(id: number, speaker: string, cluster: string, text: string): FakeT
     audioUrl: `/api/audio/${id}`,
     source: 'm',
     cluster,
+    wordsChecked: false,
   };
 }
 
-function makePage(turns: FakeTurn[]): unknown {
+/** Recording, settled: the state the capture long-poll answers when nothing changes. */
+const CAPTURE = {
+  running: true,
+  pausedUntil: null,
+  desiredRunning: true,
+  desiredPausedUntil: null,
+  settled: true,
+  micReachable: true,
+  stateToken: 'x',
+} satisfies CaptureState;
+
+function makePage(turns: Transcript[]): ConversationPage {
   return {
     items: [
       {
@@ -67,16 +62,17 @@ function makePage(turns: FakeTurn[]): unknown {
   };
 }
 
-async function mockApi(page: Page, turns: FakeTurn[]): Promise<void> {
+async function mockApi(page: Page, turns: Transcript[]): Promise<void> {
   const conversationPage = makePage(turns);
   await page.route('**/api/**', (route: Route) => {
     const url = route.request().url();
     if (url.includes('/api/conversations')) return route.fulfill({ json: conversationPage });
     if (url.includes('/api/speakers')) {
-      return route.fulfill({ json: { names: ['Oskar', 'Dr. Lee'] } });
+      return route.fulfill({ json: { names: ['Oskar', 'Dr. Lee'] } satisfies SpeakerNames });
     }
-    if (url.includes('/voices')) return route.fulfill({ json: { suggestions: {} } });
-    return route.fulfill({ json: {} });
+    if (url.includes('/api/capture')) return route.fulfill({ json: CAPTURE });
+    if (url.includes('/api/no-speech')) return route.fulfill({ json: { ok: true } satisfies Ok });
+    return route.fulfill({ status: 204, body: '' });
   });
 }
 
@@ -189,15 +185,17 @@ test('a hidden line shows on request and "Someone spoke" takes it back (Pixel 9)
     ...turn(3, 'Oskar', 'SPEAKER_01', 'Thank you.'),
     hidden: 'nobody spoke',
     hiddenAs: 'nobodySpoke',
-  };
+  } satisfies Transcript;
   await page.route('**/api/**', (route: Route) => {
     const url = route.request().url();
     if (url.includes('/api/conversations')) {
       const asked = new URL(url).searchParams.get('hidden') === 'true';
       return route.fulfill({ json: makePage(asked ? [...SHORT, hidden] : SHORT) });
     }
-    if (url.includes('/api/speakers')) return route.fulfill({ json: { names: [] } });
-    return route.fulfill({ json: {} });
+    if (url.includes('/api/speakers')) return route.fulfill({ json: { names: [] } satisfies SpeakerNames });
+    if (url.includes('/api/capture')) return route.fulfill({ json: CAPTURE });
+    if (url.includes('/api/no-speech')) return route.fulfill({ json: { ok: true } satisfies Ok });
+    return route.fulfill({ status: 204, body: '' });
   });
   const undone: unknown[] = [];
   page.on('request', (r) => {

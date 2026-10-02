@@ -14,6 +14,18 @@ import {
   expectRecoversFromMissingBundle,
 } from '@xinutec/ui-harness';
 
+import type {
+  CaptureState,
+  ConversationPage,
+  LabelList,
+  SessionList,
+  SpeakerNames,
+  Tier,
+  Transcript,
+  TranscriptList,
+  VocabularyList,
+} from '../src/app/models';
+
 // Hermetic: every /api call is mocked — no real data, no backend. A rich session
 // (multiple speakers, a long turn that would overflow a phone column) so the layout
 // checks have real content to measure.
@@ -22,8 +34,8 @@ function turn(
   speaker: string,
   cluster: string,
   text: string,
-  tier = 'diarized',
-): unknown {
+  tier: Tier = 'diarized',
+): Transcript {
   return {
     id,
     start: '2026-01-15T09:35:50Z',
@@ -42,6 +54,7 @@ function turn(
     audioUrl: `/api/audio/${id}`,
     source: 'm',
     cluster,
+    wordsChecked: false,
   };
 }
 
@@ -60,7 +73,7 @@ const provisionalTurns = [
   turn(1, 'Oskar', 'SPEAKER_01', 'I have already made a list of errands.', 'live'),
 ];
 
-function pageOf(items: unknown[]) {
+function pageOf(items: Transcript[]): ConversationPage {
   return {
     items: [
       {
@@ -85,16 +98,15 @@ function pageOf(items: unknown[]) {
 const conversationPage = {
   items: pageOf(turns).items,
   hasMore: false,
-};
+} satisfies ConversationPage;
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/**', (route: Route) => {
     const url = route.request().url();
     if (url.includes('/api/conversations')) return route.fulfill({ json: conversationPage });
     if (url.includes('/api/speakers'))
-      return route.fulfill({ json: { names: ['Oskar', 'Alex'] } });
-    if (url.includes('/voices')) return route.fulfill({ json: { suggestions: {} } });
-    return route.fulfill({ json: {} });
+      return route.fulfill({ json: { names: ['Oskar', 'Alex'] } satisfies SpeakerNames });
+    return route.fulfill({ status: 204, body: '' });
   });
 });
 
@@ -138,26 +150,23 @@ test('finalizing banner keeps its icon whole', async ({ page }, testInfo) => {
 const LONG =
   'a considerably longer stretch of household conversation that would overflow a phone column if the layout ever stopped wrapping it correctly';
 
-const reviewItems = { items: [turn(21, 'Oskar', 'SPEAKER_01', LONG)] };
+const reviewItems = { items: [turn(21, 'Oskar', 'SPEAKER_01', LONG)] } satisfies TranscriptList;
 
-const searchItems = { items: [turn(31, 'Alex', 'SPEAKER_02', LONG)] };
+const searchItems = { items: [turn(31, 'Alex', 'SPEAKER_02', LONG)] } satisfies TranscriptList;
 
 const correctionsList = {
   items: [
     {
       id: 1,
+      text: LONG,
       speaker: 'Oskar',
-      original: 'a shorter original line',
-      corrected: LONG,
+      language: 'en',
       start: '2026-01-15T09:35:50Z',
-      end: '2026-01-15T09:35:55Z',
       audioUrl: '/api/correction/1/audio',
-      audioConfidence: 0.4,
-      hidden: null,
-      hiddenAs: null,
     },
   ],
-};
+  bySpeaker: { Oskar: 1 },
+} satisfies LabelList;
 
 const sessionsList = {
   items: [
@@ -170,16 +179,14 @@ const sessionsList = {
       speakers: ['Oskar', 'Alex'],
     },
   ],
-};
+} satisfies SessionList;
 
-const screenMocks: Record<string, unknown> = {
+const screenMocks: Record<string, TranscriptList | LabelList | SessionList | VocabularyList | CaptureState> = {
   '/api/transcripts': reviewItems,
   '/api/search': searchItems,
   '/api/corrections': correctionsList,
   '/api/sessions': sessionsList,
-  '/api/quiet/scan': { running: false, measured: 10, total: 10, analysed: 10, toAnalyse: 10 },
-  '/api/vocabulary': { items: [{ id: 1, term: 'vorasidenib' }] },
-  '/api/context': { text: 'A household context paragraph.' },
+  '/api/vocabulary': { items: [{ id: 1, term: 'vorasidenib' }] } satisfies VocabularyList,
   '/api/capture': {
     running: true,
     desiredRunning: true,
@@ -188,18 +195,7 @@ const screenMocks: Record<string, unknown> = {
     pausedUntil: null,
     desiredPausedUntil: null,
     stateToken: 'x',
-  },
-  '/api/sources': {
-    items: [
-      {
-        id: 'usb',
-        name: 'usb',
-        kind: 'coreaudio',
-        active: true,
-        lastActive: '2026-01-15T09:35:50Z',
-      },
-    ],
-  },
+  } satisfies CaptureState,
 };
 
 const screens: { path: string; anchor: string }[] = [
@@ -222,7 +218,7 @@ for (const { path, anchor } of screens) {
       if (url.pathname.includes('/api/conversations')) {
         return route.fulfill({ json: conversationPage });
       }
-      return route.fulfill({ json: {} });
+      return route.fulfill({ status: 204, body: '' });
     });
     await page.goto(path);
     await page.locator(anchor).first().waitFor();

@@ -1,8 +1,10 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
+import type { CaptureState, ConversationPage, CorrectResult, Ok, Transcript } from '../src/app/models';
+
 // Hermetic: every /api call is mocked here, so the e2e touches no real data.
 
-function line(id: number, source: string, text: string): unknown {
+function line(id: number, source: string, text: string): Transcript {
   return {
     id,
     start: '2026-09-19T10:00:0' + id + '+00:00',
@@ -21,6 +23,7 @@ function line(id: number, source: string, text: string): unknown {
     audioUrl: `/api/audio/${id}`,
     source,
     cluster: null,
+    wordsChecked: false,
   };
 }
 
@@ -42,6 +45,17 @@ const moments = [
   sources: ['usb', 'pixel9'],
 }));
 
+/** Recording, settled: the state the capture long-poll answers when nothing changes. */
+const CAPTURE = {
+  running: true,
+  pausedUntil: null,
+  desiredRunning: true,
+  desiredPausedUntil: null,
+  settled: true,
+  micReachable: true,
+  stateToken: 'x',
+} satisfies CaptureState;
+
 async function mockApi(page: Page): Promise<unknown[]> {
   const posted: unknown[] = [];
   await page.route('**/api/**', async (route: Route) => {
@@ -60,24 +74,25 @@ async function mockApi(page: Page): Promise<unknown[]> {
             },
           ],
           hasMore: false,
-        },
+        } satisfies ConversationPage,
       });
     }
+    if (url.includes('/api/capture')) return route.fulfill({ json: CAPTURE });
     if (url.includes('/api/correct/undo')) {
       const body: unknown = route.request().postDataJSON();
       posted.push({ undoCheck: body });
-      return route.fulfill({ json: { ok: true } });
+      return route.fulfill({ json: { ok: true } satisfies Ok });
     }
     if (url.includes('/api/correct')) {
       posted.push(route.request().postDataJSON());
-      return route.fulfill({ json: { newId: 100 + posted.length } });
+      return route.fulfill({ json: { newId: 100 + posted.length } satisfies CorrectResult });
     }
     if (url.includes('/api/no-speech')) {
       const body: unknown = route.request().postDataJSON();
       posted.push(url.endsWith('/undo') ? { undo: body } : { noSpeech: body });
-      return route.fulfill({ json: { ok: true } });
+      return route.fulfill({ json: { ok: true } satisfies Ok });
     }
-    return route.fulfill({ json: {} });
+    return route.fulfill({ status: 204, body: '' });
   });
   return posted;
 }

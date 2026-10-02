@@ -1,8 +1,10 @@
 import { expect, test, type Route } from '@playwright/test';
 
+import type { ConversationPage, SpeakerNames, Transcript } from '../src/app/models';
+
 // Hermetic: every /api call is mocked — no real data, no backend.
 
-function turn(id: number, speaker: string, cluster: string, text: string): unknown {
+function turn(id: number, speaker: string, cluster: string, text: string): Transcript {
   return {
     id,
     start: '2026-01-15T09:35:50Z',
@@ -21,6 +23,7 @@ function turn(id: number, speaker: string, cluster: string, text: string): unkno
     audioUrl: `/api/audio/${id}`,
     source: 'm',
     cluster,
+    wordsChecked: false,
   };
 }
 
@@ -49,7 +52,7 @@ const conversationPage = {
     },
   ],
   hasMore: false,
-};
+} satisfies ConversationPage;
 
 test('the bubble play button requests the full joined span (Pixel 9)', async ({ page }) => {
   let spanUrl: string | null = null;
@@ -57,9 +60,8 @@ test('the bubble play button requests the full joined span (Pixel 9)', async ({ 
   await page.route('**/api/**', (route: Route) => {
     const url = route.request().url();
     if (url.includes('/api/conversations')) return route.fulfill({ json: conversationPage });
-    if (url.includes('/api/speakers')) return route.fulfill({ json: { names: ['Oskar'] } });
-    if (url.includes('/voices')) return route.fulfill({ json: { suggestions: {} } });
-    return route.fulfill({ json: {} });
+    if (url.includes('/api/speakers')) return route.fulfill({ json: { names: ['Oskar'] } satisfies SpeakerNames });
+    return route.fulfill({ status: 204, body: '' });
   });
   // Registered after the catch-all, so it wins for the span request.
   await page.route('**/api/audio-span*', async (route: Route) => {
