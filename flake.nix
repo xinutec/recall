@@ -23,10 +23,23 @@
       inputs.uv2nix.follows = "uv2nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # The Rust workspace's dependencies built ONCE, as their own derivation:
+    # buildRustPackage recompiled all ~190 of them on every Rust edit, which was
+    # most of a commit's gate (2026-10-02: the agents build was 160-640 s).
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
-    { self, nixpkgs, flake-utils, pyproject-nix, uv2nix, pyproject-build-systems }:
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      pyproject-nix,
+      uv2nix,
+      pyproject-build-systems,
+      crane,
+    }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
@@ -124,9 +137,11 @@
         # workspace. The build RUNS THE TESTS, so a deployed audiod is one whose suite
         # passed in the sandbox. The fileset is exactly the Rust workspace, so a
         # Python or frontend edit does not rebuild it.
-        audiodPkg = pkgs.rustPlatform.buildRustPackage {
+        craneLib = crane.mkLib pkgs;
+        rustCommon = {
           pname = "audiod";
           version = "0.1.0";
+          strictDeps = true;
           src = pkgs.lib.fileset.toSource {
             root = ./.;
             fileset = pkgs.lib.fileset.unions [
@@ -171,7 +186,6 @@
               ./src/recall/asr.py
             ];
           };
-          cargoLock.lockFile = ./Cargo.lock;
           # The whole workspace builds and tests (audiocore + recalld ride
           # along — they are audiod's own test dependencies anyway); the
           # installed output carries every workspace binary, of which the
@@ -194,6 +208,10 @@
           ];
           ORT_DYLIB_PATH = "${pkgs.onnxruntime}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
         };
+        # Only Cargo.lock and the members' Cargo.toml reach this derivation (crane
+        # stubs the sources), so a Rust edit reuses it and compiles only ours.
+        cargoArtifacts = craneLib.buildDepsOnly rustCommon;
+        audiodPkg = craneLib.buildPackage (rustCommon // { inherit cargoArtifacts; });
 
         # Everything home-manager will actually run, as ONE buildable output: a farm
         # of the launchd wrappers named in deploy/hm-agents.nix, keyed by label.
