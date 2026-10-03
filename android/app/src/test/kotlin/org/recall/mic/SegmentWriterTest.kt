@@ -41,23 +41,13 @@ class SegmentWriterTest {
         assertEquals(0L, writer.droppedBytes())
         val closed = SegmentStore.undelivered(tmp.root)
         assertEquals(
-            listOf("pixel5-20260905T120000.wav", "pixel5-20260905T120100.wav"),
+            listOf("pixel5-20260905T120000.phone.flac", "pixel5-20260905T120100.phone.flac"),
             closed.map { it.name },
         )
-        // First file: header + exactly one minute of the fed pattern.
-        val first = closed[0].readBytes()
-        assertEquals(44 + SegmentNames.SEGMENT_BYTES, first.size)
-        assertArrayEquals(
-            SegmentNames.wavHeader(SegmentNames.SEGMENT_BYTES),
-            first.copyOfRange(0, 44),
-        )
-        assertEquals(full[0], first[44])
-        assertEquals(full[SegmentNames.SEGMENT_BYTES - 1], first[first.size - 1])
-        // Second: the one-second tail, closed by close() with a truthful header.
-        val second = closed[1].readBytes()
-        assertEquals(44 + 96_000, second.size)
-        assertArrayEquals(SegmentNames.wavHeader(96_000), second.copyOfRange(0, 44))
-        assertTrue(second.drop(44).all { it == 7.toByte() })
+        // Exactly one minute of the fed audio, then the one-second tail that
+        // close() finished.
+        assertArrayEquals(full, FlacDecode.bytesOf(FlacDecode.samples(closed[0].readBytes())))
+        assertArrayEquals(tail, FlacDecode.bytesOf(FlacDecode.samples(closed[1].readBytes())))
     }
 
     @Test

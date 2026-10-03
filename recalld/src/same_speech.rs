@@ -5,9 +5,9 @@
 use chrono::{DateTime, Utc};
 
 /// How far apart a mic's two clips of one minute can be stamped: a phone's
-/// minute arrives as the Mac's `.flac` of its stream and the phone's own
-/// `.wav`, cut separately; up to three seconds seen, a minute's clips about
-/// sixty apart.
+/// minute arrives as the Mac's cut of its stream and the phone's own
+/// `.phone.flac`, cut separately; up to three seconds seen, a minute's clips
+/// about sixty apart.
 pub const COPY_SECONDS: i64 = 5;
 
 /// Two spans are the same speech when they overlap by more than half of the

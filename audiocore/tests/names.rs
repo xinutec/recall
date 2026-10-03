@@ -19,6 +19,19 @@ fn every_recorder_extension_is_accepted() {
 }
 
 #[test]
+fn a_phones_own_copy_is_named_apart_from_its_streams() {
+    // The host cuts a phone's stream and the phone keeps its own copy of the
+    // same minute; both are FLAC and often open in the same second.
+    let own = parse("pixel5", "pixel5-20261003T120000.phone.flac").expect("valid");
+    assert_eq!(own.start_utc, "2026-10-03T12:00:00Z");
+    assert_eq!(own.ext, Extension::Flac);
+    assert_eq!(
+        parse("pixel5", "pixel5-20261003T120000.tablet.flac"),
+        Err(NameError::BadExtension)
+    );
+}
+
+#[test]
 fn the_prefix_must_be_the_source() {
     assert_eq!(
         parse("usb", "geb-20260905T120000.flac"),

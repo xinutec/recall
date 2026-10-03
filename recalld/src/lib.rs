@@ -23,6 +23,7 @@ pub mod latin_ranges;
 pub mod ledger;
 pub mod live_tier;
 pub mod meaning_schema;
+pub mod phone_flac;
 pub mod pyjson;
 pub mod quality;
 pub mod queue;

@@ -50,9 +50,9 @@ crate::statements! {
         "SELECT id FROM sources WHERE kind != ?1";
     /// Measured clips with no transcription job, and none for another copy of
     /// the same minute: a phone's minute arrives twice, the Mac's `.flac` of
-    /// its stream and the phone's own `.wav` copy, the same samples stamped a
-    /// few seconds apart ([`COPY_SECONDS`](crate::same_speech::COPY_SECONDS) either side). Newest first; on one
-    /// stamp `.wav` before `.flac`, a tie-break only.
+    /// its stream and the phone's own `.phone.flac`, the same samples stamped
+    /// a few seconds apart ([`COPY_SECONDS`](crate::same_speech::COPY_SECONDS) either side). Newest first; on one
+    /// stamp the phone's copy first, a tie-break only.
     UNQUEUED_SPEECH: Ingest =
         "SELECT s.filename, s.source, s.start_utc FROM segments s
              JOIN segment_speech p ON p.filename = s.filename

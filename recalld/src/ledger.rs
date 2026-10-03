@@ -50,7 +50,7 @@ pub enum Outcome {
     // Registration.
     Registered,
     AlreadyRegistered,
-    /// A sibling file (the `.wav` beside the `.opus`) already holds the minute.
+    /// Another copy of the same minute already holds it.
     CoveredBySibling,
     // Any pass.
     /// The filename is not a segment name.

@@ -43,6 +43,52 @@ struct Args {
     /// The built web app to serve.
     #[arg(long, value_name = "DIR")]
     frontend: Option<PathBuf>,
+    /// A one-off task to run instead of serving.
+    #[command(subcommand)]
+    task: Option<Task>,
+}
+
+#[derive(Clone, Copy, clap::Subcommand)]
+enum Task {
+    /// Store the phones' WAV copies as FLAC (`recalld::phone_flac`).
+    PhoneFlac {
+        /// Convert; without this, only say what would be converted.
+        #[arg(long)]
+        apply: bool,
+        /// Leave copies received within this many hours, which a phone may
+        /// still be sending again.
+        #[arg(long, default_value_t = 24)]
+        settled_hours: i64,
+    },
+}
+
+/// Run `task` against the planes under `root`, printing what it did as JSON.
+fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
+    let Task::PhoneFlac {
+        apply,
+        settled_hours,
+    } = task;
+    let before = (chrono::Utc::now() - chrono::Duration::hours(settled_hours))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let done = recalld::work::open_write(root).and_then(|meaning| {
+        let mut ingest = recalld::store::open(root)?;
+        recalld::phone_flac::convert(root, &meaning, &mut ingest, &before, apply)
+    });
+    match done.map(|done| serde_json::to_string_pretty(&done)) {
+        Ok(Ok(json)) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Ok(Err(err)) => {
+            eprintln!("recalld: {err}");
+            ExitCode::FAILURE
+        }
+        Err(err) => {
+            eprintln!("recalld: {err}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// `RECALLD_TRUSTED_PROXIES`: comma-separated addresses whose `X-Real-IP` the
@@ -122,7 +168,11 @@ fn main() -> ExitCode {
         binds,
         tokens_path,
         frontend,
+        task,
     } = Args::parse();
+    if let Some(task) = task {
+        return run_task(&root, task);
+    }
     // A configured-but-unreadable token table fails closed at startup: an
     // open ingest plane must be a choice, never the residue of a typo.
     let tokens = match (tokens_path, std::env::var("RECALLD_INGEST_TOKENS")) {

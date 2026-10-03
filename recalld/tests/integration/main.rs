@@ -29,6 +29,7 @@ mod labels;
 mod labels_write;
 mod live_tier;
 mod meaning_schema;
+mod phone_flac;
 mod queue;
 mod reads;
 mod record_health;

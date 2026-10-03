@@ -134,7 +134,8 @@ Three implementations, one contract.
 
 The contract: record fixed-length segments (60 s) named
 `<source>-YYYYMMDDTHHMMSS.<ext>` from the recorder's own UTC clock at segment
-open; `PUT /ingest/v1/segments/{source}/{filename}` with the source's bearer
+open (a phone's own copy is `.phone.flac`, because `audiod ingest` also cuts its
+stream and the two often open in the same second); `PUT /ingest/v1/segments/{source}/{filename}` with the source's bearer
 token; compare the receipt's sha-256 with a local re-hash before counting it
 delivered; evict only under cache pressure, only verified segments, oldest
 first, never the open one; honour the household pause. The name is the only
@@ -151,6 +152,9 @@ recorded against one.
 
 Segments are FLAC, lossless, kept forever. Opus was the default once and
 destroys phase, which is why the older archive cannot be combined coherently.
+The Android app wrote its own copy as WAV until October 2026, and the iOS app
+still does; `recalld phone-flac` converts those, keeping a FLAC only if it
+decodes to the WAV's exact samples.
 
 ## recalld
 

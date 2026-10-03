@@ -195,7 +195,7 @@ pub struct Registered {
     pub waiting: usize,
     /// Clips with an unparseable name or that ffmpeg could not read. Ledgered.
     pub unreadable: usize,
-    /// Clips whose minute a sibling file (e.g. the `.wav` beside the `.opus`)
+    /// Clips whose minute another copy of it (e.g. the phone's beside the Mac's)
     /// already holds under `UNIQUE (source_id, start_utc)`. Common, not a fault;
     /// counted apart from `added` so the duplicates stay visible.
     pub covered: usize,
@@ -350,7 +350,7 @@ fn registered_names(
 }
 
 /// Every registered `(source_id, start_utc)`: the key the `UNIQUE` constraint
-/// rejects on. A sibling file (the `.wav` beside the `.opus`) misses
+/// rejects on. Another copy of the minute (the phone's beside the Mac's) misses
 /// [`registered_names`], but its start time is in its name, so this catches it
 /// before a decode.
 fn registered_minutes(

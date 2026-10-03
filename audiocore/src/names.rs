@@ -1,7 +1,11 @@
 //! The segment-name grammar every recorder speaks:
-//! `<source>-YYYYMMDDTHHMMSS.<ext>`, UTC, stamped by the recorder's own clock
-//! at segment open (docs/architecture.md, decision 4). The name is the only
-//! timing metadata a segment carries, so every reader parses it here.
+//! `<source>-YYYYMMDDTHHMMSS[.phone].<ext>`, UTC, stamped by the recorder's own
+//! clock at segment open (docs/architecture.md, decision 4). The name is the
+//! only timing metadata a segment carries, so every reader parses it here.
+//!
+//! `.phone` marks a phone's own copy of a minute whose stream the host also
+//! cuts. The two open within seconds of each other, often in the same one, and
+//! would otherwise share a name.
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use std::path::{Path, PathBuf};
@@ -85,7 +89,7 @@ impl NameError {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::BadSource => "source id must be [a-z0-9][a-z0-9_-]*, at most 64 chars",
-            Self::WrongPrefix => "filename must be <source>-<stamp>.<ext>",
+            Self::WrongPrefix => "filename must be <source>-<stamp>[.phone].<ext>",
             Self::BadStamp => "stamp must be a valid YYYYMMDDTHHMMSS UTC instant",
             Self::BadExtension => "extension must be one of flac/opus/ogg/wav/mp3/m4a/mp4/aac/webm",
         }
@@ -114,6 +118,7 @@ pub fn parse(source: &str, filename: &str) -> Result<SegmentName, NameError> {
         .and_then(|r| r.strip_prefix('-'))
         .ok_or(NameError::WrongPrefix)?;
     let (stamp, ext) = rest.split_once('.').ok_or(NameError::WrongPrefix)?;
+    let ext = ext.strip_prefix("phone.").unwrap_or(ext);
     let ext = Extension::parse(ext).ok_or(NameError::BadExtension)?;
     if stamp.len() != 15 {
         return Err(NameError::BadStamp);

@@ -213,9 +213,9 @@ pub enum HiddenReason {
     SetAside,
     /// A re-transcription was taken back: its lines gave way to the old ones.
     RetranscriptionUndone,
-    /// The mic's minute arrived twice (the Mac's `.flac` and the phone's
-    /// `.wav`, the same samples) and both were transcribed; these lines are
-    /// the copy not kept.
+    /// The mic's minute arrived twice (the Mac's cut of the stream and the
+    /// phone's own copy, the same samples) and both were transcribed; these
+    /// lines are the copy not kept.
     SecondCopy,
     /// Test speech played through the house's speakers
     /// (`experimental/playback`), not the household.

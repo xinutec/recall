@@ -5,7 +5,7 @@ import java.io.RandomAccessFile
 import java.time.Instant
 
 /**
- * Turns the mic loop's PCM chunks into closed, capture-stamped WAV segments in
+ * Turns the mic loop's PCM chunks into closed, capture-stamped FLAC segments in
  * [SegmentStore] — the phone's half of store-and-forward
  * (recall/docs/architecture.md, stage C1), running in shadow: the PCM stream to
  * the recorder host is untouched, this only adds durable local copies that the
@@ -42,6 +42,7 @@ class SegmentWriter(
     private var thread: Thread? = null
 
     private var file: RandomAccessFile? = null
+    private var flac: FlacFile? = null
     private var path: File? = null
     private var written = 0
 
@@ -95,7 +96,7 @@ class SegmentWriter(
     private fun write(bytes: ByteArray) {
         var from = 0
         while (from < bytes.size) {
-            val out = file ?: openSegment()
+            val out = flac ?: openSegment()
             val room = SegmentNames.SEGMENT_BYTES - written
             val take = minOf(room, bytes.size - from)
             out.write(bytes, from, take)
@@ -105,28 +106,28 @@ class SegmentWriter(
         }
     }
 
-    private fun openSegment(): RandomAccessFile {
+    private fun openSegment(): FlacFile {
         val name = SegmentNames.segmentName(source, now())
         val target = File(SegmentStore.open(base), name)
         val out = RandomAccessFile(target, "rw")
-        // Sizes lie zero until close; decoders read to EOF, so a crash keeps
-        // a decodable file rather than headerless bytes.
-        out.write(SegmentNames.wavHeader(0))
+        val encoder = FlacFile(out, SegmentNames.SAMPLE_RATE)
         file = out
+        flac = encoder
         path = target
         written = 0
-        return out
+        return encoder
     }
 
     private fun finishSegment() {
         val out = file ?: return
+        val encoder = flac ?: return
         val target = path ?: return
         file = null
+        flac = null
         path = null
         // Patch the header with the truth, land the bytes, then rename into
         // the closed set — the only step anything downstream can observe.
-        out.seek(0)
-        out.write(SegmentNames.wavHeader(written))
+        encoder.finish()
         out.fd.sync()
         out.close()
         if (written == 0) {

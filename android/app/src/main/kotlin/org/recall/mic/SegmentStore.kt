@@ -26,7 +26,7 @@ object SegmentStore {
     private const val DELIVERED = "delivered"
     private const val CONFLICT = "conflict"
 
-    /** ~2 GiB: hours of WAV, days of FLAC — enough local history to span the
+    /** ~2 GiB, over a day of FLAC: enough local history to span the
      * upload→nightly-backup window that makes eviction safe at all. */
     const val DEFAULT_CEILING_BYTES = 2L * 1024 * 1024 * 1024
 
