@@ -1,37 +1,30 @@
-# hm-agents.nix — home-manager module: recall launchd daemons (Mac mini).
+# hm-agents.nix — home-manager module: recall's launchd agents on the Mac mini.
 #
-# Apply after editing (a PINNED flake input, so the lock must be bumped): commit
-# here, then in ~/.config/home-manager run
-# `nix flake update recall && home-manager switch --flake .#$USER`.
+# A pinned flake input: after editing, commit here, then in ~/.config/home-manager
+# run `nix flake update recall && home-manager switch --flake .#$USER`.
 #
-# Every agent runs a wrapper in the store naming the store paths of its binary,
-# sox and ffmpeg directly, so no flake evaluation sits in an agent's startup
-# path. All but `llm-host` are Rust; the shims the runners drive and `llm-host`
-# run the uv2nix store env (`nix build .#ml-env`) that holds mlx and pyannote.
+# Each agent runs a store wrapper that names its binaries' store paths, so no
+# flake evaluation sits in an agent's startup. All but `llm-host` are Rust; the
+# shims and `llm-host` run the uv2nix ML env (`nix build .#ml-env`).
 #
-# The agent env (HF_TOKEN, RECALL_SYNC_TOKEN, the ingest tokens) is read at runtime
-# from ~/.config/recall/env, 0600, on the INTERNAL disk — secrets must never enter
-# the store.
+# Secrets (HF_TOKEN, RECALL_SYNC_TOKEN, the ingest tokens) are read at runtime from
+# ~/.config/recall/env (0600) and never enter the store.
 #
-# ⚠ NOT under ~/Code/recall: that path is a symlink onto /Volumes/Backup, where a
-# launchd-spawned process cannot write, and whose first touch can HANG rather than
-# fail, waiting on a consent nobody is at the machine to give. That wedges every
-# agent whose wrapper sources the file, in bash, before it starts. An interactive
-# shell writes there fine, so it is invisible until something runs under launchd.
+# ⚠ That file lives on the internal disk, not under ~/Code/recall: the checkout is
+# on /Volumes/Backup, which a launchd process cannot write, and whose first access
+# can hang on a consent prompt nobody answers, wedging every agent that sources the
+# file. An interactive shell never shows the problem.
 #
-# ⚠ Logs live in ~/Library/Logs/recall, NOT in the repo: launchd opens the stdio
-# paths before any code runs, so a log path inside a checkout that moves takes the
-# agent down with exit 78 and an EMPTY log.
+# ⚠ Logs go to ~/Library/Logs/recall, not the repo: launchd opens them before any
+# code runs, so a log path in a checkout that moves kills the agent with exit 78
+# and an empty log. recall-logrotate keeps each log to its last 2 MB.
 #
-# Bounded hourly by the recall-logrotate agent below: each log keeps its last
-# 2 MB. Before that nothing rotated them and the directory reached 112 MB.
+# recall-capture opens the microphone and recall-live does not: live reads the UDP
+# tap capture publishes (runner::live::TAP), because two CoreAudio clients on one
+# device starve each other.
 #
-# recall-capture opens the microphone; recall-live does NOT — it reads the UDP tap
-# capture publishes, because two CoreAudio clients on one device starve each other
-# (audiod segmenter's fanout; runner::live::TAP is the other end).
-#
-# home-manager writes each plist read-only with no native comment, so a provenance
-# `Comment` key points back here. Do NOT hand-edit the generated plists.
+# home-manager writes each plist read-only, with a `Comment` key pointing here;
+# change this file, never the plists.
 { config, pkgs, lib, recall, ... }:
 
 let
@@ -47,47 +40,35 @@ let
   ingest = "https://recall.xinutec.org";
   logs = "${config.home.homeDirectory}/Library/Logs/recall";
 
-  # The ML stack (mlx-whisper, pyannote, torch) as a STORE PATH, built from uv.lock's
-  # wheels by uv2nix (`nix build .#ml-env`) — no longer the working tree's uv venv.
-  # It moves with the flake lock, so what these agents import is pinned by the same
-  # commit as the code they run, and a `uv sync` in the tree can no longer change a
-  # running daemon.
+  # The ML stack (mlx-whisper, pyannote, torch) as a store path, built from uv.lock's
+  # wheels by uv2nix (`nix build .#ml-env`). It moves with the flake lock, so what
+  # the agents import is pinned by the same commit as the code they run, and a
+  # `uv sync` in the tree cannot change a running agent.
   #
-  # No agent on this interpreter opens the microphone: capture owns the device
-  # and live consumes its UDP tap. The grant it needs is /Volumes/Backup.
+  # No agent on this interpreter opens the microphone, so the only access it needs
+  # is to /Volumes/Backup.
   venvPython = "${recall.packages.${pkgs.stdenv.hostPlatform.system}.ml-env}/bin/python";
 
-  # One store wrapper per agent; `python` selects the interpreter and the arguments
-  # below are the single source of truth for what each daemon does.
+  # Where the Hugging Face models live, declared here rather than behind a symlink,
+  # so the location of tens of gigabytes is visible to whoever reads this module.
   #
-  # ⚠ A real package, NOT a devshell entry: `nix develop --command` puts a full flake
-  # evaluation in every agent's startup path, which is catastrophic when nix's cache
-  # is on the USB volume. `runtimeInputs` PREPENDS to PATH, so `say` and `launchctl`
-  # still come from the system paths launchd provides.
-  # Where the Hugging Face models live, DECLARED rather than symlinked.
-  #
-  # Declared, not inherited from a symlink: a symlink makes where tens of gigabytes
-  # of models live invisible to every reader of this module (memview #645).
-  #
-  # ⚠ **The path is on the external volume ON PURPOSE**, and it is written by NAME:
-  # `/Volumes/Backup` has survived a hardware swap underneath it because the name
-  # did, which is why a replacement volume takes the name rather than the paths
-  # being rewritten.
-  #
-  # The `cache/cache` doubling is a fossil of the era when `~/.cache` itself was
-  # a symlink to `/Volumes/Backup/cache`. Kept because tidying it means moving
-  # the models, and the point of this change is to stop the location being an
-  # accident — not to pick a new one.
+  # ⚠ On the external volume on purpose, and by name: /Volumes/Backup has survived
+  # a disk swap because a replacement takes the name. The `cache/cache` doubling is
+  # a fossil, kept because removing it means moving the models.
   hfHome = "/Volumes/Backup/cache/cache/huggingface";
 
+  # One store wrapper per agent; `python` selects the interpreter, and each agent's
+  # arguments below are the whole of what it does.
+  #
+  # ⚠ A package, not a devshell entry: `nix develop --command` would put a full
+  # flake evaluation in every agent's startup. `runtimeInputs` prepends to PATH, so
+  # `say` and `launchctl` still come from launchd's system paths.
   wrapper = { name, python, args, module ? "recall" }:
     pkgs.writeShellApplication {
       name = "recall-${name}";
-      # sox captures the mic (CoreAudio, sample-perfect); ffmpeg segments and encodes,
-      # and ffprobe reads durations. All are invoked by bare name. From RECALL's flake,
-      # not `pkgs.sox`: this module is evaluated by home-manager against its own
-      # nixpkgs, so naming them here would hand the agents binaries that no run of
-      # recall's own test suite has ever seen.
+      # sox, ffmpeg and ffprobe, called by bare name, from recall's flake rather than
+      # `pkgs`: home-manager evaluates this module against its own nixpkgs, whose
+      # binaries recall's test suite has never run.
       runtimeInputs = [ recall.packages.${pkgs.stdenv.hostPlatform.system}.agent-tools ];
       text = ''
         ENV_FILE="''${RECALL_ENV:-$HOME/.config/recall/env}"
@@ -102,10 +83,9 @@ let
       '';
     };
 
-  # The Rust audio-plane daemon (audiod/, docs/architecture.md). Its wrapper
-  # sources no .env — the ingest path holds no secrets — but keeps agent-tools
-  # on PATH: audiod spawns ffmpeg as its segmenter child, and it must be the
-  # same ffmpeg the test suite and the Python agents run.
+  # The Rust audio-plane daemon (audiod/). Sources no env file, since the ingest
+  # path holds no secrets, but keeps agent-tools on PATH: audiod's segmenter is an
+  # ffmpeg child, and it must be the ffmpeg the test suite runs.
   audiodWrapper = { name, args }:
     pkgs.writeShellApplication {
       name = "recall-${name}";
@@ -117,11 +97,9 @@ let
       '';
     };
 
-  # The Rust health agent (doctor/). Sources .env, unlike audiodWrapper: the
-  # doctor needs RECALL_SYNC_TOKEN to ask Isis how the live tier is running,
-  # which is the one thing it cannot see from this volume. It needs no
-  # agent-tools — the doctor spawns only ITSELF, as the bounded child that
-  # reads the archive.
+  # The Rust health agent (doctor/). Sources the env file, unlike audiodWrapper: it
+  # needs RECALL_SYNC_TOKEN to ask Isis how the live tier is running. No
+  # agent-tools: the only child it spawns is itself, to read the archive.
   doctorWrapper = { name, args }:
     pkgs.writeShellApplication {
       name = "recall-${name}";
@@ -168,17 +146,14 @@ in
   # parent directory is exit 78 with nothing written anywhere to say so.
   home.file."Library/Logs/recall/.keep".text = "";
 
-  # NO recall-api here — the Mac serves no UI or control plane (the Isis split). Isis
-  # (recall.xinutec.org) is the system of record and the only web UI / control surface; the
-  # Mac is capture, all MLX, and the protected master archive. Browsers and the phone web
-  # app point at Isis; pause/resume is mirrored down by recall-capture-mirror. Work that
-  # needs the GPU reaches the Mac by its own poll of recalld's queue — Isis cannot dial a
-  # one-way peer, so every path here is Mac-initiated.
+  # No recall-api: the Mac serves no UI. Isis (recall.xinutec.org) is the system of
+  # record and the only UI; the Mac records, runs the models and keeps the master
+  # archive. Isis cannot dial the Mac, so every path between them starts here: the
+  # runners poll recalld's queue, and recall-capture-mirror polls the pause state.
 
-  # Single-port audio ingest for the phone mics — audiod (Rust).
-  # Same reasoning as capture for the priority class: this holds the phones' live
-  # PCM sockets and pumps them into ffmpeg in real time. A throttled reader drops
-  # a phone's samples exactly as a throttled sox drops the USB mic's.
+  # Audio ingest for the phone mics, one port. Interactive for the same reason as
+  # capture: it pumps the phones' live PCM into ffmpeg in real time, and a
+  # throttled reader drops samples.
   launchd.agents."org.xinutec.recall-ingest" = daemon {
     label = "org.xinutec.recall-ingest";
     name = "ingest";
@@ -187,13 +162,12 @@ in
     extra = { ProcessType = "Interactive"; };
   };
 
-  # LAN fallback for the mic heartbeat (#888). Independent of the capture agents ON
-  # PURPOSE: a household pause closes the ingest listener, and a pause is exactly when
-  # the heartbeat is the only signal there is — so a beat receiver that shared that
-  # lifecycle would be shut precisely when it was needed.
+  # LAN fallback for the mic heartbeat (#888), separate from the capture agents: a
+  # pause closes the ingest listener, and during a pause the heartbeat is the only
+  # signal left.
   #
-  # ⚠ NO `--root`: it FORWARDS and stores nothing. A second beat store would let two
-  # places disagree about which mics are alive.
+  # ⚠ No `--root`: it only forwards. A second store of beats would let two places
+  # disagree about which mics are alive.
   launchd.agents."org.xinutec.recall-beat-relay" = daemon {
     label = "org.xinutec.recall-beat-relay";
     name = "beat-relay";
@@ -204,19 +178,12 @@ in
     };
   };
 
-  # The one process on this Mac that holds the LLM weights (src/recall/llmhost.py).
-  # recall's summaries/Ask and life's emotion worker are clients over 127.0.0.1:8092;
-  # neither loads a model of its own, so the ~4.3 GB is paid once and released after
-  # five idle minutes.
+  # The one process here that holds LLM weights (src/recall/llmhost.py), served to
+  # life's emotion worker on 127.0.0.1:8092: the ~4.3 GB loads once and is released
+  # after five idle minutes.
   #
-  # ProcessType overrides the Background default the other daemons take: an Ask has a
-  # human waiting on it, and the throttled I/O made the cold weight read visibly
-  # slower than the same load from a shell (104s vs 62s, measured). Idle it costs a
-  # few MB, so it competes with capture only while it is actually answering.
-  # ⚠ ENTERS THROUGH ITS OWN MODULE, not through `recall llm-host`. This is the
-  # one Python agent that stays, and while it started via the CLI it held the
-  # whole CLI substrate alive in production: `recall.cli` imports 28 `recall.*`
-  # modules where this needs 4 (#1342).
+  # Standard rather than Background: a caller is waiting, and throttled I/O made the
+  # cold weight read take 104 s instead of 62 s. Idle, it costs a few MB.
   launchd.agents."org.xinutec.recall-llm-host" = daemon {
     label = "org.xinutec.recall-llm-host";
     name = "llm-host";
@@ -226,13 +193,12 @@ in
     extra = { ProcessType = "Standard"; };
   };
 
-  # The instant feed. Reads the UDP tap capture
-  # publishes, cuts it at the pauses with the same silero the archive uses,
-  # drives the asr shim, and POSTs each turn to Isis, which shows it within
-  # seconds and hides it once the archive pass reaches that minute.
+  # The instant feed: reads capture's UDP tap, cuts it at pauses with the archive's
+  # speech detector, transcribes, and posts each turn to Isis, which shows it within
+  # seconds and hides it when the archive pass reaches that minute.
   #
-  # ⚠ It holds NO STORE — the push IS the write, so there is no `--out` and this
-  # agent touches the archive volume nowhere (#1412's stalls cannot reach it).
+  # It keeps no store: the post is the write, so it never touches the archive
+  # volume and its stalls (#1412).
   launchd.agents."org.xinutec.recall-live" = daemon {
     label = "org.xinutec.recall-live";
     name = "live";
@@ -250,10 +216,9 @@ in
           set +a
         fi
 
-        # ORT_DYLIB_PATH: ort dlopens the ONNX runtime by name and macOS has no
-        # system libonnxruntime, so without this the detector never loads and
-        # the agent exits at once. Taken from recall's nixpkgs, the one the test
-        # suite runs silero through.
+        # ort loads the ONNX runtime by name and macOS has none, so without
+        # ORT_DYLIB_PATH the detector never loads and the agent exits at once.
+        # From recall's nixpkgs, the one the tests run the detector through.
         exec env RUST_LOG=info \
           ORT_DYLIB_PATH=${
             recall.packages.${pkgs.stdenv.hostPlatform.system}.onnxruntime
@@ -266,59 +231,50 @@ in
     };
   };
 
-  # Mic agent — the critical continuous recording stream (USB mic → segments).
-  # Devshell python (no ML deps): the one process that must never die. A renamed or
-  # missing --device makes sox fail hard and the agent crash-loop, visibly, rather
-  # than silently recording from the wrong mic.
-  # ⚠ `Interactive`, overriding the `Background` default: Background is macOS's
-  # THROTTLED class, and sox reads CoreAudio in real time — starve it and its buffer
-  # overruns, samples are DROPPED, and the segment ring stretches. That is silent,
-  # unrecoverable loss of household speech (#1330). Measured under load, a throttled
-  # recorder loses roughly half the wall clock; ANY neighbour outranks it.
+  # The USB mic: the continuous recording, the one process that must never die. A
+  # renamed or missing --device makes sox fail and the agent crash-loop, visibly,
+  # rather than record from the wrong mic.
+  #
+  # ⚠ Interactive, overriding the Background default: Background is macOS's
+  # throttled class, and sox reads CoreAudio in real time. Starved, its buffer
+  # overruns and samples are lost silently and for good (#1330); under load a
+  # throttled recorder lost about half the wall clock.
   launchd.agents."org.xinutec.recall-capture" = daemon {
     label = "org.xinutec.recall-capture";
     name = "capture";
     args = [ ];
     program = audiodWrapper {
       name = "capture";
-      # ⚠ No `--codec` here, and that is deliberate: lossless is audiod's DEFAULT,
-      # so every recorder gets it without a flag. Carrying it explicitly on this
-      # one agent would read as "the condenser is special" and leave the others on a
-      # default nobody revisited. The reasoning lives with the default, in
-      # audiod/src/segmenter.rs; retention is docs/architecture.md.
+      # No `--codec`: lossless is audiod's default for every recorder
+      # (audiod/src/segmenter.rs), and a flag here would suggest this mic is special.
       args = [ "capture" "--root" out "--id" "usb" "--device" "USB Condenser Microphone" ];
     };
     extra = { ProcessType = "Interactive"; };
   };
 
-  # NO recall-backup here: odin's nightly restic already takes an
-  # integrity-checked SQLite snapshot from inside the Isis pod plus an audio rsync
-  # of the recall PVC, so every recording is protected server-to-server.
-  #
-  # The only content Isis lacks is the training corpora, derived from the archive
-  # and deliberately NOT backed up — they can be regenerated.
+  # No recall-backup: odin's nightly restic takes an integrity-checked SQLite
+  # snapshot inside the Isis pod and an rsync of the recall volume, so every
+  # recording is backed up server to server. Training corpora are left out; they
+  # can be regenerated from the archive.
 
-  # Is recall actually working? Every 5 minutes, reported to fleetwatch.
+  # Is recall working? Every 5 minutes, reported to fleetwatch. Needed because
+  # launchd restarts capture when it dies, and a crash loop looks like a quiet house.
   #
-  # ⚠ launchd RESTARTS capture when it dies, so a persistent fault becomes a loop —
-  # and a crash loop looks exactly like a quiet house.
+  # ⚠ The interval must equal the doctor's INTERVAL_S (300): fleetwatch derives
+  # staleness from the cadence the report declares, so a silent doctor is itself
+  # the alarm.
   #
-  # ⚠ The interval MUST match the doctor's declared INTERVAL_S (300): fleetwatch
-  # derives staleness from the cadence the report declares, so this agent dying, or
-  # the Mac dying, is itself the alarm.
-  #
-  # ⚠ `KeepAlive = false` with a 300s interval is why the doctor reads the
-  # archive in a child it can abandon: launchd starts no further run while one
-  # is stuck, so a single wedged doctor silences every doctor after it.
+  # ⚠ With KeepAlive off, launchd starts no new run while one is stuck, so one
+  # wedged doctor would silence every later one. That is why the doctor reads the
+  # archive in a child it can abandon.
   launchd.agents."org.xinutec.recall-doctor" = daemon {
     label = "org.xinutec.recall-doctor";
     name = "doctor";
     args = [ ];
     program = doctorWrapper {
       name = "doctor";
-      # ⚠ `--fleet` is what makes the live checks measurable at all: the tier
-      # is a Mac agent that keeps no store, so its output is only on Isis. The
-      # bearer is RECALL_SYNC_TOKEN, which doctorWrapper already sources.
+      # `--fleet` is how the live tier gets checked at all: it keeps no store, so
+      # its output exists only on Isis. Authenticated with RECALL_SYNC_TOKEN.
       args = [ "--out" out "--post" "--fleet" fleet ];
     };
     extra = {
@@ -329,21 +285,8 @@ in
     };
   };
 
-  # How much of each archived segment is SPEECH — the evidence the quiet review
-  # needs before it may propose deleting anything, and the thing that tells a
-  # broken microphone from a quiet room (#1485 was found by its first pass).
-  #
-  # ⚠ It runs on the MAC, not against Isis, because deletion authority is
-  # Mac-local (docs/architecture.md, "Deletion authority") and because the fleet
-  # cannot answer for everything: 730 of 14,777 segments have never been
-  # delivered, and those are the least replicated audio in the house.
-  #
-  # Bounded and low priority: this decodes audio on the machine that is also
-  # recording, and delivery must never compete with the recorder (docs/architecture.md: capture runs at launchd's Interactive class).
-  # ~0.5 s per segment measured, so 120 a pass is about a minute of CPU every
-  # five — a 13k backlog drains over a day or so, behind live capture.
-  # Bounds the agents' own logs (#1656). Hourly, cheap, and it touches nothing
-  # but `~/Library/Logs/recall`.
+  # Keeps the agents' logs bounded (#1656). Hourly; it touches nothing but
+  # ~/Library/Logs/recall.
   launchd.agents."org.xinutec.recall-logrotate" = daemon {
     label = "org.xinutec.recall-logrotate";
     name = "logrotate";
@@ -358,24 +301,17 @@ in
     };
   };
 
-  # The room transcription runner (docs/architecture.md, stage E3). Leases a
-  # room block from recalld, drives the `asr` shim over stdio, pushes the result,
-  # acks. Stateless: no watermark, no outbox, no mirror queue, so killing it
-  # costs an expiring lease and nothing else.
+  # The transcription runner: leases a clip from recalld's queue, transcribes it
+  # with the `asr` shim, pushes the result. Stateless, so killing it costs an
+  # expiring lease.
   #
-  # ⚠ KeepAlive, NOT a StartInterval timer: the shim holds the whisper weights for
-  # the life of the process, so a periodic agent would reload them per job instead
-  # of per boot. The runner has its own idle sleep and respawns a dead shim.
+  # ⚠ KeepAlive, not a StartInterval timer: the shim holds the Whisper weights for
+  # its whole life, and a periodic agent would reload them for every job.
   #
-  # ⚠ It REFUSES TO START without the vocabulary (in the runner, not here):
-  # transcribing without that biasing produces a corpus that has to be redone
-  # (#1388). An EMPTY vocabulary is fine; an unreachable one is not.
+  # It refuses to start if the vocabulary is unreachable (an empty one is fine):
+  # transcripts made without it would have to be redone.
   #
-  # ⚠ Results are stored OPAQUE in ingest.sqlite's job rows, so running this
-  # changes no transcript anybody reads.
-  #
-  # Nice + LowPriorityIO: transcription must never compete with the recorder
-  # (docs/architecture.md: capture runs at launchd's Interactive class), and this one holds a GPU.
+  # Nice and LowPriorityIO: transcription must never compete with the recorder.
   launchd.agents."org.xinutec.recall-runner" = daemon {
     label = "org.xinutec.recall-runner";
     name = "runner";
@@ -408,17 +344,17 @@ in
     };
   };
 
-  # Stage E4's `voices` runner: same binary and loop as recall-runner, driving
-  # `shim_voices` instead of `shim_asr`. The shim NAMES ITSELF over the protocol,
-  # so the runner discovers it can do `diarize-segment` rather than being told.
+  # The speaker runner: the same binary and loop, driving `shim_voices`. The shim
+  # names itself over the protocol, so the runner learns what it can do.
   #
-  # `Nice = 15`, below recall-runner's 10 — diarization is re-derivable where the
-  # archive pass is not. ⚠ No `--pulse`: a second process stamping the archive
-  # heartbeat would make a stalled transcriber look healthy.
+  # Nice 15, below recall-runner's 10: speakers can wait, words cannot.
   #
-  # ⚠ It writes no turns. The result goes back to the queue and
-  # `recalld::diarized` owns the only write, because that write REPLACES a
-  # transcript and the guards against emptying one belong beside the database.
+  # ⚠ No `--pulse`: a second process stamping the archive heartbeat would make a
+  # stalled transcriber look healthy.
+  #
+  # It writes no lines. Results go back to the queue, and `recalld::diarized` owns
+  # the write: it replaces a transcript, so the guards against emptying one live
+  # beside the database.
   launchd.agents."org.xinutec.recall-voices" = daemon {
     label = "org.xinutec.recall-voices";
     name = "voices";
@@ -451,17 +387,13 @@ in
     };
   };
 
-  # Store-and-forward delivery (docs/architecture.md, stage B): every closed
-  # segment to recalld on Isis, sha-256 receipt verified against a local
-  # re-hash before it is recorded delivered. A timer, not KeepAlive; each
-  # pass is bounded (--max) and resumes from upload-state.sqlite, so the
-  # historical backfill proceeds in bites and a killed pass costs nothing.
-  # Reads RECALL_INGEST_TOKEN (the custodial `*` grant) from .env — the token
-  # must never enter the store, the standing rule. Nice + LowPriorityIO:
-  # delivery must never compete with the recorder (docs/architecture.md: capture runs at launchd's Interactive class).
+  # Delivery: every closed segment to recalld on Isis, counted as delivered only
+  # when its sha-256 receipt matches a local re-hash. A timer, with each pass
+  # bounded (--max) and resuming from upload-state.sqlite, so a killed pass costs
+  # nothing. Below the recorder in priority.
   #
-  # ⚠ NO EVICTION RIDES THIS. The Mac's archive stays the protected master
-  # until stage F; this agent only ever adds copies.
+  # It only adds copies: nothing here deletes from the Mac's archive, which stays
+  # the master.
   launchd.agents."org.xinutec.recall-upload" = daemon {
     label = "org.xinutec.recall-upload";
     name = "upload";
@@ -490,19 +422,13 @@ in
     };
   };
 
-  # Mirror Isis's mic pause/resume onto this Mac (the Isis split). A KeepAlive loop that
-  # polls Isis every ~5s: Isis holds the desired capture state (its VPN UI) but cannot
-  # dial this one-way peer, so control is inverted to a Mac-initiated poll and a pause
-  # pressed on the VPN UI takes hold within seconds. Lightweight — an HTTP round trip,
-  # no ML. Inert until RECALL_SYNC_TOKEN is set in .env.
+  # Mirrors the pause set on Isis onto this Mac. Isis holds the wanted capture state
+  # but cannot dial the Mac, so the Mac polls every ~5 s and a pause takes hold
+  # within seconds. Inert until RECALL_SYNC_TOKEN is set.
   #
-  # ⚠ **This is the household's pause control**, so it is the one agent where a
-  # port is not a drive-by. `audiod pause-mirror` is edge-triggered on the same
-  # `capture_intent_mirrored` marker the Python wrote, which is what makes the
-  # swap a swap rather than a restart from zero: whichever binary runs, it reads
-  # the state the other left. Sources .env for RECALL_SYNC_TOKEN the way
-  # recall-upload does — audiodWrapper deliberately does not, because the ingest
-  # path holds no secrets and this path does.
+  # ⚠ This is the household's pause control. It acts only when the wanted state
+  # changes, tracked in the `capture_intent_mirrored` marker, so a restarted agent
+  # carries on from where the last one stopped.
   launchd.agents."org.xinutec.recall-capture-mirror" = daemon {
     label = "org.xinutec.recall-capture-mirror";
     name = "capture-mirror";

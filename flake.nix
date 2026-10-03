@@ -5,9 +5,9 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
 
-    # The ML runtime from uv.lock's PyPI wheels, NOT nixpkgs' python packages:
-    # nixpkgs has no mlx-whisper and lags on transformers/peft, and that stack from
-    # source on aarch64-darwin is uncached.
+    # The ML runtime from uv.lock's PyPI wheels, not nixpkgs' Python packages:
+    # nixpkgs has no mlx-whisper, and that stack built from source on
+    # aarch64-darwin is uncached.
     pyproject-nix = {
       url = "github:pyproject-nix/pyproject.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -24,9 +24,8 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # The Rust workspace's dependencies built ONCE, as their own derivation:
-    # buildRustPackage recompiled all ~190 of them on every Rust edit, which was
-    # most of a commit's gate (2026-10-02: the agents build was 160-640 s).
+    # Builds the Rust workspace's ~190 dependencies once, as their own derivation,
+    # so a Rust edit recompiles only recall's own crates.
     crane.url = "github:ipetkov/crane";
   };
 
@@ -52,12 +51,10 @@
         # "wheel", not "sdist": the point is to take PyPI's prebuilt binaries.
         uvOverlay = uvWorkspace.mkPyprojectOverlay { sourcePreference = "wheel"; };
 
-        # mlx ships as TWO wheels that expect to share one directory: `mlx` has
-        # mlx/core.cpython-312-darwin.so, `mlx-metal` has mlx/lib/libmlx.dylib.
-        # uv installs both into one site-packages so the .so's @rpath resolves;
-        # nix gives each wheel its own store path and @rpath resolves relative to
-        # the .so's OWN output, where the dylib isn't — so mlx fails to import.
-        # Link mlx-metal's lib/ into mlx's output, where the loader already looks.
+        # mlx ships as two wheels that expect one directory: `mlx` has the .so,
+        # `mlx-metal` has libmlx.dylib, found through @rpath. nix gives each wheel its
+        # own store path, so the .so looks in its own output and mlx fails to import.
+        # Link mlx-metal's lib/ into mlx's output, where the loader looks.
         mlxMetalFix = final: prev: {
           mlx = prev.mlx.overrideAttrs (old: {
             postInstall = (old.postInstall or "") + ''
@@ -80,13 +77,12 @@
           });
         };
 
-        # ⚠ NARROWED, because uv2nix installs the workspace's own package and this
-        # `src` decides whether `recall-ml-env`'s store path moves. At the workspace
-        # root, every commit hands the ML agents a different binary path — which is
-        # the identity macOS attributes their /Volumes/Backup access to.
+        # ⚠ Narrowed to pyproject.toml and src/: this source decides whether the ML
+        # env's store path moves, and macOS ties the agents' /Volumes/Backup access to
+        # that path. At the workspace root, every commit would revoke it.
         #
-        # ⚠ A COMMENT in pyproject.toml still moves it: hatchling reads the whole
-        # file. Keep toolchain prose in flake.nix or gate.dhall, where it is free.
+        # ⚠ Even a comment in pyproject.toml moves it (hatchling reads the whole
+        # file); put toolchain notes in flake.nix or gate.dhall instead.
         wheelSrc = nixpkgs.lib.fileset.toSource {
           root = ./.;
           fileset = nixpkgs.lib.fileset.unions [ ./pyproject.toml ./src ];
@@ -107,37 +103,33 @@
 
         mlEnv = mlPythonSet.mkVirtualEnv "recall-ml-env" uvWorkspace.deps.default;
 
-        # The same runtime plus the `dev` group, and THIS is what `.venv` is.
+        # The same runtime plus the `dev` group: this is `.venv`. A store path rather
+        # than a uv-built directory, so the gate tests the very artifact the agents
+        # run and no drift check is needed between two.
         #
-        # A STORE PATH, not a directory uv builds from the same lock — otherwise the
-        # agents run a store path while the gate runs a mutable tree outside every GC
-        # root, and the two need a drift check one artifact does not.
+        # ⚠ `deps.all`, not `deps.default`: mypy resolves third-party imports through
+        # `.venv/bin/python`, so test tools outside the env flood it with
+        # unfollowed-import errors.
         #
-        # ⚠ `deps.all`, not `deps.default`: mypy resolves third-party imports
-        # through `python_executable = ".venv/bin/python"`, so a pytest beside the
-        # environment rather than IN it is a flood of unfollowed-import errors.
-        #
-        # NOT in the devshell — it would drag the whole ML closure into
-        # `ruff check`. The gate builds it into `.venv` in one row (gate.dhall).
+        # Not in the devshell, which would then carry the whole ML closure into every
+        # `ruff check`; the gate builds it into `.venv` (gate.dhall).
         devEnv = mlPythonSet.mkVirtualEnv "recall-dev-env" uvWorkspace.deps.all;
 
         # The devshell's interpreter: no ML, mypy and pytest for the gate; also
         # `packages.dev-python` below.
         devPython = python.withPackages (ps: [ ps.mypy ps.pytest ]);
 
-        # The binaries the agents shell out to by bare name. ⚠ Exposed as a package
-        # because home-manager evaluates deploy/hm-agents.nix against ITS OWN nixpkgs:
-        # `pkgs.sox` there is a different sox from the one this repo tests against.
+        # The binaries the agents call by bare name, exported because home-manager
+        # evaluates deploy/hm-agents.nix against its own nixpkgs, whose sox is not
+        # the one recall tests against.
         agentTools = pkgs.buildEnv {
           name = "recall-agent-tools";
           paths = [ pkgs.sox pkgs.ffmpeg ];
         };
 
-        # The Rust audio-plane daemon (audiod/, docs/architecture.md), built from the
-        # workspace. The fileset is exactly the Rust workspace, so a Python or
-        # frontend edit does not rebuild it. The deployed build runs no tests: the
-        # gate's `cargo test` runs the same suite on every commit, and re-running it
-        # here cost each Rust commit ~75 s. The sandbox arm is `sandbox-tests`.
+        # The Rust workspace, from a fileset of exactly its sources, so a Python or
+        # frontend edit does not rebuild it. Every workspace binary is installed; the
+        # agents run audiod, runner, doctor and recall-live.
         craneLib = crane.mkLib pkgs;
         rustCommon = {
           pname = "audiod";
@@ -151,67 +143,48 @@
               ./audiocore
               ./audiod
               ./recalld
-              # Every workspace MEMBER, or cargo cannot even load the graph:
-              # adding a crate to Cargo.toml and not to this list fails the
-              # sandboxed build with "failed to read runner/Cargo.toml".
+              # ⚠ Every workspace member, the cli and the experiments included:
+              # cargo cannot load the graph with one missing.
               ./doctor
               ./runner
-              # The terminal client. Not deployed as an agent, but a workspace
-              # member — cargo cannot load the graph without it.
               ./cli
-              # Experiments run by hand; members, so built and tested, never agents.
               ./experimental
-              # The one licence-clean speech clip (#1433). ⚠ Not pointless: every
-              # OTHER fixture here is gitignored audio, so this entry is the only
-              # way a committed clip reaches the sandbox.
-              ./tests/fixtures/speech
-              # The worker/doctor contract, whose two halves are in different
-              # languages. ⚠ The sandbox has no `tests/` beyond what is named here,
-              # so leaving it out fails the BUILD rather than the test.
-              ./tests/fixtures/worker-heartbeat.json
-              # The runner-shim contract (#1830): one example of every message,
-              # read by audiocore/tests/shim.rs and produced by the Python shims'
-              # tests. Same reason as above: unnamed, the sandbox has none.
-              ./tests/fixtures/shim
-              # The ASR model contract, for the same reason one entry up: the
-              # queue carries no model field, so `turns::SHIM_MODEL` has to name
-              # what the shim will load, and `recall.asr.DEFAULT_MODEL` is what
-              # the shim actually reads. A test compares them, and the sandbox
-              # has no `src/` beyond what is named here — so leaving this out
-              # fails the BUILD with a missing file rather than the test with a
-              # mismatch, which is a much worse error to read.
+              # ⚠ The sandbox holds only the files named here, so every test input
+              # outside the crates is listed. A missing one fails the build with a
+              # missing file, not the test.
               #
-              # ⚠ ONE FILE, not `./src`. This is live Python in the Rust build's
-              # inputs: naming the directory would make every Python edit in the
-              # repo rebuild and re-test the whole Rust workspace.
+              # The one committed speech clip (#1433); the rest are gitignored.
+              ./tests/fixtures/speech
+              # The worker/doctor contract, whose halves are in two languages.
+              ./tests/fixtures/worker-heartbeat.json
+              # The runner-shim contract (#1830): one example of every message.
+              ./tests/fixtures/shim
+              # The model contract: a test checks `turns::SHIM_MODEL` against the
+              # model this file loads. ⚠ The file, not ./src: the directory would
+              # rebuild the Rust workspace on every Python edit.
               ./src/recall/asr.py
             ];
           };
-          # The whole workspace builds (audiocore + recalld ride along); the
-          # installed output carries every workspace binary, of which the agents
-          # run bin/audiod. On here so the cached dependencies include the test
-          # ones `sandboxTests` needs; `audiodPkg` turns it off.
+          # On here so the cached dependencies include the test-only ones
+          # `sandboxTests` needs; `audiodPkg` turns it off.
           doCheck = true;
-          # The watchdog tests decode real files through ffmpeg — the same
-          # binary the daemon spawns at runtime, so the sandboxed suite
-          # exercises the real verdict path, not a stub of it.
-          # ffmpeg for the decode path; onnxruntime because recalld's VAD now
-          # dlopens the SYSTEM runtime rather than a bundled one (the prebuilt
-          # binaries need AVX2, which the fleet's 2012 Xeons lack).
           nativeCheckInputs = [
+            # The tests decode real files through the ffmpeg the daemon runs.
             pkgs.ffmpeg
+            # The speech detector loads the system ONNX runtime: the prebuilt one
+            # needs AVX2, which the fleet's 2012 Xeons lack.
             pkgs.onnxruntime
-            # The runner's tests drive a STUB SHIM — a few lines of python
-            # speaking the real stdio protocol — so the sandbox needs an
-            # interpreter. Substituting only the model is the point: everything
-            # else in that test is the pair that ships.
+            # The runner's tests drive a stub shim, a few lines of Python speaking
+            # the real protocol: only the model is faked.
             pkgs.python3
           ];
           ORT_DYLIB_PATH = "${pkgs.onnxruntime}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
         };
-        # Only Cargo.lock and the members' Cargo.toml reach this derivation (crane
-        # stubs the sources), so a Rust edit reuses it and compiles only ours.
+        # Only Cargo.lock and the members' Cargo.toml reach this (crane stubs the
+        # sources), so a Rust edit reuses it.
         cargoArtifacts = craneLib.buildDepsOnly rustCommon;
+        # Runs no tests: the gate's `cargo test` runs the same suite on every
+        # commit, and running it again here cost each Rust commit ~75 s.
         audiodPkg = craneLib.buildPackage (
           rustCommon
           // {
@@ -224,17 +197,13 @@
         # environment assumptions surface; `scripts/sandbox_sampler.sh` builds it.
         sandboxTests = craneLib.cargoTest (rustCommon // { inherit cargoArtifacts; });
 
-        # Everything home-manager will actually run, as ONE buildable output: a farm
-        # of the launchd wrappers named in deploy/hm-agents.nix, keyed by label.
+        # Everything home-manager will run, as one output the gate can build: the
+        # launchd wrappers from deploy/hm-agents.nix, keyed by label. Without it, an
+        # unbuildable ml-env or a wrapper failing shellcheck surfaces only at
+        # `home-manager switch`, with no commit attached.
         #
-        # ⚠ Without this the gate proves the source tree healthy and builds nothing
-        # the agents run, so an unbuildable ml-env or a wrapper failing shellcheck
-        # stays invisible until `home-manager switch` — a different day, a different
-        # repo, and a bare error with no commit attached.
-        #
-        # ⚠ Applied as a FUNCTION, not evaluated as a module, so launchd option types
-        # are unchecked and a misspelled `KeepAlive` still gets through. What is
-        # covered is every part that is a derivation.
+        # ⚠ The module is applied as a function, not evaluated as a module, so
+        # launchd option types go unchecked: a misspelled `KeepAlive` gets through.
         deployedAgents =
           let
             lib = nixpkgs.lib;
@@ -257,9 +226,8 @@
             }) hm.launchd.agents
           );
 
-        # Android toolchain for the recall-mic app (android/). Kept in its own pkgs
-        # import + dev shell so the unfree SDK licence stays scoped to it and the
-        # default Python shell is unaffected.
+        # The Android toolchain for recall-mic (android/), in its own pkgs import and
+        # dev shell so the unfree SDK licence stays scoped to it.
         androidPkgs = import nixpkgs {
           inherit system;
           config.allowUnfree = true;
@@ -283,17 +251,13 @@
         packages.sandbox-tests = sandboxTests;
         packages.ml-env = mlEnv;
         packages.dev-env = devEnv;
-        # volume's gate runs mypy and its Python tests through this: a pinned
-        # interpreter already in the store, where `nixpkgs#mypy` would unpack the
-        # ambient channel. Removing it breaks volume's gate, not this one.
+        # ⚠ The volume repo's gate runs mypy and its Python tests through this
+        # pinned interpreter: removing it breaks that gate, not this one.
         packages.dev-python = devPython;
         packages.agent-tools = agentTools;
-        # ⚠ The ONNX runtime the speech agent must dlopen, exported so
-        # home-manager reaches the SAME one this flake's tests run silero
-        # through. It is not enough to hand it to the internal `.#agents`
-        # attrset: home-manager imports deploy/hm-agents.nix against these
-        # PUBLIC outputs, so `nix build .#agents` can pass while the real
-        # switch fails on a missing attribute — which is exactly what happened.
+        # ⚠ The ONNX runtime recall-live loads, exported so home-manager gets the
+        # one the tests use. home-manager reads these public outputs, not the
+        # attrset `.#agents` builds from, so `.#agents` passing does not prove it.
         packages.onnxruntime = pkgs.onnxruntime;
         packages.agents = deployedAgents;
 
@@ -313,33 +277,25 @@
           PLAYWRIGHT_BROWSERS_PATH = pkgs.playwright-driver.browsers;
           PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "1";
           packages = [
-            # toolchain + type checking
             devPython
             pkgs.ruff
-            # capture (Phase 0): sox captures the mic (CoreAudio, sample-accurate),
-            # ffmpeg segments/encodes the stream.
             pkgs.sox
             pkgs.ffmpeg
-            # uv still owns the LOCK — `uv lock` after a dependency change — but
-            # no longer the venv: `.venv` is `packages.dev-env`, built from that
-            # lock by uv2nix. Kept here for relocking and for `uv tree`.
+            # For `uv lock` and `uv tree` only: `.venv` is `packages.dev-env`,
+            # built from the lock by uv2nix.
             pkgs.uv
-            # audiod/ — the Rust audio-plane daemon (docs/architecture.md)
             pkgs.cargo
             pkgs.rustc
             pkgs.rust-analyzer
             pkgs.rustfmt
             pkgs.clippy
-            # recalld's VAD (stage D4) dlopens the ONNX runtime rather than
-            # bundling one — ort's prebuilt binaries need AVX2 and the fleet's
-            # 2012 Xeons lack it, so the daemon uses whatever baseline-built
-            # runtime the host provides. ORT_DYLIB_PATH below points at this one.
+            # The speech detector's runtime; ORT_DYLIB_PATH below points at it.
             pkgs.onnxruntime
-            # Angular front-end toolchain (Angular 22 needs Node >= 24.15)
+            # Angular 22 needs Node 24.15 or later.
             pkgs.nodejs_24
-            pkgs.pnpm # the frontend's installer; node ships npm too, ignore it
-            # dev-lint is invoked via `nix run git+file:../dev-lint?ref=HEAD` by the gate
-            # (always-live, no pinned/stale copy) — not a devshell dependency.
+            # The frontend's installer; ignore the npm that node ships.
+            pkgs.pnpm
+            # dev-lint is not here: the gate runs it from its live checkout.
           ];
           shellHook = ''
             export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
