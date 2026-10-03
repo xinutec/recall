@@ -161,7 +161,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     // The browsing plane is mounted only when SSO is configured. Absent means
-    // ABSENT, not open: these routes serve household transcripts, so an
+    // absent, not open: these routes serve household transcripts, so an
     // unconfigured recalld must not answer them at all.
     let webauth =
         recalld::webauth::Config::from_process_env().map(|cfg| recalld::webauth::GateState {
@@ -198,7 +198,7 @@ fn main() -> ExitCode {
         for listener in listeners {
             serve_one(&mut serving, listener, app.clone());
         }
-        // The FIRST listener to stop decides the exit: if one port dies the daemon
+        // The first listener to stop decides the exit: if one port dies the daemon
         // is half-serving, which is the state that hides a fault. Better to exit
         // and be restarted whole.
         match serving.join_next().await {

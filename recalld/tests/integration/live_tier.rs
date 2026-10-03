@@ -25,7 +25,7 @@ fn source(conn: &Connection, id: &str, kind: &str) {
 }
 
 /// A delivered clip, and — when `speech` is given — its measured speech, which
-/// lives in the OTHER database.
+/// lives in the other database.
 fn clip(root: &Path, source_id: &str, name: &str, minute: u32, speech: Option<f64>) {
     let start = format!("2026-09-21T11:{minute:02}:00+00:00");
     let end = format!("2026-09-21T11:{minute:02}:30+00:00");

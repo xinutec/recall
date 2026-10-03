@@ -142,9 +142,8 @@ fn stem(path: &str) -> String {
 /// yet, bounded by `limit` so a backlog queues in bites rather than days of GPU
 /// work in one statement.
 ///
-/// ⚠ Only a clip the speech pass has measured, and not as silent. The job used
-/// to go ahead while the measurement was pending (up to two minutes), and a
-/// silent minute handed to Whisper comes back as "Thank you." Undecodable
+/// ⚠ Only a clip the speech pass has measured, and not as silent: a silent
+/// minute handed to Whisper comes back as "Thank you." Undecodable
 /// (`UNKNOWN_SECONDS`) still queues: the transcriber may read what VAD could not.
 ///
 /// The join across the planes is on the filename: the two planes spell the same

@@ -943,7 +943,7 @@ fn another_passes_verdict_does_not_retire_this_passes_job() {
         "2026-09-11T10:01:00+00:00",
         &a_result("dit is echte spraak"),
     );
-    // The same filename decided by the OTHER pass, writing nothing.
+    // The same filename decided by the other pass, writing nothing.
     recalld::ingest_schema::ensure(&ingest).expect("ledger");
     ingest
         .execute(

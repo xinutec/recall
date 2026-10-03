@@ -129,7 +129,7 @@ pub fn pending(meaning: &Connection) -> rusqlite::Result<Vec<(String, Span)>> {
     Ok(out)
 }
 
-/// The turns to embed from one leased clip, by its INGEST filename.
+/// The turns to embed from one leased clip, by its ingest filename.
 ///
 /// # Errors
 /// If the meaning plane refuses.

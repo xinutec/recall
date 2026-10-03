@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 /// A per-batch cap, so a buggy client cannot turn one POST into a log flood.
 const MAX_EVENTS: usize = 100;
-/// A per-label cap, counted in CHARACTERS rather than bytes so a multi-byte
+/// A per-label cap, counted in characters rather than bytes so a multi-byte
 /// glyph is never split in half.
 const MAX_LABEL: usize = 160;
 

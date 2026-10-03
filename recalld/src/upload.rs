@@ -110,7 +110,7 @@ pub fn probe(path: &Path) -> Result<Media, UploadError> {
         .get("streams")
         .and_then(|s| s.get(0))
         .ok_or(UploadError::Unreadable)?;
-    // ffprobe reports sample_rate as a STRING and channels as a number.
+    // ffprobe reports sample_rate as a string and channels as a number.
     let sample_rate: i64 = stream
         .get("sample_rate")
         .and_then(|v| v.as_str())
@@ -162,7 +162,7 @@ pub fn suffix_of(filename: &str) -> String {
         .unwrap_or_default()
 }
 
-/// A meeting's id and default title, from its LOCAL start.
+/// A meeting's id and default title, from its local start.
 ///
 /// Local is Europe/London, not the host's zone: the pod runs UTC, which would
 /// shift the id by an hour in summer.
@@ -302,10 +302,9 @@ pub fn is_supported(suffix: &str) -> bool {
 
 /// The client's `start`, or now, to the whole second.
 ///
-/// ⚠ The second is not cosmetic: the stored filename carries whole seconds, and
-/// the turns writer finds the clip's audio row by the start it parses from that
-/// name. A fraction here made the row unfindable and the session's transcript
-/// was never written.
+/// ⚠ Whole seconds because the stored filename carries whole seconds, and the
+/// turns writer finds the clip's audio row by the start it parses from that name:
+/// with a fraction, the row is never found and the transcript never written.
 pub fn started_at(raw: &str) -> Result<DateTime<Utc>, UploadError> {
     let started = if raw.is_empty() {
         Utc::now()

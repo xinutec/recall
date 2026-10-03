@@ -158,7 +158,7 @@ fn smooth(mut runs: Vec<Run>, min_turn_s: f64) -> Vec<Run> {
 }
 
 /// Group `words` into per-speaker runs by which diarized turn each word's
-/// MIDPOINT falls in, then smooth away sub-`min_turn_s` turns.
+/// midpoint falls in, then smooth away sub-`min_turn_s` turns.
 ///
 /// The text is the words joined (Whisper words carry their own leading spaces).
 /// `min_turn_s` is a parameter so the attribution eval can sweep it; production

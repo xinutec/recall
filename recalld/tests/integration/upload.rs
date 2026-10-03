@@ -412,7 +412,7 @@ async fn a_real_recording_uploads_and_becomes_a_session() {
     );
 }
 
-/// The turns writer finds a clip's audio row by the start its FILENAME
+/// The turns writer finds a clip's audio row by the start its filename
 /// carries, which has whole seconds. An upload with no `start` was stamped
 /// "now" to the microsecond, its row never matched, and its transcript was
 /// never written: transcribed, then waiting for ever with no error.

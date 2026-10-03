@@ -25,7 +25,7 @@ pub struct Frontend {
 /// Prefixes the server answers itself. A miss under one of these is a miss.
 pub const SERVER_PREFIXES: &[&str] = &["/api/", "/sync/", "/ingest/", "/work/"];
 
-/// Resolve a request path to a file INSIDE the frontend root, or None.
+/// Resolve a request path to a file inside the frontend root, or None.
 ///
 /// ⚠ The containment check is on the canonicalised path, so `..` segments and
 /// symlinks are resolved first; the raw string would pass `a/../../etc/passwd`.

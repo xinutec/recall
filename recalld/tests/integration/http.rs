@@ -1,9 +1,9 @@
 //! HTTP for tests, over a bare socket: one request per connection, read to its
 //! end.
 //!
-//! ⚠ Not ureq. After an empty body ureq hands its socket back to a pool with a
-//! syscall that fails (EINVAL) once the server has closed it, and panics
-//! instead of returning an error; the agents build failed on it once (#1480).
+//! ⚠ Not ureq: after an empty body it returns its socket to a pool with a call
+//! that fails (EINVAL) once the server has closed it, and panics rather than
+//! return the error (#1480).
 
 use std::fmt::Write as _;
 use std::io::{Read, Write};

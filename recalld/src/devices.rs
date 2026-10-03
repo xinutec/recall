@@ -158,7 +158,7 @@ fn flag(value: Option<&serde_json::Value>) -> Option<bool> {
 
 fn one_beat(device: &str, raw: &serde_json::Value) -> Option<Beat> {
     let raw = raw.as_object()?;
-    // `at` and `streaming` are REQUIRED; their absence costs this device its line.
+    // `at` and `streaming` are required; their absence costs this device its line.
     let at = when(raw.get("at"))?;
     let streaming = flag(raw.get("streaming"))?;
     Some(Beat {
@@ -420,7 +420,7 @@ pub async fn heartbeat_post_route(
     Json(body): Json<HeartbeatIn>,
 ) -> Response {
     let root = st.root.clone();
-    // The SERVER's clock. See the module note.
+    // The server's clock. See the module note.
     let at = instant::python_isoformat_utc(Utc::now());
     let beat = Beat {
         device: body.device,

@@ -35,7 +35,7 @@ fn silent_wav(seconds: u32) -> Vec<u8> {
 
 #[test]
 fn silence_is_measured_as_no_speech_not_as_unknown() {
-    // 0.0 and UNKNOWN must never collapse: one says nobody spoke, the other
+    // 0.0 and unknown must never collapse: one says nobody spoke, the other
     // says nobody looked, and only one of them is safe to sweep on.
     let dir = tempfile::tempdir().expect("tempdir");
     stored(dir.path(), "usb", "usb-20260905T120000.wav", &silent_wav(3));
@@ -173,7 +173,7 @@ fn an_undecodable_segment_counts_too_because_it_was_never_heard() {
 
 #[test]
 fn the_scan_takes_the_newest_segments_first() {
-    // Liveness and the calibrated reference both read RECENT rows, so the
+    // Liveness and the calibrated reference both read recent rows, so the
     // archive must backfill behind live audio, never in front of it.
     let dir = tempfile::tempdir().expect("tempdir");
     let quiet = silent_wav(1);

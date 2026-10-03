@@ -131,7 +131,7 @@ pub enum Swap {
     /// Name the turns that are already there, each with the speaker whose span
     /// covers it most. No text is rewritten and no boundary is lost.
     ///
-    /// ⚠ This is the outcome whenever a pass would write FEWER turns than it
+    /// ⚠ This is the outcome whenever a pass would write fewer turns than it
     /// hides, at any speaker count. A pass may split (more turns, every word
     /// kept) or label (no text touched); merging is neither, and is refused.
     Attribute {
@@ -449,7 +449,7 @@ fn invented(segment: &asr::Segment, heard: &Heard) -> bool {
     }
 }
 
-/// Did this stored transcription carry ANY word timings, before the quality
+/// Did this stored transcription carry any word timings, before the quality
 /// filter in [`words_of`] had its say?
 ///
 /// The two absences differ. No timings at all is transient: a code change can
@@ -642,7 +642,7 @@ pub struct Block<'a> {
 /// Empty `voices` is ordinary, not an error: those turns land with their
 /// `SPEAKER_nn` cluster and no guess.
 pub struct Named<'a> {
-    /// Speaker label from THIS clip's diarization to the vector built for it.
+    /// Speaker label from this clip's diarization to the vector built for it.
     pub voices: std::collections::HashMap<&'a str, &'a [f64]>,
     pub enrolled: &'a [crate::identify::Voiceprint],
 }

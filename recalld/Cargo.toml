@@ -51,12 +51,10 @@ sha2 = "0.11"
 hmac = "0.13"
 base64 = "0.23"
 form_urlencoded = "1"
-# The OAuth code exchange and userinfo lookup. TLS is enabled EXPLICITLY here,
-# unlike audiod's `default-features = false`: production reaches Nextcloud over
-# plain http in-cluster (NC_INTERNAL_URL), but the fallback when that is unset is
-# the public https origin, and a client that silently cannot make that call would
-# be a masking fallback. ⚠ rustls, NOT tls-native — ort's default dragged in an
-# openssl `rust:1-slim` does not carry, which cost an image build once already.
+# The OAuth code exchange and userinfo lookup. TLS is on, unlike audiod's: in the
+# cluster Nextcloud is plain http (NC_INTERNAL_URL), but without that it is the
+# public https origin, and a client that cannot reach it would fail silently.
+# ⚠ rustls, not native TLS: that needs an openssl the `rust:1-slim` image lacks.
 ureq = { version = "2", features = ["json", "tls"] }
 hex = "0.4"
 # The sync plane's token compare. Already in the tree as a transitive dep of
@@ -64,17 +62,15 @@ hex = "0.4"
 # kind of thing that looks constant-time and is not.
 subtle = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-# ⚠ A meeting's id is its LOCAL start (`meeting-20260703-0950`), and local means
-# Europe/London, not the container's clock — which is UTC. Deriving the id in UTC
-# would shift it by an hour all summer and mint a different id for the same
-# recording, so it would no longer match the directory the worker discovered.
+# ⚠ A meeting's id is its local start (`meeting-20260703-0950`) in Europe/London,
+# not the container's UTC: in UTC the id would be an hour off all summer and no
+# longer match the directory the worker discovered.
 chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
-# ⚠ Both features are load-bearing for byte-parity with the Python writer.
-# `float_roundtrip`: without it serde_json reads a stored word timing one ulp low
-# where str::parse and Python give the exact value, and word timings decide where a
-# split lands. `preserve_order`: serde_json's Map is a BTreeMap, so it writes object
-# keys ALPHABETICALLY where a Python dict preserves insertion order.
+# ⚠ Both features keep stored JSON byte-identical to what Python wrote.
+# `float_roundtrip`: without it a word timing reads one ulp low, and word timings
+# decide where a split lands. `preserve_order`: otherwise object keys are written
+# sorted, where Python keeps insertion order.
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 # The atomic-write half of the durability order: stream into a temp file in
 # the same filesystem, fsync, then rename into place — a name never points at
@@ -85,15 +81,12 @@ tracing = "0.1"
 # `scripts/gen-types.sh` writes them and the gate fails on drift.
 ts-rs = { version = "12", features = ["serde-compat"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# ONNX runtime for the silero VAD (stage D4), loaded DYNAMICALLY from the
-# system library rather than ort's prebuilt binaries.
+# The ONNX runtime for the speech detector, loaded from the system library at
+# runtime.
 #
-# ⚠ ort's prebuilt ONNX Runtime REQUIRES AVX2, and the fleet's servers are Ivy
-# Bridge (2012) — isis crash-looped with SIGILL when it first ran there. Debian's
-# libonnxruntime is built for baseline x86-64 and runs on those CPUs, so the
-# daemon dlopens that
-# instead. `api-21` matches Debian trixie's 1.21; asking for a newer API than the
-# library provides fails at load.
+# ⚠ Not ort's prebuilt runtime: it needs AVX2, and the fleet's 2012 Ivy Bridge
+# servers lack it (the daemon dies with SIGILL). Debian's runs on baseline x86-64.
+# `api-21` matches Debian trixie's 1.21; asking for a newer API fails at load.
 ort = { version = "2.0.0-rc.13", default-features = false, features = [
     "std",
     "ndarray",

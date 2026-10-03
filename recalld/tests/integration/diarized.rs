@@ -47,7 +47,7 @@ fn at_seconds(id: i64, text: &str, start: f64, end: f64) -> Existing {
     }
 }
 
-/// The same, carrying the word timings a SPLIT needs. Spans are absolute within
+/// The same, carrying the word timings a split needs. Spans are absolute within
 /// the clip, which is how the shim stores them.
 fn timed(id: i64, start: f64, end: f64, words: &[(f64, f64, &str)]) -> Existing {
     let json: Vec<String> = words
@@ -668,7 +668,7 @@ fn a_single_speaker_pass_names_the_turns_that_are_there_and_hides_nothing() {
     let pass = write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10).expect("pass");
 
     assert_eq!(pass.named, 3, "every turn the speaker covers");
-    assert_eq!(pass.hidden, 0, "⚠ NOTHING may be hidden");
+    assert_eq!(pass.hidden, 0, "nothing may be hidden");
     assert_eq!(pass.turns, 0, "and nothing inserted");
 
     for id in [a, b, c] {

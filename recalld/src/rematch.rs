@@ -48,7 +48,7 @@ pub fn newest_enrolment(conn: &Connection) -> rusqlite::Result<Option<String>> {
 ///
 /// Writes `speaker_guess` only — `speaker_label` is the name a person gave, and
 /// the machine may disagree with its past self but not with them. Stamps every
-/// turn it EXAMINES, including unchanged ones, or the pass never finishes.
+/// turn it examines, including unchanged ones, or the pass never finishes.
 ///
 /// # Errors
 /// If the database refuses.

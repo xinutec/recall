@@ -183,7 +183,7 @@ fn the_reply_is_camel_case_and_null_when_running() {
     );
 }
 
-// --- the route is MOUNTED, not merely written --------------------------------
+// --- the route is mounted, not merely written --------------------------------
 
 /// A served router on the real schema, with the sync token set or not.
 async fn serve(token: Option<&str>) -> (tempfile::TempDir, String) {

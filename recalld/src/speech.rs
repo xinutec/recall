@@ -55,7 +55,7 @@ crate::statements! {
 
 pub use audiocore::vad::UNKNOWN_SECONDS;
 
-/// Measure up to `batch` unmeasured segments, NEWEST first; returns rows written.
+/// Measure up to `batch` unmeasured segments, newest first; returns rows written.
 /// Room left in the batch goes to measured segments whose regions were never
 /// stored (they predate the column), so a new clip is never queued behind the
 /// backfill: the transcription queue waits on its measurement.

@@ -48,7 +48,7 @@ fn turn(conn: &rusqlite::Connection, id: i64, label: Option<&str>, offset: f64, 
     .expect("turn");
 }
 
-/// The ingest plane's row for clip 1 — note the OTHER extension.
+/// The ingest plane's row for clip 1 — note the other extension.
 fn delivered(root: &std::path::Path, filename: &str) {
     delivered_at(root, filename, "2026-09-10T10:00:00Z");
 }
@@ -531,7 +531,7 @@ fn enrolment_outranks_capture_time_or_it_would_never_be_leased() {
     // diarize jobs.
     let dir = tempfile::tempdir().expect("tempdir");
     let ingest = ingest_at(dir.path());
-    // A NEWER clip with diarization to do, and an OLDER one awaiting a print.
+    // A newer clip with diarization to do, and an older one awaiting a print.
     delivered_at(
         dir.path(),
         "usb-20260912T100000.wav",

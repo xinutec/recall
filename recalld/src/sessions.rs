@@ -501,7 +501,7 @@ pub async fn name_voice_route(
     axum::Json(body): axum::Json<VoiceNameIn>,
 ) -> Response {
     let root = st.root.clone();
-    // An empty name CLEARS the label rather than storing "", which would read as
+    // An empty name clears the label rather than storing "", which would read as
     // a speaker called nothing.
     let name = body
         .name

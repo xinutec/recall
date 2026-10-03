@@ -159,14 +159,13 @@ pub fn is_requested(ingest: &Connection, filename: &str) -> rusqlite::Result<boo
         .is_some())
 }
 
-/// A requested clip's NEW transcription: the job's result if it finished after
-/// the request, else `None` while it is still pending. `Err` only from SQLite.
+/// A requested clip's new transcription: the job's result if it finished after
+/// the request, else `None` while it is pending.
 ///
-/// ⚠ The turns pass reads every finished result when a pass begins, and a
-/// request can land while it is running: writing the result it already holds
-/// rewrote a clip from its OLD transcription and dropped the request, so the
-/// new one, arriving minutes later, was never written (2026-10-03, three
-/// sessions pinned to Dutch came back in English and Italian).
+/// ⚠ The turns pass reads every finished result when it starts, and a request
+/// can land mid-pass. Writing the result it already holds would rewrite the clip
+/// from its old transcription and drop the request, so the new one would never
+/// be written.
 pub fn fresh_result(ingest: &Connection, filename: &str) -> rusqlite::Result<Option<String>> {
     let row: Option<(String, Option<String>, Option<String>)> = REQUESTED_RESULT
         .query_row(

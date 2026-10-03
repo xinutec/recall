@@ -53,7 +53,7 @@ fn groups_consecutive_words_by_speaker() {
             ("SPEAKER_00", "thanks"),
         ]
     );
-    // The turn's span is its first/last WORD, not a diarization boundary.
+    // The turn's span is its first/last word, not a diarization boundary.
     assert!((aligned[1].start - 1.6).abs() < f64::EPSILON);
     assert!((aligned[1].end - 2.5).abs() < f64::EPSILON);
 }

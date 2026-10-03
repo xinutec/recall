@@ -245,7 +245,7 @@ fn a_page_reads_oldest_first_though_the_query_is_newest_first() {
 
 #[test]
 fn a_turn_with_no_audio_segment_still_appears() {
-    // Corrections can exist with no audio row. An INNER join would drop exactly
+    // Corrections can exist with no audio row. An inner join would drop exactly
     // the turns a person took the trouble to fix.
     let conn = db();
     turn(&conn, 1, "2026-09-01T10:00:00+00:00", "corrected", &[]);

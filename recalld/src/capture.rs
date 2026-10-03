@@ -142,7 +142,7 @@ pub fn intent_until(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<O
         return Ok(None);
     }
     let Some(parsed) = audiocore::instant::parse(&raw) else {
-        // Unparseable reads as RUNNING, never as a pause nobody can clear.
+        // Unparseable reads as running, never as a pause nobody can clear.
         return Ok(None);
     };
     if parsed.with_timezone(&Utc) <= now {
@@ -261,7 +261,7 @@ pub fn fleet_capture_state(
     };
 
     // Settled = the mic confirmed the desired state. When paused the resume-by
-    // must match too, so EXTENDING a pause (a snooze) reads as transitioning
+    // must match too, so extending a pause (a snooze) reads as transitioning
     // until applied. The Mac round-trips the intent's exact ISO string, so this
     // equality is exact rather than a tolerance.
     let settled = reported.running == desired_running

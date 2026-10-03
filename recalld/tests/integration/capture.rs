@@ -459,7 +459,7 @@ fn the_audit_write_cannot_refuse_the_control_action() {
     );
 }
 
-// --- the routes are MOUNTED, not merely written ------------------------------
+// --- the routes are mounted, not merely written ------------------------------
 
 /// Through the real router, because a handler's passing unit tests say nothing
 /// about whether it is mounted.

@@ -253,7 +253,7 @@ pub fn apply_correction(
     let old = load_original(&tx, segment_id)?;
     if old.superseded_by.is_some() {
         // A double-tap, or a second tab correcting a stale id, would mint a
-        // SECOND current human turn and a duplicate corpus pair.
+        // second current human turn and a duplicate corpus pair.
         return Err(CorrectError::AlreadySuperseded(segment_id));
     }
     let language = edit.language.or(old.language.as_deref());

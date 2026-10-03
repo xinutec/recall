@@ -1,9 +1,9 @@
 //! Every write to `transcript_segments`, and the types that say what a row is.
 //!
-//! ⚠ No other module writes the table: `the_turn_table_has_one_writer` fails the
-//! build otherwise. A writer that records its work in a way the readers do not
-//! recognise is the bug this closes: a pass naming turns in place set only the
-//! cluster, and the tier, read from the provenance, called them undiarized.
+//! ⚠ No other module writes the table (`the_turn_table_has_one_writer` fails
+//! the build otherwise), so every write records itself the way readers expect:
+//! a writer of its own once set only the cluster, and readers, going by the
+//! provenance, called the turns undiarized.
 
 use audiocore::instant::Stamp;
 use std::borrow::Cow;

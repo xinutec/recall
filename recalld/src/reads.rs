@@ -194,7 +194,7 @@ fn to_out(segment: &Segment) -> TranscriptOut {
 /// The turn as the app consumes it, optionally overriding the auto guess.
 ///
 /// ⚠ The override exists for folded moments only. A spine is chosen for the
-/// cleanest TRANSCRIPTION, which says nothing about attribution — the strongest
+/// cleanest transcription, which says nothing about attribution — the strongest
 /// voiceprint match for the same words may sit on another mic's version. A human
 /// label still wins over both: `confirmed` is checked first, so an override can
 /// never overwrite a name a person gave.
