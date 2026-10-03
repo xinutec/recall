@@ -155,6 +155,7 @@ fn one(
         filename,
         source,
         spans,
+        language,
     } = job;
     tracing::info!(id, %kind, %source, %filename, "leased");
     let clip = scratch.join(&filename);
@@ -162,7 +163,7 @@ fn one(
     // Exhaustive: a new kind does not compile until it is given work here.
     let outcome = match kind {
         Kind::TranscribeSegment => shim
-            .transcribe(&clip, None, prompt)
+            .transcribe_in(&clip, language.as_deref(), prompt)
             .map(|a| (a.raw, a.reply.segments.len())),
         Kind::DiarizeSegment => shim.diarize(&clip).map(|a| (a.raw, a.reply.turns.len())),
         // One model call per named turn, composed here. A refused span costs

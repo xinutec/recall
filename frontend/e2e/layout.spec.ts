@@ -177,6 +177,7 @@ const sessionsList = {
       end: '2026-01-15T10:36:10Z',
       turnCount: 42,
       speakers: ['Oskar', 'Alex'],
+      language: 'nl',
     },
   ],
 } satisfies SessionList;

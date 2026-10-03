@@ -307,21 +307,20 @@ fn make_flac(path: &std::path::Path, seconds: f64) -> bool {
 }
 
 fn multipart(filename: &str, bytes: &[u8], title: &str, start: &str) -> (String, Vec<u8>) {
+    multipart_fields(filename, bytes, &[("title", title), ("start", start)])
+}
+
+/// The form with any text fields; an empty value is left out, as a browser does.
+fn multipart_fields(filename: &str, bytes: &[u8], fields: &[(&str, &str)]) -> (String, Vec<u8>) {
     let boundary = "----recalldtestboundary";
     let mut body = Vec::new();
-    let mut part = |name: &str, value: &str| {
+    for (name, value) in fields.iter().filter(|(_, v)| !v.is_empty()) {
         body.extend_from_slice(
             format!(
                 "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
             )
             .as_bytes(),
         );
-    };
-    if !title.is_empty() {
-        part("title", title);
-    }
-    if !start.is_empty() {
-        part("start", start);
     }
     body.extend_from_slice(
         format!(
@@ -447,6 +446,62 @@ async fn an_upload_without_a_start_is_stored_at_the_second_its_filename_carries(
         .expect("row");
     let named = audiocore::names::parse_segment_start(&path).expect("a segment name");
     assert_eq!(start, audiocore::instant::python_isoformat_utc(named));
+}
+
+async fn upload(dir: &std::path::Path, fields: &[(&str, &str)]) -> u16 {
+    let clip = dir.join("meeting.flac");
+    if !make_flac(&clip, 2.0) {
+        return 0;
+    }
+    let bytes = std::fs::read(&clip).expect("read");
+    let (ctype, body) = multipart_fields("meeting.flac", &bytes, fields);
+    gated(dir)
+        .oneshot(
+            Request::post("/api/sessions")
+                .header("content-type", ctype)
+                .header("cookie", cookie())
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("call")
+        .status()
+        .as_u16()
+}
+
+#[tokio::test]
+async fn a_language_chosen_at_upload_is_kept_with_the_session() {
+    let dir = scratch();
+    match upload(dir.path(), &[("language", "nl")]).await {
+        0 => return eprintln!("skipped: no ffmpeg on this host"),
+        status => assert_eq!(status, 200),
+    }
+    let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
+    let language: Option<String> = conn
+        .query_row(
+            "SELECT language FROM sources WHERE kind = 'upload'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("row");
+    assert_eq!(language.as_deref(), Some("nl"));
+}
+
+#[tokio::test]
+async fn a_language_outside_the_households_is_refused_before_anything_is_stored() {
+    let dir = scratch();
+    match upload(dir.path(), &[("language", "it")]).await {
+        0 => return eprintln!("skipped: no ffmpeg on this host"),
+        status => assert_eq!(status, 400),
+    }
+    assert!(
+        !dir.path().join("recall.sqlite").exists() || {
+            let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
+            conn.query_row("SELECT count(*) FROM sources", [], |r| r.get::<_, i64>(0))
+                .unwrap_or(0)
+                == 0
+        }
+    );
 }
 
 #[test]

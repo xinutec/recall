@@ -11,6 +11,12 @@ use std::sync::Arc;
 const READ_TOKEN: &str = "read-me";
 
 fn serve(root: &Path) -> String {
+    // The lease reads the meaning plane (a session's pinned language), which a
+    // real recalld always has, migrated at startup.
+    recalld::meaning_schema::ensure(
+        &rusqlite::Connection::open(root.join("recall.sqlite")).expect("meaning"),
+    )
+    .expect("schema");
     let config = Arc::new(ServerConfig {
         root: root.to_owned(),
         tokens: None,

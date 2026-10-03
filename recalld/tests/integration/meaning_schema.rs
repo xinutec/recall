@@ -213,14 +213,16 @@ fn an_instant_in_another_spelling_is_refused_and_the_stored_one_accepted() {
 fn words_a_person_typed_or_vouched_for_are_marked_on_their_turn() {
     // Rung 50 reads the corrections already filed: a check or a changed text
     // marks the person's turn, a speaker fix (the machine's words) does not.
-    // A database one rung short: the top built, then its last rung taken off.
+    // A database at rung 49: the top built, then every rung above 49 taken off
+    // (v50 words_checked, v51 sources.language).
     let conn = rusqlite::Connection::open_in_memory().expect("db");
     ensure(&conn).expect("schema");
     conn.execute_batch(
         "ALTER TABLE transcript_segments DROP COLUMN words_checked;
+         ALTER TABLE sources DROP COLUMN language;
          PRAGMA user_version = 49;",
     )
-    .expect("one rung short");
+    .expect("at rung 49");
     conn.execute_batch(
         "INSERT INTO transcript_segments (id, start_utc, end_utc, text, asr_model, provenance)
          VALUES (11, '2026-09-19T10:00:00+00:00', '2026-09-19T10:00:02+00:00', 'a', 'human', 'human correction of #1'),

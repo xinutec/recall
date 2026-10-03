@@ -356,14 +356,16 @@ struct Form {
     bytes: Vec<u8>,
     title: String,
     start: String,
+    /// `nl`, `en`, or empty for the model's guess (`sessions::LANGUAGES`).
+    language: String,
 }
 
 // A `Response` as the error is the axum handler idiom, and it is returned once,
 // so boxing it buys nothing.
 #[expect(clippy::result_large_err, reason = "the Err is the HTTP response")]
 async fn read_form(mut parts: Multipart) -> Result<Form, Response> {
-    let (mut filename, mut bytes, mut title, mut start) =
-        (None, None, String::new(), String::new());
+    let (mut filename, mut bytes, mut title, mut start, mut language) =
+        (None, None, String::new(), String::new(), String::new());
     loop {
         let field = match parts.next_field().await {
             Ok(Some(field)) => field,
@@ -393,6 +395,7 @@ async fn read_form(mut parts: Multipart) -> Result<Form, Response> {
             }
             "title" => title = field.text().await.unwrap_or_default(),
             "start" => start = field.text().await.unwrap_or_default(),
+            "language" => language = field.text().await.unwrap_or_default(),
             _ => {}
         }
     }
@@ -404,6 +407,7 @@ async fn read_form(mut parts: Multipart) -> Result<Form, Response> {
         bytes,
         title,
         start,
+        language,
     })
 }
 
@@ -426,6 +430,10 @@ pub async fn create_session_route(
         )
             .into_response();
     }
+    let language = match crate::sessions::parse_language(Some(&form.language)) {
+        Ok(language) => language,
+        Err(why) => return (StatusCode::BAD_REQUEST, why).into_response(),
+    };
     let root = st.root.clone();
     let title = form.title.trim().to_owned();
 
@@ -448,14 +456,13 @@ pub async fn create_session_route(
                 return Err(err);
             }
         };
-        register(
-            &work::open_write(&root)?,
-            &source,
-            &name,
-            &path,
-            started,
-            media,
-        )?;
+        let meaning = work::open_write(&root)?;
+        register(&meaning, &source, &name, &path, started, media)?;
+        // Before the ingest row below, so the first transcription already
+        // leases with it.
+        if language.is_some() {
+            crate::sessions::pin_language(&meaning, &source, language)?;
+        }
         // The ingest row makes it transcribable; the meaning rows above only
         // make it visible.
         deliver(

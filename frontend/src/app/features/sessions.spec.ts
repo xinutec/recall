@@ -13,7 +13,7 @@ import { RecallApi } from '../recall-api';
 function setup(createOk = true) {
   const navigate = vi.fn();
   const open = vi.fn();
-  const createSession = vi.fn((...args: [File, string, string]) => {
+  const createSession = vi.fn((...args: [File, string, string, string?]) => {
     void args;
     return createOk
       ? of({ id: 'meeting-20260703-1420', title: 'Meeting 2026-07-03 14:20' })
@@ -22,6 +22,7 @@ function setup(createOk = true) {
   const renameSession = vi.fn(() => of({ ok: true }));
   const deleteSession = vi.fn(() => of({ ok: true }));
   const rediarizeSession = vi.fn(() => of({ ok: true }));
+  const setSessionLanguage = vi.fn(() => of({ ok: true }));
   TestBed.configureTestingModule({
     providers: [
       provideZonelessChangeDetection(),
@@ -30,7 +31,13 @@ function setup(createOk = true) {
       { provide: Router, useValue: { navigate } },
       {
         provide: RecallApi,
-        useValue: { createSession, renameSession, deleteSession, rediarizeSession },
+        useValue: {
+          createSession,
+          renameSession,
+          deleteSession,
+          rediarizeSession,
+          setSessionLanguage,
+        },
       },
       { provide: MatSnackBar, useValue: { open } },
     ],
@@ -47,6 +54,7 @@ function setup(createOk = true) {
     renameSession,
     deleteSession,
     rediarizeSession,
+    setSessionLanguage,
   };
 }
 
@@ -110,6 +118,31 @@ describe('Sessions', () => {
     c.confirmDelete('meeting-1');
     expect(deleteSession).toHaveBeenCalledWith('meeting-1');
     expect(c.confirmingId()).toBeNull();
+  });
+
+  it('uploads with the chosen language, and with none by default', () => {
+    const { c, createSession } = setup();
+    const file = new File(['a'], 'x.mp3', { type: 'audio/mpeg' });
+    c.onFile(fileInput(file));
+    expect(createSession.mock.calls[0][3]).toBe('');
+
+    c.uploadLanguage.set('nl');
+    c.onFile(fileInput(file));
+    expect(createSession.mock.calls[1][3]).toBe('nl');
+  });
+
+  it('pins a session language, and Automatic unpins it', () => {
+    const { c, setSessionLanguage } = setup();
+    c.setLanguage('meeting-1', 'nl');
+    expect(setSessionLanguage).toHaveBeenCalledWith('meeting-1', 'nl');
+    c.setLanguage('meeting-1', '');
+    expect(setSessionLanguage).toHaveBeenLastCalledWith('meeting-1', null);
+  });
+
+  it('shows a pinned language after the turn count, and nothing when guessed', () => {
+    const { c } = setup();
+    expect(c.countText({ turnCount: 58, language: 'nl' })).toBe('58 turns · Dutch');
+    expect(c.countText({ turnCount: 1, language: null })).toBe('1 turn');
   });
 
   it('re-diarize queues without navigating away', () => {

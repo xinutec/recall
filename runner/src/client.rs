@@ -17,6 +17,10 @@ pub struct Job {
     /// from its start. Absent for every other kind.
     #[serde(default)]
     pub spans: Vec<Span>,
+    /// For `transcribe-segment`: the language its session is pinned to;
+    /// absent, the model guesses.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 /// One stretch of a clip to embed, as recalld serves it. It carries no name:

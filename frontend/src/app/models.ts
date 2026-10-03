@@ -18,6 +18,7 @@ export type { Ok } from './generated/Ok';
 export type { Session } from './generated/Session';
 export type { SessionList } from './generated/SessionList';
 export type { SessionRenameRequest } from './generated/SessionRenameRequest';
+export type { SessionLanguageRequest } from './generated/SessionLanguageRequest';
 export type { VoiceNameRequest } from './generated/VoiceNameRequest';
 export type { AssignSpanRequest } from './generated/AssignSpanRequest';
 export type { AssignResult } from './generated/AssignResult';

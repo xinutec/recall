@@ -12,6 +12,7 @@ import {
   LineRequest,
   Ok,
   Session,
+  SessionLanguageRequest,
   SessionRenameRequest,
   SpeakerNames,
   VoiceNameRequest,
@@ -125,13 +126,23 @@ export class RecallApi {
     return this.http.post<Ok>(`/api/correction/${id}/hide`, {});
   }
 
-  /** Upload a recording as a new session. `start` is when it was recorded. */
-  createSession(file: File, title: string, start: string): Observable<Session> {
+  /**
+   * Upload a recording as a new session. `start` is when it was recorded;
+   * `language` ('nl', 'en') pins its transcription, empty leaves it to the model.
+   */
+  createSession(file: File, title: string, start: string, language = ''): Observable<Session> {
     const form = new FormData();
     form.append('audio', file, file.name);
     if (title) form.append('title', title);
     if (start) form.append('start', start);
+    if (language) form.append('language', language);
     return this.http.post<Session>('/api/sessions', form);
+  }
+
+  /** Pin a session's language (null: the model's guess) and transcribe it again. */
+  setSessionLanguage(source: string, language: string | null): Observable<Ok> {
+    const body: SessionLanguageRequest = { language };
+    return this.http.post<Ok>(`/api/sessions/${encodeURIComponent(source)}/language`, body);
   }
 
   renameSession(source: string, title: string): Observable<Ok> {

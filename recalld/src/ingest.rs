@@ -423,6 +423,7 @@ pub async fn lease_job(
                 return Ok(None);
             };
             crate::enrol::attach_spans(&config.root, &mut job)?;
+            crate::sessions::attach_language(&config.root, &mut job)?;
             Ok(Some(job))
         });
     match handle.await {

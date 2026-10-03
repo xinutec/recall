@@ -19,6 +19,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 crate::statements! {
+    /// Pin a session's language, or `NULL` to leave it to the model.
+    SET_LANGUAGE: Meaning = "UPDATE sources SET language = ?2 WHERE id = ?1";
+    LANGUAGE_OF: Meaning = "SELECT language FROM sources WHERE id = ?1";
+    SESSION_FILES: Ingest = "SELECT filename FROM segments WHERE source = ?1 ORDER BY filename";
     SESSIONS: Meaning =
         "SELECT s.id, s.name, MIN(a.start_utc), MAX(a.end_utc), COUNT(t.id), \
                 GROUP_CONCAT(DISTINCT CASE \
@@ -27,7 +31,8 @@ crate::statements! {
                          AND t.speaker_label NOT LIKE 'SPEAKER_%' \
                          THEN t.speaker_label \
                     ELSE 'unknown' \
-                END) \
+                END), \
+                s.language \
          FROM sources s \
          JOIN audio_segments a ON a.source_id = s.id \
          LEFT JOIN transcript_segments t \
@@ -92,6 +97,8 @@ pub struct SessionOut {
     pub end: String,
     pub turn_count: i64,
     pub speakers: Vec<String>,
+    /// The language every transcription of it uses; `None`: the model guesses.
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
@@ -123,6 +130,7 @@ pub fn sessions(conn: &Connection) -> rusqlite::Result<SessionsOut> {
             end: r.get(3)?,
             turn_count: r.get(4)?,
             speakers,
+            language: r.get(6)?,
         })
     })?;
     Ok(SessionsOut {
@@ -199,6 +207,81 @@ pub fn rediarize(
     CLEAR_DIARIZE_LEDGER.execute(&tx, (audiocore::job::Kind::DiarizeSegment, source))?;
     tx.commit()?;
     Ok(requeued)
+}
+
+/// The languages a session can be pinned to: the household's two. The model's
+/// own guess picks a third language for Dutch often enough (Italian for a Dutch
+/// conversation, 2026-10-03) that anything else is more likely a mistake.
+pub const LANGUAGES: &[&str] = &["nl", "en"];
+
+/// A requested language: absent or empty is the model's guess, one of
+/// [`LANGUAGES`] pins it, anything else is refused.
+pub fn parse_language(raw: Option<&str>) -> Result<Option<&'static str>, String> {
+    match raw.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(code) => LANGUAGES
+            .iter()
+            .find(|l| **l == code)
+            .copied()
+            .map(Some)
+            .ok_or_else(|| format!("language must be one of {LANGUAGES:?} or empty, not {code:?}")),
+    }
+}
+
+/// Pin `source`'s language (or unpin it) and transcribe every clip again with
+/// it, through [`crate::retranscribe`]: the old lines are set aside, not
+/// deleted, and a person's own lines are kept.
+pub fn set_language(
+    meaning: &Connection,
+    ingest: &Connection,
+    source: &str,
+    language: Option<&str>,
+    now: &audiocore::instant::Stamp,
+) -> Result<crate::retranscribe::Requested, SessionError> {
+    require_upload(meaning, source)?;
+    let files: Vec<String> = {
+        let mut stmt = SESSION_FILES.prepare(ingest)?;
+        let rows = stmt.query_map([source], |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    if files.is_empty() {
+        return Err(SessionError::NoAudio);
+    }
+    pin_language(meaning, source, language)?;
+    Ok(crate::retranscribe::request(ingest, &files, now)?)
+}
+
+/// Store `source`'s language without transcribing anything again: for a
+/// session being created, which has no transcription yet.
+pub fn pin_language(
+    conn: &Connection,
+    source: &str,
+    language: Option<&str>,
+) -> rusqlite::Result<()> {
+    SET_LANGUAGE.execute(conn, (source, language))?;
+    Ok(())
+}
+
+/// The language `source` is pinned to, if any.
+pub fn language_of(conn: &Connection, source: &str) -> rusqlite::Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    Ok(LANGUAGE_OF
+        .query_row(conn, [source], |r| r.get(0))
+        .optional()?
+        .flatten())
+}
+
+/// Give a leased transcription job its session's pinned language, if any;
+/// attached at lease time so a change applies to the next transcription.
+pub fn attach_language(
+    root: &std::path::Path,
+    job: &mut crate::queue::Job,
+) -> rusqlite::Result<()> {
+    if job.kind != audiocore::job::Kind::TranscribeSegment {
+        return Ok(());
+    }
+    job.language = language_of(&crate::reads::open(root)?, &job.source)?;
+    Ok(())
 }
 
 /// Name a diarization voice across a whole session, or clear it with `None`.
@@ -371,6 +454,44 @@ pub async fn rediarize_route(
         Ok(Ok(_)) => route::ack(),
         Ok(Err(err)) => err.into_response("session rediarize"),
         Err(err) => route::faulted("session rediarize task", &err),
+    }
+}
+
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(export, rename = "SessionLanguageRequest")]
+pub struct LanguageIn {
+    /// `"nl"`, `"en"`, or null for the model's guess.
+    #[ts(optional = nullable)]
+    language: Option<String>,
+}
+
+/// `POST /api/sessions/{source}/language`: pin the language and transcribe again.
+pub async fn language_route(
+    State(st): State<Arc<reads::State>>,
+    Path(source): Path<String>,
+    axum::Json(body): axum::Json<LanguageIn>,
+) -> Response {
+    let language = match parse_language(body.language.as_deref()) {
+        Ok(language) => language,
+        Err(why) => return (StatusCode::BAD_REQUEST, why).into_response(),
+    };
+    let root = st.root.clone();
+    match tokio::task::spawn_blocking(move || {
+        let meaning = work::open_write(&root)?;
+        let ingest = crate::store::open(&root)?;
+        set_language(
+            &meaning,
+            &ingest,
+            &source,
+            language,
+            &audiocore::instant::Stamp::now(),
+        )
+    })
+    .await
+    {
+        Ok(Ok(_)) => route::ack(),
+        Ok(Err(err)) => err.into_response("session language"),
+        Err(err) => route::faulted("session language task", &err),
     }
 }
 

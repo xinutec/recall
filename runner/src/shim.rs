@@ -238,6 +238,27 @@ impl Shim {
         };
         self.ask(asr::OP, &request)
     }
+
+    /// Transcribe one clip in a stated `language` (`"nl"`), the default model;
+    /// `None` leaves it to the model, exactly as [`Shim::transcribe`] does.
+    ///
+    /// # Errors
+    /// Whatever [`Shim::ask`] reports.
+    pub fn transcribe_in(
+        &mut self,
+        audio: &Path,
+        language: Option<&str>,
+        initial_prompt: Option<&str>,
+    ) -> Result<Answer<asr::Reply>, Error> {
+        let request = asr::Request {
+            audio: audio.to_string_lossy().into_owned(),
+            words: true,
+            model: None,
+            language: language.map(str::to_owned),
+            initial_prompt: initial_prompt.map(str::to_owned),
+        };
+        self.ask(asr::OP, &request)
+    }
 }
 
 /// A shim's reply, as it came and as read.

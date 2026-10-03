@@ -15,6 +15,18 @@ import { Session, SessionList } from '../models';
 import { RecallApi } from '../recall-api';
 import { dayLabel, timeOfDay } from '../format';
 
+/** The languages a session can be pinned to; '' leaves it to the model. */
+export const LANGUAGES: readonly { code: string; label: string }[] = [
+  { code: '', label: 'Automatic' },
+  { code: 'nl', label: 'Dutch' },
+  { code: 'en', label: 'English' },
+];
+
+/** A language code's label; an unknown or absent code is the model's guess. */
+export function languageLabel(code: string | null | undefined): string {
+  return LANGUAGES.find((l) => l.code === (code ?? ''))?.label ?? 'Automatic';
+}
+
 /** Uploaded recordings, such as appointments: upload, open, rename, re-diarize, delete. */
 @Component({
   selector: 'app-sessions',
@@ -42,6 +54,10 @@ export class Sessions {
   protected readonly empty = computed(() => !this.items().length && !this.data.isLoading());
 
   protected readonly uploading = signal(false);
+  /** The language the next upload is pinned to; '' is the model's guess. */
+  protected readonly uploadLanguage = signal('');
+  protected readonly languages = LANGUAGES;
+  protected readonly languageLabel = languageLabel;
   protected readonly editingId = signal<string | null>(null);
   protected readonly editTitle = signal('');
   // Delete takes two taps.
@@ -49,6 +65,12 @@ export class Sessions {
 
   protected readonly day = dayLabel;
   protected readonly time = timeOfDay;
+
+  /** "58 turns", and the pinned language after it: "58 turns · Dutch". */
+  protected countText(s: Session): string {
+    const turns = `${s.turnCount} ${s.turnCount === 1 ? 'turn' : 'turns'}`;
+    return s.language ? `${turns} · ${languageLabel(s.language)}` : turns;
+  }
 
   protected open(id: string): void {
     void this.router.navigate(['/sessions', id]);
@@ -63,7 +85,7 @@ export class Sessions {
     }
     this.uploading.set(true);
     const start = new Date(file.lastModified).toISOString();
-    this.api.createSession(file, '', start).subscribe({
+    this.api.createSession(file, '', start, this.uploadLanguage()).subscribe({
       next: (s: Session) => {
         this.uploading.set(false);
         this.data.reload();
@@ -107,6 +129,19 @@ export class Sessions {
           duration: 4000,
         }),
       error: () => this.snack.open('Could not queue re-diarize', 'Dismiss', { duration: 4000 }),
+    });
+  }
+
+  /** Pin a session's language and transcribe it again; '' unpins it. */
+  protected setLanguage(id: string, code: string): void {
+    this.api.setSessionLanguage(id, code || null).subscribe({
+      next: () => {
+        this.data.reload();
+        this.snack.open(`Transcribing again — ${languageLabel(code)}`, undefined, {
+          duration: 4000,
+        });
+      },
+      error: () => this.snack.open('Could not change the language', 'Dismiss', { duration: 4000 }),
     });
   }
 

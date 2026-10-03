@@ -5,7 +5,8 @@
 
 use audiocore::job::Kind;
 use recalld::sessions::{
-    self, ExportTurn, SessionError, clean_transcript, name_voice, rediarize, rename,
+    self, ExportTurn, SessionError, clean_transcript, name_voice, parse_language, rediarize,
+    rename, set_language,
 };
 use rusqlite::Connection;
 
@@ -711,4 +712,109 @@ fn a_failed_delete_leaves_the_session_whole() {
         0,
         "including the tombstone"
     );
+}
+
+/// The model guessed Italian for a Dutch conversation (2026-10-03): pinning
+/// the language transcribes every clip again with it, and the next lease
+/// carries it to the runner.
+#[test]
+fn pinning_a_language_transcribes_the_session_again_and_the_lease_carries_it() {
+    let dir = diarized_meeting("meeting-1");
+    let root = dir.path();
+    let meaning = recalld::work::open_write(root).expect("meaning");
+    let ingest = recalld::store::open(root).expect("ingest");
+
+    let requested = set_language(
+        &meaning,
+        &ingest,
+        "meeting-1",
+        Some("nl"),
+        &crate::stamp(NOW),
+    )
+    .expect("pinned");
+
+    assert_eq!(requested.queued.len(), 2);
+    assert_eq!(open_jobs(root, "transcribe-segment"), 2);
+    assert_eq!(
+        sessions::language_of(&meaning, "meeting-1")
+            .expect("read")
+            .as_deref(),
+        Some("nl")
+    );
+    // The list (which shows only sessions with audio) says so too.
+    segment(
+        &meaning,
+        "meeting-1",
+        "2026-07-03T09:50:00+00:00",
+        "2026-07-03T09:51:00+00:00",
+    );
+    let listed = sessions::sessions(&meaning).expect("list");
+    assert_eq!(listed.items[0].language.as_deref(), Some("nl"));
+
+    let now = "2026-09-07T10:00:00Z".parse().expect("t");
+    let mut job = recalld::queue::lease(root, now, &[Kind::TranscribeSegment])
+        .expect("lease")
+        .expect("a job");
+    sessions::attach_language(root, &mut job).expect("attach");
+    assert_eq!(job.language.as_deref(), Some("nl"));
+    assert_eq!(serde_json::to_value(&job).expect("json")["language"], "nl");
+}
+
+#[test]
+fn unpinning_leaves_the_language_to_the_model_again() {
+    let dir = diarized_meeting("meeting-1");
+    let root = dir.path();
+    let meaning = recalld::work::open_write(root).expect("meaning");
+    let ingest = recalld::store::open(root).expect("ingest");
+    set_language(
+        &meaning,
+        &ingest,
+        "meeting-1",
+        Some("en"),
+        &crate::stamp(NOW),
+    )
+    .expect("pin");
+
+    set_language(&meaning, &ingest, "meeting-1", None, &crate::stamp(NOW)).expect("unpin");
+
+    assert_eq!(
+        sessions::language_of(&meaning, "meeting-1").expect("read"),
+        None
+    );
+    let now = "2026-09-07T10:00:00Z".parse().expect("t");
+    let mut job = recalld::queue::lease(root, now, &[Kind::TranscribeSegment])
+        .expect("lease")
+        .expect("a job");
+    sessions::attach_language(root, &mut job).expect("attach");
+    assert_eq!(job.language, None);
+    assert!(
+        serde_json::to_value(&job)
+            .expect("json")
+            .get("language")
+            .is_none()
+    );
+}
+
+#[test]
+fn pinning_the_household_archive_is_refused() {
+    let dir = diarized_meeting("meeting-1");
+    let root = dir.path();
+    let meaning = recalld::work::open_write(root).expect("meaning");
+    source(&meaning, "usb", "coreaudio");
+    let ingest = recalld::store::open(root).expect("ingest");
+
+    let err = set_language(&meaning, &ingest, "usb", Some("nl"), &crate::stamp(NOW))
+        .expect_err("must refuse");
+
+    assert!(matches!(err, SessionError::NotAnUpload), "got {err:?}");
+    assert_eq!(open_jobs(root, "transcribe-segment"), 0);
+}
+
+#[test]
+fn a_language_is_one_of_the_households_or_left_to_the_model() {
+    assert_eq!(parse_language(None), Ok(None));
+    assert_eq!(parse_language(Some("")), Ok(None));
+    assert_eq!(parse_language(Some(" nl ")), Ok(Some("nl")));
+    assert_eq!(parse_language(Some("en")), Ok(Some("en")));
+    assert!(parse_language(Some("it")).is_err());
 }

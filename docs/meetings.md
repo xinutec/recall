@@ -12,6 +12,14 @@ microphone clip goes through, read back as a clean attributed transcript.
   mp3, m4a, wav, flac, ogg, opus, webm). The session appears at once with zero
   turns; the runners fill it in.
 
+**Language.** By default the model guesses each recording's language, which
+copes with a mixed conversation. It can guess wrong: a Dutch conversation has
+come back as English or Italian, translated rather than transcribed. Pin the
+language when uploading (the language button under "Upload recording"), or
+later from a session's menu (Language), which transcribes it again in that
+language: the old lines are set aside, not deleted. Dutch and English are the
+choices (`sessions::LANGUAGES`); Automatic unpins.
+
 A session's id is its local start, `meeting-YYYYMMDD-HHMM` (Europe/London), and
 its audio lands in the ingest plane like any delivered blob. Uploading the same
 recording twice is a no-op on the id.

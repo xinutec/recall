@@ -105,6 +105,10 @@ pub struct Job {
     /// other kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<crate::enrol::Span>,
+    /// For [`Kind::TranscribeSegment`] only: the language its session is pinned
+    /// to (`crate::sessions::attach_language`); absent, the model guesses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 fn iso(t: DateTime<Utc>) -> String {
@@ -230,6 +234,7 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[Kind]) -> rusqlite::Resul
                 // Filled by the caller that can reach the meaning plane; this
                 // one holds only the ingest connection.
                 spans: Vec::new(),
+                language: None,
             })
         })
         .optional()?;

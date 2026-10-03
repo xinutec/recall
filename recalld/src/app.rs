@@ -148,6 +148,10 @@ fn browsing(
             post(sessions::rediarize_route),
         )
         .route(
+            "/api/sessions/{source}/language",
+            post(sessions::language_route),
+        )
+        .route(
             "/api/sessions/{source}/voice",
             post(sessions::name_voice_route),
         )

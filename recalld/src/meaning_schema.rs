@@ -525,6 +525,12 @@ pub const MIGRATIONS: &[&str] = &[
                    WHERE transcript_segments.provenance = 'human correction of #' || c.transcript_segment_id
                      AND (c.words_checked = 1 OR c.corrected_text <> c.original_text));
 "#,
+    // v51
+    r#"
+    -- The language a person pinned an uploaded session to ('nl', 'en'); NULL
+    -- leaves it to the model's guess. Every transcription of its clips uses it.
+    ALTER TABLE sources ADD COLUMN language TEXT;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

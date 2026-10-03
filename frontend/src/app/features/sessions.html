@@ -4,10 +4,24 @@
       <h2>Sessions</h2>
       <span class="sub">Discrete recordings — meetings and appointments</span>
     </div>
-    <button mat-flat-button (click)="picker.click()" [disabled]="uploading()">
-      <mat-icon>upload</mat-icon>
-      Upload recording
-    </button>
+    <div class="upload">
+      <button mat-flat-button (click)="picker.click()" [disabled]="uploading()">
+        <mat-icon>upload</mat-icon>
+        Upload recording
+      </button>
+      <button mat-button [matMenuTriggerFor]="uploadLang" aria-label="Language of the next upload">
+        <mat-icon>translate</mat-icon>
+        {{ languageLabel(uploadLanguage()) }}
+      </button>
+      <mat-menu #uploadLang="matMenu">
+        @for (l of languages; track l.code) {
+          <button mat-menu-item (click)="uploadLanguage.set(l.code)">
+            <mat-icon>{{ uploadLanguage() === l.code ? 'check' : '' }}</mat-icon>
+            <span>{{ l.label }}</span>
+          </button>
+        }
+      </mat-menu>
+    </div>
     <input #picker type="file" accept="audio/*,.m4a,.mp3,.wav" hidden (change)="onFile(picker)" />
   </header>
 
@@ -54,7 +68,7 @@
               </div>
               <div class="title">{{ s.title }}</div>
               <div class="meta">
-                <span class="count">{{ s.turnCount }} {{ s.turnCount === 1 ? 'turn' : 'turns' }}</span>
+                <span class="count">{{ countText(s) }}</span>
                 @for (who of s.speakers; track who) {
                   <mat-chip class="who">{{ who }}</mat-chip>
                 }
@@ -72,10 +86,22 @@
                 <mat-icon>groups</mat-icon>
                 <span>Re-diarize</span>
               </button>
+              <button mat-menu-item [matMenuTriggerFor]="lang">
+                <mat-icon>translate</mat-icon>
+                <span>Language</span>
+              </button>
               <button mat-menu-item (click)="askDelete(s.id)">
                 <mat-icon>delete</mat-icon>
                 <span>Delete</span>
               </button>
+            </mat-menu>
+            <mat-menu #lang="matMenu">
+              @for (l of languages; track l.code) {
+                <button mat-menu-item (click)="setLanguage(s.id, l.code)">
+                  <mat-icon>{{ (s.language ?? '') === l.code ? 'check' : '' }}</mat-icon>
+                  <span>{{ l.label }}</span>
+                </button>
+              }
             </mat-menu>
           </mat-card-content>
         }
