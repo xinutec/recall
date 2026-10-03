@@ -17,14 +17,9 @@ makes "the binary exists" and "the model exists" the same fact.
   detector is already decoded to 16 kHz mono (ASR's shape, and what the room
   builder emits), so the multi-rate model's extra input and size buy nothing.
 
-⚠ **The Python pipeline does NOT use this file.** `recall.vad` loads silero
-through torch as a JIT model (`silero_vad.jit`); the ONNX files merely ship in
-the same wheel. So the two implementations share weights and an origin, but not
-a runtime — and agreement between them is something to MEASURE, not assume.
-Their pre-processing must match deliberately: `recall.vad` lifts a clip's peak
-toward 0.5 with gain capped at 32x before detection, which is what stopped quiet
-phone mics from being gated to silence. A Rust port that skips that gain will
-disagree with Python exactly where it matters most.
+Every speech measurement in recall goes through this file (`audiocore::vad`),
+on the fleet and the Mac alike, so the two cannot disagree about whether a
+minute held speech.
 
 To re-derive, from the devshell:
 

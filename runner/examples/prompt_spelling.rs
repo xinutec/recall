@@ -1,4 +1,4 @@
-//! What the vocabulary prompt BUYS: household names spelled right (#1665).
+//! What the vocabulary prompt buys: household names spelled right (#1665).
 //!
 //! The other half of `prompt_cost`. That one measures the harm — the prompt
 //! putting a name into audio containing none. This measures the benefit it was
@@ -11,7 +11,7 @@
 //!
 //!     cargo run -p runner --example prompt_spelling -- [<archive root>]
 //!
-//! ⚠ Prints COUNTS and CLIP LENGTHS only. No name, no transcript and no
+//! ⚠ Prints counts and clip lengths only. No name, no transcript and no
 //! correction text is ever echoed.
 
 use audiocore::{decode, vad::RATE};
@@ -115,7 +115,7 @@ fn spelled(shim: &mut Shim, clip: &Path, prompt: Option<&str>, wanted: &[String]
     })
 }
 
-/// What the vocabulary prompt BUYS: household names spelled right (#1665).
+/// What the vocabulary prompt buys: household names spelled right (#1665).
 #[derive(Parser)]
 struct Cli {
     /// The archive root.

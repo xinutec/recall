@@ -203,7 +203,7 @@ fn block_contributors(
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         })?
         .collect::<Result<_, _>>()?;
-    // The loudest reading per source, and the WORST gate reading per source.
+    // The loudest reading per source, and the worst gate reading per source.
     let mut per_source: BTreeMap<String, (f32, f32)> = BTreeMap::new();
     for (source, _filename, speech_db, gated) in rows {
         let Some(speech_db) = speech_db else {
@@ -246,7 +246,7 @@ fn reference_db(
     config: &RoomConfig,
     source: &str,
 ) -> rusqlite::Result<Option<f32>> {
-    // Counted through the SAME gate the reference uses, or the threshold would
+    // Counted through the same gate the reference uses, or the threshold would
     // admit a source whose reference is then built from nothing.
     let measured: u32 = conn.query_row(
         "SELECT COUNT(*) FROM segment_levels l

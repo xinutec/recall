@@ -163,7 +163,7 @@ pub fn levels_between(
     rows.collect()
 }
 
-/// This SOURCE's median speech-to-floor gap over its most recent `window`
+/// This source's median speech-to-floor gap over its most recent `window`
 /// segments, or `None` while it has too little history to mean anything.
 ///
 /// The per-source read the room builder needs, beside [`gaps`]'s whole-fleet

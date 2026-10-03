@@ -1,10 +1,10 @@
 //! What the vocabulary prompt buys and what it costs, on short clips (#1665).
 //!
-//! The ASR prompt lists household names FIRST so Whisper spells them right, so
+//! The ASR prompt lists household names first so Whisper spells them right, so
 //! on audio it cannot place it reaches for them: measured over the archive, the
 //! live tier is 8.8x likelier than the archive pass to emit a turn that is
 //! nothing but a name. The obvious remedy — drop the prompt for very short
-//! clips — trades one error for another, and #1665 says to measure BOTH
+//! clips — trades one error for another, and #1665 says to measure both
 //! directions before choosing. This measures the harm direction.
 //!
 //! ⚠ **Known-truth audio containing NO names.** The committed public-domain
@@ -14,7 +14,7 @@
 //!
 //!     RECALL_SYNC_TOKEN=… cargo run -p runner --example prompt_cost -- [<db>]
 //!
-//! ⚠ It prints COUNTS ONLY. The names are read from the archive to be searched
+//! ⚠ It prints counts only. The names are read from the archive to be searched
 //! for and are never echoed, and neither is any transcript.
 
 use audiocore::decode;
@@ -30,7 +30,7 @@ const ARCHIVE: &str = "/Volumes/Backup/recall/recall.sqlite";
 /// archive pass sees a whole 60 s clip.
 const LENGTHS: [f64; 5] = [0.5, 1.0, 2.0, 5.0, 12.0];
 
-/// Enrolled household names, read to be SEARCHED FOR and never printed.
+/// Enrolled household names, read to be searched FOR and never printed.
 fn names(db: &Path) -> Vec<String> {
     let conn = rusqlite::Connection::open(db).expect("open the archive");
     let mut stmt = conn
@@ -67,7 +67,7 @@ fn cut(samples: &[f32], seconds: f64) -> Vec<&[f32]> {
 /// The quietest `want` fragments, which is where the harm actually lives.
 ///
 /// ⚠ **Clearly read poetry is not the condition under test.** The archive
-/// finding is that the tier reaches for a name on audio it CANNOT PLACE, and a
+/// finding is that the tier reaches for a name on audio it cannot place, and a
 /// well-articulated stanza is placeable — so cutting the fixture evenly mostly
 /// measures the easy case. The gaps between stanzas are the low-information
 /// audio a half-second VAD fragment often really holds, and they are the arm
@@ -147,7 +147,7 @@ fn main() {
         .expect("the asr shim");
     assert_eq!(shim.hello().expect("hello"), "asr");
 
-    // ⚠ The glossary from the RUNNING fleet, so this measures the prompt that
+    // ⚠ The glossary from the running fleet, so this measures the prompt that
     // actually ships rather than a reconstruction of it.
     // ⚠ The sync token from the environment, never a literal: this reads the
     // household's real glossary and the credential must not live in the repo.

@@ -1,9 +1,7 @@
 # audiocore — what recall's Rust crates must not fork; src/lib.rs says why.
 #
-# ⚠ The STFT and the fusion engine were REMOVED 2026-09-20. Waveform fusion is
-# settled dead on the Opus archive — it lost to the best single microphone and
-# the control proved the loss belonged to the algorithms, not the pipeline
-# (#1388). Nothing called either module; the numbers are in the task.
+# Waveform fusion is settled (#1388): it lost to the best single microphone, so
+# its STFT and fusion engine are gone and should not come back for it.
 [package]
 name = "audiocore"
 version = "0.1.0"
@@ -38,19 +36,15 @@ serde_json = "1"
 # Only for `job::Kind` to be a column type: every crate that stores a kind
 # already links it.
 rusqlite = { version = "0.40", features = ["bundled"] }
-# ONNX runtime for the silero VAD, loaded DYNAMICALLY from the system library
-# rather than ort's prebuilt binaries.
+# The ONNX runtime for the speech detector, loaded from the system library.
 #
-# ⚠ ort's prebuilt ONNX Runtime REQUIRES AVX2, and the fleet's servers are Ivy
-# Bridge (2012) — isis crash-looped with SIGILL when it first ran there. Debian's
-# libonnxruntime is built for baseline x86-64 and runs on those CPUs, so the
-# daemon dlopens that instead. `api-21` matches Debian trixie's 1.21; asking for
-# a newer API than the library provides fails at load.
+# ⚠ Not ort's prebuilt runtime: it needs AVX2, and the fleet's 2012 Ivy Bridge
+# servers lack it (the daemon dies with SIGILL). Debian's runs on baseline x86-64.
+# `api-21` matches Debian trixie's 1.21; asking for a newer API fails at load.
 #
-# It lives HERE rather than in recalld because the Mac needs the SAME detector:
-# a Mac-local speech measurement and the fleet's must agree by construction, or
-# one can call a segment silent while the other hears speech — and one of those
-# two answers is a licence to delete audio.
+# Here rather than in recalld because the Mac and the fleet must run the same
+# detector: if one calls a minute silent while the other hears speech, the
+# silent answer is a licence to delete audio.
 ort = { version = "2.0.0-rc.13", default-features = false, features = [
     "std",
     "ndarray",

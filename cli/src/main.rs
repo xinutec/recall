@@ -370,9 +370,7 @@ fn correct_by_id(api: &Api, id: i64, text: &str, apply: bool) -> Result<bool, Er
     Ok(true)
 }
 
-/// ⚠ The other write, gated like `correct`: the turn is hidden and its words
-/// filed as the model's invention.
-/// The clips to transcribe again: named, or one per line in `--from LIST`.
+/// Clips whose speech was lost under repetition loops, most lost first.
 fn retranscribe_candidates(api: &Api, min: f64) -> Result<bool, Error> {
     let found = api.retranscribe_candidates(min)?;
     let total: f64 = found.iter().map(|c| c.looped_speech_s).sum();
@@ -387,6 +385,7 @@ fn retranscribe_candidates(api: &Api, min: f64) -> Result<bool, Error> {
     Ok(!found.is_empty())
 }
 
+/// Transcribe clips again: named, or one per line in `--from LIST`.
 fn retranscribe(
     api: &Api,
     mut clips: Vec<String>,
@@ -439,6 +438,8 @@ fn retranscribe(
     Ok(skipped.is_empty())
 }
 
+/// ⚠ The other write, gated like `correct`: the turn is hidden and its words
+/// filed as the model's invention.
 fn no_speech(api: &Api, id: i64, undo: bool, apply: bool) -> Result<bool, Error> {
     if undo {
         // A hidden turn is not in the reads, so there is nothing to show first.

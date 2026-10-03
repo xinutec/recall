@@ -1,6 +1,6 @@
 //! What batching the live tier's calls actually costs and buys, on real audio.
 //!
-//! The live tier's per-call cost is the 30-SECOND WINDOW Whisper pads every
+//! The live tier's per-call cost is the 30-second window Whisper pads every
 //! input to, not the audio in it (`live::CALL_SECONDS`). This runs one fixture
 //! through the real cutter and the real shim twice — once per utterance, as the
 //! tier did before, and once joined the way `live::drain` joins them when the
@@ -111,20 +111,20 @@ fn main() {
     };
     // ⚠ The project venv, not the devshell's python: the weights live there and
     // a bare `python` answers `ModuleNotFoundError` from inside the shim, which
-    // arrives as a REFUSAL — i.e. as though the clip were the problem.
+    // arrives as a refusal — i.e. as though the clip were the problem.
     let python = std::env::var("RECALL_PYTHON").unwrap_or_else(|_| ".venv/bin/python".to_owned());
     let mut shim = Shim::spawn(&python, &["-m".to_owned(), "recall.shim_asr".to_owned()])
         .expect("the asr shim");
     assert_eq!(shim.hello().expect("hello"), "asr", "the asr shim");
     for path in paths {
         let utterances = cut(path);
-        // ⚠ One discarded call first. Whisper loads its weights on the FIRST
+        // ⚠ One discarded call first. Whisper loads its weights on the first
         // transcribe, not on `hello`, so without this the whole model load is
         // charged to whichever arm runs first — and that is the arm under test.
         run(&mut shim, &utterances[..1]);
         let batches = joined(&utterances);
         println!("\n=== {} ===", path.display());
-        // ⚠ Fragments FIRST, so the batched arm cannot be the one that benefits
+        // ⚠ Fragments first, so the batched arm cannot be the one that benefits
         // from anything the other warmed up.
         let (fragments, fragment_text) = run(&mut shim, &utterances);
         let (joint, batch_text) = run(&mut shim, &batches);

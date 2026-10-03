@@ -197,7 +197,7 @@ pub fn fetch(
 }
 
 /// [`deaf_check`] on whatever the fleet said; a fleet that could not be asked
-/// SKIPS naming why, since the delivery checks are what go red for a down link.
+/// skips naming why, since the delivery checks are what go red for a down link.
 #[must_use]
 pub fn deaf_check_from(fetched: &Result<Vec<Heard>, String>) -> Check {
     match fetched {

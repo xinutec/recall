@@ -94,7 +94,7 @@ pub fn run(
         // ⚠ One spawn at a time in this process. On macOS a pipe is made and
         // marked close-on-exec in two steps, so a child spawned by another
         // thread in between inherits this child's write end, and the read end
-        // reaches EOF only when THAT process exits: a prompt child reads as
+        // reaches EOF only when that process exits: a prompt child reads as
         // hung for the whole bound (#1480, caught with a `sleep 30` holding
         // another test's pipe). Held for the spawn only, never the wait.
         static SPAWN: Mutex<()> = Mutex::new(());

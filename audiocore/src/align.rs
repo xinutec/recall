@@ -70,7 +70,7 @@ pub fn best_lag(
             &reference[ref_start..ref_start + len],
             &source[src_start..src_start + len],
         );
-        // The offset that moves the source ONTO the reference is +lag buckets.
+        // The offset that moves the source onto the reference is +lag buckets.
         let candidate = Anchor {
             offset_s: lag as f64 * bucket_s,
             peak_r: r,

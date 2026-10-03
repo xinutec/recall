@@ -28,7 +28,7 @@ fn sep_fourth() -> Vec<Levels> {
 #[test]
 fn it_names_geb_and_nothing_else() {
     // The whole point: four real microphones and one gated stream, separated by
-    // a property of each stream against ITSELF.
+    // a property of each stream against itself.
     assert_eq!(processed_sources(&sep_fourth()), vec!["geb".to_owned()]);
 }
 

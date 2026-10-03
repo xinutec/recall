@@ -69,7 +69,7 @@ fn an_unparseable_intent_is_recorded_so_it_is_never_retried_forever() {
 
 #[test]
 fn liveness_reads_the_marker_mtime_not_its_contents() {
-    // `.alive` is EMPTY by design: its mtime is the measurement.
+    // `.alive` is empty by design: its mtime is the measurement.
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir(dir.path().join("usb")).expect("mkdir");
     std::fs::write(dir.path().join("usb/.alive"), b"").expect("marker");

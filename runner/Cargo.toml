@@ -38,7 +38,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 
 [dev-dependencies]
 recalld = { path = "../recalld" }
-# Reading back what the end-to-end test's recalld WROTE. A 200 from the push
+# Reading back what the end-to-end test's recalld wrote. A 200 from the push
 # says stored, not correct; the row is the assertion.
 rusqlite = { version = "0.40", features = ["bundled"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

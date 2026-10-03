@@ -6,7 +6,7 @@
 # fleet's health lives.
 #
 # Its own crate rather than a subcommand of audiod, because it spans both
-# planes: audiod's lib doc names the doctor as an OUTSIDE consumer of the
+# planes: audiod's lib doc names the doctor as an outside consumer of the
 # filesystem contract, and this reads the meaning plane (recall.sqlite) too.
 [package]
 name = "doctor"
@@ -36,22 +36,18 @@ must_use_candidate = "allow"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-# ⚠ Not "the doctor may as well depend on things now". The text rules that
-# decide whether a hidden turn is worth restoring are the SAME rules recalld
-# used to decide whether to write it, and they may not disagree; a copy of them
-# here already drifted once. Depending on recalld itself would pull a web server
-# into an agent whose job is to read files — audiocore is the leaf both daemons
-# already share.
+# ⚠ For one reason only: the text rules that judge whether a hidden turn is
+# worth restoring must be the ones recalld wrote it by, and a copy here drifted.
+# audiocore, not recalld, which would pull a web server into an agent that
+# reads files.
 audiocore = { path = "../audiocore" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# ⚠ TLS is NOT inherited. The workspace's other ureq users are
-# `default-features = false` on purpose — everything they talk to is plain HTTP
-# inside WireGuard. fleetwatch is on the public internet over https, so rustls
-# is enabled HERE and nowhere else. Not `tls-native`: that drags in an openssl
-# the deploy image does not carry.
+# ⚠ TLS on here only: the workspace's other ureq users talk plain HTTP inside
+# WireGuard, but fleetwatch is public https. rustls, not native TLS, which needs
+# an openssl the deploy image lacks.
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 
 [dev-dependencies]

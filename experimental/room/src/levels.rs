@@ -80,7 +80,7 @@ pub fn measure(path: &Path) -> Option<Levels> {
     })
 }
 
-/// What fraction of an envelope sits inside a silent RUN, not merely silent.
+/// What fraction of an envelope sits inside a silent run, not merely silent.
 ///
 /// A quiet room has quiet buckets scattered through it; a gate produces
 /// consecutive ones, because it stays shut until it hears a voice. Counting

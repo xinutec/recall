@@ -19,7 +19,7 @@ pub const UNKNOWN_SECONDS: f64 = -1.0;
 /// What silero was trained on, and what every segment is decoded to.
 pub const RATE: u32 = 16_000;
 /// The window the 16 kHz model expects. Not a tunable: the graph is shaped for it.
-/// Public because a STREAMING caller must cut its reads to exactly this.
+/// Public because a streaming caller must cut its reads to exactly this.
 pub const WINDOW: usize = 512;
 /// ⚠ silero v5+ prepends this many samples of the previous window, so the model
 /// is fed `CONTEXT + WINDOW`. The input shape is dynamic, so omitting the

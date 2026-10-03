@@ -434,7 +434,7 @@ fn spawn_beat(source_id: &str, url: &str, mic_ok: std::sync::Arc<std::sync::atom
 
 /// Park while paused, run while active, re-park when a pause interrupts;
 /// exit (for the `KeepAlive` respawn) only when a run ends for a non-pause
-/// reason. Marks RESUME/PAUSE transitions in the capture log, best-effort.
+/// reason. Marks resume/pause transitions in the capture log, best-effort.
 pub fn serve_paused_aware(
     root: &Path,
     source_id: &str,

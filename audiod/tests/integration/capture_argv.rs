@@ -4,7 +4,7 @@
 
 use audiod::capture_run::{alsa_argv, sox_argv};
 
-/// Everything before `-i` configures the INPUT; everything after, the output.
+/// Everything before `-i` configures the input; everything after, the output.
 fn before_input(argv: &[String]) -> Vec<String> {
     let at = argv.iter().position(|a| a == "-i").expect("an -i");
     argv[..at].to_vec()

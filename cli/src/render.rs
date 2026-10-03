@@ -21,7 +21,7 @@ fn when(iso: &str, format: &str) -> String {
     local(iso).map_or_else(|| iso.to_owned(), |t| t.format(format).to_string())
 }
 
-/// Who said a turn, for a SEARCH HIT.
+/// Who said a turn, for a search hit.
 ///
 /// A human-confirmed name is authoritative; otherwise the voiceprint guess with
 /// its strength as a hint ("Name ~76%"); otherwise the bare diarization
@@ -45,7 +45,7 @@ pub fn attribution(turn: &Turn) -> String {
     turn.cluster.clone().unwrap_or_else(|| "unknown".to_owned())
 }
 
-/// Who said a turn, for a READ-THROUGH TRANSCRIPT: a confirmed name, else the
+/// Who said a turn, for a read-through transcript: a confirmed name, else the
 /// diarization voice so distinct unnamed speakers stay distinguishable, else
 /// "unknown". No guesses: a transcript read end to end should not assert a
 /// name the machine only guessed.

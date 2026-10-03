@@ -17,7 +17,7 @@ const RUN_MIN: usize = 3;
 /// no"); long ones are hallucinations ("everything everything everything").
 /// Six is calibrated from the archive.
 const RUN_WORD_MIN_LEN: usize = 6;
-/// A space-less loop's repeated unit is 2-8 characters ("ASTASTASTAST").
+/// A space-less loop's repeated unit is 2-8 characters ("astastastast").
 const CHAR_UNIT_MIN: usize = 2;
 const CHAR_UNIT_MAX: usize = 8;
 /// …repeated this many times in a row, total…
@@ -117,7 +117,7 @@ fn is_word_loop(text: &str) -> bool {
     false
 }
 
-/// Space-less loops ("ASTASTAST", "obaobaoba"): a short unit repeated in a row.
+/// Space-less loops ("astastast", "obaobaoba"): a short unit repeated in a row.
 ///
 /// ⚠ The first such run decides, not the longest: the leftmost, shortest-unit
 /// match of `(.{2,8}?)\1{3,}`, with the length test applied to that match. So a
