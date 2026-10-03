@@ -292,9 +292,9 @@ Isis.
 - **Combining microphones lost; selecting the best one tied it.** On 38
   corrections, the best single mic scored 0.229 median WER against 0.348 and
   0.437 for two fusion arms, 14 worse against 4 better; a control showed the
-  pipeline itself cost nothing. The room stream is selection. It is an
-  experiment run by hand on a copy of the data (`experimental/room`, #1388),
-  not part of production.
+  pipeline itself cost nothing. Transcribing the selected mic once (the room
+  stream) then added nothing over each mic's own transcript (#1388), so it was
+  removed; git history has `experimental/room`.
 - **Enhance the selected mic, do not stitch mics.** By ear, the best microphone
   through DeepFilterNet was the clearest version of every minute tried.
 - **Denoising hurts far-field ASR.** Two denoisers measured worse; raw is best.

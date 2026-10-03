@@ -113,8 +113,8 @@ they are stored the same way wherever given: each files a correction marked
 `words_checked` (a person heard the words and vouches for them), and the person's
 turn carries `words_checked` too. Check skips a moment once any of its lines has
 it, so a day can be worked in a session first and finished in Check. A speaker
-fix keeps the machine's words: it leaves the line to be checked, and the
-referees (`scripts/rank_referee.py`, `scripts/room_referee.py`) do not count it.
+fix keeps the machine's words: it leaves the line to be checked, and a referee
+scoring words against corrections must not count it.
 
 ## What to trust (and what not to)
 

@@ -63,11 +63,8 @@ household's decision, made before `play` and after it.
    `ATTACH` the fleet's file read-only, `CREATE TABLE ... AS SELECT`) and score:
 
    ```sh
-   playback score --dir DIR --db window.sqlite [--room room.jsonl] [--json]
+   playback score --dir DIR --db window.sqlite [--json]
    ```
-
-   `--room` adds the room lab's transcripts (`experimental/room`, run over the
-   same window) as one source per arm, `room-whole` and `room-pieces`.
 
    Per source: word error rate over all parts, its substitutions, deletions
    and insertions, the rate per part, and words "invented": in lines that sit

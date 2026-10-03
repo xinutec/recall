@@ -51,41 +51,6 @@ pub struct Report {
     pub silent_seconds: f64,
 }
 
-/// The room lab's output (`experimental/room`, `room transcribe --out`): one
-/// JSON line per minute and arm, segment times relative to the minute. Each
-/// arm becomes its own source, `room-<arm>`.
-pub fn room_lines(jsonl: &str) -> Result<Vec<Line>, String> {
-    let mut out = Vec::new();
-    for (n, raw) in jsonl
-        .lines()
-        .enumerate()
-        .filter(|(_, l)| !l.trim().is_empty())
-    {
-        let row: serde_json::Value =
-            serde_json::from_str(raw).map_err(|e| format!("line {}: {e}", n + 1))?;
-        let block = row["block"]
-            .as_str()
-            .and_then(|b| DateTime::parse_from_rfc3339(b).ok())
-            .ok_or_else(|| format!("line {}: no block instant", n + 1))?
-            .with_timezone(&Utc);
-        let arm = row["arm"]
-            .as_str()
-            .ok_or_else(|| format!("line {}: no arm", n + 1))?;
-        for seg in row["result"]["segments"].as_array().into_iter().flatten() {
-            let (Some(start), Some(end)) = (seg["start"].as_f64(), seg["end"].as_f64()) else {
-                return Err(format!("line {}: a segment without times", n + 1));
-            };
-            out.push(Line {
-                source: format!("room-{arm}"),
-                start: block + seconds(start),
-                end: block + seconds(end),
-                text: seg["text"].as_str().unwrap_or_default().to_string(),
-            });
-        }
-    }
-    Ok(out)
-}
-
 /// A span of `seconds`; negative or unrepresentable spans are zero.
 pub fn seconds(seconds: f64) -> Duration {
     std::time::Duration::try_from_secs_f64(seconds)

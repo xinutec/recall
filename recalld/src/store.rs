@@ -52,9 +52,8 @@ pub struct Row {
     pub sent_utc: Option<String>,
 }
 
-/// The room stream's source and its meaning-plane kind. The stream is an
-/// experiment now (`experimental/room`); its old rows stay as history, and every
-/// pass here skips them.
+/// The room stream's source and its meaning-plane kind. The stream was removed
+/// (#1388); its old rows stay as history, and every pass here skips them.
 pub const ROOM_SOURCE: &str = "room";
 pub const ROOM_KIND: &str = "derived";
 

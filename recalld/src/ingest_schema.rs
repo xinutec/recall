@@ -123,7 +123,7 @@ fn split_old_outcomes(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// The room stream left production (`experimental/room`), and its job kinds
+/// The room stream left production, and its job kinds
 /// with it. Its unfinished jobs are closed as failures, not deleted, so the
 /// queue keeps its history.
 ///

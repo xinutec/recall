@@ -333,8 +333,6 @@ fn spawn_background_passes(root: &std::path::Path) {
     let root = &root;
     spawn_speech_scanner(root.clone());
     spawn_rematcher(root.clone());
-    // The room stream is an experiment, run by hand (`experimental/room`).
-    //
     // Fills clips that have no turns. It hides only the live guesses on the
     // same span, so its worst case is a transcript where there was silence,
     // deletable by its provenance.

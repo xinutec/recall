@@ -46,7 +46,7 @@ def main() -> int:
 
     sources = (("Dockerfile", dockerfile_copies()), ("flake.nix", flake_paths()))
     for where, present in sources:
-        # `experimental/room` arrives with its top directory.
+        # `experimental/playback` arrives with its top directory.
         missing = {m for m in members if m.split("/")[0] not in present}
         if missing:
             problems.append(
