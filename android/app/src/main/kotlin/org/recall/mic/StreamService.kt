@@ -248,7 +248,15 @@ class StreamService : Service() {
                     // publish to the shared state, so the screen and notification
                     // render the one value and can't disagree about
                     // pause-vs-unreachable.
-                    val cap = runBlocking { CaptureApi.state(controlHost) }
+                    // ⚠ While paused the loop spends its time here, so this is where
+                    // onDestroy's interrupt lands when a meeting takes the mic.
+                    // Uncaught, it kills the app and the meeting with it.
+                    val cap =
+                        try {
+                            runBlocking { CaptureApi.state(controlHost) }
+                        } catch (_: InterruptedException) {
+                            break
+                        }
                     MicState.setCapture(cap)
                     // A paused mic can't connect, so this failure path polls the control
                     // host every couple of seconds while paused — the reliable place to
