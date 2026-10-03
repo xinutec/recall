@@ -4,17 +4,13 @@ import Foundation
 /// of the Android app's `PcmSpool.kt`, kept in step so both recorders behave the
 /// same way when the host cannot keep up.
 ///
-/// The capture tap used to hand each buffer straight to the connection. On iOS
-/// that does not block the way Android's socket write does — Network.framework
-/// queues instead — but the queue is nobody's to bound, so a busy host turns into
-/// unbounded memory and a burst delivered much later. Measured 2026-09-03 with the
-/// Mac at load 42: iphone11's segment rotation showed exactly that shape, a mean
-/// below 60s with a 228s worst case (stall, then a backlog arriving at once).
+/// Network.framework does not block a send the way Android's socket write does;
+/// it queues, and nobody bounds that queue, so a busy host becomes unbounded memory
+/// and a backlog delivered at once much later.
 ///
-/// A recorder must not depend on its consumer's mood. `offer` never blocks and
-/// never fails; if the spool fills, the OLDEST audio is discarded and counted.
-/// Dropping is a real loss either way — the point is that it is bounded, chosen,
-/// and REPORTED, rather than happening invisibly inside a framework buffer.
+/// So `offer` never blocks and never fails: if the spool fills, the oldest audio is
+/// discarded and counted. Dropping is a loss either way; here it is bounded, chosen
+/// and reported instead of invisible inside a framework buffer.
 final class PcmSpool {
     private let capacityBytes: Int
     private var buffer: Data

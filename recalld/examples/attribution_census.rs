@@ -40,7 +40,7 @@ struct Cli {
     prints: String,
     /// The turns.
     turns: String,
-    /// Turns by voices certainly NOT enrolled (played test speech), same
+    /// Turns by voices certainly not enrolled (played test speech), same
     /// format; scored against the full corpus for `--scores`.
     #[arg(long)]
     strangers: Option<String>,

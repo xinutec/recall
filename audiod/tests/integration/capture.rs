@@ -66,7 +66,7 @@ fn a_wedged_reads_zeros_a_live_room_does_not() {
     let dir = tempfile::tempdir().unwrap();
     let zeros = wav_of(dir.path(), "dead.wav", &vec![0.0f32; 16_000]);
     assert!(segment_is_digital_silence(&zeros));
-    // A quiet room's noise floor (amplitude ~40 of 32768) is NOT silence.
+    // A quiet room's noise floor (amplitude ~40 of 32768) is not silence.
     let quiet: Vec<f32> = (0..16_000)
         .map(|i| {
             if i % 2 == 0 {
@@ -86,7 +86,7 @@ fn an_empty_file_is_silence_and_garbage_is_no_verdict() {
     let empty = dir.path().join("empty.opus");
     std::fs::write(&empty, b"").unwrap();
     assert!(segment_is_digital_silence(&empty));
-    // Unreadable is NOT a verdict: never cycle on doubt.
+    // Unreadable is not a verdict: never cycle on doubt.
     let garbage = dir.path().join("garbage.opus");
     std::fs::write(&garbage, b"not audio at all").unwrap();
     assert!(!segment_is_digital_silence(&garbage));

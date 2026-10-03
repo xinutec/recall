@@ -115,13 +115,10 @@ class MeetingUpload(
             // An empty outbox is the common case — the mic stream calls this on every
             // reconnect — and waking WorkManager to discover that is pure cost.
             //
-            // ⚠ Except when the queue emptied by hand. A delete sends no report, so the
-            // fleet would go on believing the recording is stuck: measured on the
-            // Pixel 9, the check still read "1 failing" after the recording was gone
-            // and the token fixed. A check that cannot go back to green is one that
-            // gets muted, which is the failure this whole task exists to end — so a
-            // caller that changed the queue itself passes `always` and the pass runs
-            // for the report alone.
+            // ⚠ Except when the queue was emptied by hand. A delete sends no report, so
+            // the fleet check would go on reading "failing" for a recording that is
+            // gone, and a check that cannot return to green gets muted. A caller that
+            // changed the queue itself passes `always`; the pass runs for the report.
             if (!always && approvedCount(ctx) == 0) return
             WorkManager.getInstance(ctx).enqueueUniqueWork(
                 WORK_NAME,

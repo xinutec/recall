@@ -167,7 +167,7 @@ fn a_turn_outside_the_speaker_span_is_left_unnamed() {
     }
 }
 
-/// …and when the one speaker covers NOTHING that exists, there is nothing to
+/// …and when the one speaker covers nothing that exists, there is nothing to
 /// say, so the transcript simply stands.
 #[test]
 fn a_pass_covering_no_existing_turn_is_a_plain_refusal() {

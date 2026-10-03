@@ -62,7 +62,7 @@ read-only rootfs + `/tmp` emptyDir, seccomp, probes, limits), `03-service` (Clus
    `/sync/*` keeps its bearer token, and the iOS mic app's capture endpoints
    (`/api/capture`, `/api/sources`, `/api/capture/pause|resume`) are exempt — a headless
    device can't do an interactive OAuth login. See `docs/architecture.md`, "Credential planes".
-4. **WireGuard exposure** — do NOT add an nginx Ingress. Expose the Service over WireGuard
+4. **WireGuard exposure** — do not add an nginx Ingress. Expose the Service over WireGuard
    only: a MetalLB address from a `wg0`-only pool, or a NodePort firewalled to `wg0`. That
    is the real network gate; the public ingress is not one.
 5. ~~**Move the manifests to `kubes/recall/k8s/`** and add a `sync.sh`~~ — **DONE.** They <!-- dev-lint: allow-pii the repository's name -->

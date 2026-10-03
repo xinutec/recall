@@ -147,7 +147,7 @@ fn an_unmeasured_segment_still_counts_as_possible_speech() {
     // silence would black out every recorder at once.
     let dir = tempfile::tempdir().expect("tempdir");
     stored(dir.path(), "usb", "usb-20260905T120000.wav", &silent_wav(2));
-    // deliberately NOT scanned
+    // deliberately not scanned
     let conn = store::open(dir.path()).expect("db");
     assert_eq!(
         speech::latest_speech_utc(&conn, "usb")

@@ -75,7 +75,7 @@ fn main() {
     paired(&text);
 }
 
-/// Room against the microphones recording the SAME minute. Unpaired rates cannot
+/// Room against the microphones recording the same minute. Unpaired rates cannot
 /// answer this: the mics cover different minutes, so an unpaired table compares
 /// the rooms each happened to be in.
 fn paired(text: &str) {

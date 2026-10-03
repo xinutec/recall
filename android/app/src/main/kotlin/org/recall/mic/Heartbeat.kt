@@ -63,7 +63,7 @@ object Heartbeat {
      * Pure, so the schedule is pinned in unit tests without a network or an hour of
      * waiting — the same reason [body] is pure.
      *
-     * ⚠ The cap is what keeps this a BACKOFF and not a poll. One request an hour is the
+     * ⚠ The cap is what keeps this a backoff and not a poll. One request an hour is the
      * design; a phone that is simply off (or out of range for a week) must never beat
      * harder than that, and the whole retry burst is bounded to fit inside one cadence.
      * Growing it would trade the thing this exists to protect for a little less latency.

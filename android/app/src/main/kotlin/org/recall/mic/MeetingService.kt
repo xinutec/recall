@@ -96,7 +96,7 @@ class MeetingService : Service() {
         // also the record of whether to put the stream back afterwards — a field would
         // not survive this service being killed.
         StreamService.stop(this)
-        // ⚠ stopService is ASYNC. onDestroy clears `running`, and only on its next
+        // ⚠ stopService is asynchronous. onDestroy clears `running`, and only on its next
         // pass does the capture thread reach the finally that releases the
         // AudioRecord — so opening a MediaRecorder here raced a mic we still held,
         // both sources failed, and the user was told to check permissions (#1472).

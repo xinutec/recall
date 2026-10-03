@@ -12,7 +12,7 @@
 # and then at its WireGuard address. The VPN one is not a fallback for a broken
 # router — it is how you reach a phone that is genuinely out of the house, which
 # on 2026-08-14 was the only way the Pixel 9 could be deployed to at all. Both use
-# the fixed adb port 5555, set once per phone via `adb tcpip 5555`; that does NOT
+# the fixed adb port 5555, set once per phone via `adb tcpip 5555`; that does not
 # survive a reboot, and no address helps once it is off.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -33,29 +33,24 @@ echo "building APK..."
 APK="$PWD/app/build/outputs/apk/debug/app-debug.apk"
 LOCAL_MD5=$(md5 -q "$APK")
 
-# ⚠ If every address below reports unreachable while the ports are demonstrably
-# open (`nc -z <ip> 5555` succeeds), the local adb server is wedged from earlier
-# failed connects rather than the phones being away — measured 2026-08-14, `nc`
-# succeeded 3/3 while `adb connect` timed out, and a restarted server connected in
-# 0.3 s. The remedy is `adb kill-server && adb start-server`, by hand.
+# ⚠ If every address reports unreachable while `nc -z <ip> 5555` succeeds, the
+# local adb server is wedged from earlier failed connects, not the phones away.
+# Restart it by hand: `adb kill-server && adb start-server`.
 #
-# Deliberately not done here: `kill-server` itself hangs indefinitely when a
-# server is holding a transport to an offline device, and there is no `timeout` in
-# this devshell to bound it — so a script that opens with it can wedge before it
-# has printed a word, which is exactly what this one did on its first run. A stale
-# entry for one address is cleared with `disconnect`, which cannot block.
+# Not done here: `kill-server` hangs while the server holds a transport to an
+# offline device, and this devshell has no `timeout` to bound it. A stale entry
+# for one address is cleared with `disconnect`, which cannot block.
 
 # Where Wireless debugging is listening right now, via mDNS. Echoes host:port, or nothing.
 #
 # `adb tcpip 5555` does not survive a reboot, and what comes back after one is the
 # Settings > Wireless debugging toggle — which listens on a random high port, not 5555.
 # So a phone that is awake, on the LAN and pingable can still refuse :5555 on every
-# address it owns, which reads exactly like a phone that is away (measured 2026-08-14:
-# pixel5 pinged on both addresses with :5555 shut, while it was in fact listening on
-# :39345). The port is advertised, so look it up rather than asking the user to.
+# address it owns, which reads exactly like a phone that is away. The port is
+# advertised, so look it up rather than asking the user to.
 #
-# ⚠ mDNS is link-local, so this only rescues a phone on the HOME LAN — a phone that is
-# out of the house does not advertise here, and for it the VPN address is the only way in.
+# ⚠ mDNS is link-local, so this only finds a phone on the home LAN; away from home
+# the VPN address is the only way in.
 mdns_addr() {
   local serial=$1
   "$ADB" mdns services 2>/dev/null |

@@ -22,7 +22,7 @@ fn the_slow_tail_is_a_single_word_over_near_silence_not_slow_speech() {
     let junk = vec![(0.0, 0.4), (11.0, 11.3), (21.0, 21.4), (32.0, 32.4)];
     assert!(is_implausibly_slow(&junk));
 
-    // Deliberate, careful speech is NOT this. A memory aid whose quality rule
+    // Deliberate, careful speech is not this. A memory aid whose quality rule
     // fires on someone speaking slowly has misread what it is for.
     let deliberate = at_rate(12, 1.0);
     assert!(!is_implausibly_slow(&deliberate));

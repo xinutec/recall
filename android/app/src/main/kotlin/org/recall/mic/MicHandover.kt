@@ -6,20 +6,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Whether continuous streaming currently holds the microphone, so a deliberate
  * meeting recording can wait for the handover instead of racing it.
  *
- * ⚠ **The race this exists to remove.** `MeetingService.beginOnQ` called
- * `StreamService.stop(this)` and then immediately opened a `MediaRecorder`.
- * `stopService` is asynchronous: `onDestroy` clears `running`, and only on its
- * next iteration does the capture thread reach the `finally` block that runs
- * `record.stop()` / `record.release()`. While continuous capture was running
- * there was therefore a window in which the old `AudioRecord` was still open —
- * both audio sources failed and the user was told to check permissions, which
- * sent them into Android settings looking for a race in our own handover.
+ * ⚠ `stopService` is asynchronous: `onDestroy` clears `running`, and the capture
+ * thread releases its `AudioRecord` only when its next pass reaches the `finally`.
+ * A `MediaRecorder` opened straight after `StreamService.stop` races that release;
+ * both audio sources fail, and the user is sent to check permissions for a race in
+ * our own code.
  *
- * ⚠ **Why nobody hit it while the household was paused:** a paused stream has
- * already released the record in that same `finally` on every failed connect
- * cycle, and then sleeps between retries. A paused house leaves the mic free, so
- * a meeting started during a pause acquires it cleanly. The bug needs capture to
- * be actively running.
+ * ⚠ A paused stream never shows it: it releases the record on every failed connect
+ * and sleeps between retries. Testing the handover needs capture actively running.
  */
 object MicHandover {
     private val held = AtomicBoolean(false)

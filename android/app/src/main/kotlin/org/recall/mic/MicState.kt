@@ -20,16 +20,11 @@ internal class MicUnavailableException(
  * connect, a dropped socket — means the attempt never got as far as opening it,
  * and reports nothing either way.
  *
- * ⚠ This used to be `e !is MicUnavailableException`, which read a network failure
- * as proof the mic is fine and cleared a real fault. The order is what makes that
- * wrong: the socket connects before the mic opens, so during a household pause —
- * when the host's listener is closed — every attempt fails on the connect, and a
- * phone whose microphone was genuinely broken kept reporting micOk=true. That is
- * exactly what happened for nine hours on 2026-09-06: the app retried every two
- * seconds, could not open AudioRecord, and the fleet check built to catch a dead
- * mic (#887) called it healthy throughout.
+ * ⚠ Never read another failure as "mic fine". The socket connects before the mic
+ * opens, so during a household pause every attempt fails on the connect, and a
+ * broken microphone would report micOk=true for as long as the pause lasts.
  *
- * `true` is only ever written where the mic actually OPENED.
+ * `true` is only ever written where the mic actually opened.
  */
 internal fun micOkAfter(previous: Boolean, failure: Throwable): Boolean =
     if (failure is MicUnavailableException) false else previous

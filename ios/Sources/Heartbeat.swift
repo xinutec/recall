@@ -65,7 +65,7 @@ enum Heartbeat {
     /// Pure, so the schedule is pinned in tests without a network or an hour of
     /// waiting — the same reason `body` is pure.
     ///
-    /// ⚠ The cap is what keeps this a BACKOFF and not a poll. One request an hour is
+    /// ⚠ The cap is what keeps this a backoff and not a poll. One request an hour is
     /// the design; a phone that is simply off must never beat harder than that, and
     /// the whole retry burst is bounded to fit inside one cadence.
     static func nextDelay(consecutiveFailures: Int) -> TimeInterval {

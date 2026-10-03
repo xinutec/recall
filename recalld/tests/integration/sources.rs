@@ -331,7 +331,7 @@ async fn on_the_fleet_liveness_comes_from_the_macs_report() {
     let (_dir, root) = root_with(&[
         ("usb", "usb", "coreaudio"),
         ("pixel9", "Pixel 9", "tcp_pcm"),
-        // An uploaded recording is a source but NOT a live device.
+        // An uploaded recording is a source but not a live device.
         ("meeting-x", "Meeting", "upload"),
     ]);
     let conn = recalld::work::open_write(&root).expect("db");

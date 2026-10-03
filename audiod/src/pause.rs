@@ -53,7 +53,7 @@ pub fn resume_by(now: DateTime<Utc>, minutes: Option<i64>) -> DateTime<Utc> {
 /// agents read back.
 ///
 /// # Errors
-/// If the file cannot be written, which means the pause did NOT take.
+/// If the file cannot be written, which means the pause did not take.
 pub fn pause(
     root: &Path,
     now: DateTime<Utc>,

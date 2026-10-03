@@ -39,7 +39,7 @@ pass=0 fail=0 noop=0
 for i in $(seq 1 "$iterations"); do
     # A comment in the crate everything depends on: the whole workspace is
     # rebuilt and re-tested, which is the condition the flake needs (it does
-    # NOT reproduce with webauth alone — 0/40).
+    # not reproduce with webauth alone — 0/40).
     printf '\n// sandbox sampler %s iteration %s\n' "$run" "$i" >> audiocore/src/lib.rs
     git add audiocore/src/lib.rs
 

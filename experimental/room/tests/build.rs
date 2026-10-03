@@ -172,7 +172,7 @@ fn the_room_blob_carries_the_winners_audio() {
 fn no_verdict_on_partial_evidence() {
     let dir = tempfile::tempdir().expect("tempdir");
     let block = seed_two_devices(dir.path());
-    // Levels NOT scanned: every block must defer, none may be judged.
+    // Levels not scanned: every block must defer, none may be judged.
     let summary = build_once(dir.path(), &config(), now_after(block)).expect("build");
     assert_eq!(summary.built, 0, "{summary:?}");
     assert!(summary.deferred > 0);

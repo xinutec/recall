@@ -179,22 +179,15 @@ class StreamService : Service() {
                 // Read in small chunks (not the full ~1s buffer) so the UI level
                 // meter is responsive.
                 //
-                // ⚠ The mic loop never touches the socket. It used to write each
-                // chunk straight out, so when the recorder host was busy TCP
-                // backpressure blocked the write, read() was not called, and
-                // AudioRecord's own ~1s buffer overran — the phone dropped speech
-                // it had already heard. Measured 2026-09-03 with the Mac at load
-                // 42: phone segment rotation slipped to 162s and 228s worst-case,
-                // tracking the Mac's load. A recorder must not depend on its
-                // consumer's mood, so capture now hands frames to a bounded spool
-                // (PcmSpool) that never blocks, and a sender thread drains it.
+                // ⚠ The mic loop never touches the socket: a blocked write would
+                // stop read() and overrun AudioRecord's buffer (see PcmSpool). It
+                // hands frames to the spool, and a sender thread drains it.
                 val spool = PcmSpool(SPOOL_BYTES)
                 // The sender owns every socket write, and an exception escaping a
-                // bare thread lambda KILLS the APP (two data_app_crash records on
-                // 2026-09-04, both "Software caused connection abort" at this
-                // write). So nothing may escape: any failure here is flagged, and
-                // the mic loop below turns the flag into the ordinary reconnect
-                // path. The spool keeps absorbing frames during the handover.
+                // bare thread lambda kills the app ("Software caused connection
+                // abort" at this write did). So nothing may escape: any failure is
+                // flagged, and the mic loop below turns the flag into the ordinary
+                // reconnect path. The spool keeps absorbing frames during the handover.
                 val senderFailed = AtomicBoolean(false)
                 val sender =
                     thread(name = "mic-sender") {

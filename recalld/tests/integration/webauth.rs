@@ -532,7 +532,7 @@ async fn a_device_token_opens_its_route_through_the_middleware_and_no_other() {
         .await,
         200
     );
-    // The same credential must NOT read transcripts.
+    // The same credential must not read transcripts.
     assert_eq!(
         status(
             &app,

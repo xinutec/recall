@@ -577,7 +577,7 @@ async fn control(st: Arc<Control>, intent: Intent, request: axum::extract::Reque
                 "resume"
             }
         };
-        // AFTER the action, never before: the audit annotates a decision that
+        // After the action, never before: the audit annotates a decision that
         // has already been taken, and must not be able to prevent it.
         audit(
             &conn,

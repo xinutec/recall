@@ -59,7 +59,7 @@ object ShareUpload {
      * order: SAF's `last_modified` first, then MediaStore's `date_modified`.
      *
      * ⚠ They are in **different units** — `last_modified` is millis, `date_modified` is
-     * SECONDS. Reading seconds as millis dates a 2026 recording to January 1970, which is
+     * seconds. Reading seconds as millis dates a 2026 recording to January 1970, which is
      * worse than the `now` fallback: it looks like the file's own time was honoured.
      *
      * Zero, negative and null all mean "this provider has no time for the file", never

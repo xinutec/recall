@@ -3,18 +3,13 @@ package org.recall.mic
 /**
  * A bounded PCM hand-off between the microphone and the network.
  *
- * The mic loop used to write captured frames straight to the socket, so when the
- * recorder host was momentarily busy TCP backpressure blocked the write, the loop
- * stopped calling `AudioRecord.read`, and the device's own ~1s buffer overran —
- * the phone dropped speech it had already heard, before the network was even
- * involved. Measured 2026-09-03 with the Mac at load 42: the phones' segment
- * rotation slipped to 162s and 228s worst-case, in lockstep with the Mac's load.
+ * Capture must never wait for the network. A socket write blocked by TCP
+ * backpressure stops `AudioRecord.read`, the device's ~1 s buffer overruns, and the
+ * phone drops speech it has already heard.
  *
- * A recorder must not depend on its consumer's mood. `offer` never blocks and
- * never fails: capture keeps up whatever the network is doing, and if the spool
- * fills, the OLDEST audio is discarded and counted. Dropping is a real loss
- * either way — the point is that it is bounded, chosen, and REPORTED, rather
- * than happening invisibly inside a device buffer.
+ * So `offer` never blocks and never fails: if the spool fills, the oldest audio is
+ * discarded and counted. Dropping is a loss either way; here it is bounded, chosen
+ * and reported instead of invisible inside a device buffer.
  *
  * Oldest-first because in a memory aid the newest speech is what someone is most
  * likely to come looking for. Pure and synchronised, so it is unit-tested on the

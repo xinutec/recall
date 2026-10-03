@@ -8,9 +8,8 @@ import java.io.IOException
 /**
  * What a failed streaming attempt is allowed to conclude about the microphone.
  *
- * ⚠ This exists because the answer was inverted for a network failure, and that
- * inversion hid a dead microphone for nine hours behind a check built to catch
- * exactly that.
+ * ⚠ A network failure says nothing about the mic. Reading it as "mic fine" once
+ * hid a dead microphone behind the check built to catch one.
  */
 class MicOkTest {
     @Test

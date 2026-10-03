@@ -80,7 +80,7 @@ final class RecallController: ObservableObject {
 
     // MARK: liveness (#837)
 
-    /// One long-lived loop, started at launch and never cancelled — deliberately NOT
+    /// One long-lived loop, started at launch and never cancelled — deliberately not
     /// wired to `setUIVisible` like the two polls below it. A backgrounded app kept
     /// alive for days by its audio session is exactly the thing this reports on, and
     /// a beat that stopped when the screen went dark would read as the app dying

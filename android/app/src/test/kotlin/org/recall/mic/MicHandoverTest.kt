@@ -10,13 +10,8 @@ import kotlin.concurrent.thread
 /**
  * The handover from continuous streaming to a deliberate meeting recording.
  *
- * ⚠ MeetingService called StreamService.stop() and then immediately opened a
- * MediaRecorder. stopService is ASYNC: onDestroy clears `running`, and only on
- * its next iteration does the capture thread reach the finally block that runs
- * record.stop()/release(). So while continuous capture was running there was a
- * window where the old AudioRecord was still open — both audio sources failed and
- * the user was told "check permission / other apps", which sent them into Android
- * settings to look for a race in our own code.
+ * ⚠ stopService is asynchronous, so a MediaRecorder opened straight after
+ * StreamService.stop() can find the old AudioRecord still open. See [MicHandover].
  */
 class MicHandoverTest {
     @After
