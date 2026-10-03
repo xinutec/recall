@@ -64,7 +64,7 @@ class HeartbeatTest {
     @Test
     fun `the vpn is tried before the lan, so the fallback stays a backstop`() {
         // #888: audio goes to the LAN host, so a phone at home with its tunnel off
-        // records fine and used to read as dead. The fallback fixes that WITHOUT
+        // records fine and used to read as dead. The fallback fixes that without
         // making the LAN the normal path — a phone away from home must behave
         // exactly as before, and a beat that took the back way is marked by the relay.
         assertEquals(
@@ -121,7 +121,7 @@ class HeartbeatTest {
         }
         assertTrue("an outage costs ${delays.size} retries", delays.size <= 8)
         // Monotonic: each wait is at least the one before it, so the schedule can only
-        // ever back OFF. A dip would mean an outage beating harder the longer it lasts.
+        // ever back off. A dip would mean an outage beating harder the longer it lasts.
         assertEquals(delays.sorted(), delays)
     }
 

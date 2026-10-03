@@ -1,5 +1,5 @@
 // The app-specific half of the shared phone-width harness (@xinutec/ui-harness).
-// Read by BOTH playwright.config.ts and the harness's static server, so there is
+// Read by both playwright.config.ts and the harness's static server, so there is
 // one place to say what this app is and no port to keep in step — the port is
 // allocated from `app`.
 

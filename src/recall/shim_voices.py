@@ -5,18 +5,13 @@ that lets the Rust runner own refinement: diarization says who spoke when, and
 embedding turns a clip into the vector that names them. Both are pyannote, both
 are Python only because the model is.
 
-⚠ **It reads no database, and that is the whole point of it existing.** Today
-`recall refine` holds a `Store`, the pyannote pipeline, the coverage guards and
-the write transaction in one process — which is why refinement can only live on
-the Mac. Splitting the model call out leaves the guards and the write to be
-re-homed in Rust (they are the part that blanked 132 segments when it was got
-wrong, so they move on their own, with their own tests). This shim is the half
-that cannot move, and it is 100 lines.
+⚠ **It reads no database.** The coverage guards and the write that replaces a
+transcript live in Rust beside the database (`recalld::diarized`), with their
+own tests; this shim is only the model call.
 
-Matching against enrolled voiceprints is deliberately NOT here, and no longer
-anywhere in Python: it is pure arithmetic over vectors, and pure arithmetic
-belongs on the side that owns the profiles (`recalld::identify`), not inside the
-process holding the weights.
+Matching against enrolled voiceprints is not here either: it is arithmetic over
+vectors, so it belongs on the side that owns the profiles (`recalld::identify`),
+not in the process holding the weights.
 """
 
 from __future__ import annotations
@@ -86,16 +81,10 @@ def _embed_speakers(
 ) -> list[JsonValue]:
     """One voiceprint per distinct speaker in the clip, from their LONGEST span.
 
-    ⚠ **Per SPEAKER, where `refine` embeds per aligned TURN, and the difference is
-    deliberate.** Alignment happens on the fleet — it needs the words, which are a
-    different job's result — so embedding per turn would need a second round trip
-    for every clip. A speaker's longest span is audio this process already has,
-    and it is usually LONGER than any one turn, which is the direction that helps
-    a voiceprint rather than hurts it.
-
-    ⚠ What it cannot do is prove that: whether per-speaker attribution is as good
-    as per-turn is a question for a differential over the real archive, not for an
-    argument here. Until that is run it is a change, not an improvement.
+    Per speaker rather than per aligned turn: alignment happens on the fleet,
+    which needs the words from another job, so per-turn embedding would cost a
+    second round trip per clip. A speaker's longest span is already here, and
+    usually longer than any one turn, which helps a voiceprint.
 
     A span that will not slice is SKIPPED, not faked: a corrupt frame makes ffmpeg
     fail on some clips, and a speaker with no vector is simply one the fleet will
@@ -156,7 +145,7 @@ def handle(
         audio = _clip(args)
         start = _optional_float(args, "start")
         end = _optional_float(args, "end")
-        # ⚠ A SPAN, when one is asked for. Enrolment names one labelled turn, and
+        # ⚠ A span, when one is asked for. Enrolment names one labelled turn, and
         # embedding the whole clip it sits in would make a voiceprint mostly of
         # whoever else was in the room. Both or neither: a half-given span is a
         # caller bug, and defaulting the missing end to the clip's would enrol a

@@ -26,7 +26,7 @@ frontend/node_modules/
 frontend/dist/
 frontend/.angular/
 
-# recall runtime data — NEVER commit audio or transcripts
+# recall runtime data — never commit audio or transcripts
 data/
 audio/
 logs/
@@ -34,11 +34,11 @@ logs/
 *.flac
 *.opus
 # ...except the clips the tests may actually ship with. A public repo cannot
-# carry recordings of real people, but it must carry SOMETHING, or checks that
+# carry recordings of real people, but it must carry something, or checks that
 # read like repo-wide guarantees quietly do nothing on a fresh clone (#1433).
 # See tests/fixtures/speech/README.md.
 #
-# ⚠ These three negations are the WHOLE exception and they are named one by one
+# ⚠ These three negations are the whole exception and they are named one by one
 # on purpose. A pattern here (`!tests/fixtures/speech/*.flac`) would silently
 # adopt whatever lands in that directory next, which is exactly how household
 # audio would reach a public repo. Adding a fourth is a decision, not a tidy-up.

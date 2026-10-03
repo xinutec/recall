@@ -21,8 +21,8 @@ const RECOVERY_KEY = 'recall.sw-recovery-attempted';
  * learns a newer one exists**, which is worse than no caching because it looks
  * fine. That is why the update path arrives in the same change (dev-lint#1384).
  *
- * ⚠ **Only the SHELL is cached — `ngsw-config.json` carries no dataGroups, and
- * this app is the strongest case for that.** It is a control surface over a LIVE
+ * ⚠ **Only the shell is cached — `ngsw-config.json` carries no dataGroups, and
+ * this app is the strongest case for that.** It is a control surface over a live
  * pipeline: a cached `/api/capture` would show recording as running when it had
  * stopped, or the reverse. Whether the mics are listening is the one thing this
  * UI exists to answer, and an answer from cache is not an answer. Offline it

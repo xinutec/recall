@@ -27,7 +27,7 @@ final class LevelsTests: XCTestCase {
     }
 
     func testTierMatchesAndroidBoundaries() {
-        // Android meterTier: OFF at/after `lit`, HIGH above 85%, MID above 60%.
+        // Android meterTier: off at/after `lit`, high above 85%, mid above 60%.
         let segments = 24
         XCTAssertEqual(Levels.tier(index: 5, lit: 5, segments: segments), .off)
         XCTAssertEqual(Levels.tier(index: 5, lit: 24, segments: segments), .low)

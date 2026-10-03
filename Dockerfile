@@ -36,7 +36,7 @@ RUN pnpm run build
 # The Rust system-of-record daemon (docs/architecture.md, stage A) — the only
 # program this image exists to run. One binary binds both planes, so the pod is
 # one container and the image is one artifact to version, push and roll.
-# TRIXIE, where the rest of the fleet is on bookworm, and that is forced rather
+# Trixie, where the rest of the fleet is on bookworm, and that is forced rather
 # than drifted: Debian ships libonnxruntime only from trixie (1.21), and the VAD
 # dlopens Debian's baseline build because ort's prebuilt needs AVX2 — which
 # SIGILLs on isis (Ivy Bridge, 2012). Harmonising this to bookworm takes the
@@ -48,18 +48,11 @@ WORKDIR /build
 # audiocore dependency — audiod rides along as text. Layer caching comes from
 # buildx's registry cache rather than a dummy-source dance, which a workspace
 # would make three times as fiddly for a build measured in low minutes.
-# ⚠ EVERY workspace member must be copied, even ones this image never runs:
-# cargo loads the whole graph before it compiles anything, so a missing crate
-# fails with "failed to load manifest for workspace member". The member list
-# lives in THREE places — Cargo.toml, flake.nix's fileset, and here — and the
-# two build ones fail only in CI and the nix sandbox, never on a laptop.
+# ⚠ Every workspace member, though only recalld is built: cargo loads the whole
+# graph first, and a missing member fails with a bare "No such file or
+# directory". The list lives in Cargo.toml, flake.nix's fileset and here; the
+# gate never builds this image, so scripts/check_workspace_members.py checks it.
 COPY Cargo.toml Cargo.lock ./
-# ⚠ EVERY workspace MEMBER, or cargo cannot even load the graph — it fails with
-# a bare "No such file or directory" naming nothing. Only recalld is built here,
-# which makes it tempting to copy only what it needs. ⚠ Adding a crate to
-# Cargo.toml and not to this list breaks the image build and NOTHING ELSE — the
-# commit gate never builds it. flake.nix carries the same list and the same
-# warning.
 COPY audiocore/ audiocore/
 COPY audiod/ audiod/
 COPY doctor/ doctor/

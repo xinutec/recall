@@ -4,7 +4,7 @@ import Network
 /// Streams the mic to the recall ingester over TCP — and stays alive in the background.
 ///
 /// iOS keeps an app running in the background only while it holds an *active audio
-/// session*, so the mic is captured for the WHOLE time the client is "on", not just
+/// session*, so the mic is captured for the whole time the client is "on", not just
 /// while connected. PCM is forwarded only while a connection is up; when paused or
 /// unreachable the capture keeps running (so iOS doesn't suspend us) and the loop
 /// reconnects every 2 s. That is what lets the recorder enable/disable this device
@@ -24,7 +24,7 @@ final class StreamClient {
     /// Bounded capture-to-network hand-off (PcmSpool) — 60s of audio, enough to ride
     /// out a busy host or a Wi-Fi stall without the mic ever pausing. Derived from
     /// the capture rate rather than written as a literal: a hardcoded 16000 here
-    /// silently made this a TWENTY-second spool against a 48 kHz stream.
+    /// silently made this a twenty-second spool against a 48 kHz stream.
     private let spool = PcmSpool(
         capacityBytes: Int(AudioCapture.sampleRate) * 2 * StreamClient.spoolSeconds)
 
@@ -38,7 +38,7 @@ final class StreamClient {
 
     /// Store-and-forward shadow (docs/architecture.md, stage C2): the same PCM
     /// lands in capture-stamped local segments delivered with verified
-    /// receipts. Gated on the CONNECTION, exactly like Android's C1: iOS keeps
+    /// receipts. Gated on the connection, exactly like Android's C1: iOS keeps
     /// this mic hot even while paused (audio discarded by design), and the
     /// connection is the one signal that means at-home + unpaused + wanted.
     private let segments = SegmentWriter(source: Prefs.deviceID)

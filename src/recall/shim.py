@@ -67,7 +67,7 @@ def parse_request(line: str) -> tuple[str | None, str | None, JsonDict]:
 def finite(value: JsonValue) -> JsonValue:
     """Replace every non-finite float with `None`, recursively.
 
-    ⚠ **`json.dumps` EMITS BARE `NaN`, AND THAT IS NOT JSON.** Python's encoder
+    ⚠ **`json.dumps` emits bare `NaN`, and that is not JSON.** Python's encoder
     defaults to `allow_nan=True` and writes `NaN`, `Infinity` and `-Infinity`
     unquoted. Python reads them back, so a round-trip in this language hides it
     completely; every other parser rejects them. The runner is Rust, and

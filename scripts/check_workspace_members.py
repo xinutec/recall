@@ -1,23 +1,13 @@
 #!/usr/bin/env python3
 """Every Rust workspace member must reach the places that BUILD it.
 
-⚠ This exists because of a real outage of the deploy path, not a style rule.
-On 2026-09-08 the `doctor` crate was added to `Cargo.toml` and to `flake.nix`
-but not to the Dockerfile. `cargo build --locked -p recalld` inside the image
-then fails — cargo cannot load the workspace graph unless every MEMBER is
-present — and it reports that as a bare "No such file or directory" naming no
-file at all. Four consecutive image builds failed before anyone looked.
+A member missing from the Dockerfile fails the image build with a bare "No such
+file or directory", and the gate builds no image, so the break shows only in CI.
+Fleet images are `:latest` only, so a broken image build leaves the fleet
+undeployable, in an emergency too, while every local check is green.
 
-The gate ran 31 checks that day and every one passed, because none of them
-builds the Docker image. That is the gap: fleet images are `:latest` only, so a
-rollback IS a roll-forward, and a change that breaks the image build makes the
-whole fleet undeployable — including in an emergency — while looking green
-locally.
-
-⚠ Deliberately a TEXT comparison, not a build. Building the image in the gate
-would add minutes to every commit on a machine that is also recording audio,
-and the gate's cost already shapes whether people run it. Reading three files
-catches the entire failure class for nothing.
+⚠ A text comparison, not a build: building the image would add minutes to every
+commit, and reading three files catches the whole failure class.
 """
 
 from __future__ import annotations

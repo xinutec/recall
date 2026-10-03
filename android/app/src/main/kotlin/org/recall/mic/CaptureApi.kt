@@ -26,13 +26,13 @@ data class CaptureState(
 )
 
 /**
- * One recorder's liveness for the fleet view, as TWO answers.
+ * One recorder's liveness for the fleet view, as two answers.
  *
- * [active] is the CONSENT signal: your voice is being captured audibly. A silent
+ * [active] is the consent signal: your voice is being captured audibly. A silent
  * room reads inactive on purpose — nobody should speak trusting a dot the audio
  * cannot back.
  *
- * [recording] is the OPERATIONAL answer: bytes are arriving, whatever is on
+ * [recording] is the operational answer: bytes are arriving, whatever is on
  * them. Serving only [active] is how geb came to read "off" while recording
  * perfectly (#1428), because the reader was asking this question instead.
  *
@@ -97,7 +97,7 @@ fun parseSources(body: String): List<SourceStatus> =
 /**
  * Talks to the recall web API — the same one the web app uses — to read the global
  * capture pause (and control it), and the fleet's per-recorder liveness. Since the Isis
- * split this is the *control host* (Isis), NOT the recorder host the stream uses: the API
+ * split this is the *control host* (Isis), not the recorder host the stream uses: the API
  * moved to Isis while the PCM ingest stayed on the Mac. The API stays up *during* a pause
  * (it's control-plane), so the app shows the true state even when the stream port is
  * closed.

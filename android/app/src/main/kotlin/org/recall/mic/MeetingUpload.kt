@@ -106,7 +106,7 @@ class MeetingUpload(
         private const val WORK_NAME = "meeting-upload"
 
         /**
-         * Try the outbox now, and keep trying. REPLACE, not KEEP: every caller is an event
+         * Try the outbox now, and keep trying. REPLACE, not keep: every caller is an event
          * that means "the host might be reachable now" — a recording being approved, the
          * screen opening, the mic stream connecting — so the backoff a previous failure
          * earned should be abandoned rather than waited out.
@@ -115,7 +115,7 @@ class MeetingUpload(
             // An empty outbox is the common case — the mic stream calls this on every
             // reconnect — and waking WorkManager to discover that is pure cost.
             //
-            // ⚠ Except when the queue emptied by HAND. A delete sends no report, so the
+            // ⚠ Except when the queue emptied by hand. A delete sends no report, so the
             // fleet would go on believing the recording is stuck: measured on the
             // Pixel 9, the check still read "1 failing" after the recording was gone
             // and the token fixed. A check that cannot go back to green is one that

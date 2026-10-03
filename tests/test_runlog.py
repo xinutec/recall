@@ -1,6 +1,6 @@
 """The excepthooks exist so #1383's stalls are diagnosable.
 
-live's failure mode is a WORKER THREAD dying on an exception while the reader
+live's failure mode is a worker thread dying on an exception while the reader
 thread keeps consuming the microphone: the process stays up, the transcript
 stops, and the only trace is a bare traceback with no clock and no thread name.
 `live.err.log` held 562 `PermissionError`, 562 `FileNotFoundError` and 417

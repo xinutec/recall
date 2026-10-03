@@ -33,20 +33,12 @@ def setup() -> None:
 def catch_uncaught() -> None:
     """Route uncaught exceptions through `logging`, so they get the same clock.
 
-    ⚠ **Without this, the exceptions that matter most are the ones with no
-    timestamp.** `basicConfig` above only reaches messages that go through
-    `logging`; an exception nobody caught goes straight to stderr as a bare
-    traceback. Measured 2026-09-09, `live.err.log` held 562 `PermissionError:
-    /Volumes/Backup`, 562 `FileNotFoundError` and 417 `httpx.ConnectError` in
-    exactly that shape — undated, and therefore impossible to line up against
-    any of the 45 measured stalls (#1383).
+    ⚠ Without it, uncaught exceptions are the ones with no timestamp:
+    `basicConfig` reaches only what goes through `logging`, so an uncaught
+    exception lands on stderr undated and cannot be lined up with anything else.
 
-    ⚠ **The THREAD hook is the one this was written for.** live's failure mode is
-    a worker thread dying while the reader thread keeps consuming the microphone:
-    the process stays up, the transcript stops, and nothing says which thread
-    went. `threading.excepthook` names it. That distinction — the thread is dead,
-    the process is not — is the whole difference between a hang and a death, and
-    it is why the stalls stayed inferable rather than measurable for so long.
+    The thread hook matters most: a worker thread dying while the process lives
+    on looks like a hang, and `threading.excepthook` names the thread.
 
     Idempotent in effect: installing twice leaves the same behaviour.
     """
@@ -78,7 +70,7 @@ def catch_uncaught() -> None:
         )
         # `exc_value` is Optional on ExceptHookArgs. It is not None in practice
         # when this fires, but a thread dying is the one event that must still be
-        # recorded when the object is missing — the NAME is the diagnostic.
+        # recorded when the object is missing — the name is the diagnostic.
         if args.exc_value is None:
             log.error(dead, name)
             return

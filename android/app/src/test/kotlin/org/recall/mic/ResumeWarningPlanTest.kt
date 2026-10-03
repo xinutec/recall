@@ -103,7 +103,7 @@ class ResumeWarningPlanTest {
     @Test
     fun leavesInsteadOfCancellingOnceInsideTheLeadWindow() {
         // now 07:00Z, resume 08:30Z → only 1h30m left (< 2h lead). No ahead-of-time
-        // moment, and crucially NOT a cancel — so a sync crossing the warn boundary
+        // moment, and crucially not a cancel — so a sync crossing the warn boundary
         // can't kill the alarm the instant before it fires.
         assertEquals(
             ResumeWarningPlan.Leave,
@@ -120,7 +120,7 @@ class ResumeWarningPlanTest {
         // The heads-up has already fired (resume 08:30Z, now 07:00Z, inside the 2h lead)
         // and the pause is then extended by a day — from this screen, the web UI or the
         // CLI, the plan cannot tell and must not care. Going back to Warn is what re-arms
-        // the alarm AND takes down the notification still on screen, which would
+        // the alarm and takes down the notification still on screen, which would
         // otherwise keep showing yesterday's resume time.
         val warn =
             planResumeWarning(

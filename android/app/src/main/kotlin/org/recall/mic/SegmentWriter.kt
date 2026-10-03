@@ -7,7 +7,7 @@ import java.time.Instant
 /**
  * Turns the mic loop's PCM chunks into closed, capture-stamped WAV segments in
  * [SegmentStore] — the phone's half of store-and-forward
- * (recall/docs/architecture.md, stage C1), running in SHADOW: the PCM stream to
+ * (recall/docs/architecture.md, stage C1), running in shadow: the PCM stream to
  * the recorder host is untouched, this only adds durable local copies that the
  * uploader delivers with verified receipts.
  *
@@ -123,7 +123,7 @@ class SegmentWriter(
         val target = path ?: return
         file = null
         path = null
-        // Patch the header with the truth, land the bytes, then RENAME into
+        // Patch the header with the truth, land the bytes, then rename into
         // the closed set — the only step anything downstream can observe.
         out.seek(0)
         out.write(SegmentNames.wavHeader(written))

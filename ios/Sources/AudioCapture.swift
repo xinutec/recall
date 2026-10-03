@@ -157,7 +157,7 @@ final class AudioCapture {
         case .began:
             engine.pause()
         case .ended:
-            // Restart REGARDLESS of `.shouldResume`: this is a dedicated always-on
+            // Restart regardless of `.shouldResume`: this is a dedicated always-on
             // mic, and an un-resumed engine is a silent "Streaming" source — the
             // recorder's worst failure. If another app still holds the session the
             // start fails quietly here and the watchdog keeps retrying.

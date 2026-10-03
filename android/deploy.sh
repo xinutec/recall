@@ -10,7 +10,7 @@
 #
 # Each phone is tried at its LAN address first (a DHCP reservation on the router)
 # and then at its WireGuard address. The VPN one is not a fallback for a broken
-# router — it is how you reach a phone that is genuinely OUT OF THE HOUSE, which
+# router — it is how you reach a phone that is genuinely out of the house, which
 # on 2026-08-14 was the only way the Pixel 9 could be deployed to at all. Both use
 # the fixed adb port 5555, set once per phone via `adb tcpip 5555`; that does NOT
 # survive a reboot, and no address helps once it is off.
@@ -33,11 +33,11 @@ echo "building APK..."
 APK="$PWD/app/build/outputs/apk/debug/app-debug.apk"
 LOCAL_MD5=$(md5 -q "$APK")
 
-# ⚠ If EVERY address below reports unreachable while the ports are demonstrably
-# open (`nc -z <ip> 5555` succeeds), the LOCAL adb server is wedged from earlier
+# ⚠ If every address below reports unreachable while the ports are demonstrably
+# open (`nc -z <ip> 5555` succeeds), the local adb server is wedged from earlier
 # failed connects rather than the phones being away — measured 2026-08-14, `nc`
 # succeeded 3/3 while `adb connect` timed out, and a restarted server connected in
-# 0.3 s. The remedy is `adb kill-server && adb start-server`, BY HAND.
+# 0.3 s. The remedy is `adb kill-server && adb start-server`, by hand.
 #
 # Deliberately not done here: `kill-server` itself hangs indefinitely when a
 # server is holding a transport to an offline device, and there is no `timeout` in
@@ -47,8 +47,8 @@ LOCAL_MD5=$(md5 -q "$APK")
 
 # Where Wireless debugging is listening right now, via mDNS. Echoes host:port, or nothing.
 #
-# `adb tcpip 5555` does NOT survive a reboot, and what comes back after one is the
-# Settings > Wireless debugging toggle — which listens on a RANDOM high port, not 5555.
+# `adb tcpip 5555` does not survive a reboot, and what comes back after one is the
+# Settings > Wireless debugging toggle — which listens on a random high port, not 5555.
 # So a phone that is awake, on the LAN and pingable can still refuse :5555 on every
 # address it owns, which reads exactly like a phone that is away (measured 2026-08-14:
 # pixel5 pinged on both addresses with :5555 shut, while it was in fact listening on
@@ -82,7 +82,7 @@ reach() {
   return 1
 }
 
-# Push, verify, then install FROM THE PHONE. Over the VPN a phone on cellular
+# Push, verify, then install from the phone. Over the VPN a phone on cellular
 # drops mid-transfer (`failed to read copy response`, then `device offline`), and
 # a bare `adb install` makes that one flaky link carry both the 15 MB copy and the
 # install. Split, and a drop costs a retry instead of the attempt. The old app

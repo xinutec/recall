@@ -388,7 +388,7 @@ private fun RecordingItem(
 
         row.failure?.let { why ->
             // Same place and the same colour as the length warning below, because it is
-            // the same kind of thing: something about THIS recording that the person
+            // the same kind of thing: something about this recording that the person
             // deciding what to do with it needs, said where the buttons are rather than
             // in a log nobody reads.
             Text(

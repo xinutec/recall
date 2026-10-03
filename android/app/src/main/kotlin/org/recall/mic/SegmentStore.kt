@@ -12,8 +12,8 @@ import java.io.File
  * |------------------------|-----------------------------------------------------|
  * | `segments/open/`       | being written by the recorder, nothing touches it   |
  * | `segments/`            | closed, undelivered — what the uploader drains      |
- * | `segments/delivered/`  | Isis holds it, PROVEN: the receipt's sha-256 matched a local re-hash |
- * | `segments/conflict/`   | Isis holds DIFFERENT bytes under this name — a person must look |
+ * | `segments/delivered/`  | Isis holds it, proven: the receipt's sha-256 matched a local re-hash |
+ * | `segments/conflict/`   | Isis holds different bytes under this name — a person must look |
  *
  * Deletion happens in exactly one place, [evict], and eats only `delivered/`,
  * oldest first, under cache pressure — never an undelivered segment, never a
@@ -70,7 +70,7 @@ object SegmentStore {
 
     /**
      * Free space down to [ceilingBytes], eating verified-delivered segments
-     * oldest first and NOTHING else. Returns how many were evicted. If the
+     * oldest first and nothing else. Returns how many were evicted. If the
      * cache is over the ceiling with `delivered/` empty, it stays over — the
      * undelivered audio is the point of the cache, and deleting it to meet a
      * number would be the exact loss this design exists to prevent.

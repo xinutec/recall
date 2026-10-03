@@ -27,7 +27,7 @@ function turn(id: number, speaker: string, cluster: string, text: string): Trans
   };
 }
 
-// Two same-speaker turns coalesce into ONE bubble (run) — the case where the play
+// Two same-speaker turns coalesce into one bubble (run) — the case where the play
 // button must span both turns, not just the first.
 const turns = [
   turn(1, 'Oskar', 'SPEAKER_01', 'I have already made a list of errands.'),

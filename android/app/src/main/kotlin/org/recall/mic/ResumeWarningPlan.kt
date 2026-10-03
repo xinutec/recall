@@ -44,7 +44,7 @@ sealed interface ResumeWarningPlan {
 }
 
 /**
- * Decide the warning from the household capture state. Keyed on the DESIRED view (the
+ * Decide the warning from the household capture state. Keyed on the desired view (the
  * intent that moves the instant a button is pressed), so extending the pause
  * reschedules the warning at once, without waiting for the mic to confirm.
  */

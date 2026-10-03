@@ -463,7 +463,7 @@ private fun CaptureBanner(
     onResume: () -> Unit,
 ) {
     if (capture == null) return // API unreachable — nothing beyond the stream status
-    // The card follows the DESIRED state, with an explicit in-between while the mic
+    // The card follows the desired state, with an explicit in-between while the mic
     // hasn't confirmed it — a press can't flap back to the old state on the next poll.
     val paused = !capture.desiredRunning
     val transitioning = capture.micReachable && !capture.settled

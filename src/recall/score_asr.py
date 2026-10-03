@@ -39,7 +39,7 @@ class GoldenFixture:
 #
 # Each threshold is its own measured baseline + ~0.05, never copied: the
 # references differ in exactness, and one number would import the loosest
-# denominator. These are DRIFT bounds, not evidence about absolute quality. If a
+# denominator. These are drift bounds, not evidence about absolute quality. If a
 # legitimate runtime update trips one, re-baseline deliberately.
 GOLDEN_FIXTURES = (
     GoldenFixture(

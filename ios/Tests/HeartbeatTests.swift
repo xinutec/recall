@@ -61,7 +61,7 @@ final class HeartbeatTests: XCTestCase {
 
     func testTheVPNIsTriedBeforeTheLANSoTheFallbackStaysABackstop() {
         // #888: audio goes to the LAN host, so a phone at home with its tunnel off
-        // records fine and used to read as dead. The fallback fixes that WITHOUT
+        // records fine and used to read as dead. The fallback fixes that without
         // making the LAN the normal path — a phone away from home must behave exactly
         // as before, and a beat that took the back way is marked by the relay.
         XCTAssertEqual(
@@ -113,7 +113,7 @@ final class HeartbeatTests: XCTestCase {
         }
         XCTAssertLessThanOrEqual(delays.count, 8, "an outage costs \(delays.count) retries")
         // Monotonic: each wait is at least the one before it, so the schedule can only
-        // ever back OFF. A dip would mean an outage beating harder the longer it lasts.
+        // ever back off. A dip would mean an outage beating harder the longer it lasts.
         XCTAssertEqual(delays, delays.sorted())
     }
 

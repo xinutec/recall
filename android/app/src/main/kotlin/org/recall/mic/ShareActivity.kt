@@ -70,7 +70,7 @@ class ShareActivity : ComponentActivity() {
         setContent { RecallMicTheme { ShareScreen() } }
 
         val uri = streamUri(intent)
-        // The API host (Isis), NOT the recorder host the PCM stream goes to: the Mac's
+        // The API host (Isis), not the recorder host the PCM stream goes to: the Mac's
         // own UI was retired in the Isis split and its :8000 refuses, so uploads sent
         // there went nowhere. Never blank — it falls back to DEFAULT_CONTROL_HOST.
         val host = Prefs.controlHost(this)

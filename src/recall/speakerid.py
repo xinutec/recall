@@ -1,6 +1,6 @@
 """The speaker-embedding model, behind a lazy import.
 
-⚠ **What is left here is the MODEL and nothing else.** The matching arithmetic —
+⚠ **What is left here is the model and nothing else.** The matching arithmetic —
 cosine, the profile type, the threshold rule — lived here until 2026-09-17 and is
 now `recalld::identify`, on the side that owns the voiceprints. This module is
 part of the Python floor: pyannote's weights, the decode, and the process that

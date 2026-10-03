@@ -9,7 +9,7 @@ inject plain functions; only the factory touches ML.
 than one process wants it: this project's summaries and Ask, and life's emotion
 suggestions. Loaded in-process by each, the Mac holds two copies — and the refine
 daemon's copy is never released, so the second one is permanent. So the weights
-live in ONE holder process (`recall llm-host`, recall.llmhost) and everything
+live in one holder process (`recall llm-host`, recall.llmhost) and everything
 else asks it over localhost. `make_generator` is the single place that choice is
 made; it points at the holder unless `RECALL_LLM_HOST` is set to the empty
 string, which means "load it in this process".
@@ -34,7 +34,7 @@ DEFAULT_LLM = "mlx-community/Qwen2.5-7B-Instruct-4bit"
 # the GPU for minutes on a bad prompt.
 MAX_TOKENS = 600
 
-# Disk prefix-KV cache. A long, STABLE system prompt (emotion suggestions send
+# Disk prefix-KV cache. A long, stable system prompt (emotion suggestions send
 # ~5-6k tokens of vocabulary + a day-stable few-shot) is otherwise re-prefilled on
 # every call, and that prefill is most of a warm request's time. When the same
 # system recurs, its KV is computed once and saved to disk; the next call loads it

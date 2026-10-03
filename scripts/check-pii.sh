@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fail if any tracked file contains a term from the private denylist. The denylist
-# (real names, addresses, recorded-utterance fragments) lives OUTSIDE the repo, in
+# (real names, addresses, recorded-utterance fragments) lives outside the repo, in
 # the encrypted data root — committing it here would itself be the violation it
 # guards against. One term per line; matched case-insensitively as a fixed string.
 set -euo pipefail

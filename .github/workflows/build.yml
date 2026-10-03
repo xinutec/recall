@@ -1,7 +1,7 @@
 ---
 name: build
 
-# recall's FLEET image (recalld: browsing API + web + device ingest, no ML) — build +
+# recall's fleet image (recalld: browsing API + web + device ingest, no ML) — build +
 # push xinutec/recall:latest to Docker Hub on push to main, the same way the other web
 # apps do (health/life/coach/fleetwatch each have this workflow). The k8s manifests live
 # in deploy/k8s (and, once deployed, the kubes monorepo); the image tag is the only
@@ -21,7 +21,7 @@ on:
   workflow_dispatch: {}
 
 # One build per branch at a time. Pushes here land in bursts, and the image tag
-# is `latest` — two runs racing means the tag ends up at whichever FINISHED
+# is `latest` — two runs racing means the tag ends up at whichever finished
 # last, not whichever commit is newer.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,7 +38,7 @@ jobs:
       # Unpinned, the action tracks latest and CI enforces rules the pre-commit
       # gate cannot even see: 0.16.0 stabilised PLR0917 and failed a push that
       # was green locally on 0.15.20. Worse, the obvious fix (a noqa) would then
-      # fail LOCALLY as an unused-noqa, since RUF100 is selected — so the two
+      # fail locally as an unused-noqa, since RUF100 is selected — so the two
       # must move together. Bump this and flake.nix in the same commit.
       - uses: astral-sh/ruff-action@v3
         with:
@@ -64,7 +64,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      # Build it, BOOT it, and only then publish it. Without the smoke step an image
+      # Build it, boot it, and only then publish it. Without the smoke step an image
       # that cannot run the app still gets tagged :latest and deployed: a lint fix
       # is enough to drag a package into the serving chain and leave Isis in
       # CrashLoopBackOff off a green build. The Dockerfile's dep set is a claim;
@@ -89,7 +89,7 @@ jobs:
           # a working API serving 404s.
           docker run --rm xinutec/recall:ci \
             test -f /app/frontend/dist/recall-web/browser/index.html
-          # The binaries recalld SHELLS OUT to. Missing one is not a boot failure — it is
+          # The binaries recalld SHELLS out to. Missing one is not a boot failure — it is
           # a 500 the first time somebody presses play, which is how `sox` reached
           # production: transcripts served perfectly, every audio request died.
           docker run --rm xinutec/recall:ci \

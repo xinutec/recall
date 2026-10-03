@@ -13,7 +13,7 @@ import harness from './e2e/harness.mjs';
  * deviceScaleFactor 1 (CSS-pixel geometry is DPR-invariant, and forcing 1 keeps
  * measurements small).
  *
- * The BUILT bundle is served, not `ng serve`: the tests mock every /api call so
+ * The built bundle is served, not `ng serve`: the tests mock every /api call so
  * no backend is involved, and serving the built dist dodges the macOS
  * kqueue.c:279 abort that spawning the CLI dev server trips. `npm run ui-check`
  * builds first; reuseExistingServer attaches to a server you started yourself.
@@ -22,7 +22,7 @@ const base = phoneConfig(harness, devices);
 
 /**
  * ⚠ **The service worker is blocked, and the harness does it now.** This suite
- * serves the BUILT bundle, so as of the ngsw adoption a real worker registers —
+ * serves the built bundle, so as of the ngsw adoption a real worker registers —
  * and Playwright's `page.route` does not intercept requests that pass through
  * one. Two `session-assign` tests went to `Received: null` where they expected
  * a captured request, which reads as the app not making the call and sends you

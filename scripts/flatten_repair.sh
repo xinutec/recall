@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Undo the diarized pass's flattening on N clips (#1663).
 #
-# ⚠ **The flattened state is simply WRONG under the write model** — a pass may
-# SPLIT (more turns out than in, every word kept) or LABEL (no text touched).
+# ⚠ **The flattened state is simply wrong under the write model** — a pass may
+# split (more turns out than in, every word kept) or label (no text touched).
 # Merging is neither. This restores the boundaries a merge hid and releases the
 # clip so the pass can re-decide, which under the current rule attributes
 # instead of replacing.
 #
-# ⚠⚠ **TURNS FIRST, LEDGER LAST, and the order INSIDE the transaction matters
+# ⚠⚠ **turns first, ledger last, and the order inside the transaction matters
 # too.** Releasing the ledger first let the pass re-decide against the broken
 # state and race the repair, leaving 7 duplicate turns to clean by hand. And the
-# replacements must be hidden BEFORE the originals are un-hidden, or the
+# replacements must be hidden before the originals are un-hidden, or the
 # un-hidden ones match the "not hidden" predicate and get hidden straight back.
 #
 #   scripts/flatten_repair.sh <count>      default 20
@@ -24,7 +24,7 @@ reason="flatten-repair $stamp"
 
 ssh "$host" "set -euo pipefail
 pvc=$pvc
-# ⚠ A snapshot per RUN, not per campaign: a repair is only reversible against
+# ⚠ A snapshot per run, not per campaign: a repair is only reversible against
 # the state it started from.
 for db in recall ingest; do
   [ -f \"\$pvc/\$db-before-flatten-repair-$stamp.sqlite\" ] ||
@@ -45,7 +45,7 @@ GROUP BY a.id HAVING hidden > 0 AND written > 0 AND written < hidden
 ORDER BY (hidden - written) DESC LIMIT $count;
 
 BEGIN IMMEDIATE;
--- 1. the merged replacements go FIRST
+-- 1. the merged replacements go first
 UPDATE transcript_segments SET hidden_reason = '$reason'
  WHERE audio_segment_id IN (SELECT aid FROM pick)
    AND provenance LIKE 'diarized-aligned%' AND hidden_reason IS NULL

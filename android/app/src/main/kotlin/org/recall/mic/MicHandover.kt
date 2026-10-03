@@ -7,9 +7,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * meeting recording can wait for the handover instead of racing it.
  *
  * ⚠ **The race this exists to remove.** `MeetingService.beginOnQ` called
- * `StreamService.stop(this)` and then IMMEDIATELY opened a `MediaRecorder`.
+ * `StreamService.stop(this)` and then immediately opened a `MediaRecorder`.
  * `stopService` is asynchronous: `onDestroy` clears `running`, and only on its
- * NEXT iteration does the capture thread reach the `finally` block that runs
+ * next iteration does the capture thread reach the `finally` block that runs
  * `record.stop()` / `record.release()`. While continuous capture was running
  * there was therefore a window in which the old `AudioRecord` was still open —
  * both audio sources failed and the user was told to check permissions, which
@@ -39,7 +39,7 @@ object MicHandover {
      * ⚠ **Bounded on purpose.** A capture thread wedged on a dead socket would
      * otherwise hang the deliberate act indefinitely, and a meeting somebody has
      * pressed record on is worth more than a tidy handover — so on a timeout the
-     * caller should still TRY, and say something true if it fails.
+     * caller should still try, and say something true if it fails.
      */
     fun awaitRelease(timeoutMs: Long): Boolean {
         val deadline = System.nanoTime() + timeoutMs * 1_000_000

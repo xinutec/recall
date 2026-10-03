@@ -10,7 +10,7 @@
 # this line has to move whenever the harness commit does. Note the commit here
 # is not the one the other frontends pin; each repo's lockfile decides.
 #
-# A local install will NOT tell you this entry is missing. The machine-wide
+# A local install will not tell you this entry is missing. The machine-wide
 # store already holds the built harness from a sibling repo, so nothing needs
 # running and the install passes; CI, with a cold store, fails on
 # ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED. Test a change to this file with
@@ -47,7 +47,7 @@ allowBuilds:
 # the vulnerable 4.13.1 — a floor is the only thing that moves it. Dev-time
 # only: nothing here serves HTTP in production.
 #
-# ⚠ FLOORS COME FROM CHECKING EACH ALERT'S VULNERABLE RANGE against the version
+# ⚠ Floors come from checking each alert's vulnerable range against the version
 # pnpm actually installed. Do not read the alert list and stop: every alert names
 # dev-lint: allow-doc-path the path GitHub's alerts still name, deleted on purpose
 # `frontend/package-lock.json`, long deleted, and that stale path makes the whole

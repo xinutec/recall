@@ -66,7 +66,7 @@ enum SegmentUpload {
             guard let http = response as? HTTPURLResponse else { return .failed }
             switch http.statusCode {
             case 200:
-                // The eviction-grade check: the receipt must equal OUR hash.
+                // The eviction-grade check: the receipt must equal our hash.
                 guard
                     let receipt = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
                     receipt["sha256"] as? String == sha,

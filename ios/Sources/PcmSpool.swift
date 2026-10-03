@@ -9,7 +9,7 @@ import Foundation
 /// queues instead — but the queue is nobody's to bound, so a busy host turns into
 /// unbounded memory and a burst delivered much later. Measured 2026-09-03 with the
 /// Mac at load 42: iphone11's segment rotation showed exactly that shape, a mean
-/// BELOW 60s with a 228s worst case (stall, then a backlog arriving at once).
+/// below 60s with a 228s worst case (stall, then a backlog arriving at once).
 ///
 /// A recorder must not depend on its consumer's mood. `offer` never blocks and
 /// never fails; if the spool fills, the OLDEST audio is discarded and counted.

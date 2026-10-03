@@ -101,7 +101,7 @@ class MeetingService : Service() {
         // AudioRecord — so opening a MediaRecorder here raced a mic we still held,
         // both sources failed, and the user was told to check permissions (#1472).
         // Bounded, because a capture thread wedged on a dead socket must not hang a
-        // recording somebody deliberately pressed: on a timeout we still TRY, and
+        // recording somebody deliberately pressed: on a timeout we still try, and
         // say something true if it fails.
         val handedOver = MicHandover.awaitRelease(MicHandover.HANDOVER_MS)
 

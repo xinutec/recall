@@ -89,7 +89,7 @@ def test_a_missing_op_is_unusable_rather_than_guessed() -> None:
 
 
 def test_stdout_pollution_by_the_model_cannot_corrupt_the_wire() -> None:
-    # ⚠ THE hazard: mlx-whisper and friends print progress. A stray line would
+    # ⚠ The hazard: mlx-whisper and friends print progress. A stray line would
     # desync the stream silently, because the next parse fails on data that
     # looks almost right. serve() must make library prints go to stderr.
     script = (

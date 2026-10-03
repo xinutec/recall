@@ -22,7 +22,7 @@ class MicOkTest {
 
     @Test
     fun `a network failure does not clear an earlier mic failure`() {
-        // ⚠ THE BUG. The socket connects BEFORE the mic opens, so during a
+        // ⚠ The bug. The socket connects before the mic opens, so during a
         // household pause — listener closed — every attempt fails on the connect.
         // Reading that as "the mic is fine" is what kept micOk=true through nine
         // hours of a phone that could not open AudioRecord.

@@ -65,7 +65,7 @@ struct ContentView: View {
 
     @ViewBuilder private var captureBanner: some View {
         if state.capture.reachable {
-            // The banner follows the DESIRED state, with an explicit in-between while
+            // The banner follows the desired state, with an explicit in-between while
             // the mic hasn't confirmed — a press can't flap back on the next poll.
             let paused = !state.capture.desiredRunning
             let transitioning = state.capture.micReachable && !state.capture.settled

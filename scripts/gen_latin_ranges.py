@@ -1,7 +1,7 @@
 """Emit `recalld/src/latin_ranges.rs` — the codepoint ranges Python calls LATIN.
 
 ⚠ The Rust port of `foreign_script_ratio` must agree with the Python it replaces
-on the EDGES, and the Python asked whether a character's Unicode NAME contains
+on the EDGES, and the Python asked whether a character's Unicode name contains
 "LATIN". There is no dependency-free Rust equivalent, and guessing at block
 boundaries is how the two quietly disagree — so the answer is derived from the
 same table Python used and frozen here.

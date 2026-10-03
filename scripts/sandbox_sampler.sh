@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Sample the NIX SANDBOX arm of the workspace test suite (#1480).
+# Sample the NIX sandbox arm of the workspace test suite (#1480).
 #
-# ⚠ **`nix build --rebuild` and `--check` CANNOT do this.** Both return in under
+# ⚠ **`nix build --rebuild` and `--check` cannot do this.** Both return in under
 # a second on a cache hit and run NO tests, so a loop over either reports a
 # confident zero having done nothing — and one did: "0 sandbox failures in 8
-# runs" was eight no-ops. What works is varying a TRACKED input so the
+# runs" was eight no-ops. What works is varying a tracked input so the
 # derivation hash changes every iteration, plus an assertion that cargo really
 # ran, which is why this counts `test result:` lines and refuses a run with none.
 #
-# ⚠ It works in a scratch CLONE. The marker has to be `git add`ed for the flake
+# ⚠ It works in a scratch clone. The marker has to be `git add`ed for the flake
 # to see it (nix ignores untracked files), and doing that in the real checkout
 # would mix an experiment into the tree somebody is committing from.
 #
 #   scripts/sandbox_sampler.sh [iterations]     default 10
-# ⚠ `set -e` with a loop whose whole purpose is to SURVIVE a failing command:
+# ⚠ `set -e` with a loop whose whole purpose is to survive a failing command:
 # every status that is expected to be non-zero is captured in an `if` or with an
 # explicit `|| true`, never left bare. In particular `grep -c` exits 1 when it
-# counts ZERO, which is the ordinary case here and would otherwise end the run
+# counts zero, which is the ordinary case here and would otherwise end the run
 # at the first clean build.
 set -euo pipefail
 
@@ -30,7 +30,7 @@ mkdir -p "$scratch"
 git clone --quiet --no-hardlinks "$repo" "$scratch/recall"
 cd "$scratch/recall"
 
-# ⚠ Unique per RUN, not just per iteration. A marker of "iteration 3" is the
+# ⚠ Unique per run, not just per iteration. A marker of "iteration 3" is the
 # same text every run, so the second run's derivations hash to the first run's
 # and nix serves the cache — a whole sampling that measures nothing. Caught by
 # the assertion below on the first re-run, which is what it is for.

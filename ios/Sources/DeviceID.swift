@@ -4,7 +4,7 @@ import Foundation
 /// derivation: `<sanitised-model>-<8-hex-suffix>`, lowercased, non-alphanumerics
 /// folded to hyphens, capped at 40 chars. Used only when `Prefs.presetID` is nil —
 /// this build ships a fixed `"iphone11"` for the one dedicated device (source
-/// continuity, like the Pixels' `pixel9`/`pixel5`); a SECOND iOS device must get a
+/// continuity, like the Pixels' `pixel9`/`pixel5`); a second iOS device must get a
 /// different preset (or nil, to auto-derive) or it would merge into the first's
 /// recording history. A handshake id becomes a source id (and a directory name) on
 /// the recorder, so it must be stable and filesystem-safe.

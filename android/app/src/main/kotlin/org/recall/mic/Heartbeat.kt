@@ -20,7 +20,7 @@ import java.time.format.DateTimeFormatter
  * before this was written, which is exactly the window in which a dead app goes unnoticed
  * until somebody picks the phone up (#837).
  *
- * Sent to the CONTROL host (Isis, over WireGuard), not the recorder on the LAN — the same
+ * Sent to the control host (Isis, over WireGuard), not the recorder on the LAN — the same
  * split [CaptureApi] already makes. Isis is reachable from anywhere, so a phone that is
  * out of the house still beats and "away" stops looking like "dead". That is also why
  * this is not merged into [OutboxReport]: that one rides the upload worker's schedule and
@@ -106,7 +106,7 @@ object Heartbeat {
             .put("version", version)
             .put("startedAt", DateTimeFormatter.ISO_INSTANT.format(startedAt))
             .put("streaming", streaming)
-            // A running app that cannot open its mic must SAY so rather than fall
+            // A running app that cannot open its mic must say so rather than fall
             // silent, which is what it used to do (#887).
             .put("micOk", micOk)
             // Absent rather than null when unknown: guessing "discharging" would invent
@@ -154,7 +154,7 @@ object Heartbeat {
         ctx: Context,
     ): Boolean {
         val body = body(device, version(ctx), startedAt, streaming, charging(ctx), micOk)
-        // Control plane FIRST, the recorder's LAN address second (#888). The beat used
+        // Control plane first, the recorder's LAN address second (#888). The beat used
         // to demand more reachability than recording does — audio goes to the LAN host,
         // so a phone at home with its tunnel off recorded every sample and still read as
         // dead. The Mac runs a relay on the same port, so the fallback is the identical

@@ -18,7 +18,7 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ios"
 # (byte-identical when nothing changed) and takes a second, so do it every run.
 nix run nixpkgs#xcodegen -- generate --quiet
 
-# xcrun/xcodebuild must resolve the REAL Xcode toolchain; a Nix devshell retargets
+# xcrun/xcodebuild must resolve the real Xcode toolchain; a Nix devshell retargets
 # DEVELOPER_DIR to its own SDK, so clear it (same dance as the gate's swift-format row).
 env -u DEVELOPER_DIR xcodebuild test \
     -project RecallMic.xcodeproj \

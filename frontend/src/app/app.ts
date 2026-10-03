@@ -97,7 +97,7 @@ export class App {
   });
   // Ticks so the "resumes in Xh Ym" countdown stays current between polls.
   private readonly now = signal(Date.now());
-  // The banner/button follow the DESIRED state (what was asked for)…
+  // The banner/button follow the desired state (what was asked for)…
   protected readonly paused = computed(() => this.capture().desiredPausedUntil !== null);
   // …with an explicit in-between while the mic hasn't confirmed it yet.
   protected readonly transitioning = computed(() => {

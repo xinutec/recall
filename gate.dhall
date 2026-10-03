@@ -129,7 +129,7 @@ in  { name = "recall"
         , argv = G.inDevShell [ "cargo", "fmt", "--all", "--check" ]
         , timeout_s = 300
         }
-      , {-  `.venv` IS a store path, and this row is what makes it one.
+      , {-  `.venv` is a store path, and this row is what makes it one.
 
             It was a directory uv built from the same `uv.lock`, and the check
             here was `uv sync --check`: report drift, repair nothing. That check
@@ -146,7 +146,7 @@ in  { name = "recall"
             order; a reshuffle that moves this one down turns four rows into
             "no such file" with nothing saying why.
 
-            NOT in the devshell, deliberately: putting it there would drag the
+            Not in the devshell, deliberately: putting it there would drag the
             whole ML closure into `ruff check`.
         -}
         G.Check::{
@@ -198,10 +198,10 @@ in  { name = "recall"
       , {-  Generated-types drift: regenerate the ts-rs bindings from recalld's
             structs and fail if the committed frontend/src/app/generated moved.
         -}
-        {-  ⚠ THE ONLY CHECK HERE THAT GUARDS THE DEPLOY PATH ITSELF. A crate
+        {-  ⚠ The only check here that guards the deploy path itself. A crate
             added to Cargo.toml but not to the Dockerfile makes the image build
             fail — cargo cannot load the workspace graph without every member —
-            and because fleet images are :latest only, a rollback IS a
+            and because fleet images are :latest only, a rollback is a
             roll-forward. So that mistake does not stale one image, it makes the
             whole fleet undeployable, including in an emergency. It happened on
             2026-09-08 and all 31 checks passed, because none of them builds the
@@ -224,13 +224,9 @@ in  { name = "recall"
             is invisible. Importing on the DEVSHELL interpreter, which has no ML
             deps, is what catches it.
 
-            ⚠ This used to import `recall.cli`, because recall-capture/-ingest ran
-            `python -m recall` on this interpreter. Both are Rust now and the CLI
-            is deleted (#1342), so that subject is gone — but the discipline is
-            not. The shims are the reason it still matters: the runner spawns them
-            per job, and a module-level ML import turns a missing or broken model
-            dependency into a shim that dies at spawn, which reads as the queue
-            being quiet rather than as a fault.
+            It matters for the shims: the runner spawns them, and a module-level
+            ML import turns a missing model dependency into a shim that dies at
+            spawn, which reads as a quiet queue rather than a fault.
         -}
         G.Check::{
         , name = "shim import surface (devshell python, no ML deps)"

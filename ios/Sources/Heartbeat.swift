@@ -13,7 +13,7 @@ import Foundation
 /// four days before this was written, which is precisely the window in which this
 /// app dying would have gone unnoticed until somebody picked the phone up (#837).
 ///
-/// Sent to the CONTROL host (Isis, over WireGuard), not the recorder on the LAN —
+/// Sent to the control host (Isis, over WireGuard), not the recorder on the LAN —
 /// the same split every other API call here already makes. Isis is reachable from
 /// anywhere, so a phone that is out of the house still beats and "away" stops
 /// looking like "dead".
@@ -102,7 +102,7 @@ enum Heartbeat {
             "version": version,
             "startedAt": iso(startedAt),
             "streaming": streaming,
-            // A running app that cannot open its mic must SAY so rather than fall
+            // A running app that cannot open its mic must say so rather than fall
             // silent, which is what it used to do (#887).
             "micOk": micOk,
         ]
@@ -133,14 +133,14 @@ enum Heartbeat {
     /// POST one beat, trying the control plane first and the recorder's LAN address
     /// second (#888).
     ///
-    /// The fallback exists because the beat used to demand MORE reachability than
+    /// The fallback exists because the beat used to demand more reachability than
     /// recording does: audio goes to `host` on the LAN, so a phone at home with its
     /// tunnel off records every sample and still read as dead. `lanHost` runs the
     /// relay on the same port, so this is the identical request with the host
     /// swapped — and the relay marks what it forwards, so "alive but its tunnel is
     /// down" stays visible instead of being papered over.
     ///
-    /// Order matters: the VPN is tried FIRST so the LAN path is a backstop rather
+    /// Order matters: the VPN is tried first so the LAN path is a backstop rather
     /// than a shortcut, and a phone away from home behaves exactly as before.
     @discardableResult
     static func send(

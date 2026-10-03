@@ -106,12 +106,12 @@ class StreamService : Service() {
             // Store-and-forward shadow (docs/architecture.md, stage C1): beside
             // the live stream, the same PCM lands in closed, capture-stamped
             // local segments that SegmentUpload delivers with verified
-            // receipts. Per CYCLE, not per service: a segment must never span
+            // receipts. Per cycle, not per service: a segment must never span
             // a reconnect gap — its name claims its audio is continuous from
             // the stamp, and the mic really was closed in between.
             var segments: SegmentWriter? = null
             try {
-                // Connect FIRST, open the mic only on success. The recall host is a
+                // Connect first, open the mic only on success. The recall host is a
                 // private home-LAN address, reachable only when the phone is on the
                 // home network — so off it (mobile data, another Wi-Fi) the connect
                 // fails and the mic never opens: nothing is recorded unless it can
@@ -179,7 +179,7 @@ class StreamService : Service() {
                 // Read in small chunks (not the full ~1s buffer) so the UI level
                 // meter is responsive.
                 //
-                // ⚠ The mic loop NEVER touches the socket. It used to write each
+                // ⚠ The mic loop never touches the socket. It used to write each
                 // chunk straight out, so when the recorder host was busy TCP
                 // backpressure blocked the write, read() was not called, and
                 // AudioRecord's own ~1s buffer overran — the phone dropped speech
@@ -190,7 +190,7 @@ class StreamService : Service() {
                 // (PcmSpool) that never blocks, and a sender thread drains it.
                 val spool = PcmSpool(SPOOL_BYTES)
                 // The sender owns every socket write, and an exception escaping a
-                // bare thread lambda KILLS THE APP (two data_app_crash records on
+                // bare thread lambda KILLS the APP (two data_app_crash records on
                 // 2026-09-04, both "Software caused connection abort" at this
                 // write). So nothing may escape: any failure here is flagged, and
                 // the mic loop below turns the flag into the ordinary reconnect
@@ -216,7 +216,7 @@ class StreamService : Service() {
                 try {
                     while (running) {
                         if (senderFailed.get()) {
-                            // Surface the sender's death HERE, where the catch
+                            // Surface the sender's death here, where the catch
                             // below runs the normal teardown + reconnect + backoff.
                             error("sender thread lost the connection — reconnecting")
                         }
@@ -232,7 +232,7 @@ class StreamService : Service() {
                 } finally {
                     sender.join(SENDER_JOIN_MS)
                     if (spool.dropped() > 0) {
-                        // The phone is the ONLY place that knows this happened, so
+                        // The phone is the only place that knows this happened, so
                         // it must say so rather than lose the audio silently.
                         MicState.setDroppedBytes(spool.dropped())
                     }
@@ -273,7 +273,7 @@ class StreamService : Service() {
                 releaseWakeLock()
                 runCatching { record?.stop() }
                 runCatching { record?.release() }
-                // The microphone is genuinely free from here — announced AFTER the
+                // The microphone is genuinely free from here — announced after the
                 // release, never before it, or the waiter is told a lie.
                 MicHandover.released()
                 runCatching { socket?.close() }

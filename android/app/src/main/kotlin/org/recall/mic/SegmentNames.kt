@@ -6,7 +6,7 @@ import java.time.format.DateTimeFormatter
 
 /**
  * The store-and-forward segment grammar (recall/docs/architecture.md): a closed
- * segment is `<source>-YYYYMMDDTHHMMSS.<ext>`, stamped in UTC from THIS device's
+ * segment is `<source>-YYYYMMDDTHHMMSS.<ext>`, stamped in UTC from this device's
  * clock at the moment the segment opens. The name is the only timing metadata a
  * segment carries, so it is derived in exactly one place.
  *

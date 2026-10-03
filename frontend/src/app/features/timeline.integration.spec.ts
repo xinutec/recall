@@ -9,7 +9,7 @@ import { filter, firstValueFrom } from 'rxjs';
 import { Timeline } from './timeline';
 
 /**
- * Integration test through the REAL router — no mocked navigate(). It proves what
+ * Integration test through the real router — no mocked navigate(). It proves what
  * the unit spec can't: the timeline is wired to /api/conversations on the real
  * route, and a `?before=` cursor round-trips through the real router onto the
  * timeline route. The unit spec proves the rest: the `before` input keys the

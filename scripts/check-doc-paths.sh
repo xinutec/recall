@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Every repo path a doc cites in backticks must exist.
 #
-# ⚠ **This is the commonest way documentation rots here, and it rots SILENTLY.**
+# ⚠ **This is the commonest way documentation rots here, and it rots silently.**
 # A doc that names a deleted file reads exactly like one that names a live file,
 # so the claim around it keeps its authority long after the evidence is gone.
 # Found twice by hand: a permanent Python floor citing a test module that had
@@ -9,7 +9,7 @@
 # in a floor is the worst place for a claim to rot; and seven paths left behind
 # when the test suites were consolidated into `integration/` subdirectories.
 #
-# ⚠ It only checks paths that LOOK like repo paths — a leading directory this
+# ⚠ It only checks paths that look like repo paths — a leading directory this
 # repo actually has. A prose backtick like `speaker_label` is not a path and
 # must not be treated as one, or the check becomes noise and gets ignored.
 set -euo pipefail

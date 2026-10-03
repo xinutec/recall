@@ -8,7 +8,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { Search } from './search';
 
 /**
- * Integration test through the REAL router with withComponentInputBinding(), as
+ * Integration test through the real router with withComponentInputBinding(), as
  * in app.config.ts. It proves what the unit spec can't: when /search is opened
  * without a ?q param, the router calls setInput('q', undefined) — clobbering the
  * input('') default. Untransformed, that undefined reached the DOM as the literal

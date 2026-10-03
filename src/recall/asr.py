@@ -93,7 +93,7 @@ def build_working_copy_argv(
     """ffmpeg argv to derive the ASR-facing working copy.
 
     Mono, 16 kHz, loudness-normalised — what Whisper wants. This is a *derived*
-    copy; the raw archive segment is never modified (DESIGN req #1).
+    copy; the raw archive segment is never modified (design req #1).
     """
     return [
         "ffmpeg",
@@ -344,7 +344,7 @@ def mlx_transcribe(
     adds per-word timings (for aligning a whole-segment transcription to diarized
     speakers) at some extra cost; off by default. `initial_prompt` biases decoding
     toward the household vocabulary — names it has seen in the prompt get spelled
-    right. The prompt is built by the FLEET (`recalld::labels::initial_prompt`)
+    right. The prompt is built by the fleet (`recalld::labels::initial_prompt`)
     and handed to the shim per job; the Python that used to build it is gone.
     """
     import mlx_whisper  # noqa: PLC0415 - lazy: mlx-whisper is an optional heavy dep

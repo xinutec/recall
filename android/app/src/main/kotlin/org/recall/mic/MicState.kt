@@ -21,15 +21,15 @@ internal class MicUnavailableException(
  * and reports nothing either way.
  *
  * ⚠ This used to be `e !is MicUnavailableException`, which read a network failure
- * as PROOF THE MIC IS FINE and cleared a real fault. The order is what makes that
- * wrong: the socket connects BEFORE the mic opens, so during a household pause —
+ * as proof the mic is fine and cleared a real fault. The order is what makes that
+ * wrong: the socket connects before the mic opens, so during a household pause —
  * when the host's listener is closed — every attempt fails on the connect, and a
  * phone whose microphone was genuinely broken kept reporting micOk=true. That is
  * exactly what happened for nine hours on 2026-09-06: the app retried every two
  * seconds, could not open AudioRecord, and the fleet check built to catch a dead
  * mic (#887) called it healthy throughout.
  *
- * `true` is only ever written where the mic ACTUALLY OPENED.
+ * `true` is only ever written where the mic actually OPENED.
  */
 internal fun micOkAfter(previous: Boolean, failure: Throwable): Boolean =
     if (failure is MicUnavailableException) false else previous
@@ -61,7 +61,7 @@ object MicState {
 
     /**
      * Bytes of captured audio this app discarded because it could not deliver them
-     * — the spool overran (PcmSpool). The phone is the ONLY place that knows this
+     * — the spool overran (PcmSpool). The phone is the only place that knows this
      * happened: the samples never reach the network, so no server-side check can
      * see them. Zero is the normal, expected value; anything else is speech that
      * was heard and lost, and it belongs in the heartbeat beside micOk.

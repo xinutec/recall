@@ -92,7 +92,7 @@ def test_a_transcribe_request_reaches_the_model_with_its_arguments(
     assert seen["model"] == "mlx-community/whisper-small"
     assert seen["language"] == "nl"
     assert seen["words"] is True
-    # Vocabulary biasing is CARRIED, not fetched: the shim reads no database.
+    # Vocabulary biasing is carried, not fetched: the shim reads no database.
     assert seen["initial_prompt"] == "Oskar, Kat"
     assert as_dict(out)["language"] == "nl"
     assert segment(out)["text"] == "hallo daar"

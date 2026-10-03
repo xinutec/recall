@@ -24,7 +24,7 @@ source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
 
 # Decline the Angular CLI's first-run analytics-consent prompt so it never blocks a
 # headless build: with a TTY but no one to answer, the prompt aborts with
-# ExitPromptError (exit 127). (Note: this is NOT the intermittent kqueue abort above
+# ExitPromptError (exit 127). (Note: this is not the intermittent kqueue abort above
 # — that still occurs with this set; the retry loop is what handles that one.)
 export NG_CLI_ANALYTICS=false
 
@@ -40,13 +40,13 @@ cd "$FRONTEND"
 trap 'rm -rf "$STAGE"' EXIT
 
 # A staged build is usable if index.html is non-empty, the main bundle it points at
-# exists and is non-empty, AND every file in public/ actually arrived. We validate the
+# exists and is non-empty, and every file in public/ actually arrived. We validate the
 # *artifact*, not the build's exit code: the kqueue abort happens in the CLI's teardown
 # *after* "bundle generation complete", so the process exits non-zero even though the
 # output is usually fully written and valid.
 #
 # The assets check is not belt-and-braces. That same abort can kill the CLI *mid-copy*
-# of public/**, and it did: a build shipped with an EMPTY fonts/ directory — the
+# of public/**, and it did: a build shipped with an empty fonts/ directory — the
 # directory created, not one font in it. index.html was fine, the JS was fine, the
 # check passed, and the app deployed to the phone with every icon rendered as ligature
 # text ("delete", "graphic_eq") instead of a glyph. A half-copied build must never swap

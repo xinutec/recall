@@ -98,7 +98,7 @@ class MeetingQueueTest {
         assertFalse(MeetingQueue.landedShort(tenMinutes, tenMinutes))
         assertFalse(MeetingQueue.landedShort(tenMinutes, tenMinutes - 400))
         assertFalse(MeetingQueue.landedShort(tenMinutes, tenMinutes + 400))
-        // A post cut short mid-stream still parses on the server, so this is the ONLY
+        // A post cut short mid-stream still parses on the server, so this is the only
         // signal that the phone holds the longer recording.
         assertTrue(MeetingQueue.landedShort(tenMinutes, tenMinutes - 30_000))
         assertTrue(MeetingQueue.landedShort(tenMinutes, 5_000))

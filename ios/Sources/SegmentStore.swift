@@ -6,8 +6,8 @@ import Foundation
 ///
 ///   segments/open/       being written; nothing touches it
 ///   segments/            closed, undelivered — what the uploader drains
-///   segments/delivered/  Isis holds it, PROVEN: receipt sha-256 matched a local re-hash
-///   segments/conflict/   Isis holds DIFFERENT bytes under this name — a person must look
+///   segments/delivered/  Isis holds it, proven: receipt sha-256 matched a local re-hash
+///   segments/conflict/   Isis holds different bytes under this name — a person must look
 ///
 /// Deletion happens only in `evict`, eats only `delivered/`, oldest first,
 /// under cache pressure — never an undelivered segment, never on a server's

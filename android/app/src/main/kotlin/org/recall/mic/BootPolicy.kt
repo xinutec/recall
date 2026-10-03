@@ -7,7 +7,7 @@ enum class BootAction { AUTO_START, PROMPT, NOTHING }
  * Pure decision for the after-boot restart, split out so it's unit-testable.
  *
  * Android 11+ (API 30) treats a microphone foreground service started from the
- * background as while-in-use restricted: it comes up but records SILENCE — and
+ * background as while-in-use restricted: it comes up but records silence — and
  * Android 15 forbids the start outright (ForegroundServiceStartNotAllowedException,
  * a crash dialog). Hours of silent zeros that look like a live source in the
  * Devices panel are worse than a visibly dark mic. So from boot we auto-start only

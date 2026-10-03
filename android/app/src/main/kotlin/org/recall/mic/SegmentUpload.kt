@@ -19,7 +19,7 @@ import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 /**
- * Delivers closed segments to recalld's ingest plane and believes NOTHING but
+ * Delivers closed segments to recalld's ingest plane and believes nothing but
  * its own arithmetic: a delivery counts only when the receipt's sha-256 equals
  * a local digest of the bytes just sent — the meeting recorder's "a 2xx is not
  * proof", tightened from durations to hashes (recall/docs/architecture.md,
@@ -109,7 +109,7 @@ class SegmentUpload(
                             Delivery.VERIFIED
                         } else {
                             // A 200 whose receipt disagrees is a delivery that
-                            // did NOT happen, whatever the server thinks.
+                            // did not happen, whatever the server thinks.
                             Delivery.FAILED
                         }
                     }
@@ -151,7 +151,7 @@ class SegmentUpload(
         private const val READ_TIMEOUT_MS = 60_000
 
         /** The eviction-grade check, pure so the JVM tests it: the receipt
-         * must name OUR hash and OUR byte count. */
+         * must name our hash and our byte count. */
         fun receiptMatches(body: String, sha256: String, bytes: Int): Boolean =
             runCatching {
                 val receipt = JSONObject(body)

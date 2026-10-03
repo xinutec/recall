@@ -3,11 +3,11 @@
 # dev-lint: allow-doc-path the path GitHub's alerts still name, deleted on purpose
 # ⚠ Every alert on this repo names `frontend/package-lock.json`, which was
 # DELETED when the frontend moved to pnpm. The dependency graph kept a snapshot
-# of it and goes on matching NEW advisories against that snapshot, so this is not
+# of it and goes on matching new advisories against that snapshot, so this is not
 # staleness that ages out — which is why this file exists at all: nothing had ever
 # told Dependabot where to look.
 #
-# ⚠ Do NOT read that alert list as noise because the path is dead. Most alerted
+# ⚠ Do not read that alert list as noise because the path is dead. Most alerted
 # packages turn out already patched, and some are real and current. The only
 # trustworthy check is each alert's vulnerable range against the version pnpm
 # actually installed — see #1505.

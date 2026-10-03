@@ -1,6 +1,6 @@
 """Raw vs calibrated room selection, refereed against human corrections (#1461).
 
-For each correction, asks which microphone each RANK would have chosen for its
+For each correction, asks which microphone each rank would have chosen for its
 block, takes what that microphone actually transcribed, and scores both against
 the corrected text. Reports the median.
 
@@ -13,7 +13,7 @@ Three constraints, each of which produced a wrong answer when missed:
   - Exclude HUMAN CORRECTIONS from the hypothesis. A correction is stored as a
     turn that supersedes the machine's, so reading the current turn makes the
     hypothesis identical to the truth.
-  - Take only the LATEST machine version per moment; the archive keeps every
+  - Take only the latest machine version per moment; the archive keeps every
     re-transcription.
 
 A block where both ranks choose the same microphone is skipped: both arms would
@@ -195,11 +195,11 @@ def load_cases(
 def _report_by_origin(cases: list[Case]) -> None:
     """Split the medians by which microphone the human actually edited.
 
-    ⚠⚠ **THE HEADLINE MEDIANS ABOVE ARE NOT A COMPARISON ON THEIR OWN.** Each
+    ⚠⚠ **The headline medians above are not a comparison on their own.** Each
     correction flatters the arm it was typed over, so a one-sided set makes that
     arm win by construction and a balanced set averages the bias away into
-    mush. What CAN be compared is cross against cross: each arm scored only
-    against truth derived from the OTHER one.
+    mush. What can be compared is cross against cross: each arm scored only
+    against truth derived from the other one.
     """
     from recall.wer import word_error_rate  # noqa: PLC0415  lazy, scoring only
 

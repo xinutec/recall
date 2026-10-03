@@ -7,7 +7,7 @@ name = "recall"
 version = "0.0.0"
 description = "Local household speech recall system (memory aid)"
 requires-python = ">=3.12"
-# The DIRECT dependencies (what src/recall imports + serving glue). uv.lock is the
+# The direct dependencies (what src/recall imports + serving glue). uv.lock is the
 # frozen, complete pin set; this list is the human-readable intent behind it.
 dependencies = [
     # The LLM host's HTTP surface, and only that: it holds the mlx-lm weights
@@ -48,7 +48,7 @@ dev = ["pytest>=9.1"]
 # lift this when upstream ships stubs again.
 [tool.uv]
 constraint-dependencies = ["mlx<0.32"]
-# Resolve for THIS Mac only. These locks describe the local ML venv and nothing
+# Resolve for this Mac only. These locks describe the local ML venv and nothing
 # else — the Isis image installs its own non-ML subset directly in the Dockerfile
 # and never reads them. Without this, uv emits every platform's packages behind
 # markers (the CUDA/nvidia stack, win32 tzdata), which `uv pip freeze` on darwin

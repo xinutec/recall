@@ -1,6 +1,6 @@
 """Room stream vs per-microphone transcripts, refereed against human corrections.
 
-#1388 asks whether transcribing the ROOM once can replace transcribing every
+#1388 asks whether transcribing the room once can replace transcribing every
 microphone. Its loop, turn-count and character proxies have each been read wrong
 once; the only measurement that settles it is WER against text a person wrote.
 
@@ -14,28 +14,28 @@ wrong answer when missed:
   - Compare STORED transcripts, never re-transcribed slices. The mics do not
     share a clock — pixel9 ran 3.7 s behind usb — so matching is by overlap
     within a tolerance.
-  - Exclude HUMAN CORRECTIONS from the hypothesis. A correction is stored as a
+  - Exclude human CORRECTIONS from the hypothesis. A correction is stored as a
     turn that supersedes the machine's, so reading the current turn makes the
     hypothesis identical to the truth.
-  - Take only the LATEST machine version per moment; the archive keeps every
+  - Take only the latest machine version per moment; the archive keeps every
     re-transcription.
 
-⚠⚠ **THIS CANNOT SETTLE #1388 ON THE EXISTING CORRECTIONS, and the reason is
-structural.** A correction is an EDIT OF THE MICROPHONE'S OWN TEXT: the person
+⚠⚠ **This cannot settle #1388 on the existing corrections, and the reason is
+structural.** A correction is an edit of the microphone's own text: the person
 read what one microphone said and fixed the words that were wrong. So the
 reference shares its vocabulary and phrasing with the per-mic hypothesis and is
 independent of the room's. The per-mic arm would win even if the two were
 equally accurate, and the size of that advantage cannot be recovered from this
-data. Fresh ground truth written against AUDIO — #1461 — is therefore necessary
+data. Fresh ground truth written against audio — #1461 — is therefore necessary
 rather than merely convenient.
 
 Only words a person heard count: a correction marked `words_checked`, or one
 whose text changed. Most older corrections are speaker fixes that left the
 machine's words, and for those the per-mic arm would score 0.0 by construction.
 
-⚠ And one of its own: the two arms are reported SEPARATELY for blocks the
+⚠ And one of its own: the two arms are reported separately for blocks the
 correction's own microphone won and blocks it did not. Where it won, both arms
-carry the SAME AUDIO and the comparison is of pipelines; where it lost, the room
+carry the same audio and the comparison is of pipelines; where it lost, the room
 is a different microphone and the comparison includes the selection. Pooling them
 answers neither question.
 
@@ -79,10 +79,10 @@ def infix_error_rate(reference: str, hypothesis: str) -> float:
     that way is the trap this file exists inside.** A correction is a short
     utterance; both arms are gathered over its span plus a skew tolerance, so
     both capture surrounding speech — and the room's segments are coarser, so it
-    captures MORE. Measured that way the room scored a median 4.33 against the
+    captures more. Measured that way the room scored a median 4.33 against the
     microphone's 2.33, which is almost entirely a statement about window size.
 
-    Levenshtein with a FREE prefix and suffix: the alignment may start and end
+    Levenshtein with a free prefix and suffix: the alignment may start and end
     anywhere in the hypothesis at no cost, so surrounding words neither help nor
     hurt, and what is left is whether the corrected words are actually there.
     """

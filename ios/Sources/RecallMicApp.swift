@@ -52,17 +52,17 @@ final class RecallController: ObservableObject {
         guard !state.running else { return }
         Task {
             guard await AudioCapture.requestPermission() else { return }
-            // The INTENT, recorded before the engine is asked and never cleared by
+            // The intent, recorded before the engine is asked and never cleared by
             // its answer. `enabled` means "this should be recording", not "the
             // engine started this time" — writing the outcome here was #887: one
-            // failed mic open disabled auto-start forever AND silenced the beat,
+            // failed mic open disabled auto-start forever and silenced the beat,
             // so the single signal that would have reported the fault was the thing
             // the fault switched off.
             Prefs.enabled = true
             let ok = client.start()  // false if the mic couldn't be opened
             state.running = ok
             state.micOk = ok
-            // Beat EITHER WAY. A mic that will not open is exactly what the fleet
+            // Beat either way. A mic that will not open is exactly what the fleet
             // wants to hear about, and the beat now carries `micOk` to say it.
             // The outcome is dropped on purpose: this is a one-off alongside the
             // beat loop, and the loop owns the retry schedule.

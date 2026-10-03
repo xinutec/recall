@@ -154,7 +154,7 @@ describe('App', () => {
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('.paused-banner.transitioning')?.textContent).toContain('Pausing');
-    // the settled paused banner (with its resume buttons) is NOT shown yet
+    // the settled paused banner (with its resume buttons) is not shown yet
     expect(el.querySelector('.paused-banner .rec-dot')).toBeFalsy();
   });
 
@@ -169,7 +169,7 @@ describe('App', () => {
   it('a transition is abortable: the toggle stays enabled to change your mind', () => {
     // Intent is cheap and idempotent — pressing the opposite action mid-transition
     // just overwrites the desired state. Freezing the buttons was the old flap
-    // fix overshooting; only the LABEL needed to be honest.
+    // fix overshooting; only the label needed to be honest.
     const { fixture, c } = setup();
     c.pauseCapture();
     expect(c.transitioning()).toBe(true);
