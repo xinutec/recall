@@ -540,6 +540,17 @@ pub fn write_pass(
         if written_already > 0 && !again {
             continue;
         }
+        // A clip asked to be transcribed again is written only from a result
+        // that finished after the request, never the one this pass read when it
+        // began: until then it waits, request kept.
+        let result = if again {
+            match crate::retranscribe::fresh_result(ingest, &filename)? {
+                Some(fresh) => fresh,
+                None => continue,
+            }
+        } else {
+            result
+        };
         let Ok(turns) = interpret(block_start, &result) else {
             // Permanent: the stored result will not change.
             pass.barren += 1;

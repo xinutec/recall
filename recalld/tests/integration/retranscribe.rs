@@ -317,3 +317,56 @@ fn a_candidate_lost_speech_under_a_loop_and_a_loop_over_silence_is_not_one() {
             .is_empty()
     );
 }
+
+/// The race of 2026-10-03: the turns pass holds every finished result read
+/// when it began, and a request lands while it runs. It must not rewrite the
+/// clip from the OLD result it holds and drop the request; it waits for the
+/// result that finishes after the request.
+#[test]
+fn a_request_is_written_only_from_a_result_newer_than_itself() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let (mut meaning, ingest) = planes(dir.path());
+    passes(&mut meaning, &ingest);
+    assert_eq!(shown(&meaning), ["old words here"]);
+    // The old transcription finished before the request; the request is in,
+    // the job still shows its old result (what the pass read at its start).
+    ingest
+        .execute(
+            "UPDATE jobs SET done_utc = '2026-09-27T17:00:00+00:00' WHERE kind = ?1",
+            [Kind::TranscribeSegment],
+        )
+        .expect("an older result");
+    ingest
+        .execute(
+            "INSERT INTO retranscribe_requests (filename, requested_utc) VALUES (?1, ?2)",
+            (BLOCK, NOW),
+        )
+        .expect("the request");
+
+    passes(&mut meaning, &ingest);
+    assert_eq!(
+        shown(&meaning),
+        ["old words here"],
+        "nothing rewritten from the old result"
+    );
+    assert_eq!(
+        rows(
+            &ingest,
+            "SELECT count(*) FROM retranscribe_requests WHERE filename = ?1"
+        ),
+        1,
+        "the request waits"
+    );
+
+    lands(&ingest, FRESH);
+    passes(&mut meaning, &ingest);
+    let now_shown = shown(&meaning);
+    assert!(
+        now_shown.iter().any(|t| t.contains("new words")),
+        "{now_shown:?}"
+    );
+    assert!(
+        !now_shown.iter().any(|t| t.contains("old words")),
+        "{now_shown:?}"
+    );
+}

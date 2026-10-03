@@ -34,6 +34,11 @@ crate::statements! {
            AND NOT EXISTS (SELECT 1 FROM retranscribe_requests r WHERE r.filename = j.filename)";
     IS_REQUESTED: Ingest =
         "SELECT 1 FROM retranscribe_requests WHERE filename = ?1";
+    /// The request's time and the transcription job's current result and finish.
+    REQUESTED_RESULT: Ingest =
+        "SELECT r.requested_utc, j.done_utc, j.result FROM retranscribe_requests r
+         LEFT JOIN jobs j ON j.filename = r.filename AND j.kind = ?2
+         WHERE r.filename = ?1";
     CLEAR_LEDGER: Ingest =
         "DELETE FROM pass_ledger WHERE kind = ?1 AND filename = ?2";
     DROP_REQUEST: Ingest =
@@ -152,6 +157,34 @@ pub fn is_requested(ingest: &Connection, filename: &str) -> rusqlite::Result<boo
         .query_row(ingest, [filename], |r| r.get::<_, i64>(0))
         .optional()?
         .is_some())
+}
+
+/// A requested clip's NEW transcription: the job's result if it finished after
+/// the request, else `None` while it is still pending. `Err` only from SQLite.
+///
+/// ⚠ The turns pass reads every finished result when a pass begins, and a
+/// request can land while it is running: writing the result it already holds
+/// rewrote a clip from its OLD transcription and dropped the request, so the
+/// new one, arriving minutes later, was never written (2026-10-03, three
+/// sessions pinned to Dutch came back in English and Italian).
+pub fn fresh_result(ingest: &Connection, filename: &str) -> rusqlite::Result<Option<String>> {
+    let row: Option<(String, Option<String>, Option<String>)> = REQUESTED_RESULT
+        .query_row(
+            ingest,
+            rusqlite::params![filename, Kind::TranscribeSegment],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let Some((requested, Some(done), Some(result))) = row else {
+        return Ok(None);
+    };
+    let (Some(requested), Some(done)) = (
+        audiocore::instant::parse_utc(&requested),
+        audiocore::instant::parse_utc(&done),
+    ) else {
+        return Ok(None);
+    };
+    Ok((done >= requested).then_some(result))
 }
 
 /// The turns pass has written the new lines (or found nothing to write): drop
