@@ -73,6 +73,9 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
         .to_string();
     let done = recalld::work::open_write(root).and_then(|meaning| {
         let mut ingest = recalld::store::open(root)?;
+        // The daemon's passes hold the ingest lock for longer than its 5 s, and
+        // a task that waits costs nothing; one that gives up stops halfway.
+        ingest.busy_timeout(std::time::Duration::from_mins(2))?;
         recalld::phone_flac::convert(root, &meaning, &mut ingest, &before, apply)
     });
     match done.map(|done| serde_json::to_string_pretty(&done)) {
