@@ -20,8 +20,9 @@ told they are recorded. This file is the shape of the system as it runs;
 6. **Low maintenance.** Runs as services, restarts on failure, surfaces its
    health.
 
-Latency is not a requirement: minutes behind real time is fine, which is what
-lets the most accurate models be used.
+Text must be there within minutes, even if not yet perfect; the accurate
+version may follow later. Real-time is not needed, which is what lets the most
+accurate models do the archive pass.
 
 ## What it is for
 
@@ -254,9 +255,11 @@ mlx-whisper's temperature fallback is patched to draw fresh noise per token
 random key per process, and the fallback meant to escape a repetition loop made
 them (#1764).
 
-`recall-live` is the instant feed: it reads the tap the segmenter publishes,
-cuts at pauses with the same detector, transcribes each utterance as the
-speaker stops, and pushes it to `POST /sync/live`. A live turn is provisional;
+`recall-live` is the instant feed. It keeps "within minutes" true while the
+archive pass runs 3 to 25 minutes behind (median per day, late September), for
+the USB mic only: it reads the tap the segmenter publishes, cuts at pauses with
+the same detector, transcribes each utterance as the speaker stops, and pushes
+it to `POST /sync/live`. A live turn is provisional;
 the archive pass hides it when it writes the same minute. It joins whatever is
 waiting into one call, because Whisper pads every call to 30 seconds and the
 cost is the window, not the audio.
