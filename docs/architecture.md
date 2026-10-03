@@ -292,6 +292,13 @@ Isis.
 
 ## Decisions that bind
 
+- **Continuous capture is home-only; outside, a meeting is recorded on
+  purpose.** A phone's mic opens only while it reaches the Mac on the home
+  network, so that connection is also how a phone knows it is home. Away, the
+  app's meeting recorder is the tool (decided 2026-10-03, superseding
+  2026-09-06's "record whenever unpaused"). So the stream stays, and a phone
+  minute is kept twice (the Mac's cut and the phone's own copy, which also
+  covers a dropped stream).
 - **Combining microphones lost; selecting the best one tied it.** On 38
   corrections, the best single mic scored 0.229 median WER against 0.348 and
   0.437 for two fusion arms, 14 worse against 4 better; a control showed the
