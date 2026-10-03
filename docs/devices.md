@@ -1,314 +1,187 @@
-# recall — device ingest, identity & onboarding
+# recall — device ingest, identity & liveness
 
-How recorder devices (the USB mic, roaming phones, and always-on Linux hosts) connect, are identified, and
-report liveness. Companion to [architecture.md](architecture.md), which covers what happens to several sources —
-several co-located mics capturing the **same** speech; this covers getting their audio
-in and knowing which device is which.
+How recorders (the USB mic, the phones, and always-on Linux hosts) get their audio
+in, are told apart, and show that they are alive. What happens to several mics
+hearing the same speech is in [architecture.md](architecture.md).
 
 ## Model: one shared port, devices announce themselves
 
-Every networked recorder connects to **one** TCP port, served by a single host agent:
+Every networked recorder connects to one TCP port, served by one agent:
 
 ```
-audiod --root <archive>       # the recall-ingest agent: one server on DEFAULT_INGEST_PORT (9999)
-audiod capture --id usb       # the USB mic: sox -d, local, no port, no handshake
-audiod capture + upload       # a Linux host's own mic (geb): store-and-forward, not streaming
+audiod ingest --root <archive>   # recall-ingest: one server on DEFAULT_INGEST_PORT (9999)
+audiod capture --id usb          # the USB mic: local, no port, no handshake
+audiod capture + audiod upload   # a Linux host's own mic (geb): store-and-forward
 ```
 
-A phone runs the recall-mic app and opens a plain TCP connection to the host's ingest
-port. It first sends a one-line **handshake** announcing itself —
+A phone runs the recall-mic app and opens a plain TCP connection to the ingest
+port. It sends a one-line handshake —
 `{"id": "pixel5", "rate": 48000, "channels": 1, "epoch": 1756900000.25}\n` — then
-streams **raw s16le PCM**. `epoch` (optional) is the phone's wall-clock, in unix
-seconds, of the first PCM byte it streams: the server measures that byte's arrival,
-takes the difference as the connection's capture-vs-arrival offset, and renames each
-closed segment from arrival time to capture time — so cross-mic timestamps share a
-clock and moment folding lines up. Absent or nonsense (a clock >10 min out), segments
-stay arrival-stamped exactly as before; the shift is only ever backwards, never past
-ffmpeg's open segment.
-The server (`audiod`, Rust):
+streams raw s16le PCM. `epoch` (optional) is the phone's wall clock, in unix
+seconds, for the first PCM byte. The server measures that byte's arrival and
+renames each closed segment from arrival time to capture time, so the mics' times
+line up. Without a usable epoch (absent, or more than 10 minutes out) segments
+keep their arrival time; the shift is only ever backwards.
 
-1. reads *exactly* the handshake line (byte by byte, so it never consumes any PCM),
-2. **auto-registers** the source by the announced id (a filesystem-safe id = one source
-   = one storage directory) in the capture log — no host-side provisioning,
-3. pumps the socket's PCM into an ffmpeg segmenter that writes the 60 s segment files —
-   the same files the USB mic produces.
+The server (`audiod`):
 
-So a new recorder needs **zero host-side setup**: it connects, announces itself, and the
-backend learns about it on first connect — no plist, no per-device port; devices are
-added freely.
+1. reads exactly the handshake line, byte by byte, so it consumes no PCM;
+2. registers the source by its announced id (one id, one storage directory) in the
+   capture log, with no host-side setup;
+3. pumps the PCM into an ffmpeg segmenter that writes the same 60 s segment files
+   the USB mic produces.
 
-## Three kinds of client, one protocol
+So a new recorder needs nothing on the host: it connects, announces itself, and
+exists from then on.
+
+## Three kinds of client
 
 | | how the audio reaches the segmenter |
 |---|---|
-| **USB mic** (`audiod capture`, since 2026-09-05) | local, on the recorder host itself: sox → ffmpeg, no socket and no handshake. Our code is never in this path — a real-time device has no buffer to absorb a stall. It ported `recall record`, which is deleted |
-| **Phones** (the mic apps) | TCP to the ingest port, handshake, raw PCM. They roam, sleep, and need a person to restart them, which is what the apps' bulk is for |
-| **Linux hosts** (geb: `audiod capture` + `audiod upload`, since 2026-09-05) | store-and-forward, not streaming ([architecture.md](architecture.md) stage C3): ffmpeg opens ALSA into audiod's segmenter, closed capture-stamped segments deliver to recalld with verified receipts, `audiod pause-mirror` keeps the household pause honoured. The `recall.mic` streaming client this row used to describe was retired here and deleted 2026-09-12 |
+| **USB mic** (`audiod capture`) | locally: sox into ffmpeg, no socket. No code of ours is in this path, because a real-time device has no buffer to absorb a stall |
+| **Phones** (the mic apps) | TCP to the ingest port, handshake, raw PCM; and alongside it, closed capture-stamped segments of their own, delivered with verified receipts. The phones roam, sleep and need a person to restart them, which is what most of the apps is for |
+| **Linux hosts** (geb: `audiod capture` + `audiod upload`) | store-and-forward only: ffmpeg reads ALSA into audiod's segmenter, closed segments go to recalld with verified receipts, and `audiod pause-mirror` honours the household pause |
 
-A Linux mic is the cheapest recorder to add, because most of what makes a phone hard
-is absent: no roaming, no battery, no app lifecycle. Since the C3 cutover its
-never-block rule is audiod's own (the metered pump and the uploader read only
-closed files), and a network stall costs delivery latency, never audio.
+A Linux mic is the cheapest recorder to add: no roaming, no battery, no app
+lifecycle. Its uploader reads only closed files, so a network stall costs
+delivery latency, never audio.
 
-It also shares the **hourly heartbeat**, and the tempting reason to skip it is wrong.
-"A dead unit is a failed systemd service, which the fleet already watches" is true of
-the rented machines and false of the box this was built for: `fleet_health`'s
-failed-unit check covers amun, isis and odin and excludes geb deliberately, because
-geb is on the home LAN over wifi where *unreachable* is normal rather than a fault.
-Skipping the beat would therefore have left a dead recorder seen by nobody — and
-worse, the mic collector grades **every** `tcp_pcm` source, including ones that have
-never beaten, so a silent Linux mic would read as a dead app from its first connect
-onward. It beats to the control plane first and falls back to the recorder host's
-`beat-relay` on the LAN, so a VPN route that starts working again stops being
-reported as the back road on its own.
+⚠ **Do not judge reachability by ping.** From geb the control plane answered a
+real POST in 0.22 s while ICMP to the same address lost every packet. Check with
+the request itself.
 
-⚠ **Do not read reachability off a ping.** From geb the control plane answers a real
-POST in 0.22 s while ICMP to the same address loses 100% of packets, and a bare
-`/dev/tcp` open read as closed. Two cheap probes agreed with each other and were both
-wrong; the beat lands direct (`viaLan` absent), which is what settled it.
+⚠ **A Linux host's buffer is a cushion, not a store.** The server renames a
+connection's segments by one offset measured at its first byte
+(`audiod::rebase::connection_offset`), so a replayed backlog would be stamped
+right at its head and ever more wrong towards its tail. Clients discard while
+disconnected; keeping audio across a disconnect needs a protocol that times each
+segment.
 
-> Since 2026-09-05 the Android app also runs the store-and-forward SHADOW
-> ([architecture.md](architecture.md) stage C1): the same PCM lands in closed,
-> capture-stamped local segments delivered to recalld with verified receipts.
-> The stream below is unchanged and remains the live path until stage C4.
-
-⚠ **The spool is a backpressure cushion, not a store.** A Linux box has RAM to bank
-hours, but the server rebases a connection's segment names by ONE offset measured at
-its first byte (`audiod::rebase::connection_offset`), so a replayed backlog would be
-stamped correctly at its head and progressively wrong toward its tail. The client
-therefore **discards while disconnected**, exactly as the phones do. Holding audio
-across a disconnect needs a protocol that times each segment, not a bigger buffer.
-
-`recall.wire` holds the handful of facts both ends must agree on (port, rate, sample
-width) and imports nothing, so a client can run on a bare `python3` without the
-store, pydantic or the ML stack coming with it. That is also why the client is a
-module with its own entry point rather than a `recall` subcommand: the main CLI
-imports all three, and would advertise the command on macOS, which has no ALSA to
-open.
-
-## The audio path: a pump, and the kernel buffers
+## The audio path: a pump and the kernel's buffer
 
 `audiod ingest` reads the socket and writes the bytes to ffmpeg's stdin. That is
-safe because a phone is a **TCP** source: the kernel's receive buffer holds
-incoming audio across any momentary pause, so a stall cannot drop samples.
-ffmpeg does all the segmenting, reading a clean pipe.
-
-The USB mic — a real-time local device with **no** such buffer — stays sox/ffmpeg-only
-and is never pumped; gap-free local capture depends on keeping our code out of that path.
+safe because a phone is a TCP source: the kernel's receive buffer holds audio
+across any momentary pause, so a stall drops nothing. The USB mic has no such
+buffer, which is why our code stays out of its path.
 
 ## Identity: the handshake id
 
-The id is announced in the handshake (the port is just transport), so there is
-**nothing to set on a recorder but the host**:
+The id comes in the handshake (the port is only transport), so the only thing to
+set on a recorder is the host:
 
-- **Derived:** a phone makes a stable id from its model + a random suffix
-  (`pixel-9-3f7a`), persisted, so two same-model phones differ (`Prefs.deviceId`).
-- **Pre-set:** a device can carry a fixed id (`pixel5`/`pixel9`/`oneplus6t`,
-  the iPhone's `iphone11` via `Prefs.presetID`) so its recording history stays
-  one source. The OnePlus 6T joined 2026-09-05 (VPN 10.100.0.8, display name
-  "OnePlus 6T"); its ingest token reached the server's table only after the
-  enrolment, so its first deliveries answered 401 and retried until then —
-  the shadow's park-on-auth rule is what made that recoverable rather than lost.
+- **Derived:** a phone builds a stable id from its model and a random suffix
+  (`pixel-9-3f7a`), persisted, so two phones of one model differ
+  (`Prefs.deviceId`).
+- **Preset:** a device can carry a fixed id (`pixel5`, `pixel9`, `oneplus6t`, the
+  iPhone's `iphone11` via `Prefs.presetID`), so its history stays one source.
 
-A friendlier name can be set later in the web UI; the underlying id is display-renamable
-without moving the data.
+A friendlier display name can be set in the web UI without moving any data.
 
-## Liveness: the host owns the socket
+## Liveness: two questions, two answers
 
-The ingest server holds the connection, so *recording* liveness is **direct**. While a
-device streams, the server refreshes a per-source marker file (`<source>/.alive`); the
-`/api/sources` endpoint reads its freshness into a per-recorder active/idle status. The
-USB mic goes through the same marker, refreshed by the capture watchdog when a closed
-segment decodes to real audio — **"active" means measurably RECORDING, never merely
-connected**, so a phone streaming digital silence reads idle. (It was once known
-directly from `capture_running()` and the pause file; that is `api_capture.py`, and
-recalld has served this route since the cutover.) Uploaded recordings (meetings) are sources
-too, but they're excluded — they aren't live devices. The mic apps' Devices panel
-renders it (own device highlighted, "active / Ns ago" per recorder).
+`/api/sources` answers two different questions per recorder, and the mic apps show
+three states from the pair: audible, recording but quiet, off.
 
-⚠ **The marker is refreshed only by audio above the silence floor**, so "active" means
-*recording*, not connected — a phone streaming digital silence reads idle on purpose,
-because nobody should speak trusting a dot the audio can't back
-(`audiod::server`).
-
-⚠ **A STORE-AND-FORWARD RECORDER REFRESHES NO MARKER, so the marker is only half
-the answer.** The marker is refreshed by the server holding a STREAM; a recorder
-that writes closed segments locally and uploads them never opens that connection.
-Measured 2026-09-05, the day geb cut over: its marker froze at 17:08:44 UTC, the
-minute it stopped streaming, while `recall-capture` ran and it delivered 584
-segments — **off in the panel, recording perfectly**. The OnePlus was invisible
-for the same reason. The phones were unaffected only because their
-store-and-forward is still a *shadow*: they stream as well, so their markers keep
-being refreshed.
-
-So liveness takes **either** proof (#1428): the marker, or the newest DELIVERED
-SEGMENT for sources that stream to nothing. recalld serves the second on
-`/ingest/v1/liveness` (`recall.ingest_liveness`), and the windows differ because
-the evidence does — sub-second per chunk for a stream, but once per segment for a
-delivery, which must close and wait out the upload timer
-(`liveness.DELIVERED_ACTIVE_WITHIN`).
-
-⚠ **AND IT ANSWERS TWO QUESTIONS, NOT ONE.** `/api/sources` carries `active` AND
-`recording`, because they are different and collapsing them is what this whole
-entry is about:
-
-| field | question | signal |
+| field | question | evidence |
 |---|---|---|
-| `active` | is my voice being captured **audibly**? | speech-gated — a silent room reads inactive ON PURPOSE, so nobody speaks trusting a dot the audio cannot back |
-| `recording` | is this recorder **running**? | delivery recency, whatever was on the segments |
+| `active` | is my voice being captured audibly? | a marker file (`<source>/.alive`) refreshed only by audio above the silence floor, so a silent room reads inactive on purpose: nobody should speak trusting a dot the audio cannot back |
+| `recording` | is this recorder running? | the marker, or the newest delivered segment |
 
-The consent question is the one the dot has always answered. The OPERATIONAL
-question is the one actually asked out loud — "is geb on?", twice in an evening —
-and a speech-gated dot answers it wrongly through any quiet stretch. The mic app
-renders three states from the pair: audible, recording-but-quiet, off. A
-two-state dot has to lie about one of them.
+The marker is refreshed by the server holding a stream, or for the USB mic by the
+capture watchdog. ⚠ **A store-and-forward recorder refreshes no marker**: it never
+opens a stream, so it proves itself by delivering (`/ingest/v1/liveness`). The
+windows differ because the evidence does: under a second per chunk for a stream,
+up to five minutes for a delivery, which must close and wait out the upload timer
+(`recalld::sources`).
 
-⚠ The two times travel as ONE `liveness.Evidence(delivered, speech)`, so a later
-edit cannot silently drop half the answer and leave the panel confident.
+Rules the two proofs need:
 
-⚠ **The delivered time is the segment's CAPTURE time, never its arrival time.** A
-cached backlog draining hours late arrives *now* and would read as recording now
-while proving nothing about now — the OnePlus did exactly that drain the same
-evening.
+- ⚠ **A delivery counts by its capture time, never its arrival.** A backlog
+  draining hours late arrives now and proves nothing about now.
+- ⚠ **A recently stale marker outranks a delivery.** A phone streams as its main
+  path, so its marker going quiet is the deliberate stop, newer than any segment
+  captured just before it. Without this, a phone stopped by hand stayed green for
+  the whole delivery window. How stale tells the cases apart: inside the delivery
+  window means just stopped, beyond it means a recorder that does not stream.
+- ⚠ **A pause discards delivered evidence for every kind of recorder**, or audio
+  captured in the seconds before a pause would keep a dot green through it.
+- Uploaded recordings (meetings) are sources too, but not recorders, and are
+  left out.
 
-⚠ **A RECENTLY-STALE MARKER OUTRANKS DELIVERY**, and that rule was bought the
-hard way: the first version of "either proof" fixed geb's false *off* and
-introduced a false *on* beside it. Pixel 9 was stopped by hand and stayed green
-the full five minutes (marker frozen 20:08:13, last capture 20:07:19, flipped at
-20:12:19 — measured, not estimated), where it used to go idle in twelve seconds.
-A phone streams as its PRIMARY path, so its marker falling silent IS the
-deliberate act and is NEWER information than a segment captured just before it.
-geb's marker is hours stale only because it never streams at all. **How stale is
-what tells the two apart** — inside the delivered window means "just stopped",
-beyond it means "does not use the stream path".
+⚠ **Do not stop a recorder on the strength of this dot.** A false "off" once led
+to a recorder being stopped and two minutes of audio lost. Where the panel and the
+ingest plane disagree, the ingest plane holds the evidence.
 
-⚠ **A pause discards delivered evidence for EVERY kind**, not just the local mic.
-The mic had that gate from the start; extending the mechanism to phones and
-machines without extending the guard is exactly how the regression above
-happened. A pause stops every recorder, so none of them may be resurrected by
-what they captured in the seconds before it.
+## Aliveness: the heartbeat
 
-⚠ **Do not stop a recorder on the strength of this dot.** On 2026-09-05, before
-the second proof existed, its false "off" led to a recorder being stopped and two
-minutes of audio deleted. Where the panel and the ingest plane disagree, the
-ingest plane holds the evidence.
+Recording liveness cannot tell a quiet room from a dead app, says nothing at all
+during a pause (the listener is closed), and a phone that vanishes without a FIN
+leaves its socket looking open for ever. So every recorder also says it is alive:
 
-## Aliveness: the app says so, hourly
-
-This page used to say liveness was direct and there was **no phone-sent heartbeat**.
-That was true of *recording* and wrong about *running*, and the gap was total rather
-than partial (#837):
-
-- A **quiet room and a dead app are the same reading**, by the design just above.
-- A phone that vanishes without a FIN leaves the ingest socket half-open, so no
-  `ingest_disconnect` is written either and the connection looks open for ever (#838).
-- **While paused there is no signal at all** — the listener is closed and every stream
-  dropped. Capture is routinely paused for days, which is exactly when an app dying
-  goes unnoticed until somebody picks the phone up.
-
-So each mic app POSTs `/api/devices/heartbeat` **once an hour, whether or not it is
-streaming**, from the component that is meant to be permanently alive: iOS's held audio
-session, Android's `StreamService` foreground service. It beats only while *started* — a
-stopped app is not going to record, and a beat that arrived anyway would paint the one
-state worth catching bright green.
+- the mic apps POST `/api/devices/heartbeat` once an hour while started, whether
+  or not they are streaming, from the part meant to stay alive (iOS's held audio
+  session, Android's `StreamService`). A stopped app does not beat: a beat would
+  paint the one state worth catching green.
+- audiod's store-and-forward recorders (geb) beat every minute
+  (`audiod::capture_run::BEAT_EVERY`).
 
 | | |
 |---|---|
-| Where | the **control** host (Isis over WireGuard) first, so a phone beats from away from home too and "out of the house" stops looking like "dead"; if that fails, the **recorder host on the LAN**, where `recall beat-relay` forwards it (#888) |
-| Auth | **none**, deliberately. The mic app has never held a token, and a beat that could 401 would report a credential mistake as dead hardware (`webauth._DEVICE_EXEMPT`) |
-| Carries | `startedAt` (a restart between beats is what "it goes down now and then" looks like from here), `streaming`, `charging`, `micOk`, app + version |
-| Retries | a failed beat comes back in a minute, doubling to the hourly cadence (#886) — an app that came up while the network was still settling used to wait a full hour |
-| Stored | one settings row (`recalld::devices`) — last-known status, no history, no migration. Capped at 16 devices, aged out after 30 days, and forgettable with an authenticated `DELETE /api/devices/heartbeat/{device}` (#1408) |
-| Graded | not here. The Mac reads `/sync/devices/heartbeats` and `xinutec-infra/mac-mini/recall_mics.py` decides what is too long, beside the rest of the fleetwatch thresholds |
+| Where | the control host (Isis over WireGuard) first, so a phone away from home still beats; if that fails, the recorder host on the LAN, where `audiod beat-relay` forwards it |
+| Auth | none, on purpose: a beat that could 401 would report a credential mistake as dead hardware (`recalld::webauth::DEVICE_EXEMPT`) |
+| Carries | `startedAt` (a restart between beats), `streaming`, `charging`, `micOk`, app and version |
+| Retries | a failed beat retries after a minute, doubling up to the hourly cadence |
+| Stored | one settings row (`recalld::devices`): last-known status only. At most 16 devices, aged out after 30 days, removable with an authenticated `DELETE /api/devices/heartbeat/{device}` |
+| Graded | not here: the Mac reads `/sync/devices/heartbeats`, and `xinutec-infra/mac-mini/recall_mics.py` decides what is too old, taking either a fresh beat or delivered audio as proof |
 
-`streaming` and `charging` are carried but **never graded**: every honest app reports
-`streaming: false` while the household is paused, a carried phone is off charge all day,
-and a room phone gets switched off on purpose — the user silences the pixel9 to type on
-it. They say what the app was doing when the beats stopped. `micOk` **is** graded — it
-is a fault, not a mode: the app kept running but the audio engine would not open, which
-used to show up as silence and is now named (#887).
-
-**Only the phones beat at all, and only Android reads `micOk` continuously:**
+`streaming` and `charging` are carried but never graded: every honest app reports
+`streaming: false` during a pause, a carried phone is off charge all day, and a
+phone switched off on purpose is not a fault. `micOk` is graded: the app is
+running but the audio engine will not open.
 
 | Recorder | Where `micOk` comes from | What it can miss |
 | --- | --- | --- |
 | Android (`MicState.micOkAfter`) | every open attempt; a failure that never reached the microphone leaves it unchanged | — |
-| iOS (`RecallMicApp`) | the return of `client.start()`, once | a mic that dies after a good start still reads `true` |
-| audiod recorders (geb) | **nothing — audiod sends no heartbeat** | see below |
-
-The Android rule was wrong until 2026-09-07 and **lied for nine hours on 2026-09-06**:
-a failed attempt set it from `e !is MicUnavailableException`, so any NON-mic failure
-wrote `micOk=true`. The socket connects before the mic opens, so during a pause every
-attempt failed on the connect and kept clearing a genuine fault. The fix is installed —
-a phone carrying it reports `version=0.11` or later in its beat.
-
-⚠ **geb's heartbeat died at the stage-C3 cutover, and `geb alive` has been red
-ever since.** The streaming client beat hourly; `audiod` does not beat at all,
-so geb's last heartbeat is from 2026-09-05. `recall_mics.py` grades beat AGE, so
-it is correct that nothing is arriving and wrong about what that means: geb
-records perfectly and delivered right up to the pause on 2026-09-07, in step
-with every other source. It is a false alarm that cannot go green by itself —
-the "cry-wolf that gets a check muted" that collector's own comments warn about.
-
-This was FORESEEN, not missed: [architecture.md](architecture.md) stage C3 calls
-it "transitional and accepted — geb no longer beats or streams, so the old
-liveness reads it stale until the delivery-based liveness lands". What the
-measurement adds is that "stale" undersells it; the line is red every hour.
-
-The liveness that IS true already exists: recalld's `/ingest/v1/liveness` carries
-`delivered` and `speech` per source, and the sources panel takes EITHER proof for
-exactly this reason (#1428, "a store-and-forward recorder refreshes no marker"
-above). The heartbeat collector lives in another repo and never got that rule
-(#1481).
+| iOS (`RecallMicApp`) | the result of `client.start()`, once | a mic that dies after a good start still reads true |
+| audiod (geb) | the last producer start | — |
 
 ### The LAN fallback
 
-The beat's reachability requirement used to be stricter than recording's: a phone at
-home with its tunnel off streamed every sample correctly and still read dead. So the
-Mac answers the same request on the LAN — `recall beat-relay`, its own tiny server on
-port 8000 (the fleet's port, so the apps need one URL shape), independent of the capture
-agents because a pause closes the ingest listener. It stores nothing: it filters the
-body to an allowlist, stamps `viaLan` itself so a caller cannot deny coming the back
-way, and forwards to Isis, which stays the only place a beat lives.
+A phone at home with its tunnel off records correctly but cannot reach Isis to
+beat. So the Mac answers the same request on the LAN: `audiod beat-relay`, its own
+small server on port 8000 (the fleet's port, so the apps need one URL shape),
+separate from the capture agents because a pause closes the ingest listener. It
+stores nothing: it filters the body to an allowlist, stamps `viaLan` itself, and
+forwards to Isis, the only place a beat lives.
 
-## Pause stops phone recording too
+## Pause stops every recorder
 
-A global pause must stop *all* recording, not just the USB mic. While paused, the
-ingest server **closes its listener** (so connecting phones are refused and back off,
-showing "Recording paused") and **drops any active stream** — its handler finalises the
-current segment on the dropped socket, so no audio is lost. On resume it reopens the
-listener and the phones reconnect. (`audiod::server::serve`.)
+While paused, the ingest server closes its listener (phones are refused, back off
+and show "Recording paused") and drops any active stream, finalising the current
+segment so nothing is lost. On resume it reopens and the phones reconnect
+(`audiod::server::serve`).
 
-One platform nuance: **Android closes its microphone** whenever it can't deliver
-(connect-first, then open the mic), so a pause means the mic is off. **iOS keeps the
-audio session captive while "on"** (it dies in the background otherwise) and discards
-the PCM when disconnected — during a pause the iPhone's mic is technically hot, its
-audio dropped in RAM. See ios/README.md ("Always-on").
+**Android closes its microphone** whenever it cannot deliver (it connects first,
+then opens the mic), so a pause means the mic is off. **iOS keeps its audio
+session while on**, because it is killed in the background otherwise, and discards
+the PCM while disconnected: during a pause the iPhone's mic is technically live and
+its audio dropped in memory. See ios/README.md ("Always-on").
 
-## Notes
+## Updating a phone's app
 
-- **One agent, many devices.** `recall-ingest` serves every phone; there's no
-  per-device plist or port, and the handshake distinguishes devices, so the old
-  unique-port constraint is gone.
-- **The USB mic is unchanged** — a separate local `audiod capture --id usb` agent
-  (sox -d), not a TCP client, so it neither handshakes nor pumps.
-
-## Updating a phone's app (and getting it recording again)
-
-An install stops the running recorder on both platforms, and only Android can be
+An install stops the recorder on both platforms, and only Android can be
 restarted remotely.
 
-- **Android** — `adb install -r app-debug.apk`, then `adb shell monkey -p
-  org.recall.mic -c android.intent.category.LAUNCHER 1` brings the foreground service
-  back, no hands needed. The phones answer adb on their **VPN** addresses
-  (`adb connect 10.100.0.N:5555`), not the LAN.
-- **iOS** — `xcodebuild … -destination 'platform=iOS,id=<udid>' install` needs the phone
-  **unlocked and awake**; a locked one fails with "The developer disk image could not be
-  mounted on this device", which reads like a toolchain problem and is not one. ⚠ **The
-  app must then be tapped open by hand** — there is no remote equivalent of the Android
-  intent, so a phone left alone after an iOS install is a phone that has stopped
-  recording.
+- **Android:** `adb install -r app-debug.apk`, then `adb shell monkey -p
+  org.recall.mic -c android.intent.category.LAUNCHER 1` restarts the foreground
+  service. The phones answer adb on their VPN addresses (`adb connect
+  10.100.0.N:5555`), not the LAN.
+- **iOS:** `xcodebuild … -destination 'platform=iOS,id=<udid>' install` needs the
+  phone unlocked and awake; a locked one fails with "The developer disk image could
+  not be mounted on this device", which looks like a toolchain problem and is not.
+  ⚠ **The app must then be opened by hand**: there is no remote equivalent of the
+  Android intent, so an iPhone left alone after an install has stopped recording.
 
-While the household is being recorded, update one device at a time and confirm each is
-streaming again (a fresh segment file under its source dir) before touching the next, so
+While the household is recording, update one device at a time and confirm it is
+streaming again (a fresh segment under its source directory) before the next, so
 a live mic is always up.

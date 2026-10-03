@@ -132,7 +132,7 @@ Household capture on the USB mic is a different device and is unaffected.
 
 ## What the session gets downstream
 
-`create_session` registers an UPLOAD source holding **one segment for the whole file**,
+`create_session` registers an `upload` source holding **one segment for the whole file**,
 so the recording is diarized as a single window — the regime that scores best on speaker
 boundaries (see [architecture.md](architecture.md)). It appears in the web app immediately
 with 0 turns while the runners transcribe and diarize it; rename, delete and

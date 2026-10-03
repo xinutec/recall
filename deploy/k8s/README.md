@@ -11,9 +11,7 @@ stale: it was missing the six web-SSO env vars and the nextcloud egress rule tha
 live cluster had been running for nine days. A `kubectl apply` from this directory would
 have deleted working single sign-on. That is why there is now exactly one copy.
 
-⚠ **Deploy with `kubes/deploy.sh recall`**, or equivalently `recall/k8s/sync.sh`,
-which is a three-line wrapper that `exec`s it. The old apply script was named here
-until 2026-08-23 and was **deleted 2026-08-16** — `plan-run deploy` replaced it.
+Deploy with `kubes/deploy.sh recall` (or `recall/k8s/sync.sh`, which runs it).
 The cluster comes from the model (`dhall/clusters.json`: `recall: isis.xinutec.org`),
 so it is never passed by hand.
 
@@ -27,10 +25,9 @@ API + web app (8000) and the device ingest plane (wg hostPort 8001, gated by the
 `INGEST_TOKENS` key in `recall-secret`) in one process. No ML — the Mac keeps capture,
 ASR, diarization, and the LLM.
 
-⚠ Was two containers from one image, the second a Python `recall api`, from
-2026-09-05 until the port finished on 2026-09-12. The image carries no interpreter
-now: a Debian base, the `recalld` binary, the built Angular frontend, and the media
-tools recalld shells out to (ffmpeg, ffprobe, sox, flac, deep-filter).
+The image carries no Python interpreter: a Debian base, the `recalld` binary, the
+built Angular frontend, and the media tools recalld shells out to (ffmpeg,
+ffprobe, sox, flac, deep-filter).
 
 <!-- dev-lint: allow-pii the repository's name -->
 Manifests (in `pippijn:code/kubes/recall/k8s/`): `00-namespace`, `01-pvc` (the SQLite DB +

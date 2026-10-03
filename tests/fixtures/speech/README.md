@@ -20,17 +20,16 @@ and any fresh clone can actually use.
 - Converted with `ffmpeg -ac 1 -ar 16000 -c:a flac`, matching what every
   recorder delivers and what the room builder emits.
 
-⚠ `public-domain-en.txt` is the CANONICAL poem text plus the spoken LibriVox
-preamble — it is not a hand-verified transcription of this particular reading.
-A reader's small deviations therefore show up as a little WER. That is fine for
-a DRIFT check, which asks whether the number MOVED, not whether it is zero; it
-would not be fine for an absolute quality claim, so do not make one from it.
+⚠ `public-domain-en.txt` is the published poem text plus the spoken LibriVox
+preamble, not a checked transcription of this reading, so the reader's small
+deviations show up as a little WER. Fine for a drift check, which asks whether
+the number moved; not for a claim about absolute quality.
 
 ## `dialogue-*.flac` — machine-read, and committed since 2026-09-09
 
-⚠ **These are NOT recordings of anyone.** They are macOS `say` reading INVENTED
-lines — plants, a plumber, a bakery — rendered by `scripts/gen-speech-fixture.sh`
-and fully regenerable from it. Two English voices and one Dutch, stitched with
+⚠ **These are not recordings of anyone.** They are macOS `say` reading invented
+lines (plants, a plumber, a bakery), rendered by `scripts/gen-speech-fixture.sh`
+and regenerable from it. Two English voices and one Dutch, stitched with
 0.8 s gaps into the shape of a captured segment (48 kHz mono).
 
 An earlier version of this file called them "recordings of real people in this
