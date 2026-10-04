@@ -49,15 +49,12 @@ impl Heard {
     }
 }
 
-/// Seconds of `regions` inside `[start, end)`.
+/// Seconds of `regions` inside `[start, end)`: [`transcript::quality::speech_inside`].
 #[must_use]
 pub fn speech_inside(regions: &[Region], start: f64, end: f64) -> f64 {
-    regions
-        .iter()
-        .map(|r| (r.end.min(end) - r.start.max(start)).max(0.0))
-        .sum()
+    let pairs: Vec<(f64, f64)> = regions.iter().map(|r| (r.start, r.end)).collect();
+    transcript::quality::speech_inside(&pairs, start, end)
 }
-
 /// True if `text` is nothing but one of `names`: "Anna.", " anna ", "Anna!".
 ///
 /// The cost of the vocabulary prompt: it lists the household's names so Whisper

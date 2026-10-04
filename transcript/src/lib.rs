@@ -1,5 +1,6 @@
 //! recall's domain, as data (#1911): what a clip is, when things happened, who
-//! a source is, and what a person did (the edit log). `render` comes next.
+//! a source is, what a person did (the edit log), and the lines a clip shows
+//! (`render`).
 //!
 //! ⚠ Pure by construction. Nothing here does IO or reads the clock, and the
 //! crate depends on nothing that could (`scripts/check_pure_crate.py`). A
@@ -10,6 +11,7 @@ mod edit;
 mod instant;
 mod latin_ranges;
 pub mod quality;
+pub mod render;
 mod source;
 mod span;
 pub mod text;

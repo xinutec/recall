@@ -139,3 +139,12 @@ pub const FOREIGN_SCRIPT_MAX: f64 = 0.5;
 pub fn is_foreign_script(text: &str) -> bool {
     foreign_script_ratio(text) > FOREIGN_SCRIPT_MAX
 }
+
+/// Seconds of `regions` (start, end, from the clip's start) inside `[start, end)`.
+#[must_use]
+pub fn speech_inside(regions: &[(f64, f64)], start: f64, end: f64) -> f64 {
+    regions
+        .iter()
+        .map(|&(a, b)| (b.min(end) - a.max(start)).max(0.0))
+        .sum()
+}
