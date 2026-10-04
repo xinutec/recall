@@ -151,8 +151,9 @@ pub mod voices {
     pub struct Diarization {
         #[serde(default)]
         pub turns: Vec<SpeakerTurn>,
-        /// Absent in results stored before the shim embedded.
-        #[serde(default)]
+        /// Absent in results stored before the shim embedded; a speaker whose
+        /// print is unusable is left out ([`usable_prints`]).
+        #[serde(default, deserialize_with = "usable_prints")]
         pub speakers: Vec<SpeakerVoice>,
     }
 
@@ -172,6 +173,30 @@ pub mod voices {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub seconds: Option<f64>,
         pub vector: Vec<f64>,
+    }
+
+    /// A speaker whose print holds a `null` (the model's NaN; JSON has none)
+    /// has no usable print, and is left out rather than carried with a hole.
+    fn usable_prints<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> Result<Vec<SpeakerVoice>, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            speaker: String,
+            #[serde(default)]
+            seconds: Option<f64>,
+            vector: Vec<Option<f64>>,
+        }
+        Ok(Vec::<Raw>::deserialize(d)?
+            .into_iter()
+            .filter_map(|raw| {
+                Some(SpeakerVoice {
+                    speaker: raw.speaker,
+                    seconds: raw.seconds,
+                    vector: raw.vector.into_iter().collect::<Option<Vec<f64>>>()?,
+                })
+            })
+            .collect())
     }
 
     /// Embed one span of a clip (seconds from its start).

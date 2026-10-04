@@ -98,3 +98,14 @@ fn an_older_word_spelling_is_read_and_the_current_one_written() {
         r#"{"start":1.5,"end":1.9,"text":"een"}"#
     );
 }
+
+#[test]
+fn a_print_stored_with_a_null_is_left_out() {
+    // 18 diarization results on 2026-10-04 held a NaN, which JSON writes as null.
+    let stored = r#"{"ok":true,"result":{"turns":[],"speakers":[{"speaker":"SPEAKER_00","vector":[0.1,null,0.3]},{"speaker":"SPEAKER_01","vector":[0.1,0.2,0.3]}]}}"#;
+    let parsed = audiocore::shim::Stored::<audiocore::shim::voices::Diarization>::parse(stored)
+        .expect("parses");
+    let speakers = parsed.answer().expect("an answer").speakers;
+    assert_eq!(speakers.len(), 1);
+    assert_eq!(speakers[0].speaker, "SPEAKER_01");
+}

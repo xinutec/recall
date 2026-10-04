@@ -1,8 +1,18 @@
 //! Every shape of human data found on 2026-10-04 becomes the acts it means,
 //! and a row that means nothing says why.
 
-use recalld::legacy_edits::{Correction, Hide, NamedLine, Origin, convert};
+use recalld::legacy_edits::{Correction, Hide, NamedLine, Origin, Recovered};
 use transcript::{Act, ClipId, Instant, Language, SourceId, Span};
+
+/// The conversion, with "now" well after every act in these tests.
+fn convert(
+    corrections: &[Correction],
+    lines: &[NamedLine],
+    hides: &[Hide],
+    pins: &[(SourceId, Option<Language>)],
+) -> Recovered {
+    recalld::legacy_edits::convert(corrections, lines, hides, pins, at(10_000))
+}
 
 fn at(s: i64) -> Instant {
     Instant::from_micros(1_759_000_000_000_000 + s * 1_000_000).unwrap()
@@ -24,6 +34,7 @@ fn correction(
         at: at(100 + id),
         clip: ClipId::from_stored(7),
         span: span(0, 4),
+        over: span(0, 4),
         original: original.into(),
         corrected: corrected.into(),
         speaker: speaker.map(Into::into),
@@ -124,6 +135,7 @@ fn a_piece_of_a_split_corrected_line_carries_words_and_a_name() {
         at: at(200),
         clip: ClipId::from_stored(7),
         span: span(2, 4),
+        over: span(2, 4),
         text: "tweede deel".into(),
         speaker: Some("Sam".into()),
         human_text: true,

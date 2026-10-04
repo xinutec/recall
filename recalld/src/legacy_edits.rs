@@ -14,18 +14,21 @@ use transcript::{Act, ClipId, Instant, Language, Name, SourceId, Span, Text};
 crate::statements! {
     CORRECTIONS: Meaning =
         "SELECT c.id, c.created_utc, a.path, c.start_utc, c.end_utc, c.original_text,
-                c.corrected_text, c.speaker, c.words_checked, c.hidden_reason
+                c.corrected_text, c.speaker, c.words_checked, c.hidden_reason,
+                o.start_utc, o.end_utc
          FROM corrections c JOIN audio_segments a ON a.id = c.audio_segment_id
+         LEFT JOIN transcript_segments o ON o.id = c.transcript_segment_id
          ORDER BY c.created_utc, c.id";
-    /// Visible lines a person shaped without a correction row: named lines and
-    /// the pieces of split ones. Lines a correction produced are its own rows.
+    /// Every visible line a person named or wrote: today's state, which the
+    /// corrections' history alone does not reach (a voice named for a whole
+    /// session relabels lines a correction had named).
     NAMED_LINES: Meaning =
         "SELECT t.id, t.created_utc, a.path, t.start_utc, t.end_utc, t.text, t.speaker_label,
-                t.asr_model = 'human'
+                t.asr_model = 'human', o.start_utc, o.end_utc
          FROM transcript_segments t JOIN audio_segments a ON a.id = t.audio_segment_id
+         LEFT JOIN transcript_segments o ON t.provenance = 'human correction of #' || o.id
          WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL
            AND (t.speaker_label IS NOT NULL OR t.asr_model = 'human')
-           AND coalesce(t.provenance, '') NOT LIKE 'human correction of #%'
          ORDER BY t.created_utc, t.id";
     HIDES: Meaning =
         "SELECT t.id, t.created_utc, a.path, t.start_utc, t.end_utc, t.hidden_reason
@@ -46,6 +49,8 @@ pub struct Correction {
     pub at: Instant,
     pub clip: ClipId,
     pub span: Span,
+    /// The corrected line's own span, which the correction replaces whole.
+    pub over: Span,
     pub original: String,
     pub corrected: String,
     pub speaker: Option<String>,
@@ -61,6 +66,8 @@ pub struct NamedLine {
     pub at: Instant,
     pub clip: ClipId,
     pub span: Span,
+    /// What a person's words replace: the line it corrected, when it did.
+    pub over: Span,
     pub text: String,
     pub speaker: Option<String>,
     /// The text is a person's (a piece of a corrected line), not the model's.
@@ -95,18 +102,23 @@ pub struct Recovered {
 }
 
 /// Turn the rows into acts. Pure.
+///
+/// The corrections become acts at the time they were made: the history. The
+/// visible lines become acts at `now`, after all of it: today's state, so
+/// rendering the log reproduces what a person sees today.
 pub fn convert(
     corrections: &[Correction],
     lines: &[NamedLine],
     hides: &[Hide],
     pins: &[(SourceId, Option<Language>)],
+    now: Instant,
 ) -> Recovered {
     let mut out = Recovered::default();
     for c in corrections {
         correction(c, &mut out);
     }
     for l in lines {
-        line(l, &mut out);
+        line(l, now, &mut out);
     }
     for h in hides {
         let act = if h.unintelligible {
@@ -157,7 +169,7 @@ fn correction(c: &Correction, out: &mut Recovered) {
             c.at,
             Act::NoSpeech {
                 clip: c.clip,
-                span: c.span,
+                span: c.over,
             },
             origin,
         ));
@@ -168,6 +180,7 @@ fn correction(c: &Correction, out: &mut Recovered) {
                 Act::Words {
                     clip: c.clip,
                     span: c.span,
+                    over: c.over,
                     text,
                     checked: true,
                 },
@@ -194,7 +207,7 @@ fn correction(c: &Correction, out: &mut Recovered) {
 }
 
 /// A named line is a name; a piece of a corrected line also carries words.
-fn line(l: &NamedLine, out: &mut Recovered) {
+fn line(l: &NamedLine, now: Instant, out: &mut Recovered) {
     let origin = Origin::Line(l.id);
     let words = l.human_text.then(|| Text::new(&l.text)).flatten();
     let name = l.speaker.as_deref().and_then(Name::new);
@@ -205,10 +218,11 @@ fn line(l: &NamedLine, out: &mut Recovered) {
     }
     if let Some(text) = words {
         out.acts.push((
-            l.at,
+            now,
             Act::Words {
                 clip: l.clip,
                 span: l.span,
+                over: l.over,
                 text,
                 checked: true,
             },
@@ -217,7 +231,7 @@ fn line(l: &NamedLine, out: &mut Recovered) {
     }
     if let Some(name) = name {
         out.acts.push((
-            l.at,
+            now,
             Act::Speaker {
                 clip: l.clip,
                 span: l.span,
@@ -334,6 +348,14 @@ impl Anchor<'_> {
     }
 }
 
+/// `span`, widened to cover the line it replaced when that line is known.
+fn covering(span: Span, start: Option<String>, end: Option<String>) -> Span {
+    let replaced = start
+        .zip(end)
+        .and_then(|(a, b)| Span::new(Instant::parse(&a)?, Instant::parse(&b)?));
+    replaced.map_or(span, |r| span.cover(r))
+}
+
 /// The columns every row kind starts with: id, when, the clip's path, the span.
 fn head(r: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, Option<String>, String, String, String)> {
     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
@@ -354,6 +376,7 @@ fn load_corrections(
                 at,
                 clip,
                 span,
+                over: covering(span, r.get(10)?, r.get(11)?),
                 original: r.get(5)?,
                 corrected: r.get(6)?,
                 speaker: r.get(7)?,
@@ -381,6 +404,7 @@ fn load_lines(
                 at,
                 clip,
                 span,
+                over: covering(span, r.get(8)?, r.get(9)?),
                 text: r.get(5)?,
                 speaker: r.get(6)?,
                 human_text: r.get::<_, Option<bool>>(7)?.unwrap_or(false),
@@ -452,6 +476,7 @@ pub fn census(meaning: &Connection, ingest: &Connection, root: &Path) -> Result<
         &loaded.lines,
         &loaded.hides,
         &loaded.pins,
+        Instant::from_utc(chrono::Utc::now()),
     );
     let mut census = Census {
         corrections: loaded.corrections.len(),

@@ -105,9 +105,9 @@ fn without_diarization_a_line_is_a_segment() {
 }
 
 #[test]
-fn a_line_breaks_where_the_speaker_changes_and_where_the_segment_ends() {
+fn a_line_breaks_where_the_speaker_changes_between_sentences_and_where_the_segment_ends() {
     let h = heard(vec![
-        segment(0.0, 4.0, "een twee drie vier"),
+        segment(0.0, 4.0, "een twee. drie vier"),
         segment(4.0, 6.0, "vijf zes"),
     ]);
     let v = Voices {
@@ -128,7 +128,53 @@ fn a_line_breaks_where_the_speaker_changes_and_where_the_segment_ends() {
     // B speaks across the segment boundary at 4 s: still two lines, never one.
     assert_eq!(
         texts(&h, Some(&v), &Speech::default(), &[]),
-        ["een twee", "drie vier", "vijf zes"]
+        ["een twee.", "drie vier", "vijf zes"]
+    );
+}
+
+#[test]
+fn a_speaker_change_inside_a_sentence_does_not_break_it() {
+    // Seen in the shadow diff: "They don't know that. Did | they say ..." when
+    // a diarized boundary landed one word early.
+    let h = heard(vec![segment(
+        0.0,
+        6.0,
+        "they do not know that. did they say two tests",
+    )]);
+    let v = Voices {
+        turns: vec![
+            VoiceTurn {
+                speaker: "A".into(),
+                start: 0.0,
+                end: 3.4,
+            },
+            VoiceTurn {
+                speaker: "B".into(),
+                start: 3.4,
+                end: 6.0,
+            },
+        ],
+        prints: vec![],
+    };
+    let got = lines(&h, Some(&v), &Speech::default(), &[]);
+    let shown: Vec<(&str, String)> = got
+        .iter()
+        .map(|(t, s)| {
+            (
+                t.as_str(),
+                match s {
+                    Some(Speaker::Cluster(c)) => c.clone(),
+                    _ => String::new(),
+                },
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("they do not know that.", "A".to_owned()),
+            ("did they say two tests", "B".to_owned())
+        ]
     );
 }
 
@@ -212,6 +258,7 @@ fn a_persons_words_own_their_span_and_say_so() {
         Act::Words {
             clip: ClipId::from_stored(1),
             span: span(2.0, 4.0),
+            over: span(2.0, 4.0),
             text: Text::new("DRIE VIER").unwrap(),
             checked: true,
         },
@@ -267,6 +314,7 @@ fn a_later_act_wins_and_a_retraction_takes_one_back() {
             Act::Words {
                 clip: ClipId::from_stored(1),
                 span: span(0.0, 2.0),
+                over: span(0.0, 2.0),
                 text: Text::new(t).unwrap(),
                 checked: true,
             },
@@ -419,6 +467,7 @@ fn render_is_deterministic_and_no_model_word_vanishes_without_a_reason() {
         Act::Words {
             clip: ClipId::from_stored(1),
             span: span(5.0, 6.0),
+            over: span(5.0, 6.0),
             text: Text::new("VIER").unwrap(),
             checked: true,
         },
@@ -455,5 +504,55 @@ fn render_is_deterministic_and_no_model_word_vanishes_without_a_reason() {
             .filter(|d| d.why == Why::SilencePhrase)
             .count(),
         1
+    );
+}
+
+#[test]
+fn two_neighbouring_corrections_whose_edges_overlap_both_stand() {
+    // Seen in the shadow diff: two corrected lines starting in the same second
+    // cancelled each other, and the model's words came back.
+    let h = heard(vec![segment(0.0, 4.0, "yeah yeah line up")]);
+    let words = |id, a, b, t: &str| {
+        edit(
+            id,
+            Act::Words {
+                clip: ClipId::from_stored(1),
+                span: span(a, b),
+                over: span(a, b),
+                text: Text::new(t).unwrap(),
+                checked: true,
+            },
+        )
+    };
+    let shown = texts(
+        &h,
+        None,
+        &Speech::default(),
+        &[
+            words(1, 0.0, 2.2, "Yeah, yeah, yeah."),
+            words(2, 1.9, 4.0, "Line up, please."),
+        ],
+    );
+    assert_eq!(shown, ["Yeah, yeah, yeah.", "Line up, please."]);
+}
+
+#[test]
+fn a_correction_replaces_the_whole_line_it_corrected_even_where_it_narrowed_the_words() {
+    // Seen in the shadow diff: a correction that moved a line's start later
+    // let the model's words before the new start come back.
+    let h = heard(vec![segment(0.0, 4.0, "hi here's hello hello hi there")]);
+    let narrowed = edit(
+        1,
+        Act::Words {
+            clip: ClipId::from_stored(1),
+            span: span(3.0, 4.0),
+            over: span(0.0, 4.0),
+            text: Text::new("Hi there.").unwrap(),
+            checked: true,
+        },
+    );
+    assert_eq!(
+        texts(&h, None, &Speech::default(), &[narrowed]),
+        ["Hi there."]
     );
 }

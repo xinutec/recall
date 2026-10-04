@@ -54,6 +54,13 @@ enum Task {
     ClipCensus,
     /// Recover the edit log from today's tables and account for every row (#1912).
     EditCensus,
+    /// Render every clip with a stored result and compare with today's lines (#1916).
+    ShadowDiff,
+    /// One clip, today's lines beside rendered ones (holds transcript text).
+    ShadowClip {
+        #[arg(long)]
+        id: i64,
+    },
     /// Store the phones' WAV copies as FLAC (`recalld::phone_flac`).
     PhoneFlac {
         /// Convert; without this, only say what would be converted.
@@ -66,9 +73,12 @@ enum Task {
     },
 }
 
-/// Open both planes as the server does (which gives every file a clip), then
-/// count what has one.
-fn clip_census(root: &std::path::Path) -> ExitCode {
+/// Open both planes as the server does (which gives every stored file a clip),
+/// run `report` over them, and print what it returns as JSON.
+fn report<T: serde::Serialize, E: std::fmt::Display>(
+    root: &std::path::Path,
+    report: impl FnOnce(&rusqlite::Connection, &rusqlite::Connection) -> Result<T, E>,
+) -> ExitCode {
     if let Err(complaint) = prepare_planes(root) {
         eprintln!("recalld: {complaint}");
         return ExitCode::FAILURE;
@@ -77,33 +87,10 @@ fn clip_census(root: &std::path::Path) -> ExitCode {
         .map_err(|err| err.to_string())
         .and_then(|meaning| {
             let ingest = recalld::store::open(root).map_err(|err| err.to_string())?;
-            recalld::clips::census(&meaning, &ingest, root).map_err(|err| err.to_string())
-        });
-    match done.and_then(|c| serde_json::to_string_pretty(&c).map_err(|err| err.to_string())) {
-        Ok(json) => {
-            println!("{json}");
-            ExitCode::SUCCESS
-        }
-        Err(err) => {
-            eprintln!("recalld: {err}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-/// Recover the edit log from today's tables and print what every row became.
-fn edit_census(root: &std::path::Path) -> ExitCode {
-    if let Err(complaint) = prepare_planes(root) {
-        eprintln!("recalld: {complaint}");
-        return ExitCode::FAILURE;
-    }
-    let done = recalld::work::open_write(root)
-        .map_err(|err| err.to_string())
-        .and_then(|meaning| {
-            let ingest = recalld::store::open(root).map_err(|err| err.to_string())?;
-            recalld::legacy_edits::census(&meaning, &ingest, root).map_err(|err| err.to_string())
-        });
-    match done.and_then(|c| serde_json::to_string_pretty(&c).map_err(|err| err.to_string())) {
+            report(&meaning, &ingest).map_err(|err| err.to_string())
+        })
+        .and_then(|value| serde_json::to_string_pretty(&value).map_err(|err| err.to_string()));
+    match done {
         Ok(json) => {
             println!("{json}");
             ExitCode::SUCCESS
@@ -122,8 +109,26 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
             apply,
             settled_hours,
         } => (apply, settled_hours),
-        Task::ClipCensus => return clip_census(root),
-        Task::EditCensus => return edit_census(root),
+        Task::ClipCensus => {
+            return report(root, |meaning, ingest| {
+                recalld::clips::census(meaning, ingest, root)
+            });
+        }
+        Task::EditCensus => {
+            return report(root, |meaning, ingest| {
+                recalld::legacy_edits::census(meaning, ingest, root)
+            });
+        }
+        Task::ShadowDiff => {
+            return report(root, |meaning, ingest| {
+                recalld::shadow::run(meaning, ingest, root)
+            });
+        }
+        Task::ShadowClip { id } => {
+            return report(root, |meaning, ingest| {
+                recalld::shadow::detail(meaning, ingest, root, id)
+            });
+        }
     };
     let before = (chrono::Utc::now() - chrono::Duration::hours(settled_hours))
         .format("%Y-%m-%dT%H:%M:%SZ")

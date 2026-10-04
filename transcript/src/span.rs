@@ -37,6 +37,15 @@ impl Span {
             .filter(|shared| shared.micros() > 0)
     }
 
+    /// The smallest span containing both.
+    #[must_use]
+    pub fn cover(self, other: Self) -> Self {
+        Self {
+            start: self.start.min(other.start),
+            end: self.end.max(other.end),
+        }
+    }
+
     pub fn contains(self, at: Instant) -> bool {
         self.start <= at && at < self.end
     }

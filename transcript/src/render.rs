@@ -9,8 +9,11 @@
 //! 2. Each remaining word is spoken by the diarized speaker at its midpoint;
 //!    runs shorter than [`MIN_TURN_US`] are folded into a neighbour.
 //! 3. A person's words, "nobody spoke" or "can't make it out" own their span:
-//!    the model's words under it give way. A later act wins.
-//! 4. A line breaks where the model's segment ends or the speaker changes.
+//!    the model's words under it give way. A later act replaces an earlier one
+//!    whose middle it covers.
+//! 4. Inside a model segment, a sentence goes to whoever speaks most of it; a
+//!    line breaks where the segment ends or the speaker changes between
+//!    sentences, never inside one.
 //! 5. A line's speaker is, in order: a person's naming of that stretch, a
 //!    person's naming of that voice, the voiceprint guess, the diarized label.
 
@@ -179,12 +182,8 @@ pub fn render(input: &Input<'_>) -> Rendered {
     let owned = person_layer(&acts);
     let mut kept = Vec::new();
     for word in words {
-        match owned
-            .iter()
-            .rev()
-            .find(|(span, _, _)| span.contains(word.mid))
-        {
-            Some((_, content, id)) => out.dropped.push(Dropped {
+        match owned.iter().rev().find(|o| o.over.contains(word.mid)) {
+            Some(Owned { content, id, .. }) => out.dropped.push(Dropped {
                 span: word.span,
                 text: word.text.clone(),
                 why: match content {
@@ -198,7 +197,10 @@ pub fn render(input: &Input<'_>) -> Rendered {
     }
     let speakers = Speakers::new(input, &acts);
     out.lines.extend(model_lines(&kept, &speakers, input.heard));
-    for (span, content, id) in &owned {
+    for Owned {
+        span, content, id, ..
+    } in &owned
+    {
         if let Content::Words { text, checked } = content {
             out.lines.push(Line {
                 span: *span,
@@ -329,30 +331,50 @@ enum Content {
     Unintelligible,
 }
 
-/// The stretches a person owns, latest last. A later act replaces any earlier
-/// one it overlaps: a person's words have no timings, so they cannot be cut.
-fn person_layer(acts: &[&Edit]) -> Vec<(Span, Content, EditId)> {
-    let mut owned: Vec<(Span, Content, EditId)> = Vec::new();
+/// A stretch a person owns: the model's words over `over` give way, and a
+/// person's words are shown at `span`.
+#[derive(Debug, Clone)]
+struct Owned {
+    over: Span,
+    span: Span,
+    content: Content,
+    id: EditId,
+}
+
+/// The stretches a person owns, latest last. A later act replaces an earlier
+/// one whose middle it covers (a person's words have no timings, so they are
+/// never cut); acts that only share an edge both stand.
+fn person_layer(acts: &[&Edit]) -> Vec<Owned> {
+    let mut owned: Vec<Owned> = Vec::new();
     for edit in acts {
-        let (span, content) = match &edit.act {
+        let (over, span, content) = match &edit.act {
             Act::Words {
                 span,
+                over,
                 text,
                 checked,
                 ..
             } => (
+                over.cover(*span),
                 *span,
                 Content::Words {
                     text: text.as_str().to_owned(),
                     checked: *checked,
                 },
             ),
-            Act::NoSpeech { span, .. } => (*span, Content::NoSpeech),
-            Act::Unintelligible { span, .. } => (*span, Content::Unintelligible),
+            Act::NoSpeech { span, .. } => (*span, *span, Content::NoSpeech),
+            Act::Unintelligible { span, .. } => (*span, *span, Content::Unintelligible),
             _ => continue,
         };
-        owned.retain(|(other, _, _)| !other.overlaps(span) && *other != span);
-        owned.push((span, content, edit.id));
+        // Replaced when the new act covers its middle: neighbouring lines whose
+        // edges merely touch or overlap a little both stand.
+        owned.retain(|o| o.over != over && !over.contains(span_mid(o.over)));
+        owned.push(Owned {
+            over,
+            span,
+            content,
+            id: edit.id,
+        });
     }
     owned
 }
@@ -504,6 +526,12 @@ fn speaker_at(at: f64, turns: &[VoiceTurn]) -> Option<String> {
 /// speaker changes.
 fn model_lines(words: &[Word], speakers: &Speakers<'_>, heard: Option<&Heard>) -> Vec<Line> {
     let clusters = clusters(words, speakers.turns);
+    let resolved: Vec<Option<Speaker>> = words
+        .iter()
+        .zip(&clusters)
+        .map(|(w, c)| speakers.resolve(w.mid, c.as_deref()))
+        .collect();
+    let speaker = by_sentence(words, &resolved);
     let language = heard.and_then(|h| h.language.clone());
     let household = language
         .as_deref()
@@ -511,12 +539,8 @@ fn model_lines(words: &[Word], speakers: &Speakers<'_>, heard: Option<&Heard>) -
     let mut lines = Vec::new();
     let mut i = 0;
     while i < words.len() {
-        let speaker = speakers.resolve(words[i].mid, clusters[i].as_deref());
         let mut j = i + 1;
-        while j < words.len()
-            && words[j].segment == words[i].segment
-            && speakers.resolve(words[j].mid, clusters[j].as_deref()) == speaker
-        {
+        while j < words.len() && words[j].segment == words[i].segment && speaker[j] == speaker[i] {
             j += 1;
         }
         let run = &words[i..j];
@@ -548,7 +572,7 @@ fn model_lines(words: &[Word], speakers: &Speakers<'_>, heard: Option<&Heard>) -
                 span,
                 text,
                 by: Author::Model,
-                speaker,
+                speaker: speaker[i].clone(),
                 language: language.clone(),
                 confidence: if doubted { Some(0.0) } else { mean },
                 checked: false,
@@ -557,6 +581,44 @@ fn model_lines(words: &[Word], speakers: &Speakers<'_>, heard: Option<&Heard>) -
         i = j;
     }
     lines
+}
+
+/// Each word's speaker, decided per sentence: a sentence goes to whoever
+/// speaks most of it, by time. A diarized boundary is approximate to a word or
+/// so, so a change inside a sentence is jitter, never a reason to break it.
+fn by_sentence(words: &[Word], resolved: &[Option<Speaker>]) -> Vec<Option<Speaker>> {
+    let mut out = vec![None; words.len()];
+    let mut start = 0;
+    for end in 0..words.len() {
+        let last = end + 1 == words.len() || words[end + 1].segment != words[end].segment;
+        if !(last || ends_sentence(&words[end].text)) {
+            continue;
+        }
+        let mut weight: Vec<(Option<&Speaker>, i64)> = Vec::new();
+        for k in start..=end {
+            let who = resolved[k].as_ref();
+            let length = words[k].span.micros().max(1);
+            match weight.iter_mut().find(|(w, _)| *w == who) {
+                Some((_, total)) => *total += length,
+                None => weight.push((who, length)),
+            }
+        }
+        // `max_by_key` keeps the last of equal maxima; reversed, the first.
+        let winner = weight
+            .iter()
+            .rev()
+            .max_by_key(|(_, t)| *t)
+            .and_then(|(w, _)| (*w).cloned());
+        for slot in &mut out[start..=end] {
+            slot.clone_from(&winner);
+        }
+        start = end + 1;
+    }
+    out
+}
+
+fn ends_sentence(word: &str) -> bool {
+    word.trim_end().ends_with(['.', '?', '!', '\u{2026}'])
 }
 
 fn span_mid(span: Span) -> Instant {

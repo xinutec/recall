@@ -29,11 +29,14 @@ impl EditId {
 /// Every kind of thing a person can do to the record. Nothing else is one.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum Act {
-    /// The words said over `span` of `clip`. `checked` means the person
+    /// The words said over `span` of `clip`, replacing the model's words over
+    /// `over` (the line the person corrected, which may be wider than where
+    /// they placed their words; it covers `span`). `checked` means the person
     /// listened and vouches for them, whether or not they changed any.
     Words {
         clip: ClipId,
         span: Span,
+        over: Span,
         text: Text,
         checked: bool,
     },
