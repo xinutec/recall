@@ -11,6 +11,18 @@ use std::path::Path;
 use std::time::Duration;
 
 crate::statements! {
+    FORGET_SPEECH: Ingest =
+        "DELETE FROM segment_speech WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
+    FORGET_LEVELS: Ingest =
+        "DELETE FROM segment_levels WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
+    FORGET_REQUESTS: Ingest =
+        "DELETE FROM retranscribe_requests WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
+    FORGET_JOBS: Ingest =
+        "DELETE FROM jobs WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
+    FORGET_LEDGER: Ingest =
+        "DELETE FROM pass_ledger WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
+    FORGET_CLIPS: Ingest = "DELETE FROM clips WHERE source = ?1";
+    FORGET_SEGMENTS: Ingest = "DELETE FROM segments WHERE source = ?1";
     INSERT: Ingest =
         "INSERT INTO segments
              (filename, source, start_utc, bytes, sha256, received_utc, sent_utc)
@@ -73,6 +85,33 @@ pub fn open(root: &Path) -> rusqlite::Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     crate::ingest_schema::ensure(&conn)?;
     Ok(conn)
+}
+
+/// Remove every ingest-plane row of a deleted upload, in one transaction: its
+/// transcription and diarization (the jobs), measurements, ledger, clips and
+/// segment rows.
+///
+/// ⚠ The ingest plane is append-only for recorders; this is the one deletion,
+/// and [`crate::sessions::DeletedUpload`] is its only key, so household capture
+/// cannot reach it.
+pub fn forget_upload(
+    conn: &mut Connection,
+    deleted: &crate::sessions::DeletedUpload,
+) -> rusqlite::Result<()> {
+    let tx = crate::sql::write(conn)?;
+    let source = deleted.source();
+    for statement in [
+        FORGET_SPEECH,
+        FORGET_LEVELS,
+        FORGET_REQUESTS,
+        FORGET_JOBS,
+        FORGET_LEDGER,
+        FORGET_CLIPS,
+        FORGET_SEGMENTS,
+    ] {
+        statement.execute(&tx, [source])?;
+    }
+    tx.commit()
 }
 
 pub fn insert(conn: &Connection, row: &Row) -> rusqlite::Result<()> {

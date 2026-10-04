@@ -294,7 +294,10 @@ UI reaches the microphone by the Mac's mirror long-polling for it.
 
 No network path deletes. The ingest plane has no delete endpoint; recorders
 evict only under their own cache pressure; an uploaded meeting can be deleted
-through the app and the household capture cannot. odin pulls a nightly restic
+through the app and the household capture cannot. Deleting a meeting removes
+it everywhere: its audio, its lines, and its rows in the ingest plane, whose
+jobs hold its transcription. `sessions::DeletedUpload` is the only key to that
+last step, so household capture cannot reach it. odin pulls a nightly restic
 of Isis (a SQLite snapshot plus the audio tree); the Mac keeps the protected
 master archive on an encrypted volume and delivers every closed segment to
 Isis.

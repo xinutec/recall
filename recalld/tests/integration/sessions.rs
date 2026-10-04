@@ -631,9 +631,9 @@ fn deleting_a_meeting_removes_every_derived_row_and_returns_its_files() {
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
 
-    let paths = delete_session(&mut conn, "meeting-1", &crate::stamp(NOW)).expect("deleted");
+    let deleted = delete_session(&mut conn, "meeting-1", &crate::stamp(NOW)).expect("deleted");
 
-    assert_eq!(paths, vec!["/data/meeting-1/clip.flac".to_owned()]);
+    assert_eq!(deleted.paths(), ["/data/meeting-1/clip.flac".to_owned()]);
     for table in [
         "sources",
         "audio_segments",
@@ -853,4 +853,62 @@ fn an_ingest_directory_still_holding_audio_is_kept() {
     recalld::sessions::remove_files(root.path(), "meeting-1", &[]);
 
     assert!(other.exists());
+}
+
+#[test]
+fn deleting_a_session_forgets_its_words_in_the_ingest_plane_too() {
+    // The transcription lives in the ingest plane's jobs: a delete that left it
+    // kept every word of a meeting the person deleted.
+    let dir = tempfile::tempdir().expect("tmp");
+    let mut meaning = delete_db();
+    populate(&meaning, "meeting-1", "upload");
+    let mut ingest = recalld::store::open(dir.path()).expect("ingest");
+    for (source, name) in [
+        ("meeting-1", "meeting-1-20261004T120000.wav"),
+        ("usb", "usb-20261004T120000.flac"),
+    ] {
+        recalld::store::insert(
+            &ingest,
+            &recalld::store::Row {
+                source: source.into(),
+                filename: name.into(),
+                start_utc: "2026-10-04T12:00:00Z".into(),
+                bytes: 1,
+                sha256: "x".into(),
+                received_utc: "2026-10-04T12:00:00Z".into(),
+                sent_utc: None,
+            },
+        )
+        .expect("segment");
+        ingest
+            .execute(
+                "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+                 VALUES ('transcribe-segment', ?1, 'done', 'x', 'x', '{\"ok\":true}')",
+                [name],
+            )
+            .expect("job");
+    }
+
+    let deleted = delete_session(&mut meaning, "meeting-1", &crate::stamp(NOW)).expect("deleted");
+    recalld::store::forget_upload(&mut ingest, &deleted).expect("forgotten");
+
+    let left = |sql: &str| -> i64 { ingest.query_row(sql, [], |r| r.get(0)).expect("count") };
+    assert_eq!(
+        left("SELECT count(*) FROM jobs WHERE filename LIKE 'meeting-1%'"),
+        0
+    );
+    assert_eq!(
+        left("SELECT count(*) FROM segments WHERE source = 'meeting-1'"),
+        0
+    );
+    assert_eq!(
+        left("SELECT count(*) FROM clips WHERE source = 'meeting-1'"),
+        0
+    );
+    // Household capture beside it is untouched.
+    assert_eq!(
+        left("SELECT count(*) FROM jobs WHERE filename LIKE 'usb%'"),
+        1
+    );
+    assert_eq!(left("SELECT count(*) FROM clips WHERE source = 'usb'"), 1);
 }

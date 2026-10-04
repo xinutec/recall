@@ -36,6 +36,7 @@ mod reads;
 mod record_health;
 mod rematch;
 mod reports;
+mod results;
 mod retranscribe;
 mod script;
 mod sessions;

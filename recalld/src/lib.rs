@@ -32,6 +32,7 @@ pub mod reads;
 pub mod record_health;
 pub mod rematch;
 pub mod reports;
+pub mod results;
 pub mod retranscribe;
 pub mod route;
 pub mod same_speech;

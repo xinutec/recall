@@ -550,11 +550,32 @@ pub async fn transcript_route(
 ///
 /// `transcript_fts` is deliberately not cleaned: it is contentless FTS5 with no
 /// per-row delete, and a rowid whose segment is gone resolves to nothing.
+/// Proof that an upload's meaning-plane rows were deleted: the only thing
+/// [`crate::store::forget_upload`] accepts, and only [`delete_session`] makes
+/// one. So the ingest rows of a source can be removed only for a source just
+/// checked to be an upload and deleted, never for household capture.
+#[derive(Debug)]
+pub struct DeletedUpload {
+    source: String,
+    paths: Vec<String>,
+}
+
+impl DeletedUpload {
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// The audio files the deleted rows named, for the caller to unlink.
+    pub fn paths(&self) -> &[String] {
+        &self.paths
+    }
+}
+
 pub fn delete_session(
     conn: &mut Connection,
     source: &str,
     now: &Stamp,
-) -> Result<Vec<String>, SessionError> {
+) -> Result<DeletedUpload, SessionError> {
     require_upload(conn, source)?;
     let tx = crate::sql::write(conn)?;
     let segments: Vec<(i64, String, String)> = {
@@ -581,7 +602,10 @@ pub fn delete_session(
     DROP_AUDIO.execute(&tx, [source])?;
     DROP_SOURCE.execute(&tx, [source])?;
     tx.commit()?;
-    Ok(segments.into_iter().map(|(_, path, _)| path).collect())
+    Ok(DeletedUpload {
+        source: source.to_owned(),
+        paths: segments.into_iter().map(|(_, path, _)| path).collect(),
+    })
 }
 
 /// Unlink a deleted session's audio, its own directory, and its ingest
@@ -607,13 +631,18 @@ pub async fn delete_route(
     let root = st.root.clone();
     let now = audiocore::instant::Stamp::now();
     let done = tokio::task::spawn_blocking(move || -> Result<(), SessionError> {
-        let paths = {
+        let deleted = {
             let mut conn = work::open_write(&root)?;
             delete_session(&mut conn, &source, &now)?
         };
-        // Files only after the commit: unlinking first would destroy audio a
+        // The words too: the ingest plane holds the session's transcription
+        // in its jobs, and a delete that leaves them has not deleted anything
+        // a reader cares about.
+        let mut ingest = crate::store::open(&root)?;
+        crate::store::forget_upload(&mut ingest, &deleted)?;
+        // Files only after the commits: unlinking first would destroy audio a
         // rolled-back delete still points at.
-        remove_files(&root, &source, &paths);
+        remove_files(&root, &source, deleted.paths());
         Ok(())
     });
     match done.await {
