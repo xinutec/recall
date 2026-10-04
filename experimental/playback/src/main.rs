@@ -64,6 +64,22 @@ enum Command {
         #[arg(long)]
         vad: bool,
     },
+    /// Score a meeting transcript against an AMI word reference, placing every
+    /// dropped word: in time no segment covers, or inside one (#1470).
+    Meeting {
+        /// The corpus's `words/` directory.
+        #[arg(long)]
+        words: PathBuf,
+        /// The meeting id, e.g. `ES2004a`.
+        #[arg(long)]
+        meeting: String,
+        /// Transcripts to score: a Whisper result (`{"segments": [..]}`, bare
+        /// or as the shim's reply), or JSON lines of `{start, end, text}`;
+        /// times from the recording's start. Repeatable.
+        hypothesis: Vec<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Score every microphone's lines in a copy of recall.sqlite against DIR's plan.
     Score {
         #[arg(long)]
@@ -263,6 +279,80 @@ fn lines(db: &Path, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<Line>>
     Ok(out)
 }
 
+/// A hypothesis file: a Whisper result, or JSON lines of segments.
+fn read_segments(path: &Path) -> Result<Vec<playback::meeting::Segment>> {
+    let text = std::fs::read_to_string(path)?;
+    if let Ok(segments) = playback::meeting::whisper_segments(&text) {
+        return Ok(segments);
+    }
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| Ok(serde_json::from_str(l)?))
+        .collect()
+}
+
+fn meeting_score(words: &Path, meeting: &str, hypotheses: &[PathBuf], json: bool) -> Result<()> {
+    let mut reference = Vec::new();
+    for speaker in ["A", "B", "C", "D", "E"] {
+        let path = words.join(format!("{meeting}.{speaker}.words.xml"));
+        if let Ok(xml) = std::fs::read_to_string(&path) {
+            reference.extend(playback::meeting::ami_words(speaker, &xml));
+        }
+    }
+    if reference.is_empty() {
+        return Err(format!("no words for {meeting} in {}", words.display()).into());
+    }
+    let mut reports = Vec::new();
+    for path in hypotheses {
+        let report = playback::meeting::score(&reference, &read_segments(path)?);
+        reports.push((path.display().to_string(), report));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+        return Ok(());
+    }
+    println!(
+        "{meeting}: {} reference words, {} speakers (fillers and broken-off words left out)",
+        reference.len(),
+        playback::meeting::speakers(&reference).len()
+    );
+    for (name, r) in &reports {
+        let e = r.errors;
+        println!(
+            "{name}\n  WER {}  (sub {} del {} ins {})\n  deleted: {} where no line is, {} inside lines; {} said over another speaker",
+            pct(r.wer),
+            e.substitutions,
+            e.deletions,
+            e.insertions,
+            r.deleted_uncovered,
+            r.deleted_covered,
+            r.deleted_overlapped
+        );
+        println!(
+            "  of the deleted: {} stutter repeats, {} backchannels; most often: {}",
+            r.deleted_repeats,
+            r.deleted_backchannels,
+            r.most_deleted
+                .iter()
+                .map(|(w, n)| format!("{w} {n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        println!(
+            "  substituted most often: {}",
+            r.most_substituted
+                .iter()
+                .map(|(w, n)| format!("{w} ({n})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        for h in &r.holes {
+            println!("  hole {:.0}-{:.0} s: {} words", h.start, h.end, h.words);
+        }
+    }
+    Ok(())
+}
+
 fn pct(rate: Option<f64>) -> String {
     rate.map_or_else(|| "-".into(), |r| format!("{:.1}%", r * 100.0))
 }
@@ -445,6 +535,12 @@ fn main() {
             sox,
         } => play(&dir, gap, lead, &sox),
         Command::Diarization { dir, results, vad } => diarize(&dir, &results, vad),
+        Command::Meeting {
+            words,
+            meeting,
+            hypothesis,
+            json,
+        } => meeting_score(&words, &meeting, &hypothesis, json),
         Command::Score {
             dir,
             db,

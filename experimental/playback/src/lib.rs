@@ -8,6 +8,7 @@
 
 pub mod corpus;
 pub mod diarization;
+pub mod meeting;
 pub mod plan;
 pub mod score;
 pub mod wer;
