@@ -14,8 +14,8 @@
 //! and unit ≤ 8, so no match is 11 characters long and `CHAR_LOOP_MIN_LEN` of
 //! 11 behaves as 12.
 
-use audiocore::text::{is_repetition_loop, is_wordless};
 use serde::Deserialize;
+use transcript::text::{is_repetition_loop, is_wordless};
 
 #[derive(Deserialize)]
 struct Case {

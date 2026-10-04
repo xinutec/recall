@@ -1,4 +1,4 @@
-"""Emit `recalld/src/latin_ranges.rs` — the codepoint ranges Python calls LATIN.
+"""Emit `transcript/src/latin_ranges.rs` — the codepoint ranges Python calls LATIN.
 
 ⚠ The Rust port of `foreign_script_ratio` must agree with the Python it replaces
 on the EDGES, and the Python asked whether a character's Unicode name contains
@@ -6,7 +6,7 @@ on the EDGES, and the Python asked whether a character's Unicode name contains
 boundaries is how the two quietly disagree — so the answer is derived from the
 same table Python used and frozen here.
 
-Run: python3 scripts/gen_latin_ranges.py > recalld/src/latin_ranges.rs
+Run: python3 scripts/gen_latin_ranges.py > transcript/src/latin_ranges.rs
 """
 
 from __future__ import annotations

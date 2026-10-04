@@ -8,8 +8,12 @@
 mod clip;
 mod edit;
 mod instant;
+mod latin_ranges;
+pub mod quality;
 mod source;
 mod span;
+pub mod text;
+pub mod voice;
 
 pub use clip::{Clip, ClipId};
 pub use edit::{Act, Edit, EditId, Language, Name, Text};
