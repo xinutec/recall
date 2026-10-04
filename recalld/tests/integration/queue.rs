@@ -13,7 +13,10 @@ fn room_row(root: &std::path::Path, stamp: &str) {
         &store::Row {
             source: "room".into(),
             filename: format!("room-{stamp}.flac"),
-            start_utc: stamp.into(),
+            // As production stores it: the name's stamp, parsed.
+            start_utc: audiocore::names::parse("room", &format!("room-{stamp}.flac"))
+                .expect("a segment name")
+                .start_utc,
             bytes: 1,
             sha256: "x".into(),
             received_utc: "2026-09-05T00:00:00Z".into(),

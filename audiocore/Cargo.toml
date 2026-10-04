@@ -28,6 +28,7 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 
 [dependencies]
+transcript = { path = "../transcript" }
 # The probe's and examples' argv.
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

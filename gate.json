@@ -172,6 +172,21 @@
         "develop",
         "--no-warn-dirty",
         "--command",
+        "python",
+        "scripts/check_pure_crate.py"
+      ],
+      "artifacts": [],
+      "cwd": ".",
+      "env": {},
+      "name": "transcript is pure (no IO dependency, no IO in source)",
+      "timeout_s": 120
+    },
+    {
+      "argv": [
+        "nix",
+        "develop",
+        "--no-warn-dirty",
+        "--command",
         "scripts/gen-types.sh",
         "--check"
       ],

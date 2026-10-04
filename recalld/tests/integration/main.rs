@@ -17,6 +17,7 @@ mod align_parity;
 mod assign;
 mod audio;
 mod capture;
+mod clips;
 mod conversations;
 mod devices;
 mod diarized;

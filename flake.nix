@@ -147,6 +147,7 @@
               # cargo cannot load the graph with one missing.
               ./doctor
               ./runner
+              ./transcript
               ./cli
               ./experimental
               # ⚠ The sandbox holds only the files named here, so every test input

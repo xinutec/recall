@@ -214,6 +214,14 @@ in  { name = "recall"
             G.inDevShell [ "python", "scripts/check_workspace_members.py" ]
         , timeout_s = 60
         }
+      , {-  The domain crate stays pure (#1911): its whole dependency graph is
+            on an allowlist and its source does no IO and reads no clock.
+        -}
+        G.Check::{
+        , name = "transcript is pure (no IO dependency, no IO in source)"
+        , argv = G.inDevShell [ "python", "scripts/check_pure_crate.py" ]
+        , timeout_s = 120
+        }
       , G.Check::{
         , name = "generated types are current"
         , argv = G.inDevShell [ "scripts/gen-types.sh", "--check" ]

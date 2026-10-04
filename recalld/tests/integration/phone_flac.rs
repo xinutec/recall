@@ -138,12 +138,22 @@ fn names(conn: &Connection, table: &str) -> Vec<String> {
 fn a_phones_wav_becomes_flac_with_the_same_samples_and_every_row_renamed() {
     let samples = speech();
     let mut r = root_with("tcp_pcm", &wav_bytes(&samples), "done");
+    let clip = recalld::clips::by_filename(&r.ingest, WAV)
+        .unwrap()
+        .expect("a clip");
     let done = run(&mut r, true);
 
     assert_eq!(done.converted, 1, "{done:?}");
     assert!(done.flac_bytes * 2 < done.wav_bytes, "{done:?}");
     assert!(!r.clips().join(WAV).exists());
     assert_eq!(decoded(&r.clips().join(FLAC)), samples);
+    let renamed = recalld::clips::by_filename(&r.ingest, FLAC)
+        .unwrap()
+        .expect("the clip followed");
+    assert_eq!(
+        renamed.id, clip.id,
+        "a conversion keeps the clip's identity"
+    );
     for table in [
         "segments",
         "segment_levels",

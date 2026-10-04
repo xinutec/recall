@@ -50,6 +50,8 @@ struct Args {
 
 #[derive(Clone, Copy, clap::Subcommand)]
 enum Task {
+    /// Give every stored file a clip and say whether all have one (#1911).
+    ClipCensus,
     /// Store the phones' WAV copies as FLAC (`recalld::phone_flac`).
     PhoneFlac {
         /// Convert; without this, only say what would be converted.
@@ -62,12 +64,40 @@ enum Task {
     },
 }
 
+/// Open both planes as the server does (which gives every file a clip), then
+/// count what has one.
+fn clip_census(root: &std::path::Path) -> ExitCode {
+    if let Err(complaint) = prepare_planes(root) {
+        eprintln!("recalld: {complaint}");
+        return ExitCode::FAILURE;
+    }
+    let done = recalld::work::open_write(root)
+        .map_err(|err| err.to_string())
+        .and_then(|meaning| {
+            let ingest = recalld::store::open(root).map_err(|err| err.to_string())?;
+            recalld::clips::census(&meaning, &ingest, root).map_err(|err| err.to_string())
+        });
+    match done.and_then(|c| serde_json::to_string_pretty(&c).map_err(|err| err.to_string())) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("recalld: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Run `task` against the planes under `root`, printing what it did as JSON.
 fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
     let Task::PhoneFlac {
         apply,
         settled_hours,
-    } = task;
+    } = task
+    else {
+        return clip_census(root);
+    };
     let before = (chrono::Utc::now() - chrono::Duration::hours(settled_hours))
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
@@ -156,7 +186,13 @@ fn prepare_planes(root: &std::path::Path) -> Result<(), String> {
     let conn = recalld::work::open_write(root)
         .map_err(|err| format!("cannot open {}/recall.sqlite: {err}", root.display()))?;
     recalld::meaning_schema::ensure(&conn)
-        .map_err(|err| format!("cannot migrate {}/recall.sqlite: {err}", root.display()))
+        .map_err(|err| format!("cannot migrate {}/recall.sqlite: {err}", root.display()))?;
+    // Uploads stored before the ingest plane existed get their clips (#1911).
+    let ingest = recalld::store::open(root)
+        .map_err(|err| format!("cannot open {}/ingest.sqlite: {err}", root.display()))?;
+    recalld::clips::adopt_outside_ingest(&conn, &ingest, root)
+        .map(|_| ())
+        .map_err(|err| format!("cannot adopt clips outside ingest/: {err}"))
 }
 
 fn main() -> ExitCode {

@@ -154,6 +154,12 @@ fn one(
         return Ok(None);
     }
     let sha = crate::ingest::sha256_hex(&flac);
+    // The clip follows the file and keeps its id (#1911); then the new name's
+    // segments row finds it there instead of minting another.
+    crate::clips::rename(&tx, filename, &flac_name).map_err(|err| match err {
+        crate::clips::ClipError::Db(db) => Skip::Plane(db),
+        other => Skip::Clip(other.to_string()),
+    })?;
     let bytes = i64::try_from(flac.len()).unwrap_or(i64::MAX);
     COPY_SEGMENT.execute(&tx, (filename, &flac_name, bytes, &sha))?;
     for rename in [

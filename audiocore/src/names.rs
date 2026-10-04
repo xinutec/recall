@@ -96,16 +96,9 @@ impl NameError {
     }
 }
 
-/// A filesystem-safe source id: the id is a storage directory name, so the
-/// grammar excludes everything a path could interpret ('.', '/', case games).
+/// A filesystem-safe source id: [`transcript::SourceId`] holds the one rule.
 pub fn valid_source(source: &str) -> bool {
-    let mut chars = source.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    source.len() <= 64
-        && (first.is_ascii_lowercase() || first.is_ascii_digit())
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    transcript::SourceId::parse(source).is_some()
 }
 
 /// Parse `filename` as a segment of `source`, or say exactly why not.

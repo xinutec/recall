@@ -10,6 +10,7 @@ pub mod app;
 pub mod assign;
 pub mod audio;
 pub mod capture;
+pub mod clips;
 pub mod conversations;
 pub mod devices;
 pub mod diarized;

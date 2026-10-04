@@ -109,6 +109,15 @@ spelling (`audiocore::instant`), because instants are compared and ordered as
 text. Writers take it as a `Stamp`, which only a real instant builds, and
 triggers (v47) refuse any other spelling. Foreign keys are enforced.
 
+**A clip is a stored file** (#1911): `clips` in `ingest.sqlite` gives each one
+an id, its source, its start in integer microseconds, and its path relative to
+the data root. The database keeps the invariant itself: a trigger gives every
+file stored a clip in the same transaction, and a rename keeps the id. The file
+is the key, never `(source, start)`: a phone's own copy and the Mac's cut of its
+stream often open in the same second. The types (`ClipId`, `SourceId`,
+`Instant`, `Span`) live in the `transcript` crate, which may do no IO
+(`scripts/check_pure_crate.py`).
+
 Every write to the turn table goes through `recalld::turn_store`, a test fails
 the build otherwise. It owns the typed provenance, the stage the app shows
 (live, transcribed, diarized, corrected) and the rule for what a person owns:

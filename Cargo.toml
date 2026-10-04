@@ -9,6 +9,7 @@
 #   doctor     the Mac's health agent, reporting to fleetwatch
 #   recalld    the fleet's system-of-record daemon on Isis
 #   runner     the Mac's job orchestration against recalld's queue
+#   transcript the domain as pure data: clips, instants, spans (#1911)
 #   experimental/playback  known speech played into the house, scored per mic (#1388)
 [workspace]
 resolver = "3"
@@ -20,4 +21,5 @@ members = [
     "experimental/playback",
     "recalld",
     "runner",
+    "transcript",
 ]

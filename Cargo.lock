@@ -93,6 +93,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "transcript",
 ]
 
 [[package]]
@@ -1219,6 +1220,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "transcript",
  "ts-rs",
  "ureq",
 ]
@@ -1746,6 +1748,14 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "transcript"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
 ]
 
 [[package]]

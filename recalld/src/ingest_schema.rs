@@ -13,6 +13,9 @@
 use rusqlite::Connection;
 
 pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
+    let had_clips: bool = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'clips'")?
+        .exists([])?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS segments (
              filename     TEXT PRIMARY KEY,
@@ -89,6 +92,7 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
              requested_utc TEXT NOT NULL
          );",
     )?;
+    ensure_clips(conn, had_clips)?;
     add_column(conn, "segment_levels", "gated", "REAL")?;
     add_column(conn, "segment_levels", "quiet_run_s", "REAL")?;
     add_column(conn, "room_blocks", "coverage", "REAL")?;
@@ -100,6 +104,56 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
     add_column(conn, "pass_ledger", "detail", "TEXT")?;
     split_old_outcomes(conn)?;
     retire_room_jobs(conn)
+}
+
+/// The clips table and the trigger that keeps it (#1911), and on the open that
+/// creates them, every file stored before.
+fn ensure_clips(conn: &Connection, had_clips: bool) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "-- One row per stored recording (#1911): the clip's identity. The file
+         -- is the key, never (source, start): a phone's own copy and the Mac's
+         -- cut of its stream often open in the same second. A rename keeps the
+         -- id (`clips::rename`). `path` is relative to the data root.
+         CREATE TABLE IF NOT EXISTS clips (
+             id       INTEGER PRIMARY KEY,
+             source   TEXT NOT NULL,
+             start_us INTEGER NOT NULL,
+             filename TEXT NOT NULL UNIQUE,
+             path     TEXT NOT NULL UNIQUE
+         );
+         CREATE INDEX IF NOT EXISTS clips_source_start ON clips (source, start_us);
+
+         -- Every stored file has a clip, whoever stores it: an invariant the
+         -- database keeps, so no writer can forget it. A start that will not
+         -- convert fails the file's own insert rather than store a clip
+         -- without a time. Stored starts are whole seconds, so strftime('%s')
+         -- is exact.
+         -- ⚠ ON CONFLICT on the filename only, never OR IGNORE: OR IGNORE
+         -- also skips a NOT NULL failure, which would drop the clip silently.
+         CREATE TRIGGER IF NOT EXISTS segments_have_clips AFTER INSERT ON segments
+         BEGIN
+             INSERT INTO clips (source, start_us, filename, path)
+             VALUES (NEW.source,
+                     CAST(strftime('%s', NEW.start_utc) AS INTEGER) * 1000000,
+                     NEW.filename,
+                     'ingest/' || NEW.source || '/' || NEW.filename)
+             ON CONFLICT (filename) DO NOTHING;
+         END;",
+    )?;
+    if !had_clips {
+        // Once, when the table first appears: every file stored before the
+        // trigger existed. From then on the trigger keeps them.
+        conn.execute_batch(
+            "INSERT INTO clips (source, start_us, filename, path)
+             SELECT * FROM (
+                 SELECT source, CAST(strftime('%s', start_utc) AS INTEGER) * 1000000,
+                        filename, 'ingest/' || source || '/' || filename
+                 FROM segments ORDER BY start_utc, filename)
+             WHERE true
+             ON CONFLICT (filename) DO NOTHING",
+        )?;
+    }
+    Ok(())
 }
 
 /// Rows written before `detail` put their counts in the outcome as a sentence

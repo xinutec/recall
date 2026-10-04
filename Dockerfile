@@ -58,6 +58,7 @@ COPY audiod/ audiod/
 COPY doctor/ doctor/
 COPY recalld/ recalld/
 COPY runner/ runner/
+COPY transcript/ transcript/
 COPY cli/ cli/
 COPY experimental/ experimental/
 RUN cargo build --release --locked -p recalld

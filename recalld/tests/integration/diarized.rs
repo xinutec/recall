@@ -603,16 +603,9 @@ fn meaning_plane(path: &std::path::Path) -> Connection {
 
 /// The ingest plane: the segment and the two finished jobs about it.
 fn ingest_plane(path: &std::path::Path, voices: &str, transcription: &str) -> Connection {
-    let conn = Connection::open(path.join("ingest.sqlite")).expect("ingest");
-    conn.execute_batch(
-        "CREATE TABLE segments (
-             source TEXT NOT NULL, filename TEXT NOT NULL, start_utc TEXT NOT NULL,
-             bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, received_utc TEXT NOT NULL,
-             sent_utc TEXT, PRIMARY KEY (source, filename)
-         );",
-    )
-    .expect("segments");
-    recalld::ingest_schema::ensure(&conn).expect("jobs");
+    // The production schema: a hand-made copy keyed on (source, filename)
+    // tested a table recalld never builds.
+    let conn = recalld::store::open(path).expect("ingest");
     conn.execute(
         "INSERT INTO segments (source, filename, start_utc, bytes, sha256, received_utc)
          VALUES ('usb', ?1, ?2, 1, 'x', ?2)",
