@@ -584,6 +584,22 @@ pub fn delete_session(
     Ok(segments.into_iter().map(|(_, path, _)| path).collect())
 }
 
+/// Unlink a deleted session's audio, its own directory, and its ingest
+/// directory once that is empty. Best effort: the rows are already gone.
+///
+/// The ingest directory is removed only when empty, never recursively: it is
+/// the ingest plane, and anything still in it is not this delete's to destroy.
+pub fn remove_files(root: &std::path::Path, source: &str, paths: &[String]) {
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
+    let own = root.join(source);
+    if own.is_dir() {
+        let _ = std::fs::remove_dir_all(&own);
+    }
+    let _ = std::fs::remove_dir(crate::store::source_dir(root, source));
+}
+
 pub async fn delete_route(
     State(st): State<Arc<reads::State>>,
     Path(source): Path<String>,
@@ -597,13 +613,7 @@ pub async fn delete_route(
         };
         // Files only after the commit: unlinking first would destroy audio a
         // rolled-back delete still points at.
-        for path in paths {
-            let _ = std::fs::remove_file(&path);
-        }
-        let dir = root.join(&source);
-        if dir.is_dir() {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
+        remove_files(&root, &source, &paths);
         Ok(())
     });
     match done.await {

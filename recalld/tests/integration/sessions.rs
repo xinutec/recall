@@ -818,3 +818,39 @@ fn a_language_is_one_of_the_households_or_left_to_the_model() {
     assert_eq!(parse_language(Some("en")), Ok(Some("en")));
     assert!(parse_language(Some("it")).is_err());
 }
+
+#[test]
+fn a_deleted_sessions_files_leave_no_directory_behind() {
+    // An upload's audio lands in the ingest plane (`ingest/<source>/`); the
+    // session's own directory may hold derived files.
+    let root = tempfile::tempdir().expect("tmp");
+    let ingest = recalld::store::source_dir(root.path(), "meeting-1");
+    let own = root.path().join("meeting-1");
+    std::fs::create_dir_all(&ingest).expect("ingest dir");
+    std::fs::create_dir_all(&own).expect("own dir");
+    let clip = ingest.join("meeting-1-20261004T120000.wav");
+    std::fs::write(&clip, b"audio").expect("clip");
+    std::fs::write(own.join("derived"), b"x").expect("derived");
+
+    recalld::sessions::remove_files(
+        root.path(),
+        "meeting-1",
+        &[clip.to_string_lossy().into_owned()],
+    );
+
+    assert!(!ingest.exists());
+    assert!(!own.exists());
+}
+
+#[test]
+fn an_ingest_directory_still_holding_audio_is_kept() {
+    let root = tempfile::tempdir().expect("tmp");
+    let ingest = recalld::store::source_dir(root.path(), "meeting-1");
+    std::fs::create_dir_all(&ingest).expect("ingest dir");
+    let other = ingest.join("meeting-1-20261004T130000.wav");
+    std::fs::write(&other, b"audio").expect("other");
+
+    recalld::sessions::remove_files(root.path(), "meeting-1", &[]);
+
+    assert!(other.exists());
+}
