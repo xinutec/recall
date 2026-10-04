@@ -82,3 +82,18 @@ fn a_source_id_is_one_safe_path_component() {
         assert!(SourceId::parse(bad).is_none(), "{bad:?}");
     }
 }
+
+#[test]
+fn blank_words_and_blank_names_cannot_be_made() {
+    use transcript::{Language, Name, Text};
+    assert!(Text::new("   ").is_none());
+    assert_eq!(Text::new("  hallo ").unwrap().as_str(), "hallo");
+    assert!(Name::new("").is_none());
+    assert_eq!(Language::from_code("nl"), Some(Language::Dutch));
+    assert_eq!(
+        Language::from_code("it"),
+        None,
+        "only the household's languages can be pinned"
+    );
+    assert_eq!(Language::English.code(), "en");
+}

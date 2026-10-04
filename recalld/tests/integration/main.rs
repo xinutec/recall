@@ -28,6 +28,7 @@ mod identify_parity;
 mod ingest;
 mod labels;
 mod labels_write;
+mod legacy_edits;
 mod live_tier;
 mod meaning_schema;
 mod phone_flac;

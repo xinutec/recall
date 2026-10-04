@@ -52,6 +52,8 @@ struct Args {
 enum Task {
     /// Give every stored file a clip and say whether all have one (#1911).
     ClipCensus,
+    /// Recover the edit log from today's tables and account for every row (#1912).
+    EditCensus,
     /// Store the phones' WAV copies as FLAC (`recalld::phone_flac`).
     PhoneFlac {
         /// Convert; without this, only say what would be converted.
@@ -89,14 +91,39 @@ fn clip_census(root: &std::path::Path) -> ExitCode {
     }
 }
 
+/// Recover the edit log from today's tables and print what every row became.
+fn edit_census(root: &std::path::Path) -> ExitCode {
+    if let Err(complaint) = prepare_planes(root) {
+        eprintln!("recalld: {complaint}");
+        return ExitCode::FAILURE;
+    }
+    let done = recalld::work::open_write(root)
+        .map_err(|err| err.to_string())
+        .and_then(|meaning| {
+            let ingest = recalld::store::open(root).map_err(|err| err.to_string())?;
+            recalld::legacy_edits::census(&meaning, &ingest, root).map_err(|err| err.to_string())
+        });
+    match done.and_then(|c| serde_json::to_string_pretty(&c).map_err(|err| err.to_string())) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("recalld: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Run `task` against the planes under `root`, printing what it did as JSON.
 fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
-    let Task::PhoneFlac {
-        apply,
-        settled_hours,
-    } = task
-    else {
-        return clip_census(root);
+    let (apply, settled_hours) = match task {
+        Task::PhoneFlac {
+            apply,
+            settled_hours,
+        } => (apply, settled_hours),
+        Task::ClipCensus => return clip_census(root),
+        Task::EditCensus => return edit_census(root),
     };
     let before = (chrono::Utc::now() - chrono::Duration::hours(settled_hours))
         .format("%Y-%m-%dT%H:%M:%SZ")
