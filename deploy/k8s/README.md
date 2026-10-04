@@ -23,7 +23,7 @@ hand. Rationale and topology: `docs/architecture.md`.
 The **fleet tier only**: ONE container running `recalld`, which binds the browsing
 API + web app (8000) and the device ingest plane (wg hostPort 8001, gated by the
 `INGEST_TOKENS` key in `recall-secret`) in one process. No ML — the Mac keeps capture,
-ASR, diarization, and the LLM.
+ASR and diarization.
 
 The image carries no Python interpreter: a Debian base, the `recalld` binary, the
 built Angular frontend, and the media tools recalld shells out to (ffmpeg,

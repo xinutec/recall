@@ -4,8 +4,8 @@
 # run `nix flake update recall && home-manager switch --flake .#$USER`.
 #
 # Each agent runs a store wrapper that names its binaries' store paths, so no
-# flake evaluation sits in an agent's startup. All but `llm-host` are Rust; the
-# shims and `llm-host` run the uv2nix ML env (`nix build .#ml-env`).
+# flake evaluation sits in an agent's startup. The agents are Rust; the shims
+# they drive run the uv2nix ML env (`nix build .#ml-env`).
 #
 # Secrets (HF_TOKEN, RECALL_SYNC_TOKEN, the ingest tokens) are read at runtime from
 # ~/.config/recall/env (0600) and never enter the store.
@@ -176,21 +176,6 @@ in
       name = "beat-relay";
       args = [ "beat-relay" "--url" fleet "--port" "8000" ];
     };
-  };
-
-  # The one process here that holds LLM weights (src/recall/llmhost.py), served to
-  # life's emotion worker on 127.0.0.1:8092: the ~4.3 GB loads once and is released
-  # after five idle minutes.
-  #
-  # Standard rather than Background: a caller is waiting, and throttled I/O made the
-  # cold weight read take 104 s instead of 62 s. Idle, it costs a few MB.
-  launchd.agents."org.xinutec.recall-llm-host" = daemon {
-    label = "org.xinutec.recall-llm-host";
-    name = "llm-host";
-    python = venvPython;
-    module = "recall.llmhost";
-    args = [ ];
-    extra = { ProcessType = "Standard"; };
   };
 
   # The instant feed: reads capture's UDP tap, cuts it at pauses with the archive's

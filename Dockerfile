@@ -1,5 +1,5 @@
 # recall's fleet image (Isis k3s): the browsing API, the web app and the device ingest,
-# all served by `recalld`. NO ML — the Mac keeps capture, ASR, diarization and the LLM.
+# all served by `recalld`. NO ML — the Mac keeps capture, ASR and diarization.
 #
 # ⚠ **No Python, and no interpreter.** A Debian base, one static-ish binary, and the
 # media tools recalld shells out to — so the fleet dependency set is the Rust lockfile

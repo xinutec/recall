@@ -322,14 +322,14 @@ Isis.
   short isolated clips; fragments that begin or end mid-speech are.
 - **Training is not a goal.** Correct, enrol; what to train from that is a
   later decision. The LoRA toolchain is deleted.
-- **Ask and summaries are cut.** The archive is searchable, not answerable.
-  `llm-host` stays on the Mac for `life`'s emotion worker, not for recall.
+- **Ask and summaries are cut.** The archive is searchable, not answerable;
+  recall holds no LLM.
 - **Keep everything.** Audio scope is answered with disk, not by discarding;
   trimming would bake today's speech detector into the archive.
 
 ## What is Python
 
 The two model shims and their wrappers (`asr`, `diarize`, `speakerid`), the
-golden ASR check (`score_asr`, `wer`), and `llm-host`. Nothing else, and that is
+golden ASR check (`score_asr`, `wer`). Nothing else, and that is
 the end state: the models are Python, so their wrappers are. Each is its own
 module, run as `python -m recall.<module>`.

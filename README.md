@@ -17,7 +17,7 @@ A Rust workspace: `audiocore` (what the crates share), `audiod` (the Mac's audio
 plane), `recalld` (the fleet's system of record and the web API), `runner` (the
 Mac's job loop and the live feed), `doctor` (the Mac's health agent), `cli`.
 `src/recall` is the Python model floor: the two shims the runners drive, the
-golden ASR check, and `llm-host`. `frontend/` is the Angular app; `android/` and
+golden ASR check. `frontend/` is the Angular app; `android/` and
 `ios/` the microphone apps.
 
 ## Dev

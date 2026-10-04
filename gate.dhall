@@ -240,7 +240,7 @@ in  { name = "recall"
         , timeout_s = 300
         }
       , {-  The .venv interpreter: plain `pytest` is the nix one and cannot
-            import fastapi/numpy/pyannote.
+            import numpy/pyannote.
         -}
         G.Check::{
         , name = "pytest (backend)"

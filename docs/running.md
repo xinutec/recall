@@ -33,7 +33,6 @@ in `~/Library/Logs/recall/<agent>.{out,err}.log`; `recall-logrotate` caps them.
 | `recall-voices` | leases `diarize-segment` and `enroll-speaker`, drives the `voices` shim |
 | `recall-doctor` | the health checks, every five minutes, reported to fleetwatch |
 | `recall-beat-relay` | accepts a mic app's heartbeat on the LAN (port 8000) and forwards it to Isis |
-| `recall-llm-host` | holds the LLM on `127.0.0.1:8092` for `life`'s emotion worker; recall asks it nothing |
 
 The agents read `~/.config/recall/env` (0600, on the internal disk), not the
 repository's `.env`: a launchd agent cannot touch `/Volumes/Backup`, and its
