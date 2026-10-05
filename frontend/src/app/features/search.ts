@@ -19,7 +19,7 @@ import { TranscriptCard } from '../shared/transcript-card';
 
 const SEARCH_DEBOUNCE_MS = 200;
 
-/** Full-text search across all transcripts (SQLite FTS5 behind /api/search). */
+/** Full-text search across all transcripts (`/api/search`). */
 @Component({
   selector: 'app-search',
   imports: [
@@ -37,10 +37,8 @@ export class Search {
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
 
-  /** URL is the source of truth for the query (bookmarkable, reload-safe).
-   * withComponentInputBinding passes undefined when ?q is absent (it overrides
-   * the default) — normalize it, or the box renders the string "undefined" and
-   * .trim() throws. */
+  /** The query, from the URL. Absent arrives as undefined, overriding the
+   * default. */
   readonly q = input('', { transform: (value: string | undefined) => value ?? '' });
   protected readonly query = signal('');
 
@@ -53,7 +51,7 @@ export class Search {
     });
   }
 
-  /** Mirror typing into the URL (replaceUrl so it doesn't spam history). */
+  /** Typing goes into the URL, replacing the history entry. */
   protected onInput(value: string): void {
     this.query.set(value);
     void this.router.navigate([], {
@@ -63,8 +61,7 @@ export class Search {
     });
   }
 
-  // Debounced copy of `query`: the resource keys on this, so a phone keyboard
-  // doesn't fire a 200-row FTS request per keystroke — only once typing pauses.
+  // `query`, debounced: one search when typing pauses, not one per key.
   private readonly settledQuery = signal('');
   protected readonly trimmed = computed(() => this.settledQuery().trim());
   protected readonly trimmedLength = computed(() => this.trimmed().length);

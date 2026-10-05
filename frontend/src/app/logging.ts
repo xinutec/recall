@@ -5,9 +5,9 @@ import { catchError, throwError } from 'rxjs';
 import { stringField } from './narrow';
 
 /**
- * The phone has no console you can read, so browser errors are POSTed to the
- * server (logs/client.log). Uses fetch directly so logging never re-enters the
- * HttpClient interceptor chain.
+ * Send a browser error to the server's `logs/client.log`, since a phone's
+ * console cannot be read. With `fetch`, so it does not pass through the
+ * interceptors.
  */
 export function reportToServer(level: string, message: string, stack?: string): void {
   try {
@@ -17,16 +17,15 @@ export function reportToServer(level: string, message: string, stack?: string): 
       body: JSON.stringify({ level, message, stack, url: location.href }),
     }).catch(() => undefined);
   } catch {
-    /* never let logging throw */
+    /* dropped */
   }
 }
 
 @Injectable()
 export class ServerErrorHandler implements ErrorHandler {
   handleError(error: unknown): void {
-    // Read, don't assert: an ErrorHandler catches literally anything a
-    // component threw, and `String(error)` on a plain object reports
-    // "[object Object]" to the server — a log line that says nothing at all.
+    // Anything can be thrown; `String(error)` on a plain object would log
+    // "[object Object]".
     reportToServer(
       'error',
       stringField(error, 'message') ?? (typeof error === 'string' ? error : 'non-Error thrown'),
@@ -36,7 +35,7 @@ export class ServerErrorHandler implements ErrorHandler {
   }
 }
 
-/** Report failed API calls (the phone can't show them). */
+/** Reports failed API calls to the server. */
 export const serverLogInterceptor: HttpInterceptorFn = (req, next) =>
   next(req).pipe(
     catchError((err: { status?: number; statusText?: string; message?: string }) => {

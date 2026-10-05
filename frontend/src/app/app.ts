@@ -25,11 +25,9 @@ interface NavItem {
   readonly exact: boolean;
 }
 
-// Long-poll pacing: the server holds /api/capture?wait&known until the state
-// actually changes (a press on any client, a mirror confirmation), so changes
-// land in ~RTT. The delays below only guard the edges: a breather between
-// polls, a retry gap after an error, and the plain-poll cadence against an
-// older server that answers immediately (no stateToken).
+// The server holds /api/capture?wait&known until the state changes, so these
+// only pace the edges: a pause between polls, a retry after an error, and a
+// plain poll when the answer has no stateToken.
 const CAPTURE_WAIT_S = 25;
 const CAPTURE_REPOLL_MS = 250;
 const CAPTURE_RETRY_MS = 5_000;
@@ -56,14 +54,12 @@ export class App {
   private readonly breakpoints = inject(BreakpointObserver);
   private readonly api = inject(RecallApi);
 
-  /** Nextcloud sign-in wall state; only ever active on the SSO-gated fleet UI. */
+  /** The Nextcloud sign-in wall. */
   protected readonly auth = inject(AuthState);
-  // Instrumented from the shell alone: a trace each screen had to remember to
-  // join would have holes in exactly the screens nobody thought about.
   private readonly telemetry = inject(Telemetry);
   private readonly swUpdates = inject(SwUpdates);
 
-  /** Phone-sized viewport → bottom nav; otherwise a rail beside the content. */
+  /** Phone-sized: a bottom nav; otherwise a rail beside the content. */
   protected readonly handset = toSignal(
     this.breakpoints.observe(Breakpoints.Handset).pipe(map((state) => state.matches)),
     { initialValue: false },
@@ -81,11 +77,9 @@ export class App {
     { path: '/labels', label: 'Labels', icon: 'label', exact: false },
   ];
 
-  // Capture (whole-house recording) state, so it can be paused while working in
-  // the room. Polled so the banner reflects the worker's auto-resume. Rendered
-  // spec-vs-status: `desired*` moves at the button press, `running` is the mic's
-  // confirmed word, and the gap between them shows as "Pausing…"/"Resuming…" —
-  // never a flap between the two truths.
+  // Capture state, polled so the banner follows an automatic resume. `desired*`
+  // changes at the button press, `running` when the mic confirms; in between
+  // the banner says "Pausing…" or "Resuming…".
   private readonly capture = signal<CaptureState>({
     running: true,
     pausedUntil: null,
@@ -97,9 +91,7 @@ export class App {
   });
   // Ticks so the "resumes in Xh Ym" countdown stays current between polls.
   private readonly now = signal(Date.now());
-  // The banner/button follow the desired state (what was asked for)…
   protected readonly paused = computed(() => this.capture().desiredPausedUntil !== null);
-  // …with an explicit in-between while the mic hasn't confirmed it yet.
   protected readonly transitioning = computed(() => {
     const c = this.capture();
     return c.micReachable && !c.settled;
@@ -107,15 +99,14 @@ export class App {
   protected readonly transitionLabel = computed(() =>
     this.capture().desiredRunning ? 'Resuming' : 'Pausing',
   );
-  // The mic stopped reporting: its true state is unknown, and saying so beats
-  // presenting the intent as fact.
+  // The mic stopped reporting, so its state is unknown.
   protected readonly unreachable = computed(() => !this.capture().micReachable);
   protected readonly resumeBy = computed(() => {
     const until = this.capture().desiredPausedUntil;
-    // yyyy-mm-dd before the local time, so an overnight pause reads unambiguously.
+    // With the date, so an overnight pause is unambiguous.
     return until ? `${dayKey(until)} ${timeOfDay(until)}` : '';
   });
-  // Time left until the worker auto-resumes, e.g. "5h 23m".
+  // "5h 23m".
   protected readonly resumeIn = computed(() => {
     const until = this.capture().desiredPausedUntil;
     return until ? durationUntil(until, this.now()) : '';
@@ -123,15 +114,12 @@ export class App {
 
   constructor() {
     this.telemetry.init();
-    // Wired once here, so no view has to know a service worker exists.
     this.swUpdates.start();
     this.pollCapture(0);
     setInterval(() => this.now.set(Date.now()), 30_000);
   }
 
-  // One chained capture poll at a time: each response (or error) schedules the
-  // next request. Against a long-polling server the request itself hangs until
-  // something changes, so the chain is mostly one idle held request.
+  // One poll at a time: each answer or error schedules the next.
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   private pollCapture(delayMs: number): void {
@@ -142,8 +130,7 @@ export class App {
     const go = () => {
       this.api
         .capture(this.capture().stateToken ?? '', CAPTURE_WAIT_S)
-        // A dead connection would otherwise hold the chain forever: the server
-        // answers within CAPTURE_WAIT_S, so anything slower is a lost socket.
+        // The server answers within CAPTURE_WAIT_S; slower is a lost socket.
         .pipe(timeout({ first: (CAPTURE_WAIT_S + 10) * 1_000 }))
         .subscribe({
           next: (s) => {
@@ -153,7 +140,7 @@ export class App {
           error: () => this.pollCapture(CAPTURE_RETRY_MS),
         });
     };
-    // delay 0 runs synchronously so the initial state is applied on construction.
+    // Synchronously at 0, so the first poll starts during construction.
     if (delayMs <= 0) {
       go();
     } else {
@@ -173,8 +160,7 @@ export class App {
       .subscribe({ next: (s) => this.capture.set(s), error: () => undefined });
   }
 
-  /** Build stamp embedded at build time; shown in the footer so a stale cached
-   * tab reveals its own old sha instead of looking current. */
+  /** Shown in the footer, so a stale cached tab shows its old sha. */
   protected readonly build = BUILD_INFO;
   protected readonly builtAt = BUILD_INFO.builtAt
     ? new Date(BUILD_INFO.builtAt).toLocaleString()

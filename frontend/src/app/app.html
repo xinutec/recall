@@ -15,7 +15,7 @@
 <!-- The bar every fleet app draws (@xinutec/ui-scaffold): the menu and "recall" on
      a main screen, an arrow up and the screen's name on one drilled into. -->
 <ui-scaffold class="bar" title="recall" [menu]="moreMenu">
-  <!-- On every screen: recording is the household's control, never a page's. -->
+  <!-- On every screen, so recording can be paused from anywhere. -->
   <button
     matIconButton
     class="capture-toggle"

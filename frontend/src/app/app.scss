@@ -5,8 +5,7 @@ $rail-w: 220px;
   flex-direction: column;
   min-block-size: 100dvh;
 
-  // Toolbar height differs by breakpoint; sticky day-headers key off this var,
-  // and the @media below overrides it.
+  // The toolbar's height, which sticky headers offset by; wider below.
   --toolbar-h: 56px;
 }
 @media (min-width: 600px) {
@@ -15,8 +14,7 @@ $rail-w: 220px;
   }
 }
 
-// Nextcloud sign-in wall: a full-screen cover over the whole app while the fleet UI
-// waits for a session. Only rendered when the server returns 401 (SSO gate up).
+// The sign-in wall, covering the app after a 401.
 .signin-wall {
   position: fixed;
   inset: 0;
@@ -49,16 +47,13 @@ $rail-w: 220px;
 }
 
 .signin-logo {
-  // Icon glyph: font-size sizes the glyph; width+height size its box (dev-lint exempts
-  // icon glyphs sized this way from the type-scale rule).
+  // font-size sizes the glyph, width and height its box.
   font-size: 3rem;
   width: 3rem;
   height: 3rem;
 }
 
-// The scaffold's bar, pinned: the surface through Material's own token, and the
-// edge-to-edge inset (viewport-fit=cover) as padding above it. The toolbar keeps
-// its own height, which `--toolbar-h` names for the sticky offsets below it.
+// The scaffold's bar, pinned, padded below the status bar.
 .bar {
   position: sticky;
   top: 0;
@@ -77,8 +72,7 @@ $rail-w: 220px;
   color: var(--mat-sys-outline);
 }
 
-// The state is in flight (desired ≠ confirmed): the sync icon turns while the
-// mic catches up, so a press reads as "working on it", never as a flap.
+// The sync icon turns until the mic confirms a press.
 .spin {
   animation: spin 1.2s linear infinite;
 }
@@ -105,8 +99,7 @@ $rail-w: 220px;
   font: var(--mat-sys-body-medium);
   font-weight: 600;
 
-  // the recording dot only — kept circular (no shrink) and pulsing; the action
-  // buttons' icons must not inherit the red pulse.
+  // Only the dot pulses, not the buttons' icons.
   .rec-dot {
     flex-shrink: 0;
     color: var(--mat-sys-error);
@@ -117,13 +110,13 @@ $rail-w: 220px;
     flex: 1 1 auto;
   }
 
-  // In-flight: neutral colours — it's progress, not an alarm.
+  // Neutral: progress, not an alarm.
   &.transitioning {
     background: var(--mat-sys-surface-variant);
     color: var(--mat-sys-on-surface-variant);
   }
 
-  // The mic isn't reporting: unknown state, flagged distinctly from paused.
+  // State unknown; distinct from paused.
   &.unreachable {
     background: var(--mat-sys-tertiary-container);
     color: var(--mat-sys-on-tertiary-container);
@@ -149,7 +142,6 @@ $rail-w: 220px;
   flex: 1 1 auto;
   padding: 1rem;
 
-  // Leave room for the fixed bottom nav (plus the phone's home-indicator inset).
   &.with-bottom-nav {
     padding-block-end: var(--bottom-nav-reserve);
   }
@@ -169,8 +161,8 @@ $rail-w: 220px;
   user-select: text;
 }
 
-// Material 3's navigation bar (phone) and a drawer-style rail (wide), as life
-// draws them: the icon sits in a pill that fills on the active screen.
+// M3's navigation bar (phone) and rail (wide): the active screen's icon sits in
+// a filled pill.
 .bottom-nav,
 .rail {
   position: fixed;

@@ -19,8 +19,8 @@ import { formatClock } from '../format';
 import { PlayButton } from '../shared/play-button';
 
 /**
- * Review/audit the labelled fragments: filter by voice, play each, re-tag a
- * mis-assigned speaker, or remove a bad label from the corpus.
+ * Review the labelled fragments: filter by voice, play each, reassign a wrong
+ * speaker or hide a bad label. Also the household vocabulary.
  */
 @Component({
   selector: 'app-labels',
@@ -50,9 +50,7 @@ export class Labels {
     scaffoldTitle(() => 'Review labels');
   }
 
-  // The household vocabulary: proper nouns the ASR is biased toward. Managed
-  // here because this is the curation page — a new term applies from the next
-  // transcription, no restart.
+  // Proper nouns transcription is biased toward, from the next clip on.
   protected readonly vocabulary = httpResource<VocabularyList>(() => '/api/vocabulary');
   protected readonly vocabTerms = computed(() => this.vocabulary.value()?.items ?? []);
   protected readonly newTerm = signal('');
@@ -78,13 +76,9 @@ export class Labels {
     });
   }
 
-
-  /** URL drives the filter (bookmarkable, e.g. linked from the Train balance).
-   * withComponentInputBinding passes undefined when the param is absent —
-   * normalize so the type is honest. */
+  /** The filter, from the URL. Absent arrives as undefined. */
   readonly speaker = input('', { transform: (value: string | undefined) => value ?? '' });
-  /** Quick-pick roster from runtime enrolment (not hard-coded — keeps real names
-   * out of the codebase, per the design's privacy promise). */
+  /** Fetched, so real names stay out of the code. */
   private readonly roster = httpResource<SpeakerNames>(() => '/api/speakers');
   protected readonly speakers = computed(() => this.roster.value()?.names ?? []);
   protected readonly clock = (start: string): string => formatClock(start);
@@ -101,8 +95,8 @@ export class Labels {
   private readonly counts = computed(() => this.results.value()?.bySpeaker ?? {});
   protected readonly speakerCount = (name: string): number => this.counts()[name] ?? 0;
 
-  // Default: play the exact trimmed cut, to audit the boundaries. With context
-  // adds the lead-in/-out back for easier voice recognition.
+  // Off: the exact cut, to check its edges. On: with the audio around it, to
+  // recognise the voice.
   protected readonly context = signal(false);
   protected setContext(on: boolean): void {
     this.context.set(on);

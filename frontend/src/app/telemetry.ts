@@ -4,17 +4,10 @@ import { filter } from 'rxjs';
 
 import type { TelemetryEvent } from './models';
 
-
 /**
- * The verbatim label of the nearest interactive ancestor of `node`.
- *
- * Returns null when the tap did not land on or inside a control, which is what
- * keeps the trace to things a person meant to do. Reuses the accessible name
- * already on screen — aria-label, then trimmed text, then a title — so nothing
- * needs a bespoke tracking attribute and no control can be instrumented wrongly
- * by being forgotten.
- *
- * Exported for its own test.
+ * The label of the nearest control at or above `node`: its aria-label, else its
+ * visible text, else its title. Null outside a control, which keeps the trace
+ * to deliberate taps. Exported for its test.
  */
 export function labelFor(node: EventTarget | null): string | null {
   if (!(node instanceof Element)) return null;
@@ -25,10 +18,8 @@ export function labelFor(node: EventTarget | null): string | null {
   const aria = el.getAttribute('aria-label')?.trim();
   if (aria) return aria;
 
-  // Read the visible label minus the decorative parts. A Material icon renders
-  // its ligature *name* as text, so an icon+label control would otherwise log
-  // "micRecord"; and aria-hidden content is by definition not part of what the
-  // control says. Stripped on a clone, so the live DOM is untouched.
+  // Without icons, whose ligature names are text ("micRecord"), and without
+  // aria-hidden content. On a clone, so the page is untouched.
   const clone = el.cloneNode(true);
   let text = '';
   if (clone instanceof Element) {
@@ -40,24 +31,14 @@ export function labelFor(node: EventTarget | null): string | null {
 }
 
 /**
- * What the person did, folded into the server log beside what the API saw.
+ * What the person did (navigations and taps), sent to the server log beside
+ * what the API saw, so "I pressed it and nothing happened" can be diagnosed.
+ * `logging.ts` reports errors; this reports activity.
  *
- * **Distinct from `logging.ts`**, which reports browser *errors* to
- * `logs/client.log`. This reports *activity*: a tap that hits a cache, a control
- * that was disabled, a screen that rendered wrong — none of it reaches the
- * server otherwise, so "I pressed it and nothing happened" is undiagnosable.
- * The two answer different questions.
- *
- * **Instrumented once, here.** Two central seams — the router's navigation
- * events, and a single capture-phase click listener — so no page knows this
- * exists and no new control can be missed by forgetting to annotate it.
- *
- * Uses `fetch` directly rather than `HttpClient`, for the same reason
- * `reportToServer` does: going through the interceptor chain would let a failing
- * request generate telemetry about itself.
- *
- * Best-effort by design: a failed send is dropped, never retried, never
- * surfaced.
+ * Hooked in two places only, the router and one capture-phase click listener,
+ * so no page needs to know about it. Sent with `fetch`, not `HttpClient`, so a
+ * failing request cannot generate telemetry about itself through the
+ * interceptors. A failed send is dropped.
  */
 @Injectable({ providedIn: 'root' })
 export class Telemetry {
@@ -67,13 +48,11 @@ export class Telemetry {
   private queue: TelemetryEvent[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
 
-  /** How often the queue is sent. */
   private static readonly FLUSH_MS = 5000;
-  /** Queue length that forces an early flush, so a burst cannot grow it without
-   *  bound between ticks. */
+  /** Queue length that forces a flush before the next tick. */
   private static readonly MAX_QUEUE = 50;
 
-  /** Wire the two capture points. Called once from the app shell; idempotent. */
+  /** Idempotent; called from the app shell. */
   init(): void {
     if (this.timer !== null) return;
 
@@ -81,7 +60,7 @@ export class Telemetry {
       .pipe(filter((e): e is NavigationEnd => e instanceof NavigationEnd))
       .subscribe((e) => this.enqueue('nav', e.urlAfterRedirects, null));
 
-    // Capture phase, so the tap is seen even where a handler stops propagation.
+    // Capture phase, so a handler that stops propagation does not hide the tap.
     this.doc.addEventListener(
       'click',
       (ev) => {
@@ -93,8 +72,7 @@ export class Telemetry {
 
     this.timer = setInterval(() => this.flush(false), Telemetry.FLUSH_MS);
 
-    // A last flush when the page is hidden, so the final few events are not
-    // stranded in the queue by a tab being closed mid-batch.
+    // Flush when hidden, in case the tab is closing.
     this.doc.addEventListener('visibilitychange', () => {
       if (this.doc.visibilityState === 'hidden') this.flush(true);
     });
@@ -109,7 +87,7 @@ export class Telemetry {
     if (this.queue.length === 0) return;
     const batch = this.queue;
     this.queue = [];
-    // On hiding, `sendBeacon` survives a teardown an in-flight request would not.
+    // `sendBeacon` survives the page's teardown; a fetch may not.
     if (final && this.doc.defaultView?.navigator.sendBeacon) {
       this.doc.defaultView.navigator.sendBeacon(
         '/api/telemetry',
@@ -124,7 +102,7 @@ export class Telemetry {
         body: JSON.stringify(batch),
       }).catch(() => undefined);
     } catch {
-      /* never let the trace throw */
+      /* dropped */
     }
   }
 }

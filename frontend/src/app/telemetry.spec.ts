@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { labelFor } from './telemetry';
 
-/** Build a detached element tree from markup, for reading labels out of it. */
+/** A detached element from markup. */
 function markup(html: string): Element {
   const host = document.createElement('div');
   host.innerHTML = html;
@@ -16,9 +16,7 @@ describe('labelFor', () => {
   });
 
   it("strips a Material icon's ligature name out of the label", () => {
-    // The failure this exists for: mat-icon renders its ligature as *text*, so
-    // without stripping it every icon+label control logs as "micRecord" and the
-    // trace is unreadable.
+    // mat-icon's ligature is text; unstripped, this logs "micRecord".
     const el = markup('<button><mat-icon>mic</mat-icon>Record</button>');
     expect(labelFor(el)).toBe('Record');
   });
@@ -29,21 +27,17 @@ describe('labelFor', () => {
   });
 
   it('finds the control a tap landed inside', () => {
-    // Taps land on the innermost node, which is almost never the button itself.
+    // A tap's target is the innermost node.
     const button = markup('<button><span class="label">Timeline</span></button>');
     expect(labelFor(button.querySelector('.label'))).toBe('Timeline');
   });
 
   it('says nothing for a tap that missed every control', () => {
-    // What keeps the trace to things a person meant to do. Without this, every
-    // click on the page body would be logged as an event.
     expect(labelFor(markup('<p>Nothing captured yet.</p>'))).toBeNull();
     expect(labelFor(null)).toBeNull();
   });
 
   it('does not disturb the live DOM while reading a label', () => {
-    // The icon is stripped on a clone. Reading a label must not delete the icon
-    // from the page it was read off.
     const el = markup('<button><mat-icon>search</mat-icon>Search</button>');
     document.body.append(el);
     expect(labelFor(el)).toBe('Search');

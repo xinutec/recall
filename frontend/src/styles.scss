@@ -1,12 +1,6 @@
-// Include theming for Angular Material with `mat.theme()`.
-// This Sass mixin will define CSS variables that are used for styling Angular Material
-// components according to the Material 3 design spec.
-// Learn more about theming and how to use it for your application's
-// custom components at https://material.angular.dev/guide/theming
 @use '@angular/material' as mat;
 
-// Universal border-box: with the content-box default, `width: 100%` plus side
-// padding renders wider than the viewport and pages scroll sideways on a phone.
+// With content-box, `width: 100%` plus padding is wider than the viewport.
 *,
 *::before,
 *::after {
@@ -26,11 +20,9 @@ html {
     )
   );
 
-  // Lift dialogs off the base surface. Material 3 maps the dialog container to
-  // `surface` — the same token as the page body — so on a dark theme a dialog
-  // has no tonal step and its elevation shadow is invisible; it blends into
-  // whatever it opens over. M3 puts dialogs on surface-container-high; restore
-  // that. (DL-ANGULAR-DIALOG-SURFACE)
+  // Angular maps the dialog to `surface`, the page's own colour, so on a dark
+  // theme it blends into the page. M3 specifies surface-container-high.
+  // (DL-ANGULAR-DIALOG-SURFACE)
   @include mat.dialog-overrides(
     (
       container-color: var(--mat-sys-surface-container-high),
@@ -39,53 +31,35 @@ html {
 }
 
 body {
-  // Default the application to a dark color theme. Use `light dark` instead to
-  // defer to the user's system settings.
   color-scheme: dark;
-
-  // Set a default background, font and text colors for the application using
-  // Angular Material's system-level CSS variables. Learn more about these
-  // variables at https://material.angular.dev/guide/system-variables
   background-color: var(--mat-sys-surface);
   color: var(--mat-sys-on-surface);
   font: var(--mat-sys-body-medium);
-
-  // Reset the user agent margin.
   margin: 0;
   height: 100%;
 
-  // Vertical space the fixed bottom nav occupies (content height + the phone's
-  // home-indicator inset + a little breathing room). Anything pinned to the bottom of
-  // a phone screen must clear this, or it's drawn behind the nav.
+  // The height the fixed bottom nav covers, with the home-indicator inset.
   --bottom-nav-reserve: calc(64px + env(safe-area-inset-bottom, 0px) + 0.5rem);
 }
 
-// Every routed screen's content column must clear the fixed bottom nav, or its
-// last controls are drawn behind it — found by the layout harness the day it
-// first rendered all nine screens (train's Save sat under the nav; labels' Play
-// met the Timeline label). Global on purpose: screens share the failure, so
-// they share the rule rather than each rediscovering it.
+// Every screen's content clears the bottom nav, here once rather than per
+// screen.
 .with-bottom-nav {
   .page {
     padding-block-end: var(--bottom-nav-reserve);
   }
 
-  // Status-bar / notch inset at the top (with viewport-fit=cover: edge-to-edge on
-  // Android, the notch on iOS). The top toolbar pads by this, and anything sticky
-  // below the toolbar adds it to its offset. 0 in a normal browser tab.
+  // The status bar or notch inset (viewport-fit=cover); 0 in a browser tab.
+  // The toolbar pads by it, and sticky elements below add it to their offset.
   --safe-top: env(safe-area-inset-top, 0px);
 }
 
-// A snackbar lives in the overlay container, outside `.with-bottom-nav`, so the
-// rule above misses it: without this it covers the nav it should sit above.
+// A snackbar is in the overlay container, outside `.with-bottom-nav`.
 body:has(.bottom-nav) .mat-mdc-snack-bar-container {
   margin-block-end: var(--bottom-nav-reserve);
 }
 
-/* You can add global styles to this file, and also import other style files */
-
-// Destructive-action buttons: M3 ignores `color="warn"`, so tint via the
-// component tokens instead (shared idiom, matches life/health).
+// M3 ignores `color="warn"`, so destructive buttons are tinted via tokens.
 button.danger {
   --mat-button-text-label-text-color: var(--mat-sys-error);
   --mat-button-text-state-layer-color: var(--mat-sys-error);
@@ -93,15 +67,10 @@ button.danger {
   color: var(--mat-sys-error);
 }
 
-/* An icon has exactly one correct size, so it must never absorb flex shrink.
- * Material ships `mat-icon` with `overflow: hidden`, which costs a flex/grid item
- * its `min-width: auto` floor — the floor becomes 0, and a squeezed icon is then
- * CLIPPED rather than scaled, showing a fragment of a glyph. Said once here
- * rather than per component: it is unconditionally correct, so repeating it in
- * every stylesheet that happens to flex an icon is noise that also rots
- * (DL-ANGULAR-ICON-SHRINK). This is where it was first measured: the session
- * screen's "Still being finalized" banner painted 9.6px of a 24px hourglass,
- * while the shorter "ready" sentence beside it lost 0.7px and looked perfect. */
+/* An icon never shrinks. `mat-icon` has `overflow: hidden`, which drops a flex
+ * item's `min-width: auto` floor to 0, so a squeezed icon is clipped, not
+ * scaled: the session banner once showed 9.6px of a 24px glyph.
+ * (DL-ANGULAR-ICON-SHRINK) */
 mat-icon {
   flex-shrink: 0;
 }

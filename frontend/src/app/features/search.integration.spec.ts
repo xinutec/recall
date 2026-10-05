@@ -8,11 +8,10 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { Search } from './search';
 
 /**
- * Integration test through the real router with withComponentInputBinding(), as
- * in app.config.ts. It proves what the unit spec can't: when /search is opened
- * without a ?q param, the router calls setInput('q', undefined) — clobbering the
- * input('') default. Untransformed, that undefined reached the DOM as the literal
- * string "undefined" and made settledQuery().trim() throw ("Search failed").
+ * Through the real router with `withComponentInputBinding()`, as in
+ * app.config.ts. Without `?q` the router sets the input to undefined,
+ * overriding its default; untransformed, that once showed "undefined" in the
+ * box and made the search throw.
  */
 describe('Search (router integration)', () => {
   async function start(url: string) {

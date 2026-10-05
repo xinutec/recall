@@ -9,17 +9,11 @@ import { filter, firstValueFrom } from 'rxjs';
 import { Timeline } from './timeline';
 
 /**
- * Integration test through the real router — no mocked navigate(). It proves what
- * the unit spec can't: the timeline is wired to /api/conversations on the real
- * route, and a `?before=` cursor round-trips through the real router onto the
- * timeline route. The unit spec proves the rest: the `before` input keys the
- * request URL, and loadEarlier navigates to `?before=<oldest>` *without*
- * replaceUrl — which is the Back == Later guarantee (browser Back is then the
- * browser's job, not something to assert here).
+ * Through the real router: the timeline route requests /api/conversations, and
+ * a `?before=` cursor reaches it. The unit spec covers the rest.
  *
- * Assertions are on `router.url` / the outgoing request — deterministic. We never
- * await whenStable: an outstanding httpResource request keeps the fixture
- * unstable, so we just drain the requests instead.
+ * Never `whenStable`: a pending httpResource request keeps the fixture
+ * unstable, so the requests are drained instead.
  */
 describe('Timeline (router integration)', () => {
   async function start(url = '/timeline') {

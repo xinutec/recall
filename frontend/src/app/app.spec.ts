@@ -29,8 +29,8 @@ function cap(overrides: Partial<CaptureState> = {}): CaptureState {
 function setup(initial: CaptureState = cap()) {
   const state = new BehaviorSubject<CaptureState>(initial);
   const capture = vi.fn(() => state);
-  // A press answers with the TRANSITIONING shape: desired flipped, confirmed
-  // unchanged — the same shape the next poll returns, so nothing can flap.
+  // A press answers mid-transition: desired flipped, confirmed unchanged, as
+  // the next poll would.
   const pauseCapture = vi.fn(() =>
     of(
       cap({
@@ -58,9 +58,7 @@ function setup(initial: CaptureState = cap()) {
       provideZonelessChangeDetection(),
       provideRouter([]),
       { provide: RecallApi, useValue: { capture, pauseCapture, resumeCapture } },
-      // The shell starts the update check, so SwUpdate has to resolve here.
-      // `enabled: false` gives the real class in its disabled state, which is
-      // what a test runner is: no worker registered, no update to activate.
+      // The shell starts the update check; disabled, as with no worker.
       provideServiceWorker('ngsw-worker.js', { enabled: false }),
     ],
   });
@@ -88,9 +86,7 @@ describe('App', () => {
     for (const label of ['Timeline', 'Sessions', 'Check', 'Search']) {
       expect(navText).toContain(label);
     }
-    // Ask, Compare and Train were cut with the product's scope (architecture.md).
-    // A tab outliving its route is silent: the router falls through to '' and the
-    // page just looks wrong, so name each cut one here.
+    // Removed screens: a tab outliving its route falls through to '' silently.
     expect(navText).not.toContain('Ask');
     expect(navText).not.toContain('Train');
   });
@@ -108,7 +104,6 @@ describe('App', () => {
     );
     expect(texts.some((t) => t.includes('Labels'))).toBe(true);
     expect(texts.some((t) => t.includes('Compare'))).toBe(false);
-    // The stamp makes a stale cache visible at a glance, on every screen size.
     expect(overlay?.querySelector('.version')?.textContent).toContain(BUILD_INFO.sha);
   });
 
@@ -121,12 +116,11 @@ describe('App', () => {
 
   it('resume-by leads with a yyyy-mm-dd date before the time', () => {
     const { c } = setup(cap({ running: false, pausedUntil: '2026-06-17T20:00:00Z' }));
-    // Shape, not exact value — the local date/time depend on the runner's timezone.
+    // The shape only: the value depends on the runner's timezone.
     expect(c.resumeBy()).toMatch(/^\d{4}-\d{2}-\d{2} \S/);
   });
 
   it('resume-in shows the remaining hours/minutes', () => {
-    // Timezone-independent (a duration, not a wall clock): a far-future deadline.
     const { c } = setup(
       cap({
         running: false,
@@ -141,20 +135,19 @@ describe('App', () => {
   });
 
   it('a press flips to the desired state as transitioning — no flap possible', () => {
-    // The flap seen live 2026-07-16: POST said "paused" (intent), the next poll
-    // said "running" (the mic's stale report), and the banner blinked. Desired
-    // and confirmed are now separate fields, rendered as an explicit "Pausing…".
+    // Once, the press said paused and the next poll the mic's stale running,
+    // and the banner blinked between them.
     const { fixture, c, pauseCapture } = setup();
     expect(c.paused()).toBe(false);
     c.pauseCapture();
     expect(pauseCapture).toHaveBeenCalled();
-    expect(c.paused()).toBe(true); // the banner follows the desired state…
-    expect(c.transitioning()).toBe(true); // …flagged as awaiting confirmation
+    expect(c.paused()).toBe(true);
+    expect(c.transitioning()).toBe(true);
     expect(c.transitionLabel()).toBe('Pausing');
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('.paused-banner.transitioning')?.textContent).toContain('Pausing');
-    // the settled paused banner (with its resume buttons) is not shown yet
+    // Not yet the settled banner with its resume buttons.
     expect(el.querySelector('.paused-banner .rec-dot')).toBeFalsy();
   });
 
@@ -167,9 +160,7 @@ describe('App', () => {
   });
 
   it('a transition is abortable: the toggle stays enabled to change your mind', () => {
-    // Intent is cheap and idempotent — pressing the opposite action mid-transition
-    // just overwrites the desired state. Freezing the buttons was the old flap
-    // fix overshooting; only the label needed to be honest.
+    // Pressing the opposite mid-transition just replaces the desired state.
     const { fixture, c } = setup();
     c.pauseCapture();
     expect(c.transitioning()).toBe(true);

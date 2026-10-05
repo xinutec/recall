@@ -1,9 +1,6 @@
 import { test, type Route } from '@playwright/test';
-// The fleet-shared layout harness, consumed as the published @xinutec/ui-harness
-// package (source repo ~/Code/ui-harness). It renders the app in a real browser at
-// true phone geometry and asserts the failure classes that read fine in source and
-// only show in a painted layout — text collisions, horizontal overflow, controls
-// occluded behind the fixed bottom nav, and icons squeezed below their own glyph.
+// Checks that only a painted layout shows: overlapping text, horizontal
+// overflow, controls behind the bottom nav, clipped icons.
 import {
   expectViewportIsPhone,
   expectIconFontLoaded,
@@ -26,9 +23,8 @@ import type {
   VocabularyList,
 } from '../src/app/models';
 
-// Hermetic: every /api call is mocked — no real data, no backend. A rich session
-// (multiple speakers, a long turn that would overflow a phone column) so the layout
-// checks have real content to measure.
+// Every /api call is mocked, with enough content (several speakers, long
+// turns) to stress a phone column.
 function turn(
   id: number,
   speaker: string,
@@ -58,17 +54,15 @@ function turn(
   };
 }
 
-// Synthetic speakers/content only — no real names (see scripts/check-pii.sh).
+// Invented names only (scripts/check-pii.sh).
 const turns = [
   turn(1, 'Oskar', 'SPEAKER_01', 'I have already made a list of errands for the afternoon.'),
   turn(2, 'Oskar', 'SPEAKER_01', 'The first one is picking up a parcel from the depot.'),
   turn(3, 'Alex', 'SPEAKER_02', 'Let us go through them one by one so nothing is missed.'),
 ];
 
-// The same session before the refine pass lands: provisional turns put the screen in
-// its "Still being finalized" state, whose banner carries a much longer sentence than
-// the finalized one. That length is the variable that clips the icon, so the state has
-// to be rendered to be checked.
+// Live turns only: the "Still being finalized" banner, whose longer sentence is
+// what clipped its icon.
 const provisionalTurns = [
   turn(1, 'Oskar', 'SPEAKER_01', 'I have already made a list of errands.', 'live'),
 ];
@@ -120,11 +114,8 @@ test('session screen holds phone geometry with no overflow, overlap, or occlusio
   await expectIconFontLoaded(page); // Material Icons bundled, not tofu boxes
   await expectNoHorizontalOverflow(page, testInfo);
   await expectNoTextOverlaps(page, testInfo);
-  // The bottom nav is fixed — nothing tappable may hide behind it. Exempt the
-  // transcript `.t` spans: they're inline click-to-select text (role=button), and
-  // a wrapped inline span's bounding-box centre lands on its own <p class="body">
-  // parent, which the centre-point occlusion model reads as occluded. The check
-  // still guards the real block controls (nav, pause/resume, voice actions).
+  // `.t` spans are exempt: a wrapped inline span's centre lands on its parent
+  // paragraph, which the probe reads as occluding it.
   await expectNoOccludedControls(page, testInfo, 'button, a[href], [role="button"]', ['.t']);
   await expectNoClippedIcons(page, testInfo);
 });
@@ -142,10 +133,7 @@ test('finalizing banner keeps its icon whole', async ({ page }, testInfo) => {
 });
 
 // ---------------------------------------------------------------------------
-// Every routed screen, not just the session view (#1342's UI-quality pass).
-// Nine screens had no painted evidence at phone geometry; the checks below are
-// the same failure classes, per screen, over rich-enough mocked data that the
-// phone column is actually stressed (a long turn, a long label, a long span).
+// The same checks on every other routed screen (#1342).
 
 const LONG =
   'a considerably longer stretch of household conversation that would overflow a phone column if the layout ever stopped wrapping it correctly';
@@ -228,9 +216,8 @@ for (const { path, anchor } of screens) {
     await expectIconFontLoaded(page);
     await expectNoHorizontalOverflow(page, testInfo);
     await expectNoTextOverlaps(page, testInfo);
-    // :not([disabled]): a disabled Material button has pointer-events none, so
-    // the centre-point probe reads its own ancestor and calls it occluded — but a
-    // control that cannot be tapped anyway has no occlusion to answer for.
+    // A disabled button has pointer-events none, so the probe would read it as
+    // occluded by its ancestor.
     await expectNoOccludedControls(
       page,
       testInfo,
@@ -241,9 +228,9 @@ for (const { path, anchor } of screens) {
   });
 }
 
-// A service worker can serve an index naming a bundle a later deploy removed, and
-// the app's own update handling is inside that bundle (#1825). The recovery is
-// inline in `src/index.html`; this is the check that it is there and works.
+// A service worker can serve an index naming a bundle a later deploy removed,
+// and the update handling is inside that bundle (#1825). The recovery is inline
+// in `src/index.html`.
 test('a bundle a deploy removed reloads into the app, not a blank screen', async ({ page }) => {
   await expectRecoversFromMissingBundle(page, '/', 'h2:text-is("Timeline")');
 });

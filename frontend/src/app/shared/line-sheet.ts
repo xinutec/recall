@@ -31,7 +31,8 @@ export interface LineSheetData {
 
 export interface Word {
   readonly text: string;
-  /** Character offsets, end exclusive. Characters, not UTF-16 units: the server counts `char`s. */
+  /** Code-point offsets, end exclusive, as the server counts them; not UTF-16
+   *  units. */
   readonly start: number;
   readonly end: number;
 }
@@ -59,8 +60,8 @@ type Mode = 'main' | 'part' | 'edit' | 'mics';
 export type LineSheetResult = 'wrote' | 'hidden';
 
 /** Everything to do with one line: hear it, say who said it, give part of it to
- * someone else, say its words are right, fix them or say nobody spoke, compare the mics. Closes with
- * a {@link LineSheetResult} after a write. */
+ * someone else, confirm or fix its words, say nobody spoke, compare the mics.
+ * Closes with a {@link LineSheetResult} after a write. */
 @Component({
   selector: 'app-line-sheet',
   imports: [

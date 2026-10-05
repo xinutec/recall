@@ -3,28 +3,23 @@ import { Injectable, inject, signal } from '@angular/core';
 import { catchError, throwError } from 'rxjs';
 
 /**
- * Sign-in state for the Nextcloud SSO wall.
- *
- * Only relevant on the fleet deployment, where the server gates the browsing API
- * (`/api/*`) behind a Nextcloud session. The open LAN UI never returns 401, so
- * `needsSignIn` stays false there and no wall is ever shown — this is inert unless the
- * server has the gate up.
+ * Sign-in state for the Nextcloud sign-in wall. Inert unless the server gates
+ * `/api/*`.
  */
 @Injectable({ providedIn: 'root' })
 export class AuthState {
-  /** Flipped true the first time a gated API call comes back 401. */
+  /** Set when an API call first comes back 401. */
   readonly needsSignIn = signal(false);
 
-  /** Full-page link to the server's login route, returning to the current view.
-   * A plain href (not routerLink) on purpose: `/login` is a server redirect out to
-   * Nextcloud and back, not an in-app route. */
+  /** The server's login route, returning here. A plain href: `/login`
+   * redirects out to Nextcloud and back. */
   loginUrl(): string {
     const returnTo = location.pathname + location.search;
     return `/login?return_to=${encodeURIComponent(returnTo)}`;
   }
 }
 
-/** Raise the sign-in wall when the server rejects a browsing call as unauthenticated. */
+/** Raises the sign-in wall on a 401 from `/api/`. */
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const auth = inject(AuthState);
   return next(req).pipe(

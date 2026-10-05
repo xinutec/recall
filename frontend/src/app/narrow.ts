@@ -1,20 +1,15 @@
 /**
- * Reading a value that came from outside the app — a `catch` binding, a fetch
- * body — without asserting what it is.
- *
- * `x as Shape` is a claim, not a check: it tells the compiler what arrived and
- * then never looks. When the claim is wrong the failure surfaces far from the
- * line that made it — as `undefined` where the types promised a value, or as
- * "[object Object]" where they promised a string. Nothing in the toolchain can
- * catch that, because the assertion is the thing that lied to it.
+ * Reading a value from outside the app (a `catch` binding, a fetch body) by
+ * checking it, not asserting it: `x as Shape` is never checked, so a wrong
+ * guess fails far from where it was made.
  */
 
-/** A value that can be indexed by string — i.e. worth asking about a field. */
+/** A value that can be indexed by string. */
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-/** The named field, only if it really is a non-empty string. */
+/** The named field, if it is a non-empty string. */
 export function stringField(value: unknown, key: string): string | null {
   if (!isRecord(value)) return null;
   const field = value[key];
