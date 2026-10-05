@@ -73,7 +73,8 @@ pub fn source_dir(root: &std::path::Path, source: &str) -> std::path::PathBuf {
 
 pub fn open(root: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(root.join("ingest.sqlite"))?;
-    conn.busy_timeout(Duration::from_secs(5))?;
+    // As `work::open_write`: at 5 s, a burst of uploads answered 500.
+    conn.busy_timeout(Duration::from_secs(30))?;
     // WAL: readers and a recorder's upload never block each other.
     conn.pragma_update(None, "journal_mode", "WAL")?;
     crate::ingest_schema::ensure(&conn)?;

@@ -345,3 +345,45 @@ async fn liveness_ignores_a_segment_measured_as_silent() {
     );
     let _ = &h.dir;
 }
+
+/// A delivery waits out another writer rather than failing "database is
+/// locked": the lock is held 7 s, past the 5 s that answered eleven uploads
+/// with 500s in one burst.
+#[tokio::test]
+async fn a_delivery_waits_for_another_writer_instead_of_failing() {
+    let h = harness(None, None);
+    drop(recalld::store::open(h.dir.path()).expect("schema"));
+    let held = std::time::Duration::from_secs(7);
+    let (locked, wait) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn({
+        let root = h.dir.path().to_owned();
+        move || {
+            let conn = recalld::store::open(&root).expect("open");
+            conn.execute_batch("BEGIN IMMEDIATE")
+                .expect("take the lock");
+            locked.send(()).expect("signal");
+            std::thread::sleep(held);
+            conn.execute_batch("COMMIT").expect("release");
+        }
+    });
+    wait.recv().expect("the lock is held");
+
+    let started = std::time::Instant::now();
+    let (status, _) = send(
+        &h.app,
+        put("usb", "usb-20260905T120000.flac", b"bytes", None),
+    )
+    .await;
+    let waited = started.elapsed();
+    holder.join().expect("holder");
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "contention must delay a delivery, not fail it"
+    );
+    assert!(
+        waited > std::time::Duration::from_secs(5),
+        "answered in {waited:?}, so it never met the lock held for {held:?}"
+    );
+}
