@@ -16,8 +16,7 @@ use axum::routing::{delete, get, patch, post, put};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// A segment is ~60 s of mono FLAC — single-digit MB. The cap is generous
-/// headroom over that, not a promise to accept arbitrary uploads.
+/// A segment is ~60 s of mono FLAC, single-digit MB; a meeting upload tens.
 pub const DEFAULT_MAX_BODY: usize = 64 * 1024 * 1024;
 
 pub struct Config {
@@ -29,17 +28,13 @@ pub struct Config {
     /// The read gate (listing, blobs). `None` = open, same pattern.
     pub read_token: Option<String>,
     pub max_body_bytes: usize,
-    /// The browsing plane's SSO gate. `None` = the browsing routes are not
-    /// mounted at all.
-    ///
-    /// ⚠ Unlike the other credentials here, absent means unmounted, not open:
-    /// these routes serve private transcripts.
+    /// The browsing plane's SSO gate. `None` = not mounted (not open, unlike
+    /// the tokens above): these routes serve private transcripts.
     pub webauth: Option<webauth::GateState>,
     /// The Mac→fleet sync plane's shared secret. `None` = those routes are not
     /// mounted: they carry capture control and must never answer open.
     pub sync_token: Option<String>,
-    /// The built Angular app. `None` = not served (the default, and what every
-    /// test and dev run uses).
+    /// The built Angular app. `None` = not served.
     pub frontend: Option<PathBuf>,
     /// Peers whose `X-Real-IP` the capture audit believes: isis's front door,
     /// which connects from the node for every caller. Empty = believe nobody.
@@ -96,11 +91,8 @@ fn browsing(
             "/api/conversations",
             get(conversations::conversations_route),
         )
-        // Playback shares reads' state and its read-only connection: a clip is a
-        // read of the meaning plane plus a read of the audio file.
         .route("/api/audio/{id}", get(audio::audio_route))
         .route("/api/audio-span", get(audio::audio_span_route))
-        // Reads keep the read-only handle; writes take their own connection.
         .route(
             "/api/vocabulary",
             get(work::vocabulary_route).post(work::vocabulary_add_route),
@@ -160,8 +152,7 @@ fn browsing(
             get(sessions::transcript_route),
         )
         .with_state(read)
-        // The pause control. Its own state because it needs the gate config, to
-        // record who pressed the button on routes that require no login.
+        // Its own state: it needs the gate config to record who pressed pause.
         .merge(
             Router::new()
                 .route("/api/capture", get(capture::status_route))
@@ -173,7 +164,6 @@ fn browsing(
                     trusted_proxies,
                 })),
         )
-        // Client reports carry their own state (a log path), not the database's.
         .merge(
             Router::new()
                 .route("/api/log", post(reports::log_route))

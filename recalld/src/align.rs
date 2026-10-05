@@ -1,27 +1,19 @@
-//! Assign a whole-block transcription to diarized speakers, by word timing.
-//!
-//! The block is transcribed once, with full context so language detection and
-//! anti-hallucination decoding work, and diarized separately; each word then
-//! goes to whoever was speaking at its midpoint.
+//! Assign a block's transcription to diarized speakers: each word goes to
+//! whoever was speaking at its midpoint.
 //!
 //! Word timestamps and diarization boundaries are both ~100 ms approximate, so
-//! a word at a speaker boundary, or a one-word backchannel, often lands in the
-//! wrong span. Runs shorter than `MIN_TURN_S` are therefore absorbed into a
-//! neighbour: real turns are longer than that.
+//! runs shorter than `MIN_TURN_S` are absorbed into a neighbour.
 
 use serde::Deserialize;
 use std::cmp::Ordering;
 
-/// Runs shorter than this are alignment artefacts (a jitter-flipped word, a
-/// backchannel), folded into a neighbour rather than kept as their own turn.
+/// Runs shorter than this are jitter or a backchannel.
 pub const MIN_TURN_S: f64 = 0.5;
 
 /// One word with its timing, as the `asr` shim reports it.
 ///
-/// Stored results use two spellings: `text` with `probability`, and older
-/// mlx-whisper output with `word` and no probability. Hence the alias and the
-/// default. A parser that missed the old spelling would align no words, which
-/// looks exactly like a silent block.
+/// Older mlx-whisper results spell `text` as `word` and have no probability;
+/// missing that would align no words, which looks like a silent block.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Word {
     pub start: f64,
@@ -44,14 +36,12 @@ impl From<&audiocore::shim::asr::Word> for Word {
     }
 }
 
-/// Probability for a word that has none. Not zero: an absent score means
-/// "not measured", and zeros would drag the turn's mean confidence down.
+/// Probability for an unscored word. Not zero, which would drag the turn's
+/// mean down for something not measured.
 const fn unscored() -> f64 {
     1.0
 }
 
-/// A contiguous span attributed to one relative speaker, as the `voices` shim
-/// reports it. Clip-relative, like the words.
 pub use audiocore::shim::voices::SpeakerTurn;
 
 /// A run of consecutive words attributed to one relative speaker.
@@ -63,11 +53,10 @@ pub struct AlignedTurn {
     pub text: String,
     /// Mean word probability across the run.
     pub confidence: f64,
-    /// The run's words, kept for audio-exact boundary edits later.
+    /// Kept for audio-exact boundary edits.
     pub words: Vec<Word>,
 }
 
-/// A mutable run of consecutive words by one speaker, during smoothing.
 struct Run {
     speaker: String,
     words: Vec<Word>,
@@ -86,14 +75,12 @@ fn total(a: f64, b: f64) -> Ordering {
     a.partial_cmp(&b).unwrap_or(Ordering::Equal)
 }
 
-/// The relative speaker talking at `t`: the turn containing it, or — if `t`
-/// falls in a gap between turns — the nearest one by edge distance.
+/// The turn containing `t`, else the nearest by edge distance.
 fn speaker_at(t: f64, turns: &[SpeakerTurn]) -> Option<&str> {
     if let Some(turn) = turns.iter().find(|tr| tr.start <= t && t <= tr.end) {
         return Some(&turn.speaker);
     }
-    // `min_by` keeps the first of equal minima. The tie-break shows when a word
-    // sits exactly between two turns; `tests/integration/align_parity.rs` pins it.
+    // Ties go to the first turn; `tests/integration/align_parity.rs` pins it.
     turns
         .iter()
         .min_by(|a, b| {
@@ -104,7 +91,6 @@ fn speaker_at(t: f64, turns: &[SpeakerTurn]) -> Option<&str> {
         .map(|turn| turn.speaker.as_str())
 }
 
-/// Merge adjacent runs that share a speaker into one.
 fn coalesce(runs: Vec<Run>) -> Vec<Run> {
     let mut merged: Vec<Run> = Vec::with_capacity(runs.len());
     for run in runs {
@@ -118,10 +104,8 @@ fn coalesce(runs: Vec<Run>) -> Vec<Run> {
     merged
 }
 
-/// Absorb sub-`min_turn_s` runs into a neighbour and re-coalesce, so a word or
-/// two flipped by timestamp jitter (or a backchannel) does not become its own
-/// turn. The shortest offender is relabelled to its longer neighbour each pass,
-/// until every run clears the threshold (or only one remains).
+/// Relabel the shortest run under `min_turn_s` to its longer neighbour, until
+/// every run clears it or one remains.
 fn smooth(mut runs: Vec<Run>, min_turn_s: f64) -> Vec<Run> {
     while runs.len() > 1 {
         let Some(index) = runs
@@ -157,12 +141,9 @@ fn smooth(mut runs: Vec<Run>, min_turn_s: f64) -> Vec<Run> {
     runs
 }
 
-/// Group `words` into per-speaker runs by which diarized turn each word's
-/// midpoint falls in, then smooth away sub-`min_turn_s` turns.
-///
-/// The text is the words joined (Whisper words carry their own leading spaces).
-/// `min_turn_s` is a parameter so the attribution eval can sweep it; production
-/// passes `MIN_TURN_S`.
+/// Group `words` into per-speaker runs and smooth them. `min_turn_s` is a
+/// parameter so the attribution eval can sweep it; production passes
+/// `MIN_TURN_S`.
 #[must_use]
 pub fn assign_words_to_speakers(
     words: &[Word],

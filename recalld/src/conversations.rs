@@ -1,26 +1,18 @@
-//! Conversation and moment folding: the structure that makes an always-on
-//! stream of turns browsable.
+//! Folding a stream of turns into something browsable.
 //!
-//! Two groupings, in order. A *conversation* is a maximal run with no silence
-//! longer than `gap` between turns. Inside one, each line shown is a *moment*,
-//! carrying the other microphones' versions of the same speech, since every
-//! source transcribes the room independently.
-//!
-//! The folding is pure (no database): it reads only spans, sources and
-//! confidences, so tests construct turns directly.
+//! A *conversation* is a maximal run with no silence longer than `gap`. Inside
+//! one, each shown line is a *moment*, carrying the other microphones' versions
+//! of the same speech.
 
 use crate::same_speech::{overlap, same_span, seconds as seconds_between};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
-/// A conversation breaks after a silence longer than this. Five minutes is a
-/// starting point, exposed as the `gap` query parameter for calibration.
+/// A conversation breaks after a silence longer than this; the `gap` query
+/// parameter overrides it.
 pub const DEFAULT_GAP_SECONDS: f64 = 300.0;
 
-/// A turn reduced to what folding reads, with its instants parsed once.
-///
-/// Parsed up front because `best_colocated_guess` compares spans a quadratic
-/// number of times, and a parse failure must not surface halfway through a fold.
+/// A turn reduced to what folding reads, its instants parsed once.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Turn {
     pub id: i64,
@@ -35,14 +27,8 @@ pub struct Turn {
     pub audio_segment_id: Option<i64>,
 }
 
-/// Split chronologically-ordered turns into conversations on silence gaps.
-///
-/// Returns index groups into `turns`, which must be sorted ascending by start
-/// and already filtered to current, non-hidden turns.
-///
-/// Silence is measured from the running maximum end, not the previous turn's
-/// end: turns from several mics overlap, and a turn that finished early must not
-/// create a gap.
+/// Split turns sorted by start into conversations, as index groups. Silence is
+/// measured from the running maximum end: turns from several mics overlap.
 pub fn segment_conversations(turns: &[Turn], gap_seconds: f64) -> Vec<Vec<usize>> {
     let mut conversations = Vec::new();
     let mut current: Vec<usize> = Vec::new();
@@ -63,25 +49,20 @@ pub fn segment_conversations(turns: &[Turn], gap_seconds: f64) -> Vec<Vec<usize>
     conversations
 }
 
-/// One line as shown: a line of the mic that heard its stretch best, or a line
-/// only other mics heard, with every other mic's version of it.
+/// One shown line, with the other mics' versions of it (and its own mic's
+/// second copy) for the compare view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Moment {
-    /// The shown line.
     pub primary: usize,
-    /// The other mics' versions of it, and its mic's second copy, for the
-    /// compare view.
     pub alternates: Vec<usize>,
 }
 
-/// Fold one conversation's turns into moments, one per shown line.
+/// Fold one conversation's turns into moments.
 ///
-/// First a merge-overlapping-intervals sweep cuts the conversation into
-/// stretches of overlapping speech, and each stretch is shown from the mic
-/// that heard it best ([`spine`]). Every other line then goes with the shown
-/// line it overlaps most: phone clocks lag a few seconds, so another mic's
-/// version straddles two sentences and must land in one. A line that overlaps
-/// no shown line is speech that mic missed, and is shown too, once.
+/// The conversation is cut into stretches of overlapping speech, each shown
+/// from the mic that heard it best ([`spine`]). Every other line goes with the
+/// shown line it overlaps most (phone clocks lag a few seconds); a line that
+/// overlaps none is speech the shown mic missed, and is shown too.
 pub fn cluster_moments(turns: &[Turn], group: &[usize]) -> Vec<Moment> {
     let mut stretches: Vec<Vec<usize>> = Vec::new();
     let mut current: Vec<usize> = Vec::new();
@@ -141,7 +122,7 @@ fn moments_of(turns: &[Turn], stretch: &[usize]) -> Vec<Moment> {
         }
     }
     // What the shown mic missed: the best-heard version is shown, the others
-    // of the same span go with it. Stable, so equals keep their order.
+    // of its span go with it.
     missed.sort_by(|&a, &b| quality(turns, &[b]).total_cmp(&quality(turns, &[a])));
     let mut found: Vec<Moment> = Vec::new();
     for other in missed {
@@ -165,14 +146,12 @@ fn moments_of(turns: &[Turn], stretch: &[usize]) -> Vec<Moment> {
     moments
 }
 
-/// How long a turn lasts, at least a millisecond so a zero-length turn still
-/// weighs something.
+/// At least a millisecond, so a zero-length turn still weighs something.
 fn duration(turn: &Turn) -> f64 {
     seconds_between(turn.start, turn.end).max(0.001)
 }
 
-/// ASR confidence weighted by duration, a missing score counting as zero: how
-/// well these turns were heard, whatever their number.
+/// ASR confidence weighted by duration; a missing score counts as zero.
 fn quality(turns: &[Turn], indices: &[usize]) -> f64 {
     let total: f64 = indices.iter().map(|&i| duration(&turns[i])).sum();
     let heard: f64 = indices
@@ -208,13 +187,9 @@ fn covered(turns: &[Turn], indices: &[usize]) -> f64 {
     total
 }
 
-/// One mic's turns with a second copy of the same span set aside.
-///
-/// A phone's minute arrives twice (the Mac's cut of its stream and the
-/// phone's own copy, the same samples) and both are transcribed, so one mic
-/// can hold two clips over the same seconds. A clip is a copy when its span is
-/// the [`same_span`] as a clip kept already; the better-heard clip is kept
-/// first.
+/// One mic's turns split into shown and copies. A phone's minute arrives twice
+/// (the Mac's cut of its stream and the phone's own file), and both are
+/// transcribed; of clips with the [`same_span`], the better-heard is shown.
 fn without_copies(turns: &[Turn], indices: &[usize]) -> (Vec<usize>, Vec<usize>) {
     let mut clips: Vec<(Option<i64>, Vec<usize>)> = Vec::new();
     for &i in indices {
@@ -229,7 +204,6 @@ fn without_copies(turns: &[Turn], indices: &[usize]) -> (Vec<usize>, Vec<usize>)
         let end = members.iter().map(|&i| turns[i].end).max();
         start.zip(end)
     };
-    // Stable, so equal clips keep the order they were heard in.
     clips.sort_by(|a, b| quality(turns, &b.1).total_cmp(&quality(turns, &a.1)));
     let mut kept: Vec<(DateTime<Utc>, DateTime<Utc>)> = Vec::new();
     let (mut shown, mut copies) = (Vec::new(), Vec::new());
@@ -251,7 +225,7 @@ fn without_copies(turns: &[Turn], indices: &[usize]) -> (Vec<usize>, Vec<usize>)
 /// The stretch's shown lines, from the mic that heard it best, and the rest:
 /// the other mics' lines and the shown mic's second copies.
 fn spine(turns: &[Turn], stretch: &[usize]) -> (Vec<usize>, Vec<usize>) {
-    // First-appearance order of each source; the tie rule below depends on it.
+    // First-appearance order; ties below go to the first.
     let mut order: Vec<Option<&str>> = Vec::new();
     let mut by_source: HashMap<Option<&str>, Vec<usize>> = HashMap::new();
     for &index in stretch {
@@ -266,13 +240,10 @@ fn spine(turns: &[Turn], stretch: &[usize]) -> (Vec<usize>, Vec<usize>) {
         .map(|&source| (source, without_copies(turns, &by_source[&source])))
         .collect();
 
-    // Spine = the mic that heard the stretch best: its duration-weighted
-    // confidence, scaled by how much of the stretch it covers, so neither saying
-    // more nor catching a clear fragment wins. Ties go to more turns, the finer
-    // speaker split.
-    //
-    // ⚠ On a full tie the first source wins, hence the strict `>` loop:
-    // `max_by_key` would keep the last.
+    // The mic that heard the stretch best: duration-weighted confidence times
+    // coverage, so neither saying more nor a clear fragment wins. Ties go to
+    // more turns (the finer speaker split), then the first source; hence a
+    // loop, as `max_by_key` keeps the last.
     let span = covered(turns, stretch);
     let key = |source: Option<&str>| {
         let shown = &split[&source].0;
@@ -310,16 +281,12 @@ fn spine(turns: &[Turn], stretch: &[usize]) -> (Vec<usize>, Vec<usize>) {
     (primary, rest)
 }
 
-/// The most confident speaker guess for a shown line, among it and its
-/// time-overlapping alternates (the same speech caught by other microphones).
-/// The line is chosen for the cleanest transcription, but another mic may
-/// carry a stronger voiceprint match.
+/// The speaker guess for a shown line, helped by its overlapping alternates:
+/// another mic may carry a stronger voiceprint match.
 ///
-/// ⚠ A missing guess is filled from the most confident overlapping version; an
-/// existing guess only has its score raised by mics naming the same person, and
-/// is never replaced. Phone clocks lag by a variable few seconds, so overlap
-/// alone does not prove the same speaker. Only the auto guess is refined, never
-/// a human label.
+/// A missing guess is filled from the most confident overlap; an existing one
+/// only has its score raised by mics naming the same person, never replaced,
+/// since lagging phone clocks make overlap weak proof of the same speaker.
 pub fn best_colocated_guess(
     turns: &[Turn],
     line: usize,
@@ -334,8 +301,7 @@ pub fn best_colocated_guess(
     let (mut guess, mut score) = (turn.speaker_guess.clone(), turn.speaker_score);
     match &guess {
         None => {
-            // Nothing of our own: fill from the most confident co-located
-            // version; the first on a tie, as in [`spine`].
+            // The first on a tie.
             let mut best: Option<&&Turn> = None;
             for alt in &overlapping {
                 let strength = alt.speaker_score.unwrap_or(-1.0);
@@ -405,8 +371,7 @@ pub struct ConversationsOut {
     pub has_more: bool,
 }
 
-/// A card is headed by its first reasonably-confident line, so a low-confidence
-/// guess does not become the thing a person reads first.
+/// A card is headed by its first line at least this confident.
 const PREVIEW_MIN_CONFIDENCE: f64 = 0.5;
 
 /// Distinct values in first-seen order, skipping absent ones.
@@ -420,10 +385,8 @@ fn distinct<'a>(values: impl Iterator<Item = Option<&'a str>>) -> Vec<String> {
     seen
 }
 
-/// Reduce stored rows to the fields folding reads, parsing each instant once.
-///
-/// A row whose stored time will not parse is dropped, not defaulted: an epoch
-/// would create a huge gap and split the conversation.
+/// A row whose time will not parse is dropped, not defaulted: an epoch would
+/// split the conversation.
 fn turns_of(segments: &[reads::Segment]) -> (Vec<Turn>, Vec<usize>) {
     let mut turns = Vec::with_capacity(segments.len());
     let mut kept = Vec::with_capacity(segments.len());
@@ -451,8 +414,7 @@ fn turns_of(segments: &[reads::Segment]) -> (Vec<Turn>, Vec<usize>) {
     (turns, kept)
 }
 
-/// The index in `indices` whose `pick` value is largest, keeping the first on a
-/// tie so the choice is deterministic.
+/// The index whose `pick` is the extreme; the first on a tie.
 fn extreme(
     turns: &[Turn],
     indices: &[usize],
@@ -481,9 +443,8 @@ fn moment_out(
     let row = |i: usize| &segments[kept[i]];
     let line = row(moment.primary);
     let guess = best_colocated_guess(turns, moment.primary, &moment.alternates);
-    // ⚠ Emit the stored text (`reads::iso`), never a re-formatted instant:
-    // chrono trims trailing fraction zeros (.960 for .960000), which would
-    // change every timestamp on the wire.
+    // The stored text, not a reformatted instant: chrono trims trailing zeros
+    // (.960 for .960000), changing every timestamp on the wire.
     MomentOut {
         start: reads::iso(&line.start_utc),
         end: reads::iso(&line.end_utc),
@@ -509,7 +470,6 @@ fn conversation_out(
 ) -> ConversationOut {
     let row = |i: usize| &segments[kept[i]];
     let moments = cluster_moments(turns, group);
-    // What a person reads: the spine's lines, not every mic's copy.
     let shown: Vec<usize> = moments.iter().map(|m| m.primary).collect();
     let preview = shown
         .iter()
@@ -538,11 +498,8 @@ fn conversation_out(
     }
 }
 
-/// Fold a page of stored turns into conversations, ready to serialise.
-///
-/// ⚠ `segments` must be in chronological order, but `reads::recent` answers
-/// newest-first unless paging forward. A reversed page has negative gaps and
-/// folds into one conversation.
+/// Fold a page of stored turns into conversations. `segments` must be oldest
+/// first; `reads::recent` answers newest-first unless paging forward.
 pub fn fold(segments: &[reads::Segment], gap_seconds: f64, limit: i64) -> ConversationsOut {
     let (turns, kept) = turns_of(segments);
     ConversationsOut {
@@ -581,8 +538,7 @@ pub async fn conversations_route(
     axum::extract::State(st): axum::extract::State<Arc<reads::State>>,
     Query(q): Query<ConversationsQuery>,
 ) -> Response {
-    // A malformed cursor is a 400, not a dropped filter, which would silently
-    // serve an unbounded page.
+    // A malformed cursor is a 400, not a silently dropped filter.
     for (name, value) in [("before", &q.before), ("after", &q.after)] {
         if let Some(value) = value
             && DateTime::parse_from_rfc3339(value).is_err()
@@ -604,8 +560,6 @@ pub async fn conversations_route(
                 hidden: q.hidden,
             },
         )?;
-        // Forward paging reads oldest-first; every other page is newest-first
-        // and is reversed before folding.
         if q.after.is_none() {
             segments.reverse();
         }

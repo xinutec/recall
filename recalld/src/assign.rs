@@ -1,17 +1,12 @@
 //! Assigning a span of the transcript to a speaker.
 //!
-//! Changing who-said-what is one operation: assign a text span, inside a turn
-//! or across several with partial edges, to a name. The turns are split at the
-//! span's edges and the pieces inside take the name. The frontend coalesces
-//! same-speaker neighbours, so merging needs no surgery of its own.
+//! One operation: assign a text span, inside a turn or across several, to a
+//! name. Turns are split at the span's edges and the pieces inside take the
+//! name; the frontend coalesces same-speaker neighbours. A split hides the
+//! original turn rather than deleting it.
 //!
-//! Splitting hides the original turn (`hidden_reason`) rather than deleting it,
-//! so a wrong split is recoverable. Nothing here removes a row.
-//!
-//! ⚠ Every offset is a character index, never a byte one: the frontend counts
-//! UTF-16 units, which match `char`s for BMP text. Byte arithmetic on a turn
-//! with an accented character would cut in the wrong place or panic
-//! mid-character, so everything below works on `Vec<char>`.
+//! Offsets are character indices, not bytes: the frontend counts UTF-16 units,
+//! which match `char`s for BMP text.
 
 use crate::turn_store::{self, HiddenReason, NewTurn, Provenance, Stage};
 use audiocore::instant::Stamp;
@@ -33,11 +28,10 @@ crate::statements! {
 }
 
 /// Floor on a split piece's duration, so a collapsed cut never makes a
-/// zero-length, audio-less turn (a word that aligned to no audio).
+/// zero-length turn.
 const MIN_PIECE_MS: i64 = 50;
 
-/// One word with its turn-relative timing, as stored: `{s,e,w}`. No
-/// `probability`: the stored shape does not carry one.
+/// One word with its turn-relative timing, as stored: `{s,e,w}`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct Word {
     pub s: f64,
@@ -45,7 +39,6 @@ pub struct Word {
     pub w: String,
 }
 
-/// The turn a split reads and rewrites.
 #[derive(Debug, Clone)]
 pub struct Turn {
     pub id: i64,
@@ -73,9 +66,8 @@ pub struct Piece {
     pub words: Option<Vec<Word>>,
 }
 
-/// Move `at` to the nearest space, so a split never bisects a word.
-///
-/// Operates on characters. Ties go left.
+/// Move `at` to the nearest space, so a split never bisects a word. Ties go
+/// left.
 fn snap_to_word(chars: &[char], at: usize) -> usize {
     let at = at.min(chars.len());
     if at == 0 || at == chars.len() {
@@ -114,24 +106,18 @@ fn nearest(values: &[usize], target: usize) -> usize {
     best
 }
 
-/// A float count of seconds as a `Duration`, rounded as Python's
-/// `datetime.timedelta` does so stored timestamps match.
-///
-/// ⚠ Not `(value * 1e6).round()`: the whole seconds come off first and only the
-/// fraction is scaled, then rounded half-to-even. On spans of tens of seconds
-/// the single-multiply form is one microsecond off.
+/// Seconds as a `Duration`, rounded as Python's `timedelta` did so stored
+/// timestamps match: whole seconds first, then the fraction rounded
+/// half-to-even. `(value * 1e6).round()` is a microsecond off on longer spans.
 fn seconds(value: f64) -> Duration {
     let whole = value.trunc();
     let micros = ((value - whole) * 1_000_000.0).round_ties_even() as i64;
     Duration::seconds(whole as i64) + Duration::microseconds(micros)
 }
 
-/// Where each word starts, as a character offset into the turn's text paired
-/// with its turn-relative time, plus a closing boundary.
-///
-/// The words' concatenation carries leading whitespace that `turn.text` does
-/// not, so every offset is shifted back by that lead; otherwise each cut lands
-/// one character late.
+/// Each word's character offset into the turn's text with its turn-relative
+/// start, plus a closing boundary. Offsets are shifted back by the words'
+/// leading whitespace, which `turn.text` lacks.
 fn boundaries(chars: &[char], words: &[Word]) -> Vec<(usize, f64)> {
     let joined: String = words.iter().map(|w| w.w.as_str()).collect();
     let lead = joined.chars().count() - joined.trim_start().chars().count();
@@ -169,9 +155,8 @@ pub fn pieces_of(turn: &Turn, cuts: &[usize], speakers: &[Option<String>]) -> Ve
         out
     };
 
-    // The turn's own edges are exact, but a word's timestamp can sit inside
-    // leading silence or drift, so only interior cuts snap to a word; otherwise
-    // the turn's opening or closing audio would be dropped.
+    // Only interior cuts snap to a word: the turn's edges are exact, and a
+    // word's timestamp can drift into silence and drop the turn's edge audio.
     let at = |char_at: usize| -> DateTime<Utc> {
         if char_at == 0 {
             return turn.start;
@@ -287,8 +272,7 @@ fn load_turn(tx: &Transaction, id: i64) -> rusqlite::Result<Option<Turn>> {
                 speaker_label: r.get(9)?,
                 speaker_cluster: r.get(10)?,
                 provenance: r.get(11)?,
-                // A malformed timings blob degrades to "no timings", which is the
-                // interpolated path — worse cuts, not a failed assignment.
+                // Malformed timings fall back to interpolated cuts.
                 words: raw.and_then(|v| serde_json::from_str(&v).ok()),
             })
         })
@@ -350,7 +334,7 @@ fn recut(
     }
     let pieces = min_width(pieces, turn.start, turn.end);
     if !turn_store::claim(tx, turn_id, &HiddenReason::SplitInto(turn_id))? {
-        // A concurrent split won. This caller must not also split it.
+        // A concurrent split won.
         return Ok(0);
     }
     // Pieces keep the parent's stage, so the UI shows them as it showed the turn.
@@ -389,11 +373,9 @@ pub struct Span {
     pub end_char: usize,
 }
 
-/// Assign a text span to `name`, returning how many turns were touched.
-///
-/// One gesture covers three: the whole of a turn is a reassign, part of one turn
-/// splits that part out, and a span across turns splits the two edges and
-/// relabels everything between.
+/// Assign a text span to `name`, returning how many turns were touched: a
+/// whole turn is relabelled, part of one is split out, and a span across turns
+/// splits the two edges and relabels everything between.
 pub fn assign_span(
     conn: &mut Connection,
     source: &str,
@@ -495,8 +477,6 @@ pub async fn assign_route(
 ) -> Response {
     let name = body.name.trim().to_owned();
     if name.is_empty() {
-        // An empty name would relabel the span to nothing, which reads as a
-        // speaker called "" rather than as unknown.
         return (StatusCode::BAD_REQUEST, "name required").into_response();
     }
     let root = st.root.clone();

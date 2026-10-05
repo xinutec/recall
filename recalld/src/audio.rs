@@ -1,19 +1,11 @@
-//! Playback clips.
+//! Playback clips: one turn's audio, or one span across a run of same-speaker
+//! turns. Each is sliced with ffmpeg and peak-normalised with sox.
 //!
-//! Two routes, both read-only: one turn's audio, and one continuous span across a
-//! run of same-speaker turns. Like [`crate::reads`], this opens `recall.sqlite`
-//! read-only: recalld does not own the meaning plane.
+//! ffmpeg, sox and (for `enhance`) `deep-filter` are runtime dependencies the
+//! Dockerfile installs; a missing one fails only on play.
 //!
-//! Each clip is sliced with ffmpeg and peak-normalised with sox, so a quiet turn
-//! is audible; the archived audio is never touched.
-//!
-//! ⚠ ffmpeg, sox and (for `enhance=true`) `deep-filter` are runtime
-//! dependencies. A missing one fails only when somebody presses play, while
-//! transcripts still serve; the Dockerfile installs all three.
-//!
-//! Padding: a rough turn is a whole phrase, and sliced exactly it has no
-//! lead-in, so it gets a wide window. A precise cutout (diarized, or carrying
-//! word timings) gets a tight one, because widening it would pull in the
+//! A rough turn (a whole phrase) gets a wide window for lead-in; a precise one
+//! (diarized, or with word timings) a tight one, so it does not pull in the
 //! neighbouring speaker.
 
 use rusqlite::Connection;
@@ -31,18 +23,15 @@ crate::statements! {
          WHERE t.id = ?1";
 }
 
-/// Lead-in/-out for a rough whole-phrase turn.
+/// Lead-in/-out for a rough turn.
 const PAD_S: f64 = 1.5;
-/// Minimum length for a rough turn, so even a one-word turn is listenable.
+/// Minimum length for a rough turn.
 const MIN_S: f64 = 5.0;
-/// Safety pad for a precise cutout — the diarization boundary is approximate, so
-/// onsets and offsets would otherwise clip.
+/// Pad for a precise cutout, whose boundaries are still approximate.
 const TIGHT_PAD_S: f64 = 0.2;
 
-/// Widen a `[start, end]` phrase span (seconds within its audio file) for
-/// playback: `pad` on each side, then expanded symmetrically to at least
-/// `minimum`. Start clamps at 0; the end may run past the file, where ffmpeg
-/// simply stops at EOF.
+/// `pad` on each side of a span (seconds into its file), then widened
+/// symmetrically to `minimum`. The end may pass the file; ffmpeg stops at EOF.
 #[must_use]
 pub fn clip_window(phrase_start: f64, phrase_end: f64, pad: f64, minimum: f64) -> (f64, f64) {
     let mut start = phrase_start - pad;
@@ -55,7 +44,7 @@ pub fn clip_window(phrase_start: f64, phrase_end: f64, pad: f64, minimum: f64) -
     (start.max(0.0), end)
 }
 
-/// One turn's placement: which file holds it, and where inside that file.
+/// Which file holds a turn, and where inside it.
 #[derive(Debug, PartialEq)]
 pub struct Placement {
     pub path: PathBuf,
@@ -63,18 +52,13 @@ pub struct Placement {
     /// Seconds from the start of the audio file.
     pub start_s: f64,
     pub end_s: f64,
-    /// A precise cutout, played tight — see the module note.
     pub precise: bool,
 }
 
 /// Where a turn's audio lives, or `None` if it has none.
 ///
-/// Times are offsets from the audio segment's own start: ffmpeg knows nothing
-/// of absolute timestamps.
-///
-/// The offset comes from `SQLite`'s float `julianday`, so it carries roughly
-/// 10 µs of error, far below the millisecond precision `-ss` is formatted to.
-/// Tests comparing these seconds need a tolerance, not equality.
+/// The offsets come from `SQLite`'s float `julianday`, about 10 µs off: below
+/// `-ss`'s millisecond format, but tests need a tolerance.
 pub fn placement(conn: &Connection, transcript_id: i64) -> rusqlite::Result<Option<Placement>> {
     let mut stmt = PLACEMENT.prepare(conn)?;
     let mut rows = stmt.query([transcript_id])?;
@@ -84,8 +68,8 @@ pub fn placement(conn: &Connection, transcript_id: i64) -> rusqlite::Result<Opti
     let asr_model: Option<String> = row.get(4)?;
     let provenance: Option<String> = row.get(5)?;
     let word_timings: Option<String> = row.get(6)?;
-    // Boundaries a diarized pass cut, not the tier: a turn named in place keeps
-    // the transcription's looser ones.
+    // Boundaries a diarized pass cut; a turn named in place keeps the looser
+    // transcription ones.
     let aligned = provenance
         .and_then(|raw| raw.parse::<crate::turn_store::Provenance>().ok())
         .is_some_and(|p| p.is_diarized());
@@ -103,18 +87,13 @@ pub fn placement(conn: &Connection, transcript_id: i64) -> rusqlite::Result<Opti
     }))
 }
 
-/// Slice `[start, end]` out of `src`, optionally denoise, and peak-normalise it,
-/// returning WAV bytes.
+/// Slice `[start, end]` out of `src`, optionally denoise, and peak-normalise
+/// it, returning WAV bytes.
 ///
-/// ffmpeg cuts and sox normalises (`norm -1`), keeping playback loudness
-/// stable.
-///
-/// The optional `enhance` stage sits between them: `deep-filter`
-/// (`DeepFilterNet` on tract, which needs no AVX2, which the fleet lacks)
-/// writes its output under the input's own name in `-o`'s directory, hence the
-/// subdirectory. `-D` compensates the model's lookahead so timestamps stay
-/// aligned with the raw clip. It takes about 3.5 s per 10 s of speech, which is
-/// why the flag defaults off; see docs/architecture.md.
+/// `deep-filter` (`DeepFilterNet` on tract, which needs no AVX2; the fleet
+/// lacks it) writes under the input's name in `-o`'s directory, hence the
+/// subdirectory; `-D` compensates its lookahead. It takes about 3.5 s per 10 s
+/// of speech, so it is opt-in.
 pub fn render(src: &Path, start: f64, end: f64, enhance: bool) -> std::io::Result<Vec<u8>> {
     let dir = tempfile::tempdir()?;
     let cut = dir.path().join("clip.wav");
@@ -155,7 +134,6 @@ pub fn render(src: &Path, start: f64, end: f64, enhance: bool) -> std::io::Resul
     std::fs::read(&norm)
 }
 
-/// The window to play for one turn — the padding rule, applied.
 #[must_use]
 pub fn window_for(p: &Placement) -> (f64, f64) {
     if p.precise {
@@ -165,12 +143,8 @@ pub fn window_for(p: &Placement) -> (f64, f64) {
     }
 }
 
-/// The window for a joined bubble: the first turn's start to the last turn's end,
-/// always tight — a bubble is a run of turns already snapped to one speaker.
-///
-/// `Err(SpanError::CrossesRecordings)` when the two turns are not in the same
-/// file; the UI falls back to per-turn playback rather than being handed a clip
-/// spliced across a gap.
+/// The first turn's start to the last turn's end, tight. Turns in different
+/// files are refused; the UI then plays per turn.
 pub fn span_window(first: &Placement, last: &Placement) -> Result<(f64, f64), SpanError> {
     if first.audio_segment_id != last.audio_segment_id {
         return Err(SpanError::CrossesRecordings);
@@ -178,10 +152,8 @@ pub fn span_window(first: &Placement, last: &Placement) -> Result<(f64, f64), Sp
     Ok(clip_window(first.start_s, last.end_s, TIGHT_PAD_S, 0.0))
 }
 
-/// Why a span could not be rendered as one clip.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SpanError {
-    /// The two turns live in different recordings.
     CrossesRecordings,
 }
 
@@ -197,28 +169,24 @@ use std::sync::Arc;
 pub struct SpanQuery {
     from_id: i64,
     to_id: i64,
-    /// Denoise before normalising — costs seconds of wait; see [`render`].
+    /// Denoise first; see [`render`].
     #[serde(default)]
     enhance: bool,
 }
 
-/// Query for the single-turn route, which takes its id from the path.
 #[derive(Deserialize)]
 pub struct AudioQuery {
-    /// Denoise before normalising — costs seconds of wait; see [`render`].
+    /// Denoise first; see [`render`].
     #[serde(default)]
     enhance: bool,
-    /// Seconds of lead-in and lead-out, replacing the tier's padding: checking
-    /// a line's words needs the one Whisper's early end clipped. At most
-    /// [`MAX_PAD_S`].
+    /// Lead-in and lead-out in seconds, replacing the default padding: checking
+    /// a line's words needs what Whisper's early end clipped.
     pad: Option<f64>,
 }
 
-/// The widest `pad` a caller may ask for: past it the clip is mostly the
-/// neighbouring lines.
+/// Past this the clip is mostly the neighbouring lines.
 const MAX_PAD_S: f64 = 3.0;
 
-/// The window to play for one turn, with the caller's padding if given.
 #[must_use]
 pub fn padded_window(p: &Placement, pad: Option<f64>) -> (f64, f64) {
     match pad.filter(|pad| pad.is_finite()) {
@@ -227,15 +195,10 @@ pub fn padded_window(p: &Placement, pad: Option<f64>) -> (f64, f64) {
     }
 }
 
-/// Why a clip could not be produced.
-///
-/// Errors as data: the HTTP status is decided at the edge, not inside the
-/// picker's query.
 #[derive(Debug)]
 pub enum ClipError {
-    /// The lookup failed. Nothing is known about whether audio exists.
     Db(rusqlite::Error),
-    /// Both turns exist, but they are not one stretch of one recording.
+    /// Both turns exist, but not in one recording.
     CrossesRecordings,
 }
 
@@ -245,11 +208,9 @@ impl From<rusqlite::Error> for ClipError {
     }
 }
 
-/// Render `[start, end)` of one recording as a WAV response.
-///
-/// ⚠ Private, and reached only through [`render_blocking`], because it shells
-/// out to ffmpeg and sox: on the request thread it would stall every other
-/// request, ingest included, for the length of a clip.
+/// Render `[start, end)` of one recording as a WAV response. Reached only
+/// through [`render_blocking`]: it shells out, and on a request thread would
+/// stall every other request.
 fn clip(path: &Path, start: f64, end: f64, enhance: bool) -> Response {
     match render(path, start, end, enhance) {
         Ok(bytes) => ([(header::CONTENT_TYPE, "audio/wav")], bytes).into_response(),
@@ -263,10 +224,8 @@ fn no_audio() -> Response {
 
 pub type Picked = Result<Option<(PathBuf, f64, f64)>, ClipError>;
 
-/// Open the read-only connection, pick a window and render it: the whole of
-/// what an audio route does, and the only caller of `clip`.
-///
-/// ⚠ Must run on the blocking pool; see `clip`.
+/// Open the read-only connection, pick a window and render it. Runs on the
+/// blocking pool.
 pub fn render_blocking(
     root: &Path,
     enhance: bool,
@@ -278,9 +237,8 @@ pub fn render_blocking(
     };
     match pick(&conn) {
         Err(ClipError::Db(err)) => crate::route::faulted("audio query", &err),
-        // 400, not 404: both turns exist, they just are not one clip. The UI
-        // reads this as "fall back to per-turn play", where a 404 would read as
-        // "this bubble has no audio at all".
+        // 400, not 404: the UI falls back to per-turn play, where a 404 would
+        // mean no audio at all.
         Err(ClipError::CrossesRecordings) => {
             (StatusCode::BAD_REQUEST, "span crosses recordings").into_response()
         }
