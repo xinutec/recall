@@ -1,10 +1,6 @@
-//! Every check that reads the archive volume, and the check on the reading
-//! itself.
-//!
-//! Runs in the child process ([`crate::bounded`]): the capture log, the segment
-//! stat walk and the pause marker all live on the archive volume, and any of
-//! them can block indefinitely. Nothing here writes, because an abandoned child
-//! may still be running after the parent gives up on it.
+//! Every check that reads the archive volume, run in the child process
+//! ([`crate::bounded`]): any of these reads can block indefinitely. Nothing
+//! here writes, since an abandoned child may still be running.
 
 use crate::capture::{self, Beat, Recorder};
 use crate::check::{Check, Verdict, check};
@@ -14,39 +10,34 @@ use audiocore::capture_log;
 use chrono::{DateTime, Duration, Utc};
 use std::collections::BTreeMap;
 use std::path::Path;
-/// How far back the speech-loss reconciliation looks.
+
+/// How far back the speech-loss check looks.
 pub fn loss_window() -> Duration {
     Duration::hours(48)
 }
-/// The smallest uncovered active-capture stretch that counts as loss — below
-/// this is the boundary slop of a pause recorded a beat after the last segment,
-/// not real lost speech.
+/// The shortest uncovered stretch that counts as loss; shorter is boundary
+/// slop.
 pub fn loss_min() -> Duration {
     Duration::minutes(2)
 }
-/// The trailing stretch the reconciler never judges: the newest segment (up to
-/// 60s) is still being written, so coverage there is not yet known.
+/// The recent stretch not judged, while its segment may still be written.
 pub fn loss_settle() -> Duration {
     Duration::minutes(10)
 }
 
-/// How long the archive-reading half may take before it counts as not having
-/// answered. A healthy run is ~1.5s; this must stay far under the agent's 300s
-/// `StartInterval`, since launchd starts no new doctor while one is running.
+/// How long the child may take before it counts as not answering. A healthy
+/// run is ~1.5 s; this must stay well under the agent's 300 s interval.
 pub fn archive_bound() -> Duration {
     Duration::seconds(60)
 }
-/// The reading that predicts the bound being hit: anything past a few seconds
-/// means the volume is already contended.
+/// Slower than this, the volume is already contended.
 pub fn archive_slow() -> Duration {
     Duration::seconds(10)
 }
 
-/// Could this machine read its own archive at all, and how long did it take?
-/// Reported by the parent, so it survives a child stuck in disk wait.
-///
-/// Unanswered is `fail`, never `skip`: a skip reads as "not applicable". The
-/// latency is carried as `value` so a slowing volume shows before it wedges.
+/// Did the archive answer, and how fast? Built by the parent, so it is
+/// reported even when the child hangs. No answer fails rather than skips; the
+/// latency is the trend, so a slowing volume shows before it wedges.
 pub fn archive_check(seconds: Option<f64>, detail: &str) -> Check {
     let slow = archive_slow().num_seconds() as f64;
     let expected = format!("the archive read in under {slow:.0}s");
@@ -93,17 +84,13 @@ pub fn archive_check(seconds: Option<f64>, detail: &str) -> Check {
     .build()
 }
 
-/// The file the volume probe reads a page of: the Mac's retired meaning plane,
-/// kept as an archive. Large and never written, so nothing keeps its pages warm.
+/// The file the volume probe reads a page of: the Mac's retired meaning plane.
+/// Large and never written, so its pages are rarely cached.
 pub const PROBE_FILE: &str = "recall.sqlite";
 
-/// One page, the unit this probe is fixed at.
 const PAGE: usize = 4096;
 
-/// A page number under `pages`, varying run to run.
-///
-/// The clock, not a random crate: it only has to be unpredictable to the page
-/// cache.
+/// A page number under `pages` from the clock's nanoseconds, varying by run.
 fn somewhere(pages: u64) -> u64 {
     if pages == 0 {
         return 0;
@@ -114,37 +101,28 @@ fn somewhere(pages: u64) -> u64 {
         % pages
 }
 
-/// How long the fixed one-page read may take before it warns. Far above the
-/// tenths of a second it costs on a well volume: this catches a mode, not
+/// A well volume reads a page in tenths of a second; this catches a mode, not
 /// jitter.
 pub fn volume_slow() -> Duration {
     Duration::seconds(4)
 }
 
-/// One page off the archive volume, timed: the only fixed-size read the doctor
-/// does.
+/// One page off the archive volume, timed.
 ///
-/// `archive answers` times the whole archive read (the capture log, the
-/// uploader's state, a stat walk of every segment), so it slows both when the
-/// volume is contended and
-/// when the archive grows. This read never grows, so a rise in it belongs to
-/// the disk. It samples one instant, at the start of the archive read: a stall
-/// part-way through is invisible to it.
-///
-/// Kept beside `archive answers`, not folded into it: each keeps its own trend
-/// history, and the difference between the two is the measurement.
+/// `archive answers` times the whole read, which also grows with the archive;
+/// this read is fixed, so a rise in it is the disk. It samples only the start
+/// of the archive read. A separate check, so each keeps its own trend.
 pub fn volume_check(root: &Path) -> Check {
     use std::io::{Read, Seek, SeekFrom};
     let db = root.join(PROBE_FILE);
     let started = std::time::Instant::now();
     let read = std::fs::File::open(&db).and_then(|mut file| {
-        // ⚠ A random page, never a fixed one: a page read every run stays in
-        // the page cache, and would time 0.00s with the disk wedged.
+        // A page read every run would stay cached and time 0.00 s with the
+        // disk wedged.
         let pages = file.metadata()?.len() / PAGE as u64;
         file.seek(SeekFrom::Start(somewhere(pages) * PAGE as u64))?;
         let mut page = [0_u8; PAGE];
-        // `read`, not `read_exact`: a file shorter than one page is not an
-        // unreadable disk.
+        // Not `read_exact`: a file under one page is not an unreadable disk.
         file.read(&mut page).map(|_| ())
     });
     let seconds = started.elapsed().as_secs_f64();
@@ -175,11 +153,8 @@ pub fn volume_check(root: &Path) -> Check {
     .build()
 }
 
-/// Every device that has registered here, by its latest registration, in id
-/// order.
-///
-/// An unrecognised kind is dropped rather than guessed at: the grading rules
-/// are judgements about specific kinds of hardware.
+/// Every device registered here, by its latest registration, in id order. An
+/// unrecognised kind is dropped: the grading rules are per kind.
 #[must_use]
 pub fn registered_devices(events: &[capture_log::Event]) -> Vec<(String, SourceKind)> {
     let mut latest: BTreeMap<&str, &str> = BTreeMap::new();
@@ -195,10 +170,8 @@ pub fn registered_devices(events: &[capture_log::Event]) -> Vec<(String, SourceK
         .collect()
 }
 
-/// `(start, end)` of each of `source`'s segments on disk that ended at or after
-/// `since`: the start from its name, the end from its mtime, which is when the
-/// recorder last wrote to it. A zero-byte file is a stub that caught no audio
-/// and covers nothing.
+/// `(start, end)` of each non-empty segment of `source` ending at or after
+/// `since`: the start from its name, the end from its mtime.
 #[must_use]
 pub fn recorded_intervals(
     root: &Path,
@@ -226,9 +199,7 @@ pub fn recorded_intervals(
     out
 }
 
-/// Reconcile the always-on mic's recorded coverage against the pause/resume
-/// events over the recent window: an uncovered active stretch is capture
-/// running and producing nothing.
+/// The always-on mics' lost speech over [`loss_window`].
 fn speech_loss(
     root: &Path,
     log: &[capture_log::Event],
@@ -305,14 +276,11 @@ pub fn archive_checks(
         capture::worker_slow(),
         capture::worker_stopped(),
     ));
-    // Quiet until audiod's uploader has run here (stage B): reads its state db.
     checks.extend(crate::delivery::delivery_checks(root, now));
     Ok(checks)
 }
 
-/// The runner's pulse, stamped in the archive root. It lives on the archive
-/// volume so it cannot tick while the archive is unreachable, which is also
-/// why it is read here, in the child.
+/// The runner's pulse, in the archive root.
 pub fn read_beat(root: &Path) -> Option<Beat> {
     let text = std::fs::read_to_string(root.join("worker-heartbeat.json")).ok()?;
     serde_json::from_str(&text).ok()

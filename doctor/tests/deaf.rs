@@ -1,15 +1,9 @@
-//! A source that delivers but hears nothing while the mics beside it hear a
-//! conversation. Beats, liveness and delivery all pass for such a source; only
-//! the audio's content disagrees.
-//!
-//! The rule is relative, never absolute: a quiet house takes every mic to zero
-//! together and means nothing is wrong. Only disagreement between mics in the
-//! same minutes says anything.
+//! The deaf-microphone check (see `doctor::deaf`).
 
 use doctor::check::Verdict;
 use doctor::deaf::{Heard, deaf_check};
 
-/// A real measurement: four mics, same minutes, same room.
+/// Measured: four mics, the same minutes, one room.
 fn measured() -> Vec<Heard> {
     vec![
         Heard::new("usb", 300.0, 54.2 * 5.0),
@@ -38,7 +32,6 @@ fn the_one_mic_hearing_nothing_while_three_hear_a_conversation_is_named() {
     }
 }
 
-/// The false positive this check must not have: nobody talking, every mic working and reading zero.
 #[test]
 fn a_quiet_house_is_not_a_broken_microphone() {
     let quiet = vec![
@@ -57,9 +50,7 @@ fn a_quiet_house_is_not_a_broken_microphone() {
     );
 }
 
-/// A mic switched off delivers nothing and is absent from the list, often
-/// deliberately. Absence is the delivery check's business; this one speaks only
-/// about sources that are delivering.
+/// A switched-off mic is absent from the list.
 #[test]
 fn a_source_that_delivered_nothing_is_not_accused_of_deafness() {
     let check = deaf_check(&[
@@ -72,8 +63,7 @@ fn a_source_that_delivered_nothing_is_not_accused_of_deafness() {
     assert!(!check.observed.contains("pixel9"));
 }
 
-/// One peer is not a quorum: if only one other mic heard anything, the one that
-/// heard it is as likely to be the odd one out as the one that did not.
+/// With one peer, either could be the odd one out.
 #[test]
 fn one_peer_hearing_speech_is_not_enough_to_accuse_another() {
     let check = deaf_check(&[
@@ -84,8 +74,7 @@ fn one_peer_hearing_speech_is_not_enough_to_accuse_another() {
     assert_eq!(check.verdict, Verdict::Skip);
 }
 
-/// A handful of seconds is not a conversation. Two mics catching a door closing
-/// must not convict a third of deafness.
+/// A door closing, heard by two mics.
 #[test]
 fn a_trace_of_sound_in_the_peers_is_not_a_conversation() {
     let check = deaf_check(&[
@@ -98,8 +87,7 @@ fn a_trace_of_sound_in_the_peers_is_not_a_conversation() {
     assert_eq!(check.verdict, Verdict::Skip);
 }
 
-/// A microphone grant lost on the Mac looks the same: segments arrive on
-/// schedule, every other check is green, and the audio holds nothing.
+/// As when the Mac loses its microphone permission.
 #[test]
 fn the_macs_own_mic_going_silent_is_caught_the_same_way() {
     let check = deaf_check(&[
@@ -113,7 +101,6 @@ fn the_macs_own_mic_going_silent_is_caught_the_same_way() {
     assert!(check.observed.contains("usb"), "{}", check.observed);
 }
 
-/// The label is the trend identity, so it must not carry the source name.
 #[test]
 fn the_label_is_stable_whichever_mic_is_deaf() {
     let a = deaf_check(&measured());
@@ -129,15 +116,12 @@ fn the_label_is_stable_whichever_mic_is_deaf() {
     assert_eq!(b.verdict, Verdict::Warn);
 }
 
-/// A real single-segment measurement: four mics heard 21-25 s of speech and
-/// pixel5 heard nothing. One complete segment must be enough to judge, since
-/// peer agreement, not duration, is what makes a zero meaningful.
+/// Measured over one segment: one segment is enough to judge.
 #[test]
 fn the_real_2026_09_10_measurement_names_pixel5() {
-    // speech seconds within a single 60 s segment, straight off the archive.
     let heard = vec![
-        // Phones close segments at 59.993 s, not 60; a round-number fixture
-        // would hide a floor set at exactly 60.
+        // Phones close segments at 59.993 s; a round 60 here would hide a
+        // floor set at exactly 60.
         Heard::new("iphone11", 59.993, 25.3),
         Heard::new("oneplus6t", 59.993, 22.8),
         Heard::new("pixel9", 59.993, 21.8),
@@ -154,8 +138,6 @@ fn the_real_2026_09_10_measurement_names_pixel5() {
     }
 }
 
-/// The floor must still refuse something: half a segment, from a source that
-/// started mid-minute or was cut off by a pause, is too little to convict on.
 #[test]
 fn half_a_segment_is_still_too_little_to_judge() {
     let check = deaf_check(&[

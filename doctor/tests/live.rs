@@ -1,5 +1,5 @@
-//! The live tier is graded here and measured on the fleet, so the interesting
-//! cases are the ones where the fleet does not answer.
+//! Grading the live tier from the server's measurements, including when the
+//! server does not answer.
 
 use chrono::{TimeZone, Utc};
 use doctor::check::Verdict;
@@ -23,8 +23,7 @@ fn talking(lag_median_s: Option<f64>, lag_samples: usize) -> LiveHealth {
 
 #[test]
 fn an_unreachable_fleet_skips_both_checks_and_fails_neither() {
-    // A live tier that cannot be asked about is not a broken one; failing here
-    // would cry wolf whenever the VPN blinked and teach people to ignore the check.
+    // Failing would fire whenever the VPN dropped.
     let checks = live_checks(
         &Err("cannot reach the fleet (timed out)".to_owned()),
         now(),
@@ -61,7 +60,6 @@ fn a_mac_with_no_fleet_says_so_rather_than_guessing_an_address() {
 
 #[test]
 fn a_fleet_that_is_configured_needs_both_halves_of_the_credential() {
-    // Either half missing means unconfigured, never a request without a token.
     assert!(Fleet::new(Some("http://fleet:8000"), Some("t")).is_some());
     assert!(Fleet::new(None, Some("t")).is_none());
     assert!(Fleet::new(Some("http://fleet:8000"), None).is_none());
@@ -70,8 +68,6 @@ fn a_fleet_that_is_configured_needs_both_halves_of_the_credential() {
 
 #[test]
 fn a_handful_of_turns_skips_with_the_count_rather_than_grading_noise() {
-    // The sample floor is the grader's rule, so the fleet sends the count
-    // rather than a pre-filtered median.
     let checks = live_checks(&Ok(talking(Some(4.0), 3)), now(), None);
     let lag = &checks[0];
     assert_eq!(lag.verdict, Verdict::Skip);
@@ -93,7 +89,6 @@ fn enough_turns_are_actually_graded() {
 
 #[test]
 fn the_pause_still_skips_the_liveness_check() {
-    // Pause is the Mac's own state: nothing is recorded, so nothing is transcribed.
     let until = now() + chrono::Duration::hours(1);
     let checks = live_checks(&Ok(talking(Some(4.0), 40)), now(), Some(until));
     assert_eq!(checks[1].verdict, Verdict::Skip);
@@ -106,7 +101,6 @@ fn the_pause_still_skips_the_liveness_check() {
 
 #[test]
 fn a_window_nobody_spoke_in_skips_instead_of_blaming_the_tier() {
-    // A quiet window is not the tier's fault.
     let quiet = LiveHealth {
         speech_s: 0.0,
         ..talking(Some(4.0), 40)
@@ -119,9 +113,6 @@ fn a_window_nobody_spoke_in_skips_instead_of_blaming_the_tier() {
 
 #[test]
 fn an_unscanned_window_is_not_a_quiet_one() {
-    // `scanned_s` is separate from `delivered_s`: a window reads "no speech"
-    // both when silent and when not yet measured, and collapsing those would
-    // silence the check exactly when the archive fell behind.
     let unscanned = LiveHealth {
         scanned_s: 0.0,
         speech_s: 0.0,

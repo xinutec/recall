@@ -1,11 +1,6 @@
-//! Report recall's health to fleetwatch, the fleet's monitoring platform.
-//!
-//! fleetwatch is push-based and keeps the history (its README, "The report
-//! contract"). A report declares its cadence (`interval_s`) and a producer that
-//! stops reporting renders red, so a dead Mac needs no detector of its own.
-//!
-//! The ingest token comes from `RECALL_FLEETWATCH_TOKEN` or
-//! `~/.config/fleetwatch/token`, and is never put in the report or logged.
+//! Report recall's health to fleetwatch (its README, "The report contract").
+//! fleetwatch turns a producer that stops reporting red, so a dead Mac needs
+//! no detector of its own.
 
 use crate::check::Check;
 use chrono::{DateTime, Utc};
@@ -13,22 +8,17 @@ use std::path::Path;
 use std::time::Duration;
 
 pub const DEFAULT_URL: &str = "https://fleetwatch.xinutec.org/api/reports";
-/// One collector for the whole of recall, so a single fleetwatch tile answers
-/// "is recall alright?".
+/// One collector for all of recall: one tile.
 const COLLECTOR: &str = "recall";
-/// Declared cadence. fleetwatch turns this into staleness: report less often
-/// than this and the tile goes amber, stop entirely and it goes red. It must
-/// match the launchd agent's `StartInterval`, or a healthy producer is reported
-/// as late.
+/// The declared cadence, from which fleetwatch judges staleness. Must match
+/// the launchd agent's `StartInterval`.
 const INTERVAL_S: u32 = 300;
 const SCHEMA: u32 = 1;
-/// A ULID alphabet — no I, L, O, U.
+/// Crockford base32: no I, L, O, U.
 const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /// A ULID: 48 bits of millisecond timestamp, then 80 bits of randomness, in
-/// Crockford base32. fleetwatch uses it as the idempotency key and rejects
-/// anything that is not one (422), so it is minted here rather than depending
-/// on a crate for a dozen lines. Pure, so it is tested against a known vector.
+/// Crockford base32. fleetwatch's idempotency key; it refuses anything else.
 pub fn mint_ulid(now: DateTime<Utc>, randomness: [u8; 10]) -> String {
     let value = ((now.timestamp_millis() as u128) << 80)
         | u128::from_be_bytes({
@@ -44,8 +34,8 @@ pub fn mint_ulid(now: DateTime<Utc>, randomness: [u8; 10]) -> String {
         .collect()
 }
 
-/// 80 bits from the kernel. `/dev/urandom` rather than a crate: this is the
-/// only randomness in the binary and it is an idempotency key, not a secret.
+/// 80 bits from `/dev/urandom`; zeros if it cannot be read. An idempotency
+/// key, not a secret.
 fn randomness() -> [u8; 10] {
     use std::io::Read as _;
     let mut bytes = [0u8; 10];
@@ -55,8 +45,7 @@ fn randomness() -> [u8; 10] {
     bytes
 }
 
-/// The report body. `source` is deliberately absent: fleetwatch stamps it from
-/// the ingest token, so a producer can only ever write as itself.
+/// The report body. No `source`: fleetwatch takes it from the token.
 pub fn payload(
     checks: &[Check],
     now: DateTime<Utc>,
@@ -73,13 +62,9 @@ pub fn payload(
     })
 }
 
-/// The ingest token, from the environment or the file the fleet's `secret.sh`
-/// writes. `None` if there is none — this machine is simply not a producer yet,
-/// which is a thing to say plainly, not to crash on.
-/// `from_env` is passed in rather than read here: which of the two sources wins
-/// is a decision worth testing, and setting an environment variable is `unsafe`
-/// in this edition — a test that mutated process-global state under a threaded
-/// runner would be the wrong way to reach it.
+/// The ingest token: `from_env` (`RECALL_FLEETWATCH_TOKEN`), else
+/// `~/.config/fleetwatch/token`. Passed in so tests need not set the
+/// environment.
 pub fn read_token(home: &Path, from_env: Option<&str>) -> Option<String> {
     let env = from_env.map(str::trim).filter(|t| !t.is_empty());
     if let Some(token) = env {
@@ -92,11 +77,6 @@ pub fn read_token(home: &Path, from_env: Option<&str>) -> Option<String> {
 }
 
 /// POST one report. Returns the HTTP status (201 stored, 200 duplicate).
-///
-/// Fails on a transport error — the caller decides whether a fleetwatch it
-/// cannot reach is worth failing over. It is not: the recording is what
-/// matters, and an unreachable monitor already shows itself as stale at the
-/// other end.
 pub fn post(body: &serde_json::Value, token: &str, url: &str) -> Result<u16, Box<ureq::Error>> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(15))

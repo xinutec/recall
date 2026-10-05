@@ -2,10 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One fleetwatch check (fleetwatch README, "The report contract").
-///
-/// `label` is the trend identity and must stay stable across runs; anything
-/// that varies per run belongs in `observed` or `value`.
+/// One fleetwatch check. `label` identifies the trend, so it must not vary
+/// between runs; what varies goes in `observed` or `value`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Check {
     pub section: String,
@@ -25,13 +23,11 @@ pub enum Verdict {
     Pass,
     Warn,
     Fail,
-    /// Not a fault: the thing checked was deliberately switched off.
+    /// The thing checked was switched off on purpose; ranks with `Pass`.
     Skip,
 }
 
 impl Verdict {
-    /// Worst-wins, for a roll-up. `Skip` ranks with `Pass`: a deliberate pause
-    /// is not a fault.
     fn severity(self) -> u8 {
         match self {
             Verdict::Pass | Verdict::Skip => 0,
@@ -40,7 +36,6 @@ impl Verdict {
         }
     }
 
-    /// How the terminal prints it.
     pub fn mark(self) -> &'static str {
         match self {
             Verdict::Pass => "ok",
@@ -51,10 +46,8 @@ impl Verdict {
     }
 }
 
-/// The worst verdict among `checks`, or `Pass` for none.
-///
-/// Ties keep the first, so this is a fold and not `max_by_key` (which returns
-/// the last maximum and would turn `[Pass, Skip]` into `Skip`).
+/// The worst verdict among `checks`, or `Pass` for none. Ties keep the first,
+/// so `[Pass, Skip]` is `Pass` (`max_by_key` would keep the last).
 pub fn worst(checks: impl IntoIterator<Item = Verdict>) -> Verdict {
     checks.into_iter().fold(Verdict::Pass, |best, next| {
         if next.severity() > best.severity() {
@@ -65,7 +58,6 @@ pub fn worst(checks: impl IntoIterator<Item = Verdict>) -> Verdict {
     })
 }
 
-/// Builds a [`Check`]; most carry a trendable number via [`Builder::trend`].
 pub struct Builder {
     section: &'static str,
     label: String,

@@ -1,36 +1,23 @@
-//! Is the recording actually recording: is audio still landing on disk?
+//! Is audio still landing on disk? A crash-looping capture looks like a quiet
+//! house from outside, and transcription can be hours behind a working mic, so
+//! this reads segment files, which appear every 60 seconds.
 //!
-//! launchd restarts capture when it dies (`KeepAlive`), so a persistent fault
-//! becomes a crash loop, which from outside looks exactly like a quiet house.
-//! This reads the filesystem, not the transcription pipeline: a segment file
-//! appears every 60 seconds while capture lives, and the pipeline can be hours
-//! behind without the microphone having stopped.
-//!
-//! The verdicts differ by recorder:
-//!
-//! * the **always-on mic** (wired to this machine) has no excuse for silence:
-//!   `fail`.
-//! * a **phone** leaves the house, runs flat, has its app closed: `warn`.
-//! * **every source silent at once** is the capture process or the machine:
-//!   `fail`.
-//!
-//! A paused recording reports `skip` with the resume time.
+//! A silent always-on mic fails; a silent phone warns (it may be out, flat or
+//! closed); every source silent at once fails. A pause skips.
 
 use crate::check::{Check, Verdict, check};
 use crate::source::SourceKind;
 use chrono::{DateTime, Duration, Utc};
 use std::path::Path;
 
-/// A live capture writes a segment every 60 seconds. Two missed rotations is
-/// noise (a slow disk, a rotation straddling the check); five is not.
+/// Two missed 60-second segments are noise; five are not.
 pub fn silent_after() -> Duration {
     Duration::minutes(5)
 }
 
-/// The always-on mic: wired to the recording machine, so never excused silence.
+/// The always-on mic, wired to this machine.
 pub const ALWAYS_ON: SourceKind = SourceKind::CoreAudio;
 
-/// One microphone, and when audio last landed on disk from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recorder {
     pub source_id: String,
@@ -38,20 +25,18 @@ pub struct Recorder {
     pub last_audio: Option<DateTime<Utc>>,
 }
 
-/// Minutes, to one decimal: the unit every duration in a check is reported in.
+/// Minutes to one decimal, the unit of every duration in a check.
 pub fn minutes(since: Duration) -> f64 {
     (since.num_milliseconds() as f64 / 60_000.0 * 10.0).round() / 10.0
 }
 
-/// How a pause is spelled in `observed`: `datetime.isoformat(timespec="minutes")`.
+/// `2026-09-08T19:11+00:00`.
 fn to_the_minute(when: DateTime<Utc>) -> String {
     when.format("%Y-%m-%dT%H:%M%:z").to_string()
 }
 
-/// What fleetwatch should be told about the recording, right now.
-///
-/// Pure: the filesystem read happens in [`recorders_on_disk`], so the rules are
-/// testable without a microphone.
+/// One check per recorder, and a summary. Pure; [`recorders_on_disk`] reads
+/// the disk.
 pub fn capture_checks(
     recorders: &[Recorder],
     now: DateTime<Utc>,
@@ -63,7 +48,7 @@ pub fn capture_checks(
     if let Some(until) = paused_until
         && until > now
     {
-        // Deliberate, so not a fault, but shown: a forgotten pause loses days.
+        // Shown, not passed: a forgotten pause loses days.
         return vec![
             check(
                 "capture",
@@ -90,9 +75,9 @@ pub fn capture_checks(
         let verdict = if !quiet {
             Verdict::Pass
         } else if recorder.kind == ALWAYS_ON {
-            Verdict::Fail // wired to this machine: silence means it stopped
+            Verdict::Fail
         } else {
-            Verdict::Warn // a phone: out of the house, flat battery, app closed
+            Verdict::Warn
         };
         let observed = match since {
             None => "no audio ever recorded".to_owned(),
@@ -111,8 +96,7 @@ pub fn capture_checks(
         checks.push(builder.build());
     }
 
-    // The summary: every microphone silent together is the capture process or
-    // the machine it runs on, not coincidence.
+    // Every mic silent together is capture or the machine, not coincidence.
     let everything = !recorders.is_empty() && silent == recorders.len();
     let observed = if recorders.is_empty() {
         "no recorders found".to_owned()
@@ -142,29 +126,23 @@ pub fn capture_checks(
     checks
 }
 
-/// When each microphone last wrote audio: the newest non-empty segment's mtime
-/// in its archive directory.
-///
-/// Zero-byte segments are skipped: capture can roll a fresh file every segment
-/// while the device delivers nothing (a coreaudio startup dead window), and
-/// those stubs must not read as recording.
+/// When each microphone last wrote audio: the newest non-empty segment's
+/// mtime. Empty files are skipped: capture rolls them while a device delivers
+/// nothing, as in coreaudio's startup window.
 pub fn recorders_on_disk(root: &Path, sources: &[(String, SourceKind)]) -> Vec<Recorder> {
     sources
         .iter()
         .map(|(source_id, kind)| {
             let mut newest: Option<std::time::SystemTime> = None;
-            // Segments are `<source_id>-*`; the mtime is compared, so the
-            // directory is read in any order.
             if let Ok(entries) = std::fs::read_dir(root.join(source_id)) {
                 let prefix = format!("{source_id}-");
                 for entry in entries.flatten() {
                     if !entry.file_name().to_string_lossy().starts_with(&prefix) {
                         continue;
                     }
-                    // vanished mid-scan; the next pass will see it
                     let Ok(meta) = entry.metadata() else { continue };
                     if meta.len() == 0 {
-                        continue; // dead stub — a file rolled, no audio caught
+                        continue;
                     }
                     let Ok(modified) = meta.modified() else {
                         continue;
@@ -183,43 +161,33 @@ pub fn recorders_on_disk(root: &Path, sources: &[(String, SourceKind)]) -> Vec<R
         .collect()
 }
 
-/// How long the live tier may go without a turn. Short, because it answers a
-/// question asked out loud; a quiet window is excused by [`WindowAudio`].
+/// How long the live tier may go without a turn while people talk.
 pub fn live_quiet() -> Duration {
     Duration::minutes(20)
 }
 
-/// What the recorders delivered in the live tier's window, and how much of it
-/// the fleet has measured for speech.
+/// What the recorders delivered in the live window, and how much of it the
+/// server has measured for speech.
 ///
-/// ⚠ `scanned_s` is separate from `delivered_s` on purpose. Speech is measured
-/// on its own cadence, so "no speech" can mean a quiet house or an unscanned
-/// window; collapsing the two would silence [`live_check`] when the
-/// measurement falls behind, which is when a live stall is most likely.
+/// Scanned is kept apart from delivered: speech is measured on its own
+/// schedule, and an unscanned window must not pass for a quiet one.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WindowAudio {
-    /// Seconds of audio any device source delivered inside the window.
     pub delivered_s: f64,
-    /// Seconds of that audio carrying a `speech_s` measurement.
+    /// Seconds of the delivered audio measured for speech.
     pub scanned_s: f64,
-    /// Seconds of speech found within the scanned part.
+    /// Seconds of speech in the scanned part.
     pub speech_s: f64,
 }
 
-/// How much of a window must be scanned before "nobody spoke" is believable.
-/// Below this the window is unmeasured, not quiet.
+/// The share of a window that must be scanned before it can count as quiet.
 const SCANNED_ENOUGH: f64 = 0.75;
 
-/// Speech in the window that a spurious VAD blip could not account for. A real
-/// exchange in a 20-minute window runs to minutes; this only keeps a stray
-/// second or two from indicting the live tier.
+/// Speech, in seconds, more than a stray detector blip.
 const SPOKE_AT_ALL_S: f64 = 5.0;
 
 impl WindowAudio {
-    /// Did the household audibly say something live should have transcribed?
-    ///
-    /// `None` when too little of the window was scanned: "cannot certify
-    /// quiet", never quiet.
+    /// Did anyone speak? `None` when too little was scanned to say.
     fn spoke(self) -> Option<bool> {
         if self.delivered_s <= 0.0 {
             return Some(false);
@@ -231,37 +199,27 @@ impl WindowAudio {
     }
 }
 
-/// The lag at which the instant feed warns. A call costs its 30-second Whisper
-/// window whatever it holds, so a healthy floor is a few seconds; a regressed
-/// feed measured a median of 83.8 s, so 30 s separates the two.
+/// The median lag at which the instant feed warns. Healthy is a few seconds; a
+/// regressed feed measured 83.8.
 #[must_use]
 pub fn live_lag_slow() -> Duration {
     Duration::seconds(30)
 }
 
-/// How far back the lag median looks.
-///
-/// Not the 48-hour loss window: this asks whether the feed keeps up now, and a
-/// two-day median blends a fault with its repair. Six hours is longer than any
-/// one conversation and shorter than a day.
+/// How far back the lag median looks: whether the feed keeps up now, not
+/// blended with a fault already repaired.
 #[must_use]
 pub fn live_lag_window() -> Duration {
     Duration::hours(6)
 }
 
-/// How far behind the speaker the instant feed is running.
-///
-/// The failure [`live_check`] cannot see: turns arriving steadily, each later
-/// than the last, as happens when a call costs more than the speech it carries.
-///
-/// No median skips rather than passing: "nothing to measure" is not "measured
-/// and fine".
+/// How far behind the speaker the instant feed runs: turns can keep arriving,
+/// each later than the last, which [`live_check`] cannot see. No median skips
+/// with the caller's `unmeasured` reason.
 pub fn live_lag_check(median_seconds: Option<f64>, slow: Duration, unmeasured: &str) -> Check {
     let bound = slow.num_seconds() as f64;
     let expected = format!("live turns arriving within {bound:.0}s of being said");
     let Some(median) = median_seconds else {
-        // The caller says why, because only it knows. A skip whose reason is
-        // wrong is how a blind check gets trusted.
         return check(
             "capture",
             "live delivery lag",
@@ -292,12 +250,9 @@ pub fn live_lag_check(median_seconds: Option<f64>, slow: Duration, unmeasured: &
     .build()
 }
 
-/// Is live transcription still producing turns, not merely running? Reads the
-/// output, the way [`capture_checks`] reads files on disk.
-///
-/// A deliberate pause skips. So does a window with no speech, but only when it
-/// was measured well enough to say so (see [`WindowAudio`]): a check that blames
-/// the tier for a quiet house stops being read.
+/// Is live transcription producing turns? A pause skips, and so does a window
+/// measured to have no speech: blaming the tier for a quiet house would teach
+/// people to ignore the check.
 pub fn live_check(
     newest_turn: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
@@ -321,11 +276,9 @@ pub fn live_check(
         )
         .build();
     }
-    // Nothing was said, and the window is measured well enough to know it.
     if recent.spoke() == Some(false) {
         let why = if recent.delivered_s <= 0.0 {
-            // Capture's own checks grade a recorder that delivered nothing;
-            // failing here too would count one outage twice.
+            // The capture checks already grade this.
             "no audio delivered in the window".to_owned()
         } else {
             format!(
@@ -369,11 +322,8 @@ pub fn live_check(
     .build()
 }
 
-/// One unit of transcription work, as the runner stamps it after each job (an
-/// empty queue stamps too, with no rows).
-///
-/// `finished` is optional in the format: without it the beat reads as a pass
-/// still running. The runner always writes it.
+/// The runner's pulse, stamped after each job and each empty poll. Without
+/// `finished` it reads as a pass still running; the runner always writes it.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Beat {
     #[serde(deserialize_with = "audiocore::instant::de")]
@@ -386,9 +336,8 @@ pub struct Beat {
     pub rows: i64,
 }
 
-// How long the runner may go without stamping its pulse before the check
-// warns, then fails. Loose on purpose: a line every restart's cold start
-// crosses stops being read.
+// How long without a pulse before the check warns, then fails. Loose enough
+// that a cold start does not cross it.
 pub fn worker_slow() -> Duration {
     Duration::minutes(30)
 }
@@ -396,11 +345,8 @@ pub fn worker_stopped() -> Duration {
     Duration::hours(1)
 }
 
-/// Is the transcription pipeline still turning, or has it merely gone quiet?
-///
-/// Graded on time since the pulse, which the runner stamps even when the queue
-/// is empty, so a stale pulse means the runner stopped rather than ran out of
-/// work. A beat with no `finished` is reported as a pass still running.
+/// Is the runner turning? The pulse is stamped even with an empty queue, so a
+/// stale one means the runner stopped, not that work ran out.
 pub fn worker_check(
     beat: Option<&Beat>,
     now: DateTime<Utc>,
@@ -456,8 +402,8 @@ pub fn worker_check(
     .build()
 }
 
-/// One check per launchd agent. The agents self-gate (they park while capture
-/// is paused rather than unload), so installed but not loaded is a fault.
+/// One check per launchd agent. Agents stay loaded while paused, so installed
+/// but not loaded is a fault.
 pub fn agent_checks(agents: &[(String, bool)]) -> Vec<Check> {
     if agents.is_empty() {
         return vec![

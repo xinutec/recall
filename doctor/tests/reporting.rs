@@ -6,8 +6,7 @@ use doctor::fleetwatch::{mint_ulid, payload, read_token};
 
 #[test]
 fn a_ulid_is_twenty_six_crockford_characters() {
-    // fleetwatch uses it as the idempotency key and rejects anything else with
-    // 422, so the spelling is a contract.
+    // fleetwatch refuses anything else with 422.
     const CROCKFORD: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
     let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
     let ulid = mint_ulid(now, [0u8; 10]);
@@ -49,12 +48,10 @@ fn the_payload_carries_every_field_of_the_report_contract() {
     let body = payload(&checks, now, Some(1234));
     assert_eq!(body["schema"], 1);
     assert_eq!(body["collector"], "recall");
-    // Must match the launchd agent's StartInterval, or a healthy producer is
-    // reported as late.
+    // The launchd agent's StartInterval.
     assert_eq!(body["interval_s"], 300);
     assert_eq!(body["duration_ms"], 1234);
-    // `source` is absent: fleetwatch stamps it from the token, so a producer
-    // can only write as itself.
+    // fleetwatch takes it from the token.
     assert!(body.get("source").is_none());
     let check = &body["checks"][0];
     assert_eq!(check["section"], "capture");
@@ -82,7 +79,6 @@ fn a_check_with_nothing_to_trend_sends_nulls_not_omissions() {
 
 #[test]
 fn no_token_anywhere_means_not_a_producer_rather_than_a_crash() {
-    // This machine is simply not a producer yet.
     let home = tempfile::tempdir().unwrap();
     assert!(read_token(home.path(), None).is_none());
 }
@@ -98,8 +94,7 @@ fn a_token_file_is_read_without_its_surrounding_whitespace() {
 
 #[test]
 fn an_empty_token_is_no_token_at_all_from_either_source() {
-    // The file can exist before it has contents, and an empty Bearer header
-    // would read as a credential mistake.
+    // An empty Bearer header would read as a wrong credential.
     let home = tempfile::tempdir().unwrap();
     let dir = home.path().join(".config").join("fleetwatch");
     std::fs::create_dir_all(&dir).unwrap();

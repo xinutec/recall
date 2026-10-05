@@ -1,23 +1,19 @@
-//! The record's own faults, read from the fleet and graded here: requests the
-//! server failed, and minutes a microphone shows twice.
-//!
-//! Both went unnoticed for days before (failed saves in the app's log from 26
-//! Sept, doubled phone minutes since early Sept) until the user met them. Any
-//! of either is a failure: each is a bug, and none is expected.
+//! The record's own faults, read from the server: requests it failed, and
+//! minutes a microphone shows twice. Any of either is a failure; both once
+//! went unnoticed for days.
 
 use crate::check::{Check, Verdict, check};
 use audiocore::record_health::RecordHealth;
 use chrono::{DateTime, Duration, Utc};
 
-/// How far back a failed request counts: a day, so one clears on its own once
-/// the cause is fixed.
+/// How far back a failed request counts, so it clears once the cause is fixed.
 #[must_use]
 pub fn fault_window() -> Duration {
     Duration::hours(24)
 }
 
-/// How far back, by recording time, a doubled minute counts. Longer than the
-/// fault window: a clip can be transcribed days after it was recorded.
+/// How far back, by recording time, a doubled minute counts. Longer, because a
+/// clip can be transcribed days after it was recorded.
 #[must_use]
 pub fn doubled_window() -> Duration {
     Duration::days(14)
@@ -28,9 +24,6 @@ const FAULTS_EXPECTED: &str = "every save and page load in the last day answered
 const DOUBLED: &str = "no minute is shown twice";
 const DOUBLED_EXPECTED: &str = "each mic's minute is transcribed once";
 
-/// Ask the fleet: faults over [`fault_window`], doubled minutes over
-/// [`doubled_window`].
-///
 /// # Errors
 /// A message for a skip line, naming what failed.
 pub fn fetch(fleet: &crate::live::Fleet, now: DateTime<Utc>) -> Result<RecordHealth, String> {
@@ -47,7 +40,6 @@ pub fn fetch(fleet: &crate::live::Fleet, now: DateTime<Utc>) -> Result<RecordHea
     Ok(RecordHealth { faults, doubled })
 }
 
-/// Both checks, from whatever the fleet said.
 #[must_use]
 pub fn record_checks(fetched: &Result<RecordHealth, String>) -> Vec<Check> {
     let health = match fetched {
@@ -111,7 +103,6 @@ fn skipped(why: &str) -> Vec<Check> {
     ]
 }
 
-/// Both checks, when this Mac has no fleet to ask.
 #[must_use]
 pub fn unconfigured() -> Vec<Check> {
     skipped("no fleet configured — pass --fleet and set RECALL_SYNC_TOKEN")

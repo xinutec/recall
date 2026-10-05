@@ -1,18 +1,12 @@
-//! Work you can give up on: a child process the parent abandons instead of
-//! waiting for.
+//! A child process the parent abandons rather than waits for. A starved volume
+//! puts every reader into uninterruptible disk wait, and the doctor must still
+//! report it.
 //!
-//! A starved archive volume puts every reader into uninterruptible disk wait,
-//! the doctor included, and the doctor's job is to report exactly that.
-//!
-//! ⚠ Killing the child does not bound it. A process in uninterruptible wait
-//! (`U` in `ps`) does not die on SIGKILL until its I/O completes, so
-//! `wait()` after `kill()` blocks as long as the volume does. The only bound
-//! that holds is to abandon the child: stop reading, report the timeout, never
-//! signal or reap it. It exits on its own once its I/O completes.
-//!
-//! The child must therefore be disposable: it may still be running after
-//! [`run`] returns. Read-only probes qualify; anything that mutates the archive
-//! does not.
+//! Killing the child does not bound it: in uninterruptible wait (`U` in `ps`)
+//! SIGKILL takes effect only when the I/O completes, so `wait()` blocks as long
+//! as the volume does. So the parent stops reading and never signals or reaps
+//! it; the child exits when its I/O completes. It may outlive [`run`], so it
+//! must not write.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -20,15 +14,12 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-/// The child's working directory. The parent's cwd is often the archive
-/// volume, and a child that inherits a wedged cwd hangs before running any of
-/// our code.
+/// The child's working directory: an inherited cwd on a wedged volume would
+/// hang it before `main`.
 const SAFE_CWD: &str = "/";
 
-/// What a bounded child said, and how long it took to say it.
-///
-/// `stdout: None` means it never answered inside the bound, which is itself
-/// the finding.
+/// What a bounded child said, and how long it took. `stdout: None` means it
+/// did not answer in time.
 #[derive(Debug)]
 pub struct Answer {
     pub stdout: Option<String>,
@@ -44,13 +35,10 @@ impl Answer {
     }
 }
 
-/// Read a pipe on its own thread, handing each chunk back as it arrives. One per
-/// pipe: a child that fills the 64 KiB stderr pipe while the parent reads only
-/// stdout blocks forever, indistinguishable from a wedged volume.
-///
-/// ⚠ Chunk by chunk, not read-to-EOF: a child that hangs never reaches EOF, and
-/// what it said before hanging is the useful part. The channel disconnecting
-/// reports EOF.
+/// Read a pipe on its own thread, sending each chunk as it arrives; the channel
+/// disconnects at EOF. A thread per pipe, since a child blocked on a full
+/// stderr pipe looks like a wedged volume. Chunks, not read-to-EOF, so what a
+/// hung child said before hanging is kept.
 fn drain<R: Read + Send + 'static>(mut pipe: R) -> mpsc::Receiver<Vec<u8>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -69,11 +57,8 @@ fn drain<R: Read + Send + 'static>(mut pipe: R) -> mpsc::Receiver<Vec<u8>> {
     rx
 }
 
-/// Run `argv`, read what it says, and give up on it after `timeout`.
-///
-/// Never fails on a slow child: not answering is the answer. The returned `pid`
-/// stays valid after a timeout (the child is left alive), so a log line can
-/// name the process to find in `ps`.
+/// Run `program`, read what it says, and give up on it after `timeout`. A slow
+/// child is an answer, not an error; its `pid` stays valid for `ps`.
 pub fn run(
     program: &Path,
     args: &[String],
@@ -91,12 +76,10 @@ pub fn run(
         command.env(key, value);
     }
     let mut child = {
-        // ⚠ One spawn at a time in this process. On macOS a pipe is made and
-        // marked close-on-exec in two steps, so a child spawned by another
-        // thread in between inherits this child's write end, and the read end
-        // reaches EOF only when that process exits: a prompt child reads as
-        // hung for the whole bound (#1480, caught with a `sleep 30` holding
-        // another test's pipe). Held for the spawn only, never the wait.
+        // One spawn at a time. macOS makes a pipe and marks it close-on-exec
+        // in two steps, so a child another thread spawns in between inherits
+        // this one's write end, and a prompt child reads as hung until that
+        // process exits (#1480). Held for the spawn only.
         static SPAWN: Mutex<()> = Mutex::new(());
         let _one = SPAWN
             .lock()
@@ -108,9 +91,8 @@ pub fn run(
     let err = drain(child.stderr.take().expect("stderr was piped"));
 
     let deadline = started + timeout;
-    // Everything the pipe has produced, and whether it reached EOF. Queued
-    // chunks are taken without waiting first, so output already sent is kept
-    // even after the deadline.
+    // Everything the pipe produced, and whether it reached EOF. Queued chunks
+    // are taken first, so output sent before the deadline is kept.
     let collect = |rx: &mpsc::Receiver<Vec<u8>>| -> (Vec<u8>, bool) {
         let mut all = Vec::new();
         loop {
@@ -140,13 +122,10 @@ pub fn run(
 
     let seconds = started.elapsed().as_secs_f64();
     let (Some(stdout), Some(stderr)) = (stdout, stderr) else {
-        // No kill, no wait (see the module docs): both would block as long as
-        // the volume does. Forgetting `child` leaves the process to exit on its
-        // own.
+        // No kill, no wait (see the module doc).
         std::mem::forget(child);
         return Ok(Answer {
             stdout: None,
-            // What it said before it hung.
             stderr: String::from_utf8_lossy(&err_bytes).into_owned(),
             status: None,
             seconds,
@@ -154,8 +133,7 @@ pub fn run(
         });
     };
 
-    // Both pipes are at EOF, so the child has closed them and is exiting; this
-    // wait is the reaping, not a bet on the volume.
+    // Both pipes are at EOF, so the child is exiting.
     let status = child.wait()?;
     Ok(Answer {
         stdout: Some(String::from_utf8_lossy(&stdout).into_owned()),
@@ -166,30 +144,22 @@ pub fn run(
     })
 }
 
-/// What state the kernel has an abandoned child in.
-///
-/// Each state points at a different fault: `U` is the volume not answering,
-/// `S` is waiting on something other than the disk (a lock), `R` is a read
-/// that is merely slow.
+/// The kernel's state for an abandoned child: `U` is the volume not answering,
+/// `S` waiting on something else (a lock), `R` a read that is merely slow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
-    /// `ps` named it. The string is the raw field, flags and all.
+    /// `ps`'s raw field, flags included.
     Named(String),
-    /// `ps` ran and knows no such process: it finished just after the bound ran
-    /// out rather than wedging.
+    /// No such process: it finished just after the bound.
     Gone,
-    /// `ps` could not be asked, so nothing is known.
-    ///
-    /// ⚠ Never collapse this into [`State::Gone`]: a living child would read as
-    /// finished. `ps` does not work in the nix build sandbox, so tests reach
-    /// this.
+    /// `ps` could not be asked, as in the nix build sandbox. Not [`State::Gone`]:
+    /// the child may be alive.
     Unknown(String),
 }
 
 impl State {
-    /// How it reads to somebody who has not memorised `ps`'s letters.
-    ///
-    /// Only the leading letter is the state; the rest (`Ss`, `S+`) is flags.
+    /// The state in words. Only the first letter is the state; the rest are
+    /// flags.
     #[must_use]
     pub fn explain(&self) -> String {
         match self {
@@ -209,7 +179,6 @@ impl State {
         }
     }
 
-    /// What to print for the state itself.
     #[must_use]
     pub fn label(&self) -> &str {
         match self {
@@ -220,8 +189,8 @@ impl State {
     }
 }
 
-/// Processes that write to disk in bulk. Named so they are reported at a stall
-/// even when not in `U` at that instant: a build between writes is `R` or `S`.
+/// Bulk disk writers, reported at a stall in any state: between writes a build
+/// is `R` or `S`, not `U`.
 const HEAVY_WRITERS: &[&str] = &[
     "cargo",
     "rustc",
@@ -238,12 +207,9 @@ const HEAVY_WRITERS: &[&str] = &[
     "backupd",
 ];
 
-/// From `ps -A -o pid=,state=,%cpu=,comm=`: every process waiting on a disk
-/// (`U`), then every known heavy writer, as `pid state cpu% name`. Names only,
-/// never arguments. At most `cap` lines.
-///
-/// `U` names who was blocked on the disk that second, which includes a busy
-/// writer much of the time but is not a byte count.
+/// From `ps -A -o pid=,state=,%cpu=,comm=`: every process in disk wait (`U`),
+/// then every known bulk writer, as `pid state cpu% name`, at most `cap`.
+/// Names only, never arguments.
 #[must_use]
 pub fn disk_suspects(ps_output: &str, cap: usize) -> Vec<String> {
     let mut waiting = Vec::new();
@@ -286,7 +252,7 @@ pub fn process_state(pid: u32) -> State {
     process_state_via("ps", pid)
 }
 
-/// The same, against a named `ps`, so a test can ask an absent one.
+/// [`process_state`] with a given `ps`, so a test can name an absent one.
 #[must_use]
 pub fn process_state_via(program: &str, pid: u32) -> State {
     let out = match Command::new(program)
@@ -300,8 +266,7 @@ pub fn process_state_via(program: &str, pid: u32) -> State {
     if !state.is_empty() {
         return State::Named(state);
     }
-    // An empty stdout means "no such process" only if ps succeeded; where it
-    // cannot look (a sandbox) it exits non-zero with nothing on stdout.
+    // Empty means no such process only if ps succeeded.
     if out.status.success() {
         State::Gone
     } else {

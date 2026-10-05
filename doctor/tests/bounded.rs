@@ -58,8 +58,7 @@ fn a_prompt_child_is_read_and_reaped() {
 
 #[test]
 fn a_slow_child_is_abandoned_rather_than_waited_for() {
-    // `sleep 30` stands in for uninterruptible disk wait: `run` must return on
-    // schedule and report the silence as the finding.
+    // `sleep 30` stands in for uninterruptible disk wait.
     let (program, args) = sh("sleep 30");
     let started = Instant::now();
     let answer = run(&program, &args, Duration::from_millis(300), &[]).unwrap();
@@ -75,11 +74,9 @@ fn a_slow_child_is_abandoned_rather_than_waited_for() {
 
 #[test]
 fn a_child_that_fills_stderr_does_not_deadlock_the_reader() {
-    // Interleaved writes past a 64 KiB pipe buffer on both streams, so a reader
-    // draining only one blocks the child on the other. Each chunk alone exceeds
-    // the buffer. Few large chunks keep the spawn count low: many small ones
-    // flake under a loaded `nix build`, and raising the timeout instead would
-    // hide a real deadlock.
+    // Each chunk alone exceeds the 64 KiB pipe buffer, interleaved across both
+    // streams. Few large chunks, since many small spawns flake under a loaded
+    // `nix build`.
     let (program, args) = sh("for i in 1 2 3 4; do \
                head -c 102400 /dev/zero | tr '\\0' 'x'; \
                head -c 102400 /dev/zero | tr '\\0' 'y' >&2; \
@@ -91,13 +88,10 @@ fn a_child_that_fills_stderr_does_not_deadlock_the_reader() {
 
 #[test]
 fn the_child_starts_off_the_callers_working_directory() {
-    // The parent's cwd is often the archive volume, and a wedged cwd would
-    // hang the child before it ran a line.
     let (program, args) = sh("pwd");
     let answer = run(&program, &args, Duration::from_secs(10), &[]).unwrap();
-    // It timed out once, at load 11 in the nix sandbox (#1480), and a pipe
-    // leaked to a concurrent child is refuted (0 of 400). Say enough to tell a
-    // slow `sh` from a wedged one next time.
+    // It timed out once, at load 11 in the nix sandbox (#1480); this says
+    // enough to tell a slow `sh` from a wedged one.
     assert_eq!(
         answer.stdout.as_deref(),
         Some("/\n"),
@@ -108,9 +102,8 @@ fn the_child_starts_off_the_callers_working_directory() {
     );
 }
 
-/// A hanging child never reaches EOF, so output must be kept as it arrives.
-/// `doctor`'s archive read prints its volume probe first for this reason: "the
-/// disk answered but the archive read never returned" is the diagnosis.
+/// The archive read prints its volume probe first so that this tells which
+/// half hung.
 #[test]
 fn what_a_hanging_child_already_said_survives_being_abandoned() {
     let script = "echo 'the disk answered' >&2; sleep 60";
@@ -130,7 +123,6 @@ fn what_a_hanging_child_already_said_survives_being_abandoned() {
     );
 }
 
-/// A child that finishes normally still reports both streams whole.
 #[test]
 fn a_child_that_finishes_reports_both_streams_whole() {
     let answer = doctor::bounded::run(
@@ -150,8 +142,6 @@ use doctor::bounded::State;
 
 #[test]
 fn a_ps_that_cannot_be_asked_is_unknown_and_never_gone() {
-    // Unknown and gone must not collapse: `ps` does not work inside the nix
-    // build sandbox, and a living child must not read as gone there.
     let unknown = doctor::bounded::process_state_via("no-such-ps-binary", std::process::id());
     assert!(
         matches!(unknown, State::Unknown(_)),
@@ -167,7 +157,6 @@ fn a_ps_that_cannot_be_asked_is_unknown_and_never_gone() {
 
 #[test]
 fn the_state_letters_that_matter_are_told_apart() {
-    // `ps` appends flags (`Ss`, `S+`); only the leading letter is the state.
     assert!(
         State::Named("U".to_owned())
             .explain()
@@ -191,12 +180,11 @@ fn the_state_letters_that_matter_are_told_apart() {
 
 #[test]
 fn a_live_pid_is_named_and_never_read_as_gone() {
-    // This process's own pid, not a spawned child: a fresh child's state letter
-    // depends on the scheduler, and spawning made neighbouring tests flaky.
-    // What matters is that a live pid never reads as gone.
+    // This process, not a spawned child: spawning made neighbouring tests
+    // flaky.
     match doctor::bounded::process_state(std::process::id()) {
         State::Named(raw) => assert!(!raw.is_empty(), "a named state is not empty"),
-        // `ps` cannot look here; the case that matters then is pinned above.
+        // In the nix sandbox.
         State::Unknown(_) => {}
         State::Gone => panic!("this process is running, so it cannot be gone"),
     }

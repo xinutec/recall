@@ -1,34 +1,25 @@
-//! The instant feed's health, read from the fleet and graded here.
+//! The instant feed's health. recall-live keeps nothing locally, so the server
+//! measures; every threshold and window is set here and sent with the request.
 //!
-//! `org.xinutec.recall-live` runs beside this doctor but keeps nothing locally:
-//! it pushes each turn, so the only record of what it produced is the fleet's.
-//!
-//! The fleet measures, this grades: every threshold and window is named here
-//! and sent with the request, so there is one grader.
-//!
-//! An unreachable fleet skips, naming the network, and never fails: the
-//! delivery checks already go red when the link is down.
+//! An unreachable server skips rather than fails: the delivery checks already
+//! go red when the link is down.
 
 use crate::capture::{self, WindowAudio};
 use crate::check::{Check, Verdict, check};
 use chrono::{DateTime, Duration, Utc};
 
-/// Below this the sample is not a distribution and gets no verdict. A check
-/// that grades three turns reports noise as a regression.
+/// Fewer turns than this get no lag verdict: the median would be noise.
 const MIN_LAG_SAMPLES: usize = 10;
 
-/// Where the fleet is, and the credential for it.
-///
-/// The token is the one the Mac holds for every `/sync/*` read;
-/// `doctorWrapper` sources `~/.config/recall/env` to provide it.
+/// The server, and the sync token (`RECALL_SYNC_TOKEN`, from
+/// `~/.config/recall/env` via `doctorWrapper`).
 pub struct Fleet {
     pub url: String,
     pub token: String,
 }
 
 impl Fleet {
-    /// `None` without a fleet URL or token: the checks then skip rather than
-    /// guess a default address.
+    /// `None` without a URL or token; the checks then skip.
     #[must_use]
     pub fn new(url: Option<&str>, token: Option<&str>) -> Option<Self> {
         Some(Self {
@@ -38,7 +29,7 @@ impl Fleet {
     }
 }
 
-/// What `GET /sync/live/health` answers with.
+/// `GET /sync/live/health`.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveHealth {
@@ -50,23 +41,19 @@ pub struct LiveHealth {
     pub speech_s: f64,
 }
 
-/// How long to wait on the fleet before calling it unreachable.
-///
-/// Short: this runs in the doctor's parent, outside the bounded child, so a
-/// hung read would stall the whole report.
+/// Short: these reads run in the reporting process, so a hung one would stall
+/// the report.
 const TIMEOUT_S: u64 = 10;
 
-/// A bounded, authenticated GET of `path` on the fleet.
-///
-/// ⚠ Callers add parameters with `.query`, not a formatted URL: an RFC3339
-/// stamp ends in `+00:00`, and a raw `+` arrives as a space.
+/// An authenticated GET with a timeout. Add parameters with `.query`: a raw
+/// `+` in a formatted URL (`+00:00`) arrives as a space.
 pub fn get(fleet: &Fleet, path: &str) -> ureq::Request {
     ureq::get(&format!("{}{path}", fleet.url))
         .set("Authorization", &format!("Bearer {}", fleet.token))
         .timeout(std::time::Duration::from_secs(TIMEOUT_S))
 }
 
-/// A failed fleet request, as a skip line reads it.
+/// A failed request, worded for a skip line.
 #[must_use]
 pub fn describe(err: ureq::Error) -> String {
     match err {
@@ -75,11 +62,8 @@ pub fn describe(err: ureq::Error) -> String {
     }
 }
 
-/// Ask the fleet for the numbers, over the windows this grader uses.
-///
 /// # Errors
-/// The message is meant to be read in a skip line, so it names what failed
-/// rather than carrying a type.
+/// A message for a skip line, naming what failed.
 pub fn fetch(
     fleet: &Fleet,
     now: DateTime<Utc>,
@@ -104,10 +88,7 @@ pub fn fetch(
         .map_err(|e| format!("the fleet's answer did not parse ({e})"))
 }
 
-/// The two live checks, from whatever the fleet said.
-///
-/// Both skip together when the fleet cannot be asked, so neither reads as fine
-/// by omission.
+/// The two live checks; both skip if the server could not be asked.
 #[must_use]
 pub fn live_checks(
     fetched: &Result<LiveHealth, String>,
@@ -123,8 +104,6 @@ pub fn live_checks(
             ];
         }
     };
-    // The sample floor is a grading rule, so it is applied here, not on the
-    // fleet.
     let median = health
         .lag_median_s
         .filter(|_| health.lag_samples >= MIN_LAG_SAMPLES);
@@ -151,7 +130,6 @@ pub fn live_checks(
     ]
 }
 
-/// The skip says the fleet was unreachable, not that the house was quiet.
 fn skip(label: &'static str, why: &str) -> Check {
     check(
         "capture",
@@ -163,7 +141,6 @@ fn skip(label: &'static str, why: &str) -> Check {
     .build()
 }
 
-/// Both checks, when this Mac has no fleet to ask.
 #[must_use]
 pub fn unconfigured() -> Vec<Check> {
     let why = "no fleet configured — pass --fleet and set RECALL_SYNC_TOKEN";

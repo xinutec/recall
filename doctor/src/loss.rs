@@ -1,13 +1,6 @@
-//! Reconcile recorded coverage against capture-lifecycle events to find lost
-//! speech.
-//!
-//! The pause/resume events in the capture log ([`audiocore::capture_log`]) say
-//! when capture was meant to be recording: each resume opens an active span,
-//! the next pause closes it. Any part of an active span not covered by recorded
-//! audio is unexplained, lost speech.
-//!
-//! Conservative: with no events, or before the first resume, it makes no
-//! claim, so it never cries loss over a pause it has no record of.
+//! Lost speech: stretches when capture was meant to record, by the capture
+//! log's pause and resume events, that no recorded audio covers. Before the
+//! first resume it claims nothing.
 
 use crate::capture::{ALWAYS_ON, minutes};
 use crate::check::{Check, Verdict, check, worst};
@@ -17,7 +10,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub use audiocore::capture_log::{PAUSE, RESUME};
 
-/// The slice of a logged capture event the reconciler reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
     pub utc: DateTime<Utc>,
@@ -25,14 +17,14 @@ pub struct Event {
     pub source_id: Option<String>,
 }
 
-/// A stretch capture was meant to be recording (resume -> the next pause).
+/// A stretch capture was meant to be recording: a resume to the next pause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
 }
 
-/// An unexplained stretch on one source: recorded speech that is simply gone.
+/// An uncovered stretch on one source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Gap {
     pub source_id: String,
@@ -46,10 +38,8 @@ impl Gap {
     }
 }
 
-/// The stretches capture was meant to be recording: each resume opens a span,
-/// the next pause closes it, and a trailing resume stays open to `now`. Events
-/// before the first resume contribute nothing — we have no basis to call
-/// capture active there.
+/// Each resume opens a span and the next pause closes it; a trailing resume
+/// runs to `now`. Pauses before the first resume are ignored.
 pub fn active_spans(events: &[Event], now: DateTime<Utc>) -> Vec<Span> {
     let mut ordered: Vec<&Event> = events.iter().collect();
     ordered.sort_by_key(|e| e.utc);
@@ -75,7 +65,7 @@ pub fn active_spans(events: &[Event], now: DateTime<Utc>) -> Vec<Span> {
     spans
 }
 
-/// Coverage intervals sorted and merged (overlaps collapse, running max end).
+/// Intervals sorted, overlapping ones merged.
 fn merged(intervals: &[(DateTime<Utc>, DateTime<Utc>)]) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
     let mut sorted = intervals.to_vec();
     sorted.sort();
@@ -89,14 +79,12 @@ fn merged(intervals: &[(DateTime<Utc>, DateTime<Utc>)]) -> Vec<(DateTime<Utc>, D
     out
 }
 
-/// Portions of the active spans not covered by any recorded audio — lost speech.
+/// The parts of the active spans no recorded audio covers. Measured against
+/// coverage, not as gaps between segments, so a span with no segments at all
+/// (a crash loop) is lost in full.
 ///
-/// Coverage-based, not gaps between segments: a span with no segments at all
-/// (the crash-loop shape) leaves no gap between segments yet is total loss.
-/// `min_loss` absorbs boundary slop (a segment starting a beat after the
-/// resume, a pause logged a beat after the last segment, sub-second seams).
-/// `settle` excludes the trailing stretch where the newest segment is still
-/// being written.
+/// Shorter than `min_loss` is boundary slop. The last `settle` before `now` is
+/// not judged: its segment may still be written.
 pub fn uncovered_loss(
     intervals: &[(DateTime<Utc>, DateTime<Utc>)],
     events: &[Event],
@@ -145,10 +133,8 @@ fn loss_summary(gaps: usize, lost: Duration) -> String {
     format!("{gaps} unexplained gap(s) totalling {} min", minutes(lost))
 }
 
-/// How loudly to say that this microphone lost speech.
-///
-/// The rule `capture_checks` applies to silence: the always-on mic fails, a
-/// phone warns. An unknown device gets the strict verdict.
+/// As for silence: the always-on mic fails, a phone warns, an unknown source
+/// fails.
 fn loss_verdict(kind: Option<SourceKind>) -> Verdict {
     match kind {
         Some(k) if k != ALWAYS_ON => Verdict::Warn,
@@ -156,15 +142,9 @@ fn loss_verdict(kind: Option<SourceKind>) -> Verdict {
     }
 }
 
-/// Did recorded speech go missing while capture was meant to be running — and
-/// on which microphone?
-///
-/// Reported per device, so a check names which microphone to fix and grades a
-/// phone differently from the wired mic. The roll-up keeps the bare
-/// `speech-loss` label (and its trend) and takes the worst verdict. Per-device
-/// labels are qualified (`speech-loss:usb`) because fleetwatch mutes by
-/// `(source, collector, label)` and the bare `source_id` is taken by the
-/// per-mic recording checks.
+/// One check per device (`speech-loss:<source>`; the bare source id is the
+/// recording check's label) and a `speech-loss` roll-up with the worst
+/// verdict.
 pub fn loss_checks(
     losses: &[Gap],
     sources: &[(String, SourceKind)],
@@ -182,8 +162,7 @@ pub fn loss_checks(
             .push(gap);
     }
 
-    // Every registered device, plus any unknown source that lost speech, so
-    // its loss gets its own line.
+    // Registered devices, plus any unregistered source that lost speech.
     let source_ids: BTreeSet<&str> = kinds
         .keys()
         .copied()

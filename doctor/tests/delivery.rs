@@ -1,8 +1,5 @@
-//! Store-and-forward: is the fleet's copy keeping up, and did anything collide?
-//!
-//! Driven through `delivery_checks` against a real archive layout and a real
-//! `upload-state.sqlite`, because the filename grammar and the state read must
-//! agree on which files count.
+//! The delivery checks, on a real archive layout and `upload-state.sqlite`, so
+//! the filename grammar and the state read agree on which files count.
 
 use chrono::Utc;
 use doctor::check::Verdict;
@@ -27,7 +24,7 @@ fn uploader_state(root: &Path, uploads: &[&str], conflicts: &[&str]) {
     }
 }
 
-/// A segment file, aged by setting its mtime `minutes` into the past.
+/// A segment file with its mtime `minutes` ago.
 fn segment(root: &Path, source: &str, name: &str, minutes: i64) {
     let dir = root.join(source);
     std::fs::create_dir_all(&dir).unwrap();
@@ -43,7 +40,6 @@ fn find<'a>(checks: &'a [doctor::check::Check], label: &str) -> &'a doctor::chec
 
 #[test]
 fn no_uploader_state_reports_nothing_at_all() {
-    // A machine without the uploader has no mirror to be behind on.
     let dir = tempfile::tempdir().unwrap();
     assert!(delivery_checks(dir.path(), Utc::now()).is_empty());
 }
@@ -61,8 +57,7 @@ fn a_delivered_segment_is_not_a_backlog() {
 
 #[test]
 fn the_backlog_is_graded_by_its_oldest_member() {
-    // Deliveries run oldest-first, so the oldest is how far behind the mirror
-    // is. 30 min warns, 6 h fails, hence the 45 min and 7 h fixtures.
+    // 30 min warns, 6 h fails.
     let dir = tempfile::tempdir().unwrap();
     segment(dir.path(), "usb", "usb-20260908T191122.flac", 45);
     segment(dir.path(), "usb", "usb-20260908T192122.flac", 10);
@@ -87,8 +82,6 @@ fn the_backlog_is_graded_by_its_oldest_member() {
 
 #[test]
 fn the_segment_ffmpeg_may_still_be_writing_is_not_undelivered() {
-    // The newest file inside the open grace is unfinished, not late; otherwise
-    // every healthy pass reports a backlog of one.
     let dir = tempfile::tempdir().unwrap();
     segment(dir.path(), "usb", "usb-20260908T191122.flac", 0);
     uploader_state(dir.path(), &[], &[]);
@@ -98,8 +91,6 @@ fn the_segment_ffmpeg_may_still_be_writing_is_not_undelivered() {
 
 #[test]
 fn only_files_matching_the_delivery_grammar_are_counted() {
-    // The grammar is the subset audiod ships and recalld accepts; markers and
-    // stray files are not undelivered audio.
     let dir = tempfile::tempdir().unwrap();
     let usb = dir.path().join("usb");
     std::fs::create_dir_all(&usb).unwrap();
@@ -125,8 +116,6 @@ fn only_files_matching_the_delivery_grammar_are_counted() {
 
 #[test]
 fn a_conflict_warns_without_failing_and_names_a_few() {
-    // Nothing was lost: the server holds different bytes under a name we also
-    // hold, and a person has to look.
     let dir = tempfile::tempdir().unwrap();
     uploader_state(
         dir.path(),
@@ -142,7 +131,6 @@ fn a_conflict_warns_without_failing_and_names_a_few() {
 
 #[test]
 fn a_conflicted_name_does_not_also_read_as_undelivered() {
-    // A conflict is the other check's business.
     let dir = tempfile::tempdir().unwrap();
     segment(dir.path(), "usb", "usb-20260908T191122.flac", 7 * 60);
     uploader_state(dir.path(), &[], &["usb-20260908T191122.flac"]);

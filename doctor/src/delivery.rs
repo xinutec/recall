@@ -1,11 +1,9 @@
-//! Store-and-forward delivery: is the fleet's copy keeping up, and did anything
-//! collide? (docs/architecture.md)
+//! Delivery: is the server's copy keeping up, and did anything collide?
 //!
-//! Compares every segment file on disk against audiod's uploader state
-//! (`upload-state.sqlite`). A backlog is graded by the age of its oldest member,
-//! since deliveries run oldest-first. A 409 conflict warns without failing:
-//! nothing was lost, but Isis holds different bytes under the same name and a
-//! person has to look.
+//! Compares the segment files on disk with audiod's `upload-state.sqlite`. A
+//! backlog is graded by its oldest file, since uploads run oldest first. A
+//! conflict (409: the server holds different bytes under the name) warns:
+//! nothing is lost, but a person has to look.
 
 use crate::capture::minutes;
 use crate::check::{Check, Verdict, check};
@@ -15,12 +13,12 @@ use std::path::Path;
 
 const OPEN_GRACE_MINUTES: i64 = 3;
 const WARN_MINUTES: i64 = 30;
-// A segment must not age out of the grace straight into a warning.
 const _: () = assert!(OPEN_GRACE_MINUTES < WARN_MINUTES);
 const FAIL_HOURS: i64 = 6;
 const CONFLICTS_NAMED: usize = 3;
 
-/// What the uploader has already handled, and what collided.
+/// The filenames the uploader has handled (conflicts included), and the
+/// conflicts.
 fn uploader_state(state: &Path) -> rusqlite::Result<(BTreeSet<String>, Vec<String>)> {
     let conn = rusqlite::Connection::open_with_flags(
         state,
@@ -38,11 +36,8 @@ fn uploader_state(state: &Path) -> rusqlite::Result<(BTreeSet<String>, Vec<Strin
     Ok((handled, conflicts))
 }
 
-/// Every closed segment on disk that the uploader has not handled, by mtime.
-///
-/// The newest file in each source directory is skipped while it is inside the
-/// open grace: that is the segment ffmpeg may still be writing, and it is not
-/// undelivered, it is unfinished.
+/// The mtimes of the closed segments the uploader has not handled. Each
+/// source's newest file is skipped within the grace: it may still be written.
 fn undelivered(out: &Path, handled: &BTreeSet<String>, now: DateTime<Utc>) -> Vec<DateTime<Utc>> {
     let grace = Duration::minutes(OPEN_GRACE_MINUTES);
     let mut backlog = Vec::new();
@@ -74,7 +69,7 @@ fn undelivered(out: &Path, handled: &BTreeSet<String>, now: DateTime<Utc>) -> Ve
         if names.is_empty() {
             continue;
         }
-        // The name embeds the UTC start, so sorting by name is chronological.
+        // Within a source, names sort by their UTC start.
         names.sort();
         let newest = dir.join(names.last().expect("names is non-empty"));
         if let Ok(mtime) = newest.metadata().and_then(|m| m.modified())
@@ -94,8 +89,7 @@ fn undelivered(out: &Path, handled: &BTreeSet<String>, now: DateTime<Utc>) -> Ve
     backlog
 }
 
-/// Quiet when the uploader has never run here (no state file): a stock
-/// deployment without stage B has no mirror to be behind on.
+/// None where the uploader has never run (no state file).
 pub fn delivery_checks(out: &Path, now: DateTime<Utc>) -> Vec<Check> {
     let state = out.join("upload-state.sqlite");
     if !state.exists() {

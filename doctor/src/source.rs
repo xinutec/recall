@@ -1,26 +1,22 @@
-//! How a source's PCM stream is produced: the kind a source registers in the
-//! capture log.
+//! The kind a source registers in the capture log.
 
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SourceKind {
-    /// sox — sample-perfect macOS device capture
+    /// A macOS input device.
     CoreAudio,
-    /// ffmpeg synthetic source (testing/calibration)
+    /// An ffmpeg synthetic source, for testing.
     Lavfi,
-    /// ffmpeg network source (e.g. a phone on the LAN)
+    /// A network stream, such as a phone on the LAN.
     Rtsp,
-    /// ffmpeg listens for raw s16le PCM (the recall-mic app)
+    /// Raw s16le PCM over TCP, from the recall-mic app.
     TcpPcm,
-    /// clips uploaded over HTTP (e.g. phone recorder); not captured
+    /// Clips uploaded over HTTP; not captured here.
     Upload,
-    /// Audio found on disk with no registered source; says nothing about what
-    /// wrote it.
+    /// Audio found on disk with no registered source.
     Discovered,
-    /// A stream built rather than recorded: the room stream, one settled minute
-    /// at a time from whichever microphone won it. Not a device: it has no
-    /// recorder, and measuring it would double-count the microphone it carries.
+    /// A stream built rather than recorded (the retired room stream).
     Derived,
 }
 
@@ -50,11 +46,9 @@ impl SourceKind {
         }
     }
 
-    /// Kinds that have a recorder which could stop or lose speech.
-    ///
-    /// An upload is an imported meeting with no microphone behind it. A
-    /// discovered source has no known recorder; if it is one, its agent
-    /// registers the true kind on start and it joins this set.
+    /// Kinds with a recorder that could stop or lose speech. A discovered
+    /// source that is a recorder registers its true kind when its agent
+    /// starts.
     pub fn is_device(self) -> bool {
         !matches!(self, Self::Upload | Self::Discovered | Self::Derived)
     }
