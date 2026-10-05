@@ -11,8 +11,7 @@ use std::sync::Arc;
 const READ_TOKEN: &str = "read-me";
 
 fn serve(root: &Path) -> String {
-    // The lease reads the meaning plane (a session's pinned language), which a
-    // real recalld always has, migrated at startup.
+    // The lease reads a session's pinned language from the meaning plane.
     recalld::meaning_schema::ensure(
         &rusqlite::Connection::open(root.join("recall.sqlite")).expect("meaning"),
     )
@@ -23,7 +22,6 @@ fn serve(root: &Path) -> String {
         read_token: Some(READ_TOKEN.to_owned()),
         max_body_bytes: 16 * 1024 * 1024,
         trusted_proxies: Vec::new(),
-        // The runner uses the work plane only; the browsing plane is absent here.
         webauth: None,
         sync_token: None,
         frontend: None,
@@ -42,8 +40,7 @@ fn serve(root: &Path) -> String {
     format!("http://{}", rx.recv().expect("addr"))
 }
 
-/// Store a microphone clip with a queued transcription job. The job is seeded,
-/// not derived: deriving needs the meaning plane, which this test does not use.
+/// Store a microphone clip with a queued transcription job.
 fn queued_clip(root: &Path, name: &str, bytes: &[u8]) {
     let dir = root.join("ingest").join("usb");
     std::fs::create_dir_all(&dir).expect("mkdir");
@@ -69,7 +66,7 @@ fn queued_clip(root: &Path, name: &str, bytes: &[u8]) {
     .expect("job");
 }
 
-/// A shim that speaks the real protocol and answers whatever it is told to.
+/// A shim that runs `behaviour` for each request, and writes noise to stderr.
 fn stub_shim(behaviour: &str) -> (String, Vec<String>) {
     let script = format!(
         "import json, sys\n\
@@ -104,7 +101,6 @@ fn a_job_is_leased_transcribed_and_acked() {
     assert_eq!(job.kind, audiocore::job::Kind::TranscribeSegment);
     assert_eq!(job.filename, "usb-20260906T100000.flac");
 
-    // The blob comes from recalld's own store, over its own auth gate.
     let clip = dir.path().join("fetched.flac");
     client
         .fetch_blob("usb", &job.filename, &clip)
@@ -117,7 +113,7 @@ fn a_job_is_leased_transcribed_and_acked() {
     client
         .finish(job.id, &result.raw.to_string())
         .expect("finish");
-    // Retiring is terminal: the queue must not hand the same job out again.
+    // Not handed out again.
     assert!(
         client
             .lease(&[audiocore::job::Kind::TranscribeSegment])
@@ -128,8 +124,7 @@ fn a_job_is_leased_transcribed_and_acked() {
 
 #[test]
 fn a_shim_refusal_is_reported_as_such_not_as_a_transport_failure() {
-    // A refusal is the clip's fault and is recorded terminally; a transport
-    // failure is the shim's and is retried.
+    // A refusal is recorded; a transport failure is retried.
     let dir = tempfile::tempdir().expect("tempdir");
     let (program, args) = stub_shim(
         "print(json.dumps({'id': msg['id'], 'ok': False, 'error': 'FileNotFoundError: x'}))",
@@ -175,9 +170,7 @@ fn model_and_prompt_reach_the_shim_when_given() {
 
 #[test]
 fn the_vocabulary_prompt_is_read_and_an_empty_one_is_no_biasing() {
-    // The runner carries the prompt because the shim may not fetch it. An empty
-    // vocabulary reads as None (send no `initial_prompt`), since an empty string
-    // would still be an instruction to the model.
+    // Empty is None: no `initial_prompt` at all.
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
@@ -214,20 +207,17 @@ fn the_vocabulary_prompt_is_read_and_an_empty_one_is_no_biasing() {
         .expect("fetch");
     assert_eq!(
         empty, None,
-        "an empty vocabulary is NO biasing, not an empty prompt"
+        "an empty vocabulary is no prompt, not an empty one"
     );
 }
 
-/// An idle runner must be distinguishable from a dead one, or the doctor reads
-/// an empty queue as a stall; it renders `rows == 0` as "nothing to do". Drives
-/// the shipped binary, because the property is about what the agent writes.
+/// The doctor tells idle from dead by `rows == 0`. Drives the shipped binary.
 #[test]
 fn a_runner_with_an_empty_queue_stamps_a_beat_saying_it_had_nothing_to_do() {
     let dir = tempfile::tempdir().expect("tempdir");
     let base = serve(dir.path()); // no blobs registered: the queue derives nothing
     let pulse = dir.path().join("worker-heartbeat.json");
-    // Names itself `voices`, so `kinds_for` gives it `diarize-*` and the runner
-    // skips the vocabulary fetch that only a transcriber needs.
+    // Named `voices`, so the runner skips the vocabulary fetch.
     let (program, args) =
         stub_shim("print(json.dumps({'id': msg['id'], 'ok': True, 'result': {'shim': 'voices'}}))");
 
@@ -263,8 +253,6 @@ fn a_runner_with_an_empty_queue_stamps_a_beat_saying_it_had_nothing_to_do() {
 
 #[test]
 fn a_reply_outside_the_contract_is_refused_not_stored() {
-    // The runner stores what a shim says; one that answers in a shape the fleet
-    // cannot read must fail the job with a reason, not reach the archive.
     let dir = tempfile::tempdir().expect("tempdir");
     let (program, args) = stub_shim(
         "print(json.dumps({'id': msg['id'], 'ok': True, 'result': {'segments': 'none'}}))",

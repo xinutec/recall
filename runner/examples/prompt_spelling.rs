@@ -1,18 +1,13 @@
-//! What the vocabulary prompt buys: household names spelled right (#1665).
+//! What the vocabulary prompt buys: household names spelled right (#1463,
+//! #1665). `prompt_cost` measures what it costs; dropping the prompt for short
+//! clips needs both.
 //!
-//! The other half of `prompt_cost`. That one measures the harm — the prompt
-//! putting a name into audio containing none. This measures the benefit it was
-//! added for (#1463), on the only ground truth that exists: corrections whose
-//! human-written text contains an enrolled name.
-//!
-//! ⚠ **Both halves are needed before the prompt is dropped for short clips.**
-//! Trading a hallucinated name for a misspelled one is not obviously progress,
-//! and neither number means anything without the other.
+//! The ground truth is the corrections whose human-written text contains an
+//! enrolled name: each span is transcribed with and without the prompt.
 //!
 //!     cargo run -p runner --example prompt_spelling -- [<archive root>]
 //!
-//! ⚠ Prints counts and clip lengths only. No name, no transcript and no
-//! correction text is ever echoed.
+//! Prints counts only, never a name, transcript or correction.
 
 use audiocore::{decode, vad::RATE};
 use clap::Parser;
@@ -26,7 +21,7 @@ struct Case {
     clip: PathBuf,
     from: f64,
     to: f64,
-    /// The names the human's text contains — searched for, never printed.
+    /// The names the human's text contains.
     wanted: Vec<String>,
 }
 
@@ -73,7 +68,7 @@ fn cases(root: &Path) -> Vec<Case> {
             .filter(|n| lower.contains(&n.trim().to_lowercase()))
             .cloned()
             .collect();
-        // ⚠ A span outside its own clip is a clock mismatch, not a case.
+        // A span outside its clip is a clock mismatch.
         if wanted.is_empty() || from < 0.0 || to <= from {
             continue;
         }
@@ -154,7 +149,7 @@ fn main() {
         n += 1;
         with += usize::from(a);
         without += usize::from(b);
-        // The clips a "drop the prompt under 2 s" rule would actually touch.
+        // The clips a "no prompt under 2 s" rule would touch.
         if case.to - case.from < 2.0 {
             short_n += 1;
             short_with += usize::from(a);
@@ -167,5 +162,5 @@ fn main() {
     println!(
         "  spans < 2s     {short_with} of {short_n} WITH prompt    {short_without} of {short_n} without"
     );
-    println!("\n⚠ n is small — this is the whole ground truth that exists, not a sample of it.");
+    println!("\nn is small: this is all the ground truth there is, not a sample.");
 }

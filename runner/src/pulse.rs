@@ -4,34 +4,24 @@ use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
-/// Stamp the archive's pulse file, which the doctor reads to answer "is this
-/// Mac still turning audio into transcripts?".
+/// Stamp the archive's pulse, by which the doctor sees this Mac still turning
+/// audio into transcripts. On the archive volume, so it cannot tick while the
+/// archive is unreachable; a failure just leaves it stale.
 ///
-/// The file lives on the archive volume, so a heartbeat cannot tick while the
-/// archive is unreachable. A failed write leaves the pulse stale, which the
-/// doctor reports, so no error reaches the job path.
-///
-/// ⚠ The write must never block the job path either. On an external volume
-/// without a write grant for launchd processes, `open()` can hang instead of
-/// returning `EPERM`. The write therefore runs on a background thread the
-/// caller never waits for: a hung writer costs a stale pulse, not a stopped
-/// worker.
-///
-/// `rows` is the number of segments the shim returned.
+/// On a background thread: on an external volume `open()` can hang instead of
+/// returning `EPERM`, and that must not stop the worker. `rows` is the
+/// segments the shim returned.
 pub fn stamp_pulse(path: Option<&Path>, started: DateTime<Utc>, rows: usize) {
     let Some(path) = path else { return };
     offer(path.to_path_buf(), body(started, Utc::now(), rows));
 }
 
-/// The pulse's JSON, shared by the background and synchronous writes because
-/// the doctor parses it.
+/// The pulse's JSON, which the doctor parses.
 fn body(started: DateTime<Utc>, finished: DateTime<Utc>, rows: usize) -> String {
     serde_json::json!({
         "started": started.to_rfc3339_opts(chrono::SecondsFormat::Micros, false),
         "finished": finished.to_rfc3339_opts(chrono::SecondsFormat::Micros, false),
-        // Via `std::time::Duration`, since an i64 does not fit f64's mantissa.
-        // A negative span (the clock stepped back) becomes 0.0; the two stamps
-        // above still record what happened.
+        // A clock stepped back gives 0.0; the stamps above still tell.
         "seconds": (finished - started)
             .to_std()
             .map_or(0.0, |d| d.as_secs_f64()),
@@ -40,13 +30,8 @@ fn body(started: DateTime<Utc>, finished: DateTime<Utc>, rows: usize) -> String 
     .to_string()
 }
 
-/// Hand the pulse to the background writer, replacing any beat still waiting.
-///
-/// Latest wins: a backlog of heartbeats is worthless, and a depth-1 channel
-/// would keep the oldest of a burst instead of the freshest.
-///
-/// The lock is held only to swap the slot, never across the write, so a writer
-/// stuck in `open()` cannot block a caller.
+/// Hand the pulse to the background writer, replacing any beat still waiting
+/// (latest wins). The lock is held only to swap the slot.
 fn offer(path: PathBuf, body: String) {
     let slot = writer();
     if let Ok(mut held) = slot.0.lock() {
@@ -55,14 +40,8 @@ fn offer(path: PathBuf, body: String) {
     }
 }
 
-/// Wait, at most `limit`, for the last offered beat to land. Returns whether it
-/// did.
-///
-/// For a process about to exit: the writer is a background thread, so `--once`
-/// could otherwise exit before its beat is written, which a loaded machine does
-/// (#1480; `a_runner_with_an_empty_queue_stamps_a_beat…` in
-/// `tests/against_real_recalld.rs`). Bounded for the reason the writer is a
-/// thread at all: `open()` on the archive volume can hang.
+/// Wait at most `limit` for the last beat to land, before exiting (#1480).
+/// Bounded, since `open()` on the archive volume can hang.
 #[must_use]
 pub fn settle(limit: std::time::Duration) -> bool {
     let slot = writer();
@@ -83,10 +62,8 @@ struct State {
 
 type Slot = Arc<(Mutex<State>, Condvar)>;
 
-/// The one background thread every stamp goes through.
-///
-/// It may block for ever inside `fs::write`, so nothing joins it, and
-/// [`settle`] waits for it only up to a limit.
+/// The background writer. It may block for ever in `fs::write`, so nothing
+/// joins it.
 fn writer() -> &'static Slot {
     static WRITER: OnceLock<Slot> = OnceLock::new();
     WRITER.get_or_init(|| {
@@ -125,9 +102,8 @@ pub fn stamp_now(path: &Path, started: DateTime<Utc>, rows: usize) -> std::io::R
     write_atomically(path, &body(started, Utc::now(), rows))
 }
 
-/// Replace the pulse file in one step: write beside it, then rename over it.
-/// `fs::write` truncates first, so the doctor could parse an empty or partial
-/// file; `rename` within a directory is atomic.
+/// Write beside the pulse file and rename over it, so the doctor never reads a
+/// partial one.
 fn write_atomically(path: &Path, body: &str) -> std::io::Result<()> {
     let tmp = path.with_extension("stamping");
     std::fs::write(&tmp, body)?;

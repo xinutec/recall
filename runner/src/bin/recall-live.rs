@@ -1,12 +1,6 @@
-//! `recall-live`: the instant feed.
-//!
-//! Read `audiod`'s live tap, cut it at the pauses, transcribe each utterance the
-//! moment the speaker stops, push it to the fleet. A turn reaches Isis's
-//! timeline two or three seconds after it is said, and the archive pass
-//! replaces it within the hour.
-//!
-//! It holds no state: a live turn's only home is Isis, and the push is the
-//! write. Kill it at any moment and nothing needs recovering.
+//! `recall-live`: the instant feed (see `runner::live`). A turn reaches the
+//! timeline two or three seconds after it is said; the archive pass replaces
+//! it within the hour.
 
 use audiocore::instant::python_isoformat_utc;
 use chrono::Utc;
@@ -16,11 +10,11 @@ use runner::live::{self, Cutter, LIVE_MODEL, Tap, Utterance, spoken};
 use runner::shim::{self, Shim};
 use std::time::{Duration, Instant};
 
-/// How long before the tap is reopened after it ends or fails to open. Short:
-/// the tap ending is the ordinary consequence of capture restarting.
+/// Pause before reopening the tap. Short: the tap ends whenever capture
+/// restarts.
 const REOPEN: Duration = Duration::from_secs(5);
-/// How often the vocabulary is re-read, so a name added in the UI starts
-/// biasing the live feed without a restart.
+/// How often the vocabulary is re-read, so a name added in the UI applies
+/// without a restart.
 const PROMPT_EVERY: Duration = Duration::from_mins(5);
 
 struct Config {
@@ -31,10 +25,8 @@ struct Config {
     args: Vec<String>,
 }
 
-/// The instant feed: audiod's live tap, cut at the pauses, each utterance
-/// transcribed the moment the speaker stops and pushed to the fleet.
-/// `RECALL_SYNC_TOKEN` must be set: the instant feed writes to the meaning
-/// plane, which is the sync plane's credential, never a device token.
+/// Transcribe audiod's live tap, one utterance at a time, and push each to
+/// recall. Needs `RECALL_SYNC_TOKEN`; a device token cannot write live turns.
 #[derive(Parser)]
 #[command(name = "recall-live")]
 struct Cli {
@@ -73,9 +65,6 @@ fn parse_args() -> Config {
 }
 
 /// Transcribe one utterance and push what it said.
-///
-/// Errors go back to the caller, which logs them and takes the next utterance,
-/// so one bad clip does not stop the feed.
 fn handle(
     shim: &mut Shim,
     client: &Client,
@@ -110,9 +99,8 @@ fn main() {
     let client = Client::new(&config.base, &config.token);
     let (to_shim, utterances) = live::channel();
 
-    // The transcriber thread owns the shim, the HTTP client and the
-    // vocabulary; the reader below owns the tap and the detector. They share
-    // only the channel.
+    // The transcriber thread owns the shim and the client; the reader below
+    // owns the tap and the detector. They share only the channel.
     let program = config.program.clone();
     let args = config.args.clone();
     let worker = std::thread::spawn(move || {
@@ -134,8 +122,8 @@ fn main() {
                 return;
             }
         }
-        // Best-effort, unlike the runner, where it is fatal: a live turn is
-        // superseded within the hour anyway.
+        // Unlike the runner, not fatal: a live turn is replaced within the
+        // hour anyway.
         let mut prompt = client.prompt().unwrap_or_else(|err| {
             tracing::warn!(%err, "no vocabulary; the live feed is unbiased for now");
             None
@@ -150,9 +138,8 @@ fn main() {
             }
             if let Err(err) = handle(&mut shim, &client, prompt.as_deref(), &utterance) {
                 tracing::warn!(%err, at = %utterance.start, "live utterance failed; continuing");
-                // Anything but a refusal may mean the shim is broken, so
-                // respawn it rather than write to a closed pipe for ever. A
-                // refusal is the clip's problem.
+                // A refusal is the clip's fault; anything else may mean the
+                // shim is dead.
                 if !matches!(
                     err.downcast_ref::<shim::Error>(),
                     Some(shim::Error::Refused(_))
@@ -165,10 +152,9 @@ fn main() {
         });
     });
 
-    // ⚠ One cutter for the life of the process, not one per tap:
-    // `Detector::load` holds a process-wide lock, so a second live one would
-    // deadlock. Reusing it across taps is safe because each tap's end flushes
-    // the open region.
+    // One cutter for the process, not one per tap: the detector holds a
+    // process-wide lock, so a second would deadlock. Each tap's end flushes
+    // it.
     let mut cutter = match Cutter::open() {
         Ok(cutter) => cutter,
         Err(err) => {
@@ -191,8 +177,6 @@ fn main() {
                 if let Some(last) = cutter.flush(Utc::now()) {
                     live::offer(&to_shim, last);
                 }
-                // Zero windows means the tap idled out because capture is not
-                // running: ordinary, so logged at debug.
                 if read == 0 {
                     tracing::debug!("the tap is idle; capture is not running");
                 } else {
@@ -201,8 +185,6 @@ fn main() {
             }
             Err(err) => tracing::warn!(%err, "cannot open the tap"),
         }
-        // Exit if the transcriber has died, so `KeepAlive` restarts the agent
-        // instead of the reader running on with nothing transcribed.
         if worker.is_finished() {
             tracing::error!("the transcriber is gone; exiting so KeepAlive restarts us");
             std::process::exit(1);

@@ -1,20 +1,16 @@
-//! What batching the live tier's calls actually costs and buys, on real audio.
+//! What joining the live tier's calls costs and buys, on real audio.
 //!
-//! The live tier's per-call cost is the 30-second window Whisper pads every
-//! input to, not the audio in it (`live::CALL_SECONDS`). This runs one fixture
-//! through the real cutter and the real shim twice — once per utterance, as the
-//! tier did before, and once joined the way `live::drain` joins them when the
-//! shim is behind — and prints the wall time and the text of each.
-//!
-//! ⚠ **The text is the point, not only the clock.** Arithmetic already says
-//! fewer calls is cheaper. What only a run can say is whether a 12-second call
-//! transcribes the same words as the fragments it replaces.
+//! Runs each clip through the real cutter and shim twice: once per utterance,
+//! and once joined as `live::drain` joins them when the shim is behind. Prints
+//! the wall time and the text of each, since the question is whether a joined
+//! call transcribes the same words, not only whether it is cheaper.
 //!
 //!     cargo run -p runner --example live_cost -- <clip.flac> [more...]
 //!
-//! With no arguments it uses the committed public-domain reading. `RECALL_PYTHON`
-//! overrides the interpreter; the default is the project venv, which holds the
-//! weights.
+//! With no arguments it uses the committed public-domain reading.
+//! `RECALL_PYTHON` overrides the interpreter (default: the project venv, which
+//! has the weights; a bare `python` fails inside the shim, which reports it as
+//! a refusal).
 
 use audiocore::decode;
 use audiocore::vad::{RATE, WINDOW};
@@ -27,8 +23,8 @@ use std::time::Instant;
 
 const FIXTURE: &str = "tests/fixtures/speech/public-domain-en.flac";
 
-/// Cut a file into utterances on a clock that advances one window per window —
-/// a tap with no dropped datagrams, which is what a file is.
+/// Cut a file into utterances, the clock advancing one window per window: a
+/// tap that drops nothing.
 fn cut(path: &Path) -> Vec<Utterance> {
     let pcm = decode::decode_s16(path, RATE).expect("decode");
     let samples = decode::to_f32(&pcm);
@@ -53,8 +49,7 @@ fn millis(windows: usize) -> i64 {
     (windows as f64 * audiocore::vad::window_seconds() * 1000.0) as i64
 }
 
-/// The utterances joined exactly as `live::drain` joins them when everything is
-/// already waiting — the state a shim that has fallen behind produces.
+/// The utterances joined as `live::drain` joins them when all are waiting.
 fn joined(utterances: &[Utterance]) -> Vec<Utterance> {
     let mut out: Vec<Utterance> = Vec::new();
     for utterance in utterances {
@@ -67,7 +62,7 @@ fn joined(utterances: &[Utterance]) -> Vec<Utterance> {
     out
 }
 
-/// Transcribe each clip in turn, returning the wall time and what was said.
+/// Wall time and text of transcribing each clip in turn.
 fn run(shim: &mut Shim, clips: &[Utterance]) -> (f64, Vec<String>) {
     let started = Instant::now();
     let mut said = Vec::new();
@@ -95,7 +90,7 @@ fn report(name: &str, clips: &[Utterance], seconds: f64, said: &[String]) {
     println!("  {}", said.join(" "));
 }
 
-/// What batching the live tier's calls actually costs and buys, on real audio.
+/// What joining the live tier's calls costs and buys, on real audio.
 #[derive(Parser)]
 struct Cli {
     /// Audio to cut and transcribe [default: the public-domain fixture].
@@ -109,23 +104,18 @@ fn main() {
     } else {
         args.iter().map(Path::new).collect()
     };
-    // ⚠ The project venv, not the devshell's python: the weights live there and
-    // a bare `python` answers `ModuleNotFoundError` from inside the shim, which
-    // arrives as a refusal — i.e. as though the clip were the problem.
     let python = std::env::var("RECALL_PYTHON").unwrap_or_else(|_| ".venv/bin/python".to_owned());
     let mut shim = Shim::spawn(&python, &["-m".to_owned(), "recall.shim_asr".to_owned()])
         .expect("the asr shim");
     assert_eq!(shim.hello().expect("hello"), "asr", "the asr shim");
     for path in paths {
         let utterances = cut(path);
-        // ⚠ One discarded call first. Whisper loads its weights on the first
-        // transcribe, not on `hello`, so without this the whole model load is
-        // charged to whichever arm runs first — and that is the arm under test.
+        // A discarded call first: Whisper loads its weights on the first
+        // transcribe, not on `hello`, and that cost belongs to neither arm.
         run(&mut shim, &utterances[..1]);
         let batches = joined(&utterances);
         println!("\n=== {} ===", path.display());
-        // ⚠ Fragments first, so the batched arm cannot be the one that benefits
-        // from anything the other warmed up.
+        // Fragments first, so any warm-up favours them, not the joined arm.
         let (fragments, fragment_text) = run(&mut shim, &utterances);
         let (joint, batch_text) = run(&mut shim, &batches);
         report("per utterance", &utterances, fragments, &fragment_text);

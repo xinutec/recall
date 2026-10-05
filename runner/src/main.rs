@@ -1,12 +1,7 @@
 //! `runner`: the Mac's job orchestration.
 //!
-//! Poll recalld for the next job, fetch its audio, drive a model shim, push
-//! the result, ack. Stateless, because the queue lives on Isis: killing it
-//! costs only a lease that expires.
-//!
-//! `transcribe-segment` results become turns (`recalld::turns::PER_MIC`).
-//! `transcribe-room` results are stored but not yet interpreted: the room
-//! stream waits on the referee.
+//! Lease the next job from recalld, fetch its audio, drive a model shim, push
+//! the result. Stateless: killing it costs only a lease that expires.
 
 use audiocore::job::Kind;
 use audiocore::shim::{Stored, voices};
@@ -23,9 +18,9 @@ const BACKOFF: Duration = Duration::from_mins(1);
 /// How long a `--once` runner waits for its last beat before exiting.
 const PULSE_SETTLE: Duration = Duration::from_secs(2);
 
-/// What each shim can be given, keyed by the name it reports in `hello` rather
-/// than inferred from argv, so a runner pointed at the wrong module does not
-/// lease work it will fail. An unknown name is fatal.
+/// What each shim can do, keyed by the name it reports in `hello` (not argv),
+/// so a runner pointed at the wrong module leases nothing. An unknown name is
+/// fatal.
 fn kinds_for(shim_name: &str) -> Option<&'static [Kind]> {
     match shim_name {
         "asr" => Some(&[Kind::TranscribeSegment]),
@@ -91,11 +86,8 @@ fn parse_args() -> Config {
     }
 }
 
-/// Embed each named span of one clip into the print list the fleet files.
-///
-/// A refused span is skipped, not fatal: otherwise one corrupt stretch would
-/// cost every other voice in the clip its enrolment, and the fleet would record
-/// the whole clip as decided.
+/// Embed each named span of one clip. A refused span is skipped, so one corrupt
+/// stretch does not cost the clip's other voices their enrolment.
 fn embed_spans(
     shim: &mut Shim,
     clip: &Path,
@@ -131,11 +123,8 @@ fn stored(result: &Stored<serde_json::Value>) -> Result<String, serde_json::Erro
     serde_json::to_string(result)
 }
 
-/// Do one job. `Ok(false)` means the queue was empty.
-///
-/// An empty queue stamps the pulse with `rows == 0`, so the doctor can tell an
-/// idle runner from a gone one. A runner wedged inside a job never stamps, so
-/// the doctor still catches the stall.
+/// Do one job; `Ok(false)` when the queue was empty. An empty queue still
+/// stamps the pulse (`rows == 0`), so the doctor can tell idle from gone.
 fn one(
     client: &Client,
     shim: &mut Shim,
@@ -166,8 +155,7 @@ fn one(
             .transcribe_in(&clip, language.as_deref(), prompt)
             .map(|a| (a.raw, a.reply.segments.len())),
         Kind::DiarizeSegment => shim.diarize(&clip).map(|a| (a.raw, a.reply.turns.len())),
-        // One model call per named turn, composed here. A refused span costs
-        // only its print; the fleet re-derives it while its turn is unenrolled.
+        // One model call per named turn.
         Kind::EnrollSpeaker => embed_spans(shim, &clip, &spans),
     };
     // The scratch copy is removed whatever the outcome.
@@ -187,9 +175,8 @@ fn one(
             stamp_pulse(pulse, started, rows);
             Ok(true)
         }
-        // A refusal is terminal and recorded: the clip is the problem, not the
-        // process, so a retry would get the same answer. The stored failure
-        // shows which clips could not be processed.
+        // A refusal is recorded: the clip is the problem, and a retry would
+        // get the same answer.
         Err(shim::Error::Refused(why)) => {
             tracing::warn!(id, %why, "shim refused; recording the failure");
             client.finish(
@@ -241,9 +228,8 @@ fn main() {
         tracing::error!(shim = %name, "unknown shim; refusing to guess what it can do");
         std::process::exit(1);
     };
-    // Fatal if unreachable, but only for a transcribing runner: unbiased
-    // transcripts would have to be redone. An empty vocabulary is `None`, no
-    // biasing. Diarization does not use it.
+    // Fatal if unreachable for a transcribing runner: an unbiased transcript
+    // would have to be redone.
     let prompt = if kinds.contains(&Kind::TranscribeSegment) {
         match client.prompt() {
             Ok(prompt) => {
@@ -291,8 +277,7 @@ fn main() {
                     std::process::exit(1);
                 }
                 std::thread::sleep(BACKOFF);
-                // The shim may be dead; replace it rather than write to a
-                // closed pipe.
+                // The shim may be dead: replace it.
                 if let Ok(fresh) = Shim::spawn(&config.program, &config.args) {
                     shim = fresh;
                 }

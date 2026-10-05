@@ -1,21 +1,17 @@
-//! What the vocabulary prompt buys and what it costs, on short clips (#1665).
+//! What the vocabulary prompt costs on short clips: names put into audio that
+//! has none (#1665). `prompt_spelling` measures what it buys.
 //!
-//! The ASR prompt lists household names first so Whisper spells them right, so
-//! on audio it cannot place it reaches for them: measured over the archive, the
-//! live tier is 8.8x likelier than the archive pass to emit a turn that is
-//! nothing but a name. The obvious remedy — drop the prompt for very short
-//! clips — trades one error for another, and #1665 says to measure both
-//! directions before choosing. This measures the harm direction.
+//! The prompt lists household names so Whisper spells them right, and on audio
+//! it cannot place, Whisper reaches for them: over the archive, the live tier
+//! was 8.8x likelier than the archive pass to emit a turn that is only a name.
 //!
-//! ⚠ **Known-truth audio containing NO names.** The committed public-domain
-//! reading is cut to the lengths the live tier actually sends, so every
-//! household name in the output is a hallucination by construction — there is
-//! nothing to argue about.
+//! The audio is the committed public-domain reading, cut to the lengths the
+//! live tier sends. It contains no household name, so every one in the output
+//! is a hallucination.
 //!
 //!     RECALL_SYNC_TOKEN=… cargo run -p runner --example prompt_cost -- [<db>]
 //!
-//! ⚠ It prints counts only. The names are read from the archive to be searched
-//! for and are never echoed, and neither is any transcript.
+//! Prints counts only, never a name or a transcript.
 
 use audiocore::decode;
 use audiocore::vad::RATE;
@@ -26,11 +22,11 @@ use std::path::Path;
 
 const FIXTURE: &str = "tests/fixtures/speech/public-domain-en.flac";
 const ARCHIVE: &str = "/Volumes/Backup/recall/recall.sqlite";
-/// The lengths live actually sends: its VAD fragments run 0.35-0.74 s, and the
-/// archive pass sees a whole 60 s clip.
+/// Clip lengths to try, from the live tier's typical fragment up to its
+/// longest call (`live::CALL_SECONDS`).
 const LENGTHS: [f64; 5] = [0.5, 1.0, 2.0, 5.0, 12.0];
 
-/// Enrolled household names, read to be searched FOR and never printed.
+/// The enrolled names, to search for.
 fn names(db: &Path) -> Vec<String> {
     let conn = rusqlite::Connection::open(db).expect("open the archive");
     let mut stmt = conn
@@ -64,17 +60,12 @@ fn cut(samples: &[f32], seconds: f64) -> Vec<&[f32]> {
     samples.chunks(per).filter(|c| c.len() == per).collect()
 }
 
-/// The quietest `want` fragments, which is where the harm actually lives.
+/// The quietest `want` fragments, overlapping by half so a 48-second fixture
+/// yields enough of them.
 ///
-/// ⚠ **Clearly read poetry is not the condition under test.** The archive
-/// finding is that the tier reaches for a name on audio it cannot place, and a
-/// well-articulated stanza is placeable — so cutting the fixture evenly mostly
-/// measures the easy case. The gaps between stanzas are the low-information
-/// audio a half-second VAD fragment often really holds, and they are the arm
-/// that should separate.
-///
-/// ⓘ Overlapping by a half-hop, so a 48-second fixture yields enough quiet
-/// fragments to say anything at all.
+/// Clearly read verse is easy to place; the hallucination happens on audio the
+/// model cannot place. The gaps between stanzas are that kind of audio, like
+/// many half-second VAD fragments.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -147,10 +138,7 @@ fn main() {
         .expect("the asr shim");
     assert_eq!(shim.hello().expect("hello"), "asr");
 
-    // ⚠ The glossary from the running fleet, so this measures the prompt that
-    // actually ships rather than a reconstruction of it.
-    // ⚠ The sync token from the environment, never a literal: this reads the
-    // household's real glossary and the credential must not live in the repo.
+    // The prompt that ships, from the running server.
     let token = std::env::var("RECALL_SYNC_TOKEN")
         .expect("RECALL_SYNC_TOKEN must be set — the glossary is behind the sync plane");
     let client = runner::client::Client::new("https://recall.xinutec.org", &token);
@@ -178,8 +166,6 @@ fn main() {
         );
     }
 
-    // ⚠ The condition the archive finding is actually about: audio the model
-    // cannot place. An evenly cut reading is mostly the easy case.
     println!(
         "\nthe QUIETEST fragments — low-information audio, which is what a\n              half-second VAD fragment often really holds:"
     );

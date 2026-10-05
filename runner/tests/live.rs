@@ -1,9 +1,7 @@
-//! The live feed, through its public surface. The cutting tests run on the
-//! committed public-domain reading, because silero is trained on speech and a
-//! tone proves nothing about it.
+//! The live feed. The cutting tests use the committed public-domain reading:
+//! silero is trained on speech, so a tone proves nothing.
 
-// Sample and window counts as floats: exact at test sizes, and avoids
-// `try_from` around every assertion.
+// Counts as floats are exact at test sizes.
 #![expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -23,8 +21,7 @@ fn epoch() -> DateTime<Utc> {
     "2026-09-14T09:00:00+00:00".parse().expect("a fixed clock")
 }
 
-/// Feed a whole file through the cutter on a clock advancing one window per
-/// window, as a tap with no dropped datagrams would.
+/// Feed a file through the cutter, the clock advancing one window per window.
 fn cut(path: &Path) -> Vec<Utterance> {
     let pcm = decode::decode_s16(path, RATE).expect("decode");
     let samples = decode::to_f32(&pcm);
@@ -50,8 +47,8 @@ fn real_speech_is_cut_into_utterances_that_carry_their_own_audio() {
     let path = Path::new(FIXTURE);
     assert!(path.exists(), "the committed fixture must not vanish");
     let utterances = cut(path);
-    // 48 s of read poetry with pauses between stanzas. One utterance would mean
-    // the pause rule never fired; dozens would mean it fires mid-word.
+    // 48 s of verse with pauses between stanzas: one utterance would mean the
+    // pause rule never fired, dozens that it fires mid-word.
     assert!(
         (2..=40).contains(&utterances.len()),
         "{} utterances from the reading",
@@ -70,13 +67,10 @@ fn real_speech_is_cut_into_utterances_that_carry_their_own_audio() {
 
 #[test]
 fn an_utterance_is_stamped_where_it_was_said() {
-    // The stamp is derived backwards from `now`, so it matches the offset into
-    // the file, and would still do so on a tap that dropped datagrams.
     let utterances = cut(Path::new(FIXTURE));
     let first = utterances.first().expect("the reading is not silent");
     let into_file = (first.start - epoch()).as_seconds_f64();
-    // The reading opens within the first few seconds; the stamp tracks the
-    // file, not the moment of transcription.
+    // The reading opens within the first few seconds.
     assert!(
         (0.0..8.0).contains(&into_file),
         "the first utterance is stamped {into_file:.2}s into the reading"
@@ -105,9 +99,8 @@ fn silence_produces_nothing() {
 
 #[test]
 fn the_tap_is_read_from_the_socket_audiod_publishes_on() {
-    // Pinned in order, because ffmpeg reads a flag's meaning from which side of
-    // `-i` it sits on: `-ac 1` after the input is an output channel count and
-    // leaves the demuxer on its two-channel default.
+    // ffmpeg applies a flag to the input only before `-i`; after it, `-ac 1`
+    // sets the output and the demuxer stays on two channels.
     let argv = tap_argv(runner::live::TAP);
     let i = argv.iter().position(|a| a == "-i").expect("an input");
     let before = &argv[..i];
@@ -141,8 +134,7 @@ fn the_shim_reply_becomes_one_line_of_text() {
 
 #[test]
 fn a_reply_with_nothing_said_in_it_is_not_a_turn() {
-    // Silero heard a voice and the model found no words: ordinary, and an empty
-    // turn would put a blank line on the timeline.
+    // An empty turn would be a blank line on the timeline.
     for reply in [
         serde_json::json!({"language": "en", "segments": []}),
         serde_json::json!({"language": "en", "segments": [{"text": "   "}]}),
@@ -156,8 +148,6 @@ fn a_reply_with_nothing_said_in_it_is_not_a_turn() {
 
 #[test]
 fn a_backed_up_transcriber_drops_rather_than_blocks() {
-    // Blocking would stall the reader, losing the same audio a window later and
-    // its clock with it. The archive pass transcribes this audio regardless.
     let (to, from) = channel();
     let utterance = Utterance {
         samples: vec![0.0; WINDOW],
@@ -175,15 +165,12 @@ fn a_backed_up_transcriber_drops_rather_than_blocks() {
         received > 0 && received < 64,
         "{received} of 64 got through"
     );
-    // A gone transcriber is a reason to stop: every later utterance would be
-    // lost too, so the reader stops and KeepAlive restarts the pair.
+    // A gone transcriber is a reason to stop.
     drop(from);
     assert!(!offer(&to, utterance));
 }
 
-/// An utterance of `seconds` of audio starting `at` seconds after the epoch.
-/// Real samples let the length checks catch a join that stamps a span it did
-/// not bridge.
+/// `seconds` of non-zero samples starting `at` seconds after the epoch.
 fn utterance(at: f64, seconds: f64) -> Utterance {
     Utterance {
         samples: vec![0.1; (seconds * f64::from(RATE)) as usize],
@@ -192,8 +179,8 @@ fn utterance(at: f64, seconds: f64) -> Utterance {
     }
 }
 
-/// Everything `drain` emits for a queue filled before the transcriber looks,
-/// as when a shim has fallen behind the microphone.
+/// What `drain` emits for a queue filled before it looks, as when the shim is
+/// behind.
 fn batches(utterances: Vec<Utterance>) -> Vec<Utterance> {
     let (to, from) = channel();
     for utterance in utterances {
@@ -207,8 +194,7 @@ fn batches(utterances: Vec<Utterance>) -> Vec<Utterance> {
 
 #[test]
 fn utterances_waiting_on_a_busy_shim_go_out_in_one_call() {
-    // A call costs its 30-second window whatever it holds, so one call per
-    // fragment makes the lag grow for as long as anyone talks.
+    // A call costs its 30-second window whatever it holds.
     let queued = vec![
         utterance(0.0, 0.5),
         utterance(1.0, 0.5),
@@ -228,8 +214,6 @@ fn utterances_waiting_on_a_busy_shim_go_out_in_one_call() {
 
 #[test]
 fn the_pause_between_joined_utterances_is_in_the_audio_the_model_hears() {
-    // Splicing speech end-to-end would hand the model a discontinuity where the
-    // room had a pause; the gap is filled with silence of its real length.
     let batches = batches(vec![utterance(0.0, 1.0), utterance(2.0, 1.0)]);
     let batch = batches.first().expect("one call");
     let carried = batch.samples.len() as f64 / f64::from(RATE);
@@ -246,8 +230,6 @@ fn the_pause_between_joined_utterances_is_in_the_audio_the_model_hears() {
 
 #[test]
 fn a_speaker_who_has_stopped_is_not_held_back_for_the_next_one() {
-    // Past BRIDGE_SECONDS the sentence is finished, and waiting to join it to
-    // the next would add latency for nothing.
     let apart = runner::live::BRIDGE_SECONDS + 1.0;
     let batches = batches(vec![utterance(0.0, 1.0), utterance(1.0 + apart, 1.0)]);
     assert_eq!(batches.len(), 2, "a long pause was bridged");
@@ -260,8 +242,6 @@ fn a_speaker_who_has_stopped_is_not_held_back_for_the_next_one() {
 
 #[test]
 fn no_call_outruns_the_window_it_is_paying_for() {
-    // Past 30 s a second encoder pass appears, and without a cap worst-case
-    // latency would be the length of the conversation.
     let queued: Vec<_> = (0..runner::live::BACKLOG)
         .map(|i| utterance(i as f64 * 3.0, 2.5))
         .collect();
@@ -278,7 +258,7 @@ fn no_call_outruns_the_window_it_is_paying_for() {
             batch.seconds()
         );
     }
-    // A refused join starts the next call; batching never loses an utterance.
+    // Nothing lost in the split.
     let total: f64 = batches.iter().map(Utterance::seconds).sum();
     assert!(
         total >= 2.5 * spoken as f64,

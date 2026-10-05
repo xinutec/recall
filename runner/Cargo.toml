@@ -8,38 +8,29 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-# The fleet baseline (docs/standards.md §7; life is the reference table).
-# `pedantic` does not cover these — they live in clippy's `restriction` group —
-# so five recall crates denied none of them. Zero occurrences today, which is
-# what makes this a ratchet rather than a cleanup.
+# The fleet baseline (docs/standards.md §7), from clippy's `restriction` group.
 dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-# The silero detector and WAV writing: the live tier must hear exactly what
-# the archive hears, or one of them cuts an utterance the other keeps.
+# The same speech detector as the archive, so both cut utterances alike.
 audiocore = { path = "../audiocore" }
-# Blocking HTTP: the runner does one job at a time by design, so an async
-# runtime would buy nothing and cost a dependency the Mac has to carry.
+# Blocking HTTP: one job at a time, so async buys nothing.
 ureq = { version = "2", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
-# ⚠ Wall-clock instants in the spelling the rest of the system parses
-# (`datetime.isoformat()` — micros, offset, no `Z`): the archive pulse the doctor
-# reads, and every live turn's start and end. The alternative was hand-formatting
-# `SystemTime`, which is how two spellings of the same instant end up in one
-# system.
+# Instants in the system's one spelling, for the pulse and live turns.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
 recalld = { path = "../recalld" }
-# Reading back what the end-to-end test's recalld wrote. A 200 from the push
-# says stored, not correct; the row is the assertion.
+# The end-to-end test reads back the row recalld wrote: a 200 says stored,
+# not correct.
 rusqlite = { version = "0.40", features = ["bundled"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 axum = "0.8"

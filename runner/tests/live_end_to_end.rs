@@ -1,13 +1,10 @@
-//! The live agent as it actually runs: the real binary, the real tap socket,
-//! the real recalld router, a real shim subprocess; only the model is substituted.
+//! The live agent end to end: the real binary, tap socket, recalld router and
+//! shim subprocess, with only the model stubbed. A turn crosses UDP, stdio and
+//! HTTP, and a fault in any of them gives an agent that runs quietly and stores
+//! nothing, so this asserts the stored row.
 //!
-//! A live turn crosses a UDP socket, a stdio protocol and an HTTP body, and
-//! getting any wrong gives an agent that runs quietly and stores no turn. So
-//! this asserts the row at the far end.
-//!
-//! `--tap` points at a port this test owns: publishing onto the real tap (9876)
-//! would feed the fixture to this machine's live agent, and reading it would
-//! steal that agent's datagrams.
+//! The tap is a port of the test's own, not 9876, which this machine's live
+//! agent uses.
 
 use recalld::app::{Config as ServerConfig, router};
 use std::net::UdpSocket;
@@ -16,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const TOKEN: &str = "sync-me";
-/// Datagram payload, matching what `audiod`'s segmenter publishes.
+/// Datagram payload, as `audiod`'s segmenter publishes.
 const PACKET: usize = 1316;
 
 fn serve(root: &Path) -> String {
@@ -44,15 +41,13 @@ fn serve(root: &Path) -> String {
     format!("http://{}", rx.recv().expect("addr"))
 }
 
-/// The meaning store the live feed writes into, built by the real migrations
-/// so it cannot drift from production's schema.
+/// The meaning store, built by the real migrations.
 fn meaning_store(root: &Path) {
     let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("open");
     recalld::meaning_schema::ensure(&conn).expect("schema");
 }
 
-/// A shim that speaks the real protocol: names itself `asr` and answers every
-/// clip with one line.
+/// A shim named `asr` that answers every clip with one line.
 fn stub_shim() -> Vec<String> {
     vec![
         "-c".to_owned(),
@@ -71,9 +66,8 @@ fn stub_shim() -> Vec<String> {
     ]
 }
 
-/// A free UDP port below the ephemeral range. The socket is dropped so ffmpeg
-/// can bind it, leaving a window in which the port can be claimed; below the
-/// ephemeral range the kernel never hands it to another process in that window.
+/// A free UDP port, released for ffmpeg to bind. Below the ephemeral range, so
+/// the kernel does not hand it to someone else in between.
 fn free_udp_port() -> u16 {
     for port in 20_000..32_768 {
         if let Ok(socket) = UdpSocket::bind(("127.0.0.1", port)) {
@@ -90,8 +84,8 @@ fn publish(port: u16, pcm: &[u8]) {
     let socket = UdpSocket::bind("127.0.0.1:0").expect("bind");
     let to = format!("127.0.0.1:{port}");
     for packet in pcm.chunks(PACKET) {
-        // Unpaced sending would overflow the reader's fifo. One packet is 41 ms
-        // of audio, so 20 ms between packets stays ahead without flooding.
+        // A packet is 41 ms of audio: 20 ms apart stays ahead without
+        // overflowing the reader's fifo.
         std::thread::sleep(Duration::from_millis(20));
         let _ = socket.send_to(packet, &to);
     }
@@ -108,13 +102,10 @@ fn live_turns(root: &Path) -> Vec<(String, String)> {
         .expect("rows")
 }
 
-/// Which half failed when no turn arrived, the tap or the store; the test's
-/// result alone cannot tell them apart. The store is probed with the real
-/// writer: if a canary goes in, the failure is upstream. Only called on the
-/// failure path, after the outcome is decided.
+/// When no turn arrived: did the tap half or the store half fail? A canary
+/// written with the real writer clears the store.
 fn which_half_failed(root: &Path, agent: &mut std::process::Child, elapsed: Duration) -> String {
     let conn = rusqlite::Connection::open(root.join("recall.sqlite"));
-    // Counted before the canary, and labelled so.
     let rows = conn.as_ref().map_or_else(ToString::to_string, |c| {
         c.query_row("SELECT COUNT(*) FROM transcript_segments", [], |r| {
             r.get::<_, i64>(0)
@@ -136,7 +127,6 @@ fn which_half_failed(root: &Path, agent: &mut std::process::Child, elapsed: Dura
         .map_or_else(|e| format!("REFUSED: {e}"), |n| format!("stored {n}")),
         Err(err) => format!("cannot open the store: {err}"),
     };
-    // `try_wait`, not `wait`: a still-running agent would hang the diagnosis.
     let alive = match agent.try_wait() {
         Ok(None) => "still running".to_owned(),
         Ok(Some(status)) => format!("EXITED {status}"),
@@ -155,7 +145,7 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
     let fixture = Path::new("../tests/fixtures/speech/public-domain-en.flac");
     assert!(fixture.exists(), "the committed fixture must not vanish");
     let pcm = audiocore::decode::decode_s16(fixture, audiocore::vad::RATE).expect("decode");
-    // Enough of the reading to contain a whole utterance and a pause after it.
+    // 8 s: a whole utterance and the pause after it.
     let head: Vec<u8> = pcm
         .into_iter()
         .take(audiocore::vad::RATE as usize * 2 * 8)
@@ -179,18 +169,16 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
         .args(stub_shim())
         .env("RECALL_SYNC_TOKEN", TOKEN)
         .env("RUST_LOG", "info")
-        // Not inherited: killing the agent orphans its ffmpeg (`Drop` cannot
-        // run on SIGKILL), and an orphan holding an inherited stdout keeps the
-        // harness's pipe open so `cargo test` looks hung after every test passed.
+        // Not inherited: the kill below orphans ffmpeg, which would hold the
+        // harness's pipe open and make `cargo test` hang after passing.
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("the agent starts");
 
-    // UDP drops what arrives before the socket is bound, so a longer deadline
-    // cannot rescue a burst sent too early. The reading is resent until a turn
-    // appears, which survives any cause of a lost burst; a readiness probe
-    // could not tell our listener from another process holding the port.
+    // UDP sent before ffmpeg binds is lost, so the reading is resent until a
+    // turn appears. A readiness probe could not tell ffmpeg from another
+    // process holding the port.
     std::thread::sleep(Duration::from_secs(2));
 
     let started = Instant::now();
@@ -198,8 +186,7 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
     let mut turns = Vec::new();
     while turns.is_empty() && Instant::now() < deadline {
         publish(port, &head);
-        // The utterance has to be cut, transcribed and pushed after the last
-        // packet lands; poll for that before sending the reading again.
+        // Give the last utterance time to be cut, transcribed and pushed.
         let settle = Instant::now() + Duration::from_secs(10);
         while Instant::now() < settle {
             turns = live_turns(root);
@@ -209,7 +196,7 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
             std::thread::sleep(Duration::from_millis(250));
         }
     }
-    // Diagnosed before the kill, since a killed process tells `try_wait` nothing.
+    // Before the kill, so it can see whether the agent exited on its own.
     let halves = if turns.is_empty() {
         which_half_failed(root, &mut agent, started.elapsed())
     } else {
@@ -217,12 +204,11 @@ fn speech_on_the_tap_becomes_a_turn_in_the_system_of_record() {
     };
     let _ = agent.kill();
     let _ = agent.wait();
-    // The tap ffmpeg outlives the SIGKILL above; it exits on its own within the
-    // idle timeout, and nothing here waits for that.
+    // The orphaned ffmpeg exits after `TAP_IDLE_US`.
 
     assert!(!turns.is_empty(), "no live turn reached the store.{halves}");
     assert_eq!(turns[0].1, "a stub heard something");
-    // The system's one spelling of an instant; a second would split one turn into two rows.
+    // The system's one spelling of an instant.
     assert!(
         turns[0].0.ends_with("+00:00") && turns[0].0.contains('.'),
         "a live turn is stamped {}",

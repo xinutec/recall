@@ -1,10 +1,9 @@
-//! The archive pulse the doctor reads: the writer's half of a contract whose
-//! reader's half is `doctor/tests/verdicts.rs`, both against one shared fixture.
+//! The pulse writer. The reader's tests (`doctor/tests/verdicts.rs`) parse the
+//! same fixture.
 
 use runner::pulse::{stamp_now, stamp_pulse};
 use std::time::{Duration, Instant};
 
-/// The fixture the doctor's test parses, so a diverging shape fails both halves.
 const CONTRACT: &str = include_str!("../../tests/fixtures/worker-heartbeat.json");
 
 #[test]
@@ -29,8 +28,7 @@ fn the_pulse_carries_every_key_the_doctor_reads() {
 
 #[test]
 fn the_stamps_are_spelled_the_way_the_doctor_parses_them() {
-    // An offset, not `Z`: the archive compares instants as text, so two
-    // spellings of one instant fail to match.
+    // Instants are compared as text, so there is one spelling.
     let dir = tempfile::tempdir().expect("tmp");
     let path = dir.path().join("worker-heartbeat.json");
     stamp_now(&path, "2026-09-13T18:00:00Z".parse().expect("started"), 0).expect("write");
@@ -45,20 +43,15 @@ fn the_stamps_are_spelled_the_way_the_doctor_parses_them() {
 
 #[test]
 fn no_path_means_no_pulse_and_no_panic() {
-    // A runner not beside the archive must not invent a heartbeat; `None` is
-    // that case, and it is silent.
     stamp_pulse(None, "2026-09-13T18:00:00Z".parse().expect("started"), 0);
 }
 
-/// The pulse must not be able to stop the worker. On an external volume a
-/// launchd process has no write grant for, `open()` hangs rather than returning
-/// `EPERM`. A hang cannot be reproduced portably, so this pins the property that
-/// makes one survivable: the caller does not wait for the write. The assertion
-/// is on the caller's latency, not the outcome.
+/// On an external volume launchd has no grant for, `open()` hangs. A hang
+/// cannot be reproduced portably, so this checks what makes one harmless: the
+/// caller does not wait for the write.
 #[test]
 fn stamping_never_makes_the_caller_wait_on_the_filesystem() {
     let dir = tempfile::tempdir().expect("tmp");
-    // A path whose parent does not exist: the write cannot succeed.
     let path = dir.path().join("no-such-dir").join("worker-heartbeat.json");
     let started = "2026-09-13T18:00:00Z".parse().expect("started");
 
@@ -75,7 +68,6 @@ fn stamping_never_makes_the_caller_wait_on_the_filesystem() {
     assert!(!path.exists(), "and the write genuinely could not land");
 }
 
-/// The synchronous form reports failure, for a caller that wants the answer.
 #[test]
 fn the_synchronous_form_reports_what_the_filesystem_said() {
     let dir = tempfile::tempdir().expect("tmp");
@@ -94,10 +86,8 @@ fn the_synchronous_form_reports_what_the_filesystem_said() {
     );
 }
 
-/// The asynchronous form does eventually deliver. It stamps in a loop by
-/// design: the writer is process-global and latest-wins, so one beat may be
-/// superseded before it lands (here by the sibling test's 50 stamps). What is
-/// guaranteed is that stamping keeps the pulse ticking.
+/// Stamps in a loop: the writer is process-wide and latest-wins, so another
+/// test's stamp can replace one before it lands.
 #[test]
 fn stamps_left_for_the_background_writer_keep_the_pulse_ticking() {
     let dir = tempfile::tempdir().expect("tmp");

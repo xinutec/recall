@@ -11,34 +11,27 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 pub enum Error {
     Spawn(String),
     Write(String),
-    /// The child closed its stdout: it died, and the caller must respawn it.
+    /// The child closed its stdout: it died, and must be respawned.
     Closed,
     Protocol(String),
-    /// The shim answered `ok: false`. The job failed but the shim is fine, so
-    /// respawning it would waste a model load to reach the same answer.
+    /// The shim answered `ok: false`: the job failed, the shim is fine.
     Refused(String),
 }
 
-/// Describe a reply that would not parse, without reproducing it.
+/// Describe a reply that would not parse, without quoting it: it carries
+/// private speech.
 ///
-/// A parse error alone cannot tell apart a bare `NaN` from Python's
-/// `json.dumps`, a C-level write to fd 1 under the shim's stdout guard, and a
-/// truncated line, and each needs a different fix.
-///
-/// ⚠ Never log the reply itself: it carries a transcript of private speech.
-/// Only its shape is reported: length, byte classes, bare literals and whether
-/// it ends in a brace.
+/// The shape tells apart what a parse error alone cannot: a bare `NaN` from
+/// Python's `json.dumps`, a C library writing to fd 1, a truncated line.
 fn shape_of(response: &str) -> String {
     let bytes = response.as_bytes();
     let len = bytes.len();
     let ends_brace = response.trim_end().ends_with('}');
-    // Bare `NaN`/`Infinity`: Python emits them, JSON does not allow them.
     let literal = ["NaN", "Infinity", "-Infinity"]
         .into_iter()
         .find(|t| response.contains(t))
         .unwrap_or("none");
-    // Unescaped control bytes mean something other than the protocol wrote to
-    // the stream.
+    // JSON escapes control bytes; a raw one came from another writer.
     let control = bytes
         .iter()
         .filter(|b| **b < 0x20 && **b != b'\n' && **b != b'\r')
@@ -74,10 +67,7 @@ pub struct Shim {
 }
 
 impl Shim {
-    /// Start `program args…` as a shim.
-    ///
-    /// stderr is inherited: the shim logs there, and that output must not be
-    /// read as protocol.
+    /// Start `program args…` as a shim. Its stderr, where it logs, is inherited.
     ///
     /// # Errors
     /// If the process cannot be started or its pipes cannot be taken.
@@ -145,9 +135,8 @@ impl Shim {
         Ok(parsed.result.unwrap_or(serde_json::Value::Null))
     }
 
-    /// Ask the shim what it is. Answered by the protocol layer, so it works
-    /// even when the model failed to load, which makes it safe for capability
-    /// discovery at startup.
+    /// Ask the shim its name. The protocol layer answers, so this works even
+    /// when the model failed to load.
     ///
     /// # Errors
     /// Whatever `request` reports, or `Protocol` if the answer has no name.
@@ -158,14 +147,12 @@ impl Shim {
             .map_err(|_| Error::Protocol("hello did not name the shim".to_owned()))
     }
 
-    /// Send a typed request and read a typed reply, keeping the reply as it
-    /// came: the runner stores what the shim said, not its reading of it.
-    ///
-    /// A reply that does not read as `T` is the shim breaking the contract
-    /// (`audiocore::shim`), and is refused like any answer the job cannot use.
+    /// Send a typed request and read a typed reply, keeping the raw reply too:
+    /// that is what gets stored.
     ///
     /// # Errors
-    /// Whatever `request` reports, or `Refused` for a reply outside the contract.
+    /// Whatever `request` reports, or `Refused` for a reply that does not read
+    /// as `T` (the contract in `audiocore::shim`).
     pub fn ask<Q: Serialize, T: DeserializeOwned>(
         &mut self,
         op: &str,
@@ -178,14 +165,9 @@ impl Shim {
         Ok(Answer { raw, reply })
     }
 
-    /// Diarize one clip, and embed each speaker found in it.
-    ///
-    /// Embedding happens in the same request, because the model is on this
-    /// machine; without it a diarized turn reaches the archive as a bare
-    /// `SPEAKER_00` with no name guess.
-    ///
-    /// No tuning is passed: the archive is diarized with the shipped pyannote
-    /// parameters.
+    /// Diarize one clip and embed each speaker found, in one request: the
+    /// embeddings are what let recalld guess a name. Pyannote's shipped
+    /// parameters, untuned.
     ///
     /// # Errors
     /// Whatever [`Shim::ask`] reports.
@@ -197,11 +179,8 @@ impl Shim {
         self.ask(voices::DIARIZE, &request)
     }
 
-    /// Embed one stretch of a clip into the vector that names a voice.
-    ///
-    /// A span, not the whole clip: enrolment learns one voice from one labelled
-    /// turn, and the rest of the clip holds other speakers. The shim does the
-    /// cutting, since it already decodes the audio.
+    /// Embed one stretch of a clip, in seconds from its start. A stretch, since
+    /// the rest of the clip holds other voices; the shim cuts it.
     ///
     /// # Errors
     /// Whatever [`Shim::ask`] reports.
@@ -239,8 +218,8 @@ impl Shim {
         self.ask(asr::OP, &request)
     }
 
-    /// Transcribe one clip in a stated `language` (`"nl"`), the default model;
-    /// `None` leaves it to the model, exactly as [`Shim::transcribe`] does.
+    /// Transcribe one clip with the default model, in `language` (`"nl"`) or,
+    /// given `None`, whatever the model detects.
     ///
     /// # Errors
     /// Whatever [`Shim::ask`] reports.
@@ -261,17 +240,15 @@ impl Shim {
     }
 }
 
-/// A shim's reply, as it came and as read.
+/// A shim's reply, raw (what recalld stores) and typed.
 #[derive(Debug, Clone)]
 pub struct Answer<T> {
-    /// What the shim sent: what the fleet stores.
     pub raw: serde_json::Value,
     pub reply: T,
 }
 
 impl Drop for Shim {
     fn drop(&mut self) {
-        // Kill and reap the child so it does not outlive the runner.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
