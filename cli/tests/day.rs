@@ -1,4 +1,4 @@
-//! The local-day window, the one place this crate does arithmetic on time.
+//! The local-day window.
 
 use cli::day::bounds;
 
@@ -10,9 +10,27 @@ fn a_date_becomes_a_window_exactly_one_day_long() {
     assert_eq!(end - start, chrono::Duration::days(1));
 }
 
-/// The offset comes from the day asked for, not from now; otherwise a summer or
-/// winter date is an hour off, enough to move an evening onto the wrong day.
-/// Stated as "they differ" rather than a fixed offset so it holds in any timezone.
+/// Days of 23 and 25 hours included: each ends where the next begins. The
+/// dates are the 2026 clock changes in Europe and the US; in other zones they
+/// are ordinary days.
+#[test]
+fn consecutive_days_tile_with_no_gap_across_a_clock_change() {
+    for (day, next) in [
+        ("2026-03-29", "2026-03-30"),
+        ("2026-10-25", "2026-10-26"),
+        ("2026-03-08", "2026-03-09"),
+        ("2026-11-01", "2026-11-02"),
+    ] {
+        let (_, end) = bounds(day).expect("a real date");
+        let (start, _) = bounds(next).expect("a real date");
+        let end = chrono::DateTime::parse_from_rfc3339(&end).expect("rfc3339");
+        let start = chrono::DateTime::parse_from_rfc3339(&start).expect("rfc3339");
+        assert_eq!(end, start, "{day} ends at {end}, {next} begins at {start}");
+    }
+}
+
+/// The offset comes from the day asked for, not from now. Asserted as "they
+/// differ" so it holds in any timezone.
 #[test]
 fn a_summer_day_and_a_winter_day_do_not_share_an_offset() {
     let (summer, _) = bounds("2026-07-05").expect("summer");
@@ -38,8 +56,7 @@ fn today_and_yesterday_are_a_day_apart() {
     assert_eq!(today - yesterday, chrono::Duration::days(1));
 }
 
-/// Anything else is refused rather than guessed at, or a typo would silently
-/// answer about the wrong day.
+/// Refused, not guessed: a typo must not answer about the wrong day.
 #[test]
 fn anything_that_is_not_a_date_is_refused() {
     for junk in ["yestreday", "", "2026-13-01", "05/07/2026", "last tuesday"] {

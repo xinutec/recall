@@ -1,13 +1,10 @@
-//! Turning a date a person typed into the window the archive is asked about.
-//!
-//! ⚠ The local day, using the UTC offset in force on that day, not today's.
-//! The archive stores UTC; with today's offset, a date across a daylight-saving
-//! change would shift by an hour and move late-evening conversations to the
-//! next day.
+//! A date a person typed, as the window of UTC instants it covers locally.
 
-use chrono::{Duration, Local, NaiveDate, TimeZone};
+use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone};
 
-/// The two instants bounding the local day `date` names, as RFC 3339.
+/// The local midnights starting `date` and the day after, as RFC 3339, each
+/// with the offset in force then. A day across a clock change is 23 or 25
+/// hours long.
 ///
 /// Accepts `YYYY-MM-DD`, `today` and `yesterday`; `None` for anything else.
 #[must_use]
@@ -17,12 +14,15 @@ pub fn bounds(date: &str) -> Option<(String, String)> {
         "yesterday" => Local::now().date_naive() - Duration::days(1),
         _ => NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?,
     };
-    // `earliest()`, because a local midnight can be ambiguous when the clocks
-    // move; the earliest instant keeps the window a superset of the day, since
-    // a duplicated conversation is visible and a missing one is not.
-    let start = Local
-        .from_local_datetime(&day.and_hms_opt(0, 0, 0)?)
-        .earliest()?;
-    let end = start + Duration::days(1);
+    let start = midnight(day)?;
+    let end = midnight(day.succ_opt()?)?;
     Some((start.to_rfc3339(), end.to_rfc3339()))
+}
+
+/// The local midnight starting `day`. If the clocks move then, the earliest
+/// such instant.
+fn midnight(day: NaiveDate) -> Option<DateTime<Local>> {
+    Local
+        .from_local_datetime(&day.and_hms_opt(0, 0, 0)?)
+        .earliest()
 }
