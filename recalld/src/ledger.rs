@@ -80,6 +80,9 @@ pub enum Outcome {
     /// Fewer turns than exist and nothing to name. Detail: `produced`,
     /// `existing`, `speakers`.
     Undiscriminating,
+    /// The clip's lines predate its stored result and stay as they are: the
+    /// result is fetched for render only (#1916).
+    LinesPredateResult,
     // Enrolment.
     Enrolled,
     NothingEnrolled,
@@ -105,6 +108,7 @@ impl Outcome {
             Self::AllSegmentsLooped => "all-segments-looped",
             Self::CoverageGuard => "coverage-guard",
             Self::Undiscriminating => "undiscriminating",
+            Self::LinesPredateResult => "lines-predate-result",
             Self::Enrolled => "enrolled",
             Self::NothingEnrolled => "nothing",
             Self::Refused => "refused",

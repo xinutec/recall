@@ -61,6 +61,13 @@ enum Task {
         #[arg(long)]
         id: i64,
     },
+    /// Queue a transcription for each shown clip with no stored result,
+    /// leaving its lines as they are (`recalld::backfill`).
+    BackfillResults {
+        /// Queue; without this, only say what would be queued.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Store the phones' WAV copies as FLAC (`recalld::phone_flac`).
     PhoneFlac {
         /// Convert; without this, only say what would be converted.
@@ -122,6 +129,12 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
         Task::ShadowDiff => {
             return report(root, |meaning, ingest| {
                 recalld::shadow::run(meaning, ingest, root)
+            });
+        }
+        Task::BackfillResults { apply } => {
+            return report(root, |meaning, ingest| {
+                ingest.busy_timeout(std::time::Duration::from_mins(2))?;
+                recalld::backfill::queue(meaning, ingest, root, apply)
             });
         }
         Task::ShadowClip { id } => {

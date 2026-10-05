@@ -149,6 +149,17 @@ fn edits(
         .collect())
 }
 
+/// The paths of the audio rows that show lines today.
+///
+/// # Errors
+/// If the meaning plane refuses.
+pub fn shown_paths(meaning: &Connection) -> rusqlite::Result<Vec<String>> {
+    SHOWN_CLIPS
+        .prepare(meaning)?
+        .query_map([], |r| r.get(1))?
+        .collect()
+}
+
 pub fn run(
     meaning: &Connection,
     ingest: &Connection,

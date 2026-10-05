@@ -16,6 +16,7 @@ mod align;
 mod align_parity;
 mod assign;
 mod audio;
+mod backfill;
 mod capture;
 mod clips;
 mod conversations;

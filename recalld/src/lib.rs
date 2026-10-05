@@ -9,6 +9,7 @@ pub mod align;
 pub mod app;
 pub mod assign;
 pub mod audio;
+pub mod backfill;
 pub mod capture;
 pub mod clips;
 pub mod conversations;
