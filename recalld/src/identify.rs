@@ -1,15 +1,5 @@
-//! Naming a voice from its embedding.
-//!
-//! Pure arithmetic over vectors, so it lives with the profiles rather than in
-//! the process holding the model weights.
-//!
-//! A person's score is the best cosine over their enrolled voiceprints, never the
-//! mean: someone recorded on four microphones has four quite different vectors,
-//! and averaging them describes nobody. The best-scoring person is the guess.
-//!
-//! Its confidence is a softmax over the per-person bests rather than the raw
-//! cosine: 0.7 against a 0.68 runner-up and 0.7 against a 0.2 mean opposite
-//! things.
+//! Naming a voice from its embedding (`transcript::voice`), against the
+//! voiceprints stored here.
 
 crate::statements! {
     ENROLLED: Meaning =
@@ -24,10 +14,8 @@ pub use transcript::voice::{Guess, SOFTMAX_TEMPERATURE, Voiceprint, match_one};
 /// Below this change, a re-derived score is not worth a write.
 pub const SCORE_EPSILON: f64 = 1e-4;
 
-/// Whether a re-derived guess is worth writing over the stored one.
-///
-/// A stored name with no score counts as changed: it has never been scored, and
-/// stays invisible to every reader that sorts by confidence until it is.
+/// Whether a re-derived guess is worth writing over the stored one. A stored
+/// name with no score counts as changed.
 #[must_use]
 pub fn worth_writing(stored: Option<(&str, Option<f64>)>, fresh: &Guess) -> bool {
     match stored {
@@ -40,11 +28,8 @@ pub fn worth_writing(stored: Option<(&str, Option<f64>)>, fresh: &Guess) -> bool
 
 // --- reading the enrolled people ---------------------------------------------
 
-/// Every enrolled voiceprint.
-///
-/// Vectors are JSON arrays in a TEXT column; a row that will not parse is
-/// skipped, not defaulted. A zero vector would not be inert: it could become
-/// somebody's best match on quiet audio.
+/// Every enrolled voiceprint. A row that will not parse is skipped, not made a
+/// zero vector, which could become somebody's best match on quiet audio.
 ///
 /// # Errors
 /// If the database refuses.
@@ -61,10 +46,8 @@ pub fn enrolled(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<Voiceprint>
     Ok(out)
 }
 
-/// Store a turn's embedding and the name it implies.
-///
-/// ⚠ The guess goes in `speaker_guess`, never `speaker_label`: the label is the
-/// name a person gave, and the read path shows the two differently.
+/// Store a turn's embedding and its guess. The guess goes in `speaker_guess`;
+/// `speaker_label` is the name a person gave.
 ///
 /// # Errors
 /// If the database refuses.

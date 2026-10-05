@@ -313,6 +313,11 @@ fn model_words(input: &Input<'_>, out: &mut Rendered) -> Vec<Word> {
 
 /// A phrase the model writes over silence, where the clip heard none: the
 /// whole clip near-silent, or no speech inside the segment.
+///
+/// Of 21 lines a person marked "nobody spoke" (2026-09-19), 20 had no speech
+/// inside; every line they vouched for had some. Other text with none inside
+/// is kept: a phone's suppression hides quiet speech from the detector, and
+/// another mic confirmed 30% of such lines.
 fn invented(text: &str, start: f64, end: f64, speech: &Speech) -> bool {
     if !is_silence_phrase(text) {
         return false;

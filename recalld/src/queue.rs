@@ -1,10 +1,8 @@
 //! The work queue the Mac's runners poll.
 //!
 //! Jobs are derived from the blobs, never enqueued, so a missed enqueue cannot
-//! strand audio: a `transcribe-segment` job exists for exactly every clip without
-//! a completed one. Leases are time-bounded; a runner that dies lets its lapse and
-//! the job is offered again. Newest clip first: "what are they saying now"
-//! outranks backfill.
+//! strand audio. Leases are time-bounded: a dead runner's job is offered
+//! again. Newest clip first: what is being said now outranks backfill.
 
 use crate::same_speech::COPY_SECONDS;
 use crate::store::{self, ROOM_SOURCE};
@@ -15,15 +13,9 @@ use serde::Serialize;
 use std::path::Path;
 
 crate::statements! {
-    /// Ordered by capture time through the join, not by filename: filename order
-    /// is source-alphabetical the moment a second source exists, and a runner would
-    /// drain every `usb` clip ever recorded before another source got a job. The
-    /// join is safe because every job is derived from a `segments` row.
-    ///
-    /// Enrolment outranks capture time. It is derived from what a person typed, on
-    /// whatever clip they were reading, usually old, and would otherwise wait behind
-    /// days of newer diarize jobs. Its derivation is bounded to a few per pass, so at
-    /// most a handful jump the queue.
+    /// Ordered by capture time, not filename, which would drain one source
+    /// before the next. Enrolment goes first: it follows what a person typed,
+    /// usually on an old clip, and only a few are derived per pass.
     ///
     /// `?2` is the kinds the runner can do, as a JSON array; `?3` enrolment.
     LEASE: Ingest =
@@ -48,11 +40,10 @@ crate::statements! {
              WHERE a.source_id != ?1";
     NON_ROOM_SOURCES: Meaning =
         "SELECT id FROM sources WHERE kind != ?1";
-    /// Measured clips with no transcription job, and none for another copy of
-    /// the same minute: a phone's minute arrives twice, the Mac's `.flac` of
-    /// its stream and the phone's own `.phone.flac`, the same samples stamped
-    /// a few seconds apart ([`COPY_SECONDS`](crate::same_speech::COPY_SECONDS) either side). Newest first; on one
-    /// stamp the phone's copy first, a tie-break only.
+    /// Measured clips with no transcription job, nor one for another copy of
+    /// the minute: a phone's minute arrives twice (the Mac's `.flac` of its
+    /// stream, the phone's `.phone.flac`), stamped within
+    /// [`COPY_SECONDS`](crate::same_speech::COPY_SECONDS). Newest first.
     UNQUEUED_SPEECH: Ingest =
         "SELECT s.filename, s.source, s.start_utc FROM segments s
              JOIN segment_speech p ON p.filename = s.filename
@@ -83,26 +74,21 @@ crate::statements! {
 }
 
 const LEASE_TTL_S: i64 = 10 * 60;
-/// Leases a job may take before it is retired as failed. A runner that dies
-/// mid-job lets its lease lapse and the job is offered again; a clip that kills
-/// the shim every time would otherwise be offered every ten minutes for ever,
-/// newest first, holding the GPU.
+/// Leases a job may take before it is retired as failed; otherwise a clip that
+/// kills the shim would hold the GPU for ever.
 pub const MAX_ATTEMPTS: i64 = 3;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Job {
     pub id: i64,
     pub kind: Kind,
-    /// The blob to work on, fetchable via `/ingest/v1/blob/<source>/<filename>`.
+    /// Fetched via `/ingest/v1/blob/<source>/<filename>`.
     pub filename: String,
-    /// Which recorder it came from: the `<source>` in the blob URL. Carried, not
-    /// derived: `meeting-20260907-0905` is a source id, and no split of a filename
-    /// on a hyphen is safe.
+    /// Carried, not parsed from the filename: `meeting-20260907-0905` is a
+    /// source id, so no split on a hyphen is safe.
     pub source: String,
-    /// For [`Kind::EnrollSpeaker`] only: which stretches of the clip to embed. Filled at
-    /// lease time from the meaning plane, so a voice renamed since the job was
-    /// derived is embedded under its current name. Empty and omitted for every
-    /// other kind.
+    /// For [`Kind::EnrollSpeaker`] only: the stretches to embed, filled at
+    /// lease time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<crate::enrol::Span>,
     /// For [`Kind::TranscribeSegment`] only: the language its session is pinned
@@ -115,13 +101,9 @@ fn iso(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// Derive the diarize job for every clip whose transcription succeeded.
-/// Idempotent, and cheap enough to run on every lease.
-///
-/// Diarization alone attributes nothing; it is the alignment against words that
-/// makes turns, and a clip the ASR refused would only cost the GPU the same
-/// answer again. Not gated on speech: a silent clip never gets a transcription
-/// job, so it cannot reach here.
+/// Derive the diarize job for every clip whose transcription succeeded: without
+/// words to align, diarization attributes nothing. Idempotent and cheap enough
+/// for every lease.
 pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
     DERIVE_FOLLOW_ON.execute(
         conn,
@@ -129,8 +111,7 @@ pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<us
     )
 }
 
-/// A clip's identity without its container: the same recording can exist under
-/// two extensions, so whole filenames compare unequal for one clip.
+/// A filename without its extension: one recording can exist under two.
 fn stem(path: &str) -> String {
     let name = path.rsplit('/').next().unwrap_or(path);
     name.rsplit_once('.')
@@ -138,24 +119,17 @@ fn stem(path: &str) -> String {
         .to_owned()
 }
 
-/// Derive a transcribe job for each microphone clip or upload that has no turns
-/// yet, bounded by `limit` so a backlog queues in bites rather than days of GPU
-/// work in one statement.
-///
-/// ⚠ Only a clip the speech pass has measured, and not as silent: a silent
-/// minute handed to Whisper comes back as "Thank you." Undecodable
-/// (`UNKNOWN_SECONDS`) still queues: the transcriber may read what VAD could not.
-///
-/// The join across the planes is on the filename: the two planes spell the same
-/// instant differently, and `start_utc` compared as text matches nothing.
+/// Derive a transcription job, up to `limit`, for each microphone clip or
+/// upload with no turns that the speech pass measured as not silent (a silent
+/// minute comes back as "Thank you."). Undecodable (`UNKNOWN_SECONDS`) still
+/// queues: the transcriber may read what VAD could not.
 pub fn derive_segment_jobs(
     ingest: &Connection,
     meaning: &Connection,
     now: DateTime<Utc>,
     limit: usize,
 ) -> rusqlite::Result<usize> {
-    // The filenames that already have turns, read in one pass: a correlated LIKE
-    // over both tables is a full scan of each.
+    // Read once: a correlated LIKE would scan both tables.
     let mut have: std::collections::HashSet<String> = std::collections::HashSet::new();
     {
         let mut stmt = TRANSCRIBED_PATHS.prepare(meaning)?;
@@ -165,9 +139,8 @@ pub fn derive_segment_jobs(
         }
     }
 
-    // Every source the meaning plane knows except the room, uploads included:
-    // a source this plane has never heard of gets no job, because nothing could
-    // register that clip's audio either, so the job could only go barren.
+    // A source the meaning plane does not know could never have its audio
+    // registered, so it gets no job.
     let known: std::collections::HashSet<String> = {
         let mut stmt = NON_ROOM_SOURCES.prepare(meaning)?;
         let rows = stmt.query_map([crate::store::ROOM_KIND], |r| r.get::<_, String>(0))?;
@@ -182,8 +155,7 @@ pub fn derive_segment_jobs(
         rows.collect::<Result<_, _>>()?
     };
 
-    // Copies both unqueued meet here; the first one taken (by the order
-    // above) stands for the minute.
+    // Of two unqueued copies, the first stands for the minute.
     let mut taken: Vec<(String, DateTime<Utc>)> = Vec::new();
     let mut inserted = 0;
     for (filename, source, start) in candidates {
@@ -208,13 +180,8 @@ pub fn derive_segment_jobs(
     Ok(inserted)
 }
 
-/// Lease the newest available job of a kind the caller can do: queued, or
-/// leased and lapsed. The lease is the only mutation; a runner acks by
-/// finishing.
-///
-/// `kinds` is what the runner can do, not what exists: a runner holds one shim's
-/// weights, and a job it cannot do would cycle through its attempts against a
-/// process that can never do it. An empty `kinds` leases nothing.
+/// Lease the newest queued or lapsed job of a kind in `kinds` (what the runner
+/// can do: it holds one shim's weights). Empty `kinds` leases nothing.
 pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[Kind]) -> rusqlite::Result<Option<Job>> {
     let conn = store::open(root)?;
     derive_jobs(&conn, now)?;
@@ -230,8 +197,7 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[Kind]) -> rusqlite::Resul
                 kind: r.get(1)?,
                 filename: r.get(2)?,
                 source: r.get(3)?,
-                // Filled by the caller that can reach the meaning plane; this
-                // one holds only the ingest connection.
+                // Filled by the caller, which can reach the meaning plane.
                 spans: Vec::new(),
                 language: None,
             })
@@ -243,8 +209,7 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[Kind]) -> rusqlite::Resul
     Ok(job)
 }
 
-/// Retire every job whose leases are spent and lapsed, as a failure the passes
-/// ledger like any other refusal.
+/// Retire every job whose leases are spent and lapsed, as a failure.
 fn retire_exhausted(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
     RETIRE_EXHAUSTED.execute(
         conn,

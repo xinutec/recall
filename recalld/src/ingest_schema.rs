@@ -1,9 +1,5 @@
-//! The ingest plane's schema (`ingest.sqlite`), in one place.
-//!
-//! `CREATE TABLE IF NOT EXISTS` reaches a new database only; a column added
-//! later has to be added to the tables that already exist, which is what the
-//! `ALTER`s below are for. Every open goes through this, so no pass can meet a
-//! table another pass was meant to have created.
+//! The ingest plane's schema (`ingest.sqlite`). Every open runs it; columns
+//! added later reach existing databases through `add_column`.
 
 #![expect(
     clippy::disallowed_methods,
@@ -75,8 +71,7 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
              UNIQUE (kind, filename)
          );
 
-         -- Clips a pass decided without writing, keyed on (kind, filename)
-         -- because three passes share it and reach the same clip by name.
+         -- Clips a pass decided without writing.
          CREATE TABLE IF NOT EXISTS pass_ledger (
              kind        TEXT NOT NULL,
              filename    TEXT NOT NULL,
@@ -106,14 +101,12 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
     retire_room_jobs(conn)
 }
 
-/// The clips table and the trigger that keeps it (#1911), and on the open that
-/// creates them, every file stored before.
+/// The clips table and its trigger (#1911); on first creation, a clip for
+/// every file stored before.
 fn ensure_clips(conn: &Connection, had_clips: bool) -> rusqlite::Result<()> {
     conn.execute_batch(
-        "-- One row per stored recording (#1911): the clip's identity. The file
-         -- is the key, never (source, start): a phone's own copy and the Mac's
-         -- cut of its stream often open in the same second. A rename keeps the
-         -- id (`clips::rename`). `path` is relative to the data root.
+        "-- One row per stored recording, keyed by file (`transcript::Clip`).
+         -- `path` is relative to the data root.
          CREATE TABLE IF NOT EXISTS clips (
              id       INTEGER PRIMARY KEY,
              source   TEXT NOT NULL,
@@ -123,13 +116,10 @@ fn ensure_clips(conn: &Connection, had_clips: bool) -> rusqlite::Result<()> {
          );
          CREATE INDEX IF NOT EXISTS clips_source_start ON clips (source, start_us);
 
-         -- Every stored file has a clip, whoever stores it: an invariant the
-         -- database keeps, so no writer can forget it. A start that will not
-         -- convert fails the file's own insert rather than store a clip
-         -- without a time. Stored starts are whole seconds, so strftime('%s')
-         -- is exact.
-         -- ⚠ ON CONFLICT on the filename only, never OR IGNORE: OR IGNORE
-         -- also skips a NOT NULL failure, which would drop the clip silently.
+         -- Every stored file has a clip, whoever stores it. A start that will
+         -- not convert fails the file's insert. Starts are whole seconds, so
+         -- strftime('%s') is exact. ON CONFLICT, not OR IGNORE: OR IGNORE
+         -- would also skip a NOT NULL failure and drop the clip silently.
          CREATE TRIGGER IF NOT EXISTS segments_have_clips AFTER INSERT ON segments
          BEGIN
              INSERT INTO clips (source, start_us, filename, path)
@@ -141,8 +131,6 @@ fn ensure_clips(conn: &Connection, had_clips: bool) -> rusqlite::Result<()> {
          END;",
     )?;
     if !had_clips {
-        // Once, when the table first appears: every file stored before the
-        // trigger existed. From then on the trigger keeps them.
         conn.execute_batch(
             "INSERT INTO clips (source, start_us, filename, path)
              SELECT * FROM (
@@ -156,11 +144,9 @@ fn ensure_clips(conn: &Connection, had_clips: bool) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Rows written before `detail` put their counts in the outcome as a sentence
-/// ("attributed: 10 turn(s) named in place ..."). The word stays the outcome;
-/// the whole sentence moves to `detail`, so nothing is lost.
-///
-/// Read first, like [`retire_room_jobs`]: every open runs this.
+/// Older rows put their counts in the outcome as a sentence ("attributed: 10
+/// turn(s) ..."): the word stays, the sentence moves to `detail`. Reads
+/// first, since an UPDATE takes the write lock even when it matches nothing.
 fn split_old_outcomes(conn: &Connection) -> rusqlite::Result<()> {
     let old: bool = conn
         .prepare("SELECT 1 FROM pass_ledger WHERE instr(outcome, ':') > 0")?
@@ -177,12 +163,8 @@ fn split_old_outcomes(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// The room stream left production, and its job kinds
-/// with it. Its unfinished jobs are closed as failures, not deleted, so the
-/// queue keeps its history.
-///
-/// Read first: an UPDATE takes the write lock even when it matches nothing, and
-/// every open runs this.
+/// The room stream is retired: its unfinished jobs are closed as failures, not
+/// deleted. Reads first, like [`split_old_outcomes`].
 fn retire_room_jobs(conn: &Connection) -> rusqlite::Result<()> {
     let kinds = ("transcribe-room", "diarize-room");
     let open: bool = conn
@@ -200,8 +182,7 @@ fn retire_room_jobs(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Add a column to a table that already exists. Every argument is a literal
-/// from this file, never input.
+/// Every argument is a literal from this file, never input.
 fn add_column(conn: &Connection, table: &str, name: &str, ty: &str) -> rusqlite::Result<()> {
     let present: bool = conn
         .prepare(&format!(

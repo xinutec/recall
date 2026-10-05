@@ -35,9 +35,8 @@ crate::statements! {
          WHERE c.id = ?1 AND c.audio_segment_id IS NOT NULL";
 }
 
-/// Lead-in and lead-out when a fragment is played with context.
+/// Padding and minimum length when a fragment is played with context.
 const PAD_S: f64 = 1.5;
-/// Minimum length for a context clip, so a short fragment is listenable.
 const MIN_S: f64 = 5.0;
 
 #[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
@@ -46,9 +45,8 @@ pub struct SpeakerNames {
     pub names: Vec<String>,
 }
 
-/// Every name already in use: enrolled voices plus human-assigned labels.
-/// Diarization's cluster tags (`SPEAKER_00`) are excluded: they are not people,
-/// and offering them as autocomplete would spread them into the roster.
+/// Every name in use: enrolled voices and human labels. Cluster tags
+/// (`SPEAKER_00`) are not people, so they are not offered.
 pub fn known_speaker_names(conn: &Connection) -> rusqlite::Result<SpeakerNames> {
     let mut stmt = SPEAKER_NAMES.prepare(conn)?;
     let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
@@ -84,10 +82,8 @@ pub struct CorrectionsOut {
     pub by_speaker: std::collections::BTreeMap<String, i64>,
 }
 
-/// The labelled fragments for review, newest first, optionally one voice.
-///
-/// Hidden corrections are excluded: hiding one is how a mistaken label is kept
-/// out of enrolment.
+/// The labelled fragments, newest first, optionally of one voice. Hidden
+/// corrections (kept out of enrolment) are excluded.
 pub fn list_corrections(
     conn: &Connection,
     speaker: Option<&str>,
@@ -117,7 +113,7 @@ pub fn list_corrections(
     rows.collect()
 }
 
-/// How many labels each voice has, for the progress strip on the Labels page.
+/// How many labels each voice has.
 pub fn corrections_by_speaker(
     conn: &Connection,
 ) -> rusqlite::Result<std::collections::BTreeMap<String, i64>> {
@@ -126,7 +122,7 @@ pub fn corrections_by_speaker(
     rows.collect()
 }
 
-/// Where a correction's audio lives, and the exact span it was cut from.
+/// A correction's audio file and the span it was cut from.
 pub fn correction_placement(
     conn: &Connection,
     correction_id: i64,
@@ -143,11 +139,8 @@ pub fn correction_placement(
     )))
 }
 
-/// The window for a labelled clip.
-///
-/// Exact by default, padded only with `context` (the inverse of a turn's
-/// playback): the Labels page audits the cut, and padding would hide a wrong
-/// span. `context` helps recognise a voice from a short fragment.
+/// Exact unless `context`: the Labels page audits the cut, and padding would
+/// hide a wrong span.
 #[must_use]
 pub fn correction_window(start_s: f64, end_s: f64, context: bool) -> (f64, f64) {
     if context {
@@ -176,25 +169,17 @@ pub struct AudioQuery {
     context: bool,
 }
 
-/// Whisper reserves 224 tokens for the prompt; stay well under it so the bias
-/// list never crowds out real left-context.
+/// Whisper reserves 224 tokens for the prompt; stay well under it.
 const MAX_PROMPT_CHARS: usize = 600;
 
-/// The household glossary as Whisper's `initial_prompt`, or `None` when empty.
+/// The household glossary as Whisper's `initial_prompt`: speaker names, then
+/// the vocabulary, cut at the length cap.
 ///
-/// Enrolled speaker names first (short, highest value), then the explicit
-/// vocabulary, as a plain comma list.
-///
-/// The length cap ends the list rather than skipping a long term, so the result
-/// is always a priority-ordered prefix.
-///
-/// ⚠ Do not drop the prompt for short clips. On audio it cannot place, the model
-/// may emit a name from the prompt: about 1% of sub-two-second clips, none
-/// without the prompt and none above two seconds. But names are spelled right
-/// about 4x as often with it (few samples: the direction is firm, the magnitude
-/// rough). Re-measure with `cargo run -p runner --example prompt_cost` and
-/// `--example prompt_spelling`. The harm is handled at the output instead:
-/// `quality::is_bare_name` refuses a live turn that is only a name.
+/// Kept for short clips too. On audio it cannot place, the model may emit a
+/// prompt name (about 1% of clips under two seconds), but names are spelled
+/// right about 4x as often with it (few samples). `quality::is_bare_name`
+/// refuses a live turn that is only a name. Re-measure with the runner's
+/// `prompt_cost` and `prompt_spelling` examples.
 pub fn initial_prompt(conn: &Connection) -> rusqlite::Result<Option<String>> {
     let mut ordered: Vec<String> = known_speaker_names(conn)?.names;
     ordered.extend(
@@ -257,8 +242,6 @@ pub async fn correction_audio_route(
     Query(q): Query<AudioQuery>,
 ) -> Response {
     let root = st.root.clone();
-    // Render inside the blocking task: it shells out to ffmpeg, which would
-    // stall the runtime thread for the length of the clip.
     let rendered = tokio::task::spawn_blocking(move || {
         // No enhancement: labelling judges the recording as it is.
         audio::render_blocking(&root, false, |conn| {

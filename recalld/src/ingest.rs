@@ -1,18 +1,13 @@
-//! The ingest plane's handlers (docs/architecture.md, stage A): recorders PUT
-//! closed segments, get a sha-256 receipt, and verify it against their own
-//! re-hash before they will ever evict a local copy. Everything here serves
-//! that contract:
+//! The ingest plane (docs/architecture.md): recorders PUT closed segments and
+//! get a sha-256 receipt, which they check against their own hash before
+//! evicting a local copy.
 //!
-//! - **Durability before acknowledgement.** Bytes are written to a temp file
-//!   in the same filesystem, fsynced, renamed into place, the directory
-//!   fsynced, and the row inserted; only then does the receipt go out. A name
-//!   never points at partial bytes, and a crash leaves either nothing or a blob
-//!   the next identical PUT heals a row for.
-//! - **Append-only.** A re-PUT of identical bytes is idempotent (same
-//!   receipt); a name collision with different bytes is 409 and the stored
-//!   blob is untouched. There is no delete endpoint, by design (decision 2).
-//! - **Write is the only verb a device token buys.** Read (listing, blobs) is
-//!   the sync token's, so a recorder that can upload still cannot read.
+//! - Durable before acknowledged: temp file, fsync, rename, directory fsync,
+//!   then the row, then the receipt. A crash leaves nothing, or a blob the next
+//!   identical PUT heals a row for.
+//! - Append-only: identical bytes are idempotent; different bytes under a
+//!   taken name are 409. There is no delete endpoint (decision 2).
+//! - A device token can only write. Reading takes the sync token.
 
 use crate::app::Config;
 use crate::store::{self, Row};
@@ -43,8 +38,7 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .strip_prefix("Bearer ")
 }
 
-/// A refused credential, small enough to ride an `Err` — the caller turns it
-/// into a `Response` (clippy: a full `Response` is a fat `Err` variant).
+/// A refused credential; small, since a `Response` is too large for an `Err`.
 struct AuthError {
     status: StatusCode,
     message: &'static str,
@@ -56,8 +50,7 @@ impl AuthError {
     }
 }
 
-/// The write gate: inert when no tokens file is configured, else the bearer
-/// must be the named source's own token.
+/// The bearer must be the source's own token, when tokens are configured.
 fn write_auth(config: &Config, headers: &HeaderMap, source: &str) -> Result<(), AuthError> {
     let Some(tokens) = &config.tokens else {
         return Ok(());
@@ -81,7 +74,6 @@ fn write_auth(config: &Config, headers: &HeaderMap, source: &str) -> Result<(), 
     }
 }
 
-/// The read gate: the sync token, when configured.
 fn read_auth(config: &Config, headers: &HeaderMap) -> Result<(), AuthError> {
     let Some(expected) = &config.read_token else {
         return Ok(());
@@ -111,9 +103,8 @@ fn receipt(sha256: &str, bytes: usize) -> Response {
 
 const DIVERGENT: &str = "a different segment already holds this name";
 
-/// The blocking half of a PUT: hash, store, record — called off the async
-/// executor. Every early return maps a defect to the recorder's own fault
-/// line: 400 says fix the name, 409 says the name is taken, 500 says retry.
+/// The blocking half of a PUT. 400: fix the name; 409: the name is taken;
+/// 500: retry.
 fn store_segment(
     config: &Config,
     name: &SegmentName,
@@ -159,10 +150,8 @@ fn store_segment(
         sent_utc,
     };
     if let Err(err) = store::insert(&conn, &row) {
-        // A racing identical PUT can beat us to the row; that is the
-        // idempotent case, not a fault. Anything else: the blob is durable,
-        // the row is missing, and the next identical PUT heals it — so tell
-        // the recorder to retry rather than evict.
+        // A racing identical PUT may have written the row. Otherwise the blob
+        // is durable without a row: ask for a retry, which heals it.
         match store::lookup(&conn, filename) {
             Ok(Some(existing)) if existing.sha256 == sha256 => {}
             _ => {
@@ -180,8 +169,6 @@ enum WriteOutcome {
     AlreadyDivergent,
 }
 
-/// Compare an existing blob against incoming bytes — the crash-recovery and
-/// lost-race path. Hash equality means "the earlier delivery already stands".
 fn compare_existing(dest: &FsPath, body: &[u8]) -> std::io::Result<WriteOutcome> {
     let existing = std::fs::read(dest)?;
     if sha256_hex(&existing) == sha256_hex(body) {
@@ -213,7 +200,7 @@ fn write_blob(
         }
         Err(err) => return Err(err.error),
     }
-    // The rename is durable only once the directory entry is — fsync the dir.
+    // The rename is durable only once the directory is.
     std::fs::File::open(dir)?.sync_all()?;
     Ok(WriteOutcome::Written)
 }
@@ -290,13 +277,9 @@ pub async fn list_segments(
     }
 }
 
-/// Liveness for recorders that stream to nothing: each source's newest capture
-/// time that could be someone talking. `.alive` markers are refreshed only by a
-/// stream, so a store-and-forward recorder needs this instead.
-///
-/// Speech-gated, so a room of digital silence reads idle on purpose. A segment
-/// not yet measured still counts: the scanner runs behind live audio, and a
-/// missing measurement is not evidence of silence.
+/// Liveness for store-and-forward recorders, which refresh no `.alive`
+/// marker: each source's newest delivery, and newest delivery with speech (an
+/// unmeasured segment counts; the scanner runs behind).
 pub async fn liveness(State(config): State<Arc<Config>>, headers: HeaderMap) -> Response {
     if let Err(refused) = read_auth(&config, &headers) {
         return refused.into_response();
@@ -308,8 +291,6 @@ pub async fn liveness(State(config): State<Arc<Config>>, headers: HeaderMap) -> 
         });
     match handle.await {
         Ok(Ok(rows)) => {
-            // Two fields per source, deliberately not one: `delivered` answers
-            // "is it running", `speech` answers "is anyone audible".
             let sources: BTreeMap<String, serde_json::Value> = rows
                 .into_iter()
                 .map(|(source, delivered, speech)| {
@@ -376,14 +357,8 @@ pub struct LeaseQuery {
 }
 
 impl LeaseQuery {
-    /// The kinds to offer.
-    ///
-    /// ⚠ Absent means `transcribe-segment` alone, not "all": a runner that does
-    /// not send the parameter holds only the `asr` shim, and would burn a
-    /// diarize job's attempts failing it.
-    ///
-    /// A kind this recalld does not know is dropped, not an error: a newer
-    /// runner may ask for one, and the kinds it shares still lease.
+    /// Absent means `transcribe-segment` only: an older runner holds only the
+    /// `asr` shim. An unknown kind (from a newer runner) is dropped.
     fn kinds(&self) -> Vec<audiocore::job::Kind> {
         match self.kinds.as_deref() {
             None => vec![audiocore::job::Kind::TranscribeSegment],
@@ -401,9 +376,8 @@ impl LeaseQuery {
     }
 }
 
-/// Lease the newest available job of a kind the caller can do. The
-/// runner's plane is the sync token's — same trust as reading blobs, which the
-/// job points at.
+/// Lease the newest job of a kind the caller can do. Takes the sync token, like
+/// the blobs the job points at.
 pub async fn lease_job(
     State(config): State<Arc<Config>>,
     Query(query): Query<LeaseQuery>,
@@ -416,9 +390,6 @@ pub async fn lease_job(
     let handle =
         tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<crate::queue::Job>> {
             let leased = crate::queue::lease(&config.root, Utc::now(), &kinds)?;
-            // An enrolment job names a clip; its spans say which stretches to
-            // embed, and they live in the meaning plane which `lease` cannot
-            // reach. Attached here so the runner needs no second round trip.
             let Some(mut job) = leased else {
                 return Ok(None);
             };

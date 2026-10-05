@@ -1,8 +1,5 @@
-//! How the instant feed is doing, measured where its output lands: the live
-//! agent keeps no store of its own, so this is the only copy.
-//!
-//! This measures and does not judge. Thresholds, skip rules and verdicts stay
-//! in the doctor, and the caller names its own windows, so there is one grader.
+//! How the live feed is doing, measured where its output lands. This measures;
+//! the doctor judges and names the windows.
 
 use crate::store;
 use chrono::{DateTime, Utc};
@@ -27,17 +24,12 @@ crate::statements! {
         "SELECT speech_seconds FROM segment_speech WHERE filename = ?1 AND speech_seconds >= 0";
 }
 
-/// The numbers the doctor's live checks are computed from.
-///
-/// `lagSamples` travels beside the median because a median over a handful of
-/// turns is noise; how many is enough is the doctor's rule.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveHealth {
-    /// Median seconds between a live turn's end and its arrival. `None` when
-    /// no turn in the window carried both stamps.
+    /// Median seconds between a live turn's end and its arrival.
     pub lag_median_s: Option<f64>,
-    /// How many turns that median is over.
+    /// How many turns that median is over; a handful is noise.
     pub lag_samples: usize,
     /// The newest live turn's start, however old.
     pub newest_turn_utc: Option<String>,
@@ -49,18 +41,11 @@ pub struct LiveHealth {
     pub speech_s: f64,
 }
 
-/// Everything the doctor's live checks need, out of both planes.
+/// What the doctor's live checks need, from both planes.
 ///
-/// `audio_segments` (meaning plane) holds each clip's span; `segment_speech`
-/// (ingest plane) holds how much of it was speech. They are matched in memory on
-/// the clip's filename rather than by `ATTACH`.
-///
-/// ⚠ The window bounds are re-spelled with [`audiocore::instant`], because
-/// timestamps are compared as text: `Z` sorts after `+00:00`, so a `Z` bound
-/// would lose the first row of its window.
-///
-/// ⚠ Do not read `audio_segments.speech_s`: this server's copy of that column
-/// is not filled, so every window would read as unmeasured.
+/// The bounds are re-spelled as stored, since timestamps compare as text (`Z`
+/// sorts after `+00:00`). Speech comes from `segment_speech`:
+/// `audio_segments.speech_s` is not filled on this server.
 pub fn live_health(
     root: &Path,
     lag_since: DateTime<Utc>,
@@ -98,11 +83,8 @@ pub fn live_health(
     Ok(out)
 }
 
-/// What one device source delivered and heard in a window.
-///
-/// Only measured clips count, on both sides of the ratio: an unmeasured clip is
-/// unknown, not silent, and counting it would make a lagging scanner look like a
-/// deaf microphone.
+/// What one device source delivered and heard in a window. Only measured clips
+/// count: otherwise a lagging scanner looks like a deaf microphone.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Heard {
@@ -111,8 +93,7 @@ pub struct Heard {
     pub speech_s: f64,
 }
 
-/// Per device source, what the doctor's deaf check compares: sources that
-/// delivered no measured audio are left out, in source order.
+/// Per device source with measured audio, for the doctor's deaf check.
 ///
 /// # Errors
 /// If either plane refuses the read.
@@ -173,17 +154,14 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
     Some(values[values.len() / 2])
 }
 
-/// A device clip that started inside the window.
 struct Clip {
     source: String,
     filename: String,
     seconds: f64,
 }
 
-/// Each device clip that started inside the window, and how long it ran.
-///
-/// Which sources count is decided by [`crate::sources::SourceKind::is_device`],
-/// not restated in SQL: uploads and the derived room stream have no microphone.
+/// Each device clip that started inside the window
+/// ([`crate::sources::SourceKind::is_device`]).
 fn window_clips(conn: &Connection, since: &str, until: &str) -> rusqlite::Result<Vec<Clip>> {
     let devices: Vec<String> = crate::sources::source_rows(conn)?
         .into_iter()
@@ -221,17 +199,12 @@ fn window_clips(conn: &Connection, since: &str, until: &str) -> rusqlite::Result
     Ok(out)
 }
 
-/// The clip's filename, which is what the ingest plane keys on.
 fn basename(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).to_owned()
 }
 
-/// How much speech each named clip carries, for the ones that have been
-/// measured.
-///
-/// A clip that would not decode is unmeasured, not silent: its stored value is
-/// the negative [`audiocore::vad::UNKNOWN_SECONDS`], which is filtered out so it
-/// counts as delivered but unscanned instead of subtracting speech.
+/// Speech seconds of each measured clip. An undecodable clip stores the
+/// negative [`audiocore::vad::UNKNOWN_SECONDS`] and is left out as unmeasured.
 fn speech_seconds(conn: &Connection, names: &[&str]) -> rusqlite::Result<HashMap<String, f64>> {
     let mut out = HashMap::new();
     if names.is_empty() {

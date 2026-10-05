@@ -1,9 +1,6 @@
-//! recalld — recall's system-of-record daemon on the fleet.
-//!
-//! The ingest plane (docs/architecture.md, stage A): recorders PUT closed
-//! segments and verify sha-256 receipts; the store is append-only; read is a
-//! separate credential. On top of it: VAD, the work queue and
-//! the browsing API.
+//! recalld: recall's system of record on the fleet. The ingest plane
+//! (append-only, receipted uploads), and on top of it speech detection, the
+//! work queue, the passes and the browsing API (docs/architecture.md).
 
 pub mod align;
 pub mod app;

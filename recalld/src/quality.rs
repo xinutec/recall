@@ -1,11 +1,8 @@
-//! Is this transcript text trustworthy?
-//!
-//! Every rule here is decidable from the text and its own word timings, with
-//! no per-device denominator: a phone's noise suppression makes the same
-//! utterance measure differently on two microphones, which is what broke every
-//! signal that reached outside the turn. The rules run at write time, so a turn
-//! they refuse never reaches the read path. The two the doctor also asks are in
-//! `audiocore::text`, so writing a turn and restoring one cannot disagree.
+//! Whether transcript text is trustworthy, decided from the text and its own
+//! word timings: a phone's noise suppression makes the same utterance measure
+//! differently on two microphones, which broke every signal from outside the
+//! turn. The rules are `transcript::quality` and `transcript::text`; this adds
+//! what the write-time passes need.
 
 pub use audiocore::text::{is_repetition_loop, is_wordless, trim_wordless};
 use audiocore::vad::Region;
@@ -25,14 +22,7 @@ pub struct Heard {
 }
 
 impl Heard {
-    /// True if `text`, spanning `[start, end)` seconds into the clip, is what
-    /// the model writes over silence and the clip heard none there: the whole
-    /// clip is near-silent, or no speech falls inside the span.
-    ///
-    /// On 19 September, 20 of the 21 lines a person marked "nobody spoke" had
-    /// no speech inside their span, and every line they vouched for had some.
-    /// Other text with none inside is kept: a phone's suppression hides quiet
-    /// speech from the detector, and another mic confirmed 30% of such lines.
+    /// `render`'s rule for an invented silence phrase, for the old passes.
     #[must_use]
     pub fn invented(&self, text: &str, start: f64, end: f64) -> bool {
         if !is_silence_phrase(text) {
@@ -55,15 +45,13 @@ pub fn speech_inside(regions: &[Region], start: f64, end: f64) -> f64 {
     let pairs: Vec<(f64, f64)> = regions.iter().map(|r| (r.start, r.end)).collect();
     transcript::quality::speech_inside(&pairs, start, end)
 }
+
 /// True if `text` is nothing but one of `names`: "Anna.", " anna ", "Anna!".
 ///
-/// The cost of the vocabulary prompt: it lists the household's names so Whisper
-/// spells them right, so on audio it cannot place it reaches for one. Such a
-/// turn is refused rather than kept at zero confidence because what it carries
-/// is the assertion that a specific person spoke, and no other signal can see
-/// it. It costs the real vocative too, which is affordable only on the live
-/// tier: the archive pass re-derives the minute with the context to tell the
-/// two apart, and supersedes it.
+/// The vocabulary prompt's cost: on audio it cannot place, Whisper reaches for
+/// a listed name. Refused, not kept at zero confidence, since the line asserts
+/// a person spoke. A real vocative is lost too, which only the live tier can
+/// afford: the archive pass supersedes it with context.
 #[must_use]
 pub fn is_bare_name(text: &str, names: &[String]) -> bool {
     let bare = trim_wordless(text);
@@ -81,10 +69,9 @@ pub struct Word {
     pub text: String,
 }
 
-/// Words with their text and timing, out of a stored `word_timings` value, in
-/// either of the two stored encodings: recalld's `{s,e,w}`, re-based to the
-/// turn, and the ASR shim's verbatim `{start,end,text,probability}`, absolute
-/// within the clip. The absolute one must not be compared across turns.
+/// The words of a stored `word_timings`, in either encoding: recalld's
+/// `{s,e,w}`, turn-relative, or the shim's `{start,end,text,probability}`,
+/// clip-relative (not comparable across turns).
 #[must_use]
 pub fn timed_words(timings: &str) -> Vec<Word> {
     let Ok(serde_json::Value::Array(items)) = serde_json::from_str(timings) else {

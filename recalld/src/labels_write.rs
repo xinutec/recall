@@ -1,12 +1,9 @@
-//! The labelling writes.
+//! The labelling writes. Each multi-statement write is one transaction, so a
+//! correction's speaker and the turn it produced cannot disagree.
 //!
-//! ⚠ A name a person typed is the one thing here that cannot be re-derived
-//! from audio. Each multi-statement write is one explicit transaction, so a
-//! correction's speaker and the live turn it produced can never disagree.
-//!
-//! ⚠ A label is not display-only: the voiceprint backfill selects on
-//! `speaker_label`, so naming a voice enrols it. Re-assigning a correction
-//! therefore drops its embedding, to be re-enrolled under the new name.
+//! A label enrols: the voiceprint backfill selects on `speaker_label`, so
+//! re-assigning a correction drops its embedding to re-enrol it under the new
+//! name.
 
 use crate::route;
 use crate::turn_store::{self, HUMAN_MODEL, HiddenReason, NewTurn, Provenance};
@@ -49,7 +46,6 @@ crate::statements! {
         "DELETE FROM corrections WHERE id = ?1";
 }
 
-/// Why a correction was hidden from the corpus by a human in review.
 const HIDE_REASON: &str = "review";
 
 fn drop_voiceprint(tx: &Transaction, correction_id: i64) -> rusqlite::Result<()> {
@@ -57,12 +53,8 @@ fn drop_voiceprint(tx: &Transaction, correction_id: i64) -> rusqlite::Result<()>
     Ok(())
 }
 
-/// Re-assign a correction's voice: the corpus pair, the live turn it produced,
-/// and its voiceprint.
-///
-/// ⚠ All three or none. Updating the pair without the turn leaves the timeline
-/// showing the old name; dropping the embedding without the pair re-enrols the
-/// clip under the name that was just found to be wrong.
+/// Re-assign a correction's voice: the corpus pair, the turn it produced, and
+/// its voiceprint, all or none.
 pub fn set_correction_speaker(
     conn: &mut Connection,
     correction_id: i64,
@@ -80,10 +72,8 @@ pub fn set_correction_speaker(
     tx.commit()
 }
 
-/// Soft-remove a bad label from the corpus, the counts, and the matching pool.
-///
-/// Hidden, not deleted: the pair records that a person judged this clip, even
-/// when the judgement was that it is unusable.
+/// Hide a bad label from the corpus, the counts and the matching pool. Not
+/// deleted: a person judged the clip, even if the judgement was "unusable".
 pub fn hide_correction(conn: &mut Connection, correction_id: i64) -> rusqlite::Result<()> {
     let tx = crate::sql::write(conn)?;
     HIDE_CORRECTION.execute(&tx, (HIDE_REASON, correction_id))?;
@@ -113,8 +103,7 @@ pub async fn correction_reassign_route(
 ) -> Response {
     let speaker = body.speaker.trim().to_owned();
     if speaker.is_empty() {
-        // Clearing a correction's speaker is not a gesture the UI offers, and an
-        // empty one would drop the voiceprint for a name nobody chose.
+        // The UI never clears a speaker; an empty one would drop the voiceprint.
         return (StatusCode::BAD_REQUEST, "speaker required").into_response();
     }
     let root = st.root.clone();
@@ -147,7 +136,7 @@ pub async fn correction_hide_route(
 
 // --- the correction itself ---------------------------------------------------
 
-/// A human turn's ASR confidence. Not a score: a person read it.
+/// Not a score: a person read it.
 const HUMAN_CONFIDENCE: f64 = 1.0;
 
 /// The columns a correction carries forward from the turn it replaces.
@@ -166,22 +155,18 @@ struct Original {
     superseded_by: Option<i64>,
 }
 
-/// Why a correction was refused.
 #[derive(Debug)]
 pub enum CorrectError {
     /// Nothing but whitespace was typed.
     Blank,
-    /// No turn with that id.
     Missing(i64),
-    /// That turn has already been replaced.
     AlreadySuperseded(i64),
-    /// That turn is already hidden.
     Hidden(i64),
-    /// That turn was not hidden as nobody spoke, so there is nothing to undo.
+    /// Not hidden as "nobody spoke", so nothing to undo.
     NotNobodySpoke(i64),
-    /// That turn carries no correction that can still be taken back.
+    /// No correction that can still be taken back.
     NotCorrected(i64),
-    /// The overridden start or end is not an ISO-8601 instant.
+    /// The start or end is not an ISO-8601 instant.
     BadSpan,
     Db(rusqlite::Error),
 }
@@ -192,15 +177,13 @@ impl From<rusqlite::Error> for CorrectError {
     }
 }
 
-/// What the caller may override when correcting a turn.
+/// What a correction may override; `None` keeps the turn's own.
 #[derive(Debug, Default)]
 pub struct Correction<'a> {
-    /// Who said it. `None` keeps whatever the turn had.
     pub speaker: Option<&'a str>,
-    /// A tighter span, from the boundary editor trimming a clip to one speaker.
+    /// A tighter span, from the boundary editor.
     pub start: Option<&'a str>,
     pub end: Option<&'a str>,
-    /// A mis-detected language, e.g. Dutch heard as English.
     pub language: Option<&'a str>,
     /// The person listened and vouches for the words, even if unchanged.
     pub words_checked: bool,
@@ -230,14 +213,9 @@ fn load_original(tx: &Transaction, segment_id: i64) -> Result<Original, CorrectE
         })
 }
 
-/// Replace a turn with a human-authored one and record the corpus pair.
-///
-/// One transaction: the new turn, its search-index row, the supersede and the
-/// pair land together or not at all.
-///
-/// ⚠ `transcript_fts` is contentless FTS5 maintained by the writer, not a
-/// trigger. Skipping the insert fails nothing; it just makes the correction
-/// unsearchable.
+/// Replace a turn with a person's and record the corpus pair, in one
+/// transaction. `transcript_fts` is maintained by the writer: skipping its
+/// insert fails nothing, it just makes the correction unsearchable.
 pub fn apply_correction(
     conn: &mut Connection,
     segment_id: i64,
@@ -252,13 +230,11 @@ pub fn apply_correction(
     let tx = crate::sql::write(conn)?;
     let old = load_original(&tx, segment_id)?;
     if old.superseded_by.is_some() {
-        // A double-tap, or a second tab correcting a stale id, would mint a
-        // second current human turn and a duplicate corpus pair.
+        // A double-tap or a stale tab.
         return Err(CorrectError::AlreadySuperseded(segment_id));
     }
     let language = edit.language.or(old.language.as_deref());
-    // An overridden span is re-spelled in UTC, never stored as sent: these
-    // columns are compared as text. See `audiocore::instant`.
+    // Re-spelled in UTC: these columns are compared as text.
     let start = match edit.start {
         Some(value) => Stamp::parse(value).ok_or(CorrectError::BadSpan)?,
         None => old.start_utc.clone(),
@@ -267,7 +243,6 @@ pub fn apply_correction(
         Some(value) => Stamp::parse(value).ok_or(CorrectError::BadSpan)?,
         None => old.end_utc.clone(),
     };
-    // A speaker given here wins; otherwise the turn keeps the name it had.
     let speaker_label = edit.speaker.or(old.speaker_label.as_deref());
 
     let new_id = turn_store::insert(
@@ -280,13 +255,10 @@ pub fn apply_correction(
             asr_model: Some(HUMAN_MODEL),
             speaker_label,
             speaker_id: old.speaker_id,
-            // Carried forward so a corrected turn stays attributed to its voice
-            // instead of falling back to unknown.
             speaker_cluster: old.speaker_cluster.as_deref(),
             provenance: Some(Provenance::Correction(old.id)),
             created_utc: Some(now),
-            // Typed words are vouched for; a renamed speaker leaves them the
-            // machine's.
+            // Typed words are vouched for; renaming the speaker vouches nothing.
             words_checked: edit.words_checked || text != old.text,
             ..NewTurn::at(&start, &end, text)
         },
@@ -333,8 +305,7 @@ fn insert_pair(tx: &Transaction, old: &Original, pair: &Pair, now: &Stamp) -> ru
             pair.language,
             now,
             pair.speaker,
-            // The clip's audio quality, carried onto the pair: a readable label
-            // on faint audio is still good ASR data but too degraded to enrol.
+            // Faint audio is still ASR data, but too degraded to enrol.
             old.asr_confidence,
             pair.words_checked.then_some(1),
         ],
@@ -342,13 +313,9 @@ fn insert_pair(tx: &Transaction, old: &Original, pair: &Pair, now: &Stamp) -> ru
     Ok(())
 }
 
-/// A person listened and nobody spoke: the turn's words are the model's
-/// invention, typically "Thank you." on a silent minute.
-///
-/// The turn is hidden and the pair stored with empty text. The pair's span is
-/// what keeps a later pass from writing the same invention back
-/// ([`turn_store::protected_between`]), and it is an ASR label: this audio
-/// should transcribe to nothing.
+/// A person listened and nobody spoke. The turn is hidden and the pair stored
+/// with empty text: its span keeps a later pass from writing the invention
+/// back ([`turn_store::protected_between`]).
 ///
 /// # Errors
 /// [`CorrectError::Missing`], [`CorrectError::AlreadySuperseded`] or
@@ -383,10 +350,8 @@ pub fn mark_no_speech(
     Ok(())
 }
 
-/// Take back a [`mark_no_speech`]: the turn shows again and the pair goes.
-///
-/// Deleted, not hidden: the pair was a mis-tap, not a judgement, and a hidden
-/// pair would still protect the span.
+/// Take back a [`mark_no_speech`]: the turn shows again and the pair is
+/// deleted (a mis-tap, and a hidden pair would still protect the span).
 ///
 /// # Errors
 /// [`CorrectError::NotNobodySpoke`] when the turn is not hidden that way.
@@ -400,10 +365,9 @@ pub fn undo_no_speech(conn: &mut Connection, segment_id: i64) -> Result<(), Corr
     Ok(())
 }
 
-/// Take back a correction of `segment_id`: the person's turn goes, the
-/// machine's shows again, and the pair and any voiceprint enrolled from either
-/// go with them. For a mis-tap, so the words a person typed are deleted rather
-/// than hidden: they were never meant.
+/// Take back a correction of `segment_id`, for a mis-tap: the person's turn,
+/// the pair and any voiceprint enrolled from them are deleted, and the
+/// machine's turn shows again.
 ///
 /// # Errors
 /// [`CorrectError::NotCorrected`] unless the turn is replaced by a current,

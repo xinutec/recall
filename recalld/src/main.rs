@@ -148,8 +148,8 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
         .to_string();
     let done = recalld::work::open_write(root).and_then(|meaning| {
         let mut ingest = recalld::store::open(root)?;
-        // The daemon's passes hold the ingest lock for longer than its 5 s, and
-        // a task that waits costs nothing; one that gives up stops halfway.
+        // The daemon's passes hold the ingest lock past the 5 s default; a task
+        // that gives up stops halfway.
         ingest.busy_timeout(std::time::Duration::from_mins(2))?;
         recalld::phone_flac::convert(root, &meaning, &mut ingest, &before, apply)
     });
@@ -169,9 +169,8 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
     }
 }
 
-/// `RECALLD_TRUSTED_PROXIES`: comma-separated addresses whose `X-Real-IP` the
-/// capture audit believes. `None` (and a message) on a typo, which fails startup:
-/// a silently empty list would name every pause after the node.
+/// `RECALLD_TRUSTED_PROXIES`. `None` on a typo, failing startup: a silently
+/// empty list would name every pause after the node.
 fn trusted_proxies() -> Option<Vec<std::net::IpAddr>> {
     let Ok(text) = std::env::var("RECALLD_TRUSTED_PROXIES") else {
         return Some(Vec::new());
@@ -191,9 +190,8 @@ fn trusted_proxies() -> Option<Vec<std::net::IpAddr>> {
     }
 }
 
-/// Serve one bound listener with connect info. The capture-control plane carries
-/// no credential, so the peer address is the only identity its audit records;
-/// without it every pause is recorded against `unknown-host`.
+/// Serve one listener with connect info: the peer address is the only identity
+/// the capture audit can record.
 fn serve_one(
     serving: &mut tokio::task::JoinSet<std::io::Result<()>>,
     listener: tokio::net::TcpListener,
@@ -222,9 +220,8 @@ fn keep_faults(root: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Open both planes and bring the meaning schema up to date, or say what is wrong
-/// in a line a human can act on. Failing to start is deliberate: every read route
-/// assumes those tables exist.
+/// Open both planes and bring the meaning schema up to date, or say what is
+/// wrong. Every read route assumes those tables exist.
 fn prepare_planes(root: &std::path::Path) -> Result<(), String> {
     recalld::store::open(root)
         .map_err(|err| format!("cannot open {}/ingest.sqlite: {err}", root.display()))?;
@@ -257,8 +254,8 @@ fn main() -> ExitCode {
     if let Some(task) = task {
         return run_task(&root, task);
     }
-    // A configured-but-unreadable token table fails closed at startup: an
-    // open ingest plane must be a choice, never the residue of a typo.
+    // A configured but unreadable token table fails startup: an open ingest
+    // plane must be a choice, not a typo.
     let tokens = match (tokens_path, std::env::var("RECALLD_INGEST_TOKENS")) {
         (Some(path), _) => match Tokens::load(&path) {
             Ok(tokens) => Some(tokens),
@@ -294,9 +291,8 @@ fn main() -> ExitCode {
         eprintln!("recalld: {complaint}");
         return ExitCode::FAILURE;
     }
-    // The browsing plane is mounted only when SSO is configured. Absent means
-    // absent, not open: these routes serve household transcripts, so an
-    // unconfigured recalld must not answer them at all.
+    // The browsing plane is mounted only with SSO configured: unconfigured
+    // means absent, not open.
     let webauth =
         recalld::webauth::Config::from_process_env().map(|cfg| recalld::webauth::GateState {
             cfg: std::sync::Arc::new(cfg),
@@ -332,9 +328,8 @@ fn main() -> ExitCode {
         for listener in listeners {
             serve_one(&mut serving, listener, app.clone());
         }
-        // The first listener to stop decides the exit: if one port dies the daemon
-        // is half-serving, which is the state that hides a fault. Better to exit
-        // and be restarted whole.
+        // The first listener to stop ends the daemon: half-serving hides a
+        // fault, and a restart brings it back whole.
         match serving.join_next().await {
             Some(Ok(Ok(()))) => ExitCode::SUCCESS,
             Some(Ok(Err(err))) => {
@@ -350,8 +345,8 @@ fn main() -> ExitCode {
     })
 }
 
-/// Bind every address before serving any: a half-bound daemon looks healthy from
-/// whichever side you check, so refusing to start is better.
+/// Bind every address before serving any: a half-bound daemon looks healthy
+/// from whichever side you check.
 async fn bind_all(binds: &[String]) -> Option<Vec<tokio::net::TcpListener>> {
     let mut listeners = Vec::new();
     for addr in binds {
@@ -366,11 +361,8 @@ async fn bind_all(binds: &[String]) -> Option<Vec<tokio::net::TcpListener>> {
     Some(listeners)
 }
 
-/// Re-derive stored speaker guesses when the voiceprint corpus has grown.
-///
-/// This rewrites the record, so it runs in bounded batches and logs every batch
-/// that changed something. The work-list refills only when a voice is enrolled,
-/// so the idle sleep is the usual state.
+/// Re-derive stored speaker guesses when a voice is enrolled, in bounded,
+/// logged batches.
 fn spawn_rematcher(root: PathBuf) {
     const BATCH: usize = 200;
     const IDLE: std::time::Duration = std::time::Duration::from_mins(5);
@@ -406,33 +398,25 @@ fn spawn_rematcher(root: PathBuf) {
     });
 }
 
-/// Start every background pass the daemon runs. Which passes are on is the most
-/// important fact about a deployed recalld, so the list lives on one screen with
-/// the reasons beside it.
+/// Every background pass the daemon runs, in one place.
 fn spawn_background_passes(root: &std::path::Path) {
     let root = root.to_path_buf();
     let root = &root;
     spawn_speech_scanner(root.clone());
     spawn_rematcher(root.clone());
-    // Fills clips that have no turns. It hides only the live guesses on the
-    // same span, so its worst case is a transcript where there was silence,
-    // deletable by its provenance.
+    // Fills clips that have no turns; hides only live guesses on its span.
     spawn_turn_writer(root.clone());
-    // The only running loop that replaces a transcript somebody reads, so it
-    // must stay the only such writer: two writers each hiding what the other
-    // wrote leave a corpus nobody can reason about.
+    // The one loop that replaces a transcript somebody reads; keep it the only
+    // one, or two writers hide each other's lines.
     spawn_diarized_writer(root.clone());
     spawn_segment_registrar(root.clone());
     spawn_segment_deriver(root.clone());
     spawn_enroller(root.clone());
 }
 
-/// Turn human-named turns into reference voiceprints.
-///
-/// Deliberately slow: more prints barely move attribution, so this only has to
-/// keep up with new labels (a handful a week) and must not outbid diarization
-/// for the one GPU. Deriving and writing share one loop because nothing else
-/// enrols.
+/// Turn human-named turns into voiceprints. Slow on purpose: it only has to
+/// keep up with a handful of labels a week, and must not outbid diarization
+/// for the GPU.
 fn spawn_enroller(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(10);
     const DERIVE: usize = 5;
@@ -455,8 +439,7 @@ fn spawn_enroller(root: PathBuf) {
             })
             .await;
             match done {
-                // `stale` is in the guard: a pass that only finds spans no
-                // longer wanted writes and queues nothing, and must still log.
+                // A pass that only finds stale spans must still log.
                 Ok(Ok((queued, pass))) if queued + pass.prints + pass.stale > 0 => {
                     tracing::info!(
                         queued,
@@ -475,33 +458,25 @@ fn spawn_enroller(root: PathBuf) {
     });
 }
 
-/// Turn finished diarize results into speaker-split turns.
-///
-/// The only loop that replaces a transcript: it hides turns somebody can read
-/// and writes new ones over them. `diarized::decide` makes the whole decision on
-/// data before a row is touched, and either replaces or keeps. Idle until a
-/// runner leases `diarize-segment`.
+/// Turn finished diarize results into speaker-split turns (`diarized::decide`).
+/// Small batches on a slow cadence, so a bad verdict is noticed early.
 ///
 /// To reverse it, both planes:
 ///
 /// ```sql
-/// -- recall.sqlite: un-hide first, then delete. Deleting first makes the
-/// -- blocks eligible again while the originals are still hidden.
+/// -- recall.sqlite: un-hide first, so the blocks never become eligible
+/// -- while the originals are hidden.
 /// UPDATE transcript_segments SET hidden_reason = NULL
 ///  WHERE hidden_reason = 'diarized (per-mic runner)';
 /// DELETE FROM transcript_segments
 ///  WHERE provenance = 'diarized-aligned (per-mic runner)';
 ///
-/// -- ingest.sqlite: declined blocks wrote no rows, only a ledger entry.
-/// -- Without this they stay decided for ever.
+/// -- ingest.sqlite: the declined blocks.
 /// DELETE FROM pass_ledger WHERE kind = 'diarize-segment';
 /// ```
 ///
-/// ⚠ Use exact equality, not `LIKE 'diarized-aligned (%'`: that pattern also
-/// matches the archive's older diarized corpus, and would delete it too.
-///
-/// A small batch on a slow cadence, so a bad verdict is noticed while it covers
-/// dozens of blocks rather than hundreds.
+/// Exact equality: `LIKE 'diarized-aligned (%'` also matches the older
+/// diarized corpus.
 fn spawn_diarized_writer(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
     const BATCH: usize = 20;
@@ -516,8 +491,7 @@ fn spawn_diarized_writer(root: PathBuf) {
             })
             .await;
             match done {
-                // `kept` is in the guard: a pass that declines every block is
-                // the one most worth seeing.
+                // A pass that declines every block is the one most worth seeing.
                 Ok(Ok(pass)) if pass.turns + pass.hidden + pass.kept > 0 => {
                     tracing::info!(
                         blocks = pass.blocks,
@@ -541,17 +515,12 @@ fn spawn_diarized_writer(root: PathBuf) {
     });
 }
 
-/// Run VAD over every delivered segment, so "active" can mean someone is
-/// talking rather than that bytes arrived, and the quiet review has evidence
-/// before it proposes deleting anything.
-///
-/// A smaller batch and longer idle than the level scanner: this runs a neural
-/// network per 32 ms window on four cores shared with Nextcloud, and speech
-/// evidence is wanted within minutes, not seconds.
+/// Run VAD over every delivered segment, so "active" means someone talking.
+/// Small batches: a neural network per 32 ms window, on four cores shared with
+/// Nextcloud.
 fn spawn_speech_scanner(root: PathBuf) {
-    // ⚠ Do not start where the model cannot run. isis and amun are Ivy Bridge
-    // and ort's prebuilt runtime needs AVX2: calling it there raises SIGILL and
-    // kills the daemon. Refuse once, loudly.
+    // ort's prebuilt runtime needs AVX2, which Ivy Bridge (isis, amun) lacks:
+    // calling it there is a SIGILL. Check once and stay off.
     const BATCH: usize = 40;
     const IDLE: std::time::Duration = std::time::Duration::from_mins(2);
     const BACKOFF: std::time::Duration = std::time::Duration::from_mins(5);
@@ -585,22 +554,15 @@ fn spawn_speech_scanner(root: PathBuf) {
     });
 }
 
-/// Turn stored transcription results into turns people read.
+/// Turn stored transcriptions into turns, for clips that have none. Hides the
+/// live guesses on its span (`live-reconciled`). Small batches, slow cadence.
 ///
-/// Fills gaps only: a clip that already carries turns is refused before a row
-/// is touched. It hides the live guesses on the span it writes, as
-/// `live-reconciled`.
-///
-/// To reverse it, both planes. Deleting the turns makes those clips eligible
-/// again; clips that wrote nothing are held only in the ledger:
+/// To reverse it, both planes:
 ///
 /// ```sql
 /// DELETE FROM transcript_segments WHERE provenance = 'per-mic (runner)';
 /// DELETE FROM pass_ledger WHERE kind = 'transcribe-segment';
 /// ```
-///
-/// A small batch on a slow cadence, so a bad verdict is noticed while it covers
-/// dozens of clips rather than hundreds.
 fn spawn_turn_writer(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
     const BATCH: usize = 20;
@@ -615,9 +577,8 @@ fn spawn_turn_writer(root: PathBuf) {
             })
             .await;
             match done {
-                // `swept` is in the guard: a clip whose turns are all repetition
-                // loops writes and refuses nothing, and that pass is the one
-                // saying the audio is bad.
+                // An all-loops clip writes and refuses nothing, but says the
+                // audio is bad.
                 Ok(Ok(pass)) if pass.turns + pass.refused + pass.swept > 0 => {
                     tracing::info!(
                         blocks = pass.blocks,
@@ -641,14 +602,9 @@ fn spawn_turn_writer(root: PathBuf) {
     });
 }
 
-/// Derive `transcribe-segment` jobs for microphone clips that have no turns.
-///
-/// A timer rather than a step in `queue::lease`: a lease is a frequent request,
-/// and deriving spans both planes and scans the ingest one. The diarize jobs
-/// derive in `lease` because that is one indexed statement.
-///
-/// The batch bound is the throttle: queuing the whole backlog at once would hand
-/// a runner days of work the moment it learned the kind.
+/// Derive transcription jobs for microphone clips with no turns. A timer, not
+/// part of `queue::lease`: it spans both planes and scans one. The batch bound
+/// keeps a runner from being handed days of backlog at once.
 fn spawn_segment_deriver(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(10);
     const BATCH: usize = 50;
@@ -672,15 +628,10 @@ fn spawn_segment_deriver(root: PathBuf) {
     });
 }
 
-/// Register microphone clips in the meaning plane, so their turns have audio. A
-/// clip with no `audio_segments` row goes barren at the write step however often
-/// it is transcribed.
+/// Register microphone clips in the meaning plane, so their turns have audio.
+/// Bounded: `upload::probe` decodes the whole file.
 ///
-/// Bounded because it decodes: `upload::probe` reads the whole file, competing
-/// with capture.
-///
-/// To reverse it (registration hides nothing, it only makes clips eligible),
-/// both planes:
+/// To reverse it, both planes:
 ///
 /// ```sql
 /// DELETE FROM audio_segments WHERE path LIKE '%/ingest/%'
@@ -690,8 +641,7 @@ fn spawn_segment_deriver(root: PathBuf) {
 /// DELETE FROM pass_ledger WHERE kind = 'register-segment';
 /// ```
 ///
-/// Keep the `NOT IN`: deleting a row a turn hangs from leaves text whose audio no
-/// longer resolves.
+/// Keep the `NOT IN`: a turn's audio must still resolve.
 fn spawn_segment_registrar(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(5);
     const BATCH: usize = 40;
@@ -706,11 +656,9 @@ fn spawn_segment_registrar(root: PathBuf) {
             })
             .await;
             match done {
-                // `waiting` is not in the guard: an unknown recorder makes it a
-                // large constant, and a line every five minutes would drown the
-                // log. `covered` is, and `retired` is not: a covered clip cost a
-                // full decode to discover, a retired one a hash lookup, so a
-                // rising `covered` is how repeated decoding shows up.
+                // Not `waiting` (an unknown recorder keeps it high) or `retired`
+                // (a hash lookup); `covered` cost a full decode, so a rising
+                // count shows repeated decoding.
                 Ok(Ok(pass)) if pass.added + pass.unreadable + pass.covered > 0 => {
                     tracing::info!(
                         added = pass.added,

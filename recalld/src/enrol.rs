@@ -1,7 +1,6 @@
-//! Voiceprint enrolment: turning a named turn into a reference vector, on the
-//! fleet, where the namings are. Enrolling more does not identify better: the
-//! print corpus has saturated (#1648), so this keeps up with new labels rather
-//! than raising a number.
+//! Voiceprint enrolment: a named turn becomes a reference vector. The corpus
+//! has saturated (#1648), so this keeps up with new labels rather than
+//! improving identification.
 
 use crate::ledger::{Outcome, record};
 use audiocore::instant::Stamp;
@@ -59,13 +58,12 @@ crate::statements! {
 /// A turn shorter than this enrols a useless print.
 const MIN_SECONDS: f64 = 1.0;
 
-/// One turn to embed, as the runner is told about it. No name on the wire: the
-/// fleet reads the label at write time, so a turn re-assigned between lease and
-/// result enrols under the name it has then.
+/// One turn to embed. No name on the wire: the label is read at write time, so
+/// a turn renamed meanwhile enrols under its new name.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Span {
     pub segment_id: i64,
-    /// Seconds from the start of the clip, not from the epoch.
+    /// Seconds from the start of the clip.
     pub start_s: f64,
     pub end_s: f64,
 }
@@ -97,14 +95,13 @@ pub fn pending(meaning: &Connection) -> rusqlite::Result<Vec<(String, Span)>> {
     let mut out = Vec::new();
     for row in rows {
         let (clip, segment_id, start, end, clip_start) = row?;
-        // Subtracted here rather than by SQLite's `julianday`, which counts
-        // days in a double and is off by tens of microseconds.
+        // Not SQLite's `julianday`, which is off by tens of microseconds.
         let (Ok(start), Ok(end), Ok(clip_start)) = (
             DateTime::parse_from_rfc3339(&start),
             DateTime::parse_from_rfc3339(&end),
             DateTime::parse_from_rfc3339(&clip_start),
         ) else {
-            continue; // a row whose instant will not parse names no span
+            continue;
         };
         let seconds = |a: DateTime<chrono::FixedOffset>| {
             (a - clip_start).num_microseconds().map_or_else(
@@ -113,14 +110,13 @@ pub fn pending(meaning: &Connection) -> rusqlite::Result<Vec<(String, Span)>> {
             )
         };
         if (end - start).num_milliseconds() < (MIN_SECONDS * 1000.0) as i64 {
-            continue; // a sliver enrols a useless print
+            continue;
         }
         out.push((
             clip,
             Span {
                 segment_id,
-                // Clamped at zero: a negative seek makes ffmpeg return the
-                // whole clip, enrolling a minute of the room as one voice.
+                // A negative seek makes ffmpeg return the whole clip.
                 start_s: seconds(start).max(0.0),
                 end_s: seconds(end),
             },
@@ -142,11 +138,8 @@ pub fn spans_for(meaning: &Connection, filename: &str) -> rusqlite::Result<Vec<S
         .collect())
 }
 
-/// Fill a leased job's spans, if it is a kind that has any. At lease time, not
-/// at derivation: the work-list lives in the meaning plane and changes whenever
-/// somebody renames a voice. The meaning plane is opened only for a kind that
-/// needs it, so a transcription runner is not stopped by a database it never
-/// reads.
+/// Fill an enrolment job's spans at lease time: they change whenever somebody
+/// renames a voice. Other kinds never open the meaning plane.
 ///
 /// # Errors
 /// If the meaning plane refuses.
@@ -158,10 +151,8 @@ pub fn attach_spans(root: &std::path::Path, job: &mut crate::queue::Job) -> rusq
     Ok(())
 }
 
-/// Derive one enrolment job per clip holding turns that still need a
-/// voiceprint. Per clip, because `jobs` is keyed on (kind, filename); the spans
-/// travel with the lease. Derived from the ingest side, so a turn whose clip
-/// was never delivered gets no job the runner could not fetch.
+/// Derive one enrolment job per delivered clip holding turns that still need a
+/// voiceprint; the spans travel with the lease.
 ///
 /// # Errors
 /// If either database refuses.
@@ -203,22 +194,19 @@ pub fn derive_jobs(
 
 // --- writing what the runner embedded ----------------------------------------
 
-/// One embedded span as the runner sends it back.
 pub use audiocore::shim::voices::Print;
 use audiocore::shim::{Stored, voices::Prints};
 
-/// What one pass did, for the log line.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Enrolled {
     pub clips: usize,
     pub prints: usize,
-    /// Spans whose turn no longer qualifies — re-named, hidden, or enrolled by
-    /// something else while the runner was working.
+    /// Spans whose turn was renamed, hidden or enrolled meanwhile, or that came
+    /// back empty.
     pub stale: usize,
 }
 
-/// Whose voice a segment is now, or `None` if it should no longer be enrolled.
-/// Re-read at write time: a person can re-assign a turn while the model runs.
+/// Whose voice a segment is now, or `None` if it no longer qualifies.
 fn still_wanted(meaning: &Connection, segment_id: i64) -> rusqlite::Result<Option<String>> {
     STILL_WANTED
         .query_row(meaning, [segment_id], |r| r.get::<_, String>(0))
@@ -229,10 +217,6 @@ fn still_wanted(meaning: &Connection, segment_id: i64) -> rusqlite::Result<Optio
         })
 }
 
-/// Enrol one span under `person`, creating the speaker if this is their first.
-///
-/// # Errors
-/// If the meaning plane refuses.
 fn enrol_one(
     meaning: &Connection,
     person: &str,
@@ -253,9 +237,8 @@ fn enrol_one(
     Ok(())
 }
 
-/// Turn finished `enroll-speaker` results into reference voiceprints. Every
-/// clip examined is ledgered, including one that enrols nothing: the candidate
-/// query is "not in the ledger".
+/// Turn finished enrolment results into voiceprints. Every clip examined is
+/// ledgered, even one that enrols nothing.
 ///
 /// # Errors
 /// If either database refuses.
@@ -301,8 +284,8 @@ pub fn write_pass(
         };
         let mut wrote = 0;
         for print in &body.prints {
-            // An empty vector is not a voiceprint: at cosine 0 against everyone
-            // it becomes somebody's best match on quiet audio.
+            // At cosine 0 against everyone, an empty vector would become
+            // somebody's best match on quiet audio.
             if print.vector.is_empty() {
                 pass.stale += 1;
                 continue;
