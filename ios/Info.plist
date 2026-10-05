@@ -23,7 +23,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Recall Mic connects to your recall recorder on the local network to stream microphone audio.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Recall Mic streams this device's microphone to your local recall recorder. Audio never leaves your home network.</string>
+	<string>Recall Mic records this device's microphone for recall.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

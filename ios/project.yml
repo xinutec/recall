@@ -33,8 +33,7 @@ targets:
         UIBackgroundModes: [audio]
         # iOS requires these to open the mic and to reach a LAN IP directly.
         NSMicrophoneUsageDescription: >-
-          Recall Mic streams this device's microphone to your local recall
-          recorder. Audio never leaves your home network.
+          Recall Mic records this device's microphone for recall.
         NSLocalNetworkUsageDescription: >-
           Recall Mic connects to your recall recorder on the local network to
           stream microphone audio.
