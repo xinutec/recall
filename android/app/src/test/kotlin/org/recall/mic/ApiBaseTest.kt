@@ -3,11 +3,7 @@ package org.recall.mic
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/**
- * The fleet moved from `http://10.100.0.2:8000` to `https://recall.xinutec.org` (#1799),
- * while the Mac's LAN beat relay still answers a bare host on :8000. One setting holds
- * either, so how it becomes a URL is pinned here.
- */
+/** A host setting is either a URL (Isis, #1799) or a bare host (the Mac's relay on :8000). */
 class ApiBaseTest {
     @Test
     fun `a value with a scheme is used as written`() {

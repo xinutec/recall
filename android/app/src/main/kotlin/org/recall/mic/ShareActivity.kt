@@ -36,17 +36,11 @@ import java.time.Instant
 import java.time.ZoneId
 
 /**
- * Receives an audio file shared from another app (the mp3 recorder's Share sheet) and
- * uploads it to the recall host as a new session. Shown as "Recall" in the share sheet.
+ * "Recall" in the share sheet: uploads a shared audio file as a new session, with a
+ * small progress screen that closes itself on success.
  *
- * The upload runs in the activity's lifecycle with a small progress screen: copy the
- * shared content to cache (so a transient content-URI grant can't fail a long stream),
- * upload, then auto-dismiss on success or offer Close on failure.
- *
- * The session is dated when the audio was **recorded**, not when it was shared: a file
- * kept for a week and sent in afterwards belongs in the archive at its own time, next to
- * whatever else happened that afternoon. [modifiedMillis] is what makes that possible for
- * a file whose name carries no recorder stamp.
+ * The session is dated when the audio was recorded, not shared: from the recorder's
+ * filename stamp, else the file's modification time ([modifiedMillis]).
  */
 class ShareActivity : ComponentActivity() {
     private sealed interface UiState {
@@ -70,9 +64,7 @@ class ShareActivity : ComponentActivity() {
         setContent { RecallMicTheme { ShareScreen() } }
 
         val uri = streamUri(intent)
-        // The API host (Isis), not the recorder host the PCM stream goes to: the Mac's
-        // own UI was retired in the Isis split and its :8000 refuses, so uploads sent
-        // there went nowhere. Never blank — it falls back to DEFAULT_CONTROL_HOST.
+        // Isis, not the recorder host; never blank.
         val host = Prefs.controlHost(this)
         if (uri == null) {
             state = UiState.Failed("No audio file was shared.")
@@ -116,8 +108,8 @@ class ShareActivity : ComponentActivity() {
             }
     }
 
-    /** Copy the shared content to a cache file so the upload doesn't depend on holding
-     * the (temporary) content-URI read grant for the whole stream. */
+    /** Copy to the cache, so the upload does not depend on the content-URI grant
+     * lasting. */
     private fun copyToCache(uri: Uri, name: String): File {
         val out = File(cacheDir, "share-${System.nanoTime()}-$name")
         contentResolver.openInputStream(uri)?.use { input ->
@@ -127,13 +119,9 @@ class ShareActivity : ComponentActivity() {
     }
 
     /**
-     * When the shared file was last written, or null if the provider won't say.
-     *
-     * This has to come from the **content URI**, not from the cache copy: copying stamps
-     * the copy with now, so `File.lastModified()` on it would confidently report the
-     * upload time as the recording time. Which column exists depends on who is sharing —
-     * a documents provider answers `last_modified`, MediaStore answers `date_modified` —
-     * so ask for both and let [ShareUpload.modifiedMillis] settle the units.
+     * When the shared file was last written, or null. From the content URI, since the
+     * cache copy is stamped now. A documents provider answers `last_modified`,
+     * MediaStore `date_modified`, in different units.
      */
     private fun modifiedMillis(uri: Uri): Long? =
         ShareUpload.modifiedMillis(
@@ -141,9 +129,7 @@ class ShareActivity : ComponentActivity() {
             longColumn(uri, MediaStore.MediaColumns.DATE_MODIFIED),
         )
 
-    /** One long column, or null. Querying a column a provider doesn't have throws, and a
-     * missing timestamp is a fallback ([ShareUpload.chooseStart] has one), not a failed
-     * upload — so this never propagates. */
+    /** One long column, or null, including when the provider lacks it (that throws). */
     private fun longColumn(uri: Uri, column: String): Long? =
         runCatching {
             contentResolver.query(uri, arrayOf(column), null, null, null)?.use { c ->
@@ -174,9 +160,8 @@ class ShareActivity : ComponentActivity() {
     private fun ShareScreen() {
         Surface(modifier = Modifier.fillMaxSize()) {
             Column(
-                // The content is centred, so it does not currently reach the status
-                // bar — but targetSdk 36 means nothing insets this window, so a
-                // longer message would run under the icons.
+                // targetSdk 36 insets nothing, so a long message could run under the
+                // status bar.
                 Modifier.fillMaxSize().safeDrawingPadding().padding(32.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                 horizontalAlignment = Alignment.CenterHorizontally,

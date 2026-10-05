@@ -65,19 +65,12 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 
 /**
- * Compose UI: a live status card (connection state + a mic level meter), the household
- * pause banner, the fleet's devices and Start/Stop. The heavy lifting is in StreamService;
- * the UI just reflects MicState and toggles the service.
- *
- * The hosts live in [SettingsActivity], reached from the drawer — they are set once per
- * phone and then never again, so keeping them here made the daily screen mostly a form.
- * The saved values are re-read in `onResume`, so a change made in Settings is reflected
- * the moment you come back.
+ * The main screen: status and mic level, the household pause banner, the devices, and
+ * Start/Stop. It shows [MicState] and starts or stops [StreamService]. The hosts are set
+ * in [SettingsActivity], from the drawer.
  */
 class MainActivity : ComponentActivity() {
-    // Re-read on resume rather than captured at composition: Settings can change either
-    // one while this screen is merely stopped, and the Start button must not act on a
-    // host the user has since replaced.
+    // Re-read on resume: Settings may have changed them while this screen was stopped.
     private val host = mutableStateOf("")
     private val controlHost = mutableStateOf("")
 
@@ -149,10 +142,8 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MicScreen(
-    // The recorder host the stream connects to, and the control-plane host (Isis) — two,
-    // because the Isis split put the capture API on a different machine than the PCM
-    // ingest. The pause banner and Devices panel poll the latter. Both are owned by
-    // SettingsActivity; this screen only reads them.
+    // The recorder host the stream connects to, and Isis, which the pause banner and
+    // the devices panel poll.
     host: String,
     controlHost: String,
     onStart: () -> Unit,
@@ -164,10 +155,8 @@ fun MicScreen(
     val connected by MicState.connected.collectAsStateWithLifecycle()
     val level by MicState.level.collectAsStateWithLifecycle()
 
-    // The household capture (pause) state lives in MicState — the one value the
-    // notification renders too, so the two can't disagree. Poll it while the screen's
-    // open (the service polls while it runs); only overwrite on a successful read so a
-    // transient blip doesn't flicker the banner.
+    // In MicState, which the notification shows too. Polled while the screen is open,
+    // and replaced only on a successful read, so a failed one does not blank the banner.
     val capture by MicState.capture.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -175,9 +164,8 @@ fun MicScreen(
         if (controlHost.isBlank()) return@LaunchedEffect
         delay(500) // debounce: typing restarts this effect per keystroke
         while (true) {
-            // Long-poll: the request hangs on the server until the household state
-            // changes (a press on any client, the mic confirming), so changes land in
-            // ~RTT. An older server (no stateToken) answers at once → plain 5s poll.
+            // A long poll: the server answers when the state changes. Without a
+            // stateToken in the answer, a plain 5 s poll.
             val cap =
                 CaptureApi.state(
                     controlHost,
@@ -185,43 +173,36 @@ fun MicScreen(
                     known = MicState.capture.value?.stateToken,
                 )
             cap?.let { MicState.setCapture(it) }
-            // Keep the 2h-before-resume warning current while the screen is open (the
-            // service does the same on its poll); a pause set/extended here re-arms it.
             ResumeWarning.sync(context, cap, Instant.now())
             delay(if (cap?.stateToken != null) 250 else 5_000)
         }
     }
 
-    // A ticking clock so the "auto-resumes in Xh Ym" countdown counts down between
-    // capture polls (the poll dedups equal state, so it alone wouldn't advance it).
+    // Ticks so the "auto-resumes in Xh Ym" countdown moves between polls.
     var now by remember { mutableStateOf(Instant.now()) }
     LaunchedEffect(Unit) {
         while (true) {
             now = Instant.now()
-            delay(30_000) // minute-granularity text; 30s keeps it within a minute of true
+            delay(30_000) // the text shows minutes
         }
     }
 
-    // Fleet liveness: which recorders are streaming. Polled fast (~1.5s) so the
-    // panel tracks devices going active within a second or two. Off the control host
-    // (Isis), not the recorder host.
+    // Which recorders are streaming, from Isis, polled every 1.5 s.
     var devices by remember { mutableStateOf<List<SourceStatus>>(emptyList()) }
     LaunchedEffect(controlHost) {
         if (controlHost.isBlank()) return@LaunchedEffect
         delay(500) // debounce, as above
         while (true) {
-            // null = request failed → keep the last list so a blip can't blank the panel.
+            // null: the request failed; keep the last list.
             CaptureApi.sources(controlHost)?.let { devices = it }
             delay(1_500)
         }
     }
 
-    // We know our own source id directly (it's what we announce in the handshake), so
-    // we can highlight our own row in the Devices list with no extra call.
+    // This phone's source id, to mark its own row.
     val selfId = remember { Prefs.deviceId(context) }
 
-    // Run a capture action (pause/resume) against the control host, then publish its
-    // result to the one shared state — so the screen and notification both reflect it.
+    // Pause or resume on Isis, publishing the answer to MicState.
     fun control(call: suspend (String) -> CaptureState?) {
         scope.launch { call(controlHost)?.let { MicState.setCapture(it) } }
     }
@@ -321,8 +302,8 @@ private fun MicContent(
             StatusCard(
                 running,
                 connected,
-                // The desired state: while "Pausing…" the phone may still stream for
-                // a few seconds, but the household has been told to stop.
+                // The desired state: while "Pausing…" the phone may stream a few
+                // seconds more.
                 paused = capture?.let { !it.desiredRunning } == true,
                 level,
                 host,
@@ -357,8 +338,6 @@ private fun MicContent(
                 ) { Text("Stop") }
             }
             if (host.isBlank()) {
-                // Start is dead without one, and the field is no longer on this screen —
-                // so say where it went rather than leave a button that does nothing.
                 Text(
                     "Set the recorder host in Settings before starting.",
                     style = MaterialTheme.typography.bodySmall,
@@ -383,7 +362,7 @@ private fun StatusCard(
                 Triple("Streaming", "to $host", MaterialTheme.colorScheme.primary)
             }
 
-            // A deliberate pause closes the host's listener, so don't read it as an error.
+            // A pause closes the host's listener; not an error.
             running && paused -> {
                 Triple(
                     "Paused",
@@ -450,9 +429,8 @@ private fun StatusCard(
 }
 
 /**
- * Mirrors the web app's pause banner for the *household* capture (the whole system).
- * Shown only when the API is reachable (home), so a pause reads as a deliberate pause
- * — not the "Waiting for recall host" the stream shows when the port is closed.
+ * The web app's pause banner, for the household's capture. Shown only when Isis
+ * answers.
  */
 @Composable
 private fun CaptureBanner(
@@ -462,9 +440,8 @@ private fun CaptureBanner(
     onSnooze: () -> Unit,
     onResume: () -> Unit,
 ) {
-    if (capture == null) return // API unreachable — nothing beyond the stream status
-    // The card follows the desired state, with an explicit in-between while the mic
-    // hasn't confirmed it — a press can't flap back to the old state on the next poll.
+    if (capture == null) return
+    // The desired state, with "Pausing…"/"Resuming…" until the mic confirms.
     val paused = !capture.desiredRunning
     val transitioning = capture.micReachable && !capture.settled
     val container =
@@ -488,9 +465,7 @@ private fun CaptureBanner(
                 },
                 style = MaterialTheme.typography.titleMedium,
             )
-            // Buttons stay enabled while transitioning: intent is cheap and
-            // idempotent, so pressing again (or the other way) just overwrites the
-            // target and the system converges — always abortable, never locked out.
+            // Enabled mid-transition: a press just replaces the desired state.
             if (paused) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(
@@ -518,7 +493,7 @@ private fun CaptureBanner(
     }
 }
 
-/** The fleet: which recorders are streaming now and when each was last active. */
+/** The recorders: which are streaming, and when each was last active. */
 @Composable
 private fun DevicesPanel(sources: List<SourceStatus>, selfId: String?) {
     if (sources.isEmpty()) {
@@ -541,9 +516,7 @@ private fun DevicesPanel(sources: List<SourceStatus>, selfId: String?) {
                             .size(10.dp)
                             .clip(CircleShape)
                             .background(
-                                // Three states, because there are three: audible,
-                                // running-but-quiet, and off. A two-state dot has
-                                // to lie about one of them.
+                                // Audible, recording but quiet, or off.
                                 when {
                                     source.active -> {
                                         MaterialTheme.colorScheme.primary
@@ -586,22 +559,14 @@ private fun DevicesPanel(sources: List<SourceStatus>, selfId: String?) {
 }
 
 /**
- * What the devices panel says under each recorder, in three states.
- *
- * "active" — audible: someone is being recorded speaking. "recording, quiet" —
- * the machine is running and delivering, but the room is silent. Otherwise, how
- * long since it last proved anything.
- *
- * The middle state is the one that matters: collapsing it into "idle" is what
- * made geb look broken while it was working, and sent me looking for a bug in
- * the recorder rather than in the question the panel was answering (#1428).
+ * A recorder's state in the devices panel: "active" (someone audible), "recording,
+ * quiet" (delivering, the room silent), else how long since it was last heard from.
+ * Calling the middle state "idle" made a working recorder look broken (#1428).
  */
 private fun activityLabel(source: SourceStatus): String {
     if (source.active) {
         return "active"
     }
-    // Recording but nobody audible. Saying "idle" here is what sent me hunting a
-    // bug that did not exist: the machine was working, the room was quiet.
     if (source.recording) {
         return "recording, quiet"
     }

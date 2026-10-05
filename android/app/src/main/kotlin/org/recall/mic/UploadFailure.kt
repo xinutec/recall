@@ -6,24 +6,13 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
 /**
- * Why an upload didn't land, in words the person holding the phone can act on.
+ * Why an upload failed, as one of the four causes with different fixes: a wrong token
+ * (Settings), no route home (wait, or fix the control host), a refused file (look at
+ * the recording), or a server fault (nothing to do). A bare 401 in the log once went
+ * unnoticed for months.
  *
- * The meeting recorder 401ed for as long as the feature had existed and nobody knew.
- * `MeetingUpload` wrote `meeting upload failed: <file>: HTTP 401` to logcat and the
- * screen showed a pending count, which reads exactly like "not home yet" — so the
- * failure was found on 2026-07-07 by a root-cause session that ended at a conclusion
- * the phone had known all along and written down where nobody reads.
- *
- * The distinctions that matter to someone holding the phone are the ones with different
- * fixes: **the token is wrong** (Settings), **there is no route home** (wait, or the
- * control host is wrong), **recall refused this file** (look at the recording), and
- * **recall is broken** (nothing to do here). A single "upload failed" collapses four
- * different next actions into none.
- *
- * ⚠ **The text is composed here and never quoted from the throwable.** A message that
- * echoed what it was given would eventually put the bearer token on the screen — and
- * from there into a screenshot, which is how a secret leaves a phone. The only thing
- * taken from the failure is a three-digit status code.
+ * The text is written here, never copied from the throwable, which could carry the
+ * bearer token onto the screen; only a status code is taken from it.
  */
 object UploadFailure {
     private const val AUTH = "Not authorised — check the upload token in Settings."
@@ -31,7 +20,7 @@ object UploadFailure {
         "Couldn't reach recall. Check the control host in Settings, or try again from home."
     private const val UNKNOWN = "Upload failed. It will keep trying."
 
-    /** `HTTP <code>` is what [ShareUpload] raises for a non-2xx; anything else has none. */
+    /** What [ShareUpload] raises for a non-2xx. */
     private val STATUS = Regex("""^HTTP (\d{3})$""")
 
     /** The status code [ShareUpload] put in the message, or null if this wasn't one. */
@@ -49,8 +38,7 @@ object UploadFailure {
         val status = httpStatus(failure.message)
         if (status != null) return forStatus(status)
         return when (failure) {
-            // Every "the host isn't there" shape lands on one sentence: from the phone
-            // they are one situation, and the fix is the same for all of them.
+            // One situation from the phone, with one fix.
             is ConnectException, is UnknownHostException, is SocketTimeoutException -> UNREACHABLE
 
             is IOException -> UNKNOWN
@@ -65,8 +53,7 @@ object UploadFailure {
                 AUTH
             }
 
-            // The server probed the body and refused it, so the phone's copy is the
-            // thing to look at — and it is still here, which is what to say.
+            // The server refused the file; the phone still has it.
             status in 400..499 -> {
                 "recall refused this recording (HTTP $status). Play it before deleting it."
             }

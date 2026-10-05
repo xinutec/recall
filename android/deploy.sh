@@ -3,17 +3,12 @@
 #
 #   nix develop ..#android --command ./deploy.sh
 #
-# The android devshell provides Gradle and the SDK's adb. `pm install -r` keeps
-# each app's data (host/port config survives); we relaunch the activity afterwards
-# because a reinstall stops the foreground service, so this restarts streaming
-# with no manual taps.
+# `pm install -r` keeps each app's settings; the activity is relaunched after,
+# since a reinstall stops the foreground service.
 #
-# Each phone is tried at its LAN address first (a DHCP reservation on the router)
-# and then at its WireGuard address. The VPN one is not a fallback for a broken
-# router — it is how you reach a phone that is genuinely out of the house, which
-# on 2026-08-14 was the only way the Pixel 9 could be deployed to at all. Both use
-# the fixed adb port 5555, set once per phone via `adb tcpip 5555`; that does not
-# survive a reboot, and no address helps once it is off.
+# Each phone is tried at its LAN address (a DHCP reservation), then its WireGuard
+# address, which reaches it away from home. Both use adb port 5555, set per phone
+# with `adb tcpip 5555`, which a reboot undoes.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -21,8 +16,8 @@ cd "$(dirname "$0")"
 PHONES=(
   "pixel9|192.168.1.253:5555|10.100.0.12:5555|4C070DLAQ001L1"   # living room, but carried
   "pixel5|192.168.1.242:5555|10.100.0.10:5555|15271FDD40043S"
-  # LineageOS: Wireless debugging only (random port, TLS-paired with this Mac on
-  # 2026-09-27), so 5555 refuses and the serial's mDNS lookup finds the port.
+  # LineageOS: Wireless debugging only (a random port, TLS-paired with this Mac),
+  # so 5555 refuses and the mDNS lookup finds the port.
   "oneplus6t|192.168.1.28:5555|10.100.0.8:5555|83bf636e"
 )
 
@@ -33,24 +28,13 @@ echo "building APK..."
 APK="$PWD/app/build/outputs/apk/debug/app-debug.apk"
 LOCAL_MD5=$(md5 -q "$APK")
 
-# ⚠ If every address reports unreachable while `nc -z <ip> 5555` succeeds, the
-# local adb server is wedged from earlier failed connects, not the phones away.
-# Restart it by hand: `adb kill-server && adb start-server`.
-#
-# Not done here: `kill-server` hangs while the server holds a transport to an
-# offline device, and this devshell has no `timeout` to bound it. A stale entry
-# for one address is cleared with `disconnect`, which cannot block.
+# If every address is unreachable while `nc -z <ip> 5555` succeeds, the local adb
+# server is wedged; restart it by hand: `adb kill-server && adb start-server`. Not
+# done here: `kill-server` can hang, and this devshell has no `timeout`.
 
-# Where Wireless debugging is listening right now, via mDNS. Echoes host:port, or nothing.
-#
-# `adb tcpip 5555` does not survive a reboot, and what comes back after one is the
-# Settings > Wireless debugging toggle — which listens on a random high port, not 5555.
-# So a phone that is awake, on the LAN and pingable can still refuse :5555 on every
-# address it owns, which reads exactly like a phone that is away. The port is
-# advertised, so look it up rather than asking the user to.
-#
-# ⚠ mDNS is link-local, so this only finds a phone on the home LAN; away from home
-# the VPN address is the only way in.
+# Where Wireless debugging listens now, by mDNS: host:port, or nothing. After a
+# reboot only Wireless debugging is on, on a random port, so a phone at home can
+# refuse :5555 everywhere. mDNS only works on the home LAN.
 mdns_addr() {
   local serial=$1
   "$ADB" mdns services 2>/dev/null |
@@ -64,8 +48,7 @@ reach() {
     [ -n "$addr" ] || continue
     "$ADB" disconnect "$addr" >/dev/null 2>&1 || true
     if "$ADB" connect "$addr" 2>&1 | grep -qiE "connected|already"; then
-      # `connect` can report success and then sit `offline`, which every later
-      # command fails on with a message about the device rather than the link.
+      # `connect` can succeed and then sit `offline`.
       sleep 1
       if [ "$("$ADB" devices | awk -v a="$addr" '$1 == a {print $2}')" = "device" ]; then
         echo "$addr"
@@ -77,12 +60,9 @@ reach() {
   return 1
 }
 
-# Push, verify, then install from the phone. Over the VPN a phone on cellular
-# drops mid-transfer (`failed to read copy response`, then `device offline`), and
-# a bare `adb install` makes that one flaky link carry both the 15 MB copy and the
-# install. Split, and a drop costs a retry instead of the attempt. The old app
-# survives a failed transfer untouched — measured: same versionName, same
-# ServiceRecord, the foreground service never even restarted.
+# Push, verify, then install on the phone, so a link that drops mid-copy (a phone on
+# cellular over the VPN) costs a retry, not the install. A failed transfer leaves the
+# old app running untouched.
 stage_and_install() {
   local p=$1 staged=/data/local/tmp/recall-mic.apk try
   for try in 1 2 3; do
@@ -110,8 +90,7 @@ for entry in "${PHONES[@]}"; do
       echo "  (turn on Settings > Developer options > Wireless debugging)"
       continue
     fi
-    # Put :5555 back, so the next run finds it at the address this file documents
-    # instead of rediscovering a port that changes on every reboot.
+    # Put :5555 back for next time.
     echo "  reached at $p over mDNS — restoring :5555"
     "$ADB" -s "$p" tcpip 5555 >/dev/null 2>&1 || true
     sleep 3
@@ -125,8 +104,8 @@ for entry in "${PHONES[@]}"; do
     echo "  INSTALL FAILED — the previous build is still installed and running"
     continue
   fi
-  # -S force-stops first so the activity is recreated (onCreate -> resume the
-  # service with the new build), rather than just fronting a stale task.
+  # -S force-stops first, so onCreate runs and restarts the service on the new
+  # build.
   "$ADB" -s "$p" shell am start -S -n org.recall.mic/.MainActivity >/dev/null
   echo "  installed + relaunched"
   ok=$((ok + 1))

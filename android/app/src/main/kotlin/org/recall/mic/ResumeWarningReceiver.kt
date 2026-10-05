@@ -13,20 +13,13 @@ import java.time.Instant
 import java.time.ZoneId
 
 /**
- * Posts the "recording resumes soon" heads-up when [ResumeWarning]'s alarm fires. A
- * plain informational notification: tapping it opens the app on the pause controls, so
- * the pause can be extended before the mic comes back on.
- *
- * Extending is also what makes it go away — [ResumeWarning] drops it when it next reads a
- * moved resume time — so the text here is written as a snapshot that is never left to
- * contradict the pause it describes.
+ * Posts "recording resumes soon" when [ResumeWarning]'s alarm fires; tapping it opens
+ * the app's pause controls. Extending the pause takes it down ([ResumeWarning]).
  */
 class ResumeWarningReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val millis = intent.getLongExtra(ResumeWarning.EXTRA_RESUME_AT_MILLIS, 0L)
-        // Without a resume time the warning has nothing to say — skip rather than post a
-        // bare notification (defensive; the scheduler always sets the extra).
-        if (millis <= 0L) return
+        if (millis <= 0L) return // the scheduler always sets it
         val resumeAt = Instant.ofEpochMilli(millis)
 
         val mgr = context.getSystemService(NotificationManager::class.java)
@@ -35,10 +28,8 @@ class ResumeWarningReceiver : BroadcastReceiver() {
                 NotificationChannel(
                     CHANNEL_ID,
                     "Resume warning",
-                    // Low: silent — no sound, no vibration, no heads-up peek. It just
-                    // appears in the shade / status bar, so the room mic never makes a
-                    // noise. (Channel importance is locked at first creation, so this
-                    // must ship before any warning ever fires.)
+                    // Silent: no sound, vibration or peek, so a room phone never makes
+                    // a noise. Fixed once the channel exists.
                     NotificationManager.IMPORTANCE_LOW,
                 ),
             )
@@ -53,14 +44,11 @@ class ResumeWarningReceiver : BroadcastReceiver() {
             .setContentText(resumeWarningText(resumeAt, Instant.now(), ZoneId.systemDefault()))
             .setSmallIcon(R.drawable.ic_mic)
             .setColor(ContextCompat.getColor(context, R.color.ic_launcher_background))
-            // Silent on pre-O too (the compat mirror of the low channel): no sound/peek.
+            // Silent before Android 8 too.
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setAutoCancel(true)
-            // A warning must not outlive the resume it warns about. [ResumeWarning] takes
-            // it down as soon as it sees the pause move, but that read needs something
-            // running; this is the system's own backstop, honoured even if the app never
-            // polls again. Never negative: an alarm delivered past its resume (doze held
-            // it, the clock jumped) has nothing to count down, so it goes at once.
+            // Gone at the resume even if the app never polls again; at once if the alarm
+            // came late.
             .setTimeoutAfter(msUntil(resumeAt).coerceAtLeast(1))
             .setContentIntent(launchApp(context))
             .build()

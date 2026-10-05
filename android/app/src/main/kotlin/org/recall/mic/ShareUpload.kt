@@ -14,10 +14,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * What recall made of an upload: the session's name, and **how long the audio it actually
- * received turned out to be**. The second one is the receipt — the server probes what
- * arrived, so comparing its length with the file still on the phone is the only way to
- * tell a complete post from one that was cut short and still parsed.
+ * What recall made of an upload: the session's name and the length of the audio it
+ * received, compared with the phone's copy to catch a post cut short.
  */
 data class UploadedSession(
     val title: String,
@@ -25,19 +23,10 @@ data class UploadedSession(
 )
 
 /**
- * Uploads an audio file to `POST /api/sessions` — the same endpoint the web Upload button
- * uses — so a conversation recorded outside continuous capture becomes a recall session,
- * transcribed and diarized like any meeting. Used by both the share sheet
- * ([ShareActivity]) and the app's own recorder ([MeetingUpload]).
- *
- * The `host` is the **control host** (Isis), not the recorder host: the Mac's own web UI
- * was retired in the Isis split and its `:8000` refuses, so an upload sent to the machine
- * the PCM stream goes to has nowhere to land. Isis picks the session up and the Mac pulls
- * the blob back through the job-pull to transcribe it.
- *
- * The pure time helpers are unit-tested; the network call mirrors CaptureApi.
+ * Uploads an audio file to `POST /api/sessions`, as the web app's Upload button does,
+ * making it a session. Used by the share sheet ([ShareActivity]) and the meeting
+ * recorder ([MeetingUpload]). `host` is Isis, not the recorder host.
  */
-
 object ShareUpload {
     // The recorder encodes the local start in the filename, e.g. 2026_07_03_09_50_50_1.mp3.
     private val RECORDER_STAMP = Regex("""(\d{4})_(\d{2})_(\d{2})_(\d{2})_(\d{2})_(\d{2})""")
@@ -55,15 +44,8 @@ object ShareUpload {
         }
 
     /**
-     * Epoch millis from the two columns a shared content URI might carry, in priority
-     * order: SAF's `last_modified` first, then MediaStore's `date_modified`.
-     *
-     * ⚠ They are in **different units** — `last_modified` is millis, `date_modified` is
-     * seconds. Reading seconds as millis dates a 2026 recording to January 1970, which is
-     * worse than the `now` fallback: it looks like the file's own time was honoured.
-     *
-     * Zero, negative and null all mean "this provider has no time for the file", never
-     * the epoch.
+     * Epoch millis from SAF's `last_modified` (millis), else MediaStore's
+     * `date_modified` (seconds). Zero, negative and null mean no time, not 1970.
      */
     fun modifiedMillis(lastModifiedMillis: Long?, dateModifiedSeconds: Long?): Long? =
         lastModifiedMillis?.takeIf { it > 0 }
@@ -76,11 +58,8 @@ object ShareUpload {
             ?: modifiedMillis?.takeIf { it > 0 }?.let(Instant::ofEpochMilli)
             ?: now
 
-    /**
-     * How long recall says the session is, from the `start`/`end` it returns — 0 when the
-     * response doesn't carry both, which [MeetingQueue.landedShort] reads as "not
-     * verified" rather than as agreement.
-     */
+    /** The session's length from the returned `start` and `end`; 0 if either is missing,
+     * which [MeetingQueue.landedShort] reads as unverified. */
     fun sessionDurationMs(body: String): Long =
         runCatching {
             val json = JSONObject(body)
@@ -91,16 +70,11 @@ object ShareUpload {
                 ).toMillis()
         }.getOrDefault(0L)
 
-    /** POST `file` to /api/sessions as multipart. Returns the created session's title on
-     * success, or a failure. Streams the file (an appointment can be tens of MB).
-     * No `title` is sent: the server names the session `Meeting <date> <time>` from the
-     * start, and it is renamed there if it ever needs a name.
+    /** POST `file` to /api/sessions as multipart, streamed. No title: the server names
+     * the session after its start.
      *
-     * `token` is the device bearer ([Prefs.deviceToken]). Isis gates its `/api` routes
-     * behind a Nextcloud sign-in and a phone cannot do an interactive OAuth login — the
-     * WebView that can is a different app with its own cookie jar — so without it every
-     * upload to the fleet is a 401. Blank sends no header at all, which is what an
-     * ungated LAN deployment (the Mac, dev, tests) expects. */
+     * `token` is the device bearer ([Prefs.deviceToken]), since the phone cannot sign in
+     * to Nextcloud; blank sends no header, for an ungated server. */
     suspend fun upload(
         host: String,
         file: File,

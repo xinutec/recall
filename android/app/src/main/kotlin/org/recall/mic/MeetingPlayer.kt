@@ -9,16 +9,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 
 /**
- * Plays a recording back on the phone, so a meeting can be listened to before anything is
- * decided about it. Deliberately small: one file at a time, no queue, no service — this is
- * a check before uploading, not a media app.
- *
- * The position is *pulled* by the screen rather than pushed from a ticker thread here, so
- * nothing polls while the list is closed.
- *
- * It never touches the device volume. Playback comes out at whatever the phone is set to;
- * a recording made in a quiet room is quiet, and turning the phone up on the user's behalf
- * is not this app's decision to make.
+ * Plays a recording back, to check it before uploading: one file at a time, no service.
+ * The screen polls the position. The device volume is left alone.
  */
 object MeetingPlayer {
     private const val TAG = "recall.meeting"
@@ -26,7 +18,7 @@ object MeetingPlayer {
     // dev-lint: allow-object-var the one MediaPlayer this process owns; no test reaches it
     private var player: MediaPlayer? = null
 
-    /** The file loaded right now, or null when nothing is. */
+    /** The loaded file, if any. */
     private val _file = MutableStateFlow<File?>(null)
     val file: StateFlow<File?> = _file.asStateFlow()
 
@@ -61,7 +53,7 @@ object MeetingPlayer {
         runCatching { player?.seekTo(ms.toInt()) }
     }
 
-    /** Current playback head, in ms — read by the screen while it is open. */
+    /** The playback position, in ms. */
     fun positionMs(): Long =
         runCatching { player?.currentPosition?.toLong() ?: 0L }.getOrDefault(0L)
 
@@ -73,8 +65,7 @@ object MeetingPlayer {
         _durationMs.value = 0L
     }
 
-    /** Same as [stop] — named for the lifecycle callers, so leaving the screen reads as
-     * releasing the codec rather than as a user action. */
+    /** [stop], named for the lifecycle callers. */
     fun release() = stop()
 
     private fun load(target: File) {

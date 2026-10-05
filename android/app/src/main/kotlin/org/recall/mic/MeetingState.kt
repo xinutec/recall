@@ -8,32 +8,25 @@ import java.io.File
 import java.time.Instant
 
 /**
- * Live meeting-recorder state, published by [MeetingService] and the upload worker and
- * observed by the UI — the same in-process StateFlow arrangement as [MicState], and
- * deliberately separate from it: the two modes never run at once, so sharing one
- * "running" flag would only invite the screen to render the wrong mode's status.
+ * The meeting recorder's state, written by [MeetingService] and the upload worker, read
+ * by the UI; kept apart from [MicState], so neither screen shows the other's status.
  */
 object MeetingState {
     private val _recording = MutableStateFlow(false)
     val recording: StateFlow<Boolean> = _recording.asStateFlow()
 
-    /** When the current recording started, for the elapsed-time readout; null if idle. */
+    /** When the current recording started; null if idle. */
     private val _startedAt = MutableStateFlow<Instant?>(null)
     val startedAt: StateFlow<Instant?> = _startedAt.asStateFlow()
 
     private val _level = MutableStateFlow(0f)
     val level: StateFlow<Float> = _level.asStateFlow()
 
-    /** The file being recorded into right now — excluded from the library, since it is
-     * not a thing that can be played, uploaded or deleted yet. */
+    /** The file being recorded, left out of the list until finished. */
     private val _activeFile = MutableStateFlow<File?>(null)
     val activeFile: StateFlow<File?> = _activeFile.asStateFlow()
 
-    /**
-     * Every recording still on the phone: held ones awaiting a decision and approved ones
-     * on their way out. Shown in the app because audio that exists in exactly one place
-     * and is invisible is how a lost recording goes unnoticed for weeks.
-     */
+    /** Every recording on the phone, whatever its state. */
     private val _recordings = MutableStateFlow<List<RecordingRow>>(emptyList())
     val recordings: StateFlow<List<RecordingRow>> = _recordings.asStateFlow()
 
@@ -41,7 +34,7 @@ object MeetingState {
     private val _pending = MutableStateFlow(0)
     val pending: StateFlow<Int> = _pending.asStateFlow()
 
-    /** Last thing that went wrong, for the screen; cleared when a recording starts. */
+    /** The last error, for the screen; cleared when a recording starts. */
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 

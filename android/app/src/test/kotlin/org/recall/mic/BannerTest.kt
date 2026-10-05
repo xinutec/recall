@@ -6,14 +6,11 @@ import java.time.Instant
 import java.time.ZoneId
 
 class BannerTest {
-    // The reference: the website's banner reads
-    // "Recording paused — auto-resumes in 5h 23m (by 2026-07-04 08:30)".
-    // The phones must match it byte-for-byte (durationUntil + dayKey HH:mm).
+    // The texts must equal the web app's.
     private val london = ZoneId.of("Europe/London")
 
     @Test
     fun matchesWebsitePhrasingWithHoursAndMinutes() {
-        // 2026-07-04 08:30 London, read 5h 23m earlier (03:07).
         val until = "2026-07-04T07:30:00+00:00" // 08:30 BST
         val now = Instant.parse("2026-07-04T02:07:00Z") // 03:07 BST
         assertEquals(
@@ -34,7 +31,6 @@ class BannerTest {
 
     @Test
     fun readsNowWhenDeadlinePassed() {
-        // Never a negative countdown — a past resume time reads "now", as on the web.
         val until = "2026-07-04T07:30:00+00:00"
         val now = Instant.parse("2026-07-04T09:00:00Z")
         assertEquals(
@@ -45,7 +41,6 @@ class BannerTest {
 
     @Test
     fun bareWhenNoResumeTime() {
-        // running==false with no pausedUntil (or an unparseable one) → no resume clause.
         val now = Instant.parse("2026-07-04T09:00:00Z")
         assertEquals("Recording paused", Banner.pausedText(null, now, london))
         assertEquals("Recording paused", Banner.pausedText("not-a-date", now, london))
@@ -64,8 +59,6 @@ class BannerTest {
     @Test
     fun labelsARecordingsDateAndSize() {
         assertEquals("3 Jul, 09:50", startedLabel(Instant.parse("2026-07-03T08:50:50Z"), london))
-        // Rounded the way a person reads it — the point is "is this the recording I think
-        // it is", not an exact byte count.
         assertEquals("21.4 MB", sizeLabel(21_400_000))
         assertEquals("812 KB", sizeLabel(812_345))
         assertEquals("640 B", sizeLabel(640))
@@ -73,8 +66,7 @@ class BannerTest {
 
     @Test
     fun elapsedNeverGoesNegative() {
-        // A clock that steps backwards mid-meeting must not paint a minus sign onto the
-        // one readout that says whether the recorder is running.
+        // A clock stepped back.
         val since = Instant.parse("2026-07-04T09:00:00Z")
         assertEquals("00:00", elapsedLabel(since, since.minusSeconds(90)))
     }

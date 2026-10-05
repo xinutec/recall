@@ -25,8 +25,7 @@ class MeetingQueueTest {
 
     @Test
     fun recoversTheStartFromTheFilename() {
-        // The filename is the only record of when a recording was made, so it must
-        // round-trip exactly — nothing else carries the start.
+        // Nothing else records the start.
         assertEquals(
             start,
             MeetingQueue.startFromName(MeetingQueue.fileName(start, london), london),
@@ -52,8 +51,7 @@ class MeetingQueueTest {
 
     @Test
     fun fallsBackToTheFileTimeForANameWeDidntWrite() {
-        // Something copied into the directory by hand still shows up, at a plausible
-        // time, rather than being silently hidden.
+        // As for a file copied in by hand.
         val odd = record("interview.ogg").apply { setLastModified(1_770_000_000_000) }
         val queue = MeetingQueue.list(tmp.root, london)
         assertEquals(listOf(odd), queue.map { it.audio })
@@ -62,8 +60,6 @@ class MeetingQueueTest {
 
     @Test
     fun skipsEmptyFilesAndNonRecordings() {
-        // A MediaRecorder stopped before it wrote a page leaves a 0-byte file; posting it
-        // would only earn a 400 from the server's ffprobe.
         File(tmp.root, "meeting-20260703-095050.ogg").createNewFile()
         record("notes.txt")
         assertTrue(MeetingQueue.list(tmp.root, london).isEmpty())
@@ -78,8 +74,6 @@ class MeetingQueueTest {
 
     @Test
     fun movingARecordingIsHowItChangesState() {
-        // Every state here is a directory, because a decision or a verdict has to survive
-        // a reboot and a rename is the only change that can't half-happen.
         val audio = record("meeting-20260703-095050.ogg")
         val outbox = tmp.newFolder("outbox")
 
@@ -87,27 +81,23 @@ class MeetingQueueTest {
 
         assertEquals(File(outbox, audio.name), moved?.audio)
         assertFalse(audio.exists())
-        // The name carries the start, so it survives the move intact.
         assertEquals(start, MeetingQueue.list(outbox, london).single().start)
     }
 
     @Test
     fun aShorterCopyOnTheHostIsNotAVerifiedUpload() {
         val tenMinutes = 600_000L
-        // What a complete post looks like: the two probes disagree by milliseconds.
+        // A complete post: the two probes differ by milliseconds.
         assertFalse(MeetingQueue.landedShort(tenMinutes, tenMinutes))
         assertFalse(MeetingQueue.landedShort(tenMinutes, tenMinutes - 400))
         assertFalse(MeetingQueue.landedShort(tenMinutes, tenMinutes + 400))
-        // A post cut short mid-stream still parses on the server, so this is the only
-        // signal that the phone holds the longer recording.
+        // A post cut short.
         assertTrue(MeetingQueue.landedShort(tenMinutes, tenMinutes - 30_000))
         assertTrue(MeetingQueue.landedShort(tenMinutes, 5_000))
     }
 
     @Test
     fun anUnknownLengthCountsAsUnverifiedNotAsAgreement() {
-        // "Couldn't compare" must never read as "checked and fine" — the whole point is
-        // whether the upload has been verified, and an unanswered question has not been.
         assertTrue(MeetingQueue.landedShort(0, 600_000))
         assertTrue(MeetingQueue.landedShort(600_000, 0))
         assertTrue(MeetingQueue.landedShort(0, 0))
@@ -115,8 +105,7 @@ class MeetingQueueTest {
 
     @Test
     fun theOutboxIsNotListedAsARecording() {
-        // The outbox is a subdirectory of the recordings directory; held recordings must
-        // not gain a phantom row for it.
+        // A subdirectory of the recordings directory.
         record("meeting-20260703-095050.ogg")
         tmp.newFolder("outbox")
         assertEquals(1, MeetingQueue.list(tmp.root, london).size)
@@ -124,8 +113,6 @@ class MeetingQueueTest {
 
     @Test
     fun aFailureIsRememberedBesideTheRecording() {
-        // On disk, not in memory: MeetingUpload runs under WorkManager with the app gone,
-        // so a reason held in a field is collected before anyone opens the screen to ask.
         val audio = record("meeting-20260703-095050.ogg")
         assertNull(MeetingQueue.failure(audio))
 
@@ -138,8 +125,7 @@ class MeetingQueueTest {
 
     @Test
     fun aFailureNoteIsNeverListedAsARecording() {
-        // It sits in the outbox next to the audio, and the outbox is exactly what the
-        // uploader iterates — a note that listed as a recording would be posted.
+        // Or the uploader would post it.
         val audio = record("meeting-20260703-095050.ogg")
         MeetingQueue.noteFailure(audio, "Upload failed.")
         assertEquals(listOf(audio), MeetingQueue.list(tmp.root, london).map { it.audio })
@@ -147,8 +133,6 @@ class MeetingQueueTest {
 
     @Test
     fun deliveryTakesTheFailureNoteWithIt() {
-        // Otherwise "not authorised" stays under a recording that is now safely on
-        // recall — the retry that succeeded would leave the reason it once failed.
         val audio = record("meeting-20260703-095050.ogg")
         MeetingQueue.noteFailure(audio, "Not authorised — check the upload token.")
         val uploaded = tmp.newFolder("uploaded")
@@ -169,8 +153,6 @@ class MeetingQueueTest {
 
     @Test
     fun theOutboxStateIsWhatTheFleetIsTold() {
-        // The four things a stuck queue needs to be visible from outside the phone:
-        // how much, how old, how much of it is failing, and why.
         val old = record("meeting-20260703-095050.ogg")
         record("meeting-20260703-140000.ogg")
         MeetingQueue.noteFailure(old, "Not authorised — check the upload token.")
@@ -185,9 +167,7 @@ class MeetingQueueTest {
 
     @Test
     fun anEmptyOutboxIsStillAReportableState() {
-        // ⚠ Not "nothing to say". Only reporting failures would leave the last bad
-        // reading standing after the queue drained, and a check that cannot go back
-        // to green is one that gets muted — which is where this task started.
+        // So the server's check can return to green.
         val state = MeetingQueue.state(tmp.root, london)
         assertEquals(0, state.queued)
         assertEquals(0, state.failing)
@@ -195,7 +175,7 @@ class MeetingQueueTest {
         assertNull(state.reason)
     }
 
-    /** A file with some bytes in it, standing in for a recording. */
+    /** A non-empty file standing in for a recording. */
     private fun record(name: String): File =
         File(tmp.root, name).apply { writeBytes(ByteArray(64)) }
 }

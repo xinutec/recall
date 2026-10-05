@@ -9,14 +9,13 @@ import kotlin.math.max
 import kotlin.math.roundToLong
 
 /**
- * Elapsed recording time as "07:12" (or "1:07:12" past the hour) — seconds included,
- * because the readout doubles as the proof that the recorder is actually running.
- * Never negative: a clock that steps backwards mid-meeting shows 00:00, not a minus sign.
+ * Elapsed time as "07:12", or "1:07:12" past the hour; the ticking seconds show the
+ * recorder runs. A clock stepped back shows 00:00.
  */
 fun elapsedLabel(since: Instant, now: Instant): String =
     elapsedLabel(Duration.between(since, now).seconds)
 
-/** As above, for a duration already in seconds — a recording's length, a playback head. */
+/** As above, for a duration in seconds. */
 fun elapsedLabel(seconds: Long): String {
     val secs = max(0L, seconds)
     val h = secs / 3600
@@ -33,11 +32,8 @@ fun elapsedLabel(seconds: Long): String {
 fun startedLabel(start: Instant, zone: ZoneId): String =
     DateTimeFormatter.ofPattern("d MMM, HH:mm").format(start.atZone(zone))
 
-/**
- * A recording's size, rounded the way a person reads it: "21.4 MB", "812 KB". Shown
- * because it is the other half of "is this the recording I think it is" — a 40-minute
- * appointment that came out 300 KB did not record what you were expecting.
- */
+/** A recording's size: "21.4 MB", "812 KB". Shown since a too-small file reveals a
+ * failed recording. */
 fun sizeLabel(bytes: Long): String =
     when {
         bytes >= 1_000_000L -> "%.1f MB".format(bytes / 1_000_000.0)
@@ -46,9 +42,8 @@ fun sizeLabel(bytes: Long): String =
     }
 
 /**
- * The household paused-banner text, kept byte-for-byte identical to the website's
- * (frontend `app.html` + `format.ts`): "Recording paused — auto-resumes in 5h 23m
- * (by 2026-07-04 08:30)". One place so web/Android/iOS can't drift apart.
+ * The paused-banner text, identical to the web app's (`app.html`, `format.ts`):
+ * "Recording paused — auto-resumes in 5h 23m (by 2026-07-04 08:30)".
  */
 object Banner {
     private val DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
@@ -61,8 +56,7 @@ object Banner {
         return "Recording paused — auto-resumes in ${remaining(until.toInstant(), now)} (by $by)"
     }
 
-    /** Time left as "5h 23m" / "23m" / "now" — whole minutes, never negative
-     *  (matches format.ts durationUntil). */
+    /** Time left as "5h 23m", "23m" or "now", as format.ts `durationUntil`. */
     private fun remaining(until: Instant, now: Instant): String {
         val mins =
             max(

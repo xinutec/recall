@@ -11,67 +11,37 @@ import java.time.Instant
 import java.time.format.DateTimeFormatter
 
 /**
- * "I am still here", once an hour, whether or not there is anything to stream.
+ * "Still here", once an hour, whether or not anything streams (#837): audio alone cannot
+ * tell a dead app from a quiet room or a pause.
  *
- * recall could not tell a dead recorder from a quiet room. Its per-source liveness marker
- * is refreshed only by audio above the silence floor — deliberately, so that a dot means
- * *recording* rather than merely connected — and while the household is paused the ingest
- * listener is closed and nothing streams at all. Capture was paused for the four days
- * before this was written, which is exactly the window in which a dead app goes unnoticed
- * until somebody picks the phone up (#837).
+ * Sent to Isis, reachable from anywhere over WireGuard, so a phone that is out still
+ * beats; the recorder's LAN address is the fallback. Separate from [OutboxReport], which
+ * runs on the upload schedule and only on meeting phones.
  *
- * Sent to the control host (Isis, over WireGuard), not the recorder on the LAN — the same
- * split [CaptureApi] already makes. Isis is reachable from anywhere, so a phone that is
- * out of the house still beats and "away" stops looking like "dead". That is also why
- * this is not merged into [OutboxReport]: that one rides the upload worker's schedule and
- * only exists on phones that record meetings; this must beat from the streaming service,
- * on every mic phone, on its own clock.
- *
- * ⚠ Beats only while the service is running, which is what "started" means here. A
- * stopped app is not going to record, and a beat that arrived anyway would paint the one
- * state worth catching — this mic will capture nothing — bright green.
- *
- * Best-effort and silent, like [OutboxReport]: a liveness report that raised its own
- * failures would be the tail wagging the dog.
+ * Only while the service runs: a stopped app records nothing and must not look alive.
+ * Best-effort and silent.
  */
 object Heartbeat {
     private const val TIMEOUT_MS = 8000
 
-    /**
-     * How often to beat. The grader's thresholds are written as multiples of this
-     * (`recalld::devices::BEAT_EVERY_MINUTES`), so the two cannot drift apart silently.
-     */
+    /** How often to beat; equal to `recalld::devices::BEAT_EVERY_MINUTES`, which the
+     * grader's thresholds are multiples of. */
     const val EVERY_MINUTES = 60L
 
-    /**
-     * First retry after a beat that did not land. Doubles per consecutive failure up to
-     * [EVERY_MINUTES], so a blip costs minutes rather than an hour (#886).
-     */
+    /** First retry after a failed beat; doubles per failure up to [EVERY_MINUTES] (#886). */
     private const val RETRY_BASE_MINUTES = 1L
 
-    /**
-     * When this process started. Set on class load — the service is the first thing to
-     * touch it — so a beat carrying a recent value means the app restarted, and "up all
-     * week" is distinguishable from "relaunching between beats".
-     */
+    /** When this process started (on class load, by the service), so restarts show. */
     val startedAt: Instant = Instant.now()
 
     /**
-     * Minutes until the next beat: the full cadence when the last one landed, a short
-     * backoff when it did not.
-     *
-     * Pure, so the schedule is pinned in unit tests without a network or an hour of
-     * waiting — the same reason [body] is pure.
-     *
-     * ⚠ The cap is what keeps this a backoff and not a poll. One request an hour is the
-     * design; a phone that is simply off (or out of range for a week) must never beat
-     * harder than that, and the whole retry burst is bounded to fit inside one cadence.
-     * Growing it would trade the thing this exists to protect for a little less latency.
+     * Minutes until the next beat: the full cadence after a success, a backoff after a
+     * failure, never more often than hourly once the backoff reaches the cadence.
      */
     fun nextDelayMinutes(consecutiveFailures: Int): Long {
         if (consecutiveFailures <= 0) return EVERY_MINUTES
-        // Shift-free: `1L shl 63` would wrap, and this counter is reset only by a
-        // success, so a phone left in a dead spot keeps incrementing it forever.
+        // Doubling, not shifting: the counter grows without bound in a dead spot, and
+        // `1L shl 63` would wrap.
         var delay = RETRY_BASE_MINUTES
         repeat(consecutiveFailures - 1) {
             if (delay >= EVERY_MINUTES) return EVERY_MINUTES
@@ -80,7 +50,7 @@ object Heartbeat {
         return minOf(delay, EVERY_MINUTES)
     }
 
-    /** App version and build, so a restart *into a new build* reads as a deploy. */
+    /** App version and build, so a restart into a new build reads as a deploy. */
     fun version(ctx: Context): String =
         runCatching {
             val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
@@ -88,10 +58,7 @@ object Heartbeat {
             "${info.versionName} (${info.versionCode})"
         }.getOrDefault("?")
 
-    /**
-     * The JSON a beat carries — pure, so the field names (a contract with the server's
-     * `HeartbeatIn`) can be pinned in a unit test without a network.
-     */
+    /** A beat's JSON, the server's `HeartbeatIn`. */
     fun body(
         device: String,
         version: String,
@@ -106,18 +73,15 @@ object Heartbeat {
             .put("version", version)
             .put("startedAt", DateTimeFormatter.ISO_INSTANT.format(startedAt))
             .put("streaming", streaming)
-            // A running app that cannot open its mic must say so rather than fall
-            // silent, which is what it used to do (#887).
+            // A running app that cannot open its mic (#887).
             .put("micOk", micOk)
-            // Absent rather than null when unknown: guessing "discharging" would invent
-            // the very reading a mains-powered room phone is watched for.
+            // Absent when unknown, rather than a guess.
             .apply { if (charging != null) put("charging", charging) }
             .toString()
 
     /**
-     * True on mains, false on battery, null when Android will not say. Room phones are
-     * mains-powered, so discharging is the leading indicator of the death this exists to
-     * catch — carried, never graded, because a carried phone is off charge all day.
+     * True on mains, false on battery, null if unknown. For a room phone, discharging
+     * warns of its death; reported, not graded, since a carried phone discharges all day.
      */
     fun charging(ctx: Context): Boolean? =
         runCatching {
@@ -139,12 +103,7 @@ object Heartbeat {
             }
         }.getOrNull()
 
-    /**
-     * POST one beat, blocking. Returns whether it landed; nothing depends on it.
-     *
-     * Blocking rather than `suspend` on purpose: the caller is [StreamService]'s own beat
-     * thread, which has no coroutine scope and whose whole job is to sleep and send.
-     */
+    /** POST one beat, blocking (the caller is a plain thread). Whether it landed. */
     fun send(
         controlHost: String,
         lanHost: String,
@@ -154,26 +113,15 @@ object Heartbeat {
         ctx: Context,
     ): Boolean {
         val body = body(device, version(ctx), startedAt, streaming, charging(ctx), micOk)
-        // Control plane first, the recorder's LAN address second (#888). The beat used
-        // to demand more reachability than recording does — audio goes to the LAN host,
-        // so a phone at home with its tunnel off recorded every sample and still read as
-        // dead. The Mac runs a relay on the same port, so the fallback is the identical
-        // request with the host swapped. Trying the VPN first keeps the LAN a backstop
-        // rather than a shortcut, so a phone away from home behaves exactly as before.
+        // Isis first, then the recorder's LAN address, where the Mac relays beats (#888):
+        // a phone at home with its tunnel off still records, so must not read as dead.
         for (host in hostsToTry(controlHost, lanHost)) {
             if (post(body, host)) return true
         }
         return false
     }
 
-    /**
-     * Which hosts to try, in order. Pure, so the ORDER — the part that matters, and the
-     * part a network test cannot pin cheaply — is checked without a network.
-     *
-     * Control plane first: the LAN is a backstop, not a shortcut, so a phone away from
-     * home behaves exactly as it did before the fallback existed. Duplicates dropped so
-     * a device configured with one host for both does not pay the timeout twice.
-     */
+    /** The hosts to try, in order, blanks and duplicates dropped. */
     fun hostsToTry(controlHost: String, lanHost: String): List<String> =
         listOf(controlHost, lanHost).filter { it.isNotBlank() }.distinct()
 
@@ -191,8 +139,7 @@ object Heartbeat {
                     setRequestProperty("Content-Type", "application/json")
                 }
             conn.outputStream.use { it.write(body.toByteArray()) }
-            // Any 2xx: the fleet answers 200, the LAN relay 204 — it stores nothing of
-            // its own, so it has no body to return.
+            // Isis answers 200, the relay 204.
             val code = conn.responseCode
             conn.disconnect()
             code in 200..299

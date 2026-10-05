@@ -7,12 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.concurrent.thread
 
-/**
- * The handover from continuous streaming to a deliberate meeting recording.
- *
- * ⚠ stopService is asynchronous, so a MediaRecorder opened straight after
- * StreamService.stop() can find the old AudioRecord still open. See [MicHandover].
- */
+/** The handover of the mic from streaming to a meeting recording ([MicHandover]). */
 class MicHandoverTest {
     @After
     fun clear() = MicHandover.released()
@@ -39,11 +34,6 @@ class MicHandoverTest {
         assertTrue("the wait must see the release the capture thread performs", handed)
     }
 
-    /**
-     * ⚠ The bound matters as much as the wait. A capture thread wedged on a dead
-     * socket would otherwise hang the deliberate act forever, and a meeting the
-     * user pressed record on is worth more than a tidy handover.
-     */
     @Test
     fun `a microphone that is never released gives up rather than hanging`() {
         MicHandover.acquired()
@@ -54,14 +44,9 @@ class MicHandoverTest {
 
         assertFalse("it must report the handover did not complete", handed)
         assertTrue("returned in ${tookMs}ms, before its own bound", tookMs >= 100)
-        assertTrue("took ${tookMs}ms — that is a hang, not a bound", tookMs < 2_000)
+        assertTrue("took ${tookMs}ms", tookMs < 2_000)
     }
 
-    /**
-     * ⚠ The message is half the bug. Telling somebody to check permissions when
-     * we know our own stream still held the mic is worse than saying nothing: it
-     * sends them somewhere the fault has never been.
-     */
     @Test
     fun `a failed handover does not blame permissions`() {
         val message = MicHandover.failureMessage(handedOver = false)

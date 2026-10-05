@@ -3,17 +3,12 @@ package org.recall.mic
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Whether continuous streaming currently holds the microphone, so a deliberate
- * meeting recording can wait for the handover instead of racing it.
+ * Whether the stream holds the microphone, so a meeting recording waits for it to let
+ * go (#1472). `stopService` is asynchronous: the capture thread releases its
+ * `AudioRecord` only on its next pass, and a `MediaRecorder` opened before then fails.
  *
- * ⚠ `stopService` is asynchronous: `onDestroy` clears `running`, and the capture
- * thread releases its `AudioRecord` only when its next pass reaches the `finally`.
- * A `MediaRecorder` opened straight after `StreamService.stop` races that release;
- * both audio sources fail, and the user is sent to check permissions for a race in
- * our own code.
- *
- * ⚠ A paused stream never shows it: it releases the record on every failed connect
- * and sleeps between retries. Testing the handover needs capture actively running.
+ * A paused stream releases the mic between retries, so testing this needs capture
+ * running.
  */
 object MicHandover {
     private val held = AtomicBoolean(false)
@@ -27,13 +22,9 @@ object MicHandover {
     fun isHeld(): Boolean = held.get()
 
     /**
-     * Wait up to [timeoutMs] for the streaming capture to let go. `true` if the
-     * microphone is free.
-     *
-     * ⚠ **Bounded on purpose.** A capture thread wedged on a dead socket would
-     * otherwise hang the deliberate act indefinitely, and a meeting somebody has
-     * pressed record on is worth more than a tidy handover — so on a timeout the
-     * caller should still try, and say something true if it fails.
+     * Wait up to [timeoutMs] for the stream to let go; `true` if the mic is free.
+     * Bounded, since a capture thread can wedge on a dead socket; on a timeout the
+     * caller still tries.
      */
     fun awaitRelease(timeoutMs: Long): Boolean {
         val deadline = System.nanoTime() + timeoutMs * 1_000_000
@@ -44,13 +35,7 @@ object MicHandover {
         return true
     }
 
-    /**
-     * What to tell somebody whose recording would not start.
-     *
-     * ⚠ The message is half the bug. Blaming permissions when we know our own
-     * stream still held the microphone sends the reader somewhere the fault has
-     * never been.
-     */
+    /** Why a recording would not start: permissions only if the stream had let go. */
     fun failureMessage(handedOver: Boolean): String =
         if (handedOver) {
             "Microphone unavailable — check permission / other apps."
@@ -60,6 +45,6 @@ object MicHandover {
 
     private const val POLL_MS = 10L
 
-    /** How long a deliberate recording waits for the stream to release. */
+    /** How long a meeting recording waits for the stream to let go. */
     const val HANDOVER_MS = 2_000L
 }

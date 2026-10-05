@@ -5,15 +5,9 @@ import android.os.Build
 import java.util.UUID
 
 /**
- * Persisted config for the mic app, read by the foreground service and the boot
- * receiver so they share one configuration. Two hosts, because the Isis split put the
- * PCM ingest and the control API on different machines:
- *  - [host] — the *recorder* host the mic stream connects to (the Mac's ingest, on the
- *    home LAN); user-set, per-network.
- *  - [controlHost] — the *control-plane* host for the capture API (pause/resume + the
- *    fleet liveness the Devices panel shows). That's Isis, reachable over the VPN, so it
- *    defaults to [DEFAULT_CONTROL_HOST] and rarely changes.
- * The ingest port is fixed (one shared port) and the device id is derived.
+ * The app's saved settings, shared by the UI, the service and the boot receiver. Two
+ * hosts: [host], the recorder the PCM stream goes to (the Mac, on the home LAN), and
+ * [controlHost], Isis, for the capture API and the devices panel.
  */
 object Prefs {
     private const val FILE = "recall-mic"
@@ -23,22 +17,20 @@ object Prefs {
     private const val KEY_DEVICE_TOKEN = "device_token"
     private const val KEY_INGEST_TOKEN = "ingest_token"
 
-    // Legacy key from the manual-device-id version; adopted for source continuity.
+    // From the version where the id was typed in; kept so the source stays the same.
     private const val KEY_LEGACY_SOURCE_ID = "source_id"
     private const val KEY_ENABLED = "enabled"
     private const val MAX_ID_LEN = 40
 
-    // Isis (the fleet control plane), a name its front door serves on the VPN only:
-    // the out-of-the-box default. The stream still goes to the recorder [host]; only
-    // the API moved here. Read through [ApiBase], which also takes a bare host.
+    // Isis, a name served on the VPN only. Read through [ApiBase], which also takes a
+    // bare host.
     const val DEFAULT_CONTROL_HOST = "https://recall.xinutec.org"
 
-    // The default before the front door (#1799). Stored on installs that saved the
-    // settings screen, so it reads as "unset" rather than as a choice.
+    // The previous default (#1799), stored by installs that saved the settings; read
+    // as unset.
     private const val OLD_DEFAULT_CONTROL_HOST = "10.100.0.2"
 
-    // recalld's ingest plane (recall/docs/architecture.md, stage A): the same server
-    // as the control plane. Not user-set until a reason appears.
+    // recalld's ingest, the same server. Not a setting.
     const val INGEST_BASE = "https://recall.xinutec.org"
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -48,12 +40,11 @@ object Prefs {
 
     fun host(ctx: Context): String = prefs(ctx).getString(KEY_HOST, "") ?: ""
 
-    /** The capture-API host (Isis). Empty/unset falls back to [DEFAULT_CONTROL_HOST], so
-     * the pause controls and Devices panel work out of the box against the fleet. */
+    /** The capture-API host; [DEFAULT_CONTROL_HOST] when unset. */
     fun controlHost(ctx: Context): String =
         effectiveControlHost(prefs(ctx).getString(KEY_CONTROL_HOST, "") ?: "")
 
-    /** What a stored control setting means: unset and the old default both mean the fleet. */
+    /** A stored control host; unset or the old default means [DEFAULT_CONTROL_HOST]. */
     fun effectiveControlHost(stored: String): String =
         if (stored.isEmpty() || stored == OLD_DEFAULT_CONTROL_HOST) DEFAULT_CONTROL_HOST else stored
 
@@ -62,12 +53,9 @@ object Prefs {
     }
 
     /**
-     * The bearer this phone presents when uploading a recording (`RECALL_DEVICE_TOKEN`
-     * on the server). Empty when unset, which is what a stock LAN deployment wants: the
-     * gate is only up on Isis, and the upload works without a token everywhere else.
-     *
-     * Not the sync token, and not a password: it authorises `POST /api/sessions` and
-     * nothing else, so losing the phone costs uploads rather than the archive.
+     * The bearer for uploading a recording (`RECALL_DEVICE_TOKEN` on the server); empty
+     * for an ungated server. It authorises `POST /api/sessions` only, so a lost phone
+     * costs uploads, not the archive.
      */
     fun deviceToken(ctx: Context): String = prefs(ctx).getString(KEY_DEVICE_TOKEN, "") ?: ""
 
@@ -75,9 +63,8 @@ object Prefs {
         prefs(ctx).edit().putString(KEY_DEVICE_TOKEN, token.trim()).apply()
     }
 
-    /** The fourth credential plane's per-device bearer: `PUT` this phone's own
-     * segments to recalld, and nothing else — not read, not another device's
-     * source. Empty = send no header (an open dev server). */
+    /** The bearer for `PUT`ting this phone's own segments to recalld, and nothing
+     * else. Empty sends no header. */
     fun ingestToken(ctx: Context): String = prefs(ctx).getString(KEY_INGEST_TOKEN, "") ?: ""
 
     fun saveIngestToken(ctx: Context, token: String) {
@@ -85,14 +72,11 @@ object Prefs {
     }
 
     fun ingestBase(
-        @Suppress("UNUSED_PARAMETER") ctx: Context, // same signature as the other prefs readers
+        @Suppress("UNUSED_PARAMETER") ctx: Context, // like the other readers
     ): String = INGEST_BASE
 
-    /** This device's stable recall source id, announced in the stream handshake.
-     * Resolved once and persisted — nothing for the user to set; renamable in the web
-     * UI. A phone upgraded from the manual-device-id version keeps that id (so its
-     * recording history stays one source); a fresh phone derives model + random suffix
-     * (so two same-model phones differ). */
+    /** This phone's source id, sent in the handshake; made once and kept. The typed-in
+     * id of older versions if there is one, else the model plus a random suffix. */
     fun deviceId(ctx: Context): String {
         val existing = prefs(ctx).getString(KEY_DEVICE_ID, null)
         if (existing != null) return existing
@@ -107,7 +91,7 @@ object Prefs {
         return id
     }
 
-    /** Whether streaming should be running — set true on Start, drives boot restart. */
+    /** Whether streaming should run: set by Start and Stop, read at boot. */
     fun enabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_ENABLED, false)
 
     fun save(ctx: Context, host: String, enabled: Boolean) {

@@ -15,12 +15,9 @@ data class PendingRecording(
 )
 
 /**
- * The outbox in one sentence, for the fleet: how much is undelivered, how old the
- * oldest of it is, how much of it is actively failing, and why.
- *
- * Sent after *every* upload pass, including the ones that find nothing — a report only
- * made on failure would leave the last bad reading standing after the queue drained,
- * and a check that cannot go back to green is one that gets muted.
+ * The outbox for the server: how much is undelivered, the oldest, how much is failing,
+ * and why. Sent after every upload pass, empty ones included, so the check can return
+ * to green.
  */
 data class OutboxState(
     val queued: Int,
@@ -30,28 +27,17 @@ data class OutboxState(
 )
 
 /**
- * The recordings on the phone: where they live and what they're called.
+ * The recordings on the phone: where they live and what they are called. A meeting
+ * usually happens where recall is unreachable, so a recording is a file first and an
+ * upload second, and nothing about it lives only in memory.
  *
- * Offline-first is the whole point — a meeting happens where the recall host is
- * unreachable, and some guest networks block the VPN outright, so there may be no route
- * home from the building at all. The recording is a file first and an upload second, and
- * nothing about it may live only in memory.
+ * One file per recording, `meeting-<local stamp>.ogg`, named for when it was made; recall
+ * names the session after the same time, and it is renamed there. Beside it may be
+ * `<name>.ogg.failure` ([FAILURE_SUFFIX]): why the last delivery failed, on disk because
+ * [MeetingUpload] runs when the app is gone.
  *
- * **One file per recording, named for when it was made** — `meeting-<local stamp>.ogg`.
- * No title: the only thing worth knowing before a recording is transcribed is when it
- * happened, and the filename says that. recall names the session `Meeting <date>
- * <time>`, renameable there, where the transcript is to hand and the name can be chosen
- * for what the meeting turned out to be.
- *
- * **The one exception is [FAILURE_SUFFIX]**, `<name>.ogg.failure`, holding why the last
- * delivery attempt didn't land. Not metadata about the recording but state about an
- * attempt, deleted the moment one succeeds — and on disk for the same reason the audio
- * is: [MeetingUpload] runs under WorkManager when the app is gone, so a reason kept in
- * memory is lost exactly when someone opens the screen to ask.
- *
- * **A recording's state is which directory it is in**, because every one of those states
- * is a decision or a verdict that has to survive a reboot, and a rename is the only way
- * to change one that can't half-happen:
+ * A recording's state is the directory it is in, since a rename cannot half-happen and
+ * survives a reboot:
  *
  * | directory              | meaning                                                |
  * |------------------------|--------------------------------------------------------|
@@ -60,63 +46,50 @@ data class OutboxState(
  * | `meetings/uploaded/`   | recall has it, and its length matches this copy          |
  * | `meetings/unverified/` | recall has it, but the two lengths don't agree           |
  *
- * Nothing is ever deleted by getting to the end of that list. The phone's copy goes when
- * the user says so and at no other time: a 2xx means recall *received* something, and the
- * one failure that survives every check upstream — a body cut short mid-post, which still
- * parses and so still returns 2xx — is exactly the one where the phone holds the only
- * complete recording.
+ * The phone's copy is deleted only when the user says so: a body cut short mid-post still
+ * parses and gets a 2xx, and then the phone holds the only complete recording.
  */
 object MeetingQueue {
     const val AUDIO_SUFFIX = ".ogg"
 
-    /** Suffixed onto the audio's full name, so `list` — which matches [AUDIO_SUFFIX] at
-     * the end — can never mistake a note for a recording. */
+    /** After the audio's full name, so `list`, which matches [AUDIO_SUFFIX] at the end,
+     * never takes a note for a recording. */
     const val FAILURE_SUFFIX = ".failure"
     private const val DIR = "meetings"
     private const val OUTBOX = "outbox"
     private const val UPLOADED = "uploaded"
     private const val UNVERIFIED = "unverified"
 
-    // How much shorter recall's copy may be before it stops counting as the same
-    // recording. Two container probes of one file disagree by tens of milliseconds
-    // (ffprobe on the server, MediaMetadataRetriever on the phone); a post that was cut
-    // short loses seconds at least. A second and a half sits clear of the first and well
-    // under the second.
+    // How much shorter recall's copy may be and still count as the same recording. Two
+    // probes of one file differ by tens of milliseconds; a cut-short post loses seconds.
     private const val LENGTH_TOLERANCE_MS = 1_500L
 
-    // Local wall-clock in the name: this is what a human scanning the directory over USB
-    // reads, and it is the recording's start. Ambiguous for one repeated hour when the
-    // clocks go back, where `atZone` takes the earlier offset — an hour's error on a
-    // recording made at 01:30 on that one night, which is cheaper than carrying an offset
-    // in every filename to prevent it.
+    // Local time, for someone reading the directory over USB. In the repeated hour when
+    // the clocks go back, `atZone` takes the earlier offset: an hour off, that one night.
     private val STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
     private val NAME = Regex("""^meeting-(\d{8})-(\d{6})""")
 
     /**
-     * `Android/data/org.recall.mic/files/Music/meetings` — app-private, so no storage
-     * permission and no scoped-storage dance, but *visible over USB*, unlike `filesDir`.
-     * A recording whose upload never succeeds can still be pulled off the phone by hand.
+     * `Android/data/org.recall.mic/files/Music/meetings`: app-private, so no storage
+     * permission, but unlike `filesDir` visible over USB, so a recording can be pulled
+     * off by hand.
      */
     fun dir(ctx: Context): File =
         File(ctx.getExternalFilesDir(Environment.DIRECTORY_MUSIC), DIR).apply { mkdirs() }
 
-    /** Recordings the user has approved for upload — the only ones that get sent. */
+    /** Approved for upload; the only ones sent. */
     fun outbox(ctx: Context): File = File(dir(ctx), OUTBOX).apply { mkdirs() }
 
     /** Delivered, and recall's copy is as long as this one. */
     fun uploaded(ctx: Context): File = File(dir(ctx), UPLOADED).apply { mkdirs() }
 
-    /** Delivered, but the lengths don't agree — look before deleting this one. */
+    /** Delivered, but the lengths disagree. */
     fun unverified(ctx: Context): File = File(dir(ctx), UNVERIFIED).apply { mkdirs() }
 
     /**
-     * Whether recall's copy is materially shorter than the phone's, i.e. whether the 2xx
-     * can be believed. Only *short* counts: a copy that probes a shade longer is two
-     * decoders rounding the same file differently, not a loss.
-     *
-     * Unknown lengths (either probe failed) cannot be compared, and report `true` — the
-     * whole point is to decide whether the upload has been *verified*, and an unanswered
-     * question has not been.
+     * Whether recall's copy is shorter than the phone's beyond the tolerance. Longer is
+     * two decoders rounding differently. An unknown length (0) counts as short: the upload
+     * is not verified.
      */
     fun landedShort(
         localMs: Long,
@@ -148,12 +121,8 @@ object MeetingQueue {
         }
 
     /**
-     * The recordings in one directory, oldest first. Zero-length files are skipped: a
-     * `MediaRecorder` that was stopped before it wrote a page leaves one, and posting it
-     * would only earn a 400 from the server's ffprobe.
-     *
-     * A file whose name doesn't parse falls back to its mtime, so something copied in by
-     * hand still lands at a plausible time rather than being hidden.
+     * The recordings in one directory, oldest first, skipping empty files (a recorder
+     * stopped before its first page). A name that does not parse is dated by its mtime.
      */
     fun list(dir: File, zone: ZoneId): List<PendingRecording> =
         (dir.listFiles() ?: emptyArray())
@@ -169,13 +138,8 @@ object MeetingQueue {
             }
 
     /**
-     * Move a recording into [target] — how every state change happens here. Returns it at
-     * its new home, or null if the rename failed, in which case it stays where it was
-     * rather than quietly falling out of the flow.
-     *
-     * A move is always the end of the last attempt — approved, or delivered — so the
-     * failure note goes with it. Leaving one behind would put "not authorised" under a
-     * recording that is now safely on recall.
+     * Move a recording into [target]: every state change. Null if the rename failed,
+     * leaving it where it was. Clears the failure note, since a move ends the attempt.
      */
     fun moveTo(recording: PendingRecording, target: File): PendingRecording? {
         val moved = File(target, recording.audio.name)
@@ -184,24 +148,17 @@ object MeetingQueue {
         return recording.copy(audio = moved)
     }
 
-    /** Delete a recording. Only ever on the user's say-so. */
+    /** Only on the user's say-so. */
     fun delete(recording: PendingRecording) {
         clearFailure(recording.audio)
         recording.audio.delete()
     }
 
-    /**
-     * Why the last attempt to deliver [audio] didn't land, written beside it.
-     *
-     * On disk rather than in memory because the uploader runs under WorkManager with the
-     * app gone: a reason held in a field is collected before anyone opens the screen to
-     * find out, which is the state this whole task is fixing.
-     */
+    /** Why the last delivery of [audio] failed, written beside it. */
     fun noteFailure(audio: File, reason: String) {
         runCatching { failureFile(audio).writeText(reason) }
     }
 
-    /** Forget the last failure — a delivery landed, or the recording moved on. */
     fun clearFailure(audio: File) {
         runCatching { failureFile(audio).delete() }
     }
@@ -215,13 +172,8 @@ object MeetingQueue {
     private fun failureFile(audio: File) = File(audio.parentFile, audio.name + FAILURE_SUFFIX)
 
     /**
-     * What this phone is still holding that it was told to send — the thing no fleet
-     * component could see (#77).
-     *
-     * `oldestStart` is the *recording's* start, not when it was approved: the start is
-     * the only time the phone carries, and "how long has this been stuck" wants the
-     * older of the two anyway. `reason` is the newest failure among them, which is the
-     * one worth showing — a queue usually fails for one reason at a time.
+     * What the phone still holds that it was told to send (#77). `oldestStart` is the
+     * recording's start, the only time the phone keeps; `reason` the newest failure.
      */
     fun state(outbox: File, zone: ZoneId): OutboxState {
         val queue = list(outbox, zone)

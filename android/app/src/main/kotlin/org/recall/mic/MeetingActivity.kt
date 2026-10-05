@@ -56,16 +56,11 @@ import java.time.Instant
 import java.time.ZoneId
 
 /**
- * The meeting-recorder screen: the recorder itself, then everything still on the phone —
- * each one playable, deletable, and uploadable *only* when the user says so.
+ * The meeting recorder, then every recording on the phone: playable, deletable, and
+ * uploaded only when the user says so ([MeetingQueue]).
  *
- * Nothing leaves the phone on its own. A finished recording sits in the list until it is
- * listened to and a decision is made about it; that is the whole point of the split
- * between `meetings/` and `meetings/outbox/` in [MeetingQueue].
- *
- * The recording belongs to [MeetingService], which outlives this screen — an appointment
- * is recorded with the phone in a pocket and the screen off. Playback, by contrast, is
- * tied to this screen and released when it goes away.
+ * Recording belongs to [MeetingService], which outlives this screen; playback is tied to
+ * the screen.
  */
 class MeetingActivity : ComponentActivity() {
     private val requestPermissions =
@@ -98,14 +93,11 @@ class MeetingActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         refresh()
-        // Opening the screen is the clearest "am I home yet?" signal there is, so anything
-        // already approved gets another go at the host.
+        // Another try for anything approved: the host may be reachable now.
         MeetingUpload.enqueue(this)
     }
 
     override fun onStop() {
-        // Leaving the screen releases the codec; playback is a check, not a background
-        // feature, and it must not outlive the list it belongs to.
         MeetingPlayer.release()
         super.onStop()
     }
@@ -147,7 +139,7 @@ class MeetingActivity : ComponentActivity() {
         }
     }
 
-    /** Re-read the directories off the main thread — it probes each file for its length. */
+    /** Off the main thread: it probes each file for its length. */
     private fun refresh() {
         lifecycleScope.launch {
             withContext(Dispatchers.IO) { MeetingLibrary.refresh(this@MeetingActivity) }
@@ -172,10 +164,10 @@ fun MeetingScreen(
     val recordings by MeetingState.recordings.collectAsStateWithLifecycle()
     val pending by MeetingState.pending.collectAsStateWithLifecycle()
     val error by MeetingState.error.collectAsStateWithLifecycle()
-    // Deleting is the one action with no undo — the phone holds the only copy.
+    // Deleting cannot be undone, so it asks first.
     var confirmDelete by remember { mutableStateOf<RecordingRow?>(null) }
 
-    // A ticking clock for the elapsed readout — a second, since it counts seconds.
+    // Ticks each second for the elapsed time.
     var now by remember { mutableStateOf(Instant.now()) }
     LaunchedEffect(recording) {
         while (recording) {
@@ -243,7 +235,7 @@ fun MeetingScreen(
                         }
 
                         RecordingState.UNVERIFIED -> {
-                            "recall received this, but its copy is SHORTER than the one " +
+                            "recall received this, but its copy is shorter than the one " +
                                 "here — this may be the only complete recording. " +
                                 "Deleting it cannot be undone."
                         }
@@ -299,8 +291,7 @@ private fun RecorderCard(recording: Boolean, startedAt: Instant?, now: Instant, 
     }
 }
 
-/** Everything still on the phone. Never hidden: audio that exists in one place and is
- * invisible is how a recording goes unnoticed for weeks. */
+/** Every recording on the phone, whatever its state, so none goes unnoticed. */
 @Composable
 private fun RecordingList(
     recordings: List<RecordingRow>,
@@ -332,10 +323,8 @@ private fun RecordingList(
         }
     }
     if (pending > 0) {
-        // "Waiting for the recall host" is the same untruth the rows used to tell, one
-        // level up: it names the one cause — not home yet — while the row above it says
-        // the token is wrong. Seen side by side on the real screen, the footer reads as
-        // the summary and quietly contradicts the diagnosis.
+        // "Waiting for the recall host" only when nothing is failing; otherwise it
+        // would contradict the reasons on the rows.
         val failing = recordings.count { it.failure != null }
         Row(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -372,9 +361,7 @@ private fun RecordingItem(
     val isThis = playingFile == row.file
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // When it was recorded is the whole identity of a recording — recall names the
-        // session the same way, and it can be renamed there once there's a transcript to
-        // name it after.
+        // Named by when it was recorded, as recall names the session.
         Text(
             startedLabel(row.recording.start, ZoneId.systemDefault()),
             style = MaterialTheme.typography.titleSmall,
@@ -387,10 +374,7 @@ private fun RecordingItem(
         )
 
         row.failure?.let { why ->
-            // Same place and the same colour as the length warning below, because it is
-            // the same kind of thing: something about this recording that the person
-            // deciding what to do with it needs, said where the buttons are rather than
-            // in a log nobody reads.
+            // Beside the buttons, like the length warning below.
             Text(
                 why,
                 style = MaterialTheme.typography.bodySmall,
@@ -399,8 +383,7 @@ private fun RecordingItem(
         }
 
         if (row.state == RecordingState.UNVERIFIED) {
-            // The one case where the phone's copy is the better one — say so where the
-            // Delete button is, not in a log nobody reads.
+            // The phone's copy is the better one.
             Text(
                 "recall received this, but its copy is shorter than the one here. " +
                     "Keep this until you have checked it.",
@@ -424,10 +407,6 @@ private fun RecordingItem(
                 }
 
                 RecordingState.QUEUED -> {
-                    // "Uploading…" next to a recording that has been failing for an hour
-                    // is the lie this task exists to end: the count on the meeting screen
-                    // read the same whether the host was unreachable or the token was
-                    // wrong, so a 401 survived from the day the feature was written.
                     if (row.failure == null) {
                         StateNote("Uploading…", MaterialTheme.colorScheme.primary)
                     } else {
@@ -454,13 +433,12 @@ private fun StateNote(text: String, color: Color) {
     Text(text, style = MaterialTheme.typography.bodySmall, color = color)
 }
 
-/** Position and a scrubber for the recording being played — an appointment is an hour
- * long, so listening back without seeking is no use. */
+/** Position and a seek bar for the recording playing. */
 @Composable
 private fun PlaybackBar(row: RecordingRow) {
     val playing by MeetingPlayer.playing.collectAsStateWithLifecycle()
     val duration by MeetingPlayer.durationMs.collectAsStateWithLifecycle()
-    // Pulled, not pushed: nothing polls while this screen is closed.
+    // Polled only while shown.
     var position by remember { mutableStateOf(0L) }
     LaunchedEffect(playing, row.file) {
         while (true) {

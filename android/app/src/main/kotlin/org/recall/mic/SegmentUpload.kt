@@ -19,20 +19,13 @@ import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 /**
- * Delivers closed segments to recalld's ingest plane and believes nothing but
- * its own arithmetic: a delivery counts only when the receipt's sha-256 equals
- * a local digest of the bytes just sent — the meeting recorder's "a 2xx is not
- * proof", tightened from durations to hashes (recall/docs/architecture.md,
- * decision 3).
+ * Delivers closed segments to recalld's ingest, oldest first. A delivery counts
+ * only when the receipt's sha-256 and length match the bytes sent
+ * (docs/architecture.md, decision 3); then the segment moves to `delivered/`. A
+ * 409 or a refusal moves it to `conflict/` for a person to look at; anything else
+ * waits for the next pass.
  *
- * Drains the whole undelivered set oldest-first, like every outbox here: the
- * files are the state, not the job. Verified segments move to `delivered/`
- * (eviction fodder, and only that); a 409 moves to `conflict/` and is never
- * retried — the name is held by different bytes, which a person must look at;
- * anything else stays put for the next pass.
- *
- * Unmetered networks only, by WorkManager constraint: continuous capture on a
- * metered plan is a bill, not a feature. The cache absorbs metered days.
+ * Unmetered networks only; the cache holds the audio meanwhile.
  */
 class SegmentUpload(
     ctx: Context,
@@ -59,15 +52,12 @@ class SegmentUpload(
                 Delivery.FAILED -> {
                     Log.w(TAG, "segment upload failed, will retry: ${segment.name}")
                     stuck = true
-                    // Stop the pass rather than hammer a down server with the
-                    // whole backlog; backoff owns the cadence.
+                    // Stop the pass; the backoff decides when to try again.
                     break
                 }
 
                 Delivery.REJECTED -> {
-                    // A refusal retrying cannot fix (bad name, oversize) —
-                    // deleting would lose audio, so park it for a person
-                    // under the same "look at me" directory.
+                    // Retrying cannot help (bad name, oversize); kept for a person.
                     Log.w(TAG, "segment rejected ($verdict): ${segment.name}")
                     SegmentStore.markConflict(base, segment)
                 }
@@ -108,8 +98,6 @@ class SegmentUpload(
                         ) {
                             Delivery.VERIFIED
                         } else {
-                            // A 200 whose receipt disagrees is a delivery that
-                            // did not happen, whatever the server thinks.
                             Delivery.FAILED
                         }
                     }
@@ -118,11 +106,8 @@ class SegmentUpload(
                         Delivery.CONFLICT
                     }
 
-                    // Auth answers are CONFIG, not verdicts on the segment: a
-                    // fresh install uploads before its token is typed in, and
-                    // parking everything it recorded meanwhile as "rejected"
-                    // would turn a missing setting into hand-recovery work.
-                    // Retry: the token arrives, the backlog drains.
+                    // A missing or wrong token, not a bad segment: retried, so
+                    // the backlog drains once the token is set.
                     401, 403 -> {
                         Delivery.FAILED
                     }
@@ -150,8 +135,7 @@ class SegmentUpload(
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_TIMEOUT_MS = 60_000
 
-        /** The eviction-grade check, pure so the JVM tests it: the receipt
-         * must name our hash and our byte count. */
+        /** Whether the receipt names our hash and byte count. */
         fun receiptMatches(body: String, sha256: String, bytes: Int): Boolean =
             runCatching {
                 val receipt = JSONObject(body)
@@ -163,8 +147,7 @@ class SegmentUpload(
                 "%02x".format(b)
             }
 
-        /** Kick a drain; REPLACE abandons a previous failure's backoff, same
-         * as the meeting outbox — "the host might be reachable now". */
+        /** Drain now; REPLACE drops an earlier failure's backoff. */
         fun enqueue(ctx: Context) {
             val request =
                 OneTimeWorkRequestBuilder<SegmentUpload>()

@@ -8,28 +8,15 @@ import java.net.URL
 import java.time.format.DateTimeFormatter
 
 /**
- * Tell the fleet what this phone is still holding.
+ * Tell the server what approved recordings this phone still holds (#77), so a stuck
+ * upload is visible without the phone in hand.
  *
- * An approved recording the phone cannot deliver was the one piece of state nothing
- * outside the phone could see. The meeting recorder 401ed from the day it was written;
- * WorkManager retried out to a +1h23m backoff, the audio stayed safe, and the screen
- * said "N recordings waiting to upload" — which reads the same as "not home yet" and as
- * "not approved yet". [MeetingUpload] now writes *why* on the row ([UploadFailure]), but
- * that only helps somebody already holding the phone and wondering (#77).
- *
- * ⚠ **Silence is not health, and this cannot pretend otherwise.** A phone with no route
- * home cannot report either — so the absence of a report has to be the finding, judged
- * at the other end, exactly as fleetwatch already treats a producer that stops. Sending
- * the same thing more insistently would not help, and would flatten the one distinction
- * worth keeping: uploads failing while the fleet is reachable is a fault, and uploads
- * not happening because you are out of the house is a Tuesday.
- *
- * Best-effort and silent: this is a status report about failures, and a status report
- * that raises its own failures would be the tail wagging the dog. The mirror of
- * `recall doctor --post` on the Mac, which does the same thing for the same reason.
+ * A phone with no route home cannot report either, so a missing report is judged on the
+ * server. Failing while the server is reachable is a fault; not uploading while out of
+ * the house is not. Best-effort and silent.
  */
 object OutboxReport {
-    /** POST the outbox state. Returns whether it landed; nothing depends on it. */
+    /** POST the outbox state; whether it landed. */
     suspend fun send(
         host: String,
         device: String,

@@ -15,13 +15,8 @@ import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 
 /**
- * Sends the recordings the user approved, and keeps trying after the app is gone.
- *
- * It drains **the outbox only** — nothing is uploaded because it was recorded, only
- * because it was approved. Within the outbox it takes everything rather than one named
- * item, so a missed enqueue can't strand an approved recording: the files on disk are the
- * state, not the job. A meeting is recorded where the host usually isn't reachable, so
- * this is a `WorkManager` job that survives the process, the screen going off and a
+ * Sends every approved recording in the outbox, and only those. The files are the state,
+ * so a missed enqueue strands nothing. A `WorkManager` job, so it survives the app and a
  * reboot, retrying with backoff until the host answers.
  */
 class MeetingUpload(
@@ -35,8 +30,7 @@ class MeetingUpload(
         val queue = MeetingQueue.list(outbox, ZoneId.systemDefault())
         if (queue.isEmpty()) {
             MeetingLibrary.refresh(applicationContext)
-            // Still report: an empty outbox is the reading that lets the fleet check
-            // go back to green, and one that cannot is one that gets muted.
+            // Reported too, so the server's check can return to green.
             report(host, token, outbox)
             return Result.success()
         }
@@ -48,24 +42,19 @@ class MeetingUpload(
                 .onSuccess { file(recording, it) }
                 .onFailure {
                     Log.w(UI_LOG, "meeting upload failed: ${recording.audio.name}: ${it.message}")
-                    // Beside the recording, not only in the log: the screen is where
-                    // somebody asks why, and this worker runs with the app gone.
+                    // Beside the recording, for the screen to show.
                     MeetingQueue.noteFailure(recording.audio, UploadFailure.describe(it))
                     stuck = true
                 }
             MeetingLibrary.refresh(applicationContext)
         }
-        // After the pass, not before: the fleet wants what is left, not what was there.
+        // What is left after the pass.
         report(host, token, outbox)
-        // Retry rather than fail: the usual reason is "not home yet", which time fixes.
+        // Usually "not home yet", which time fixes.
         return if (stuck) Result.retry() else Result.success()
     }
 
-    /**
-     * Say what is still here. Best-effort and unchecked — a report about undelivered
-     * recordings that failed the pass because the report failed would be absurd, and
-     * the fleet reads a missing report as a finding of its own (#77).
-     */
+    /** Report what is still here (#77); best-effort, never failing the pass. */
     private suspend fun report(host: String, token: String, outbox: File) {
         OutboxReport.send(
             host,
@@ -76,11 +65,8 @@ class MeetingUpload(
     }
 
     /**
-     * Put a delivered recording where its verdict says it belongs. A 2xx only means recall
-     * received *something*: the server probes what arrived, so a post cut short mid-stream
-     * still parses and still succeeds — with seconds missing off the end. Comparing the
-     * length recall reports against the file still on the phone is what turns "sent" into
-     * "sent intact", and the phone's copy is kept either way.
+     * File a delivered recording under `uploaded/` or, if recall's copy is shorter (a post
+     * cut short still gets a 2xx), `unverified/`. The phone's copy stays either way.
      */
     private fun file(recording: PendingRecording, session: UploadedSession) {
         val localMs = MeetingLibrary.durationMs(recording.audio)
@@ -91,8 +77,7 @@ class MeetingUpload(
             } else {
                 MeetingQueue.uploaded(applicationContext)
             }
-        // The numbers, not just the verdict: "why does it say unverified" has to be
-        // answerable from the log after the fact.
+        // The numbers too, to explain an "unverified" later.
         Log.i(
             UI_LOG,
             "meeting uploaded: ${recording.audio.name} -> ${session.title} " +
@@ -106,19 +91,14 @@ class MeetingUpload(
         private const val WORK_NAME = "meeting-upload"
 
         /**
-         * Try the outbox now, and keep trying. REPLACE, not keep: every caller is an event
-         * that means "the host might be reachable now" — a recording being approved, the
-         * screen opening, the mic stream connecting — so the backoff a previous failure
-         * earned should be abandoned rather than waited out.
+         * Try the outbox now, and keep trying. REPLACE: every caller (an approval, the
+         * screen opening, the stream connecting) means the host may be reachable now, so
+         * an earlier failure's backoff is dropped.
          */
         fun enqueue(ctx: Context, always: Boolean = false) {
-            // An empty outbox is the common case — the mic stream calls this on every
-            // reconnect — and waking WorkManager to discover that is pure cost.
-            //
-            // ⚠ Except when the queue was emptied by hand. A delete sends no report, so
-            // the fleet check would go on reading "failing" for a recording that is
-            // gone, and a check that cannot return to green gets muted. A caller that
-            // changed the queue itself passes `always`; the pass runs for the report.
+            // An empty outbox is common (the stream calls this on every reconnect), so it
+            // is skipped, unless the caller emptied it (`always`): the pass then runs for
+            // its report, or the server would go on reading "failing".
             if (!always && approvedCount(ctx) == 0) return
             WorkManager.getInstance(ctx).enqueueUniqueWork(
                 WORK_NAME,
@@ -134,7 +114,6 @@ class MeetingUpload(
             )
         }
 
-        /** How many recordings are approved and not yet delivered. */
         private fun approvedCount(ctx: Context): Int =
             MeetingQueue.list(MeetingQueue.outbox(ctx), ZoneId.systemDefault()).size
 

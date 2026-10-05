@@ -5,34 +5,25 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-// Shared tag for UI-state-change logging; filter with `adb logcat -s recall-ui:I`.
+// The tag for UI state changes: `adb logcat -s recall-ui:I`.
 const val UI_LOG = "recall-ui"
 
-/** Mic-init failure — distinct so the status can't blame the network for it. */
+/** The mic failed to open, as opposed to the network. */
 internal class MicUnavailableException(
     message: String,
 ) : Exception(message)
 
 /**
- * What a FAILED streaming attempt says about the microphone.
- *
- * Only a mic failure says anything about the mic. Anything else — a refused
- * connect, a dropped socket — means the attempt never got as far as opening it,
- * and reports nothing either way.
- *
- * ⚠ Never read another failure as "mic fine". The socket connects before the mic
- * opens, so during a household pause every attempt fails on the connect, and a
- * broken microphone would report micOk=true for as long as the pause lasts.
- *
- * `true` is only ever written where the mic actually opened.
+ * `micOk` after a failed streaming attempt. Only a mic failure changes it: other
+ * failures happen before the mic opens (the socket connects first), so they say
+ * nothing about it. `true` is written only where the mic opened.
  */
 internal fun micOkAfter(previous: Boolean, failure: Throwable): Boolean =
     if (failure is MicUnavailableException) false else previous
 
 /**
- * Live streaming state published by [StreamService] and observed by the UI. Same
- * process, so this is just shared in-memory state (StateFlow is thread-safe) — no
- * binding or IPC. The service writes from its capture thread; the UI collects it.
+ * Streaming state, written by [StreamService] and read by the UI: one process, so
+ * StateFlows suffice.
  */
 object MicState {
     private val _running = MutableStateFlow(false)
@@ -42,10 +33,8 @@ object MicState {
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
 
     /**
-     * False while the audio engine will not open (permission revoked, mic held by
-     * another app). Carried by the heartbeat so a running-but-deaf app SAYS so:
-     * before #887 such an app simply stopped beating, and the check went red for
-     * the wrong reason. Starts true — "not known to be broken".
+     * False while the mic will not open (permission revoked, held by another app).
+     * Sent in the heartbeat (#887). Starts true: not known to be broken.
      */
     private val _micOk = MutableStateFlow(true)
     val micOk: StateFlow<Boolean> = _micOk.asStateFlow()
@@ -55,11 +44,9 @@ object MicState {
     }
 
     /**
-     * Bytes of captured audio this app discarded because it could not deliver them
-     * — the spool overran (PcmSpool). The phone is the only place that knows this
-     * happened: the samples never reach the network, so no server-side check can
-     * see them. Zero is the normal, expected value; anything else is speech that
-     * was heard and lost, and it belongs in the heartbeat beside micOk.
+     * Bytes of audio dropped because the stream's spool overran ([PcmSpool]); normally
+     * zero. No server can see this loss. Nothing reads it yet: the heartbeat does not
+     * carry it.
      */
     private val _droppedBytes = MutableStateFlow(0L)
     val droppedBytes: StateFlow<Long> = _droppedBytes.asStateFlow()
@@ -73,10 +60,8 @@ object MicState {
     val level: StateFlow<Float> = _level.asStateFlow()
 
     /**
-     * The household capture (pause) state from /api/capture — the single value the
-     * screen and the notification both render, so they can't disagree. Written by
-     * whichever component is alive to poll (the open screen and/or the running
-     * service); null until first read / when unreachable.
+     * The household capture state from /api/capture, shown by both the screen and the
+     * notification. Written by whichever is polling; null until first read.
      */
     private val _capture = MutableStateFlow<CaptureState?>(null)
     val capture: StateFlow<CaptureState?> = _capture.asStateFlow()

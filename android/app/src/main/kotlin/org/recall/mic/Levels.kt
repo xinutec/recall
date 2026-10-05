@@ -2,18 +2,14 @@ package org.recall.mic
 
 import kotlin.math.log10
 
-// Pure audio-level and meter logic — no Android or Compose dependencies, so it's
-// unit-tested on the JVM (the service and UI just call into it).
+// Level-meter arithmetic, without Android, so tested on the JVM.
 
-/** Quietest level the meter shows; below this (room noise) reads empty. Far-field
- * speech sits around -50..-40 dBFS, so this gives it real range. */
+/** The quietest level the meter shows. Far-field speech is around -50 to -40 dBFS. */
 const val METER_FLOOR_DBFS = -70f
 
 /**
- * Peak amplitude of the first [n] bytes of an s16le buffer as a 0f..1f meter
- * level. Scaled logarithmically (dBFS) from [floorDbfs], because far-field speech
- * is tiny in linear terms (a loud distant voice is only ~-44 dBFS) and a linear
- * meter barely moves.
+ * The peak of the first [n] bytes of s16le audio as a 0f..1f meter level, in dBFS
+ * above [floorDbfs]: on a linear scale far-field speech would barely move it.
  */
 fun peakLevel(buf: ByteArray, n: Int, floorDbfs: Float = METER_FLOOR_DBFS): Float {
     var peak = 0
@@ -28,10 +24,8 @@ fun peakLevel(buf: ByteArray, n: Int, floorDbfs: Float = METER_FLOOR_DBFS): Floa
 }
 
 /**
- * The same 0f..1f meter scaling for a peak amplitude that was measured elsewhere —
- * `MediaRecorder.getMaxAmplitude()` reports the same 0..32767 units but never hands over
- * the samples, so the meeting recorder can't compute it from a buffer the way
- * [peakLevel] does. One function so both modes' meters read alike.
+ * The meter level for a peak amplitude in 0..32767, such as
+ * `MediaRecorder.getMaxAmplitude()` gives the meeting recorder.
  */
 fun amplitudeLevel(peak: Int, floorDbfs: Float = METER_FLOOR_DBFS): Float {
     if (peak <= 0) return 0f

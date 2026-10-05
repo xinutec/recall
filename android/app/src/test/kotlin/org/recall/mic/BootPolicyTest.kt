@@ -28,9 +28,7 @@ class BootPolicyTest {
 
     @Test
     fun modernAndroidPromptsInsteadOfStreamingSilence() {
-        // API 30+ gives a boot-started mic FGS no real audio (while-in-use restriction;
-        // Android 15 forbids the start outright). Hours of silent zeros that look like
-        // a live source are worse than a dark mic — prompt for one tap instead.
+        // See BootPolicy.
         assertEquals(
             BootAction.PROMPT,
             BootPolicy.decide(sdkInt = 30, enabled = true, hostSet = true, hasMicPermission = true),

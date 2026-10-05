@@ -4,15 +4,9 @@ package org.recall.mic
 enum class BootAction { AUTO_START, PROMPT, NOTHING }
 
 /**
- * Pure decision for the after-boot restart, split out so it's unit-testable.
- *
- * Android 11+ (API 30) treats a microphone foreground service started from the
- * background as while-in-use restricted: it comes up but records silence — and
- * Android 15 forbids the start outright (ForegroundServiceStartNotAllowedException,
- * a crash dialog). Hours of silent zeros that look like a live source in the
- * Devices panel are worse than a visibly dark mic. So from boot we auto-start only
- * where it actually records (API < 30) and otherwise post a tap-to-resume
- * notification — MainActivity's on-open resume path does the rest after one tap.
+ * What to do after boot. From Android 11 a mic service started in the background
+ * records silence, which would look like a live source; Android 15 refuses the start.
+ * So it starts by itself only below Android 11, and otherwise asks for a tap.
  */
 object BootPolicy {
     private const val WHILE_IN_USE_SDK = 30 // Android 11

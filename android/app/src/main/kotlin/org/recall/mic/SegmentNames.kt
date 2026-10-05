@@ -5,13 +5,11 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 /**
- * The store-and-forward segment grammar (recall/docs/architecture.md): a closed
- * segment is `<source>-YYYYMMDDTHHMMSS.phone.flac`, stamped in UTC from this
- * device's clock at the moment the segment opens. The name is the only timing
- * metadata a segment carries, so it is derived in exactly one place.
+ * Segment names (docs/architecture.md): `<source>-YYYYMMDDTHHMMSS.phone.flac`, the
+ * UTC time the segment opened by this phone's clock; a segment's only timing.
  *
- * `.phone` because the host also cuts this phone's stream into FLAC, often
- * opening in the same second: without it the two copies would share a name.
+ * `.phone`, since the host cuts the same stream into FLAC too, often starting in the
+ * same second.
  */
 object SegmentNames {
     const val EXT = "phone.flac"
@@ -19,8 +17,7 @@ object SegmentNames {
     const val CHANNELS = 1
     const val BYTES_PER_SAMPLE = 2
 
-    /** One minute of PCM — the rotation boundary, counted in bytes fed so the
-     * writer needs no timer: audio time, not wall time, decides. */
+    /** A minute of PCM: segments are cut by audio, not wall time. */
     const val SEGMENT_BYTES = 60 * SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS
 
     private val stamp: DateTimeFormatter =

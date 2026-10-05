@@ -7,8 +7,7 @@ import org.junit.Test
 class CaptureApiTest {
     @Test
     fun parsesTheSpecVsStatusShape() {
-        // The transitioning answer a pause press gets: desired flipped, the mic's
-        // confirmed word unchanged — rendered as "Pausing…", never a flap.
+        // The answer to a pause press: desired changed, confirmed not yet.
         val state =
             parseCaptureState(
                 """{"running": true, "pausedUntil": null,
@@ -26,8 +25,6 @@ class CaptureApiTest {
 
     @Test
     fun anOlderServersConfirmedOnlyAnswerReadsAsSettled() {
-        // Rollout order safety: the app may meet a server that only sends the old
-        // two-field shape. That is a settled state (desired == confirmed).
         val state =
             parseCaptureState(
                 """{"running": false, "pausedUntil": "2026-07-17T15:13:32+00:00"}""",
@@ -67,7 +64,6 @@ class CaptureApiTest {
 
     @Test
     fun anOlderServerWithoutATokenReadsAsNull() {
-        // Null token = no long-poll support; the poll loop falls back to plain 5s.
         val state = parseCaptureState("""{"running": true, "pausedUntil": null}""")!!
         assertNull(state.stateToken)
     }

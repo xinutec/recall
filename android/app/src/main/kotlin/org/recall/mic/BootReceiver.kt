@@ -13,13 +13,9 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
 /**
- * Brings the mic back after a reboot, but only if the user had it enabled — so a
- * power blip or OS update doesn't silently leave the living-room mic dark.
- *
- * On modern Android a boot-started mic service can't actually record (see
- * BootPolicy), so there this posts a tap-to-resume notification instead of
- * starting a service that would stream silence; one tap opens MainActivity, whose
- * on-open resume path restarts streaming with full mic access.
+ * After a reboot, restarts streaming if it was enabled. Where a boot-started mic service
+ * cannot record ([BootPolicy]), it posts a prompt instead; a tap opens MainActivity,
+ * which restarts streaming.
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -36,8 +32,7 @@ class BootReceiver : BroadcastReceiver() {
             )
         when (action) {
             BootAction.AUTO_START -> {
-                // Belt and braces: if the OS still refuses, fall back to the prompt
-                // rather than crashing the receiver.
+                // If refused anyway, prompt.
                 runCatching { StreamService.start(context) }
                     .onFailure { promptToResume(context) }
             }
@@ -91,13 +86,8 @@ class BootReceiver : BroadcastReceiver() {
         private const val CHANNEL_ID = "boot-resume"
 
         /**
-         * Take down the reboot prompt, because what it asked for has happened.
-         *
-         * Nothing else does: `setAutoCancel` clears it when it is TAPPED, and the usual
-         * way streaming comes back is opening the app from the launcher, which restarts
-         * the service (MainActivity's resume-on-open) without going near the shade. Left
-         * alone it keeps asking for something already done, which reads as the resume
-         * having failed.
+         * Take down the reboot prompt once streaming is back. `setAutoCancel` only
+         * covers a tap, and streaming usually returns by opening the app.
          */
         fun clearResumePrompt(context: Context) {
             context

@@ -30,12 +30,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
- * The two hosts and this device's identity, off the main screen — they are set once per
- * phone and then never again, so leaving them on the front page made the thing you look at
- * every day mostly configuration.
- *
- * Saved as they are typed (no Save button): every field here is a single value with an
- * immediate effect, and a form that can be left half-applied is a form that lies.
+ * The hosts, tokens and device id, set once per phone. Saved as typed: no Save button,
+ * so nothing is left half-applied.
  */
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -109,8 +105,7 @@ fun SettingsScreen(
                 label = { Text("recorder host (stream)") },
                 placeholder = { Text("192.168.1.81") },
                 singleLine = true,
-                // Locked while streaming: the service connects to the host it was given
-                // at Start, so an edit here would make the status card lie.
+                // The service keeps the host it started with.
                 enabled = !running,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -133,7 +128,6 @@ fun SettingsScreen(
                 label = { Text("control host (Isis)") },
                 placeholder = { Text(Prefs.DEFAULT_CONTROL_HOST) },
                 singleLine = true,
-                // Not tied to the stream, so it's editable any time.
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(

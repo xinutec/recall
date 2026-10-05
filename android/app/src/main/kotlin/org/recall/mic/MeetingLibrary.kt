@@ -6,60 +6,44 @@ import android.util.Log
 import java.io.File
 import java.time.ZoneId
 
-/**
- * Where a recording has got to. Declared in the order the list shows them: what needs a
- * decision first, then what is in flight, then what needs a second look, then what is
- * settled.
- */
+/** Where a recording has got to, in the order the list shows them. */
 enum class RecordingState {
-    /** On the phone and nowhere else. Nothing will send it until told. */
+    /** On the phone only; not sent until approved. */
     HELD,
 
-    /** Approved; waiting for the host to answer. */
+    /** Approved; waiting for the host. */
     QUEUED,
 
-    /** recall has it, but its copy is shorter than this one — or couldn't be compared. */
+    /** recall's copy is shorter, or could not be compared. */
     UNVERIFIED,
 
-    /** recall has it, and its copy is the same length. Safe to delete when you like. */
+    /** recall's copy is the same length; safe to delete. */
     UPLOADED,
 }
 
-/**
- * One recording as the screen shows it: what it is, how long, how big, and where it has
- * got to.
- */
+/** One recording as the meeting screen shows it. */
 data class RecordingRow(
     val recording: PendingRecording,
     val durationMs: Long,
     val sizeBytes: Long,
     val state: RecordingState,
-    /** Why the last delivery attempt didn't land, or null if none has failed. Only ever
-     * set on a [RecordingState.QUEUED] row — anywhere else it has been delivered. */
+    /** Why the last delivery failed; only on a [RecordingState.QUEUED] row. */
     val failure: String? = null,
 ) {
     val file: File get() = recording.audio
 }
 
 /**
- * The recordings on this phone, as the meeting screen sees them — held, in flight and
- * delivered, in one list, because the question "what audio is on this phone?" has one
- * answer, and the one about "which of it is safe to delete" is answered per row.
- *
- * Nothing here deletes on its own. [approve] hands a recording to [MeetingUpload]; a
- * successful upload files it under `uploaded/` or `unverified/` but leaves the audio
- * alone. [delete] is the only thing that removes anything, and only a person calls it.
+ * Every recording on the phone, in one list for the meeting screen. [approve] hands one
+ * to [MeetingUpload]; [delete], called only by a person, is the only removal.
  */
 object MeetingLibrary {
     private const val TAG = "recall.meeting"
 
-    /** Re-read the directories and publish. Touches the filesystem and probes every file
-     * for its length — call it off the main thread. */
+    /** Re-read the directories and publish. Probes every file; off the main thread. */
     fun refresh(ctx: Context) {
         val zone = ZoneId.systemDefault()
-        // The in-progress recording lives in the same directory and is a perfectly valid
-        // partial Ogg — but offering Play/Upload/Delete on the file being written to is
-        // nonsense, so it is excluded until it is finished.
+        // Not the file still being recorded.
         val active = MeetingState.activeFile.value
         val rows =
             listOf(
@@ -76,7 +60,7 @@ object MeetingLibrary {
         MeetingState.setRecordings(rows)
     }
 
-    /** Hand a recording to the uploader. Until this, nothing leaves the phone. */
+    /** Hand a recording to the uploader. */
     fun approve(ctx: Context, row: RecordingRow) {
         if (row.state != RecordingState.HELD) return
         if (MeetingQueue.moveTo(row.recording, MeetingQueue.outbox(ctx)) == null) {
@@ -89,16 +73,14 @@ object MeetingLibrary {
         refresh(ctx)
     }
 
-    /** Delete a recording from the phone. The only thing that ever removes one. */
+    /** Delete a recording from the phone. */
     fun delete(ctx: Context, row: RecordingRow) {
         if (MeetingPlayer.playingFile() == row.file) MeetingPlayer.stop()
         Log.i(UI_LOG, "meeting deleted from phone: ${row.file.name} (was ${row.state})")
         val wasQueued = row.state == RecordingState.QUEUED
         MeetingQueue.delete(row.recording)
         refresh(ctx)
-        // Deleting something the fleet was told about changes what the fleet should
-        // be told. Nothing else would send that: an upload pass is what reports, and
-        // there is now nothing to upload.
+        // A pass, so the server hears the outbox changed.
         if (wasQueued) MeetingUpload.enqueue(ctx, always = true)
     }
 
@@ -117,14 +99,11 @@ object MeetingLibrary {
         )
 
     /**
-     * The recording's length, from the container. 0 when it can't be read — which is the
-     * honest answer for a file cut short by a crash, and no reason to hide the row: a
-     * truncated Ogg still plays and still uploads. It is also what the upload check
-     * compares against, where 0 means "couldn't verify", not "matches".
+     * The recording's length, from the container; 0 if unreadable, as after a crash
+     * (the file still plays and uploads). The upload check reads 0 as unverified.
      */
     fun durationMs(file: File): Long {
-        // Not `use`: MediaMetadataRetriever only became AutoCloseable in API 29, and this
-        // has to work on everything the app installs on.
+        // Not `use`: AutoCloseable only from API 29.
         val probe = MediaMetadataRetriever()
         return try {
             probe.setDataSource(file.path)

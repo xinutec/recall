@@ -16,12 +16,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 
-/**
- * The segmented mic-level meter, shared by both modes' screens — streaming reads it from
- * the PCM it is about to send, the meeting recorder from `MediaRecorder`'s peak amplitude,
- * but the scaling ([amplitudeLevel]) and therefore the picture are the same. One
- * composable so "how loud does the room look" can't mean two different things.
- */
+/** The segmented mic-level meter both screens use, scaled by [amplitudeLevel]. */
 @Composable
 fun LevelMeter(level: Float, segments: Int = 24) {
     val animated by animateFloatAsState(targetValue = level, label = "mic-level")

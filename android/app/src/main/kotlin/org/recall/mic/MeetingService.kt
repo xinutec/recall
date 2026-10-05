@@ -22,26 +22,17 @@ import java.time.ZoneId
 import kotlin.concurrent.thread
 
 /**
- * Foreground service that records one meeting to a file — the appointment/meeting mode,
- * as opposed to [StreamService]'s continuous household capture.
+ * Foreground service that records one meeting to a file, as opposed to [StreamService]'s
+ * continuous capture.
  *
- * **Ogg/Opus, and the container is the crash strategy.** A truncated Ogg still decodes to
- * its last complete page, so a recording cut short by a flat battery or a kill costs its
- * tail rather than the whole appointment. An m4a interrupted before `stop()` has no `moov`
- * atom and is not recoverable at all — which is why this is one file per meeting instead
- * of rolled parts plus a join. (Android has no MP3 encoder; Opus is the format it encodes
- * well, and `.ogg` is already accepted by the server's upload endpoint.)
+ * Ogg/Opus, because a truncated Ogg still decodes to its last page, so a flat battery or
+ * a kill costs only the tail; an m4a cut short before `stop()` has no `moov` atom and is
+ * lost. Hence one file per meeting.
  *
- * The audio source is `UNPROCESSED` falling back to `MIC` — the same preference
- * [StreamService] makes, for the same reason: automatic gain control and noise suppression
- * damage the speaker embeddings the diarizer depends on. The bitrate is above continuous
- * capture's 32 kbps because a meeting is far-field with several voices and a one-off hour
- * costs ~25 MB, so the storage argument doesn't apply.
+ * `UNPROCESSED`, falling back to `MIC`, as in [StreamService].
  *
- * Recording is deliberate, so it wins the microphone: starting stops the stream, and
- * stopping starts it again if it was enabled. Both modes are in one process precisely so
- * that rule can be enforced — across two apps the loser would only find out via a failed
- * recorder init.
+ * A meeting wins the microphone: starting stops the stream, and stopping restarts it if
+ * it was enabled. Both are in one process so that rule can be enforced.
  */
 class MeetingService : Service() {
     private val recorderLock = Any()
@@ -58,23 +49,19 @@ class MeetingService : Service() {
             ACTION_STOP -> finish()
             else -> begin()
         }
-        return START_NOT_STICKY // a killed recording is finished, never silently restarted
+        return START_NOT_STICKY // a killed recording is finished, not restarted
     }
 
     override fun onDestroy() {
-        // The system killed us mid-recording (or the process is going away): close the
-        // file properly rather than leaving the last page unwritten.
+        // Torn down mid-recording: close the file so the last page is written.
         if (recorder != null) finish()
         super.onDestroy()
     }
 
     private fun begin() {
-        if (recorder != null) return // already recording; a second Start is a no-op
+        if (recorder != null) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            // Opus encoding (and the OGG container) arrived in Android 10. Nothing below
-            // that can produce the format, and silently writing a different one would put
-            // an unrecoverable m4a where the crash strategy expects an Ogg. minSdk stays
-            // 26 because an older phone can still do the streaming job.
+            // Ogg/Opus needs Android 10; minSdk stays 26 for streaming.
             MeetingState.setError("Meeting recording needs Android 10 or newer.")
             stopSelf()
             return
@@ -85,24 +72,16 @@ class MeetingService : Service() {
     @RequiresApi(Build.VERSION_CODES.Q)
     private fun beginOnQ() {
         if (!startInForeground()) {
-            // The OS refused a mic-type foreground start — recording on would capture
-            // nothing but silence.
             MeetingState.setError("Android refused to start recording in the foreground.")
             stopSelf()
             return
         }
 
-        // The deliberate act wins the microphone. Prefs.enabled is untouched, so it is
-        // also the record of whether to put the stream back afterwards — a field would
-        // not survive this service being killed.
+        // Prefs.enabled is left alone: it says whether to restart the stream after,
+        // and survives this service being killed.
         StreamService.stop(this)
-        // ⚠ stopService is asynchronous. onDestroy clears `running`, and only on its next
-        // pass does the capture thread reach the finally that releases the
-        // AudioRecord — so opening a MediaRecorder here raced a mic we still held,
-        // both sources failed, and the user was told to check permissions (#1472).
-        // Bounded, because a capture thread wedged on a dead socket must not hang a
-        // recording somebody deliberately pressed: on a timeout we still try, and
-        // say something true if it fails.
+        // stopService is asynchronous, so wait for the capture thread to release the
+        // mic (#1472); bounded, and on a timeout try anyway (see MicHandover).
         val handedOver = MicHandover.awaitRelease(MicHandover.HANDOVER_MS)
 
         val start = Instant.now()
@@ -159,8 +138,7 @@ class MeetingService : Service() {
         }
     }
 
-    /** Close the file and publish it to the list, whether the user pressed Stop or the
-     * system is tearing us down. */
+    /** Close the file and list it, on Stop or on teardown. */
     private fun finish() {
         val rec =
             recorder ?: run {
@@ -174,8 +152,7 @@ class MeetingService : Service() {
         meter?.interrupt()
         meter = null
 
-        // stop() throws when the recorder never got a valid frame (Stop pressed
-        // instantly, or the mic died) — that leaves an empty file, not a short one.
+        // stop() throws when no frame was recorded; the file is then empty.
         val kept =
             synchronized(recorderLock) {
                 runCatching { rec.stop() }.isSuccess.also { runCatching { rec.release() } }
@@ -185,9 +162,8 @@ class MeetingService : Service() {
 
         if (file != null) {
             if (kept && file.length() > 0) {
+                // Kept on the phone until the user uploads it.
                 Log.i(UI_LOG, "meeting saved: ${file.name} (${file.length()} bytes)")
-                // Saved, and that is all. It stays on the phone to be listened to; only
-                // an explicit Upload hands it to MeetingUpload.
             } else {
                 Log.w(UI_LOG, "meeting discarded: ${file.name} — no audio was written")
                 MeetingQueue.discard(file)
@@ -199,15 +175,14 @@ class MeetingService : Service() {
         stopSelf()
     }
 
-    /** Put continuous capture back if it was running before this recording took the mic. */
+    /** Restart continuous capture if it is enabled. */
     private fun restoreStream() {
         if (Prefs.enabled(this) && Prefs.host(this).isNotBlank()) StreamService.start(this)
     }
 
     /**
-     * `MediaRecorder` never hands over the samples, so the level meter polls the peak
-     * amplitude it accumulated since the last read — the same 0..32767 units
-     * [amplitudeLevel] scales for the streaming meter, so the two read alike.
+     * `MediaRecorder` does not hand over samples, so the meter polls its peak amplitude
+     * since the last read, in the 0..32767 units [amplitudeLevel] scales.
      */
     private fun meterLoop() {
         while (!Thread.currentThread().isInterrupted) {
@@ -274,10 +249,8 @@ class MeetingService : Service() {
                 .setColor(ContextCompat.getColor(this, R.color.ic_launcher_background))
                 .setOngoing(true)
                 .setContentIntent(open)
-                // Stoppable from the shade: the alternative is walking out of an
-                // appointment with the recorder still running.
                 .addAction(R.drawable.ic_mic, "Stop", stop)
-        // A live elapsed counter for free, so the shade shows how long it has been going.
+        // An elapsed-time counter in the shade.
         since?.let {
             builder.setUsesChronometer(true).setWhen(it.toEpochMilli()).setShowWhen(true)
         }
@@ -306,8 +279,8 @@ class MeetingService : Service() {
 
         private const val ACTION_STOP = "org.recall.mic.STOP_MEETING"
 
-        // 48 kHz mono, as the rest of recall. 56 kbps sits in the 48-64 range a far-field
-        // multi-voice meeting wants — above continuous capture's 32 kbps.
+        // 48 kHz mono, as the rest of recall; 56 kbps Opus suits a far-field meeting
+        // with several voices (~25 MB an hour).
         private const val SAMPLE_RATE = 48000
         private const val BITRATE = 56000
 

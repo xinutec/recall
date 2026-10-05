@@ -3,22 +3,18 @@ package org.recall.mic
 import java.io.File
 
 /**
- * The phone's segment cache: where closed segments wait, and what each
- * directory MEANS — the meeting queue's idiom, because every state here is a
- * verdict that must survive a reboot and a rename is the only change that
- * cannot half-happen:
+ * The phone's segment cache. As in [MeetingQueue], a segment's state is its
+ * directory, since a rename cannot half-happen:
  *
  * | directory              | meaning                                             |
  * |------------------------|-----------------------------------------------------|
- * | `segments/open/`       | being written by the recorder, nothing touches it   |
- * | `segments/`            | closed, undelivered — what the uploader drains      |
- * | `segments/delivered/`  | Isis holds it, proven: the receipt's sha-256 matched a local re-hash |
- * | `segments/conflict/`   | Isis holds different bytes under this name — a person must look |
+ * | `segments/open/`       | being written                                       |
+ * | `segments/`            | closed, undelivered: what the uploader drains       |
+ * | `segments/delivered/`  | on Isis, its receipt's sha-256 matching ours        |
+ * | `segments/conflict/`   | Isis holds different bytes under the name, or refused it |
  *
- * Deletion happens in exactly one place, [evict], and eats only `delivered/`,
- * oldest first, under cache pressure — never an undelivered segment, never a
- * conflict, never because a server asked (recall/docs/architecture.md,
- * decision 2: eviction is a local decision; Isis's word destroys nothing).
+ * Only [evict] deletes, and only from `delivered/`, oldest first, under cache
+ * pressure; never because the server asked (docs/architecture.md, decision 2).
  */
 object SegmentStore {
     private const val DIR = "segments"
@@ -26,8 +22,8 @@ object SegmentStore {
     private const val DELIVERED = "delivered"
     private const val CONFLICT = "conflict"
 
-    /** ~2 GiB, over a day of FLAC: enough local history to span the
-     * upload→nightly-backup window that makes eviction safe at all. */
+    /** ~2 GiB, over a day of FLAC: covers the time from upload to the server's
+     * nightly backup. */
     const val DEFAULT_CEILING_BYTES = 2L * 1024 * 1024 * 1024
 
     fun root(base: File): File = File(base, DIR).apply { mkdirs() }
@@ -41,14 +37,12 @@ object SegmentStore {
     private fun segmentsIn(dir: File): List<File> =
         (dir.listFiles() ?: emptyArray()).filter { it.isFile }.sortedBy { it.name }
 
-    /** Closed, undelivered, oldest first — the uploader's work list. */
+    /** Closed and undelivered, oldest first. */
     fun undelivered(base: File): List<File> = segmentsIn(root(base))
 
     /**
-     * Adopt anything a crash left in `open/`: a truncated segment is real
-     * audio that was really heard — completeness outranks tidiness, so it
-     * closes as-is and ships. Run once at recorder start, before a new
-     * segment opens.
+     * Close whatever a crash left in `open/`: truncated, but real audio. Run at
+     * recorder start, before a new segment opens.
      */
     fun sweepOpen(base: File) {
         for (orphan in segmentsIn(open(base))) {
@@ -69,11 +63,8 @@ object SegmentStore {
         ).sumOf { it.length() }
 
     /**
-     * Free space down to [ceilingBytes], eating verified-delivered segments
-     * oldest first and nothing else. Returns how many were evicted. If the
-     * cache is over the ceiling with `delivered/` empty, it stays over — the
-     * undelivered audio is the point of the cache, and deleting it to meet a
-     * number would be the exact loss this design exists to prevent.
+     * Delete delivered segments, oldest first, until the cache is under
+     * [ceilingBytes]; how many. With nothing delivered it stays over.
      */
     fun evict(base: File, ceilingBytes: Long = DEFAULT_CEILING_BYTES): Int {
         var evicted = 0

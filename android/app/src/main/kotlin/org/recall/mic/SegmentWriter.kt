@@ -5,35 +5,24 @@ import java.io.RandomAccessFile
 import java.time.Instant
 
 /**
- * Turns the mic loop's PCM chunks into closed, capture-stamped FLAC segments in
- * [SegmentStore] — the phone's half of store-and-forward
- * (recall/docs/architecture.md, stage C1), running in shadow: the PCM stream to
- * the recorder host is untouched, this only adds durable local copies that the
- * uploader delivers with verified receipts.
+ * Writes the mic loop's PCM to closed, capture-stamped FLAC segments in
+ * [SegmentStore], beside the live stream, for [SegmentUpload] to deliver.
  *
- * The mic loop calls [offer], which hands bytes to a bounded [PcmSpool] and
- * returns — the same never-block-the-microphone rule as the network sender,
- * for the same measured reason. A writer thread drains the spool to disk and
- * rotates files every [SegmentNames.SEGMENT_BYTES] of audio (one minute of
- * PCM, counted in bytes: audio time, not wall time). Nothing here may throw
- * into the capture path; a dead writer costs the shadow copies, never the
- * stream.
+ * [offer] only fills a bounded [PcmSpool], so the mic is never blocked; a writer
+ * thread drains it and starts a new file every [SegmentNames.SEGMENT_BYTES] of audio
+ * (a minute, counted in audio, not wall time). Nothing here throws into capture: a
+ * dead writer costs the copies, not the stream.
  *
- * Pure JVM by construction (files, bytes, an injected clock), so rotation and
- * naming are unit-tested without a device.
+ * Plain JVM (files, bytes, an injected clock), so it is tested without a device.
  */
 class SegmentWriter(
     private val base: File,
     private val source: String,
     private val now: () -> Instant = Instant::now,
     spoolBytes: Int = DEFAULT_SPOOL_BYTES,
-    // Injected, not android.util.Log: the class stays pure JVM so its
-    // rotation arithmetic is tested without a device; the service passes a
-    // real logger.
+    // Not android.util.Log, to stay plain JVM.
     private val onFailure: (String) -> Unit = {},
-    // Fires (on the writer thread) each time a segment lands in the closed
-    // set — the service kicks the uploader here, so delivery tracks rotation
-    // instead of waiting for the stream cycle to end.
+    // On the writer thread, per closed segment; the service starts an upload.
     private val onSegmentClosed: () -> Unit = {},
 ) {
     private val spool = PcmSpool(spoolBytes)
@@ -46,7 +35,7 @@ class SegmentWriter(
     private var path: File? = null
     private var written = 0
 
-    /** Never blocks; drops-oldest into the counted spool under pressure. */
+    /** Never blocks; when full, the spool drops its oldest bytes and counts them. */
     fun offer(chunk: ByteArray, length: Int) {
         spool.offer(chunk, length)
     }
@@ -56,7 +45,6 @@ class SegmentWriter(
     fun start() {
         if (running) return
         running = true
-        // Whatever a crash left half-written is real audio: close it out first.
         SegmentStore.sweepOpen(base)
         thread =
             Thread({ drainLoop() }, "segment-writer").apply {
@@ -83,10 +71,9 @@ class SegmentWriter(
                     write(pending)
                 }
             }
-            // One last drain so Stop does not orphan the tail of the spool.
+            // The spool's tail.
             write(spool.drain())
         } catch (e: Exception) {
-            // The shadow must never take the stream down with it.
             onFailure("segment writer failed: ${e.message}")
         } finally {
             runCatching { finishSegment() }
@@ -125,13 +112,12 @@ class SegmentWriter(
         file = null
         flac = null
         path = null
-        // Patch the header with the truth, land the bytes, then rename into
-        // the closed set — the only step anything downstream can observe.
+        // Finish the header, sync, then rename into the closed set: the only
+        // step the uploader can see.
         encoder.finish()
         out.fd.sync()
         out.close()
         if (written == 0) {
-            // A zero-length segment says nothing; do not ship an empty claim.
             target.delete()
         } else if (target.renameTo(File(SegmentStore.root(base), target.name))) {
             onSegmentClosed()

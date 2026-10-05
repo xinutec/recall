@@ -7,11 +7,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * The recall *household* capture state (the whole system, not just this phone), as
- * spec-vs-status: [running]/[pausedUntil] is the mic's confirmed word, [desiredRunning]/
- * [desiredPausedUntil] is the intent (moves the instant a button is pressed), and
- * [settled] says they agree. While unsettled the UI shows "Pausing…"/"Resuming…" —
- * never a flap between the intent it just set and a not-yet-caught-up report.
+ * The household's capture state, not just this phone's. [running] and [pausedUntil] are
+ * what the mic confirmed; the `desired` pair what was asked, changed at the press;
+ * [settled] that they agree. Until then the UI says "Pausing…" or "Resuming…".
  */
 data class CaptureState(
     val running: Boolean,
@@ -20,24 +18,14 @@ data class CaptureState(
     val desiredPausedUntil: String?,
     val settled: Boolean,
     val micReachable: Boolean,
-    /** Fingerprint echoed back as ?known= to long-poll: the server holds the request
-     * until the state changes. Null on an older server (fall back to plain polling). */
+    /** Sent back as `?known=` to long-poll; null means poll plainly. */
     val stateToken: String? = null,
 )
 
 /**
- * One recorder's liveness for the fleet view, as two answers.
- *
- * [active] is the consent signal: your voice is being captured audibly. A silent
- * room reads inactive on purpose — nobody should speak trusting a dot the audio
- * cannot back.
- *
- * [recording] is the operational answer: bytes are arriving, whatever is on
- * them. Serving only [active] is how geb came to read "off" while recording
- * perfectly (#1428), because the reader was asking this question instead.
- *
- * An older server sends neither field; [recording] then falls back to [active],
- * which is the pre-#1428 behaviour rather than a claim that nothing is running.
+ * One recorder's liveness. [active]: someone is being recorded audibly, so a silent
+ * room reads inactive. [recording]: audio is arriving, whatever is on it (#1428);
+ * without the field it falls back to [active].
  */
 data class SourceStatus(
     val id: String,
@@ -49,8 +37,7 @@ data class SourceStatus(
     val lastDelivered: String?,
 )
 
-/** Parse `/api/capture`'s JSON. Pure (no I/O), so it's unit-tested. An older server
- * sends only the confirmed view; that reads as settled (desired == confirmed). */
+/** Parse `/api/capture`'s JSON. Without the desired fields, it reads as settled. */
 fun parseCaptureState(body: String): CaptureState? =
     runCatching {
         val json = JSONObject(body)
@@ -63,10 +50,7 @@ fun parseCaptureState(body: String): CaptureState? =
             desiredPausedUntil =
                 when {
                     !json.has("desiredPausedUntil") -> until
-
-                    // old server: field absent
                     json.isNull("desiredPausedUntil") -> null
-
                     else -> json.getString("desiredPausedUntil")
                 },
             settled = json.optBoolean("settled", true),
@@ -75,7 +59,7 @@ fun parseCaptureState(body: String): CaptureState? =
         )
     }.getOrNull()
 
-/** Parse `/api/sources`'s JSON into the per-recorder list. Pure, so it's unit-tested. */
+/** Parse `/api/sources`'s JSON. */
 fun parseSources(body: String): List<SourceStatus> =
     runCatching {
         val items = JSONObject(body).getJSONArray("items")
@@ -95,24 +79,17 @@ fun parseSources(body: String): List<SourceStatus> =
     }.getOrDefault(emptyList())
 
 /**
- * Talks to the recall web API — the same one the web app uses — to read the global
- * capture pause (and control it), and the fleet's per-recorder liveness. Since the Isis
- * split this is the *control host* (Isis), not the recorder host the stream uses: the API
- * moved to Isis while the PCM ingest stayed on the Mac. The API stays up *during* a pause
- * (it's control-plane), so the app shows the true state even when the stream port is
- * closed.
- *
- * Reachable wherever the caller can reach Isis (over the VPN); if it can't, calls just
- * fail and the panels stay hidden rather than showing stale state.
+ * The web API on Isis: the household pause, read and set, and the recorders' liveness.
+ * It answers during a pause, when the recorder's port is closed. A failed call returns
+ * null, and the panels stay hidden.
  */
 object CaptureApi {
     private const val TIMEOUT_MS = 4000
 
     private fun endpoint(host: String, path: String) = "${ApiBase.of(host)}/api$path"
 
-    /** With [waitS] + [known] (the last stateToken) the server long-polls: the request
-     * hangs until the household state changes, so a press anywhere lands here in ~RTT.
-     * The read timeout stretches to cover the hang. */
+    /** With [waitS] and [known] (the last stateToken), a long poll: the server answers
+     * when the state changes, so the read timeout covers the wait. */
     suspend fun state(host: String, waitS: Int = 0, known: String? = null): CaptureState? {
         val query = if (waitS > 0) "?wait=$waitS&known=${known.orEmpty()}" else ""
         return get(
@@ -128,8 +105,7 @@ object CaptureApi {
     suspend fun resume(host: String): CaptureState? =
         get(endpoint(host, "/capture/resume"), "POST")?.let { parseCaptureState(it) }
 
-    // null = the request failed (caller should keep its last list, not blank the
-    // panel); an empty list means the host genuinely has no sources.
+    // null: the request failed; empty: no sources.
     suspend fun sources(host: String): List<SourceStatus>? =
         get(endpoint(host, "/sources"), "GET")?.let { parseSources(it) }
 
