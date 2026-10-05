@@ -1,18 +1,13 @@
-//! The text rules, against a frozen corpus and the shapes a reader needs spelled out.
+//! The text rules, against a frozen corpus and hand-written cases.
 //!
-//! The corpus holds verdicts from the implementation these rules replaced and
-//! cannot be regenerated; if a case looks wrong, judge the Rust on its merits.
-//! It pins edge cases hand-written examples miss: which match the character
-//! loop finds, where a word with a diaeresis splits, and stripping a turn that
-//! is punctuation at one end only.
+//! The corpus holds verdicts from the Python these rules replaced and cannot be
+//! regenerated; if a case looks wrong, judge the Rust on its merits. Its texts
+//! are generated nonsense in the archive's shapes, since the repository is
+//! public.
 //!
-//! The texts are generated nonsense tokens in the archive's shapes, since the
-//! repository is public; they cannot show agreement on real rows.
-//!
-//! Moving any threshold in `text.rs` by one turns the corpus red, with one
-//! exception: a character loop's match is `repeats × unit` with repeats ≥ 4
-//! and unit ≤ 8, so no match is 11 characters long and `CHAR_LOOP_MIN_LEN` of
-//! 11 behaves as 12.
+//! Moving any threshold in `text.rs` by one turns the corpus red, except
+//! `CHAR_LOOP_MIN_LEN` 12 → 11: no match (repeats ≥ 4, unit ≤ 8) is 11
+//! characters long.
 
 use serde::Deserialize;
 use transcript::text::{is_repetition_loop, is_wordless};
@@ -95,7 +90,7 @@ fn punctuation_only_turns_are_wordless() {
 #[test]
 fn a_long_word_repeated_three_times_is_a_loop_and_a_short_one_is_emphasis() {
     assert!(is_repetition_loop("everything everything everything"));
-    // Real speech. Hiding this would delete somebody actually saying it.
+    // Real speech.
     assert!(!is_repetition_loop("no no no"));
     assert!(!is_repetition_loop("who who who"));
 }

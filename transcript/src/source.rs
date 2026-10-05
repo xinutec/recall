@@ -1,8 +1,7 @@
 /// A recorder's or a session's id: `[a-z0-9][a-z0-9_-]*`, at most 64 bytes.
 ///
 /// The id is a directory name, so the grammar excludes everything a path could
-/// interpret (`.`, `/`, case games). The one definition: `audiocore::names`
-/// asks this type.
+/// interpret (`.`, `/`, case). `audiocore::names` defers to this type.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct SourceId(String);
 

@@ -1,7 +1,5 @@
-# transcript — recall's domain: clips, instants, spans, and (later) the edit
-# log and render (#1911). Pure by construction: no dependency here may do IO
-# or read a clock (`scripts/check_pure_crate.py` refuses one), so nothing built
-# on these types can quietly reach a database, a file or the time of day.
+# recall's domain: clips, instants, spans, the edit log and render (#1911).
+# Pure: no dependency may do IO or read a clock (`scripts/check_pure_crate.py`).
 [package]
 name = "transcript"
 version = "0.1.0"

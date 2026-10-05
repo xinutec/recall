@@ -1,11 +1,9 @@
-//! Is this transcript text trustworthy? The rules decidable from a line's own
-//! text and timings, which `render` applies and recalld re-exports
-//! (`recalld::quality`).
+//! Whether transcript text is trustworthy, decided from a line's own text and
+//! timings. Used by `render`; re-exported as `recalld::quality`.
 
 /// Measured speech under which a minute counts as near-silent, in seconds. The
-/// speech pass's floor is one 0.256 s blip, and in minutes under a second the
-/// commonest lines on this archive were "Thank you." and video sign-offs
-/// (2026-09-26, #1461).
+/// speech pass's floor is one 0.256 s blip; in minutes under a second the
+/// commonest lines were "Thank you." and video sign-offs (#1461).
 pub const NEAR_SILENT_S: f64 = 1.0;
 
 /// What Whisper writes over silence: thanks in several languages, "you", "bye",
@@ -29,12 +27,11 @@ const SILENCE_PHRASES: &[&str] = &[
 /// Words a "thank you" can be made of, repeated or cut short by the model.
 const THANKS_WORDS: &[&str] = &["thank", "thanks", "you", "very", "much", "so"];
 
-/// True if `text` is a phrase the model writes over silence (see
-/// `SILENCE_PHRASES`), or thanks and nothing else: "Thank you.",
-/// "Thank you. Thank you.", "thank thank you".
+/// True if `text` is a phrase the model writes over silence, or thanks and
+/// nothing else ("Thank you. Thank you.", "thank thank you").
 ///
-/// Only meaningful where no speech was heard (`recalld::quality::Heard::invented`): where there
-/// was, "Thank you." is as likely said as invented.
+/// Only meaningful where no speech was heard: where there was, "Thank you." is
+/// as likely said as invented.
 #[must_use]
 pub fn is_silence_phrase(text: &str) -> bool {
     let lower = text.to_lowercase();
@@ -54,25 +51,23 @@ pub fn is_silence_phrase(text: &str) -> bool {
 /// runs about 2 w/s, and below this the typical turn is a few words spread over
 /// half a minute of near-silence.
 ///
-/// Four signals that look right and are refuted on this archive, so nobody
-/// reaches for them again: ASR confidence (the commonest low-confidence turns
-/// are the household's quiet agreement, `Ja.`, `Yeah.`, `Okay.`); tokens per
-/// speech-second (a phone's suppression gates between words, so the detector
-/// under-reports and the rate measures AGC, not hallucination); repetition
-/// loops as a proxy for slowness (the slow band is not repetitive); and the
-/// language label (most turns labelled a foreign language are Dutch and
-/// English mislabelled; script outranks the label). When scoring any of this,
-/// read the median: one hallucination loop moves a mean by an order of
-/// magnitude.
+/// Signals refuted on this archive as hallucination detectors:
+/// - ASR confidence: the commonest low-confidence turns are quiet agreement
+///   (`Ja.`, `Yeah.`, `Okay.`).
+/// - Tokens per speech-second: a phone gates between words, so the detector
+///   under-reports and the rate measures AGC.
+/// - Repetition loops: the slow band is not repetitive.
+/// - The language label: most turns labelled foreign are mislabelled Dutch or
+///   English; script outranks it.
+///
+/// Score with the median: one loop moves a mean by an order of magnitude.
 pub const SLOW_RATE: f64 = 0.2;
 
-/// The turn's own speaking rate: words over first-word-start to last-word-end,
-/// or `None` when there is nothing to divide by.
+/// Words per second from the first word's start to the last word's end; `None`
+/// for a zero span.
 ///
-/// The denominator is the turn's own span, which is device-independent. A rate
-/// from a span under half a second is an artefact of the denominator, not
-/// speech, so a rule on the fast side would need a minimum span;
-/// [`is_implausibly_slow`] cannot be reached by a short span and needs none.
+/// A span under half a second gives a meaningless high rate, so a fast-side
+/// rule would need a minimum span; the slow-side rule needs none.
 #[must_use]
 pub fn speaking_rate(words: &[(f64, f64)]) -> Option<f64> {
     let first = words.first()?.0;
@@ -81,16 +76,16 @@ pub fn speaking_rate(words: &[(f64, f64)]) -> Option<f64> {
     (span > 0.0).then(|| words.len() as f64 / span)
 }
 
-/// The slow tail: a turn spoken too slowly to be somebody talking. Zeroes
-/// `asr_confidence`, never deletes; the turn stays searchable and lands in the
-/// review queue. The fast tail is real and too small for a rule.
+/// A turn spoken too slowly to be somebody talking. Callers zero its
+/// confidence rather than drop it. The fast tail is real and too small for a
+/// rule.
 #[must_use]
 pub fn is_implausibly_slow(words: &[(f64, f64)]) -> bool {
     speaking_rate(words).is_some_and(|rate| rate < SLOW_RATE)
 }
 
-/// Is this character a letter Unicode names LATIN? Binary search over the
-/// generated table, which covers Latin Extended and the fullwidth forms.
+/// Whether Unicode names this character Latin, including Latin Extended and
+/// the fullwidth forms.
 #[must_use]
 pub fn is_latin_letter(c: char) -> bool {
     let cp = c as u32;
@@ -107,9 +102,7 @@ pub fn is_latin_letter(c: char) -> bool {
         .is_ok()
 }
 
-/// What fraction of this turn's letters are not Latin. Only letters vote:
-/// punctuation, digits and spaces say nothing about script, and a turn with no
-/// letters scores 0.0.
+/// The fraction of the turn's letters that are not Latin; 0.0 with no letters.
 #[must_use]
 pub fn foreign_script_ratio(text: &str) -> f64 {
     let letters = text.chars().filter(|c| c.is_alphabetic());
@@ -126,15 +119,13 @@ pub fn foreign_script_ratio(text: &str) -> f64 {
     f64::from(foreign) / f64::from(total)
 }
 
-/// Above this fraction of non-Latin letters, a turn is written in a script this
-/// household does not speak. A majority, not a trace: one borrowed word must
-/// not condemn a Dutch sentence, and the ratio is bimodal over the archive, so
-/// the exact cut matters little.
+/// Above this fraction of non-Latin letters, a turn is in a script the
+/// household does not speak. A majority, so one borrowed word does not flag a
+/// Dutch sentence; the ratio is bimodal, so the exact cut matters little.
 pub const FOREIGN_SCRIPT_MAX: f64 = 0.5;
 
-/// True if this turn is mostly not in Latin script. A signal, not a verdict: a
-/// visitor really speaking Russian reads the same as the model contradicting
-/// its own `nl` label, and what to do with a flagged turn is the caller's.
+/// True if the turn is mostly not Latin script. A signal, not a verdict: a
+/// visitor speaking Russian looks the same as an invention.
 #[must_use]
 pub fn is_foreign_script(text: &str) -> bool {
     foreign_script_ratio(text) > FOREIGN_SCRIPT_MAX

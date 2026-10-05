@@ -1,10 +1,9 @@
-//! recall's domain, as data (#1911): what a clip is, when things happened, who
-//! a source is, what a person did (the edit log), and the lines a clip shows
-//! (`render`).
+//! recall's domain, as data (#1911): clips, instants, sources, the edit log,
+//! and the lines a clip shows (`render`).
 //!
-//! ⚠ Pure by construction. Nothing here does IO or reads the clock, and the
-//! crate depends on nothing that could (`scripts/check_pure_crate.py`). A
-//! function in this crate is a function of its arguments.
+//! Nothing here does IO or reads the clock, and no dependency can
+//! (`scripts/check_pure_crate.py`): every function is a function of its
+//! arguments.
 
 mod clip;
 mod edit;

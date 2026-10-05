@@ -1,8 +1,8 @@
 use crate::{ClipId, Instant, SourceId, Span};
 
-/// What a person did, the one kind of data in recall nothing can re-derive
-/// (#1911). The log is append-only: an act is never changed, a later act wins
-/// its span, and taking one back is an act of its own ([`Act::Retract`]).
+/// What a person did: the one kind of data nothing can re-derive (#1911). The
+/// log is append-only: a later act wins its span, and taking one back is an act
+/// of its own ([`Act::Retract`]).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Edit {
     pub id: EditId,
@@ -16,7 +16,7 @@ pub struct Edit {
 pub struct EditId(i64);
 
 impl EditId {
-    /// The id the log assigned. Only the store that owns the log calls this.
+    /// For the store that owns the log.
     pub const fn from_stored(id: i64) -> Self {
         Self(id)
     }
@@ -26,13 +26,12 @@ impl EditId {
     }
 }
 
-/// Every kind of thing a person can do to the record. Nothing else is one.
+/// Everything a person can do to the record.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum Act {
-    /// The words said over `span` of `clip`, replacing the model's words over
-    /// `over` (the line the person corrected, which may be wider than where
-    /// they placed their words; it covers `span`). `checked` means the person
-    /// listened and vouches for them, whether or not they changed any.
+    /// The words said over `span`, replacing the model's words over `over`:
+    /// the line the person corrected, which covers `span` and may be wider.
+    /// `checked`: the person listened and vouches for them, changed or not.
     Words {
         clip: ClipId,
         span: Span,
@@ -40,19 +39,19 @@ pub enum Act {
         text: Text,
         checked: bool,
     },
-    /// Who spoke over `span` of `clip`. `enrol` false: do not learn this voice
-    /// from it (a guest, or a clip judged unusable for a voiceprint).
+    /// Who spoke over `span`. `enrol` false: do not learn a voiceprint from it
+    /// (a guest, or unusable audio).
     Speaker {
         clip: ClipId,
         span: Span,
         name: Name,
         enrol: bool,
     },
-    /// Nobody spoke over `span`: whatever the model wrote there was invented.
+    /// Nobody spoke over `span`: the model's words there were invented.
     NoSpeech { clip: ClipId, span: Span },
     /// Someone spoke over `span`, but the words cannot be made out.
     Unintelligible { clip: ClipId, span: Span },
-    /// A whole voice of a session, as diarization labelled it, is this person.
+    /// A diarized voice of a session is this person.
     Voice {
         source: SourceId,
         cluster: String,
@@ -72,7 +71,7 @@ pub enum Act {
 pub struct Text(String);
 
 impl Text {
-    /// `None` for text that is empty once trimmed: blank words are not words.
+    /// `None` for text that is empty once trimmed.
     pub fn new(text: &str) -> Option<Self> {
         let trimmed = text.trim();
         (!trimmed.is_empty()).then(|| Self(trimmed.to_owned()))

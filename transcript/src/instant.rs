@@ -2,10 +2,9 @@ use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 
 /// A moment, in whole microseconds since the Unix epoch, UTC.
 ///
-/// Microseconds because stored instants carry them (word timings, live lines);
-/// an integer because two text spellings of one moment compared unequal. Text
-/// exists only at the edges: [`Instant::parse`] reads every spelling stored
-/// today, and [`Instant::to_utc`] hands chrono to whoever formats.
+/// Microseconds because stored instants carry them (word timings); an integer
+/// because two text spellings of one moment compare unequal. Text exists only
+/// at the edges: [`Instant::parse`] and [`Instant::to_utc`].
 // No derived `Deserialize`: it would build an `Instant` without the range check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct Instant(i64);

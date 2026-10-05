@@ -3,9 +3,8 @@
 //!
 //! Every rule is here once:
 //!
-//! 1. A model segment that is a repetition loop, has no words, or is a phrase
-//!    the model writes over silence where no speech was heard is dropped, and
-//!    the drop says why.
+//! 1. A model segment that is a repetition loop, has no words, or is a silence
+//!    phrase where no speech was heard is dropped, with the reason.
 //! 2. Each remaining word is spoken by the diarized speaker at its midpoint;
 //!    runs shorter than [`MIN_TURN_US`] are folded into a neighbour.
 //! 3. A person's words, "nobody spoke" or "can't make it out" own their span:
@@ -175,7 +174,7 @@ pub struct Rendered {
     pub dropped: Vec<Dropped>,
 }
 
-/// The clip's lines. Pure: the same input always gives the same lines.
+/// The clip's lines, and the model text left out.
 pub fn render(input: &Input<'_>) -> Rendered {
     let acts = active(input.edits, input.clip);
     let mut out = Rendered::default();
@@ -370,8 +369,6 @@ fn person_layer(acts: &[&Edit]) -> Vec<Owned> {
             Act::Unintelligible { span, .. } => (*span, *span, Content::Unintelligible),
             _ => continue,
         };
-        // Replaced when the new act covers its middle: neighbouring lines whose
-        // edges merely touch or overlap a little both stand.
         owned.retain(|o| o.over != over && !over.contains(span_mid(o.over)));
         owned.push(Owned {
             over,
