@@ -1,9 +1,5 @@
-//! Every audiod integration test, as one binary: cargo builds and links one
-//! binary per `tests/*.rs`, so one binary relinks once per change.
-//!
-//! `include_str!` is relative to its source file, so fixture paths here climb
-//! one extra level. A new test file must be added below; cargo does not
-//! auto-discover inside this directory.
+//! Every audiod integration test as one binary, so it links once. A new test
+//! file needs its `mod` here; `include_str!` paths climb one extra level.
 
 mod beat_relay;
 mod capture;

@@ -2,11 +2,10 @@
 //! ffmpeg on ALSA) piped into the ffmpeg segmenter through a metered pump,
 //! watched by the dead-segment watchdog.
 //!
-//! The split keeps capture gap-free: sox does not drop samples, and ffmpeg only
-//! sees a clean continuous stream. sox's one known failure, a `CoreAudio` read
-//! that wedges to digital zeros while the device stays healthy, is covered by
-//! the watchdog: it cycles the producer when closed segments decode to pure
-//! silence (or rotation stalls), so a wedge costs minutes.
+//! sox drops no samples, and ffmpeg sees a continuous stream. sox's one known
+//! failure, a `CoreAudio` read wedged on digital zeros, is caught by the
+//! watchdog, which cycles the producer when closed segments decode to pure
+//! silence or rotation stalls.
 
 use crate::events;
 use crate::meter::{SILENCE_PEAK, StreamMeter};
@@ -22,9 +21,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// How often the watchdog looks, and how many consecutive digital-silence
-/// segments mean the producer's device read has wedged. Two (not one) because
-/// a single segment could straddle the moment a wedge began.
+/// How often the watchdog looks, and how many all-zero segments in a row mean
+/// a wedge (two: one could straddle its start).
 const WATCH_POLL: Duration = Duration::from_secs(30);
 const DEAD_SEGMENTS_TO_CYCLE: u32 = 2;
 /// producer -> segmenter pump chunk (matches the ingest pump's socket chunk).
@@ -35,9 +33,8 @@ const TERM_GRACE: Duration = Duration::from_secs(10);
 /// How often the pipe re-checks the pause while running / while parked.
 const STOP_POLL: Duration = Duration::from_secs(1);
 
-/// Which program opens the audio device. `Sox` is the Mac's path (`CoreAudio`,
-/// sample-perfect); `Alsa` is ffmpeg reading ALSA on the Linux recorder,
-/// rather than teaching sox a second platform.
+/// Which program opens the device: sox on the Mac (`CoreAudio`), ffmpeg on
+/// Linux (ALSA).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Producer {
     Sox,
@@ -63,9 +60,8 @@ pub fn alsa_argv(
     ]
     .map(String::from)
     .to_vec();
-    // ⚠ `-channels` belongs before `-i`; `-ac` after it is not the same thing.
-    // Before `-i` configures the input. Without it the ALSA demuxer opens the
-    // device at two channels, and a mono-only microphone refuses:
+    // `-channels` before `-i` configures the input (`-ac` after it does not):
+    // without it ALSA opens two channels and a mono microphone refuses:
     //
     //     [in#0] cannot set channel count to 2 (Invalid argument)
     argv.splice(argv.len().., ["-channels".to_owned(), channels.to_string()]);
@@ -89,9 +85,8 @@ pub fn alsa_argv(
     argv
 }
 
-/// sox argv for the pinned `CoreAudio` device. An unknown device name makes sox
-/// fail hard (the launchd agent crash-loops visibly), never a silent fallback
-/// to the system default, which a Bluetooth handsfree mic can grab.
+/// sox argv for the pinned `CoreAudio` device. An unknown name fails hard,
+/// rather than falling back to the default a Bluetooth headset can grab.
 pub fn sox_argv(
     device: Option<&str>,
     sample_rate: u32,
@@ -125,9 +120,8 @@ pub fn sox_argv(
     argv
 }
 
-/// True when the segment holds nothing or decodes to pure digital zeros, the
-/// signature of a wedged device read (a live room's noise floor is never
-/// zero). Unreadable is not a verdict: never cycle on doubt.
+/// True when the segment is empty or pure digital zeros: a wedged read (a real
+/// room's floor is never zero). Unreadable is no verdict.
 pub fn segment_is_digital_silence(path: &Path) -> bool {
     match path.metadata() {
         Ok(meta) if meta.len() == 0 => return true,
@@ -146,9 +140,8 @@ pub fn segment_is_digital_silence(path: &Path) -> bool {
         .all(|pair| i32::from(i16::from_le_bytes(*pair)).abs() < SILENCE_PEAK)
 }
 
-/// Floor the cutoff to the second: segment names carry whole seconds, so the
-/// run's own first segment would otherwise miss the bar by microseconds and
-/// liveness would wait a full extra segment.
+/// Floored to the second, as segment names are, or the run's first segment
+/// misses the bar by microseconds.
 fn starts_after(name: &str, cutoff: DateTime<Utc>) -> bool {
     parse_segment_start(name).is_some_and(|start| {
         start >= cutoff - chrono::Duration::nanoseconds(i64::from(cutoff.timestamp_subsec_nanos()))
@@ -168,8 +161,7 @@ fn mark_alive(out_dir: &Path) {
     let _ = std::fs::write(out_dir.join(".alive"), b"");
 }
 
-/// The watchdog loop body, one poll: returns `Some(reason)` when the producer
-/// must be cycled. Split from the thread so the decision is testable.
+/// One watchdog poll: `Some(reason)` when the producer must be cycled.
 struct Watchdog {
     out_dir: PathBuf,
     source_id: String,
@@ -396,18 +388,12 @@ fn wait_grace(child: &mut Child, grace: Duration) {
     }
 }
 
-/// How often a store-and-forward recorder says it is alive.
-///
-/// ⚠ The heartbeat is not the delivery: a recorder delivers nothing both when
-/// paused and when its microphone is dead, and liveness derived from arriving
-/// segments cannot tell those apart. Sixty seconds, the segment length.
+/// How often a store-and-forward recorder says it is alive: delivery alone
+/// cannot tell paused from dead.
 const BEAT_EVERY: Duration = Duration::from_mins(1);
 
-/// What this recorder tells the fleet about itself.
-///
-/// `streaming` is false by construction: on the store-and-forward path audio
-/// reaches the fleet by upload. `mic_ok` is what the last producer start
-/// actually did.
+/// What this recorder tells the fleet. `streaming` is false: audio goes by
+/// upload. `mic_ok` is what the last producer start did.
 pub fn beat_body(source_id: &str, mic_ok: bool) -> serde_json::Value {
     serde_json::json!({
         "device": source_id,
@@ -418,8 +404,7 @@ pub fn beat_body(source_id: &str, mic_ok: bool) -> serde_json::Value {
     })
 }
 
-/// Beat until the process ends, on its own thread so a fleet that stops
-/// answering slows nothing down.
+/// Beat until the process ends, on its own thread.
 fn spawn_beat(source_id: &str, url: &str, mic_ok: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     let source_id = source_id.to_owned();
     let url = url.to_owned();
@@ -452,8 +437,7 @@ pub fn serve_paused_aware(
             Producer::Alsa => "alsa",
         },
     );
-    // Starts true: nothing has failed yet, and `micOk: false` before the first
-    // attempt would cry wolf on every restart.
+    // True until an attempt fails.
     let mic_ok = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     if let Some(url) = beat_url {
         spawn_beat(source_id, url, mic_ok.clone());

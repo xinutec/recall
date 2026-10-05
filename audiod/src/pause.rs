@@ -29,10 +29,8 @@ fn parse_pause_timestamp(text: &str) -> Option<DateTime<Utc>> {
     Some(Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0)?))
 }
 
-/// A pause lasts at most this long, then recording auto-resumes.
-///
-/// A safety net, not a policy: a forgotten pause must not leave the household
-/// unrecorded indefinitely. 24h covers a full day away.
+/// A pause lasts at most this long, so a forgotten one cannot leave the house
+/// unrecorded indefinitely.
 pub const MAX_PAUSE_HOURS: i64 = 24;
 
 /// When a pause starting at `now` must end, clamped to [`MAX_PAUSE_HOURS`].
@@ -43,14 +41,8 @@ pub fn resume_by(now: DateTime<Utc>, minutes: Option<i64>) -> DateTime<Utc> {
     now + span
 }
 
-/// Begin a bounded pause. Returns when it will auto-resume by.
-///
-/// The household's break-glass control: the normal surface is the fleet's UI,
-/// and this still works when Isis cannot be reached. Every recording agent
-/// self-gates on the file, so nothing else has to be told.
-///
-/// Written as an aware RFC 3339 instant, which [`paused_until`] and other
-/// agents read back.
+/// Begin a bounded pause; returns when it ends. The break-glass control for
+/// when Isis cannot be reached: every recording agent gates on the file.
 ///
 /// # Errors
 /// If the file cannot be written, which means the pause did not take.
@@ -67,10 +59,8 @@ pub fn pause(
     Ok(until)
 }
 
-/// End a pause by clearing the file; parked agents resume on their own.
-///
-/// ⚠ Only on a person's explicit command: resuming capture is the household's
-/// decision, never an inference from a stale file. An absent file is success.
+/// End a pause by clearing the file; parked agents resume. Only on a person's
+/// command. An absent file is success.
 ///
 /// # Errors
 /// If the file exists and cannot be removed.

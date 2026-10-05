@@ -1,21 +1,15 @@
-//! Store-and-forward delivery (docs/architecture.md, stage B): walk the
-//! archive for closed segments, PUT each to recalld's ingest plane, verify
-//! the sha-256 receipt against the local bytes, and record what is proven
-//! delivered. Eviction is not here: the Mac's archive stays the master, so
-//! this only ever adds copies.
-//!
-//! Never in the capture path: this runs as its own process, and the scan rule
-//! below keeps it off the segment ffmpeg still has open.
+//! Store-and-forward delivery: PUT each closed segment to recalld, check the
+//! sha-256 receipt against the local bytes, and record what is proven
+//! delivered. It never evicts: the Mac's archive stays the master. Its own
+//! process, off the segment ffmpeg has open.
 
 use audiocore::names;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// How long the lexically-newest segment of a source must sit unmodified
-/// before it is believed closed. ffmpeg touches the open segment on every
-/// write, so "newest and recently modified" is the live file; a newest file
-/// this stale means capture stopped and the ring's last segment is final.
+/// How long a source's newest segment must sit unmodified to count as closed:
+/// ffmpeg touches the open one on every write.
 pub const OPEN_GRACE: Duration = Duration::from_mins(3);
 
 pub struct Config {
@@ -25,8 +19,7 @@ pub struct Config {
     pub base_url: String,
     /// The ingest bearer token; `None` sends no header (an open dev server).
     pub token: Option<String>,
-    /// Upper bound per pass, so a historical backfill proceeds in bounded,
-    /// resumable bites rather than one marathon.
+    /// Per pass, so a backfill goes in resumable bites.
     pub max_per_pass: usize,
     pub open_grace: Duration,
 }
@@ -40,10 +33,8 @@ pub struct PassSummary {
 
 // --- delivery state ------------------------------------------------------------------
 
-/// The uploader's own bookkeeping, beside the archive it mirrors. A row in
-/// `uploads` is a verified receipt (hash equal to our own re-read); a row in
-/// `conflicts` is a 409: the name is taken by different bytes, which retrying
-/// cannot fix and a person must look at.
+/// The uploader's bookkeeping. `uploads`: verified receipts. `conflicts`:
+/// 409s, a name taken by different bytes, for a person to look at.
 fn open_state(root: &Path) -> rusqlite::Result<rusqlite::Connection> {
     let conn = rusqlite::Connection::open(root.join("upload-state.sqlite"))?;
     conn.busy_timeout(Duration::from_secs(5))?;
@@ -79,9 +70,8 @@ struct Candidate {
     path: PathBuf,
 }
 
-/// Everything shippable right now, oldest first. The lexically-newest file of
-/// each source is skipped while its mtime is fresh: ffmpeg may still be
-/// writing it.
+/// Everything shippable now, oldest first, less each source's newest file
+/// while ffmpeg may still be writing it.
 fn scan(root: &Path, grace: Duration) -> std::io::Result<Vec<Candidate>> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(root)? {
@@ -154,8 +144,7 @@ fn deliver(config: &Config, candidate: &Candidate, agent: &ureq::Agent) -> Deliv
         Ok(receipt) => receipt,
         Err(err) => return Delivery::Failed(format!("receipt parse: {err}")),
     };
-    // The receipt must equal our own hash of what we read from disk; a 2xx
-    // proves nothing by itself.
+    // A 2xx alone proves nothing: the receipt must match our own hash.
     if receipt["sha256"] == sha256.as_str() && receipt["bytes"] == bytes.len() {
         Delivery::Verified {
             sha256,
@@ -170,9 +159,8 @@ fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-/// One bounded pass: scan, deliver, record. Individual failures are logged
-/// and left for the next pass; the files are the state, so there is no retry
-/// queue.
+/// One bounded pass: scan, deliver, record. A failure waits for the next pass;
+/// the files are the state.
 pub fn run_pass(config: &Config) -> PassSummary {
     let mut summary = PassSummary::default();
     let conn = match open_state(&config.root) {
@@ -212,8 +200,7 @@ pub fn run_pass(config: &Config) -> PassSummary {
                         &candidate.filename,
                         &candidate.source,
                         &sha256,
-                        // SQLite's integer is i64, and rusqlite refuses a
-                        // u64; a file size fits.
+                        // rusqlite refuses a u64; a file size fits an i64.
                         i64::try_from(bytes).expect("a byte count fits SQLite's i64"),
                         now_rfc3339(),
                     ),
@@ -229,9 +216,8 @@ pub fn run_pass(config: &Config) -> PassSummary {
                 }
             }
             Delivery::Conflict { sha256 } => {
-                // The name is taken by different bytes. Retrying cannot fix it
-                // and overwriting is forbidden: journal it for a person and
-                // stop resending.
+                // Taken by different bytes: journal it for a person, stop
+                // resending.
                 tracing::error!(file = %candidate.filename, "receipt conflict: name held by different bytes");
                 let _ = conn.execute(
                     "INSERT OR IGNORE INTO conflicts (filename, source, sha256, noticed_utc)

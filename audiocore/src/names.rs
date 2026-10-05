@@ -10,13 +10,10 @@
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use std::path::{Path, PathBuf};
 
-/// The closed set of containers a producer may deliver. FLAC is the target
-/// (decision 1); the rest are what capture paths and uploads produce, since the
-/// protocol is container-agnostic.
-///
-/// ⚠ Uploaded sessions are fetched back through `/ingest/v1/blob`, which parses
-/// the name, so a container missing here makes an uploaded clip unreadable.
-/// This list must mirror `recalld::upload::AUDIO_SUFFIXES`.
+/// The containers a producer may deliver. FLAC is the target (decision 1); the
+/// rest come from capture paths and uploads. Must cover
+/// `recalld::upload::AUDIO_SUFFIXES`: an upload is fetched back through
+/// `/ingest/v1/blob`, which parses the name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Extension {
     Flac,
@@ -45,9 +42,8 @@ impl Extension {
         }
     }
 
-    /// Whether a recorder's segment ring writes this container. The rest
-    /// arrive by upload, and a file in one of them under a microphone's
-    /// directory is not the recorder's to ship.
+    /// Whether a recorder's segment ring writes this container; the rest arrive
+    /// by upload.
     pub fn recorded(self) -> bool {
         matches!(self, Self::Flac | Self::Opus | Self::Ogg | Self::Wav)
     }
@@ -75,8 +71,8 @@ pub struct SegmentName {
     pub ext: Extension,
 }
 
-/// Why a name was refused, carried into the 400 body so a recorder's log says
-/// what to fix.
+/// Why a name was refused, in the 400 body so a recorder's log says what to
+/// fix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameError {
     BadSource,
@@ -127,13 +123,11 @@ pub fn parse(source: &str, filename: &str) -> Result<SegmentName, NameError> {
 
 const TS_FORMAT: &str = "%Y%m%dT%H%M%S";
 
-/// The UTC start time embedded in a segment filename (the first
-/// `YYYYMMDDTHHMMSS` token), or `None` for a file that carries none. Looser
-/// than [`parse`] on purpose: the sweeps and the rebase read files outside the
-/// strict grammar (arrival-stamped, derived copies).
+/// The UTC start in a filename (the first `YYYYMMDDTHHMMSS`). Looser than
+/// [`parse`]: the sweeps read files outside the strict grammar.
 pub fn parse_segment_start(filename: &str) -> Option<DateTime<Utc>> {
     for start in 0..filename.len().saturating_sub(14) {
-        // .get: a multibyte filename must not panic the sweep on a boundary
+        // `.get`: a multibyte filename must not panic on a boundary.
         let Some(window) = filename.get(start..start + 15) else {
             continue;
         };
@@ -147,8 +141,7 @@ pub fn parse_segment_start(filename: &str) -> Option<DateTime<Utc>> {
     None
 }
 
-/// The source's segment files (any state: open, closed, stub), sorted by name —
-/// which is chronological, because the name embeds the UTC start time.
+/// The source's segment files (open, closed or stub), by name: chronological.
 pub fn segment_glob(out_dir: &Path, source_id: &str) -> Vec<PathBuf> {
     let prefix = format!("{source_id}-");
     let mut files: Vec<PathBuf> = std::fs::read_dir(out_dir)

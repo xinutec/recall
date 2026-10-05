@@ -15,13 +15,9 @@ const MAX_EPOCH_SKEW_S: f64 = 600.0;
 const TS_FORMAT: &str = "%Y%m%dT%H%M%S";
 
 /// Seconds to shift this connection's segment names: capture minus arrival.
-///
-/// Negative is the physical case (the phone buffered before or while
-/// connecting, so the audio is older than its arrival). A positive value can
-/// only be clock skew; renaming a segment forward could pass ffmpeg's open
-/// segment, which liveness and the dead-segment watchdog identify as the newest
-/// name, so it clamps to 0.0 (arrival-stamping). `None` when there is no epoch,
-/// or it is too far from arrival to trust the phone's clock.
+/// Negative is physical (the phone buffered). Positive can only be skew, and
+/// renaming forward could pass ffmpeg's open segment, so it clamps to 0.0.
+/// `None` without an epoch, or one too far off to trust.
 pub fn connection_offset(epoch: Option<f64>, first_byte_wall: f64) -> Option<f64> {
     let offset = epoch? - first_byte_wall;
     if offset.abs() > MAX_EPOCH_SKEW_S {
@@ -34,15 +30,14 @@ pub fn connection_offset(epoch: Option<f64>, first_byte_wall: f64) -> Option<f64
     Some(offset.min(0.0))
 }
 
-/// Shift every closed segment of this connection by `offset_s`, renaming
-/// arrival time to capture time. The newest file is ffmpeg's open segment and
-/// is untouched unless `include_newest`; a file stamped before `since` (the
-/// connection's start) belongs to an earlier connection and is left alone.
-/// `done` carries every name this connection has handled, including the names
-/// it created, or the next sweep would shift a renamed file again. A segment
-/// whose corrected name is taken keeps its arrival name: completeness outranks
-/// precision (docs/architecture.md, requirement 1). Returns the (old, new)
-/// renames performed.
+/// Rename this connection's closed segments from arrival to capture time,
+/// returning the renames.
+///
+/// - The newest file is ffmpeg's open segment: untouched unless
+///   `include_newest`.
+/// - A file stamped before `since` is an earlier connection's.
+/// - `done` holds every name handled, created ones too, so none shifts twice.
+/// - A segment whose new name is taken keeps its arrival name.
 pub fn rebase_segment_names<S: BuildHasher>(
     out_dir: &Path,
     source_id: &str,

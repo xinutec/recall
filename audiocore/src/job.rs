@@ -1,6 +1,5 @@
-//! The queue's job kinds, shared by recalld (which derives and leases them) and
-//! the runner (which asks for and does them). One enum, so the two cannot spell
-//! a kind differently: a misspelt kind leased nothing and failed nowhere.
+//! The queue's job kinds, one enum for recalld and the runner: a misspelt kind
+//! once leased nothing and failed nowhere.
 
 use std::fmt;
 use std::str::FromStr;

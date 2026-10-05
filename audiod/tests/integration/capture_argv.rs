@@ -12,9 +12,8 @@ fn before_input(argv: &[String]) -> Vec<String> {
 
 #[test]
 fn the_alsa_input_is_opened_with_the_channel_count_we_want() {
-    // `-ac` after `-i` only downmixes what arrived. ffmpeg's ALSA demuxer asks
-    // the device for two channels unless `-channels` precedes `-i`, and a
-    // mono-only microphone refuses with "cannot set channel count to 2".
+    // Without `-channels` before `-i`, ALSA asks for two channels and a mono
+    // microphone refuses.
     let argv = alsa_argv(Some("hw:CARD=Microphone,DEV=0"), 48_000, 1, None);
     let head = before_input(&argv);
     let at = head
@@ -58,9 +57,7 @@ use audiod::capture_run::beat_body;
 
 #[test]
 fn a_store_and_forward_recorder_beats_that_it_is_not_streaming() {
-    // Liveness cannot be derived from segments arriving: a recorder delivers
-    // nothing both when paused and when its microphone is dead, and those two
-    // must not look alike. So it beats on its own.
+    // Delivery cannot tell paused from dead, so the recorder beats.
     let beat = beat_body("geb", true);
     assert_eq!(beat["device"], "geb");
     assert_eq!(beat["app"], "linux");
@@ -77,8 +74,7 @@ fn a_store_and_forward_recorder_beats_that_it_is_not_streaming() {
 
 #[test]
 fn a_producer_that_died_beats_mic_ok_false() {
-    // A device that will not open is the fact the beat exists to report;
-    // delivery alone says nothing when capture crash-loops.
+    // A device that will not open is what the beat reports.
     let beat = beat_body("geb", false);
     assert_eq!(beat["micOk"], false);
 }

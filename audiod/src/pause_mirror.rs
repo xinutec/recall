@@ -1,23 +1,15 @@
-//! Mirror the household pause onto a recorder, in one of two modes.
+//! Mirror the household pause onto a recorder.
 //!
-//! **`poll`** (the Linux recorder) reads Isis's login-free `/api/capture` and
-//! maintains the `capture_paused_until` file every capture loop self-gates on.
-//! One way: that recorder has nothing the fleet wants.
+//! - `poll` (the Linux recorder) reads `/api/capture` and maintains the
+//!   `capture_paused_until` file every capture loop gates on.
+//! - `exchange` (the Mac) reports what it applied, with each source's `.alive`
+//!   freshness, and long-polls for the intent, in one round trip.
 //!
-//! **`exchange`** is the Mac's: one round trip that both reports and
-//! long-polls, pushing what the Mac actually applied and pulling the fleet's
-//! intent. The report is how the fleet confirms a pause took effect; it also
-//! carries each source's `.alive` freshness, which only the Mac can see.
-//!
-//! ⚠ Edge-triggered: intent is applied only when it changes, tracked in a
-//! local marker file. Applying an unchanged "running" every cycle would
-//! silently clobber a pause pressed on the Mac's own LAN UI.
-//!
-//! The mirror only writes a pause the control plane explicitly stated (a
-//! bounded `pausedUntil`), and an unreachable control plane leaves the last
-//! state standing: inventing a pause on error would silence a recorder over a
-//! wifi blip, and completeness outranks (docs/architecture.md, requirement 1).
-//! The pause file's bounded timestamp is the backstop: a stale pause expires.
+//! Edge-triggered: intent is applied only when it changes (a local marker), or
+//! an unchanged "running" would clobber a pause pressed on the Mac's own UI.
+//! An unreachable fleet leaves the last state standing: inventing a pause on
+//! error would silence a recorder over a wifi blip. A stale pause expires by
+//! its bounded timestamp.
 
 use crate::pause::{PAUSE_FILE, paused_until};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -79,8 +71,7 @@ fn apply(root: &Path, desired: &Desired) {
     }
 }
 
-/// Poll forever. Never exits: a dead mirror would freeze the last state, so
-/// systemd owns the restart.
+/// Poll forever; systemd owns the restart.
 pub fn run(root: &Path, url: &str) -> ! {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(5))
@@ -101,10 +92,7 @@ pub fn run(root: &Path, url: &str) -> ! {
 /// no-op.
 pub const MARKER_FILE: &str = "capture_intent_mirrored";
 
-/// What a pass should do, decided from the marker and the fleet's answer alone.
-///
-/// Split out so the rule that can clobber a household's pause is testable
-/// without a network or a clock.
+/// What a pass should do, from the marker and the fleet's answer alone.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Decision {
     /// The fleet's intent is what we last applied. Leave the local file alone.
@@ -113,10 +101,8 @@ pub enum Decision {
     Apply { desired: Desired, record: String },
 }
 
-/// ⚠ An unparseable or elapsed intent resolves to Running and is still
-/// recorded. Running, because an expired bounded pause is not a pause (as in
-/// [`paused_until`]). Recorded, so a poisoned value is not retried every tick
-/// and a real pause pressed later still gets applied.
+/// An unparseable or elapsed intent resolves to Running (an expired pause is
+/// not a pause), and is recorded, so it is not retried every tick.
 #[must_use]
 pub fn decide(applied: &str, intent: Option<&str>, now: DateTime<Utc>) -> Decision {
     let record = intent.unwrap_or("").to_owned();
@@ -137,12 +123,8 @@ pub fn decide(applied: &str, intent: Option<&str>, now: DateTime<Utc>) -> Decisi
     Decision::Apply { desired, record }
 }
 
-/// Each source's last-proved-recording time, from the `.alive` markers.
-///
-/// The marker is empty; its mtime is the measurement. The ingest pump refreshes
-/// a phone's while real signal streams; the capture watchdog refreshes the
-/// mic's while its segments decode to real audio. The fleet cannot see these
-/// files, so every pass ships them. An unreadable marker is skipped.
+/// Each source's last proved recording time: its `.alive` marker's mtime. The
+/// fleet cannot see these files, so every pass ships them.
 #[must_use]
 pub fn source_liveness(root: &Path) -> serde_json::Map<String, serde_json::Value> {
     let mut out = serde_json::Map::new();
@@ -171,9 +153,8 @@ pub fn source_liveness(root: &Path) -> serde_json::Map<String, serde_json::Value
 
 /// One exchange: report what this Mac applied, receive the fleet's intent.
 ///
-/// `wait` asks the fleet to hold the reply while its intent still equals
-/// `applied`, so a press on any UI comes back in ~RTT. A fleet that answers at
-/// once is paced by the loop rather than hot-spun.
+/// `wait` asks the fleet to hold the reply while its intent equals `applied`,
+/// so a press anywhere comes back in about a round trip.
 ///
 /// # Errors
 /// Transport or protocol failure; the caller keeps the last state on either.
@@ -194,8 +175,7 @@ pub fn exchange(
         "wait": wait,
         "knownIntent": if applied.is_empty() { None } else { Some(applied) },
     });
-    // A string rather than `send_json`, which needs ureq's `json` feature;
-    // audiod builds ureq with `default-features = false`.
+    // ureq is built without `json`.
     let text = agent
         .post(&format!("{url}/sync/capture"))
         .set("authorization", &format!("Bearer {token}"))
@@ -217,15 +197,12 @@ fn read_marker(root: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Mirror the fleet's intent forever, reporting each pass. Never exits.
-///
-/// A transient failure is logged and the loop continues; the pause file's
-/// bounded timestamp is the backstop.
+/// Mirror the fleet's intent forever, reporting each pass. A failure is logged
+/// and the loop goes on.
 pub fn run_exchange(root: &Path, url: &str, token: &str, interval: Duration) -> ! {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(5))
-        // Longer than `interval`: the fleet holds this request on purpose, and
-        // the read timeout must outlast the hold.
+        // Longer than the fleet's hold.
         .timeout(interval + Duration::from_secs(20))
         .build();
     loop {
@@ -244,7 +221,7 @@ pub fn run_exchange(root: &Path, url: &str, token: &str, interval: Duration) -> 
                 Decision::Unchanged => false,
                 Decision::Apply { desired, record } => {
                     apply(root, &desired);
-                    // ⚠ Recorded even when the intent was unparseable — see `decide`.
+                    // Recorded even when unparseable; see `decide`.
                     if let Err(err) = std::fs::write(root.join(MARKER_FILE), &record) {
                         tracing::warn!(%err, "pause-mirror: cannot record applied intent");
                     }
@@ -264,12 +241,10 @@ pub fn run_exchange(root: &Path, url: &str, token: &str, interval: Duration) -> 
                 false
             }
         };
-        // A pass that applied a change loops at once, so the new state is
-        // reported immediately (settling the fleet's "Pausing…"). An unchanged
-        // pass sleeps only the remainder, which a long poll has already spent.
+        // A change is reported at once (settling "Pausing…"); otherwise sleep
+        // what the long poll has not already spent.
         if !changed {
-            // `saturating_sub`: a pass that outran the interval (a long hang, a
-            // slow fleet) sleeps zero rather than underflowing.
+            // A pass that outran the interval sleeps zero.
             std::thread::sleep(interval.saturating_sub(started.elapsed()));
         }
     }

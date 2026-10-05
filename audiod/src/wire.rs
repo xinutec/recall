@@ -18,10 +18,9 @@ const MAX_HANDSHAKE_BYTES: usize = 8192;
 
 /// A device's opening announcement: who it is + its PCM format.
 ///
-/// `epoch` (optional) is the phone's wall clock, in unix seconds, at the first
-/// PCM byte it streams, which lets the server shift arrival-stamped segment
-/// names back to capture time. `None` when absent or unreadable: a bad epoch
-/// degrades to arrival-stamping, never to a dropped stream.
+/// `epoch` is the phone's clock at its first PCM byte, in unix seconds, to
+/// name segments by capture time. A bad one falls back to arrival time, never
+/// a dropped stream.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handshake {
     pub source_id: String,

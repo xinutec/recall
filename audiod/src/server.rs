@@ -22,9 +22,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// A mic stream is continuous (48 kHz * 2 bytes flows even in a silent room),
-/// so no data for this long means the peer is gone; TCP keepalive never probes
-/// a connection the kernel believes is fine. 15 s tolerates a brief Wi-Fi stall.
+/// A mic stream flows even in a silent room, so no data this long means the
+/// peer is gone (keepalive never probes a healthy-looking connection).
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_CHUNK_BYTES: usize = 65536;
 /// How often the accept loop re-checks the global pause.
@@ -46,9 +45,8 @@ fn mark_alive(source_dir: &Path) {
     let _ = std::fs::write(source_dir.join(".alive"), b"");
 }
 
-/// The segment file this connection last finalised: the newest one touched
-/// since the connection opened. `None` when the connection wrote no file at
-/// all: naming an older file would blame the wrong window.
+/// The newest segment touched since the connection opened; `None` if it wrote
+/// none.
 fn flushed_segment(out_dir: &Path, source_id: &str, since: SystemTime) -> Option<(String, u64)> {
     segment_glob(out_dir, source_id)
         .into_iter()
@@ -65,9 +63,8 @@ fn flushed_segment(out_dir: &Path, source_id: &str, since: SystemTime) -> Option
         .map(|(_, name, size)| (name, size))
 }
 
-/// The socket -> segmenter pump, and what it learned on the way. A struct, so
-/// the caller can file the disconnect record from it even when the pump exits
-/// early.
+/// The socket -> segmenter pump, and what it learned, for the disconnect
+/// record.
 struct Pump<'a> {
     stream: &'a TcpStream,
     stdin: Option<std::process::ChildStdin>,
@@ -117,9 +114,7 @@ impl Pump<'_> {
                     return;
                 }
                 Err(err) => {
-                    // A pause closes the active socket, and the errno on the
-                    // closed fd is how the reader learns of it: finalise like
-                    // any other disconnect.
+                    // A pause closes the socket: finalise like any disconnect.
                     self.ended = format!("closed locally ({err})");
                     return;
                 }
@@ -139,8 +134,7 @@ impl Pump<'_> {
             }
             self.maybe_rebase(false);
             let heard = self.meter.first_audible_byte.is_some();
-            // Liveness: refresh the marker only when the chunk carries real
-            // signal. A connected phone streaming digital silence reads idle.
+            // Only real signal refreshes the marker.
             if self.meter.feed(data) >= SILENCE_PEAK {
                 mark_alive(self.out_dir);
             }
@@ -154,9 +148,8 @@ impl Pump<'_> {
         }
     }
 
-    /// Rename this connection's closed segments to capture time. Rides the
-    /// pump loop rather than a thread. `finished` runs once after the segmenter
-    /// has exited, when every segment is closed, so the last one is renamed too.
+    /// Rename this connection's closed segments to capture time, from the pump
+    /// loop. `finished`: after the segmenter exited, so the last one too.
     fn maybe_rebase(&mut self, finished: bool) {
         let (Some(offset_s), Some(first_byte)) = (self.offset_s, self.first_byte) else {
             return;
@@ -166,9 +159,7 @@ impl Pump<'_> {
             return;
         }
         self.next_sweep = Some(now + REBASE_SWEEP);
-        // 2 s slack: ffmpeg stamps the first segment by strftime (whole
-        // seconds), which can floor to just before the measured first-byte
-        // instant. The prior-connection exclusion only needs coarse precision.
+        // 2 s slack: ffmpeg's first segment name floors to the second.
         let since = DateTime::<Utc>::from_timestamp_micros(((first_byte - 2.0) * 1e6) as i64)
             .unwrap_or_default();
         rebase_segment_names(
@@ -182,14 +173,9 @@ impl Pump<'_> {
     }
 }
 
-/// Serve one device connection: read its handshake, register it, then pump its
-/// raw-PCM stream into a segmenter child. The kernel's TCP receive buffer
-/// absorbs any pause in the pump, so a momentary stall can't lose audio.
-/// Returns when the device disconnects.
-///
-/// Every connection leaves evidence in the capture log: an `ingest_connect` on
-/// open, and an `ingest_disconnect` on close carrying what the device actually
-/// sent, which tells a stream of digital silence from no stream at all.
+/// Serve one device connection until it disconnects: handshake, then pump its
+/// PCM into a segmenter (the TCP buffer absorbs a stall). The capture log gets
+/// `ingest_connect`, and `ingest_disconnect` with what the device sent.
 pub fn handle_connection(
     stream: &TcpStream,
     root: &Path,
@@ -272,9 +258,8 @@ fn serve_stream(
     drop(pump.stdin.take()); // EOF -> the segmenter finalises the current segment
     let _ = child.wait();
     let flushed = flushed_segment(&out_dir, source_id, connected);
-    // Every segment is closed now: give the last one its capture-time name
-    // too. After flushed_segment, so the disconnect record keeps the arrival
-    // name.
+    // Rename the last segment too, after the disconnect record took its
+    // arrival name.
     pump.maybe_rebase(true);
     let ended = std::mem::take(&mut pump.ended);
     drop(pump); // releases the meter borrow for the stats below
@@ -314,8 +299,7 @@ struct ConnHandle {
 /// Accept device connections on one shared port; each announces itself in a
 /// handshake, then gets its own segmenter.
 ///
-/// Honours the global capture pause: while paused, the listener is closed (so
-/// phones are refused and back off) and any active stream is dropped.
+/// While paused, the listener is closed and any active stream dropped.
 pub fn serve(root: &Path, port: u16, config: &CaptureConfig) -> ! {
     let conns: Arc<Mutex<HashMap<u64, ConnHandle>>> = Arc::new(Mutex::new(HashMap::new()));
     let mut listener: Option<TcpListener> = None;

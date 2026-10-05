@@ -42,10 +42,8 @@ fn instant_ser<S: serde::Serializer>(at: &DateTime<Utc>, s: S) -> Result<S::Ok, 
     s.serialize_str(&crate::instant::python_isoformat_utc(*at))
 }
 
-/// Append one event.
-///
-/// ⚠ One `write_all` of the whole line on a file opened for append: several
-/// agents share this log, and a single short append-mode write lands whole.
+/// Append one event, as one `write_all` of the whole line: several agents
+/// share the log, and a short append-mode write lands whole.
 ///
 /// # Errors
 /// If the file cannot be opened or written.
@@ -59,8 +57,7 @@ pub fn append(root: &Path, event: &Event) -> std::io::Result<()> {
         .write_all(line.as_bytes())
 }
 
-/// Every event in the log, in the order written. An absent log is an empty
-/// one: a machine that has recorded nothing yet has no events.
+/// Every event in the log, in order; an absent log is empty.
 ///
 /// # Errors
 /// If the file exists and cannot be read.

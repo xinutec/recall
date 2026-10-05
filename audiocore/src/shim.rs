@@ -26,11 +26,8 @@ pub struct Stored<T> {
 }
 
 impl<T: for<'de> Deserialize<'de>> Stored<T> {
-    /// Read a stored job result.
-    ///
     /// # Errors
-    /// When the text is not this shape: a result from a shim this code does
-    /// not understand.
+    /// When the text is not this shape.
     pub fn parse(stored: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(stored)
     }
@@ -93,10 +90,8 @@ pub mod asr {
         pub segments: Vec<Segment>,
     }
 
-    /// One transcribed span.
-    ///
-    /// ⚠ `start`/`end` are optional because results were stored without them;
-    /// a reader that needs them says what it does when they are missing.
+    /// One transcribed span. `start`/`end` are optional: older results lack
+    /// them.
     #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
     pub struct Segment {
         pub start: Option<f64>,

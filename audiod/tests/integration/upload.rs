@@ -1,8 +1,6 @@
-//! The delivery half of the recorder contract, against a scripted stub that
-//! speaks recalld's receipt shape: only closed segments ship, receipts are
-//! checked by re-hash and not by status code, verified work is never resent,
-//! and a conflict is journaled for a person instead of retried forever. The
-//! real pair is tested in `upload_real_server.rs`.
+//! Delivery against a scripted stub: only closed segments ship, receipts are
+//! checked by hash, verified work is not resent, and a conflict is journaled.
+//! The real pair is `upload_real_server.rs`.
 
 use audiod::upload::{Config, run_pass};
 use sha2::{Digest, Sha256};

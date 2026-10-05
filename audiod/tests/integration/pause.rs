@@ -41,8 +41,7 @@ fn garbage_means_recording_not_a_crash() {
 
 #[test]
 fn a_pause_is_written_in_the_spelling_every_reader_already_parses() {
-    // Other machines' agents read this file, and a recorder that cannot parse
-    // it records, so a pause written here must round-trip through `paused_until`.
+    // An unparseable pause file means recording: it must round-trip.
     let dir = tempfile::tempdir().expect("tmp");
     let now: DateTime<Utc> = "2026-09-17T14:00:00+00:00".parse().expect("t");
 
@@ -56,8 +55,7 @@ fn a_pause_is_written_in_the_spelling_every_reader_already_parses() {
 
 #[test]
 fn a_pause_is_capped_so_a_forgotten_one_cannot_silence_the_house_for_ever() {
-    // The cap is the safety net: 24 h covers a day away, then recording resumes
-    // by itself instead of staying off because somebody forgot.
+    // Capped at 24 h.
     let now: DateTime<Utc> = "2026-09-17T14:00:00+00:00".parse().expect("t");
 
     let capped = audiod::pause::resume_by(now, Some(60 * 24 * 7));
@@ -66,15 +64,13 @@ fn a_pause_is_capped_so_a_forgotten_one_cannot_silence_the_house_for_ever() {
     assert_eq!(capped, default, "a week must clamp to the cap");
     let cap: DateTime<Utc> = "2026-09-18T14:00:00+00:00".parse().expect("t");
     assert_eq!(capped, cap);
-    // A negative span must not put the resume time in the past, which would
-    // read as not paused and record through the request.
+    // A negative span does not put the resume time in the past.
     assert_eq!(audiod::pause::resume_by(now, Some(-5)), now);
 }
 
 #[test]
 fn resuming_is_the_end_state_not_the_write_so_no_pause_is_success() {
-    // The pause is the user's control, never resumed on their behalf. Resume is
-    // idempotent: an already-resumed recorder must not report a failure.
+    // Resume is idempotent.
     let dir = tempfile::tempdir().expect("tmp");
     audiod::pause::resume(dir.path()).expect("no file is already resumed");
 

@@ -1,8 +1,7 @@
 use audiod::segmenter::{CaptureConfig, Codec, build_segment_argv, segment_output_pattern};
 use std::path::PathBuf;
 
-/// The default codec is a retention decision: a source that records lossy by
-/// default has lost the phase information for good.
+/// The default codec is a retention decision: lossy loses phase for good.
 #[test]
 fn the_default_is_lossless_because_a_wrong_default_cannot_be_taken_back() {
     let config = CaptureConfig::default();
@@ -12,8 +11,8 @@ fn the_default_is_lossless_because_a_wrong_default_cannot_be_taken_back() {
     assert_eq!(config.codec.container_ext(), "flac");
 }
 
-/// Each codec owns its bitrate so the pair cannot disagree: ffmpeg accepts and
-/// ignores `-b:a 32k` next to `-c:a flac`, so a mismatch looks configured.
+/// Each codec owns its bitrate: ffmpeg ignores `-b:a 32k` beside `-c:a flac`
+/// silently.
 #[test]
 fn a_lossless_codec_asks_for_no_bitrate_and_a_lossy_one_does() {
     assert_eq!(Codec::Flac.default_bitrate(), None);
@@ -80,9 +79,8 @@ fn the_pattern_places_segments_under_the_source_directory() {
     assert_eq!(pattern, "/data/pixel9/pixel9-%Y%m%dT%H%M%S.opus");
 }
 
-/// Opus at 32 kbps is transparent to the ear but destroys phase, so two Opus
-/// streams of one room cannot be summed coherently. Lossless is the
-/// prerequisite for combining microphones.
+/// Opus destroys phase: lossless is the prerequisite for combining
+/// microphones.
 #[test]
 fn a_lossless_capture_writes_flac_and_asks_for_no_bitrate() {
     let config = CaptureConfig {
@@ -119,9 +117,8 @@ fn the_container_extension_follows_the_codec() {
     );
 }
 
-/// The live tap's contract. `recall-live` reads this socket instead of opening
-/// the microphone, because two `CoreAudio` clients on one device starve each
-/// other, so these argv positions are the interface between recorder and live feed.
+/// The live tap: `recall-live` reads this socket, since two `CoreAudio` clients
+/// on one device starve each other.
 #[test]
 fn the_live_tap_is_the_second_output_at_the_format_live_reads() {
     let argv = build_segment_argv(

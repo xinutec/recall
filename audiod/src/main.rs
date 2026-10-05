@@ -227,8 +227,7 @@ fn main() -> ExitCode {
             url.as_deref(),
         ),
         Mode::PauseMirror { root, url } => audiod::pause_mirror::run(&root.path, &url),
-        // The Mac's mirror: reports what it applied, then long-polls for
-        // intent. The report is how the fleet knows a pause took hold.
+        // Reports what it applied, then long-polls for intent.
         Mode::CaptureMirror {
             root,
             url,
@@ -241,8 +240,8 @@ fn main() -> ExitCode {
             token_file,
             max,
         } => run_upload(root.path, url, token_file, max),
-        // The household's break-glass control. Here rather than in
-        // `recall-cli`, which would need the network the emergency is about.
+        // Break-glass, here rather than in `recall-cli`, which needs the
+        // network.
         Mode::Pause { root, minutes } => {
             match audiod::pause::pause(&root.path, Utc::now(), minutes) {
                 Ok(until) => {
@@ -268,11 +267,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// The LAN heartbeat fallback: accept a beat, forward it to the fleet, forever.
-/// Not gated on the pause, unlike `ingest`: a pause is exactly when the
-/// heartbeat is the only signal there is.
-///
-/// It takes no `--root`: the relay stores nothing.
+/// The LAN heartbeat fallback. Not gated on the pause, when the heartbeat is
+/// the only signal; stores nothing, so no `--root`.
 fn run_beat_relay(url: &str, port: Option<u16>) -> ExitCode {
     let port = port.unwrap_or(audiod::beat_relay::DEFAULT_RELAY_PORT);
     let err = audiod::beat_relay::serve(port, url);
@@ -280,9 +276,7 @@ fn run_beat_relay(url: &str, port: Option<u16>) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// The Mac's capture mirror: report what was applied, long-poll for intent.
-/// The token is the sync plane's, not the ingest one: `/sync/capture` is a
-/// control-plane exchange.
+/// The Mac's capture mirror, with the sync token (`/sync/capture`).
 fn run_capture_mirror(
     root: &std::path::Path,
     url: &str,
@@ -310,8 +304,8 @@ fn run_capture_mirror(
     audiod::pause_mirror::run_exchange(root, url, &token, interval)
 }
 
-/// The upload arm: resolve the token (file or env, never argv, which `ps`
-/// shows) and run one bounded pass.
+/// One bounded upload pass. The token comes from a file or env, never argv,
+/// which `ps` shows.
 fn run_upload(root: PathBuf, url: String, token_file: Option<PathBuf>, max: usize) -> ExitCode {
     let token = match token_file {
         None => std::env::var("RECALL_INGEST_TOKEN")

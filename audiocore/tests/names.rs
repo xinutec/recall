@@ -1,5 +1,5 @@
-//! The name grammar is the timing contract; every refusal here is a recorder
-//! bug caught at the door instead of a mis-stamped row downstream.
+//! The name grammar is the timing contract: a refusal here is a recorder bug
+//! caught at the door, not a mis-stamped row downstream.
 
 use audiocore::names::{Extension, NameError, parse, valid_source};
 
@@ -63,9 +63,8 @@ fn unknown_extensions_are_refused() {
 
 #[test]
 fn an_uploaded_recordings_container_is_a_deliverable_one() {
-    // An uploaded session is fetched back through `/ingest/v1/blob`, which
-    // parses the name, so a voice memo's container must be in this grammar or
-    // the runner cannot read the file it was asked to transcribe.
+    // An upload is fetched back through `/ingest/v1/blob`, which parses the
+    // name, so a voice memo's container must be in the grammar.
     for ext in ["mp3", "m4a", "mp4", "aac", "webm"] {
         let name = parse(
             "meeting-20260907-0905",

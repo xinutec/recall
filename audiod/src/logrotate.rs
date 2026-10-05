@@ -1,13 +1,9 @@
 //! Bound the launchd agents' log files.
 //!
-//! launchd opens the stdio paths before any code runs and the agents hold them
-//! with `O_APPEND`, so a log cannot be renamed out from under a running agent.
-//! This does the classic copytruncate: keep the last `keep_bytes` of an oversized
-//! log in a `.1` sibling, then truncate the original to zero. The writer carries
-//! on appending from offset 0 with no reopen.
-//!
-//! The trade-off is copytruncate's usual one: lines written during the copy are
-//! lost, an acceptable price for append-only agent logs.
+//! launchd holds the agents' logs open with `O_APPEND`, so they cannot be
+//! renamed. Copytruncate instead: keep the tail in a `.1` sibling and truncate
+//! the original; the writer carries on at offset 0. Lines written during the
+//! copy are lost.
 
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -28,8 +24,7 @@ pub struct Pass {
 /// Rotate every `*.log` in `dir` that exceeds `cap`.
 ///
 /// # Errors
-/// If the directory cannot be read. A single unreadable file is skipped rather
-/// than failing the pass: one bad log must not stop the others being bounded.
+/// If the directory cannot be read; an unreadable file is skipped.
 pub fn run(dir: &Path, cap: u64) -> std::io::Result<Pass> {
     let mut pass = Pass::default();
     for entry in fs::read_dir(dir)? {
@@ -64,8 +59,7 @@ fn rotate(path: &Path, cap: u64) -> std::io::Result<()> {
     let mut kept = fs::File::create(path.with_extension("log.1"))?;
     kept.write_all(&tail[from..])?;
     kept.sync_all()?;
-    // ⚠ set_len, never a recreate: the agent holds this inode open, and a new
-    // file would leave it writing to one nothing can read.
+    // `set_len`, not a recreate: the agent holds this inode open.
     file.set_len(0)?;
     Ok(())
 }

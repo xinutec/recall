@@ -22,9 +22,8 @@ pub fn decode_s16(path: &Path, rate: u32) -> Option<Vec<u8>> {
 pub struct Window {
     /// s16le mono at the requested rate, zero-filled where nothing was recorded.
     pub pcm: Vec<u8>,
-    /// Fraction a stored clip actually covered, 0.0..=1.0. The zero-fill is
-    /// indistinguishable from silence, so only this separates "the room was
-    /// quiet" from "nothing was recorded".
+    /// Fraction a stored clip covered, 0.0..=1.0: the only way to tell a quiet
+    /// room from nothing recorded.
     pub coverage: f32,
 }
 
@@ -119,9 +118,8 @@ fn union_len(spans: &mut [(usize, usize)]) -> usize {
     total
 }
 
-/// Decode to s16le mono at the file's native rate — the dead-segment
-/// watchdog's input, where forcing a rate would resample and dither the exact
-/// zeros it is looking for.
+/// Decode to s16le mono at the file's native rate: the dead-segment watchdog
+/// looks for exact zeros, which resampling would dither.
 pub fn decode_native_s16(path: &Path) -> Option<Vec<u8>> {
     let out = std::process::Command::new("ffmpeg")
         .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-i"])
@@ -132,11 +130,8 @@ pub fn decode_native_s16(path: &Path) -> Option<Vec<u8>> {
     out.status.success().then_some(out.stdout)
 }
 
-/// A segment's native sample rate and channel count, from the stream header.
-///
-/// ⚠ The header of a live segment carries no duration (`ffprobe` returns an
-/// empty `format=duration`). A caller that needs length has to decode with
-/// [`decode_s16`] and divide the byte count by the rate it asked for.
+/// A segment's native sample rate and channel count. A live segment's header
+/// has no duration: decode with [`decode_s16`] and count bytes.
 #[must_use]
 pub fn stream_shape(path: &Path) -> Option<(i64, i64)> {
     let out = std::process::Command::new("ffprobe")

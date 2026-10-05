@@ -8,7 +8,7 @@
 /// and how confidently the audio says so.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Anchor {
-    /// Seconds to ADD to the source's nominal time to land on the reference's
+    /// Seconds to add to the source's nominal time to land on the reference's
     /// timeline. Negative: the source's timestamps run late.
     pub offset_s: f64,
     /// Normalised correlation at the peak, in [-1, 1]. Below ~0.3 the two
@@ -16,8 +16,7 @@ pub struct Anchor {
     pub peak_r: f64,
 }
 
-/// Pearson correlation of two equal-length slices; 0.0 when either side is
-/// flat (a silent window correlates with nothing, and must not divide by it).
+/// Pearson correlation of two equal-length slices; 0.0 when either is flat.
 fn pearson(a: &[f32], b: &[f32]) -> f64 {
     let n = a.len() as f64;
     let (ma, mb) = (
@@ -37,12 +36,10 @@ fn pearson(a: &[f32], b: &[f32]) -> f64 {
     cov / (va * vb).sqrt()
 }
 
-/// Slide `source` against `reference` over lags of ±`max_lag` buckets and
-/// return the best-correlating lag as an [`Anchor`], with `bucket_s` giving
-/// the time each bucket spans. Both slices share one bucket clock (position i
-/// = the same nominal wall-time in each). `None` when the overlap at every
-/// lag is shorter than `min_overlap` buckets: too little shared audio gives
-/// noise, not an offset.
+/// Slide `source` against `reference` over lags of ±`max_lag` buckets (both
+/// on one bucket clock, `bucket_s` each) and return the best lag. `None` when
+/// every overlap is under `min_overlap` buckets: that gives noise, not an
+/// offset.
 pub fn best_lag(
     reference: &[f32],
     source: &[f32],

@@ -1,10 +1,7 @@
-//! The beat relay's filter, checked against a frozen corpus of verdicts from
-//! the implementation it replaced. The corpus cannot be regenerated. It pins
-//! edge cases hand-written examples miss: which keys survive the allowlist, a
-//! device name of exactly the limit, a non-object JSON value.
-//!
-//! This is the boundary between an unauthenticated LAN caller and the fleet's
-//! store, hence a corpus rather than a handful of cases.
+//! The beat relay's filter, the boundary between an unauthenticated LAN caller
+//! and the fleet, against a frozen corpus of verdicts from the Python it
+//! replaced (not regenerable): which keys survive, a name at the limit, a
+//! non-object value.
 
 use audiod::beat_relay::{Head, read_head, relayed};
 use serde::Deserialize;
@@ -62,8 +59,7 @@ fn an_unknown_key_cannot_reach_the_fleet_by_being_added_to_the_app() {
 
 #[test]
 fn the_request_head_is_bounded_against_a_caller_that_never_stops() {
-    // An unauthenticated caller can send headers forever; reading until a
-    // blank line alone would accumulate them without bound.
+    // Headers sent forever are cut off.
     let endless = "POST /api/devices/heartbeat HTTP/1.1\r\n".to_owned()
         + &"X-Pad: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n".repeat(1000);
     let mut reader = std::io::BufReader::new(endless.as_bytes());

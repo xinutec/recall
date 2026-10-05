@@ -1,27 +1,22 @@
 //! LAN fallback for the mic heartbeat.
 //!
 //! Audio goes phone -> Mac over the LAN, but the beat goes phone -> Isis over
-//! the VPN, so a phone at home with its tunnel off would record correctly and
-//! still read `silent`, then `dead`. This relay lets the beat take the LAN too.
+//! the VPN: a phone at home with its tunnel off would read dead. This relay
+//! lets the beat take the LAN too.
 //!
-//! ⚠ Not the ingest port, and not gated on the pause: `server::serve` closes
-//! its listener while capture is paused, which is exactly when the heartbeat is
-//! the only signal there is.
+//! Not the ingest port and not gated on the pause: the ingest listener closes
+//! while paused, exactly when the heartbeat is the only signal. It forwards
+//! and stores nothing, so Isis stays the one record.
 //!
-//! Isis stays the single source of truth: this forwards and stores nothing, so
-//! two places cannot disagree about which mics are alive.
-//!
-//! Hand-written HTTP, deliberately: one route, one unauthenticated LAN caller,
-//! a handful of requests a month. `axum` and `tokio` are only dev-dependencies
-//! here, and the capture daemon should not take them on for this.
+//! Hand-written HTTP: one route, a handful of requests a month; not worth axum
+//! and tokio in the capture daemon.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
-/// The port the phone apps use for the fallback: the same port the fleet API
-/// answers on, so the fallback is the identical request with `host` swapped for
-/// `controlHost`.
+/// The fleet API's port, so the fallback is the same request with `host`
+/// swapped for `controlHost`.
 pub const DEFAULT_RELAY_PORT: u16 = 8000;
 
 /// Where a beat is posted, here and on the fleet.
@@ -33,11 +28,8 @@ const MAX_HEAD_BYTES: usize = 8192;
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(8);
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// What a phone is allowed to say.
-///
-/// `at` is absent on purpose: the fleet stamps it, so a beat cannot backdate
-/// itself. `viaLan` is the relay's testimony, not the phone's, and is added
-/// below.
+/// What a phone may say. No `at`: the fleet stamps it. `viaLan` is the relay's
+/// to add.
 const FROM_PHONE: &[&str] = &[
     "device",
     "app",
@@ -52,9 +44,8 @@ const FROM_PHONE: &[&str] = &[
 #[derive(Debug, PartialEq, Eq)]
 pub struct Rejected(pub String);
 
-/// The beat to forward: what the phone said, filtered, plus how it arrived.
-/// An allowlist rather than a scrub, since the caller is unauthenticated: a key
-/// not named here cannot reach Isis.
+/// The beat to forward: an allowlist of what the phone said, plus how it
+/// arrived. The caller is unauthenticated.
 ///
 /// # Errors
 /// If the body is oversized, is not a JSON object, or names no usable device.
@@ -89,20 +80,16 @@ pub fn relayed(raw: &[u8]) -> Result<serde_json::Value, Rejected> {
     Ok(serde_json::Value::Object(out))
 }
 
-/// POST one beat to the fleet. Returns whether it landed.
-///
-/// Best-effort: the phone learns from the status returned, and its own retry
-/// backoff decides what to do.
+/// POST one beat to the fleet; whether it landed. The phone's own backoff
+/// handles failure.
 pub fn forward(beat: &serde_json::Value, fleet_url: &str) -> bool {
     let url = format!("{}{BEAT_PATH}", fleet_url.trim_end_matches('/'));
-    // Its own agent: `ureq`'s bare functions share one process-wide connection
-    // pool, and a stale pooled socket is an unreproducible 502.
+    // Its own agent: a stale socket in ureq's shared pool is a random 502.
     let agent = ureq::AgentBuilder::new()
         .timeout(FORWARD_TIMEOUT)
         .max_idle_connections(0)
         .build();
-    // `send_bytes` with the header set by hand: ureq is built without the
-    // `json` feature that provides `send_json`.
+    // ureq is built without `json`.
     let body = beat.to_string();
     match agent
         .post(&url)
@@ -129,10 +116,7 @@ pub struct Head {
     pub content_length: usize,
 }
 
-/// Read the request line and headers, bounded.
-///
-/// Bounded on both line count and byte count, so an unauthenticated caller
-/// sending headers forever costs nothing.
+/// Read the request line and headers, bounded in lines and bytes.
 ///
 /// # Errors
 /// If the stream ends, the head is oversized, or the request line is not
@@ -182,9 +166,8 @@ pub fn read_head<R: BufRead>(reader: &mut R) -> Result<Head, Rejected> {
     })
 }
 
-/// Answer with an empty body. Success is 204 (the relay has nothing to
-/// return); a failed forward is 502, never 204, so "the Mac took it" never
-/// reads as "the fleet knows".
+/// 204 when the fleet took it, 502 when not: the Mac taking it is not the
+/// fleet knowing.
 fn respond(stream: &mut TcpStream, status: u16, reason: &str) {
     let _ = write!(
         stream,
@@ -244,10 +227,8 @@ fn handle(stream: &mut TcpStream, fleet_url: &str) {
     respond(stream, 204, "No Content");
 }
 
-/// Accept beats on the LAN and pass them to the fleet, forever.
-///
-/// One thread per connection: a phone whose socket stalls must not hold up the
-/// next phone's beat, and the volume is too low to justify anything cleverer.
+/// Accept beats on the LAN and pass them on, one thread per connection so a
+/// stalled socket holds up nobody.
 pub fn serve(port: u16, fleet_url: &str) -> std::io::Error {
     let listener = match TcpListener::bind(("0.0.0.0", port)) {
         Ok(l) => l,

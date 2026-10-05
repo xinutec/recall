@@ -12,9 +12,8 @@ pub const SILENCE_PEAK: i32 = 2;
 const AUDIBLE_FLOOR: i32 = 16;
 const S16_FULL_SCALE: f64 = 32768.0;
 
-/// Total bytes, peak level, and when the first *audible* sample arrived — in
-/// stream time, so the phone's wall clock can't confuse it. Chunks need not
-/// respect sample boundaries; a half sample carries to the next feed.
+/// Total bytes, peak level, and when the first audible sample arrived, in
+/// stream time. A half sample carries to the next chunk.
 pub struct StreamMeter {
     byte_rate: u64,
     carry: Option<u8>,

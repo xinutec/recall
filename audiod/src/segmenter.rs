@@ -26,12 +26,8 @@ impl Codec {
         }
     }
 
-    /// The bitrate to ask ffmpeg for, or `None` when the codec is lossless and
-    /// a bitrate would be meaningless.
-    ///
-    /// The codec owns this rather than the caller pairing the two: a lossy
-    /// codec whose bitrate went missing would silently encode at ffmpeg's
-    /// default, and nothing downstream could see it.
+    /// The bitrate to ask ffmpeg for; `None` for a lossless codec. The codec
+    /// owns it, so a lossy one never silently gets ffmpeg's default.
     pub fn default_bitrate(self) -> Option<&'static str> {
         match self {
             Codec::Libopus | Codec::Aac => Some("32k"),
@@ -50,13 +46,9 @@ impl Codec {
     }
 }
 
-/// Capture parameters. Defaults to FLAC: lossless, because the archive keeps
-/// what the microphones heard.
-///
-/// ⚠ The default is the retention decision. Opus at 32 kbps is transparent for
-/// speech but destroys phase, so two recorders' streams of one room could never
-/// be combined (docs/architecture.md). Audio cannot be re-recorded, so a source
-/// that wants Opus has to ask for it.
+/// Capture parameters. The FLAC default is the retention decision: Opus
+/// destroys phase, so two recorders of one room could never be combined, and
+/// audio cannot be re-recorded.
 #[derive(Debug, Clone)]
 pub struct CaptureConfig {
     pub sample_rate: u32,

@@ -43,9 +43,8 @@ fn decode(path: &Path) -> Option<Vec<u8>> {
     out.status.success().then_some(out.stdout)
 }
 
-/// The window's PCM for one source, placed on the wall clock by segment names
-/// (zero-filled where nothing was recorded), so every source shares one
-/// nominal timeline and the measured lag is exactly the clock disagreement.
+/// The window's PCM for one source, placed by segment names (zero-filled where
+/// nothing was recorded): the measured lag is the clock disagreement.
 fn window_pcm(root: &Path, source: &str, start: DateTime<Utc>, seconds: usize) -> Vec<u8> {
     let mut buf = vec![0u8; 2 * DECODE_RATE as usize * seconds];
     for path in segment_glob(&root.join(source), source) {
@@ -101,8 +100,8 @@ fn instant(raw: &str) -> Result<DateTime<Utc>, String> {
         .map_err(|e| format!("not an RFC 3339 instant: {e}"))
 }
 
-/// The decoder is ffmpeg, and a missing one reads as silence: every block would
-/// report no correlation, which looks like a measurement.
+/// A missing ffmpeg reads as silence: no correlation, which looks like a
+/// measurement.
 fn ffmpeg_found() -> bool {
     std::process::Command::new("ffmpeg")
         .arg("-version")

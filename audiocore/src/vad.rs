@@ -10,40 +10,34 @@ use crate::decode;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-/// Recorded when the audio could not be decoded at all. Negative seconds are
-/// impossible, which is the point: ⚠ "we could not look" must never be stored
-/// as the 0.0 that means "nobody spoke", or a sweep deletes audio it never
-/// examined. Here so every writer of a speech measurement shares it.
+/// Recorded when the audio could not be decoded. Negative on purpose: "could
+/// not look" must never be the 0.0 that means "nobody spoke", or a sweep
+/// deletes audio it never examined.
 pub const UNKNOWN_SECONDS: f64 = -1.0;
 
 /// What silero was trained on, and what every segment is decoded to.
 pub const RATE: u32 = 16_000;
-/// The window the 16 kHz model expects. Not a tunable: the graph is shaped for it.
-/// Public because a streaming caller must cut its reads to exactly this.
+/// The window the 16 kHz model is shaped for; a streaming caller cuts its reads
+/// to it.
 pub const WINDOW: usize = 512;
-/// ⚠ silero v5+ prepends this many samples of the previous window, so the model
-/// is fed `CONTEXT + WINDOW`. The input shape is dynamic, so omitting the
-/// context is accepted silently and returns near-zero probability on obvious
-/// speech, which looks like a quiet room. Matches silero's own
-/// `utils_vad.OnnxWrapper.__call__`.
+/// silero v5+ is fed this many samples of the previous window before each one
+/// (as silero's `utils_vad.OnnxWrapper.__call__`). Omitted, the dynamic input
+/// accepts it silently and returns near-zero probability on obvious speech.
 const CONTEXT: usize = 64;
 
 /// "Are we sure it is speech." Silero's default.
 const THRESHOLD: f32 = 0.5;
-/// Leaving speech is deliberately harder than entering it, so one weak window
-/// mid-word does not split a region in two. Silero's own hysteresis margin.
+/// Leaving speech is harder than entering it, so one weak window mid-word does
+/// not split a region. Silero's own hysteresis margin.
 const EXIT_THRESHOLD: f32 = THRESHOLD - 0.15;
 /// Regions shorter than this are noise, not talking.
 const MIN_SPEECH_MS: f64 = 250.0;
 /// Silence shorter than this is a pause inside speech, not the end of it.
 const MIN_SILENCE_MS: f64 = 300.0;
 
-/// Phone mics capture un-gained, ~25-40 dB below the USB mic, which leaves
-/// audible speech below the detector's sensitivity. The peak is lifted to this
-/// before detection; the ASR still sees the original audio.
-///
-/// ⚠ No cap on the lift: a cap is a floor below which a microphone reads 0.0 s
-/// of speech, and such a segment gets no transcribe job.
+/// Phone mics capture un-gained, ~25-40 dB below the USB mic, so the peak is
+/// lifted to this before detection (the ASR sees the original). Uncapped: a
+/// cap would be a floor below which a mic reads 0.0 s and gets no job.
 const TARGET_PEAK: f32 = 0.5;
 
 /// A span of detected speech, in seconds from the start of the audio.
@@ -60,10 +54,8 @@ impl Region {
     }
 }
 
-/// ⚠ One session for the whole process, never dropped. With `load-dynamic`,
-/// ONNX Runtime's destructors run after the library is unloaded and the
-/// process segfaults at exit. It also means the model (2 s to construct
-/// against 0.5 s per detection) is built once per process.
+/// One session per process, never dropped: with `load-dynamic`, ONNX Runtime's
+/// destructors would run after the library is unloaded and segfault at exit.
 static SESSION: OnceLock<Mutex<ort::session::Session>> = OnceLock::new();
 
 /// A handle to the process-wide detector. Cheap to create; holding one across a
@@ -72,8 +64,8 @@ pub struct Detector {
     session: MutexGuard<'static, ort::session::Session>,
 }
 
-/// What can go wrong, kept separate from "no speech found" so a broken detector
-/// can never be recorded as a silent segment.
+/// Apart from "no speech found", so a broken detector is never recorded as a
+/// silent segment.
 #[derive(Debug)]
 pub enum Error {
     Model(String),
@@ -99,16 +91,12 @@ pub fn detection_gain(peak: f32) -> f32 {
     TARGET_PEAK / peak
 }
 
-/// One real inference on silence, to prove the whole chain works before the
-/// scanner trusts it: the dynamic library resolved, the API level matched, the
-/// embedded model parsed, and the CPU can execute what the library emits.
-///
-/// ⚠ It cannot catch SIGILL, which kills the process rather than returning an
-/// error; that is excluded by loading a baseline-built runtime (see
-/// recalld/Cargo.toml).
+/// One real inference on silence, proving the library, API level and model
+/// before the scanner trusts them. It cannot catch SIGILL; a baseline-built
+/// runtime excludes that (recalld/Cargo.toml).
 ///
 /// # Errors
-/// Whatever prevented the inference, so the caller can stand down rather than
+/// Whatever prevented the inference, so the caller stands down rather than
 /// report a silent room.
 pub fn self_test() -> Result<(), Error> {
     let mut detector = Detector::load()?;
@@ -120,8 +108,7 @@ pub fn self_test() -> Result<(), Error> {
 fn build_session() -> Result<ort::session::Session, Error> {
     ort::session::Session::builder()
         .map_err(|e| Error::Model(e.to_string()))?
-        // One thread: onnxruntime defaults to every core, and this runs as a
-        // background scanner on a shared 4-core server.
+        // One thread: a background scanner on a shared 4-core server.
         .with_intra_threads(1)
         .map_err(|e| Error::Model(e.to_string()))?
         .with_inter_threads(1)
@@ -152,25 +139,23 @@ impl Detector {
     /// If the dynamic ONNX Runtime cannot be loaded (wrong API level, library
     /// absent) or the embedded network fails to parse.
     pub fn load() -> Result<Self, Error> {
-        // Built fallibly, not via `get_or_init`, so a missing or mismatched
-        // runtime is an error the caller can stand down on, not a panic.
+        // Not `get_or_init`: a missing runtime is an error, not a panic.
         if SESSION.get().is_none() {
             let _ = SESSION.set(Mutex::new(build_session()?));
         }
         let cell = SESSION
             .get()
             .ok_or_else(|| Error::Model("session unavailable".to_owned()))?;
-        // Poisoning means a previous inference panicked; the session itself is
-        // still valid, so recover rather than refuse to measure ever again.
+        // A poisoned lock means an inference panicked; the session is still
+        // valid.
         let session = cell
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(Self { session })
     }
 
-    /// Per-window speech probabilities for 16 kHz mono samples. Public because
-    /// only this view can pin the model's input contract: hysteresis over
-    /// all-zero probabilities looks exactly like a quiet room.
+    /// Per-window speech probabilities for 16 kHz mono samples; public so tests
+    /// can pin the input contract.
     ///
     /// # Errors
     /// If the network fails.
@@ -184,9 +169,8 @@ impl Detector {
         Ok(out)
     }
 
-    /// One window, with the caller holding the state that crosses windows.
-    /// Both the batch pass above and [`Stream`] go through here, so a live
-    /// utterance and a stored segment are measured by the same inference.
+    /// One window; the caller holds the state between windows. Batch and
+    /// [`Stream`] both go through here.
     fn window(&mut self, chunk: &[f32], gain: f32, carried: &mut Carried) -> Result<f32, Error> {
         let mut framed = Vec::with_capacity(CONTEXT + WINDOW);
         framed.extend_from_slice(&carried.context);
@@ -244,9 +228,8 @@ impl Detector {
     }
 }
 
-/// Every speech region in a finished array of probabilities: a whole stored
-/// segment, decided at once. Public so tests can pin the policy, which lives in
-/// [`Splitter`].
+/// Every speech region in a finished array of probabilities ([`Splitter`]'s
+/// policy, folded).
 #[must_use]
 pub fn regions_from_probabilities(probs: &[f32]) -> Vec<Region> {
     let mut splitter = Splitter::new();
@@ -287,18 +270,14 @@ fn min_silence_windows() -> usize {
     (MIN_SILENCE_MS / 1000.0 / window_seconds()).ceil() as usize
 }
 
-/// A closed span, or `None` if it was too short to be talking. The one place
-/// `MIN_SPEECH_MS` is applied, shared by the offline and streaming paths.
+/// A closed span, or `None` if too short to be talking.
 fn region_if_long_enough(begin: usize, end: usize) -> Option<Windows> {
     let span = Windows { first: begin, end };
     (span.region().seconds() * 1000.0 >= MIN_SPEECH_MS).then_some(span)
 }
 
-/// The region policy itself, decided one window at a time.
-///
-/// The only implementation: [`regions_from_probabilities`] is a fold over it,
-/// so the live tier and the archive cannot disagree about where an utterance
-/// ended.
+/// The region policy, one window at a time: the only implementation, so the
+/// live tier and the archive cannot disagree about where an utterance ended.
 #[derive(Debug, Default)]
 pub struct Splitter {
     index: usize,
@@ -337,8 +316,7 @@ impl Splitter {
         region_if_long_enough(begin, end)
     }
 
-    /// Close whatever is open because the stream ended. A live agent calls this
-    /// on shutdown so the last sentence is not lost to the exit.
+    /// Close whatever is open, at the end of the stream.
     pub fn flush(&mut self) -> Option<Windows> {
         let begin = self.start.take()?;
         self.quiet_run = 0;
@@ -351,16 +329,13 @@ impl Splitter {
         self.index
     }
 
-    /// The window an open region started at, if one is open. A live agent needs
-    /// it to bound how long it will wait before cutting a sentence itself.
+    /// Where the open region started, so a live agent can bound its wait.
     #[must_use]
     pub const fn open_since(&self) -> Option<usize> {
         self.start
     }
 
-    /// Cut an open region at the current window, whatever the probabilities say:
-    /// for a speaker who has not paused long enough to end a region, in a tier
-    /// that promises latency.
+    /// Cut an open region now, for a speaker who has not paused long enough.
     pub fn cut(&mut self) -> Option<Windows> {
         let begin = self.start?;
         self.start = Some(self.index);
@@ -369,13 +344,8 @@ impl Splitter {
     }
 }
 
-/// A live detector: one window at a time, carrying state across the whole
-/// stream.
-///
-/// ⚠ The gain is fixed for the life of the stream. [`Detector::probabilities`]
-/// derives it from the buffer's own peak, which is right for a stored segment
-/// and wrong for a stream: normalising each 32 ms window to its own peak makes
-/// room tone as loud as a voice. The USB mic needs no gain: pass 1.0.
+/// A live detector, carrying state across the stream. The gain is fixed: per
+/// window it would make room tone as loud as a voice. The USB mic needs 1.0.
 pub struct Stream {
     detector: Detector,
     carried: Carried,
@@ -396,8 +366,8 @@ impl Stream {
     /// The speech probability of exactly [`WINDOW`] samples.
     ///
     /// # Errors
-    /// If the network fails, or the window is the wrong length (a dynamic input
-    /// shape would otherwise answer it with a plausible number).
+    /// If the network fails, or the window is the wrong length (the dynamic
+    /// input would answer it with a plausible number).
     pub fn probability(&mut self, window: &[f32]) -> Result<f32, Error> {
         if window.len() != WINDOW {
             return Err(Error::Model(format!(
@@ -409,6 +379,5 @@ impl Stream {
     }
 }
 
-/// The vendored silero network, embedded so no deployment step can forget it
-/// and no runtime path can drift.
+/// The vendored silero network, embedded.
 pub const MODEL: &[u8] = include_bytes!("../assets/silero_vad_16k_op15.onnx");

@@ -17,8 +17,7 @@ const EARLIER: &str = "2026-09-11T06:00:00+00:00";
 
 #[test]
 fn an_unchanged_intent_touches_nothing() {
-    // Why the mirror is edge-triggered: reapplying an unchanged "running" every
-    // tick would silently clobber a pause pressed on the Mac's own LAN UI.
+    // Edge-triggered, or an unchanged "running" clobbers a local pause.
     assert_eq!(decide("", None, at(NOW)), Decision::Unchanged);
     assert_eq!(decide(LATER, Some(LATER), at(NOW)), Decision::Unchanged);
 }
@@ -53,8 +52,7 @@ fn an_elapsed_bound_reads_as_running() {
 
 #[test]
 fn an_unparseable_intent_is_recorded_so_it_is_never_retried_forever() {
-    // A bad value reads as running and is also recorded; without the record the
-    // mirror retries it every tick and never reaches a real pause pressed later.
+    // A bad value reads as running and is recorded, so it is not retried.
     let Decision::Apply { desired, record } = decide("", Some("not-a-time"), at(NOW)) else {
         panic!("must apply");
     };
@@ -87,6 +85,6 @@ fn liveness_reads_the_marker_mtime_not_its_contents() {
 
 #[test]
 fn an_unreadable_root_is_empty_not_a_panic() {
-    // Liveness is best-effort; a mirror that died reading it would stop applying pauses.
+    // Liveness is best-effort: reading it must not kill the mirror.
     assert!(source_liveness(std::path::Path::new("/nonexistent-xyz")).is_empty());
 }

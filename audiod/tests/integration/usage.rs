@@ -1,8 +1,7 @@
 //! `--help` must name every mode, the break-glass ones above all.
 
-/// `--help` is what a person reads when the fleet is unreachable, so it must
-/// list `pause` and `resume`. clap generates it from the same enum the
-/// dispatcher matches; this reads the output rather than trusting that.
+/// `--help` is what a person reads when the fleet is unreachable: it lists
+/// `pause` and `resume`.
 #[test]
 fn every_mode_is_in_the_help() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_audiod"))

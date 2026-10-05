@@ -51,8 +51,7 @@ fn a_log_under_the_cap_is_left_alone() {
 
 #[test]
 fn the_inode_survives_so_a_running_agent_keeps_writing() {
-    // Copytruncate, not rename: launchd holds the agent's stdout FD, so
-    // replacing the file would leave the agent writing to an unreadable inode.
+    // Copytruncate, not rename: launchd holds the agent's stdout open.
     let dir = tempfile::tempdir().expect("tmp");
     let path = write_log(dir.path(), "runner.err.log", 4_000);
     let mut held = std::fs::OpenOptions::new()
