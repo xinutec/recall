@@ -10,12 +10,12 @@
 # Secrets (HF_TOKEN, RECALL_SYNC_TOKEN, the ingest tokens) are read at runtime from
 # ~/.config/recall/env (0600) and never enter the store.
 #
-# ⚠ That file lives on the internal disk, not under ~/Code/recall: the checkout is
-# on /Volumes/Backup, which a launchd process cannot write, and whose first access
+# That file is on the internal disk, not under ~/Code/recall: the checkout is on
+# /Volumes/Backup, which a launchd process cannot write, and whose first access
 # can hang on a consent prompt nobody answers, wedging every agent that sources the
 # file. An interactive shell never shows the problem.
 #
-# ⚠ Logs go to ~/Library/Logs/recall, not the repo: launchd opens them before any
+# Logs go to ~/Library/Logs/recall, not the repo: launchd opens them before any
 # code runs, so a log path in a checkout that moves kills the agent with exit 78
 # and an empty log. recall-logrotate keeps each log to its last 2 MB.
 #
@@ -52,7 +52,7 @@ let
   # Where the Hugging Face models live, declared here rather than behind a symlink,
   # so the location of tens of gigabytes is visible to whoever reads this module.
   #
-  # ⚠ On the external volume on purpose, and by name: /Volumes/Backup has survived
+  # On the external volume on purpose, and by name: /Volumes/Backup has survived
   # a disk swap because a replacement takes the name. The `cache/cache` doubling is
   # a fossil, kept because removing it means moving the models.
   hfHome = "/Volumes/Backup/cache/cache/huggingface";
@@ -60,7 +60,7 @@ let
   # One store wrapper per agent; `python` selects the interpreter, and each agent's
   # arguments below are the whole of what it does.
   #
-  # ⚠ A package, not a devshell entry: `nix develop --command` would put a full
+  # A package, not a devshell entry: `nix develop --command` would put a full
   # flake evaluation in every agent's startup. `runtimeInputs` prepends to PATH, so
   # `say` and `launchctl` still come from launchd's system paths.
   wrapper = { name, python, args, module ? "recall" }:
@@ -166,7 +166,7 @@ in
   # pause closes the ingest listener, and during a pause the heartbeat is the only
   # signal left.
   #
-  # ⚠ No `--root`: it only forwards. A second store of beats would let two places
+  # No `--root`: it only forwards. A second store of beats would let two places
   # disagree about which mics are alive.
   launchd.agents."org.xinutec.recall-beat-relay" = daemon {
     label = "org.xinutec.recall-beat-relay";
@@ -216,14 +216,13 @@ in
     };
   };
 
-  # The USB mic: the continuous recording, the one process that must never die. A
-  # renamed or missing --device makes sox fail and the agent crash-loop, visibly,
-  # rather than record from the wrong mic.
+  # The USB mic, the continuous recording. A renamed or missing --device makes sox
+  # fail and the agent crash-loop, visibly, rather than record from the wrong mic.
   #
-  # ⚠ Interactive, overriding the Background default: Background is macOS's
+  # Interactive, overriding the Background default: Background is macOS's
   # throttled class, and sox reads CoreAudio in real time. Starved, its buffer
-  # overruns and samples are lost silently and for good (#1330); under load a
-  # throttled recorder lost about half the wall clock.
+  # overruns and samples are lost for good (#1330); under load a throttled
+  # recorder lost about half the wall clock.
   launchd.agents."org.xinutec.recall-capture" = daemon {
     label = "org.xinutec.recall-capture";
     name = "capture";
@@ -245,11 +244,11 @@ in
   # Is recall working? Every 5 minutes, reported to fleetwatch. Needed because
   # launchd restarts capture when it dies, and a crash loop looks like a quiet house.
   #
-  # ⚠ The interval must equal the doctor's INTERVAL_S (300): fleetwatch derives
+  # The interval must equal the doctor's INTERVAL_S (300): fleetwatch derives
   # staleness from the cadence the report declares, so a silent doctor is itself
   # the alarm.
   #
-  # ⚠ With KeepAlive off, launchd starts no new run while one is stuck, so one
+  # With KeepAlive off, launchd starts no new run while one is stuck, so one
   # wedged doctor would silence every later one. That is why the doctor reads the
   # archive in a child it can abandon.
   launchd.agents."org.xinutec.recall-doctor" = daemon {
@@ -290,7 +289,7 @@ in
   # with the `asr` shim, pushes the result. Stateless, so killing it costs an
   # expiring lease.
   #
-  # ⚠ KeepAlive, not a StartInterval timer: the shim holds the Whisper weights for
+  # KeepAlive, not a StartInterval timer: the shim holds the Whisper weights for
   # its whole life, and a periodic agent would reload them for every job.
   #
   # It refuses to start if the vocabulary is unreachable (an empty one is fine):
@@ -334,7 +333,7 @@ in
   #
   # Nice 15, below recall-runner's 10: speakers can wait, words cannot.
   #
-  # ⚠ No `--pulse`: a second process stamping the archive heartbeat would make a
+  # No `--pulse`: a second process stamping the archive heartbeat would make a
   # stalled transcriber look healthy.
   #
   # It writes no lines. Results go back to the queue, and `recalld::diarized` owns
@@ -411,8 +410,7 @@ in
   # but cannot dial the Mac, so the Mac polls every ~5 s and a pause takes hold
   # within seconds. Inert until RECALL_SYNC_TOKEN is set.
   #
-  # ⚠ This is the household's pause control. It acts only when the wanted state
-  # changes, tracked in the `capture_intent_mirrored` marker, so a restarted agent
+  # It acts only when the wanted state changes, tracked in the `capture_intent_mirrored` marker, so a restarted agent
   # carries on from where the last one stopped.
   launchd.agents."org.xinutec.recall-capture-mirror" = daemon {
     label = "org.xinutec.recall-capture-mirror";

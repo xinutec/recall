@@ -24,7 +24,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Builds the Rust workspace's ~190 dependencies once, as their own derivation,
+    # Builds the Rust workspace's dependencies once, as their own derivation,
     # so a Rust edit recompiles only recall's own crates.
     crane.url = "github:ipetkov/crane";
   };
@@ -77,12 +77,12 @@
           });
         };
 
-        # ⚠ Narrowed to pyproject.toml and src/: this source decides whether the ML
-        # env's store path moves, and macOS ties the agents' /Volumes/Backup access to
-        # that path. At the workspace root, every commit would revoke it.
+        # Only pyproject.toml and src/: this decides whether the ML env's store path
+        # moves, and macOS ties the agents' /Volumes/Backup access to that path. At
+        # the workspace root, every commit would revoke it.
         #
-        # ⚠ Even a comment in pyproject.toml moves it (hatchling reads the whole
-        # file); put toolchain notes in flake.nix or gate.dhall instead.
+        # Even a comment in pyproject.toml moves it (hatchling reads the whole
+        # file), so toolchain notes go in flake.nix or gate.dhall.
         wheelSrc = nixpkgs.lib.fileset.toSource {
           root = ./.;
           fileset = nixpkgs.lib.fileset.unions [ ./pyproject.toml ./src ];
@@ -103,16 +103,13 @@
 
         mlEnv = mlPythonSet.mkVirtualEnv "recall-ml-env" uvWorkspace.deps.default;
 
-        # The same runtime plus the `dev` group: this is `.venv`. A store path rather
-        # than a uv-built directory, so the gate tests the very artifact the agents
-        # run and no drift check is needed between two.
+        # The same runtime plus the `dev` group: `.venv`, built by the gate
+        # (gate.dhall), so the tests run against what the agents run.
         #
-        # ⚠ `deps.all`, not `deps.default`: mypy resolves third-party imports through
-        # `.venv/bin/python`, so test tools outside the env flood it with
-        # unfollowed-import errors.
+        # `deps.all`: mypy resolves third-party imports through `.venv/bin/python`,
+        # and test tools outside it would be unfollowed imports.
         #
-        # Not in the devshell, which would then carry the whole ML closure into every
-        # `ruff check`; the gate builds it into `.venv` (gate.dhall).
+        # Not in the devshell, which would carry the ML closure into `ruff check`.
         devEnv = mlPythonSet.mkVirtualEnv "recall-dev-env" uvWorkspace.deps.all;
 
         # The devshell's interpreter: no ML, mypy and pytest for the gate; also
@@ -143,26 +140,25 @@
               ./audiocore
               ./audiod
               ./recalld
-              # ⚠ Every workspace member, the cli and the experiments included:
+              # Every workspace member, the cli and the experiments included:
               # cargo cannot load the graph with one missing.
               ./doctor
               ./runner
               ./transcript
               ./cli
               ./experimental
-              # ⚠ The sandbox holds only the files named here, so every test input
-              # outside the crates is listed. A missing one fails the build with a
-              # missing file, not the test.
+              # The sandbox holds only the files named here, so every test input
+              # outside the crates is listed.
               #
-              # The one committed speech clip (#1433); the rest are gitignored.
+              # The committed speech clips (#1433).
               ./tests/fixtures/speech
-              # The worker/doctor contract, whose halves are in two languages.
+              # The runner/doctor pulse contract.
               ./tests/fixtures/worker-heartbeat.json
-              # The runner-shim contract (#1830): one example of every message.
+              # The runner-shim contract (#1830).
               ./tests/fixtures/shim
-              # The model contract: a test checks `turns::SHIM_MODEL` against the
-              # model this file loads. ⚠ The file, not ./src: the directory would
-              # rebuild the Rust workspace on every Python edit.
+              # A test checks `turns::SHIM_MODEL` against the model this file
+              # loads. The file, not ./src, which would rebuild the Rust
+              # workspace on every Python edit.
               ./src/recall/asr.py
             ];
           };
@@ -203,7 +199,7 @@
         # unbuildable ml-env or a wrapper failing shellcheck surfaces only at
         # `home-manager switch`, with no commit attached.
         #
-        # ⚠ The module is applied as a function, not evaluated as a module, so
+        # The module is applied as a function, not evaluated as a module, so
         # launchd option types go unchecked: a misspelled `KeepAlive` gets through.
         deployedAgents =
           let
@@ -252,11 +248,11 @@
         packages.sandbox-tests = sandboxTests;
         packages.ml-env = mlEnv;
         packages.dev-env = devEnv;
-        # ⚠ The volume repo's gate runs mypy and its Python tests through this
-        # pinned interpreter: removing it breaks that gate, not this one.
+        # The volume repo's gate runs mypy and its Python tests with this
+        # interpreter: removing it breaks that gate, not this one.
         packages.dev-python = devPython;
         packages.agent-tools = agentTools;
-        # ⚠ The ONNX runtime recall-live loads, exported so home-manager gets the
+        # The ONNX runtime recall-live loads, exported so home-manager gets the
         # one the tests use. home-manager reads these public outputs, not the
         # attrset `.#agents` builds from, so `.#agents` passing does not prove it.
         packages.onnxruntime = pkgs.onnxruntime;

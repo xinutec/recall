@@ -1,7 +1,5 @@
-# The recall Rust workspace (docs/architecture.md, stage D1): one lockfile,
-# one target dir. The members are the list below, not this comment — a crate
-# added without touching the prose is exactly how a "three crates" header
-# outlives its fourth.
+# The recall Rust workspace: one lockfile, one target dir. `members` below is the
+# list; this summary may lag it.
 #
 #   audiocore  the shared DSP + segment-grammar library
 #   audiod     the Mac's audio plane (capture, ingest, upload)

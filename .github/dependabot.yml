@@ -1,22 +1,14 @@
-# Dependabot has never read this repo's real lockfile.
+# Points Dependabot at the real lockfile.
 #
 # dev-lint: allow-doc-path the path GitHub's alerts still name, deleted on purpose
-# ⚠ Every alert on this repo names `frontend/package-lock.json`, which was
-# DELETED when the frontend moved to pnpm. The dependency graph kept a snapshot
-# of it and goes on matching new advisories against that snapshot, so this is not
-# staleness that ages out — which is why this file exists at all: nothing had ever
-# told Dependabot where to look.
+# Alerts name `frontend/package-lock.json`, deleted in the move to pnpm: GitHub's
+# dependency graph kept a snapshot of it and still matches advisories against it.
+# Check each alert's range against the version pnpm installed (#1505); some are
+# current.
 #
-# ⚠ Do not read that alert list as noise because the path is dead. Most alerted
-# packages turn out already patched, and some are real and current. The only
-# trustworthy check is each alert's vulnerable range against the version pnpm
-# actually installed — see #1505.
-#
-# The `npm` ecosystem is the right one for pnpm; GitHub parses pnpm-lock.yaml
-# under that name. `open-pull-requests-limit: 0` keeps the security ALERTS while
-# refusing the version-bump PRs: this repo carries its floors deliberately in
-# frontend/pnpm-workspace.yaml, with an argued reason per entry, and a bot
-# raising PRs against them would fight that file every week.
+# `npm` is the ecosystem GitHub reads pnpm-lock.yaml under.
+# `open-pull-requests-limit: 0` keeps the alerts without version-bump PRs: the
+# floors in frontend/pnpm-workspace.yaml are deliberate, each with a reason.
 version: 2
 updates:
   - package-ecosystem: npm

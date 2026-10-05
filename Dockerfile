@@ -1,29 +1,19 @@
-# recall's fleet image (Isis k3s): the browsing API, the web app and the device ingest,
-# all served by `recalld`. NO ML — the Mac keeps capture, ASR and diarization.
+# recall's fleet image (Isis k3s): `recalld`, serving the API, the web app and the
+# device ingest. No ML and no interpreter: the Mac keeps capture and the models, so the
+# dependencies are the Rust lockfile and the `apt` line below.
 #
-# ⚠ **No Python, and no interpreter.** A Debian base, one static-ish binary, and the
-# media tools recalld shells out to — so the fleet dependency set is the Rust lockfile
-# and the `apt` line below, nothing else.
-#
-# Multi-stage: build the Angular app, build recalld, then assemble. Runs as non-root
-# uid 1000, matching the Deployment's runAsUser + fsGroup.
-#
-# Built and pushed by .github/workflows/build.yml — there's no container builder on the
-# dev Mac.
+# Builds the Angular app, builds recalld, then assembles; runs as uid 1000, matching
+# the Deployment's runAsUser and fsGroup. Built by .github/workflows/build.yml.
 
 # --- frontend build ---
 FROM node:24-slim AS frontend
 WORKDIR /build/frontend
-# pnpm-workspace.yaml belongs in this layer, not with the sources: it carries the
-# install-script allowlist, and without it neither esbuild nor the ui-harness
-# unpacks — the build then fails on dependencies that look installed.
+# pnpm-workspace.yaml has the install-script allowlist; without it esbuild and the
+# ui-harness do not unpack.
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
-# git: the shared layout harness is a git dependency (github:xinutec/ui-harness),
-# so the install clones it — node:slim ships no git.
+# git: the ui-harness is a git dependency, and node:slim has none.
 #
-# pnpm is taken unpinned. The host gets its copy from the flake, and pinning a
-# second version here would be two numbers held level by hand; the lockfile is
-# what has to match, and --frozen-lockfile fails rather than drift.
+# pnpm unpinned: --frozen-lockfile is what holds the install to the lock.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -33,25 +23,15 @@ COPY frontend/ ./
 RUN pnpm run build
 
 # --- recalld build ---
-# The Rust system-of-record daemon (docs/architecture.md, stage A) — the only
-# program this image exists to run. One binary binds both planes, so the pod is
-# one container and the image is one artifact to version, push and roll.
-# Trixie, where the rest of the fleet is on bookworm, and that is forced rather
-# than drifted: Debian ships libonnxruntime only from trixie (1.21), and the VAD
-# dlopens Debian's baseline build because ort's prebuilt needs AVX2 — which
-# SIGILLs on isis (Ivy Bridge, 2012). Harmonising this to bookworm takes the
-# speech detector off the air (#1629).
+# Trixie, unlike the rest of the fleet's bookworm: Debian ships libonnxruntime only
+# from trixie, and the speech detector needs Debian's build, since ort's prebuilt
+# one needs AVX2, which isis (Ivy Bridge) lacks (#1629).
 FROM rust:1.98-slim-trixie AS recalld
 WORKDIR /build
-# The whole Rust workspace (stage D1): cargo needs every member's manifest and
-# sources to load the graph, but `-p recalld` compiles only recalld and its
-# audiocore dependency — audiod rides along as text. Layer caching comes from
-# buildx's registry cache rather than a dummy-source dance, which a workspace
-# would make three times as fiddly for a build measured in low minutes.
-# ⚠ Every workspace member, though only recalld is built: cargo loads the whole
-# graph first, and a missing member fails with a bare "No such file or
-# directory". The list lives in Cargo.toml, flake.nix's fileset and here; the
-# gate never builds this image, so scripts/check_workspace_members.py checks it.
+# Every workspace member, though only recalld is built: cargo loads the whole graph
+# first. The list is also in Cargo.toml and flake.nix;
+# scripts/check_workspace_members.py keeps them equal. Layers are cached by buildx's
+# registry cache.
 COPY Cargo.toml Cargo.lock ./
 COPY audiocore/ audiocore/
 COPY audiod/ audiod/
@@ -64,32 +44,22 @@ COPY experimental/ experimental/
 RUN cargo build --release --locked -p recalld
 
 # --- runtime ---
-# -trixie pinned explicitly: the recalld stage links against this release's glibc,
-# so the two FROMs must name the same Debian rather than drift apart on a float.
+# The same Debian as the build stage, whose glibc recalld links against.
 FROM debian:trixie-slim
-# The app shells out to these; a missing one is a 500 at request time, not a boot error,
-# so it hides until someone presses play. `sox` was: the image had ffmpeg only, and every
-# audio request on the fleet died with FileNotFoundError deep in loudness normalisation
-# while the transcripts served perfectly. `flac` decodes the older archive segments.
-# libonnxruntime1.21: recalld's VAD (stage D4) DLOPENS this rather than bundling
-# a runtime. ort's prebuilt binaries require AVX2 and the fleet's servers are Ivy
-# Bridge (2012) — isis crash-looped with SIGILL on them. Debian's build targets
-# baseline x86-64 and runs there (verified by executing silero through it on
-# amun's identical CPU). ORT_DYLIB_PATH below names it.
+# The tools recalld runs; a missing one fails at request time, not at boot. `flac`
+# decodes older archive segments. libonnxruntime1.21 is loaded by the speech detector
+# (ORT_DYLIB_PATH below); Debian's build targets baseline x86-64 and runs on the
+# fleet's Ivy Bridge CPUs, where ort's prebuilt one crashed with SIGILL.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg sox flac libonnxruntime1.21 \
     && rm -rf /var/lib/apt/lists/*
-# deep-filter denoises playback clips on demand (audio.rs, `enhance=true`) — the
-# #1522 listen-test winner. The release binary is static musl with tract
-# inference (pure Rust): no AVX2, which matters because the fleet is Ivy Bridge
-# and ort's prebuilt binaries already SIGILLed here once (above).
+# deep-filter denoises playback clips on request (audio.rs, `enhance=true`; #1522).
+# The static musl release uses pure-Rust inference, so needs no AVX2.
 ADD --checksum=sha256:70775e251eee44c0f2451a1e833326cf8bcbbe304d3e7cd12851e6fce72ef7da \
     --chmod=755 \
     https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/deep-filter-0.5.6-x86_64-unknown-linux-musl \
     /usr/local/bin/deep-filter
-# uid 1000 matches the Deployment's runAsUser + fsGroup.
-# Pinned to the versioned soname on purpose: an unversioned symlink would let an
-# apt upgrade swap the ABI under a running image, and ort asks for API 21.
+# The versioned soname, so an apt upgrade cannot change the ABI ort expects (21).
 ENV ORT_DYLIB_PATH=/usr/lib/x86_64-linux-gnu/libonnxruntime.so.1.21
 
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin recall
@@ -99,10 +69,9 @@ COPY --from=recalld /build/target/release/recalld /usr/local/bin/recalld
 RUN mkdir -p /app/logs && chown -R 1000:1000 /app
 USER 1000
 EXPOSE 8000 8001
-# The Deployment passes its own command (kubes/dhall/apps/recall.dhall) — this is the
-# shape it passes, kept here so `docker run` on the image is the same program the fleet
-# runs rather than a bare shell. `--root` binds the PVC mount; both ports are bound in
-# one process (the browsing plane and the device ingest plane).
+# The command the Deployment passes (kubes/dhall/apps/recall.dhall), so `docker run`
+# runs the same program. `--root` is the PVC mount; one process binds the browsing
+# port and the device ingest port.
 CMD ["recalld", "--root", "/data", \
      "--bind", "0.0.0.0:8000", "--bind", "0.0.0.0:8001", \
      "--frontend", "/app/frontend/dist/recall-web/browser"]

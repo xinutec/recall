@@ -1,55 +1,14 @@
 {-
-recall/gate.dhall — this repository's commit gate.
+recall/gate.dhall: this repository's commit gate. Every check runs; none is
+skipped for a missing tool or venv.
 
-Was `scripts/verify.sh`, 195 lines, and the longest conversion in the fleet. Five
-things changed beyond the mechanical port.
+Rows are cheapest first, and run in lanes beside each other: cargo in the main
+lane; python (the venv before everything that runs it); the frontend, in table
+order; android; and the nix builds with dev-lint. No row reads another lane's
+output.
 
-**The backend checks can no longer be skipped.** The script kept a `has_venv`
-flag: when `uv sync` failed it printed "failed to restore virtual environment
-(lack of credentials for private registry?)" and took a second branch that ran
-dev-lint and nothing else — mypy, the venv/lock check, the model contract, both
-import-surface checks and the whole pytest suite gone, and the run still green.
-There is no private registry: all 573 URLs in `uv.lock` are
-`files.pythonhosted.org`, and the only non-registry source is `editable = "."`.
-The real origin is `af7b936` (2026-07-09), "make validation gates resilient to
-unmounted volumes and credential blocks", which added three graceful bypasses at
-once — the same commit that made `check-pii.sh` exit 0 when its denylist was
-unreadable.
-
-**The venv is built here, and there is nothing left to report on.** It was a
-directory uv filled from `uv.lock`, and this gate carried a `uv sync --check` row
-to say when the two had drifted — reporting rather than repairing, because the
-script it replaced synced first and checked afterwards, which silently reverted
-an ad-hoc `pip install` instead of reporting it. Both of those are answers to
-having two artifacts. `.venv` is now `nix build .#dev-env --out-link .venv`: one
-store path, built from the same lock the agents' `ml-env` is built from, and a GC
-root rather than 1.5 GB of loose wheels that a fresh clone had to reconstruct by
-hand. What is left to check is that it *builds*, which is the row itself.
-
-**swift-format is a check rather than a courtesy.** `swift-format not found (no
-Xcode) — Swift formatting NOT checked` was the loud-skip shape again. `env -u
-DEVELOPER_DIR -u SDKROOT` is what makes `/usr/bin/xcrun` resolve the real Xcode
-toolchain from inside a Nix devshell: the first variable is why `swift` reported
-"tool not found", and the second is why it then reported "this SDK is not
-supported by the compiler" — a nix apple-sdk 5.10 under a 6.3 compiler. Both had
-to go; thoth found the second one.
-
-**The `android/` app was ungated.** Not partly — entirely: no ktlint, no build,
-and five Kotlin test classes under `app/src/test` that nothing ran. life's gate
-builds its own Android app in THIS repository's `#android` dev shell, so the
-toolchain was proven while the app it belongs to was not.
-
-`ng build`'s artifact judgement moved to `dev-lint#ng-build`, which keeps the
-scratch `--output-path` (so a verify run can never clobber the bundle
-`recall-build-frontend.sh` serves), keeps the retry for the macOS Piscina teardown
-abort, and additionally follows chunk references and parses what it finds.
-
-The generated `gate.json` is committed; `the table matches its Dhall` re-renders
-and diffs it, so running the gate needs no `dhall`.
-
-Rows are cheapest-first, so a fast failure does not wait behind the frontend
-build — the ordering the script had, and the only thing about it that survives
-unchanged.
+The generated `gate.json` is committed; `the table matches its Dhall`
+re-renders and diffs it, so running the gate needs no `dhall`.
 -}
 
 let G = ../dev-lint/gate/schema.dhall
@@ -58,25 +17,15 @@ let scratch = "dist/.verify-build"
 
 in  { name = "recall"
     , checks =
-        {-  **Lanes, run beside each other** (2026-10-02; all 32 rows had run in
-            one): cargo in the main lane; python (the venv before pytest, which
-            runs from it); the frontend, in table order; android; and the nix
-            agents build with dev-lint. No row reads another lane's output.
-        -}
-      [ {-  The denylist lives in the encrypted data root, never in the repo —
-            committing it would be the violation it guards against. A missing
-            one now fails; see the script's header for why that changed.
+      [ {-  The denylist lives in the encrypted data root, not the repo; a
+            missing one fails.
         -}
         G.Check::{
         , name = "check-pii (no personal terms in tracked files)"
         , argv = G.inDevShell [ "scripts/check-pii.sh" ]
         , timeout_s = 300
         }
-      , {-  Documentation rots SILENTLY: a doc naming a deleted file reads
-            exactly like one naming a live file, so the claim around it keeps
-            its authority long after the evidence is gone. Found by hand twice
-            — a permanent Python floor citing a deleted test module, and seven
-            paths left behind when the suites moved into `integration/`.
+      , {-  A doc naming a deleted file reads like one naming a live one.
         -}
         G.Check::{
         , name = "every repo path the docs cite exists"
@@ -95,10 +44,9 @@ in  { name = "recall"
         , argv = G.inDevShell [ "ruff", "format", "--check" ]
         , timeout_s = 300
         }
-      , {-  The Swift counterpart of `ruff format --check`. swift-format ships
-            with Xcode, not Nix, and a Nix devshell exports DEVELOPER_DIR and
-            SDKROOT at its own apple-sdk — unset both or xcrun resolves the wrong
-            toolchain. See the header.
+      , {-  swift-format ships with Xcode, not Nix. The devshell points
+            DEVELOPER_DIR and SDKROOT at its own apple-sdk; with either set,
+            xcrun picks the wrong toolchain or an SDK the compiler refuses.
         -}
         G.Check::{
         , name = "swift-format lint --strict (ios)"
@@ -121,33 +69,19 @@ in  { name = "recall"
               ]
         , timeout_s = 600
         }
-      , {-  The Rust counterpart of `ruff format --check` — one row for the
-            whole workspace (audiocore + audiod + recalld, stage D1).
-        -}
-        G.Check::{
+      , G.Check::{
         , name = "cargo fmt --check (workspace)"
         , argv = G.inDevShell [ "cargo", "fmt", "--all", "--check" ]
         , timeout_s = 300
         }
-      , {-  `.venv` is a store path, and this row is what makes it one.
+      , {-  `.venv` is `packages.dev-env` (the agents' `ml-env` plus the `dev`
+            group, from the same `uv.lock`), linked here and kept as a GC root.
 
-            It was a directory uv built from the same `uv.lock`, and the check
-            here was `uv sync --check`: report drift, repair nothing. That check
-            only existed because there were two artifacts to compare. There is
-            one now — `packages.dev-env`, uv2nix over the same lock, which is
-            `packages.ml-env` plus the `dev` group — so `--out-link` points
-            `.venv` at it and drift has nowhere to come from. It is also a GC
-            root, which the 1.5 GB of PyPI wheels it replaced was not.
+            Before every python-lane row that runs `.venv/bin/python`, and
+            before `mypy`, which resolves third-party imports through it.
 
-            ⚠ **This row must come before every row that runs `.venv/bin/python`**
-            (the model contract, the fleet import surface, pytest) and before
-            `mypy`, which resolves third-party imports through
-            `python_executable = ".venv/bin/python"`. The gate runs its rows in
-            order; a reshuffle that moves this one down turns four rows into
-            "no such file" with nothing saying why.
-
-            Not in the devshell, deliberately: putting it there would drag the
-            whole ML closure into `ruff check`.
+            Not in the devshell, which would drag the ML closure into
+            `ruff check`.
         -}
         G.Check::{
         , name = "the venv is a store path (nix builds it, uv does not)"
@@ -156,57 +90,33 @@ in  { name = "recall"
             [ "nix", "build", "--no-warn-dirty", ".#dev-env", "--out-link", ".venv" ]
         , timeout_s = 1800
         }
-      , {-  What home-manager will actually run, built here instead of discovered
-            at `home-manager switch`. `.#agents` is a farm of the launchd wrappers
-            in `deploy/hm-agents.nix`, so one row builds `ml-env`, `dev-python`,
-            `agent-tools` and every wrapper — including the shellcheck pass
-            `writeShellApplication` does on the wrapper text.
-
-            Every other row in this table reads the source tree. Nothing built the
-            deployed outputs, and that gap is not theoretical: gamepads and thoth
-            each carried a packaged build that had been dead for weeks with a green
-            gate the whole time, found only when an unrelated edit invalidated a
-            cached derivation.
-
-            Measured 2026-08-06: 2.5s when nothing moved, 21s when `src/` changed.
-            Only a `uv.lock` change makes it expensive, which is the change it most
-            needs to catch.
+      , {-  What home-manager deploys, built here rather than discovered at
+            `home-manager switch`: `.#agents` is every launchd wrapper in
+            `deploy/hm-agents.nix` with what it runs, including the
+            shellcheck pass on the wrapper text. The other rows read source;
+            elsewhere in the fleet, packaged builds stayed broken for weeks
+            behind a green gate.
         -}
         G.Check::{
         , name = "the launchd agents build (what home-manager deploys)"
         , lane = Some "nix"
         , argv = [ "nix", "build", "--no-warn-dirty", "--no-link", ".#agents" ]
-        , {-  ⚠ 2400, not 900, and the reason is contention rather than slowness.
-              A change to `audiocore` invalidates `audiod`, so this row does a
-              COLD Rust build — ~3 minutes alone, but it runs beside `cargo test
-              (workspace)` and the frontend build, all competing for one nix
-              daemon and this machine's cores. It failed twice on 2026-09-18 and
-              passed on retry both times with nothing changed but the cache,
-              which is the shape that teaches people to re-run a red gate
-              instead of reading it.
+        , {-  A Rust change means a cold build, ~3 minutes alone but here beside
+              `cargo test` and the frontend build for the same cores; 900 s
+              timed out twice under that contention.
           -}
           timeout_s = 2400
         }
-      , {-  Real third-party types, resolved from the .venv above.
-        -}
-        G.Check::{
+      , G.Check::{
         , name = "mypy --strict (types)"
         , lane = Some "python"
         , argv = G.inDevShell [ "mypy" ]
         , timeout_s = 900
         }
-      , {-  Generated-types drift: regenerate the ts-rs bindings from recalld's
-            structs and fail if the committed frontend/src/app/generated moved.
-        -}
-        {-  ⚠ The only check here that guards the deploy path itself. A crate
-            added to Cargo.toml but not to the Dockerfile makes the image build
-            fail — cargo cannot load the workspace graph without every member —
-            and because fleet images are :latest only, a rollback is a
-            roll-forward. So that mistake does not stale one image, it makes the
-            whole fleet undeployable, including in an emergency. It happened on
-            2026-09-08 and all 31 checks passed, because none of them builds the
-            image. Text against text on purpose: building it here would add
-            minutes to every commit for no extra coverage.
+      , {-  The one check on the image build, which no row runs: cargo cannot
+            load the workspace without every member, so a crate missing from
+            the Dockerfile breaks the image, and with :latest-only images,
+            every deploy until fixed. Compared as text, which is cheap.
         -}
         G.Check::{
         , name = "every Rust workspace member reaches the Dockerfile and flake"
@@ -222,19 +132,17 @@ in  { name = "recall"
         , argv = G.inDevShell [ "python", "scripts/check_pure_crate.py" ]
         , timeout_s = 120
         }
-      , G.Check::{
+      , {-  The ts-rs bindings, regenerated from recalld and compared with
+            frontend/src/app/generated.
+        -}
+        G.Check::{
         , name = "generated types are current"
         , argv = G.inDevShell [ "scripts/gen-types.sh", "--check" ]
         , timeout_s = 900
         }
-      , {-  THE ML IMPORTS MUST STAY LAZY, and pytest cannot show it: pytest runs
-            on the fully-stocked .venv, where a new top-level `import mlx_whisper`
-            is invisible. Importing on the DEVSHELL interpreter, which has no ML
-            deps, is what catches it.
-
-            It matters for the shims: the runner spawns them, and a module-level
-            ML import turns a missing model dependency into a shim that dies at
-            spawn, which reads as a quiet queue rather than a fault.
+      , {-  The ML imports stay lazy. pytest cannot show it, since the .venv has
+            every ML package; the devshell interpreter has none. A module-level
+            ML import would make a missing dependency kill the shim at spawn.
         -}
         G.Check::{
         , name = "shim import surface (devshell python, no ML deps)"
@@ -247,8 +155,7 @@ in  { name = "recall"
               ]
         , timeout_s = 300
         }
-      , {-  The .venv interpreter: plain `pytest` is the nix one and cannot
-            import numpy/pyannote.
+      , {-  The .venv interpreter: the devshell's has no numpy or pyannote.
         -}
         G.Check::{
         , name = "pytest (backend)"
@@ -256,9 +163,8 @@ in  { name = "recall"
         , argv = G.inDevShell [ ".venv/bin/python", "-m", "pytest" ]
         , timeout_s = 3600
         }
-      , {-  Clippy gets its own target directory: clippy-driver and rustc
-            fingerprint the workspace differently and evict each other in a
-            shared one, forcing a full recompile every gate run.
+      , {-  Its own target directory: clippy-driver and rustc fingerprint
+            differently and would evict each other's builds.
         -}
         G.Check::{
         , name = "cargo clippy (workspace)"
@@ -285,12 +191,8 @@ in  { name = "recall"
       , G.cargoDoc // { cwd = "doctor" }
       , G.cargoDoc // { cwd = "recalld" }
       , G.cargoDoc // { cwd = "runner" }
-      , {-  Unconditional. The script's guard was `[ ! -x
-            frontend/node_modules/.bin/eslint ]`, and its own comment says why
-            that is not merely a speed-up: a node_modules left behind by npm
-            still has a working .bin, so verify would pass against packages the
-            lockfile no longer describes. A guard that has to be right about that
-            is a guard that will one day be wrong; installing every time is not.
+      , {-  Every run: a stale node_modules still has a working .bin, so
+            checking for one cannot tell it matches the lockfile.
         -}
         G.Check::{
         , name = "frontend deps match the lockfile"
@@ -316,9 +218,8 @@ in  { name = "recall"
         , env = G.nonInteractive
         , timeout_s = 900
         }
-      , {-  A scratch --output-path, so the gate can never clobber the bundle in
-            dist/recall-web that recall-build-frontend.sh serves: deploying is
-            that script's job, not this one's.
+      , {-  A scratch --output-path, so the gate never overwrites the bundle
+            recall-build-frontend.sh serves.
         -}
         G.Check::{
         , name = "frontend build (Angular strict templates)"
@@ -332,13 +233,10 @@ in  { name = "recall"
         , env = G.nonInteractive
         , timeout_s = 1800
         }
-      , {-  Re-sync public/ into the scratch build before the harness serves it.
-            The Piscina teardown abort can truncate the verbatim public/** copy,
-            and a dropped Material Icons woff2 fails the harness's icon-font
-            check with ligature text — a real failure with a misleading name.
-            ng-build judges the assets index.html references and the chunks those
-            reach; a font referenced only from CSS is outside that, so this stays
-            a step of its own rather than a claim the build tool makes.
+      , {-  The macOS Piscina teardown abort can truncate the copy of public/,
+            and a missing icon font fails the harness with a misleading
+            message. ng-build checks only what index.html and its chunks
+            reference, not a font named in CSS.
         -}
         G.Check::{
         , name = "restore public/ assets into the scratch build"
@@ -347,10 +245,8 @@ in  { name = "recall"
         , argv = [ "cp", "-R", "public/.", "${scratch}/browser/" ]
         , timeout_s = 120
         }
-      , {-  Phone-width layout harness against that same scratch build — no
-            second `ng build`. serve.mjs serves it and the specs mock every /api
-            call; both are plain node, so this run does not trip the ng-cli
-            teardown crash.
+      , {-  On the same scratch build, served by plain node, so the ng-cli
+            teardown crash cannot hit it.
         -}
         G.Check::{
         , name = "frontend layout harness (playwright, phone width)"
@@ -368,7 +264,7 @@ in  { name = "recall"
         , env = G.nonInteractive # G.oneAngularWorker
         , timeout_s = 1800
         }
-      , {-  ktlint does its own pattern matching, so the glob is its to expand.
+      , {-  ktlint expands the glob itself.
         -}
         G.Check::{
         , name = "ktlint (android/)"
@@ -387,9 +283,7 @@ in  { name = "recall"
               [ "./gradlew", "--console=plain", ":app:assembleDebug" ]
         , timeout_s = 1800
         }
-      , {-  Five test classes under app/src/test that the shell gate never ran.
-        -}
-        G.Check::{
+      , G.Check::{
         , name = "android :app unit tests"
         , lane = Some "android"
         , cwd = "android"
@@ -399,8 +293,7 @@ in  { name = "recall"
               [ "./gradlew", "--console=plain", ":app:testDebugUnitTest" ]
         , timeout_s = 1800
         }
-      , {-  Strict, no baseline: the bare-dict-route debt was cleared via
-            TypedDicts, so any new violation fails.
+      , {-  Strict, no baseline.
         -}
         G.devLint "../" // { lane = Some "nix" }
       , G.checkTable "../dev-lint"
