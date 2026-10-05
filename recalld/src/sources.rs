@@ -1,15 +1,9 @@
-//! Per-source liveness: which recorders are measurably recording right now.
+//! Which recorders are measurably recording right now.
 //!
-//! Every source reduces to a last-proved-recording time from its liveness
-//! marker, refreshed by the ingest pump while a phone streams real signal and
-//! by the capture watchdog while the local mic's closed segments decode to real
-//! audio. "Active" therefore means recording, not merely connected: a phone
-//! streaming digital silence, or a mic in a startup dead-window, reads idle.
-//!
-//! The fleet has no markers of its own: every time here arrives via the Mac's
-//! ~5 s mirror report, one report-cadence old. Hence the wider windows on this
-//! side, and a Mac that stops reporting must read as "cannot see", not as the
-//! last thing heard.
+//! A source's liveness marker is refreshed by the ingest pump while a phone
+//! streams real signal, and by the capture watchdog while the mic's segments
+//! decode to real audio: a phone streaming silence reads idle. The fleet sees
+//! markers only through the Mac's ~5 s report, hence wider windows here.
 
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
@@ -29,12 +23,8 @@ pub enum SourceKind {
     TcpPcm,
     Upload,
     Discovered,
-    /// A stream this system built rather than recorded: the room stream, one
-    /// settled minute at a time from whichever microphone won it.
-    ///
-    /// Not a device: it has no recorder, no `.alive` marker and no phone to
-    /// blame, and measuring it as a microphone would double-count the one whose
-    /// audio it carries. Device checks ask `is_device()`.
+    /// A stream built rather than recorded (the retired room stream). Not a
+    /// device: measuring it would double-count the mic whose audio it carries.
     Derived,
 }
 
@@ -66,18 +56,15 @@ impl SourceKind {
         }
     }
 
-    /// Is this a recorder whose up-or-down state is a real question?
-    ///
-    /// `Upload` is a clip someone sent, not a producer. `Discovered` is audio
-    /// found on disk with no registered source, so nothing knows what wrote it;
-    /// if it really is a recorder, its agent registers the true kind on start.
+    /// A recorder whose up-or-down state is a real question. `Discovered` is
+    /// audio found on disk with no registered source; a real recorder's agent
+    /// registers its true kind on start.
     #[must_use]
     pub fn is_device(self) -> bool {
         !matches!(self, Self::Upload | Self::Discovered | Self::Derived)
     }
 }
 
-/// A registered source, as the liveness view needs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRow {
     pub id: String,
@@ -85,29 +72,25 @@ pub struct SourceRow {
     pub kind: SourceKind,
 }
 
-/// What a recorder's deliveries prove: two times, because they answer two
-/// different questions.
+/// What a recorder's deliveries prove.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Evidence {
-    /// Newest segment sent, whatever was on it: "is it running".
+    /// Newest segment sent: is it running.
     pub delivered: Option<DateTime<Utc>>,
-    /// Newest segment that could be someone talking: "is my voice being
-    /// captured audibly". `None` when nothing audible has been measured.
+    /// Newest segment with possible speech: is a voice captured audibly.
     pub speech: Option<DateTime<Utc>>,
 }
 
-/// One recorder's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceStatus {
     pub source_id: String,
     pub name: String,
     pub kind: SourceKind,
     pub last_active: Option<DateTime<Utc>>,
-    /// The consent signal, "your voice is being captured audibly", so it goes
-    /// out in a silent room.
+    /// The consent signal: a voice is being captured audibly. Off in a silent
+    /// room.
     pub active: bool,
-    /// The operational one: bytes arriving, whatever is on them. A recorder in
-    /// a silent room is recording but not active.
+    /// Bytes arriving, whatever is on them.
     pub recording: bool,
     pub last_delivered: Option<DateTime<Utc>>,
 }
@@ -116,20 +99,17 @@ pub struct SourceStatus {
 fn active_within() -> Duration {
     Duration::seconds(5)
 }
-/// The mic's marker is refreshed by the dead-segment watchdog each healthy poll
-/// (every 30 s): two missable polls plus margin.
+/// The watchdog refreshes the mic's marker every 30 s: two missable polls plus
+/// margin.
 fn watchdog_active_within() -> Duration {
     Duration::seconds(75)
 }
-/// On the fleet the markers arrive via the Mac's ~5 s mirror report, not a local
-/// file, so every time reads a report-cadence older here.
+/// The Mac's ~5 s report.
 fn fleet_report_lag() -> Duration {
     Duration::seconds(7)
 }
-/// A store-and-forward recorder refreshes no marker; it proves itself by
-/// delivering a closed segment, which takes up to 60 s to close plus up to the
-/// 60 s upload timer plus transfer. Five minutes covers that without flapping,
-/// and a dead recorder does not read live for long.
+/// A store-and-forward recorder proves itself by delivering a segment: up to
+/// 60 s to close, 60 s to the upload timer, plus transfer.
 fn delivered_active_within() -> Duration {
     Duration::minutes(5)
 }
@@ -149,10 +129,8 @@ pub fn active_window(kind: SourceKind, on_fleet: bool) -> Duration {
     }
 }
 
-/// Combine registered sources with their last-activity time.
-///
-/// ⚠ Both times must be capture times, never arrival times: a backlog draining
-/// hours late proves nothing about now.
+/// Combine registered sources with their last activity. Both times are capture
+/// times: a backlog arriving hours late proves nothing about now.
 #[must_use]
 pub fn source_statuses<S: std::hash::BuildHasher, T: std::hash::BuildHasher>(
     sources: &[SourceRow],
@@ -167,11 +145,9 @@ pub fn source_statuses<S: std::hash::BuildHasher, T: std::hash::BuildHasher>(
             let seen = last_active.get(&row.id).copied();
             let window = active_window(row.kind, on_fleet);
             let marker_fresh = seen.is_some_and(|t| now - t < window);
-            // ⚠ A marker that went stale recently is a deliberate stop, newer
-            // than any segment captured just before it; without this check a
-            // stopped phone stays green for the whole delivery window. A
-            // recorder that never streams has a marker hours stale, so how stale
-            // tells the two apart.
+            // A marker gone stale recently is a deliberate stop; without this a
+            // stopped phone stays green for the delivery window. A recorder that
+            // never streams has a marker hours stale.
             let stopped_recently =
                 seen.is_some_and(|t| !marker_fresh && now - t < delivered_active_within());
             let fresh = |when: Option<DateTime<Utc>>| {
@@ -186,8 +162,7 @@ pub fn source_statuses<S: std::hash::BuildHasher, T: std::hash::BuildHasher>(
                 name: row.name.clone(),
                 kind: row.kind,
                 last_active: [seen, heard].into_iter().flatten().max(),
-                // The marker is refreshed only above the silence floor, so a
-                // fresh marker is evidence of audible speech.
+                // The marker is refreshed only above the silence floor.
                 active: marker_fresh || fresh(heard),
                 recording: marker_fresh || fresh(shipped),
                 last_delivered: [seen, shipped].into_iter().flatten().max(),
@@ -196,10 +171,7 @@ pub fn source_statuses<S: std::hash::BuildHasher, T: std::hash::BuildHasher>(
         .collect()
 }
 
-/// Registered sources, for the liveness view.
-///
-/// An unknown kind in the database is an error here rather than a string that
-/// silently never matches downstream.
+/// Registered sources. An unknown kind is an error, not a silent mismatch.
 pub fn source_rows(conn: &Connection) -> rusqlite::Result<Vec<SourceRow>> {
     let mut stmt = SOURCES.prepare(conn)?;
     let rows = stmt.query_map([], |r| {
@@ -220,10 +192,8 @@ pub fn source_rows(conn: &Connection) -> rusqlite::Result<Vec<SourceRow>> {
     rows.collect()
 }
 
-/// The delivered-segment evidence, read straight from the ingest database.
-///
-/// Best-effort: an unreadable ingest database means "no extra evidence", never
-/// an error, because the panel is still correct on markers alone.
+/// The delivered-segment evidence. An unreadable ingest plane gives none: the
+/// markers alone are still correct.
 fn delivered_evidence(root: &std::path::Path) -> HashMap<String, Evidence> {
     let Ok(conn) = crate::store::open(root) else {
         return HashMap::new();
@@ -233,7 +203,6 @@ fn delivered_evidence(root: &std::path::Path) -> HashMap<String, Evidence> {
     };
     rows.into_iter()
         .filter_map(|(source, delivered, speech)| {
-            // A source with no parseable delivered time carries no evidence.
             let delivered = audiocore::instant::parse(&delivered)?.with_timezone(&Utc);
             Some((
                 source,
@@ -246,7 +215,7 @@ fn delivered_evidence(root: &std::path::Path) -> HashMap<String, Evidence> {
         .collect()
 }
 
-/// The wire shape of one row of `GET /api/sources`.
+/// One row of `GET /api/sources`.
 #[derive(Debug, serde::Serialize, PartialEq, Eq)]
 pub struct SourceOut {
     pub id: String,
@@ -255,7 +224,7 @@ pub struct SourceOut {
     pub active: bool,
     #[serde(rename = "lastActive")]
     pub last_active: Option<String>,
-    /// Separate from `active` on purpose — see [`SourceStatus`].
+    /// See [`SourceStatus`].
     pub recording: bool,
     #[serde(rename = "lastDelivered")]
     pub last_delivered: Option<String>,
@@ -266,11 +235,8 @@ pub struct SourcesOut {
     pub items: Vec<SourceOut>,
 }
 
-/// Everything `GET /api/sources` needs, computed off the request thread.
-///
-/// ⚠ Delivery evidence is discarded while capture is paused, for every kind:
-/// audio captured just before a pause would otherwise keep a dot green for the
-/// whole delivery window, contradicting the pause.
+/// `GET /api/sources`'s answer. Delivery evidence is ignored while capture is
+/// paused: audio from just before a pause would keep a dot green.
 pub fn fleet_sources(
     root: &std::path::Path,
     conn: &Connection,
@@ -285,9 +251,8 @@ pub fn fleet_sources(
 
     let mut last_active: HashMap<String, DateTime<Utc>> = HashMap::new();
     for row in &rows {
-        // The mic keeps a pause gate the streamed phones do not need: its
-        // window is a leisurely ~75 s (the watchdog's cadence), and a pause must
-        // read idle at once rather than after one more poll.
+        // The mic's ~75 s window would show a pause one poll late; the phones'
+        // is short enough without the gate.
         if let Some(when) = reported
             .get(&row.id)
             .filter(|_| row.kind == SourceKind::TcpPcm || running)
@@ -324,10 +289,7 @@ pub fn fleet_sources(
     })
 }
 
-/// `GET /api/sources` — per-recorder liveness for the fleet view.
-///
-/// Uploaded recordings are sources but not live devices, so they are excluded;
-/// they live in the Sessions view.
+/// `GET /api/sources`: per-recorder liveness. Uploads are not devices.
 pub async fn sources_route(
     axum::extract::State(st): axum::extract::State<std::sync::Arc<crate::reads::State>>,
 ) -> axum::response::Response {

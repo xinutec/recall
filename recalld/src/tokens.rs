@@ -1,25 +1,20 @@
-//! The fourth credential plane (docs/architecture.md): per-device, write-only
-//! ingest tokens. A token authorizes `PUT` for exactly one source — not read,
-//! not list, not another device's directory — so a stolen recorder can append
-//! audio and do nothing else, and is revoked by deleting its line.
+//! Per-device ingest tokens (docs/architecture.md): a token authorizes `PUT`
+//! for one source only, so a stolen recorder can append audio and nothing else,
+//! and is revoked by deleting its line.
 //!
-//! One deliberate widening: a `*` line grants a token every source, still
-//! write-only. It is for the Mac's backfill, which mirrors every device's audio
-//! plus a new source per uploaded meeting, so a per-source list would drift. A
-//! device never gets `*`.
+//! A `*` line grants every source, still write-only: the Mac's backfill
+//! mirrors every device plus each uploaded meeting. No device gets `*`.
 //!
-//! The file lives outside the repo and the image (`--tokens` points at a
-//! mounted secret); one `<source> <token>` per line, `#` comments and blank
-//! lines ignored. Read once at startup, so rotation is a pod rollout.
-//! Unconfigured means open, so dev and tests need no setup.
+//! One `<source> <token>` per line; `#` comments and blank lines ignored. A
+//! mounted secret, read once at startup: rotation is a rollout. Unconfigured
+//! means open, for dev and tests.
 
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
 
-/// The parsed token table. Tokens are held as sha-256 digests so an equality
-/// check compares fixed-length hashes — timing reveals nothing about how much
-/// of a guess matched.
+/// Tokens are held as sha-256 digests, so comparison timing reveals nothing
+/// about how much of a guess matched.
 pub struct Tokens {
     by_source: HashMap<String, Vec<[u8; 32]>>,
     any_source: Vec<[u8; 32]>,
@@ -29,9 +24,8 @@ fn digest(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
-/// The authorization verdict, split so the surface can answer 401 (who are
-/// you) and 403 (not yours) distinctly: a recorder holding a valid neighbour's
-/// token is a configuration fault worth naming.
+/// 401 (unknown) and 403 (another source's token) apart: a recorder holding a
+/// neighbour's token is a configuration fault worth naming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Allowed,
@@ -44,8 +38,7 @@ impl Tokens {
         Self::parse(&std::fs::read_to_string(path)?)
     }
 
-    /// The same grammar from any carrier: the fleet supplies it as an env var
-    /// (`RECALLD_INGEST_TOKENS`), dev as a file.
+    /// The fleet supplies it as `RECALLD_INGEST_TOKENS`, dev as a file.
     pub fn parse(text: &str) -> std::io::Result<Self> {
         let mut by_source: HashMap<String, Vec<[u8; 32]>> = HashMap::new();
         let mut any_source: Vec<[u8; 32]> = Vec::new();
@@ -92,8 +85,7 @@ impl Tokens {
     }
 }
 
-/// Equality for single-token gates (the read side), through the same
-/// digest-then-compare shape as the table above.
+/// Equality for a single-token gate, compared as digests.
 pub fn same_token(presented: &str, expected: &str) -> bool {
     digest(presented) == digest(expected)
 }

@@ -1,9 +1,6 @@
 //! The ingest plane's bookkeeping: one row per stored blob, in
-//! `<root>/ingest.sqlite`. The transcript system of record (`recall.sqlite`) is
-//! a separate plane (docs/architecture.md, "recalld").
-//!
-//! Append-only: there is no delete here because no network path deletes
-//! (decision 2).
+//! `<root>/ingest.sqlite`. Append-only (decision 2), except
+//! [`forget_upload`].
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
@@ -30,8 +27,8 @@ crate::statements! {
     LOOKUP: Ingest =
         "SELECT source, filename, start_utc, bytes, sha256, received_utc, sent_utc
          FROM segments WHERE filename = ?1";
-    // ?2 bounds the start (NULL: from the first). The source (?1) has a
-    // statement of its own so it can reach its rows by `segments_source_start`.
+    // ?2 bounds the start (NULL: from the first). The source filter has its
+    // own statement, to use `segments_source_start`.
     LIST: Ingest =
         "SELECT source, filename, start_utc, bytes, sha256, received_utc, sent_utc
          FROM segments WHERE start_utc >= COALESCE(?2, '')
@@ -42,8 +39,7 @@ crate::statements! {
          ORDER BY start_utc, filename LIMIT ?3";
 }
 
-/// A byte count column, read as the i64 SQLite stores and returned as u64. A
-/// negative value is an out-of-range error naming the column.
+/// A byte count; negative is an out-of-range error.
 fn byte_count(r: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<u64> {
     let stored: i64 = r.get(column)?;
     u64::try_from(stored).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(column, stored))
@@ -58,21 +54,18 @@ pub struct Row {
     pub bytes: u64,
     pub sha256: String,
     pub received_utc: String,
-    /// The recorder's own clock at upload, when it sent one, which clock skew
-    /// is measured against. Name-vs-arrival is delivery latency, not skew: a
-    /// cached backlog arrives late legitimately.
+    /// The recorder's clock at upload, to measure clock skew against (arrival
+    /// is latency, not skew: a backlog arrives late).
     pub sent_utc: Option<String>,
 }
 
-/// The room stream's source and its meaning-plane kind. The stream was removed
-/// (#1388); its old rows stay as history, and every pass here skips them.
+/// The retired room stream (#1388); its rows stay as history and the passes
+/// skip them.
 pub const ROOM_SOURCE: &str = "room";
 pub const ROOM_KIND: &str = "derived";
 
-/// Where a source's delivered blobs live: `<root>/ingest/<source>/`.
-///
-/// Use this rather than spelling the path out: nothing type-checks a `join`,
-/// and a wrong one records unplayable audio paths.
+/// Where a source's blobs live: `<root>/ingest/<source>/`. Use this, not a
+/// spelled-out `join`: a wrong one records unplayable paths.
 #[must_use]
 pub fn source_dir(root: &std::path::Path, source: &str) -> std::path::PathBuf {
     root.join("ingest").join(source)
@@ -81,19 +74,15 @@ pub fn source_dir(root: &std::path::Path, source: &str) -> std::path::PathBuf {
 pub fn open(root: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(root.join("ingest.sqlite"))?;
     conn.busy_timeout(Duration::from_secs(5))?;
-    // WAL so the readers never block a recorder's upload, and vice versa.
+    // WAL: readers and a recorder's upload never block each other.
     conn.pragma_update(None, "journal_mode", "WAL")?;
     crate::ingest_schema::ensure(&conn)?;
     Ok(conn)
 }
 
-/// Remove every ingest-plane row of a deleted upload, in one transaction: its
-/// transcription and diarization (the jobs), measurements, ledger, clips and
-/// segment rows.
-///
-/// ⚠ The ingest plane is append-only for recorders; this is the one deletion,
-/// and [`crate::sessions::DeletedUpload`] is its only key, so household capture
-/// cannot reach it.
+/// Remove every ingest-plane row of a deleted upload in one transaction: jobs,
+/// measurements, ledger, clips and segments. The plane's one deletion; only a
+/// [`crate::sessions::DeletedUpload`] opens it, so household capture cannot.
 pub fn forget_upload(
     conn: &mut Connection,
     deleted: &crate::sessions::DeletedUpload,
@@ -121,7 +110,6 @@ pub fn insert(conn: &Connection, row: &Row) -> rusqlite::Result<()> {
             &row.filename,
             &row.source,
             &row.start_utc,
-            // SQLite's integer is i64; a file size fits.
             i64::try_from(row.bytes).expect("a byte count fits SQLite's i64"),
             &row.sha256,
             &row.received_utc,
@@ -147,8 +135,8 @@ pub fn lookup(conn: &Connection, filename: &str) -> rusqlite::Result<Option<Row>
         .optional()
 }
 
-/// The read side's listing: everything, one source's, or one source's since
-/// an instant — ordered by capture start so a consumer walks time forward.
+/// Stored segments, optionally of one source and since an instant, in capture
+/// order.
 pub fn list(
     conn: &Connection,
     source: Option<&str>,

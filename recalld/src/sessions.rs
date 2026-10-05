@@ -1,13 +1,8 @@
-//! The uploaded-sessions surface.
+//! Uploaded sessions: one discrete recording, such as a meeting, as opposed to
+//! the continuous capture. The upload itself is `crate::upload`.
 //!
-//! A *session* is one discrete recording, such as a meeting, as opposed to the
-//! continuous capture. These routes find, name and read one back; the upload
-//! itself is `crate::upload`.
-//!
-//! Every mutating route is guarded to upload sources: renaming or re-diarizing
-//! the continuous archive would be wrong, deleting it unrecoverable. The guard
-//! answers 404 for a source that does not exist and 400 for one that is not an
-//! upload.
+//! Every mutating route is guarded to uploads (404 for no such source, 400 for
+//! the continuous archive).
 
 use crate::{reads, route, work};
 use audiocore::instant::Stamp;
@@ -80,11 +75,9 @@ crate::statements! {
         "DELETE FROM sources WHERE id = ?1";
 }
 
-/// A source that arrived as a file rather than a live microphone.
 const UPLOAD_KIND: &str = "upload";
 
-/// A diarization tag, as opposed to a name a person gave. Never shown as a
-/// speaker: `SPEAKER_00` is an answer about voices, not about people.
+/// A diarization tag, not a person's name; never listed as a speaker.
 const CLUSTER_PREFIX: &str = "SPEAKER";
 
 #[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
@@ -107,17 +100,13 @@ pub struct SessionsOut {
     pub items: Vec<SessionOut>,
 }
 
-/// Every uploaded session, newest first.
-///
-/// Only human-confirmed names are listed as speakers; a turn without one counts
-/// as "unknown". Voiceprint guesses have no trustworthy threshold (see
-/// [`crate::identify::match_one`]).
+/// Every uploaded session, newest first. Only names a person gave are listed
+/// as speakers; guesses have no trustworthy threshold.
 pub fn sessions(conn: &Connection) -> rusqlite::Result<SessionsOut> {
     let mut stmt = SESSIONS.prepare(conn)?;
     let rows = stmt.query_map([UPLOAD_KIND], |r| {
         let names: Option<String> = r.get(5)?;
-        // Sorted, not first-seen: this is a list to scan, and GROUP_CONCAT's
-        // order is not defined.
+        // GROUP_CONCAT's order is undefined.
         let mut speakers: Vec<String> = names
             .filter(|s| !s.is_empty())
             .map(|s| s.split(',').map(str::to_owned).collect())
@@ -138,14 +127,11 @@ pub fn sessions(conn: &Connection) -> rusqlite::Result<SessionsOut> {
     })
 }
 
-/// Why a session could not be acted on.
 #[derive(Debug)]
 pub enum SessionError {
-    /// No source with that id.
     Missing,
-    /// It exists, but it is the continuous archive rather than an upload.
+    /// The continuous archive, not an upload.
     NotAnUpload,
-    /// It has no audio, so there is no span to work over.
     NoAudio,
     Db(rusqlite::Error),
 }
@@ -169,7 +155,6 @@ impl SessionError {
     }
 }
 
-/// Refuse anything that is not an uploaded meeting.
 fn require_upload(conn: &Connection, source: &str) -> Result<(), SessionError> {
     let kind: Option<String> = SOURCE_KIND.query_row(conn, [source], |r| r.get(0)).ok();
     match kind.as_deref() {
@@ -185,13 +170,9 @@ pub fn rename(conn: &Connection, source: &str, title: &str) -> Result<(), Sessio
     Ok(())
 }
 
-/// Re-derive who said what across a whole session: every finished
-/// `diarize-segment` job of its clips goes back to `queued` and the diarized
-/// pass's ledger rows for them are cleared, so the voices runner diarizes them
-/// again and the pass decides afresh against the turns standing now.
-///
-/// Returns how many clips were re-queued. Zero is not an error: a session whose
-/// diarization has not finished yet has nothing to redo.
+/// Diarize a whole session again: its finished diarize jobs are re-queued and
+/// their ledger rows cleared, so the pass decides afresh. Returns how many were
+/// re-queued; zero if none had finished.
 pub fn rediarize(
     meaning: &Connection,
     ingest: &Connection,
@@ -209,13 +190,12 @@ pub fn rediarize(
     Ok(requeued)
 }
 
-/// The languages a session can be pinned to: the household's two. The model's
-/// own guess picks a third language for Dutch often enough (Italian for a Dutch
-/// conversation, 2026-10-03) that anything else is more likely a mistake.
+/// The household's two languages. The model guesses a third for Dutch often
+/// enough (Italian, 2026-10-03) that any other pin is likely a mistake.
 pub const LANGUAGES: &[&str] = &["nl", "en"];
 
-/// A requested language: absent or empty is the model's guess, one of
-/// [`LANGUAGES`] pins it, anything else is refused.
+/// Absent or empty: the model guesses. Anything outside [`LANGUAGES`] is
+/// refused.
 pub fn parse_language(raw: Option<&str>) -> Result<Option<&'static str>, String> {
     match raw.map(str::trim) {
         None | Some("") => Ok(None),
@@ -228,9 +208,8 @@ pub fn parse_language(raw: Option<&str>) -> Result<Option<&'static str>, String>
     }
 }
 
-/// Pin `source`'s language (or unpin it) and transcribe every clip again with
-/// it, through [`crate::retranscribe`]: the old lines are set aside, not
-/// deleted, and a person's own lines are kept.
+/// Pin (or unpin) `source`'s language and transcribe every clip again with it
+/// ([`crate::retranscribe`]).
 pub fn set_language(
     meaning: &Connection,
     ingest: &Connection,
@@ -251,8 +230,7 @@ pub fn set_language(
     Ok(crate::retranscribe::request(ingest, &files, now)?)
 }
 
-/// Store `source`'s language without transcribing anything again: for a
-/// session being created, which has no transcription yet.
+/// Store `source`'s language without transcribing again, for a new session.
 pub fn pin_language(
     conn: &Connection,
     source: &str,
@@ -262,7 +240,6 @@ pub fn pin_language(
     Ok(())
 }
 
-/// The language `source` is pinned to, if any.
 pub fn language_of(conn: &Connection, source: &str) -> rusqlite::Result<Option<String>> {
     use rusqlite::OptionalExtension;
     Ok(LANGUAGE_OF
@@ -271,8 +248,8 @@ pub fn language_of(conn: &Connection, source: &str) -> rusqlite::Result<Option<S
         .flatten())
 }
 
-/// Give a leased transcription job its session's pinned language, if any;
-/// attached at lease time so a change applies to the next transcription.
+/// Give a leased transcription job its session's pinned language, at lease
+/// time so a change applies to the next one.
 pub fn attach_language(
     root: &std::path::Path,
     job: &mut crate::queue::Job,
@@ -284,13 +261,8 @@ pub fn attach_language(
     Ok(())
 }
 
-/// Name a diarization voice across a whole session, or clear it with `None`.
-///
-/// No `hidden_reason` filter, unlike the read queries: hiding is a display
-/// state, and a turn unhidden later must come back correctly named.
-///
-/// Not display-only: the voiceprint backfill selects on `speaker_label`, so
-/// naming a voice here enrols it.
+/// Name a diarized voice across a whole session, or clear it with `None`.
+/// Hidden turns too, so one unhidden later is named. Naming enrols the voice.
 pub fn name_voice(
     conn: &Connection,
     source: &str,
@@ -317,8 +289,7 @@ pub struct TranscriptExportOut {
     pub turns: Vec<BubbleOut>,
 }
 
-/// One turn as the export reads it. Public so the merge rule can be tested by
-/// constructing turns rather than a schema.
+/// One turn as the export reads it.
 pub struct ExportTurn {
     pub start_utc: String,
     pub text: String,
@@ -326,8 +297,7 @@ pub struct ExportTurn {
     pub speaker_cluster: Option<String>,
 }
 
-/// A confirmed name wins; else the diarization voice, so distinct unnamed
-/// speakers stay distinguishable; "unknown" only when there is neither.
+/// A person's name, else the diarized voice, else "unknown".
 fn who(turn: &ExportTurn) -> String {
     turn.speaker_label
         .clone()
@@ -348,12 +318,8 @@ fn session_turns(conn: &Connection, source: &str) -> rusqlite::Result<Vec<Export
     rows.collect()
 }
 
-/// The finalised transcript: consecutive same-speaker turns merged into one
-/// bubble, current state only, deterministic so an unchanged re-export is
-/// byte-identical.
-///
-/// Bubble times are in the machine's local zone, for a person reading a
-/// document. The pod runs in UTC.
+/// The finished transcript, consecutive same-speaker turns merged, and
+/// deterministic. Times are in the machine's local zone (the pod's is UTC).
 pub fn clean_transcript(source: &str, turns: &[ExportTurn]) -> TranscriptExportOut {
     let mut bubbles: Vec<BubbleOut> = Vec::new();
     let mut speakers: Vec<String> = Vec::new();
@@ -386,9 +352,7 @@ pub fn clean_transcript(source: &str, turns: &[ExportTurn]) -> TranscriptExportO
     }
 }
 
-/// A stored UTC instant in the machine's local zone, or unchanged if it will
-/// not parse — a transcript is worth exporting with an odd timestamp, and is
-/// not worth failing over one.
+/// A stored instant in the local zone, or unchanged if it will not parse.
 fn local_iso(stored: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(stored).map_or_else(
         |_| stored.to_owned(),
@@ -501,8 +465,7 @@ pub async fn name_voice_route(
     axum::Json(body): axum::Json<VoiceNameIn>,
 ) -> Response {
     let root = st.root.clone();
-    // An empty name clears the label rather than storing "", which would read as
-    // a speaker called nothing.
+    // An empty name clears the label.
     let name = body
         .name
         .map(|n| n.trim().to_owned())
@@ -537,23 +500,10 @@ pub async fn transcript_route(
 
 // --- deleting a session ------------------------------------------------------
 
-/// Delete an uploaded session and everything derived from it, returning the audio
-/// file paths for the caller to unlink.
-///
-/// ⚠ The one irreversible operation in this product: everything else hides,
-/// supersedes or re-derives. It must stay guarded to upload sources by
-/// `require_upload`; the continuous capture is append-only.
-///
-/// ⚠ Every deleted segment is tombstoned in the same transaction, so the turns
-/// pass (`turns::tombstoned_block`) does not rebuild it. A record, never an
-/// order: nothing serves it to a recorder.
-///
-/// `transcript_fts` is deliberately not cleaned: it is contentless FTS5 with no
-/// per-row delete, and a rowid whose segment is gone resolves to nothing.
 /// Proof that an upload's meaning-plane rows were deleted: the only thing
 /// [`crate::store::forget_upload`] accepts, and only [`delete_session`] makes
-/// one. So the ingest rows of a source can be removed only for a source just
-/// checked to be an upload and deleted, never for household capture.
+/// one, so ingest rows can be removed only for a deleted upload, never for
+/// household capture.
 #[derive(Debug)]
 pub struct DeletedUpload {
     source: String,
@@ -571,6 +521,14 @@ impl DeletedUpload {
     }
 }
 
+/// Delete an uploaded session and everything derived from it: the one
+/// irreversible operation (everything else hides, supersedes or re-derives),
+/// so it is guarded to uploads by `require_upload`.
+///
+/// Each deleted segment is tombstoned in the same transaction, so the turns
+/// pass (`turns::tombstoned_block`) does not rebuild it. `transcript_fts` is
+/// contentless FTS5 with no per-row delete; a rowid whose segment is gone
+/// resolves to nothing.
 pub fn delete_session(
     conn: &mut Connection,
     source: &str,
@@ -608,11 +566,9 @@ pub fn delete_session(
     })
 }
 
-/// Unlink a deleted session's audio, its own directory, and its ingest
-/// directory once that is empty. Best effort: the rows are already gone.
-///
-/// The ingest directory is removed only when empty, never recursively: it is
-/// the ingest plane, and anything still in it is not this delete's to destroy.
+/// Unlink a deleted session's audio and its own directory, and its ingest
+/// directory only if empty: anything still there is not this delete's. Best
+/// effort: the rows are already gone.
 pub fn remove_files(root: &std::path::Path, source: &str, paths: &[String]) {
     for path in paths {
         let _ = std::fs::remove_file(path);
@@ -635,13 +591,10 @@ pub async fn delete_route(
             let mut conn = work::open_write(&root)?;
             delete_session(&mut conn, &source, &now)?
         };
-        // The words too: the ingest plane holds the session's transcription
-        // in its jobs, and a delete that leaves them has not deleted anything
-        // a reader cares about.
+        // The ingest plane holds the session's words in its jobs.
         let mut ingest = crate::store::open(&root)?;
         crate::store::forget_upload(&mut ingest, &deleted)?;
-        // Files only after the commits: unlinking first would destroy audio a
-        // rolled-back delete still points at.
+        // Files only after the commits, in case a delete rolls back.
         remove_files(&root, &source, deleted.paths());
         Ok(())
     });

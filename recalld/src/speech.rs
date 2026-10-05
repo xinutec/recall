@@ -1,15 +1,9 @@
-//! How much of each delivered segment is speech, stored once per blob
-//! (docs/architecture.md).
+//! How much of each delivered segment is speech, and where: one row per blob.
+//! Liveness wants "someone is speaking", not "bytes arrived"; the queue refuses
+//! a segment measured silent, since a model asked about silence invents text;
+//! render drops a silence phrase where no speech was heard.
 //!
-//! The level scanner measures how loud a segment is; this measures whether
-//! anyone was talking. Liveness wants "someone is speaking" rather than "bytes
-//! arrived"; the room builder's reference level wants speech-bearing segments;
-//! and the queue waits for this measurement and refuses a segment measured
-//! silent, because a model asked about silence invents text.
-//!
-//! Bounded batches, one row per blob, like the level scanner, but newest first:
-//! liveness and the reference both read recent rows, and oldest-first would
-//! leave them waiting hours behind the archive backfill.
+//! Bounded batches, newest first, so liveness does not wait behind backfill.
 
 use crate::store;
 use audiocore::vad::{Detector, Region};
@@ -55,18 +49,13 @@ crate::statements! {
 
 pub use audiocore::vad::UNKNOWN_SECONDS;
 
-/// Measure up to `batch` unmeasured segments, newest first; returns rows written.
-/// Room left in the batch goes to measured segments whose regions were never
-/// stored (they predate the column), so a new clip is never queued behind the
-/// backfill: the transcription queue waits on its measurement.
-///
-/// The detector is loaded once per batch: construction costs ~2 s against
-/// ~0.5 s of detection per clip.
+/// Measure up to `batch` unmeasured segments, newest first, and fill the rest
+/// of the batch with older rows that predate stored regions. Returns rows
+/// written. The detector loads once per batch (~2 s, against ~0.5 s a clip).
 ///
 /// # Errors
-/// Only for database failures. An undecodable blob is a stored row
-/// (`UNKNOWN_SECONDS`), not an error: the row is what stops the scanner
-/// revisiting it forever.
+/// Only for database failures. An undecodable blob is stored as
+/// `UNKNOWN_SECONDS`, so it is not revisited.
 pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     let conn = store::open(root)?;
     let pending = unmeasured(&conn, batch)?;
@@ -79,8 +68,7 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     let mut detector = match Detector::load() {
         Ok(detector) => detector,
         Err(err) => {
-            // A broken model is a deployment fault, not a silent room: leave the
-            // segments unmeasured for a fixed build, rather than writing zeros.
+            // A deployment fault, not a silent room: write nothing.
             tracing::error!(%err, "speech detector unavailable; leaving segments unmeasured");
             return Ok(0);
         }
@@ -105,8 +93,7 @@ pub fn scan_once(root: &Path, batch: usize) -> rusqlite::Result<usize> {
     }
     for (filename, source) in backfill {
         let found = detector.speech_regions(&root.join("ingest").join(&source).join(&filename));
-        // Only the regions: the stored total came from the same detector, and
-        // the queue has already acted on it.
+        // Only the regions: the queue has already acted on the stored total.
         SET_REGIONS.execute(&conn, (&filename, regions_json(found.ok().as_deref())?))?;
         written += 1;
     }
@@ -147,8 +134,7 @@ pub fn parse_regions(json: &str) -> Option<Vec<Region>> {
     )
 }
 
-/// What the pass found in one blob, for the write-time sweep: how much speech,
-/// and where. Each is `None` until measured.
+/// What the pass found in one blob; each part `None` until measured.
 ///
 /// # Errors
 /// On database failure.
@@ -166,12 +152,8 @@ pub fn heard(ingest: &Connection, filename: &str) -> rusqlite::Result<crate::qua
     })
 }
 
-/// This source's newest segment that could be someone talking, as its capture
-/// stamp.
-///
-/// ⚠ Only a segment measured as silent disqualifies. Unmeasured and
-/// undecodable (`UNKNOWN_SECONDS`) ones still count: the scanner runs behind
-/// live audio, and "not looked at yet" is not evidence of silence.
+/// The capture stamp of this source's newest segment not measured silent.
+/// Unmeasured and undecodable ones count: not looked at is not silence.
 ///
 /// # Errors
 /// On database failure.
@@ -181,12 +163,8 @@ pub fn latest_speech_utc(conn: &Connection, source: &str) -> rusqlite::Result<Op
     Ok(found)
 }
 
-/// Every source's newest capture time, in two flavours the panel must not
-/// conflate: what the recorder delivered ("is it running?") and what could be
-/// someone talking ("is my voice captured audibly?", so a silent room reads
-/// idle on purpose).
-///
-/// Speech rule as in [`latest_speech_utc`].
+/// Every source's newest delivered capture time ("is it running") and newest
+/// possible speech ("is a voice captured", as in [`latest_speech_utc`]).
 ///
 /// # Errors
 /// On database failure.
@@ -194,8 +172,7 @@ pub fn liveness_by_source(conn: &Connection) -> rusqlite::Result<Vec<(String, St
     let mut stmt = LIVENESS.prepare(conn)?;
     let rows = stmt.query_map([], |r| {
         let delivered: String = r.get(1)?;
-        // No speech-bearing segment: the empty string rather than an invented
-        // time. Callers map it to null.
+        // Empty for none; callers map it to null.
         let speech: Option<String> = r.get(2)?;
         Ok((r.get(0)?, delivered, speech.unwrap_or_default()))
     })?;

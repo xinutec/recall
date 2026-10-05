@@ -3,19 +3,15 @@ import type { HiddenKind } from "./HiddenKind";
 import type { Tier } from "./Tier";
 
 /**
- * One turn, in exactly the shape the Angular app already consumes.
- *
- * `camelCase` and the explicit `Option`s are the contract: the UI distinguishes
- * a null confidence ("confirmed by a human, no score applies") from a numeric
- * one ("a guess, this strong"), so these serialise as `null` rather than being
- * skipped.
+ * One turn as the app shows it. Absent values serialise as `null`: a null
+ * confidence means a person confirmed it, a number is a guess's strength.
  */
 export type Transcript = { id: number, start: string, end: string, text: string, language: string | null, speaker: string | null, speakerConfirmed: boolean, speakerConfidence: number | null, confidence: number | null, loudness: number | null, model: string | null, tier: Tier, hidden: string | null, 
 /**
- * What kind of hide `hidden` is; the app checks this, never the spelling.
+ * The kind of hide; the app checks this, never `hidden`'s spelling.
  */
 hiddenAs: HiddenKind | null, audioUrl: string, source: string | null, cluster: string | null, 
 /**
- * A person typed or vouched for these words, wherever they did it.
+ * A person typed or vouched for these words.
  */
 wordsChecked: boolean, };

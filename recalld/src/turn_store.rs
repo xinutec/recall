@@ -1,9 +1,6 @@
 //! Every write to `transcript_segments`, and the types that say what a row is.
-//!
-//! ⚠ No other module writes the table (`the_turn_table_has_one_writer` fails
-//! the build otherwise), so every write records itself the way readers expect:
-//! a writer of its own once set only the cluster, and readers, going by the
-//! provenance, called the turns undiarized.
+//! No other module writes the table (`the_turn_table_has_one_writer`), so every
+//! write records itself the way readers expect.
 
 use audiocore::instant::Stamp;
 use std::borrow::Cow;
@@ -418,10 +415,9 @@ impl<'a> NewTurn<'a> {
     }
 }
 
-/// Insert a turn and its search-index row, returning its id.
-///
-/// ⚠ `transcript_fts` is contentless FTS5 kept by the writer, not a trigger;
-/// a turn missing from it is silently unsearchable. Hence one function.
+/// Insert a turn and its search-index row, returning its id. One function,
+/// since `transcript_fts` is kept by the writer and a missing row is silently
+/// unsearchable.
 ///
 /// # Errors
 /// If the database refuses.

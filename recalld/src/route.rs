@@ -1,21 +1,13 @@
-//! Shared plumbing for the browsing-tier route handlers.
-//!
-//! Every route in [`crate::reads`], [`crate::labels`] and [`crate::work`] does
-//! the same two things: move a blocking `SQLite` call off the async runtime, and
-//! turn a failure into a 500 without leaking why.
-//!
-//! ⚠ The blocking pool is not optional: `rusqlite` is synchronous, and a query
-//! on the request thread stalls every other request, ingest included.
+//! Route plumbing: run a blocking `SQLite` call off the async runtime (on the
+//! request thread it would stall every other request), and turn a failure into
+//! a 500 that says nothing.
 
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
-/// The body a fault answers with.
-///
-/// Deliberately says nothing about what failed: no caller branches on it. The
-/// log line names the route and carries the error.
+/// The log line carries the route and the error; the answer neither.
 const FAULT: &str = "request failed";
 
 fn fault() -> Response {
@@ -32,8 +24,7 @@ pub fn keep_faults_in(path: std::path::PathBuf) {
 }
 
 /// Log a fault, and keep it where the doctor looks. A fault log that cannot
-/// be written is logged and otherwise ignored: the request has failed
-/// already, and this must not fail it twice.
+/// be written is only logged.
 fn record(what: &str, err: &dyn std::fmt::Display) {
     tracing::warn!("{what} failed: {err}");
     let Some(path) = KEPT_IN.get() else {
@@ -59,18 +50,14 @@ fn record(what: &str, err: &dyn std::fmt::Display) {
     }
 }
 
-/// Log a fault and answer 500 — for routes whose own error type says more than
-/// `rusqlite::Error` does, so they cannot go through [`blocking`].
+/// Log a fault and answer 500, for routes with their own error type.
 pub fn faulted(what: &str, err: &dyn std::fmt::Display) -> Response {
     record(what, err);
     fault()
 }
 
-/// Run a blocking database closure, or a 500 describing nothing.
-///
-/// `what` names the route for the log only. Both failure modes land in the same
-/// place on purpose: a panicked task and a failed query are equally a fault of
-/// ours, and the caller can act on neither.
+/// Run a blocking database closure; a failed query or a panic is a 500.
+/// `what` names the route in the log.
 #[expect(clippy::result_large_err, reason = "the Err is the HTTP response")]
 pub async fn blocking<T, F>(what: &'static str, f: F) -> Result<T, Response>
 where
@@ -83,8 +70,7 @@ where
             record(what, &err);
             Err(fault())
         }
-        // spawn_blocking cannot be cancelled by dropping the handle, so in
-        // practice this is a panic in the closure. Display says which.
+        // A panic: spawn_blocking is not cancelled by dropping the handle.
         Err(err) => {
             record(&format!("{what} task"), &err);
             Err(fault())
@@ -92,7 +78,7 @@ where
     }
 }
 
-/// [`blocking`], serialised — the shape almost every read route wants.
+/// [`blocking`], answered as JSON.
 pub async fn json<T, F>(what: &'static str, f: F) -> Response
 where
     F: FnOnce() -> rusqlite::Result<T> + Send + 'static,
@@ -104,9 +90,7 @@ where
     }
 }
 
-/// What a write route answers with when it has nothing to return.
-///
-/// `{"ok": true}`. Nothing reads the field; the app branches on the status.
+/// `{"ok": true}`, for a write with nothing to return. The app reads the status.
 #[derive(Serialize, ts_rs::TS)]
 #[ts(export, rename = "Ok")]
 pub struct Ack {

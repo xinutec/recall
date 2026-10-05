@@ -1,29 +1,24 @@
 //! What the browser tells the server: error reports and the activity trace.
 //!
-//! Neither route touches a database. `/api/log` appends a browser-side error to
-//! a file, because the phone has no readable console; `/api/telemetry` logs what
-//! a person did (a tap that hit a cache, a disabled control), which otherwise
-//! never reaches the server.
+//! `/api/log` appends a browser error to a file (the phone has no readable
+//! console); `/api/telemetry` logs what a person did, which otherwise never
+//! reaches the server.
 //!
-//! ⚠ `one_line` is a security boundary: client text goes verbatim into log
-//! lines, and a newline in it could forge whole `client-event` lines.
+//! `one_line` is a security boundary: client text goes into log lines, where a
+//! newline could forge a `client-event` line.
 
 use axum::Json;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
-/// A per-batch cap, so a buggy client cannot turn one POST into a log flood.
+/// So one POST cannot flood the log.
 const MAX_EVENTS: usize = 100;
-/// A per-label cap, counted in characters rather than bytes so a multi-byte
-/// glyph is never split in half.
+/// In characters, so a multi-byte glyph is never split.
 const MAX_LABEL: usize = 160;
 
 /// Invisible characters that can reorder or disguise a rendered line: bidi
-/// overrides and zero-width marks. They cannot forge a newline, but they can
-/// make a log line read as something it does not say.
-///
-/// An explicit list rather than the whole Cf category: `char::is_control`
-/// covers Cc and `char::is_whitespace` covers U+2028/U+2029, leaving this set.
+/// overrides and zero-width marks. Control characters and line separators are
+/// covered by `is_control` and `is_whitespace`.
 const REORDERING: &[char] = &[
     '\u{00AD}', // soft hyphen
     '\u{200B}', '\u{200C}', '\u{200D}', '\u{200E}', '\u{200F}', // zero-width + LRM/RLM
@@ -32,10 +27,9 @@ const REORDERING: &[char] = &[
     '\u{FEFF}', // zero-width no-break space
 ];
 
-/// Flatten a client-supplied label to a single harmless log field.
-///
-/// Everything that could break or re-render a line becomes a space, then runs of
-/// whitespace collapse to one. Truncation is last and counts characters.
+/// Flatten client text to one harmless log field: anything that could break
+/// or re-render a line becomes a space, whitespace collapses, then it is cut
+/// to `max_len` characters.
 #[must_use]
 pub fn one_line(label: &str, max_len: usize) -> String {
     let unbroken: String = label
@@ -67,25 +61,19 @@ pub struct ClientLog {
     pub stack: Option<String>,
 }
 
-/// One thing that happened in the client.
-///
-/// ⚠ The field types are the contract with a shipped app. `at` is the client's
-/// clock in epoch milliseconds, a number; typed as a string, every batch fails
-/// to deserialise. `path` is required.
+/// One thing that happened in the client. The types are a shipped app's
+/// contract: `at` is epoch milliseconds, a number.
 #[derive(Debug, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct TelemetryEvent {
     pub kind: String,
     pub path: String,
-    /// Null for a nav event, a control's visible text for a tap — present either
-    /// way, so no `serde(default)`: the client sends the key on every event.
+    /// Null for a navigation, a control's visible text for a tap; always sent.
     pub label: Option<String>,
     pub at: i64,
 }
 
-/// The line `/api/log` appends, split out to be testable without a filesystem.
-/// Only the first line of a stack is kept, so one client error cannot write a
-/// hundred lines.
+/// The line `/api/log` appends; only a stack's first line is kept.
 #[must_use]
 pub fn log_line(stamp: &str, entry: &ClientLog) -> String {
     let mut line = format!(
@@ -114,9 +102,8 @@ fn ok() -> Response {
 
 #[derive(Clone, Debug)]
 pub struct Reports {
-    /// Where `/api/log` appends. The activity trace goes to the tracing
-    /// subscriber instead, so a session interleaves with the request log and
-    /// reads as one timeline.
+    /// Where `/api/log` appends. Telemetry goes to the tracing log instead, to
+    /// interleave with the requests.
     pub log_path: std::path::PathBuf,
 }
 
@@ -134,8 +121,7 @@ pub async fn log_route(
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        // A failed write must not fail the request: losing the report is better
-        // than turning it into a second error.
+        // A failed write must not fail the request.
         match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -153,8 +139,6 @@ pub async fn log_route(
 
 pub async fn telemetry_route(Json(events): Json<Vec<TelemetryEvent>>) -> Response {
     for e in events.iter().take(MAX_EVENTS) {
-        // `at` is an integer, so it needs no flattening — only the free-text
-        // fields can carry a newline.
         tracing::info!(
             "client-event kind={} path={} label={} at={}",
             one_line(&e.kind, MAX_LABEL),

@@ -25,10 +25,9 @@ pub struct Frontend {
 /// Prefixes the server answers itself. A miss under one of these is a miss.
 pub const SERVER_PREFIXES: &[&str] = &["/api/", "/sync/", "/ingest/", "/work/"];
 
-/// Resolve a request path to a file inside the frontend root, or None.
-///
-/// ⚠ The containment check is on the canonicalised path, so `..` segments and
-/// symlinks are resolved first; the raw string would pass `a/../../etc/passwd`.
+/// Resolve a request path to a file inside the frontend root, or None. The
+/// check is on the canonical path: the raw string would pass
+/// `a/../../etc/passwd`.
 #[must_use]
 pub fn resolve(root: &Path, request_path: &str) -> Option<PathBuf> {
     let root = root.canonicalize().ok()?;
@@ -75,10 +74,8 @@ fn file(path: &Path, cache: &str) -> Response {
     }
 }
 
-/// The SPA fallback. Mounted last, so every explicit route wins.
-///
-/// `async` with no await: axum requires the handler signature, and reading a
-/// built asset off local disk is not worth a blocking-pool hop.
+/// The SPA fallback, mounted last so every explicit route wins. Reads the
+/// asset inline: a local file is not worth a blocking-pool hop.
 #[expect(
     clippy::unused_async,
     reason = "axum requires the async signature (doc above)"

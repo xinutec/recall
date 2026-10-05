@@ -1,16 +1,11 @@
-//! The Mac→fleet sync plane: the routes the one-way peer dials in on.
+//! The Mac's sync plane. The Mac is a one-way `WireGuard` peer: it dials the
+//! fleet and nothing dials back, so a pause pressed in the web UI reaches the
+//! microphone by the Mac long-polling [`capture_route`].
 //!
-//! Every exchange is Mac-initiated: the Mac is a one-way `WireGuard` peer that
-//! may dial the fleet, and nothing may dial back. A pause pressed in the web UI
-//! therefore reaches the microphone by the Mac polling for it, which is why
-//! [`capture_route`] long-polls.
-//!
-//! The credential is `RECALL_SYNC_TOKEN`, a shared secret on both ends. It
-//! grants nothing on the browsing plane.
-//!
-//! Routes: the capture handshake (audiod's mirror), the vocabulary prompt (the
-//! runner), the instant feed (recall-live), and the live tier's numbers and the
-//! microphones' speech (both for the doctor).
+//! The credential is `RECALL_SYNC_TOKEN`, shared by both ends; it grants
+//! nothing on the browsing plane. Routes: the capture handshake (audiod), the
+//! vocabulary prompt (the runner), the live feed (recall-live), and numbers
+//! for the doctor.
 
 use axum::Router;
 use axum::extract::{Query, State};
@@ -21,10 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 
-/// The secret the Mac presents, and the data it is presented for.
-///
-/// No "unconfigured" variant: without a token there is no [`routes`] call and
-/// no mounted route, so the plane cannot be answered open by accident.
+/// The secret the Mac presents. Without one the plane is not mounted, so it
+/// cannot answer open by accident.
 pub struct Gate {
     pub expected: String,
     pub root: std::path::PathBuf,
@@ -32,21 +25,15 @@ pub struct Gate {
 
 const BEARER: &str = "Bearer ";
 
-/// The token out of an `Authorization: Bearer <token>` header.
 #[must_use]
 pub fn bearer(header: Option<&str>) -> Option<&str> {
     header?.strip_prefix(BEARER)
 }
 
-/// Authorise a sync request, or the status and detail to answer with instead.
-///
-/// Constant-time compare, so timing does not reveal how much of a guess was
-/// right. Returns the parts rather than a built `Response`, so the error stays
-/// small and a test can assert on the status.
+/// Authorise a sync request in constant time, or say what to answer.
 pub fn check(presented: Option<&str>, expected: &str) -> Result<(), (StatusCode, &'static str)> {
     let ok = presented.is_some_and(|p| {
-        // `ct_eq` short-circuits on unequal length; the length of a
-        // fixed-format token is not secret.
+        // `ct_eq` short-circuits on unequal length, which is not secret.
         p.as_bytes().ct_eq(expected.as_bytes()).into()
     });
     if ok {
@@ -56,53 +43,45 @@ pub fn check(presented: Option<&str>, expected: &str) -> Result<(), (StatusCode,
     }
 }
 
-/// What the Mac reports it currently has applied, each mirror pass.
+/// What the Mac reports it has applied, each mirror pass.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Applied {
     pub running: bool,
-    /// The ISO resume-by it applied, or absent while recording.
+    /// The ISO resume-by it applied; absent while recording.
     #[serde(default)]
     pub paused_until: Option<String>,
-    /// Each source's last-proved-recording time. Defaulted, so a Mac that omits
-    /// it reports no liveness rather than failing the exchange.
+    /// Each source's last proved recording time.
     #[serde(default)]
     pub source_liveness: serde_json::Map<String, serde_json::Value>,
-    /// Seconds to hang while the intent still equals `known_intent`. Defaults to
-    /// zero: answer at once.
+    /// Seconds to hang while the intent still equals `known_intent`.
     #[serde(default)]
     pub wait: f64,
-    /// The intent the Mac has already applied; `None` means running.
+    /// The intent the Mac has applied; `None` means running.
     #[serde(default)]
     pub known_intent: Option<String>,
 }
 
-/// The fleet's desired capture state, for the Mac to mirror onto its pause file.
+/// The intent, for the Mac to mirror onto its pause file.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct IntentOut {
     pub paused_until: Option<String>,
 }
 
-/// Never hold the exchange past this (as `GET /api/capture`): proxies and
-/// thread pools need a horizon.
+/// As `GET /api/capture`.
 const WAIT_CAP: std::time::Duration = std::time::Duration::from_secs(25);
-/// Re-derive the intent this often while hanging, so a pause elapsing (which
-/// has no writer to notify) surfaces within one slice.
 const WAIT_SLICE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// `source_liveness` carries instants as strings and nothing else; the reader
-/// would drop anything more.
+/// `source_liveness` carries instants as strings; the reader drops anything
+/// else.
 fn all_strings(map: &serde_json::Map<String, serde_json::Value>) -> bool {
     map.values().all(serde_json::Value::is_string)
 }
 
-/// `POST /sync/capture`: the capture-control handshake in one round trip. The
-/// Mac reports what it applied and reads back what the fleet wants.
-///
-/// ⚠ The report is recorded once, before the hang, which re-reads only the
-/// intent. Recording inside the loop would keep a Mac that died mid-hang looking
-/// alive for the whole cap.
+/// `POST /sync/capture`: the Mac reports what it applied and reads back the
+/// intent, in one round trip. The report is recorded once, before the hang:
+/// recording inside it would keep a Mac that died mid-hang looking alive.
 pub async fn capture_route(
     State(st): State<Arc<Gate>>,
     headers: axum::http::HeaderMap,
@@ -127,8 +106,7 @@ pub async fn capture_route(
 
     let root = st.root.clone();
     let reported = body.paused_until.clone();
-    // ⚠ Subscribe before each derive, so a press landing between a derive and
-    // the following wait is not a lost wakeup.
+    // Subscribe before each derive, so no press is lost in between.
     let mut watcher = crate::capture::intent_watch();
     let mut reply = match crate::route::blocking("sync capture", move || {
         let conn = crate::work::open_write(&root)?;
@@ -157,10 +135,8 @@ pub async fn capture_route(
         if now >= deadline {
             break;
         }
-        // Notify for the fast path, slice as the floor (as in
-        // `capture::status_route`): an elapsing pause has no writer, and a CLI
-        // pause writes from another process, so the timeout still re-derives.
-        // The notify removes the up-to-a-slice delay on a press.
+        // As `capture::status_route`: notified on a press, re-derived each
+        // slice for changes nothing signals.
         crate::capture::wait_intent_changed(watcher, WAIT_SLICE.min(deadline - now)).await;
         watcher = crate::capture::intent_watch();
         let root = st.root.clone();
@@ -177,8 +153,7 @@ pub async fn capture_route(
     axum::Json(reply).into_response()
 }
 
-/// Authorise, then answer a read from the meaning database off the request
-/// thread.
+/// Authorise, then answer a read of the meaning plane.
 async fn gated_read<T, F>(
     st: &Arc<Gate>,
     headers: &axum::http::HeaderMap,
@@ -199,9 +174,8 @@ where
     crate::route::json(what, move || read(&crate::reads::open(&root)?)).await
 }
 
-/// `GET /sync/vocabulary/prompt`: the glossary as an ASR prompt. The runner
-/// reads it and hands it to the model shim, which does no I/O beyond its stdio
-/// and the audio path it is given.
+/// `GET /sync/vocabulary/prompt`: the glossary as an ASR prompt, for the
+/// runner to hand to the model shim.
 pub async fn vocabulary_prompt_route(
     State(st): State<Arc<Gate>>,
     headers: axum::http::HeaderMap,
@@ -214,9 +188,7 @@ pub async fn vocabulary_prompt_route(
     .await
 }
 
-/// The windows the caller wants the live tier measured over.
-///
-/// No defaults: the doctor owns every window.
+/// The windows to measure over; no defaults, the doctor owns them.
 #[derive(Deserialize)]
 pub struct LiveHealthQuery {
     pub lag_since: String,
@@ -224,9 +196,7 @@ pub struct LiveHealthQuery {
     pub window_until: String,
 }
 
-/// `GET /sync/live/health`: how the instant feed is running, for the doctor.
-/// On the sync plane because the reader is the Mac, which holds this token.
-/// Numbers only; the verdicts stay on the Mac.
+/// `GET /sync/live/health`: the live feed's numbers, for the doctor on the Mac.
 pub async fn live_health_route(
     State(st): State<Arc<Gate>>,
     headers: axum::http::HeaderMap,
@@ -265,8 +235,7 @@ pub struct RecordHealthQuery {
     pub since: String,
 }
 
-/// `GET /sync/record/health`: requests that failed on our side, and minutes a
-/// mic shows twice, since `since`, for the doctor to grade.
+/// `GET /sync/record/health`: server faults and doubled minutes since `since`.
 pub async fn record_health_route(
     State(st): State<Arc<Gate>>,
     headers: axum::http::HeaderMap,
@@ -295,9 +264,8 @@ pub struct HeardQuery {
     pub until: String,
 }
 
-/// `GET /sync/heard`: per device source, the audio delivered and the speech in
-/// it, for the doctor's deaf-microphone check. Numbers only, like
-/// [`live_health_route`].
+/// `GET /sync/heard`: per device source, audio delivered and speech in it, for
+/// the doctor's deaf-microphone check.
 pub async fn heard_route(
     State(st): State<Arc<Gate>>,
     headers: axum::http::HeaderMap,
@@ -322,22 +290,19 @@ pub async fn heard_route(
     .await
 }
 
-/// A batch of provisional live turns from the Mac.
 #[derive(Deserialize)]
 pub struct LiveTurnsIn {
     pub turns: Vec<crate::work::LiveTurn>,
 }
 
-/// How many were newly stored; turns already present are not counted.
+/// How many were newly stored.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct LiveStoredOut {
     pub stored: usize,
 }
 
-/// `POST /sync/live`: the instant feed.
-///
-/// Best-effort: the archive pass transcribes the same minute again, so a
-/// dropped live push delays the feed and never loses a word.
+/// `POST /sync/live`: the live feed. Best effort: the archive pass transcribes
+/// the minute again, so a dropped push loses no word.
 pub async fn live_route(
     State(st): State<Arc<Gate>>,
     headers: axum::http::HeaderMap,
@@ -364,13 +329,12 @@ pub async fn live_route(
     }
 }
 
-/// The glossary prompt's wire shape. `null` when nothing is enrolled.
+/// `null` when nothing is enrolled.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct PromptOut {
     pub prompt: Option<String>,
 }
 
-/// The sync plane's routes. Mounted only where a token is configured.
 pub fn routes(gate: Arc<Gate>) -> Router {
     Router::new()
         .route("/sync/capture", post(capture_route))

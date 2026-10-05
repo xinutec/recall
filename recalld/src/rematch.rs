@@ -19,7 +19,6 @@ crate::statements! {
           LIMIT ?2";
 }
 
-/// What one pass did.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Pass {
     pub examined: usize,
@@ -29,14 +28,13 @@ pub struct Pass {
     pub unmatched: usize,
 }
 
-/// One turn waiting to be re-asked.
 struct Stale {
     id: i64,
     vector: Vec<f64>,
     stored: Option<(String, Option<f64>)>,
 }
 
-/// The newest enrolment, which is what makes older guesses suspect.
+/// The newest enrolment: guesses older than it are stale.
 ///
 /// # Errors
 /// If the database refuses.
@@ -44,17 +42,15 @@ pub fn newest_enrolment(conn: &Connection) -> rusqlite::Result<Option<String>> {
     NEWEST_ENROLMENT.query_row(conn, [], |r| r.get::<_, Option<String>>(0))
 }
 
-/// Re-derive up to `limit` stale guesses.
-///
-/// Writes `speaker_guess` only — `speaker_label` is the name a person gave, and
-/// the machine may disagree with its past self but not with them. Stamps every
-/// turn it examines, including unchanged ones, or the pass never finishes.
+/// Re-derive up to `limit` stale guesses. Writes `speaker_guess` only, never a
+/// person's `speaker_label`, and stamps every turn examined, or the pass never
+/// finishes.
 ///
 /// # Errors
 /// If the database refuses.
 pub fn run_once(conn: &mut Connection, limit: usize, now: &Stamp) -> rusqlite::Result<Pass> {
-    // Stamping against an empty corpus would mark every turn fresh, so the
-    // first real enrolment would look already applied.
+    // Stamping against an empty corpus would make the first enrolment look
+    // already applied.
     let Some(newest) = newest_enrolment(conn)? else {
         return Ok(Pass::default());
     };
@@ -95,10 +91,8 @@ fn stamp(conn: &Connection, id: i64, now: &Stamp) -> rusqlite::Result<()> {
     crate::turn_store::stamp_matched(conn, id, now)
 }
 
-/// Turns with an embedding whose guess predates the newest enrolment.
-///
-/// Hidden and superseded turns are included: both can still be read, so a stale
-/// name on them is the same fault, merely less visible.
+/// Turns with an embedding whose guess predates the newest enrolment, hidden
+/// and superseded ones too: both can still be read.
 fn pending(conn: &Connection, newest: &str, limit: usize) -> rusqlite::Result<Vec<Stale>> {
     let mut stmt = STALE.prepare(conn)?;
     let rows = stmt.query_map(
@@ -113,7 +107,6 @@ fn pending(conn: &Connection, newest: &str, limit: usize) -> rusqlite::Result<Ve
     let mut out = Vec::new();
     for row in rows {
         let (id, raw, stored) = row?;
-        // An unparseable vector is skipped, matching `identify::enrolled`.
         if let Ok(vector) = serde_json::from_str::<Vec<f64>>(&raw) {
             out.push(Stale { id, vector, stored });
         }

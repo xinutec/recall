@@ -1,8 +1,5 @@
-//! The meaning plane's writers that are not a pass: vocabulary, and the
-//! instant feed's turns.
-//!
-//! Vocabulary is the proper nouns fed to Whisper as `initial_prompt` on every
-//! pass; the runner refuses to transcribe without it.
+//! Meaning-plane writers that are not a pass: the vocabulary (proper nouns fed
+//! to Whisper as `initial_prompt`) and the live feed's turns.
 
 use crate::{reads, route};
 use audiocore::instant::Stamp;
@@ -31,12 +28,8 @@ crate::statements! {
                  WHERE asr_model = 'live' AND start_utc = ?1 AND text = ?2 LIMIT 1";
 }
 
-/// Open `recall.sqlite` for writing.
-///
-/// Separate from [`reads::open`], so a bug in a read path cannot write. The
-/// 30 s busy timeout lets several writers share the file: at 5 s, contended
-/// requests answered 500 `database is locked`, and a late correct answer beats
-/// a prompt failure.
+/// Open `recall.sqlite` for writing (apart from [`reads::open`], so a read
+/// path cannot write). At a 5 s busy timeout contended requests answered 500.
 pub fn open_write(root: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(root.join("recall.sqlite"))?;
     conn.busy_timeout(Duration::from_secs(30))?;
@@ -56,7 +49,7 @@ pub struct VocabularyOut {
     pub items: Vec<Term>,
 }
 
-/// The terms, ordered case-insensitively — the order the Labels page renders.
+/// The terms, case-insensitively ordered.
 pub fn vocabulary(conn: &Connection) -> rusqlite::Result<VocabularyOut> {
     let mut stmt = VOCABULARY.prepare(conn)?;
     let rows = stmt.query_map([], |r| {
@@ -70,15 +63,10 @@ pub fn vocabulary(conn: &Connection) -> rusqlite::Result<VocabularyOut> {
     })
 }
 
-/// Why a term was not added.
-///
-/// A blank term (400, the caller's to fix) and a database failure (500) are
-/// kept apart, so a locked database is not reported as bad input.
+/// A blank term (400) apart from a database failure (500).
 #[derive(Debug)]
 pub enum TermError {
-    /// Nothing but whitespace was sent.
     Blank,
-    /// The database refused the write.
     Db(rusqlite::Error),
 }
 
@@ -88,15 +76,10 @@ impl From<rusqlite::Error> for TermError {
     }
 }
 
-/// Add a term, returning the id — the existing one if it is already there.
-///
-/// Idempotent: `ON CONFLICT DO NOTHING`, then read the id back, because the
-/// Labels page cannot know what is already in the list before it posts.
+/// Add a term, returning its id; idempotent.
 pub fn add_term(conn: &Connection, term: &str, now: &Stamp) -> Result<i64, TermError> {
     let cleaned = term.trim();
     if cleaned.is_empty() {
-        // A blank term would be applied to every transcription as an empty prompt
-        // fragment and could never be found again to delete.
         return Err(TermError::Blank);
     }
     ADD_TERM.execute(conn, (cleaned, now))?;
@@ -131,7 +114,6 @@ pub async fn vocabulary_add_route(
         tokio::task::spawn_blocking(move || add_term(&open_write(&root)?, &body.term, &now));
     match added.await {
         Ok(Ok(id)) => Json(route::NewId { new_id: id }).into_response(),
-        // The only answer the caller can act on: they sent whitespace.
         Ok(Err(TermError::Blank)) => {
             (StatusCode::BAD_REQUEST, "vocabulary term must not be blank").into_response()
         }
@@ -155,9 +137,8 @@ pub async fn vocabulary_delete_route(
     }
 }
 
-// --- the instant feed (`POST /sync/live`) -------------------------------------
+// --- the live feed (`POST /sync/live`) ----------------------------------------
 
-/// One provisional live turn the Mac pushes for the fleet's instant feed.
 #[derive(Debug, Deserialize)]
 pub struct LiveTurn {
     pub start: String,
@@ -168,33 +149,23 @@ pub struct LiveTurn {
     pub language: Option<String>,
 }
 
-/// Persist pushed live turns — audio-less provisional transcripts shown at once
-/// while the archive pass catches up, then reconciled when the segment spanning
-/// them arrives.
+/// Store pushed live turns: provisional, audio-less lines shown until the
+/// archive pass writes their minute. `created_utc` records the tier's latency.
 ///
-/// `start_utc` is where in the audio the words were said; `created_utc` is when
-/// this tier delivered them, the only record of its latency.
-///
-/// Idempotent by (start, text) among `live` turns: a retried push, or one the
-/// archive has already reconciled to hidden, is skipped, so a re-push never
-/// duplicates a turn or resurrects a hidden one.
-///
-/// Degenerate text is dropped here rather than by each pusher: Whisper loops on
-/// the short, hard clips this tier is made of ("goog goog goog…"), and that is a
-/// property of the string. Dropped turns are not counted as stored.
+/// Idempotent by (start, text) among live turns, so a retried push neither
+/// duplicates a turn nor brings back a reconciled one. Loops, wordless text
+/// and bare names are dropped and not counted.
 pub fn ingest_live(
     conn: &mut Connection,
     turns: &[LiveTurn],
     now: DateTime<Utc>,
 ) -> rusqlite::Result<usize> {
     let delivered = Stamp::of(now);
-    // Read once, here rather than passed in: the same names biased the ASR
-    // prompt, so the refusal and its cause cannot drift apart.
+    // The names the prompt biased the model toward.
     let names = crate::labels::known_speaker_names(conn)?.names;
     let mut stored = 0;
     for turn in turns {
-        // The stored spelling, so the presence check and the insert agree. A
-        // turn re-spelled on the way in would never match its own earlier copy.
+        // The stored spelling, so the presence check matches earlier copies.
         let (Some(start), Some(end)) = (Stamp::parse(&turn.start), Stamp::parse(&turn.end)) else {
             continue;
         };

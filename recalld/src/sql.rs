@@ -61,11 +61,9 @@ impl Sql {
     }
 }
 
-/// A write transaction, holding the write lock from its first statement.
-///
-/// ⚠ Not rusqlite's default (deferred): a transaction that reads first and
-/// writes later cannot take the lock over a view another writer changed in
-/// between, and fails at once ("database is locked") instead of waiting out
+/// A write transaction, holding the write lock from its first statement. A
+/// deferred one (rusqlite's default) that reads then writes fails at once with
+/// "database is locked" when another writer intervened, instead of waiting out
 /// the busy timeout. Clippy refuses the default (`recalld/clippy.toml`).
 pub fn write(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
     conn.transaction_with_behavior(TransactionBehavior::Immediate)

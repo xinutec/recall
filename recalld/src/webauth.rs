@@ -1,17 +1,13 @@
-//! Nextcloud SSO for the human-facing web UI. Inert unless configured.
-//!
-//! The browsing plane requires a Nextcloud sign-in plus a username allowlist;
-//! this gate is what lets recalld serve transcripts at all.
+//! Nextcloud SSO for the web UI: a sign-in plus a username allowlist. Inert
+//! unless configured.
 //!
 //! Sessions are stateless `<payload>.<mac>` cookies signed with
-//! `RECALL_SESSION_SECRET`. Changing the format signs everyone out.
+//! `RECALL_SESSION_SECRET`; changing the format signs everyone out.
 //!
-//! Three planes:
-//!
-//! * **Browsing** — `/api/*` requires a session; a request without one gets 401.
-//! * **Recording** — a closed set of paths a headless device uses stays open,
-//!   because a device cannot perform an interactive OAuth login.
-//! * **Device token** — a closed set where a bearer stands in for a cookie.
+//! - `/api/*` requires a session (401 without).
+//! - A closed set of paths headless devices use stays open: they cannot sign
+//!   in.
+//! - A closed set accepts a device bearer instead of a cookie.
 
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
@@ -24,18 +20,10 @@ pub const COOKIE_NAME: &str = "recall_session";
 const SESSION_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 const STATE_TTL_SECS: i64 = 10 * 60;
 
-/// Paths that stay open because the caller is a device or daemon that cannot sign
-/// in interactively.
-///
-/// ⚠ `POST /api/devices/outbox` reports what a phone could not upload. Gating it
-/// would 401 the report exactly when the token is wrong, the fault it exists to
-/// surface.
-///
-/// ⚠ `POST /api/devices/heartbeat` carries no credential, so a phone with a bad
-/// credential does not read as dead hardware.
-///
-/// The cost is bounded: anyone inside `WireGuard` or the LAN can lie about a queue
-/// depth or refresh a beat. Neither grants a read, any audio, or the archive.
+/// Paths open to devices that cannot sign in. The outbox report and heartbeat
+/// carry no credential, so a phone with a wrong token can still say so. Anyone
+/// on `WireGuard` or the LAN can fake a queue depth or a beat; neither grants
+/// a read.
 const DEVICE_EXEMPT: &[(&str, &str)] = &[
     ("GET", "/api/capture"),
     ("GET", "/api/sources"),
@@ -46,25 +34,24 @@ const DEVICE_EXEMPT: &[(&str, &str)] = &[
     ("POST", "/api/devices/heartbeat"),
 ];
 
-/// Where a `RECALL_DEVICE_TOKEN` bearer may stand in for a cookie. A closed set:
-/// the phone's credential grants what the phone does (upload), not reads.
+/// Where a `RECALL_DEVICE_TOKEN` bearer may stand in for a cookie: what the
+/// phone does (upload), never a read.
 const DEVICE_TOKEN_PATHS: &[(&str, &str)] = &[("POST", "/api/sessions")];
 
-/// Who is signed in, carried entirely in the cookie with no server-side store.
+/// Who is signed in, carried entirely in the cookie.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     pub user_id: String,
     pub display_name: String,
 }
 
-/// Anything carried in a signed token expires. The trait lets `verify` enforce
-/// expiry centrally, so no caller can forget it.
+/// Lets `verify` enforce expiry, so no caller can forget it.
 trait Expires {
     fn exp(&self) -> i64;
 }
 
-/// The claims inside a session token. Field order is the serialised key order;
-/// keep it alphabetical so the token format does not change.
+/// Field order is the serialised key order: keep it alphabetical, or the
+/// token format changes.
 #[derive(Serialize, Deserialize)]
 struct SessionClaims {
     exp: i64,
@@ -78,7 +65,6 @@ impl Expires for SessionClaims {
     }
 }
 
-/// The claims inside an OAuth `state` token.
 #[derive(Serialize, Deserialize)]
 struct StateClaims {
     exp: i64,
@@ -91,8 +77,8 @@ impl Expires for StateClaims {
     }
 }
 
-/// True when this request must carry a valid session: the browsing plane only.
-/// Static assets, the OAuth routes and `/sync/*` (its own bearer) are not gated.
+/// Whether this request needs a session: `/api/*`, less the device-exempt
+/// paths. Static assets, the OAuth routes and `/sync/*` are not gated.
 #[must_use]
 pub fn requires_session(method: &str, path: &str) -> bool {
     if !path.starts_with("/api/") {
@@ -102,7 +88,6 @@ pub fn requires_session(method: &str, path: &str) -> bool {
     !DEVICE_EXEMPT.iter().any(|(em, ep)| *em == m && *ep == path)
 }
 
-/// True when a device bearer may stand in for a session on this route.
 #[must_use]
 pub fn accepts_device_token(method: &str, path: &str) -> bool {
     let m = method.to_ascii_uppercase();
@@ -111,15 +96,10 @@ pub fn accepts_device_token(method: &str, path: &str) -> bool {
         .any(|(dm, dp)| *dm == m && *dp == path)
 }
 
+/// Who asked for a capture-control action, which needs no login: the signed-in
+/// user if a valid cookie is present, else the device token, else the peer.
+/// Never fails: annotating a pause must not break it.
 #[must_use]
-/// A short descriptor of who asked for a capture-control action.
-///
-/// Capture-control paths are login-free, so the gate enforced no identity. This
-/// reconstructs what it would have found: the signed-in user if a valid cookie
-/// is present, else the device-token plane if a token is accepted on this
-/// route, else an anonymous peer. With auth off only the peer address is known.
-///
-/// Total: annotating a pause must never break the pause.
 pub fn request_origin(
     cfg: Option<&Config>,
     method: &str,
@@ -142,8 +122,7 @@ pub fn request_origin(
     format!("anon {host}")
 }
 
-/// A safe local redirect target: a single-slash absolute path only. Anything
-/// that could leave the origin (`//host`, a scheme) becomes `/`, so a crafted
+/// A local redirect target: a single-slash absolute path, else `/`, so
 /// `?return_to=` cannot make sign-in an open redirect.
 pub fn validate_return_to(raw: Option<&str>) -> String {
     match raw {
@@ -164,10 +143,8 @@ fn b64d(text: &str) -> Option<Vec<u8>> {
         .ok()
 }
 
-/// `<payload>.<mac>`: the base64url JSON payload and an HMAC-SHA256 of that
-/// encoding keyed by the secret. Verifying needs only the secret.
+/// `<payload>.<mac>`: base64url JSON and its HMAC-SHA256 under the secret.
 fn sign<T: Serialize>(secret: &str, claims: &T) -> Option<String> {
-    // Compact JSON; key order is the struct's field order.
     let json = serde_json::to_string(claims).ok()?;
     let encoded = b64e(json.as_bytes());
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
@@ -175,9 +152,8 @@ fn sign<T: Serialize>(secret: &str, claims: &T) -> Option<String> {
     Some(format!("{encoded}.{}", b64e(&mac.finalize().into_bytes())))
 }
 
-/// The payload if the MAC checks out and the token has not expired, else None.
-/// The MAC compare is constant-time and every malformed input is None, so a
-/// forged cookie is indistinguishable from a corrupt one.
+/// The payload if the MAC checks out (in constant time) and the token has not
+/// expired. A forged cookie looks the same as a corrupt one.
 fn verify<T: for<'de> Deserialize<'de> + Expires>(
     secret: &str,
     token: &str,
@@ -186,11 +162,9 @@ fn verify<T: for<'de> Deserialize<'de> + Expires>(
     let (encoded, presented) = token.split_once('.')?;
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
     mac.update(encoded.as_bytes());
-    // `verify_slice` is the constant-time compare; a wrong length is just a miss.
     mac.verify_slice(&b64d(presented)?).ok()?;
     let raw = b64d(encoded)?;
     let claims: T = serde_json::from_slice(&raw).ok()?;
-    // Centrally, so no caller can skip it.
     if claims.exp() < now {
         return None;
     }
@@ -229,35 +203,32 @@ pub fn make_state(secret: &str, return_to: Option<&str>, now: i64) -> Option<Str
     )
 }
 
-/// The validated `return_to` if the state token is authentic and fresh, else
-/// None (the login is rejected).
+/// The `return_to` of an authentic, fresh state token.
 #[must_use]
 pub fn read_state(secret: &str, token: &str, now: i64) -> Option<String> {
     let claims: StateClaims = verify(secret, token, now)?;
     Some(validate_return_to(Some(&claims.rt)))
 }
 
-/// The gate's configuration. Absent means the gate is off and recall runs as an
-/// open LAN UI, so dev, tests and the Mac's UI need no setup.
+/// The gate's configuration. Absent: an open LAN UI, for dev and tests.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub session_secret: String,
     pub client_id: String,
     pub client_secret: String,
     pub nc_base_url: String,
-    /// Where server-to-server calls actually go. Defaults to `nc_base_url`; the
-    /// fleet points it at the cluster-local service.
+    /// Where server-to-server calls go; the fleet uses the cluster-local
+    /// service.
     pub nc_internal_url: String,
     pub redirect_uri: String,
-    /// Empty means any authenticated Nextcloud user. Defaults to a single user,
-    /// since recall holds private audio.
+    /// Empty admits any Nextcloud user. Defaults to one.
     pub allowed_users: HashSet<String>,
     pub device_token: Option<String>,
 }
 
 impl Config {
-    /// [`Self::from_env`] over the process environment. Every key is read here
-    /// by its literal name, so the deploy-env contract sees each read.
+    /// [`Self::from_env`] over the process environment, each key read by its
+    /// literal name so the deploy-env contract sees it.
     #[must_use]
     pub fn from_process_env() -> Option<Self> {
         let read = [
@@ -289,8 +260,7 @@ impl Config {
         })
     }
 
-    /// The gate goes up only when the whole OAuth triple is present. A partial
-    /// configuration means off, not an error: half a gate would refuse everyone.
+    /// On only with the whole OAuth triple: half a gate would refuse everyone.
     #[must_use]
     pub fn from_env(get: &dyn Fn(&str) -> Option<String>) -> Option<Self> {
         let session_secret = get("RECALL_SESSION_SECRET")?;
@@ -324,14 +294,11 @@ impl Config {
         })
     }
 
-    /// Whether a signed-in Nextcloud user may enter. An empty allowlist admits
-    /// anyone who authenticated.
     #[must_use]
     pub fn permits(&self, user_id: &str) -> bool {
         self.allowed_users.is_empty() || self.allowed_users.contains(user_id)
     }
 
-    /// Whether this request carries an acceptable device bearer for this route.
     #[must_use]
     pub fn presents_device_token(
         &self,
@@ -348,8 +315,7 @@ impl Config {
         let Some(presented) = authorization.and_then(|a| a.strip_prefix("Bearer ")) else {
             return false;
         };
-        // Compare HMACs of both rather than the tokens with `==`, which would
-        // leak the token's prefix through timing.
+        // HMACs, not `==` on the tokens, which leaks a prefix through timing.
         let Ok(mut mac) = HmacSha256::new_from_slice(self.session_secret.as_bytes()) else {
             return false;
         };
@@ -362,7 +328,6 @@ impl Config {
     }
 }
 
-/// The Nextcloud authorization URL a sign-in redirects to.
 #[must_use]
 pub fn authorize_url(cfg: &Config, state: &str) -> String {
     let q = form_urlencoded::Serializer::new(String::new())
@@ -374,11 +339,8 @@ pub fn authorize_url(cfg: &Config, state: &str) -> String {
     format!("{}/index.php/apps/oauth2/authorize?{q}", cfg.nc_base_url)
 }
 
-/// The (url, optional `Host` header) for a server-side Nextcloud call.
-///
-/// When the internal URL differs from the public one, the request goes to the
-/// internal address but presents the public host as `Host:`, so Nextcloud's
-/// trusted-domain routing treats it like a public request.
+/// The URL and `Host` header for a server-side Nextcloud call: to the internal
+/// address, presenting the public host for Nextcloud's trusted-domain check.
 #[must_use]
 pub fn server_call(cfg: &Config, path: &str) -> (String, Option<String>) {
     let url = format!("{}{path}", cfg.nc_internal_url);
@@ -394,8 +356,8 @@ pub fn server_call(cfg: &Config, path: &str) -> (String, Option<String>) {
     (url, host)
 }
 
-/// What can go wrong signing in. The routes turn every variant into the same
-/// 502, so a visitor does not learn which half of the exchange failed.
+/// Every variant answers the same 502: a visitor does not learn which half of
+/// the exchange failed.
 #[derive(Debug)]
 pub enum AuthError {
     Transport(String),
@@ -411,8 +373,8 @@ impl std::fmt::Display for AuthError {
     }
 }
 
-/// A transport failure, with the io kind and raw errno of every io error in the
-/// chain appended: `e.to_string()` alone does not say which layer failed.
+/// A transport failure, with each io error's kind and errno in the chain: the
+/// message alone does not say which layer failed.
 fn transport(e: &ureq::Error) -> AuthError {
     use std::fmt::Write;
     let mut detail = e.to_string();
@@ -426,12 +388,8 @@ fn transport(e: &ureq::Error) -> AuthError {
     AuthError::Transport(detail)
 }
 
-/// The agent both Nextcloud calls use.
-///
-/// ⚠ Not `ureq::get`/`ureq::post`: those share one process-wide pool, and a
-/// pooled socket the far end has closed fails the next call with
-/// `Invalid argument (os error 22)`. `max_idle_connections(0)` disables reuse,
-/// which costs nothing for a sign-in's two calls.
+/// Not `ureq::get`'s shared pool: a pooled socket the far end closed fails the
+/// next call with `os error 22`. No reuse costs nothing for two calls.
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .max_idle_connections(0)
@@ -439,7 +397,6 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-/// Trade the authorization code for an access token.
 pub fn exchange_code(cfg: &Config, code: &str) -> Result<String, AuthError> {
     let (url, host) = server_call(cfg, "/index.php/apps/oauth2/api/v1/token");
     let mut req = agent().post(&url);
@@ -465,10 +422,8 @@ pub fn exchange_code(cfg: &Config, code: &str) -> Result<String, AuthError> {
     }
 }
 
-/// Look up who signed in, via the OCS user endpoint.
-///
-/// Identity only: the access token is used here once and dropped; the signed
-/// cookie carries the identity from here on.
+/// Who signed in, via the OCS user endpoint. The access token is used once and
+/// dropped.
 pub fn fetch_userinfo(cfg: &Config, access_token: &str) -> Result<Session, AuthError> {
     let (url, host) = server_call(cfg, "/ocs/v2.php/cloud/user?format=json");
     let mut req = agent()
@@ -512,7 +467,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use std::sync::Arc;
 
-/// The clock, injected so tests are not at the mercy of wall time.
+/// Injected, for tests.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 #[derive(Clone)]
@@ -533,8 +488,8 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
         })
 }
 
-/// The gate, applied to every request. It decides only, and never serves. The
-/// device token is checked only after the cookie fails.
+/// The gate on every request; it decides and never serves. The device token is
+/// tried only after the cookie fails.
 pub async fn gate(
     State(st): State<GateState>,
     request: axum::extract::Request,
@@ -582,10 +537,8 @@ pub struct CallbackQuery {
     state: Option<String>,
 }
 
-/// The cookie attributes, in one place so login and logout cannot disagree.
-///
-/// `Secure`: recall is served only as `https://recall.xinutec.org` (#1799). A
-/// browser treats `http://localhost` as secure too, so the dev server keeps working.
+/// Shared by login and logout. `Secure`: recall is served only over https
+/// (#1799); browsers treat `http://localhost` as secure, so dev still works.
 const COOKIE_ATTRS: &str = "Path=/; HttpOnly; Secure; SameSite=Lax";
 
 fn set_cookie(token: &str) -> String {
@@ -624,7 +577,7 @@ pub fn routes(st: GateState) -> Router {
         .with_state(st)
 }
 
-/// A 302 to a local path or an absolute URL.
+/// A 302.
 struct Redirect(String);
 
 impl IntoResponse for Redirect {
@@ -635,8 +588,7 @@ impl IntoResponse for Redirect {
 
 async fn callback(State(st): State<GateState>, Query(q): Query<CallbackQuery>) -> Response {
     let now = (st.now)();
-    // State first: an expired or forged state is rejected before any network
-    // call, so a stranger cannot make this server call Nextcloud on demand.
+    // State first, so a stranger cannot make this server call Nextcloud.
     let Some(return_to) = q
         .state
         .as_deref()
@@ -662,7 +614,6 @@ async fn callback(State(st): State<GateState>, Query(q): Query<CallbackQuery>) -
     .await;
     let session = match resolved {
         Ok(Ok(s)) => s,
-        // One shape for every failure (see `AuthError`).
         Ok(Err(e)) => {
             tracing::warn!("nextcloud sign-in failed: {e}");
             return (
@@ -697,8 +648,7 @@ async fn callback(State(st): State<GateState>, Query(q): Query<CallbackQuery>) -
         .into_response()
 }
 
-/// Who is signed in: the SPA's login probe. The gate answers 401 first when
-/// there is no session.
+/// Who is signed in: the SPA's login probe.
 async fn me(State(st): State<GateState>, headers: HeaderMap) -> Response {
     match read_session_cookie(
         &st.cfg.session_secret,

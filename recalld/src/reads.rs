@@ -1,9 +1,5 @@
-//! The browsing tier's read routes over `recall.sqlite` (the meaning plane, not
-//! `ingest.sqlite`; see docs/architecture.md). Nothing here writes: every
-//! connection is opened read-only.
-//!
-//! The JSON is a contract with the Angular app, so field names and null-versus-
-//! absent are fixed; the exported structs generate its typed contract.
+//! The browsing read routes over the meaning plane, on read-only connections.
+//! The exported structs generate the Angular app's types.
 
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
@@ -12,11 +8,8 @@ use std::time::Duration;
 
 use crate::turn_store::{HiddenKind, Provenance, Stage};
 
-/// The current-turn projection the page queries share: not superseded, and
-/// carrying the capturing source.
-///
-/// LEFT JOIN, not JOIN: a correction can exist with no audio segment, and the
-/// timeline must still show it.
+/// Current turns with their source. LEFT JOIN: a correction can exist with no
+/// audio segment.
 macro_rules! current {
     () => {
         "SELECT t.*, a.source_id FROM transcript_segments t \
@@ -54,10 +47,9 @@ crate::statements! {
          ORDER BY t.asr_confidence IS NOT NULL, t.asr_confidence ASC, t.start_utc \
          LIMIT ?2";
 
-    // The page queries. ?1 shows hidden turns too; ?3/?4 bound the start
-    // (NULL: open) and stay index ranges; ?2 is a source filter of its own,
-    // because as a NULL-able test it stops SQLite reaching a session's turns
-    // through its audio (6x slower on a small meeting).
+    // ?1 shows hidden turns too; ?3/?4 bound the start (NULL: open). The
+    // source filter ?2 has its own queries: as a NULL-able test it stops
+    // SQLite reaching a session's turns through its audio (6x slower).
     PAGE_NEWEST: Meaning =
         current!(), " ORDER BY t.start_utc DESC, t.id DESC LIMIT ?5";
     PAGE_OLDEST: Meaning =
@@ -78,12 +70,8 @@ crate::statements! {
         current!(), " AND a.source_id = ?2", ties!(), " ORDER BY t.id ASC";
 }
 
-/// One turn, in exactly the shape the Angular app already consumes.
-///
-/// `camelCase` and the explicit `Option`s are the contract: the UI distinguishes
-/// a null confidence ("confirmed by a human, no score applies") from a numeric
-/// one ("a guess, this strong"), so these serialise as `null` rather than being
-/// skipped.
+/// One turn as the app shows it. Absent values serialise as `null`: a null
+/// confidence means a person confirmed it, a number is a guess's strength.
 #[derive(Debug, Serialize, PartialEq, ts_rs::TS)]
 #[ts(export, rename = "Transcript")]
 #[serde(rename_all = "camelCase")]
@@ -101,12 +89,12 @@ pub struct TranscriptOut {
     pub model: Option<String>,
     pub tier: Stage,
     pub hidden: Option<String>,
-    /// What kind of hide `hidden` is; the app checks this, never the spelling.
+    /// The kind of hide; the app checks this, never `hidden`'s spelling.
     pub hidden_as: Option<HiddenKind>,
     pub audio_url: String,
     pub source: Option<String>,
     pub cluster: Option<String>,
-    /// A person typed or vouched for these words, wherever they did it.
+    /// A person typed or vouched for these words.
     pub words_checked: bool,
 }
 
@@ -123,7 +111,7 @@ pub struct PageOut {
     pub has_more: bool,
 }
 
-/// The raw columns a turn is built from, before the display rules are applied.
+/// A turn's stored columns, before the display rules.
 pub struct Segment {
     pub id: i64,
     pub start_utc: String,
@@ -140,7 +128,6 @@ pub struct Segment {
     pub provenance: Option<String>,
     pub hidden_reason: Option<String>,
     pub source_id: Option<String>,
-    /// The clip it was transcribed from.
     pub audio_segment_id: Option<i64>,
     pub words_checked: bool,
 }
@@ -168,8 +155,8 @@ impl Segment {
         })
     }
 
-    /// How much processing this turn has had. A provenance no writer produces is
-    /// logged and read as none: the badge is display, and the audit reports it.
+    /// How much processing this turn has had. An unknown provenance is logged
+    /// and read as none.
     fn tier(&self) -> Stage {
         let provenance = self.provenance.as_deref().and_then(|raw| {
             raw.parse::<Provenance>()
@@ -184,20 +171,14 @@ impl Segment {
     }
 }
 
-/// Apply the display rules: a human label is authoritative and carries no score;
-/// otherwise show the best auto guess WITH its strength, so the UI can render
-/// "Alice 31%" rather than hiding a weak-but-useful guess as "unknown".
 fn to_out(segment: &Segment) -> TranscriptOut {
     to_out_with(segment, None)
 }
 
-/// The turn as the app consumes it, optionally overriding the auto guess.
-///
-/// ⚠ The override exists for folded moments only. A spine is chosen for the
-/// cleanest transcription, which says nothing about attribution — the strongest
-/// voiceprint match for the same words may sit on another mic's version. A human
-/// label still wins over both: `confirmed` is checked first, so an override can
-/// never overwrite a name a person gave.
+/// The display rules: a person's label wins and carries no score; otherwise
+/// the guess with its strength ("Alice 31%", not "unknown"). `guess` overrides
+/// the turn's own for a folded moment, whose strongest match may sit on
+/// another mic's version; a person's label still wins.
 pub fn to_out_with(
     segment: &Segment,
     guess: Option<(Option<String>, Option<f64>)>,
@@ -232,29 +213,24 @@ pub fn to_out_with(
     }
 }
 
-/// Times go out exactly as stored. The stored text is already isoformat, and
-/// re-formatting could only introduce a difference (a `Z` for `+00:00`, or
-/// dropped microseconds).
+/// Times go out exactly as stored: reformatting could only change them (a `Z`
+/// for `+00:00`, dropped microseconds).
 pub fn iso(stored: &str) -> String {
     stored.to_owned()
 }
 
-/// Open `recall.sqlite` read-only, so a read route cannot write the record.
+/// Open `recall.sqlite` read-only.
 pub fn open(root: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open_with_flags(
         root.join("recall.sqlite"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )?;
-    // Background passes write this database; a reader waits for them rather
-    // than failing.
     conn.busy_timeout(Duration::from_secs(5))?;
     Ok(conn)
 }
 
 /// Full-text search over current turns, oldest-first.
 pub fn search(conn: &Connection, query: &str, limit: i64) -> rusqlite::Result<ItemsOut> {
-    // The FTS join is what makes this a search rather than a scan; ts.* keeps the
-    // row shape identical to the timeline's.
     let mut stmt = SEARCH.prepare(conn)?;
     let rows = stmt.query_map((query, limit), Segment::from_row)?;
     let mut items = Vec::new();
@@ -264,21 +240,15 @@ pub fn search(conn: &Connection, query: &str, limit: i64) -> rusqlite::Result<It
     Ok(ItemsOut { items })
 }
 
-/// The live version of a turn, following the supersede chain.
-///
-/// A deep link names the id it was made from, which may since have been
-/// corrected or reprocessed; resolving it shows the text that is true now.
-///
-/// `seen` is a cycle guard: several passes write `superseded_by`, and one bad
-/// chain would otherwise hang a request thread.
+/// The current version of a turn, following the supersede chain, so a deep
+/// link shows what is true now. Guarded against cycles: several passes write
+/// `superseded_by`.
 pub fn current_version(conn: &Connection, id: i64) -> rusqlite::Result<Option<TranscriptOut>> {
-    // A scalar query rather than a wider `Segment`: every other query filters
-    // `superseded_by IS NULL`, so the column would always be NULL there.
     let mut seen = std::collections::HashSet::new();
     let mut at = id;
     loop {
         if !seen.insert(at) {
-            return Ok(None); // a cycle: report absent rather than spin
+            return Ok(None);
         }
         let next: Option<Option<i64>> = SUPERSEDED_BY
             .query_row(conn, [at], |r| r.get(0))
@@ -297,10 +267,8 @@ pub fn current_version(conn: &Connection, id: i64) -> rusqlite::Result<Option<Tr
     Ok(Some(to_out(&Segment::from_row(row)?)))
 }
 
-/// Specific turns by id, resolved to their live versions, in the order asked.
-///
-/// Deduped: several ids can resolve to the same live turn, and showing it twice
-/// would read as two things said.
+/// Turns by id, resolved to their current versions, in the order asked and
+/// deduplicated (several ids can resolve to one turn).
 pub fn transcripts(conn: &Connection, ids: &[i64]) -> rusqlite::Result<ItemsOut> {
     let mut items = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -314,9 +282,7 @@ pub fn transcripts(conn: &Connection, ids: &[i64]) -> rusqlite::Result<ItemsOut>
     Ok(ItemsOut { items })
 }
 
-/// The review queue: current turns most in need of a human, least confident first.
-///
-/// NULL confidence sorts first: a turn nobody has scored is the most suspect.
+/// The review queue, least confident first; unscored first of all.
 pub fn review(conn: &Connection, max_confidence: f64, limit: i64) -> rusqlite::Result<ItemsOut> {
     let mut stmt = REVIEW.prepare(conn)?;
     let rows = stmt.query_map((max_confidence, limit), Segment::from_row)?;
@@ -327,30 +293,22 @@ pub fn review(conn: &Connection, max_confidence: f64, limit: i64) -> rusqlite::R
     Ok(ItemsOut { items })
 }
 
-/// Which slice of the stream to read.
-///
-/// `before` and `after` are not symmetric: `before` takes the newest page older
-/// than the cursor, newest-first; `after` takes the oldest page newer than it,
-/// oldest-first, so a forward page is contiguous with what the caller holds.
+/// Which slice of the stream to read. `before` takes the newest page older than
+/// the cursor, newest first; `after` the oldest page newer, oldest first, so a
+/// forward page joins what the caller holds.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Window<'a> {
     pub before: Option<&'a str>,
     pub after: Option<&'a str>,
     pub source: Option<&'a str>,
-    /// Hidden turns too, each carrying its reason, so a person can take a hide back.
+    /// Hidden turns too, with their reason, so a hide can be taken back.
     pub hidden: bool,
 }
 
-/// Current turns for one page (visible ones unless `window.hidden`), including
-/// the boundary instant's ties.
-///
-/// ⚠ A full page extends past `limit`. The cursor is a bare start time and turns
-/// share one often (co-located mics, corrections), so a page cut mid-group would
-/// make the next strict-`<` page skip the rest of it. Callers therefore test
-/// `len >= limit` for has-more, not `==`.
+/// Current turns for one page, plus the rest of the last instant's ties: the
+/// cursor is a bare start time that turns often share, so a page can exceed
+/// `limit`. Callers test `len >= limit` for more.
 pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result<Vec<Segment>> {
-    // Forward paging reads oldest-first; every other case newest-first. The id
-    // tiebreak makes same-instant order deterministic, and matches the tie pass.
     let (page, ties) = match (window.source.is_some(), window.after.is_some()) {
         (false, false) => (PAGE_NEWEST, TIES_NEWEST),
         (false, true) => (PAGE_OLDEST, TIES_OLDEST),
@@ -366,7 +324,6 @@ pub fn recent(conn: &Connection, limit: i64, window: Window) -> rusqlite::Result
         )?
         .collect::<rusqlite::Result<_>>()?;
 
-    // At limit 0 an empty page must not trigger a tie pass with no boundary.
     let full_page = !segments.is_empty() && i64::try_from(segments.len()).is_ok_and(|n| n == limit);
     if full_page {
         let boundary = segments
@@ -403,8 +360,6 @@ pub fn timeline(conn: &Connection, limit: i64, before: Option<&str>) -> rusqlite
         },
     )?;
     let has_more = i64::try_from(segments.len()).is_ok_and(|n| n >= limit);
-    // Newest-first from the DB; reverse so the page reads top-to-bottom in
-    // conversation order.
     segments.reverse();
     Ok(PageOut {
         items: segments.iter().map(to_out).collect(),
@@ -448,8 +403,7 @@ const fn default_search_limit() -> i64 {
     100
 }
 
-/// A limit is clamped rather than trusted, so `?limit=10000000` cannot turn a
-/// browsing route into an archive dump.
+/// So `?limit=10000000` cannot dump the archive.
 fn clamp(limit: i64) -> i64 {
     limit.clamp(0, 1000)
 }
@@ -480,15 +434,13 @@ const fn default_review_limit() -> i64 {
     50
 }
 
-/// Turns most in need of a human are those the model was least sure of.
 const REVIEW_MAX_CONFIDENCE: f64 = 0.9;
 
 pub async fn transcripts_route(
     axum::extract::State(st): axum::extract::State<Arc<State>>,
     Query(q): Query<TranscriptsQuery>,
 ) -> Response {
-    // A non-integer id is a 400, not silently dropped: returning fewer turns
-    // than asked would read as "those turns are gone".
+    // A bad id is a 400: dropping it would read as "that turn is gone".
     let mut ids = Vec::new();
     for piece in q.ids.split(',').map(str::trim).filter(|p| !p.is_empty()) {
         match piece.parse::<i64>() {

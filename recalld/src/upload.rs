@@ -1,15 +1,9 @@
-//! Uploading a discrete recording (an appointment, a meeting) as a new session.
+//! Uploading a recording (an appointment, a meeting) as a new session. It is
+//! listed at once with zero turns while the runner transcribes it.
 //!
-//! The file becomes a source and the runner transcribes it. The session appears
-//! in the list at once with zero turns, so the upload does not look failed while
-//! transcription runs.
-//!
-//! Two writes: [`register`] makes the session visible in the meaning plane;
-//! [`deliver`] puts the blob in the ingest plane, where the work queue looks.
-//! Without the second, the session is listed but never transcribed.
-//!
-//! The container is kept as uploaded. ffprobe validates the contents; the suffix
-//! only gates what is worth trying.
+//! [`register`] makes the session visible in the meaning plane; [`deliver`]
+//! puts the blob where the work queue looks. The container is kept as
+//! uploaded; ffprobe validates it.
 
 use crate::pyjson;
 use audiocore::instant;
@@ -34,17 +28,12 @@ crate::statements! {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
 }
 
-/// Containers a recording might arrive in: phone voice memos are m4a, most
-/// recorders export mp3.
-///
-/// ⚠ Each must also parse as `audiocore::names::Extension`, or the upload is
-/// stored and then 400s on the fetch that would transcribe it. The test
-/// `an_accepted_container_can_also_be_fetched_back` holds the two together.
+/// Accepted containers. Each must also parse as `audiocore::names::Extension`,
+/// or the fetch that would transcribe it 400s; a test holds the two together.
 pub const AUDIO_SUFFIXES: &[&str] = &[
     ".mp3", ".m4a", ".mp4", ".wav", ".flac", ".aac", ".ogg", ".opus", ".webm",
 ];
 
-/// A source that arrived as a file rather than a live microphone.
 const UPLOAD_KIND: &str = "upload";
 
 const S16_BYTES_PER_SAMPLE: usize = 2;
@@ -55,9 +44,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[derive(Debug)]
 pub enum UploadError {
-    /// The suffix is not one we would even try to decode.
     UnsupportedType(String),
-    /// ffprobe or ffmpeg could not read it, so it is not audio we can use.
+    /// ffprobe or ffmpeg could not read it.
     Unreadable,
     /// The client's `start` is not an ISO-8601 instant.
     BadStart,
@@ -77,7 +65,6 @@ impl From<rusqlite::Error> for UploadError {
     }
 }
 
-/// What an audio file holds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Media {
     pub duration_s: f64,
@@ -85,8 +72,8 @@ pub struct Media {
     pub channels: i64,
 }
 
-/// Sample rate and channels from the stream header. The duration is measured by
-/// `decode_duration` instead: segment-muxer output has none in its header.
+/// Sample rate and channels from the header; the duration by decoding, since
+/// segment-muxer output has none in its header.
 pub fn probe(path: &Path) -> Result<Media, UploadError> {
     let out = Command::new("ffprobe")
         .args([
@@ -130,9 +117,8 @@ pub fn probe(path: &Path) -> Result<Media, UploadError> {
     })
 }
 
-/// Exact duration by decoding to raw PCM and counting bytes. Independent of the
-/// header, so it also works for sub-second segments where ffmpeg's progress
-/// reports `time=N/A`.
+/// Exact duration by decoding to raw PCM and counting bytes; works where
+/// ffmpeg reports `time=N/A`.
 fn decode_duration(path: &Path, sample_rate: i64, channels: i64) -> Result<f64, UploadError> {
     let out = Command::new("ffmpeg")
         .args(["-nostdin", "-v", "error", "-i"])
@@ -162,18 +148,13 @@ pub fn suffix_of(filename: &str) -> String {
         .unwrap_or_default()
 }
 
-/// A meeting's id and default title, from its local start.
-///
-/// Local is Europe/London, not the host's zone: the pod runs UTC, which would
-/// shift the id by an hour in summer.
+/// A meeting's id and default title, from its start in Europe/London (the
+/// pod's zone is UTC).
 pub fn meeting_id(started: DateTime<Utc>) -> (String, String) {
     let local = started.with_timezone(&London);
-    // ⚠ When the clocks go back, 01:00-02:00 local happens twice, so two
-    // different instants read as the same local time. Without a marker they
-    // would share one id and `register` would upsert them into one session.
-    // Only the second pass is marked, so every other id keeps its spelling.
-    // Deriving the marker from the instant (not a collision check against the
-    // database) keeps the id idempotent for a re-uploaded recording.
+    // When the clocks go back, 01:00-02:00 happens twice: the second pass is
+    // marked, or two meetings would share an id. Derived from the instant, so a
+    // re-upload gets the same id.
     let marker = repeated_hour_marker(started, &local);
     (
         format!(
@@ -199,9 +180,8 @@ pub fn meeting_id(started: DateTime<Utc>) -> (String, String) {
     )
 }
 
-/// The zone abbreviation, only for the second pass through a repeated local
-/// hour; otherwise `None`. Being in GMT is not enough (every winter meeting is):
-/// the local time must map back to two instants and this must be the later.
+/// The zone abbreviation for the second pass through a repeated local hour;
+/// otherwise `None`.
 fn repeated_hour_marker(started: DateTime<Utc>, local: &DateTime<chrono_tz::Tz>) -> Option<String> {
     use chrono::offset::LocalResult;
     match London.from_local_datetime(&local.naive_local()) {
@@ -212,10 +192,8 @@ fn repeated_hour_marker(started: DateTime<Utc>, local: &DateTime<chrono_tz::Tz>)
     }
 }
 
-/// Where the uploaded file lands: the ingest plane's directory for its source,
-/// so an upload is leased, fetched over `/ingest/v1/blob` and transcribed the
-/// same way as a microphone clip. Older rows point at `<root>/<source>/`; they
-/// still play because playback reads `audio_segments.path`.
+/// Where the uploaded file lands: the ingest plane, so it is transcribed like a
+/// microphone clip. Older uploads live in `<root>/<source>/`.
 pub fn stored_path(root: &Path, source: &str, started: DateTime<Utc>, suffix: &str) -> PathBuf {
     let stamp = format!(
         "{:04}{:02}{:02}T{:02}{:02}{:02}",
@@ -229,11 +207,8 @@ pub fn stored_path(root: &Path, source: &str, started: DateTime<Utc>, suffix: &s
     crate::store::source_dir(root, source).join(format!("{source}-{stamp}{suffix}"))
 }
 
-/// Record the blob in the ingest plane, so `queue::derive_segment_jobs` sees it.
-///
-/// Idempotent by lookup: `segments.filename` is the primary key, and a second
-/// upload under the same name is the same recording, so re-inserting would fail
-/// the request for a row that already holds what we would write.
+/// Record the blob in the ingest plane, so the queue sees it. Idempotent: the
+/// same name is the same recording.
 pub fn deliver(
     ingest: &Connection,
     source: &str,
@@ -254,8 +229,7 @@ pub fn deliver(
         &crate::store::Row {
             source: source.to_owned(),
             filename,
-            // The ingest plane's spelling (trailing Z), not the meaning plane's
-            // `+00:00`, so this row matches its neighbours.
+            // The ingest plane's spelling (`Z`).
             start_utc: started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             bytes: bytes as u64,
             sha256: sha256.to_owned(),
@@ -265,12 +239,9 @@ pub fn deliver(
     )
 }
 
-/// Register the source and its one audio segment.
-///
-/// An upsert, not `INSERT OR IGNORE`: the source may already exist with another
-/// kind (such as `discovered`) and a placeholder name equal to its id, and the
-/// list only shows `kind = 'upload'`. The name is replaced only while it is
-/// still the placeholder, so a title the user chose is kept.
+/// Register the source and its one audio segment. An upsert: the source may
+/// exist as `discovered` with its id as a placeholder name; a chosen title is
+/// kept.
 pub fn register(
     conn: &Connection,
     source: &str,
@@ -295,16 +266,12 @@ pub fn register(
     Ok(())
 }
 
-/// Whether this suffix is worth handing to ffprobe.
 pub fn is_supported(suffix: &str) -> bool {
     AUDIO_SUFFIXES.contains(&suffix)
 }
 
-/// The client's `start`, or now, to the whole second.
-///
-/// ⚠ Whole seconds because the stored filename carries whole seconds, and the
-/// turns writer finds the clip's audio row by the start it parses from that name:
-/// with a fraction, the row is never found and the transcript never written.
+/// The client's `start`, or now, to the whole second: the filename carries
+/// whole seconds, and the clip's audio row is found by the start parsed from it.
 pub fn started_at(raw: &str) -> Result<DateTime<Utc>, UploadError> {
     let started = if raw.is_empty() {
         Utc::now()
@@ -317,7 +284,7 @@ pub fn started_at(raw: &str) -> Result<DateTime<Utc>, UploadError> {
     Ok(started.trunc_subsecs(0))
 }
 
-/// The session as the list renders it, for the response.
+/// The session as the list shows it.
 pub fn created_json(source: &str, title: &str, started: DateTime<Utc>, duration_s: f64) -> String {
     let end = started + chrono::Duration::microseconds((duration_s * 1e6).round() as i64);
     pyjson::dump(&serde_json::json!({
@@ -330,7 +297,7 @@ pub fn created_json(source: &str, title: &str, started: DateTime<Utc>, duration_
     }))
 }
 
-/// London, exported so a test can state the zone it is asserting about.
+/// For tests to state the zone they assert about.
 pub fn london_offset_hours(at: DateTime<Utc>) -> i32 {
     use chrono::Offset;
     London
@@ -359,8 +326,6 @@ struct Form {
     language: String,
 }
 
-// A `Response` as the error is the axum handler idiom, and it is returned once,
-// so boxing it buys nothing.
 #[expect(clippy::result_large_err, reason = "the Err is the HTTP response")]
 async fn read_form(mut parts: Multipart) -> Result<Form, Response> {
     let (mut filename, mut bytes, mut title, mut start, mut language) =
@@ -446,8 +411,7 @@ pub async fn create_session_route(
         let path = stored_path(&root, &source, started, &suffix);
         std::fs::create_dir_all(path.parent().expect("a file has a parent"))?;
         std::fs::write(&path, &form.bytes)?;
-        // Probed after writing, and removed if it will not decode, so no
-        // unreadable file is left in the data root.
+        // An unreadable file is not left behind.
         let media = match probe(&path) {
             Ok(media) => media,
             Err(err) => {
@@ -457,13 +421,10 @@ pub async fn create_session_route(
         };
         let meaning = work::open_write(&root)?;
         register(&meaning, &source, &name, &path, started, media)?;
-        // Before the ingest row below, so the first transcription already
-        // leases with it.
+        // Before the ingest row, so the first transcription leases with it.
         if language.is_some() {
             crate::sessions::pin_language(&meaning, &source, language)?;
         }
-        // The ingest row makes it transcribable; the meaning rows above only
-        // make it visible.
         deliver(
             &crate::store::open(&root)?,
             &source,

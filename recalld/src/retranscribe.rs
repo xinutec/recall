@@ -57,16 +57,14 @@ crate::statements! {
 pub struct Requested {
     /// Back in the queue.
     pub queued: Vec<String>,
-    /// No finished transcription to redo: never transcribed, still in the
-    /// queue, or not a clip at all. Left as they were.
+    /// No finished transcription to redo; left as they were.
     pub skipped: Vec<String>,
 }
 
 /// Queue `filenames` to be transcribed again.
 ///
 /// # Errors
-/// If the ingest plane refuses; nothing is half-requested, each clip is one
-/// transaction.
+/// If the ingest plane refuses; each clip is one transaction.
 pub fn request(
     ingest: &Connection,
     filenames: &[String],
@@ -96,10 +94,8 @@ pub struct Candidate {
     pub looped_speech_s: f64,
 }
 
-/// Every clip with more than `min_speech_s` of measured speech under segments
-/// the passes drop as loops (`quality::is_repetition_loop`), most lost first.
-/// Clips already waiting are left out. Reads the stored results only: the
-/// speech is what the speech pass placed, not what the model claimed.
+/// Every clip not already waiting with more than `min_speech_s` of measured
+/// speech under segments dropped as loops, most lost first.
 ///
 /// # Errors
 /// If the ingest plane refuses.
@@ -159,13 +155,9 @@ pub fn is_requested(ingest: &Connection, filename: &str) -> rusqlite::Result<boo
         .is_some())
 }
 
-/// A requested clip's new transcription: the job's result if it finished after
-/// the request, else `None` while it is pending.
-///
-/// ⚠ The turns pass reads every finished result when it starts, and a request
-/// can land mid-pass. Writing the result it already holds would rewrite the clip
-/// from its old transcription and drop the request, so the new one would never
-/// be written.
+/// A requested clip's new transcription, if it finished after the request. A
+/// request can land mid-pass, after the pass read the old result; writing that
+/// would drop the request and lose the new one.
 pub fn fresh_result(ingest: &Connection, filename: &str) -> rusqlite::Result<Option<String>> {
     let row: Option<(String, Option<String>, Option<String>)> = REQUESTED_RESULT
         .query_row(
