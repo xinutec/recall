@@ -2,15 +2,8 @@
 
 Everything operational is a Rust binary: `audiod` (capture, ingest, upload),
 `recalld` (the fleet daemon), `doctor`, `runner` and `recall-live`,
-`recall-cli`. The Python is the model floor, each piece its own module:
-
-```sh
-nix develop --command env PYTHONPATH=src .venv/bin/python -m recall.<module>
-```
-
-`.venv` is a symlink into the nix store (`nix build .#dev-env --out-link .venv`),
-the same interpreter the agents run. Without `PYTHONPATH=src` a module runs from
-the built copy in the store, not the working tree. The Mac's data root is
+`recall-cli`. The Python model floor runs from `.venv`, the interpreter the
+agents run (see the [README](../README.md)). The Mac's data root is
 `/Volumes/Backup/recall` (encrypted).
 
 ## The Mac's agents
@@ -44,22 +37,17 @@ token.
 ### The doctor runs itself twice
 
 `doctor` starts a child (`--collect`) that does every read of the archive
-volume (the capture log, the segment files, the uploader's receipts) and prints
-its checks as JSON; the parent reports them, touching only launchd,
-`~/.config` and bounded reads of Isis for the live tier and each microphone's
-speech. If the child does not answer
-in 60 s the parent abandons it and reports `archive answers: no answer`, naming
-the pid and its process state on stderr. An abandoned child in `U` state cannot
-be killed; it exits when the volume does. The stalls come from another writer
-on the same volume, which holds every repository's build output (#1412).
+volume, the pause file included, and prints its checks as JSON; the parent
+touches only launchd, `~/.config` and Isis. A child silent for 60 s is abandoned
+and reported as `archive answers: no answer`, with its pid and state on stderr;
+in `U` state it cannot be killed and exits when the volume answers. The stalls
+come from other writers on the volume (#1412).
 
 ### The runner leaves a pulse
 
 `<data root>/worker-heartbeat.json` is stamped after every job and the doctor
-grades its age (warn 30 min, fail 1 h; the cold first pass loads models off the
-spinning disk). The name says `worker` because the doctor, the fleet's history
-and the thresholds key on that path. An empty queue stamps too, so a drained
-backlog does not read as a stall.
+grades its age (warn 30 min, fail 1 h). The name predates the runner; the
+fleet's history keys on it. An empty queue stamps too.
 
 Only capture needs the microphone grant. A denied grant is digital silence, not
 an error: segments are written and every one is silent. Look at levels, not
@@ -67,12 +55,11 @@ logs: `doctor --out <root> --collect` prints them.
 
 ## The fleet
 
-recalld runs in one container on Isis, binding both `:8000` (the app, behind the
-Nextcloud sign-in) and `:8001` (ingest and the queue). Shipping a change: push
-to `main`, CI builds `xinutec/recall:latest`, then
+recalld runs in one container on Isis, on one port behind isis's front door:
+`https://recall.xinutec.org`, on the VPN only, serves the app (behind the
+Nextcloud sign-in), ingest, sync and the job queue ([k8s](../deploy/k8s/README.md)).
+Shipping a change: push to `main`, CI builds `xinutec/recall:latest`, then
 `ssh root@10.100.0.2 'kubectl -n recall rollout restart deployment/recall'`.
-The web app is at `https://recall.xinutec.org` over the VPN (isis's front door serves the name on the tunnel address only): timeline, search with
-playback, review, sessions, labels, the capture control.
 
 ```sh
 ./scripts/recall-build-frontend.sh                          # the image's frontend build, locally
@@ -90,8 +77,8 @@ listener and drops active streams, finalising the current segment. The web
 app's pause is mirrored to the Mac within seconds; `audiod pause --root <root>`
 and `audiod resume` are the break-glass when Isis cannot be reached.
 
-Phones run the `recall-mic` app: install, set the host, press Start; a phone
-self-registers on first connect. Protocol and liveness: [devices.md](devices.md).
+Phones: [android](../android/README.md), [ios](../ios/README.md); protocol and
+liveness: [devices.md](devices.md).
 
 ## Speakers and vocabulary
 
@@ -111,9 +98,7 @@ nix develop --command env PYTHONPATH=src .venv/bin/python -m recall.score_asr
 
 Transcribes the three committed fixtures with the real model and fails if word
 error rate drifts past each one's threshold or the language is mis-detected.
-On demand, never part of the gate: it loads the model. Regenerate the
-`say`-voiced fixtures only deliberately (`scripts/gen-speech-fixture.sh`): a new
-voice moves the baseline under the threshold.
+On demand, not in the gate: it loads the model.
 
 ## The shim by hand
 

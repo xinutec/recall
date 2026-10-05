@@ -99,8 +99,8 @@ on the golden ASR check, never by a calendar.
 ## Two planes, two databases
 
 `ingest.sqlite` is the **audio plane**: one row per delivered blob, speech
-seconds per blob, the job queue and the passes' ledger, and the room stream's
-history (levels, room blocks, room jobs). `recall.sqlite` is the **meaning plane**: sources, audio segments,
+seconds per blob, the job queue and the passes' ledger, and the retired room
+stream's tables. `recall.sqlite` is the **meaning plane**: sources, audio segments,
 turns, corrections, speakers and voiceprints, and the FTS index. recalld owns
 both; the schema of the second is a migration ladder
 (`recalld::meaning_schema`), that of the first one `ensure`
@@ -168,8 +168,8 @@ decodes to the WAV's exact samples.
 
 ## recalld
 
-One binary (axum, rusqlite) on Isis, binding the ingest port the recorders
-push to and the port the browser uses. It owns:
+One binary (axum, rusqlite) on Isis, on one port behind the front door for
+recorders, the Mac and the browser. It owns:
 
 - **The ingest door.** Bytes stream to a temp file, are fsynced, renamed into
   place, the directory fsynced, the row inserted, then the receipt goes out.

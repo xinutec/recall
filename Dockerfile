@@ -68,10 +68,9 @@ COPY --from=frontend /build/frontend/dist /app/frontend/dist
 COPY --from=recalld /build/target/release/recalld /usr/local/bin/recalld
 RUN mkdir -p /app/logs && chown -R 1000:1000 /app
 USER 1000
-EXPOSE 8000 8001
+EXPOSE 8000
 # The command the Deployment passes (kubes/dhall/apps/recall.dhall), so `docker run`
-# runs the same program. `--root` is the PVC mount; one process binds the browsing
-# port and the device ingest port.
+# runs the same program: one port for the browser, ingest and sync.
 CMD ["recalld", "--root", "/data", \
-     "--bind", "0.0.0.0:8000", "--bind", "0.0.0.0:8001", \
+     "--bind", "0.0.0.0:8000", \
      "--frontend", "/app/frontend/dist/recall-web/browser"]

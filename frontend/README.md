@@ -1,49 +1,21 @@
 # recall web
 
-The recall front-end: an Angular 22 app (zoneless, signals, standalone) with
-Angular Material 22. It talks to the FastAPI backend (`../src/recall/api.py`) over
-`/api/*` and, in production, is served by that same backend on one origin.
-
-Run everything from the repo's Nix devshell so the right Node is on PATH:
+Angular 22 (zoneless, signals, standalone) with Angular Material, served by
+recalld (`--frontend`) on the same origin as `/api`. Run from `nix develop`.
 
 ```sh
-nix develop          # provides nodejs_24 (Angular 22 needs Node >= 24.15)
-```
-
-## Develop (hot reload)
-
-```sh
-cd frontend && npx ng serve
-```
-
-`proxy.conf.json` forwards `/api` to the backend on `http://localhost:8000`, so
-start the API too (`../scripts/recall.sh api --out /Volumes/Backup/recall`). The
-dev server binds `0.0.0.0`, so it's reachable from the phone over the LAN.
-
-## Build (what the backend serves)
-
-```sh
-../scripts/recall-build-frontend.sh
-```
-
-Not a bare `ng build`: it runs `npm run build` (so the `prebuild` version stamp
-fires), builds into a staging dir, checks `index.html` + the main bundle + every
-`public/` asset landed, retries a known libuv/kqueue abort, and only then swaps into
-`dist/recall-web`. Output is `dist/recall-web/browser/`, served with an SPA fallback.
-In production the Dockerfile does this build — the image is what Isis serves.
-
-## Test
-
-```sh
-pnpm test                                  # Vitest (via the pretest version stamp)
-pnpm run e2e                               # Playwright specs in e2e/
+pnpm start              # dev server; proxy.conf.json sends /api to localhost:8000
+pnpm run lint
+pnpm exec ng test --watch=false
+pnpm run e2e            # Playwright, e2e/
+../scripts/recall-build-frontend.sh    # the image's build, into dist/recall-web/browser
 ```
 
 ## Layout
 
-- `src/app/features/` — one component per route: timeline (`''`), search, review,
-  labels, sessions, session (`sessions/:id`)
-- `src/app/shared/` — `turns` (the speaker-paragraph view the timeline and a
-  session share), `player`, transcript card, confirm dialog
-- `src/app/recall-api.ts` — typed client for the backend mutations
-- `src/app/models.ts`, `format.ts` — API types and presentation helpers
+- `src/app/features/`: one component per route (`app.routes.ts`): timeline,
+  search, check, labels, sessions, session
+- `src/app/shared/`: the line sheet, player, confirm dialog
+- `src/app/generated/`: API types from recalld's structs (`scripts/gen-types.sh`)
+- `recall-api.ts`: the client for mutations; `models.ts`, `format.ts`: types and
+  display helpers

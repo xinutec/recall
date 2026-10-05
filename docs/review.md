@@ -15,8 +15,7 @@ meeting-20260209-1033  Mon 09 Feb 2026 10:33   18m29s    50 turns  Dr. Adams,Ale
 meeting-20260202-1529  Mon 02 Feb 2026 15:29    1h07m   275 turns  unknown
 ```
 
-Columns: session id, when, duration, turn count, and the confirmed speakers (or
-`unknown` where none have been named yet).
+The last column is the confirmed speakers, or `unknown`.
 
 ## Read one session
 
@@ -31,15 +30,13 @@ recall-cli transcript meeting-20260209-1033
 [10:35:16] Dr. Adams: Of course — let's go through the results together.
 ```
 
-Each line is `[time] speaker: text`. The speaker is a **confirmed name** where one has
-been entered; otherwise the **diarization voice** (`SPEAKER_00`, `SPEAKER_01`, …), so
-distinct unnamed speakers stay distinguishable; `unknown` only if there's neither.
+The speaker is a confirmed name, else the diarization voice (`SPEAKER_00`, ...),
+else `unknown`.
 
 ## Read a day's calls (continuous capture)
 
-Phone calls and in-person conversations caught by the always-on mics aren't "sessions"
-— they're split out of the day's continuous recording by silence gaps. List a day's
-conversations, then dump one by its number:
+Conversations caught by the always-on mics are not sessions; they are split out
+of the day by silence gaps:
 
 ```
 recall-cli day 2026-02-09
@@ -54,18 +51,15 @@ recall-cli day 2026-02-09 --conv 3
 3. 16:33-16:40   56 turns  Hello, is anyone home?
 ```
 
-Times are local. `--day` takes `today` or `YYYY-MM-DD`; `--conv N` (or `--conv last`)
-dumps conversation N
-(same `[time] speaker: text` format). The redundant room mics are folded to one line
-per moment, so the dump isn't doubled.
+Times are local. The date is `YYYY-MM-DD`, `today` or `yesterday`; `--conv N`
+(or `last`) reads one conversation. Mics that heard the same moment are folded
+to one line.
 
 ## Machine-readable
 
-`recall-cli` prints for a reader. For structured output call the API directly:
-`GET /api/sessions/<id>/transcript` is the session's clean export, one bubble per
-run of same-speaker turns, current state only, deterministic. It sits behind the
-Nextcloud sign-in like every browsing route; `cli/src/api.rs` shows how the CLI
-carries the cookie.
+`GET /api/sessions/<id>/transcript` is the session's export: one bubble per run
+of same-speaker turns, current state, deterministic. It needs the sign-in
+cookie, as in `cli/src/api.rs`.
 
 ## Editing in the app
 
@@ -116,12 +110,9 @@ it, so a day can be worked in a session first and finished in Check. A speaker
 fix keeps the machine's words: it leaves the line to be checked, and a referee
 scoring words against corrections must not count it.
 
-## What to trust (and what not to)
+## What to trust
 
-- The **text** is automatic speech recognition (Whisper). It mishears — especially
-  names, drug names, and medical terms. Don't quote a single word as fact.
-- **Speaker attribution** comes from diarization + voiceprints + human review. A
-  **confirmed name** is reliable. A bare `SPEAKER_nn` only means "a distinct voice" —
-  it is *not* verified to be one person throughout, and the diarization can mis-sort an
-  individual turn. Treat any unconfirmed attribution as a hint, not a fact.
-- Corrections are made in the web UI; this command reflects the corrected state.
+- Unchecked text is Whisper's and mishears names and medical terms: do not quote
+  a single word as fact.
+- A confirmed name is reliable. `SPEAKER_nn` means a distinct voice, not
+  verified to be one person throughout; an unconfirmed attribution is a hint.

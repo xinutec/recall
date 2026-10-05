@@ -1,13 +1,12 @@
 # playback: known speech, scored per microphone
 
-An experiment (#1388): play speech from a public test set through the house's
+An experiment (#1388): play public test-set speech through the house's
 loudspeakers while capture runs, then score each microphone's transcript
-against the text that was played. The household's own speech has no
-reference unless someone checks every word; played speech brings its own, so
-microphones, and ways of combining them, can be compared with nobody at home.
+against the text played. Never deployed. It does not touch capture: resume it
+before `play` and pause it after.
 
-Never deployed. It does not touch capture: resuming and pausing it is the
-household's decision, made before `play` and after it.
+`playback meeting` is separate: it scores a meeting transcript against an AMI
+word reference and places every dropped word (#1470; `--help`).
 
 ## Run it
 
@@ -47,10 +46,8 @@ household's decision, made before `play` and after it.
 
 4. With capture running, play: silence, then each part followed by silence
    (`--gap`, 45 s), through `sox`. Each part's start goes to
-   `DIR/played.jsonl`. The Mac ramps its output up over about half a second
-   when playback starts, so each part opens with `--lead` (0.5 s) of silence
-   before its first turn's own gap. Whether the ramp counts silence is
-   untested: the score shows whether each part's first words were heard.
+   `DIR/played.jsonl`. Each part opens with `--lead` (0.5 s) of silence, as
+   the Mac ramps its output up over about that long.
 
    ```sh
    playback play --dir DIR

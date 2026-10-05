@@ -1,54 +1,34 @@
 # Meeting recordings
 
-A meeting or appointment is one recording, not the continuous room. It becomes
-a *session*: its own source, transcribed and diarized by the same runners every
-microphone clip goes through, read back as a clean attributed transcript.
+A meeting is one recording, not the continuous room. It becomes a *session*: its
+own source, transcribed and diarized by the same runners as every microphone
+clip.
 
 ## Getting one in
 
-- **Record it on the phone** with the app's meeting recorder
-  ([meeting-recorder.md](meeting-recorder.md)); it uploads itself as a session.
-- **Or upload any file** on the app's Sessions page (`POST /api/sessions`:
-  mp3, m4a, wav, flac, ogg, opus, webm). The session appears at once with zero
-  turns; the runners fill it in.
+- The phone's meeting recorder ([meeting-recorder.md](meeting-recorder.md)).
+- Any file on the Sessions page (`POST /api/sessions`: mp3, m4a, wav, flac,
+  ogg, opus, webm). The session appears at once, empty, and the runners fill it.
 
-**Language.** By default the model guesses each recording's language, which
-copes with a mixed conversation. It can guess wrong: a Dutch conversation has
-come back as English or Italian, translated rather than transcribed. Pin the
-language when uploading (the language button under "Upload recording"), or
-later from a session's menu (Language), which transcribes it again in that
-language: the old lines are set aside, not deleted. Dutch and English are the
-choices (`sessions::LANGUAGES`); Automatic unpins.
+The id is the local start in Europe/London, `meeting-YYYYMMDD-HHMM`
+(`upload.rs`); uploading the same recording twice is a no-op.
 
-A session's id is its local start, `meeting-YYYYMMDD-HHMM` (Europe/London), and
-its audio lands in the ingest plane like any delivered blob. Uploading the same
-recording twice is a no-op on the id.
+**Language.** Unpinned, Whisper guesses per recording and can come back
+translated (Dutch as English or Italian). Pin Dutch or English at upload or from
+the session's menu (`sessions::LANGUAGES`); pinning later transcribes again and
+sets the old lines aside. No automatic guess measured better (#1470).
 
 ## Speakers
 
-Two columns both get called "the speaker":
+- `speaker_cluster`: diarization's answer (`SPEAKER_00`, ...), on every turn.
+- `speaker_label`: a name a person gave, to a voice in the "Who's speaking"
+  strip (which enrols it) or to one line. Null means nobody named it yet.
 
-- `speaker_cluster` is diarization's answer (`SPEAKER_00`, `SPEAKER_01`),
-  written by the machine on every turn.
-- `speaker_label` is the name a person gave: to a whole voice in the session
-  screen's "Who's speaking" strip, which enrols it, or to one line.
-
-A null `speaker_label` means nobody has named the voices yet, not that
-diarization failed. **Re-diarize** on a session re-queues its clips for the
-voices runner and the pass decides afresh against the turns standing now.
+**Re-diarize** re-queues the session's clips for the voices runner.
 
 ## Reading it
 
-The session screen in the app, or from a terminal:
-
-```sh
-recall-cli sessions
-recall-cli transcript meeting-20260209-1033
-```
-
-Diarized output on a long recording is a rough dump: turns can be
-mis-assigned, and the second half can collapse into one run-on block. A
-publishable transcript is corrected in the app (speakers from the content,
-names, drug names, numbers) and then exported; the export is deterministic, so a
-re-run with no new corrections produces no diff. Meeting quality has not been
-measured (#1470); the audio remains the source of truth.
+The session screen, or `recall-cli sessions` and
+`recall-cli transcript meeting-20260209-1033`. Long recordings come out rough
+(mis-assigned turns, run-on blocks); correct in the app, then export, which is
+deterministic. Quality: 28% WER on the AMI meeting ES2004a (#1470).

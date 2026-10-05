@@ -1,8 +1,7 @@
 # recall
 
-Local, always-on household speech recall: records the house, transcribes it,
-attributes who said what, and makes it searchable. A memory aid. Everything
-stays on the household's own machines.
+Always-on household speech recall: records the house, transcribes it,
+attributes who said what, and makes it searchable.
 
 - [`docs/architecture.md`](docs/architecture.md): what it is for and how it is built
 - [`docs/running.md`](docs/running.md): the agents, the fleet, deploying
@@ -13,21 +12,21 @@ stays on the household's own machines.
 
 ## Layout
 
-A Rust workspace: `audiocore` (what the crates share), `audiod` (the Mac's audio
-plane), `recalld` (the fleet's system of record and the web API), `runner` (the
-Mac's job loop and the live feed), `doctor` (the Mac's health agent), `cli`.
-`src/recall` is the Python model floor: the two shims the runners drive, the
-golden ASR check. `frontend/` is the Angular app; `android/` and
-`ios/` the microphone apps.
+A Rust workspace: `audiocore` (shared), `audiod` (the Mac's audio plane),
+`recalld` (the fleet's system of record and web API), `runner` (the Mac's job
+loop and live feed), `doctor` (the Mac's health agent), `cli`, `transcript`
+(the domain as pure data), `experimental/playback`. `src/recall` is
+the Python the runners drive (the model shims) and the ASR check.
+`frontend/` is the web app; `android/` and `ios/` the microphone apps.
 
 ## Dev
 
 ```sh
-nix develop                               # rust, python, node, ffmpeg, sox, the lot
+nix develop                               # rust, python, node, ffmpeg, sox
 nix run ../dev-lint#gate -- . gate.json   # the full gate; a commit runs it
 ```
 
-`.venv` is a symlink into the nix store, built by `nix build .#dev-env
---out-link .venv` from `uv.lock`. Run a Python module with
+`.venv` is a store symlink (`nix build .#dev-env --out-link .venv`, from
+`uv.lock`). Run a Python module with
 `nix develop --command env PYTHONPATH=src .venv/bin/python -m recall.<module>`;
-without `PYTHONPATH=src` you run the store's copy, not your edit.
+without `PYTHONPATH=src` it runs the store's copy, not your edit.

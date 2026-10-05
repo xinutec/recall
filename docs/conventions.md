@@ -2,115 +2,54 @@
 
 ## Rust
 
-Six crates in one workspace, `unsafe` forbidden, clippy `pedantic` as warnings
-with `dbg!`, `todo!` and `unimplemented!` denied, and the gate runs clippy over
-every target. Tests are integration tests against public APIs, one binary per
-crate (`recalld/tests/integration/main.rs`), never `#[cfg(test)]` modules.
-A rule two crates need lives in `audiocore`, not beside a caller. Doc comments
-say what a thing is for today; history is in git. An intra-doc link that does
-not resolve fails the gate.
+`unsafe` forbidden; clippy `pedantic` as warnings, `dbg!`, `todo!` and
+`unimplemented!` denied, every target linted. Tests are integration tests
+against public APIs, one binary per crate (`recalld/tests/integration/main.rs`),
+never `#[cfg(test)]` modules. A rule two crates need lives in `audiocore`. Doc
+comments say what a thing is for today; history is in git. An unresolved
+intra-doc link fails the gate.
 
 recalld's SQL is declared, never inline: each statement is a constant in its
-module's `statements!` block, naming the database it runs against, and runs
-through that constant (`recalld/src/sql.rs`). Clippy refuses rusqlite's
-text-taking methods outside it, and a test prepares every statement against
-the migrated schema, so a renamed column fails the gate. A statement whose
-shape varies is written as one statement per shape, not built at run time.
+module's `statements!` block, naming its database (`recalld/src/sql.rs`).
+Clippy refuses rusqlite's text-taking methods elsewhere, and a test prepares
+every statement against the migrated schema. A statement whose shape varies is
+one statement per shape, not built at run time.
 
-## Typing (strict)
+## Python
 
-The Python is the model floor and is fully, strictly typed.
+The model floor (`src/recall`), `mypy --strict` with extra codes
+(`pyproject.toml`), every function annotated (ruff `ANN`), `# type: ignore` only
+with a code, missing-import waivers per module (mlx-whisper, silero-vad), no
+`Any` from unimported types. `ruff check` and `ruff format`.
 
-- **`mypy --strict` must pass with zero errors** on `src/`, `tests/` and `scripts/`. Config
-  lives in `pyproject.toml` (`[tool.mypy]`), with several extra error codes
-  enabled on top of `strict` (`possibly-undefined`, `explicit-override`,
-  `ignore-without-code`, etc.).
-- **Every function and method is annotated** — parameters and return type.
-  ruff's `ANN` rules enforce presence; mypy enforces correctness.
-- **No bare `# type: ignore`.** If a suppression is unavoidable, it carries a
-  code: `# type: ignore[attr-defined]`. `warn_unused_ignores` removes them once
-  they're stale.
-- **No blanket `ignore_missing_imports`.** mypy resolves third-party imports
-  from the venv (`python_executable`), so typed libraries (FastAPI, numpy,
-  pyannote, torch) are really checked. Only the stubless ones (mlx-whisper,
-  silero-vad) are waived, per module, never globally.
-- **Avoid `Any`.** `disallow_any_unimported` is on. Prefer precise types;
-  reach for `typing.Protocol`, `TypedDict`, `dataclass`, and generics over
-  loose dicts. Untyped third-party return values get narrowed at the boundary,
-  not propagated.
-- Prefer `from __future__ import annotations` and PEP 604 (`X | None`) syntax.
+`.venv` holds the ML dependencies and is built by nix
+(`nix build .#dev-env --out-link .venv`), never `uv sync`; run tests with
+`.venv/bin/python -m pytest`, since the devshell's python lacks numpy.
 
-## Linting & formatting
+## Frontend
 
-- `ruff check` and `ruff format` are the linter/formatter. Selected rule sets
-  in `pyproject.toml`. Keep the tree warning-free (a standing project rule).
+Angular 22: zoneless, signals, standalone, `OnPush`, flat file names
+(`foo.ts`, `foo.html`, `foo.scss`), external templates and styles. Reads use
+`httpResource`; mutations go through `RecallApi`. Angular Material for
+primitives. Strict TypeScript and `strictTemplates`. Wire types are generated
+from recalld (`scripts/gen-types.sh`), never hand-written.
 
-## Testing
+## Tests
 
-- **TDD-first**: write the failing test before the implementation, even for
-  small changes. Pipeline/geometry code gets real-data fixtures (captured audio
-  clips), not just synthetic units.
-- Python tests live in `tests/`, Rust tests beside each crate, and the frontend
-  specs with the app. Run the whole gate
-  with **`nix run ../dev-lint#gate -- . gate.json`**; for just the backend tests use
-  `nix develop --command .venv/bin/python -m pytest` (the venv holds the ML deps —
-  bare `pytest` can't import numpy/fastapi). `.venv` is a symlink into the store,
-  built by `nix build .#dev-env --out-link .venv`; if it is missing, that is the
-  command, not `uv sync`.
-
-## Toolchain
-
-- Nix `devShell` provides python, mypy, ruff, pytest, sox, ffmpeg, uv, and
-  node: `nix develop` (or `nix-shell`). The interpreter is the Nix one; ML deps
-  go in a uv-managed venv against that interpreter (they aren't cleanly in
-  nixpkgs).
-- Don't reach for brew/global pip/global npm. Tools come from the flake.
-
-## Frontend (Angular)
-
-The web app in `frontend/` is Angular 22, kept on the most modern footing:
-
-- **Zoneless** (no zone.js), **signals** for state, **standalone** components,
-  the flat naming convention (`foo.ts` / `foo.html` / `foo.scss`, no `.component`
-  suffix). Reactive reads use `httpResource`; mutations go through the typed
-  `RecallApi` service.
-- **External template and style files** — never inline `template:`/`styles:` in
-  the `@Component` decorator.
-- Use **Angular Material** components for primitives that exist (form fields,
-  cards, chips, buttons, snackbar) rather than hand-rolled CSS.
-- **Strict TypeScript**: `strict` plus `noUnusedLocals/Parameters`,
-  `exactOptionalPropertyTypes`, and `strictTemplates` in `tsconfig.json`. The
-  build must be error-free (strict templates catch real bugs).
-- `ChangeDetectionStrategy.OnPush` on components. The wire types are generated
-  from recalld's structs (`scripts/gen-types.sh`); never hand-write a shape.
+Test first. Pipeline code gets real-audio fixtures (`tests/fixtures/speech/`).
+Tools come from the flake, never brew or global installs.
 
 ## Reading the real archive
 
-⚠ **Opening a database through recalld migrates it.** `store::open` creates the
-ingest tables and `meaning_schema::ensure` climbs the ladder, so a harness that
-goes through them to *read* production changes production under the agents
-still running the previous revision.
+Opening a database through recalld migrates it (`store::open`,
+`meaning_schema::ensure`), which changes production under agents still on the
+previous revision. To look: open read-only (`sqlite3 -readonly`,
+`SQLITE_OPEN_READ_ONLY`). To compare or test a migration: a `.backup` snapshot,
+never the live file, and check the human-authored row counts afterwards.
 
-So, for anything that only needs to look:
+## The gate
 
-- open read-only (`sqlite3 -readonly`, `OpenFlags::SQLITE_OPEN_READ_ONLY`);
-- to compare implementations or test a migration, work on a **snapshot**
-  (`.backup`), never the live file: several daemons write it, so a moving
-  target cannot be diffed either way;
-- after exercising a migration on the copy, check the row counts of everything
-  human-authored before believing it.
-
-## Verify cycle
-
-Before considering a unit of work done, run **`nix run ../dev-lint#gate -- . gate.json`**
-— the full gate, every row in `gate.dhall` (the count lives there, not here): `ruff check` + `ruff format
---check`, `swift-format lint --strict` (the iOS app, via the Xcode toolchain),
-the venv store-path build, `mypy --strict`, `dev-lint` (custom rules), the
-generated-types drift check, the shim import-surface check, `pytest` (via the venv that holds the ML deps), the frontend build +
-layout harness + vitest, and the Android app. All green. It runs every row and
-names every one that failed, rather than stopping at the first.
-A pre-commit hook runs it on every commit (`scripts/setup-hooks.sh`); there is no
-separate pre-push step, so a commit that landed has already passed the gate. CI (`.github/workflows/build.yml`) builds the
-image and is the gate that must stay green, but it does *not* run the full local gate
-(no mypy/pytest/dev-lint there), so the local gate is the real one. Fix nearby
-warnings opportunistically; don't punt them as "pre-existing".
+`nix run ../dev-lint#gate -- . gate.json` runs every row of `gate.dhall` and
+names each failure. The pre-commit hook (`scripts/setup-hooks.sh`) runs it, so
+a landed commit has passed it. CI (`.github/workflows/build.yml`) only builds
+and smoke-tests the image.

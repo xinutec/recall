@@ -1,79 +1,33 @@
-# recall on Isis (k3s) — deployment notes
-
-Status: **LIVE since 2026-07-17.** The manifests no longer live here — they are in the
-<!-- dev-lint: allow-pii the repository's name -->
-`pippijn` monorepo at `code/kubes/recall/k8s/`, rendered from the typed Dhall model
-(`dhall/apps/recall.dhall`). This file is kept for the setup and rationale below
-(secrets, WireGuard exposure, backup), not as a source of manifests.
-
-They were duplicated in both places until 2026-07-26, and the copy here silently went
-stale: it was missing the six web-SSO env vars and the nextcloud egress rule that the
-live cluster had been running for nine days. A `kubectl apply` from this directory would
-have deleted working single sign-on. That is why there is now exactly one copy.
-
-Deploy with `kubes/deploy.sh recall` (or `recall/k8s/sync.sh`, which runs it).
-The cluster comes from the model (`dhall/clusters.json`: `recall: isis.xinutec.org`),
-so it is never passed by hand.
-
-Nothing auto-applies anywhere — the fleet does NOT run Flux; every app is deployed by
-hand. Rationale and topology: `docs/architecture.md`.
-
-## What runs here
-
-The **fleet tier only**: ONE container running `recalld`, which binds the browsing
-API + web app (8000) and the device ingest plane (wg hostPort 8001, gated by the
-`INGEST_TOKENS` key in `recall-secret`) in one process. No ML — the Mac keeps capture,
-ASR and diarization.
-
-The image carries no Python interpreter: a Debian base, the `recalld` binary, the
-built Angular frontend, and the media tools recalld shells out to (ffmpeg,
-ffprobe, sox, flac, deep-filter).
+# recall on Isis (k3s)
 
 <!-- dev-lint: allow-pii the repository's name -->
-Manifests (in `pippijn:code/kubes/recall/k8s/`): `00-namespace`, `01-pvc` (the SQLite DB +
-audio under `/data`), `02-deployment` (hardened: non-root uid 1000, dropped caps,
-read-only rootfs + `/tmp` emptyDir, seccomp, probes, limits), `03-service` (ClusterIP),
-`04-networkpolicy` (default-deny egress bar DNS + the nextcloud SSO exchange).
+The manifests live in the `pippijn` monorepo at `code/kubes/recall/k8s/`,
+rendered from `dhall/apps/recall.dhall`; this repo keeps no copy (a stale one
+here once lacked the SSO settings). Deploy with `kubes/deploy.sh recall`; nothing
+auto-applies. The image is `xinutec/recall:latest`, built and smoke-tested by CI
+(`.github/workflows/build.yml`) on push to `main`.
 
-## Steps to actually deploy (each is the host-touching part)
+One container runs `recalld` on one port: the browser, the phones' ingest and
+the Mac's sync all come through isis's front door as `recall.xinutec.org`,
+which answers on the WireGuard address only. No ML; the Mac does ASR and
+diarization. The PVC holds the SQLite databases and audio under `/data`.
+Network policy denies egress except DNS and the Nextcloud sign-in.
 
-1. **Image** — DONE. Built and pushed by CI (`.github/workflows/build.yml`, like every
-   other app) on push to `main`: `xinutec/recall:latest` is on Docker Hub. Nobody builds
-   it locally. It runs as uid 1000 via `recalld`, and CI boots the image before
-   publishing: the binary must print its usage, the Angular bundle must be present, and
-   every binary recalld shells out to must resolve.
-2. **Encryption at rest — DEFERRED (future action item, 2026-07-11).** Isis is a single
-   unencrypted ext4 disk (no spare partition), so encryption would be a LUKS file-container
-   mounted at recall's storage path (nixos-config + activation). Deferred by decision to
-   get the pipeline working first — so until this is done, recall's household/medical audio
-   sits on **plaintext disk** on Isis. Revisit before treating the split as production-grade.
-3. **Secret** — create `recall-secret` in the `recall` namespace with `SYNC_TOKEN` (the
-   Mac presents it as a bearer token). Source it from agenix/Vaultwarden, never committed.
-   Without it the sync routes don't register (the app stays a plain LAN web UI).
+## Secrets (`recall-secret`)
 
-   **Web-UI SSO (optional, additive).** To gate the human web UI behind a Nextcloud
-   sign-in, add three more keys to the same `recall-secret`: `NC_CLIENT_ID` +
-   `NC_CLIENT_SECRET` (from an OAuth 2.0 client registered on **dash.xinutec.org →
-   Settings → Security → OAuth 2.0 clients**, redirect URI
-   `https://recall.xinutec.org/auth/callback`), and `SESSION_SECRET` (a random cookie-signing
-   key, e.g. `openssl rand -hex 32`). All three raise the gate; missing any of them leaves
-   the UI open. `RECALL_ALLOWED_USERS` (plain env in the Deployment, default one account)
-   restricts who may enter after a valid sign-in. The recording plane stays login-free:
-   `/sync/*` keeps its bearer token, and the iOS mic app's capture endpoints
-   (`/api/capture`, `/api/sources`, `/api/capture/pause|resume`) are exempt — a headless
-   device can't do an interactive OAuth login. See `docs/architecture.md`, "Credential planes".
-4. **WireGuard exposure** — do not add an nginx Ingress. Expose the Service over WireGuard
-   only: a MetalLB address from a `wg0`-only pool, or a NodePort firewalled to `wg0`. That
-   is the real network gate; the public ingress is not one.
-5. ~~**Move the manifests to `kubes/recall/k8s/`** and add a `sync.sh`~~ — **DONE.** They <!-- dev-lint: allow-pii the repository's name -->
-   live at `pippijn:code/kubes/recall/k8s/` with `sync.sh` + `secret.sh` (the `sync.sh`
-   is now a wrapper on `kubes/deploy.sh`, not its own copy of the procedure). The copies that
-   used to sit here were deleted 2026-07-26 (see the status note at the top). The Mac
-   worker pushes (`recall sync`) at the Isis WG address.
-6. **Backup** — add a recall block to odin `backup-prepare.sh`: a consistent
-   `sqlite3 .backup` of `/data/recall.sqlite` on the PVC host path + the audio dir (NOT
-   the MariaDB-dump shape). Verify a restore before trusting it. Then recall rides the
-   standard odin-restic + Mac restic-copy — the bespoke `recall-backup.sh` retires.
+The env vars recalld reads (`grep -rn 'env::var' recalld/src`):
 
-Until step 5, production is unchanged: the Mac still runs everything and the LAN web UI is
-untouched (`recall.sync` is inert without the token).
+- `RECALL_SYNC_TOKEN`: the Mac's bearer token for `/sync/*`.
+- `RECALLD_INGEST_TOKENS`: per-source tokens for segment delivery.
+- `RECALL_DEVICE_TOKEN`: what a phone presents instead of a sign-in cookie.
+- `RECALLD_READ_TOKEN`: gates the read side.
+- Web sign-in, all or none: `NC_CLIENT_ID`, `NC_CLIENT_SECRET` (an OAuth client
+  on dash.xinutec.org, redirect `https://recall.xinutec.org/auth/callback`) and
+  `RECALL_SESSION_SECRET`. `RECALL_ALLOWED_USERS` limits who may enter. The
+  device paths are exempt (`webauth::DEVICE_EXEMPT`).
+
+## Facts
+
+- Backed up nightly by odin: a `.backup` of the databases and an rsync of the
+  audio (`xinutec-infra/backups.md`).
+- Isis's disk is not encrypted; deferred on 2026-07-11.

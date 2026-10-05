@@ -1,215 +1,80 @@
 # Meeting recorder
 
-A record-to-file mode inside the existing Android app, so a meeting or appointment is
-captured by recall's own app and uploaded as a session — replacing the third-party mp3
-recorder previously used for that job, whose ads are the reason to stop using it.
+A record-to-file mode in the Android app (`MeetingService`, `MeetingActivity`,
+`MeetingQueue`, `MeetingLibrary`, `MeetingPlayer`, `MeetingUpload`); a recording
+is uploaded as a session. This file holds the decisions and their reasons.
 
-**Status: built** — `MeetingService`, `MeetingActivity`, `MeetingQueue`, `MeetingLibrary`,
-`MeetingPlayer`, `MeetingUpload`.
-This file is the design decisions and why they were made.
+## In `android/app`, not a new app
 
-**It does not record mp3, and cannot:** Android has no MP3 encoder — `MediaRecorder` and
-`MediaCodec` decode the format but have never encoded it. Emitting `.mp3` would mean
-bundling LAME through the NDK. Opus is what the platform encodes well, and the server
-accepts it, so the choice below costs nothing.
+It shares `Prefs`, the mic-type foreground service, the `UNPROCESSED` → `MIC`
+fallback and `ShareUpload` (`POST /api/sessions` with a `start` instant). Both
+modes want the one microphone, and only one process can enforce that: starting a
+meeting stops `StreamService`, stopping it restarts the stream if it was on. A
+WebView cannot hold a mic foreground service.
 
-## Where it lives: `android/app`, as a second mode
+## Ogg/Opus, 56 kbps, 48 kHz mono
 
-Not a new app, and not the `android/web` WebView module.
+A truncated Ogg decodes to its last complete page, so a crash or flat battery
+costs the tail, not the meeting; an m4a cut before `stop()` has no `moov` atom.
+That is why one file per meeting is acceptable. Android has no MP3 encoder.
+Opus needs Android 10 (API 29); older phones only stream (`minSdk` 26), rather
+than fall back to m4a. The server already accepts `.ogg`
+(`recalld/src/upload.rs`, `AUDIO_SUFFIXES`).
 
-- [`ShareUpload`](../android/app/src/main/kotlin/org/recall/mic/ShareUpload.kt) already
-  posts to `/api/sessions` with a `start` instant, streamed. Reusing it means a recording
-  made here arrives exactly like one shared from another app today.
-- `Prefs` already holds the host, control host and device id. A second app would carry a
-  second copy of that configuration, free to drift from the first.
-- The hard parts exist: a microphone-type foreground service, the `UNPROCESSED` → `MIC`
-  source fallback, the refused-foreground-start path, the notification, `LevelMeter`.
-- Both modes want the one microphone. Inside a single process the rule can be enforced;
-  across two apps the loser only learns about it as an `AudioRecord` init failure.
-- A WebView can't hold a microphone-type foreground service, so `getUserMedia` there
-  stops at screen-off.
+## Nothing uploads unheard, nothing is deleted automatically
 
-## Format: Ogg/Opus — the container is the crash strategy
+A recording waits on the phone with Play, Upload and Delete. Every state is a
+directory, because a rename cannot half-happen and survives a reboot:
 
-`MediaRecorder` with `OutputFormat.OGG` + `AudioEncoder.OPUS`, 48 kHz mono, audio source
-`UNPROCESSED` falling back to `MIC` — the same preference `StreamService.openRecord`
-makes, and for the same reason: automatic gain control and noise suppression damage the
-speaker embeddings the diarizer depends on.
+| directory              | meaning                                  |
+|------------------------|------------------------------------------|
+| `meetings/`            | held                                     |
+| `meetings/outbox/`     | approved: the only place the uploader looks |
+| `meetings/uploaded/`   | recall has it, same length               |
+| `meetings/unverified/` | recall has it, lengths disagree or unreadable |
 
-Ogg is chosen over m4a because **a truncated Ogg still decodes** to its last complete
-page. A recording cut short by a flat battery or a crash costs its tail, not the whole
-appointment. An m4a interrupted before `stop()` has no `moov` atom and is not
-recoverable. That property is what makes one file per meeting acceptable, instead of
-rolled parts plus a join.
+Delete is the only removal, even after a verified upload. Files live in
+`getExternalFilesDir(DIRECTORY_MUSIC)/meetings`, reachable over USB.
 
-Bitrate **48–64 kbps**, above the 32 kbps of continuous capture: a meeting is far-field
-with several voices, and a one-off hour costs ~25 MB, so the storage argument behind
-32 kbps does not apply here.
+## A 2xx is not proof
 
-`.ogg` is already in the accepted containers
-([`recalld/src/upload.rs`](../recalld/src/upload.rs), `AUDIO_SUFFIXES`),
-so **the format needs no server change**. Reaching the endpoint at all did — see
-"Authenticating the upload" below.
-
-Opus encoding arrived in Android 10, so meeting recording requires API 29 and says so on
-anything older. `minSdk` stays 26: an older phone can still do the streaming job, and
-quietly writing an m4a instead would put an unrecoverable container exactly where the
-crash strategy expects a recoverable one.
-
-## Nothing uploads until it has been listened to
-
-A recording is evidence about an appointment, and whether it is worth keeping is a
-judgement that can only be made after hearing it. So the recorder does not send anything
-on its own: a finished recording appears in a list on the phone with **Play**, **Upload**
-and **Delete**, and stays there until one of the last two is pressed.
-
-Approval is a **move on disk**, not a flag — and so is every other state a recording can
-be in, because each one is a decision or a verdict that has to survive a reboot, and a
-rename is the only change that cannot half-happen:
-
-| directory              | meaning                                            |
-|------------------------|----------------------------------------------------|
-| `meetings/`            | held: nothing sends it                             |
-| `meetings/outbox/`     | approved — the only place the uploader looks       |
-| `meetings/uploaded/`   | recall has it, and its length matches this copy    |
-| `meetings/unverified/` | recall has it, but the lengths don't agree         |
-
-The uploader looks only in the outbox, so it cannot send something that was never
-approved, and a reboot between the decision and the upload cannot lose the decision.
-
-Playback is deliberately small — one file, no queue, no service, released when the screen
-closes. It is a check before uploading, not a media player, and it never touches the
-device volume.
-
-## A 2xx is not proof, so the lengths are compared
-
-The server does check what arrives: `create_session` runs ffprobe on the uploaded file and,
-if it can't read it, unlinks it and returns 400. Garbage cannot earn a success.
-
-What that misses is a **post cut short mid-stream** — a dropped connection partway through
-40 MB. ffprobe reports the duration of whatever showed up, so a truncated body still parses
-and still returns 2xx, with seconds or minutes missing off the end. That is exactly the
-case where the phone holds the only complete recording, and it was also the case where the
-old behaviour deleted it.
-
-So the response is read as a receipt. `create_session` returns `start` and `end`, so the
-phone knows how long recall thinks the recording is, and compares it with the file it still
-has. Shorter by more than 1.5 s — clear of two decoders rounding one file differently, well
-under any real truncation — and it goes to `unverified/`, where the row says so next to the
-Delete button. A length that can't be read on either side is *also* unverified: "couldn't
-compare" must never render as "checked and fine".
+recalld ffprobes an upload and rejects what it cannot read, but a post cut short
+mid-stream still parses and returns 2xx. So the phone compares the `start`/`end`
+the response reports with its file: more than 1.5 s shorter
+(`MeetingQueue.LENGTH_TOLERANCE_MS`), or unreadable on either side, is
+unverified.
 
 ## The upload queue
 
-Meetings happen where the recall host is unreachable, and some guest networks block the
-VPN outright, so there may be no route home from the building at all. So once a recording
-*is* approved, delivery is offline-first: it waits in the outbox until the host answers.
+Meetings happen where recall is unreachable, so delivery waits in the outbox. A
+WorkManager job (network constraint, backoff) drains the whole outbox, so a
+missed enqueue strands nothing and a delivered file is never sent twice. It is
+kicked, with `REPLACE` to drop a previous backoff, when a recording is approved,
+the screen opens, or the mic stream connects. The app shows how many wait.
 
-- Write to `getExternalFilesDir(DIRECTORY_MUSIC)/meetings`, not `filesDir`. Both are
-  app-private, but the former is visible over USB, so a recording whose upload never
-  succeeds can still be retrieved by plugging the phone in.
-- Upload via a `WorkManager` job with a network constraint and backoff. Each run drains
-  the **whole outbox** rather than one named item, so a missed enqueue can't strand an
-  approved recording: the files on disk are the state, not the job. A delivered recording
-  leaves the outbox, so it is never sent twice and can't produce a duplicate session.
-- The outbox is kicked on three "the host might be reachable now" events — a recording
-  being approved, the screen opening, and the mic stream connecting (which proves we're
-  home). All three use `REPLACE`, so a previous failure's backoff is abandoned rather
-  than waited out.
-- Each recording is a single file, `meeting-<local stamp>.ogg` — no title, no sidecar. The
-  filename is the whole record, so a recording that ends in a crash still knows when it
-  was made, and there is no second file to lose or keep in step.
-- The pending queue is **shown in the app** ("2 recordings waiting to upload"). A silent
-  queue is how a lost recording goes unnoticed for weeks.
+One file per recording, `meeting-<local stamp>.ogg`, no title or sidecar; the
+server names the session from `start`, and a name, if wanted, is given in recall.
 
-## Microphone contention
+## Credentials
 
-Starting a meeting recording stops `StreamService`; stopping it starts the stream again
-if it was running. The meeting recorder wins because it is the deliberate act, and the
-notification says why the stream stopped.
+`POST /api/sessions` sits behind the web sign-in, which a phone cannot do. The
+phone sends `RECALL_DEVICE_TOKEN` as a bearer (Settings, "upload token"; blank
+sends none), accepted on `POST /api/sessions` only: not the sync token, which
+opens all of `/sync/*`, and not the login-free list, which suits a pause button
+but not a 40 MB upload. `POST /api/devices/outbox` is login-free, since it
+reports failed uploads, a bad token included.
 
-Household capture on the USB mic is a different device and is unaffected.
+Uploads go to the control host (`Prefs.controlHost`), not the recorder host.
 
-## What the session gets downstream
+## Downstream
 
-`create_session` registers an `upload` source holding **one segment for the whole file**,
-so the recording is diarized as a single window — the regime that scores best on speaker
-boundaries (see [architecture.md](architecture.md)). It appears in the web app immediately
-with 0 turns while the runners transcribe and diarize it; rename, delete and
-re-diarize already work on it.
+The session is one `upload` source holding one segment for the whole file, so
+it is diarized as a single window ([architecture.md](architecture.md)). It
+appears at once with no turns and lands at its true start on the timeline.
 
-The app knows the true start instant, so `start` is filled and the session lands at the
-right point in the timeline rather than at the moment it happened to be uploaded.
+## Not done, on purpose
 
-## Scope
-
-Phone: `MeetingService` mirroring `StreamService`'s lifecycle; `MeetingActivity` with
-start/stop, elapsed time, the shared level meter and the list of what is still on the
-phone; `MeetingQueue` (the files and the two directories), `MeetingLibrary`
-(what the list shows, and the approve/delete actions), `MeetingPlayer` (listening back)
-and `MeetingUpload` (the WorkManager job). The hosts moved to `SettingsActivity`, behind
-the drawer, so the daily screen is status and Start/Stop rather than a form. Tests cover
-the pure parts — file naming, start recovery, listing, approval, the row labels — as
-`ShareUpload`'s time helpers were covered before.
-
-Server: the device-token plane (below), with one deliberate exception —
-`POST /api/devices/outbox` is login-free, because it reports what a phone could
-NOT upload using the same credential it uploads with. Gating it would 401 the
-report about a bad token, which is the fault it exists to catch.
-
-## Authenticating the upload
-
-Found on 2026-08-07, the first time a real recording was uploaded to Isis: **every
-upload got a 401**, deterministically, and always would have. `POST /api/sessions` is on
-the browsing plane behind the Nextcloud sign-in ([architecture.md](architecture.md), "Credential planes"),
-and `ShareUpload` sent no credential at all. The web Upload button works because a
-browser carries the `recall_session` cookie; the phone has none, and the WebView that
-could get one is a different app (`org.recall.web`) with its own cookie jar. The share
-sheet had the same defect for the same reason.
-
-Nothing was lost — the outbox is the state, so the recording sat there retrying — but the
-success signal is unreachable until the server answers, so the length comparison above had
-never run in anger either.
-
-The fix is a **device token**: `RECALL_DEVICE_TOKEN` on the server, accepted as a bearer
-in place of a session cookie on `POST /api/sessions` **and nowhere else**, and set on the
-phone under Settings → "upload token". Blank sends no header, so an ungated LAN host (the
-Mac, dev, tests) is unchanged.
-
-Why a token rather than adding the path to the login-free device allowlist: that
-allowlist can only say *no credential at all*. A pause button is a fair thing to leave
-open; accepting tens of megabytes and creating a session is not the same trade. And why
-not the sync token: that one opens the whole `/sync/*` surface — archive push, job pull,
-path-checked writes — and a phone is easier to lose than a Mac. Two secrets, rotated
-independently. The closed path set is what keeps a phone that can upload a recording from
-being able to read the household's transcripts.
-
-## Decisions that were open, and how they went
-
-- **Nothing is ever deleted automatically — not even after a successful upload.** This was
-  the other way round at first, on the reasoning that the phone is the least reliable
-  device and recall is what gets backed up (Isis's `recall-data-pvc` is rsynced nightly
-  into odin's restic repo, with an off-site copy after). Both halves of that are true and
-  it was still wrong, because of what a 2xx does *not* prove — see below. Deleting is now
-  the one thing only a person does.
-- **No pause/resume.** `MediaRecorder` supports it, but a paused recorder that is never
-  resumed loses audio silently — the same failure the resume warning guards against for
-  continuous capture. A break in a long appointment is Stop then Start, which costs a
-  second session and, unlike silence, is visible.
-- **The level meter reads `MediaRecorder.getMaxAmplitude()`**, polled every 100 ms, not
-  `AudioRecord` frames — `MediaRecorder` owns the mic and never hands over the samples.
-  Both modes scale it through the same `amplitudeLevel`, so the two meters read alike.
-
-## No name, and the host it goes to
-
-A recording has no title, on the phone or on the wire. The only thing worth knowing about
-one before it is transcribed is when it happened, and the filename says that; the server
-names the session `Meeting <date> <time>` from the `start` field. If it ever needs a name
-it gets one in recall, where the transcript is to hand and the name can be chosen for what
-the meeting turned out to be — rather than typed into a phone on the way into a waiting
-room, which is the worst moment to be asked.
-
-Uploads go to the **control host** (Isis), not the recorder host the PCM stream connects
-to. `ShareActivity` used to post to the recorder host, which has served nothing on `:8000`
-since the Mac's UI was retired in the Isis split — so sharing a recording in had been
-silently failing. Both paths now use `Prefs.controlHost`.
+- No pause/resume: a paused recorder never resumed loses audio silently; Stop
+  then Start is visible.
+- The level meter polls `MediaRecorder.getMaxAmplitude()`, as `MediaRecorder`
+  owns the mic, scaled by the shared `amplitudeLevel`.
