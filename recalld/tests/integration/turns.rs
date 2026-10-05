@@ -1,4 +1,4 @@
-//! What a finished transcription job means — and, just as much, what it does NOT mean.
+//! What a finished transcription job means, and what it does not.
 
 use audiocore::job::Kind;
 use chrono::{TimeZone, Utc};
@@ -8,8 +8,7 @@ fn block() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 6, 9, 45, 0).unwrap()
 }
 
-/// The shim's result shape, copied from a real stored result rather than
-/// written from a type definition, so it pins the wire format.
+/// Copied from a real stored result, to pin the wire format.
 const REAL_SHAPE: &str = r#"{
   "ok": true,
   "result": {
@@ -35,8 +34,7 @@ fn offsets_become_absolute_times_against_the_blocks_own_start() {
         block() + chrono::Duration::milliseconds(1500)
     );
     assert_eq!(turns[0].end, block() + chrono::Duration::milliseconds(3250));
-    // The shim's offsets are relative to the clip it was handed; only the
-    // block's filename says when that clip began.
+    // Offsets are clip-relative; the filename says when the clip began.
     assert_eq!(turns[1].start, block() + chrono::Duration::seconds(4));
 }
 
@@ -54,14 +52,12 @@ fn word_timings_are_carried_verbatim_or_absent_never_invented() {
     let turns = interpret(block(), REAL_SHAPE).expect("turns");
 
     assert!(turns[0].word_timings.is_some());
-    // The second segment's `words` is JSON null, which must land as absent,
-    // not as the string "null" a naive `to_string()` would store.
+    // JSON null lands as absent, not the string "null".
     assert_eq!(turns[1].word_timings, None);
 }
 
-/// Transcribing near-silence returns inventions, such as runs of tildes at low
-/// confidence. The queue denies measured silence a job; this is the same rule
-/// one stage later, for blocks nobody measured.
+/// Near-silence comes back as inventions such as runs of tildes; the same rule
+/// as the queue's, for blocks nobody measured.
 #[test]
 fn a_turn_with_no_word_in_it_is_dropped_rather_than_stored() {
     let junk = r#"{"ok": true, "result": {"language": "en", "segments": [
@@ -74,8 +70,7 @@ fn a_turn_with_no_word_in_it_is_dropped_rather_than_stored() {
 
 #[test]
 fn a_refusal_is_barren_not_an_error_to_retry() {
-    // A refusal is a fact about the audio; re-running would produce the same
-    // refusal at the same GPU cost.
+    // A refusal is a fact about the audio.
     let refused = r#"{"ok": false, "error": "unreadable clip"}"#;
 
     assert_eq!(interpret(block(), refused), Err(Barren::Refused));
@@ -105,10 +100,9 @@ fn a_result_of_another_shape_names_itself_unreadable_rather_than_guessing() {
     }
 }
 
-/// Runs the interpreter over every stored result in a real queue, because a
-/// fixture only encodes a belief about the shim. Point `RECALL_INGEST_DB` at a
-/// copy of the queue, never the live file (a reader takes locks the fleet
-/// uses). It prints counts only; the transcripts are private.
+/// The interpreter over every stored result in a real queue. Point
+/// `RECALL_INGEST_DB` at a copy, never the live file (a reader takes locks).
+/// Prints counts only.
 ///
 ///     cargo test --test turns -- --ignored --nocapture
 #[test]
@@ -163,7 +157,7 @@ fn every_stored_result_interprets_or_names_why_not() {
     );
 }
 
-// ---- the write plan: the rules that can destroy a person's typed words ----
+// ---- the write plan ----
 
 use audiocore::vad::Region;
 use recalld::quality::Heard;
@@ -196,7 +190,7 @@ const D: &str = "2026-09-11T10:00:30+00:00";
 
 #[test]
 fn a_turn_over_a_corrected_span_is_refused_with_a_reason() {
-    // The human's text stands. A machine pass does not get to restate it.
+    // The person's text stands.
     let out = plan(
         vec![clip_turn(A, B, "what the model heard")],
         &[Protected {
@@ -217,8 +211,7 @@ fn a_turn_over_a_corrected_span_is_refused_with_a_reason() {
 
 #[test]
 fn a_looping_turn_is_swept_and_never_written() {
-    // Repetition loops stay out of the system of record, swept where the write
-    // is decided rather than on the read path.
+    // Loops are swept at write time.
     let out = plan(
         vec![
             clip_turn(A, B, "momentum momentum momentum momentum"),
@@ -341,8 +334,7 @@ fn a_thank_you_where_nobody_spoke_is_swept_and_one_said_is_kept() {
 
 #[test]
 fn a_touching_boundary_does_not_count_as_overlap() {
-    // Half-open spans: a turn ending exactly where a correction begins does not
-    // hit it. Without this every adjacent turn would be treated as corrected.
+    // Half-open spans: a turn ending where a correction begins is untouched.
     let out = plan(
         vec![clip_turn(A, B, "before the correction")],
         &[Protected {
@@ -359,8 +351,7 @@ fn a_touching_boundary_does_not_count_as_overlap() {
 
 #[test]
 fn a_blob_lives_under_root_ingest_source_not_root_source() {
-    // Blocks live in `<root>/ingest/<source>/`; a path built as
-    // `<root>/<source>/` names a directory that does not exist.
+    // Blocks live in `<root>/ingest/<source>/`.
     let dir = recalld::store::source_dir(std::path::Path::new("/data"), "room");
     assert_eq!(dir, std::path::Path::new("/data/ingest/room"));
 }
@@ -382,8 +373,7 @@ fn meaning_with_turns() -> rusqlite::Connection {
     conn
 }
 
-/// The minute the fixture's turns fall in. `write_block` needs the clip's span
-/// to reconcile live turns against it.
+/// The minute the fixture's turns fall in, for reconciling live turns.
 fn a_span() -> (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>) {
     (
         "2026-09-11T10:00:00Z".parse().expect("from"),
@@ -401,8 +391,7 @@ fn a_plan() -> recalld::turns::Plan {
 
 #[test]
 fn a_written_turn_is_findable_by_search() {
-    // The FTS index is maintained in code; forgetting it fails nothing and
-    // makes the text unfindable by search.
+    // The FTS index is maintained in code.
     let mut conn = meaning_with_turns();
     assert_eq!(
         write_block(&mut conn, 7, a_span(), &a_plan(), &crate::stamp(NOW), false).expect("write"),
@@ -420,8 +409,7 @@ fn a_written_turn_is_findable_by_search() {
 
 #[test]
 fn a_second_pass_refuses_rather_than_duplicating() {
-    // Idempotent by refusing, not overwriting: a re-run must never duplicate,
-    // nor "fix" a minute a person has since edited.
+    // A re-run refuses: no duplicate, no overwrite of an edited minute.
     let mut conn = meaning_with_turns();
     let plan = a_plan();
     assert_eq!(
@@ -450,8 +438,7 @@ fn planes_for_a_pass() -> (
 ) {
     let meaning = rusqlite::Connection::open_in_memory().expect("meaning");
     recalld::meaning_schema::ensure(&meaning).expect("meaning schema");
-    // Every clip's source is registered, as the foreign key requires; these
-    // tests name sources freely.
+    // Every source is registered, as the foreign key requires.
     meaning
         .execute_batch(
             "CREATE TEMP TRIGGER known_source BEFORE INSERT ON audio_segments BEGIN
@@ -462,9 +449,7 @@ fn planes_for_a_pass() -> (
              END;",
         )
         .expect("sources");
-    // The ingest plane is opened through `store::open`, not copied DDL:
-    // `write_pass` joins `jobs` to `segments`, so the test must use
-    // production's table.
+    // Production's schema (`store::open`), not copied DDL.
     let dir = tempfile::tempdir().expect("tmp");
     let ingest = recalld::store::open(dir.path()).expect("ingest");
     recalld::ingest_schema::ensure(&ingest).expect("jobs");
@@ -490,8 +475,7 @@ fn done_clip(
     );
 }
 
-/// A done job and the ingest-plane segment row it names. `write_pass` joins
-/// them to learn the source, and every real job derives from a `segments` row.
+/// A done job and the segment row it names.
 fn done_job(
     ingest: &rusqlite::Connection,
     kind: Kind,
@@ -533,9 +517,7 @@ fn a_result(text: &str) -> String {
 
 #[test]
 fn a_block_that_writes_nothing_is_decided_once_not_every_pass() {
-    // A block that writes nothing leaves no trace in the meaning plane to
-    // derive "done" from, so only the ledger can retire it. Without it the pass
-    // re-examines the same blocks forever.
+    // A block that writes nothing is retired by the ledger alone.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_clip(
         &meaning,
@@ -561,8 +543,7 @@ fn a_block_that_writes_nothing_is_decided_once_not_every_pass() {
 
 #[test]
 fn a_written_block_is_retired_by_its_turns_and_not_by_the_ledger() {
-    // Deleting the pass's turns is enough to re-enable the clip, with no
-    // ledger row to clear.
+    // Deleting the pass's turns re-enables the clip.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_clip(
         &meaning,
@@ -610,9 +591,7 @@ fn a_written_block_is_retired_by_its_turns_and_not_by_the_ledger() {
 
 #[test]
 fn a_block_whose_audio_is_not_registered_yet_comes_back() {
-    // The one barren cause that gets no ledger row: the registrar runs in its
-    // own loop, so a block examined too early is not a verdict, and a row would
-    // retire it for good.
+    // Unregistered audio gets no ledger row: the registrar may catch up.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_job(
         &ingest,
@@ -652,9 +631,8 @@ fn a_block_whose_audio_is_not_registered_yet_comes_back() {
 
 #[test]
 fn the_limit_counts_blocks_decided_not_rows_looked_at() {
-    // Why the SQL has no LIMIT: with decided blocks ahead in filename order, a
-    // query limited to N returns N ineligible rows and the pass never moves.
-    // `limit` bounds the work, not the read.
+    // A query limited to N would return N ineligible rows for ever; `limit`
+    // bounds the work, not the read.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     for minute in 0..5 {
         done_clip(
@@ -686,8 +664,7 @@ fn the_limit_counts_blocks_decided_not_rows_looked_at() {
 
 // ---- the per-mic stream ----
 
-/// A microphone clip: the ingest-plane blob, the job, and the meaning-plane row
-/// its turns will hang from. `end_utc` is a real span, because the pass reads it.
+/// A microphone clip: blob, job, and audio row with a real `end_utc`.
 fn done_mic_job(
     meaning: &rusqlite::Connection,
     ingest: &rusqlite::Connection,
@@ -723,8 +700,7 @@ fn done_mic_job(
 
 #[test]
 fn a_per_mic_pass_writes_its_turns_and_hides_absolutely_nothing() {
-    // A per-mic turn stands for its own clip and covers nothing: one microphone
-    // must never suppress another's transcript.
+    // One microphone does not suppress another's transcript.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_mic_job(
         &meaning,
@@ -776,9 +752,8 @@ fn a_per_mic_pass_writes_its_turns_and_hides_absolutely_nothing() {
 
 #[test]
 fn a_per_mic_turn_records_the_provenance_that_takes_it_back_and_the_corpus_model() {
-    // `asr_model` matches the rest of the corpus, so the archive does not split
-    // by orchestrator; `provenance` is unique to this pass, so reversing it is
-    // one DELETE that names only its rows.
+    // `asr_model` matches the corpus; `provenance` is unique to this pass, so
+    // one DELETE reverses it.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_mic_job(
         &meaning,
@@ -805,8 +780,7 @@ fn a_per_mic_turn_records_the_provenance_that_takes_it_back_and_the_corpus_model
 
 #[test]
 fn a_clip_the_mac_already_transcribed_is_left_alone() {
-    // Both orchestrators may run at once. Wasted GPU is acceptable; a
-    // duplicated transcript is not, because a reader cannot tell which is which.
+    // Two writers at once may waste GPU, never duplicate a transcript.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_mic_job(
         &meaning,
@@ -848,7 +822,7 @@ fn a_clip_the_mac_already_transcribed_is_left_alone() {
 
 #[test]
 fn a_per_mic_turn_over_a_human_correction_is_refused_like_a_clip_turn() {
-    // What a person typed is the one thing not re-derivable from audio.
+    // A person's typed words stand.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_mic_job(
         &meaning,
@@ -876,9 +850,8 @@ fn a_per_mic_turn_over_a_human_correction_is_refused_like_a_clip_turn() {
 
 #[test]
 fn the_correction_window_is_the_clips_own_span_not_a_minute() {
-    // A microphone clip is whatever the segment muxer closed, so it can be
-    // longer than a minute. Assuming a 60 s grid would end the window early,
-    // before the correction it is about to overwrite.
+    // A clip can be longer than a minute; a 60 s window would miss the
+    // correction.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_mic_job(
         &meaning,
@@ -911,8 +884,7 @@ fn the_correction_window_is_the_clips_own_span_not_a_minute() {
 
 #[test]
 fn the_source_is_read_from_the_ingest_plane_not_split_out_of_the_filename() {
-    // `meeting-20260907-0905` is a source id, so no split of a filename on a
-    // hyphen is safe; a wrong split makes the clip silently barren forever.
+    // `meeting-20260907-0905` is a source id: no split on a hyphen is safe.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_mic_job(
         &meaning,
@@ -930,8 +902,8 @@ fn the_source_is_read_from_the_ingest_plane_not_split_out_of_the_filename() {
 
 #[test]
 fn another_passes_verdict_does_not_retire_this_passes_job() {
-    // The ledger is keyed on (kind, filename). A shared key would let the
-    // diarize pass's verdict on a clip silently retire its transcription.
+    // The ledger is keyed on (kind, filename): one pass's verdict does not
+    // retire the clip for another.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     let name = "usb-20260911T100000.flac";
     done_mic_job(
@@ -959,9 +931,7 @@ fn another_passes_verdict_does_not_retire_this_passes_job() {
 
 #[test]
 fn a_per_mic_turn_names_the_model_the_shim_will_actually_load() {
-    // The queue carries no model field, so the shim loads its own default and
-    // `SHIM_MODEL` must match it, or every per-mic turn names the wrong model.
-    // `asr.py` is what the running shim reads, so the test reads it too.
+    // The shim loads its own default; `SHIM_MODEL` must match `asr.py`.
     let asr = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/recall/asr.py"),
     )
@@ -987,8 +957,7 @@ fn a_per_mic_turn_names_the_model_the_shim_will_actually_load() {
 use recalld::ledger::PassKind;
 use recalld::turns::register_segments;
 
-/// An ingest-plane blob and a real audio file where the registrar looks for
-/// it. Real, because the pass decodes it to measure the duration.
+/// A blob and a real audio file: the pass decodes it.
 fn ingest_blob(root: &std::path::Path, source: &str, stamp: &str, seconds: f64) -> String {
     let filename = format!("{source}-{stamp}.flac");
     let dir = recalld::store::source_dir(root, source);
@@ -1039,8 +1008,7 @@ fn meaning_for_registration() -> rusqlite::Connection {
 
 #[test]
 fn a_clip_is_registered_with_the_duration_it_actually_has() {
-    // Measured, not assumed: `write_pass` sizes its correction window from
-    // `end_utc`, and a window too narrow for a long clip overwrites typed words.
+    // Measured: `write_pass` sizes its correction window from it.
     let dir = tempfile::tempdir().expect("tmp");
     ingest_blob(dir.path(), "usb", "20260913T100000", 7.5);
     let meaning = meaning_for_registration();
@@ -1070,8 +1038,7 @@ fn a_clip_is_registered_with_the_duration_it_actually_has() {
 
 #[test]
 fn the_registered_path_is_the_ingest_copy_that_is_complete() {
-    // A copy of the same bytes may exist at `<root>/<source>/`, but it is
-    // incomplete; rows must point at the ingest copy.
+    // Rows point at the ingest copy, not a partial one in `<root>/<source>/`.
     let dir = tempfile::tempdir().expect("tmp");
     let name = ingest_blob(dir.path(), "usb", "20260913T100000", 1.0);
     let meaning = meaning_for_registration();
@@ -1087,10 +1054,8 @@ fn the_registered_path_is_the_ingest_copy_that_is_complete() {
 
 #[test]
 fn a_clip_already_registered_is_skipped_before_any_statement_runs() {
-    // The first of two defences: the `have` set holds every
-    // `audio_segments.path` basename, so a registered clip never reaches the
-    // INSERT. The SQL's `OR IGNORE` is invisible from here; see
-    // a_row_whose_filename_changed_is_still_not_repointed.
+    // The first defence: a registered basename never reaches the INSERT. The
+    // second is in a_row_whose_filename_changed_is_still_not_repointed.
     let dir = tempfile::tempdir().expect("tmp");
     ingest_blob(dir.path(), "usb", "20260913T100000", 1.0);
     let meaning = meaning_for_registration();
@@ -1116,8 +1081,7 @@ fn a_clip_already_registered_is_skipped_before_any_statement_runs() {
 
 #[test]
 fn a_clip_ffmpeg_cannot_read_is_retired_not_retried_for_ever() {
-    // Header-only clips exist in the archive. Without a ledger row each would
-    // cost a decode attempt on every pass, for ever.
+    // A header-only clip is ledgered, so it is not decoded every pass.
     let dir = tempfile::tempdir().expect("tmp");
     let source_dir = recalld::store::source_dir(dir.path(), "usb");
     std::fs::create_dir_all(&source_dir).expect("dir");
@@ -1157,9 +1121,7 @@ fn a_clip_ffmpeg_cannot_read_is_retired_not_retried_for_ever() {
 
 #[test]
 fn a_source_the_meaning_plane_cannot_type_waits_rather_than_being_guessed() {
-    // `sources.kind` says how a recorder produces PCM and the sender owns it.
-    // Sources are inserted with INSERT OR IGNORE, so a guess would be permanent;
-    // an unknown source is counted and left.
+    // A source's kind is the sender's to declare: an unknown one waits.
     let dir = tempfile::tempdir().expect("tmp");
     ingest_blob(dir.path(), "newmic", "20260913T100000", 1.0);
     let meaning = meaning_for_registration(); // knows `usb` only
@@ -1177,10 +1139,8 @@ fn a_source_the_meaning_plane_cannot_type_waits_rather_than_being_guessed() {
 
 #[test]
 fn a_row_whose_filename_changed_is_still_not_repointed() {
-    // The second defence. The `have` short-circuit is keyed on the basename,
-    // the table on `UNIQUE (source_id, start_utc)`; when a stored path's
-    // filename differs, `have` misses and only `OR IGNORE` stops the INSERT
-    // repointing a row out from under playable turns.
+    // The second defence: when a stored path's filename differs, only
+    // `OR IGNORE` stops the INSERT repointing a row under playable turns.
     let dir = tempfile::tempdir().expect("tmp");
     ingest_blob(dir.path(), "usb", "20260913T100000", 1.0);
     let meaning = meaning_for_registration();
@@ -1215,9 +1175,8 @@ fn a_row_whose_filename_changed_is_still_not_repointed() {
 
 #[test]
 fn a_per_mic_write_hides_the_live_guess_it_replaces() {
-    // A live turn is a guess made while somebody was still speaking. A runner
-    // writing turns directly bypasses the push path's reconciliation, so it
-    // must hide the guess itself, or the timeline shows the conversation twice.
+    // The pass hides the live guesses it replaces, or the timeline shows the
+    // conversation twice.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_mic_job(
         &meaning,
@@ -1252,9 +1211,8 @@ fn a_per_mic_write_hides_the_live_guess_it_replaces() {
 
 #[test]
 fn a_live_turn_outside_the_clip_is_left_alone() {
-    // A live turn has no `audio_segment_id`; only the span relates it to a
-    // clip. A bound past the clip would hide a guess for a minute nothing has
-    // transcribed yet, losing the only record of it.
+    // A live turn relates to a clip by span only; a bound past the clip would
+    // hide a guess for a minute not transcribed yet.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_mic_job(
         &meaning,
@@ -1290,11 +1248,8 @@ fn a_live_turn_outside_the_clip_is_left_alone() {
     );
 }
 
-/// `register_segments` decodes a clip in full, then inserts with `OR IGNORE`
-/// on `(source_id, start_utc)`. Where two files share a minute the second
-/// insert is ignored, and without a ledger row that clip would be decoded again
-/// on every pass. A pass ledgers every terminal decision, including "nothing to
-/// do".
+/// Two files share a minute: the second insert is ignored, and its ledger row
+/// keeps it from being decoded every pass.
 #[test]
 fn a_clip_whose_minute_a_sibling_already_holds_is_retired_not_reconsidered() {
     let dir = tempfile::tempdir().expect("tmp");
@@ -1386,9 +1341,8 @@ fn twin_blob(root: &std::path::Path, source: &str, stamp: &str, seconds: f64, ex
 
 #[test]
 fn a_block_whose_session_was_deleted_is_decided_not_waited_for() {
-    // No audio is transient for a clip not yet registered and permanent for a
-    // deleted session, whose ingest rows and finished job outlive the deletion.
-    // The tombstone journal tells the two apart.
+    // No audio is transient unless the session was deleted; the tombstone
+    // tells them apart.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     done_job(
         &ingest,
@@ -1421,8 +1375,7 @@ fn a_block_whose_session_was_deleted_is_decided_not_waited_for() {
 
 #[test]
 fn a_limited_pass_takes_the_oldest_clip_across_sources_first() {
-    // Filename order is source order: every clip of `aaa` would drain before
-    // the older clips of `zzz`.
+    // By filename, every clip of `aaa` would drain before `zzz`'s older ones.
     let (mut meaning, ingest, _dir) = planes_for_a_pass();
     for (source, start) in [
         ("aaa", "2026-09-11T11:00:00+00:00"),

@@ -15,8 +15,7 @@ fn at(iso: &str) -> DateTime<Utc> {
 
 #[test]
 fn a_meeting_id_is_its_london_start_not_the_containers_utc() {
-    // ⚠ The pod runs UTC. A July recording at 09:50 London is 08:50 UTC, and an
-    // id from the container clock would not match the discovered directory.
+    // The pod runs UTC; the id is London time.
     let summer = at("2026-07-03T08:50:00+00:00");
     assert_eq!(
         london_offset_hours(summer),
@@ -52,8 +51,7 @@ fn the_stored_filename_uses_the_utc_stamp_not_the_local_one() {
         ".mp3",
     );
 
-    // Under `ingest/`, where every delivered blob lives; anywhere else the
-    // runner cannot fetch it from `/ingest/v1/blob`.
+    // Under `ingest/`, where the runner fetches from.
     assert_eq!(
         path,
         std::path::Path::new(
@@ -64,8 +62,7 @@ fn the_stored_filename_uses_the_utc_stamp_not_the_local_one() {
 
 #[test]
 fn an_upload_is_recorded_in_the_ingest_plane_and_a_repeat_is_a_no_op() {
-    // The row `queue::derive_segment_jobs` reads. `register` makes the session
-    // visible; without this row it is never transcribed.
+    // The row the queue reads: without it the session is never transcribed.
     let dir = tempfile::tempdir().expect("tempdir");
     let started = at("2026-07-03T08:50:00+00:00");
     let now = at("2026-07-03T09:00:00+00:00");
@@ -147,9 +144,7 @@ const MEDIA: Media = Media {
 
 #[test]
 fn an_upload_corrects_a_kind_the_worker_already_guessed() {
-    // ⚠ The worker may already have claimed the directory as `discovered`. The
-    // sessions list selects on kind='upload', so an INSERT OR IGNORE would hide
-    // the meeting for good.
+    // The source may exist as `discovered`; the list shows only uploads.
     let conn = db();
     conn.execute(
         "INSERT INTO sources (id, name, kind) VALUES ('meeting-20260703-0950',
@@ -294,8 +289,7 @@ fn gated(root: &std::path::Path) -> axum::Router {
     }))
 }
 
-/// A real, decodable file from ffmpeg, so the probe is exercised rather than
-/// mocked. The container follows `path`'s extension.
+/// A real file from ffmpeg, in `path`'s container.
 fn make_flac(path: &std::path::Path, seconds: f64) -> bool {
     std::process::Command::new("ffmpeg")
         .args(["-nostdin", "-v", "error", "-f", "lavfi", "-i"])
@@ -337,7 +331,7 @@ fn multipart_fields(filename: &str, bytes: &[u8], fields: &[(&str, &str)]) -> (S
 const SECRET: &str = "test-secret-not-a-real-one";
 const NOW: i64 = 1_788_000_000;
 
-/// A signed-in browser's cookie: uploading is a gated browsing-plane write.
+/// A signed-in browser's cookie: uploading is gated.
 fn cookie() -> String {
     let session = Session {
         user_id: "user".into(),
@@ -412,10 +406,9 @@ async fn a_real_recording_uploads_and_becomes_a_session() {
     );
 }
 
-/// The turns writer finds a clip's audio row by the start its filename
-/// carries, which has whole seconds. An upload with no `start` was stamped
-/// "now" to the microsecond, its row never matched, and its transcript was
-/// never written: transcribed, then waiting for ever with no error.
+/// An upload with no `start` is stamped to the whole second: the turns writer
+/// finds its audio row by the filename's start, and a fractional one never
+/// matched.
 #[tokio::test]
 async fn an_upload_without_a_start_is_stored_at_the_second_its_filename_carries() {
     let dir = scratch();
@@ -515,8 +508,7 @@ fn a_start_is_kept_to_the_second() {
 
 #[tokio::test]
 async fn a_file_that_is_not_audio_is_refused_and_leaves_nothing_behind() {
-    // Named .flac, so the suffix gate passes and the probe refuses. A file left
-    // on disk would be registered by the worker as a source of its own.
+    // Passes the suffix gate, fails the probe, and is not left on disk.
     let dir = scratch();
     let (ctype, body) = multipart("hospital.flac", b"this is not audio at all", "", "");
 
@@ -574,13 +566,11 @@ async fn an_unsupported_container_is_refused_before_it_is_written() {
 
 // --- the autumn clock change ------------------------------------------------
 
-/// ⚠ A meeting's id is its local start, and when the clocks go back the local
-/// hour 01:00–02:00 happens twice:
+/// When the clocks go back, 01:00-02:00 local happens twice; one id for both
+/// would merge two recordings:
 ///
 ///     2026-10-25T00:30:00Z  ->  local 01:30 BST
 ///     2026-10-25T01:30:00Z  ->  local 01:30 GMT
-///
-/// One id for both would silently merge two recordings into one session.
 #[test]
 fn the_two_local_half_past_ones_on_the_autumn_change_are_different_meetings() {
     let first = "2026-10-25T00:30:00Z".parse().expect("first");
@@ -593,8 +583,7 @@ fn the_two_local_half_past_ones_on_the_autumn_change_are_different_meetings() {
     assert_ne!(title_a, title_b, "two sessions must not read identically");
 }
 
-/// The first pass keeps the plain id, so no existing meeting is renamed; only
-/// the repeat is marked.
+/// Only the repeat is marked.
 #[test]
 fn the_first_pass_through_the_repeated_hour_keeps_the_plain_id() {
     let first = "2026-10-25T00:30:00Z".parse().expect("first");
@@ -617,8 +606,7 @@ fn the_second_pass_is_marked_with_the_zone_it_happened_in() {
     assert!(title.contains("GMT"), "{title}");
 }
 
-/// The same recording uploaded twice lands on one id, or a re-upload mints a
-/// second session.
+/// A re-upload lands on the same id.
 #[test]
 fn the_same_instant_always_derives_the_same_id() {
     let at = "2026-10-25T01:30:00Z".parse().expect("at");
@@ -626,8 +614,7 @@ fn the_same_instant_always_derives_the_same_id() {
     assert_eq!(meeting_id(at), meeting_id(at));
 }
 
-/// The spring edge gets no marker: the skipped local hour is the local time of
-/// no instant, so no id repeats.
+/// The spring edge gets no marker: no id repeats.
 #[test]
 fn the_spring_change_needs_no_marker_because_no_id_repeats() {
     for utc in [
@@ -640,8 +627,7 @@ fn the_spring_change_needs_no_marker_because_no_id_repeats() {
     }
 }
 
-/// An ordinary winter meeting is also in GMT; marking it would rename every
-/// meeting between November and March.
+/// An ordinary winter meeting, also in GMT, is not marked.
 #[test]
 fn an_ordinary_gmt_meeting_is_not_marked() {
     let (id, title) = meeting_id("2026-12-01T01:30:00Z".parse().expect("winter"));
@@ -706,9 +692,7 @@ fn two_uploads_in_the_repeated_hour_stay_two_sessions_with_two_files() {
 
 #[test]
 fn an_accepted_container_can_also_be_fetched_back() {
-    // ⚠ Two lists, one contract: `is_supported` decides what may be uploaded,
-    // `audiocore::names` what `/ingest/v1/blob` will serve. A suffix only in the
-    // first is a session stored, queued, and never fetchable.
+    // What may be uploaded must also be servable by `/ingest/v1/blob`.
     for suffix in recalld::upload::AUDIO_SUFFIXES {
         let ext = suffix.trim_start_matches('.');
         assert!(
@@ -720,9 +704,8 @@ fn an_accepted_container_can_also_be_fetched_back() {
 
 #[tokio::test]
 async fn a_recording_over_two_megabytes_is_accepted() {
-    // axum limits a body to 2 MB by default, and a meeting recording is tens of
-    // MB. The configured `DefaultBodyLimit` must also cover the browsing plane,
-    // where the upload route lives.
+    // axum's default limit is 2 MB; a meeting is tens of MB, on the browsing
+    // plane.
     let dir = scratch();
     let clip = dir.path().join("hospital.wav");
     if !make_flac(&clip, 40.0) {

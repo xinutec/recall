@@ -1,8 +1,7 @@
 //! The migration ladder, held to the database it has to produce.
 //!
-//! ⚠ The reference is a dump of the live `recall.sqlite` on isis, not this code's
-//! output: a ladder compared against itself is only self-consistent, and what can
-//! go wrong is a column spelled differently from the one the archive uses.
+//! The reference is a dump of the live `recall.sqlite`, not this code's output:
+//! a ladder compared with itself is only self-consistent.
 
 use recalld::meaning_schema::{MIGRATIONS, ensure};
 
@@ -28,11 +27,8 @@ fn fleet_schema() -> Vec<String> {
         .collect()
 }
 
-/// The version the fixture was dumped at.
-///
-/// ⚠ The comparison runs to this rung, not to the top of the ladder: later
-/// migrations differ from the dump by design. Re-baselining the fixture from this
-/// code's output would turn a production dump into a self-comparison.
+/// The version the fixture was dumped at; later rungs differ by design. Do not
+/// re-baseline it from this code's output.
 fn fixture_version() -> usize {
     include_str!("../fixtures/meaning_schema_fleet.txt")
         .lines()
@@ -78,8 +74,7 @@ fn the_version_matches_the_rung_count_and_a_second_run_does_nothing() {
         .expect("version");
     assert_eq!(version as usize, MIGRATIONS.len());
 
-    // `ensure` runs on every start; re-running a shipped step would CREATE an
-    // existing table.
+    // `ensure` runs on every start.
     let before = schema_of(&conn);
     ensure(&conn).expect("second");
     assert_eq!(schema_of(&conn), before);

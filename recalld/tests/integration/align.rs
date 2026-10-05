@@ -1,5 +1,4 @@
-//! Word-to-speaker alignment: the heart of the transcribe-then-assign pipeline.
-//! These are the hand-written cases of the Python implementation it ports.
+//! Word-to-speaker alignment, hand-written cases.
 
 use recalld::align::{AlignedTurn, MIN_TURN_S, SpeakerTurn, Word, assign_words_to_speakers};
 
@@ -73,9 +72,8 @@ fn empty_inputs_align_to_nothing() {
 
 #[test]
 fn smooths_a_single_jitter_flipped_word() {
-    // One speaker talks continuously, but a brief diarization blip plus
-    // word-timestamp jitter lands one word in the other speaker's span. It must
-    // be absorbed, not split into its own one-word turn (the ping-pong bug).
+    // A diarization blip lands one word in the other speaker's span: it is
+    // absorbed, not made a one-word turn.
     let blipped = vec![
         turn("SPEAKER_00", 0.0, 2.0),
         turn("SPEAKER_01", 2.0, 2.3), // 0.3s blip
@@ -97,7 +95,7 @@ fn smooths_a_single_jitter_flipped_word() {
 
 #[test]
 fn an_aligned_turn_carries_its_words() {
-    // Per-word timings ride along — the basis for audio-exact edits later.
+    // Per-word timings ride along.
     let words = [
         w(0.0, 0.5, " can"),
         w(0.5, 1.0, " you"),
@@ -151,9 +149,8 @@ fn confidence_is_the_mean_word_probability() {
 
 #[test]
 fn an_exactly_tied_neighbour_pair_absorbs_the_left_one() {
-    // A sub-threshold run whose neighbours are exactly equal in duration goes to
-    // the left one. Random float durations never tie, so only this test guards
-    // the `>=` in `smooth`.
+    // A short run between equal neighbours goes left. Random durations never
+    // tie, so only this test guards the `>=` in `smooth`.
     let turns = vec![
         turn("A", 0.0, 1.0),
         turn("B", 1.0, 1.25),

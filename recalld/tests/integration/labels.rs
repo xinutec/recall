@@ -1,6 +1,5 @@
-//! The labelling surface's read half. Each route has a rule a plain SELECT would
-//! get wrong, and each failure is quiet: a list still renders, a clip still
-//! plays, autocomplete still offers something.
+//! The labelling reads. Each rule's failure would be quiet: a list still
+//! renders, a clip still plays.
 
 use recalld::labels::{
     correction_window, corrections_by_speaker, known_speaker_names, list_corrections,
@@ -30,8 +29,7 @@ fn correction(conn: &Connection, id: i64, speaker: Option<&str>, hidden: Option<
 
 #[test]
 fn the_roster_never_offers_a_diarization_cluster_tag_as_a_name() {
-    // A diarization tag is not a person. Offered for autocomplete, it spreads
-    // into the roster one accepted suggestion at a time.
+    // A diarization tag is not a person to offer.
     let conn = db();
     conn.execute("INSERT INTO speakers (id, name) VALUES (1, 'Oskar')", ())
         .expect("speaker");
@@ -69,8 +67,7 @@ fn the_roster_is_case_insensitively_ordered_and_free_of_blanks() {
 
 #[test]
 fn a_hidden_correction_stays_out_of_the_review_list() {
-    // A label is hidden because it was a mistake feeding the voiceprints; listing
-    // it again invites re-confirming it.
+    // A hidden label was a mistake; it is not listed.
     let conn = db();
     correction(&conn, 1, Some("Oskar"), None);
     correction(&conn, 2, Some("Oskar"), Some("wrong speaker"));
@@ -111,8 +108,7 @@ fn each_label_carries_the_url_that_plays_it() {
 
 #[test]
 fn the_per_speaker_tally_excludes_hidden_labels_too() {
-    // The progress strip must count the same set the list shows, or the page
-    // says "12 for Alex" over a list of 11.
+    // The counts match the list.
     let conn = db();
     correction(&conn, 1, Some("Alex"), None);
     correction(&conn, 2, Some("Alex"), Some("mistaken"));
@@ -130,9 +126,7 @@ fn the_per_speaker_tally_excludes_hidden_labels_too() {
 
 #[test]
 fn a_label_plays_its_exact_cut_by_default_and_pads_only_on_request() {
-    // The inverse of a turn's playback: the Labels page audits the cut, and
-    // padding would hide a wrong span. Context is opt-in, for a voice that cannot
-    // be recognised from the trimmed fragment.
+    // Exact by default: the Labels page audits the cut. Context is opt-in.
     let (exact_start, exact_end) = correction_window(10.0, 12.0, false);
     assert!((exact_start - 10.0).abs() < 1e-9);
     assert!((exact_end - 12.0).abs() < 1e-9);
@@ -144,8 +138,7 @@ fn a_label_plays_its_exact_cut_by_default_and_pads_only_on_request() {
 
 #[test]
 fn an_exact_window_never_starts_before_the_file() {
-    // A fragment at the very start of a recording: a negative -ss makes ffmpeg
-    // fail rather than clamp.
+    // At the start of a recording: ffmpeg fails on a negative -ss.
     let (start, _) = correction_window(-0.4, 1.0, false);
     assert!(start >= 0.0);
 }

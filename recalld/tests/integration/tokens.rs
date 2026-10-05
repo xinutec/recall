@@ -1,4 +1,4 @@
-//! The fourth credential plane: a token opens exactly one source's write path.
+//! Ingest tokens: a token opens exactly one source's write path.
 
 use recalld::tokens::{Tokens, Verdict, same_token};
 
@@ -36,9 +36,8 @@ fn the_env_carrier_parses_the_same_grammar() {
 
 #[test]
 fn the_custodial_wildcard_opens_every_source_write_only() {
-    // The Mac's backfill grant: its archive holds every device's master plus a
-    // new source per uploaded meeting, so its one token writes any source. An
-    // unknown bearer is still refused.
+    // The Mac's backfill token writes any source; an unknown bearer is still
+    // refused.
     let tokens = load("* mac-token\npixel5 secret-b\n");
     assert_eq!(tokens.check("usb", "mac-token"), Verdict::Allowed);
     assert_eq!(

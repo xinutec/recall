@@ -1,15 +1,12 @@
-//! The matcher against the live archive's real voices, which a public repository
-//! cannot hold as a fixture. It reports rates only: no name, vector or text.
+//! The matcher against the archive's real voices, which a public repository
+//! cannot hold. Reports rates only: no name, vector or text. It checks the
+//! arithmetic over the same stored vectors.
 //!
-//! It compares the matcher over the same stored vectors, so it checks the
-//! arithmetic, not whether a per-speaker embedding attributes as well as a
-//! per-turn one.
+//! The stored guesses came from the Python matcher, but `recalld::diarized`
+//! rewrites guesses, and a rewritten row agrees trivially: read the scored
+//! rows' age, not only the rate.
 //!
-//! ⚠ The stored `speaker_guess` baseline comes from the Python matcher, but
-//! `recalld::diarized` rewrites guesses on the same rows, and every rewritten row
-//! agrees trivially. Read the age of the scored rows, not only the rate.
-//!
-//! Ignored by default because it needs a machine-specific file. Run it with:
+//! Needs a machine-specific file, so it is ignored by default:
 //!
 //! ```text
 //! cargo test -p recalld --test integration identify_differential -- --ignored --nocapture
@@ -20,8 +17,7 @@ use rusqlite::Connection;
 
 const ARCHIVE: &str = "/Volumes/Backup/recall/recall.sqlite";
 
-/// Total: one rule in two languages over identical inputs, so any disagreement
-/// is a porting bug, not a tuning difference.
+/// One rule over identical inputs: any disagreement is a bug.
 const REQUIRED_AGREEMENT: f64 = 1.0;
 
 #[test]
@@ -43,9 +39,7 @@ fn the_port_agrees_with_the_python_on_the_real_archive() {
 
     let mut stmt = conn
         .prepare(
-            // ⚠ The same population `rematch::run_once` maintains.
-            // Superseded, hidden and human-labelled turns never get their cached
-            // guess refreshed, so they are stale against any correct matcher.
+            // The population `rematch::run_once` keeps current.
             "SELECT te.vector, ts.speaker_guess, ts.speaker_score
              FROM transcript_embeddings te
              JOIN transcript_segments ts ON ts.id = te.segment_id
@@ -82,8 +76,7 @@ fn the_port_agrees_with_the_python_on_the_real_archive() {
         }
         let gap = (got.score - py_score).abs();
         worst_score_gap = worst_score_gap.max(gap);
-        // 1e-4 is the writer's own threshold (`_SCORE_EPSILON`): a stored score
-        // is left alone below it, so the cache may lag by that much.
+        // The writer's own threshold (`SCORE_EPSILON`).
         if gap <= 1e-4 {
             same_score += 1;
         }

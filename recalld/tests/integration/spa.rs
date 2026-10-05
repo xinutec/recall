@@ -43,9 +43,7 @@ async fn get_path(app: &Router, path: &str) -> (u16, String, String) {
 
 #[tokio::test]
 async fn a_client_route_gets_the_shell_but_an_api_miss_gets_a_404() {
-    // Rule 1. Returning the shell with 200 for an unknown /api/ path turns "this
-    // route does not exist" into "here is some HTML", and the client's JSON parse
-    // fails a long way from the cause.
+    // Rule 1: an unknown /api/ path is a 404, not the HTML shell.
     let dir = tempfile::tempdir().expect("tempdir");
     let app = app(built(dir.path()));
 
@@ -74,8 +72,7 @@ async fn a_client_route_gets_the_shell_but_an_api_miss_gets_a_404() {
 
 #[tokio::test]
 async fn the_shell_is_never_cached_and_the_hashed_bundle_is_cached_hard() {
-    // Rule 2. index.html names the current bundles, so caching it means a deploy
-    // is not picked up until a hard refresh.
+    // Rule 2: index.html is not cached.
     let dir = tempfile::tempdir().expect("tempdir");
     let app = app(built(dir.path()));
 
@@ -92,8 +89,8 @@ async fn the_shell_is_never_cached_and_the_hashed_bundle_is_cached_hard() {
 
 #[tokio::test]
 async fn a_request_cannot_escape_the_frontend_directory() {
-    // Rule 3. Above the built app sit the archive, the database and the token
-    // file; a traversal that reached any of them would be the whole ballgame.
+    // Rule 3: no traversal out of the app; above it sit the archive, the
+    // database and the token file.
     let outer = tempfile::tempdir().expect("tempdir");
     let secret = outer.path().join("tokens");
     std::fs::write(&secret, "usb super-secret-token").expect("secret");

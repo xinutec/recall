@@ -1,7 +1,5 @@
-//! Uploaded meetings: the list, the guards, and the transcript export.
-//!
-//! ⚠ Rename and re-diarize reach the sources table, so the guards keep the
-//! household capture archive unreachable through a path meant for meetings.
+//! Uploaded meetings: the list, the guards that keep household capture out of
+//! reach, and the transcript export.
 
 use audiocore::job::Kind;
 use recalld::sessions::{
@@ -60,8 +58,7 @@ fn db() -> Connection {
 
 #[test]
 fn only_uploaded_sessions_are_listed_never_the_household_capture() {
-    // ⚠ The continuous archive is not a "session" and must never appear in a
-    // list whose every other action is rename/delete/re-diarize.
+    // The continuous archive is not a session.
     let conn = db();
     source(&conn, "meeting-1", "upload");
     source(&conn, "usb", "coreaudio");
@@ -103,8 +100,7 @@ fn only_uploaded_sessions_are_listed_never_the_household_capture() {
 
 #[test]
 fn a_diarization_tag_is_never_listed_as_a_person() {
-    // A diarization cluster tag is about voices, not people; listing it would put
-    // a machine label where a name goes.
+    // A cluster tag is not a person's name.
     let conn = db();
     source(&conn, "meeting-1", "upload");
     let m = segment(
@@ -137,8 +133,7 @@ fn a_diarization_tag_is_never_listed_as_a_person() {
 
 #[test]
 fn a_session_with_no_turns_still_lists_with_an_empty_speaker_set() {
-    // A freshly uploaded meeting appears at once, at 0 turns, while the worker
-    // transcribes it; otherwise an upload would look like it failed.
+    // A new upload is listed at once, at 0 turns.
     let conn = db();
     source(&conn, "meeting-1", "upload");
     segment(
@@ -325,8 +320,7 @@ fn rediarizing_the_household_archive_is_refused() {
 
 #[test]
 fn naming_a_voice_labels_every_turn_of_that_cluster_including_hidden_ones() {
-    // ⚠ No hidden_reason filter, unlike the reads. Hiding is a display state;
-    // who spoke is a fact. A hidden turn unhidden later must come back named.
+    // Hidden turns are named too, so one unhidden later is named.
     let conn = db();
     source(&conn, "meeting-1", "upload");
     let m = segment(
@@ -376,8 +370,7 @@ fn naming_a_voice_labels_every_turn_of_that_cluster_including_hidden_ones() {
 
 #[test]
 fn a_superseded_turn_is_not_renamed_by_a_voice_naming() {
-    // Its current version carries the human text; renaming the dead one would
-    // put a name on a row nobody reads and leave the live one unnamed.
+    // The current version, with the person's text, is the one named.
     let conn = db();
     source(&conn, "meeting-1", "upload");
     let m = segment(
@@ -487,7 +480,7 @@ fn consecutive_turns_by_one_speaker_merge_into_a_single_bubble() {
 
 #[test]
 fn an_unnamed_voice_keeps_its_cluster_so_two_strangers_stay_apart() {
-    // Falling back to "unknown" for both would merge two people into one bubble.
+    // Two unnamed voices stay apart.
     let turns = vec![
         export(
             "2026-07-03T09:51:00+00:00",
@@ -552,8 +545,7 @@ fn the_export_date_is_the_first_bubble_start() {
 
 use recalld::sessions::delete_session;
 
-/// The production schema: a delete that missed a table would pass against a
-/// schema that lacks it.
+/// The production schema, so a delete that misses a table fails.
 fn delete_db() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
     recalld::meaning_schema::ensure(&conn).expect("schema");
@@ -612,8 +604,7 @@ fn count(conn: &Connection, table: &str) -> i64 {
 
 #[test]
 fn deleting_the_household_archive_is_refused_and_removes_nothing() {
-    // ⚠ The continuous capture is append-only; without this guard the household
-    // archive is one HTTP call from gone.
+    // The continuous capture cannot be deleted.
     let mut conn = delete_db();
     populate(&conn, "usb", "coreaudio");
 
@@ -648,8 +639,7 @@ fn deleting_a_meeting_removes_every_derived_row_and_returns_its_files() {
 
 #[test]
 fn a_deletion_is_tombstoned_so_a_later_push_cannot_resurrect_it() {
-    // Without the tombstone the turns pass rebuilds the session, and a deletion
-    // that undoes itself is worse than none.
+    // The tombstone stops the turns pass rebuilding it.
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
 
@@ -695,8 +685,7 @@ fn deleting_a_session_that_does_not_exist_is_a_miss_not_a_wipe() {
 
 #[test]
 fn a_failed_delete_leaves_the_session_whole() {
-    // Atomic: a half-deleted session is turns with no source, which no view can
-    // render and no path can clean up.
+    // Atomic: a half-deleted session could not be rendered or cleaned up.
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
     conn.execute("DROP TABLE refine_requests", [])
@@ -857,8 +846,7 @@ fn an_ingest_directory_still_holding_audio_is_kept() {
 
 #[test]
 fn deleting_a_session_forgets_its_words_in_the_ingest_plane_too() {
-    // The transcription lives in the ingest plane's jobs: a delete that left it
-    // kept every word of a meeting the person deleted.
+    // The words in the ingest plane's jobs go too.
     let dir = tempfile::tempdir().expect("tmp");
     let mut meaning = delete_db();
     populate(&meaning, "meeting-1", "upload");

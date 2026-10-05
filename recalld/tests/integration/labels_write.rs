@@ -1,4 +1,4 @@
-//! The labelling writes: names a person typed, which no pass can re-derive.
+//! The labelling writes.
 
 use recalld::labels_write::{hide_correction, set_correction_speaker};
 use rusqlite::Connection;
@@ -63,8 +63,7 @@ fn label_of(conn: &Connection, provenance: &str) -> Option<String> {
 
 #[test]
 fn reassigning_a_correction_moves_the_pair_the_live_turn_and_the_voiceprint() {
-    // All three, or the timeline keeps showing the name just found to be wrong
-    // while the corpus says otherwise.
+    // All three move together.
     let mut conn = db();
     let correction = corrected(&conn, 41, "Alex");
 
@@ -91,8 +90,7 @@ fn reassigning_a_correction_moves_the_pair_the_live_turn_and_the_voiceprint() {
 
 #[test]
 fn reassigning_does_not_touch_a_superseded_turn_carrying_the_same_provenance() {
-    // A turn corrected twice leaves an older human turn with the same provenance.
-    // Renaming the dead one would leave the live one under its old name.
+    // A turn corrected twice: the current human turn is renamed, not the old.
     let mut conn = db();
     let correction = corrected(&conn, 41, "Alex");
     conn.execute(
@@ -118,8 +116,7 @@ fn reassigning_does_not_touch_a_superseded_turn_carrying_the_same_provenance() {
 
 #[test]
 fn reassigning_a_correction_with_no_live_turn_still_moves_the_pair() {
-    // The pair can outlive its turn. Refusing here would leave a label nobody can
-    // fix.
+    // The pair can outlive its turn and is still fixable.
     let mut conn = db();
     conn.execute(
         "INSERT INTO corrections
@@ -145,8 +142,7 @@ fn reassigning_a_correction_with_no_live_turn_still_moves_the_pair() {
 
 #[test]
 fn hiding_a_correction_keeps_the_pair_and_drops_the_voiceprint() {
-    // Hidden, not deleted: a person judging this clip unusable is evidence worth
-    // keeping.
+    // Hidden, not deleted: the judgement is kept.
     let mut conn = db();
     let correction = corrected(&conn, 41, "Alex");
 
@@ -169,8 +165,7 @@ fn hiding_a_correction_keeps_the_pair_and_drops_the_voiceprint() {
 
 #[test]
 fn a_failed_reassignment_leaves_nothing_half_done() {
-    // Drop the table the last statement needs: the pair and the live turn must
-    // both roll back, or the corpus and the timeline disagree.
+    // Drop the table the last statement needs: everything rolls back.
     let mut conn = db();
     let correction = corrected(&conn, 41, "Alex");
     conn.execute("DROP TABLE speaker_embeddings", [])
@@ -225,10 +220,8 @@ fn seed_correction(conn: &Connection) {
     .expect("original turn");
 }
 
-/// A background pass writes between a save's first read and its first write.
-/// Started as a reader, the save could not take the write lock over a view
-/// that changed under it and failed at once ("database is locked") instead
-/// of waiting its turn.
+/// A background pass writes between a save's first read and first write; the
+/// save waits its turn instead of failing "database is locked".
 #[test]
 fn a_correction_waits_for_a_background_write_instead_of_failing() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -317,9 +310,8 @@ fn a_correction_supersedes_the_original_and_records_the_pair() {
 
 #[test]
 fn a_corrected_turn_is_findable_by_search() {
-    // ⚠ `transcript_fts` is a contentless FTS5 table maintained by the writer,
-    // not a trigger. Forgetting the insert breaks nothing loudly; it makes every
-    // human correction unsearchable.
+    // `transcript_fts` is kept by the writer: a missing row is silently
+    // unsearchable.
     let mut conn = correction_db();
 
     let new_id = apply_correction(
@@ -366,8 +358,7 @@ fn a_correction_carries_the_voice_forward_so_it_does_not_go_unknown() {
 
 #[test]
 fn correcting_an_already_superseded_turn_is_refused() {
-    // A double-tap, or a second tab holding a stale id, must not mint a second
-    // current human turn and a duplicate corpus pair.
+    // A double-tap or a stale tab mints no second turn or pair.
     let mut conn = correction_db();
     apply_correction(
         &mut conn,
@@ -472,8 +463,7 @@ fn words_checked_is_recorded_even_when_the_text_is_unchanged() {
 
 #[test]
 fn an_overridden_span_and_language_reach_both_the_turn_and_the_pair() {
-    // The boundary editor trims a clip to exactly one speaker, and a
-    // mis-detected language is fixed in the same gesture.
+    // The boundary editor trims the span and fixes the language at once.
     let mut conn = correction_db();
 
     let new_id = apply_correction(
@@ -520,8 +510,7 @@ fn an_overridden_span_and_language_reach_both_the_turn_and_the_pair() {
 
 #[test]
 fn the_pair_carries_the_original_audio_confidence_not_the_human_one() {
-    // A readable label on faint audio is still good ASR data but too degraded to
-    // enrol as a voice; storing 1.0 would lose the only signal that says so.
+    // The machine's confidence is kept: faint audio is too degraded to enrol.
     let mut conn = correction_db();
 
     apply_correction(
@@ -541,9 +530,7 @@ fn the_pair_carries_the_original_audio_confidence_not_the_human_one() {
 
 #[test]
 fn a_failed_correction_leaves_no_orphan_turn_behind() {
-    // A partial correction would leave a human turn superseding nothing, or an
-    // original superseded with no pair. Drop the last table to prove the whole
-    // thing unwinds.
+    // Drop the last table: the whole correction unwinds.
     let mut conn = correction_db();
     conn.execute("DROP TABLE corrections", []).expect("drop");
 
@@ -572,9 +559,8 @@ fn a_failed_correction_leaves_no_orphan_turn_behind() {
 
 #[test]
 fn an_overridden_span_is_respelled_the_way_every_stored_row_is() {
-    // ⚠ These columns are compared and ordered as TEXT: a client's `...Z` where
-    // the table holds `...+00:00` would sort the turn onto the wrong page,
-    // silently.
+    // Compared as text: a client's `...Z` among `...+00:00` would sort onto the
+    // wrong page.
     let mut conn = correction_db();
 
     let new_id = apply_correction(
@@ -745,8 +731,7 @@ fn nobody_spoke_twice_is_refused() {
 
 #[test]
 fn undoing_nobody_spoke_shows_the_turn_and_frees_the_span() {
-    // A mis-tap must leave nothing behind: a pair left over would still keep
-    // every later pass off the span.
+    // Nothing is left: a leftover pair would keep every pass off the span.
     let mut conn = db();
     let id = invented(&conn);
     mark_no_speech(&mut conn, id, &now()).expect("mark");
@@ -845,8 +830,8 @@ fn a_check_can_be_undone_once_and_a_line_never_checked_not_at_all() {
 
 #[test]
 fn a_check_corrected_again_since_is_not_taken_back() {
-    // Undo is for the mis-tap just made. A later edit replaced the checked
-    // turn, and taking back the first would orphan it.
+    // A later edit replaced the checked turn; taking back the first would
+    // orphan it.
     let mut conn = correction_db();
     let human = checked(&mut conn);
     apply_correction(

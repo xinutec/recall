@@ -1,5 +1,4 @@
-//! The SSO gate. Each test names the attack or failure it stands against rather
-//! than the function it calls.
+//! The SSO gate; each test is named for the attack it stands against.
 
 use recalld::webauth::{
     Config, Session, accepts_device_token, authorize_url, make_session_cookie, make_state,
@@ -39,8 +38,7 @@ fn a_cookie_round_trips_and_carries_the_identity() {
 
 #[test]
 fn a_forged_or_tampered_cookie_is_refused() {
-    // The client carries its identity, so the MAC is all that stands between a
-    // stranger on the VPN and the transcripts.
+    // The client carries its identity: the MAC is the only check.
     let token = make_session_cookie(SECRET, &session(), NOW).expect("sign");
 
     // Signed with a different secret.
@@ -56,7 +54,7 @@ fn a_forged_or_tampered_cookie_is_refused() {
         None
     );
 
-    // Structurally broken input must be refused, never panic.
+    // Broken input is refused, without a panic.
     for bad in ["", ".", "no-dot", "a.b", "....", "𝕒.𝕓"] {
         assert_eq!(read_session_cookie(SECRET, Some(bad), NOW), None, "{bad}");
     }
@@ -82,8 +80,7 @@ fn a_cookie_expires_and_a_state_expires_much_sooner() {
 
 #[test]
 fn a_crafted_return_to_cannot_turn_sign_in_into_an_open_redirect() {
-    // Anything that could leave the origin collapses to "/". `//host` is the one
-    // that looks local and is not.
+    // Anything that could leave the origin becomes "/"; `//host` looks local.
     for hostile in [
         "//evil.example.com",
         "https://evil.example.com",
@@ -96,8 +93,7 @@ fn a_crafted_return_to_cannot_turn_sign_in_into_an_open_redirect() {
     assert_eq!(validate_return_to(None), "/");
     assert_eq!(validate_return_to(Some("/sessions/42")), "/sessions/42");
 
-    // The state carries the sanitised target, so the callback redirects there
-    // rather than to what the query string asked for.
+    // The state carries the sanitised target.
     let state = make_state(SECRET, Some("//evil.example.com"), NOW).expect("sign");
     assert_eq!(read_state(SECRET, &state, NOW).as_deref(), Some("/"));
 }
@@ -114,7 +110,7 @@ fn the_browsing_plane_is_gated_and_the_recording_plane_is_not() {
         assert!(requires_session(m, p), "{m} {p} must require a session");
     }
 
-    // Open: a device or daemon cannot perform an interactive OAuth login.
+    // Open: a device cannot sign in.
     for (m, p) in [
         ("GET", "/api/capture"),
         ("GET", "/api/sources"),
@@ -127,8 +123,7 @@ fn the_browsing_plane_is_gated_and_the_recording_plane_is_not() {
         assert!(!requires_session(m, p), "{m} {p} must stay login-free");
     }
 
-    // Not the browsing plane at all: /sync/* carries its own bearer, and static
-    // assets and the OAuth routes must be reachable from the sign-in wall.
+    // Not gated: /sync/* (its own bearer), static assets and the OAuth routes.
     for (m, p) in [
         ("GET", "/sync/jobs"),
         ("GET", "/auth/callback"),
@@ -193,7 +188,7 @@ fn the_allowlist_narrows_who_may_enter_after_a_valid_sign_in() {
 
 #[test]
 fn a_partial_oauth_configuration_leaves_the_gate_off_rather_than_broken() {
-    // Half a gate would refuse everyone and take the UI down.
+    // Half a gate would refuse everyone.
     let required = [
         ("RECALL_SESSION_SECRET", SECRET),
         ("NC_CLIENT_ID", "cid"),
@@ -231,15 +226,13 @@ fn the_authorize_url_carries_the_state_and_escapes_its_parameters() {
     assert!(url.starts_with("https://dash.example.org/index.php/apps/oauth2/authorize?"));
     assert!(url.contains("client_id=cid"));
     assert!(url.contains("response_type=code"));
-    // The redirect URI and state must be escaped, or a value containing & or /
-    // would inject a parameter into the authorize request.
+    // Escaped, so `&` cannot inject a parameter.
     assert!(url.contains("redirect_uri=http%3A%2F%2F10.100.0.2%3A8000%2Fauth%2Fcallback"));
     assert!(url.contains("state=st%2Fate%2Bvalue"));
 }
 
-/// Golden tokens minted with `SECRET` at `NOW` by the original Python sign-in.
-/// Verifying them, and minting the same bytes, pins the token format: a change
-/// to it would sign every existing session out.
+/// Tokens the Python sign-in minted with `SECRET` at `NOW`: they pin the
+/// format, whose change would sign everyone out.
 #[test]
 fn a_cookie_minted_by_the_python_verifies_here() {
     const PY_COOKIE: &str = concat!(
@@ -269,11 +262,10 @@ fn a_cookie_minted_by_the_python_verifies_here() {
     );
 }
 
-// --- the OAuth exchange, against a REAL server ---------------------------------
+// --- the OAuth exchange, against a stub Nextcloud server -----------------------
 //
-// A stub Nextcloud rather than a mocked client: the request shape and the
-// response parsing are what is most likely wrong, and a mock would only echo
-// the expectation.
+// Not a mocked client: the request shape and the parsing are what is likely
+// wrong, and a mock would echo the expectation.
 
 use axum::Router;
 use axum::routing::{get, post};
@@ -352,15 +344,13 @@ async fn a_code_is_exchanged_for_a_token_and_the_user_is_resolved() {
 
 #[tokio::test]
 async fn a_response_missing_what_it_must_carry_is_an_error_not_an_empty_identity() {
-    // A blank id would sign someone in as "" and, with an empty allowlist, let
-    // them through.
+    // A blank id would sign someone in as "".
     let app = Router::new()
         .route(
             "/index.php/apps/oauth2/api/v1/token",
-            // ⚠ The body is read, not ignored. A server that closes with the
-            // request unread resets the connection, and on macOS ureq's
-            // per-read `set_read_timeout` then fails with EINVAL: 12 of 4,400
-            // calls failed that way, 0 of 4,400 with the body read (#1480).
+            // The body is read: closing with it unread resets the connection,
+            // and on macOS ureq then fails with EINVAL (12 of 4,400 calls;
+            // 0 with the body read, #1480).
             post(|_form: String| async { axum::Json(serde_json::json!({"token_type": "Bearer"})) }),
         )
         .route(
@@ -388,7 +378,7 @@ async fn a_response_missing_what_it_must_carry_is_an_error_not_an_empty_identity
 
 #[tokio::test]
 async fn a_user_with_no_display_name_falls_back_to_their_id() {
-    // A person who can sign in must not be locked out by an empty profile field.
+    // An empty display name falls back to the id.
     let app = Router::new().route(
         "/ocs/v2.php/cloud/user",
         get(|| async {
@@ -454,7 +444,7 @@ async fn status(app: &Router, req: Request<Body>) -> axum::http::StatusCode {
 async fn the_gate_refuses_the_archive_without_a_session_and_lets_the_pause_through() {
     let app = gated(cfg(None));
 
-    // A stranger on the VPN cannot read the transcripts.
+    // No session, no transcripts.
     assert_eq!(
         status(
             &app,
@@ -491,8 +481,7 @@ async fn the_gate_refuses_the_archive_without_a_session_and_lets_the_pause_throu
 
 #[tokio::test]
 async fn a_signed_in_user_outside_the_allowlist_is_forbidden_not_unauthenticated() {
-    // 403, not 401: they are signed in, and a 401 would loop them through
-    // Nextcloud for ever.
+    // 403, not 401, which would loop through Nextcloud.
     let mut c = cfg(None);
     c.allowed_users = ["someone-else".to_owned()].into_iter().collect();
     let token = make_session_cookie(SECRET, &session(), NOW).expect("sign");
@@ -548,9 +537,7 @@ async fn a_device_token_opens_its_route_through_the_middleware_and_no_other() {
 
 #[tokio::test]
 async fn the_callback_rejects_a_forged_state_before_making_any_network_call() {
-    // Nothing listens on the configured port, so a handler that reached the
-    // network would not answer 403. A stranger must not make this server dial
-    // Nextcloud.
+    // Nothing listens on the configured port: a 403 shows no call was made.
     let mut c = cfg(None);
     c.nc_internal_url = "http://127.0.0.1:1".into();
     let app = gated(c);
@@ -595,8 +582,7 @@ async fn login_redirects_to_nextcloud_and_the_cookie_it_later_sets_is_httponly()
     assert!(location.starts_with("https://dash.example.org/index.php/apps/oauth2/authorize?"));
     assert!(location.contains("state="));
 
-    // Logout clears the cookie on the same path it was set on, or the browser
-    // keeps the old one and the user cannot sign out.
+    // Logout clears the cookie on the path it was set on.
     let resp = app
         .oneshot(Request::post("/logout").body(Body::empty()).unwrap())
         .await
@@ -637,7 +623,7 @@ async fn me_answers_with_the_identity_the_cookie_carries() {
 
 #[tokio::test]
 async fn me_without_a_session_is_refused_rather_than_anonymous() {
-    // An empty identity would read to the SPA as "signed in as nobody".
+    // No session: 401, not an empty identity.
     let app = gated(cfg(None));
 
     assert_eq!(

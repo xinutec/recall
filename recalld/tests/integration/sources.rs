@@ -45,8 +45,7 @@ struct Case {
     expect: &'static [(&'static str, bool, bool)],
 }
 
-/// Reference answers computed by the original Python implementation on the same
-/// matrix, not by this one. The function is pure, so the comparison is exact.
+/// Reference answers from the Python it replaced, on the same matrix.
 const CASES: &[Case] = &[
     Case {
         label: "all fresh markers",
@@ -248,9 +247,7 @@ fn only_real_recorders_are_devices() {
 
 #[test]
 fn the_two_time_fields_take_different_pairs() {
-    // ⚠ lastActive is max(marker, speech); lastDelivered is max(marker,
-    // delivered). Feeding both the same pair hides a recorder shipping bytes
-    // nobody spoke into.
+    // lastActive is max(marker, speech); lastDelivered max(marker, delivered).
     let markers = HashMap::new();
     let delivered = HashMap::from([(
         "geb".to_owned(),
@@ -324,8 +321,7 @@ fn active_by_id(
         .collect()
 }
 
-/// The `.alive` markers live on the Mac, so on the fleet liveness comes from the
-/// Mac's mirror report, never from local files.
+/// On the fleet, liveness comes from the Mac's report.
 #[tokio::test]
 async fn on_the_fleet_liveness_comes_from_the_macs_report() {
     let (_dir, root) = root_with(&[
@@ -367,8 +363,7 @@ async fn on_the_fleet_liveness_comes_from_the_macs_report() {
     assert_eq!(paused.get("usb"), Some(&false));
 }
 
-/// A report older than the freshness gate means the Mac has stopped checking in;
-/// the last thing heard is not served as current.
+/// A stale report is not served as current.
 #[tokio::test]
 async fn a_stale_report_reads_as_nobody_live_not_as_the_last_thing_heard() {
     let (_dir, root) = root_with(&[("pixel9", "Pixel 9", "tcp_pcm")]);
@@ -395,8 +390,7 @@ fn an_unknown_source_kind_is_an_error_not_a_silent_skip() {
     assert!(recalld::sources::source_rows(&conn).is_err());
 }
 
-/// Through the real router: mounted, and device-exempt, since a session
-/// requirement would blank the recording panel on every phone.
+/// Through the real router: mounted, and open to the phones.
 #[tokio::test]
 async fn the_route_is_mounted_and_answers_without_a_session() {
     let (_dir, root) = root_with(&[("pixel9", "Pixel 9", "tcp_pcm")]);
@@ -478,9 +472,8 @@ fn deliver(root: &std::path::Path, source: &str, captured: DateTime<Utc>, speech
     .expect("speech");
 }
 
-/// A pause reads idle at once, and delivered evidence does not undo it: audio
-/// captured just before the pause would otherwise hold a dot green for the
-/// five-minute delivered window. A pause stops every kind, phones included.
+/// A pause reads idle at once for every kind; audio delivered just before it
+/// does not hold a dot green.
 #[tokio::test]
 async fn a_pause_silences_delivered_evidence_for_every_kind() {
     let (_dir, root) = root_with(&[("usb", "usb", "coreaudio"), ("geb", "geb", "tcp_pcm")]);
@@ -508,8 +501,7 @@ async fn a_pause_silences_delivered_evidence_for_every_kind() {
     assert_eq!(paused.get("geb"), Some(&false), "and so is the phone");
 }
 
-/// A store-and-forward recorder refreshes no marker, so it reads dead while
-/// recording unless delivery counts.
+/// A store-and-forward recorder has no marker: delivery counts.
 #[tokio::test]
 async fn a_recorder_that_streams_to_nothing_proves_itself_by_delivering() {
     let (_dir, root) = root_with(&[("geb", "geb", "rtsp")]);

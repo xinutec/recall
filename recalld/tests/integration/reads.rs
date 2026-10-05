@@ -1,5 +1,5 @@
-//! The read routes, against a database built to hold the cases that bite, plus
-//! the mounting rules: invariants that hold everywhere, including a fresh clone.
+//! The read routes, against a database holding the hard cases, and their
+//! mounting rules.
 
 use recalld::reads;
 use recalld::turn_store::Stage;
@@ -39,9 +39,7 @@ fn db() -> Connection {
 
 #[test]
 fn a_superseded_or_hidden_turn_is_never_shown() {
-    // Supersession and soft-hiding are how this system corrects itself without
-    // deleting; a reader that ignored them would resurrect every wrong
-    // transcript and every swept hallucination.
+    // Superseded and hidden turns stay out of the read.
     let conn = db();
     turn(&conn, 1, "2026-09-01T10:00:00+00:00", "current", &[]);
     turn(
@@ -70,8 +68,7 @@ fn a_superseded_or_hidden_turn_is_never_shown() {
 
 #[test]
 fn asked_for_hidden_turns_a_page_shows_them_with_their_reason_but_never_a_superseded_one() {
-    // A person can only take a hide back if they can see the line; a
-    // superseded turn is history, not something hidden.
+    // Hidden lines show on request; superseded ones are history.
     let conn = db();
     turn(&conn, 1, "2026-09-01T10:00:00+00:00", "current", &[]);
     turn(
@@ -106,9 +103,7 @@ fn asked_for_hidden_turns_a_page_shows_them_with_their_reason_but_never_a_supers
 
 #[test]
 fn a_human_label_wins_and_drops_the_score_a_guess_keeps_it() {
-    // The UI renders "Alice 31%" for a guess and a bare name for a confirmation.
-    // Collapsing the two would either hide useful weak guesses or present a
-    // machine guess as though a person had confirmed it.
+    // A guess carries its score ("Alice 31%"); a person's name carries none.
     let conn = db();
     turn(
         &conn,
@@ -204,9 +199,8 @@ fn the_tier_badge_reports_how_much_processing_a_turn_has_had() {
 
 #[test]
 fn a_page_boundary_never_splits_turns_that_share_an_instant() {
-    // Co-located microphones record the same speech, so several turns carry one
-    // start time. A page that cut such a group in half would make the next
-    // strict-`<` page skip the remainder, silently.
+    // Several turns can share a start; a page cut inside the group would make
+    // the next page skip the rest.
     let conn = db();
     turn(&conn, 1, "2026-09-01T10:00:00+00:00", "older", &[]);
     for id in 2..=4 {
@@ -245,8 +239,7 @@ fn a_page_reads_oldest_first_though_the_query_is_newest_first() {
 
 #[test]
 fn a_turn_with_no_audio_segment_still_appears() {
-    // Corrections can exist with no audio row. An inner join would drop exactly
-    // the turns a person took the trouble to fix.
+    // A correction with no audio row still shows.
     let conn = db();
     turn(&conn, 1, "2026-09-01T10:00:00+00:00", "corrected", &[]);
     let page = reads::timeline(&conn, 50, None).expect("timeline");
@@ -256,8 +249,7 @@ fn a_turn_with_no_audio_segment_still_appears() {
 
 #[test]
 fn an_empty_page_is_not_treated_as_a_full_one() {
-    // The limit-0 edge: the tie pass is skipped on an empty page, where a bare
-    // `len == limit` would run one with no boundary.
+    // At limit 0 the tie pass is skipped.
     let conn = db();
     let page = reads::timeline(&conn, 0, None).expect("timeline");
     assert!(page.items.is_empty());
@@ -306,9 +298,8 @@ fn app(root: &std::path::Path, webauth: Option<GateState>) -> axum::Router {
 
 #[tokio::test]
 async fn an_unconfigured_recalld_does_not_serve_transcripts_at_all() {
-    // ⚠ The one place the inert-unless-configured rule is inverted. Elsewhere an
-    // absent credential means "run open"; these routes serve household
-    // transcripts, so absent means the route does not exist: 404, not 200.
+    // Unlike elsewhere, an absent credential here means no route (404), not an
+    // open one: these serve household transcripts.
     let dir = tempfile::tempdir().expect("tempdir");
     let a = app(dir.path(), None);
     for path in ["/api/timeline", "/api/search?q=x"] {
@@ -321,7 +312,7 @@ async fn an_unconfigured_recalld_does_not_serve_transcripts_at_all() {
         assert_eq!(code, 404, "{path} must not exist without the gate");
     }
 
-    // The ingest plane is unaffected — it has its own credential and its own rules.
+    // The ingest plane has its own credential.
     let code = a
         .oneshot(
             Request::get("/ingest/v1/health")
@@ -382,8 +373,7 @@ async fn mounted_transcripts_are_refused_without_a_session_and_served_with_one()
 
 #[tokio::test]
 async fn a_limit_is_clamped_rather_than_trusted() {
-    // Unclamped, ?limit=10000000 would ask SQLite for the whole archive in one
-    // page.
+    // ?limit=10000000 is clamped.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
     schema(&conn);
@@ -425,9 +415,7 @@ async fn a_limit_is_clamped_rather_than_trusted() {
 
 #[test]
 fn a_deep_link_resolves_to_the_turn_as_it_reads_now() {
-    // A link points at the id it was made from. If that turn has since been
-    // corrected, the link must show the correction, not text that is no longer
-    // true.
+    // A link to a since-corrected turn shows the correction.
     let conn = Connection::open_in_memory().expect("open");
     schema(&conn);
     turn(&conn, 1, "2026-06-14T18:00:00+00:00", "hird a noise", &[]);
@@ -448,8 +436,7 @@ fn a_deep_link_resolves_to_the_turn_as_it_reads_now() {
 
 #[test]
 fn a_supersede_cycle_is_reported_absent_rather_than_hanging() {
-    // `superseded_by` is written by several passes; one cyclic chain would spin
-    // a request thread forever, which is far harder to diagnose than a 404.
+    // A cyclic `superseded_by` chain answers absent instead of spinning.
     let conn = Connection::open_in_memory().expect("open");
     schema(&conn);
     turn(&conn, 1, "2026-06-14T18:00:00+00:00", "a", &[]);
@@ -470,8 +457,7 @@ fn a_supersede_cycle_is_reported_absent_rather_than_hanging() {
 
 #[test]
 fn several_ids_that_now_resolve_to_one_turn_appear_once() {
-    // Two fragments merged by a correction: a link naming both must not render
-    // the same sentence twice, which would read as two separate utterances.
+    // Two fragments merged by a correction render once.
     let conn = Connection::open_in_memory().expect("open");
     schema(&conn);
     turn(&conn, 1, "2026-06-14T18:00:00+00:00", "old a", &[]);
@@ -491,8 +477,7 @@ fn several_ids_that_now_resolve_to_one_turn_appear_once() {
 
 #[test]
 fn the_review_queue_puts_unscored_turns_first() {
-    // A NULL confidence is the most suspect: nobody has scored it. Sorting nulls
-    // last would bury the turns the queue exists to surface.
+    // Unscored turns come first.
     let conn = Connection::open_in_memory().expect("open");
     schema(&conn);
     turn(

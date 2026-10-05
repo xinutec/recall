@@ -1,5 +1,5 @@
-//! What the recorders say about themselves. Status, never control: a phone on an
-//! older build must cost its own line and nothing else.
+//! What the recorders say about themselves. A phone on an older build costs
+//! its own detail and nothing else.
 
 use recalld::devices::{
     BEATS, Beat, REPORTS, Report, forget, read_beats, read_reports, record_beat, record_report,
@@ -93,8 +93,7 @@ fn beats_read_back_sorted_by_device_id() {
 
 #[test]
 fn a_malformed_entry_costs_that_device_its_line_and_no_more() {
-    // Read on a health endpoint's request path: one phone on a broken build must
-    // not blank the whole answer.
+    // One phone on a broken build must not blank the whole answer.
     let conn = db();
     record_beat(
         &conn,
@@ -132,8 +131,7 @@ fn an_unreadable_setting_reads_as_no_beats_rather_than_failing() {
 
 #[test]
 fn a_flood_of_devices_evicts_the_least_recently_heard() {
-    // The write endpoint is unauthenticated, so the device count is
-    // client-controlled; the cap lets a stray row age out.
+    // Anyone can write, so the count is capped.
     let conn = db();
     for i in 0..20 {
         record_beat(
@@ -194,8 +192,7 @@ fn an_entry_that_cannot_be_read_is_evicted_before_a_readable_one() {
 
 #[test]
 fn the_outbox_is_capped_like_the_beats_are() {
-    // The outbox is unauthenticated too, so a stray row there must age out as
-    // well.
+    // The outbox is capped too.
     let conn = db();
     for i in 0..20 {
         record_report(
@@ -214,8 +211,7 @@ fn the_outbox_is_capped_like_the_beats_are() {
 
 #[test]
 fn a_device_silent_for_a_month_ages_out() {
-    // The count cap removes nothing below sixteen devices; a phone silent for a
-    // month is not a device any more.
+    // Below the cap, a phone silent for a month is still dropped.
     let conn = db();
     record_beat(&conn, &beat("current", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
     record_beat(&conn, &beat("ancient", "2026-06-01T09:00:00+00:00"), now()).expect("beat");
@@ -233,8 +229,7 @@ fn a_device_silent_for_a_month_ages_out() {
 
 #[test]
 fn an_unreadable_row_is_not_aged_out_on_a_failed_parse() {
-    // Age cannot judge a row with no usable `at`, and dropping it on the next
-    // write would hide a row worth seeing. The count cap removes it first.
+    // A row with no usable `at` is left to the count cap, so it is seen first.
     let conn = db();
     record_beat(&conn, &beat("good", "2026-09-07T09:00:00+00:00"), now()).expect("beat");
     let mut map: serde_json::Value =
@@ -296,8 +291,7 @@ fn forgetting_an_outbox_row_leaves_the_beat_alone() {
 
 #[test]
 fn a_long_device_name_is_truncated_by_character_not_byte() {
-    // A name of accented characters is 64 chars but more than 64 bytes; cutting
-    // by byte would land mid-character.
+    // 64 accented characters are more than 64 bytes.
     let conn = db();
     let long: String = "é".repeat(100);
 
@@ -455,8 +449,7 @@ async fn a_beat_posts_without_a_session_because_a_phone_cannot_sign_in() {
 
 #[tokio::test]
 async fn the_beats_clock_is_the_servers_not_the_phones() {
-    // A phone with a wrong clock would read permanently fresh or stale, so an
-    // `at` in the body is ignored.
+    // A body `at` is ignored: a phone's wrong clock would read fresh or stale.
     let dir = scratch();
     let app = gated(dir.path());
 
@@ -539,8 +532,7 @@ async fn negative_counts_are_clamped_rather_than_refused() {
 
 #[tokio::test]
 async fn reading_the_beats_requires_a_session_unlike_writing_them() {
-    // Only the phone's POST is exempt; an open read would hand the device
-    // inventory to anyone on the VPN.
+    // Only the POST is exempt; the read stays gated.
     let dir = scratch();
     let app = gated(dir.path());
 
@@ -559,8 +551,7 @@ async fn reading_the_beats_requires_a_session_unlike_writing_them() {
 
 #[tokio::test]
 async fn a_beat_carrying_only_a_device_id_still_counts_as_alive() {
-    // Every field but `device` is optional: an app on an older build must still
-    // register as alive, and a 422 would hide exactly the phone this is for.
+    // Every field but `device` is optional: an older app still counts as alive.
     let dir = scratch();
     let app = gated(dir.path());
 
@@ -600,9 +591,7 @@ async fn an_outbox_report_carrying_only_a_device_id_is_accepted() {
 
 #[tokio::test]
 async fn forgetting_a_device_needs_a_session_unlike_writing_one() {
-    // Forgetting destroys a reading rather than replacing it, so it is gated:
-    // otherwise anyone on the VPN could erase the evidence that a recorder
-    // stopped.
+    // Forgetting is gated: anyone could erase the evidence a recorder stopped.
     let dir = scratch();
     let app = gated(dir.path());
 
@@ -671,10 +660,9 @@ async fn a_signed_in_person_can_forget_a_stray_row() {
     assert_eq!(devices, ["real"], "no sqlite3 in the pod required");
 }
 
-/// ⚠ A cross-repo contract: the Android mic app (`Heartbeat.EVERY_MINUTES`,
-/// asserted in `HeartbeatTest`) and the fleetwatch thresholds in
-/// `xinutec-infra/mac-mini/recall_mics.py` are built to this number. This is the
-/// canonical side; a change must move all three.
+/// A cross-repo contract: Android's `Heartbeat.EVERY_MINUTES` and fleetwatch's
+/// thresholds (`xinutec-infra/mac-mini/recall_mics.py`) are built to this
+/// number; a change moves all three.
 #[test]
 fn the_beat_cadence_is_the_one_the_phones_and_fleetwatch_were_built_to() {
     assert_eq!(

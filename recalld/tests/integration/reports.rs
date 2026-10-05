@@ -1,7 +1,5 @@
-//! The client-report surface and its security boundary: `/api/log` and
-//! `/api/telemetry` write browser-supplied text into log lines. Hostile text
-//! fails silently: the request succeeds, the log looks normal, and it is no
-//! longer evidence of what happened.
+//! `/api/log` and `/api/telemetry` write browser text into log lines. Hostile
+//! text would fail silently: the log looks normal and says something false.
 
 use recalld::reports::{ClientLog, log_line, one_line};
 
@@ -9,8 +7,7 @@ const MAX: usize = 160;
 
 #[test]
 fn a_newline_in_a_label_cannot_forge_a_log_line() {
-    // The attack this function exists for: a newline in `label=` would let a
-    // client append its own `client-event` lines, attributed to somebody else.
+    // A newline in `label=` would let a client forge `client-event` lines.
     let hostile = "ok\nclient-event kind=deleted path=/ label=everything";
 
     let safe = one_line(hostile, MAX);
@@ -28,9 +25,8 @@ fn carriage_returns_and_tabs_are_flattened_too() {
 
 #[test]
 fn unicode_line_and_paragraph_separators_do_not_survive() {
-    // ⚠ U+2028 and U+2029 are not control characters, so an `is_control` guard
-    // lets them through, yet log viewers and JavaScript treat them as line
-    // breaks. They are whitespace, which is what catches them.
+    // U+2028 and U+2029 are not control characters, but viewers break lines on
+    // them; they are whitespace.
     let hostile = "before\u{2028}after\u{2029}more";
 
     assert_eq!(one_line(hostile, MAX), "before after more");
@@ -63,8 +59,7 @@ fn runs_of_whitespace_collapse_to_one_space() {
 
 #[test]
 fn truncation_counts_characters_not_bytes() {
-    // Byte truncation would cut a multi-byte glyph and write invalid UTF-8. Each
-    // of these is 3 bytes and one character.
+    // Each of these is 3 bytes and one character.
     let long = "\u{3042}".repeat(200); // HIRAGANA A
 
     let safe = one_line(&long, 10);
@@ -75,8 +70,7 @@ fn truncation_counts_characters_not_bytes() {
 
 #[test]
 fn a_log_line_keeps_only_the_first_line_of_a_stack() {
-    // A browser stack is dozens of frames; writing them all turns one client
-    // error into a flood of log lines.
+    // Only a stack's first frame is kept.
     let entry = ClientLog {
         level: "error".into(),
         url: Some("/sessions/meeting-x".into()),
@@ -120,9 +114,7 @@ fn a_missing_url_reads_as_absent_rather_than_empty() {
 
 #[test]
 fn a_real_telemetry_batch_from_the_app_deserialises() {
-    // The app sends `{ kind, path, label, at: Date.now() }`, so `at` is a number.
-    // Typed as a string, every batch would fail with a 422 and the activity trace
-    // would be lost silently.
+    // The app sends `at: Date.now()`, a number.
     let body = r#"[
         {"kind":"tap","path":"/sessions","label":"Upload","at":1788000000000},
         {"kind":"nav","path":"/","label":null,"at":1788000000001}

@@ -1,4 +1,4 @@
-//! What the fleet can say about the instant feed, out of both planes at once.
+//! What the fleet can say about the live feed, from both planes.
 
 use audiocore::instant::python_isoformat_utc;
 use recalld::live_tier::live_health;
@@ -24,8 +24,7 @@ fn source(conn: &Connection, id: &str, kind: &str) {
     .expect("source");
 }
 
-/// A delivered clip, and — when `speech` is given — its measured speech, which
-/// lives in the other database.
+/// A delivered clip, and its measured speech if given (in the other plane).
 fn clip(root: &Path, source_id: &str, name: &str, minute: u32, speech: Option<f64>) {
     let start = format!("2026-09-21T11:{minute:02}:00+00:00");
     let end = format!("2026-09-21T11:{minute:02}:30+00:00");
@@ -99,13 +98,11 @@ fn health(root: &Path) -> recalld::live_tier::LiveHealth {
 fn the_lag_is_the_median_and_only_over_the_live_tier() {
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning(dir.path());
-    // The median, not the mean: one turn that waited behind a restart moves a
-    // mean by minutes.
+    // The median: one turn delayed by a restart moves a mean by minutes.
     for (minute, lag) in [(41, 3), (42, 4), (43, 5), (44, 6), (45, 200)] {
         turn(&conn, "live", minute, lag);
     }
-    // An archive pass writes the same table and must not be counted: it is
-    // hours behind by design, and its lag would swamp the feed's.
+    // Archive turns are hours behind by design and are not counted.
     turn(&conn, "large-v3-turbo", 46, 9_000);
     drop(conn);
 
@@ -137,9 +134,7 @@ fn a_window_reports_what_was_delivered_and_how_much_of_it_was_measured() {
 
 #[test]
 fn a_clip_that_would_not_decode_is_unmeasured_rather_than_silent() {
-    // ⚠ UNKNOWN_SECONDS is negative so it cannot pass for a duration. Summed, it
-    // would subtract speech and push a busy window under the floor that decides
-    // whether anybody spoke, blaming a working tier for silence.
+    // UNKNOWN_SECONDS is negative; summed, it would subtract speech.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning(dir.path());
     source(&conn, "usb", "coreaudio");
@@ -173,9 +168,7 @@ fn a_clip_that_would_not_decode_is_unmeasured_rather_than_silent() {
 
 #[test]
 fn only_sources_with_a_recorder_count_as_delivered_audio() {
-    // An imported meeting and the derived room stream are sources with no
-    // microphone. Counting either would say the room was busy when a file was
-    // uploaded, or double-count the microphone the room stream carried.
+    // Uploads and the derived room stream have no microphone.
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning(dir.path());
     source(&conn, "usb", "coreaudio");
@@ -214,8 +207,7 @@ fn only_sources_with_a_recorder_count_as_delivered_audio() {
 
 #[test]
 fn an_empty_archive_answers_with_no_opinion_rather_than_a_zero() {
-    // "Nothing to measure" is not "measured and fine": a lag of 0.0 would read as
-    // a perfect feed.
+    // Nothing to measure is `None`, not a perfect 0.0.
     let dir = tempfile::tempdir().expect("tempdir");
     drop(meaning(dir.path()));
     let out = health(dir.path());

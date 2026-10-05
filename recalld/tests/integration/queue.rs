@@ -69,8 +69,7 @@ fn newest_first_lease_done_and_lapse() {
 
 #[test]
 fn a_job_nobody_finishes_is_retired_after_its_attempts_are_spent() {
-    // A clip that crashes the shim never reaches `done`, so without a cap it is
-    // re-offered for ever. After the cap it is recorded as a failure.
+    // A clip that crashes the shim is retired as a failure after the cap.
     let dir = tempfile::tempdir().expect("tempdir");
     let start: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
     let name = queued(dir.path(), "20260905T100000");
@@ -124,8 +123,7 @@ fn a_segment_measured_as_silent_gets_no_transcription_job() {
 
 #[test]
 fn a_segment_waits_for_its_speech_measurement() {
-    // The job used to go ahead while the measurement was pending, and the
-    // silent minutes among them came back as "Thank you."
+    // A job before the measurement turned silent minutes into "Thank you."
     let dir = tempfile::tempdir().expect("tempdir");
     let clip = unmeasured_row(dir.path(), "usb", "20260906T100000");
     let ingest = store::open(dir.path()).expect("db");
@@ -169,8 +167,7 @@ fn kinds_queued(root: &std::path::Path) -> Vec<(String, String)> {
 
 #[test]
 fn a_diarize_job_appears_only_once_the_words_exist() {
-    // Diarization spans become turns only when aligned against words, so the
-    // job derives from a succeeded transcription, never from the segment.
+    // Derived from a succeeded transcription: spans need words to align.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     let name = queued(dir.path(), "20260911T100000");
@@ -191,8 +188,7 @@ fn a_diarize_job_appears_only_once_the_words_exist() {
 
 #[test]
 fn a_refused_transcription_derives_no_diarization() {
-    // A refused clip is the problem (`turns::Barren::Refused`); diarizing it
-    // would spend GPU to learn that again.
+    // A refused clip is not diarized.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     queued(dir.path(), "20260911T100000");
@@ -207,8 +203,7 @@ fn a_refused_transcription_derives_no_diarization() {
 
 #[test]
 fn a_runner_is_never_handed_a_kind_it_cannot_do() {
-    // A runner holds one shim's weights; another kind would burn the job's
-    // attempts.
+    // A runner holds one shim's weights.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     queued(dir.path(), "20260911T100000");
@@ -348,9 +343,8 @@ fn already_transcribed(meaning: &rusqlite::Connection, source: &str, filename: &
 
 #[test]
 fn a_segment_that_already_has_turns_gets_no_job() {
-    // ⚠ The join key is the filename. Joining on start_utc matches nothing: the
-    // planes spell the same instant `...Z` and `...+00:00`, and text comparison
-    // returns a confident zero rather than an error.
+    // Joined on the filename: the planes spell an instant `...Z` and
+    // `...+00:00`, and as text they never match.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
     let done_one = mic_row(dir.path(), "usb", "20260905T100000");
@@ -381,8 +375,7 @@ fn a_segment_that_already_has_turns_gets_no_job() {
 
 #[test]
 fn room_blocks_are_not_derived_as_per_mic_work() {
-    // The room stream's old blocks stay in the store as history, and are no
-    // microphone's clips.
+    // The room stream's old blocks are history, not microphone clips.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
     room_row(dir.path(), "20260905T100000");
@@ -397,8 +390,7 @@ fn room_blocks_are_not_derived_as_per_mic_work() {
 
 #[test]
 fn the_derivation_is_bounded_and_newest_first() {
-    // A backlog derived in one statement would queue days of GPU work at once,
-    // competing with the room stream. The bound keeps it reversible.
+    // Bounded, so a backlog does not queue days of GPU work at once.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-05T12:00:00Z".parse().expect("t");
     for minute in 0..5 {
@@ -446,8 +438,7 @@ fn deriving_twice_queues_nothing_new() {
 
 #[test]
 fn an_uploaded_meeting_is_leased_by_the_same_runner_as_a_microphone() {
-    // Uploads have no other transcriber: nothing transcribes them on arrival,
-    // so the ingest plane's queue is their only road.
+    // Uploads are transcribed through this queue too.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-08T12:00:00Z".parse().expect("t");
     let meeting = mic_row(dir.path(), "meeting-20260907-0905", "20260907T090500");
@@ -483,8 +474,7 @@ fn an_uploaded_meeting_is_leased_by_the_same_runner_as_a_microphone() {
 
 #[test]
 fn an_uploaded_meeting_that_already_has_turns_gets_no_job() {
-    // Uploads join on the basename exactly as microphone clips do, so one that
-    // already has turns is not transcribed again.
+    // An upload that has turns is not transcribed again.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-08T12:00:00Z".parse().expect("t");
     let meeting = mic_row(dir.path(), "meeting-20260907-0905", "20260907T090500");
@@ -514,8 +504,7 @@ fn an_uploaded_meeting_that_already_has_turns_gets_no_job() {
 
 #[test]
 fn a_source_the_meaning_plane_has_never_heard_of_waits() {
-    // Neither an error nor a job: nothing could register the clip's audio, so
-    // the job would go barren on every pass and sit at the head of the queue.
+    // No job: nothing could register this clip's audio.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-08T12:00:00Z".parse().expect("t");
     mic_row(dir.path(), "newmic", "20260907T090500");
@@ -531,9 +520,7 @@ fn a_source_the_meaning_plane_has_never_heard_of_waits() {
 
 #[test]
 fn a_lease_picks_the_newest_clip_across_sources_not_the_alphabetical_one() {
-    // ⚠ `ORDER BY filename DESC` is newest-first only within one source. Across
-    // sources it is alphabetical, and `geb` would starve behind every `usb`
-    // clip ever recorded.
+    // By filename, `geb` would wait behind every `usb` clip ever recorded.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-13T12:00:00Z".parse().expect("t");
     let ingest = store::open(dir.path()).expect("db");
@@ -579,8 +566,7 @@ fn a_lease_picks_the_newest_clip_across_sources_not_the_alphabetical_one() {
 
 #[test]
 fn a_job_whose_blob_the_ingest_plane_has_forgotten_is_not_leasable() {
-    // A job with no `segments` row names a blob nothing can fetch; leasing it
-    // could only fail.
+    // A job with no `segments` row names a blob nothing can fetch.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-13T12:00:00Z".parse().expect("t");
     let ingest = store::open(dir.path()).expect("db");
@@ -602,9 +588,8 @@ fn a_job_whose_blob_the_ingest_plane_has_forgotten_is_not_leasable() {
 
 #[test]
 fn a_clip_transcribed_under_another_extension_gets_no_second_job() {
-    // One recording can exist under two extensions across the planes, so "already has turns" is keyed on the stem. Keyed
-    // on the whole filename, each such clip costs a full transcription that the
-    // write then refuses.
+    // One recording can have two extensions across the planes, so "already has
+    // turns" is keyed on the stem.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     let _ = mic_row(dir.path(), "usb", "20260910T203720");
@@ -669,9 +654,8 @@ fn an_old_outcome_sentence_is_split_into_its_word_and_its_detail() {
     );
 }
 
-/// A phone's minute arrives twice (the Mac's .flac and the phone's .wav), the two files'
-/// stamps up to a second apart. One transcription per minute; two would put
-/// every sentence on the timeline twice.
+/// A phone's minute arrives twice, stamped up to a second apart: one
+/// transcription per minute.
 fn copy_row(root: &std::path::Path, stamp: &str, ext: &str) -> String {
     let name = unmeasured_file(root, "geb", stamp, ext);
     measured(root, &name, 12.0);

@@ -1,6 +1,5 @@
-//! The playback-clip window, not ffmpeg. A clip that pulls in the neighbouring
-//! speaker undoes the diarized attribution, and a clip sliced exactly to a
-//! one-second phrase is unlistenable. Both fail silently: the wrong audio plays.
+//! The playback window. Too wide pulls in the neighbouring speaker; too tight
+//! is unlistenable. Both fail silently.
 
 use recalld::audio::{self, Placement, SpanError};
 use rusqlite::Connection;
@@ -54,8 +53,7 @@ fn db() -> Connection {
 
 #[test]
 fn a_rough_phrase_gets_a_wide_window_so_it_is_listenable() {
-    // A whole-phrase turn from Whisper. Sliced exactly, "Ja." is under a second of
-    // audio with no lead-in, which is what the padding prevents.
+    // Sliced exactly, "Ja." is under a second with no lead-in.
     let conn = db();
     turn(
         &conn,
@@ -77,8 +75,7 @@ fn a_rough_phrase_gets_a_wide_window_so_it_is_listenable() {
 
 #[test]
 fn a_diarized_turn_is_played_tight_so_it_cannot_pull_in_the_next_speaker() {
-    // Widening a diarized cutout by the rough turn's 1.5s would drag in whoever
-    // spoke next, while the UI still labels the clip with one name.
+    // The rough turn's 1.5 s would drag in whoever spoke next.
     let conn = db();
     turn(
         &conn,
@@ -93,16 +90,14 @@ fn a_diarized_turn_is_played_tight_so_it_cannot_pull_in_the_next_speaker() {
     assert!(p.precise);
     let (start, end) = audio::window_for(&p);
 
-    // 1e-4, not 1e-6: the offset comes from SQLite's `julianday`, a float day
-    // count with ~10µs of error, far below the millisecond `-ss` precision.
+    // `julianday` carries ~10 µs of error.
     assert!((start - 19.8).abs() < 1e-4, "start {start}");
     assert!((end - 22.2).abs() < 1e-4, "end {end}");
 }
 
 #[test]
 fn word_timings_make_a_turn_precise_even_without_diarized_provenance() {
-    // A span-assign split carries word timings but not the diarized marker. It is
-    // just as precise a cutout, and must be played just as tight.
+    // A span-assign split has word timings but no diarized marker: as precise.
     let conn = db();
     turn(
         &conn,
@@ -119,9 +114,8 @@ fn word_timings_make_a_turn_precise_even_without_diarized_provenance() {
 
 #[test]
 fn a_human_correction_is_not_treated_as_diarized() {
-    // A corrected turn's provenance ("human correction of #N") lacks the diarized
-    // marker, but its asr_model is `human`, and the tier rules check that first.
-    // Reading only provenance would mis-tier every correction.
+    // A correction's provenance lacks the diarized marker; its `human` model is
+    // checked first.
     let conn = db();
     turn(
         &conn,
@@ -141,8 +135,8 @@ fn a_human_correction_is_not_treated_as_diarized() {
 
 #[test]
 fn the_window_never_starts_before_the_file() {
-    // A turn near the very start of a recording: padding would run negative, and a
-    // negative -ss makes ffmpeg fail rather than clamp.
+    // Near the start, padding would run negative; ffmpeg fails on a negative
+    // -ss.
     let conn = db();
     turn(
         &conn,
@@ -175,9 +169,8 @@ fn a_turn_with_no_audio_segment_is_absent_not_an_error() {
 
 #[test]
 fn a_span_across_two_recordings_is_refused_rather_than_spliced() {
-    // A session stopped and restarted is two files; one window across them would
-    // serve unrelated audio under the bubble's label. The UI falls back to
-    // per-turn playback.
+    // A session stopped and restarted is two files; one window across them
+    // would serve unrelated audio.
     let first = Placement {
         path: PathBuf::from("/archive/a.flac"),
         audio_segment_id: 1,
@@ -217,15 +210,14 @@ fn a_span_within_one_recording_runs_first_start_to_last_end() {
     };
 
     let (start, end) = audio::span_window(&first, &last).expect("same recording");
-    // Tight, and spanning the whole run — not just the first turn.
+    // Tight, and spanning the whole run.
     assert!((start - 9.8).abs() < 1e-6, "start {start}");
     assert!((end - 20.2).abs() < 1e-6, "end {end}");
 }
 
 #[test]
 fn clip_window_expands_about_the_midpoint_not_the_start() {
-    // Expanding to the minimum by pushing only the end would leave a short turn
-    // with no lead-in.
+    // Widened on both sides, so a short turn keeps a lead-in.
     let (start, end) = audio::clip_window(100.0, 101.0, 0.0, 10.0);
     assert!((start - 95.5).abs() < 1e-6, "start {start}");
     assert!((end - 105.5).abs() < 1e-6, "end {end}");

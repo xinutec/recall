@@ -1,12 +1,8 @@
-//! Every recalld integration test, as one binary: cargo links one binary per
-//! `tests/*.rs`, each carrying all of recalld, so one binary means one link.
+//! Every recalld integration test as one binary, so recalld links once. A new
+//! test file needs its `mod` here.
 //!
-//! ⚠ `include_str!` is relative to its source file, so fixture paths here are
-//! `../fixtures/...`. `Path::new("../tests/fixtures/...")` resolves against the
-//! working directory at runtime instead, and stays as it is.
-//!
-//! Adding a test file means adding its `mod` here; cargo does not auto-discover
-//! inside this directory.
+//! `include_str!` is relative to the source file (`../fixtures/...`);
+//! `Path::new` resolves against the working directory.
 #![expect(
     clippy::disallowed_methods,
     reason = "tests seed and read rows with SQL of their own; the ban is for the daemon"

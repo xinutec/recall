@@ -1,4 +1,4 @@
-//! What the sync plane's reads and the instant feed write and answer.
+//! The sync plane's reads, and the live feed's writes.
 
 use recalld::labels::initial_prompt;
 use rusqlite::Connection;
@@ -23,10 +23,9 @@ fn glossary(conn: &Connection, speakers: &[&str], terms: &[&str]) {
     }
 }
 
-/// The expected string is the Python implementation's output on these rows, not
-/// this code's. It pins three rules: speaker names come before the vocabulary; a
-/// term in both is carried once, at its first position; and each group is
-/// ordered `COLLATE NOCASE`, not by insertion.
+/// The expected string came from the Python it replaced. Speaker names come
+/// before the vocabulary, a term in both appears once, and each group is
+/// ordered `COLLATE NOCASE`.
 #[test]
 fn the_glossary_prompt_matches_what_the_python_built() {
     let conn = store();
@@ -48,9 +47,8 @@ fn the_glossary_prompt_matches_what_the_python_built() {
     );
 }
 
-/// The cap ends the list rather than skipping the long term: skipping would make
-/// the prompt depend on which terms are long rather than on their priority. (The
-/// 580-char term above sorts last, which is why `never-reached` survives there.)
+/// The cap ends the list rather than skipping a long term, so priority decides,
+/// not length.
 #[test]
 fn a_term_over_the_cap_ends_the_list_rather_than_being_skipped() {
     let conn = store();
@@ -68,16 +66,15 @@ fn a_term_over_the_cap_ends_the_list_rather_than_being_skipped() {
 
 #[test]
 fn an_empty_glossary_is_none_not_an_empty_string() {
-    // The Mac branches on null; "" would read as a prompt that biases nothing.
+    // Null, not "": the Mac branches on null.
     assert_eq!(initial_prompt(&store()).unwrap(), None);
 }
 
-// --- the instant feed --------------------------------------------------------
+// --- the live feed -----------------------------------------------------------
 
 use recalld::work::{LiveTurn, ingest_live};
 
-/// The real migration ladder: a hand-written copy stops matching production when
-/// a column is added.
+/// The real migration ladder.
 fn live_store() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     recalld::meaning_schema::ensure(&conn).expect("schema");
@@ -99,10 +96,8 @@ fn a_turn(start: &str, text: &str) -> LiveTurn {
     }
 }
 
-/// A live turn's `start_utc` is where in the audio the words were said, not when
-/// the tier delivered them. Without `created_utc` the tier whose value is
-/// immediacy leaves no evidence of its own latency, and a stall can only be
-/// caught while it is happening.
+/// `start_utc` is when the words were said; `created_utc` when they were
+/// delivered, the tier's only record of its latency.
 #[test]
 fn a_live_turn_records_when_it_was_delivered_not_only_when_it_was_said() {
     let mut conn = live_store();
@@ -128,9 +123,7 @@ fn a_live_turn_records_when_it_was_delivered_not_only_when_it_was_said() {
     );
 }
 
-/// ⚠ `transcript_fts` is a contentless FTS5 table with no trigger; the writer
-/// fills it by hand. Forgetting it fails nothing and makes every live turn
-/// unfindable by search.
+/// The writer fills `transcript_fts`; a missing row is silently unsearchable.
 #[test]
 fn a_stored_live_turn_is_searchable() {
     let mut conn = live_store();
@@ -153,8 +146,7 @@ fn a_stored_live_turn_is_searchable() {
     assert_eq!(found, 1, "the turn exists but cannot be searched for");
 }
 
-/// A re-push must neither duplicate a turn nor resurrect one the archive has
-/// reconciled to hidden.
+/// A re-push neither duplicates a turn nor brings back a reconciled one.
 #[test]
 fn a_repushed_turn_is_skipped_even_once_hidden() {
     let mut conn = live_store();
@@ -185,8 +177,7 @@ fn a_repushed_turn_is_skipped_even_once_hidden() {
     assert_eq!(total, 1);
 }
 
-/// The presence check compares the stored spelling: a turn re-spelled on the way
-/// in would never match its earlier copy, and every retry would insert again.
+/// The presence check compares the stored spelling, so a retry matches.
 #[test]
 fn a_z_suffixed_time_matches_the_offset_spelling_it_was_stored_as() {
     let mut conn = live_store();
@@ -243,9 +234,8 @@ fn an_unparseable_time_costs_that_turn_and_no_other() {
     assert_eq!(text, "kept");
 }
 
-/// A live turn is short and hard, which is what Whisper loops on. The filter is
-/// here rather than in the pusher because being a model artefact is a property of
-/// the string, so every writer gets the same answer.
+/// Live turns are short and hard, what Whisper loops on: loops are dropped
+/// here, the same for every pusher.
 #[test]
 fn a_degenerate_loop_is_not_stored_as_a_live_turn() {
     let mut conn = live_store();
@@ -286,9 +276,8 @@ fn a_degenerate_loop_is_not_stored_as_a_live_turn() {
     );
 }
 
-/// The ASR prompt lists household names first, so on audio it cannot place the
-/// model emits one, and short live turns are where it does. A false name passes
-/// every other signal: fluent, Latin script, correctly labelled, plausibly timed.
+/// On audio it cannot place, the model emits a prompt name, mostly in short
+/// live turns. A false name passes every other signal.
 #[test]
 fn a_live_turn_that_is_nothing_but_a_household_name_is_refused() {
     let mut conn = live_store();
@@ -307,8 +296,7 @@ fn a_live_turn_that_is_nothing_but_a_household_name_is_refused() {
     )
     .unwrap();
 
-    // Only the bare name goes: a name inside a sentence is ordinary speech, and
-    // a name that merely starts the same way is a different word.
+    // Only a bare name goes.
     assert_eq!(stored, 2, "a name in a sentence must survive");
     let kept: Vec<String> = conn
         .prepare("SELECT text FROM transcript_segments ORDER BY start_utc")

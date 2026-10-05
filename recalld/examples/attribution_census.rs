@@ -3,10 +3,11 @@
 //! Runs the production rule over every human-labelled turn with a stored
 //! embedding, reporting each population separately rather than one headline.
 //!
-//! Exclusion is LEAVE-ONE-OUT ON PROVENANCE: every print derives from a labelled
-//! turn (`speaker_embeddings.source_segment_id`), and 240 of 522 scored turns are
-//! a print's own source. Excluding by comparing VECTORS catches none of them — an
-//! enrolled print is a different vector from the same audio — and reports 1.0000.
+//! Exclusion is leave-one-out by provenance: every print derives from a
+//! labelled turn (`speaker_embeddings.source_segment_id`), and 240 of 522
+//! scored turns are a print's own source. Excluding by comparing vectors
+//! catches none of them (an enrolled print is a different vector from the same
+//! audio) and reports 1.0000.
 //!
 //! Input: two `|`-separated dumps from the fleet's `recall.sqlite`:
 //! ```text

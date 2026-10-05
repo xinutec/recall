@@ -35,8 +35,7 @@ fn silent_wav(seconds: u32) -> Vec<u8> {
 
 #[test]
 fn silence_is_measured_as_no_speech_not_as_unknown() {
-    // 0.0 and unknown must never collapse: one says nobody spoke, the other
-    // says nobody looked, and only one of them is safe to sweep on.
+    // 0.0 (nobody spoke) and unknown (nobody looked) stay apart.
     let dir = tempfile::tempdir().expect("tempdir");
     stored(dir.path(), "usb", "usb-20260905T120000.wav", &silent_wav(3));
     assert_eq!(speech::scan_once(dir.path(), 10).expect("scan"), 1);
@@ -71,7 +70,7 @@ fn an_undecodable_blob_is_recorded_as_unknown_and_never_retried() {
         })
         .expect("row");
     assert!((seconds - UNKNOWN_SECONDS).abs() < f64::EPSILON);
-    // The row is what stops it being revisited for ever.
+    // The row stops it being revisited.
     assert_eq!(speech::scan_once(dir.path(), 10).expect("rescan"), 0);
 }
 
@@ -143,8 +142,7 @@ fn real_speech_is_measured_and_becomes_the_source_latest_speech() {
 
 #[test]
 fn an_unmeasured_segment_still_counts_as_possible_speech() {
-    // The backlog scans behind live audio. Treating "not looked at yet" as
-    // silence would black out every recorder at once.
+    // Not looked at yet is not silence.
     let dir = tempfile::tempdir().expect("tempdir");
     stored(dir.path(), "usb", "usb-20260905T120000.wav", &silent_wav(2));
     // deliberately not scanned
@@ -173,8 +171,7 @@ fn an_undecodable_segment_counts_too_because_it_was_never_heard() {
 
 #[test]
 fn the_scan_takes_the_newest_segments_first() {
-    // Liveness and the calibrated reference both read recent rows, so the
-    // archive must backfill behind live audio, never in front of it.
+    // New audio is scanned before the backlog.
     let dir = tempfile::tempdir().expect("tempdir");
     let quiet = silent_wav(1);
     for (name, stamp) in [

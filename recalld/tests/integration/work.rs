@@ -1,5 +1,4 @@
-//! Vocabulary writes to `recall.sqlite`: what makes a write safe to repeat and
-//! hard to corrupt by accident.
+//! Vocabulary writes.
 
 use recalld::work::{self, TermError};
 use rusqlite::Connection;
@@ -18,9 +17,7 @@ const NOW: &str = "2026-09-07T09:00:00+00:00";
 
 #[test]
 fn adding_the_same_term_twice_returns_the_same_id_rather_than_failing() {
-    // The Labels page cannot know what is already listed before it posts, so a
-    // repeat add is ordinary. A duplicate row would repeat the term in the ASR
-    // prompt.
+    // A repeat add is ordinary and adds no duplicate.
     let conn = db();
 
     let first = work::add_term(&conn, "vorasidenib", &crate::stamp(NOW)).expect("first");
@@ -32,8 +29,7 @@ fn adding_the_same_term_twice_returns_the_same_id_rather_than_failing() {
 
 #[test]
 fn a_term_is_trimmed_before_it_is_stored_and_matched() {
-    // Storing the padded form would defeat the UNIQUE constraint and put two
-    // copies in the prompt.
+    // Trimmed, so UNIQUE holds.
     let conn = db();
 
     let padded = work::add_term(&conn, "  EGA wing  ", &crate::stamp(NOW)).expect("padded");
@@ -47,8 +43,7 @@ fn a_term_is_trimmed_before_it_is_stored_and_matched() {
 
 #[test]
 fn a_blank_term_is_refused_rather_than_stored() {
-    // A blank term would be applied to every transcription as an empty prompt
-    // fragment and could never be found again to delete.
+    // A blank term is refused.
     let conn = db();
 
     assert!(matches!(
@@ -64,9 +59,7 @@ fn a_blank_term_is_refused_rather_than_stored() {
 
 #[test]
 fn a_database_failure_is_not_reported_as_a_blank_term() {
-    // A database failure reported as a blank-term 400 sends the user retyping a
-    // term that was never the problem, while nobody investigates the unwritable
-    // database.
+    // A database failure is not reported as a blank term.
     let conn = Connection::open_in_memory().expect("open");
     // No schema: every write fails at the table that is not there.
 
@@ -78,8 +71,7 @@ fn a_database_failure_is_not_reported_as_a_blank_term() {
 
 #[test]
 fn terms_list_case_insensitively_so_the_page_reads_alphabetically() {
-    // COLLATE NOCASE, not a plain sort: otherwise every capitalised proper noun
-    // sorts above every lowercase one, which is most of what this list holds.
+    // Case-insensitive order.
     let conn = db();
     for t in ["zebra", "Apple", "mango"] {
         work::add_term(&conn, t, &crate::stamp(NOW)).expect("add");
@@ -103,14 +95,13 @@ fn deleting_a_term_removes_it_and_deleting_a_missing_one_is_quiet() {
     work::delete_term(&conn, id).expect("delete");
     assert!(work::vocabulary(&conn).expect("list").items.is_empty());
 
-    // Idempotent: a second delete (a double-tap, a stale page) is not an error.
+    // A second delete is not an error.
     work::delete_term(&conn, id).expect("delete again");
 }
 
 #[test]
 fn the_write_connection_is_separate_from_the_read_only_one() {
-    // A read route takes the read-only handle, so a bug in a read path cannot
-    // write.
+    // A read route takes the read-only handle.
     let dir = tempfile::tempdir().expect("tmp");
     {
         let seed = Connection::open(dir.path().join("recall.sqlite")).expect("create");

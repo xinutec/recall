@@ -1,5 +1,4 @@
-//! Assigning a span to a speaker — the drag-select gesture, and the only surgery
-//! in the product that creates turns.
+//! Assigning a span to a speaker: the drag-select gesture.
 
 use chrono::{DateTime, Duration, Utc};
 use recalld::assign::{Piece, Span, Turn, Word, assign_span, min_width, pieces_of};
@@ -55,8 +54,7 @@ fn a_cut_never_bisects_a_word() {
 
 #[test]
 fn a_cut_inside_a_word_ties_to_the_left() {
-    // "abc def": offset 5 is one from each space, and a tie goes left. Going
-    // right would move every ambiguous cut by a word.
+    // "abc def": offset 5 is one from each space; a tie goes left.
     let t = turn("abc def ghi", None);
 
     let pieces = pieces_of(&t, &[5], &[None, Some("Dr Lee".into())]);
@@ -66,8 +64,8 @@ fn a_cut_inside_a_word_ties_to_the_left() {
 
 #[test]
 fn an_accented_turn_cuts_by_character_not_by_byte() {
-    // ⚠ "geëvalueerd" is 11 characters and 12 bytes. `&str` indexes by byte, so
-    // byte arithmetic cuts in the wrong place, and landing inside the ë panics.
+    // "geëvalueerd" is 11 characters and 12 bytes: byte arithmetic cuts in the
+    // wrong place, or panics inside the ë.
     let t = turn("wij hebben dat geëvalueerd vandaag", None);
 
     // Character 15 is the start of "geëvalueerd".
@@ -115,8 +113,8 @@ fn word_timings_place_the_cut_at_the_words_own_time() {
 
 #[test]
 fn the_turns_own_edges_are_kept_exact_not_snapped_to_a_word() {
-    // ⚠ A word's timestamp can sit inside leading silence or drift. Anchoring the
-    // first piece to it would drop the turn's opening audio.
+    // A word's timestamp can drift into leading silence; anchoring the first
+    // piece to it would drop the turn's opening audio.
     let words = vec![word(2.5, 3.0, "late"), word(3.0, 4.0, " start")];
     let t = turn("late start", Some(words));
 
@@ -160,8 +158,7 @@ fn an_empty_piece_drops_out_rather_than_becoming_a_blank_turn() {
 
 #[test]
 fn a_collapsed_cut_is_widened_to_a_playable_span() {
-    // Two words that aligned to the same instant would otherwise make a
-    // zero-length, audio-less turn.
+    // Two words aligned to one instant would make a zero-length turn.
     let pieces = vec![
         Piece {
             start: at(0),
@@ -265,7 +262,7 @@ fn assigning_a_whole_turn_relabels_it_without_splitting() {
 
 #[test]
 fn assigning_part_of_a_turn_splits_it_and_hides_the_original() {
-    // ⚠ Hidden, never deleted: a wrong split has to be recoverable.
+    // Hidden, not deleted: a wrong split is recoverable.
     let mut conn = db();
     add(
         &conn,
@@ -392,8 +389,7 @@ fn a_right_to_left_selection_is_the_same_as_left_to_right() {
 
 #[test]
 fn a_second_assign_on_an_already_split_turn_does_nothing() {
-    // The double-tap: both callers read the turn as live, and only the one that
-    // wins the atomic claim splits it, so no duplicate set of pieces.
+    // A double-tap: only the caller that wins the claim splits the turn.
     let mut conn = db();
     add(&conn, 1, 0, "a list of errands and we want to", None);
     let span = Span {
@@ -502,10 +498,8 @@ fn a_turn_from_another_session_is_refused_rather_than_split() {
     assert_eq!(current(&conn)[0].2, None, "untouched");
 }
 
-/// A turn with no word timings places its cut proportionally by character across
-/// its span. The player seeks to this estimate; falling back to the turn's start
-/// would put every piece of an untimed turn at the same moment while the text
-/// still looked right.
+/// A turn without word timings places its cut proportionally by character, not
+/// at the turn's start, where every piece would land at one moment.
 #[test]
 fn without_word_timings_a_cut_is_placed_proportionally_by_character() {
     let text = "a list of errands and we want to";

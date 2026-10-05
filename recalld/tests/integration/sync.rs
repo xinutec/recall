@@ -59,9 +59,7 @@ fn a_missing_or_wrong_token_is_rejected() {
 
 #[test]
 fn a_reported_pause_is_stored_verbatim_so_settled_can_compare_it() {
-    // The Mac echoes the intent string it read, and `fleet_capture_state` decides
-    // `settled` by string equality: a normalised spelling reads as a pause that
-    // never settles.
+    // Stored verbatim: `settled` compares the Mac's echo as a string.
     let conn = store();
     let applied = "2026-09-09T21:15:05.645698+00:00";
 
@@ -90,8 +88,7 @@ fn the_intent_and_the_echo_of_it_settle() {
 
 #[test]
 fn recording_stores_an_empty_pause_not_a_missing_row() {
-    // Writing the row means a reader never has to tell "never reported" from
-    // "reported as running".
+    // Written, so "reported as running" is not "never reported".
     let conn = store();
 
     record_reported(&conn, at(0), true, None, &liveness(&[])).unwrap();
@@ -107,8 +104,7 @@ fn recording_stores_an_empty_pause_not_a_missing_row() {
 
 #[test]
 fn the_report_stamps_the_freshness_clock_python_spells_it_with() {
-    // Every reader of the reported state gates on this key's age, so a report
-    // without it reads as a Mac that has stopped checking in.
+    // Every reader gates on this key's age.
     let conn = store();
 
     record_reported(&conn, at(0), true, None, &liveness(&[])).unwrap();
@@ -126,9 +122,7 @@ fn the_report_stamps_the_freshness_clock_python_spells_it_with() {
 
 #[test]
 fn source_liveness_is_stored_as_python_would_dump_it() {
-    // One spelling per column: `json.dumps` separators, which differ from
-    // `serde_json`'s defaults, and the Mac's key order rather than an
-    // alphabetical one, which is why `preserve_order` is on.
+    // `json.dumps` separators and the Mac's key order (`preserve_order`).
     let conn = store();
 
     record_reported(
@@ -152,8 +146,7 @@ fn source_liveness_is_stored_as_python_would_dump_it() {
 
 #[test]
 fn an_absent_liveness_map_stores_an_empty_object() {
-    // A Mac too old to send the field reports no liveness rather than breaking
-    // the exchange.
+    // An older Mac without the field reports no liveness.
     let conn = store();
 
     record_reported(&conn, at(0), true, None, &liveness(&[])).unwrap();
@@ -168,8 +161,7 @@ fn an_absent_liveness_map_stores_an_empty_object() {
 
 #[test]
 fn the_reply_is_camel_case_and_null_when_running() {
-    // The Mac reads `pausedUntil`; a snake_case field or an omitted null would
-    // read as "no pause".
+    // `pausedUntil`, with an explicit null.
     assert_eq!(
         serde_json::to_string(&IntentOut { paused_until: None }).unwrap(),
         r#"{"pausedUntil":null}"#
@@ -190,8 +182,7 @@ async fn serve(token: Option<&str>) -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().expect("tmp");
     let root = dir.path().to_path_buf();
     recalld::store::open(&root).expect("ingest db");
-    // The real migration ladder, not a hand-written subset: a column missing
-    // from a copied schema would look like an unmounted route.
+    // The real migration ladder.
     let conn = recalld::work::open_write(&root).expect("recall db");
     recalld::meaning_schema::ensure(&conn).expect("schema");
     drop(conn);
@@ -202,8 +193,7 @@ async fn serve(token: Option<&str>) -> (tempfile::TempDir, String) {
         read_token: None,
         max_body_bytes: recalld::app::DEFAULT_MAX_BODY,
         trusted_proxies: Vec::new(),
-        // The sync plane is exempt from the SSO gate; left absent so the tests
-        // show that.
+        // Absent, to show the sync plane does not need the SSO gate.
         webauth: None,
         sync_token: token.map(ToOwned::to_owned),
         frontend: None,
@@ -235,8 +225,7 @@ async fn post(addr: &str, token: Option<&str>, body: serde_json::Value) -> (u16,
     .await
 }
 
-/// Over HTTP, because passing unit tests say nothing about whether a route is
-/// mounted.
+/// Over HTTP, to show the route is mounted.
 #[tokio::test]
 async fn the_capture_handshake_is_reachable_and_returns_the_fleets_intent() {
     let (dir, addr) = serve(Some("sekrit")).await;
@@ -257,8 +246,7 @@ async fn the_capture_handshake_is_reachable_and_returns_the_fleets_intent() {
 
 #[tokio::test]
 async fn the_report_lands_where_api_capture_reads_it() {
-    // The Mac's report must reach the state the status page serves, or the UI
-    // can never confirm a pause.
+    // The report reaches the state the UI reads.
     let (dir, addr) = serve(Some("sekrit")).await;
     let conn = recalld::work::open_write(dir.path()).expect("db");
     let intent = intent_pause(&conn, chrono::Utc::now(), Some(30)).unwrap();
@@ -289,7 +277,7 @@ async fn the_report_lands_where_api_capture_reads_it() {
 
 #[tokio::test]
 async fn an_unauthenticated_report_cannot_move_the_state() {
-    // Not just a 401: the write must not have happened either.
+    // And nothing was written.
     let (dir, addr) = serve(Some("sekrit")).await;
 
     for token in [None, Some("wrong")] {
@@ -345,8 +333,7 @@ async fn a_non_string_liveness_value_is_refused_like_pydantic_refuses_it() {
 
 #[tokio::test]
 async fn a_long_poll_returns_at_once_when_the_intent_already_differs() {
-    // The hang is only for an unchanged intent. A stale `knownIntent` is
-    // answered at once, not held for the 25 s cap.
+    // A stale `knownIntent` is answered at once.
     let (dir, addr) = serve(Some("sekrit")).await;
     let conn = recalld::work::open_write(dir.path()).expect("db");
     let intent = intent_pause(&conn, chrono::Utc::now(), Some(30)).unwrap();
@@ -374,8 +361,8 @@ async fn a_long_poll_returns_at_once_when_the_intent_already_differs() {
 
 #[tokio::test]
 async fn a_long_poll_hangs_while_the_intent_is_unchanged_and_wakes_on_a_pause() {
-    // The reason for the hang: the fleet cannot dial the Mac, so a pause pressed
-    // in the UI must reach it through the request already waiting.
+    // The fleet cannot dial the Mac: a pause reaches it through the waiting
+    // request.
     let (dir, addr) = serve(Some("sekrit")).await;
     let root = dir.path().to_path_buf();
 
@@ -420,9 +407,8 @@ async fn a_long_poll_hangs_while_the_intent_is_unchanged_and_wakes_on_a_pause() 
 
 // --- lock contention ---------------------------------------------------------
 
-/// Lock contention must delay a handshake, not fail it with `database is
-/// locked`. The lock is held for 7 s, past a 5 s busy timeout, so this asserts
-/// the wait rather than the number.
+/// Lock contention delays a handshake rather than failing it: the lock is held
+/// 7 s, past a 5 s busy timeout.
 #[tokio::test]
 async fn a_writer_holding_the_lock_delays_the_handshake_rather_than_failing_it() {
     let (dir, addr) = serve(Some("sekrit")).await;
@@ -476,12 +462,10 @@ async fn get(addr: &str, path: &str, token: Option<&str>) -> (u16, String) {
     crate::http::request(addr, "GET", path, &headers, None).await
 }
 
-/// Reach and gate for the listed read routes: an ungated one would hand the
-/// household's names and glossary to anything that can reach the port.
+/// The read routes are mounted and gated: they carry the household's names.
 #[tokio::test]
 async fn every_sync_read_route_is_mounted_and_gated() {
-    // These routes answer 200 with an empty body when their tables are missing,
-    // which is why `serve` runs the real migration ladder.
+    // With tables missing these answer 200 and empty; hence the real ladder.
     let (_dir, addr) = serve(Some("sekrit")).await;
 
     for path in [
@@ -498,8 +482,7 @@ async fn every_sync_read_route_is_mounted_and_gated() {
     }
 }
 
-/// Without a token the read routes are absent, not open: they carry the
-/// household's names.
+/// Without a token the read routes are absent, not open.
 #[tokio::test]
 async fn the_read_routes_are_absent_when_no_token_is_configured() {
     let (_dir, addr) = serve(None).await;
@@ -514,9 +497,8 @@ async fn the_read_routes_are_absent_when_no_token_is_configured() {
     }
 }
 
-/// The common long-poll case: nothing changes, and the route returns the
-/// unchanged intent when the caller's wait runs out, not at the 25 s cap and not
-/// as an error. A wrong bound shows as a slow mirror, not as a failure.
+/// Nothing changes: the route answers when the caller's wait runs out, not at
+/// the 25 s cap.
 #[tokio::test]
 async fn a_wait_that_elapses_with_no_change_returns_the_intent_it_started_with() {
     let (dir, addr) = serve(Some("sekrit")).await;
@@ -591,9 +573,8 @@ async fn the_live_tier_numbers_are_reachable_and_gated() {
 
 #[tokio::test]
 async fn the_same_moment_spelled_two_ways_gives_the_same_answer() {
-    // ⚠ Stored timestamps compare as text, and `Z` (0x5A) sorts after `+`
-    // (0x2B), so a `…Z` bound would silently drop the first row. The server
-    // re-spells the bound rather than trusting it.
+    // Timestamps compare as text and `Z` sorts after `+`: the server re-spells
+    // the bound, or the first row would be dropped.
     let (dir, addr) = serve(Some("sekrit")).await;
     let conn = recalld::work::open_write(dir.path()).expect("db");
     conn.execute_batch(
@@ -616,7 +597,7 @@ async fn the_same_moment_spelled_two_ways_gives_the_same_answer() {
 
 #[tokio::test]
 async fn a_window_bound_that_is_not_an_instant_is_refused() {
-    // A 400, not a 500 and not a text comparison against a non-timestamp.
+    // A 400.
     let (_dir, addr) = serve(Some("sekrit")).await;
     let (status, _) = live_health(&addr, Some("sekrit"), "yesterday").await;
     assert_eq!(status, 400);

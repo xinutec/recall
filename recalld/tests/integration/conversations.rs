@@ -1,5 +1,4 @@
-//! Conversation and moment folding: the two groupings that give an always-on
-//! capture stream a shape a person can browse.
+//! Conversation and moment folding.
 
 use chrono::{DateTime, TimeDelta, Utc};
 use recalld::conversations::{
@@ -73,9 +72,8 @@ fn a_silence_longer_than_the_gap_starts_a_new_conversation() {
 
 #[test]
 fn the_silence_is_measured_from_the_furthest_end_not_the_previous_turn() {
-    // A long turn from one mic covers a short one from another. Measuring the gap
-    // from the short turn's end would invent a silence and split the
-    // conversation.
+    // A long turn covers a short one from another mic; measuring from the short
+    // one's end would invent a silence.
     let turns = vec![
         turn(1, 0, 500, "usb"),   // runs long
         turn(2, 10, 20, "pixel"), // ends early, inside the first
@@ -89,8 +87,7 @@ fn the_silence_is_measured_from_the_furthest_end_not_the_previous_turn() {
 
 #[test]
 fn a_gap_exactly_on_the_threshold_does_not_break() {
-    // The rule is strictly greater than, so a caller calibrating the knob gets
-    // the boundary they asked for.
+    // Strictly greater than.
     let turns = vec![turn(1, 0, 10, "usb"), turn(2, 310, 320, "usb")];
 
     assert_eq!(segment_conversations(&turns, 300.0), vec![vec![0, 1]]);
@@ -189,8 +186,8 @@ fn speech_the_shown_mic_missed_is_still_shown_once() {
 
 #[test]
 fn the_spine_is_the_mic_that_heard_best_not_the_one_that_said_most() {
-    // Two middling lines do not outweigh one better one: a mic that splits or
-    // repeats more would otherwise win on volume.
+    // Two middling lines do not outweigh one better one, or a mic that splits
+    // more would win on volume.
     let turns = vec![
         scored(turn(1, 0, 10, "usb"), 0.55),
         scored(turn(2, 0, 4, "pixel"), 0.3),
@@ -235,8 +232,8 @@ fn a_mic_that_heard_only_part_of_the_moment_is_not_the_spine() {
 
 #[test]
 fn a_mics_second_copy_of_the_same_minute_is_set_aside() {
-    // A phone's minute arrives twice (the Mac's .flac and the phone's .wav), both
-    // transcribed. The spine shows one copy; the other is an alternate.
+    // A phone's minute arrives twice, both transcribed: one copy is shown, the
+    // other is an alternate.
     let turns = vec![
         from_clip(scored(turn(1, 0, 10, "usb"), 0.5), 20),
         from_clip(scored(turn(2, 0, 5, "pixel"), 0.8), 10),
@@ -267,9 +264,8 @@ fn a_mics_next_minute_is_not_mistaken_for_a_copy() {
 
 #[test]
 fn a_tied_spine_goes_to_the_first_source_seen_not_the_last() {
-    // ⚠ On a full tie the first microphone is the spine. Rust's `max_by_key`
-    // returns the last maximum, and swapping the spine silently swaps which
-    // transcription the UI shows as primary and which it hides behind "compare".
+    // On a full tie the first microphone is shown (`max_by_key` would keep the
+    // last).
     let turns = vec![
         scored(turn(1, 0, 10, "usb"), 0.5),
         scored(turn(2, 1, 11, "pixel"), 0.5),
@@ -304,10 +300,9 @@ fn a_missing_guess_is_filled_from_the_most_confident_overlapping_mic() {
 
 #[test]
 fn an_existing_guess_is_strengthened_by_agreement_but_never_flipped() {
-    // The asymmetry is deliberate. Phone clocks are arrival-stamped and lag by a
-    // variable few seconds, so a time overlap is not reliable evidence of the same
-    // speaker: a mic that agrees may raise the confidence, one that disagrees must
-    // not rename the person.
+    // Phone clocks lag a few seconds, so overlap is weak evidence of the same
+    // speaker: an agreeing mic may raise the score, a disagreeing one does not
+    // rename the person.
     let turns = vec![
         guessed(turn(1, 0, 10, "usb"), "Alex", 0.4),
         guessed(turn(2, 1, 9, "pixel"), "Alex", 0.8), // agrees, stronger
@@ -337,8 +332,7 @@ fn a_weaker_agreeing_mic_does_not_lower_the_confidence() {
 
 #[test]
 fn turns_that_only_touch_are_not_overlapping() {
-    // Adjacency is not overlap: one turn ending exactly where the next begins is
-    // two moments, not one folded card.
+    // Touching is not overlapping: two moments.
     let turns = vec![turn(1, 0, 10, "usb"), turn(2, 10, 20, "pixel")];
     let group = vec![0, 1];
 
@@ -357,8 +351,7 @@ fn an_empty_stream_folds_to_nothing_rather_than_panicking() {
 
 #[test]
 fn a_turn_with_no_source_still_folds() {
-    // Corrections carry no audio segment, so their source is NULL. They must not
-    // vanish from the timeline.
+    // A correction without an audio segment has no source; it still shows.
     let mut orphan = turn(1, 0, 10, "usb");
     orphan.source_id = None;
     let turns = vec![orphan, turn(2, 1, 9, "usb")];
@@ -383,8 +376,7 @@ fn a_long_conversation_keeps_its_turns_in_order() {
 
 #[test]
 fn a_gap_measured_in_fractions_of_a_second_is_respected() {
-    // The threshold is a float the caller sets; truncating to whole seconds
-    // would put this pair on the wrong side of it.
+    // The gap is compared as a float, not whole seconds.
     let turns = vec![
         Turn {
             end: at(0) + TimeDelta::milliseconds(500),
@@ -401,11 +393,7 @@ fn a_gap_measured_in_fractions_of_a_second_is_respected() {
     assert_eq!(segment_conversations(&turns, 1.4), vec![vec![0], vec![1]]);
 }
 
-// --- the conversation SUMMARY, which is what a browsing list shows -----------
-//
-// These pin `fold`, which builds `ConversationOut`: `turnCount`, `speakers` and
-// `preview`, the fields the list view is made of. The tests above work on turn
-// indices only.
+// --- the conversation summary the list shows (`fold`) ------------------------
 
 /// A stored row, with everything the summary ignores left empty.
 fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment {
@@ -494,8 +482,7 @@ fn the_preview_is_from_the_mic_shown() {
     assert_eq!(out.items[0].preview, "Alex speaking");
 }
 
-/// A card is headed by its first line above `PREVIEW_MIN_CONFIDENCE`, so a
-/// low-confidence guess is not what a person reads first.
+/// A card is headed by its first line above `PREVIEW_MIN_CONFIDENCE`.
 #[test]
 fn the_preview_skips_a_low_confidence_opening_line() {
     let segments = vec![
@@ -508,8 +495,7 @@ fn the_preview_skips_a_low_confidence_opening_line() {
     assert_eq!(out.items[0].preview, "the line worth showing");
 }
 
-/// When nothing clears the bar the card still gets a heading: an empty preview
-/// reads as an empty conversation.
+/// When nothing clears the bar the card still gets a heading.
 #[test]
 fn a_conversation_with_nothing_confident_still_previews_its_first_line() {
     let segments = vec![
@@ -522,8 +508,7 @@ fn a_conversation_with_nothing_confident_still_previews_its_first_line() {
     assert_eq!(out.items[0].preview, "mumbled nonsense");
 }
 
-/// An unscored turn is not treated as confident: a NULL confidence means nobody
-/// measured.
+/// An unscored turn is not confident.
 #[test]
 fn an_unscored_line_does_not_clear_the_preview_bar() {
     let segments = vec![
@@ -536,8 +521,7 @@ fn an_unscored_line_does_not_clear_the_preview_bar() {
     assert_eq!(out.items[0].preview, "scored and good");
 }
 
-/// The gap is tunable, and the summary splits with it, as a caller passing
-/// `?gap=` sees.
+/// The summary splits with `?gap=`.
 #[test]
 fn the_gap_is_tunable_and_the_summary_splits_with_it() {
     let segments = vec![segment(1, 0, 2, "before"), segment(2, 40, 42, "after")];
@@ -546,8 +530,7 @@ fn the_gap_is_tunable_and_the_summary_splits_with_it() {
     assert_eq!(fold(&segments, 10.0, 200).items.len(), 2, "38s > 10s gap");
 }
 
-/// The instants are the stored strings, not re-formatted ones: the pass-through
-/// `reads::iso` promises, checked on a conversation card.
+/// The instants are the stored strings, not reformatted.
 fn reads_iso(seconds: i64) -> String {
     at(seconds).to_rfc3339()
 }

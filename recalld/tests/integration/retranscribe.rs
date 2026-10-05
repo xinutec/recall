@@ -138,7 +138,7 @@ fn new_lines_replace_the_machine_ones_a_persons_line_stays_and_speakers_come_aft
     );
 
     lands(&ingest, FRESH);
-    // ⚠ The order this guards: the speaker pass must not run before the lines.
+    // The speaker pass does not run before the lines.
     let now = crate::stamp(NOW);
     let early = recalld::diarized::write_pass(&mut meaning, &ingest, &now, 10).expect("speakers");
     assert_eq!(early.blocks, 0, "the speaker pass waits for the new lines");
@@ -244,10 +244,8 @@ fn a_clip_never_transcribed_again_has_nothing_to_take_back() {
 
 #[test]
 fn a_clip_the_speaker_pass_never_decided_still_gets_its_lines_before_its_speakers() {
-    // The case the request row itself must guard: no speaker ledger row to hold
-    // the speaker pass off, so without the request it would write its own lines
-    // onto the clip the moment the transcription lands, and the turns pass would
-    // then skip the clip.
+    // No ledger row holds the speaker pass off: only the request keeps it from
+    // writing its own lines first, which the turns pass would then skip.
     let dir = tempfile::tempdir().expect("tmp");
     let (mut meaning, ingest) = planes(dir.path());
     let now = crate::stamp(NOW);
@@ -318,10 +316,8 @@ fn a_candidate_lost_speech_under_a_loop_and_a_loop_over_silence_is_not_one() {
     );
 }
 
-/// The race of 2026-10-03: the turns pass holds every finished result read
-/// when it began, and a request lands while it runs. It must not rewrite the
-/// clip from the OLD result it holds and drop the request; it waits for the
-/// result that finishes after the request.
+/// The race of 2026-10-03: a request lands while the turns pass holds the old
+/// result. It waits for the result that finishes after the request.
 #[test]
 fn a_request_is_written_only_from_a_result_newer_than_itself() {
     let dir = tempfile::tempdir().expect("tmp");

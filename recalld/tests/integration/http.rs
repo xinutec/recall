@@ -1,9 +1,5 @@
-//! HTTP for tests, over a bare socket: one request per connection, read to its
-//! end.
-//!
-//! ⚠ Not ureq: after an empty body it returns its socket to a pool with a call
-//! that fails (EINVAL) once the server has closed it, and panics rather than
-//! return the error (#1480).
+//! HTTP for tests over a bare socket, one request per connection. Not ureq: it
+//! pools a socket the server closed and panics on the next call (#1480).
 
 use std::fmt::Write as _;
 use std::io::{Read, Write};
@@ -25,16 +21,14 @@ pub async fn request(
     let addr = addr.to_owned();
     let reply = tokio::task::spawn_blocking(move || {
         let mut stream = std::net::TcpStream::connect(&addr).expect("connect");
-        // One write: a body arriving after the server has answered from the
-        // head alone (a 404 for an unmounted route) is unread when it closes,
-        // and the kernel answers that with a reset.
+        // One write: a body arriving after the server answered from the head
+        // alone would be unread at close, and reset.
         stream
             .write_all(format!("{head}{body}").as_bytes())
             .expect("request");
         let mut reply = Vec::new();
         if let Err(e) = stream.read_to_end(&mut reply) {
-            // The same reset can still race the read. The answer has already
-            // arrived once its head is complete; a reset before that is a failure.
+            // The reset can still race the read: a complete head is an answer.
             let answered = reply.windows(4).any(|w| w == b"\r\n\r\n");
             assert!(
                 e.kind() == std::io::ErrorKind::ConnectionReset && answered,

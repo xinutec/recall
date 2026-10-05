@@ -1,6 +1,5 @@
-//! The recorder contract, end to end through the router: receipts a recorder
-//! can trust its eviction to, idempotent redelivery, append-only conflicts,
-//! and the two credential planes.
+//! The recorder contract through the router: receipts, idempotent
+//! redelivery, append-only conflicts, and the two credentials.
 
 use axum::Router;
 use axum::body::Body;
@@ -66,8 +65,7 @@ async fn send(app: &Router, request: Request<Body>) -> (StatusCode, serde_json::
         .await
         .expect("body")
         .to_bytes();
-    // Every route behind `send` answers JSON; a body that does not parse is
-    // a broken response, never "no data".
+    // Every route behind `send` answers JSON.
     let json = if bytes.is_empty() {
         serde_json::Value::Null
     } else {
@@ -106,8 +104,7 @@ async fn the_receipt_is_the_hash_of_what_was_stored() {
     let audio = b"pretend flac bytes";
     let (status, body) = send(&h.app, put("usb", "usb-20260905T120000.flac", audio, None)).await;
     assert_eq!(status, StatusCode::OK);
-    // The recorder's eviction rule: re-hash the local file, compare. So the
-    // receipt must equal an independent sha-256 of the bytes sent.
+    // The recorder evicts when its own hash matches the receipt.
     assert_eq!(body["sha256"], hex::encode(Sha256::digest(audio)));
     assert_eq!(body["bytes"], audio.len());
     let stored = std::fs::read(blob_path(h.dir.path(), "usb", "usb-20260905T120000.flac"))
@@ -176,7 +173,7 @@ async fn the_write_gate_distinguishes_unknown_from_misdirected() {
 
 #[tokio::test]
 async fn unconfigured_gates_are_open() {
-    // The inert-unless-configured pattern: dev and tests carry no ceremony.
+    // Unconfigured means open.
     let h = harness(None, None);
     let (status, _) = send(&h.app, put("usb", "usb-20260905T120000.flac", b"x", None)).await;
     assert_eq!(status, StatusCode::OK);
@@ -188,8 +185,7 @@ async fn unconfigured_gates_are_open() {
 async fn an_oversize_body_is_refused() {
     let h = harness(None, None);
     let oversize = vec![0u8; 2 * 1024 * 1024];
-    // The limit layer answers before our handlers, with a plain-text body —
-    // read the status raw rather than pretending it is our JSON.
+    // The limit layer answers before the handlers, in plain text.
     let (status, _) = send_raw(
         &h.app,
         put("usb", "usb-20260905T120000.flac", &oversize, None),
@@ -232,7 +228,7 @@ async fn the_read_side_is_the_sync_tokens_not_the_devices() {
     let name = "usb-20260905T120000.flac";
     let (status, _) = send(&h.app, put("usb", name, b"audio", Some("secret-a"))).await;
     assert_eq!(status, StatusCode::OK);
-    // The device's own token cannot read — write-only is the plane's promise.
+    // A device token cannot read.
     for token in [None, Some("secret-a")] {
         let (status, _) = send(&h.app, get("/ingest/v1/segments", token)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -261,8 +257,8 @@ async fn a_missing_blob_is_404() {
 
 #[tokio::test]
 async fn a_blob_without_a_row_heals_on_redelivery() {
-    // The crash window: rename landed, row insert did not. The next identical
-    // PUT must repair the row and hand out the normal receipt.
+    // A crash after the rename, before the row: the next identical PUT repairs
+    // it.
     let h = harness(None, None);
     let audio = b"recovered bytes";
     let dir = h.dir.path().join("ingest").join("usb");
@@ -280,7 +276,7 @@ async fn a_blob_without_a_row_heals_on_redelivery() {
 #[tokio::test]
 async fn liveness_reports_each_source_newest_capture_time() {
     let h = harness(Some("* write\n"), Some("read"));
-    // Two sources, delivered out of order — the newest capture must win.
+    // Delivered out of order: the newest capture wins.
     for name in [
         "geb-20260905T100000.opus",
         "geb-20260905T100200.opus",
@@ -316,9 +312,7 @@ async fn liveness_is_behind_the_read_plane_not_the_write_one() {
 
 #[tokio::test]
 async fn liveness_ignores_a_segment_measured_as_silent() {
-    // "Active" means someone is talking. A segment measured as silence stops
-    // counting; an unmeasured one still counts, because the scanner runs behind
-    // live audio.
+    // A segment measured silent stops counting; an unmeasured one counts.
     let h = harness(Some("* write\n"), Some("read"));
     for name in ["geb-20260905T100000.opus", "geb-20260905T100100.opus"] {
         let (status, _) = send(&h.app, put("geb", name, b"a", Some("write"))).await;

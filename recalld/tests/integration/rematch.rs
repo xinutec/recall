@@ -1,7 +1,5 @@
-//! Re-deriving stale speaker guesses. What matters is which turns a pass
-//! reconsiders and which it leaves alone: sweeping everything every time would
-//! rewrite the archive continuously, and stamping only rewrites would never
-//! finish.
+//! Re-deriving stale speaker guesses: which turns a pass reconsiders, and
+//! which it leaves alone.
 
 use recalld::rematch::{Pass, run_once};
 use rusqlite::Connection;
@@ -17,8 +15,7 @@ fn json(v: &[f64]) -> String {
     serde_json::to_string(v).expect("json")
 }
 
-/// The meaning plane, built by the real migration ladder, not a hand-copied
-/// subset.
+/// The meaning plane, built by the real migration ladder.
 fn plane() -> Connection {
     let conn = Connection::open_in_memory().expect("db");
     recalld::meaning_schema::ensure(&conn).expect("migrate");
@@ -98,12 +95,8 @@ fn a_guess_made_before_the_newest_enrolment_is_re_derived() {
 
 #[test]
 fn a_turn_whose_answer_is_unchanged_is_stamped_not_rewritten() {
-    // Stamping unchanged turns is what makes the pass finish; marking only
-    // rewrites would bring every settled turn back on every run.
-    //
-    // ⚠ Reaching that branch takes three runs: a turn with no guess is rewritten
-    // on its first pass, so the sequence settles it (rewrite), re-arms it with a
-    // new voice (unchanged), and only then checks the stamp.
+    // Unchanged turns are stamped, or every run would bring them back. It takes
+    // three runs: rewrite, re-arm with a new voice (unchanged), check the stamp.
     let mut conn = plane();
     enrol(&conn, "Alex", &vector(0), "2026-08-01T00:00:00+00:00");
     turn(&conn, 1, &vector(0), None);
@@ -130,8 +123,7 @@ fn a_turn_whose_answer_is_unchanged_is_stamped_not_rewritten() {
 
 #[test]
 fn enrolling_a_voice_re_arms_the_whole_archive() {
-    // The only event that can change an answer, and the pass must notice it
-    // without anyone scheduling a sweep.
+    // A new enrolment is noticed without a scheduled sweep.
     let mut conn = plane();
     enrol(&conn, "Alex", &vector(0), "2026-08-01T00:00:00+00:00");
     turn(&conn, 1, &vector(0), None);
@@ -184,7 +176,7 @@ fn with_nobody_enrolled_it_does_nothing_rather_than_stamping() {
 
 #[test]
 fn a_human_label_is_never_touched() {
-    // The one line that must not move: `speaker_label` is what a person typed.
+    // `speaker_label`, a person's name, never moves.
     let mut conn = plane();
     enrol(&conn, "Alex", &vector(0), "2026-08-01T00:00:00+00:00");
     turn(&conn, 1, &vector(3), Some(("Alex", 0.9)));

@@ -47,9 +47,8 @@ fn state(
 
 #[test]
 fn the_token_matches_the_one_the_live_fleet_served() {
-    // The token production served for this state. A change to the field set,
-    // key order or JSON separators fails here rather than silently turning
-    // every client's long-poll into a busy poll.
+    // The token production served for this state: a change to the fields, key
+    // order or separators fails here, not as busy-polling clients.
     let live = state(
         false,
         Some("2026-09-08T19:11:22.164504+00:00"),
@@ -122,8 +121,7 @@ fn no_intent_is_running() {
 
 #[test]
 fn an_elapsed_intent_reads_as_running() {
-    // A pause past its deadline must not keep the house silent because nobody
-    // cleared the row.
+    // A pause past its deadline reads as running.
     let conn = store(&[("capture_intent", "2026-09-08T19:11:22+00:00")]);
     assert_eq!(intent_until(&conn, at(1)).unwrap(), None);
     assert!(intent_until(&conn, at(-1)).unwrap().is_some());
@@ -137,8 +135,7 @@ fn an_unparseable_intent_reads_as_running_rather_than_a_pause_nobody_can_clear()
 
 #[test]
 fn the_intent_keeps_its_stored_spelling() {
-    // `settled` compares this string to the Mac's echo by equality, so
-    // normalising it would leave an applied pause transitioning for ever.
+    // `settled` compares this string to the Mac's echo.
     let conn = store(&[("capture_intent", "2026-09-08T19:11:22.164504+00:00")]);
     assert_eq!(
         intent_until(&conn, at(-1)).unwrap().as_deref(),
@@ -244,8 +241,7 @@ fn writable() -> Connection {
 
 #[test]
 fn a_pause_is_always_bounded() {
-    // A pause is never indefinite: a forgotten one would lose days of the
-    // archive without anyone deciding to.
+    // A pause is never indefinite.
     let now = at(0);
     assert_eq!(
         compute_resume_by(now, None),
@@ -272,8 +268,7 @@ fn a_negative_pause_clamps_to_now_rather_than_minting_an_elapsed_one() {
 fn pausing_then_resuming_round_trips_through_the_settings_row() {
     let conn = writable();
     let iso = intent_pause(&conn, at(0), Some(30)).unwrap();
-    // A reader gets the stored spelling back: the Mac's confirmation compares
-    // it by equality.
+    // The stored spelling comes back; the Mac's echo is compared to it.
     assert_eq!(
         intent_until(&conn, at(0)).unwrap().as_deref(),
         Some(iso.as_str())
@@ -285,8 +280,7 @@ fn pausing_then_resuming_round_trips_through_the_settings_row() {
 
 #[test]
 fn a_resume_leaves_a_row_rather_than_deleting_it() {
-    // The mirror polls this value, so "resumed" is a value it reads rather than
-    // an absence it infers.
+    // "Resumed" is a stored value, not an absence.
     let conn = writable();
     intent_pause(&conn, at(0), Some(30)).unwrap();
     intent_resume(&conn).unwrap();
@@ -302,8 +296,7 @@ fn a_resume_leaves_a_row_rather_than_deleting_it() {
 
 #[test]
 fn a_fresh_pause_reads_as_unsettled_until_the_mac_confirms() {
-    // The press moves desired only, so the UI shows "Pausing…" rather than
-    // claiming a pause that has not taken effect.
+    // The press moves only the intent: "Pausing…" until the Mac confirms.
     let conn = writable();
     intent_pause(&conn, at(0), Some(30)).unwrap();
     let state = fleet_capture_state(&conn, at(0)).unwrap();
@@ -328,9 +321,8 @@ fn the_audit_names_the_verb_and_the_origin() {
 
 #[test]
 fn a_whole_second_pause_is_spelled_without_a_fraction() {
-    // `isoformat()` spelling: `...22+00:00`, not `...22.000000+00:00`. The
-    // intent is compared to other spellings of it as text, so a fixed precision
-    // would leave an applied pause transitioning for ever.
+    // `isoformat()` spelling: `...22+00:00`, not `...22.000000+00:00`; the
+    // intent is compared as text.
     let conn = writable();
     let iso = intent_pause(&conn, at(0), Some(30)).unwrap();
     assert!(!iso.contains(".000000"), "{iso}");
@@ -345,8 +337,8 @@ fn a_whole_second_pause_is_spelled_without_a_fraction() {
 
 #[test]
 fn an_unchanged_state_fingerprints_the_same_twice() {
-    // The token is a pure function of the state. If it varied per call, every
-    // hang would return at once and every recorder would become a busy poller.
+    // The token is a function of the state; varying per call, every hang
+    // would return at once.
     let conn = writable();
     intent_pause(&conn, at(0), Some(30)).unwrap();
     let a = fleet_capture_state(&conn, at(1)).unwrap();
@@ -366,8 +358,7 @@ fn a_press_changes_the_fingerprint_so_a_hanging_poll_wakes() {
 
 #[test]
 fn a_pause_elapsing_changes_the_fingerprint_with_nobody_pressing_anything() {
-    // Nothing writes when a pause reaches its deadline, so no notify fires;
-    // this is why the handler re-derives on a slice.
+    // Nothing writes when a pause expires, so the handler re-derives each slice.
     let conn = writable();
     intent_pause(&conn, at(0), Some(30)).unwrap();
     let during = fleet_capture_state(&conn, at(60)).unwrap();
@@ -410,8 +401,8 @@ use recalld::capture::client_host;
 
 #[test]
 fn behind_the_named_proxy_the_audit_names_the_real_client() {
-    // isis's front door connects from the node, so the peer is the same for
-    // every caller; the header it sets is the only address that says who.
+    // isis's front door connects from the node for every caller; its header
+    // says who.
     let proxy: std::net::IpAddr = "10.42.0.1".parse().unwrap();
     assert_eq!(
         client_host(Some(proxy), Some("10.100.0.12"), &[proxy]).as_deref(),
@@ -445,8 +436,8 @@ fn a_proxy_without_a_usable_header_is_still_named() {
 
 #[test]
 fn the_audit_write_cannot_refuse_the_control_action() {
-    // Silencing the microphone must not depend on a bookkeeping write. The
-    // events table is missing entirely, and the intent is still recorded.
+    // Pausing must not depend on the audit: with no events table at all, the
+    // intent is still recorded.
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         .unwrap();
@@ -461,8 +452,7 @@ fn the_audit_write_cannot_refuse_the_control_action() {
 
 // --- the routes are mounted, not merely written ------------------------------
 
-/// Through the real router, because a handler's passing unit tests say nothing
-/// about whether it is mounted.
+/// Through the real router: a handler's tests say nothing about its mounting.
 #[tokio::test]
 async fn the_capture_routes_are_reachable_through_the_real_router() {
     let dir = tempfile::tempdir().expect("tmp");
@@ -478,8 +468,7 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
         read_token: None,
         max_body_bytes: recalld::app::DEFAULT_MAX_BODY,
         trusted_proxies: Vec::new(),
-        // ⚠ Not None: without webauth the browsing plane, capture routes
-        // included, is absent rather than open.
+        // Without webauth the browsing plane, capture included, is absent.
         webauth: Some(recalld::webauth::GateState {
             cfg: std::sync::Arc::new(recalld::webauth::Config {
                 session_secret: "test-secret-not-a-real-one".into(),
@@ -505,8 +494,7 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
         let _ = axum::serve(listener, app).await;
     });
 
-    // No session cookie: the mic apps long-poll GET /api/capture with no
-    // credential, so it must stay device-exempt.
+    // No session cookie: the mic apps long-poll this without a credential.
     let (status, body) =
         crate::http::request(&addr.to_string(), "GET", "/api/capture", &[], None).await;
     assert_eq!(status, 200, "the route is mounted AND ungated: {body}");
@@ -533,8 +521,7 @@ async fn the_capture_routes_are_reachable_through_the_real_router() {
 
 #[tokio::test]
 async fn pausing_through_the_real_router_needs_no_login() {
-    // The mic apps' pause and resume buttons carry no credential by choice; a
-    // session requirement here would break every phone's pause button.
+    // The phones' pause buttons carry no credential.
     for (method, path) in [
         ("GET", "/api/capture"),
         ("POST", "/api/capture/pause"),
@@ -549,9 +536,7 @@ async fn pausing_through_the_real_router_needs_no_login() {
 
 // --- the notify, and the slice that must survive it -------------------------
 
-/// A press reaches a waiting poll in about one round trip, not a 2 s slice: the
-/// `/api/capture` writers and readers share this process, so a notify reaches
-/// them.
+/// A press reaches a waiting poll in about one round trip, not a 2 s slice.
 #[tokio::test]
 async fn a_press_wakes_a_waiting_poll_without_paying_a_slice() {
     let watcher = recalld::capture::intent_watch();
@@ -572,12 +557,12 @@ async fn a_press_wakes_a_waiting_poll_without_paying_a_slice() {
     );
 }
 
-/// ⚠ The lost wakeup: a change landing between deriving the state and starting
-/// the wait must not be missed. Subscribing before the derive closes it.
+/// A change between deriving the state and starting the wait is not missed:
+/// subscribing before the derive catches it.
 #[tokio::test]
 async fn a_change_landing_before_the_wait_starts_is_not_missed() {
-    // ⚠ A local channel: the real signal is process-global, and a neighbouring
-    // test's press would let this pass for the wrong reason.
+    // A local channel: the real one is process-global, and another test's
+    // press would let this pass for the wrong reason.
     let (tx, rx) = tokio::sync::watch::channel(0u64);
 
     // Subscribe first, then press where a real handler would be deriving state.
@@ -599,9 +584,8 @@ async fn a_change_landing_before_the_wait_starts_is_not_missed() {
     );
 }
 
-/// ⚠ The notify must not replace the slice. A pause elapsing and a CLI pause from
-/// another process have no writer that can signal, so the wait still times out
-/// and lets the caller re-derive.
+/// The notify does not replace the slice: an expiring pause and a pause from
+/// another process signal nothing, so the wait still times out.
 #[tokio::test]
 async fn a_transition_with_no_writer_still_surfaces_on_the_slice() {
     // A local channel, not `intent_watch()`: the timeout is under test, so no
