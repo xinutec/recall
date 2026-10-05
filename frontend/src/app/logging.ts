@@ -15,6 +15,7 @@ export function reportToServer(level: string, message: string, stack?: string): 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ level, message, stack, url: location.href }),
+      // dev-lint: allow-ignored-error the error report itself failed; there is nowhere left to say so
     }).catch(() => undefined);
   } catch {
     /* dropped */

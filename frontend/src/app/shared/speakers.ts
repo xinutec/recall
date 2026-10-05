@@ -13,7 +13,7 @@ export class Speakers {
   refresh(): void {
     this.api.speakers().subscribe({
       next: (r) => this.list.set(r.names),
-      // Keeps the last list: a failed refresh is not an empty roster.
+      // dev-lint: allow-ignored-error keeps the last list: a failed refresh is not an empty roster
       error: () => undefined,
     });
   }

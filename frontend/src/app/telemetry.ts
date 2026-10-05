@@ -100,6 +100,7 @@ export class Telemetry {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(batch),
+        // dev-lint: allow-ignored-error the activity trace is best-effort; a lost batch is not the user's problem
       }).catch(() => undefined);
     } catch {
       /* dropped */

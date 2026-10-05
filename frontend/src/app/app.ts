@@ -7,6 +7,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatIconModule } from '@angular/material/icon';
 import { MatMenuModule } from '@angular/material/menu';
+import { MatSnackBar } from '@angular/material/snack-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { Scaffold } from '@xinutec/ui-scaffold';
 
@@ -53,6 +54,7 @@ const CAPTURE_PLAIN_POLL_MS = 5_000;
 export class App {
   private readonly breakpoints = inject(BreakpointObserver);
   private readonly api = inject(RecallApi);
+  private readonly snack = inject(MatSnackBar);
 
   /** The Nextcloud sign-in wall. */
   protected readonly auth = inject(AuthState);
@@ -149,15 +151,18 @@ export class App {
   }
 
   protected pauseCapture(): void {
-    this.api
-      .pauseCapture()
-      .subscribe({ next: (s) => this.capture.set(s), error: () => undefined });
+    this.api.pauseCapture().subscribe({
+      next: (s) => this.capture.set(s),
+      // Still recording: a pause that silently failed is the one this must say.
+      error: () => this.snack.open('Could not pause recording', 'Dismiss', { duration: 5000 }),
+    });
   }
 
   protected resumeCapture(): void {
-    this.api
-      .resumeCapture()
-      .subscribe({ next: (s) => this.capture.set(s), error: () => undefined });
+    this.api.resumeCapture().subscribe({
+      next: (s) => this.capture.set(s),
+      error: () => this.snack.open('Could not resume recording', 'Dismiss', { duration: 5000 }),
+    });
   }
 
   /** Shown in the footer, so a stale cached tab shows its old sha. */
