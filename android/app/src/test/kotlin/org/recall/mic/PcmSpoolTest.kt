@@ -26,10 +26,8 @@ class PcmSpoolTest {
 
     @Test
     fun anOverrunDropsTheOLDESTAudioAndSaysHowMuch() {
-        // Dropping is a real loss either way, so it must be COUNTED — the phone is
-        // the only place that knows, and it reports the count in its heartbeat.
-        // Oldest-first: in a memory aid the newest speech is the one someone is
-        // most likely to come looking for.
+        // Drops are counted, since only the phone knows. Oldest first: the newest
+        // speech is the most likely to be looked for.
         val spool = PcmSpool(capacityBytes = 4)
         spool.offer(byteArrayOf(1, 2, 3, 4), 4)
         spool.offer(byteArrayOf(5, 6), 2)

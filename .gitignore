@@ -4,9 +4,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
-# No trailing slash: `.venv` is a SYMLINK into the store now (built by
-# `nix build .#dev-env --out-link .venv`), and `.venv/` matches only directories
-# — so the trailing slash left the symlink showing as an untracked file.
+# No trailing slash: `.venv` is a symlink into the store
+# (`nix build .#dev-env --out-link .venv`), and `.venv/` matches only directories.
 .venv
 *.egg-info/
 dist/
@@ -16,9 +15,7 @@ build/
 result
 result-*
 
-# rust — the cargo workspace's build output. Absent until the D1 workspace
-# landed, so 462 MB of clippy incremental caches and rustdoc search indexes
-# rode into history before anyone noticed.
+# rust
 target/
 
 # angular frontend
@@ -33,25 +30,13 @@ logs/
 *.wav
 *.flac
 *.opus
-# ...except the clips the tests may actually ship with. A public repo cannot
-# carry recordings of real people, but it must carry something, or checks that
-# read like repo-wide guarantees quietly do nothing on a fresh clone (#1433).
-# See tests/fixtures/speech/README.md.
-#
-# ⚠ These three negations are the whole exception and they are named one by one
-# on purpose. A pattern here (`!tests/fixtures/speech/*.flac`) would silently
-# adopt whatever lands in that directory next, which is exactly how household
-# audio would reach a public repo. Adding a fourth is a decision, not a tidy-up.
+# ...except the test clips, so checks run on a fresh clone (#1433; see
+# tests/fixtures/speech/README.md). Named one by one: a pattern would adopt
+# whatever lands in that directory next, including household audio.
 !tests/fixtures/speech/public-domain-en.flac
-# Synthetic speech: macOS `say` reading INVENTED lines (plants, a plumber, a
-# bakery) rendered by the committed scripts/gen-speech-fixture.sh, so they are
-# PII-free by construction — nobody's voice, nothing about this household. They
-# carry the only Dutch in the gate, and they score 0.0123 / 0.0000 WER against
-# exact references where the public-domain reading scores 0.0426, which makes
-# them the better drift instrument. Regenerating them in CI is not an option:
-# `say` is macOS-only and CI runs Ubuntu, so committing is the only way a clone
-# can run the Dutch ASR check and the Dutch VAD test. Committed 2026-09-09 on
-# the user's explicit go-ahead, the blunt no-audio rule above being theirs to waive.
+# Synthetic speech from scripts/gen-speech-fixture.sh (macOS `say`, invented
+# lines), the gate's only Dutch. Committed because `say` does not run on CI's
+# Ubuntu; the owner waived the no-audio rule for them on 2026-09-09.
 !tests/fixtures/speech/dialogue-en.flac
 !tests/fixtures/speech/dialogue-nl.flac
 *.sqlite
