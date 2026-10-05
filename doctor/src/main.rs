@@ -1,27 +1,25 @@
 //! `doctor`: the Mac's health agent (launchd, every 300s).
 //!
-//! * `--collect` is the child: it reads the archive volume and prints one JSON
-//!   object. Everything that can block indefinitely is here.
-//! * the default is the parent: it asks a child for the archive's verdicts,
-//!   gives up on it after a bound, adds launchd and the fleet's checks, prints
-//!   the lot, and with `--post` sends it to fleetwatch.
+//! `--collect` is the child: it reads the archive volume, which can block
+//! indefinitely, and prints [`archive::Collected`]. The default is the parent:
+//! it runs the child with a time limit, adds launchd's and the server's checks,
+//! prints them all and, with `--post`, sends them to fleetwatch.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use doctor::check::{Check, Verdict};
 use doctor::{agents, archive, bounded, capture, deaf, fleetwatch, live, record};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-/// The Mac's health agent: the archive's checks, launchd's and the fleet's.
+/// The Mac's health agent: the archive's checks, launchd's and the server's.
 #[derive(Parser)]
 #[command(name = "doctor")]
 struct Config {
     /// The archive root.
     #[arg(long)]
     out: PathBuf,
-    /// Read the archive and print its checks as JSON: the child half, not
-    /// meant to be run by hand.
+    /// Read the archive and print its checks as JSON (the child process).
     #[arg(long)]
     collect: bool,
     /// Send the verdicts to fleetwatch (token from `RECALL_FLEETWATCH_TOKEN`
@@ -31,30 +29,34 @@ struct Config {
     /// Fleetwatch.
     #[arg(long, default_value = fleetwatch::DEFAULT_URL)]
     url: String,
-    /// The fleet's base URL, for the live tier's own numbers (bearer from
-    /// `RECALL_SYNC_TOKEN`). Absent, the fleet checks skip rather than guess an
-    /// address.
+    /// The recall server, for the checks it measures (token from
+    /// `RECALL_SYNC_TOKEN`). Absent, they skip.
     #[arg(long)]
     fleet: Option<String>,
 }
 
-/// What `--collect` prints: the child's own timing plus its verdicts.
-#[derive(serde::Deserialize)]
-struct Collected {
-    seconds: f64,
+/// The child's answer, or none if it failed or hung.
+struct FromArchive {
     checks: Vec<Check>,
+    /// Whether and how fast the archive answered; reported either way.
+    answered: Check,
+    paused_until: Option<DateTime<Utc>>,
+}
+
+impl FromArchive {
+    fn unanswered(answered: Check) -> Self {
+        Self {
+            checks: Vec::new(),
+            answered,
+            paused_until: None,
+        }
+    }
 }
 
 /// Ask a child process for the archive's checks, and give up on it if it hangs.
-///
-/// Returns its checks plus the verdict on the asking itself, which is reported
-/// whether or not the archive answered.
-fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
+fn read_archive_checks(out: &Path) -> FromArchive {
     let Ok(program) = std::env::current_exe() else {
-        return (
-            Vec::new(),
-            archive::archive_check(None, "cannot find my own binary"),
-        );
+        return FromArchive::unanswered(archive::archive_check(None, "cannot find my own binary"));
     };
     let args = vec![
         "--out".to_owned(),
@@ -65,16 +67,16 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
     let answer = match bounded::run(&program, &args, bound, &[]) {
         Ok(answer) => answer,
         Err(err) => {
-            return (
-                Vec::new(),
-                archive::archive_check(None, &format!("cannot start the archive read: {err}")),
-            );
+            return FromArchive::unanswered(archive::archive_check(
+                None,
+                &format!("cannot start the archive read: {err}"),
+            ));
         }
     };
 
     let Some(stdout) = answer.stdout else {
-        // Timestamped: these lines are the only record that a stall happened,
-        // and the first question about them is whether they cluster in time.
+        // Timestamped: these lines are the only record of a stall, and the
+        // first question is whether stalls cluster in time.
         let state = bounded::process_state(answer.pid);
         eprintln!(
             "{} doctor: the archive did not answer in {:.0}s — abandoned pid {} in state {} ({})",
@@ -84,44 +86,45 @@ fn read_archive_checks(out: &Path) -> (Vec<Check>, Check) {
             state.label(),
             state.explain()
         );
-        // What the child said before it hung: the volume probe prints first, so
-        // this names which half was slow.
+        // The volume probe prints first, so this says which half was slow.
         for line in answer.stderr.lines().filter(|l| !l.trim().is_empty()) {
             eprintln!("  it had said: {line}");
         }
-        // Who else was on the disk at that second (#1412): waiting in `U`, or a
-        // known bulk writer in any state.
+        // Who else was on the disk then (#1412).
         for line in bounded::disk_suspects_now(20) {
             eprintln!("  on the disk then: {line}");
         }
-        return (Vec::new(), archive::archive_check(None, ""));
+        return FromArchive::unanswered(archive::archive_check(None, ""));
     };
     if answer.status != Some(0) {
         let reason = answer.stderr.trim();
         let last = reason.lines().last().unwrap_or("the archive read failed");
-        return (
-            Vec::new(),
-            archive::archive_check(Some(answer.seconds), last),
-        );
+        return FromArchive::unanswered(archive::archive_check(Some(answer.seconds), last));
     }
-    match serde_json::from_str::<Collected>(&stdout) {
-        Ok(report) => (
-            report.checks,
-            archive::archive_check(Some(report.seconds), ""),
-        ),
-        Err(_) => (
-            Vec::new(),
-            archive::archive_check(Some(answer.seconds), "unreadable archive report"),
-        ),
+    match serde_json::from_str::<archive::Collected>(&stdout) {
+        Ok(report) => FromArchive {
+            checks: report.checks,
+            answered: archive::archive_check(Some(report.seconds), ""),
+            paused_until: report
+                .paused_until
+                .as_deref()
+                .and_then(audiocore::instant::parse_utc),
+        },
+        Err(_) => FromArchive::unanswered(archive::archive_check(
+            Some(answer.seconds),
+            "unreadable archive report",
+        )),
     }
 }
 
-/// The checks whose evidence is on the fleet (the live tier's two, the deaf
-/// microphone, and the record's faults), asked of it and graded here.
-///
-/// In the parent, not the bounded child: the child survives an unresponsive
-/// volume, and behind the same bound a slow fleet would read as a stalled disk.
-fn live_checks(config: &Config, now: chrono::DateTime<Utc>, out: &Path) -> Vec<Check> {
+/// The checks whose evidence is on the server: the live tier's two, the deaf
+/// microphone and the record's faults. In the parent, since behind the child's
+/// bound a slow server would read as a stalled disk.
+fn live_checks(
+    config: &Config,
+    now: DateTime<Utc>,
+    paused_until: Option<DateTime<Utc>>,
+) -> Vec<Check> {
     let token = std::env::var("RECALL_SYNC_TOKEN").ok();
     let Some(fleet) = live::Fleet::new(config.fleet.as_deref(), token.as_deref()) else {
         let mut checks = live::unconfigured();
@@ -130,7 +133,7 @@ fn live_checks(config: &Config, now: chrono::DateTime<Utc>, out: &Path) -> Vec<C
         return checks;
     };
     let fetched = live::fetch(&fleet, now, capture::live_lag_window());
-    let mut checks = live::live_checks(&fetched, now, agents::paused_until(out));
+    let mut checks = live::live_checks(&fetched, now, paused_until);
     checks.push(deaf::deaf_check_from(&deaf::fetch(
         &fleet,
         now,
@@ -140,9 +143,8 @@ fn live_checks(config: &Config, now: chrono::DateTime<Utc>, out: &Path) -> Vec<C
     checks
 }
 
-/// Send the verdicts on. An unreachable monitor is not a broken recording: say
-/// so and carry on, since the missing report shows as staleness at the other
-/// end.
+/// An unreachable fleetwatch is logged, not failed: it shows the missing report
+/// as stale.
 fn report_to_fleetwatch(checks: &[Check], url: &str, home: &Path) {
     let from_env = std::env::var("RECALL_FLEETWATCH_TOKEN").ok();
     let Some(token) = fleetwatch::read_token(home, from_env.as_deref()) else {
@@ -168,36 +170,37 @@ fn main() {
     let now = Utc::now();
 
     if config.collect {
-        // The child times itself, so the figure excludes process startup.
         let started = Instant::now();
-        // ⚠ Probe the disk and print it before anything slow: if the reads
-        // below hang, the parent never sees the checks but does see stderr.
+        // Printed before anything slow: if the reads below hang, the parent
+        // still sees stderr.
         let volume = archive::volume_check(&config.out);
         eprintln!("doctor: {} — {}", volume.label, volume.observed);
-        let checks = match archive::archive_checks(&config.out, now, volume) {
+        let paused_until = agents::paused_until(&config.out);
+        let checks = match archive::archive_checks(&config.out, now, volume, paused_until) {
             Ok(checks) => checks,
             Err(err) => {
-                // The parent turns stderr plus a non-zero exit into the archive
-                // check's `detail`.
+                // The parent reports the last stderr line.
                 eprintln!("{err}");
                 std::process::exit(1);
             }
         };
+        let collected = archive::Collected {
+            seconds: started.elapsed().as_secs_f64(),
+            checks,
+            paused_until: paused_until.map(audiocore::instant::python_isoformat_utc),
+        };
         println!(
             "{}",
-            serde_json::json!({
-                "seconds": started.elapsed().as_secs_f64(),
-                "checks": checks,
-            })
+            serde_json::to_string(&collected).expect("plain data serialises")
         );
         return;
     }
 
-    let (archive_checks, reachable) = read_archive_checks(&config.out);
-    let mut checks = vec![reachable];
-    checks.extend(archive_checks);
+    let archive = read_archive_checks(&config.out);
+    let mut checks = vec![archive.answered];
+    checks.extend(archive.checks);
     checks.extend(capture::agent_checks(&agents::agent_health(&home())));
-    checks.extend(live_checks(&config, now, &config.out));
+    checks.extend(live_checks(&config, now, archive.paused_until));
 
     for check in &checks {
         println!(

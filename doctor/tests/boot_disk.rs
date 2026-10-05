@@ -1,7 +1,33 @@
-//! What the reporting process may read: launchd and the pause file. Nothing
-//! here touches the archive volume; that is the boundary the crate is built around.
+//! launchd and the pause file. The pause file is on the archive volume, so the
+//! reporting process learns it from the child.
 
 use doctor::agents::{PAUSE_FILE, agent_health, paused_until};
+
+#[test]
+fn the_child_reports_the_pause_so_the_parent_need_not_read_the_volume() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(PAUSE_FILE),
+        "2026-09-08T19:11:22.164504+00:00\n",
+    )
+    .unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_doctor"))
+        .arg("--out")
+        .arg(dir.path())
+        .arg("--collect")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let collected: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        collected["paused_until"], "2026-09-08T19:11:22.164504+00:00",
+        "{collected}"
+    );
+}
 
 #[test]
 fn no_pause_file_is_not_paused() {
@@ -22,8 +48,7 @@ fn a_pause_file_reads_back_as_its_instant() {
 
 #[test]
 fn a_naive_pause_timestamp_is_read_as_utc_rather_than_refused() {
-    // This gates every capture agent's main loop. Refusing to parse would read
-    // as not paused, overriding the user's control over their own recording.
+    // Refusing it would read as not paused.
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join(PAUSE_FILE), "2026-09-08T19:11:22").unwrap();
     assert_eq!(paused_until(dir.path()).unwrap().timestamp(), 1_788_894_682);
@@ -64,8 +89,7 @@ fn only_recall_plists_count_as_installed_agents() {
 
 #[test]
 fn a_machine_with_no_launchagents_directory_reports_none() {
-    // The fleet's Linux container has no launchctl and no plists; "no agents"
-    // is the right answer there, not a crash.
+    // As in a Linux container.
     let home = tempfile::tempdir().unwrap();
     assert!(agent_health(home.path()).is_empty());
 }

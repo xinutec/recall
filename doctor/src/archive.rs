@@ -262,7 +262,18 @@ fn speech_loss(
     losses
 }
 
-/// Everything the child process reports. The `--collect` half of the doctor.
+/// What `--collect` prints.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct Collected {
+    /// How long the child took, excluding its startup.
+    pub seconds: f64,
+    pub checks: Vec<Check>,
+    /// The pause file's instant, for the parent's checks.
+    pub paused_until: Option<String>,
+}
+
+/// Every check the child reports. `volume` is probed by the caller and printed
+/// first, so a child that hangs here has still said whether the disk answered.
 ///
 /// # Errors
 /// If the capture log exists and cannot be read.
@@ -270,16 +281,13 @@ pub fn archive_checks(
     root: &Path,
     now: DateTime<Utc>,
     volume: Check,
+    paused_until: Option<DateTime<Utc>>,
 ) -> std::io::Result<Vec<Check>> {
-    // The volume probe is taken by the caller and printed before the reads
-    // below, so a child that hangs here has still said whether the disk
-    // answered.
     let log = capture_log::read(root)?;
     // Registered recorders, not whatever directories exist.
     let sources = registered_devices(&log);
     let losses = speech_loss(root, &log, &sources, now);
 
-    let paused_until = crate::agents::paused_until(root);
     let recorders: Vec<Recorder> = capture::recorders_on_disk(root, &sources);
     let beat = read_beat(root);
 

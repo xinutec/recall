@@ -1,5 +1,5 @@
-//! launchd and the pause file: both on the boot disk, so the reporting process
-//! may read them.
+//! launchd's agents, and the pause file. The pause file is on the archive
+//! volume, so only the child process reads it.
 
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
@@ -10,10 +10,7 @@ const AGENT_PREFIX: &str = "org.xinutec.recall-";
 /// The pause file every capture agent self-gates on.
 pub const PAUSE_FILE: &str = "capture_paused_until";
 
-/// Recall agent labels currently loaded in launchd.
-///
-/// Empty when `launchctl` is not there — e.g. a Linux container: capture runs
-/// on the Mac, so "no agents loaded" is the right answer, not a crash.
+/// Recall agent labels loaded in launchd; empty where there is no `launchctl`.
 fn loaded_agents() -> BTreeSet<String> {
     let Ok(out) = std::process::Command::new("launchctl").arg("list").output() else {
         return BTreeSet::new();
@@ -26,7 +23,7 @@ fn loaded_agents() -> BTreeSet<String> {
         .collect()
 }
 
-/// Labels of every installed recall agent (its plist in `~/Library/LaunchAgents`).
+/// Recall agent labels with a plist in `~/Library/LaunchAgents`.
 fn installed_agents(home: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(home.join("Library").join("LaunchAgents")) else {
         return Vec::new();
@@ -43,8 +40,8 @@ fn installed_agents(home: &Path) -> Vec<String> {
     labels
 }
 
-/// Every installed agent and whether launchd has it loaded. Self-gating means
-/// agents stay loaded even while paused, so installed-but-not-loaded is a fault.
+/// Every installed agent and whether it is loaded. Agents stay loaded while
+/// paused, so installed but not loaded is a fault.
 pub fn agent_health(home: &Path) -> Vec<(String, bool)> {
     let loaded = loaded_agents();
     installed_agents(home)
@@ -56,10 +53,8 @@ pub fn agent_health(home: &Path) -> Vec<(String, bool)> {
         .collect()
 }
 
-/// The recorded resume-by time, or `None` if not paused.
-///
-/// A hand-written naive timestamp is read as UTC rather than refused: refusing
-/// would read as "not paused", overriding the household's pause.
+/// When capture resumes, or `None` if not paused. A hand-written timestamp
+/// without an offset is read as UTC: refusing it would read as not paused.
 pub fn paused_until(root: &Path) -> Option<DateTime<Utc>> {
     let text = std::fs::read_to_string(root.join(PAUSE_FILE)).ok()?;
     audiocore::instant::parse_utc(text.trim())
