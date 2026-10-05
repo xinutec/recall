@@ -1,10 +1,6 @@
-//! `recall-cli` against the real recalld router, with the SSO gate on in every
-//! test: `recalld::webauth` refuses the browsing routes without a session, and a
-//! suite booted with `webauth: None` would pass while the shipped CLI could not
-//! read a turn.
-//!
-//! Everything is real except the archive's contents, which are inserted
-//! straight into a temporary database.
+//! `recall-cli` against the real recalld router, sign-in gate on: with it off,
+//! these would pass while the shipped CLI could not read a turn. Only the
+//! archive's contents are fake, inserted into a temporary database.
 
 use cli::api::Api;
 use cli::render;
@@ -15,7 +11,7 @@ use std::sync::Arc;
 
 const SECRET: &str = "test-session-secret";
 
-/// A recalld serving `root`, with the browsing gate up. Returns its base URL.
+/// The base URL of a gated recalld serving `root`.
 fn serve(root: &Path) -> String {
     let webauth = recalld::webauth::GateState {
         cfg: Arc::new(recalld::webauth::Config {
@@ -55,7 +51,7 @@ fn serve(root: &Path) -> String {
     format!("http://{}", rx.recv().expect("addr"))
 }
 
-/// A cookie the gate will accept, minted the way the OAuth callback mints one.
+/// A cookie minted as the OAuth callback mints one.
 fn session() -> String {
     recalld::webauth::make_session_cookie(
         SECRET,
@@ -100,8 +96,6 @@ fn archive(root: &Path, text: &str, speaker: Option<&str>, guess: Option<(&str, 
     id
 }
 
-/// Without a session the archive is refused, and the message says what to do
-/// rather than showing a status code.
 #[test]
 fn without_a_session_the_archive_is_refused_and_the_message_says_what_to_do() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -141,8 +135,7 @@ fn a_search_with_a_session_finds_the_turn_and_renders_it() {
     assert!(line.contains("(usb)"), "the source is shown: {line}");
 }
 
-/// The attribution rule against a real row: recalld must put the guess and its
-/// score where the rendering looks for them.
+/// recalld puts the guess and its score where the rendering looks.
 #[test]
 fn an_unconfirmed_guess_arrives_with_its_score_and_is_shown_as_one() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -156,7 +149,6 @@ fn an_unconfirmed_guess_arrives_with_its_score_and_is_shown_as_one() {
 
     let hits = api.search("marmalade", 10).expect("search");
     assert_eq!(render::attribution(&hits[0]), "Oskar ~76%");
-    // The read-through transcript must not assert it.
     assert_eq!(render::who(&hits[0]), "SPEAKER_01");
 }
 
@@ -212,8 +204,7 @@ fn the_review_queue_surfaces_a_low_confidence_turn() {
     assert_eq!(turns.len(), 1);
 }
 
-/// The correction reaches the corpus, and the old id then answers with the new
-/// turn, which is what `render::details`'s supersession note relies on.
+/// `render::details`'s supersession note relies on this.
 #[test]
 fn a_correction_is_applied_and_the_old_id_then_answers_with_the_new_turn() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -240,8 +231,6 @@ fn a_correction_is_applied_and_the_old_id_then_answers_with_the_new_turn() {
     );
 }
 
-/// Nobody spoke: the turn leaves the archive's reads, a second go is refused
-/// rather than filing a second pair, and undo brings it back.
 #[test]
 fn nobody_spoke_hides_the_turn_once_and_undo_shows_it_again() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -268,8 +257,6 @@ fn nobody_spoke_hides_the_turn_once_and_undo_shows_it_again() {
     );
 }
 
-/// `sources` and `capture` are device-exempt, so `recall-cli capture` can check
-/// the pause without a session.
 #[test]
 fn capture_and_sources_answer_without_a_session() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -280,8 +267,7 @@ fn capture_and_sources_answer_without_a_session() {
     api.sources().expect("sources answers unauthenticated");
 }
 
-/// The query string is hand-encoded (`api::urlencode`), so the real router must
-/// parse it. Spaces and multi-byte characters are routine in names and phrases.
+/// The query string is encoded by hand (`api::urlencode`).
 #[test]
 fn a_multi_word_search_term_survives_the_query_string() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -302,8 +288,7 @@ fn a_multi_byte_search_term_survives_the_query_string() {
     assert_eq!(hits.len(), 1, "an accented term reached the server intact");
 }
 
-/// Make `usb` an upload source with a second turn, so the session surface has
-/// something to list: `/api/sessions` lists uploads only.
+/// Make `usb` an upload, which `/api/sessions` lists.
 fn as_upload_session(root: &std::path::Path, title: &str) {
     let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("db");
     conn.execute(
@@ -340,8 +325,6 @@ fn an_uploaded_session_is_listed_with_its_turn_count() {
     assert!(rendered.contains("1 turns"), "got: {rendered}");
 }
 
-/// Only confirmed names reach the speaker list: on out-of-domain audio a
-/// visitor can score high against an enrolled voiceprint.
 #[test]
 fn a_session_does_not_list_a_guessed_speaker_as_a_participant() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -386,8 +369,6 @@ fn a_session_transcript_reads_through_with_its_speaker() {
     );
 }
 
-/// The day view, through the real folding route: one turn is one conversation,
-/// and the card is headed by it.
 #[test]
 fn a_days_conversations_come_back_folded_and_numbered() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -413,8 +394,7 @@ fn a_days_conversations_come_back_folded_and_numbered() {
     assert!(read.contains("marmalade on the windowsill"), "got:\n{read}");
 }
 
-/// A malformed window is the route's 400, not a dropped filter that would serve
-/// the whole archive as one page.
+/// Ignoring it would serve the newest page of the whole archive.
 #[test]
 fn a_malformed_day_window_is_refused_rather_than_ignored() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -427,7 +407,7 @@ fn a_malformed_day_window_is_refused_rather_than_ignored() {
     assert!(err.to_string().contains("400"), "got: {err}");
 }
 
-/// Add a second turn to the same source, so a substring can be ambiguous.
+/// A second turn on the same clip, ten seconds later.
 fn second_turn(root: &std::path::Path, text: &str) -> i64 {
     let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("db");
     conn.execute(
@@ -449,7 +429,6 @@ fn second_turn(root: &std::path::Path, text: &str) -> i64 {
     id
 }
 
-/// Correcting by the words on screen rather than an id.
 #[test]
 fn a_correction_can_be_made_by_a_unique_substring_rather_than_an_id() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -473,8 +452,6 @@ fn a_correction_can_be_made_by_a_unique_substring_rather_than_an_id() {
     );
 }
 
-/// A substring in two turns must not pick one: correcting the wrong turn would
-/// undetectably write words onto somebody else's sentence.
 #[test]
 fn a_substring_in_two_turns_is_ambiguous_and_must_not_be_guessed_at() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -490,8 +467,7 @@ fn a_substring_in_two_turns_is_ambiguous_and_must_not_be_guessed_at() {
     assert_eq!(ambiguous.len(), 2, "both turns hold it — the CLI must skip");
 }
 
-/// `source_turns` must return turns that lost a moment comparison, not only the
-/// spine, or a correction reports them as absent.
+/// Including turns another mic's version won.
 #[test]
 fn every_turn_of_a_source_is_visible_to_a_correction_not_only_the_spine() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -511,7 +487,7 @@ fn every_turn_of_a_source_is_visible_to_a_correction_not_only_the_spine() {
     );
 }
 
-/// The clip, finished, in the ingest plane, so it can be asked for again.
+/// A clip with a finished transcription job.
 fn transcribed_clip(root: &Path, name: &str) {
     let ingest = recalld::store::open(root).expect("ingest");
     ingest

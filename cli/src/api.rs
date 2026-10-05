@@ -1,18 +1,12 @@
-//! The browsing API, as a person at a terminal sees it.
+//! The browsing API's client.
 //!
-//! This reads the system of record, the fleet, never a local copy that could
-//! diverge from it.
-//!
-//! Every type here mirrors `recalld::reads` field for field. They are separate
-//! declarations on purpose: a client compiled against the server's structs
-//! cannot detect when the server changes its HTTP contract.
+//! The types mirror `recalld::reads` field for field, declared separately: a
+//! client compiled against the server's own structs could not notice the HTTP
+//! contract changing.
 
 use serde::Deserialize;
 
-/// One turn, in the shape `recalld::reads::TranscriptOut` serialises.
-///
-/// There is no `provenance` or `superseded_by`: the route sends `tier` as the
-/// summary instead (see [`crate::render::details`]).
+/// One turn, as `recalld::reads::TranscriptOut` serialises it.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Turn {
@@ -61,22 +55,17 @@ pub struct Sources {
     pub items: Vec<Source>,
 }
 
-/// What `/api/capture` says about the recorders, verbatim.
-///
-/// Nothing in this crate writes the pause; this type only reports it.
-// Four bools, because the route sends four: `running` is what the recorders
-// are doing, `desired_running` what they were asked to do, and `settled`
-// whether those agree. What a combination means is the server's call.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "four bools because the route sends four (above)"
-)]
+/// What `/api/capture` says about the recorders. Read-only: this crate never
+/// pauses capture.
+#[expect(clippy::struct_excessive_bools, reason = "the route sends these four")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capture {
     pub running: bool,
     pub paused_until: Option<String>,
+    /// What the recorders were asked to do.
     pub desired_running: bool,
+    /// Whether `running` agrees with `desired_running`.
     pub settled: bool,
     pub mic_reachable: bool,
 }
@@ -89,8 +78,8 @@ pub struct Session {
     pub start: String,
     pub end: String,
     pub turn_count: i64,
-    /// Human-confirmed names only. The route excludes voiceprint guesses: on
-    /// unfamiliar audio a stranger can score 0.95 against an enrolled voice.
+    /// Confirmed names only: on unfamiliar audio a stranger can score 0.95
+    /// against an enrolled voice.
     pub speakers: Vec<String>,
 }
 
@@ -99,7 +88,7 @@ pub struct Sessions {
     pub items: Vec<Session>,
 }
 
-/// One speaker's run of consecutive turns, merged, as the export sends it.
+/// One speaker's consecutive turns, merged.
 #[derive(Debug, Deserialize)]
 pub struct Bubble {
     pub start: String,
@@ -120,9 +109,8 @@ pub struct Export {
 pub struct Moment {
     pub start: String,
     pub end: String,
-    /// The best mic's version — what a reader should read.
+    /// The best mic's version.
     pub primary: Turn,
-    /// The other mics' overlapping versions, for comparison.
     pub alternates: Vec<Turn>,
     pub sources: Vec<String>,
 }
@@ -154,9 +142,9 @@ pub struct NewId {
 
 #[derive(Debug)]
 pub enum Error {
-    /// The fleet could not be reached, or answered a status.
+    /// Unreachable, or an error status.
     Http(String),
-    /// It answered, and the body was not what this understands.
+    /// A body this cannot read.
     Body(String),
 }
 
@@ -171,11 +159,10 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Clips per re-transcription request: the server's limit
-/// (`recalld::retranscribe::MAX_PER_REQUEST`, which a test holds this to).
+/// Clips per re-transcription request: `recalld::retranscribe::MAX_PER_REQUEST`,
+/// held equal by a test.
 pub const RETRANSCRIBE_BATCH: usize = 1000;
 
-/// What a re-transcription request did with each clip it named.
 #[derive(Debug, Deserialize)]
 pub struct Requested {
     pub queued: Vec<String>,
@@ -190,14 +177,10 @@ pub struct Candidate {
     pub looped_speech_s: f64,
 }
 
-/// Where a saved browsing session lives, under `$HOME`.
-///
-/// ⚠ The CLI needs a credential, not an exemption: adding the transcript
-/// routes to `recalld::webauth`'s `DEVICE_EXEMPT` would open the archive to
-/// every device token on the network.
+/// The saved browsing session, under `$HOME`. The transcript routes need one;
+/// exempting them for device tokens would open the archive to every device.
 pub const SESSION_FILE: &str = ".config/recall/session";
 
-/// What to tell someone whose request was refused for want of a session.
 pub const HOW_TO_SIGN_IN: &str = concat!(
     "no session — sign in at https://recall.xinutec.org/ in a browser, then save the
 ",
@@ -212,12 +195,10 @@ pub const HOW_TO_SIGN_IN: &str = concat!(
     "or pass it as RECALL_SESSION in the environment. It is valid for seven days."
 );
 
-/// A reachable recall API, and the session it presents.
 pub struct Api {
     base: String,
-    /// The `recall_session` cookie, if any. `None` still works for the
-    /// device-exempt routes (`sources`, `capture`), so a missing session is not
-    /// an error until a request is refused.
+    /// The `recall_session` cookie. `None` still works for `sources` and
+    /// `capture`, so its absence is an error only when a request is refused.
     session: Option<String>,
     agent: ureq::Agent,
 }
@@ -232,10 +213,8 @@ impl Api {
         }
     }
 
-    /// The session from the environment, else the saved file. Absent is fine.
-    ///
-    /// Whitespace is trimmed: a shell redirect usually leaves a newline, and a
-    /// cookie with one is rejected as a bad signature.
+    /// `RECALL_SESSION`, else [`SESSION_FILE`]. Trimmed: a trailing newline
+    /// fails the signature.
     #[must_use]
     pub fn saved_session() -> Option<String> {
         if let Ok(from_env) = std::env::var("RECALL_SESSION")
@@ -256,8 +235,7 @@ impl Api {
         }
     }
 
-    /// Turn a transport failure into one that says what to do about it. A 401
-    /// means no session or an invalid one, so it carries sign-in instructions.
+    /// A transport error; a 401 carries sign-in instructions.
     fn refused(&self, err: &ureq::Error) -> Error {
         if matches!(err, ureq::Error::Status(401, _)) {
             let why = if self.session.is_some() {
@@ -278,10 +256,10 @@ impl Api {
         serde_json::from_reader(response.into_reader()).map_err(|e| Error::Body(e.to_string()))
     }
 
-    /// Full-text search across the archive.
+    /// Full-text search.
     ///
     /// # Errors
-    /// If the fleet is unreachable or answers something unreadable.
+    /// If recalld is unreachable or answers something unreadable.
     pub fn search(&self, query: &str, limit: i64) -> Result<Vec<Turn>, Error> {
         let items: Items =
             self.get(&format!("/api/search?q={}&limit={limit}", urlencode(query)))?;
@@ -291,7 +269,7 @@ impl Api {
     /// Specific turns by id.
     ///
     /// # Errors
-    /// As [`Api::search`]. A non-integer id is refused by the route, not here.
+    /// As [`Api::search`].
     pub fn transcripts(&self, ids: &[i64]) -> Result<Vec<Turn>, Error> {
         let joined = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
         let items: Items = self.get(&format!("/api/transcripts?ids={joined}"))?;
@@ -311,7 +289,7 @@ impl Api {
         self.get(&path)
     }
 
-    /// The turns the model was least sure of — what a human should look at.
+    /// The turns the model was least sure of.
     ///
     /// # Errors
     /// As [`Api::search`].
@@ -320,7 +298,7 @@ impl Api {
         Ok(items.items)
     }
 
-    /// Every recorder the fleet knows.
+    /// Every recorder.
     ///
     /// # Errors
     /// As [`Api::search`].
@@ -354,12 +332,10 @@ impl Api {
         self.get(&format!("/api/sessions/{}/transcript", urlencode(source)))
     }
 
-    /// Every turn one source has, with its id — what a correction needs.
+    /// Every turn one source has, with ids for correcting.
     ///
-    /// Both `primary` and `alternates` are flattened. The split ranks the
-    /// microphones that heard one moment, so for one source this does not
-    /// double-count, and `primary` alone would hide turns that lost to another
-    /// mic.
+    /// Alternates included: filtered to one source there is no double
+    /// counting, and `primary` alone would drop turns another mic won.
     ///
     /// # Errors
     /// As [`Api::search`].
@@ -379,16 +355,12 @@ impl Api {
         Ok(turns)
     }
 
-    /// A window of the always-on stream, split at the silences and folded per
-    /// moment.
-    ///
-    /// `after` and `before` are required here, although the route accepts
-    /// neither: without a window this would be the newest page of the whole
-    /// archive, which `timeline` already answers.
+    /// A window of the stream, split at silences longer than `gap` seconds.
+    /// The route's `after` and `before` are optional; without them this is
+    /// `timeline`.
     ///
     /// # Errors
-    /// As [`Api::search`]. A malformed instant is a 400 from the route, which
-    /// arrives as [`Error::Http`].
+    /// As [`Api::search`].
     pub fn conversations(
         &self,
         after: &str,
@@ -403,15 +375,11 @@ impl Api {
         ))
     }
 
-    /// Replace a turn's text with a person's own words.
-    ///
-    /// One of the two writes in this crate. It reaches the corrections corpus, the only
-    /// part of the archive not re-derivable from audio; `recall-cli correct`
-    /// requires `--apply` and prints the change first.
+    /// Replace a turn's text with a person's own words, which no rerun of the
+    /// models can recover.
     ///
     /// # Errors
-    /// As [`Api::search`]. A 400 arrives as [`Error::Http`] carrying the route's
-    /// own explanation of what was wrong.
+    /// As [`Api::search`]; a 400 carries the route's reason.
     pub fn correct(&self, id: i64, text: &str) -> Result<i64, Error> {
         let response = self
             .signed(self.agent.post(&format!("{}/api/correct", self.base)))
@@ -423,7 +391,6 @@ impl Api {
     }
 
     /// Say nobody spoke: the turn is hidden and its words filed as invented.
-    /// The other write; `recall-cli no-speech` requires `--apply`.
     ///
     /// # Errors
     /// As [`Api::correct`].
@@ -434,8 +401,8 @@ impl Api {
         Ok(())
     }
 
-    /// Transcribe clips again, by filename: back in Whisper's queue; when the
-    /// new words land their machine lines are set aside and a person's stay.
+    /// Queue clips for transcription again. When the new words land, the
+    /// machine lines are set aside and a person's stay.
     ///
     /// # Errors
     /// As [`Api::correct`]; more than a batch is a 400.
@@ -487,8 +454,7 @@ impl Api {
     }
 }
 
-/// Percent-encode a query-string value: everything but RFC 3986 unreserved
-/// characters is escaped. Hand-written to avoid a dependency for one function.
+/// Percent-encode all but RFC 3986 unreserved characters.
 fn urlencode(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for byte in raw.as_bytes() {

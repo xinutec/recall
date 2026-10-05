@@ -1,13 +1,6 @@
-# doctor — "is recall working?", in Rust.
-#
-# The Mac's health agent: are the microphones still writing audio, is the
-# worker turning, is the archive readable at all, are the launchd agents
-# loaded — and the verdicts posted to fleetwatch, where the rest of the
-# fleet's health lives.
-#
-# Its own crate rather than a subcommand of audiod, because it spans both
-# planes: audiod's lib doc names the doctor as an outside consumer of the
-# filesystem contract, and this reads the meaning plane (recall.sqlite) too.
+# doctor: is recall working? The Mac's health agent; posts its verdicts to
+# fleetwatch. Its own crate, not part of audiod, because it reads the meaning
+# plane too.
 [package]
 name = "doctor"
 version = "0.1.0"
@@ -18,15 +11,13 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-# The fleet baseline (docs/standards.md §7; life is the reference table).
-# `pedantic` does not cover these — they live in clippy's `restriction` group —
-# so five recall crates denied none of them. Zero occurrences today, which is
-# what makes this a ratchet rather than a cleanup.
+# The fleet baseline (dev-lint's docs/standards.md §7), from clippy's
+# `restriction` group.
 dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
-# Every cast here is a duration in minutes or seconds on its way into a
-# human-readable string or a fleetwatch `value`. None is near a precision limit.
+# Every cast is a duration in minutes or seconds headed for a message or a
+# fleetwatch `value`, far from any precision limit.
 cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
@@ -36,22 +27,18 @@ must_use_candidate = "allow"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-# ⚠ For one reason only: the text rules that judge whether a hidden turn is
-# worth restoring must be the ones recalld wrote it by, and a copy here drifted.
-# audiocore, not recalld, which would pull a web server into an agent that
-# reads files.
+# Instants, filenames and the capture log as the rest of recall reads them.
+# Not recalld, which would pull a web server into an agent that reads files.
 audiocore = { path = "../audiocore" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# ⚠ TLS on here only: the workspace's other ureq users talk plain HTTP inside
-# WireGuard, but fleetwatch is public https. rustls, not native TLS, which needs
-# an openssl the deploy image lacks.
+# TLS here only: fleetwatch is public https, while the other crates talk plain
+# HTTP inside WireGuard. ureq's `tls` is rustls, so no openssl is needed.
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 
 [dev-dependencies]
 tempfile = "3"
-# Ageing a segment file is how the delivery backlog is exercised at all: the
-# check grades by mtime, so a test that cannot set one tests nothing.
+# The delivery check grades segments by mtime; tests age them with this.
 filetime = "0.2"

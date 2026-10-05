@@ -1,10 +1,5 @@
-//! The display rules, exercised through the crate's public surface.
-//!
-//! A search hit shows an unconfirmed speaker guess; a read-through transcript
-//! must not assert it. The paired tests below pin both sides of that.
-//!
-//! The private helpers (`clarity`, `who_detail`) are tested through
-//! [`cli::render::details`], which pins what a person reads.
+//! The display rules. The private helpers are tested through
+//! [`cli::render::details`].
 
 use cli::api::Turn;
 use cli::render::{attribution, details, hit, transcript, who};
@@ -41,7 +36,6 @@ fn a_confirmed_name_wins_and_carries_no_score() {
     assert_eq!(who(&t), "Oskar");
 }
 
-/// Search shows an unconfirmed guess with its strength; it is the only signal most hits have.
 #[test]
 fn a_search_hit_shows_an_unconfirmed_guess_with_its_strength() {
     let t = Turn {
@@ -52,7 +46,6 @@ fn a_search_hit_shows_an_unconfirmed_guess_with_its_strength() {
     assert_eq!(attribution(&t), "Oskar ~76%");
 }
 
-/// A read-through transcript must not assert the same unconfirmed name.
 #[test]
 fn a_transcript_never_asserts_an_unconfirmed_guess() {
     let t = Turn {
@@ -82,8 +75,6 @@ fn with_neither_a_name_nor_a_voice_it_is_unknown() {
     assert_eq!(who(&t), "unknown");
 }
 
-/// A `SPEAKER_*` in the label column is diarization's placeholder, not a person,
-/// and the diagnostic dump must not report it as a confirmed name.
 #[test]
 fn a_confirmed_speaker_placeholder_is_not_reported_as_confirmed() {
     let t = Turn {
@@ -112,8 +103,6 @@ fn the_audibility_bands_are_the_labelling_uis() {
     }
 }
 
-/// `/api/transcripts` answers with the current turn, so a dump asked about a
-/// superseded id must say so rather than print new text under the old number.
 #[test]
 fn a_dump_says_when_the_id_that_answered_is_not_the_one_asked_for() {
     let out = details(&[3], &[turn()]);

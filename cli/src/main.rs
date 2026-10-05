@@ -6,22 +6,20 @@ use clap::{ArgGroup, Parser, Subcommand};
 use cli::api::{Api, Error};
 use cli::render;
 
-/// The fleet: the system of record, and the only thing this talks to.
 const DEFAULT_API: &str = "https://recall.xinutec.org";
 const DEFAULT_LIMIT: i64 = 100;
-/// A conversation breaks after a silence longer than this. Matches
-/// `recalld::conversations::DEFAULT_GAP_SECONDS`, but sent explicitly.
+/// A conversation breaks after a silence longer than this, in seconds. Sent
+/// explicitly; recalld's default is the same.
 const DEFAULT_GAP: f64 = 300.0;
 
-/// Read and correct the recall archive, at the system of record.
+/// Read and correct the recall archive.
 ///
-/// There is no option to read a local database: a second answer nobody can
-/// tell from the first is what this replaced. Reading transcripts needs a
-/// browsing session; `capture` and `sources` do not.
+/// Reading transcripts needs a browsing session; `capture` and `sources` do
+/// not.
 #[derive(Parser)]
 #[command(name = "recall-cli", after_help = cli::api::HOW_TO_SIGN_IN)]
 struct Cli {
-    /// The system of record [default: `RECALL_API`, else the fleet].
+    /// The recall server [default: `RECALL_API`, else recall.xinutec.org].
     #[arg(long, value_name = "URL")]
     api: Option<String>,
     #[command(subcommand)]
@@ -66,7 +64,7 @@ enum Command {
         #[command(flatten)]
         limit: Limit,
     },
-    /// Every recorder the fleet knows.
+    /// Every recorder.
     Sources,
     /// Whether the recorders are running.
     Capture,
@@ -97,8 +95,8 @@ enum Command {
     #[command(group(ArgGroup::new("clips_from").args(["clips", "from", "candidates"]).required(true)))]
     Retranscribe {
         clips: Vec<String>,
-        /// The clips, one per line (the first column, so `--candidates`
-        /// output reads as it is).
+        /// The clips, one per line; only the first column is read, so
+        /// `--candidates` output works as it is.
         #[arg(long, value_name = "LIST")]
         from: Option<PathBuf>,
         /// Take a retranscription back.
@@ -150,7 +148,7 @@ fn fix(raw: &str) -> Result<(String, String), String> {
         .ok_or_else(|| format!("OLD=>NEW, not {raw:?}"))
 }
 
-/// `Ok(false)` means nothing matched, which exits 1 so scripts can branch on it.
+/// `Ok(false)`: nothing matched, and the exit status is 1.
 fn run(api: &Api, command: Command) -> Result<bool, Error> {
     match command {
         Command::Search { query, limit } => search(api, &query.join(" "), limit.n),
@@ -250,9 +248,7 @@ fn transcript(api: &Api, source: &str) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// A day of the always-on stream: list its conversations, or read one.
-///
-/// The window is the local day, not the UTC one (see [`cli::day`]).
+/// A local day's conversations, or one of them.
 fn day(api: &Api, date: &str, which: Option<Conv>, limit: i64) -> Result<bool, Error> {
     let Some((after, before)) = cli::day::bounds(date) else {
         eprintln!("day must be YYYY-MM-DD, 'today' or 'yesterday', not {date:?}");
@@ -306,8 +302,6 @@ fn sources(api: &Api) -> Result<bool, Error> {
     Ok(!sources.is_empty())
 }
 
-/// Read-only: what the recorders are doing, to check before anything that
-/// could pause them.
 fn capture(api: &Api) -> Result<bool, Error> {
     let capture = api.capture()?;
     println!(
@@ -327,18 +321,11 @@ fn capture(api: &Api) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// ⚠ A write. It reaches the corrections corpus, the only part of the
-/// archive not re-derivable from audio, so it is a dry run unless `--apply` is
-/// given, and the change is printed either way.
-///
-/// Two forms:
+/// Prints the change; writes it only with `--apply`. Two forms, which clap
+/// keeps apart:
 ///
 ///     correct <id> "<the whole corrected line>"
 ///     correct --session <id> --fix "OLD=>NEW" [--fix ...]
-///
-/// The second corrects by the visible words, without looking up an id.
-/// By id and text, or by `OLD=>NEW` fixes within a session; clap refuses a
-/// mix, which would mean guessing which the caller meant.
 fn correct(
     api: &Api,
     by_id: Option<(i64, String)>,
@@ -370,7 +357,6 @@ fn correct_by_id(api: &Api, id: i64, text: &str, apply: bool) -> Result<bool, Er
     Ok(true)
 }
 
-/// Clips whose speech was lost under repetition loops, most lost first.
 fn retranscribe_candidates(api: &Api, min: f64) -> Result<bool, Error> {
     let found = api.retranscribe_candidates(min)?;
     let total: f64 = found.iter().map(|c| c.looped_speech_s).sum();
@@ -385,7 +371,6 @@ fn retranscribe_candidates(api: &Api, min: f64) -> Result<bool, Error> {
     Ok(!found.is_empty())
 }
 
-/// Transcribe clips again: named, or one per line in `--from LIST`.
 fn retranscribe(
     api: &Api,
     mut clips: Vec<String>,
@@ -398,7 +383,6 @@ fn retranscribe(
             eprintln!("cannot read {}", list.display());
             std::process::exit(2)
         };
-        // The first column: `--candidates` prints the seconds beside each name.
         clips.extend(
             text.lines()
                 .filter_map(|l| l.split_whitespace().next())
@@ -438,11 +422,10 @@ fn retranscribe(
     Ok(skipped.is_empty())
 }
 
-/// ⚠ The other write, gated like `correct`: the turn is hidden and its words
-/// filed as the model's invention.
+/// Gated by `--apply` like `correct`.
 fn no_speech(api: &Api, id: i64, undo: bool, apply: bool) -> Result<bool, Error> {
     if undo {
-        // A hidden turn is not in the reads, so there is nothing to show first.
+        // A hidden turn is not readable, so there is no change to print.
         if apply {
             api.undo_no_speech(id)?;
             println!("#{id} shown again");
@@ -467,8 +450,8 @@ fn no_speech(api: &Api, id: i64, undo: bool, apply: bool) -> Result<bool, Error>
     Ok(true)
 }
 
-/// A substring matching more than one turn is skipped, not guessed at: a
-/// correction on the wrong turn cannot be detected later.
+/// A substring matching other than exactly one turn is skipped: a correction
+/// on the wrong turn would go unnoticed.
 fn correct_by_substring(
     api: &Api,
     session: &str,

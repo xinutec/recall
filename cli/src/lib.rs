@@ -1,10 +1,6 @@
-//! `recall-cli`: the archive from a terminal.
-//!
-//! Every command asks the fleet, the system of record, never a local database
-//! (see [`api`]).
-//!
-//! [`render`] holds the display rules and is pure, so they are tested without a
-//! fleet to ask.
+//! `recall-cli`: the archive from a terminal. Every command asks recalld; none
+//! reads a local database. [`render`] is pure, so the display rules are tested
+//! without a server.
 
 pub mod api;
 pub mod day;
