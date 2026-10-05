@@ -73,6 +73,8 @@ pub struct Report {
     /// Over the `Speakers` class: each differing line, as
     /// "today's kind -> render's kind" (person, guess, cluster, none).
     pub speaker_changes: BTreeMap<String, usize>,
+    /// A few clips for each of those changes.
+    pub speaker_change_examples: BTreeMap<String, Vec<i64>>,
     /// Clips where a line a person named shows another name in render.
     pub person_names_changed: Vec<i64>,
     /// Across every class: lines a person named or wrote today, and how many
@@ -302,10 +304,15 @@ fn compare(clip: i64, today: &[Today], rendered: &[Line], report: &mut Report) -
             Some(Speaker::Cluster(_)) => "cluster",
             None => "none",
         };
-        *report
-            .speaker_changes
-            .entry(format!("{} -> {kind}", t.kind))
-            .or_default() += 1;
+        let change = format!("{} -> {kind}", t.kind);
+        let examples = report
+            .speaker_change_examples
+            .entry(change.clone())
+            .or_default();
+        if examples.len() < 12 && !examples.contains(&clip) {
+            examples.push(clip);
+        }
+        *report.speaker_changes.entry(change).or_default() += 1;
         person_changed |= t.kind == "person";
     }
     if person_changed && report.person_names_changed.len() < 40 {

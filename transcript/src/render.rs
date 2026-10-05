@@ -16,6 +16,7 @@
 //!    sentences, never inside one.
 //! 5. A line's speaker is, in order: a person's naming of that stretch, a
 //!    person's naming of that voice, the voiceprint guess, the diarized label.
+//!    A person's words take the voice diarized at their midpoint, like a word.
 
 use crate::quality::{NEAR_SILENT_S, is_implausibly_slow, is_silence_phrase, speech_inside};
 use crate::text::{is_repetition_loop, is_wordless};
@@ -202,11 +203,14 @@ pub fn render(input: &Input<'_>) -> Rendered {
     } in &owned
     {
         if let Content::Words { text, checked } = content {
+            let mid = span_mid(*span);
+            let seconds = (mid.micros() - input.clip.start.micros()) as f64 / 1e6;
+            let cluster = speaker_at(seconds, speakers.turns);
             out.lines.push(Line {
                 span: *span,
                 text: text.clone(),
                 by: Author::Person(*id),
-                speaker: speakers.resolve(span_mid(*span), None),
+                speaker: speakers.resolve(mid, cluster.as_deref()),
                 language: input.heard.and_then(|h| h.language.clone()),
                 confidence: None,
                 checked: *checked,

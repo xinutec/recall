@@ -556,3 +556,34 @@ fn a_correction_replaces_the_whole_line_it_corrected_even_where_it_narrowed_the_
         ["Hi there."]
     );
 }
+
+#[test]
+fn a_persons_words_take_the_voice_heard_there_unless_they_named_it() {
+    // Seen in the shadow diff: a corrected line lost its diarized speaker.
+    let h = heard(vec![segment(0.0, 2.0, "model woorden")]);
+    let v = Voices {
+        turns: vec![VoiceTurn {
+            speaker: "SPEAKER_01".into(),
+            start: 0.0,
+            end: 2.0,
+        }],
+        prints: Vec::new(),
+    };
+    let words = edit(
+        1,
+        Act::Words {
+            clip: ClipId::from_stored(1),
+            span: span(0.0, 2.0),
+            over: span(0.0, 2.0),
+            text: Text::new("Echte woorden.").unwrap(),
+            checked: true,
+        },
+    );
+    assert_eq!(
+        lines(&h, Some(&v), &Speech::default(), &[words]),
+        [(
+            "Echte woorden.".to_owned(),
+            Some(Speaker::Cluster("SPEAKER_01".into()))
+        )]
+    );
+}
