@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
-# Fail if any tracked file contains a term from the private denylist. The denylist
-# (real names, addresses, recorded-utterance fragments) lives outside the repo, in
-# the encrypted data root — committing it here would itself be the violation it
-# guards against. One term per line; matched case-insensitively as a fixed string.
+# Fail if any tracked file contains a term from the private denylist, which lives
+# in the encrypted data root, not here. One term per line, matched as a
+# case-insensitive fixed string.
 set -euo pipefail
 
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 DENYLIST=/Volumes/Backup/recall/pii-denylist.txt
 
-# A missing denylist FAILS. It used to `exit 0` with a warning, added on
-# 2026-07-09 to "make validation gates resilient to unmounted volumes" — but this
-# is the check that stops real names and addresses reaching tracked files, and
-# those files get pushed. Resilient here meant: when the external volume happens
-# not to be mounted, the one gate that guards personal data silently passes.
-# An unmounted volume is a normal condition on this machine, so that was not a
-# rare corner. Being unable to commit until it is mounted is the cheaper failure.
+# A missing denylist fails: the volume is often unmounted, and passing then would
+# let personal data be pushed.
 if [[ ! -r "$DENYLIST" ]]; then
     echo "check-pii: cannot read $DENYLIST" >&2
     echo "check-pii: the PII gate cannot run, so this is a FAILURE, not a skip." >&2

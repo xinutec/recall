@@ -1,8 +1,5 @@
-// Writes src/app/build-info.ts with the current git sha + build time, so the
-// running bundle can show which build it is. Embedded at build time (not fetched
-// at runtime) on purpose: a stale cached tab then shows its own old stamp, which
-// is the whole point — it lets you spot a stale cache instead of being reassured
-// by the server's current version. The generated file is gitignored.
+// Writes the gitignored src/app/build-info.ts with the git sha and build time.
+// Embedded rather than fetched, so a stale cached tab shows its own old stamp.
 import { execSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

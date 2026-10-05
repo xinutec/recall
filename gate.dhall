@@ -219,7 +219,7 @@ in  { name = "recall"
         , timeout_s = 900
         }
       , {-  A scratch --output-path, so the gate never overwrites the bundle
-            recall-build-frontend.sh serves.
+            recall-build-frontend.sh writes.
         -}
         G.Check::{
         , name = "frontend build (Angular strict templates)"

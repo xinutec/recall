@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
 # Undo the diarized pass's flattening on N clips (#1663).
 #
-# ⚠ **The flattened state is simply wrong under the write model** — a pass may
-# split (more turns out than in, every word kept) or label (no text touched).
-# Merging is neither. This restores the boundaries a merge hid and releases the
-# clip so the pass can re-decide, which under the current rule attributes
-# instead of replacing.
+# A pass may split turns (keeping every word) or label them; a merge is
+# neither. This hides the merged turns and restores the originals. It does not
+# release the clips to the pass: do that afterwards, since releasing first let
+# the pass re-decide against the broken state and left 7 duplicate turns.
 #
-# ⚠⚠ **turns first, ledger last, and the order inside the transaction matters
-# too.** Releasing the ledger first let the pass re-decide against the broken
-# state and race the repair, leaving 7 duplicate turns to clean by hand. And the
-# replacements must be hidden before the originals are un-hidden, or the
-# un-hidden ones match the "not hidden" predicate and get hidden straight back.
+# The merged turns are hidden before the originals are restored, or the restored
+# ones would match the "not hidden" predicate and be hidden again.
 #
 #   scripts/flatten_repair.sh <count>      default 20
 set -euo pipefail
@@ -24,8 +20,7 @@ reason="flatten-repair $stamp"
 
 ssh "$host" "set -euo pipefail
 pvc=$pvc
-# ⚠ A snapshot per run, not per campaign: a repair is only reversible against
-# the state it started from.
+# A snapshot per day's run, to undo against the state it started from.
 for db in recall ingest; do
   [ -f \"\$pvc/\$db-before-flatten-repair-$stamp.sqlite\" ] ||
     sqlite3 \"\$pvc/\$db.sqlite\" \".backup \$pvc/\$db-before-flatten-repair-$stamp.sqlite\"

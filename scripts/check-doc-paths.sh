@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
 # Every repo path a doc cites in backticks must exist.
 #
-# ⚠ **This is the commonest way documentation rots here, and it rots silently.**
-# A doc that names a deleted file reads exactly like one that names a live file,
-# so the claim around it keeps its authority long after the evidence is gone.
-# Found twice by hand: a permanent Python floor citing a test module that had
-# been deleted, two lines above its own warning that a deleted module standing
-# in a floor is the worst place for a claim to rot; and seven paths left behind
-# when the test suites were consolidated into `integration/` subdirectories.
+# A doc naming a deleted file reads like one naming a live file.
 #
-# ⚠ It only checks paths that look like repo paths — a leading directory this
-# repo actually has. A prose backtick like `speaker_label` is not a path and
-# must not be treated as one, or the check becomes noise and gets ignored.
+# Only backticks starting with one of this repo's top directories count as
+# paths; `speaker_label` is not one.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

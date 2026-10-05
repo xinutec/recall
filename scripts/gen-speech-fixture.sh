@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 # Generate tests/fixtures/speech/ — the committed real-speech golden fixture.
 #
-# Synthetic speech (macOS `say`, two English voices + one Dutch), so it is
-# PII-free by construction: no household audio ever enters the repo. The rendered
-# FLAC and its reference transcript are COMMITTED — `recall score-asr`
-# transcribes the audio with the real ASR stack and fails if WER drifts past its
-# threshold, which is the regression net under the model/decoder seams (the unit
-# tests stub the ASR).
+# Synthetic speech from macOS `say`, so no household audio enters the repo. The
+# FLAC and reference transcripts are committed; score-asr transcribes them with
+# the real ASR and fails when WER passes its threshold.
 #
-# Regenerate only deliberately (a new `say` voice rendering changes the audio and
-# may shift the measured baseline behind score-asr's threshold):
+# Regenerate only deliberately: a changed `say` voice changes the audio and may
+# move the baseline.
 #   ./scripts/gen-speech-fixture.sh
 set -euo pipefail
 
@@ -22,12 +19,9 @@ mkdir -p "$OUT"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-# The dialogues: neutral, invented content; alternating voices like a household
-# exchange. One fixture per household language — Whisper detects one language per
-# segment, so a mixed fixture makes it mangle the minority language (the
-# documented code-switching weakness, docs/architecture.md), which is a known
-# limitation, not a regression baseline. Keep these lines and reference-*.txt in
-# lockstep — the references are what WER scores against.
+# Invented dialogue in alternating voices. One fixture per language: Whisper
+# detects one language per segment, so mixing would measure that known weakness
+# instead. Keep these lines and reference-*.txt in step.
 utter() { # utter <index> <voice> <text>
     say -v "$2" -o "$WORK/$1.aiff" "$3"
 }
@@ -42,9 +36,8 @@ utter nl-01 Xander "Vergeet niet dat we zondag bij de bakker brood moeten halen.
 utter nl-02 Ellen "Goed idee, en daarna kunnen we koffie drinken in het park."
 utter nl-03 Xander "De trein naar de stad vertrekt morgen om kwart over acht."
 
-# Stitch each language into one 48 kHz mono FLAC — the same shape as a captured
-# segment (CaptureConfig: 48k mono s16le) — with 0.8s silence between utterances:
-# decode each to raw PCM, append raw silence, encode the concatenation once.
+# One 48 kHz mono FLAC per language, the shape of a captured segment, with 0.8 s
+# of silence between utterances.
 stitch() { # stitch <lang>
     : >"$WORK/$1.pcm"
     for f in "$WORK/$1"-*.aiff; do
