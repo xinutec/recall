@@ -16,10 +16,8 @@ struct RecallMicApp: App {
                 onHostChanged: { controller.restartPolling() }
             )
             .onAppear { controller.onLaunch() }
-            // The polls only feed the visible UI (banner + Devices panel); a
-            // backgrounded app kept alive for days by its audio session must not
-            // hit the API ~57k times a day for a screen nobody sees. Streaming
-            // itself is unaffected — StreamClient runs its own loop.
+            // The polls feed only the visible UI; an app kept alive in the background
+            // must not poll for a screen nobody sees. Streaming has its own loop.
             .onChange(of: scenePhase) { phase in
                 controller.setUIVisible(phase == .active)
             }
@@ -27,11 +25,9 @@ struct RecallMicApp: App {
     }
 }
 
-/// Owns the shared state and the stream client, runs the control-plane polling, and
-/// wires Start/Stop and the household pause/resume intent.
-///
-/// Note: iOS can't auto-launch on boot (unlike the Android `BootReceiver`); instead the
-/// app auto-resumes streaming when it's next opened, if it was left enabled.
+/// Owns the state and the stream client, polls Isis, and wires Start/Stop and the
+/// household pause. iOS cannot start an app at boot, so streaming resumes when the app
+/// is next opened, if it was enabled.
 @MainActor
 final class RecallController: ObservableObject {
     let state = MicState()
@@ -52,20 +48,13 @@ final class RecallController: ObservableObject {
         guard !state.running else { return }
         Task {
             guard await AudioCapture.requestPermission() else { return }
-            // The intent, recorded before the engine is asked and never cleared by
-            // its answer. `enabled` means "this should be recording", not "the
-            // engine started this time" — writing the outcome here was #887: one
-            // failed mic open disabled auto-start forever and silenced the beat,
-            // so the single signal that would have reported the fault was the thing
-            // the fault switched off.
+            // The intent, whatever the engine answers: storing the outcome once let
+            // one failed open disable auto-start and the beat for good (#887).
             Prefs.enabled = true
             let ok = client.start()  // false if the mic couldn't be opened
             state.running = ok
             state.micOk = ok
-            // Beat either way. A mic that will not open is exactly what the fleet
-            // wants to hear about, and the beat now carries `micOk` to say it.
-            // The outcome is dropped on purpose: this is a one-off alongside the
-            // beat loop, and the loop owns the retry schedule.
+            // Beat either way, carrying `micOk`. The loop owns retries.
             _ = await beatNow()
         }
     }
@@ -80,19 +69,12 @@ final class RecallController: ObservableObject {
 
     // MARK: liveness (#837)
 
-    /// One long-lived loop, started at launch and never cancelled — deliberately not
-    /// wired to `setUIVisible` like the two polls below it. A backgrounded app kept
-    /// alive for days by its audio session is exactly the thing this reports on, and
-    /// a beat that stopped when the screen went dark would read as the app dying
-    /// every time the phone was put down. One request an hour is not the traffic
-    /// those polls were trimmed for.
+    /// The beat loop, from launch, never cancelled: unlike the polls it runs in the
+    /// background too, since the backgrounded app is what it reports on.
     private func startBeating() {
         guard beatLoop == nil else { return }
         beatLoop = Task { [weak self] in
-            // Consecutive failures, reset by any beat that lands. A blip must not cost
-            // an hour of looking dead (#886) — which is exactly what it did on
-            // 2026-08-14, when this phone stayed red for the full interval after its
-            // tunnel came back and only cleared on a manual relaunch.
+            // Consecutive failures, which shorten the next wait (#886).
             var failures = 0
             while !Task.isCancelled {
                 let outcome = await self?.beatNow() ?? .skipped
@@ -103,11 +85,7 @@ final class RecallController: ObservableObject {
         }
     }
 
-    /// Sends only while started: a stopped app is not going to record, and saying
-    /// "alive" for it would paint the state we most want to see as healthy.
-    ///
-    /// Reports which of the three it was, because `skipped` must not drive the retry
-    /// backoff — see `Heartbeat.Outcome`.
+    /// Beats only while started; see `Heartbeat.Outcome`.
     private func beatNow() async -> Heartbeat.Outcome {
         guard Prefs.enabled else { return .skipped }
         let sent = await Heartbeat.send(
@@ -126,9 +104,8 @@ final class RecallController: ObservableObject {
         Task { state.capture = await CaptureApi.resume(host: Prefs.controlHost) }
     }
 
-    // MARK: polling — capture state long-polls (held by the server until it
-    // changes; ~RTT latency), fleet liveness every 1.5s (Android cadence), and —
-    // like Android — only while the UI is actually visible.
+    // MARK: polling, only while the UI is visible: the capture state by long poll,
+    // the recorders every 1.5 s, as on Android.
 
     func setUIVisible(_ visible: Bool) {
         if visible {
@@ -150,10 +127,8 @@ final class RecallController: ObservableObject {
                     try? await Task.sleep(nanoseconds: 5_000_000_000)
                     continue
                 }
-                // Long-poll: the request hangs on the server until the household
-                // state changes (a press on any client, the mic confirming), so
-                // changes land in ~RTT. An older server (no stateToken) answers at
-                // once → plain 5s poll; so does an unreachable one (failed call).
+                // The server answers when the state changes. Without a stateToken
+                // (or on failure), a plain 5 s poll.
                 let known = self?.state.capture.stateToken
                 let cap = await CaptureApi.state(host: Prefs.controlHost, wait: 25, known: known)
                 self?.state.capture = cap

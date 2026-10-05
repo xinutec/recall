@@ -2,7 +2,7 @@ import XCTest
 
 @testable import RecallMic
 
-/// Mirrors the Android `LevelsTest.kt` cases so the two meters can't drift apart.
+/// The cases of Android's `LevelsTest.kt`.
 final class LevelsTests: XCTestCase {
     func testSilenceReadsZero() {
         XCTAssertEqual(Levels.meter(fromSamples: [Int16](repeating: 0, count: 32)), 0)
@@ -18,8 +18,7 @@ final class LevelsTests: XCTestCase {
     }
 
     func testFarFieldSpeechLandsMidMeter() {
-        // ~-44 dBFS (a loud distant voice) should sit visibly mid-meter, not at
-        // the bottom — the point of the dBFS scale.
+        // ~-44 dBFS, a distant voice, sits mid-meter.
         let amp = Int16(32768.0 * pow(10.0, -44.0 / 20.0))
         let level = Levels.meter(fromSamples: [amp])
         XCTAssertGreaterThan(level, 0.3)

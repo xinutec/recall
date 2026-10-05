@@ -3,9 +3,7 @@ import XCTest
 @testable import RecallMic
 
 final class BannerTests: XCTestCase {
-    // The reference: the website's banner reads
-    // "Recording paused — auto-resumes in 5h 23m (by 2026-07-04 08:30)".
-    // The phones must match it byte-for-byte (durationUntil + dayKey HH:mm).
+    // The web app's banner, which the phones match exactly.
     private let london = TimeZone(identifier: "Europe/London")!
 
     private func date(_ iso: String) -> Date {
@@ -30,7 +28,7 @@ final class BannerTests: XCTestCase {
     }
 
     func testReadsNowWhenDeadlinePassed() {
-        // Never a negative countdown — a past resume time reads "now", as on the web.
+        // A past resume time reads "now", as on the web.
         let until = date("2026-07-04T07:30:00Z")
         let now = date("2026-07-04T09:00:00Z")
         XCTAssertEqual(

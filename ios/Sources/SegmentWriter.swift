@@ -1,18 +1,13 @@
 import Foundation
 
-/// PCM chunks into closed, capture-stamped WAV segments (stage C2's shadow,
-/// mirroring the Android `SegmentWriter`): one minute of audio per file,
-/// counted in bytes fed — audio time, not wall time — named
-/// `<source>-YYYYMMDDTHHMMSS.wav` from this device's UTC clock at segment
-/// open. WAV first for the same reason as Android: the delivery protocol is
-/// container-agnostic and a platform encoder's header behaviour is probed
-/// before it is trusted.
+/// Writes PCM to closed, capture-stamped WAV segments, as Android's
+/// `SegmentWriter` (which writes FLAC): a minute of audio per file, counted in
+/// audio, not wall time, named `<source>-YYYYMMDDTHHMMSS.wav` by the UTC time
+/// the segment opened.
 ///
-/// The mic path calls `offer` and returns; writing happens on the caller's
-/// audio-callback-free queue (the stream's drainer feeds us, never the audio
-/// thread directly). A segment never spans a disconnect gap: the client calls
-/// `closeSegment()` when the stream drops, because the name claims continuity
-/// from its stamp and the tee is gated on the connection.
+/// Fed by the stream's drain task, never the audio thread. The client calls
+/// `closeSegment()` when the stream drops, since a name claims its audio is
+/// continuous from its stamp.
 final class SegmentWriter {
     static let sampleRate = 48_000
     static let segmentBytes = 60 * sampleRate * 2

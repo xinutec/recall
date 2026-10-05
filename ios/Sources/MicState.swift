@@ -1,15 +1,12 @@
 import Combine
 import Foundation
 
-/// Household pause state, read from the recorder's `/api/capture`. Mirrors the
-/// Android `CaptureState` — the API is the authority on pause, never the socket.
-/// `reachable` is false when the API call failed (off the LAN), so the banner hides.
+/// The household's capture state from `/api/capture` on Isis, as Android's
+/// `CaptureState`; `reachable` is false when the call failed, and the banner hides.
 ///
-/// Spec-vs-status: `running`/`pausedUntil` is the mic's confirmed word, `desired*`
-/// is the intent (moves the instant a button is pressed), `settled` says they
-/// agree. Unsettled renders as "Pausing…"/"Resuming…" — never a flap between the
-/// intent just set and a not-yet-caught-up report. Defaults read an older server's
-/// confirmed-only answer as settled.
+/// `running` and `pausedUntil` are what the mic confirmed, `desired*` what was asked,
+/// changed at the press; `settled` that they agree. Until then the UI says
+/// "Pausing…" or "Resuming…".
 struct CaptureState: Equatable {
     var running: Bool
     var reachable: Bool
@@ -18,12 +15,11 @@ struct CaptureState: Equatable {
     var desiredPausedUntil: Date?
     var settled = true
     var micReachable = true
-    /// Fingerprint echoed back as ?known= to long-poll /api/capture — the request
-    /// hangs until the state changes. Nil on an older server (plain polling).
+    /// Sent back as `?known=` to long-poll; nil means poll plainly.
     var stateToken: String?
 }
 
-/// Connection / streaming phase, used to drive the status card text.
+/// The streaming phase, for the status card.
 enum MicPhase: Equatable {
     case stopped
     case waitingForHost  // can't reach the recorder
@@ -35,17 +31,14 @@ enum MicPhase: Equatable {
 @MainActor
 final class MicState: ObservableObject {
     @Published var running = false  // user pressed Start
-    /// False while the audio engine will not open. Carried by the heartbeat so a
-    /// running-but-deaf app SAYS so — before #887 it simply stopped beating, and the
-    /// check went red for the wrong reason. Starts true: "not known to be broken".
+    /// False while the mic will not open. Sent in the heartbeat (#887). Starts
+    /// true: not known to be broken.
     @Published var micOk = true
     @Published var connected = false  // TCP up and streaming
     @Published var phase: MicPhase = .stopped
     @Published var level: Float = 0  // 0...1 meter position
-    /// Bytes of captured audio this app discarded because it could not deliver
-    /// them (the spool overran). The phone is the only place that knows: those
-    /// samples never reach the network, so no server-side check can see them.
-    /// Zero is the normal value; anything else is speech heard and lost.
+    /// Bytes of audio dropped because the spool overran; normally zero. No server
+    /// can see this loss. Nothing shows or reports it yet.
     @Published var droppedBytes: Int = 0
     @Published var capture = CaptureState(running: true, reachable: false, pausedUntil: nil)
     @Published var sources: [SourceStatus] = []  // fleet liveness for the Devices panel

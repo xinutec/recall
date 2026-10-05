@@ -1,18 +1,13 @@
 import CryptoKit
 import Foundation
 
-/// Delivers closed segments to recalld's ingest plane and believes nothing
-/// but its own arithmetic (docs/architecture.md, decision 3): a delivery
-/// counts only when the receipt's sha-256 equals a local digest of the bytes
-/// just sent. 409 → `conflict/`, never retried (a person must look); auth
-/// answers are config, not verdicts — retry until the token arrives; anything
-/// else stays put for the next pass.
+/// Delivers closed segments to recalld's ingest. A delivery counts only when the
+/// receipt's sha-256 matches the bytes sent (docs/architecture.md, decision 3). A
+/// 409 moves to `conflict/` for a person; a token refusal is retried; anything else
+/// waits for the next pass.
 ///
-/// A plain in-app task rather than a background scheduler: this app is alive
-/// exactly while it records (the held audio session), and audio that exists
-/// only while the app is gone was recorded before the app died — the next
-/// launch's first pass picks it up. Wi-Fi only, via the path's own
-/// `isExpensive` flag: continuous capture on a metered plan is a bill.
+/// An in-app task: the app runs while it records, and what it left behind is picked
+/// up at the next launch. Not on expensive networks.
 enum SegmentUpload {
     private static let lock = NSLock()
     private static var draining = false

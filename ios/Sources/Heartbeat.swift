@@ -4,46 +4,29 @@ import Foundation
     import UIKit
 #endif
 
-/// "I am still here", once an hour, whether or not there is anything to stream.
+/// "Still here", once an hour, whether or not anything streams (#837): audio alone
+/// cannot tell a dead app from a quiet room or a pause.
 ///
-/// recall could not tell a dead recorder from a quiet room. Its liveness marker is
-/// refreshed only by audio above the silence floor — deliberately, so a dot means
-/// *recording* rather than merely connected — and while the household is paused the
-/// ingest listener is closed and nothing streams at all. Capture was paused for the
-/// four days before this was written, which is precisely the window in which this
-/// app dying would have gone unnoticed until somebody picked the phone up (#837).
+/// Sent to Isis, reachable from anywhere over WireGuard, so a phone that is out still
+/// beats; the recorder's LAN address is the fallback.
 ///
-/// Sent to the control host (Isis, over WireGuard), not the recorder on the LAN —
-/// the same split every other API call here already makes. Isis is reachable from
-/// anywhere, so a phone that is out of the house still beats and "away" stops
-/// looking like "dead".
-///
-/// ⚠ Beats only while the user has this app *started*. A stopped app is not going
-/// to record, and a beat that arrived anyway would paint the one state we care
-/// about — this mic will not capture anything — bright green. The check going red
-/// after a deliberate Stop is correct, and pressing Start clears it.
-///
-/// Best-effort and silent, like `OutboxReport` on Android: a liveness report that
-/// raised its own failures would be the tail wagging the dog.
+/// Only while the app is started: a stopped app records nothing and must not look
+/// alive. Best-effort and silent.
 enum Heartbeat {
     private static let timeout: TimeInterval = 8
 
-    /// How often to beat. The grader's thresholds are expressed in multiples of this
-    /// (recalld::devices::BEAT_EVERY_MINUTES), so the two cannot drift apart silently.
+    /// How often to beat; equal to `recalld::devices::BEAT_EVERY_MINUTES`, which the
+    /// grader's thresholds are multiples of.
     static let every: TimeInterval = 60 * 60
 
-    /// First retry after a beat that did not land. Doubles per consecutive failure up
-    /// to `every`, so a blip costs minutes rather than an hour (#886).
+    /// First retry after a failed beat; doubles per failure up to `every` (#886).
     private static let retryBase: TimeInterval = 60
 
-    /// When this process started. Read once, at first touch, which is app launch —
-    /// so a beat carrying a recent value means the app restarted, and "up all week"
-    /// is distinguishable from "crash-looping between beats".
+    /// When this process started (first touched at launch), so restarts show.
     static let startedAt = Date()
 
-    /// What one attempt did. Three cases, not two: a beat SKIPPED because the app is
-    /// stopped is a deliberate state, not an unreachable control plane, and feeding it
-    /// to the failure counter would spin the backoff and then beat hourly for nothing.
+    /// What one attempt did. A beat skipped because the app is stopped is not a
+    /// failure, and must not drive the backoff.
     enum Outcome {
         case sent
         case failed
@@ -59,20 +42,11 @@ enum Heartbeat {
         }
     }
 
-    /// Seconds until the next beat: the full cadence when the last one landed, a short
-    /// backoff when it did not.
-    ///
-    /// Pure, so the schedule is pinned in tests without a network or an hour of
-    /// waiting — the same reason `body` is pure.
-    ///
-    /// ⚠ The cap is what keeps this a backoff and not a poll. One request an hour is
-    /// the design; a phone that is simply off must never beat harder than that, and
-    /// the whole retry burst is bounded to fit inside one cadence.
+    /// Seconds until the next beat: the full cadence after a success, a backoff after
+    /// a failure, never more often than hourly once the backoff reaches the cadence.
     static func nextDelay(consecutiveFailures: Int) -> TimeInterval {
         guard consecutiveFailures > 0 else { return every }
-        // Doubling by multiplication rather than shifting: this counter is reset only
-        // by a success, so a phone in a dead spot keeps incrementing it forever and a
-        // shift would wrap.
+        // Doubling, not shifting: the counter grows without bound in a dead spot.
         var delay = retryBase
         for _ in 1..<max(consecutiveFailures, 1) {
             if delay >= every { return every }
@@ -81,8 +55,7 @@ enum Heartbeat {
         return min(delay, every)
     }
 
-    /// App version and build, so a restart *into a new build* reads as a deploy
-    /// rather than as a fault.
+    /// App version and build, so a restart into a new build reads as a deploy.
     static var version: String {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "?"
@@ -90,8 +63,7 @@ enum Heartbeat {
         return "\(short) (\(build))"
     }
 
-    /// The JSON a beat carries. Pure and separate from the send so it can be tested
-    /// without a network — the field names are a contract with `HeartbeatIn`.
+    /// A beat's JSON, the server's `HeartbeatIn`.
     static func body(
         device: String, version: String, startedAt: Date, streaming: Bool, charging: Bool?,
         micOk: Bool
@@ -102,21 +74,17 @@ enum Heartbeat {
             "version": version,
             "startedAt": iso(startedAt),
             "streaming": streaming,
-            // A running app that cannot open its mic must say so rather than fall
-            // silent, which is what it used to do (#887).
+            // A running app that cannot open its mic (#887).
             "micOk": micOk,
         ]
-        // Absent rather than null when unknown: the simulator and a device with
-        // battery monitoring off both report `.unknown`, and guessing "discharging"
-        // there would invent the very reading a room phone is watched for.
+        // Absent when unknown (the simulator, monitoring off), rather than a guess.
         if let charging { out["charging"] = charging }
         return out
     }
 
-    /// True on mains, false on battery, nil when iOS will not say. Room phones are
-    /// mains-powered, so discharging is the leading indicator of the death this
-    /// whole feature exists to catch — carried, though never graded, because a
-    /// carried phone is off charge all day and that is not a fault.
+    /// True on mains, false on battery, nil if unknown. For a room phone, discharging
+    /// warns of its death; reported, not graded, since a carried phone discharges all
+    /// day.
     static func charging() -> Bool? {
         #if canImport(UIKit)
             UIDevice.current.isBatteryMonitoringEnabled = true
@@ -130,18 +98,9 @@ enum Heartbeat {
         #endif
     }
 
-    /// POST one beat, trying the control plane first and the recorder's LAN address
-    /// second (#888).
-    ///
-    /// The fallback exists because the beat used to demand more reachability than
-    /// recording does: audio goes to `host` on the LAN, so a phone at home with its
-    /// tunnel off records every sample and still read as dead. `lanHost` runs the
-    /// relay on the same port, so this is the identical request with the host
-    /// swapped — and the relay marks what it forwards, so "alive but its tunnel is
-    /// down" stays visible instead of being papered over.
-    ///
-    /// Order matters: the VPN is tried first so the LAN path is a backstop rather
-    /// than a shortcut, and a phone away from home behaves exactly as before.
+    /// POST one beat to Isis, else to the recorder's LAN address, where the Mac
+    /// relays it (#888): a phone at home with its tunnel off still records, so must
+    /// not read as dead. The relay marks what it forwards.
     @discardableResult
     static func send(
         host: String, lanHost: String = "", device: String, streaming: Bool, micOk: Bool
@@ -155,13 +114,8 @@ enum Heartbeat {
         return false
     }
 
-    /// Which hosts to try, in order. Pure, so the ORDER — the part that matters and
-    /// the part a network test cannot pin cheaply — is checked without a network.
+    /// The hosts to try, in order, blanks and duplicates dropped.
     static func hostsToTry(control: String, lan: String) -> [String] {
-        // Control plane first: the LAN is a backstop, not a shortcut, so a phone away
-        // from home behaves exactly as it did before the fallback existed. Duplicates
-        // dropped so a device configured with one host for both does not pay the
-        // timeout twice.
         var seen: Set<String> = []
         return [control, lan].filter { !$0.isEmpty && seen.insert($0).inserted }
     }
@@ -180,9 +134,7 @@ enum Heartbeat {
         guard let (_, resp) = try? await URLSession.shared.data(for: req) else {
             return false
         }
-        // Any 2xx: the fleet answers 200, the LAN relay 204 (it stores nothing of
-        // its own, so it has no body to return). Insisting on 200 would have made
-        // every relayed beat read as a failure.
+        // Isis answers 200, the relay 204.
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         return (200..<300).contains(code)
     }

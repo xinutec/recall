@@ -1,8 +1,7 @@
 import Foundation
 
-/// The household paused-banner text, kept byte-for-byte identical to the website's
-/// (frontend `app.html` + `format.ts`): "Recording paused — auto-resumes in 5h 23m
-/// (by 2026-07-04 08:30)". One place so web/Android/iOS can't drift apart.
+/// The paused-banner text, identical to the web app's (`app.html`, `format.ts`):
+/// "Recording paused — auto-resumes in 5h 23m (by 2026-07-04 08:30)".
 enum Banner {
     static func pausedText(pausedUntil: Date?, now: Date, timeZone: TimeZone) -> String {
         guard let until = pausedUntil else { return "Recording paused" }
@@ -13,8 +12,7 @@ enum Banner {
         return "Recording paused — auto-resumes in \(remaining(until: until, now: now)) (by \(by))"
     }
 
-    /// Time left as "5h 23m" / "23m" / "now" — whole minutes, never negative
-    /// (matches format.ts durationUntil).
+    /// Time left as "5h 23m", "23m" or "now", as format.ts `durationUntil`.
     private static func remaining(until: Date, now: Date) -> String {
         let mins = max(0, Int((until.timeIntervalSince(now) / 60).rounded()))
         if mins == 0 { return "now" }

@@ -1,12 +1,12 @@
 import AVFoundation
 
-/// Captures the mic as 48 kHz mono signed-16-bit little-endian PCM — the exact format
-/// the recall ingester expects — and hands each block to a callback as raw bytes.
+/// Captures the mic as 48 kHz mono s16le PCM, the ingest's format, and hands each
+/// block to a callback.
 ///
-/// `.measurement` mode disables the system's AGC / noise processing, the closest iOS
-/// equivalent to Android's `UNPROCESSED` audio source, so the recorder gets clean audio.
+/// `.measurement` mode turns off automatic gain and noise processing, like Android's
+/// `UNPROCESSED`.
 final class AudioCapture {
-    /// Target wire format: 48 kHz, mono, Int16 interleaved (little-endian on iOS).
+    /// 48 kHz, mono, Int16 (little-endian on iOS).
     static let sampleRate: Double = 48_000
 
     private let engine = AVAudioEngine()
@@ -19,8 +19,7 @@ final class AudioCapture {
     private var onLevel: ((Float) -> Void)?
     private var running = false
 
-    // When the tap last delivered audio — the watchdog's staleness signal. Written
-    // on the audio thread, read from the main actor, so guarded by a lock.
+    // For the watchdog. Written on the audio thread, read on the main actor, so locked.
     private let bufferLock = NSLock()
     private var lastBufferAtLocked: Date?
 
@@ -31,7 +30,7 @@ final class AudioCapture {
         return lastBufferAtLocked
     }
 
-    /// Ask for mic access (works across iOS 16/17+).
+    /// Ask for mic access, on iOS 16 and 17+.
     static func requestPermission() async -> Bool {
         if #available(iOS 17.0, *) {
             return await AVAudioApplication.requestRecordPermission()
@@ -57,7 +56,7 @@ final class AudioCapture {
         let inFormat = input.outputFormat(forBus: 0)
         converter = AVAudioConverter(from: inFormat, to: target)
 
-        // ~2048 frames per tap keeps the level meter responsive (~tens of ms).
+        // 2048 frames, tens of milliseconds, so the meter stays lively.
         input.installTap(onBus: 0, bufferSize: 2048, format: inFormat) { [weak self] buf, _ in
             self?.handle(buf)
         }
@@ -72,8 +71,8 @@ final class AudioCapture {
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleInterruption),
             name: AVAudioSession.interruptionNotification, object: session)
-        // A route change (wired mic unplugged, Bluetooth device gone) or a media-
-        // services reset can stop input without any interruption notification.
+        // A route change or a media-services reset can stop input with no
+        // interruption notification.
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleRouteChange),
             name: AVAudioSession.routeChangeNotification, object: session)
@@ -82,9 +81,8 @@ final class AudioCapture {
             name: AVAudioSession.mediaServicesWereResetNotification, object: session)
     }
 
-    /// Try to bring a stalled engine back (the watchdog's lever): reactivate the
-    /// session and restart the engine. Safe to call repeatedly; a failure is left
-    /// for the next watchdog tick to retry.
+    /// Reactivate the session and restart a stalled engine. Safe to repeat; the
+    /// watchdog retries a failure.
     func kick() {
         guard running else { return }
         try? AVAudioSession.sharedInstance().setActive(true)
@@ -135,7 +133,6 @@ final class AudioCapture {
         let data = Data(bytes: ch[0], count: bytes)
         onPCM?(data)
 
-        // Peak for the level meter, straight off the converted samples.
         let samples = UnsafeBufferPointer(start: ch[0], count: count)
         var peak: Int32 = 0
         for s in samples {
@@ -157,10 +154,9 @@ final class AudioCapture {
         case .began:
             engine.pause()
         case .ended:
-            // Restart regardless of `.shouldResume`: this is a dedicated always-on
-            // mic, and an un-resumed engine is a silent "Streaming" source — the
-            // recorder's worst failure. If another app still holds the session the
-            // start fails quietly here and the watchdog keeps retrying.
+            // Whatever `.shouldResume` says: an engine left paused is a silent source
+            // that looks live. If another app holds the session, the watchdog
+            // retries.
             kick()
         @unknown default:
             break
@@ -172,8 +168,7 @@ final class AudioCapture {
             let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
             let reason = AVAudioSession.RouteChangeReason(rawValue: raw)
         else { return }
-        // Losing the active input (or a new one appearing) can leave the engine
-        // wedged on a dead route — restart it on the new one.
+        // The engine can wedge on the old route.
         if reason == .oldDeviceUnavailable || reason == .newDeviceAvailable {
             engine.stop()
             kick()
@@ -181,8 +176,7 @@ final class AudioCapture {
     }
 
     @objc private func handleMediaReset(_ note: Notification) {
-        // The media daemon restarted: every audio object is invalid. Tear down and
-        // rebuild the whole capture path with the stored callbacks.
+        // The media daemon restarted, invalidating every audio object: rebuild.
         guard running, let pcm = onPCM, let level = onLevel else { return }
         stop()
         try? start(onPCM: pcm, onLevel: level)

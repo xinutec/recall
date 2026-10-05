@@ -1,19 +1,17 @@
 import Foundation
 
-/// The phone's segment cache (docs/architecture.md, stage C2) — the meeting
-/// queue's idiom shared with Android: a segment's state is which directory it
-/// is in, because a rename cannot half-happen.
+/// The phone's segment cache, as on Android: a segment's state is its directory,
+/// since a rename cannot half-happen.
 ///
-///   segments/open/       being written; nothing touches it
-///   segments/            closed, undelivered — what the uploader drains
-///   segments/delivered/  Isis holds it, proven: receipt sha-256 matched a local re-hash
-///   segments/conflict/   Isis holds different bytes under this name — a person must look
+///   segments/open/       being written
+///   segments/            closed, undelivered: what the uploader drains
+///   segments/delivered/  on Isis, its receipt's sha-256 matching ours
+///   segments/conflict/   Isis holds different bytes under the name, or refused it
 ///
-/// Deletion happens only in `evict`, eats only `delivered/`, oldest first,
-/// under cache pressure — never an undelivered segment, never on a server's
-/// word (decision 2: eviction is a local decision).
+/// Only `evict` deletes, and only from `delivered/`, oldest first, under cache
+/// pressure; never because the server asked (docs/architecture.md, decision 2).
 enum SegmentStore {
-    /// ~2 GiB: hours of WAV — local history spanning the upload→backup window.
+    /// ~2 GiB, hours of WAV: covers the time from upload to the server's backup.
     static let ceilingBytes: Int64 = 2 * 1024 * 1024 * 1024
 
     static func root() -> URL {
@@ -43,11 +41,11 @@ enum SegmentStore {
         }
     }
 
-    /// Closed, undelivered, oldest first — the uploader's work list.
+    /// Closed and undelivered, oldest first.
     static func undelivered() -> [URL] { files(in: root()) }
 
-    /// Adopt a crash's leftovers: a truncated segment is real audio that was
-    /// really heard. Run at recorder start, before a new segment opens.
+    /// Close whatever a crash left in `open/`: truncated, but real audio. Run at
+    /// recorder start, before a new segment opens.
     static func sweepOpen() {
         for orphan in files(in: open()) {
             try? FileManager.default.moveItem(
@@ -69,9 +67,8 @@ enum SegmentStore {
         Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
     }
 
-    /// Free space down to the ceiling, verified-delivered oldest first and
-    /// nothing else. Over the ceiling with nothing delivered stays over —
-    /// undelivered audio is the point of the cache.
+    /// Delete delivered segments, oldest first, until under the ceiling. With
+    /// nothing delivered it stays over.
     static func evict(ceiling: Int64 = ceilingBytes) {
         var total = [root(), open(), delivered(), conflict()]
             .flatMap(files(in:)).reduce(Int64(0)) { $0 + size($1) }

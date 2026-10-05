@@ -2,9 +2,8 @@ import XCTest
 
 @testable import RecallMic
 
-/// The beat's body is a contract with the server's `HeartbeatIn`, so it is built by
-/// a pure function and pinned here — a renamed key would otherwise fail silently,
-/// as a field the server defaults rather than as an error anyone sees.
+/// The beat's body must match the server's `HeartbeatIn`: a renamed key would not
+/// fail there, it would read as the field's default.
 final class HeartbeatTests: XCTestCase {
     private let started = ISO8601DateFormatter().date(from: "2026-08-11T07:00:00Z")!
 
@@ -27,15 +26,13 @@ final class HeartbeatTests: XCTestCase {
     }
 
     func testAPausedHouseholdStillBeats() {
-        // The whole point: capture is normally paused for days, and the app being
-        // alive through that is the fact nothing else in recall could report.
+        // Capture is often paused for days; the beat is the only sign the app is alive.
         XCTAssertEqual(body(streaming: false)["streaming"] as? Bool, false)
     }
 
     func testUnknownChargeIsOmittedRatherThanGuessed() {
-        // The simulator and a device with battery monitoring off both say `.unknown`.
-        // Sending "discharging" there would invent the one reading a mains-powered
-        // room phone is watched for.
+        // `.unknown` (the simulator, or monitoring off) must not read as discharging,
+        // which is what a mains-powered phone is watched for.
         XCTAssertNil(body(charging: nil)["charging"])
         XCTAssertEqual(body(charging: false)["charging"] as? Bool, false)
     }
@@ -46,33 +43,28 @@ final class HeartbeatTests: XCTestCase {
     }
 
     func testStartedAtIsFixedForTheProcess() {
-        // "Alive now" and "alive since Tuesday" are different answers, and only the
-        // second tells a stable app from one relaunching between beats.
+        // Tells a stable app from one relaunching between beats.
         XCTAssertEqual(Heartbeat.startedAt, Heartbeat.startedAt)
     }
 
     func testADeafAppSaysSoInsteadOfFallingSilent() {
-        // #887: a failed `client.start()` used to clear `Prefs.enabled`, which both
-        // disabled auto-start forever and silenced the beat — so the one signal that
-        // would have reported the broken mic was what the breakage switched off.
+        // #887: a failed `client.start()` used to clear `Prefs.enabled`, which also
+        // stopped the beat that would have reported it.
         XCTAssertEqual(body(micOk: false)["micOk"] as? Bool, false)
         XCTAssertEqual(body()["micOk"] as? Bool, true)
     }
 
     func testTheVPNIsTriedBeforeTheLANSoTheFallbackStaysABackstop() {
-        // #888: audio goes to the LAN host, so a phone at home with its tunnel off
-        // records fine and used to read as dead. The fallback fixes that without
-        // making the LAN the normal path — a phone away from home must behave exactly
-        // as before, and a beat that took the back way is marked by the relay.
+        // #888: a phone at home with its tunnel off records fine but read as dead.
+        // The LAN is the fallback, not the normal path; the relay marks beats it
+        // carried.
         XCTAssertEqual(
             Heartbeat.hostsToTry(control: "10.100.0.2", lan: "192.168.1.81"),
             ["10.100.0.2", "192.168.1.81"])
-        // Blank halves are skipped rather than tried: an unconfigured host is not an
-        // address, and attempting it would cost a timeout per beat.
+        // A blank host is skipped, not tried.
         XCTAssertEqual(Heartbeat.hostsToTry(control: "", lan: "192.168.1.81"), ["192.168.1.81"])
         XCTAssertEqual(Heartbeat.hostsToTry(control: "10.100.0.2", lan: ""), ["10.100.0.2"])
         XCTAssertEqual(Heartbeat.hostsToTry(control: "", lan: ""), [])
-        // One host configured for both: try it once, not twice.
         XCTAssertEqual(
             Heartbeat.hostsToTry(control: "10.100.0.2", lan: "10.100.0.2"), ["10.100.0.2"])
     }
@@ -82,9 +74,8 @@ final class HeartbeatTests: XCTestCase {
     }
 
     func testAFailedBeatRetriesSoonNotAtTheNextHourMark() {
-        // #886: the loop used to sleep the full interval whatever happened, so this
-        // very phone read `never sent a beat` for an hour after its tunnel came back
-        // on 2026-08-14, and only went green because it was relaunched by hand.
+        // #886: the loop slept the full hour after a failure too, so a phone read as
+        // silent for an hour after its tunnel came back.
         XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 1), 60)
         XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 2), 120)
         XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 3), 240)
@@ -92,19 +83,14 @@ final class HeartbeatTests: XCTestCase {
     }
 
     func testALongOutageCostsNoMoreThanTheHourlyCadence() {
-        // The bound that keeps this a backoff and not a poll.
         XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 7), Heartbeat.every)
         XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: 64), Heartbeat.every)
-        // No overflow at absurd counts: only a success resets this counter, so a phone
-        // in a dead spot for a month keeps incrementing it.
+        // Only a success resets the counter, so it can grow without bound.
         XCTAssertEqual(Heartbeat.nextDelay(consecutiveFailures: .max), Heartbeat.every)
     }
 
     func testAnOutageCostsAFewExtraRequestsThenSettles() {
-        // The bound that matters is the COUNT of extra requests an outage can cost
-        // before the schedule reaches the hourly cap — not the wall-clock they span.
-        // (An earlier version of this test asserted the burst fit inside one cadence;
-        // it does not, by three minutes, and that was never the property worth having.)
+        // Bounds the number of retries before the hourly cap, not the time they span.
         var delays: [TimeInterval] = []
         var n = 1
         while Heartbeat.nextDelay(consecutiveFailures: n) < Heartbeat.every {
@@ -112,15 +98,12 @@ final class HeartbeatTests: XCTestCase {
             n += 1
         }
         XCTAssertLessThanOrEqual(delays.count, 8, "an outage costs \(delays.count) retries")
-        // Monotonic: each wait is at least the one before it, so the schedule can only
-        // ever back off. A dip would mean an outage beating harder the longer it lasts.
+        // Each wait is at least the one before.
         XCTAssertEqual(delays, delays.sorted())
     }
 
     func testASkippedBeatIsNotAFailure() {
-        // A stopped app is a deliberate state, not an unreachable control plane. If
-        // `skipped` fed the failure counter, stopping the app would spin the backoff
-        // and then beat hourly forever for nothing.
+        // A stopped app is not an unreachable server, so it does not back off.
         XCTAssertEqual(Heartbeat.Outcome.skipped.nextFailureCount(after: 0), 0)
         XCTAssertEqual(Heartbeat.Outcome.skipped.nextFailureCount(after: 3), 3)
         XCTAssertEqual(Heartbeat.Outcome.sent.nextFailureCount(after: 3), 0)
@@ -128,9 +111,8 @@ final class HeartbeatTests: XCTestCase {
     }
 
     func testTheCadenceMatchesWhatTheGraderWasToldToExpect() {
-        // recalld::devices::BEAT_EVERY_MINUTES is 60; the fleetwatch thresholds are
-        // written as multiples of it. Drifting apart here would silently make every
-        // threshold describe a cadence nothing sends.
+        // recalld::devices::BEAT_EVERY_MINUTES; fleetwatch's thresholds are multiples
+        // of it.
         XCTAssertEqual(Heartbeat.every, 3600)
     }
 }

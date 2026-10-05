@@ -2,8 +2,7 @@ import XCTest
 
 @testable import RecallMic
 
-/// Mirrors the Android `HandshakeTest.kt` cases so the two announcements can't
-/// drift apart.
+/// The cases of Android's `HandshakeTest.kt`.
 final class HandshakeTests: XCTestCase {
     func testCarriesIdRateChannelsAndEpoch() {
         let data = Handshake.line(id: "iphone11", rate: 48000, epoch: 1_756_900_000.25)

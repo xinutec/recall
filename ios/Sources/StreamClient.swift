@@ -1,18 +1,14 @@
 import Foundation
 import Network
 
-/// Streams the mic to the recall ingester over TCP — and stays alive in the background.
+/// Streams the mic to the recorder host over TCP, and stays alive in the background.
 ///
-/// iOS keeps an app running in the background only while it holds an *active audio
-/// session*, so the mic is captured for the whole time the client is "on", not just
-/// while connected. PCM is forwarded only while a connection is up; when paused or
-/// unreachable the capture keeps running (so iOS doesn't suspend us) and the loop
-/// reconnects every 2 s. That is what lets the recorder enable/disable this device
-/// **over the network**: pause/resume on the server and the still-alive app follows —
-/// the same model as the Android mics. Pause vs. unreachable is read from `/api/capture`.
+/// iOS keeps a background app running only while it holds an active audio session, so
+/// the mic is captured the whole time the client is on, and PCM is forwarded only
+/// while connected. Paused or unreachable, it keeps capturing and retries every 2 s,
+/// so a pause on the server takes effect here as it does on Android.
 ///
-/// Loop: connect (5 s timeout) → handshake → forward captured PCM → on drop, sleep 2 s,
-/// retry. The mic itself never stops until `stop()`.
+/// Loop: connect (5 s timeout), handshake, forward PCM; on a drop, wait 2 s and retry.
 final class StreamClient {
     private let state: MicState
     private let audio = AudioCapture()
@@ -21,26 +17,21 @@ final class StreamClient {
     private var watchdog: Task<Void, Never>?
     private static let spoolSeconds = 60
     private var drainer: Task<Void, Never>?
-    /// Bounded capture-to-network hand-off (PcmSpool) — 60s of audio, enough to ride
-    /// out a busy host or a Wi-Fi stall without the mic ever pausing. Derived from
-    /// the capture rate rather than written as a literal: a hardcoded 16000 here
-    /// silently made this a twenty-second spool against a 48 kHz stream.
+    /// 60 s of audio between capture and network: rides out a busy host or a Wi-Fi
+    /// stall. Sized from the capture rate.
     private let spool = PcmSpool(
         capacityBytes: Int(AudioCapture.sampleRate) * 2 * StreamClient.spoolSeconds)
 
-    // The live connection, or nil when not connected. Read from the audio thread, so
-    // access is guarded by a lock.
+    // Nil when not connected. Read from the audio thread, so locked.
     private let connLock = NSLock()
     private var connection: NWConnection?
 
     private let connectTimeout: UInt64 = 5
     private let reconnectDelayNs: UInt64 = 2_000_000_000
 
-    /// Store-and-forward shadow (docs/architecture.md, stage C2): the same PCM
-    /// lands in capture-stamped local segments delivered with verified
-    /// receipts. Gated on the connection, exactly like Android's C1: iOS keeps
-    /// this mic hot even while paused (audio discarded by design), and the
-    /// connection is the one signal that means at-home + unpaused + wanted.
+    /// Local segments of the same PCM, delivered by `SegmentUpload`. Written only
+    /// while connected: the mic runs even while paused, and the connection is what
+    /// means at home and not paused.
     private let segments = SegmentWriter(source: Prefs.deviceID)
 
     init(state: MicState) {
@@ -48,15 +39,13 @@ final class StreamClient {
         segments.onSegmentClosed = { SegmentUpload.kick() }
     }
 
-    /// Begin capturing (held until `stop()`) and start the connect/stream loop.
-    /// Returns false if the mic couldn't be opened, so the caller can reflect that.
+    /// Start capturing (until `stop()`) and the connect loop; false if the mic did not
+    /// open.
     func start() -> Bool {
         guard loop == nil else { return true }
         do {
             try audio.start(
-                // Capture hands frames to the spool and returns — it never waits on
-                // the network. A separate drain task does the sending, so a busy or
-                // unreachable host can never reach back into the microphone.
+                // Capture only fills the spool; the drain task sends.
                 onPCM: { [weak self] data in self?.spool.offer(data) },
                 onLevel: { [weak self] level in
                     Task { @MainActor in self?.state.level = level }
@@ -83,9 +72,9 @@ final class StreamClient {
         setConnection(nil)
     }
 
-    /// The silent-mic watchdog: if the capture engine stops delivering buffers
-    /// (an interruption that never resumed, a wedged route), kick it and zero the
-    /// meter so the stall shows as silence instead of a frozen level. See Watchdog.
+    /// If capture stops delivering buffers (an interruption that never ended, a
+    /// wedged route), restart it and zero the meter rather than freeze it. See
+    /// Watchdog.
     private func watch() async {
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -96,8 +85,7 @@ final class StreamClient {
         }
     }
 
-    /// Send whatever capture has spooled, whenever a connection is up. Runs
-    /// independently of capture, so the microphone is never waiting on the network.
+    /// Send what capture spooled, while connected.
     private func drain() async {
         while !Task.isCancelled {
             let pending = spool.drain()
@@ -108,8 +96,7 @@ final class StreamClient {
             let connected = sendIfConnected(pending)
             if connected { segments.offer(pending) }
             if spool.dropped > 0 {
-                // The phone is the only place that can know audio was lost here,
-                // so it must be visible rather than silently absent.
+                // Only the phone can know (nothing shows or reports it yet).
                 await MainActor.run { state.droppedBytes = spool.dropped }
             }
         }
@@ -120,8 +107,8 @@ final class StreamClient {
     private func run() async {
         while !Task.isCancelled {
             if let conn = await connect(host: Prefs.host, port: Prefs.port) {
-                // Handshake first (sends are FIFO on the connection, so it precedes any
-                // PCM), then publish the connection so captured audio starts flowing.
+                // The handshake first (sends are in order), then publish the
+                // connection so PCM flows.
                 conn.send(
                     content: Handshake.line(
                         id: Prefs.deviceID, rate: 48000,
@@ -140,8 +127,7 @@ final class StreamClient {
             }
             if Task.isCancelled { break }
 
-            // Not connected — ask the control plane (Isis) whether this is a deliberate
-            // pause (vs the recorder host just being unreachable).
+            // Not connected: ask Isis whether this is a pause.
             let cap = await CaptureApi.state(host: Prefs.controlHost)
             await MainActor.run {
                 state.capture = cap
@@ -154,15 +140,13 @@ final class StreamClient {
 
     // MARK: - connection
 
-    /// Forward a captured PCM block if a connection is currently up; otherwise drop it.
+    /// Send a PCM block if connected; otherwise drop it.
     @discardableResult
     private func sendIfConnected(_ data: Data) -> Bool {
         connLock.lock()
         let conn = connection
         connLock.unlock()
-        // A send error on a TCP stream is fatal for the connection — cancel it so
-        // the main loop notices immediately and reconnects, instead of pumping PCM
-        // into a dead pipe until some later state change.
+        // A send error ends a TCP stream: cancel, so the loop reconnects at once.
         conn?.send(
             content: data,
             completion: .contentProcessed { [weak conn] err in
@@ -214,7 +198,7 @@ final class StreamClient {
         }
     }
 
-    /// Resolve once the connection drops (server pause closes the listener / network loss).
+    /// Returns when the connection drops (a pause closes the listener, or the network).
     private func waitUntilClosed(_ conn: NWConnection) async {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             var resumed = false

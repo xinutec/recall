@@ -1,7 +1,6 @@
 import Foundation
 
-/// One recorder's liveness for the fleet view (which mics are streaming now).
-/// Mirrors the Android `SourceStatus`.
+/// One recorder's liveness, as Android's `SourceStatus`.
 struct SourceStatus: Identifiable, Equatable {
     let id: String
     let name: String
@@ -10,13 +9,9 @@ struct SourceStatus: Identifiable, Equatable {
     let lastActive: Date?
 }
 
-/// Talks to the recall web API (port 8000) — the same control plane the web app and the
-/// Android app use — to read the *household* capture pause, control it, and read the
-/// fleet's per-recorder liveness. Since the Isis split the caller passes the *control
-/// host* (Isis), not the recorder host the stream uses: the API moved to Isis while the
-/// PCM ingest stayed on the Mac. The API stays up during a pause, so the app shows the
-/// true state even while the stream port is closed. If Isis is unreachable, calls just
-/// fail and the panels stay hidden rather than showing stale state.
+/// The web API on Isis: the household pause, read and set, and the recorders'
+/// liveness. It answers during a pause, when the recorder's port is closed. A failed
+/// call leaves the panels hidden.
 enum CaptureApi {
     private static let timeout: TimeInterval = 4
 
@@ -26,8 +21,8 @@ enum CaptureApi {
 
     // MARK: capture pause
 
-    /// With `wait` + `known` (the last stateToken) the server long-polls: the request
-    /// hangs until the household state changes, so a press anywhere lands in ~RTT.
+    /// With `wait` and `known` (the last stateToken), a long poll: the server answers
+    /// when the state changes.
     static func state(host: String, wait: Int = 0, known: String? = nil) async -> CaptureState {
         let query = wait > 0 ? "?wait=\(wait)&known=\(known ?? "")" : ""
         return await parseCapture(
@@ -44,8 +39,7 @@ enum CaptureApi {
 
     // MARK: fleet
 
-    /// nil = request failed (caller keeps its last list, doesn't blank the panel);
-    /// an empty array means the host genuinely has no sources.
+    /// nil: the request failed; empty: no sources.
     static func sources(host: String) async -> [SourceStatus]? {
         guard
             let data = await body(host, "/sources", "GET"),

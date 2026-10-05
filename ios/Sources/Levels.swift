@@ -1,9 +1,8 @@
 import Foundation
 
-/// Mic level meter math — a direct port of the Android app's `Levels.kt`, kept pure
-/// so it can be reasoned about and tested independently of audio plumbing.
+/// The level meter's arithmetic, as Android's `Levels.kt`.
 enum Levels {
-    /// Quietest level we still show, in dBFS. Below this is treated as room noise.
+    /// The quietest level shown, in dBFS.
     static let floorDbfs: Float = -70
 
     /// Peak amplitude of a block of signed 16-bit samples, normalised to 0...1.
@@ -24,13 +23,13 @@ enum Levels {
         return min(max(scaled, 0), 1)
     }
 
-    /// Convenience: meter position straight from a sample block.
+    /// The meter position for a sample block.
     static func meter(fromSamples samples: [Int16]) -> Float {
         meter(fromPeak: peakNormalised(samples))
     }
 
-    /// Colour tier of one meter segment — mirrors Android's `meterTier` (Levels.kt)
-    /// so the two meters read identically: green to 60%, orange to 85%, red above.
+    /// A meter segment's colour, as Android's: green to 60%, orange to 85%, red
+    /// above.
     enum MeterTier { case off, low, mid, high }
 
     static func tier(index: Int, lit: Int, segments: Int) -> MeterTier {

@@ -24,11 +24,8 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Recall Mic
-        # Reference the build settings above rather than restating them: xcodegen
-        # writes this plist literally, so without these two the bundle carried
-        # Apple's 1.0/1 defaults forever and the heartbeat's `version` — whose whole
-        # job is to make "restarted into a NEW BUILD" distinguishable from a crash —
-        # would be a constant across every version bump.
+        # xcodegen writes this plist literally: without these the bundle carries
+        # Apple's 1.0/1, and the heartbeat's `version` never changes.
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}

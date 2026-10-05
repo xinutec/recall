@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Single-screen UI mirroring the Android app: status card, live mic-level meter,
-/// household pause banner (Pause / Still-away / Resume), the Devices fleet panel,
-/// host field, device id, and Start/Stop.
+/// The one screen, as on Android: status, mic level, the household pause banner, the
+/// devices, the settings and Start/Stop.
 struct ContentView: View {
     @ObservedObject var state: MicState
     var onStart: () -> Void
@@ -65,20 +64,16 @@ struct ContentView: View {
 
     @ViewBuilder private var captureBanner: some View {
         if state.capture.reachable {
-            // The banner follows the desired state, with an explicit in-between while
-            // the mic hasn't confirmed — a press can't flap back on the next poll.
+            // The desired state, with "Pausing…"/"Resuming…" until the mic confirms.
             let paused = !state.capture.desiredRunning
             let transitioning = state.capture.micReachable && !state.capture.settled
             VStack(alignment: .leading, spacing: 10) {
-                // TimelineView ticks the "auto-resumes in Xh Ym" countdown every 30s
-                // without a manual timer (minute-granularity text stays within a minute).
+                // Every 30 s, for the minute countdown.
                 TimelineView(.periodic(from: .now, by: 30)) { ctx in
                     Text(bannerTitle(paused: paused, transitioning: transitioning, now: ctx.date))
                         .font(.headline)
                 }
-                // Buttons stay enabled while transitioning: intent is cheap and
-                // idempotent, so pressing again (or the other way) just overwrites
-                // the target — always abortable, never locked out.
+                // Enabled mid-transition: a press just replaces the desired state.
                 if paused {
                     HStack(spacing: 12) {
                         Button("Still away (24h)", action: onPause)
@@ -163,9 +158,7 @@ struct ContentView: View {
         }
     }
 
-    // The control-plane host (Isis). Separate from the recorder host because the Isis
-    // split put the capture API on a different machine than the PCM ingest; this drives
-    // the pause banner and Devices panel. Editable any time — it doesn't touch the stream.
+    // Isis, for the pause banner and the devices panel.
     private var controlHostField: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Control host (Isis)").font(.caption).foregroundStyle(.secondary)
@@ -181,9 +174,7 @@ struct ContentView: View {
         }
     }
 
-    // This device's own delivery credential (docs/architecture.md, the fourth
-    // plane): write-only and pinned to this source — losing the phone costs
-    // nothing but its uploads. Empty sends none.
+    // The bearer for this phone's segments, write-only and for this source alone.
     private var ingestTokenField: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Segment token").font(.caption).foregroundStyle(.secondary)
