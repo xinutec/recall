@@ -1,8 +1,6 @@
-"""The golden ASR gate: transcribe the committed speech fixtures with the real
-model and fail if word error rate drifts past each one's threshold.
-
-The regression net under the model and decoder seams — unit tests stub the ASR.
-On demand, never part of `verify`: it loads the model.
+"""The golden ASR check: transcribe the committed speech fixtures with the
+real model and fail if a word error rate drifts past its threshold. Run on
+demand, since it loads the model; the unit tests stub the ASR.
 
     python -m recall.score_asr [--model MODEL]
 """
@@ -21,12 +19,8 @@ FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "speech"
 
 @dataclass(frozen=True)
 class GoldenFixture:
-    """One clip in the golden ASR gate.
-
-    Single-language by construction: a mixed clip trips Whisper's
-    one-language-per-segment detection, which is a real code-switching weakness
-    rather than a regression signal.
-    """
+    """One clip. One language each: Whisper detects one language per segment,
+    so a mixed clip measures that weakness, not drift."""
 
     audio: str
     reference: str
@@ -34,13 +28,11 @@ class GoldenFixture:
     threshold: float
 
 
-# The dialogue pair is macOS `say` reading invented lines — nobody's voice, which
-# is what made committing it to a public repo safe. It carries the gate's only Dutch.
+# The dialogues are macOS `say` reading invented lines, so nobody's voice is
+# in the public repo; one is the only Dutch.
 #
-# Each threshold is its own measured baseline + ~0.05, never copied: the
-# references differ in exactness, and one number would import the loosest
-# denominator. These are drift bounds, not evidence about absolute quality. If a
-# legitimate runtime update trips one, re-baseline deliberately.
+# Each threshold is that fixture's measured baseline plus about 0.05: bounds on
+# drift, not measures of quality. Re-baseline on purpose if an update trips one.
 GOLDEN_FIXTURES = (
     GoldenFixture(
         audio="public-domain-en.flac",
@@ -70,12 +62,8 @@ def result_text(result: AsrResult) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Score every fixture and report. Returns 1 if any drifted.
-
-    A missing fixture FAILS rather than being skipped — a gate with less to score
-    than it claims must not report success (#1433). Passes no vocabulary bias, so
-    a name added in the UI cannot move the number.
-    """
+    """Score every fixture; 1 if any drifted or is missing (#1433). No
+    vocabulary prompt, so a name added in the UI cannot move the numbers."""
     parser = argparse.ArgumentParser(
         prog="recall-score-asr",
         description="Transcribe the committed speech fixtures with the real ASR "

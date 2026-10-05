@@ -1,8 +1,5 @@
-"""The model-shim protocol (stage E2).
-
-The protocol half is pure, so it is tested directly; the stdout-isolation half
-is tested through a real subprocess, because that is the only place the hazard
-it guards against can actually happen.
+"""The model-shim protocol. Keeping stdout clean is tested in a real
+subprocess, the only place it can fail.
 """
 
 from __future__ import annotations
@@ -42,8 +39,7 @@ def test_a_request_becomes_a_response_carrying_its_id() -> None:
 
 
 def test_hello_is_answered_without_the_handler() -> None:
-    # The runner uses hello to learn a shim is alive — it must work even for a
-    # shim whose model failed to load, so it never reaches the handler.
+    # It must work even when the model failed to load.
     def explode(op: str, args: JsonDict) -> JsonValue:
         raise AssertionError("handler must not be called for hello")
 
@@ -53,8 +49,6 @@ def test_hello_is_answered_without_the_handler() -> None:
 
 
 def test_a_malformed_line_is_answered_and_the_loop_continues() -> None:
-    # A shim that dies on one bad request loses weights that took seconds to
-    # load, and strands the queue behind it.
     got = run(["not json at all", '{"id": "2", "op": "x"}'])
     assert got[0]["ok"] is False
     assert "unparsable" in text(got[0], "error")
@@ -77,8 +71,7 @@ def test_blank_lines_are_ignored_not_answered() -> None:
 
 
 def test_ok_and_fail_round_trip_unicode_unescaped() -> None:
-    # Transcripts are Dutch as often as English; \u escaping would bloat every
-    # response and make the wire unreadable by hand.
+    # Readable by hand, not \u-escaped.
     assert "café" in ok("1", {"text": "café"})
     assert "café" in fail("1", "café")
 
@@ -89,9 +82,7 @@ def test_a_missing_op_is_unusable_rather_than_guessed() -> None:
 
 
 def test_stdout_pollution_by_the_model_cannot_corrupt_the_wire() -> None:
-    # ⚠ The hazard: mlx-whisper and friends print progress. A stray line would
-    # desync the stream silently, because the next parse fails on data that
-    # looks almost right. serve() must make library prints go to stderr.
+    # mlx-whisper prints progress.
     script = (
         "import sys; sys.path.insert(0, 'src')\n"
         "from recall.shim import serve\n"
@@ -109,7 +100,6 @@ def test_stdout_pollution_by_the_model_cannot_corrupt_the_wire() -> None:
         cwd=Path(__file__).resolve().parent.parent,
         check=True,
     )
-    # Every stdout line must be protocol, and nothing else.
     lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
     assert len(lines) == 1, f"stdout carried non-protocol lines: {lines}"
     assert json.loads(lines[0]) == {"id": "1", "ok": True, "result": {"done": True}}
@@ -117,13 +107,7 @@ def test_stdout_pollution_by_the_model_cannot_corrupt_the_wire() -> None:
 
 
 def test_a_non_finite_float_never_reaches_the_wire() -> None:
-    """⚠ `json.dumps` writes bare `NaN`, `Infinity` and `-Infinity`, and none of
-    them is JSON. Python reads them back, so a round-trip in this language proves
-    nothing; the runner is Rust and `serde_json` refuses the whole reply with
-    `expected value at line 1 column N` — transcript lost, GPU time spent.
-
-    Whisper returns non-finite `avg_logprob` and word probabilities on degenerate
-    audio, which is what a quiet minute in this archive looks like."""
+    """See `recall.shim.finite`. A Python round-trip would not show it."""
     line = ok(
         "7",
         {
@@ -142,8 +126,7 @@ def test_a_non_finite_float_never_reaches_the_wire() -> None:
     for literal in ("NaN", "Infinity", "-Infinity"):
         assert literal not in line, f"{literal} reached the wire: {line}"
 
-    # And the reply is still usable: the finite values survive, the others are
-    # null rather than the job being refused over one bad score.
+    # The rest of the reply survives.
     back = json.loads(line)
     segment = back["result"]["segments"][0]
     assert segment["avg_logprob"] is None

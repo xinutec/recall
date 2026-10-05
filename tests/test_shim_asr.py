@@ -1,8 +1,4 @@
-"""The `asr` shim's argument handling and wire form (stage E2).
-
-The model itself is injected: what needs testing here is the contract with the
-runner, not mlx-whisper, which has no business running in a unit test.
-"""
+"""The `asr` shim's argument handling and wire form, with the model faked."""
 
 from __future__ import annotations
 
@@ -16,9 +12,7 @@ from recall.shim_asr import Transcribe, handle, result_to_json
 
 
 def as_dict(value: JsonValue) -> dict[str, JsonValue]:
-    """Narrow one wire value. The protocol's type is a UNION on purpose — a
-    handler may return any JSON — so reading a known shape out of it is an
-    assertion about the contract, and worth making explicitly in a test."""
+    """Narrow one wire value to the shape the contract promises."""
     assert isinstance(value, dict), value
     return value
 
@@ -92,7 +86,6 @@ def test_a_transcribe_request_reaches_the_model_with_its_arguments(
     assert seen["model"] == "mlx-community/whisper-small"
     assert seen["language"] == "nl"
     assert seen["words"] is True
-    # Vocabulary biasing is carried, not fetched: the shim reads no database.
     assert seen["initial_prompt"] == "Oskar, Kat"
     assert as_dict(out)["language"] == "nl"
     assert segment(out)["text"] == "hallo daar"
@@ -111,8 +104,6 @@ def test_defaults_are_applied_when_the_caller_omits_them(tmp_path: Path) -> None
 
 
 def test_a_missing_clip_is_refused_clearly(tmp_path: Path) -> None:
-    # Better than whatever the model would say about a missing file, and the
-    # runner can ack and move on.
     with pytest.raises(FileNotFoundError):
         handle("transcribe", {"audio": str(tmp_path / "nope.flac")})
 
@@ -127,7 +118,7 @@ def test_an_unknown_op_is_refused(tmp_path: Path) -> None:
         handle("summarise", {"audio": "/x"})
 
 
-def test_word_timings_are_absent_from_the_wire_when_not_requested() -> None:
+def test_word_timings_are_empty_on_the_wire_when_not_requested() -> None:
     bare = AsrResult(
         language="en",
         language_confidence=None,

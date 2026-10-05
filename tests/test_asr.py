@@ -1,105 +1,14 @@
-"""ASR result mapping and working-copy command construction (pure, no model)."""
+"""The ASR result types, the slice and decode helpers, and the sampler fix."""
 
 from __future__ import annotations
 
 import math
 import subprocess
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from conftest import make_flac
-from recall.asr import (
-    AsrResult,
-    AsrSegment,
-    build_concat_argv,
-    build_slice_argv,
-    build_working_copy_argv,
-    concat_working_copy,
-    decode_pcm_f32,
-    result_to_drafts,
-)
-
-BASE = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
-
-
-def test_working_copy_is_mono_16k_normalised() -> None:
-    argv = build_working_copy_argv(Path("/a/seg.flac"), Path("/b/seg.wav"))
-    assert argv[0] == "ffmpeg"
-    assert argv[argv.index("-ar") + 1] == "16000"
-    assert argv[argv.index("-ac") + 1] == "1"
-    # loudness-normalised for the ASR copy (raw archive is untouched)
-    assert "loudnorm" in argv[argv.index("-af") + 1]
-    assert argv[-1] == "/b/seg.wav"
-
-
-def test_concat_argv_joins_every_input_and_normalises_once() -> None:
-    argv = build_concat_argv(
-        [Path("/a/1.opus"), Path("/a/2.opus"), Path("/a/3.opus")],
-        Path("/b/run.wav"),
-        normalize=True,
-    )
-    assert argv[0] == "ffmpeg"
-    assert argv.count("-i") == 3
-    graph = argv[argv.index("-filter_complex") + 1]
-    assert "[0:a][1:a][2:a]concat=n=3" in graph
-    assert graph.endswith("[j];[j]loudnorm[out]")
-    assert argv[argv.index("-ar") + 1] == "16000"
-    assert argv[argv.index("-ac") + 1] == "1"
-    assert argv[-1] == "/b/run.wav"
-
-
-def test_concat_can_skip_normalising_so_a_join_changes_nothing_else() -> None:
-    # The comparison-safe mode: sources are already normalised, so joining them must
-    # not re-gain the audio — otherwise a windowed run differs from its baseline in
-    # two ways at once and neither can be attributed.
-    argv = build_concat_argv(
-        [Path("/a/1.wav"), Path("/a/2.wav")], Path("/b/run.wav"), normalize=False
-    )
-    graph = argv[argv.index("-filter_complex") + 1]
-    assert "loudnorm" not in graph
-    assert graph.endswith("[j];[j]anull[out]")
-
-
-def test_concat_needs_a_source(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="at least one source"):
-        concat_working_copy([], tmp_path / "out.wav", normalize=True)
-
-
-def test_concat_really_joins_audio(tmp_path: Path) -> None:
-    # End-to-end through ffmpeg: three 1s tones must come back as ~3s of audio, so the
-    # filter graph is right and not just plausible.
-    parts = []
-    for i in range(3):
-        part = tmp_path / f"p{i}.flac"
-        make_flac(part, seconds=1.0)
-        parts.append(part)
-    out = tmp_path / "joined.wav"
-    concat_working_copy(parts, out, normalize=True)
-    assert out.exists()
-    assert 2.5 <= _duration_seconds(out) <= 3.5
-
-
-def _duration_seconds(path: Path) -> float:
-    """Duration via ffprobe. Local to this test because `recall.probe` went with
-    the CLI (#1342) — what is under test here is the concat, not the prober."""
-    out = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=nw=1:nk=1",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return float(out.stdout.strip())
+from recall.asr import AsrSegment, build_slice_argv, decode_pcm_f32
 
 
 def test_slice_argv_extracts_window() -> None:
@@ -135,13 +44,12 @@ def test_decode_pcm_f32_returns_normalised_mono_waveform(tmp_path: Path) -> None
 
     wave = decode_pcm_f32(flac, sample_rate=16000)
 
-    # 1 second at 16 kHz, 1-D float32, in [-1, 1] — what a feature extractor wants.
     assert wave.ndim == 1
     assert wave.dtype.name == "float32"
     assert abs(len(wave) - 16000) <= 160  # within ~10ms of one second
     assert float(wave.max()) <= 1.0
     assert float(wave.min()) >= -1.0
-    assert float(abs(wave).max()) > 0.1  # a real tone, not silence
+    assert float(abs(wave).max()) > 0.1  # a tone, not silence
 
 
 def test_confidence_from_avg_logprob() -> None:
@@ -154,90 +62,17 @@ def test_confidence_from_avg_logprob() -> None:
     assert confident.confidence == 1.0
 
 
-def test_result_to_drafts_offsets_to_absolute_time() -> None:
-    result = AsrResult(
-        language="en",
-        language_confidence=0.97,
-        segments=(
-            AsrSegment(
-                start=0.0,
-                end=2.0,
-                text=" Hello ",
-                avg_logprob=-0.2,
-                no_speech_prob=0.0,
-            ),
-            AsrSegment(
-                start=2.0,
-                end=4.0,
-                text="world",
-                avg_logprob=-0.5,
-                no_speech_prob=0.0,
-            ),
-        ),
-    )
-    drafts = result_to_drafts(result, segment_start=BASE, model_name="whisper-x")
-
-    assert len(drafts) == 2
-    assert drafts[0].start == BASE
-    assert drafts[0].end == BASE + timedelta(seconds=2)
-    assert drafts[0].text == "Hello"  # stripped
-    assert drafts[0].language == "en"
-    assert drafts[0].language_confidence == 0.97
-    assert drafts[0].asr_model == "whisper-x"
-    assert drafts[1].start == BASE + timedelta(seconds=2)
-
-
-def test_result_to_drafts_skips_empty_text() -> None:
-    result = AsrResult(
-        language="en",
-        language_confidence=None,
-        segments=(
-            AsrSegment(
-                start=0.0,
-                end=1.0,
-                text="   ",
-                avg_logprob=-0.1,
-                no_speech_prob=0.9,
-            ),
-            AsrSegment(
-                start=1.0,
-                end=2.0,
-                text="real",
-                avg_logprob=-0.1,
-                no_speech_prob=0.0,
-            ),
-        ),
-    )
-    drafts = result_to_drafts(result, segment_start=BASE, model_name="m")
-    assert [d.text for d in drafts] == ["real"]
-
-
-def test_every_derived_copy_builder_refuses_stdin() -> None:
-    """ffmpeg reads stdin for its interactive controls, so it eats the parent's.
-
-    Invisible under launchd, where stdin is closed — which is why this went
-    unnoticed. It shows up when a person runs `scripts/recall.sh transcribe`
-    from a terminal and ffmpeg swallows the keystrokes, once per segment.
-
-    The flag lives in the argv rather than `stdin=DEVNULL` at the call site so
-    that it travels with the command and this test is what holds it there.
-    """
-    builders = [
-        build_working_copy_argv(Path("/a/seg.flac"), Path("/b/seg.wav")),
-        build_concat_argv(
-            [Path("/a/1.opus"), Path("/a/2.opus")], Path("/b/run.wav"), normalize=True
-        ),
-        build_slice_argv(Path("/a/clip.wav"), Path("/b/turn.wav"), 1.5, 4.25),
-    ]
-    for argv in builders:
-        assert "-nostdin" in argv, argv
-        # Before the first -i: ffmpeg only honours it as an input option.
-        assert argv.index("-nostdin") < argv.index("-i"), argv
+def test_the_slice_refuses_stdin() -> None:
+    """ffmpeg reads stdin for its interactive controls, so run from a terminal
+    it swallows keystrokes. The flag is in the argv, so this test holds it."""
+    argv = build_slice_argv(Path("/a/clip.wav"), Path("/b/turn.wav"), 1.5, 4.25)
+    assert "-nostdin" in argv
+    # Only honoured as an input option.
+    assert argv.index("-nostdin") < argv.index("-i")
 
 
 def test_the_temperature_fallback_draws_fresh_noise_each_time() -> None:
-    # As shipped, mlx-whisper's compiled sampler froze one random key, so every
-    # draw in a process repeated and the loop-escaping fallback made loops.
+    # As shipped, mlx-whisper's compiled sampler froze one random key.
     mx = pytest.importorskip("mlx.core")
     decoding = pytest.importorskip("mlx_whisper.decoding")
     from recall.asr import unfreeze_sampling  # noqa: PLC0415 - needs mlx

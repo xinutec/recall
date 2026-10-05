@@ -1,14 +1,8 @@
-"""Every `recall.*` import in the package resolves — including the lazy ones.
+"""Every `recall.*` import in the package resolves, including the lazy ones.
 
-A lazy import (inside a function, behind `# noqa: PLC0415`) is not loaded until
-its code runs, so deleting the module it names leaves ruff, mypy and the suite
-green while that code fails at runtime with `ImportError`.
-
-⚠ Checked against a broken import: point one lazy import at a missing module and
-this fails, naming the file, the module and the line.
-
-⚠ `mypy` is no substitute: its incremental cache can still hold a module that was
-just deleted, which is exactly when this matters.
+A lazy import (inside a function) is not loaded until its code runs, so ruff,
+mypy (whose cache can still hold a deleted module) and the rest of the suite
+stay green when its module is gone.
 """
 
 from __future__ import annotations
@@ -46,9 +40,7 @@ def _recall_imports() -> list[tuple[str, str, int]]:
     ids=str,
 )
 def test_every_recall_import_resolves(source: str, module: str, line: int) -> None:
-    # ⚠ The heavy modules (mlx, torch, pyannote) are imported lazily ON purpose so
-    # the capture agents stay ML-free. Importing them here is fine — the test
-    # environment has them — and it is the only way to prove the name is real.
+    # The test venv has the heavy modules, so importing them proves the name.
     try:
         importlib.import_module(module)
     except ImportError as exc:  # pragma: no cover - the failure is the point

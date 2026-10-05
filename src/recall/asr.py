@@ -1,23 +1,17 @@
-"""Speech recognition: working-copy derivation, result types, and mapping.
-
-The actual model call (`mlx_transcribe`) is isolated and lazily imports
-mlx-whisper, so the pure logic here — building the normalised working copy and
-mapping a result to absolute-time transcript drafts — is testable without any
-model. Anything that wants to transcribe takes a `Transcriber`.
+"""Speech recognition: the result types, audio slicing and decoding, and the
+mlx-whisper call, which imports lazily so the rest is testable without it.
 """
 
 from __future__ import annotations
 
 import math
 import subprocess
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
-from statistics import mean
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import numpy as np
@@ -27,8 +21,7 @@ DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
 
 @dataclass(frozen=True)
 class Word:
-    """One word with its clip-relative timing (Whisper word_timestamps). The
-    timings are what let us assign words to diarized speakers."""
+    """One word, timed from the start of the clip."""
 
     start: float
     end: float
@@ -38,7 +31,7 @@ class Word:
 
 @dataclass(frozen=True)
 class AsrSegment:
-    """One transcribed span, timed from the start of the working-copy clip."""
+    """One transcribed span, timed from the start of the clip."""
 
     start: float
     end: float
@@ -61,128 +54,10 @@ class AsrResult:
     language_confidence: float | None
     segments: tuple[AsrSegment, ...]
 
-    @property
-    def words(self) -> tuple[Word, ...]:
-        """Every word across all segments, in order (empty unless transcribed with
-        word_timestamps)."""
-        return tuple(word for segment in self.segments for word in segment.words)
-
-
-@dataclass(frozen=True)
-class TranscriptDraft:
-    """A transcript segment in absolute wall-clock time, ready to store."""
-
-    start: datetime
-    end: datetime
-    text: str
-    language: str
-    language_confidence: float | None
-    asr_confidence: float
-    asr_model: str
-
-
-class Transcriber(Protocol):
-    """Anything that turns an audio file into an `AsrResult`."""
-
-    def __call__(self, audio: Path, /) -> AsrResult: ...
-
-
-def build_working_copy_argv(
-    src: Path, dst: Path, *, sample_rate: int = 16000
-) -> list[str]:
-    """ffmpeg argv to derive the ASR-facing working copy.
-
-    Mono, 16 kHz, loudness-normalised — what Whisper wants. This is a *derived*
-    copy; the raw archive segment is never modified (design req #1).
-    """
-    return [
-        "ffmpeg",
-        "-nostdin",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        str(src),
-        "-ac",
-        "1",
-        "-ar",
-        str(sample_rate),
-        "-af",
-        "loudnorm",
-        "-f",
-        "wav",
-        str(dst),
-    ]
-
-
-def make_working_copy(src: Path, dst: Path, *, sample_rate: int = 16000) -> None:
-    """Produce the normalised working copy at `dst`."""
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        build_working_copy_argv(src, dst, sample_rate=sample_rate), check=True
-    )
-
-
-def build_concat_argv(
-    sources: Sequence[Path], dst: Path, *, sample_rate: int = 16000, normalize: bool
-) -> list[str]:
-    """ffmpeg argv to join `sources` end-to-end into one working copy.
-
-    Mono and 16 kHz like `build_working_copy_argv`, over several inputs — for treating a
-    run of consecutive capture segments as the single recording it acoustically is.
-
-    `normalize` decides where loudness normalisation happens, and it is not a detail.
-    True applies one `loudnorm` across the join, which reads well but makes the joined
-    audio differ from the same segments normalised singly — so a comparison against a
-    per-segment baseline is measuring two changes at once. False expects the caller to
-    have normalised each source already and only joins them, which isolates the join.
-    Prefer False whenever the join is being compared against unjoined segments.
-
-    Caller's job to pass only temporally adjacent sources, in order — nothing here
-    checks it, and joining across a recording gap would invent adjacency, and with it a
-    speaker change that never happened. `attribution.context_window` is what enforces
-    adjacency for the eval.
-    """
-    argv = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]
-    for src in sources:
-        argv += ["-i", str(src)]
-    streams = "".join(f"[{i}:a]" for i in range(len(sources)))
-    graph = f"{streams}concat=n={len(sources)}:v=0:a=1[j]"
-    graph += ";[j]loudnorm[out]" if normalize else ";[j]anull[out]"
-    argv += [
-        "-filter_complex",
-        graph,
-        "-map",
-        "[out]",
-        "-ac",
-        "1",
-        "-ar",
-        str(sample_rate),
-        "-f",
-        "wav",
-        str(dst),
-    ]
-    return argv
-
-
-def concat_working_copy(
-    sources: Sequence[Path], dst: Path, *, sample_rate: int = 16000, normalize: bool
-) -> None:
-    """Join `sources` (adjacent, in order) into one working copy at `dst`. See
-    `build_concat_argv` for what `normalize` costs you if you get it wrong."""
-    if not sources:
-        msg = "concat_working_copy needs at least one source"
-        raise ValueError(msg)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        build_concat_argv(sources, dst, sample_rate=sample_rate, normalize=normalize),
-        check=True,
-    )
-
 
 def build_slice_argv(src: Path, dst: Path, start: float, end: float) -> list[str]:
-    """ffmpeg argv to extract the [start, end] second window of `src`."""
+    """ffmpeg argv to extract seconds `start` to `end` of `src`. `-nostdin`
+    before `-i`, or ffmpeg reads the terminal's keystrokes."""
     return [
         "ffmpeg",
         "-nostdin",
@@ -201,20 +76,14 @@ def build_slice_argv(src: Path, dst: Path, start: float, end: float) -> list[str
 
 
 def slice_clip(src: Path, dst: Path, start: float, end: float) -> None:
-    """Extract the [start, end] second window of `src` into `dst`."""
+    """Extract seconds `start` to `end` of `src` into `dst`."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(build_slice_argv(src, dst, start, end), check=True)
 
 
 @contextmanager
 def scratch_wav(path: Path) -> Iterator[Path]:
-    """Yield `path` for a transient working clip, deleting it on exit.
-
-    The batch passes (refine/ingest/identify) decode a working copy per segment and
-    slice a clip per turn, consume each immediately (transcribe/diarize/embed), then
-    never read it again. Wrapping every clip in this keeps the shared `work/` dir
-    from growing without bound — the files are scratch, not output.
-    """
+    """Yield `path` for a scratch clip, deleting it on exit."""
     try:
         yield path
     finally:
@@ -222,11 +91,8 @@ def scratch_wav(path: Path) -> Iterator[Path]:
 
 
 def decode_pcm_f32(audio: Path, *, sample_rate: int = 16000) -> np.ndarray:
-    """Decode `audio` to a 1-D mono float32 waveform at `sample_rate`, via ffmpeg.
-
-    Feeds Whisper feature extractors directly, bypassing the `datasets`/torchcodec
-    audio backend, which fails to load its shared libs on this torch stack (the
-    same decode path pyannote can't take). Samples are in [-1, 1].
+    """Decode `audio` to mono float32 samples in [-1, 1] at `sample_rate`, via
+    ffmpeg: torchcodec cannot load its shared libraries on this torch stack.
     """
     import numpy as np  # noqa: PLC0415 - keep numpy out of the module import surface
 
@@ -253,40 +119,6 @@ def decode_pcm_f32(audio: Path, *, sample_rate: int = 16000) -> np.ndarray:
     return np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def combine_result(result: AsrResult) -> tuple[str, float | None]:
-    """Join a result's segments into one text and a mean confidence.
-
-    Used when a whole clip (e.g. one speaker turn) should become a single
-    transcript row.
-    """
-    text = " ".join(s.text.strip() for s in result.segments if s.text.strip())
-    confidences = [s.confidence for s in result.segments]
-    return text.strip(), (mean(confidences) if confidences else None)
-
-
-def result_to_drafts(
-    result: AsrResult, *, segment_start: datetime, model_name: str
-) -> list[TranscriptDraft]:
-    """Map a clip-relative `AsrResult` to absolute-time transcript drafts."""
-    drafts: list[TranscriptDraft] = []
-    for segment in result.segments:
-        text = segment.text.strip()
-        if not text:
-            continue
-        drafts.append(
-            TranscriptDraft(
-                start=segment_start + timedelta(seconds=segment.start),
-                end=segment_start + timedelta(seconds=segment.end),
-                text=text,
-                language=result.language,
-                language_confidence=result.language_confidence,
-                asr_confidence=segment.confidence,
-                asr_model=model_name,
-            )
-        )
-    return drafts
-
-
 def _extract_words(segment: dict[str, object]) -> tuple[Word, ...]:
     raw = segment.get("words")
     if not isinstance(raw, list):
@@ -308,13 +140,12 @@ _UNFROZEN: set[object] = set()
 
 def unfreeze_sampling() -> None:
     """Make mlx-whisper's temperature fallback draw fresh noise per token.
+    Idempotent.
 
-    ⚠ Its `categorical` is `@mx.compile`d without the random state as an input,
-    so the compile freezes one key: every draw in a process repeats it. The
-    fallback meant to escape a repetition loop then feeds the same noise to
-    every token and makes loops instead. Measured on four stuck clips, three
-    fresh processes each: 7 of 15 looped as shipped, 0 of 15 with the state
-    threaded through (#1764). Idempotent.
+    Its `categorical` is `@mx.compile`d without the random state as an input,
+    which freezes one key, so the fallback meant to escape a repetition loop
+    repeats the same noise and makes loops. On four stuck clips, three runs
+    each: 7 of 15 looped as shipped, 0 of 15 with the state passed (#1764).
     """
     import mlx.core as mx  # noqa: PLC0415 - lazy, as mlx_whisper
     from mlx_whisper import decoding  # noqa: PLC0415 - lazy, as mlx_whisper
@@ -338,25 +169,20 @@ def mlx_transcribe(
     words: bool = False,
     initial_prompt: str | None = None,
 ) -> AsrResult:
-    """Transcribe `audio` with mlx-whisper (Apple-Silicon native). Lazy import.
+    """Transcribe `audio` with mlx-whisper.
 
-    `language` forces a language (e.g. "en"/"nl"); None auto-detects. `words=True`
-    adds per-word timings (for aligning a whole-segment transcription to diarized
-    speakers) at some extra cost; off by default. `initial_prompt` biases decoding
-    toward the household vocabulary — names it has seen in the prompt get spelled
-    right. The prompt is built by the fleet (`recalld::labels::initial_prompt`)
-    and handed to the shim per job; the Python that used to build it is gone.
+    `language` ("en", "nl") forces a language; None detects it. `words` adds
+    word timings. `initial_prompt` is the vocabulary
+    (`recalld::labels::initial_prompt`), which gets names spelled right.
     """
     import mlx_whisper  # noqa: PLC0415 - lazy: mlx-whisper is an optional heavy dep
 
     unfreeze_sampling()
 
-    # Anti-hallucination decoding. condition_on_previous_text=False stops a
-    # repetition loop from feeding itself across windows; the temperature
-    # fallback re-decodes a window whose output trips the compression-ratio
-    # (repetition) or logprob (gibberish) thresholds. These only work when the
-    # input has real context — hence we transcribe whole segments, never tiny
-    # isolated slices.
+    # Against hallucination: no conditioning on the previous window, so a loop
+    # cannot feed itself, and a window that trips the compression-ratio
+    # (repetition) or logprob (gibberish) threshold is decoded again warmer.
+    # Both need context, so whole segments are transcribed, not slices.
     raw = mlx_whisper.transcribe(
         str(audio),
         path_or_hf_repo=model,

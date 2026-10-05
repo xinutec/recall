@@ -1,17 +1,9 @@
-"""The `voices` shim (stage E4): pyannote behind the stdio protocol.
+"""The `voices` shim: pyannote diarization and embedding behind the stdio
+protocol. Run as `python -m recall.shim_voices`.
 
-Run as `python -m recall.shim_voices`. The second shim after `asr`, and the one
-that lets the Rust runner own refinement: diarization says who spoke when, and
-embedding turns a clip into the vector that names them. Both are pyannote, both
-are Python only because the model is.
-
-⚠ **It reads no database.** The coverage guards and the write that replaces a
-transcript live in Rust beside the database (`recalld::diarized`), with their
-own tests; this shim is only the model call.
-
-Matching against enrolled voiceprints is not here either: it is arithmetic over
-vectors, so it belongs on the side that owns the profiles (`recalld::identify`),
-not in the process holding the weights.
+Only the model calls are here. What is done with the turns is in
+`recalld::diarized`, and matching vectors to enrolled voices in
+`recalld::identify`.
 """
 
 from __future__ import annotations
@@ -31,7 +23,7 @@ NAME = "voices"
 
 
 class Diarize(Protocol):
-    """What the shim needs of a diarizer — the real one is `pyannote_diarize`."""
+    """A diarizer; the real one is `pyannote_diarize`."""
 
     def __call__(
         self,
@@ -45,18 +37,14 @@ class Diarize(Protocol):
 
 
 class Embed(Protocol):
-    """What the shim needs of an embedder — the real one is `pyannote_embed`."""
+    """An embedder; the real one is `pyannote_embed`."""
 
     def __call__(self, audio: Path, /, *, model: str) -> list[float]: ...
 
 
 def _clip(args: JsonDict) -> Path:
-    """The audio path from a request, or a refusal naming what was wrong.
-
-    A missing file is refused here rather than left to the model: the runner can
-    ack a job it cannot do and move on, where a library's own error arrives as
-    whatever that library felt like saying.
-    """
+    """The audio path from a request; a missing file is refused here, with a
+    clearer error than the library's."""
     audio = args.get("audio")
     if not isinstance(audio, str) or not audio:
         raise ValueError("needs an audio path")
@@ -79,16 +67,11 @@ def _optional_int(args: JsonDict, key: str) -> int | None:
 def _embed_speakers(
     audio: Path, turns: list[SpeakerTurn], embed: Embed, model: str
 ) -> list[JsonValue]:
-    """One voiceprint per distinct speaker in the clip, from their LONGEST span.
+    """One vector per speaker in the clip, from their longest span. Per speaker,
+    not per line: lines are aligned on the server, after this job.
 
-    Per speaker rather than per aligned turn: alignment happens on the fleet,
-    which needs the words from another job, so per-turn embedding would cost a
-    second round trip per clip. A speaker's longest span is already here, and
-    usually longer than any one turn, which helps a voiceprint.
-
-    A span that will not slice is SKIPPED, not faked: a corrupt frame makes ffmpeg
-    fail on some clips, and a speaker with no vector is simply one the fleet will
-    not guess a name for — which is the right answer when the audio is unreadable.
+    A span ffmpeg cannot slice (a corrupt frame) is skipped; that speaker gets
+    no name guess.
     """
     longest: dict[str, SpeakerTurn] = {}
     for turn in turns:
@@ -101,7 +84,7 @@ def _embed_speakers(
             with scratch_wav(audio.parent / f"{audio.stem}-{speaker}.wav") as clip:
                 slice_clip(audio, clip, turn.start, turn.end)
                 vector: list[JsonValue] = list(embed(clip, model=model))
-        except Exception:  # a bad clip costs one speaker, never the whole reply
+        except Exception:  # costs this speaker, not the reply
             continue
         out.append(
             {
@@ -120,8 +103,8 @@ def handle(
     diarize: Diarize = pyannote_diarize,
     embed: Embed = pyannote_embed,
 ) -> JsonValue:
-    """Answer one request. The collaborators are injected so the protocol and the
-    argument handling are testable without a gated download or 2 GB of weights."""
+    """Answer one request. `diarize` and `embed` are parameters so tests need
+    no weights."""
     if op == "diarize":
         audio = _clip(args)
         turns = diarize(
@@ -145,16 +128,11 @@ def handle(
         audio = _clip(args)
         start = _optional_float(args, "start")
         end = _optional_float(args, "end")
-        # ⚠ A span, when one is asked for. Enrolment names one labelled turn, and
-        # embedding the whole clip it sits in would make a voiceprint mostly of
-        # whoever else was in the room. Both or neither: a half-given span is a
-        # caller bug, and defaulting the missing end to the clip's would enrol a
-        # different stretch than the one that was named.
+        # A span, when given: enrolment names one turn, and the rest of the
+        # clip holds other voices. Half a span is a caller bug.
         if (start is None) != (end is None):
             raise ValueError("embed: start and end are given together or not at all")
-        # Re-built as JsonValue rather than passed through: `list[float]` is not a
-        # `list[JsonValue]` to a type checker, and the wire type is stated on
-        # purpose (recall.shim) so an unserialisable result is an error here.
+        # Copied into a `list[JsonValue]`, which `list[float]` is not to mypy.
         if start is None or end is None:
             vector: list[JsonValue] = list(embed(audio, model=model))
             return {"vector": vector}

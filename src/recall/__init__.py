@@ -1,7 +1,4 @@
-"""recall — local household speech recall system (memory aid).
-
-See docs/architecture.md.
-"""
+"""recall's model shims (docs/architecture.md)."""
 
 __all__ = ["__version__"]
 

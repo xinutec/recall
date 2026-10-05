@@ -1,21 +1,14 @@
-"""The model-shim protocol (stage E2): JSON over stdio, one job at a time.
+"""The model-shim protocol: one JSON request per line on stdin, one response
+per line on stdout.
 
-Python survives in this architecture only where a model is called
-(docs/architecture.md, principle 6). A shim is that survival: a long-lived
-process holding weights, reading one request per line and writing one response
-per line, doing no I/O beyond its stdio and the audio path it is handed. The
-Rust runner owns the queue, the fetching and the retries; the shim owns nothing.
+Python is kept only where a model is called (docs/architecture.md). A shim
+holds the weights and touches nothing but its stdio and the audio path it is
+given; the Rust runner owns the queue, fetching and retries. Lines, so a shim
+can be driven by hand from a terminal.
 
-Line-delimited JSON rather than a framed protocol: a shim's traffic is a handful
-of messages per minute, and being able to drive one by hand from a terminal is
-worth more here than bytes on the wire.
-
-⚠ **stdout is the protocol, so nothing else may touch it.** mlx-whisper and its
-dependencies print progress and warnings, and a single stray line would desync
-the stream — silently, because JSON parsing would then fail on data that looks
-almost right. `serve` redirects `sys.stdout` to stderr for the whole run and
-keeps a private handle for responses, so a library print becomes a log line
-instead of a corruption.
+stdout is the protocol. mlx-whisper and its dependencies print progress, so
+`serve` points `sys.stdout` at stderr and writes responses to a private
+handle.
 """
 
 from __future__ import annotations
@@ -28,14 +21,13 @@ import traceback
 from collections.abc import Callable, Iterator
 from typing import TextIO
 
-#: What crosses the wire. Spelled out rather than `Any`, so a handler returning
-#: something unserialisable is a type error here and not a crash mid-stream.
+#: What crosses the wire. Not `Any`, so an unserialisable result is a type
+#: error, not a crash mid-stream.
 type JsonValue = (
     str | int | float | bool | list[JsonValue] | dict[str, JsonValue] | None
 )
 type JsonDict = dict[str, JsonValue]
 
-#: What a handler is: an op name and its arguments, returning a JSON-able result.
 Handler = Callable[[str, "JsonDict"], "JsonValue"]
 
 HELLO = "hello"
@@ -43,10 +35,7 @@ HELLO = "hello"
 
 def parse_request(line: str) -> tuple[str | None, str | None, JsonDict]:
     """`(id, op, args)` for one request line; `op` is None when unusable.
-
-    Never raises: a malformed line is a message the caller answers with an
-    error, not a reason to take the process down. A shim that dies on one bad
-    request loses the weights it spent seconds loading.
+    Never raises: dying on one bad line would throw away the loaded weights.
     """
     try:
         message = json.loads(line)
@@ -67,21 +56,10 @@ def parse_request(line: str) -> tuple[str | None, str | None, JsonDict]:
 def finite(value: JsonValue) -> JsonValue:
     """Replace every non-finite float with `None`, recursively.
 
-    ⚠ **`json.dumps` emits bare `NaN`, and that is not JSON.** Python's encoder
-    defaults to `allow_nan=True` and writes `NaN`, `Infinity` and `-Infinity`
-    unquoted. Python reads them back, so a round-trip in this language hides it
-    completely; every other parser rejects them. The runner is Rust, and
-    `serde_json` refuses with `expected value at line 1 column N` — the whole
-    reply lost, the job failed, the GPU time spent.
-
-    Whisper produces these: `avg_logprob` and the per-word probabilities come
-    back non-finite on degenerate audio, which is exactly the quiet, clipped or
-    near-silent minute this archive is full of.
-
-    ⚠ `allow_nan=False` would be the smaller change and the wrong one — it
-    raises, turning a usable transcript into a refused job over one bad
-    confidence score. `None` is the honest value: the model did not produce a
-    number, and every consumer here already takes `Optional`.
+    `json.dumps` writes bare `NaN` and `Infinity`, which Python reads back but
+    `serde_json` refuses, losing the whole reply. Whisper produces them on
+    quiet or clipped audio (`avg_logprob`, word probabilities).
+    `allow_nan=False` would instead fail the job over one score.
     """
     if isinstance(value, float):
         return None if math.isnan(value) or math.isinf(value) else value
@@ -99,9 +77,8 @@ def ok(ident: str | None, result: JsonValue) -> str:
 
 
 def fail(ident: str | None, error: str) -> str:
-    """An error is a RESPONSE, not an exception. The runner must be able to ack
-    a job that cannot be done and move on; a shim that crashes instead turns one
-    bad clip into a stalled queue."""
+    """An error response, so the runner can record the job as failed and move
+    on."""
     return json.dumps({"id": ident, "ok": False, "error": error}, ensure_ascii=False)
 
 
@@ -113,11 +90,8 @@ def _protocol_stream() -> TextIO:
 
 
 def responses(lines: Iterator[str], handler: Handler, *, name: str) -> Iterator[str]:
-    """Pure request/response mapping — no I/O, so the protocol is unit-tested.
-
-    `hello` is answered here rather than by the handler: the runner uses it to
-    learn a shim is alive and what it is, and that must work even for a shim
-    whose model failed to load.
+    """Requests to responses, without I/O. `hello` is answered here, not by
+    the handler, so it works even when the model failed to load.
     """
     for line in lines:
         if not line.strip():
@@ -131,7 +105,7 @@ def responses(lines: Iterator[str], handler: Handler, *, name: str) -> Iterator[
             continue
         try:
             yield ok(ident, handler(op, args))
-        except Exception as err:  # any model failure is a RESPONSE, not a crash
+        except Exception as err:  # answered, not raised
             yield fail(ident, f"{type(err).__name__}: {err}")
             print(traceback.format_exc(), file=sys.stderr)
 
@@ -139,7 +113,6 @@ def responses(lines: Iterator[str], handler: Handler, *, name: str) -> Iterator[
 def serve(handler: Handler, *, name: str) -> None:
     """Run the loop on stdio until stdin closes."""
     protocol = _protocol_stream()
-    # Everything else in the process now logs; only `protocol` is the wire.
     sys.stdout = sys.stderr
     for response in responses(iter(sys.stdin), handler, name=name):
         protocol.write(response + "\n")

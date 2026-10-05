@@ -1,7 +1,4 @@
-"""Baseline test: the package imports and exposes a version.
-
-Exists so Phase 0 starts from a green, fully-typed baseline (TDD-first).
-"""
+"""The package imports."""
 
 from __future__ import annotations
 

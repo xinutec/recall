@@ -1,9 +1,4 @@
-"""The `voices` shim's argument handling and wire form (stage E4).
-
-pyannote is injected: what needs testing here is the contract with the runner,
-which is what makes refinement movable off Python — not the model, which has no
-business running in a unit test.
-"""
+"""The `voices` shim's argument handling and wire form, with pyannote faked."""
 
 from __future__ import annotations
 
@@ -90,8 +85,6 @@ def test_a_diarize_request_reaches_the_model_with_its_arguments(
 def test_diarize_defaults_leave_the_pipeline_exactly_as_shipped(
     tmp_path: Path,
 ) -> None:
-    # Both None is the production path, and it must stay the untuned one: a
-    # default that quietly tuned would change what the whole archive diarizes.
     seen: dict[str, object] = {}
     handle("diarize", {"audio": str(clip_at(tmp_path))}, diarize=diarizer(seen))
     assert seen["model"]  # DEFAULT_DIARIZER
@@ -109,11 +102,8 @@ def test_an_embed_request_returns_the_vector(tmp_path: Path) -> None:
 def test_an_embed_request_can_name_a_span_within_the_clip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Enrolment embeds ONE labelled turn, not the whole clip a turn sits in.
-
-    A minute of room audio holding four seconds of the person being enrolled
-    would make a voiceprint mostly of everyone else — so the span is the request,
-    and the clip is only where it is cut from."""
+    """Enrolment embeds one labelled turn; the rest of the clip is other
+    voices."""
     sliced: list[tuple[float, float]] = []
 
     def fake_slice(src: Path, dst: Path, start: float, end: float) -> None:
@@ -133,8 +123,6 @@ def test_an_embed_request_can_name_a_span_within_the_clip(
 
 
 def test_an_embed_request_without_a_span_reads_the_whole_clip(tmp_path: Path) -> None:
-    """The span is OPTIONAL, and its absence must not silently become 0..0 — a
-    caller that wants the clip is the original contract and still has it."""
     seen: dict[str, object] = {}
     out = handle("embed", {"audio": str(clip_at(tmp_path))}, embed=embedder(seen))
     assert as_list(as_dict(out)["vector"]) == [0.5, -0.25, 0.125]
@@ -158,9 +146,7 @@ def test_an_unknown_op_is_refused() -> None:
 
 
 def _fixed_turns() -> list[SpeakerTurn]:
-    """⚠ SPEAKER_00 holds a 0.4s backchannel AND a 6.0s explanation. A voiceprint
-    built from the backchannel is worse than one built from the explanation, and
-    diarization returns both — so which span is chosen is a decision, not a detail."""
+    """SPEAKER_00 has a 0.4 s backchannel and a 6.0 s explanation."""
     return [
         SpeakerTurn(speaker="SPEAKER_00", start=0.0, end=0.4),
         SpeakerTurn(speaker="SPEAKER_01", start=0.4, end=3.0),
@@ -216,8 +202,6 @@ def test_diarize_embeds_each_speaker_from_their_longest_span(
 
 
 def test_diarize_without_embed_sends_no_vectors(tmp_path: Path) -> None:
-    """Opt-in: the embedding costs a model load and a slice per speaker, and a
-    caller that only wants spans must not pay for it."""
     answer = as_dict(
         handle(
             "diarize",
@@ -232,8 +216,6 @@ def test_diarize_without_embed_sends_no_vectors(tmp_path: Path) -> None:
 def test_a_speaker_whose_clip_will_not_slice_is_skipped_not_faked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A corrupt frame costs that speaker a name, never the whole reply."""
-
     def bad_slice(src: Path, dst: Path, start: float, end: float) -> None:
         if start == 3.0:
             msg = "ffmpeg refused"

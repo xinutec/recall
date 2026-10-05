@@ -1,17 +1,10 @@
-"""The `asr` shim (stage E2): mlx-whisper behind the stdio protocol.
+"""The `asr` shim: mlx-whisper behind the stdio protocol.
 
-Run as `python -m recall.shim_asr`. It holds the weights for the life of the
-process and answers one `transcribe` at a time, which is what makes it worth
-being a process at all — loading a Whisper model costs seconds, and the old
-per-clip cost is a bill this architecture stops paying.
+Run as `python -m recall.shim_asr`. It keeps the weights loaded, since loading
+costs seconds, and answers one `transcribe` at a time.
 
-⚠ **It reads no database and no config.** The doc's rule is that a shim does no
-I/O beyond its stdio and the audio path it is handed, and vocabulary biasing is
-the interesting case: `initial_prompt` is what teaches Whisper to spell the
-household's names, and it comes FROM the caller. Letting the shim fetch it would
-put a DB handle, a schema and a failure mode inside the process whose only job
-is to run a model — and would couple the Mac worker back to state it is supposed
-to have given up (docs/architecture.md, principle 3).
+It reads no database or config: even the vocabulary (`initial_prompt`) comes
+from the caller (docs/architecture.md).
 """
 
 from __future__ import annotations
@@ -25,7 +18,7 @@ from recall.shim import JsonDict, JsonValue
 
 
 class Transcribe(Protocol):
-    """What the shim needs of a transcriber — the real one is `mlx_transcribe`."""
+    """A transcriber; the real one is `mlx_transcribe`."""
 
     def __call__(
         self,
@@ -43,11 +36,7 @@ NAME = "asr"
 
 
 def result_to_json(result: AsrResult) -> JsonDict:
-    """The wire form of an `AsrResult`.
-
-    Word timings ride along only when they were asked for, so a caller that does
-    not need them does not pay to serialise them.
-    """
+    """The wire form of an `AsrResult`."""
     return {
         "language": result.language,
         "language_confidence": result.language_confidence,
@@ -77,8 +66,8 @@ def result_to_json(result: AsrResult) -> JsonDict:
 def handle(
     op: str, args: JsonDict, *, transcribe: Transcribe = mlx_transcribe
 ) -> JsonValue:
-    """Answer one request. `transcribe` is injected so the protocol and the
-    argument handling are testable without Apple Silicon or 1.5 GB of weights."""
+    """Answer one request. `transcribe` is a parameter so tests need neither
+    Apple Silicon nor the weights."""
     if op != "transcribe":
         raise ValueError(f"unknown op: {op}")
     audio = args.get("audio")
@@ -86,8 +75,6 @@ def handle(
         raise ValueError("transcribe needs an audio path")
     path = Path(audio)
     if not path.is_file():
-        # A clear refusal beats whatever the model would say about a missing
-        # file, and the runner can ack and move on.
         raise FileNotFoundError(audio)
     result = transcribe(
         path,
