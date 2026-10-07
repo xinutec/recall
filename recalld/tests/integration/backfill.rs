@@ -142,3 +142,23 @@ fn the_result_arrives_and_the_lines_stay_as_they_were() {
     let again = recalld::backfill::queue(&meaning, &ingest, dir.path(), true).expect("again");
     assert_eq!(again.queued, 0, "a clip with a result is not queued again");
 }
+
+/// The turn writer skips a clip that has lines without reading its result:
+/// loading all 7,181 backfilled results every round ran recalld out of memory.
+/// The result here is not even text, so reading it fails the pass.
+#[test]
+fn the_turn_writer_does_not_read_the_result_of_a_clip_it_skips() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (mut meaning, ingest) = archive(dir.path());
+    ingest
+        .execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES (?1, ?2, 'done', ?3, ?3, X'FFFE')",
+            (Kind::TranscribeSegment, BLOCK, NOW),
+        )
+        .expect("an unreadable result");
+
+    let pass = recalld::turns::write_pass(&mut meaning, &ingest, &crate::stamp(NOW), 10);
+
+    assert!(pass.is_ok(), "{pass:?}");
+}

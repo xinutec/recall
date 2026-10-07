@@ -30,13 +30,16 @@ crate::statements! {
         "SELECT source_id, start_utc FROM audio_segments";
     WAS_DELETED: Meaning =
         "SELECT 1 FROM deleted_segments WHERE source_id = ?1 AND start_utc = ?2";
+    /// Names only: most candidates already have lines and are skipped, and
+    /// loading every result each round ran out of memory.
     FINISHED: Ingest =
-        "SELECT j.filename, j.result, s.source FROM jobs j
+        "SELECT j.filename, s.source FROM jobs j
          JOIN segments s ON s.filename = j.filename
          WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM pass_ledger l
                            WHERE l.kind = ?1 AND l.filename = j.filename)
          ORDER BY s.start_utc ASC, j.filename ASC";
+    RESULT: Ingest = "SELECT result FROM jobs WHERE kind = ?1 AND filename = ?2";
     AUDIO_SEGMENT: Meaning =
         "SELECT id, end_utc FROM audio_segments
              WHERE source_id = ?1 AND start_utc = ?2";
@@ -422,14 +425,12 @@ pub fn write_pass(
     // The source is joined, not parsed from the filename: `meeting-20260907-0905`
     // is a source id.
     let mut stmt = FINISHED.prepare(ingest)?;
-    let jobs: Vec<(String, String, String)> = stmt
-        .query_map(rusqlite::params![KIND], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })?
+    let jobs: Vec<(String, String)> = stmt
+        .query_map(rusqlite::params![KIND], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
 
     let mut pass = Pass::default();
-    for (filename, result, source) in jobs {
+    for (filename, source) in jobs {
         if pass.blocks >= limit {
             break;
         }
@@ -465,7 +466,7 @@ pub fn write_pass(
                 None => continue,
             }
         } else {
-            result
+            RESULT.query_row(ingest, rusqlite::params![KIND, filename], |r| r.get(0))?
         };
         let Ok(turns) = interpret(block_start, &result) else {
             pass.barren += 1;
