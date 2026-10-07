@@ -66,6 +66,42 @@ fn a_superseded_or_hidden_turn_is_never_shown() {
     assert_eq!(hits.items[0].text, "current");
 }
 
+/// Punctuation in a vocabulary term is text, not query syntax: "Dr. Visser"
+/// answered 500 because the full stop is an FTS5 syntax error.
+#[test]
+fn punctuation_in_a_search_is_text_and_the_operators_still_work() {
+    let conn = db();
+    turn(
+        &conn,
+        1,
+        "2026-09-01T10:00:00+00:00",
+        "dr. visser called",
+        &[],
+    );
+    turn(
+        &conn,
+        2,
+        "2026-09-01T10:00:01+00:00",
+        "jean-luc came by",
+        &[],
+    );
+    turn(&conn, 3, "2026-09-01T10:00:02+00:00", "the plumber", &[]);
+
+    let texts = |q: &str| -> Vec<String> {
+        reads::search(&conn, q, 50)
+            .unwrap_or_else(|e| panic!("{q:?}: {e}"))
+            .items
+            .into_iter()
+            .map(|t| t.text)
+            .collect()
+    };
+    assert_eq!(texts("Dr. Visser"), ["dr. visser called"]);
+    assert_eq!(texts("Jean-Luc"), ["jean-luc came by"]);
+    assert_eq!(texts("\"visser"), ["dr. visser called"]);
+    assert_eq!(texts("plumb*"), ["the plumber"]);
+    assert_eq!(texts("visser OR plumber").len(), 2);
+}
+
 #[test]
 fn asked_for_hidden_turns_a_page_shows_them_with_their_reason_but_never_a_superseded_one() {
     // Hidden lines show on request; superseded ones are history.

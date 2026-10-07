@@ -232,12 +232,32 @@ pub fn open(root: &Path) -> rusqlite::Result<Connection> {
 /// Full-text search over current turns, oldest-first.
 pub fn search(conn: &Connection, query: &str, limit: i64) -> rusqlite::Result<ItemsOut> {
     let mut stmt = SEARCH.prepare(conn)?;
-    let rows = stmt.query_map((query, limit), Segment::from_row)?;
+    let rows = stmt.query_map((fts_query(query), limit), Segment::from_row)?;
     let mut items = Vec::new();
     for row in rows {
         items.push(to_out(&row?));
     }
     Ok(ItemsOut { items })
+}
+
+/// What a person typed, as an FTS5 query: each word quoted, so punctuation is
+/// text ("Dr. Visser" was a syntax error); `AND`, `OR`, `NOT` and a trailing
+/// `*` keep their meaning.
+fn fts_query(typed: &str) -> String {
+    typed
+        .split_whitespace()
+        .map(|word| {
+            if matches!(word, "AND" | "OR" | "NOT") {
+                return word.to_owned();
+            }
+            let (stem, prefix) = match word.strip_suffix('*') {
+                Some(stem) if !stem.is_empty() => (stem, "*"),
+                _ => (word, ""),
+            };
+            format!("\"{}\"{prefix}", stem.replace('"', "\"\""))
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The current version of a turn, following the supersede chain, so a deep
