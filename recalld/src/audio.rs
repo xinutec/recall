@@ -213,7 +213,15 @@ impl From<rusqlite::Error> for ClipError {
 /// stall every other request.
 fn clip(path: &Path, start: f64, end: f64, enhance: bool) -> Response {
     match render(path, start, end, enhance) {
-        Ok(bytes) => ([(header::CONTENT_TYPE, "audio/wav")], bytes).into_response(),
+        // A turn's bounds move when it is realigned: revalidate, never replay.
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, "audio/wav"),
+                (header::CACHE_CONTROL, "private, no-cache"),
+            ],
+            bytes,
+        )
+            .into_response(),
         Err(err) => crate::route::faulted("clip render", &err),
     }
 }

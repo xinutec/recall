@@ -330,9 +330,16 @@ pub async fn get_blob(
     let path = store::source_dir(&config.root, &source).join(&filename);
     let handle = tokio::task::spawn_blocking(move || std::fs::read(path));
     match handle.await {
+        // Written once, never replaced under its name (`persist_noclobber`).
         Ok(Ok(bytes)) => (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, name.ext.content_type())],
+            [
+                (header::CONTENT_TYPE, name.ext.content_type()),
+                (
+                    header::CACHE_CONTROL,
+                    "private, max-age=31536000, immutable",
+                ),
+            ],
             bytes,
         )
             .into_response(),

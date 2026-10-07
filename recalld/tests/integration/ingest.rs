@@ -244,6 +244,30 @@ async fn the_read_side_is_the_sync_tokens_not_the_devices() {
     assert_eq!(bytes, b"audio");
 }
 
+/// A blob is written once and never replaced under its name, so a reader may
+/// keep it.
+#[tokio::test]
+async fn a_blob_says_it_never_changes() {
+    let h = harness(Some("usb secret-a\n"), Some("sync-token"));
+    let name = "usb-20260905T120000.flac";
+    let (status, _) = send(&h.app, put("usb", name, b"audio", Some("secret-a"))).await;
+    assert_eq!(status, StatusCode::OK);
+    let response = h
+        .app
+        .clone()
+        .oneshot(get(
+            &format!("/ingest/v1/blob/usb/{name}"),
+            Some("sync-token"),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[axum::http::header::CACHE_CONTROL],
+        "private, max-age=31536000, immutable"
+    );
+}
+
 #[tokio::test]
 async fn a_missing_blob_is_404() {
     let h = harness(None, None);
