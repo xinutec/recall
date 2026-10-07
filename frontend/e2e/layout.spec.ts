@@ -4,10 +4,8 @@ import { test, type Route } from '@playwright/test';
 import {
   expectViewportIsPhone,
   expectIconFontLoaded,
-  expectNoHorizontalOverflow,
-  expectNoTextOverlaps,
+  expectCleanLayout,
   expectNoOccludedControls,
-  expectNoClippedIcons,
   expectRecoversFromMissingBundle,
 } from '@xinutec/ui-harness';
 
@@ -112,12 +110,10 @@ test('session screen holds phone geometry with no overflow, overlap, or occlusio
 
   await expectViewportIsPhone(page); // the checker-checker: really at phone width
   await expectIconFontLoaded(page); // Material Icons bundled, not tofu boxes
-  await expectNoHorizontalOverflow(page, testInfo);
-  await expectNoTextOverlaps(page, testInfo);
+  await expectCleanLayout(page, testInfo);
   // `.t` spans are exempt: a wrapped inline span's centre lands on its parent
   // paragraph, which the probe reads as occluding it.
   await expectNoOccludedControls(page, testInfo, 'button, a[href], [role="button"]', ['.t']);
-  await expectNoClippedIcons(page, testInfo);
 });
 
 test('finalizing banner keeps its icon whole', async ({ page }, testInfo) => {
@@ -128,8 +124,7 @@ test('finalizing banner keeps its icon whole', async ({ page }, testInfo) => {
   await page.goto('/sessions/test');
   await page.locator('.status.finalizing').waitFor();
 
-  await expectNoClippedIcons(page, testInfo);
-  await expectNoHorizontalOverflow(page, testInfo);
+  await expectCleanLayout(page, testInfo);
 });
 
 // ---------------------------------------------------------------------------
@@ -214,8 +209,7 @@ for (const { path, anchor } of screens) {
 
     await expectViewportIsPhone(page);
     await expectIconFontLoaded(page);
-    await expectNoHorizontalOverflow(page, testInfo);
-    await expectNoTextOverlaps(page, testInfo);
+    await expectCleanLayout(page, testInfo);
     // A disabled button has pointer-events none, so the probe would read it as
     // occluded by its ancestor.
     await expectNoOccludedControls(
@@ -224,7 +218,6 @@ for (const { path, anchor } of screens) {
       'button:not([disabled]), a[href], [role="button"]',
       ['.t'],
     );
-    await expectNoClippedIcons(page, testInfo);
   });
 }
 
