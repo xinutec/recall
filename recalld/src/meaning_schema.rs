@@ -531,6 +531,12 @@ pub const MIGRATIONS: &[&str] = &[
     -- leaves it to the model's guess. Every transcription of its clips uses it.
     ALTER TABLE sources ADD COLUMN language TEXT;
 "#,
+    // v52
+    r#"
+    -- A clip's lines, hidden ones too: idx_ts_audio_current covers only the
+    -- visible. The turn writer counts them per candidate, every round.
+    CREATE INDEX idx_ts_audio ON transcript_segments(audio_segment_id);
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

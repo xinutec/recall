@@ -67,3 +67,35 @@ fn a_statement_is_built_only_by_the_macro() {
     }
     assert!(offenders.is_empty(), "{offenders:?}");
 }
+
+/// The turn writer counts a clip's lines once per candidate, every round; after
+/// the backfill that was thousands of full scans of the lines table, and recalld
+/// sat at its CPU limit. The count must use an index.
+#[test]
+fn counting_a_clips_lines_does_not_scan_the_lines_table() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (meaning, _ingest) = migrated(dir.path());
+    let count = ALL
+        .iter()
+        .filter(|(module, _)| *module == "turns")
+        .flat_map(|(_, statements)| statements.iter())
+        .find(|sql| {
+            sql.text()
+                .contains("count(*) FROM transcript_segments WHERE audio_segment_id")
+        })
+        .expect("the turn writer's count");
+    let mut plan = meaning
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", count.text()))
+        .expect("plan");
+    let steps: Vec<String> = plan
+        .query_map([0], |r| r.get::<_, String>(3))
+        .expect("steps")
+        .collect::<Result<_, _>>()
+        .expect("read");
+    assert!(
+        !steps
+            .iter()
+            .any(|s| s.starts_with("SCAN transcript_segments")),
+        "{steps:?}"
+    );
+}
