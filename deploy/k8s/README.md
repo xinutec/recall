@@ -1,7 +1,6 @@
 # recall on Isis (k3s)
 
-<!-- dev-lint: allow-pii the repository's name -->
-The manifests live in the `pippijn` monorepo at `code/kubes/recall/k8s/`,
+The manifests live in the `xinutec/pippijn` monorepo at `code/kubes/recall/k8s/`,
 rendered from `dhall/apps/recall.dhall`; this repo keeps no copy (a stale one
 here once lacked the SSO settings). Deploy with `kubes/deploy.sh recall`; nothing
 auto-applies. The image is `xinutec/recall:latest`, built and smoke-tested by CI
