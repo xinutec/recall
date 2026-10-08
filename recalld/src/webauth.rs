@@ -554,7 +554,10 @@ pub fn routes(st: GateState) -> Router {
                 |State(st): State<GateState>, Query(q): Query<LoginQuery>| async move {
                     match make_state(&st.cfg.session_secret, q.return_to.as_deref(), (st.now)()) {
                         Some(state) => Redirect(authorize_url(&st.cfg, &state)).into_response(),
-                        None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                        None => sign_in_problem(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "The sign-in could not be started.",
+                        ),
                     }
                 },
             ),
@@ -577,6 +580,30 @@ pub fn routes(st: GateState) -> Router {
         .with_state(st)
 }
 
+/// A sign-in that could not be finished, drawn for the browser: these routes are
+/// where a browser is sent, and JSON there reads as the app being broken.
+fn sign_in_problem(status: StatusCode, said: &str) -> Response {
+    let body = format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+         <title>Sign-in did not finish</title><style>\
+         body{{font:16px/1.5 system-ui,-apple-system,sans-serif;margin:0;\
+         min-height:100vh;display:grid;place-items:center;padding:1.5rem;color:#1a1a1a}}\
+         main{{max-width:26rem}}h1{{font-size:1.2rem;margin:0 0 .5rem}}\
+         p{{margin:0 0 1.5rem;color:#555}}\
+         a{{display:inline-block;padding:.65rem 1.1rem;border-radius:.5rem;\
+         background:#1b6ac9;color:#fff;text-decoration:none}}\
+         </style></head><body><main><h1>Sign-in did not finish</h1>\
+         <p>{said}</p><a href=\"/login\">Try again</a></main></body></html>"
+    );
+    (
+        status,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
 /// A 302.
 struct Redirect(String);
 
@@ -594,18 +621,16 @@ async fn callback(State(st): State<GateState>, Query(q): Query<CallbackQuery>) -
         .as_deref()
         .and_then(|s| read_state(&st.cfg.session_secret, s, now))
     else {
-        return (
+        return sign_in_problem(
             StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "invalid or expired login state"})),
-        )
-            .into_response();
+            "This sign-in did not start here, or it took too long.",
+        );
     };
     let Some(code) = q.code.filter(|c| !c.is_empty()) else {
-        return (
+        return sign_in_problem(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "missing authorization code"})),
-        )
-            .into_response();
+            "Nextcloud sent no authorization code.",
+        );
     };
     let cfg = Arc::clone(&st.cfg);
     let resolved = tokio::task::spawn_blocking(move || {
@@ -616,30 +641,27 @@ async fn callback(State(st): State<GateState>, Query(q): Query<CallbackQuery>) -
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
             tracing::warn!("nextcloud sign-in failed: {e}");
-            return (
+            return sign_in_problem(
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": "sign-in failed"})),
-            )
-                .into_response();
+                "The sign-in could not be finished.",
+            );
         }
         Err(e) => {
             tracing::warn!("sign-in task failed: {e}");
-            return (
+            return sign_in_problem(
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": "sign-in failed"})),
-            )
-                .into_response();
+                "The sign-in could not be finished.",
+            );
         }
     };
     if !st.cfg.permits(&session.user_id) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "not permitted"})),
-        )
-            .into_response();
+        return sign_in_problem(StatusCode::FORBIDDEN, "This account may not use this app.");
     }
     let Some(token) = make_session_cookie(&st.cfg.session_secret, &session, now) else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return sign_in_problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The sign-in could not be finished.",
+        );
     };
     (
         [(header::SET_COOKIE, set_cookie(&token))],
