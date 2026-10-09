@@ -7,8 +7,8 @@ and their tests mirror the Kotlin tests.
 - **Live stream:** `StreamClient`, TCP to the recorder host (the Mac on the home
   LAN) on 9999: a handshake line, then 48 kHz mono s16le. 5 s connect timeout,
   2 s retry.
-- **Segments:** `SegmentWriter` writes one-minute WAVs beside the stream (Android
-  writes FLAC, #1842); `SegmentUpload` PUTs them to
+- **Segments:** `SegmentWriter` writes one-minute `.phone.flac` files beside the
+  stream (`Flac.swift`, a port of Android's encoder); `SegmentUpload` PUTs them to
   `https://recall.xinutec.org/ingest/v1/segments/…`, not on expensive networks.
 - **Control:** `CaptureApi` uses `/api/capture` (long poll), `/api/capture/pause`,
   `/api/capture/resume` and `/api/sources` on the control host; `Heartbeat` posts to

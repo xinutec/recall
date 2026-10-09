@@ -1,9 +1,9 @@
 import Foundation
 
-/// Writes PCM to closed, capture-stamped WAV segments, as Android's
-/// `SegmentWriter` (which writes FLAC): a minute of audio per file, counted in
-/// audio, not wall time, named `<source>-YYYYMMDDTHHMMSS.wav` by the UTC time
-/// the segment opened.
+/// Writes PCM to closed, capture-stamped FLAC segments, as Android's
+/// `SegmentWriter`: a minute of audio per file, counted in audio, not wall time,
+/// named `<source>-YYYYMMDDTHHMMSS.phone.flac` by the UTC time the segment opened.
+/// `.phone`, since the host cuts the same stream into FLAC too.
 ///
 /// Fed by the stream's drain task, never the audio thread. The client calls
 /// `closeSegment()` when the stream drops, since a name claims its audio is
@@ -13,7 +13,7 @@ final class SegmentWriter {
     static let segmentBytes = 60 * sampleRate * 2
 
     private let source: String
-    private var handle: FileHandle?
+    private var flac: FlacFile?
     private var path: URL?
     private var written = 0
     var onSegmentClosed: (() -> Void)?
@@ -31,48 +31,23 @@ final class SegmentWriter {
         return f
     }()
 
-    static func wavHeader(dataBytes: Int) -> Data {
-        var d = Data()
-        func le32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
-        func le16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
-        d.append(contentsOf: Array("RIFF".utf8))
-        le32(UInt32(36 + dataBytes))
-        d.append(contentsOf: Array("WAVE".utf8))
-        d.append(contentsOf: Array("fmt ".utf8))
-        le32(16)
-        le16(1)  // PCM
-        le16(1)  // mono
-        le32(UInt32(sampleRate))
-        le32(UInt32(sampleRate * 2))
-        le16(2)
-        le16(16)
-        d.append(contentsOf: Array("data".utf8))
-        le32(UInt32(dataBytes))
-        return d
-    }
-
     func offer(_ data: Data) {
-        var from = 0
-        let bytes = [UInt8](data)
-        while from < bytes.count {
-            let out = handle ?? openSegment()
-            guard let out else { return }
-            let room = Self.segmentBytes - written
-            let take = min(room, bytes.count - from)
-            out.write(Data(bytes[from..<(from + take)]))
+        var from = data.startIndex
+        while from < data.endIndex {
+            guard let out = flac ?? openSegment() else { return }
+            let take = min(Self.segmentBytes - written, data.endIndex - from)
+            out.write(data[from..<(from + take)])
             written += take
             from += take
             if written >= Self.segmentBytes { closeSegment() }
         }
     }
 
-    private func openSegment() -> FileHandle? {
-        let name = "\(source)-\(Self.stamp.string(from: Date())).wav"
+    private func openSegment() -> FlacFile? {
+        let name = "\(source)-\(Self.stamp.string(from: Date())).phone.flac"
         let target = SegmentStore.open().appendingPathComponent(name)
-        FileManager.default.createFile(atPath: target.path, contents: Self.wavHeader(dataBytes: 0))
-        guard let out = try? FileHandle(forWritingTo: target) else { return nil }
-        out.seekToEndOfFile()
-        handle = out
+        guard let out = try? FlacFile(creating: target, rate: Self.sampleRate) else { return nil }
+        flac = out
         path = target
         written = 0
         return out
@@ -81,12 +56,10 @@ final class SegmentWriter {
     /// Patch the header with the truth and rename into the closed set — the
     /// only step anything downstream observes. Idempotent.
     func closeSegment() {
-        guard let out = handle, let target = path else { return }
-        handle = nil
+        guard let out = flac, let target = path else { return }
+        flac = nil
         path = nil
-        out.seek(toFileOffset: 0)
-        out.write(Self.wavHeader(dataBytes: written))
-        try? out.close()
+        out.finish()
         if written == 0 {
             try? FileManager.default.removeItem(at: target)
         } else {

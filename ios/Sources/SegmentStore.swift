@@ -11,7 +11,7 @@ import Foundation
 /// Only `evict` deletes, and only from `delivered/`, oldest first, under cache
 /// pressure; never because the server asked (docs/architecture.md, decision 2).
 enum SegmentStore {
-    /// ~2 GiB, hours of WAV: covers the time from upload to the server's backup.
+    /// ~2 GiB, over a day of FLAC: covers the time from upload to the server's backup.
     static let ceilingBytes: Int64 = 2 * 1024 * 1024 * 1024
 
     static func root() -> URL {
