@@ -7,12 +7,12 @@ import XCTest
 final class HeartbeatTests: XCTestCase {
     private let started = ISO8601DateFormatter().date(from: "2026-08-11T07:00:00Z")!
 
-    private func body(streaming: Bool = true, charging: Bool? = true, micOk: Bool = true)
-        -> [String: Any]
-    {
+    private func body(
+        streaming: Bool = true, charging: Bool? = true, micOk: Bool = true, droppedBytes: Int = 0
+    ) -> [String: Any] {
         Heartbeat.body(
             device: "iphone11", version: "1.4.0 (37)", startedAt: started,
-            streaming: streaming, charging: charging, micOk: micOk)
+            streaming: streaming, charging: charging, micOk: micOk, droppedBytes: droppedBytes)
     }
 
     func testCarriesTheFieldsTheServerReads() {
@@ -52,6 +52,21 @@ final class HeartbeatTests: XCTestCase {
         // stopped the beat that would have reported it.
         XCTAssertEqual(body(micOk: false)["micOk"] as? Bool, false)
         XCTAssertEqual(body()["micOk"] as? Bool, true)
+    }
+
+    func testAudioTheSpoolDroppedIsReported() {
+        XCTAssertEqual(body(droppedBytes: 96000)["droppedBytes"] as? Int, 96000)
+        XCTAssertEqual(body()["droppedBytes"] as? Int, 0)
+    }
+
+    func testABeatReportsTheDropsSinceTheLastBeatThatLanded() {
+        var drops = Heartbeat.DropsSinceBeat()
+        XCTAssertEqual(drops.pending(total: 500), 500)
+        // Failed: still owed.
+        XCTAssertEqual(drops.pending(total: 800), 800)
+        drops.landed(total: 800)
+        XCTAssertEqual(drops.pending(total: 800), 0)
+        XCTAssertEqual(drops.pending(total: 900), 100)
     }
 
     func testTheVPNIsTriedBeforeTheLANSoTheFallbackStaysABackstop() {

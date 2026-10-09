@@ -14,8 +14,14 @@ import java.time.Instant
 class HeartbeatTest {
     private val started: Instant = Instant.parse("2026-08-11T07:00:00Z")
 
-    private fun body(streaming: Boolean = true, charging: Boolean? = true, micOk: Boolean = true) =
-        JSONObject(Heartbeat.body("pixel5", "0.6 (6)", started, streaming, charging, micOk))
+    private fun body(
+        streaming: Boolean = true,
+        charging: Boolean? = true,
+        micOk: Boolean = true,
+        droppedBytes: Long = 0,
+    ) = JSONObject(
+        Heartbeat.body("pixel5", "0.6 (6)", started, streaming, charging, micOk, droppedBytes),
+    )
 
     @Test
     fun `carries the fields the server reads`() {
@@ -50,6 +56,23 @@ class HeartbeatTest {
         // #887
         assertFalse(body(micOk = false).getBoolean("micOk"))
         assertTrue(body().getBoolean("micOk"))
+    }
+
+    @Test
+    fun `audio the stream dropped is reported`() {
+        assertEquals(96_000L, body(droppedBytes = 96_000).getLong("droppedBytes"))
+        assertEquals(0L, body().getLong("droppedBytes"))
+    }
+
+    @Test
+    fun `a beat reports the drops since the last beat that landed`() {
+        val drops = Heartbeat.DropsSinceBeat()
+        assertEquals(500L, drops.pending(total = 500))
+        // Failed: still owed.
+        assertEquals(800L, drops.pending(total = 800))
+        drops.landed(800)
+        assertEquals(0L, drops.pending(total = 800))
+        assertEquals(100L, drops.pending(total = 900))
     }
 
     @Test

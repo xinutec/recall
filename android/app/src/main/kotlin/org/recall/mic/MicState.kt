@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 // The tag for UI state changes: `adb logcat -s recall-ui:I`.
 const val UI_LOG = "recall-ui"
@@ -44,15 +45,14 @@ object MicState {
     }
 
     /**
-     * Bytes of audio dropped because the stream's spool overran ([PcmSpool]); normally
-     * zero. No server can see this loss. Nothing reads it yet: the heartbeat does not
-     * carry it.
+     * Bytes of audio dropped since the app started because the stream's spool overran
+     * ([PcmSpool]); normally zero. The heartbeat reports it.
      */
     private val _droppedBytes = MutableStateFlow(0L)
     val droppedBytes: StateFlow<Long> = _droppedBytes.asStateFlow()
 
-    fun setDroppedBytes(value: Long) {
-        _droppedBytes.value = value
+    fun addDroppedBytes(delta: Long) {
+        _droppedBytes.update { it + delta }
     }
 
     /** Most recent mic peak amplitude, 0f..1f, for the level meter. */

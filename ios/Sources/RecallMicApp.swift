@@ -35,6 +35,7 @@ final class RecallController: ObservableObject {
     private var capturePoll: Task<Void, Never>?
     private var sourcesPoll: Task<Void, Never>?
     private var beatLoop: Task<Void, Never>?
+    private var drops = Heartbeat.DropsSinceBeat()
 
     func onLaunch() {
         restartPolling()
@@ -88,9 +89,12 @@ final class RecallController: ObservableObject {
     /// Beats only while started; see `Heartbeat.Outcome`.
     private func beatNow() async -> Heartbeat.Outcome {
         guard Prefs.enabled else { return .skipped }
+        let dropped = state.droppedBytes
         let sent = await Heartbeat.send(
             host: Prefs.controlHost, lanHost: Prefs.host, device: Prefs.deviceID,
-            streaming: state.connected, micOk: state.micOk)
+            streaming: state.connected, micOk: state.micOk,
+            droppedBytes: drops.pending(total: dropped))
+        if sent { drops.landed(total: dropped) }
         return sent ? .sent : .failed
     }
 

@@ -38,6 +38,7 @@ const FROM_PHONE: &[&str] = &[
     "streaming",
     "charging",
     "micOk",
+    "droppedBytes",
 ];
 
 /// Why a body was not a beat this relay will pass on.

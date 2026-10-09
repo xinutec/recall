@@ -37,8 +37,8 @@ final class MicState: ObservableObject {
     @Published var connected = false  // TCP up and streaming
     @Published var phase: MicPhase = .stopped
     @Published var level: Float = 0  // 0...1 meter position
-    /// Bytes of audio dropped because the spool overran; normally zero. No server
-    /// can see this loss. Nothing shows or reports it yet.
+    /// Bytes of audio dropped since launch because the spool overran; normally zero.
+    /// Lost from both the stream and the phone's copy. The heartbeat reports it.
     @Published var droppedBytes: Int = 0
     @Published var capture = CaptureState(running: true, reachable: false, pausedUntil: nil)
     @Published var sources: [SourceStatus] = []  // fleet liveness for the Devices panel

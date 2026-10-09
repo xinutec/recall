@@ -66,6 +66,7 @@ object Heartbeat {
         streaming: Boolean,
         charging: Boolean?,
         micOk: Boolean,
+        droppedBytes: Long,
     ): String =
         JSONObject()
             .put("device", device)
@@ -75,6 +76,7 @@ object Heartbeat {
             .put("streaming", streaming)
             // A running app that cannot open its mic (#887).
             .put("micOk", micOk)
+            .put("droppedBytes", droppedBytes)
             // Absent when unknown, rather than a guess.
             .apply { if (charging != null) put("charging", charging) }
             .toString()
@@ -103,6 +105,17 @@ object Heartbeat {
             }
         }.getOrNull()
 
+    /** Audio dropped since the last beat that landed, from a running total. */
+    class DropsSinceBeat {
+        private var reported = 0L
+
+        fun pending(total: Long): Long = total - reported
+
+        fun landed(total: Long) {
+            reported = total
+        }
+    }
+
     /** POST one beat, blocking (the caller is a plain thread). Whether it landed. */
     fun send(
         controlHost: String,
@@ -110,9 +123,11 @@ object Heartbeat {
         device: String,
         streaming: Boolean,
         micOk: Boolean,
+        droppedBytes: Long,
         ctx: Context,
     ): Boolean {
-        val body = body(device, version(ctx), startedAt, streaming, charging(ctx), micOk)
+        val body =
+            body(device, version(ctx), startedAt, streaming, charging(ctx), micOk, droppedBytes)
         // Isis first, then the recorder's LAN address, where the Mac relays beats (#888):
         // a phone at home with its tunnel off still records, so must not read as dead.
         for (host in hostsToTry(controlHost, lanHost)) {

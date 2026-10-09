@@ -58,6 +58,12 @@ fn an_unknown_key_cannot_reach_the_fleet_by_being_added_to_the_app() {
 }
 
 #[test]
+fn the_audio_a_phone_dropped_reaches_the_fleet() {
+    let out = relayed(br#"{"device":"pixel5","droppedBytes":96000}"#).expect("accepted");
+    assert_eq!(out["droppedBytes"], 96_000);
+}
+
+#[test]
 fn the_request_head_is_bounded_against_a_caller_that_never_stops() {
     // Headers sent forever are cut off.
     let endless = "POST /api/devices/heartbeat HTTP/1.1\r\n".to_owned()

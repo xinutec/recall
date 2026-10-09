@@ -166,6 +166,7 @@ class StreamService : Service() {
                         }
                     }
                 val chunk = ByteArray(READ_CHUNK_BYTES)
+                var counted = 0L
                 try {
                     while (running) {
                         if (senderFailed.get()) {
@@ -174,6 +175,11 @@ class StreamService : Service() {
                         val n = record.read(chunk, 0, chunk.size)
                         if (n > 0) {
                             spool.offer(chunk, n)
+                            val dropped = spool.dropped()
+                            if (dropped > counted) {
+                                MicState.addDroppedBytes(dropped - counted)
+                                counted = dropped
+                            }
                             segments?.offer(chunk, n)
                             MicState.setLevel(peakLevel(chunk, n))
                         } else if (n < 0) {
@@ -182,10 +188,6 @@ class StreamService : Service() {
                     }
                 } finally {
                     sender.join(SENDER_JOIN_MS)
-                    if (spool.dropped() > 0) {
-                        // Only the phone can know (nothing reports it yet).
-                        MicState.setDroppedBytes(spool.dropped())
-                    }
                 }
             } catch (e: Exception) {
                 // Stopped: leave without re-posting the notification.
@@ -249,7 +251,9 @@ class StreamService : Service() {
     private fun beatLoop(controlHost: String, host: String, deviceId: String) {
         // Consecutive failures, which shorten the next wait (#886).
         var failures = 0
+        val drops = Heartbeat.DropsSinceBeat()
         while (running) {
+            val dropped = MicState.droppedBytes.value
             val landed =
                 Heartbeat.send(
                     controlHost,
@@ -257,8 +261,10 @@ class StreamService : Service() {
                     deviceId,
                     MicState.connected.value,
                     MicState.micOk.value,
+                    drops.pending(dropped),
                     this,
                 )
+            if (landed) drops.landed(dropped)
             failures = if (landed) 0 else failures + 1
             try {
                 Thread.sleep(TimeUnit.MINUTES.toMillis(Heartbeat.nextDelayMinutes(failures)))

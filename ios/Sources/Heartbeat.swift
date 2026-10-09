@@ -66,7 +66,7 @@ enum Heartbeat {
     /// A beat's JSON, the server's `HeartbeatIn`.
     static func body(
         device: String, version: String, startedAt: Date, streaming: Bool, charging: Bool?,
-        micOk: Bool
+        micOk: Bool, droppedBytes: Int
     ) -> [String: Any] {
         var out: [String: Any] = [
             "device": device,
@@ -76,6 +76,7 @@ enum Heartbeat {
             "streaming": streaming,
             // A running app that cannot open its mic (#887).
             "micOk": micOk,
+            "droppedBytes": droppedBytes,
         ]
         // Absent when unknown (the simulator, monitoring off), rather than a guess.
         if let charging { out["charging"] = charging }
@@ -98,16 +99,26 @@ enum Heartbeat {
         #endif
     }
 
+    /// Audio dropped since the last beat that landed, from a running total.
+    struct DropsSinceBeat {
+        private var reported = 0
+
+        func pending(total: Int) -> Int { total - reported }
+
+        mutating func landed(total: Int) { reported = total }
+    }
+
     /// POST one beat to Isis, else to the recorder's LAN address, where the Mac
     /// relays it (#888): a phone at home with its tunnel off still records, so must
     /// not read as dead. The relay marks what it forwards.
     @discardableResult
     static func send(
-        host: String, lanHost: String = "", device: String, streaming: Bool, micOk: Bool
+        host: String, lanHost: String = "", device: String, streaming: Bool, micOk: Bool,
+        droppedBytes: Int
     ) async -> Bool {
         let payload = body(
             device: device, version: version, startedAt: startedAt,
-            streaming: streaming, charging: charging(), micOk: micOk)
+            streaming: streaming, charging: charging(), micOk: micOk, droppedBytes: droppedBytes)
         for candidate in hostsToTry(control: host, lan: lanHost) {
             if await post(payload, to: candidate) { return true }
         }

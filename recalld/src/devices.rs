@@ -53,6 +53,8 @@ pub struct Beat {
     pub charging: Option<bool>,
     pub mic_ok: Option<bool>,
     pub via_lan: Option<bool>,
+    /// Audio the phone captured but could not stream, since its previous beat.
+    pub dropped_bytes: Option<i64>,
     pub at: String,
 }
 
@@ -156,6 +158,7 @@ fn one_beat(device: &str, raw: &serde_json::Value) -> Option<Beat> {
         charging: flag(raw.get("charging")),
         mic_ok: flag(raw.get("micOk")),
         via_lan: flag(raw.get("viaLan")),
+        dropped_bytes: raw.get("droppedBytes").and_then(serde_json::Value::as_i64),
         at,
     })
 }
@@ -269,6 +272,7 @@ pub fn record_beat(conn: &Connection, beat: &Beat, now: DateTime<Utc>) -> rusqli
             "charging": beat.charging,
             "micOk": beat.mic_ok,
             "viaLan": beat.via_lan,
+            "droppedBytes": beat.dropped_bytes,
             "at": beat.at,
         }),
     );
@@ -330,6 +334,8 @@ pub struct HeartbeatIn {
     mic_ok: Option<bool>,
     #[serde(default)]
     via_lan: Option<bool>,
+    #[serde(default)]
+    dropped_bytes: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -357,6 +363,7 @@ pub struct BeatOut {
     charging: Option<bool>,
     mic_ok: Option<bool>,
     via_lan: Option<bool>,
+    dropped_bytes: Option<i64>,
     at: String,
 }
 
@@ -400,6 +407,8 @@ pub async fn heartbeat_post_route(
         charging: body.charging,
         mic_ok: body.mic_ok,
         via_lan: body.via_lan,
+        // A negative count is a client bug: clamped, not refused.
+        dropped_bytes: body.dropped_bytes.map(|b| b.max(0)),
         at,
     };
     match route::blocking("heartbeat", move || {
@@ -450,6 +459,7 @@ pub fn beats_out(conn: &Connection) -> rusqlite::Result<BeatsOut> {
                 charging: b.charging,
                 mic_ok: b.mic_ok,
                 via_lan: b.via_lan,
+                dropped_bytes: b.dropped_bytes,
                 at: b.at,
             })
             .collect(),

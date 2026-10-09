@@ -87,13 +87,18 @@ and a phone gone without a FIN leaves its socket looking open. So:
 |---|---|
 | Where | the control host first; on failure, the recorder host on the LAN, where `audiod beat-relay` (port 8000) filters the body, stamps `viaLan` and forwards it to Isis |
 | Auth | none: a beat that could 401 would report a credential mistake as dead hardware (`recalld::webauth::DEVICE_EXEMPT`) |
-| Carries | `startedAt`, `streaming`, `charging`, `micOk`, app, version |
+| Carries | `startedAt`, `streaming`, `charging`, `micOk`, `droppedBytes`, app, version |
 | Retries | after a minute, doubling up to the hourly cadence |
 | Stored | last status only, in one settings row (`recalld::devices`); at most 16 devices, aged out after 30 days, `DELETE /api/devices/heartbeat/{device}` |
 | Graded | on the Mac: `xinutec-infra/mac-mini/recall_mics.py` reads `/sync/devices/heartbeats` and takes a fresh beat or delivered audio as proof |
 
-Only `micOk` is graded; `streaming` is false in every pause and a carried phone
-is off charge all day.
+`micOk` and `droppedBytes` are graded; `streaming` is false in every pause and a
+carried phone is off charge all day.
+
+`droppedBytes` is the audio the app's spool discarded since the previous beat
+that landed, because the sender fell behind. On iOS one spool feeds both the
+stream and the phone's copy, so it is lost; on Android it is the stream's spool,
+and the phone's FLAC copy, with a spool of its own, may still hold it.
 
 | Recorder | `micOk` from | misses |
 | --- | --- | --- |

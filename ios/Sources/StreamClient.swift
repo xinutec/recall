@@ -96,7 +96,6 @@ final class StreamClient {
             let connected = sendIfConnected(pending)
             if connected { segments.offer(pending) }
             if spool.dropped > 0 {
-                // Only the phone can know (nothing shows or reports it yet).
                 await MainActor.run { state.droppedBytes = spool.dropped }
             }
         }

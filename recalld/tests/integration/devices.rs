@@ -29,6 +29,7 @@ fn beat(device: &str, at: &str) -> Beat {
         charging: Some(true),
         mic_ok: Some(true),
         via_lan: Some(false),
+        dropped_bytes: Some(0),
         at: at.to_owned(),
     }
 }
@@ -348,6 +349,7 @@ fn a_beat_with_no_optional_flags_keeps_them_absent_rather_than_false() {
     b.mic_ok = None;
     b.via_lan = None;
     b.started_at = None;
+    b.dropped_bytes = None;
 
     record_beat(&conn, &b, now()).expect("beat");
 
@@ -356,6 +358,24 @@ fn a_beat_with_no_optional_flags_keeps_them_absent_rather_than_false() {
     assert_eq!(beats[0].mic_ok, None);
     assert_eq!(beats[0].via_lan, None);
     assert_eq!(beats[0].started_at, None);
+    assert_eq!(beats[0].dropped_bytes, None);
+}
+
+#[test]
+fn a_beat_keeps_the_audio_the_phone_dropped() {
+    let conn = db();
+    let mut b = beat("pixel5", "2026-09-07T09:00:00+00:00");
+    b.dropped_bytes = Some(96_000);
+
+    record_beat(&conn, &b, now()).expect("beat");
+
+    assert_eq!(
+        read_beats(&conn).expect("read")[0].dropped_bytes,
+        Some(96_000)
+    );
+    // Fleetwatch reads it from here.
+    let out = serde_json::to_value(recalld::devices::beats_out(&conn).expect("out")).expect("json");
+    assert_eq!(out["items"][0]["droppedBytes"], 96_000);
 }
 
 // --- through the router ------------------------------------------------------
@@ -528,6 +548,23 @@ async fn negative_counts_are_clamped_rather_than_refused() {
     let reports = read_reports(&conn).expect("read");
     assert_eq!(reports[0].queued, 0);
     assert_eq!(reports[0].failing, 0);
+}
+
+#[tokio::test]
+async fn a_negative_drop_count_is_clamped_rather_than_refused() {
+    let dir = scratch();
+    let app = gated(dir.path());
+
+    let code = post(
+        &app,
+        "/api/devices/heartbeat",
+        serde_json::json!({"device": "pixel9", "streaming": true, "droppedBytes": -7}),
+    )
+    .await;
+
+    assert_eq!(code, 200);
+    let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
+    assert_eq!(read_beats(&conn).expect("read")[0].dropped_bytes, Some(0));
 }
 
 #[tokio::test]
