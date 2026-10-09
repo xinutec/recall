@@ -471,6 +471,8 @@ async fn every_sync_read_route_is_mounted_and_gated() {
     for path in [
         "/sync/vocabulary/prompt",
         "/sync/heard?since=2026-09-23T10:00:00%2B00:00&until=2026-09-23T10:30:00%2B00:00",
+        "/sync/devices/heartbeats",
+        "/sync/devices/outbox",
     ] {
         let (ok, body) = get(&addr, path, Some("sekrit")).await;
         assert_eq!(ok, 200, "{path} must be MOUNTED: {body}");
@@ -482,6 +484,57 @@ async fn every_sync_read_route_is_mounted_and_gated() {
     }
 }
 
+/// Fleetwatch's mic and upload checks read these with the sync token.
+#[tokio::test]
+async fn the_mac_reads_each_recorders_last_beat_and_outbox() {
+    let (dir, addr) = serve(Some("sekrit")).await;
+    let conn = recalld::work::open_write(dir.path()).expect("db");
+    recalld::devices::record_beat(
+        &conn,
+        &recalld::devices::Beat {
+            device: "pixel5".into(),
+            app: "android".into(),
+            version: "0.11 (11)".into(),
+            started_at: None,
+            streaming: true,
+            charging: None,
+            mic_ok: Some(true),
+            via_lan: None,
+            dropped_bytes: Some(96_000),
+            at: "2026-09-23T10:00:00+00:00".into(),
+        },
+        at(0),
+    )
+    .expect("beat");
+    recalld::devices::record_report(
+        &conn,
+        &recalld::devices::Report {
+            device: "pixel5".into(),
+            queued: 2,
+            oldest_queued_at: None,
+            failing: 0,
+            reason: None,
+            at: "2026-09-23T10:00:00+00:00".into(),
+        },
+        at(0),
+    )
+    .expect("report");
+    drop(conn);
+
+    let (status, body) = get(&addr, "/sync/devices/heartbeats", Some("sekrit")).await;
+    assert_eq!(status, 200, "{body}");
+    let beats: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(beats["items"][0]["device"], "pixel5");
+    assert_eq!(beats["items"][0]["micOk"], true);
+    assert_eq!(beats["items"][0]["droppedBytes"], 96_000);
+    assert_eq!(beats["items"][0]["at"], "2026-09-23T10:00:00+00:00");
+
+    let (status, body) = get(&addr, "/sync/devices/outbox", Some("sekrit")).await;
+    assert_eq!(status, 200, "{body}");
+    let reports: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(reports["items"][0]["queued"], 2);
+}
+
 /// Without a token the read routes are absent, not open.
 #[tokio::test]
 async fn the_read_routes_are_absent_when_no_token_is_configured() {
@@ -491,6 +544,8 @@ async fn the_read_routes_are_absent_when_no_token_is_configured() {
         "/sync/vocabulary/prompt",
         "/sync/live/health",
         "/sync/heard",
+        "/sync/devices/heartbeats",
+        "/sync/devices/outbox",
     ] {
         let (status, _) = get(&addr, path, Some("sekrit")).await;
         assert_eq!(status, 404, "{path} must not answer at all");

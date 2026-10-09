@@ -4,8 +4,8 @@
 //!
 //! The credential is `RECALL_SYNC_TOKEN`, shared by both ends; it grants
 //! nothing on the browsing plane. Routes: the capture handshake (audiod), the
-//! vocabulary prompt (the runner), the live feed (recall-live), and numbers
-//! for the doctor.
+//! vocabulary prompt (the runner), the live feed (recall-live), numbers for
+//! the doctor, and the recorders' beats and outboxes for fleetwatch.
 
 use axum::Router;
 use axum::extract::{Query, State};
@@ -188,6 +188,21 @@ pub async fn vocabulary_prompt_route(
     .await
 }
 
+/// `GET /sync/devices/heartbeats`: each mic app's last beat, for fleetwatch's
+/// mic check (`xinutec-infra/mac-mini/recall_mics.py`).
+pub async fn heartbeats_route(
+    State(st): State<Arc<Gate>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    gated_read(&st, &headers, "sync heartbeats", crate::devices::beats_out).await
+}
+
+/// `GET /sync/devices/outbox`: what each phone last said it still holds, for
+/// fleetwatch's upload check (`xinutec-infra/mac-mini/recall_uploads.py`).
+pub async fn outbox_route(State(st): State<Arc<Gate>>, headers: axum::http::HeaderMap) -> Response {
+    gated_read(&st, &headers, "sync outboxes", crate::devices::reports_out).await
+}
+
 /// The windows to measure over; no defaults, the doctor owns them.
 #[derive(Deserialize)]
 pub struct LiveHealthQuery {
@@ -345,6 +360,11 @@ pub fn routes(gate: Arc<Gate>) -> Router {
         .route("/sync/live", post(live_route))
         .route("/sync/live/health", axum::routing::get(live_health_route))
         .route("/sync/heard", axum::routing::get(heard_route))
+        .route(
+            "/sync/devices/heartbeats",
+            axum::routing::get(heartbeats_route),
+        )
+        .route("/sync/devices/outbox", axum::routing::get(outbox_route))
         .route(
             "/sync/record/health",
             axum::routing::get(record_health_route),
