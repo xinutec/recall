@@ -7,6 +7,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from recall.diarize import inference_device
+
 _EMBED_RATE = 16000
 
 
@@ -28,6 +30,7 @@ def _inference(model: str, token: str | None) -> object:
     cached = _INFERENCE_CACHE.get(model)
     if cached is not None:
         return cached
+    import torch  # noqa: PLC0415 - heavy
     from pyannote.audio import Inference, Model  # noqa: PLC0415 - lazy heavy/gated
 
     embedding_model = Model.from_pretrained(model, token=token)
@@ -35,6 +38,9 @@ def _inference(model: str, token: str | None) -> object:
         msg = f"could not load embedding model {model!r} (HF token/terms?)"
         raise RuntimeError(msg)
     inference = Inference(embedding_model, window="whole")
+    inference.to(
+        torch.device(inference_device(mps_available=torch.backends.mps.is_available()))
+    )
     _INFERENCE_CACHE[model] = inference
     return inference
 

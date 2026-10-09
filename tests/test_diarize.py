@@ -1,5 +1,6 @@
 """The clustering overrides (see `recall.diarize.pyannote_diarize`), and
-leaving the shipped values alone when none is given.
+leaving the shipped values alone when none is given; and the device the
+models run on.
 
 Over-splitting one person costs less than merging two: extra clusters of one
 person still map to them by majority, while a merged cluster takes the start
@@ -12,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from recall.diarize import tuned_parameters
+from recall.diarize import inference_device, tuned_parameters
 
 SHIPPED: dict[str, Any] = {
     "segmentation": {"min_duration_off": 0.0},
@@ -54,3 +55,9 @@ def test_a_pipeline_without_clustering_parameters_is_refused() -> None:
     # Rather than score a sweep that never applied.
     with pytest.raises(ValueError, match="clustering"):
         tuned_parameters({"segmentation": {}}, threshold=0.5, min_cluster_size=None)
+
+
+def test_the_models_run_on_the_apple_gpu_when_there_is_one() -> None:
+    # On the CPU a minute with speech took 51 s, on MPS 6 s, with the same turns.
+    assert inference_device(mps_available=True) == "mps"
+    assert inference_device(mps_available=False) == "cpu"
