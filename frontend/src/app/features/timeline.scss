@@ -44,7 +44,7 @@ h2 {
 
 .day {
   position: sticky;
-  top: calc(var(--toolbar-h, 56px) + var(--safe-top, 0px));
+  top: var(--toolbar-h, 56px);
   z-index: 1;
   margin: 1.5rem 0 0.5rem;
   padding-block: 0.25rem;

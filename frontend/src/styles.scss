@@ -38,8 +38,8 @@ body {
   margin: 0;
   height: 100%;
 
-  // The height the fixed bottom nav covers, with the home-indicator inset.
-  --bottom-nav-reserve: calc(64px + env(safe-area-inset-bottom, 0px) + 0.5rem);
+  // The height the fixed bottom nav covers.
+  --bottom-nav-reserve: calc(64px + 0.5rem);
 }
 
 // Every screen's content clears the bottom nav, here once rather than per
@@ -48,10 +48,6 @@ body {
   .page {
     padding-block-end: var(--bottom-nav-reserve);
   }
-
-  // The status bar or notch inset (viewport-fit=cover); 0 in a browser tab.
-  // The toolbar pads by it, and sticky elements below add it to their offset.
-  --safe-top: env(safe-area-inset-top, 0px);
 }
 
 // A snackbar is in the overlay container, outside `.with-bottom-nav`.
