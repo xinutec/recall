@@ -64,20 +64,20 @@
     flex: 1;
     min-width: 12rem;
     color: var(--mat-sys-error);
-    font-weight: 600;
+    font-weight: 700;
   }
 }
 
 .title {
   margin-top: 0.2rem;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .when {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-weight: 600;
+  font-weight: 700;
 
   mat-icon {
     color: var(--mat-sys-primary);
