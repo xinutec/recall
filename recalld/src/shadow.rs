@@ -90,7 +90,18 @@ pub struct Report {
     pub empty_unexplained: Vec<i64>,
     /// A few clip ids per class, to look at.
     pub examples: BTreeMap<Class, Vec<i64>>,
+    /// Over every rendered clip, whatever its class, split by whether it has a
+    /// diarization result: clips, and seconds of line time by speaker kind,
+    /// today and rendered. Says what a switch would do to the speakers.
+    pub speaker_seconds: BTreeMap<&'static str, SpeakerSeconds>,
     pub unmapped_audio_rows: usize,
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+pub struct SpeakerSeconds {
+    pub clips: usize,
+    pub today: BTreeMap<String, f64>,
+    pub rendered: BTreeMap<String, f64>,
 }
 
 /// One line as recall shows it today.
@@ -205,6 +216,7 @@ fn classify(
         return Class::NoResult;
     }
     let out = rendering::lines(clip, facts, edits, enrolled);
+    speaker_seconds(facts, today, &out.lines, report);
     report.lines_today += today.len();
     report.lines_rendered += out.lines.len();
     person_check(clip.id.stored(), today, &out.lines, report);
@@ -330,6 +342,40 @@ fn compare(clip: i64, today: &[Today], rendered: &[Line], report: &mut Report) -
         report.person_names_changed.push(clip);
     }
     if same { Class::Same } else { Class::Speakers }
+}
+
+fn speaker_seconds(
+    facts: &rendering::Facts,
+    today: &[Today],
+    rendered: &[Line],
+    report: &mut Report,
+) {
+    let bucket = if facts.voices.is_some() {
+        "diarized"
+    } else {
+        "not diarized"
+    };
+    let entry = report.speaker_seconds.entry(bucket).or_default();
+    entry.clips += 1;
+    for t in today {
+        if let (Some(start), Some(end)) = (
+            transcript::Instant::parse(&t.start),
+            transcript::Instant::parse(&t.end),
+        ) {
+            let seconds = (end.micros() - start.micros()) as f64 / 1e6;
+            *entry.today.entry(t.kind.clone()).or_default() += seconds;
+        }
+    }
+    for line in rendered {
+        let kind = match line.speaker() {
+            Some(Speaker::Named { .. } | Speaker::Voice { .. }) => "person",
+            Some(Speaker::Guess { .. }) => "guess",
+            Some(Speaker::Cluster(_)) => "cluster",
+            None => "none",
+        };
+        let seconds = line.span().micros() as f64 / 1e6;
+        *entry.rendered.entry(kind.to_owned()).or_default() += seconds;
+    }
 }
 
 /// Whatever the class, a person's names and words must come through: each
