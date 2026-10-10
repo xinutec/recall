@@ -56,6 +56,8 @@ enum Task {
     EditCensus,
     /// Render every clip with a stored result and compare with today's lines (#1916).
     ShadowDiff,
+    /// How render would name the lines a person named, had nobody.
+    ShadowNaming,
     /// One clip, today's lines beside rendered ones (holds transcript text).
     ShadowClip {
         #[arg(long)]
@@ -135,6 +137,11 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
             return report(root, |meaning, ingest| {
                 ingest.busy_timeout(std::time::Duration::from_mins(2))?;
                 recalld::backfill::queue(meaning, ingest, root, apply)
+            });
+        }
+        Task::ShadowNaming => {
+            return report(root, |meaning, ingest| {
+                recalld::shadow::naming(meaning, ingest, root)
             });
         }
         Task::ShadowClip { id } => {

@@ -22,6 +22,21 @@ crate::statements! {
            AND coalesce(t.asr_model, '') <> 'live'
          ORDER BY a.id";
     AUDIO_FOR: Meaning = "SELECT id FROM audio_segments WHERE path = ?1";
+    /// Every voiceprint, with the clip it was cut from.
+    PRINTS: Meaning =
+        "SELECT s.name, e.vector, coalesce(t.audio_segment_id, c.audio_segment_id)
+         FROM speaker_embeddings e JOIN speakers s ON s.id = e.speaker_id
+         LEFT JOIN transcript_segments t ON t.id = e.source_segment_id
+         LEFT JOIN corrections c ON c.id = e.source_correction_id";
+    /// A clip's visible lines a person named, and whether each has its own
+    /// voice embedding.
+    NAMED_LINES: Meaning =
+        "SELECT t.speaker_label, t.start_utc, t.end_utc, e.segment_id IS NOT NULL
+         FROM transcript_segments t
+         LEFT JOIN transcript_embeddings e ON e.segment_id = t.id
+         WHERE t.audio_segment_id = ?1 AND t.superseded_by IS NULL
+           AND t.hidden_reason IS NULL AND coalesce(t.asr_model, '') <> 'live'
+           AND t.speaker_label IS NOT NULL";
     SHOWN_LINES: Meaning =
         "SELECT text, coalesce(speaker_label, speaker_guess, speaker_cluster),
                 CASE WHEN speaker_label IS NOT NULL THEN 'person'
@@ -458,6 +473,135 @@ fn distance(a: &[String], b: &[String]) -> usize {
         previous = current;
     }
     previous[b.len()]
+}
+
+/// How render names the lines a person named, if nobody had: each clip
+/// rendered without any naming edit and without the voiceprints cut from that
+/// clip, so a line is never matched against itself. Split by whether the line
+/// has its own embedding: the lines without one are those today shows unnamed
+/// and render names from the diarization's per-voice prints.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct Naming {
+    pub clips: usize,
+    /// Named lines in clips with no diarization result: render has no voices.
+    pub undiarized_lines: usize,
+    pub buckets: BTreeMap<&'static str, NamingCounts>,
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+pub struct NamingCounts {
+    pub lines: usize,
+    pub right: usize,
+    /// Another person's name.
+    pub wrong: usize,
+    /// Shown as an unnamed voice, or with no speaker.
+    pub unnamed: usize,
+    /// The named person has no voiceprint outside this clip, so no guess can
+    /// be right: a stranger's case.
+    pub no_print_left: usize,
+    pub wrong_examples: Vec<i64>,
+}
+
+/// See [`Naming`].
+///
+/// # Errors
+/// If a store refuses or the edit log does not load.
+pub fn naming(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &Path,
+) -> Result<Naming, Box<dyn std::error::Error>> {
+    let edits: Vec<Edit> = edits(meaning, ingest, root)?
+        .into_iter()
+        .filter(|e| {
+            !matches!(
+                e.act,
+                transcript::Act::Speaker { .. } | transcript::Act::Voice { .. }
+            )
+        })
+        .collect();
+    let prints: Vec<(transcript::voice::Voiceprint, Option<i64>)> = PRINTS
+        .prepare(meaning)?
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get(2)?))
+        })?
+        .filter_map(|row| {
+            let (person, raw, clip) = row.ok()?;
+            let vector = serde_json::from_str::<Vec<f64>>(&raw).ok()?;
+            Some((transcript::voice::Voiceprint { person, vector }, clip))
+        })
+        .collect();
+    let shown: Vec<(i64, String)> = SHOWN_CLIPS
+        .prepare(meaning)?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut report = Naming::default();
+    for (audio_id, path) in shown {
+        let named: Vec<(String, String, String, bool)> = NAMED_LINES
+            .prepare(meaning)?
+            .query_map([audio_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        if named.is_empty() {
+            continue;
+        }
+        let Some(clip) = clips::for_audio_path(ingest, root, &path)? else {
+            continue;
+        };
+        let facts = match rendering::facts(ingest, &clip) {
+            Err(crate::results::ResultError::Db(err)) => return Err(err.into()),
+            Err(_) => continue,
+            Ok(facts) => facts,
+        };
+        if facts.voices.is_none() || facts.heard.is_none() {
+            report.undiarized_lines += named.len();
+            continue;
+        }
+        let enrolled: Vec<_> = prints
+            .iter()
+            .filter(|(_, from)| *from != Some(audio_id))
+            .map(|(print, _)| print.clone())
+            .collect();
+        let out = rendering::lines(&clip, &facts, &edits, &enrolled);
+        report.clips += 1;
+        for (label, start, end, embedded) in named {
+            let bucket = if embedded {
+                "own embedding"
+            } else {
+                "no own embedding"
+            };
+            let counts = report.buckets.entry(bucket).or_default();
+            counts.lines += 1;
+            if !enrolled.iter().any(|p| p.person == label) {
+                counts.no_print_left += 1;
+                continue;
+            }
+            let shown = transcript::Instant::parse(&start)
+                .zip(transcript::Instant::parse(&end))
+                .and_then(|(a, b)| transcript::Span::new(a, b))
+                .and_then(|line| {
+                    out.lines
+                        .iter()
+                        .filter_map(|l| l.span().intersection(line).map(|s| (s.micros(), l)))
+                        .max_by_key(|(shared, _)| *shared)
+                        .map(|(_, l)| l)
+                });
+            match shown.and_then(Line::speaker) {
+                Some(Speaker::Guess { name, .. }) if *name == label => counts.right += 1,
+                Some(Speaker::Guess { .. }) => {
+                    counts.wrong += 1;
+                    if counts.wrong_examples.len() < 12
+                        && !counts.wrong_examples.contains(&clip.id.stored())
+                    {
+                        counts.wrong_examples.push(clip.id.stored());
+                    }
+                }
+                _ => counts.unnamed += 1,
+            }
+        }
+    }
+    Ok(report)
 }
 
 /// One clip side by side, for a person looking into a class. Holds transcript
