@@ -253,6 +253,11 @@ path it is handed. `asr` wraps mlx-whisper (large-v3-turbo, word timings);
 `voices` wraps pyannote (diarization and embeddings). The vocabulary the
 transcriber is biased with is read from the fleet at startup and handed to the
 shim per job; a runner that cannot read it refuses to transcribe unbiased.
+The transcribing runner also serves messages' queue of voice messages
+(`--messages-url`), one job whenever recall's queue is empty, so one set of
+Whisper weights serves both. Those jobs carry messages' own token, get no
+vocabulary, stamp no pulse and use their own scratch directory; a failure of
+messages' server is logged and skipped, never recall's backoff.
 Every message between the runner and a shim is defined once, in
 `audiocore::shim`: the runner builds requests from it, refuses a reply that does
 not read as it, and stores the reply as the shim sent it; the fleet reads stored

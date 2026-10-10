@@ -23,6 +23,17 @@ pub struct Job {
     pub language: Option<String>,
 }
 
+impl Job {
+    /// The filename as a single path component, to write under the scratch
+    /// directory; `None` for anything that would land elsewhere.
+    #[must_use]
+    pub fn scratch_name(&self) -> Option<&str> {
+        let name = std::path::Path::new(&self.filename);
+        (name.file_name() == Some(name.as_os_str()) && self.filename != "..")
+            .then_some(self.filename.as_str())
+    }
+}
+
 /// One stretch of a clip to embed. No name: the fleet reads the label when it
 /// writes the print.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

@@ -2,12 +2,17 @@
 //!
 //! Lease the next job from recalld, fetch its audio, drive a model shim, push
 //! the result. Stateless: killing it costs only a lease that expires.
+//!
+//! With `--messages-url`, the transcription runner also serves messages' queue
+//! of voice messages, one job whenever recall's own queue is empty, so one
+//! Whisper process serves both. Those jobs use messages' token, get no
+//! vocabulary prompt and stamp no pulse: they are not the household's audio.
 
 use audiocore::job::Kind;
 use audiocore::shim::{Stored, voices};
 use chrono::Utc;
 use clap::Parser;
-use runner::client::{Client, Job, Span};
+use runner::client::{self, Client, Job, Span};
 use runner::pulse::stamp_pulse;
 use runner::shim::{self, Shim};
 use std::path::Path;
@@ -40,6 +45,8 @@ struct Config {
     /// Where to stamp the archive's pulse (`<archive root>/worker-heartbeat.json`).
     /// Absent means do not stamp, for a runner that is not beside the archive.
     pulse: Option<std::path::PathBuf>,
+    /// Messages' server and its token.
+    messages: Option<(String, String)>,
 }
 
 /// Lease work from recalld and run it through a Python shim.
@@ -57,6 +64,10 @@ struct Cli {
     /// Where to stamp the archive's pulse (`<archive root>/worker-heartbeat.json`).
     #[arg(long, value_name = "FILE")]
     pulse: Option<std::path::PathBuf>,
+    /// Messages' transcription queue, leased when recall's is empty. Its token
+    /// is `MESSAGES_TRANSCRIBER_TOKEN`, never recall's.
+    #[arg(long, value_name = "URL")]
+    messages_url: Option<String>,
     /// The shim and its arguments: everything after it, verbatim [default:
     /// `python -m recall.shim_asr`].
     #[arg(long, num_args = 1.., allow_hyphen_values = true, value_name = "PROGRAM [ARGS]")]
@@ -69,6 +80,13 @@ fn parse_args() -> Config {
         eprintln!("runner: RECALL_SYNC_TOKEN must be set");
         std::process::exit(2)
     };
+    let messages = cli.messages_url.map(|url| {
+        let Ok(token) = std::env::var("MESSAGES_TRANSCRIBER_TOKEN") else {
+            eprintln!("runner: --messages-url needs MESSAGES_TRANSCRIBER_TOKEN");
+            std::process::exit(2)
+        };
+        (url, token)
+    });
     let (program, args) = match cli.shim.split_first() {
         Some((program, args)) => (program.clone(), args.to_vec()),
         None => (
@@ -83,6 +101,32 @@ fn parse_args() -> Config {
         args,
         once: cli.once,
         pulse: cli.pulse,
+        messages,
+    }
+}
+
+/// A server to lease from, and what its jobs get.
+struct Queue<'a> {
+    name: &'static str,
+    client: &'a Client,
+    kinds: &'a [Kind],
+    scratch: &'a Path,
+    prompt: Option<&'a str>,
+    pulse: Option<&'a Path>,
+}
+
+/// Why a job did not finish: its server, or the shim.
+enum Failed {
+    Server(client::Error),
+    Shim(shim::Error),
+}
+
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Server(e) => e.fmt(f),
+            Self::Shim(e) => e.fmt(f),
+        }
     }
 }
 
@@ -119,25 +163,27 @@ fn embed_spans(
 }
 
 /// A job's result as the fleet stores it (`audiocore::shim::Stored`).
-fn stored(result: &Stored<serde_json::Value>) -> Result<String, serde_json::Error> {
-    serde_json::to_string(result)
+fn stored(result: &Stored<serde_json::Value>) -> Result<String, Failed> {
+    serde_json::to_string(result).map_err(|e| Failed::Shim(shim::Error::Protocol(e.to_string())))
 }
 
 /// Do one job; `Ok(false)` when the queue was empty. An empty queue still
 /// stamps the pulse (`rows == 0`), so the doctor can tell idle from gone.
-fn one(
-    client: &Client,
-    shim: &mut Shim,
-    kinds: &[Kind],
-    scratch: &Path,
-    prompt: Option<&str>,
-    pulse: Option<&Path>,
-) -> Result<bool, Box<dyn std::error::Error>> {
+fn one(queue: &Queue, shim: &mut Shim) -> Result<bool, Failed> {
+    let Queue {
+        name: queue,
+        client,
+        kinds,
+        scratch,
+        prompt,
+        pulse,
+    } = *queue;
     let started = Utc::now();
-    let Some(job) = client.lease(kinds)? else {
+    let Some(job) = client.lease(kinds).map_err(Failed::Server)? else {
         stamp_pulse(pulse, started, 0);
         return Ok(false);
     };
+    let safe_name = job.scratch_name().map(str::to_owned);
     let Job {
         id,
         kind,
@@ -146,9 +192,17 @@ fn one(
         spans,
         language,
     } = job;
-    tracing::info!(id, %kind, %source, %filename, "leased");
-    let clip = scratch.join(&filename);
-    client.fetch_blob(&source, &filename, &clip)?;
+    tracing::info!(queue, id, %kind, %source, %filename, "leased");
+    let Some(name) = safe_name else {
+        // Left leased: the server is at fault, and its lease expires.
+        return Err(Failed::Server(client::Error::Body(format!(
+            "job {id} names {filename:?}, not a plain file name"
+        ))));
+    };
+    let clip = scratch.join(&name);
+    client
+        .fetch_blob(&source, &filename, &clip)
+        .map_err(Failed::Server)?;
     // Exhaustive: a new kind does not compile until it is given work here.
     let outcome = match kind {
         Kind::TranscribeSegment => shim
@@ -163,53 +217,45 @@ fn one(
     match outcome {
         // Stored as the shim sent it; the rows come from the typed reply.
         Ok((result, rows)) => {
-            client.finish(
-                id,
-                &stored(&Stored {
-                    ok: true,
-                    result: Some(result),
-                    error: None,
-                })?,
-            )?;
-            tracing::info!(id, rows, "done");
+            client
+                .finish(
+                    id,
+                    &stored(&Stored {
+                        ok: true,
+                        result: Some(result),
+                        error: None,
+                    })?,
+                )
+                .map_err(Failed::Server)?;
+            tracing::info!(queue, id, rows, "done");
             stamp_pulse(pulse, started, rows);
             Ok(true)
         }
         // A refusal is recorded: the clip is the problem, and a retry would
         // get the same answer.
         Err(shim::Error::Refused(why)) => {
-            tracing::warn!(id, %why, "shim refused; recording the failure");
-            client.finish(
-                id,
-                &stored(&Stored {
-                    ok: false,
-                    result: None,
-                    error: Some(why),
-                })?,
-            )?;
+            tracing::warn!(queue, id, %why, "shim refused; recording the failure");
+            client
+                .finish(
+                    id,
+                    &stored(&Stored {
+                        ok: false,
+                        result: None,
+                        error: Some(why),
+                    })?,
+                )
+                .map_err(Failed::Server)?;
             // A refusal is a completed pass, not a stall.
             stamp_pulse(pulse, started, 0);
             Ok(true)
         }
         // Transport failure: let the lease expire so a fresh process retries.
-        Err(err) => Err(Box::new(err)),
+        Err(err) => Err(Failed::Shim(err)),
     }
 }
 
-fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-    let config = parse_args();
-    let client = Client::new(&config.base, &config.token);
-    let scratch = std::env::temp_dir().join("recall-runner");
-    if let Err(err) = std::fs::create_dir_all(&scratch) {
-        tracing::error!(%err, "cannot make a scratch directory");
-        std::process::exit(1);
-    }
+/// The shim, the name it gives, and the kinds that name can do; or exit.
+fn start_shim(config: &Config) -> (Shim, String, &'static [Kind]) {
     let mut shim = match Shim::spawn(&config.program, &config.args) {
         Ok(shim) => shim,
         Err(err) => {
@@ -228,6 +274,38 @@ fn main() {
         tracing::error!(shim = %name, "unknown shim; refusing to guess what it can do");
         std::process::exit(1);
     };
+    (shim, name, kinds)
+}
+
+/// Messages' client, or exit: only a transcribing shim can serve its queue.
+fn messages_client(url: &str, token: &str, shim: &str, kinds: &[Kind], scratch: &Path) -> Client {
+    if !kinds.contains(&Kind::TranscribeSegment) {
+        tracing::error!(%shim, "messages' queue is transcription; this shim cannot");
+        std::process::exit(1);
+    }
+    if let Err(err) = std::fs::create_dir_all(scratch) {
+        tracing::error!(%err, "cannot make the messages scratch directory");
+        std::process::exit(1);
+    }
+    tracing::info!(%url, "also leasing from messages");
+    Client::new(url, token)
+}
+
+fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+    let config = parse_args();
+    let client = Client::new(&config.base, &config.token);
+    let scratch = std::env::temp_dir().join("recall-runner");
+    if let Err(err) = std::fs::create_dir_all(&scratch) {
+        tracing::error!(%err, "cannot make a scratch directory");
+        std::process::exit(1);
+    }
+    let (mut shim, name, kinds) = start_shim(&config);
     // Fatal if unreachable for a transcribing runner: an unbiased transcript
     // would have to be redone.
     let prompt = if kinds.contains(&Kind::TranscribeSegment) {
@@ -247,16 +325,46 @@ fn main() {
     } else {
         None
     };
+    let recall = Queue {
+        name: "recall",
+        client: &client,
+        kinds,
+        scratch: &scratch,
+        prompt: prompt.as_deref(),
+        pulse: config.pulse.as_deref(),
+    };
+    // Its own scratch directory: other people's voice messages never sit
+    // beside the household's clips.
+    let messages_scratch = scratch.join("messages");
+    let messages_client = config
+        .messages
+        .as_ref()
+        .map(|(url, token)| messages_client(url, token, &name, kinds, &messages_scratch));
+    let messages = messages_client.as_ref().map(|client| Queue {
+        name: "messages",
+        client,
+        kinds: &[Kind::TranscribeSegment],
+        scratch: &messages_scratch,
+        // Its server serves no vocabulary: recall's names must not bias other
+        // people's messages.
+        prompt: None,
+        pulse: None,
+    });
     tracing::info!(url = %config.base, shim = %name, kinds = ?kinds, "runner: polling");
     loop {
-        match one(
-            &client,
-            &mut shim,
-            kinds,
-            &scratch,
-            prompt.as_deref(),
-            config.pulse.as_deref(),
-        ) {
+        let mut outcome = one(&recall, &mut shim);
+        // Messages only when the household's queue is empty. Its server being
+        // down costs a log line, never recall's backoff or the shim.
+        if let (Ok(false), Some(queue)) = (&outcome, &messages) {
+            outcome = match one(queue, &mut shim) {
+                Err(Failed::Server(err)) => {
+                    tracing::warn!(%err, "messages' queue failed; skipped this round");
+                    Ok(false)
+                }
+                other => other,
+            };
+        }
+        match outcome {
             // `--once` means one job, not until the queue empties.
             Ok(true) => {
                 if config.once {

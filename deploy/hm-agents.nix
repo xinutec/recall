@@ -296,6 +296,11 @@ in
   # transcripts made without it would have to be redone.
   #
   # Nice and LowPriorityIO: transcription must never compete with the recorder.
+  #
+  # The same Whisper process also transcribes messages' voice messages when
+  # recall's queue is empty (`runner --messages-url`), once their token is in
+  # ~/.config/messages/transcriber.env: never in recall's env file, and never
+  # recall's token.
   launchd.agents."org.xinutec.recall-runner" = daemon {
     label = "org.xinutec.recall-runner";
     name = "runner";
@@ -313,10 +318,23 @@ in
           set +a
         fi
 
+        MESSAGES_TRANSCRIBER_TOKEN=""
+        MESSAGES_ENV="$HOME/.config/messages/transcriber.env"
+        if [ -r "$MESSAGES_ENV" ]; then
+          set -a
+          # shellcheck disable=SC1090  # a runtime path, deliberately not a fixed file
+          . "$MESSAGES_ENV"
+          set +a
+        fi
+        messages=()
+        if [ -n "$MESSAGES_TRANSCRIBER_TOKEN" ]; then
+          messages=(--messages-url https://messages.xinutec.org)
+        fi
+
         exec env RUST_LOG=info \
           ${
             recall.packages.${pkgs.stdenv.hostPlatform.system}.audiod
-          }/bin/runner --pulse ${out}/worker-heartbeat.json \
+          }/bin/runner --pulse ${out}/worker-heartbeat.json "''${messages[@]}" \
             --shim ${venvPython} -m recall.shim_asr
       '';
     };

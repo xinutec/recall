@@ -22,7 +22,7 @@ in `~/Library/Logs/recall/<agent>.{out,err}.log`; `recall-logrotate` caps them.
 | `recall-upload` | closed segments → recalld, receipts re-hashed before anything counts as delivered |
 | `recall-capture-mirror` | reports what capture applied and long-polls Isis for the pause intent, mirrored onto the local pause file |
 | `recall-live` | the tap → speech detection → transcribe what was just said → `POST /sync/live` |
-| `recall-runner` | leases `transcribe-*` jobs, drives the `asr` shim, pushes the result |
+| `recall-runner` | leases `transcribe-*` jobs, drives the `asr` shim, pushes the result; when recall's queue is empty, one from messages' |
 | `recall-voices` | leases `diarize-segment` and `enroll-speaker`, drives the `voices` shim |
 | `recall-doctor` | the health checks, every five minutes, reported to fleetwatch |
 | `recall-beat-relay` | accepts a mic app's heartbeat on the LAN (port 8000) and forwards it to Isis |
@@ -32,7 +32,8 @@ repository's `.env`: a launchd agent cannot touch `/Volumes/Backup`, and its
 first touch can hang the agent rather than fail it. Keep the two files in step
 by hand. `recall-upload` needs `RECALL_INGEST_TOKEN`; the mirror, the runners
 and the doctor need `RECALL_SYNC_TOKEN`; the doctor also needs the fleetwatch
-token.
+token. Messages' queue is served only once `MESSAGES_TRANSCRIBER_TOKEN` is in
+`~/.config/messages/transcriber.env`, a separate file: that token is not recall's.
 
 ### The doctor runs itself twice
 
