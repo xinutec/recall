@@ -70,6 +70,13 @@ enum Task {
         #[arg(long)]
         apply: bool,
     },
+    /// Move the uploads stored before the ingest plane into it
+    /// (`recalld::old_uploads`).
+    MoveOldUploads {
+        /// Move; without this, only say what would be moved.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Store the phones' WAV copies as FLAC (`recalld::phone_flac`).
     PhoneFlac {
         /// Convert; without this, only say what would be converted.
@@ -137,6 +144,12 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
             return report(root, |meaning, ingest| {
                 ingest.busy_timeout(std::time::Duration::from_mins(2))?;
                 recalld::backfill::queue(meaning, ingest, root, apply)
+            });
+        }
+        Task::MoveOldUploads { apply } => {
+            return report(root, |meaning, ingest| {
+                ingest.busy_timeout(std::time::Duration::from_mins(2))?;
+                recalld::old_uploads::run(root, meaning, ingest, chrono::Utc::now(), apply)
             });
         }
         Task::ShadowNaming => {

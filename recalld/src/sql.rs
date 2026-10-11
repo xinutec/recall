@@ -116,6 +116,7 @@ pub const ALL: &[(&str, &[Sql])] = &[
     ("ledger", crate::ledger::STATEMENTS),
     ("legacy_edits", crate::legacy_edits::STATEMENTS),
     ("live_tier", crate::live_tier::STATEMENTS),
+    ("old_uploads", crate::old_uploads::STATEMENTS),
     ("phone_flac", crate::phone_flac::STATEMENTS),
     ("queue", crate::queue::STATEMENTS),
     ("reads", crate::reads::STATEMENTS),

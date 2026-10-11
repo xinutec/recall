@@ -28,6 +28,7 @@ mod labels_write;
 mod legacy_edits;
 mod live_tier;
 mod meaning_schema;
+mod old_uploads;
 mod phone_flac;
 mod queue;
 mod reads;
