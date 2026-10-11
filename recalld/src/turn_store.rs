@@ -175,6 +175,27 @@ pub enum Stage {
 }
 
 impl Stage {
+    /// As the app and `rendered_lines.tier` spell it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Transcribed => "transcribed",
+            Self::Diarized => "diarized",
+            Self::Corrected => "corrected",
+        }
+    }
+
+    pub fn parse(stored: &str) -> Option<Self> {
+        [
+            Self::Live,
+            Self::Transcribed,
+            Self::Diarized,
+            Self::Corrected,
+        ]
+        .into_iter()
+        .find(|s| s.as_str() == stored)
+    }
+
     /// The one derivation. A pass that keeps the boundaries names turns in place:
     /// it records the cluster and leaves the provenance alone.
     pub fn of(asr_model: Option<&str>, provenance: Option<&Provenance>, cluster: bool) -> Self {

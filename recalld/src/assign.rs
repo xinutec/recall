@@ -480,20 +480,25 @@ pub async fn assign_route(
         return (StatusCode::BAD_REQUEST, "name required").into_response();
     }
     let root = st.root.clone();
-    let now = audiocore::instant::Stamp::now();
-    let span = Span {
-        start_turn: body.start_turn,
-        start_char: body.start_char,
-        end_turn: body.end_turn,
-        end_char: body.end_char,
-    };
-    match route::blocking("assign span", move || {
-        let mut conn = work::open_write(&root)?;
-        assign_span(&mut conn, &source, span, &name, &now)
-    })
-    .await
-    {
-        Ok(touched) => Json(AssignOut { touched }).into_response(),
-        Err(response) => response,
+    let assigned = tokio::task::spawn_blocking(move || {
+        let meaning = work::open_write(&root).map_err(crate::labels_write::WriteError::Db)?;
+        let ingest = crate::store::open(&root).map_err(crate::labels_write::WriteError::Db)?;
+        crate::labels_write::assign_span(
+            &meaning,
+            &ingest,
+            &root,
+            &source,
+            (body.start_turn, body.start_char),
+            (body.end_turn, body.end_char),
+            &name,
+        )
+    });
+    match assigned.await {
+        Ok(Ok(touched)) => Json(AssignOut {
+            touched: i64::try_from(touched).unwrap_or(i64::MAX),
+        })
+        .into_response(),
+        Ok(Err(err)) => crate::labels_write::refused("assign span", err),
+        Err(err) => route::faulted("assign span task", &err),
     }
 }

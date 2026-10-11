@@ -15,6 +15,8 @@ crate::statements! {
     BY_ID: Ingest =
         "SELECT id, source, start_us, filename, path FROM clips WHERE id = ?1";
     ALL: Ingest = "SELECT id, source, start_us, filename, path FROM clips";
+    OF_SOURCE: Ingest =
+        "SELECT id, source, start_us, filename, path FROM clips WHERE source = ?1";
     BY_PATH: Ingest =
         "SELECT id, source, start_us, filename, path FROM clips WHERE path = ?1";
     RENAME: Ingest =
@@ -92,6 +94,15 @@ pub fn by_id(ingest: &Connection, id: ClipId) -> Result<Option<Clip>, ClipError>
 pub fn all(ingest: &Connection) -> Result<Vec<Clip>, ClipError> {
     ALL.prepare(ingest)?
         .query_map([], raw)?
+        .map(|row| clip(row?))
+        .collect()
+}
+
+/// A source's clips.
+pub fn of_source(ingest: &Connection, source: &str) -> Result<Vec<Clip>, ClipError> {
+    OF_SOURCE
+        .prepare(ingest)?
+        .query_map([source], raw)?
         .map(|row| clip(row?))
         .collect()
 }

@@ -71,6 +71,23 @@ pub enum Act {
     Retract { edit: EditId },
 }
 
+/// The edits taken back: each retraction removes its target, and a retracted
+/// retraction restores its target.
+pub fn taken_back(edits: &[Edit]) -> std::collections::BTreeSet<EditId> {
+    let mut ordered: Vec<&Edit> = edits.iter().collect();
+    ordered.sort_by_key(|e| e.id);
+    let mut retracted = std::collections::BTreeSet::new();
+    for edit in ordered.iter().rev() {
+        if retracted.contains(&edit.id) {
+            continue;
+        }
+        if let Act::Retract { edit: target } = edit.act {
+            retracted.insert(target);
+        }
+    }
+    retracted
+}
+
 /// Words a person wrote: never empty, never padded.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "String")]

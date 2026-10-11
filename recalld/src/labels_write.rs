@@ -1,84 +1,591 @@
-//! The labelling writes. Each multi-statement write is one transaction, so a
-//! correction's speaker and the turn it produced cannot disagree.
-//!
-//! A label enrols: the voiceprint backfill selects on `speaker_label`, so
-//! re-assigning a correction drops its embedding to re-enrol it under the new
-//! name.
+//! The labelling writes. Each appends what the person did to the edit log
+//! (`edit_log`) and renders the clip again (`view`) before replying, so the
+//! reply's view already shows it. Nothing here changes a line: lines are
+//! render's.
 
+use crate::clips;
+use crate::edit_log::{self, LogError};
 use crate::route;
-use crate::turn_store::{self, HUMAN_MODEL, HiddenReason, NewTurn, Provenance};
-use audiocore::instant::Stamp;
-use rusqlite::{Connection, Transaction};
+use crate::view::{self, ViewError};
+use rusqlite::{Connection, OptionalExtension};
+use std::path::Path as FsPath;
+use transcript::{Act, Clip, ClipId, EditId, Instant, Name, Span, Text};
 
 crate::statements! {
-    DROP_VOICEPRINT: Meaning =
-        "DELETE FROM speaker_embeddings WHERE source_correction_id = ?1";
-    CORRECTED_TURN: Meaning =
-        "SELECT transcript_segment_id FROM corrections WHERE id = ?1";
-    SET_SPEAKER: Meaning =
-        "UPDATE corrections SET speaker = ?1 WHERE id = ?2";
-    HIDE_CORRECTION: Meaning =
-        "UPDATE corrections SET hidden_reason = ?1 WHERE id = ?2";
-    LOAD_ORIGINAL: Meaning =
-        "SELECT id, audio_segment_id, start_utc, end_utc, text, language, \
-                language_confidence, asr_confidence, speaker_label, speaker_id, \
-                speaker_cluster, superseded_by \
-         FROM transcript_segments WHERE id = ?1";
-    INSERT_PAIR: Meaning =
-        "INSERT INTO corrections \
-            (transcript_segment_id, audio_segment_id, start_utc, end_utc, \
-             original_text, corrected_text, language, created_utc, speaker, \
-             audio_confidence, words_checked) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
-    DROP_NOBODY_SPOKE_PAIR: Meaning =
-        "DELETE FROM corrections WHERE transcript_segment_id = ?1 AND corrected_text = ''";
-    CURRENT_CORRECTION_TURN: Meaning =
-        "SELECT id FROM transcript_segments
-             WHERE id = ?1 AND provenance = ?2
-               AND superseded_by IS NULL AND hidden_reason IS NULL";
-    NEWEST_PAIR: Meaning =
-        "SELECT id FROM corrections WHERE transcript_segment_id = ?1 ORDER BY id DESC";
-    DROP_SEGMENT_VOICEPRINT: Meaning =
-        "DELETE FROM speaker_embeddings WHERE source_segment_id = ?1";
-    DROP_TURN_EMBEDDING: Meaning =
-        "DELETE FROM transcript_embeddings WHERE segment_id = ?1";
-    DELETE_PAIR: Meaning =
-        "DELETE FROM corrections WHERE id = ?1";
+    LINE: Meaning =
+        "SELECT id, clip_id, start_utc, end_utc, text, hidden_reason, edit_id, asr_model,
+                speaker_label, word_timings, source_id
+         FROM rendered_lines WHERE id = ?1";
+    LINE_OF_EDIT: Meaning =
+        "SELECT id FROM rendered_lines WHERE edit_id = ?1 AND hidden_reason IS NULL
+         ORDER BY start_utc LIMIT 1";
+    /// A session's shown lines between two, inclusive, in reading order.
+    SESSION_LINES: Meaning =
+        "SELECT id FROM rendered_lines
+         WHERE source_id = ?1 AND hidden_reason IS NULL
+           AND (start_utc, id) >= (?2, ?3) AND (start_utc, id) <= (?4, ?5)
+         ORDER BY start_utc, id";
 }
 
-const HIDE_REASON: &str = "review";
+/// What the person asked for that cannot be done, or a store refusing.
+#[derive(Debug)]
+pub enum WriteError {
+    /// Nothing but whitespace was typed.
+    Blank,
+    Missing(i64),
+    /// The line is hidden: render left it out.
+    Hidden(i64),
+    /// A live line: no clip yet to hang an act on.
+    Live(i64),
+    /// Not hidden as "nobody spoke", so nothing to undo.
+    NotNobodySpoke(i64),
+    /// No person's words that can still be taken back.
+    NotCorrected(i64),
+    /// No labelled fragment with this id.
+    NotALabel(i64),
+    /// An assignment whose lines are not one session's, in order.
+    BadSpan,
+    Db(rusqlite::Error),
+    Log(LogError),
+    View(ViewError),
+}
 
-fn drop_voiceprint(tx: &Transaction, correction_id: i64) -> rusqlite::Result<()> {
-    DROP_VOICEPRINT.execute(tx, [correction_id])?;
+impl std::fmt::Display for WriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Db(err) => write!(f, "{err}"),
+            Self::Log(err) => write!(f, "{err}"),
+            Self::View(err) => write!(f, "{err}"),
+            other => write!(f, "{other:?}"),
+        }
+    }
+}
+
+impl std::error::Error for WriteError {}
+
+impl From<rusqlite::Error> for WriteError {
+    fn from(err: rusqlite::Error) -> Self {
+        Self::Db(err)
+    }
+}
+
+impl From<LogError> for WriteError {
+    fn from(err: LogError) -> Self {
+        Self::Log(err)
+    }
+}
+
+impl From<ViewError> for WriteError {
+    fn from(err: ViewError) -> Self {
+        Self::View(err)
+    }
+}
+
+impl From<clips::ClipError> for WriteError {
+    fn from(err: clips::ClipError) -> Self {
+        Self::View(ViewError::Clip(err))
+    }
+}
+
+/// A shown line, as the writes need it.
+struct Line {
+    id: i64,
+    clip: Clip,
+    span: Span,
+    text: String,
+    hidden: Option<String>,
+    edit: Option<EditId>,
+    by_person: bool,
+    label: Option<String>,
+    /// `(start_us, end_us, text)` per word, for a model line.
+    words: Vec<(i64, i64, String)>,
+}
+
+fn line(meaning: &Connection, ingest: &Connection, id: i64) -> Result<Line, WriteError> {
+    type Raw = (
+        i64,
+        Option<i64>,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let raw: Option<Raw> = LINE
+        .query_row(meaning, [id], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+                r.get(8)?,
+                r.get(9)?,
+            ))
+        })
+        .optional()?;
+    let Some((id, clip, start, end, text, hidden, edit, model, label, words)) = raw else {
+        return Err(WriteError::Missing(id));
+    };
+    let Some(clip) = clip else {
+        return Err(WriteError::Live(id));
+    };
+    let clip = clips::by_id(ingest, ClipId::from_stored(clip))?.ok_or(WriteError::Missing(id))?;
+    let span = Instant::parse(&start)
+        .zip(Instant::parse(&end))
+        .and_then(|(a, b)| Span::new(a, b))
+        .ok_or(WriteError::Missing(id))?;
+    let words = match words {
+        Some(raw) => serde_json::from_str(&raw)
+            .map_err(|err| WriteError::Db(rusqlite::Error::ToSqlConversionFailure(err.into())))?,
+        None => Vec::new(),
+    };
+    Ok(Line {
+        id,
+        clip,
+        span,
+        text,
+        hidden,
+        edit: edit.map(EditId::from_stored),
+        by_person: model.as_deref() == Some(crate::turn_store::HUMAN_MODEL),
+        label,
+        words,
+    })
+}
+
+fn shown(meaning: &Connection, ingest: &Connection, id: i64) -> Result<Line, WriteError> {
+    let line = line(meaning, ingest, id)?;
+    if line.hidden.is_some() {
+        return Err(WriteError::Hidden(id));
+    }
+    Ok(line)
+}
+
+fn now() -> Instant {
+    Instant::from_utc(chrono::Utc::now())
+}
+
+/// Append `acts` in one transaction, then render the clips they touch.
+fn file(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    acts: &[Act],
+    clips: &[ClipId],
+) -> Result<Vec<EditId>, WriteError> {
+    let tx = crate::sql::write_shared(meaning)?;
+    let at = now();
+    let ids = acts
+        .iter()
+        .map(|act| edit_log::append(&tx, at, act, None))
+        .collect::<Result<Vec<_>, _>>()?;
+    tx.commit()?;
+    view::render_clips(meaning, ingest, root, clips)?;
+    Ok(ids)
+}
+
+/// What a correction says besides the words.
+#[derive(Debug, Default)]
+pub struct Correction<'a> {
+    pub speaker: Option<&'a str>,
+    /// The person listened and vouches for the words, even if unchanged.
+    pub words_checked: bool,
+}
+
+/// A person's words for a line, and who said them. Unchanged words that were
+/// not vouched for are no words act: renaming a speaker vouches nothing.
+/// Returns the line that shows the result.
+///
+/// # Errors
+/// [`WriteError::Blank`], or the line is missing, hidden or live.
+pub fn correct(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    id: i64,
+    typed: &str,
+    edit: &Correction,
+) -> Result<i64, WriteError> {
+    let text = Text::new(typed).ok_or(WriteError::Blank)?;
+    let line = shown(meaning, ingest, id)?;
+    let changed = text.as_str() != line.text;
+    let mut acts = Vec::new();
+    if changed || edit.words_checked {
+        acts.push(Act::Words {
+            clip: line.clip.id,
+            span: line.span,
+            over: line.span,
+            text,
+            checked: true,
+        });
+    }
+    if let Some(name) = edit.speaker.and_then(Name::new)
+        && Some(name.as_str()) != line.label.as_deref()
+    {
+        acts.push(Act::Speaker {
+            clip: line.clip.id,
+            span: line.span,
+            name,
+            enrol: true,
+        });
+    }
+    if acts.is_empty() {
+        return Ok(line.id);
+    }
+    let ids = file(meaning, ingest, root, &acts, &[line.clip.id])?;
+    let words = ids.first().filter(|_| changed || edit.words_checked);
+    Ok(match words {
+        Some(edit) => LINE_OF_EDIT
+            .query_row(meaning, [edit.stored()], |r| r.get(0))
+            .optional()?
+            .unwrap_or(line.id),
+        None => line.id,
+    })
+}
+
+/// Take back the person's words a line shows, for a mis-tap: the model's
+/// show again.
+///
+/// # Errors
+/// [`WriteError::NotCorrected`] for a line that is not a person's words.
+pub fn undo_correction(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    id: i64,
+) -> Result<(), WriteError> {
+    let line = shown(meaning, ingest, id)?;
+    let (true, Some(edit)) = (line.by_person, line.edit) else {
+        return Err(WriteError::NotCorrected(id));
+    };
+    file(
+        meaning,
+        ingest,
+        root,
+        &[Act::Retract { edit }],
+        &[line.clip.id],
+    )?;
     Ok(())
 }
 
-/// Re-assign a correction's voice: the corpus pair, the turn it produced, and
-/// its voiceprint, all or none.
-pub fn set_correction_speaker(
-    conn: &mut Connection,
-    correction_id: i64,
-    speaker: &str,
-) -> rusqlite::Result<()> {
-    let tx = crate::sql::write(conn)?;
-    let original: Option<i64> = CORRECTED_TURN
-        .query_row(&tx, [correction_id], |r| r.get(0))
-        .ok();
-    SET_SPEAKER.execute(&tx, (speaker, correction_id))?;
-    if let Some(original) = original {
-        turn_store::label_correction(&tx, original, speaker)?;
-    }
-    drop_voiceprint(&tx, correction_id)?;
-    tx.commit()
+/// A person listened and nobody spoke over the line.
+///
+/// # Errors
+/// The line is missing, hidden or live.
+pub fn no_speech(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    id: i64,
+) -> Result<(), WriteError> {
+    let line = shown(meaning, ingest, id)?;
+    let act = Act::NoSpeech {
+        clip: line.clip.id,
+        span: line.span,
+    };
+    file(meaning, ingest, root, &[act], &[line.clip.id])?;
+    Ok(())
 }
 
-/// Hide a bad label from the corpus, the counts and the matching pool. Not
-/// deleted: a person judged the clip, even if the judgement was "unusable".
-pub fn hide_correction(conn: &mut Connection, correction_id: i64) -> rusqlite::Result<()> {
-    let tx = crate::sql::write(conn)?;
-    HIDE_CORRECTION.execute(&tx, (HIDE_REASON, correction_id))?;
-    drop_voiceprint(&tx, correction_id)?;
-    tx.commit()
+/// Take back a "nobody spoke": the hidden line, by its id, shows again.
+///
+/// # Errors
+/// [`WriteError::NotNobodySpoke`] unless the line is hidden that way.
+pub fn undo_no_speech(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    id: i64,
+) -> Result<(), WriteError> {
+    let line = line(meaning, ingest, id)?;
+    let nobody = crate::turn_store::HiddenReason::NobodySpoke.to_string();
+    let (Some(true), Some(edit)) = (line.hidden.as_deref().map(|h| h == nobody), line.edit) else {
+        return Err(WriteError::NotNobodySpoke(id));
+    };
+    file(
+        meaning,
+        ingest,
+        root,
+        &[Act::Retract { edit }],
+        &[line.clip.id],
+    )?;
+    Ok(())
+}
+
+/// A labelled fragment: a person's naming of a stretch, still in force.
+fn label(meaning: &Connection, id: i64) -> Result<(ClipId, Span, Name), WriteError> {
+    match edit_log::get(meaning, EditId::from_stored(id))? {
+        Some(transcript::Edit {
+            act: Act::Speaker {
+                clip, span, name, ..
+            },
+            ..
+        }) => Ok((clip, span, name)),
+        _ => Err(WriteError::NotALabel(id)),
+    }
+}
+
+/// Name a labelled fragment's voice again. Over the same span, the later act
+/// wins.
+///
+/// # Errors
+/// [`WriteError::NotALabel`] for an id that is not a person's naming.
+pub fn relabel(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    id: i64,
+    speaker: &str,
+) -> Result<(), WriteError> {
+    let (clip, span, _) = label(meaning, id)?;
+    let name = Name::new(speaker).ok_or(WriteError::Blank)?;
+    let act = Act::Speaker {
+        clip,
+        span,
+        name,
+        enrol: true,
+    };
+    file(meaning, ingest, root, &[act], &[clip])?;
+    Ok(())
+}
+
+/// Keep a fragment's name but stop learning a voiceprint from it: a person
+/// judged the clip unusable.
+///
+/// # Errors
+/// [`WriteError::NotALabel`] for an id that is not a person's naming.
+pub fn unenrol(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    id: i64,
+) -> Result<(), WriteError> {
+    let (clip, span, name) = label(meaning, id)?;
+    let act = Act::Speaker {
+        clip,
+        span,
+        name,
+        enrol: false,
+    };
+    file(meaning, ingest, root, &[act], &[clip])?;
+    Ok(())
+}
+
+/// Where a character offset of a line falls in time: at a word's edge for a
+/// model line, in proportion for a person's.
+fn instant_at(line: &Line, offset: usize, end: bool) -> Instant {
+    if line.words.is_empty() {
+        let chars = line.text.chars().count().max(1);
+        let fraction = offset.min(chars) as f64 / chars as f64;
+        return line
+            .span
+            .start()
+            .plus_seconds(fraction * line.span.micros() as f64 / 1e6)
+            .unwrap_or(line.span.start());
+    }
+    // The line's text is the words joined and trimmed.
+    let lead = line.words.first().map_or(0, |(_, _, w)| {
+        w.chars().count() - w.trim_start().chars().count()
+    });
+    let mut at: usize = 0;
+    for (start, stop, word) in &line.words {
+        let len = word.chars().count();
+        let (from, to) = (at.saturating_sub(lead), (at + len).saturating_sub(lead));
+        at += len;
+        let inside = if end {
+            offset > from && offset <= to
+        } else {
+            offset < to
+        };
+        if inside {
+            let micros = if end { *stop } else { *start };
+            return Instant::from_micros(micros).unwrap_or(line.span.start());
+        }
+    }
+    if end {
+        line.span.end()
+    } else {
+        line.span.start()
+    }
+}
+
+/// Give a text span, from a character of one line to a character of another
+/// in the same session, to `speaker`: one naming act per clip it touches.
+/// Returns how many lines it touched.
+///
+/// # Errors
+/// [`WriteError::BadSpan`] for lines of another session or out of order.
+pub fn assign_span(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    source: &str,
+    (first, first_char): (i64, usize),
+    (last, last_char): (i64, usize),
+    speaker: &str,
+) -> Result<usize, WriteError> {
+    let name = Name::new(speaker).ok_or(WriteError::Blank)?;
+    let a = shown(meaning, ingest, first)?;
+    let b = shown(meaning, ingest, last)?;
+    if a.clip.source.as_str() != source || b.clip.source.as_str() != source || b.span < a.span {
+        return Err(WriteError::BadSpan);
+    }
+    let start = instant_at(&a, first_char, false);
+    let end = instant_at(&b, last_char, true);
+    let spelled = |l: &Line| audiocore::instant::python_isoformat_utc(l.span.start().to_utc());
+    let ids: Vec<i64> = SESSION_LINES
+        .prepare(meaning)?
+        .query_map(
+            rusqlite::params![source, spelled(&a), a.id, spelled(&b), b.id],
+            |r| r.get(0),
+        )?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut per_clip: Vec<(ClipId, Instant, Instant)> = Vec::new();
+    for id in &ids {
+        let l = shown(meaning, ingest, *id)?;
+        let from = if l.id == a.id { start } else { l.span.start() };
+        let to = if l.id == b.id { end } else { l.span.end() };
+        match per_clip.last_mut() {
+            Some((clip, _, stop)) if *clip == l.clip.id => *stop = to,
+            _ => per_clip.push((l.clip.id, from, to)),
+        }
+    }
+    let acts: Vec<Act> = per_clip
+        .iter()
+        .filter_map(|(clip, from, to)| {
+            Some(Act::Speaker {
+                clip: *clip,
+                span: Span::new(*from, *to)?,
+                name: name.clone(),
+                enrol: true,
+            })
+        })
+        .collect();
+    let clips: Vec<ClipId> = per_clip.iter().map(|(c, _, _)| *c).collect();
+    file(meaning, ingest, root, &acts, &clips)?;
+    Ok(ids.len())
+}
+
+/// The session acts of `source` still in force.
+fn in_force(meaning: &Connection, source: &str) -> Result<Vec<transcript::Edit>, WriteError> {
+    let edits = edit_log::for_source(meaning, source)?;
+    let gone = transcript::taken_back(&edits);
+    Ok(edits
+        .into_iter()
+        .filter(|e| !gone.contains(&e.id))
+        .collect())
+}
+
+fn session_clips(ingest: &Connection, source: &str) -> Result<Vec<ClipId>, WriteError> {
+    Ok(clips::of_source(ingest, source)?
+        .into_iter()
+        .map(|c| c.id)
+        .collect())
+}
+
+/// Name a diarized voice across a session, or with `None` take the name back.
+/// Returns whether anything changed.
+///
+/// # Errors
+/// If a store refuses.
+pub fn name_voice(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    source: &transcript::SourceId,
+    cluster: &str,
+    name: Option<&str>,
+) -> Result<bool, WriteError> {
+    let current: Vec<EditId> = in_force(meaning, source.as_str())?
+        .into_iter()
+        .filter(|e| matches!(&e.act, Act::Voice { cluster: c, .. } if c == cluster))
+        .map(|e| e.id)
+        .collect();
+    let acts: Vec<Act> = match name.and_then(Name::new) {
+        Some(name) => vec![Act::Voice {
+            source: source.clone(),
+            cluster: cluster.to_owned(),
+            name,
+        }],
+        None => current
+            .into_iter()
+            .map(|edit| Act::Retract { edit })
+            .collect(),
+    };
+    if acts.is_empty() {
+        return Ok(false);
+    }
+    file(
+        meaning,
+        ingest,
+        root,
+        &acts,
+        &session_clips(ingest, source.as_str())?,
+    )?;
+    Ok(true)
+}
+
+/// Pin `source`'s language, or with `None` leave it to the model.
+///
+/// # Errors
+/// If a store refuses.
+pub fn pin_language(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    source: &transcript::SourceId,
+    language: Option<transcript::Language>,
+) -> Result<(), WriteError> {
+    let current: Vec<EditId> = in_force(meaning, source.as_str())?
+        .into_iter()
+        .filter(|e| matches!(e.act, Act::Language { .. }))
+        .map(|e| e.id)
+        .collect();
+    let acts: Vec<Act> = match language {
+        Some(language) => vec![Act::Language {
+            source: source.clone(),
+            language,
+        }],
+        None => current
+            .into_iter()
+            .map(|edit| Act::Retract { edit })
+            .collect(),
+    };
+    if acts.is_empty() {
+        return Ok(());
+    }
+    file(
+        meaning,
+        ingest,
+        root,
+        &acts,
+        &session_clips(ingest, source.as_str())?,
+    )?;
+    Ok(())
+}
+
+/// The language a person pinned `source` to, if any: what its transcriptions
+/// are asked for.
+///
+/// # Errors
+/// If a store refuses.
+pub fn language_of(
+    meaning: &Connection,
+    source: &str,
+) -> Result<Option<transcript::Language>, WriteError> {
+    Ok(in_force(meaning, source)?
+        .into_iter()
+        .rev()
+        .find_map(|e| match e.act {
+            Act::Language { language, .. } => Some(language),
+            _ => None,
+        }))
 }
 
 // --- HTTP -------------------------------------------------------------------
@@ -91,6 +598,27 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use std::sync::Arc;
 
+/// Run a write against both planes off the async runtime.
+#[expect(clippy::result_large_err, reason = "the Err is the HTTP response")]
+async fn write<T: Send + 'static>(
+    st: &reads::State,
+    what: &'static str,
+    run: impl FnOnce(&Connection, &Connection, &FsPath) -> Result<T, WriteError> + Send + 'static,
+) -> Result<T, Response> {
+    let root = st.root.clone();
+    match tokio::task::spawn_blocking(move || {
+        let meaning = work::open_write(&root).map_err(WriteError::Db)?;
+        let ingest = crate::store::open(&root).map_err(WriteError::Db)?;
+        run(&meaning, &ingest, &root)
+    })
+    .await
+    {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(err)) => Err(refused(what, err)),
+        Err(err) => Err(route::faulted(what, &err)),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct ReassignIn {
     speaker: String,
@@ -98,18 +626,15 @@ pub struct ReassignIn {
 
 pub async fn correction_reassign_route(
     State(st): State<Arc<reads::State>>,
-    Path(correction_id): Path<i64>,
+    Path(id): Path<i64>,
     Json(body): Json<ReassignIn>,
 ) -> Response {
     let speaker = body.speaker.trim().to_owned();
     if speaker.is_empty() {
-        // The UI never clears a speaker; an empty one would drop the voiceprint.
         return (StatusCode::BAD_REQUEST, "speaker required").into_response();
     }
-    let root = st.root.clone();
-    match route::blocking("correction reassign", move || {
-        let mut conn = work::open_write(&root)?;
-        set_correction_speaker(&mut conn, correction_id, &speaker)
+    match write(&st, "correction reassign", move |m, i, root| {
+        relabel(m, i, root, id, &speaker)
     })
     .await
     {
@@ -120,281 +645,16 @@ pub async fn correction_reassign_route(
 
 pub async fn correction_hide_route(
     State(st): State<Arc<reads::State>>,
-    Path(correction_id): Path<i64>,
+    Path(id): Path<i64>,
 ) -> Response {
-    let root = st.root.clone();
-    match route::blocking("correction hide", move || {
-        let mut conn = work::open_write(&root)?;
-        hide_correction(&mut conn, correction_id)
+    match write(&st, "correction hide", move |m, i, root| {
+        unenrol(m, i, root, id)
     })
     .await
     {
         Ok(()) => route::ack(),
         Err(response) => response,
     }
-}
-
-// --- the correction itself ---------------------------------------------------
-
-/// Not a score: a person read it.
-const HUMAN_CONFIDENCE: f64 = 1.0;
-
-/// The columns a correction carries forward from the turn it replaces.
-struct Original {
-    id: i64,
-    audio_segment_id: Option<i64>,
-    start_utc: Stamp,
-    end_utc: Stamp,
-    text: String,
-    language: Option<String>,
-    language_confidence: Option<f64>,
-    asr_confidence: Option<f64>,
-    speaker_label: Option<String>,
-    speaker_id: Option<i64>,
-    speaker_cluster: Option<String>,
-    superseded_by: Option<i64>,
-}
-
-#[derive(Debug)]
-pub enum CorrectError {
-    /// Nothing but whitespace was typed.
-    Blank,
-    Missing(i64),
-    AlreadySuperseded(i64),
-    Hidden(i64),
-    /// Not hidden as "nobody spoke", so nothing to undo.
-    NotNobodySpoke(i64),
-    /// No correction that can still be taken back.
-    NotCorrected(i64),
-    /// The start or end is not an ISO-8601 instant.
-    BadSpan,
-    Db(rusqlite::Error),
-}
-
-impl From<rusqlite::Error> for CorrectError {
-    fn from(err: rusqlite::Error) -> Self {
-        Self::Db(err)
-    }
-}
-
-/// What a correction may override; `None` keeps the turn's own.
-#[derive(Debug, Default)]
-pub struct Correction<'a> {
-    pub speaker: Option<&'a str>,
-    /// A tighter span, from the boundary editor.
-    pub start: Option<&'a str>,
-    pub end: Option<&'a str>,
-    pub language: Option<&'a str>,
-    /// The person listened and vouches for the words, even if unchanged.
-    pub words_checked: bool,
-}
-
-fn load_original(tx: &Transaction, segment_id: i64) -> Result<Original, CorrectError> {
-    LOAD_ORIGINAL
-        .query_row(tx, [segment_id], |r| {
-            Ok(Original {
-                id: r.get(0)?,
-                audio_segment_id: r.get(1)?,
-                start_utc: r.get(2)?,
-                end_utc: r.get(3)?,
-                text: r.get(4)?,
-                language: r.get(5)?,
-                language_confidence: r.get(6)?,
-                asr_confidence: r.get(7)?,
-                speaker_label: r.get(8)?,
-                speaker_id: r.get(9)?,
-                speaker_cluster: r.get(10)?,
-                superseded_by: r.get(11)?,
-            })
-        })
-        .map_err(|err| match err {
-            rusqlite::Error::QueryReturnedNoRows => CorrectError::Missing(segment_id),
-            other => CorrectError::Db(other),
-        })
-}
-
-/// Replace a turn with a person's and record the corpus pair, in one
-/// transaction. `transcript_fts` is maintained by the writer: skipping its
-/// insert fails nothing, it just makes the correction unsearchable.
-pub fn apply_correction(
-    conn: &mut Connection,
-    segment_id: i64,
-    corrected_text: &str,
-    now: &Stamp,
-    edit: &Correction,
-) -> Result<i64, CorrectError> {
-    let text = corrected_text.trim();
-    if text.is_empty() {
-        return Err(CorrectError::Blank);
-    }
-    let tx = crate::sql::write(conn)?;
-    let old = load_original(&tx, segment_id)?;
-    if old.superseded_by.is_some() {
-        // A double-tap or a stale tab.
-        return Err(CorrectError::AlreadySuperseded(segment_id));
-    }
-    let language = edit.language.or(old.language.as_deref());
-    // Re-spelled in UTC: these columns are compared as text.
-    let start = match edit.start {
-        Some(value) => Stamp::parse(value).ok_or(CorrectError::BadSpan)?,
-        None => old.start_utc.clone(),
-    };
-    let end = match edit.end {
-        Some(value) => Stamp::parse(value).ok_or(CorrectError::BadSpan)?,
-        None => old.end_utc.clone(),
-    };
-    let speaker_label = edit.speaker.or(old.speaker_label.as_deref());
-
-    let new_id = turn_store::insert(
-        &tx,
-        &NewTurn {
-            audio_segment_id: old.audio_segment_id,
-            language,
-            language_confidence: old.language_confidence,
-            asr_confidence: Some(HUMAN_CONFIDENCE),
-            asr_model: Some(HUMAN_MODEL),
-            speaker_label,
-            speaker_id: old.speaker_id,
-            speaker_cluster: old.speaker_cluster.as_deref(),
-            provenance: Some(Provenance::Correction(old.id)),
-            created_utc: Some(now),
-            // Typed words are vouched for; renaming the speaker vouches nothing.
-            words_checked: edit.words_checked || text != old.text,
-            ..NewTurn::at(&start, &end, text)
-        },
-    )?;
-    turn_store::supersede(&tx, old.id, new_id)?;
-    insert_pair(
-        &tx,
-        &old,
-        &Pair {
-            start: &start,
-            end: &end,
-            text,
-            language,
-            speaker: edit.speaker,
-            words_checked: edit.words_checked,
-        },
-        now,
-    )?;
-    tx.commit()?;
-    Ok(new_id)
-}
-
-/// A corpus pair: what the machine wrote and what a person says was said.
-struct Pair<'a> {
-    start: &'a Stamp,
-    end: &'a Stamp,
-    /// Empty when nobody spoke.
-    text: &'a str,
-    language: Option<&'a str>,
-    speaker: Option<&'a str>,
-    words_checked: bool,
-}
-
-fn insert_pair(tx: &Transaction, old: &Original, pair: &Pair, now: &Stamp) -> rusqlite::Result<()> {
-    INSERT_PAIR.execute(
-        tx,
-        rusqlite::params![
-            old.id,
-            old.audio_segment_id,
-            pair.start,
-            pair.end,
-            old.text,
-            pair.text,
-            pair.language,
-            now,
-            pair.speaker,
-            // Faint audio is still ASR data, but too degraded to enrol.
-            old.asr_confidence,
-            pair.words_checked.then_some(1),
-        ],
-    )?;
-    Ok(())
-}
-
-/// A person listened and nobody spoke. The turn is hidden and the pair stored
-/// with empty text: its span keeps a later pass from writing the invention
-/// back ([`turn_store::protected_between`]).
-///
-/// # Errors
-/// [`CorrectError::Missing`], [`CorrectError::AlreadySuperseded`] or
-/// [`CorrectError::Hidden`] when the turn is not current.
-pub fn mark_no_speech(
-    conn: &mut Connection,
-    segment_id: i64,
-    now: &Stamp,
-) -> Result<(), CorrectError> {
-    let tx = crate::sql::write(conn)?;
-    let old = load_original(&tx, segment_id)?;
-    if old.superseded_by.is_some() {
-        return Err(CorrectError::AlreadySuperseded(segment_id));
-    }
-    if !turn_store::claim(&tx, old.id, &HiddenReason::NobodySpoke)? {
-        return Err(CorrectError::Hidden(segment_id));
-    }
-    insert_pair(
-        &tx,
-        &old,
-        &Pair {
-            start: &old.start_utc,
-            end: &old.end_utc,
-            text: "",
-            language: old.language.as_deref(),
-            speaker: None,
-            words_checked: true,
-        },
-        now,
-    )?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Take back a [`mark_no_speech`]: the turn shows again and the pair is
-/// deleted (a mis-tap, and a hidden pair would still protect the span).
-///
-/// # Errors
-/// [`CorrectError::NotNobodySpoke`] when the turn is not hidden that way.
-pub fn undo_no_speech(conn: &mut Connection, segment_id: i64) -> Result<(), CorrectError> {
-    let tx = crate::sql::write(conn)?;
-    if !turn_store::unhide(&tx, segment_id, &HiddenReason::NobodySpoke)? {
-        return Err(CorrectError::NotNobodySpoke(segment_id));
-    }
-    DROP_NOBODY_SPOKE_PAIR.execute(&tx, [segment_id])?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Take back a correction of `segment_id`, for a mis-tap: the person's turn,
-/// the pair and any voiceprint enrolled from them are deleted, and the
-/// machine's turn shows again.
-///
-/// # Errors
-/// [`CorrectError::NotCorrected`] unless the turn is replaced by a current,
-/// visible correction of itself; one corrected again since is refused.
-pub fn undo_correction(conn: &mut Connection, segment_id: i64) -> Result<(), CorrectError> {
-    use rusqlite::OptionalExtension as _;
-    let tx = crate::sql::write(conn)?;
-    let old = load_original(&tx, segment_id)?;
-    let provenance = Provenance::Correction(segment_id).to_string();
-    let human: Option<i64> = CURRENT_CORRECTION_TURN
-        .query_row(&tx, rusqlite::params![old.superseded_by, provenance], |r| {
-            r.get(0)
-        })
-        .optional()?;
-    let pair: Option<i64> = NEWEST_PAIR
-        .query_row(&tx, [segment_id], |r| r.get(0))
-        .optional()?;
-    let (Some(human), Some(pair)) = (human, pair) else {
-        return Err(CorrectError::NotCorrected(segment_id));
-    };
-    drop_voiceprint(&tx, pair)?;
-    DROP_SEGMENT_VOICEPRINT.execute(&tx, [human])?;
-    DROP_TURN_EMBEDDING.execute(&tx, [human])?;
-    DELETE_PAIR.execute(&tx, [pair])?;
-    turn_store::unsupersede(&tx, segment_id, human)?;
-    tx.commit()?;
-    Ok(())
 }
 
 #[derive(Deserialize, ts_rs::TS)]
@@ -405,12 +665,6 @@ pub struct CorrectIn {
     #[ts(optional = nullable)]
     speaker: Option<String>,
     #[ts(optional = nullable)]
-    start: Option<String>,
-    #[ts(optional = nullable)]
-    end: Option<String>,
-    #[ts(optional = nullable)]
-    language: Option<String>,
-    #[ts(optional = nullable)]
     checked: Option<bool>,
 }
 
@@ -418,28 +672,23 @@ pub async fn correct_route(
     State(st): State<Arc<reads::State>>,
     Json(body): Json<CorrectIn>,
 ) -> Response {
-    let root = st.root.clone();
-    let now = audiocore::instant::Stamp::now();
-    let applied = tokio::task::spawn_blocking(move || {
-        let mut conn = work::open_write(&root)?;
-        apply_correction(
-            &mut conn,
+    match write(&st, "correct", move |m, i, root| {
+        correct(
+            m,
+            i,
+            root,
             body.id,
             &body.text,
-            &now,
             &Correction {
                 speaker: body.speaker.as_deref(),
-                start: body.start.as_deref(),
-                end: body.end.as_deref(),
-                language: body.language.as_deref(),
                 words_checked: body.checked == Some(true),
             },
         )
-    });
-    match applied.await {
-        Ok(Ok(new_id)) => Json(route::NewId { new_id }).into_response(),
-        Ok(Err(err)) => refused("correct", err),
-        Err(err) => route::faulted("correct task", &err),
+    })
+    .await
+    {
+        Ok(new_id) => Json(route::NewId { new_id }).into_response(),
+        Err(response) => response,
     }
 }
 
@@ -454,16 +703,13 @@ pub async fn no_speech_route(
     State(st): State<Arc<reads::State>>,
     Json(body): Json<LineIn>,
 ) -> Response {
-    let root = st.root.clone();
-    let now = audiocore::instant::Stamp::now();
-    let applied = tokio::task::spawn_blocking(move || {
-        let mut conn = work::open_write(&root)?;
-        mark_no_speech(&mut conn, body.id, &now)
-    });
-    match applied.await {
-        Ok(Ok(())) => route::ack(),
-        Ok(Err(err)) => refused("no speech", err),
-        Err(err) => route::faulted("no speech task", &err),
+    match write(&st, "no speech", move |m, i, root| {
+        no_speech(m, i, root, body.id)
+    })
+    .await
+    {
+        Ok(()) => route::ack(),
+        Err(response) => response,
     }
 }
 
@@ -471,15 +717,13 @@ pub async fn undo_no_speech_route(
     State(st): State<Arc<reads::State>>,
     Json(body): Json<LineIn>,
 ) -> Response {
-    let root = st.root.clone();
-    let applied = tokio::task::spawn_blocking(move || {
-        let mut conn = work::open_write(&root)?;
-        undo_no_speech(&mut conn, body.id)
-    });
-    match applied.await {
-        Ok(Ok(())) => route::ack(),
-        Ok(Err(err)) => refused("undo no speech", err),
-        Err(err) => route::faulted("undo no speech task", &err),
+    match write(&st, "undo no speech", move |m, i, root| {
+        undo_no_speech(m, i, root, body.id)
+    })
+    .await
+    {
+        Ok(()) => route::ack(),
+        Err(response) => response,
     }
 }
 
@@ -487,52 +731,34 @@ pub async fn undo_correction_route(
     State(st): State<Arc<reads::State>>,
     Json(body): Json<LineIn>,
 ) -> Response {
-    let root = st.root.clone();
-    let applied = tokio::task::spawn_blocking(move || {
-        let mut conn = work::open_write(&root)?;
-        undo_correction(&mut conn, body.id)
-    });
-    match applied.await {
-        Ok(Ok(())) => route::ack(),
-        Ok(Err(err)) => refused("undo correction", err),
-        Err(err) => route::faulted("undo correction task", &err),
+    match write(&st, "undo correction", move |m, i, root| {
+        undo_correction(m, i, root, body.id)
+    })
+    .await
+    {
+        Ok(()) => route::ack(),
+        Err(response) => response,
     }
 }
 
 /// A refused write, as the caller's to fix (each says which) or a fault.
-fn refused(what: &str, err: CorrectError) -> Response {
+pub fn refused(what: &str, err: WriteError) -> Response {
+    let bad = |message: String| (StatusCode::BAD_REQUEST, message).into_response();
     match err {
-        CorrectError::Blank => {
-            (StatusCode::BAD_REQUEST, "corrected text must not be blank").into_response()
-        }
-        CorrectError::Missing(id) => (
-            StatusCode::BAD_REQUEST,
-            format!("no transcript segment with id {id}"),
-        )
-            .into_response(),
-        CorrectError::BadSpan => {
-            (StatusCode::BAD_REQUEST, "start and end must be ISO-8601").into_response()
-        }
-        CorrectError::AlreadySuperseded(id) => (
-            StatusCode::BAD_REQUEST,
-            format!("turn #{id} was already superseded - correct the current version"),
-        )
-            .into_response(),
-        CorrectError::Hidden(id) => (
-            StatusCode::BAD_REQUEST,
-            format!("turn #{id} is already hidden"),
-        )
-            .into_response(),
-        CorrectError::NotNobodySpoke(id) => (
-            StatusCode::BAD_REQUEST,
-            format!("turn #{id} is not hidden as nobody spoke"),
-        )
-            .into_response(),
-        CorrectError::NotCorrected(id) => (
-            StatusCode::BAD_REQUEST,
-            format!("turn #{id} has no correction that can be taken back"),
-        )
-            .into_response(),
-        CorrectError::Db(err) => route::faulted(what, &err),
+        WriteError::Blank => bad("text must not be blank".to_owned()),
+        WriteError::Missing(id) => bad(format!("no line with id {id}")),
+        WriteError::Hidden(id) => bad(format!("line #{id} is hidden")),
+        WriteError::Live(id) => bad(format!(
+            "line #{id} is a live guess: wait for its transcription"
+        )),
+        WriteError::NotNobodySpoke(id) => bad(format!("line #{id} is not hidden as nobody spoke")),
+        WriteError::NotCorrected(id) => bad(format!(
+            "line #{id} is not a person's words that can be taken back"
+        )),
+        WriteError::NotALabel(id) => bad(format!("no labelled fragment with id {id}")),
+        WriteError::BadSpan => bad("the span's lines are not one session's, in order".to_owned()),
+        WriteError::Db(err) => route::faulted(what, &err),
+        WriteError::Log(err) => route::faulted(what, &err),
+        WriteError::View(err) => route::faulted(what, &err),
     }
 }

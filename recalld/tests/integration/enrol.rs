@@ -1,244 +1,188 @@
-//! Voiceprint enrolment's work-list: which named turns become reference
-//! vectors, and which clip each is cut from.
+//! Voiceprint enrolment's work-list and its writes: which labelled fragments
+//! become reference vectors, which clip each is cut from, and which prints a
+//! person's later act makes stale.
 
+use crate::fixture::Fleet;
 use audiocore::job::Kind;
 use chrono::{DateTime, Utc};
-use recalld::enrol::{Span, derive_jobs, pending, spans_for};
+use recalld::enrol::{Print, Span, derive_jobs, forget_unwanted, pending, write_pass};
 use recalld::store;
+use transcript::{Act, Clip, Name, Span as TimeSpan};
 
 fn at(iso: &str) -> DateTime<Utc> {
     iso.parse().expect("t")
 }
 
-/// The meaning plane with clip 1 and one enrolled speaker, in the stored spelling.
-fn seed(conn: &rusqlite::Connection) {
-    recalld::meaning_schema::ensure(conn).expect("schema");
-    conn.execute_batch(
-        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'usb', 'coreaudio');
-         INSERT INTO speakers (id, name) VALUES (1, 'Someone');
-         INSERT INTO audio_segments (id, source_id, path, start_utc, end_utc, sample_rate, channels)
-         VALUES (1, 'usb', '/data/usb/usb-20260910T100000.opus', '2026-09-10T10:00:00+00:00',
-                 '2026-09-10T10:01:00+00:00', 16000, 1);",
-    )
-    .expect("clip 1");
+/// One usb clip with a transcription.
+fn fleet() -> (Fleet, Clip) {
+    let f = Fleet::new();
+    let clip = f.clip(
+        "usb",
+        "coreaudio",
+        "20260910T100000",
+        &[(1.0, 8.0, "een twee drie")],
+        None,
+    );
+    (f, clip)
 }
 
-fn meaning() -> rusqlite::Connection {
-    let conn = rusqlite::Connection::open_in_memory().expect("mem");
-    seed(&conn);
-    conn
+/// A person names `from..to` seconds of `clip`; returns the act's id.
+fn name(f: &Fleet, clip: &Clip, from: f64, to: f64, who: &str, enrol: bool) -> i64 {
+    name_from(f, clip, from, to, who, enrol, None)
 }
 
-/// A named turn `offset` seconds into clip 1, lasting `secs`.
-fn turn(conn: &rusqlite::Connection, id: i64, label: Option<&str>, offset: f64, secs: f64) {
-    let base = at("2026-09-10T10:00:00+00:00");
-    let start = base + chrono::Duration::milliseconds((offset * 1000.0) as i64);
-    let end = start + chrono::Duration::milliseconds((secs * 1000.0) as i64);
-    conn.execute(
-        "INSERT INTO transcript_segments
-             (id, audio_segment_id, start_utc, end_utc, text, asr_model, speaker_label)
-         VALUES (?1, 1, ?2, ?3, 'x', 'whisper', ?4)",
-        rusqlite::params![
-            id,
-            audiocore::instant::python_isoformat_utc(start),
-            audiocore::instant::python_isoformat_utc(end),
-            label
-        ],
-    )
-    .expect("turn");
-}
-
-/// The ingest plane's row for clip 1 — note the other extension.
-fn delivered(root: &std::path::Path, filename: &str) {
-    delivered_at(root, filename, "2026-09-10T10:00:00Z");
-}
-
-/// A delivered blob with a capture time of its own.
-fn delivered_at(root: &std::path::Path, filename: &str, start_utc: &str) {
-    let conn = store::open(root).expect("ingest");
-    store::insert(
-        &conn,
-        &store::Row {
-            source: "usb".into(),
-            filename: filename.into(),
-            start_utc: start_utc.into(),
-            bytes: 1,
-            sha256: "x".into(),
-            received_utc: "2026-09-10T10:01:00Z".into(),
-            sent_utc: None,
+fn name_from(
+    f: &Fleet,
+    clip: &Clip,
+    from: f64,
+    to: f64,
+    who: &str,
+    enrol: bool,
+    origin: Option<&str>,
+) -> i64 {
+    let s = |x: f64| clip.start.plus_seconds(x).expect("in range");
+    recalld::edit_log::append(
+        &f.meaning,
+        s(100.0),
+        &Act::Speaker {
+            clip: clip.id,
+            span: TimeSpan::new(s(from), s(to)).expect("ordered"),
+            name: Name::new(who).expect("name"),
+            enrol,
         },
+        origin,
     )
-    .expect("row");
+    .expect("append")
+    .stored()
+}
+
+fn spans(f: &Fleet) -> Vec<Span> {
+    pending(&f.meaning, &f.ingest)
+        .expect("pending")
+        .into_iter()
+        .map(|(_, s)| s)
+        .collect()
+}
+
+fn print(f: &Fleet, act: Option<i64>, line: Option<i64>) {
+    f.meaning
+        .execute_batch("INSERT OR IGNORE INTO speakers (id, name) VALUES (1, 'Someone');")
+        .expect("speaker");
+    f.meaning
+        .execute(
+            "INSERT INTO speaker_embeddings (speaker_id, vector, created_utc, source_edit_id, source_segment_id)
+             VALUES (1, '[1.0]', '2026-09-10T12:00:00+00:00', ?1, ?2)",
+            (act, line),
+        )
+        .expect("print");
+}
+
+fn prints(f: &Fleet) -> i64 {
+    f.meaning
+        .query_row("SELECT count(*) FROM speaker_embeddings", [], |r| r.get(0))
+        .expect("count")
 }
 
 #[test]
-fn a_named_turn_is_offered_as_seconds_into_its_clip() {
-    // The span is relative to the clip, not the epoch: the runner has one file
-    // and cuts inside it.
-    let conn = meaning();
-    turn(&conn, 10, Some("Alice"), 12.5, 4.0);
+fn a_labelled_fragment_is_offered_as_seconds_into_its_clip() {
+    let (f, clip) = fleet();
+    let act = name(&f, &clip, 2.0, 6.0, "Alice", true);
 
-    let work = pending(&conn).expect("pending");
+    let work = pending(&f.meaning, &f.ingest).expect("pending");
+
     assert_eq!(
         work,
-        vec![(
+        [(
             "usb-20260910T100000".to_owned(),
             Span {
-                segment_id: 10,
-                start_s: 12.5,
-                end_s: 16.5
+                segment_id: act,
+                start_s: 2.0,
+                end_s: 6.0
             }
         )]
     );
 }
 
 #[test]
-fn a_turn_already_enrolled_is_not_offered_again() {
-    let conn = meaning();
-    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
-    conn.execute(
-        "INSERT INTO speaker_embeddings (speaker_id, vector, created_utc, source_segment_id)
-         VALUES (1, '[1.0]', '2026-09-10T11:00:00+00:00', 10)",
-        [],
-    )
-    .expect("print");
+fn a_short_fragment_or_one_kept_from_enrolment_is_not_offered() {
+    let (f, clip) = fleet();
+    name(&f, &clip, 2.0, 2.5, "Alice", true);
+    name(&f, &clip, 10.0, 14.0, "Bob", false);
 
-    assert!(pending(&conn).expect("pending").is_empty());
+    assert!(spans(&f).is_empty());
 }
 
 #[test]
-fn the_work_list_matches_the_pythons_own_exclusions() {
-    // A turn already enrolled is not enrolled again.
-    let conn = meaning();
-    turn(&conn, 1, None, 0.0, 4.0); // never named
-    turn(&conn, 2, Some("SPEAKER_01"), 5.0, 4.0); // a cluster id is not a name
-    turn(&conn, 3, Some("Alice"), 10.0, 0.5); // under a second: a useless print
-    turn(&conn, 4, Some("Alice"), 20.0, 4.0); // the only one that qualifies
-    conn.execute(
-        "UPDATE transcript_segments SET superseded_by = 4 WHERE id = 1",
-        [],
-    )
-    .expect("supersede");
-
-    let ids: Vec<i64> = pending(&conn)
-        .expect("pending")
-        .into_iter()
-        .map(|(_, s)| s.segment_id)
-        .collect();
-    assert_eq!(ids, vec![4]);
-}
-
-#[test]
-fn a_turn_hidden_or_superseded_teaches_nothing() {
-    let conn = meaning();
-    turn(&conn, 1, Some("Alice"), 0.0, 4.0);
-    turn(&conn, 2, Some("Alice"), 10.0, 4.0);
-    conn.execute(
-        "UPDATE transcript_segments SET hidden_reason = 'review' WHERE id = 1",
-        [],
-    )
-    .expect("hide");
-    conn.execute(
-        "UPDATE transcript_segments SET superseded_by = 1 WHERE id = 2",
-        [],
-    )
-    .expect("supersede");
-
-    assert!(pending(&conn).expect("pending").is_empty());
-}
-
-#[test]
-fn a_turn_starting_a_hair_before_its_clip_seeks_to_zero_not_backwards() {
+fn a_fragment_starting_a_hair_before_its_clip_seeks_to_zero_not_backwards() {
     // ffmpeg answers a negative seek with the whole clip.
-    let conn = meaning();
-    turn(&conn, 10, Some("Alice"), -0.2, 4.0);
+    let (f, clip) = fleet();
+    name(&f, &clip, -0.2, 3.0, "Alice", true);
 
-    let (_, span) = pending(&conn).expect("pending").remove(0);
-    assert!(span.start_s.abs() < f64::EPSILON, "got {}", span.start_s);
+    assert!(spans(&f)[0].start_s.abs() < 1e-9, "seeks to zero");
 }
 
 #[test]
-fn the_job_names_the_ingest_filename_even_when_the_extensions_differ() {
-    // The meaning plane holds `.opus`, the ingest copy `.wav`, and the runner
-    // fetches by the ingest name: matched by stem.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let conn = meaning();
-    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
-    delivered(dir.path(), "usb-20260910T100000.wav");
+fn a_fragment_with_a_print_is_not_offered_again_nor_one_whose_old_line_has_one() {
+    let (f, clip) = fleet();
+    let printed = name(&f, &clip, 2.0, 6.0, "Alice", true);
+    print(&f, Some(printed), None);
+    // Recovered from a line that was enrolled before the edit log existed.
+    name_from(&f, &clip, 10.0, 14.0, "Bob", true, Some("Line(55)"));
+    print(&f, None, Some(55));
 
-    let ingest = store::open(dir.path()).expect("db");
-    recalld::ingest_schema::ensure(&ingest).expect("schema");
-    assert_eq!(
-        derive_jobs(&ingest, &conn, at("2026-09-10T12:00:00Z"), 100).expect("derive"),
-        1
-    );
-    let queued: String = ingest
-        .query_row(
-            "SELECT filename FROM jobs WHERE kind = ?1",
-            [Kind::EnrollSpeaker],
-            |r| r.get(0),
-        )
-        .expect("job");
-    assert_eq!(queued, "usb-20260910T100000.wav");
-    assert_eq!(
-        spans_for(&conn, &queued).expect("spans"),
-        vec![Span {
-            segment_id: 10,
-            start_s: 0.0,
-            end_s: 4.0
-        }]
-    );
+    assert!(spans(&f).is_empty());
 }
 
 #[test]
-fn one_job_per_clip_however_many_named_turns_it_holds() {
-    // One job per clip (`jobs` is UNIQUE (kind, filename)); the spans travel
-    // with the lease.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let conn = meaning();
-    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
-    turn(&conn, 11, Some("Bob"), 10.0, 4.0);
-    delivered(dir.path(), "usb-20260910T100000.wav");
+fn naming_a_fragment_again_forgets_its_print_even_one_learnt_from_an_old_line() {
+    let (f, clip) = fleet();
+    let first = name(&f, &clip, 2.0, 6.0, "Alice", true);
+    print(&f, Some(first), None);
+    name_from(&f, &clip, 10.0, 14.0, "Bob", true, Some("Line(55)"));
+    print(&f, None, Some(55));
+    assert_eq!(
+        forget_unwanted(&f.meaning).expect("forget"),
+        0,
+        "both wanted"
+    );
 
-    let ingest = store::open(dir.path()).expect("db");
-    recalld::ingest_schema::ensure(&ingest).expect("schema");
-    assert_eq!(
-        derive_jobs(&ingest, &conn, at("2026-09-10T12:00:00Z"), 100).expect("derive"),
-        1
-    );
-    assert_eq!(
-        spans_for(&conn, "usb-20260910T100000.wav")
-            .expect("spans")
-            .len(),
-        2
-    );
-    // Idempotent: a second pass adds nothing.
-    assert_eq!(
-        derive_jobs(&ingest, &conn, at("2026-09-10T12:05:00Z"), 100).expect("derive"),
-        0
-    );
+    let again = name(&f, &clip, 2.0, 6.0, "Carol", true);
+    name(&f, &clip, 10.0, 14.0, "Bob", false);
+
+    assert_eq!(forget_unwanted(&f.meaning).expect("forget"), 2);
+    assert_eq!(prints(&f), 0);
+    let offered: Vec<i64> = spans(&f).iter().map(|s| s.segment_id).collect();
+    assert_eq!(offered, [again], "the new naming waits for its own print");
 }
 
 #[test]
-fn a_turn_whose_clip_was_never_delivered_gets_no_job() {
-    // No job for audio the ingest plane does not hold.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let conn = meaning();
-    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
-
-    let ingest = store::open(dir.path()).expect("db");
-    recalld::ingest_schema::ensure(&ingest).expect("schema");
-    assert_eq!(
-        derive_jobs(&ingest, &conn, at("2026-09-10T12:00:00Z"), 100).expect("derive"),
-        0
+fn one_job_per_clip_however_many_fragments_it_holds_and_none_without_any() {
+    let (f, clip) = fleet();
+    f.clip(
+        "usb",
+        "coreaudio",
+        "20260910T100100",
+        &[(1.0, 8.0, "vier vijf")],
+        None,
     );
+    name(&f, &clip, 2.0, 6.0, "Alice", true);
+    name(&f, &clip, 10.0, 14.0, "Bob", true);
+
+    let queued =
+        derive_jobs(&f.ingest, &f.meaning, at("2026-09-10T12:00:00Z"), 10).expect("derive");
+
+    assert_eq!(queued, 1);
+    let jobs: Vec<String> = f
+        .ingest
+        .prepare("SELECT filename FROM jobs WHERE kind = ?1")
+        .expect("prepare")
+        .query_map([Kind::EnrollSpeaker], |r| r.get(0))
+        .expect("query")
+        .collect::<rusqlite::Result<_>>()
+        .expect("rows");
+    assert_eq!(jobs, ["usb-20260910T100000.flac"]);
 }
 
-// --- writing back what the runner embedded -----------------------------------
-
-use recalld::enrol::{Print, write_pass};
-
-/// A finished `enroll-speaker` job carrying `result`.
 fn finished(ingest: &rusqlite::Connection, filename: &str, result: &str) {
     ingest
         .execute(
@@ -259,223 +203,129 @@ fn ingest_at(root: &std::path::Path) -> rusqlite::Connection {
     conn
 }
 
-fn enrolled_names(conn: &rusqlite::Connection) -> Vec<(String, i64)> {
-    let mut stmt = conn
+fn enrolled(f: &Fleet) -> Vec<(String, i64)> {
+    f.meaning
         .prepare(
-            "SELECT s.name, e.source_segment_id FROM speaker_embeddings e
+            "SELECT s.name, e.source_edit_id FROM speaker_embeddings e
              JOIN speakers s ON s.id = e.speaker_id ORDER BY e.id",
         )
-        .expect("prepare");
-    let rows = stmt
+        .expect("prepare")
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .expect("rows");
-    rows.collect::<Result<_, _>>().expect("collect")
+        .expect("rows")
+        .collect::<Result<_, _>>()
+        .expect("collect")
 }
 
+fn pass(f: &Fleet) -> recalld::enrol::Enrolled {
+    write_pass(
+        &f.meaning,
+        &f.ingest,
+        &crate::stamp("2026-09-10T12:10:00+00:00"),
+        10,
+    )
+    .expect("pass")
+}
+
+const CLIP: &str = "usb-20260910T100000.flac";
+
 #[test]
-fn an_embedded_span_becomes_a_reference_voiceprint() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let conn = meaning();
-    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
-    let ingest = ingest_at(dir.path());
+fn an_embedded_span_becomes_a_reference_voiceprint_under_its_naming() {
+    let (f, clip) = fleet();
+    let act = name(&f, &clip, 2.0, 6.0, "Alice", true);
     finished(
-        &ingest,
-        "usb-20260910T100000.wav",
+        &f.ingest,
+        CLIP,
         &reply(&[Print {
-            segment_id: 10,
+            segment_id: act,
             vector: vec![0.5, -0.25],
         }]),
     );
 
-    let pass = write_pass(
-        &conn,
-        &ingest,
-        &crate::stamp("2026-09-10T12:10:00+00:00"),
-        10,
-    )
-    .expect("pass");
-    assert_eq!(pass.prints, 1);
-    assert_eq!(enrolled_names(&conn), vec![("Alice".to_owned(), 10)]);
-    // The turn is enrolled, so it leaves the work-list by itself.
-    assert!(pending(&conn).expect("pending").is_empty());
+    assert_eq!(pass(&f).prints, 1);
+    assert_eq!(enrolled(&f), [("Alice".to_owned(), act)]);
+    assert!(spans(&f).is_empty(), "printed, so it leaves the work-list");
 }
 
 #[test]
-fn a_turn_renamed_while_the_runner_worked_is_not_filed_under_the_old_name() {
-    // The label is read at write time: a person can re-assign while the
-    // runner works.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let conn = meaning();
-    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
-    let ingest = ingest_at(dir.path());
+fn a_fragment_named_again_while_the_runner_worked_is_not_filed_under_the_old_name() {
+    let (f, clip) = fleet();
+    let act = name(&f, &clip, 2.0, 6.0, "Alice", true);
+    name(&f, &clip, 2.0, 6.0, "Bob", true);
     finished(
-        &ingest,
-        "usb-20260910T100000.wav",
+        &f.ingest,
+        CLIP,
         &reply(&[Print {
-            segment_id: 10,
-            vector: vec![1.0],
+            segment_id: act,
+            vector: vec![0.5],
         }]),
     );
-    conn.execute(
-        "UPDATE transcript_segments SET speaker_label = 'Bob' WHERE id = 10",
-        [],
-    )
-    .expect("rename");
 
-    write_pass(
-        &conn,
-        &ingest,
-        &crate::stamp("2026-09-10T12:10:00+00:00"),
-        10,
-    )
-    .expect("pass");
-    assert_eq!(enrolled_names(&conn), vec![("Bob".to_owned(), 10)]);
+    let done = pass(&f);
+
+    assert_eq!((done.prints, done.stale), (0, 1));
+    assert!(enrolled(&f).is_empty());
 }
 
 #[test]
-fn a_turn_hidden_while_the_runner_worked_enrols_nothing() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let conn = meaning();
-    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
-    let ingest = ingest_at(dir.path());
+fn an_empty_vector_is_refused_and_the_clip_is_ledgered_all_the_same() {
+    // An empty vector would become somebody's best match on quiet audio; an
+    // unledgered clip is decided again every pass.
+    let (f, clip) = fleet();
+    let act = name(&f, &clip, 2.0, 6.0, "Alice", true);
     finished(
-        &ingest,
-        "usb-20260910T100000.wav",
+        &f.ingest,
+        CLIP,
         &reply(&[Print {
-            segment_id: 10,
-            vector: vec![1.0],
-        }]),
-    );
-    conn.execute(
-        "UPDATE transcript_segments SET hidden_reason = 'review' WHERE id = 10",
-        [],
-    )
-    .expect("hide");
-
-    let pass = write_pass(
-        &conn,
-        &ingest,
-        &crate::stamp("2026-09-10T12:10:00+00:00"),
-        10,
-    )
-    .expect("pass");
-    assert_eq!((pass.prints, pass.stale), (0, 1));
-    assert!(enrolled_names(&conn).is_empty());
-}
-
-#[test]
-fn an_empty_vector_is_refused_rather_than_enrolled() {
-    // An empty vector would become somebody's best match on quiet audio.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let conn = meaning();
-    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
-    let ingest = ingest_at(dir.path());
-    finished(
-        &ingest,
-        "usb-20260910T100000.wav",
-        &reply(&[Print {
-            segment_id: 10,
+            segment_id: act,
             vector: vec![],
         }]),
     );
 
-    let pass = write_pass(
-        &conn,
-        &ingest,
-        &crate::stamp("2026-09-10T12:10:00+00:00"),
-        10,
-    )
-    .expect("pass");
-    assert_eq!((pass.prints, pass.stale), (0, 1));
-    assert!(enrolled_names(&conn).is_empty());
+    assert_eq!(pass(&f).prints, 0);
+    assert!(enrolled(&f).is_empty());
+    assert_eq!(pass(&f).clips, 0, "ledgered: not looked at again");
 }
 
 #[test]
-fn a_clip_that_enrols_nothing_is_still_ledgered() {
-    // Ledgered, or it is decided again every pass.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let conn = meaning();
-    let ingest = ingest_at(dir.path());
-    finished(&ingest, "usb-20260910T100000.wav", "not json at all");
+fn a_replayed_print_does_not_enrol_the_same_naming_twice() {
+    let (f, clip) = fleet();
+    let act = name(&f, &clip, 2.0, 6.0, "Alice", true);
+    let twice = reply(&[
+        Print {
+            segment_id: act,
+            vector: vec![0.5],
+        },
+        Print {
+            segment_id: act,
+            vector: vec![0.5],
+        },
+    ]);
+    finished(&f.ingest, CLIP, &twice);
 
-    let first = write_pass(
-        &conn,
-        &ingest,
-        &crate::stamp("2026-09-10T12:10:00+00:00"),
-        10,
-    )
-    .expect("pass");
-    assert_eq!(first.clips, 1);
-    let again = write_pass(
-        &conn,
-        &ingest,
-        &crate::stamp("2026-09-10T12:20:00+00:00"),
-        10,
-    )
-    .expect("pass");
-    assert_eq!(again.clips, 0, "a decided clip must not come back");
-}
-
-#[test]
-fn a_replayed_result_does_not_enrol_the_same_turn_twice() {
-    // The ledger stops the clip returning; `still_wanted` stops the turn
-    // enrolling twice even if it did.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let conn = meaning();
-    turn(&conn, 10, Some("Alice"), 0.0, 4.0);
-    let ingest = ingest_at(dir.path());
-    let payload = reply(&[Print {
-        segment_id: 10,
-        vector: vec![1.0],
-    }]);
-    finished(&ingest, "usb-20260910T100000.wav", &payload);
-    write_pass(
-        &conn,
-        &ingest,
-        &crate::stamp("2026-09-10T12:10:00+00:00"),
-        10,
-    )
-    .expect("pass");
-
-    ingest
-        .execute("DELETE FROM pass_ledger", [])
-        .expect("forget the ledger");
-    let pass = write_pass(
-        &conn,
-        &ingest,
-        &crate::stamp("2026-09-10T12:20:00+00:00"),
-        10,
-    )
-    .expect("pass");
-    assert_eq!((pass.prints, pass.stale), (0, 1));
-    assert_eq!(enrolled_names(&conn).len(), 1);
+    assert_eq!(pass(&f).prints, 1);
+    assert_eq!(enrolled(&f).len(), 1);
 }
 
 #[test]
 fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
     // A job without spans would silently enrol nobody. Other kinds omit
     // `spans` on the wire.
-    let dir = tempfile::tempdir().expect("tempdir");
-    {
-        let conn =
-            rusqlite::Connection::open(dir.path().join("recall.sqlite")).expect("meaning file");
-        seed(&conn);
-        turn(&conn, 10, Some("Alice"), 2.0, 4.0);
-    }
+    let (f, clip) = fleet();
+    let act = name(&f, &clip, 2.0, 6.0, "Alice", true);
 
     let mut enrol_job = recalld::queue::Job {
         id: 1,
         kind: Kind::EnrollSpeaker,
-        filename: "usb-20260910T100000.wav".to_owned(),
+        filename: CLIP.to_owned(),
         source: "usb".to_owned(),
         spans: Vec::new(),
         language: None,
     };
-    recalld::enrol::attach_spans(dir.path(), &mut enrol_job).expect("attach");
+    recalld::enrol::attach_spans(f.root(), &mut enrol_job).expect("attach");
     assert_eq!(
         enrol_job.spans,
         vec![Span {
-            segment_id: 10,
+            segment_id: act,
             start_s: 2.0,
             end_s: 6.0
         }]
@@ -491,7 +341,7 @@ fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
         spans: Vec::new(),
         ..enrol_job.clone()
     };
-    recalld::enrol::attach_spans(dir.path(), &mut diarize_job).expect("attach");
+    recalld::enrol::attach_spans(f.root(), &mut diarize_job).expect("attach");
     assert!(diarize_job.spans.is_empty());
     assert!(
         !serde_json::to_string(&diarize_job)
@@ -499,6 +349,24 @@ fn a_leased_enrolment_job_carries_its_spans_and_other_kinds_carry_none() {
             .contains("spans"),
         "an unrelated kind's lease body must not grow a field"
     );
+}
+
+/// A delivered blob with a capture time of its own.
+fn delivered_at(root: &std::path::Path, filename: &str, start_utc: &str) {
+    let conn = store::open(root).expect("ingest");
+    store::insert(
+        &conn,
+        &store::Row {
+            source: "usb".into(),
+            filename: filename.into(),
+            start_utc: start_utc.into(),
+            bytes: 1,
+            sha256: "x".into(),
+            received_utc: "2026-09-10T10:01:00Z".into(),
+            sent_utc: None,
+        },
+    )
+    .expect("row");
 }
 
 #[test]
@@ -528,7 +396,11 @@ fn enrolment_outranks_capture_time_or_it_would_never_be_leased() {
         "usb-20260912T100000.wav",
         "2026-09-12T10:00:00Z",
     );
-    delivered(dir.path(), "usb-20260910T100000.wav");
+    delivered_at(
+        dir.path(),
+        "usb-20260910T100000.wav",
+        "2026-09-10T10:00:00Z",
+    );
     for (kind, filename) in [
         (Kind::DiarizeSegment, "usb-20260912T100000.wav"),
         (Kind::EnrollSpeaker, "usb-20260910T100000.wav"),

@@ -1,5 +1,5 @@
-//! The read routes, against a database holding the hard cases, and their
-//! mounting rules.
+//! The read routes over the rendered view, against a database holding the hard
+//! cases, and their mounting rules.
 
 use recalld::reads;
 use recalld::turn_store::Stage;
@@ -10,25 +10,21 @@ fn schema(conn: &Connection) {
     recalld::meaning_schema::ensure(conn).expect("schema");
 }
 
+/// A rendered line; the search index follows by trigger.
 fn turn(conn: &Connection, id: i64, start: &str, text: &str, extra: &[(&str, &str)]) {
     conn.execute(
-        "INSERT INTO transcript_segments (id, start_utc, end_utc, text, asr_model)
-         VALUES (?1, ?2, ?2, ?3, 'whisper')",
+        "INSERT INTO rendered_lines (id, start_utc, end_utc, text, asr_model, tier)
+         VALUES (?1, ?2, ?2, ?3, 'whisper', 'transcribed')",
         (id, start, text),
     )
     .expect("turn");
     for (col, val) in extra {
         conn.execute(
-            &format!("UPDATE transcript_segments SET {col} = ?1 WHERE id = ?2"),
+            &format!("UPDATE rendered_lines SET {col} = ?1 WHERE id = ?2"),
             (*val, id),
         )
         .expect("extra");
     }
-    conn.execute(
-        "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
-        (id, text),
-    )
-    .expect("fts");
 }
 
 fn db() -> Connection {
@@ -38,17 +34,10 @@ fn db() -> Connection {
 }
 
 #[test]
-fn a_superseded_or_hidden_turn_is_never_shown() {
-    // Superseded and hidden turns stay out of the read.
+fn a_hidden_line_is_never_shown() {
+    // Model text render left out stays out of the read and the search.
     let conn = db();
     turn(&conn, 1, "2026-09-01T10:00:00+00:00", "current", &[]);
-    turn(
-        &conn,
-        2,
-        "2026-09-01T10:00:01+00:00",
-        "old",
-        &[("superseded_by", "1")],
-    );
     turn(
         &conn,
         3,
@@ -61,7 +50,7 @@ fn a_superseded_or_hidden_turn_is_never_shown() {
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].text, "current");
 
-    let hits = reads::search(&conn, "old OR junk OR current", 50).expect("search");
+    let hits = reads::search(&conn, "junk OR current", 50).expect("search");
     assert_eq!(hits.items.len(), 1, "search must apply the same projection");
     assert_eq!(hits.items[0].text, "current");
 }
@@ -103,17 +92,9 @@ fn punctuation_in_a_search_is_text_and_the_operators_still_work() {
 }
 
 #[test]
-fn asked_for_hidden_turns_a_page_shows_them_with_their_reason_but_never_a_superseded_one() {
-    // Hidden lines show on request; superseded ones are history.
+fn asked_for_hidden_lines_a_page_shows_them_with_their_reason() {
     let conn = db();
     turn(&conn, 1, "2026-09-01T10:00:00+00:00", "current", &[]);
-    turn(
-        &conn,
-        2,
-        "2026-09-01T10:00:01+00:00",
-        "old",
-        &[("superseded_by", "1")],
-    );
     turn(
         &conn,
         3,
@@ -173,48 +154,22 @@ fn a_human_label_wins_and_drops_the_score_a_guess_keeps_it() {
 }
 
 #[test]
-fn the_tier_badge_reports_how_much_processing_a_turn_has_had() {
+fn the_tier_badge_is_the_stored_tier_and_an_unknown_one_fails_the_read() {
     let conn = db();
-    turn(
-        &conn,
-        1,
-        "2026-09-01T10:00:00+00:00",
-        "a",
-        &[("asr_model", "human")],
-    );
-    turn(
-        &conn,
-        2,
-        "2026-09-01T10:00:01+00:00",
-        "b",
-        &[("asr_model", "live")],
-    );
-    turn(
-        &conn,
-        3,
-        "2026-09-01T10:00:02+00:00",
-        "c",
-        &[("provenance", "diarized (mlx-whisper)")],
-    );
-    turn(
-        &conn,
-        4,
-        "2026-09-01T10:00:03+00:00",
-        "d",
-        &[("asr_model", "mlx-whisper")],
-    );
-    // Named in place: the pass ran and kept the boundaries.
-    turn(
-        &conn,
-        5,
-        "2026-09-01T10:00:04+00:00",
-        "e",
-        &[
-            ("asr_model", "mlx-whisper"),
-            ("speaker_cluster", "SPEAKER_00"),
-        ],
-    );
-
+    for (id, tier) in [
+        (1, "corrected"),
+        (2, "live"),
+        (3, "diarized"),
+        (4, "transcribed"),
+    ] {
+        turn(
+            &conn,
+            id,
+            &format!("2026-09-01T10:00:0{id}+00:00"),
+            "t",
+            &[("tier", tier)],
+        );
+    }
     let tiers: Vec<Stage> = reads::timeline(&conn, 50, None)
         .expect("timeline")
         .items
@@ -227,10 +182,19 @@ fn the_tier_badge_reports_how_much_processing_a_turn_has_had() {
             Stage::Corrected,
             Stage::Live,
             Stage::Diarized,
-            Stage::Transcribed,
-            Stage::Diarized
+            Stage::Transcribed
         ]
     );
+    // The app's spelling of each is the stored one.
+    for tier in tiers {
+        assert_eq!(
+            serde_json::to_value(tier).unwrap(),
+            serde_json::Value::from(tier.as_str())
+        );
+    }
+
+    turn(&conn, 5, "2026-09-01T10:00:05+00:00", "t", &[("tier", "?")]);
+    assert!(reads::timeline(&conn, 50, None).is_err());
 }
 
 #[test]
@@ -275,7 +239,7 @@ fn a_page_reads_oldest_first_though_the_query_is_newest_first() {
 
 #[test]
 fn a_turn_with_no_audio_segment_still_appears() {
-    // A correction with no audio row still shows.
+    // A live line has no audio row, and still shows.
     let conn = db();
     turn(&conn, 1, "2026-09-01T10:00:00+00:00", "corrected", &[]);
     let page = reads::timeline(&conn, 50, None).expect("timeline");
@@ -450,65 +414,27 @@ async fn a_limit_is_clamped_rather_than_trusted() {
 }
 
 #[test]
-fn a_deep_link_resolves_to_the_turn_as_it_reads_now() {
-    // A link to a since-corrected turn shows the correction.
-    let conn = Connection::open_in_memory().expect("open");
-    schema(&conn);
-    turn(&conn, 1, "2026-06-14T18:00:00+00:00", "hird a noise", &[]);
-    turn(&conn, 2, "2026-06-14T18:00:00+00:00", "heard a noise", &[]);
-    conn.execute(
-        "UPDATE transcript_segments SET superseded_by = 2 WHERE id = 1",
-        (),
-    )
-    .expect("supersede");
+fn a_deep_link_reads_the_line_and_a_line_gone_since_answers_absent() {
+    let conn = db();
+    turn(&conn, 1, "2026-06-14T18:00:00+00:00", "heard a noise", &[]);
 
     let out = reads::current_version(&conn, 1)
         .expect("query")
         .expect("found");
-
-    assert_eq!(out.id, 2);
     assert_eq!(out.text, "heard a noise");
+    assert_eq!(reads::current_version(&conn, 2).expect("query"), None);
 }
 
 #[test]
-fn a_supersede_cycle_is_reported_absent_rather_than_hanging() {
-    // A cyclic `superseded_by` chain answers absent instead of spinning.
-    let conn = Connection::open_in_memory().expect("open");
-    schema(&conn);
+fn ids_asked_for_twice_appear_once_in_the_order_asked() {
+    let conn = db();
     turn(&conn, 1, "2026-06-14T18:00:00+00:00", "a", &[]);
     turn(&conn, 2, "2026-06-14T18:00:01+00:00", "b", &[]);
-    conn.execute(
-        "UPDATE transcript_segments SET superseded_by = 2 WHERE id = 1",
-        (),
-    )
-    .expect("a->b");
-    conn.execute(
-        "UPDATE transcript_segments SET superseded_by = 1 WHERE id = 2",
-        (),
-    )
-    .expect("b->a");
 
-    assert_eq!(reads::current_version(&conn, 1).expect("query"), None);
-}
+    let out = reads::transcripts(&conn, &[2, 1, 2, 9]).expect("query");
 
-#[test]
-fn several_ids_that_now_resolve_to_one_turn_appear_once() {
-    // Two fragments merged by a correction render once.
-    let conn = Connection::open_in_memory().expect("open");
-    schema(&conn);
-    turn(&conn, 1, "2026-06-14T18:00:00+00:00", "old a", &[]);
-    turn(&conn, 2, "2026-06-14T18:00:01+00:00", "old b", &[]);
-    turn(&conn, 3, "2026-06-14T18:00:00+00:00", "merged", &[]);
-    conn.execute(
-        "UPDATE transcript_segments SET superseded_by = 3 WHERE id IN (1, 2)",
-        (),
-    )
-    .expect("merge");
-
-    let out = reads::transcripts(&conn, &[1, 2]).expect("query");
-
-    assert_eq!(out.items.len(), 1);
-    assert_eq!(out.items[0].text, "merged");
+    let ids: Vec<i64> = out.items.iter().map(|i| i.id).collect();
+    assert_eq!(ids, [2, 1]);
 }
 
 #[test]

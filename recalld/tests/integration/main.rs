@@ -20,6 +20,7 @@ mod devices;
 mod diarized;
 mod edit_log;
 mod enrol;
+mod fixture;
 mod http;
 mod identify_differential;
 mod identify_parity;

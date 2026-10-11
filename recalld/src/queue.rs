@@ -65,7 +65,7 @@ crate::statements! {
                              attempts = attempts + 1
              WHERE id = ?2";
     RETIRE_EXHAUSTED: Ingest =
-        "UPDATE jobs SET state = 'done', done_utc = ?1, result = ?2
+        "UPDATE jobs SET state = 'done', done_utc = ?1, result = COALESCE(result, ?2)
          WHERE done_utc IS NULL AND attempts >= ?3
            AND (leased_until IS NULL OR leased_until < ?1)";
     FINISH: Ingest =

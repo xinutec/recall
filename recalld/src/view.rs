@@ -45,8 +45,9 @@ crate::statements! {
     INSERT_LINE: Meaning =
         "INSERT INTO rendered_lines (id, clip_id, audio_segment_id, source_id, start_utc, end_utc,
              text, language, asr_confidence, asr_model, speaker_label, speaker_guess, speaker_score,
-             speaker_cluster, tier, hidden_reason, words_checked, edit_id, live_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
+             speaker_cluster, tier, hidden_reason, words_checked, edit_id, live_id, word_timings)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                 ?19, ?20)";
     SET_INPUTS: Meaning =
         "INSERT INTO rendered_clips (clip_id, inputs) VALUES (?1, ?2)
          ON CONFLICT (clip_id) DO UPDATE SET inputs = excluded.inputs";
@@ -154,29 +155,29 @@ pub fn refresh(
     Ok(done)
 }
 
-/// Render one clip now: a person's act shows in the reply that made it.
+/// Render these clips now: a person's act shows in the reply that made it.
 ///
 /// # Errors
-/// If a store refuses, the edit log or the clip's result does not read.
-pub fn render_clip(
+/// If a store refuses, the edit log or a clip's result does not read.
+pub fn render_clips(
     meaning: &Connection,
     ingest: &Connection,
     root: &Path,
-    clip: &Clip,
+    clips: &[transcript::ClipId],
 ) -> Result<(), ViewError> {
-    let Some(s) = shown(meaning, ingest, root)?
-        .into_iter()
-        .find(|s| s.clip.id == clip.id)
-    else {
-        return Ok(());
-    };
     let prints = crate::identify::enrolled(meaning)?;
-    let inputs = Versions::read(meaning, ingest, &prints)?.of(clip);
-    match render_one(meaning, ingest, &s, &prints, &inputs) {
-        Ok(()) => Ok(()),
-        Err(Failed::Result(err)) => Err(ViewError::Result(err)),
-        Err(Failed::View(err)) => Err(err),
+    let versions = Versions::read(meaning, ingest, &prints)?;
+    for s in shown(meaning, ingest, root)?
+        .iter()
+        .filter(|s| clips.contains(&s.clip.id))
+    {
+        match render_one(meaning, ingest, s, &prints, &versions.of(&s.clip)) {
+            Ok(()) => {}
+            Err(Failed::Result(err)) => return Err(ViewError::Result(err)),
+            Err(Failed::View(err)) => return Err(err),
+        }
     }
+    Ok(())
 }
 
 fn shown(meaning: &Connection, ingest: &Connection, root: &Path) -> Result<Vec<Shown>, ViewError> {
@@ -336,7 +337,7 @@ fn render_one(
     DROP_CLIP.execute(&tx, [s.clip.id.stored()])?;
     let source = s.clip.source.as_str();
     for line in &out.lines {
-        let row = Row::line(line, tier);
+        let row = Row::line(line, tier)?;
         let id = old.remove(&(row.start.clone(), row.end.clone(), false));
         row.insert(&tx, id, Some(s), source)?;
     }
@@ -393,22 +394,15 @@ struct Row {
     checked: bool,
     edit: Option<i64>,
     live: Option<i64>,
+    words: Option<String>,
 }
 
 fn spelled(at: Instant) -> String {
     audiocore::instant::python_isoformat_utc(at.to_utc())
 }
 
-/// The tier as the app spells it: `Stage`'s own serialisation.
-fn tier_name(tier: Stage) -> String {
-    serde_json::to_value(tier)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
-
 impl Row {
-    fn line(line: &Line, tier: Stage) -> Self {
+    fn line(line: &Line, tier: Stage) -> rusqlite::Result<Self> {
         let (label, guess, score) = match line.speaker() {
             Some(Speaker::Named { name, .. } | Speaker::Voice { name, .. }) => {
                 (Some(name.as_str().to_owned()), None, None)
@@ -420,7 +414,7 @@ impl Row {
             Author::Model => (crate::turns::SHIM_MODEL, tier, None),
             Author::Person(id) => (HUMAN_MODEL, Stage::Corrected, Some(id.stored())),
         };
-        Self {
+        Ok(Self {
             start: spelled(line.span().start()),
             end: spelled(line.span().end()),
             text: line.text().to_owned(),
@@ -436,7 +430,20 @@ impl Row {
             checked: line.checked(),
             edit,
             live: None,
-        }
+            words: if line.words().is_empty() {
+                None
+            } else {
+                let timed: Vec<(i64, i64, &str)> = line
+                    .words()
+                    .iter()
+                    .map(|(span, w)| (span.start().micros(), span.end().micros(), w.as_str()))
+                    .collect();
+                Some(
+                    serde_json::to_string(&timed)
+                        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?,
+                )
+            },
+        })
     }
 
     fn dropped(dropped: &Dropped, tier: Stage) -> Self {
@@ -465,6 +472,7 @@ impl Row {
             checked: false,
             edit,
             live: None,
+            words: None,
         }
     }
 
@@ -492,11 +500,12 @@ impl Row {
                 self.guess,
                 self.score,
                 self.cluster,
-                tier_name(self.tier),
+                self.tier.as_str(),
                 self.hidden,
                 self.checked.then_some(1),
                 self.edit,
                 self.live,
+                self.words,
             ],
         )?;
         Ok(())
@@ -541,6 +550,7 @@ fn live(meaning: &Connection, transcribed: &[(Instant, Instant)]) -> rusqlite::R
             checked: false,
             edit: None,
             live: Some(live_id),
+            words: None,
         }
         .insert(&tx, old.get(&live_id).copied(), None, "")?;
         shown += 1;

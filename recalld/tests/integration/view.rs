@@ -179,7 +179,7 @@ fn a_persons_words_show_and_the_untouched_line_keeps_its_id() {
 }
 
 #[test]
-fn render_clip_shows_an_act_at_once() {
+fn render_clips_shows_an_act_at_once() {
     let f = fleet();
     f.refresh(false);
     let clip = f.clip();
@@ -189,7 +189,7 @@ fn render_clip_shows_an_act_at_once() {
     };
     recalld::edit_log::append(&f.meaning, f.at(100.0), &act, None).expect("append");
 
-    view::render_clip(&f.meaning, &f.ingest, f.dir.path(), &clip).expect("render");
+    view::render_clips(&f.meaning, &f.ingest, f.dir.path(), &[clip.id]).expect("render");
 
     let texts: Vec<String> = f.lines().into_iter().map(|l| l.1).collect();
     assert_eq!(texts, ["hoe gaat het?"]);
@@ -219,4 +219,54 @@ fn a_live_turn_shows_until_a_transcribed_clip_covers_it() {
         .map(|l| (l.1, l.3))
         .collect();
     assert_eq!(live, [("still live".to_owned(), "live".to_owned())]);
+}
+
+#[test]
+fn a_clip_run_again_shows_its_words_until_the_new_ones_land_and_a_cancel_keeps_them() {
+    let f = crate::fixture::Fleet::new();
+    let clip = f.clip(
+        "usb",
+        "coreaudio",
+        "20261004T120000",
+        &[(1.0, 3.0, "oude woorden")],
+        None,
+    );
+    f.refresh();
+    let now = audiocore::instant::Stamp::now();
+    let asked =
+        recalld::retranscribe::request(&f.ingest, std::slice::from_ref(&clip.filename), &now)
+            .expect("request");
+    assert_eq!(asked.queued.len(), 1);
+
+    f.refresh();
+    assert_eq!(f.texts(), ["oude woorden"], "still shown while it waits");
+
+    assert!(recalld::retranscribe::cancel(&f.ingest, &clip.filename, &now).expect("cancel"));
+    let done: Option<String> = f
+        .ingest
+        .query_row(
+            "SELECT done_utc FROM jobs WHERE filename = ?1",
+            [&clip.filename],
+            |r| r.get(0),
+        )
+        .expect("job");
+    assert!(done.is_some(), "done again, with the result it kept");
+
+    recalld::retranscribe::request(&f.ingest, std::slice::from_ref(&clip.filename), &now)
+        .expect("again");
+    f.ingest
+        .execute(
+            "UPDATE jobs SET state = 'done', done_utc = '2026-10-04T13:00:00Z', result = ?2
+             WHERE filename = ?1",
+            (
+                &clip.filename,
+                format!(
+                    r#"{{"ok":true,"result":{{"language":"nl","segments":[{}]}}}}"#,
+                    crate::fixture::segment(1.0, 3.0, "nieuwe woorden")
+                ),
+            ),
+        )
+        .expect("lands");
+    f.refresh();
+    assert_eq!(f.texts(), ["nieuwe woorden"]);
 }

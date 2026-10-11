@@ -11,28 +11,17 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 crate::statements! {
-    CORRECTIONS_BY: Meaning =
-        "SELECT id, start_utc, corrected_text, speaker, language FROM corrections \
-         WHERE hidden_reason IS NULL AND speaker = ?1 ORDER BY id DESC LIMIT ?2";
-    CORRECTIONS: Meaning =
-        "SELECT id, start_utc, corrected_text, speaker, language FROM corrections \
-         WHERE hidden_reason IS NULL ORDER BY id DESC LIMIT ?1";
+    /// The shown words under a span of a clip.
+    WORDS_UNDER: Meaning =
+        "SELECT text, language FROM rendered_lines
+         WHERE clip_id = ?1 AND hidden_reason IS NULL AND start_utc < ?3 AND end_utc > ?2
+         ORDER BY start_utc, id";
     SPEAKER_NAMES: Meaning =
         "SELECT name FROM speakers \
          UNION \
-         SELECT DISTINCT speaker_label FROM transcript_segments \
+         SELECT DISTINCT speaker_label FROM rendered_lines \
          WHERE speaker_label IS NOT NULL AND speaker_label NOT LIKE 'SPEAKER%' \
          ORDER BY name COLLATE NOCASE";
-    LABEL_COUNTS: Meaning =
-        "SELECT COALESCE(speaker, ''), COUNT(*) FROM corrections \
-         WHERE hidden_reason IS NULL GROUP BY 1";
-    CORRECTION_AUDIO: Meaning =
-        "SELECT a.path, \
-                (julianday(c.start_utc) - julianday(a.start_utc)) * 86400.0, \
-                (julianday(c.end_utc)   - julianday(a.start_utc)) * 86400.0 \
-         FROM corrections c \
-         JOIN audio_segments a ON a.id = c.audio_segment_id \
-         WHERE c.id = ?1 AND c.audio_segment_id IS NOT NULL";
 }
 
 /// Padding and minimum length when a fragment is played with context.
@@ -82,60 +71,123 @@ pub struct CorrectionsOut {
     pub by_speaker: std::collections::BTreeMap<String, i64>,
 }
 
-/// The labelled fragments, newest first, optionally of one voice. Hidden
-/// corrections (kept out of enrolment) are excluded.
+/// A person's naming of a stretch that teaches a voiceprint: in force, the
+/// latest over its span, and not judged unusable. Newest first.
+pub struct Labelled {
+    pub id: transcript::EditId,
+    pub clip: transcript::ClipId,
+    pub span: transcript::Span,
+    pub name: transcript::Name,
+}
+
+fn store_error(err: impl std::error::Error + Send + Sync + 'static) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(err))
+}
+
+/// Every labelled fragment.
+pub fn labelled(conn: &Connection) -> rusqlite::Result<Vec<Labelled>> {
+    use transcript::Act;
+    let edits = crate::edit_log::all(conn).map_err(store_error)?;
+    let gone = transcript::taken_back(&edits);
+    let mut latest: std::collections::BTreeMap<(i64, transcript::Span), (Labelled, bool)> =
+        std::collections::BTreeMap::new();
+    for edit in edits.into_iter().filter(|e| !gone.contains(&e.id)) {
+        if let Act::Speaker {
+            clip,
+            span,
+            name,
+            enrol,
+        } = edit.act
+        {
+            let fragment = Labelled {
+                id: edit.id,
+                clip,
+                span,
+                name,
+            };
+            latest.insert((clip.stored(), span), (fragment, enrol));
+        }
+    }
+    let mut out: Vec<Labelled> = latest
+        .into_values()
+        .filter(|(_, enrol)| *enrol)
+        .map(|(l, _)| l)
+        .collect();
+    out.sort_by_key(|l| std::cmp::Reverse(l.id));
+    Ok(out)
+}
+
+/// The labelled fragments, newest first, optionally of one voice.
 pub fn list_corrections(
     conn: &Connection,
     speaker: Option<&str>,
     limit: i64,
 ) -> rusqlite::Result<Vec<Label>> {
-    let sql = if speaker.is_some() {
-        CORRECTIONS_BY
-    } else {
-        CORRECTIONS
-    };
-    let mut stmt = sql.prepare(conn)?;
-    let to_label = |r: &rusqlite::Row| -> rusqlite::Result<Label> {
-        let id: i64 = r.get(0)?;
-        Ok(Label {
-            id,
-            start: r.get(1)?,
-            text: r.get(2)?,
-            speaker: r.get(3)?,
-            language: r.get(4)?,
-            audio_url: format!("/api/correction/{id}/audio"),
+    let spelled = |at: transcript::Instant| audiocore::instant::python_isoformat_utc(at.to_utc());
+    labelled(conn)?
+        .into_iter()
+        .filter(|l| speaker.is_none_or(|who| l.name.as_str() == who))
+        .take(usize::try_from(limit).unwrap_or(0))
+        .map(|l| {
+            let mut words = Vec::new();
+            let mut language = None;
+            let mut stmt = WORDS_UNDER.prepare(conn)?;
+            let rows = stmt.query_map(
+                rusqlite::params![
+                    l.clip.stored(),
+                    spelled(l.span.start()),
+                    spelled(l.span.end())
+                ],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+            )?;
+            for row in rows {
+                let (text, lang) = row?;
+                words.push(text);
+                language = language.or(lang);
+            }
+            let id = l.id.stored();
+            Ok(Label {
+                id,
+                text: words.join(" "),
+                speaker: Some(l.name.as_str().to_owned()),
+                language,
+                start: spelled(l.span.start()),
+                audio_url: format!("/api/correction/{id}/audio"),
+            })
         })
-    };
-    let rows = match speaker {
-        Some(who) => stmt.query_map(rusqlite::params![who, limit], to_label)?,
-        None => stmt.query_map(rusqlite::params![limit], to_label)?,
-    };
-    rows.collect()
+        .collect()
 }
 
 /// How many labels each voice has.
 pub fn corrections_by_speaker(
     conn: &Connection,
 ) -> rusqlite::Result<std::collections::BTreeMap<String, i64>> {
-    let mut stmt = LABEL_COUNTS.prepare(conn)?;
-    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
-    rows.collect()
+    let mut counts = std::collections::BTreeMap::new();
+    for l in labelled(conn)? {
+        *counts.entry(l.name.as_str().to_owned()).or_default() += 1;
+    }
+    Ok(counts)
 }
 
-/// A correction's audio file and the span it was cut from.
+/// A labelled fragment's audio file and the span it names, in seconds into
+/// the file.
 pub fn correction_placement(
     conn: &Connection,
-    correction_id: i64,
+    ingest: &Connection,
+    root: &std::path::Path,
+    id: i64,
 ) -> rusqlite::Result<Option<(std::path::PathBuf, f64, f64)>> {
-    let mut stmt = CORRECTION_AUDIO.prepare(conn)?;
-    let mut rows = stmt.query([correction_id])?;
-    let Some(row) = rows.next()? else {
+    let Some(l) = labelled(conn)?.into_iter().find(|l| l.id.stored() == id) else {
         return Ok(None);
     };
+    let Some(clip) = crate::clips::by_id(ingest, l.clip).map_err(store_error)? else {
+        return Ok(None);
+    };
+    let at = |i: transcript::Instant| (i.micros() - clip.start.micros()) as f64 / 1e6;
     Ok(Some((
-        std::path::PathBuf::from(row.get::<_, String>(0)?),
-        row.get(1)?,
-        row.get(2)?,
+        root.join(&clip.path),
+        at(l.span.start()),
+        at(l.span.end()),
     )))
 }
 
@@ -244,13 +296,15 @@ pub async fn correction_audio_route(
     let root = st.root.clone();
     let rendered = tokio::task::spawn_blocking(move || {
         // No enhancement: labelling judges the recording as it is.
-        audio::render_blocking(&root, false, |conn| {
-            Ok(
-                correction_placement(conn, id)?.map(|(path, start_s, end_s)| {
+        let ingest_root = root.clone();
+        audio::render_blocking(&root, false, move |conn| {
+            let ingest = crate::store::open(&ingest_root)?;
+            Ok(correction_placement(conn, &ingest, &ingest_root, id)?.map(
+                |(path, start_s, end_s)| {
                     let (start, end) = correction_window(start_s, end_s, q.context);
                     (path, start, end)
-                }),
-            )
+                },
+            ))
         })
     });
     match rendered.await {

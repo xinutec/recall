@@ -23,21 +23,24 @@ fn recording(conn: &Connection, id: i64, path: &str, start: &str) {
     .expect("recording");
 }
 
+/// A rendered line: the model's unless `extra` says otherwise.
 fn turn(conn: &Connection, id: i64, seg: i64, start: &str, end: &str, extra: &[(&str, &str)]) {
     conn.execute(
-        "INSERT INTO transcript_segments (id, audio_segment_id, start_utc, end_utc, text, asr_model)
-         VALUES (?1, ?2, ?3, ?4, 'x', 'whisper')",
+        "INSERT INTO rendered_lines (id, audio_segment_id, start_utc, end_utc, text, asr_model, tier)
+         VALUES (?1, ?2, ?3, ?4, 'x', 'whisper', 'transcribed')",
         (id, seg, start, end),
     )
     .expect("turn");
     for (col, val) in extra {
         conn.execute(
-            &format!("UPDATE transcript_segments SET {col} = ?1 WHERE id = ?2"),
+            &format!("UPDATE rendered_lines SET {col} = ?1 WHERE id = ?2"),
             (*val, id),
         )
         .expect("extra");
     }
 }
+
+const PERSON: &[(&str, &str)] = &[("asr_model", "human"), ("tier", "corrected")];
 
 fn db() -> Connection {
     let conn = Connection::open_in_memory().expect("open");
@@ -52,8 +55,9 @@ fn db() -> Connection {
 }
 
 #[test]
-fn a_rough_phrase_gets_a_wide_window_so_it_is_listenable() {
-    // Sliced exactly, "Ja." is under a second with no lead-in.
+fn a_persons_short_line_gets_a_wide_window_so_it_is_listenable() {
+    // Sliced exactly, "Ja." is under a second with no lead-in; a person's span
+    // is where they put it, not where the word is.
     let conn = db();
     turn(
         &conn,
@@ -61,7 +65,7 @@ fn a_rough_phrase_gets_a_wide_window_so_it_is_listenable() {
         1,
         "2026-06-13T12:00:20+00:00",
         "2026-06-13T12:00:20.500000+00:00",
-        &[],
+        PERSON,
     );
 
     let p = audio::placement(&conn, 10).expect("query").expect("found");
@@ -74,8 +78,9 @@ fn a_rough_phrase_gets_a_wide_window_so_it_is_listenable() {
 }
 
 #[test]
-fn a_diarized_turn_is_played_tight_so_it_cannot_pull_in_the_next_speaker() {
-    // The rough turn's 1.5 s would drag in whoever spoke next.
+fn a_model_line_is_played_tight_so_it_cannot_pull_in_the_next_speaker() {
+    // Its span is its words' timings; the rough 1.5 s would drag in whoever
+    // spoke next.
     let conn = db();
     turn(
         &conn,
@@ -83,7 +88,7 @@ fn a_diarized_turn_is_played_tight_so_it_cannot_pull_in_the_next_speaker() {
         1,
         "2026-06-13T12:00:20+00:00",
         "2026-06-13T12:00:22+00:00",
-        &[("provenance", "diarized-aligned (whisper)")],
+        &[],
     );
 
     let p = audio::placement(&conn, 11).expect("query").expect("found");
@@ -93,44 +98,6 @@ fn a_diarized_turn_is_played_tight_so_it_cannot_pull_in_the_next_speaker() {
     // `julianday` carries ~10 µs of error.
     assert!((start - 19.8).abs() < 1e-4, "start {start}");
     assert!((end - 22.2).abs() < 1e-4, "end {end}");
-}
-
-#[test]
-fn word_timings_make_a_turn_precise_even_without_diarized_provenance() {
-    // A span-assign split has word timings but no diarized marker: as precise.
-    let conn = db();
-    turn(
-        &conn,
-        12,
-        1,
-        "2026-06-13T12:00:30+00:00",
-        "2026-06-13T12:00:31+00:00",
-        &[("word_timings", "[[0.0, 1.0, \"ja\"]]")],
-    );
-
-    let p = audio::placement(&conn, 12).expect("query").expect("found");
-    assert!(p.precise, "word timings alone must make it precise");
-}
-
-#[test]
-fn a_human_correction_is_not_treated_as_diarized() {
-    // A correction's provenance lacks the diarized marker; its `human` model is
-    // checked first.
-    let conn = db();
-    turn(
-        &conn,
-        13,
-        1,
-        "2026-06-13T12:00:40+00:00",
-        "2026-06-13T12:00:40.400000+00:00",
-        &[
-            ("asr_model", "human"),
-            ("provenance", "human correction of #12"),
-        ],
-    );
-
-    let p = audio::placement(&conn, 13).expect("query").expect("found");
-    assert!(!p.precise);
 }
 
 #[test]
@@ -144,7 +111,7 @@ fn the_window_never_starts_before_the_file() {
         1,
         "2026-06-13T12:00:00.200000+00:00",
         "2026-06-13T12:00:00.600000+00:00",
-        &[],
+        PERSON,
     );
 
     let p = audio::placement(&conn, 14).expect("query").expect("found");
@@ -157,8 +124,8 @@ fn the_window_never_starts_before_the_file() {
 fn a_turn_with_no_audio_segment_is_absent_not_an_error() {
     let conn = db();
     conn.execute(
-        "INSERT INTO transcript_segments (id, audio_segment_id, start_utc, end_utc, text, asr_model)
-         VALUES (99, NULL, '2026-06-13T12:00:00+00:00', '2026-06-13T12:00:01+00:00', 'x', 'live')",
+        "INSERT INTO rendered_lines (id, audio_segment_id, start_utc, end_utc, text, asr_model, tier)
+         VALUES (99, NULL, '2026-06-13T12:00:00+00:00', '2026-06-13T12:00:01+00:00', 'x', 'live', 'live')",
         (),
     )
     .expect("orphan turn");

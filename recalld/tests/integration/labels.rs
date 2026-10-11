@@ -16,15 +16,24 @@ fn db() -> Connection {
     conn
 }
 
-fn correction(conn: &Connection, id: i64, speaker: Option<&str>, hidden: Option<&str>) {
-    conn.execute(
-        "INSERT INTO corrections
-           (id, start_utc, end_utc, original_text, corrected_text, created_utc, speaker, hidden_reason)
-         VALUES (?1, '2026-06-14T18:00:00+00:00', '2026-06-14T18:00:04+00:00',
-                 'orig', 'fixed', '2026-06-14T18:00:00+00:00', ?2, ?3)",
-        rusqlite::params![id, speaker, hidden],
+/// A person's naming of four seconds of clip 1, starting `second` in; `enrol`
+/// false is "keep the name, not the voiceprint". Returns its id.
+fn label(conn: &Connection, second: i64, speaker: &str, enrol: bool) -> i64 {
+    let at =
+        |s: i64| transcript::Instant::from_micros(1_781_460_000_000_000 + s * 1_000_000).unwrap();
+    recalld::edit_log::append(
+        conn,
+        at(100),
+        &transcript::Act::Speaker {
+            clip: transcript::ClipId::from_stored(1),
+            span: transcript::Span::new(at(second), at(second + 4)).unwrap(),
+            name: transcript::Name::new(speaker).unwrap(),
+            enrol,
+        },
+        None,
     )
-    .expect("correction");
+    .expect("label")
+    .stored()
 }
 
 #[test]
@@ -34,9 +43,9 @@ fn the_roster_never_offers_a_diarization_cluster_tag_as_a_name() {
     conn.execute("INSERT INTO speakers (id, name) VALUES (1, 'Oskar')", ())
         .expect("speaker");
     conn.execute(
-        "INSERT INTO transcript_segments (id, start_utc, end_utc, text, asr_model, speaker_label)
-         VALUES (1, '2026-06-14T18:00:00+00:00', '2026-06-14T18:00:01+00:00', 'x', 'whisper', 'SPEAKER_01'),
-                (2, '2026-06-14T18:00:01+00:00', '2026-06-14T18:00:02+00:00', 'y', 'whisper', 'Dr Lee')",
+        "INSERT INTO rendered_lines (id, start_utc, end_utc, text, asr_model, speaker_label, tier)
+         VALUES (1, '2026-06-14T18:00:00+00:00', '2026-06-14T18:00:01+00:00', 'x', 'whisper', 'SPEAKER_01', 'diarized'),
+                (2, '2026-06-14T18:00:01+00:00', '2026-06-14T18:00:02+00:00', 'y', 'whisper', 'Dr Lee', 'diarized')",
         (),
     )
     .expect("turns");
@@ -66,62 +75,56 @@ fn the_roster_is_case_insensitively_ordered_and_free_of_blanks() {
 }
 
 #[test]
-fn a_hidden_correction_stays_out_of_the_review_list() {
-    // A hidden label was a mistake; it is not listed.
+fn a_label_kept_from_the_voiceprints_stays_out_of_the_list() {
+    // A person judged the clip unusable; it is not offered to review.
     let conn = db();
-    correction(&conn, 1, Some("Oskar"), None);
-    correction(&conn, 2, Some("Oskar"), Some("wrong speaker"));
+    let kept = label(&conn, 0, "Oskar", true);
+    label(&conn, 10, "Oskar", false);
 
     let items = list_corrections(&conn, None, 200).expect("list");
 
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].id, 1);
+    assert_eq!(items.iter().map(|l| l.id).collect::<Vec<_>>(), [kept]);
 }
 
 #[test]
 fn corrections_are_newest_first_and_filterable_by_voice() {
     let conn = db();
-    correction(&conn, 1, Some("Alex"), None);
-    correction(&conn, 2, Some("Oskar"), None);
-    correction(&conn, 3, Some("Alex"), None);
+    let a = label(&conn, 0, "Alex", true);
+    let b = label(&conn, 10, "Oskar", true);
+    let c = label(&conn, 20, "Alex", true);
 
     let all = list_corrections(&conn, None, 200).expect("all");
     assert_eq!(
         all.iter().map(|l| l.id).collect::<Vec<_>>(),
-        vec![3, 2, 1],
+        vec![c, b, a],
         "newest first"
     );
 
     let alex = list_corrections(&conn, Some("Alex"), 200).expect("filtered");
-    assert_eq!(alex.iter().map(|l| l.id).collect::<Vec<_>>(), vec![3, 1]);
+    assert_eq!(alex.iter().map(|l| l.id).collect::<Vec<_>>(), vec![c, a]);
 }
 
 #[test]
 fn each_label_carries_the_url_that_plays_it() {
     let conn = db();
-    correction(&conn, 7, Some("Oskar"), None);
+    let id = label(&conn, 0, "Oskar", true);
 
     let items = list_corrections(&conn, None, 200).expect("list");
 
-    assert_eq!(items[0].audio_url, "/api/correction/7/audio");
+    assert_eq!(items[0].audio_url, format!("/api/correction/{id}/audio"));
 }
 
 #[test]
-fn the_per_speaker_tally_excludes_hidden_labels_too() {
-    // The counts match the list.
+fn the_per_speaker_tally_counts_what_the_list_shows() {
     let conn = db();
-    correction(&conn, 1, Some("Alex"), None);
-    correction(&conn, 2, Some("Alex"), Some("mistaken"));
-    correction(&conn, 3, None, None);
+    label(&conn, 0, "Alex", true);
+    label(&conn, 10, "Alex", false);
+    label(&conn, 20, "Oskar", true);
 
     let tally = corrections_by_speaker(&conn).expect("tally");
 
     assert_eq!(tally.get("Alex"), Some(&1));
-    assert_eq!(
-        tally.get(""),
-        Some(&1),
-        "unattributed counts under an empty key"
-    );
+    assert_eq!(tally.get("Oskar"), Some(&1));
 }
 
 #[test]

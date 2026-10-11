@@ -17,8 +17,8 @@ crate::statements! {
         "SELECT a.path, a.id, \
                 (julianday(t.start_utc) - julianday(a.start_utc)) * 86400.0, \
                 (julianday(t.end_utc)   - julianday(a.start_utc)) * 86400.0, \
-                t.asr_model, t.provenance, t.word_timings \
-         FROM transcript_segments t \
+                t.asr_model \
+         FROM rendered_lines t \
          JOIN audio_segments a ON a.id = t.audio_segment_id \
          WHERE t.id = ?1";
 }
@@ -66,24 +66,18 @@ pub fn placement(conn: &Connection, transcript_id: i64) -> rusqlite::Result<Opti
         return Ok(None);
     };
     let asr_model: Option<String> = row.get(4)?;
-    let provenance: Option<String> = row.get(5)?;
-    let word_timings: Option<String> = row.get(6)?;
-    // Boundaries a diarized pass cut; a turn named in place keeps the looser
-    // transcription ones.
-    let aligned = provenance
-        .and_then(|raw| raw.parse::<crate::turn_store::Provenance>().ok())
-        .is_some_and(|p| p.is_diarized());
-    let diarized = aligned
-        && !matches!(
-            asr_model.as_deref(),
-            Some(crate::turn_store::HUMAN_MODEL | crate::turn_store::LIVE_MODEL)
-        );
+    // A model line's span is its words' timings; a person's span is where they
+    // put it, so it gets the padding.
+    let precise = !matches!(
+        asr_model.as_deref(),
+        Some(crate::turn_store::HUMAN_MODEL | crate::turn_store::LIVE_MODEL)
+    );
     Ok(Some(Placement {
         path: PathBuf::from(row.get::<_, String>(0)?),
         audio_segment_id: row.get(1)?,
         start_s: row.get(2)?,
         end_s: row.get(3)?,
-        precise: diarized || word_timings.is_some(),
+        precise,
     }))
 }
 

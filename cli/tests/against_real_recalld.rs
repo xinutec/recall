@@ -64,35 +64,101 @@ fn session() -> String {
     .expect("cookie")
 }
 
-/// Production's `recall.sqlite` schema, plus one turn.
+/// The clip every fixture transcribes.
+const CLIP: &str = "usb-20260910T120000.flac";
+
+/// A count as seconds' arithmetic wants it.
+fn n(count: usize) -> f64 {
+    f64::from(u32::try_from(count).expect("a fixture's count"))
+}
+
+/// One model segment, `start..end` seconds into the clip, words evenly spread.
+fn segment(start: f64, end: f64, text: &str) -> String {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let step = (end - start) / n(tokens.len());
+    let words: Vec<String> = tokens
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            format!(
+                r#"{{"start":{},"end":{},"word":" {t}","probability":0.42}}"#,
+                start + step * n(i),
+                start + step * n(i + 1)
+            )
+        })
+        .collect();
+    format!(
+        r#"{{"start":{start},"end":{end},"text":" {text}","words":[{}]}}"#,
+        words.join(",")
+    )
+}
+
+/// Production's schemas and one usb clip transcribed as `texts`, a sentence
+/// every ten seconds, rendered. Returns the lines' ids in order.
+fn archive_lines(root: &Path, texts: &[&str]) -> Vec<i64> {
+    let meaning = rusqlite::Connection::open(root.join("recall.sqlite")).expect("db");
+    recalld::meaning_schema::ensure(&meaning).expect("schema");
+    let ingest = recalld::store::open(root).expect("ingest");
+    meaning
+        .execute(
+            "INSERT INTO sources (id, name, kind) VALUES ('usb', 'USB mic', 'coreaudio')",
+            [],
+        )
+        .expect("source");
+    meaning
+        .execute(
+            "INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels)
+             VALUES ('usb', ?1, '2026-09-10T12:00:00+00:00', '2026-09-10T12:01:00+00:00', 16000, 1)",
+            [root.join("ingest/usb").join(CLIP).to_string_lossy()],
+        )
+        .expect("audio row");
+    ingest
+        .execute(
+            "INSERT INTO segments (source, filename, start_utc, bytes, sha256, received_utc)
+             VALUES ('usb', ?1, '2026-09-10T12:00:00Z', 1, 'x', '2026-09-10T12:00:00Z')",
+            [CLIP],
+        )
+        .expect("segment");
+    let segments: Vec<String> = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| segment(n(i) * 10.0, n(i) * 10.0 + 4.0, t))
+        .collect();
+    ingest
+        .execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES ('transcribe-segment', ?1, 'done', '2026-09-10T12:01:00Z', '2026-09-10T12:02:00Z', ?2)",
+            (
+                CLIP,
+                format!(
+                    r#"{{"ok":true,"result":{{"language":"en","segments":[{}]}}}}"#,
+                    segments.join(",")
+                ),
+            ),
+        )
+        .expect("transcription");
+    recalld::view::refresh(&meaning, &ingest, root, false).expect("render");
+    meaning
+        .prepare("SELECT id FROM rendered_lines WHERE hidden_reason IS NULL ORDER BY start_utc")
+        .expect("prepare")
+        .query_map([], |r| r.get(0))
+        .expect("query")
+        .collect::<rusqlite::Result<_>>()
+        .expect("ids")
+}
+
+/// One line; its name or guess set on the shown row, as the read routes read
+/// it.
 fn archive(root: &Path, text: &str, speaker: Option<&str>, guess: Option<(&str, f64)>) -> i64 {
+    let id = archive_lines(root, &[text])[0];
     let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("db");
-    recalld::meaning_schema::ensure(&conn).expect("schema");
-    conn.execute_batch(
-        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'USB mic', 'coreaudio');
-         INSERT INTO audio_segments
-             (id, source_id, path, start_utc, end_utc, sample_rate, channels)
-         VALUES (1, 'usb', '/x.flac', '2026-09-10T12:00:00+00:00',
-                 '2026-09-10T12:00:04+00:00', 16000, 1);",
-    )
-    .expect("seed");
     conn.execute(
-        "INSERT INTO transcript_segments
-             (audio_segment_id, start_utc, end_utc, text, language, asr_confidence,
-              asr_model, speaker_label, speaker_guess, speaker_score, speaker_cluster,
-              provenance, loudness, created_utc)
-         VALUES (1, '2026-09-10T12:00:00+00:00', '2026-09-10T12:00:04+00:00', ?1,
-                 'en', 0.42, 'whisper', ?2, ?3, ?4, 'SPEAKER_01', 'per-mic', 0.03,
-                 '2026-09-10T12:00:05+00:00')",
-        rusqlite::params![text, speaker, guess.map(|(n, _)| n), guess.map(|(_, s)| s)],
+        "UPDATE rendered_lines SET speaker_label = ?2, speaker_guess = ?3, speaker_score = ?4,
+                speaker_cluster = 'SPEAKER_01'
+         WHERE id = ?1",
+        rusqlite::params![id, speaker, guess.map(|(n, _)| n), guess.map(|(_, s)| s)],
     )
-    .expect("turn");
-    let id = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
-        (id, text),
-    )
-    .expect("fts");
+    .expect("speaker");
     id
 }
 
@@ -179,7 +245,10 @@ fn a_turn_can_be_fetched_by_id_and_dumped() {
     let dump = render::details(&[id], &turns);
     assert!(dump.contains("status   : visible"), "got:\n{dump}");
     assert!(dump.contains("src=usb"), "got:\n{dump}");
-    assert!(dump.contains("(quiet)"), "loudness 0.03 is quiet:\n{dump}");
+    assert!(
+        dump.contains("(unmeasured)"),
+        "nothing measures loudness:\n{dump}"
+    );
 }
 
 #[test]
@@ -204,9 +273,8 @@ fn the_review_queue_surfaces_a_low_confidence_turn() {
     assert_eq!(turns.len(), 1);
 }
 
-/// `render::details`'s supersession note relies on this.
 #[test]
-fn a_correction_is_applied_and_the_old_id_then_answers_with_the_new_turn() {
+fn a_correction_shows_on_the_line_it_corrected() {
     let dir = tempfile::tempdir().expect("tempdir");
     let id = archive(dir.path(), "marmalade on the windowsill", None, None);
     let api = Api::new(&serve(dir.path()), Some(session()));
@@ -214,21 +282,13 @@ fn a_correction_is_applied_and_the_old_id_then_answers_with_the_new_turn() {
     let new_id = api
         .correct(id, "marmalade on the window sill")
         .expect("correct");
-    assert_ne!(new_id, id, "a correction is a new turn, never an overwrite");
+    assert_eq!(new_id, id, "the line keeps its id");
 
     let turns = api.transcripts(&[id]).expect("transcripts");
     assert_eq!(turns.len(), 1);
-    assert_eq!(
-        turns[0].id, new_id,
-        "the old id answers with its replacement"
-    );
     assert_eq!(turns[0].text, "marmalade on the window sill");
-
     let dump = render::details(&[id], &turns);
-    assert!(
-        dump.contains(&format!("#{id} was superseded by this")),
-        "got:\n{dump}"
-    );
+    assert!(!dump.contains("superseded"), "got:\n{dump}");
 }
 
 #[test]
@@ -407,28 +467,6 @@ fn a_malformed_day_window_is_refused_rather_than_ignored() {
     assert!(err.to_string().contains("400"), "got: {err}");
 }
 
-/// A second turn on the same clip, ten seconds later.
-fn second_turn(root: &std::path::Path, text: &str) -> i64 {
-    let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("db");
-    conn.execute(
-        "INSERT INTO transcript_segments
-             (audio_segment_id, start_utc, end_utc, text, language, asr_confidence,
-              asr_model, speaker_cluster, provenance, loudness, created_utc)
-         VALUES (1, '2026-09-10T12:00:10+00:00', '2026-09-10T12:00:14+00:00', ?1,
-                 'en', 0.42, 'whisper', 'SPEAKER_01', 'per-mic', 0.03,
-                 '2026-09-10T12:00:15+00:00')",
-        [text],
-    )
-    .expect("turn");
-    let id = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO transcript_fts (rowid, text) VALUES (?1, ?2)",
-        (id, text),
-    )
-    .expect("fts");
-    id
-}
-
 #[test]
 fn a_correction_can_be_made_by_a_unique_substring_rather_than_an_id() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -444,19 +482,20 @@ fn a_correction_can_be_made_by_a_unique_substring_rather_than_an_id() {
     assert_eq!(found[0].id, id);
 
     let corrected = found[0].text.replace("windowsill", "window sill");
-    let new_id = api.correct(found[0].id, &corrected).expect("correct");
+    api.correct(found[0].id, &corrected).expect("correct");
     assert_eq!(
-        api.transcripts(&[id]).expect("read back")[0].id,
-        new_id,
-        "the old id answers with its replacement"
+        api.transcripts(&[id]).expect("read back")[0].text,
+        corrected
     );
 }
 
 #[test]
 fn a_substring_in_two_turns_is_ambiguous_and_must_not_be_guessed_at() {
     let dir = tempfile::tempdir().expect("tempdir");
-    archive(dir.path(), "marmalade on the windowsill", None, None);
-    second_turn(dir.path(), "more marmalade please");
+    archive_lines(
+        dir.path(),
+        &["marmalade on the windowsill.", "more marmalade please."],
+    );
     let api = Api::new(&serve(dir.path()), Some(session()));
 
     let turns = api.source_turns("usb", 1000).expect("source turns");
@@ -471,8 +510,11 @@ fn a_substring_in_two_turns_is_ambiguous_and_must_not_be_guessed_at() {
 #[test]
 fn every_turn_of_a_source_is_visible_to_a_correction_not_only_the_spine() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let first = archive(dir.path(), "marmalade on the windowsill", None, None);
-    let second = second_turn(dir.path(), "and the kettle is on");
+    let ids = archive_lines(
+        dir.path(),
+        &["marmalade on the windowsill.", "and the kettle is on."],
+    );
+    let (first, second) = (ids[0], ids[1]);
     let api = Api::new(&serve(dir.path()), Some(session()));
 
     let ids: Vec<i64> = api
@@ -487,36 +529,16 @@ fn every_turn_of_a_source_is_visible_to_a_correction_not_only_the_spine() {
     );
 }
 
-/// A clip with a finished transcription job.
-fn transcribed_clip(root: &Path, name: &str) {
-    let ingest = recalld::store::open(root).expect("ingest");
-    ingest
-        .execute(
-            "INSERT INTO segments (source, filename, start_utc, bytes, sha256, received_utc)
-             VALUES ('usb', ?1, '2026-09-10T12:00:00Z', 1, 'x', '2026-09-10T12:00:00Z')",
-            [name],
-        )
-        .expect("segment");
-    ingest
-        .execute(
-            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
-             VALUES (?1, ?2, 'done', '2026-09-10T12:01:00Z', '2026-09-10T12:02:00Z', '{}')",
-            ("transcribe-segment", name),
-        )
-        .expect("job");
-}
-
 #[test]
 fn a_retranscription_is_queued_by_name_and_one_still_waiting_can_be_cancelled() {
     let dir = tempfile::tempdir().expect("tempdir");
     archive(dir.path(), "old words", None, None);
-    transcribed_clip(dir.path(), "usb-20260910T120000.flac");
     let api = Api::new(&serve(dir.path()), Some(session()));
     assert!(
         api.retranscribe_candidates(1.0)
             .expect("candidates")
             .is_empty(),
-        "an empty result lost nothing"
+        "a result with no loop lost nothing"
     );
 
     let asked = api

@@ -17,7 +17,7 @@ pub mod text;
 pub mod voice;
 
 pub use clip::{Clip, ClipId};
-pub use edit::{Act, Edit, EditId, Language, Name, Text};
+pub use edit::{Act, Edit, EditId, Language, Name, Text, taken_back};
 pub use instant::Instant;
 pub use source::SourceId;
 pub use span::Span;

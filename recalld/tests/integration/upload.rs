@@ -470,14 +470,15 @@ async fn a_language_chosen_at_upload_is_kept_with_the_session() {
         status => assert_eq!(status, 200),
     }
     let conn = Connection::open(dir.path().join("recall.sqlite")).expect("db");
-    let language: Option<String> = conn
-        .query_row(
-            "SELECT language FROM sources WHERE kind = 'upload'",
-            [],
-            |r| r.get(0),
-        )
+    let source: String = conn
+        .query_row("SELECT id FROM sources WHERE kind = 'upload'", [], |r| {
+            r.get(0)
+        })
         .expect("row");
-    assert_eq!(language.as_deref(), Some("nl"));
+    assert_eq!(
+        recalld::labels_write::language_of(&conn, &source).expect("read"),
+        Some(transcript::Language::Dutch)
+    );
 }
 
 #[tokio::test]

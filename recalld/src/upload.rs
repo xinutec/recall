@@ -420,13 +420,20 @@ pub async fn create_session_route(
             }
         };
         let meaning = work::open_write(&root)?;
+        let ingest = crate::store::open(&root)?;
         register(&meaning, &source, &name, &path, started, media)?;
         // Before the ingest row, so the first transcription leases with it.
-        if language.is_some() {
-            crate::sessions::pin_language(&meaning, &source, language)?;
+        if let (Some(language), Some(id)) = (
+            language.and_then(transcript::Language::from_code),
+            transcript::SourceId::parse(&source),
+        ) {
+            crate::labels_write::pin_language(&meaning, &ingest, &root, &id, Some(language))
+                .map_err(|err| {
+                    UploadError::Db(rusqlite::Error::ToSqlConversionFailure(err.into()))
+                })?;
         }
         deliver(
-            &crate::store::open(&root)?,
+            &ingest,
             &source,
             &path,
             started,

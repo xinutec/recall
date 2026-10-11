@@ -1,6 +1,8 @@
-//! Voiceprint enrolment: a named turn becomes a reference vector. The corpus
-//! has saturated (#1648), so this keeps up with new labels rather than
-//! improving identification.
+//! Voiceprint enrolment: a person's naming of a stretch (a labelled fragment,
+//! `labels::labelled`) becomes a reference vector, and a print whose naming
+//! was taken back, renamed or kept from enrolment is forgotten. The corpus has
+//! saturated, so this keeps up with new labels rather than improving
+//! identification.
 
 use crate::ledger::{Outcome, record};
 use audiocore::instant::Stamp;
@@ -8,20 +10,21 @@ use audiocore::job::Kind;
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 crate::statements! {
-    PENDING: Meaning =
-        "SELECT a.path, t.id, t.start_utc, t.end_utc, a.start_utc
-         FROM transcript_segments t
-         JOIN audio_segments a ON a.id = t.audio_segment_id
-         WHERE t.speaker_label IS NOT NULL
-           AND t.speaker_label NOT LIKE 'SPEAKER%'
-           AND t.superseded_by IS NULL
-           AND t.hidden_reason IS NULL
-           AND t.id NOT IN (
-             SELECT source_segment_id FROM speaker_embeddings
-             WHERE source_segment_id IS NOT NULL)
-         ORDER BY t.start_utc DESC";
+    /// Every print and what it was learnt from: a naming act, or before the
+    /// edit log a line or a correction.
+    PRINT_SOURCES: Meaning =
+        "SELECT source_edit_id, source_segment_id, source_correction_id FROM speaker_embeddings";
+    /// The naming acts recovered from a line or a correction, with that origin.
+    SEEDED_NAMINGS: Meaning =
+        "SELECT id, origin FROM edits
+         WHERE origin IS NOT NULL AND json_extract(act, '$.Speaker') IS NOT NULL";
+    FORGET_ACT_PRINT: Meaning = "DELETE FROM speaker_embeddings WHERE source_edit_id = ?1";
+    FORGET_LINE_PRINT: Meaning = "DELETE FROM speaker_embeddings WHERE source_segment_id = ?1";
+    FORGET_CORRECTION_PRINT: Meaning =
+        "DELETE FROM speaker_embeddings WHERE source_correction_id = ?1";
     UNDERIVED: Ingest =
         "SELECT s.filename FROM segments s
              WHERE NOT EXISTS (SELECT 1 FROM jobs j
@@ -29,24 +32,13 @@ crate::statements! {
              ORDER BY s.start_utc DESC";
     DERIVE_JOB: Ingest =
         "INSERT OR IGNORE INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, ?3)";
-    STILL_WANTED: Meaning =
-        "SELECT t.speaker_label FROM transcript_segments t
-             WHERE t.id = ?1
-               AND t.speaker_label IS NOT NULL
-               AND t.speaker_label NOT LIKE 'SPEAKER%'
-               AND t.superseded_by IS NULL
-               AND t.hidden_reason IS NULL
-               AND t.id NOT IN (
-                 SELECT source_segment_id FROM speaker_embeddings
-                 WHERE source_segment_id IS NOT NULL)";
     ADD_SPEAKER: Meaning =
         "INSERT OR IGNORE INTO speakers (name) VALUES (?1)";
     SPEAKER_ID: Meaning =
         "SELECT id FROM speakers WHERE name = ?1";
     ADD_EMBEDDING: Meaning =
-        "INSERT INTO speaker_embeddings
-             (speaker_id, vector, created_utc, source_correction_id, source_segment_id)
-         VALUES (?1, ?2, ?3, NULL, ?4)";
+        "INSERT INTO speaker_embeddings (speaker_id, vector, created_utc, source_edit_id)
+         VALUES (?1, ?2, ?3, ?4)";
     FINISHED: Ingest =
         "SELECT j.filename, j.result FROM jobs j
              WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
@@ -58,10 +50,12 @@ crate::statements! {
 /// A turn shorter than this enrols a useless print.
 const MIN_SECONDS: f64 = 1.0;
 
-/// One turn to embed. No name on the wire: the label is read at write time, so
-/// a turn renamed meanwhile enrols under its new name.
+/// One stretch to embed. No name on the wire: the naming is read at write
+/// time, so one renamed meanwhile enrols under its new name.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Span {
+    /// The naming act's id (`edits.id`), echoed back with its print. Named for
+    /// the runner's protocol, which predates the edit log.
     pub segment_id: i64,
     /// Seconds from the start of the clip.
     pub start_s: f64,
@@ -77,61 +71,144 @@ fn stem(path: &str) -> String {
         .to_owned()
 }
 
-/// Every turn awaiting enrolment, grouped by the stem of the clip it sits in.
-///
-/// # Errors
-/// If the meaning plane refuses.
-pub fn pending(meaning: &Connection) -> rusqlite::Result<Vec<(String, Span)>> {
-    let mut stmt = PENDING.prepare(meaning)?;
+/// The naming acts that already have a print: by the act, or for an act
+/// recovered from the old tables, by the line or correction it came from.
+fn printed(meaning: &Connection) -> rusqlite::Result<HashSet<i64>> {
+    let mut by_act = HashSet::new();
+    let mut by_line = HashSet::new();
+    let mut by_correction = HashSet::new();
+    let mut stmt = PRINT_SOURCES.prepare(meaning)?;
     let rows = stmt.query_map([], |r| {
         Ok((
-            stem(&r.get::<_, String>(0)?),
-            r.get::<_, i64>(1)?,
-            r.get::<_, String>(2)?,
-            r.get::<_, String>(3)?,
-            r.get::<_, String>(4)?,
+            r.get::<_, Option<i64>>(0)?,
+            r.get::<_, Option<i64>>(1)?,
+            r.get::<_, Option<i64>>(2)?,
         ))
     })?;
+    for row in rows {
+        let (act, line, correction) = row?;
+        by_act.extend(act);
+        by_line.extend(line);
+        by_correction.extend(correction);
+    }
+    for (act, origin) in seeded(meaning)? {
+        let found = match origin {
+            Origin::Line(id) => by_line.contains(&id),
+            Origin::Correction(id) => by_correction.contains(&id),
+        };
+        if found {
+            by_act.insert(act);
+        }
+    }
+    Ok(by_act)
+}
+
+/// Where a recovered naming act came from.
+#[derive(Debug, Clone, Copy)]
+enum Origin {
+    Line(i64),
+    Correction(i64),
+}
+
+/// The naming acts recovered from a line or a correction, by `edits.origin`'s
+/// spelling (`legacy_edits::Origin`'s debug form).
+fn seeded(meaning: &Connection) -> rusqlite::Result<Vec<(i64, Origin)>> {
+    let mut stmt = SEEDED_NAMINGS.prepare(meaning)?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
     let mut out = Vec::new();
     for row in rows {
-        let (clip, segment_id, start, end, clip_start) = row?;
-        // Not SQLite's `julianday`, which is off by tens of microseconds.
-        let (Ok(start), Ok(end), Ok(clip_start)) = (
-            DateTime::parse_from_rfc3339(&start),
-            DateTime::parse_from_rfc3339(&end),
-            DateTime::parse_from_rfc3339(&clip_start),
-        ) else {
-            continue;
+        let (act, origin) = row?;
+        let number = |prefix: &str| {
+            origin
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.strip_suffix(')'))
+                .and_then(|n| n.parse::<i64>().ok())
         };
-        let seconds = |a: DateTime<chrono::FixedOffset>| {
-            (a - clip_start).num_microseconds().map_or_else(
-                || (a - clip_start).num_seconds() as f64,
-                |us| us as f64 / 1e6,
-            )
-        };
-        if (end - start).num_milliseconds() < (MIN_SECONDS * 1000.0) as i64 {
+        if let Some(id) = number("Line(") {
+            out.push((act, Origin::Line(id)));
+        } else if let Some(id) = number("Correction(") {
+            out.push((act, Origin::Correction(id)));
+        }
+    }
+    Ok(out)
+}
+
+/// Forget every print whose naming no longer teaches it: taken back, named
+/// again or kept from enrolment. Returns how many.
+///
+/// # Errors
+/// If the meaning plane refuses or the edit log does not read.
+pub fn forget_unwanted(meaning: &Connection) -> rusqlite::Result<usize> {
+    let wanted: HashSet<i64> = crate::labels::labelled(meaning)?
+        .iter()
+        .map(|l| l.id.stored())
+        .collect();
+    let acts: Vec<i64> = {
+        let mut stmt = PRINT_SOURCES.prepare(meaning)?;
+        let rows = stmt.query_map([], |r| r.get::<_, Option<i64>>(0))?;
+        rows.filter_map(Result::transpose)
+            .collect::<rusqlite::Result<_>>()?
+    };
+    let mut forgotten = 0;
+    for act in acts.into_iter().filter(|a| !wanted.contains(a)) {
+        forgotten += FORGET_ACT_PRINT.execute(meaning, [act])?;
+    }
+    for (act, origin) in seeded(meaning)? {
+        if wanted.contains(&act) {
             continue;
         }
+        forgotten += match origin {
+            Origin::Line(id) => FORGET_LINE_PRINT.execute(meaning, [id])?,
+            Origin::Correction(id) => FORGET_CORRECTION_PRINT.execute(meaning, [id])?,
+        };
+    }
+    Ok(forgotten)
+}
+
+/// Every labelled fragment awaiting a print, by the stem of its clip.
+///
+/// # Errors
+/// If either plane refuses or the edit log does not read.
+pub fn pending(meaning: &Connection, ingest: &Connection) -> rusqlite::Result<Vec<(String, Span)>> {
+    let printed = printed(meaning)?;
+    let clips: HashMap<transcript::ClipId, transcript::Clip> = crate::clips::all(ingest)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?
+        .into_iter()
+        .map(|c| (c.id, c))
+        .collect();
+    let mut out = Vec::new();
+    for l in crate::labels::labelled(meaning)? {
+        if printed.contains(&l.id.stored()) || (l.span.micros() as f64) < MIN_SECONDS * 1e6 {
+            continue;
+        }
+        let Some(clip) = clips.get(&l.clip) else {
+            continue;
+        };
+        let seconds = |at: transcript::Instant| (at.micros() - clip.start.micros()) as f64 / 1e6;
         out.push((
-            clip,
+            stem(&clip.filename),
             Span {
-                segment_id,
+                segment_id: l.id.stored(),
                 // A negative seek makes ffmpeg return the whole clip.
-                start_s: seconds(start).max(0.0),
-                end_s: seconds(end),
+                start_s: seconds(l.span.start()).max(0.0),
+                end_s: seconds(l.span.end()),
             },
         ));
     }
     Ok(out)
 }
 
-/// The turns to embed from one leased clip, by its ingest filename.
+/// The stretches to embed from one leased clip, by its ingest filename.
 ///
 /// # Errors
-/// If the meaning plane refuses.
-pub fn spans_for(meaning: &Connection, filename: &str) -> rusqlite::Result<Vec<Span>> {
+/// If either plane refuses.
+pub fn spans_for(
+    meaning: &Connection,
+    ingest: &Connection,
+    filename: &str,
+) -> rusqlite::Result<Vec<Span>> {
     let want = stem(filename);
-    Ok(pending(meaning)?
+    Ok(pending(meaning, ingest)?
         .into_iter()
         .filter(|(s, _)| *s == want)
         .map(|(_, span)| span)
@@ -147,7 +224,11 @@ pub fn attach_spans(root: &std::path::Path, job: &mut crate::queue::Job) -> rusq
     if job.kind != Kind::EnrollSpeaker {
         return Ok(());
     }
-    job.spans = spans_for(&crate::reads::open(root)?, &job.filename)?;
+    job.spans = spans_for(
+        &crate::reads::open(root)?,
+        &crate::store::open(root)?,
+        &job.filename,
+    )?;
     Ok(())
 }
 
@@ -162,8 +243,10 @@ pub fn derive_jobs(
     now: DateTime<Utc>,
     limit: usize,
 ) -> rusqlite::Result<usize> {
-    let wanted: std::collections::HashSet<String> =
-        pending(meaning)?.into_iter().map(|(s, _)| s).collect();
+    let wanted: HashSet<String> = pending(meaning, ingest)?
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect();
     if wanted.is_empty() {
         return Ok(0);
     }
@@ -206,15 +289,15 @@ pub struct Enrolled {
     pub stale: usize,
 }
 
-/// Whose voice a segment is now, or `None` if it no longer qualifies.
-fn still_wanted(meaning: &Connection, segment_id: i64) -> rusqlite::Result<Option<String>> {
-    STILL_WANTED
-        .query_row(meaning, [segment_id], |r| r.get::<_, String>(0))
-        .map(Some)
-        .or_else(|err| match err {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            other => Err(other),
-        })
+/// Whose voice each naming awaiting a print is now; one taken back, renamed
+/// or printed meanwhile is absent.
+fn still_wanted(meaning: &Connection) -> rusqlite::Result<HashMap<i64, String>> {
+    let printed = printed(meaning)?;
+    Ok(crate::labels::labelled(meaning)?
+        .into_iter()
+        .filter(|l| !printed.contains(&l.id.stored()))
+        .map(|l| (l.id.stored(), l.name.as_str().to_owned()))
+        .collect())
 }
 
 fn enrol_one(
@@ -255,6 +338,7 @@ pub fn write_pass(
     };
 
     let mut pass = Enrolled::default();
+    let mut wanted = still_wanted(meaning)?;
     for (filename, result) in candidates {
         if pass.clips >= limit {
             break;
@@ -290,7 +374,7 @@ pub fn write_pass(
                 pass.stale += 1;
                 continue;
             }
-            match still_wanted(meaning, print.segment_id)? {
+            match wanted.remove(&print.segment_id) {
                 Some(person) => {
                     enrol_one(meaning, &person, print, now)?;
                     wrote += 1;

@@ -22,10 +22,10 @@ crate::statements! {
           AND b.start_utc BETWEEN strftime('%Y-%m-%dT%H:%M:%S', a.start_utc, printf('-%d seconds', ?2))
                               AND strftime('%Y-%m-%dT%H:%M:%S', a.start_utc, printf('+%d seconds', ?2 + 1))
          WHERE a.start_utc >= ?1
-           AND EXISTS (SELECT 1 FROM transcript_segments t WHERE t.audio_segment_id = a.id
-                         AND t.superseded_by IS NULL AND t.hidden_reason IS NULL)
-           AND EXISTS (SELECT 1 FROM transcript_segments t WHERE t.audio_segment_id = b.id
-                         AND t.superseded_by IS NULL AND t.hidden_reason IS NULL)
+           AND EXISTS (SELECT 1 FROM rendered_lines t WHERE t.audio_segment_id = a.id
+                         AND t.hidden_reason IS NULL)
+           AND EXISTS (SELECT 1 FROM rendered_lines t WHERE t.audio_segment_id = b.id
+                         AND t.hidden_reason IS NULL)
          ORDER BY a.start_utc DESC";
 }
 

@@ -608,6 +608,17 @@ pub const MIGRATIONS: &[&str] = &[
         inputs  TEXT NOT NULL
     );
 "#,
+    // v55
+    r#"
+    -- A model line's words: [[start_us, end_us, text], ...], their texts joined
+    -- and trimmed being the line's. Where a person's span edge falls in it.
+    ALTER TABLE rendered_lines ADD COLUMN word_timings TEXT;
+"#,
+    // v56
+    r#"
+    -- The naming act a voiceprint was learnt from (edits.id).
+    ALTER TABLE speaker_embeddings ADD COLUMN source_edit_id INTEGER;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

@@ -88,8 +88,8 @@ fn clip(conn: &rusqlite::Connection, start: &str, ext: &str, lines: usize) {
     let id = conn.last_insert_rowid();
     for _ in 0..lines {
         conn.execute(
-            "INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc, text, asr_model)
-             VALUES (?1, ?2, ?2, 'words', 'whisper')",
+            "INSERT INTO rendered_lines (audio_segment_id, start_utc, end_utc, text, asr_model, tier)
+             VALUES (?1, ?2, ?2, 'words', 'whisper', 'transcribed')",
             (id, iso(start)),
         )
         .expect("line");

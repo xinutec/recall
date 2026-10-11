@@ -14,9 +14,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 crate::statements! {
-    /// Pin a session's language, or `NULL` to leave it to the model.
-    SET_LANGUAGE: Meaning = "UPDATE sources SET language = ?2 WHERE id = ?1";
-    LANGUAGE_OF: Meaning = "SELECT language FROM sources WHERE id = ?1";
     SESSION_FILES: Ingest = "SELECT filename FROM segments WHERE source = ?1 ORDER BY filename";
     SESSIONS: Meaning =
         "SELECT s.id, s.name, MIN(a.start_utc), MAX(a.end_utc), COUNT(t.id), \
@@ -26,13 +23,11 @@ crate::statements! {
                          AND t.speaker_label NOT LIKE 'SPEAKER_%' \
                          THEN t.speaker_label \
                     ELSE 'unknown' \
-                END), \
-                s.language \
+                END) \
          FROM sources s \
          JOIN audio_segments a ON a.source_id = s.id \
-         LEFT JOIN transcript_segments t \
-                ON t.audio_segment_id = a.id \
-               AND t.superseded_by IS NULL AND t.hidden_reason IS NULL \
+         LEFT JOIN rendered_lines t \
+                ON t.audio_segment_id = a.id AND t.hidden_reason IS NULL \
          WHERE s.kind = ?1 \
          GROUP BY s.id \
          ORDER BY MIN(a.start_utc) DESC";
@@ -43,7 +38,7 @@ crate::statements! {
     CLIP_COUNT: Ingest =
         "SELECT count(*) FROM segments WHERE source = ?1";
     REQUEUE_DIARIZE: Ingest =
-        "UPDATE jobs SET state = 'queued', leased_until = NULL, done_utc = NULL, result = NULL
+        "UPDATE jobs SET state = 'queued', leased_until = NULL, done_utc = NULL
          WHERE kind = ?1 AND done_utc IS NOT NULL
            AND filename IN (SELECT filename FROM segments WHERE source = ?2)";
     CLEAR_DIARIZE_LEDGER: Ingest =
@@ -51,11 +46,9 @@ crate::statements! {
            AND filename IN (SELECT filename FROM segments WHERE source = ?2)";
     SESSION_TURNS: Meaning =
         "SELECT t.start_utc, t.text, t.speaker_label, t.speaker_cluster \
-         FROM transcript_segments t \
-         JOIN audio_segments a ON a.id = t.audio_segment_id \
-         WHERE a.source_id = ?1 AND t.superseded_by IS NULL \
-           AND t.hidden_reason IS NULL \
-         ORDER BY t.start_utc";
+         FROM rendered_lines t \
+         WHERE t.source_id = ?1 AND t.hidden_reason IS NULL \
+         ORDER BY t.start_utc, t.id";
     SESSION_AUDIO: Meaning =
         "SELECT id, path, start_utc FROM audio_segments WHERE source_id = ?1";
     REMEMBER_DELETED: Meaning =
@@ -73,6 +66,14 @@ crate::statements! {
         "DELETE FROM audio_segments WHERE source_id = ?1";
     DROP_SOURCE: Meaning =
         "DELETE FROM sources WHERE id = ?1";
+    /// What people did to the session and its clips, retractions included:
+    /// each carries its target's clip or session. `?2`: the clip ids as JSON.
+    DROP_SESSION_EDITS: Meaning =
+        "DELETE FROM edits WHERE source_id = ?1
+            OR clip_id IN (SELECT value FROM json_each(?2))";
+    DROP_SESSION_LINES: Meaning = "DELETE FROM rendered_lines WHERE source_id = ?1";
+    DROP_SESSION_RENDERED: Meaning =
+        "DELETE FROM rendered_clips WHERE clip_id IN (SELECT value FROM json_each(?1))";
 }
 
 const UPLOAD_KIND: &str = "upload";
@@ -119,12 +120,16 @@ pub fn sessions(conn: &Connection) -> rusqlite::Result<SessionsOut> {
             end: r.get(3)?,
             turn_count: r.get(4)?,
             speakers,
-            language: r.get(6)?,
+            language: None,
         })
     })?;
-    Ok(SessionsOut {
-        items: rows.collect::<rusqlite::Result<_>>()?,
-    })
+    let mut items: Vec<SessionOut> = rows.collect::<rusqlite::Result<_>>()?;
+    for session in &mut items {
+        session.language = crate::labels_write::language_of(conn, &session.id)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?
+            .map(|l| l.code().to_owned());
+    }
+    Ok(SessionsOut { items })
 }
 
 #[derive(Debug)]
@@ -134,11 +139,18 @@ pub enum SessionError {
     NotAnUpload,
     NoAudio,
     Db(rusqlite::Error),
+    Write(crate::labels_write::WriteError),
 }
 
 impl From<rusqlite::Error> for SessionError {
     fn from(err: rusqlite::Error) -> Self {
         Self::Db(err)
+    }
+}
+
+impl From<crate::labels_write::WriteError> for SessionError {
+    fn from(err: crate::labels_write::WriteError) -> Self {
+        Self::Write(err)
     }
 }
 
@@ -151,6 +163,7 @@ impl SessionError {
             }
             Self::NoAudio => (StatusCode::BAD_REQUEST, "session has no audio").into_response(),
             Self::Db(err) => route::faulted(what, &err),
+            Self::Write(err) => route::faulted(what, &err),
         }
     }
 }
@@ -213,11 +226,13 @@ pub fn parse_language(raw: Option<&str>) -> Result<Option<&'static str>, String>
 pub fn set_language(
     meaning: &Connection,
     ingest: &Connection,
+    root: &std::path::Path,
     source: &str,
     language: Option<&str>,
     now: &audiocore::instant::Stamp,
 ) -> Result<crate::retranscribe::Requested, SessionError> {
     require_upload(meaning, source)?;
+    let id = transcript::SourceId::parse(source).ok_or(SessionError::Missing)?;
     let files: Vec<String> = {
         let mut stmt = SESSION_FILES.prepare(ingest)?;
         let rows = stmt.query_map([source], |r| r.get(0))?;
@@ -226,26 +241,14 @@ pub fn set_language(
     if files.is_empty() {
         return Err(SessionError::NoAudio);
     }
-    pin_language(meaning, source, language)?;
+    crate::labels_write::pin_language(
+        meaning,
+        ingest,
+        root,
+        &id,
+        language.and_then(transcript::Language::from_code),
+    )?;
     Ok(crate::retranscribe::request(ingest, &files, now)?)
-}
-
-/// Store `source`'s language without transcribing again, for a new session.
-pub fn pin_language(
-    conn: &Connection,
-    source: &str,
-    language: Option<&str>,
-) -> rusqlite::Result<()> {
-    SET_LANGUAGE.execute(conn, (source, language))?;
-    Ok(())
-}
-
-pub fn language_of(conn: &Connection, source: &str) -> rusqlite::Result<Option<String>> {
-    use rusqlite::OptionalExtension;
-    Ok(LANGUAGE_OF
-        .query_row(conn, [source], |r| r.get(0))
-        .optional()?
-        .flatten())
 }
 
 /// Give a leased transcription job its session's pinned language, at lease
@@ -257,19 +260,10 @@ pub fn attach_language(
     if job.kind != audiocore::job::Kind::TranscribeSegment {
         return Ok(());
     }
-    job.language = language_of(&crate::reads::open(root)?, &job.source)?;
+    job.language = crate::labels_write::language_of(&crate::reads::open(root)?, &job.source)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?
+        .map(|l| l.code().to_owned());
     Ok(())
-}
-
-/// Name a diarized voice across a whole session, or clear it with `None`.
-/// Hidden turns too, so one unhidden later is named. Naming enrols the voice.
-pub fn name_voice(
-    conn: &Connection,
-    source: &str,
-    cluster: &str,
-    name: Option<&str>,
-) -> rusqlite::Result<usize> {
-    crate::turn_store::label_voice(conn, source, cluster, name)
 }
 
 // --- the transcript export --------------------------------------------------
@@ -446,6 +440,7 @@ pub async fn language_route(
         set_language(
             &meaning,
             &ingest,
+            &root,
             &source,
             language,
             &audiocore::instant::Stamp::now(),
@@ -470,18 +465,26 @@ pub async fn name_voice_route(
         .name
         .map(|n| n.trim().to_owned())
         .filter(|n| !n.is_empty());
-    match route::blocking("name voice", move || {
-        name_voice(
-            &work::open_write(&root)?,
+    let Some(source) = transcript::SourceId::parse(&source) else {
+        return (StatusCode::NOT_FOUND, "no such session").into_response();
+    };
+    match tokio::task::spawn_blocking(move || -> Result<bool, SessionError> {
+        let meaning = work::open_write(&root)?;
+        let ingest = crate::store::open(&root)?;
+        Ok(crate::labels_write::name_voice(
+            &meaning,
+            &ingest,
+            &root,
             &source,
             &body.cluster,
             name.as_deref(),
-        )
+        )?)
     })
     .await
     {
-        Ok(_) => route::ack(),
-        Err(response) => response,
+        Ok(Ok(_)) => route::ack(),
+        Ok(Err(err)) => err.into_response("name voice"),
+        Err(err) => route::faulted("name voice task", &err),
     }
 }
 
@@ -529,9 +532,11 @@ impl DeletedUpload {
 /// pass (`turns::tombstoned_block`) does not rebuild it. `transcript_fts` is
 /// contentless FTS5 with no per-row delete; a rowid whose segment is gone
 /// resolves to nothing.
+/// `clips`: the session's clip ids, from the ingest plane.
 pub fn delete_session(
     conn: &mut Connection,
     source: &str,
+    clips: &[i64],
     now: &Stamp,
 ) -> Result<DeletedUpload, SessionError> {
     require_upload(conn, source)?;
@@ -556,6 +561,11 @@ pub fn delete_session(
         DROP_CORRECTIONS.execute(&tx, [audio_id])?;
         crate::turn_store::delete_for_audio(&tx, *audio_id)?;
     }
+    let clips = serde_json::to_string(clips)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+    DROP_SESSION_EDITS.execute(&tx, (source, &clips))?;
+    DROP_SESSION_LINES.execute(&tx, [source])?;
+    DROP_SESSION_RENDERED.execute(&tx, [&clips])?;
     DROP_REFINE_REQUESTS.execute(&tx, [source])?;
     DROP_AUDIO.execute(&tx, [source])?;
     DROP_SOURCE.execute(&tx, [source])?;
@@ -587,12 +597,17 @@ pub async fn delete_route(
     let root = st.root.clone();
     let now = audiocore::instant::Stamp::now();
     let done = tokio::task::spawn_blocking(move || -> Result<(), SessionError> {
+        let mut ingest = crate::store::open(&root)?;
+        let clips: Vec<i64> = crate::clips::of_source(&ingest, &source)
+            .map_err(crate::labels_write::WriteError::from)?
+            .iter()
+            .map(|c| c.id.stored())
+            .collect();
         let deleted = {
             let mut conn = work::open_write(&root)?;
-            delete_session(&mut conn, &source, &now)?
+            delete_session(&mut conn, &source, &clips, &now)?
         };
         // The ingest plane holds the session's words in its jobs.
-        let mut ingest = crate::store::open(&root)?;
         crate::store::forget_upload(&mut ingest, &deleted)?;
         // Files only after the commits, in case a delete rolls back.
         remove_files(&root, &source, deleted.paths());

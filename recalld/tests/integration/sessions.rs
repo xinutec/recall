@@ -3,8 +3,8 @@
 
 use audiocore::job::Kind;
 use recalld::sessions::{
-    self, ExportTurn, SessionError, clean_transcript, name_voice, parse_language, rediarize,
-    rename, set_language,
+    self, ExportTurn, SessionError, clean_transcript, parse_language, rediarize, rename,
+    set_language,
 };
 use rusqlite::Connection;
 
@@ -41,10 +41,11 @@ fn turn(
     cluster: Option<&str>,
 ) {
     conn.execute(
-        "INSERT INTO transcript_segments
-             (audio_segment_id, start_utc, end_utc, text, asr_model, speaker_label,
-              speaker_cluster)
-         VALUES (?1, ?2, ?2, ?3, 'whisper', ?4, ?5)",
+        "INSERT INTO rendered_lines
+             (audio_segment_id, source_id, start_utc, end_utc, text, asr_model, speaker_label,
+              speaker_cluster, tier)
+         VALUES (?1, (SELECT source_id FROM audio_segments WHERE id = ?1), ?2, ?2, ?3, 'whisper',
+                 ?4, ?5, 'diarized')",
         (seg, start, text, label, cluster),
     )
     .expect("turn");
@@ -318,125 +319,6 @@ fn rediarizing_the_household_archive_is_refused() {
     );
 }
 
-#[test]
-fn naming_a_voice_labels_every_turn_of_that_cluster_including_hidden_ones() {
-    // Hidden turns are named too, so one unhidden later is named.
-    let conn = db();
-    source(&conn, "meeting-1", "upload");
-    let m = segment(
-        &conn,
-        "meeting-1",
-        "2026-07-03T09:50:00+00:00",
-        "2026-07-03T10:20:00+00:00",
-    );
-    turn(
-        &conn,
-        m,
-        "2026-07-03T09:51:00+00:00",
-        "a",
-        None,
-        Some("SPEAKER_00"),
-    );
-    turn(
-        &conn,
-        m,
-        "2026-07-03T09:52:00+00:00",
-        "b",
-        None,
-        Some("SPEAKER_01"),
-    );
-    conn.execute(
-        "INSERT INTO transcript_segments
-             (audio_segment_id, start_utc, end_utc, text, asr_model, speaker_cluster,
-              hidden_reason)
-         VALUES (?1, '2026-07-03T09:53:00+00:00', '2026-07-03T09:53:00+00:00', 'c',
-                 'whisper', 'SPEAKER_00', 'silence')",
-        [m],
-    )
-    .expect("hidden turn");
-
-    let updated = name_voice(&conn, "meeting-1", "SPEAKER_00", Some("Dr Smith")).expect("named");
-
-    assert_eq!(updated, 2, "both SPEAKER_00 turns, hidden included");
-    let other: Option<String> = conn
-        .query_row(
-            "SELECT speaker_label FROM transcript_segments WHERE speaker_cluster = 'SPEAKER_01'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("read back");
-    assert_eq!(other, None, "the other voice is untouched");
-}
-
-#[test]
-fn a_superseded_turn_is_not_renamed_by_a_voice_naming() {
-    // The current version, with the person's text, is the one named.
-    let conn = db();
-    source(&conn, "meeting-1", "upload");
-    let m = segment(
-        &conn,
-        "meeting-1",
-        "2026-07-03T09:50:00+00:00",
-        "2026-07-03T10:20:00+00:00",
-    );
-    conn.execute(
-        "INSERT INTO transcript_segments
-             (audio_segment_id, start_utc, end_utc, text, asr_model, speaker_cluster,
-              superseded_by)
-         VALUES (?1, '2026-07-03T09:51:00+00:00', '2026-07-03T09:51:00+00:00', 'old',
-                 'whisper', 'SPEAKER_00', NULL)",
-        [m],
-    )
-    .expect("superseded turn");
-    let old = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO transcript_segments
-             (audio_segment_id, start_utc, end_utc, text, asr_model, provenance)
-         VALUES (?1, '2026-07-03T09:51:00+00:00', '2026-07-03T09:51:00+00:00', 'new',
-                 'human', 'human correction of #' || ?2)",
-        (m, old),
-    )
-    .expect("its correction");
-    conn.execute(
-        "UPDATE transcript_segments SET superseded_by = last_insert_rowid() WHERE id = ?1",
-        [old],
-    )
-    .expect("superseded");
-
-    let updated = name_voice(&conn, "meeting-1", "SPEAKER_00", Some("Dr Smith")).expect("named");
-
-    assert_eq!(updated, 0);
-}
-
-#[test]
-fn clearing_a_voice_name_removes_the_label_rather_than_storing_a_blank() {
-    let conn = db();
-    source(&conn, "meeting-1", "upload");
-    let m = segment(
-        &conn,
-        "meeting-1",
-        "2026-07-03T09:50:00+00:00",
-        "2026-07-03T10:20:00+00:00",
-    );
-    turn(
-        &conn,
-        m,
-        "2026-07-03T09:51:00+00:00",
-        "a",
-        Some("Dr Smith"),
-        Some("SPEAKER_00"),
-    );
-
-    name_voice(&conn, "meeting-1", "SPEAKER_00", None).expect("cleared");
-
-    let label: Option<String> = conn
-        .query_row("SELECT speaker_label FROM transcript_segments", [], |r| {
-            r.get(0)
-        })
-        .expect("read back");
-    assert_eq!(label, None);
-}
-
 fn export(start: &str, text: &str, label: Option<&str>, cluster: Option<&str>) -> ExportTurn {
     ExportTurn {
         start_utc: start.to_owned(),
@@ -608,7 +490,7 @@ fn deleting_the_household_archive_is_refused_and_removes_nothing() {
     let mut conn = delete_db();
     populate(&conn, "usb", "coreaudio");
 
-    let err = delete_session(&mut conn, "usb", &crate::stamp(NOW)).expect_err("must refuse");
+    let err = delete_session(&mut conn, "usb", &[], &crate::stamp(NOW)).expect_err("must refuse");
 
     assert!(matches!(err, SessionError::NotAnUpload), "got {err:?}");
     assert_eq!(count(&conn, "sources"), 1);
@@ -621,11 +503,23 @@ fn deleting_the_household_archive_is_refused_and_removes_nothing() {
 fn deleting_a_meeting_removes_every_derived_row_and_returns_its_files() {
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
+    conn.execute_batch(
+        "INSERT INTO edits (at_us, act, clip_id) VALUES (1, '{}', 7);
+         INSERT INTO edits (at_us, act, source_id) VALUES (1, '{}', 'meeting-1');
+         INSERT INTO rendered_lines (source_id, start_utc, end_utc, text, tier)
+         VALUES ('meeting-1', 'x', 'x', 'words', 'transcribed');
+         INSERT INTO rendered_clips (clip_id, inputs) VALUES (7, '-');",
+    )
+    .expect("what people did and what it shows");
 
-    let deleted = delete_session(&mut conn, "meeting-1", &crate::stamp(NOW)).expect("deleted");
+    let deleted =
+        delete_session(&mut conn, "meeting-1", &[7], &crate::stamp(NOW)).expect("deleted");
 
     assert_eq!(deleted.paths(), ["/data/meeting-1/clip.flac".to_owned()]);
     for table in [
+        "edits",
+        "rendered_lines",
+        "rendered_clips",
         "sources",
         "audio_segments",
         "transcript_segments",
@@ -643,7 +537,7 @@ fn a_deletion_is_tombstoned_so_a_later_push_cannot_resurrect_it() {
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
 
-    delete_session(&mut conn, "meeting-1", &crate::stamp(NOW)).expect("deleted");
+    delete_session(&mut conn, "meeting-1", &[], &crate::stamp(NOW)).expect("deleted");
 
     let (source, start): (String, String) = conn
         .query_row(
@@ -662,7 +556,7 @@ fn deleting_one_meeting_leaves_another_untouched() {
     populate(&conn, "meeting-1", "upload");
     populate(&conn, "meeting-2", "upload");
 
-    delete_session(&mut conn, "meeting-1", &crate::stamp(NOW)).expect("deleted");
+    delete_session(&mut conn, "meeting-1", &[], &crate::stamp(NOW)).expect("deleted");
 
     assert_eq!(count(&conn, "sources"), 1);
     assert_eq!(count(&conn, "transcript_segments"), 1);
@@ -677,7 +571,8 @@ fn deleting_a_session_that_does_not_exist_is_a_miss_not_a_wipe() {
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
 
-    let err = delete_session(&mut conn, "meeting-nope", &crate::stamp(NOW)).expect_err("must fail");
+    let err =
+        delete_session(&mut conn, "meeting-nope", &[], &crate::stamp(NOW)).expect_err("must fail");
 
     assert!(matches!(err, SessionError::Missing), "got {err:?}");
     assert_eq!(count(&conn, "sources"), 1);
@@ -691,7 +586,7 @@ fn a_failed_delete_leaves_the_session_whole() {
     conn.execute("DROP TABLE refine_requests", [])
         .expect("drop");
 
-    let failed = delete_session(&mut conn, "meeting-1", &crate::stamp(NOW));
+    let failed = delete_session(&mut conn, "meeting-1", &[], &crate::stamp(NOW));
 
     assert!(failed.is_err());
     assert_eq!(count(&conn, "sources"), 1, "rolled back");
@@ -716,6 +611,7 @@ fn pinning_a_language_transcribes_the_session_again_and_the_lease_carries_it() {
     let requested = set_language(
         &meaning,
         &ingest,
+        root,
         "meeting-1",
         Some("nl"),
         &crate::stamp(NOW),
@@ -725,9 +621,9 @@ fn pinning_a_language_transcribes_the_session_again_and_the_lease_carries_it() {
     assert_eq!(requested.queued.len(), 2);
     assert_eq!(open_jobs(root, "transcribe-segment"), 2);
     assert_eq!(
-        sessions::language_of(&meaning, "meeting-1")
+        recalld::labels_write::language_of(&meaning, "meeting-1")
             .expect("read")
-            .as_deref(),
+            .map(transcript::Language::code),
         Some("nl")
     );
     // The list (which shows only sessions with audio) says so too.
@@ -758,16 +654,25 @@ fn unpinning_leaves_the_language_to_the_model_again() {
     set_language(
         &meaning,
         &ingest,
+        root,
         "meeting-1",
         Some("en"),
         &crate::stamp(NOW),
     )
     .expect("pin");
 
-    set_language(&meaning, &ingest, "meeting-1", None, &crate::stamp(NOW)).expect("unpin");
+    set_language(
+        &meaning,
+        &ingest,
+        root,
+        "meeting-1",
+        None,
+        &crate::stamp(NOW),
+    )
+    .expect("unpin");
 
     assert_eq!(
-        sessions::language_of(&meaning, "meeting-1").expect("read"),
+        recalld::labels_write::language_of(&meaning, "meeting-1").expect("read"),
         None
     );
     let now = "2026-09-07T10:00:00Z".parse().expect("t");
@@ -792,8 +697,15 @@ fn pinning_the_household_archive_is_refused() {
     source(&meaning, "usb", "coreaudio");
     let ingest = recalld::store::open(root).expect("ingest");
 
-    let err = set_language(&meaning, &ingest, "usb", Some("nl"), &crate::stamp(NOW))
-        .expect_err("must refuse");
+    let err = set_language(
+        &meaning,
+        &ingest,
+        root,
+        "usb",
+        Some("nl"),
+        &crate::stamp(NOW),
+    )
+    .expect_err("must refuse");
 
     assert!(matches!(err, SessionError::NotAnUpload), "got {err:?}");
     assert_eq!(open_jobs(root, "transcribe-segment"), 0);
@@ -877,7 +789,8 @@ fn deleting_a_session_forgets_its_words_in_the_ingest_plane_too() {
             .expect("job");
     }
 
-    let deleted = delete_session(&mut meaning, "meeting-1", &crate::stamp(NOW)).expect("deleted");
+    let deleted =
+        delete_session(&mut meaning, "meeting-1", &[], &crate::stamp(NOW)).expect("deleted");
     recalld::store::forget_upload(&mut ingest, &deleted).expect("forgotten");
 
     let left = |sql: &str| -> i64 { ingest.query_row(sql, [], |r| r.get(0)).expect("count") };

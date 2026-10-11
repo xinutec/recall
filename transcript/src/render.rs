@@ -98,6 +98,7 @@ pub struct Line {
     language: Option<String>,
     confidence: Option<f64>,
     checked: bool,
+    words: Vec<(Span, String)>,
 }
 
 impl Line {
@@ -128,6 +129,11 @@ impl Line {
     /// A person listened and vouches for the words.
     pub fn checked(&self) -> bool {
         self.checked
+    }
+    /// The model's words and when each was said, in order; their texts joined
+    /// and trimmed are the line's. Empty for a person's words.
+    pub fn words(&self) -> &[(Span, String)] {
+        &self.words
     }
 }
 
@@ -222,6 +228,7 @@ pub fn render(input: &Input<'_>) -> Rendered {
                 language: input.heard.and_then(|h| h.language.clone()),
                 confidence: None,
                 checked: *checked,
+                words: Vec::new(),
             });
         }
     }
@@ -234,15 +241,7 @@ pub fn render(input: &Input<'_>) -> Rendered {
 fn active<'a>(edits: &'a [Edit], clip: &Clip) -> Vec<&'a Edit> {
     let mut ordered: Vec<&Edit> = edits.iter().collect();
     ordered.sort_by_key(|e| e.id);
-    let mut retracted = std::collections::BTreeSet::new();
-    for edit in ordered.iter().rev() {
-        if retracted.contains(&edit.id) {
-            continue;
-        }
-        if let Act::Retract { edit: target } = edit.act {
-            retracted.insert(target);
-        }
-    }
+    let retracted = crate::edit::taken_back(edits);
     ordered
         .into_iter()
         .filter(|e| !retracted.contains(&e.id))
@@ -595,6 +594,7 @@ fn model_lines(words: &[Word], speakers: &Speakers<'_>, heard: Option<&Heard>) -
                 language: language.clone(),
                 confidence: if doubted { Some(0.0) } else { mean },
                 checked: false,
+                words: run.iter().map(|w| (w.span, w.text.clone())).collect(),
             });
         }
         i = j;

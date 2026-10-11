@@ -18,6 +18,9 @@ crate::statements! {
     FOR_CLIP: Meaning =
         "SELECT id, at_us, act FROM edits WHERE clip_id = ?1 OR source_id = ?2 ORDER BY id";
     ALL: Meaning = "SELECT id, at_us, act FROM edits ORDER BY id";
+    /// A session's own acts and their retractions.
+    FOR_SOURCE: Meaning = "SELECT id, at_us, act FROM edits WHERE source_id = ?1 ORDER BY id";
+    ONE: Meaning = "SELECT id, at_us, act FROM edits WHERE id = ?1";
     COUNT: Meaning = "SELECT count(*) FROM edits";
 }
 
@@ -98,6 +101,22 @@ pub fn for_clip(conn: &Connection, clip: &Clip) -> Result<Vec<Edit>, LogError> {
         FOR_CLIP.prepare(conn)?,
         (clip.id.stored(), clip.source.as_str()),
     )
+}
+
+/// A session's own acts (voice names, language), in order.
+///
+/// # Errors
+/// If the store refuses or a row does not read back.
+pub fn for_source(conn: &Connection, source: &str) -> Result<Vec<Edit>, LogError> {
+    read(FOR_SOURCE.prepare(conn)?, [source])
+}
+
+/// One act by id.
+///
+/// # Errors
+/// If the store refuses or the row does not read back.
+pub fn get(conn: &Connection, id: EditId) -> Result<Option<Edit>, LogError> {
+    Ok(read(ONE.prepare(conn)?, [id.stored()])?.pop())
 }
 
 /// Every act, in order.

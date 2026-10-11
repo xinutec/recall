@@ -272,7 +272,19 @@ fn prepare_planes(root: &std::path::Path) -> Result<(), String> {
     let conn = recalld::work::open_write(root)
         .map_err(|err| format!("cannot open {}/recall.sqlite: {err}", root.display()))?;
     recalld::meaning_schema::ensure(&conn)
-        .map_err(|err| format!("cannot migrate {}/recall.sqlite: {err}", root.display()))
+        .map_err(|err| format!("cannot migrate {}/recall.sqlite: {err}", root.display()))?;
+    // What people did before the edit log existed, recovered once.
+    let ingest = recalld::store::open(root)
+        .map_err(|err| format!("cannot open {}/ingest.sqlite: {err}", root.display()))?;
+    let now = transcript::Instant::from_utc(chrono::Utc::now());
+    match recalld::edit_log::seed(&conn, &ingest, root, now) {
+        Ok(0) => Ok(()),
+        Ok(acts) => {
+            tracing::info!(acts, "edit log: seeded from the old tables");
+            Ok(())
+        }
+        Err(err) => Err(format!("cannot seed the edit log: {err}")),
+    }
 }
 
 fn main() -> ExitCode {
@@ -399,57 +411,53 @@ async fn bind_all(binds: &[String]) -> Option<Vec<tokio::net::TcpListener>> {
     Some(listeners)
 }
 
-/// Re-derive stored speaker guesses when a voice is enrolled, in bounded,
-/// logged batches.
-fn spawn_rematcher(root: PathBuf) {
-    const BATCH: usize = 200;
-    const IDLE: std::time::Duration = std::time::Duration::from_mins(5);
-    const BACKOFF: std::time::Duration = std::time::Duration::from_mins(5);
-    tokio::spawn(async move {
-        loop {
-            let batch_root = root.clone();
-            let done = tokio::task::spawn_blocking(move || {
-                let mut conn = recalld::work::open_write(&batch_root)?;
-                let now = audiocore::instant::Stamp::now();
-                recalld::rematch::run_once(&mut conn, BATCH, &now)
-            })
-            .await;
-            match done {
-                Ok(Ok(pass)) if pass.examined == 0 => tokio::time::sleep(IDLE).await,
-                Ok(Ok(pass)) => tracing::info!(
-                    examined = pass.examined,
-                    rewritten = pass.rewritten,
-                    unchanged = pass.unchanged,
-                    unmatched = pass.unmatched,
-                    "rematch: batch complete"
-                ),
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "rematch: pass failed; backing off");
-                    tokio::time::sleep(BACKOFF).await;
-                }
-                Err(err) => {
-                    tracing::error!(%err, "rematch: task failed; backing off");
-                    tokio::time::sleep(BACKOFF).await;
-                }
-            }
-        }
-    });
-}
-
 /// Every background pass the daemon runs, in one place.
 fn spawn_background_passes(root: &std::path::Path) {
     let root = root.to_path_buf();
     let root = &root;
     spawn_speech_scanner(root.clone());
-    spawn_rematcher(root.clone());
-    // Fills clips that have no turns; hides only live guesses on its span.
-    spawn_turn_writer(root.clone());
-    // The one loop that replaces a transcript somebody reads; keep it the only
-    // one, or two writers hide each other's lines.
-    spawn_diarized_writer(root.clone());
+    // The one loop that writes shown lines: render's, from results and acts.
+    spawn_view(root.clone());
     spawn_segment_registrar(root.clone());
     spawn_segment_deriver(root.clone());
     spawn_enroller(root.clone());
+}
+
+/// Keep the rendered view current: every clip once at start (render's rules
+/// may have changed with this binary), then each clip whose inputs moved.
+fn spawn_view(root: PathBuf) {
+    const EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+    tokio::spawn(async move {
+        let mut all = true;
+        loop {
+            let pass_root = root.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                let meaning = recalld::work::open_write(&pass_root)?;
+                let ingest = recalld::store::open(&pass_root)?;
+                ingest.busy_timeout(std::time::Duration::from_mins(2))?;
+                recalld::view::refresh(&meaning, &ingest, &pass_root, all)
+                    .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))
+            })
+            .await;
+            match done {
+                Ok(Ok(done)) => {
+                    if done.rendered > 0 || !done.unreadable.is_empty() {
+                        tracing::info!(
+                            all,
+                            rendered = done.rendered,
+                            unreadable = done.unreadable.len(),
+                            live = done.live_shown,
+                            "view: refreshed"
+                        );
+                    }
+                    all = false;
+                }
+                Ok(Err(err)) => tracing::warn!(%err, "view: refresh failed"),
+                Err(err) => tracing::error!(%err, "view: task failed"),
+            }
+            tokio::time::sleep(EVERY).await;
+        }
+    });
 }
 
 /// Turn human-named turns into voiceprints. Slow on purpose: it only has to
@@ -466,6 +474,10 @@ fn spawn_enroller(root: PathBuf) {
                 let ingest = recalld::store::open(&pass_root)?;
                 let meaning = recalld::work::open_write(&pass_root)?;
                 let now = chrono::Utc::now();
+                let forgotten = recalld::enrol::forget_unwanted(&meaning)?;
+                if forgotten > 0 {
+                    tracing::info!(forgotten, "enrol: prints forgotten");
+                }
                 let queued = recalld::enrol::derive_jobs(&ingest, &meaning, now, DERIVE)?;
                 let pass = recalld::enrol::write_pass(
                     &meaning,
@@ -490,63 +502,6 @@ fn spawn_enroller(root: PathBuf) {
                 Ok(Ok(_)) => {}
                 Ok(Err(err)) => tracing::warn!(%err, "enrol: pass failed"),
                 Err(err) => tracing::error!(%err, "enrol: task failed"),
-            }
-            tokio::time::sleep(EVERY).await;
-        }
-    });
-}
-
-/// Turn finished diarize results into speaker-split turns (`diarized::decide`).
-/// Small batches on a slow cadence, so a bad verdict is noticed early.
-///
-/// To reverse it, both planes:
-///
-/// ```sql
-/// -- recall.sqlite: un-hide first, so the blocks never become eligible
-/// -- while the originals are hidden.
-/// UPDATE transcript_segments SET hidden_reason = NULL
-///  WHERE hidden_reason = 'diarized (per-mic runner)';
-/// DELETE FROM transcript_segments
-///  WHERE provenance = 'diarized-aligned (per-mic runner)';
-///
-/// -- ingest.sqlite: the declined blocks.
-/// DELETE FROM pass_ledger WHERE kind = 'diarize-segment';
-/// ```
-///
-/// Exact equality: `LIKE 'diarized-aligned (%'` also matches the older
-/// diarized corpus.
-fn spawn_diarized_writer(root: PathBuf) {
-    const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
-    const BATCH: usize = 20;
-    tokio::spawn(async move {
-        loop {
-            let pass_root = root.clone();
-            let done = tokio::task::spawn_blocking(move || {
-                let ingest = recalld::store::open(&pass_root)?;
-                let mut meaning = recalld::work::open_write(&pass_root)?;
-                let now = audiocore::instant::Stamp::now();
-                recalld::diarized::write_pass(&mut meaning, &ingest, &now, BATCH)
-            })
-            .await;
-            match done {
-                // A pass that declines every block is the one most worth seeing.
-                Ok(Ok(pass)) if pass.turns + pass.hidden + pass.kept > 0 => {
-                    tracing::info!(
-                        blocks = pass.blocks,
-                        turns = pass.turns,
-                        hidden = pass.hidden,
-                        kept = pass.kept,
-                        waiting = pass.waiting,
-                        "diarized: written"
-                    );
-                }
-                Ok(Ok(_)) => {}
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "diarized: pass failed");
-                }
-                Err(err) => {
-                    tracing::error!(%err, "diarized: task failed");
-                }
             }
             tokio::time::sleep(EVERY).await;
         }
@@ -588,54 +543,6 @@ fn spawn_speech_scanner(root: PathBuf) {
                     tokio::time::sleep(BACKOFF).await;
                 }
             }
-        }
-    });
-}
-
-/// Turn stored transcriptions into turns, for clips that have none. Hides the
-/// live guesses on its span (`live-reconciled`). Small batches, slow cadence.
-///
-/// To reverse it, both planes:
-///
-/// ```sql
-/// DELETE FROM transcript_segments WHERE provenance = 'per-mic (runner)';
-/// DELETE FROM pass_ledger WHERE kind = 'transcribe-segment';
-/// ```
-fn spawn_turn_writer(root: PathBuf) {
-    const EVERY: std::time::Duration = std::time::Duration::from_mins(2);
-    const BATCH: usize = 20;
-    tokio::spawn(async move {
-        loop {
-            let pass_root = root.clone();
-            let done = tokio::task::spawn_blocking(move || {
-                let ingest = recalld::store::open(&pass_root)?;
-                let mut meaning = recalld::work::open_write(&pass_root)?;
-                let now = audiocore::instant::Stamp::now();
-                recalld::turns::write_pass(&mut meaning, &ingest, &now, BATCH)
-            })
-            .await;
-            match done {
-                // An all-loops clip writes and refuses nothing, but says the
-                // audio is bad.
-                Ok(Ok(pass)) if pass.turns + pass.refused + pass.swept > 0 => {
-                    tracing::info!(
-                        blocks = pass.blocks,
-                        turns = pass.turns,
-                        refused = pass.refused,
-                        swept = pass.swept,
-                        barren = pass.barren,
-                        "turns: written"
-                    );
-                }
-                Ok(Ok(_)) => {}
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "turns: pass failed");
-                }
-                Err(err) => {
-                    tracing::error!(%err, "turns: task failed");
-                }
-            }
-            tokio::time::sleep(EVERY).await;
         }
     });
 }

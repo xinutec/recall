@@ -1,8 +1,8 @@
 //! A clip's current model output (#1911), read by its [`ClipId`].
 //!
 //! Model output is re-derivable from the audio, so only the current result is
-//! kept: one per clip and kind, in the job that produced it. A retranscription
-//! replaces it. This is the one place that reaches a job from a clip, and each
+//! kept: one per clip and kind, in the job that produced it. A job run again
+//! keeps it until the new one replaces it. This is the one place that reaches a job from a clip, and each
 //! kind has its own reader, so a result can only be read as what it is.
 
 use audiocore::job::Kind;
@@ -13,9 +13,9 @@ use transcript::{ClipId, Instant};
 
 crate::statements! {
     CURRENT: Ingest =
-        "SELECT j.result, j.done_utc FROM jobs j
+        "SELECT j.result, COALESCE(j.done_utc, j.created_utc) FROM jobs j
          JOIN clips c ON c.filename = j.filename
-         WHERE c.id = ?1 AND j.kind = ?2 AND j.result IS NOT NULL AND j.done_utc IS NOT NULL";
+         WHERE c.id = ?1 AND j.kind = ?2 AND j.result IS NOT NULL";
 }
 
 /// What the model made of a clip.

@@ -771,3 +771,21 @@ fn an_excluded_stretch_shows_nothing_and_says_why_and_a_later_act_inside_it_stan
         .collect();
     assert_eq!(texts, ["toch dit", "echte woorden"]);
 }
+
+#[test]
+fn a_model_line_carries_its_words_and_their_times() {
+    let h = heard(vec![segment(0.0, 2.0, "goede morgen")]);
+    let clip = clip();
+    let out = render(&Input {
+        clip: &clip,
+        heard: Some(&h),
+        voices: None,
+        speech: &Speech::default(),
+        edits: &[],
+        enrolled: &[],
+    });
+    let line = &out.lines[0];
+    let joined: String = line.words().iter().map(|(_, w)| w.as_str()).collect();
+    assert_eq!(joined.trim(), line.text());
+    assert_eq!(line.words()[1].0, span(1.0, 2.0));
+}

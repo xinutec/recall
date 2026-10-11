@@ -23,8 +23,12 @@ use rusqlite::{Connection, OptionalExtension};
 crate::statements! {
     REQUEUE: Ingest =
         "UPDATE jobs SET state = 'queued', leased_until = NULL, done_utc = NULL,
-                             result = NULL, attempts = 0
+                             attempts = 0
              WHERE kind = ?1 AND filename = ?2 AND done_utc IS NOT NULL";
+    /// A re-run taken back while waiting: done again, with the result it kept.
+    KEEP_RESULT: Ingest =
+        "UPDATE jobs SET state = 'done', done_utc = ?2, leased_until = NULL
+         WHERE kind = ?3 AND filename = ?1 AND done_utc IS NULL AND result IS NOT NULL";
     REQUEST: Ingest =
         "INSERT OR REPLACE INTO retranscribe_requests (filename, requested_utc)
              VALUES (?1, ?2)";
@@ -211,8 +215,8 @@ impl From<rusqlite::Error> for UndoError {
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Undone {
-    /// The request was still waiting: dropped, and the old lines never moved.
-    /// A new transcription that lands later is not written.
+    /// The request was still waiting: dropped, and the job done again with the
+    /// result it kept all along.
     Cancelled,
     /// The new lines gave way to the ones set aside.
     Restored,
@@ -224,6 +228,25 @@ pub enum Undone {
 /// # Errors
 /// [`UndoError::Missing`] or [`UndoError::NothingSetAside`]; on database
 /// failure, nothing changes.
+/// Take back a request still waiting, `true` if there was one: the job is
+/// done again with the result it kept.
+///
+/// # Errors
+/// If the ingest plane refuses.
+pub fn cancel(
+    ingest: &Connection,
+    filename: &str,
+    now: &audiocore::instant::Stamp,
+) -> rusqlite::Result<bool> {
+    let tx = crate::sql::write_shared(ingest)?;
+    if DROP_REQUEST.execute(&tx, [filename])? == 0 {
+        return Ok(false);
+    }
+    KEEP_RESULT.execute(&tx, (filename, now.to_string(), Kind::TranscribeSegment))?;
+    tx.commit()?;
+    Ok(true)
+}
+
 pub fn undo(
     meaning: &mut Connection,
     ingest: &Connection,
@@ -268,7 +291,7 @@ pub fn undo(
 
 // --- the HTTP surface --------------------------------------------------------
 
-use crate::{reads, route, work};
+use crate::{reads, route};
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -282,11 +305,6 @@ pub const MAX_PER_REQUEST: usize = 1000;
 #[derive(Deserialize)]
 pub struct RequestIn {
     filenames: Vec<String>,
-}
-
-#[derive(Deserialize)]
-pub struct UndoIn {
-    filename: String,
 }
 
 pub async fn request_route(
@@ -330,22 +348,30 @@ pub async fn candidates_route(
     .await
 }
 
+#[derive(Deserialize)]
+pub struct UndoIn {
+    filename: String,
+}
+
+/// A request still waiting is cancelled. A finished one is gone for good: a
+/// clip keeps only its current result, so there is no older one to restore.
 pub async fn undo_route(State(st): State<Arc<reads::State>>, Json(body): Json<UndoIn>) -> Response {
     let root = st.root.clone();
-    let undone = tokio::task::spawn_blocking(move || {
-        let mut meaning = work::open_write(&root)?;
-        let ingest = crate::store::open(&root)?;
-        undo(&mut meaning, &ingest, &body.filename)
+    let cancelled = tokio::task::spawn_blocking(move || {
+        cancel(
+            &crate::store::open(&root)?,
+            &body.filename,
+            &audiocore::instant::Stamp::now(),
+        )
     });
-    match undone.await {
-        Ok(Ok(done)) => Json(done).into_response(),
-        Ok(Err(UndoError::Missing)) => (StatusCode::NOT_FOUND, "no such clip").into_response(),
-        Ok(Err(UndoError::NothingSetAside)) => (
-            StatusCode::BAD_REQUEST,
-            "nothing of this clip was set aside: never transcribed again, or already taken back",
+    match cancelled.await {
+        Ok(Ok(true)) => Json(Undone::Cancelled).into_response(),
+        Ok(Ok(false)) => (
+            StatusCode::GONE,
+            "a re-transcription replaces the clip's result; there is no older one to restore",
         )
             .into_response(),
-        Ok(Err(UndoError::Db(err))) => route::faulted("retranscribe undo", &err),
+        Ok(Err(err)) => route::faulted("retranscribe undo", &err),
         Err(err) => route::faulted("retranscribe undo task", &err),
     }
 }

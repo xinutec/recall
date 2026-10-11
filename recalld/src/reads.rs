@@ -1,20 +1,18 @@
-//! The browsing read routes over the meaning plane, on read-only connections.
-//! The exported structs generate the Angular app's types.
+//! The browsing read routes over the rendered view (`view`), on read-only
+//! connections. The exported structs generate the Angular app's types.
 
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::turn_store::{HiddenKind, Provenance, Stage};
+use crate::turn_store::{HiddenKind, Stage};
 
-/// Current turns with their source. LEFT JOIN: a correction can exist with no
-/// audio segment.
+/// The shown lines; with `?1`, the model text render left out too.
 macro_rules! current {
     () => {
-        "SELECT t.*, a.source_id FROM transcript_segments t \
-         LEFT JOIN audio_segments a ON t.audio_segment_id = a.id \
-         WHERE t.superseded_by IS NULL AND (?1 OR t.hidden_reason IS NULL) \
+        "SELECT t.* FROM rendered_lines t \
+         WHERE (?1 OR t.hidden_reason IS NULL) \
            AND t.start_utc < COALESCE(?3, '9999') AND t.start_utc > COALESCE(?4, '')"
     };
 }
@@ -27,22 +25,15 @@ macro_rules! ties {
 
 crate::statements! {
     SEARCH: Meaning =
-        "SELECT ts.*, a.source_id FROM transcript_segments ts \
-         JOIN transcript_fts ON transcript_fts.rowid = ts.id \
-         LEFT JOIN audio_segments a ON a.id = ts.audio_segment_id \
-         WHERE transcript_fts MATCH ?1 AND ts.superseded_by IS NULL \
-           AND ts.hidden_reason IS NULL \
-         ORDER BY ts.start_utc \
+        "SELECT t.* FROM rendered_lines t \
+         JOIN rendered_fts ON rendered_fts.rowid = t.id \
+         WHERE rendered_fts MATCH ?1 AND t.hidden_reason IS NULL \
+         ORDER BY t.start_utc \
          LIMIT ?2";
-    SUPERSEDED_BY: Meaning =
-        "SELECT superseded_by FROM transcript_segments WHERE id = ?1";
-    BY_ID: Meaning =
-        "SELECT t.*, a.source_id FROM transcript_segments t \
-         LEFT JOIN audio_segments a ON a.id = t.audio_segment_id WHERE t.id = ?1";
+    BY_ID: Meaning = "SELECT t.* FROM rendered_lines t WHERE t.id = ?1";
     REVIEW: Meaning =
-        "SELECT t.*, a.source_id FROM transcript_segments t \
-         LEFT JOIN audio_segments a ON a.id = t.audio_segment_id \
-         WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL \
+        "SELECT t.* FROM rendered_lines t \
+         WHERE t.hidden_reason IS NULL \
            AND (t.asr_confidence IS NULL OR t.asr_confidence < ?1) \
          ORDER BY t.asr_confidence IS NOT NULL, t.asr_confidence ASC, t.start_utc \
          LIMIT ?2";
@@ -55,9 +46,9 @@ crate::statements! {
     PAGE_OLDEST: Meaning =
         current!(), " ORDER BY t.start_utc ASC, t.id ASC LIMIT ?5";
     SOURCE_PAGE_NEWEST: Meaning =
-        current!(), " AND a.source_id = ?2 ORDER BY t.start_utc DESC, t.id DESC LIMIT ?5";
+        current!(), " AND t.source_id = ?2 ORDER BY t.start_utc DESC, t.id DESC LIMIT ?5";
     SOURCE_PAGE_OLDEST: Meaning =
-        current!(), " AND a.source_id = ?2 ORDER BY t.start_utc ASC, t.id ASC LIMIT ?5";
+        current!(), " AND t.source_id = ?2 ORDER BY t.start_utc ASC, t.id ASC LIMIT ?5";
     // The rest of a page's last instant: ?5 the instant, ?6 the ids already
     // on the page as a JSON array.
     TIES_NEWEST: Meaning =
@@ -65,9 +56,9 @@ crate::statements! {
     TIES_OLDEST: Meaning =
         current!(), ties!(), " ORDER BY t.id ASC";
     SOURCE_TIES_NEWEST: Meaning =
-        current!(), " AND a.source_id = ?2", ties!(), " ORDER BY t.id DESC";
+        current!(), " AND t.source_id = ?2", ties!(), " ORDER BY t.id DESC";
     SOURCE_TIES_OLDEST: Meaning =
-        current!(), " AND a.source_id = ?2", ties!(), " ORDER BY t.id ASC";
+        current!(), " AND t.source_id = ?2", ties!(), " ORDER BY t.id ASC";
 }
 
 /// One turn as the app shows it. Absent values serialise as `null`: a null
@@ -119,13 +110,12 @@ pub struct Segment {
     pub text: String,
     pub language: Option<String>,
     pub asr_confidence: Option<f64>,
-    pub loudness: Option<f64>,
     pub asr_model: Option<String>,
     pub speaker_label: Option<String>,
     pub speaker_guess: Option<String>,
     pub speaker_score: Option<f64>,
     pub speaker_cluster: Option<String>,
-    pub provenance: Option<String>,
+    pub tier: Stage,
     pub hidden_reason: Option<String>,
     pub source_id: Option<String>,
     pub audio_segment_id: Option<i64>,
@@ -141,33 +131,26 @@ impl Segment {
             text: row.get("text")?,
             language: row.get("language")?,
             asr_confidence: row.get("asr_confidence")?,
-            loudness: row.get("loudness")?,
             asr_model: row.get("asr_model")?,
             speaker_label: row.get("speaker_label")?,
             speaker_guess: row.get("speaker_guess")?,
             speaker_score: row.get("speaker_score")?,
             speaker_cluster: row.get("speaker_cluster")?,
-            provenance: row.get("provenance")?,
+            tier: {
+                let stored: String = row.get("tier")?;
+                Stage::parse(&stored).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        format!("unknown tier {stored:?}").into(),
+                    )
+                })?
+            },
             hidden_reason: row.get("hidden_reason")?,
             source_id: row.get("source_id")?,
             audio_segment_id: row.get("audio_segment_id")?,
             words_checked: row.get::<_, Option<i64>>("words_checked")? == Some(1),
         })
-    }
-
-    /// How much processing this turn has had. An unknown provenance is logged
-    /// and read as none.
-    fn tier(&self) -> Stage {
-        let provenance = self.provenance.as_deref().and_then(|raw| {
-            raw.parse::<Provenance>()
-                .inspect_err(|err| tracing::warn!(id = self.id, %err, "turn provenance"))
-                .ok()
-        });
-        Stage::of(
-            self.asr_model.as_deref(),
-            provenance.as_ref(),
-            self.speaker_cluster.is_some(),
-        )
     }
 }
 
@@ -201,9 +184,10 @@ pub fn to_out_with(
         speaker_confirmed: confirmed,
         speaker_confidence,
         confidence: segment.asr_confidence,
-        loudness: segment.loudness,
+        // Nothing has measured it since July.
+        loudness: None,
         model: segment.asr_model.clone(),
-        tier: segment.tier(),
+        tier: segment.tier,
         hidden: segment.hidden_reason.clone(),
         hidden_as: segment.hidden_reason.as_deref().map(HiddenKind::of),
         audio_url: format!("/api/audio/{}", segment.id),
@@ -260,35 +244,16 @@ fn fts_query(typed: &str) -> String {
         .join(" ")
 }
 
-/// The current version of a turn, following the supersede chain, so a deep
-/// link shows what is true now. Guarded against cycles: several passes write
-/// `superseded_by`.
+/// A line by id. A re-render keeps the id of a line whose span did not
+/// change; one that changed is gone.
 pub fn current_version(conn: &Connection, id: i64) -> rusqlite::Result<Option<TranscriptOut>> {
-    let mut seen = std::collections::HashSet::new();
-    let mut at = id;
-    loop {
-        if !seen.insert(at) {
-            return Ok(None);
-        }
-        let next: Option<Option<i64>> = SUPERSEDED_BY
-            .query_row(conn, [at], |r| r.get(0))
-            .optional()?;
-        match next {
-            None => return Ok(None), // no such turn
-            Some(None) => break,     // `at` is the live one
-            Some(Some(newer)) => at = newer,
-        }
-    }
-    let mut stmt = BY_ID.prepare(conn)?;
-    let mut rows = stmt.query([at])?;
-    let Some(row) = rows.next()? else {
-        return Ok(None);
-    };
-    Ok(Some(to_out(&Segment::from_row(row)?)))
+    BY_ID
+        .query_row(conn, [id], Segment::from_row)
+        .optional()
+        .map(|found| found.as_ref().map(to_out))
 }
 
-/// Turns by id, resolved to their current versions, in the order asked and
-/// deduplicated (several ids can resolve to one turn).
+/// Lines by id, in the order asked and deduplicated.
 pub fn transcripts(conn: &Connection, ids: &[i64]) -> rusqlite::Result<ItemsOut> {
     let mut items = Vec::new();
     let mut seen = std::collections::HashSet::new();
