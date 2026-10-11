@@ -15,7 +15,6 @@ function line(id: number, source: string, text: string): Transcript {
     speakerConfirmed: true,
     speakerConfidence: null,
     confidence: 0.9,
-    loudness: 0.01,
     model: 'diarized',
     tier: 'diarized',
     hidden: null,

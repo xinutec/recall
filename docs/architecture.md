@@ -87,21 +87,26 @@ Only the recording has to survive. Everything derived may be recomputed.
 | system of record | why it cannot be recomputed |
 |---|---|
 | the audio | requirement 1 |
-| human corrections | a person listened and typed; the enrolment seed |
-| enrolled speakers and voiceprints | seeded from corrections and confirmed turns |
+| the edit log | what people did: words, names, nobody spoke, left out, voice names, languages |
+| enrolled speakers and voiceprints | learnt from the stretches people named |
 | vocabulary terms | hand-managed proper nouns |
 
-Transcripts, alignments, embeddings and speaker guesses are derived views.
-They are versioned, never overwritten: a better pass supersedes or hides, and
-the history stays. Re-transcription is on demand, triggered by a measured win
-on the golden ASR check, never by a calendar.
+Model output is derived: each clip keeps its current transcription and
+diarization, and a re-run replaces them. The lines shown are a function of
+them, the edit log and the voiceprints (`transcript::render`), cached per clip
+in `rendered_lines` and rebuilt when an input changes. Nothing a person did is
+stored on a line, so a new result never overwrites it. Re-transcription is on
+demand, triggered by a measured win on the golden ASR check, never by a
+calendar.
 
 ## Two planes, two databases
 
 `ingest.sqlite` is the **audio plane**: one row per delivered blob, speech
 seconds per blob, the job queue and the passes' ledger, and the retired room
-stream's tables. `recall.sqlite` is the **meaning plane**: sources, audio segments,
-turns, corrections, speakers and voiceprints, and the FTS index. recalld owns
+stream's tables. `recall.sqlite` is the **meaning plane**: sources, audio
+segments, the edit log, the rendered lines and their search index, the live
+feed's lines, speakers and voiceprints. Nothing reads the tables the rendered
+view replaced; they stay until a backup cycle has them. recalld owns
 both; the schema of the second is a migration ladder
 (`recalld::meaning_schema`), that of the first one `ensure`
 (`recalld::ingest_schema`). Every instant in the meaning plane is text in one
@@ -118,11 +123,11 @@ stream often open in the same second. The types (`ClipId`, `SourceId`,
 `Instant`, `Span`) live in the `transcript` crate, which may do no IO
 (`scripts/check_pure_crate.py`).
 
-Every write to the turn table goes through `recalld::turn_store`, a test fails
-the build otherwise. It owns the typed provenance, the stage the app shows
-(live, transcribed, diarized, corrected) and the rule for what a person owns:
-a turn they corrected or named. No pass hides such a turn or writes over its
-span.
+Lines are made in one place, `transcript::render`, and stored in one,
+`recalld::view`. What a person did is an act in `edits` (`recalld::edit_log`),
+append-only: a change of mind is a later act or a retraction. A person's act
+owns its span; the model's words under it give way, kept as hidden rows with
+the act that dropped them, so taking the act back shows them again.
 
 A recording machine keeps no database of meaning. Beside its segments,
 `audiod` appends the capture log (`capture-events.jsonl`, the format in
@@ -185,52 +190,48 @@ recorders, the Mac and the browser. It owns:
   missed enqueue cannot strand audio. A lease is time-bounded; a runner that
   dies lets it lapse; a job nobody finishes is retired after three leases. Kinds:
   `transcribe-segment` and `diarize-segment` for every microphone clip and
-  uploaded meeting, `enroll-speaker` for turns a person has named. Enrolment outranks capture time in the lease, or a label would wait
+  uploaded meeting, `enroll-speaker` for stretches a person has named.
+  Enrolment outranks capture time in the lease, or a label would wait
   behind days of backlog.
-- **The passes.** `turns` writes the transcript of a clip that has none;
-  `diarized` aligns the words to the speaker spans and labels the turns that
-  exist, or replaces them with speaker-split ones, and never writes fewer turns
-  than it hides; `enrol` turns a named turn into a voiceprint; `rematch`
-  re-derives speaker guesses when the voiceprints have grown. Every terminal
-  decision that writes nothing leaves a ledger row, or the clip sits at the
-  head of the queue for ever. Every row a pass writes carries a provenance that
-  names the pass, so a pass can be taken back. Job kinds are one enum
-  (`audiocore::job::Kind`) shared with the runner.
+- **The passes.** `view` renders every clip whose inputs moved (its results,
+  its speech measurement, the newest act on it or its session, the
+  voiceprints), and every clip once at start, since render's rules may have
+  changed with the binary; a person's act renders its clip before the reply.
+  `enrol` turns a person's naming into a voiceprint and forgets one whose
+  naming was taken back or renamed. `registrar` gives a microphone clip the
+  audio row its lines hang from. Every terminal decision that writes nothing
+  leaves a ledger row, or the clip sits at the head of the queue for ever. Job
+  kinds are one enum (`audiocore::job::Kind`) shared with the runner.
 - **The browsing API and the app.** Timeline, search, playback, corrections,
   sessions, labels, the capture control, behind the Nextcloud sign-in. The
   frontend's types are generated from the route structs (`ts-rs`); the gate
   fails on drift.
 
-Quality rules run where rows are written: a repetition loop or a wordless turn
-is refused at the write (`audiocore::text`, shared with the doctor so both
-judge the same text the same way); so is a phrase Whisper writes over
-silence ("Thank you.", video sign-offs) where the clip heard no speech: none
-inside the line's own span, or under a second in the whole minute
-(`recalld::quality::Heard::invented`); a whole-clip
-language outside the
-household's two zeroes a turn's confidence rather than hiding it. Confidence,
+Quality rules are render's: a repetition loop, wordless text, or a phrase
+Whisper writes over silence ("Thank you.", video sign-offs) where the clip
+heard no speech (none inside its own span, or under a second in the whole
+minute) is left out, kept as a hidden row with its reason (`transcript::text`,
+`transcript::quality`). A whole-clip language outside the household's two zeroes a line's
+confidence rather than hiding it. Confidence,
 length and the language label alone are never grounds to hide: the commonest
 low-confidence turns are quiet real agreement, and most turns labelled a
 foreign language are Dutch and English mislabelled.
 
-### Text is written once
+### A sentence breaks where a person said so
 
-A direction, not yet the whole rule: a pass that attributes may split a turn
-or label it, and may not rewrite its text to do so. Every serious data loss here
-was a metadata pass that hid text to deliver a label. What ships: a pass that
-would write fewer turns than it hides labels instead (`Swap::Attribute`), and a
-proven, unwired split (`diarized::split_at_speaker_changes`). `Swap::Replace`
-still exists for the rest.
+Inside a model segment a sentence goes to whoever speaks most of it: a
+diarized boundary is approximate to a word, so a change inside a sentence is
+jitter. A person's naming is not: where they named part of a sentence, it
+breaks there.
 
 ### Transcribing a clip again
 
-The turns pass writes a clip once. A clip whose words are wrong (a Whisper
-loop, #1764) is asked for again by name (`retranscribe`, `recall-cli
-retranscribe`): its transcription goes back in the queue, and when the new words
-land the pass sets the clip's machine lines aside (hidden, not deleted) and
-writes the new ones around every span a person owns. The speaker pass waits for
-those lines: released earlier, it writes its own lines onto an empty clip and
-the turns pass then skips it. A request can be taken back, before or after.
+A clip whose words are wrong (a Whisper loop) is asked for again by name
+(`retranscribe`, `recall-cli retranscribe`): its transcription goes back in the
+queue keeping its result, so the clip shows its old words until the new ones
+land and render replaces them; a person's acts stand over either. A request
+still waiting can be taken back. A finished one cannot: only the current
+result is kept.
 
 ### Speaker attribution: identification, not diarization
 

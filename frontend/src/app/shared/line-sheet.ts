@@ -29,7 +29,7 @@ export interface LineSheetData {
   readonly alternates: readonly Transcript[];
 }
 
-export interface Word {
+export interface WordSpan {
   readonly text: string;
   /** Code-point offsets, end exclusive, as the server counts them; not UTF-16
    *  units. */
@@ -37,9 +37,9 @@ export interface Word {
   readonly end: number;
 }
 
-export function wordsOf(text: string): Word[] {
+export function wordsOf(text: string): WordSpan[] {
   const chars = Array.from(text);
-  const out: Word[] = [];
+  const out: WordSpan[] = [];
   let start = -1;
   for (let i = 0; i <= chars.length; i++) {
     const space = i === chars.length || /\s/.test(chars[i]);

@@ -1,24 +1,9 @@
-//! Transcribing a clip again, without losing what a person did to it.
-//!
-//! The turns pass writes a clip once: a clip with lines is skipped. A clip whose
-//! lines are wrong (a Whisper loop, #1764) therefore needs a request, which
-//! does three things in order:
-//!
-//! 1. [`request`] puts the clip's transcription job back in the queue and
-//!    records the request. The speaker pass leaves a requested clip alone.
-//! 2. When the new words arrive, the turns pass sets the clip's machine lines
-//!    aside ([`HiddenReason::SetAside`]) and writes the new ones around every
-//!    span a person owns, in one transaction.
-//! 3. [`written`] then drops the request and the speaker pass's ledger row, so
-//!    speakers are added to the NEW lines. Releasing it earlier lets the speaker
-//!    pass write its own lines onto an empty clip first, which the turns pass
-//!    then skips.
-//!
-//! Nothing is deleted: [`undo`] hides the new lines and shows the old ones.
+//! Transcribing a clip again. A clip keeps only its current result, so a
+//! request is the job itself, queued again: it keeps showing its result until
+//! the new one replaces it, and a request still waiting can be taken back.
 
-use crate::turn_store::{self, HiddenReason};
 use audiocore::job::Kind;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 crate::statements! {
     REQUEUE: Ingest =
@@ -29,31 +14,9 @@ crate::statements! {
     KEEP_RESULT: Ingest =
         "UPDATE jobs SET state = 'done', done_utc = ?2, leased_until = NULL
          WHERE kind = ?3 AND filename = ?1 AND done_utc IS NULL AND result IS NOT NULL";
-    REQUEST: Ingest =
-        "INSERT OR REPLACE INTO retranscribe_requests (filename, requested_utc)
-             VALUES (?1, ?2)";
     CANDIDATES: Ingest =
         "SELECT j.filename, j.result FROM jobs j
-         WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM retranscribe_requests r WHERE r.filename = j.filename)";
-    IS_REQUESTED: Ingest =
-        "SELECT 1 FROM retranscribe_requests WHERE filename = ?1";
-    /// The request's time and the transcription job's current result and finish.
-    REQUESTED_RESULT: Ingest =
-        "SELECT r.requested_utc, j.done_utc, j.result FROM retranscribe_requests r
-         LEFT JOIN jobs j ON j.filename = r.filename AND j.kind = ?2
-         WHERE r.filename = ?1";
-    CLEAR_LEDGER: Ingest =
-        "DELETE FROM pass_ledger WHERE kind = ?1 AND filename = ?2";
-    DROP_REQUEST: Ingest =
-        "DELETE FROM retranscribe_requests WHERE filename = ?1";
-    SEGMENT: Ingest =
-        "SELECT source, start_utc FROM segments WHERE filename = ?1";
-    AUDIO_SEGMENT: Meaning =
-        "SELECT id FROM audio_segments WHERE source_id = ?1 AND start_utc = ?2";
-    SET_ASIDE: Meaning =
-        "SELECT count(*) FROM transcript_segments
-         WHERE audio_segment_id = ?1 AND hidden_reason = ?2 AND superseded_by IS NULL";
+         WHERE j.kind = ?1 AND j.done_utc IS NOT NULL AND j.result IS NOT NULL";
 }
 
 /// What [`request`] did with each name it was given.
@@ -69,11 +32,7 @@ pub struct Requested {
 ///
 /// # Errors
 /// If the ingest plane refuses; each clip is one transaction.
-pub fn request(
-    ingest: &Connection,
-    filenames: &[String],
-    now: &audiocore::instant::Stamp,
-) -> rusqlite::Result<Requested> {
+pub fn request(ingest: &Connection, filenames: &[String]) -> rusqlite::Result<Requested> {
     let mut out = Requested::default();
     for filename in filenames {
         let tx = crate::sql::write_shared(ingest)?;
@@ -82,8 +41,6 @@ pub fn request(
             out.skipped.push(filename.clone());
             continue;
         }
-        CLEAR_LEDGER.execute(&tx, (Kind::TranscribeSegment, filename))?;
-        REQUEST.execute(&tx, (filename, now.to_string()))?;
         tx.commit()?;
         out.queued.push(filename.clone());
     }
@@ -148,86 +105,15 @@ pub fn candidates(ingest: &Connection, min_speech_s: f64) -> rusqlite::Result<Ve
     Ok(out)
 }
 
-/// Whether `filename` is waiting to be transcribed again.
-///
-/// # Errors
-/// If the ingest plane refuses.
-pub fn is_requested(ingest: &Connection, filename: &str) -> rusqlite::Result<bool> {
-    Ok(IS_REQUESTED
-        .query_row(ingest, [filename], |r| r.get::<_, i64>(0))
-        .optional()?
-        .is_some())
-}
-
-/// A requested clip's new transcription, if it finished after the request. A
-/// request can land mid-pass, after the pass read the old result; writing that
-/// would drop the request and lose the new one.
-pub fn fresh_result(ingest: &Connection, filename: &str) -> rusqlite::Result<Option<String>> {
-    let row: Option<(String, Option<String>, Option<String>)> = REQUESTED_RESULT
-        .query_row(
-            ingest,
-            rusqlite::params![filename, Kind::TranscribeSegment],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .optional()?;
-    let Some((requested, Some(done), Some(result))) = row else {
-        return Ok(None);
-    };
-    let (Some(requested), Some(done)) = (
-        audiocore::instant::parse_utc(&requested),
-        audiocore::instant::parse_utc(&done),
-    ) else {
-        return Ok(None);
-    };
-    Ok((done >= requested).then_some(result))
-}
-
-/// The turns pass has written the new lines (or found nothing to write): drop
-/// the request and let the speaker pass decide the clip again.
-///
-/// # Errors
-/// If the ingest plane refuses.
-pub fn written(ingest: &Connection, filename: &str) -> rusqlite::Result<()> {
-    let tx = crate::sql::write_shared(ingest)?;
-    DROP_REQUEST.execute(&tx, [filename])?;
-    CLEAR_LEDGER.execute(&tx, (Kind::DiarizeSegment, filename))?;
-    tx.commit()
-}
-
-/// Why a re-transcription could not be taken back.
-#[derive(Debug)]
-pub enum UndoError {
-    /// No clip by that name, or its audio is not registered.
-    Missing,
-    /// Nothing of this clip was set aside: it was never transcribed again, or
-    /// it was already taken back.
-    NothingSetAside,
-    Db(rusqlite::Error),
-}
-
-impl From<rusqlite::Error> for UndoError {
-    fn from(err: rusqlite::Error) -> Self {
-        Self::Db(err)
-    }
-}
-
-/// What [`undo`] did.
+/// What a take-back did.
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Undone {
-    /// The request was still waiting: dropped, and the job done again with the
-    /// result it kept all along.
+    /// The request was still waiting: the job is done again with the result
+    /// it kept all along.
     Cancelled,
-    /// The new lines gave way to the ones set aside.
-    Restored,
 }
 
-/// Take a re-transcription back: the machine lines written since give way and
-/// the ones set aside show again. A person's lines are untouched either way.
-///
-/// # Errors
-/// [`UndoError::Missing`] or [`UndoError::NothingSetAside`]; on database
-/// failure, nothing changes.
 /// Take back a request still waiting, `true` if there was one: the job is
 /// done again with the result it kept.
 ///
@@ -238,55 +124,7 @@ pub fn cancel(
     filename: &str,
     now: &audiocore::instant::Stamp,
 ) -> rusqlite::Result<bool> {
-    let tx = crate::sql::write_shared(ingest)?;
-    if DROP_REQUEST.execute(&tx, [filename])? == 0 {
-        return Ok(false);
-    }
-    KEEP_RESULT.execute(&tx, (filename, now.to_string(), Kind::TranscribeSegment))?;
-    tx.commit()?;
-    Ok(true)
-}
-
-pub fn undo(
-    meaning: &mut Connection,
-    ingest: &Connection,
-    filename: &str,
-) -> Result<Undone, UndoError> {
-    let cancelled = DROP_REQUEST.execute(ingest, [filename])?;
-    if cancelled > 0 {
-        return Ok(Undone::Cancelled);
-    }
-    let (source, start): (String, String) = SEGMENT
-        .query_row(ingest, [filename], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?
-        .ok_or(UndoError::Missing)?;
-    let block_start = chrono::DateTime::parse_from_rfc3339(&start)
-        .map_err(|_| UndoError::Missing)?
-        .with_timezone(&chrono::Utc);
-    let audio_id: i64 = AUDIO_SEGMENT
-        .query_row(
-            meaning,
-            rusqlite::params![
-                source,
-                audiocore::instant::python_isoformat_utc(block_start)
-            ],
-            |r| r.get(0),
-        )
-        .optional()?
-        .ok_or(UndoError::Missing)?;
-    let tx = crate::sql::write(meaning)?;
-    let set_aside: i64 = SET_ASIDE.query_row(
-        &tx,
-        rusqlite::params![audio_id, HiddenReason::SetAside.to_string()],
-        |r| r.get(0),
-    )?;
-    if set_aside == 0 {
-        return Err(UndoError::NothingSetAside);
-    }
-    turn_store::hide_machine_turns(&tx, audio_id, &HiddenReason::RetranscriptionUndone)?;
-    turn_store::unhide_all(&tx, audio_id, &HiddenReason::SetAside)?;
-    tx.commit()?;
-    Ok(Undone::Restored)
+    Ok(KEEP_RESULT.execute(ingest, (filename, now.to_string(), Kind::TranscribeSegment))? > 0)
 }
 
 // --- the HTTP surface --------------------------------------------------------
@@ -319,9 +157,8 @@ pub async fn request_route(
             .into_response();
     }
     let root = st.root.clone();
-    let now = audiocore::instant::Stamp::now();
     route::json("retranscribe", move || {
-        request(&crate::store::open(&root)?, &body.filenames, &now)
+        request(&crate::store::open(&root)?, &body.filenames)
     })
     .await
 }

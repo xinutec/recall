@@ -11,9 +11,13 @@
 
 use crate::clips::{self, ClipError};
 use crate::edit_log::{self, LogError};
+use crate::line::{HUMAN_MODEL, LIVE_MODEL, NOBODY_SPOKE, Stage};
 use crate::rendering;
 use crate::results::ResultError;
-use crate::turn_store::{HUMAN_MODEL, HiddenReason, LIVE_MODEL, Stage};
+
+/// The model the `asr` shim loads by default (`recall.asr.DEFAULT_MODEL`). The
+/// queue carries no model, so this copy must match; a test reads `asr.py`.
+pub const SHIM_MODEL: &str = "mlx-community/whisper-large-v3-turbo";
 use audiocore::job::Kind;
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -53,9 +57,7 @@ crate::statements! {
     SET_INPUTS: Meaning =
         "INSERT INTO rendered_clips (clip_id, inputs) VALUES (?1, ?2)
          ON CONFLICT (clip_id) DO UPDATE SET inputs = excluded.inputs";
-    LIVE_TURNS: Meaning =
-        "SELECT id, start_utc, end_utc, text, language FROM transcript_segments
-         WHERE asr_model = ?1 AND superseded_by IS NULL AND hidden_reason IS NULL";
+    LIVE_TURNS: Meaning = "SELECT id, start_utc, end_utc, text, language FROM live_lines";
     OLD_LIVE: Meaning = "SELECT live_id, id FROM rendered_lines WHERE live_id IS NOT NULL";
     DROP_LIVE: Meaning = "DELETE FROM rendered_lines WHERE live_id IS NOT NULL";
 }
@@ -413,7 +415,7 @@ impl Row {
             Some(Speaker::Cluster(_)) | None => (None, None, None),
         };
         let (model, tier, edit) = match line.by() {
-            Author::Model => (crate::turns::SHIM_MODEL, tier, None),
+            Author::Model => (SHIM_MODEL, tier, None),
             Author::Person(id) => (HUMAN_MODEL, Stage::Corrected, Some(id.stored())),
         };
         Ok(Self {
@@ -454,7 +456,7 @@ impl Row {
             Why::Wordless => ("no words".to_owned(), None),
             Why::SilencePhrase => ("a phrase written over silence".to_owned(), None),
             Why::Replaced(id) => ("replaced by a person's words".to_owned(), Some(id.stored())),
-            Why::NoSpeech(id) => (HiddenReason::NobodySpoke.to_string(), Some(id.stored())),
+            Why::NoSpeech(id) => (NOBODY_SPOKE.to_owned(), Some(id.stored())),
             Why::Unintelligible(id) => ("cannot be made out".to_owned(), Some(id.stored())),
             Why::Excluded(id) => ("left out".to_owned(), Some(id.stored())),
         };
@@ -464,7 +466,7 @@ impl Row {
             text: dropped.text.trim().to_owned(),
             language: None,
             confidence: None,
-            model: crate::turns::SHIM_MODEL,
+            model: SHIM_MODEL,
             label: None,
             guess: None,
             score: None,
@@ -518,7 +520,7 @@ impl Row {
 fn live(meaning: &Connection, transcribed: &[(Instant, Instant)]) -> rusqlite::Result<usize> {
     let turns: Vec<(i64, String, String, String, Option<String>)> = LIVE_TURNS
         .prepare(meaning)?
-        .query_map([LIVE_MODEL], |r| {
+        .query_map([], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
         })?
         .collect::<rusqlite::Result<_>>()?;

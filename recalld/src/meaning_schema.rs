@@ -619,6 +619,26 @@ pub const MIGRATIONS: &[&str] = &[
     -- The naming act a voiceprint was learnt from (edits.id).
     ALTER TABLE speaker_embeddings ADD COLUMN source_edit_id INTEGER;
 "#,
+    // v57
+    r#"
+    -- The live feed's provisional lines, shown until a transcribed clip covers
+    -- them (`view`). Moved out of transcript_segments with their ids, which
+    -- rendered_lines.live_id names. created_utc: when it arrived, for the lag.
+    CREATE TABLE live_lines (
+        id          INTEGER PRIMARY KEY,
+        start_utc   TEXT NOT NULL,
+        end_utc     TEXT NOT NULL,
+        text        TEXT NOT NULL,
+        language    TEXT,
+        asr_model   TEXT NOT NULL,
+        created_utc TEXT
+    );
+    CREATE INDEX live_lines_start ON live_lines(start_utc, text);
+    INSERT INTO live_lines (id, start_utc, end_utc, text, language, asr_model, created_utc)
+        SELECT id, start_utc, end_utc, text, language, asr_model, created_utc
+        FROM transcript_segments
+        WHERE asr_model = 'live' AND superseded_by IS NULL AND hidden_reason IS NULL;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

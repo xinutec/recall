@@ -153,7 +153,7 @@ fn line(meaning: &Connection, ingest: &Connection, id: i64) -> Result<Line, Writ
         text,
         hidden,
         edit: edit.map(EditId::from_stored),
-        by_person: model.as_deref() == Some(crate::turn_store::HUMAN_MODEL),
+        by_person: model.as_deref() == Some(crate::line::HUMAN_MODEL),
         label,
         words,
     })
@@ -304,7 +304,7 @@ pub fn undo_no_speech(
     id: i64,
 ) -> Result<(), WriteError> {
     let line = line(meaning, ingest, id)?;
-    let nobody = crate::turn_store::HiddenReason::NobodySpoke.to_string();
+    let nobody = crate::line::NOBODY_SPOKE.to_owned();
     let (Some(true), Some(edit)) = (line.hidden.as_deref().map(|h| h == nobody), line.edit) else {
         return Err(WriteError::NotNobodySpoke(id));
     };
@@ -595,7 +595,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Run a write against both planes off the async runtime.
@@ -738,6 +738,59 @@ pub async fn undo_correction_route(
     {
         Ok(()) => route::ack(),
         Err(response) => response,
+    }
+}
+
+/// A text span, from a character of one line to a character of another,
+/// given to a speaker. Offsets count characters (the app counts UTF-16 units,
+/// the same for BMP text).
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(export, rename = "AssignSpanRequest")]
+#[serde(rename_all = "camelCase")]
+pub struct AssignIn {
+    start_turn: i64,
+    start_char: usize,
+    end_turn: i64,
+    end_char: usize,
+    name: String,
+}
+
+#[derive(Serialize, ts_rs::TS)]
+#[ts(export, rename = "AssignResult")]
+pub struct AssignOut {
+    touched: i64,
+}
+
+pub async fn assign_route(
+    State(st): State<Arc<reads::State>>,
+    Path(source): Path<String>,
+    Json(body): Json<AssignIn>,
+) -> Response {
+    let name = body.name.trim().to_owned();
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, "name required").into_response();
+    }
+    let root = st.root.clone();
+    let assigned = tokio::task::spawn_blocking(move || {
+        let meaning = work::open_write(&root).map_err(WriteError::Db)?;
+        let ingest = crate::store::open(&root).map_err(WriteError::Db)?;
+        assign_span(
+            &meaning,
+            &ingest,
+            &root,
+            &source,
+            (body.start_turn, body.start_char),
+            (body.end_turn, body.end_char),
+            &name,
+        )
+    });
+    match assigned.await {
+        Ok(Ok(touched)) => Json(AssignOut {
+            touched: i64::try_from(touched).unwrap_or(i64::MAX),
+        })
+        .into_response(),
+        Ok(Err(err)) => refused("assign span", err),
+        Err(err) => route::faulted("assign span task", &err),
     }
 }
 

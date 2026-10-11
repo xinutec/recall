@@ -84,8 +84,7 @@ pub fn write_shared(conn: &Connection) -> rusqlite::Result<Transaction<'_>> {
 /// ```
 ///
 /// The text is `concat!`ed, so a shared fragment can be a literal-producing
-/// macro ([`crate::human_owned!`]). The block also defines `STATEMENTS`, the
-/// module's entry in [`ALL`].
+/// macro. The block also defines `STATEMENTS`, the module's entry in [`ALL`].
 #[macro_export]
 macro_rules! statements {
     ($($(#[$meta:meta])* $vis:vis $name:ident: $db:ident = $($part:expr),+;)+) => {
@@ -102,13 +101,10 @@ macro_rules! statements {
 /// Every module's statements, by module name; the schema test also checks
 /// that each module with a `statements!` block is here.
 pub const ALL: &[(&str, &[Sql])] = &[
-    ("assign", crate::assign::STATEMENTS),
     ("audio", crate::audio::STATEMENTS),
-    ("backfill", crate::backfill::STATEMENTS),
     ("capture", crate::capture::STATEMENTS),
     ("clips", crate::clips::STATEMENTS),
     ("devices", crate::devices::STATEMENTS),
-    ("diarized", crate::diarized::STATEMENTS),
     ("edit_log", crate::edit_log::STATEMENTS),
     ("enrol", crate::enrol::STATEMENTS),
     ("identify", crate::identify::STATEMENTS),
@@ -117,22 +113,18 @@ pub const ALL: &[(&str, &[Sql])] = &[
     ("ledger", crate::ledger::STATEMENTS),
     ("legacy_edits", crate::legacy_edits::STATEMENTS),
     ("live_tier", crate::live_tier::STATEMENTS),
-    ("old_uploads", crate::old_uploads::STATEMENTS),
     ("phone_flac", crate::phone_flac::STATEMENTS),
     ("queue", crate::queue::STATEMENTS),
     ("reads", crate::reads::STATEMENTS),
+    ("registrar", crate::registrar::STATEMENTS),
     ("record_health", crate::record_health::STATEMENTS),
-    ("rematch", crate::rematch::STATEMENTS),
     ("rendering", crate::rendering::STATEMENTS),
     ("results", crate::results::STATEMENTS),
     ("retranscribe", crate::retranscribe::STATEMENTS),
     ("sessions", crate::sessions::STATEMENTS),
     ("sources", crate::sources::STATEMENTS),
-    ("shadow", crate::shadow::STATEMENTS),
     ("speech", crate::speech::STATEMENTS),
     ("store", crate::store::STATEMENTS),
-    ("turn_store", crate::turn_store::STATEMENTS),
-    ("turns", crate::turns::STATEMENTS),
     ("view", crate::view::STATEMENTS),
     ("upload", crate::upload::STATEMENTS),
     ("verify", crate::verify::STATEMENTS),

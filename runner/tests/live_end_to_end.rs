@@ -94,7 +94,7 @@ fn publish(port: u16, pcm: &[u8]) {
 fn live_turns(root: &Path) -> Vec<(String, String)> {
     let conn = rusqlite::Connection::open(root.join("recall.sqlite")).expect("open");
     let mut stmt = conn
-        .prepare("SELECT start_utc, text FROM transcript_segments WHERE asr_model = 'live'")
+        .prepare("SELECT start_utc, text FROM live_lines")
         .expect("prepare");
     stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
         .expect("query")
@@ -107,7 +107,7 @@ fn live_turns(root: &Path) -> Vec<(String, String)> {
 fn which_half_failed(root: &Path, agent: &mut std::process::Child, elapsed: Duration) -> String {
     let conn = rusqlite::Connection::open(root.join("recall.sqlite"));
     let rows = conn.as_ref().map_or_else(ToString::to_string, |c| {
-        c.query_row("SELECT COUNT(*) FROM transcript_segments", [], |r| {
+        c.query_row("SELECT COUNT(*) FROM live_lines", [], |r| {
             r.get::<_, i64>(0)
         })
         .map_or_else(|e| e.to_string(), |n| n.to_string())

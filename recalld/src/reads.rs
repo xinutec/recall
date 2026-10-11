@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::turn_store::{HiddenKind, Stage};
+use crate::line::{HiddenKind, Stage};
 
 /// The shown lines; with `?1`, the model text render left out too.
 macro_rules! current {
@@ -76,7 +76,6 @@ pub struct TranscriptOut {
     pub speaker_confirmed: bool,
     pub speaker_confidence: Option<f64>,
     pub confidence: Option<f64>,
-    pub loudness: Option<f64>,
     pub model: Option<String>,
     pub tier: Stage,
     pub hidden: Option<String>,
@@ -184,8 +183,6 @@ pub fn to_out_with(
         speaker_confirmed: confirmed,
         speaker_confidence,
         confidence: segment.asr_confidence,
-        // Nothing has measured it since July.
-        loudness: None,
         model: segment.asr_model.clone(),
         tier: segment.tier,
         hidden: segment.hidden_reason.clone(),

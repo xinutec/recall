@@ -15,7 +15,6 @@ function turn(id: number, speaker: string, cluster: string, text: string): Trans
     speakerConfirmed: true,
     speakerConfidence: null,
     confidence: 0.9,
-    loudness: 0.01,
     model: 'diarized',
     tier: 'diarized',
     hidden: null,

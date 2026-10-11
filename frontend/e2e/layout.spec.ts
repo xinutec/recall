@@ -40,7 +40,6 @@ function turn(
     speakerConfirmed: true,
     speakerConfidence: null,
     confidence: 0.9,
-    loudness: 0.01,
     model: tier,
     tier,
     hidden: null,

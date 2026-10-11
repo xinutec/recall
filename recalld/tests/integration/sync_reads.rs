@@ -110,11 +110,9 @@ fn a_live_turn_records_when_it_was_delivered_not_only_when_it_was_said() {
     .unwrap();
 
     let (said, stored): (String, String) = conn
-        .query_row(
-            "SELECT start_utc, created_utc FROM transcript_segments",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+        .query_row("SELECT start_utc, created_utc FROM live_lines", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .expect("the turn carries both instants");
     assert_eq!(said, "2026-09-09T10:00:00+00:00");
     assert_eq!(
@@ -123,10 +121,14 @@ fn a_live_turn_records_when_it_was_delivered_not_only_when_it_was_said() {
     );
 }
 
-/// The writer fills `transcript_fts`; a missing row is silently unsearchable.
+/// A live turn is searchable once the view shows it: the search index is the
+/// view's.
 #[test]
 fn a_stored_live_turn_is_searchable() {
-    let mut conn = live_store();
+    let dir = tempfile::tempdir().unwrap();
+    let mut conn = recalld::work::open_write(dir.path()).unwrap();
+    recalld::meaning_schema::ensure(&conn).expect("schema");
+    let ingest = recalld::store::open(dir.path()).unwrap();
 
     let stored = ingest_live(
         &mut conn,
@@ -134,21 +136,20 @@ fn a_stored_live_turn_is_searchable() {
         delivered(),
     )
     .unwrap();
+    recalld::view::refresh(&conn, &ingest, dir.path(), false).unwrap();
 
     assert_eq!(stored, 1);
-    let found: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM transcript_fts WHERE transcript_fts MATCH 'hello'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(found, 1, "the turn exists but cannot be searched for");
+    let found = recalld::reads::search(&conn, "hello", 10).unwrap().items;
+    assert_eq!(
+        found.len(),
+        1,
+        "the turn is shown but cannot be searched for"
+    );
 }
 
-/// A re-push neither duplicates a turn nor brings back a reconciled one.
+/// A re-push does not duplicate a turn.
 #[test]
-fn a_repushed_turn_is_skipped_even_once_hidden() {
+fn a_repushed_turn_is_skipped() {
     let mut conn = live_store();
     let turns = [a_turn("2026-09-09T10:00:00+00:00", "same words")];
 
@@ -159,20 +160,8 @@ fn a_repushed_turn_is_skipped_even_once_hidden() {
         "a retry duplicated it"
     );
 
-    // The archive reconciles it away; a later retry must still not bring it back.
-    conn.execute(
-        "UPDATE transcript_segments SET hidden_reason = 'reconciled'",
-        [],
-    )
-    .unwrap();
-
-    assert_eq!(
-        ingest_live(&mut conn, &turns, delivered()).unwrap(),
-        0,
-        "a hidden turn was resurrected"
-    );
     let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM transcript_segments", [], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM live_lines", [], |r| r.get(0))
         .unwrap();
     assert_eq!(total, 1);
 }
@@ -203,9 +192,7 @@ fn a_z_suffixed_time_matches_the_offset_spelling_it_was_stored_as() {
     );
 
     let stored: String = conn
-        .query_row("SELECT start_utc FROM transcript_segments", [], |r| {
-            r.get(0)
-        })
+        .query_row("SELECT start_utc FROM live_lines", [], |r| r.get(0))
         .unwrap();
     assert_eq!(
         stored, "2026-09-09T10:00:00+00:00",
@@ -229,7 +216,7 @@ fn an_unparseable_time_costs_that_turn_and_no_other() {
 
     assert_eq!(stored, 1, "one bad turn must not cost the batch");
     let text: String = conn
-        .query_row("SELECT text FROM transcript_segments", [], |r| r.get(0))
+        .query_row("SELECT text FROM live_lines", [], |r| r.get(0))
         .unwrap();
     assert_eq!(text, "kept");
 }
@@ -299,7 +286,7 @@ fn a_live_turn_that_is_nothing_but_a_household_name_is_refused() {
     // Only a bare name goes.
     assert_eq!(stored, 2, "a name in a sentence must survive");
     let kept: Vec<String> = conn
-        .prepare("SELECT text FROM transcript_segments ORDER BY start_utc")
+        .prepare("SELECT text FROM live_lines ORDER BY start_utc")
         .unwrap()
         .query_map([], |r| r.get(0))
         .unwrap()

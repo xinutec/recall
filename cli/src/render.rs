@@ -3,10 +3,6 @@
 use crate::api::{Conversation, Export, Session, Turn};
 use chrono::{DateTime, Local};
 
-/// Lower bounds of the loudness bands clear and quiet; below is faint.
-const CLEAR_LOUDNESS: f64 = 0.05;
-const QUIET_LOUDNESS: f64 = 0.01;
-
 fn local(iso: &str) -> Option<DateTime<Local>> {
     DateTime::parse_from_rfc3339(iso)
         .ok()
@@ -70,15 +66,6 @@ pub fn hit(turn: &Turn) -> String {
     )
 }
 
-fn clarity(loudness: Option<f64>) -> &'static str {
-    match loudness {
-        None => "unmeasured",
-        Some(l) if l >= CLEAR_LOUDNESS => "clear",
-        Some(l) if l >= QUIET_LOUDNESS => "quiet",
-        Some(_) => "faint",
-    }
-}
-
 /// Attribution for the diagnostic view, tagged confirmed or guess. A confirmed
 /// `SPEAKER_*` is a diarization placeholder, not a name.
 fn who_detail(turn: &Turn) -> String {
@@ -97,32 +84,22 @@ fn who_detail(turn: &Turn) -> String {
 }
 
 /// Every field of specific turns.
-///
-/// `asked` is the ids typed. `/api/transcripts` answers with a turn's current
-/// version, so where the id differs the status names the one it replaced.
 #[must_use]
-pub fn details(asked: &[i64], turns: &[Turn]) -> String {
+pub fn details(turns: &[Turn]) -> String {
     turns
         .iter()
-        .zip(asked.iter().copied().chain(std::iter::repeat(0)))
-        .map(|(t, asked_id)| {
+        .map(|t| {
             #[expect(clippy::cast_precision_loss, reason = "a turn lasts seconds")]
             let duration = local(&t.end)
                 .zip(local(&t.start))
                 .map_or(0.0, |(e, s)| (e - s).num_milliseconds() as f64 / 1000.0);
             let status = match &t.hidden {
                 Some(why) => format!("hidden: {why}"),
-                None if asked_id != 0 && asked_id != t.id => {
-                    format!("current; #{asked_id} was superseded by this")
-                }
                 None => "visible".to_owned(),
             };
             let conf = t
                 .confidence
                 .map_or_else(|| "—".to_owned(), |c| format!("{c:.2}"));
-            let loud = t
-                .loudness
-                .map_or_else(|| "—".to_owned(), |l| format!("{l:.5}"));
             [
                 format!(
                     "#{}  {}-{}  ({duration:.1}s)  [{}]  src={}",
@@ -137,10 +114,7 @@ pub fn details(asked: &[i64], turns: &[Turn]) -> String {
                     who_detail(t),
                     t.cluster.as_deref().unwrap_or("—")
                 ),
-                format!(
-                    "  conf     : {conf}   loudness: {loud} ({})",
-                    clarity(t.loudness)
-                ),
+                format!("  conf     : {conf}"),
                 format!("  model    : {}", t.model.as_deref().unwrap_or("—")),
                 format!("  tier     : {}", t.tier),
                 format!("  status   : {status}"),

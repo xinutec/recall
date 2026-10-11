@@ -22,7 +22,6 @@ function line(id: number, source: string, o: Partial<Transcript> = {}): Transcri
     wordsChecked: false,
     speakerConfidence: null,
     confidence: null,
-    loudness: null,
     model: 'diarized',
     tier: 'diarized',
     hidden: null,

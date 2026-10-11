@@ -6,7 +6,7 @@ import type { Tier } from "./Tier";
  * One turn as the app shows it. Absent values serialise as `null`: a null
  * confidence means a person confirmed it, a number is a guess's strength.
  */
-export type Transcript = { id: number, start: string, end: string, text: string, language: string | null, speaker: string | null, speakerConfirmed: boolean, speakerConfidence: number | null, confidence: number | null, loudness: number | null, model: string | null, tier: Tier, hidden: string | null, 
+export type Transcript = { id: number, start: string, end: string, text: string, language: string | null, speaker: string | null, speakerConfirmed: boolean, speakerConfidence: number | null, confidence: number | null, model: string | null, tier: Tier, hidden: string | null, 
 /**
  * The kind of hide; the app checks this, never `hidden`'s spelling.
  */

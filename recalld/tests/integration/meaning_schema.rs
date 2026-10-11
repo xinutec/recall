@@ -210,11 +210,13 @@ fn words_a_person_typed_or_vouched_for_are_marked_on_their_turn() {
     // marks the person's turn, a speaker fix (the machine's words) does not.
     // A database at rung 49: the top built, then every rung above 49 taken off
     // (v50 words_checked, v51 sources.language, v52 idx_ts_audio, v53 edits,
-    // v54 rendered_lines, v55 its word timings, v56 a print's naming act).
+    // v54 rendered_lines, v55 its word timings, v56 a print's naming act,
+    // v57 live_lines).
     let conn = rusqlite::Connection::open_in_memory().expect("db");
     ensure(&conn).expect("schema");
     conn.execute_batch(
-        "ALTER TABLE speaker_embeddings DROP COLUMN source_edit_id;
+        "DROP TABLE live_lines;
+         ALTER TABLE speaker_embeddings DROP COLUMN source_edit_id;
          DROP TABLE rendered_clips;
          DROP TABLE rendered_fts;
          DROP TABLE rendered_lines;

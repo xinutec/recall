@@ -205,7 +205,7 @@ fn a_live_turn_shows_until_a_transcribed_clip_covers_it() {
     let f = fleet();
     f.meaning
         .execute_batch(
-            "INSERT INTO transcript_segments (start_utc, end_utc, text, asr_model)
+            "INSERT INTO live_lines (start_utc, end_utc, text, asr_model)
              VALUES ('2026-10-04T12:00:30+00:00', '2026-10-04T12:00:32+00:00', 'covered', 'live'),
                     ('2026-10-04T12:05:00+00:00', '2026-10-04T12:05:02+00:00', 'still live', 'live');",
         )
@@ -233,9 +233,8 @@ fn a_clip_run_again_shows_its_words_until_the_new_ones_land_and_a_cancel_keeps_t
     );
     f.refresh();
     let now = audiocore::instant::Stamp::now();
-    let asked =
-        recalld::retranscribe::request(&f.ingest, std::slice::from_ref(&clip.filename), &now)
-            .expect("request");
+    let asked = recalld::retranscribe::request(&f.ingest, std::slice::from_ref(&clip.filename))
+        .expect("request");
     assert_eq!(asked.queued.len(), 1);
 
     f.refresh();
@@ -252,8 +251,7 @@ fn a_clip_run_again_shows_its_words_until_the_new_ones_land_and_a_cancel_keeps_t
         .expect("job");
     assert!(done.is_some(), "done again, with the result it kept");
 
-    recalld::retranscribe::request(&f.ingest, std::slice::from_ref(&clip.filename), &now)
-        .expect("again");
+    recalld::retranscribe::request(&f.ingest, std::slice::from_ref(&clip.filename)).expect("again");
     f.ingest
         .execute(
             "UPDATE jobs SET state = 'done', done_utc = '2026-10-04T13:00:00Z', result = ?2

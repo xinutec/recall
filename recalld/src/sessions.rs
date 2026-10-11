@@ -66,6 +66,9 @@ crate::statements! {
         "DELETE FROM audio_segments WHERE source_id = ?1";
     DROP_SOURCE: Meaning =
         "DELETE FROM sources WHERE id = ?1";
+    /// The session's lines in the table the rendered view replaced, which is
+    /// kept until a backup cycle has it.
+    DROP_OLD_LINES: Meaning = "DELETE FROM transcript_segments WHERE audio_segment_id = ?1";
     /// What people did to the session and its clips, retractions included:
     /// each carries its target's clip or session. `?2`: the clip ids as JSON.
     DROP_SESSION_EDITS: Meaning =
@@ -229,7 +232,6 @@ pub fn set_language(
     root: &std::path::Path,
     source: &str,
     language: Option<&str>,
-    now: &audiocore::instant::Stamp,
 ) -> Result<crate::retranscribe::Requested, SessionError> {
     require_upload(meaning, source)?;
     let id = transcript::SourceId::parse(source).ok_or(SessionError::Missing)?;
@@ -248,7 +250,7 @@ pub fn set_language(
         &id,
         language.and_then(transcript::Language::from_code),
     )?;
-    Ok(crate::retranscribe::request(ingest, &files, now)?)
+    Ok(crate::retranscribe::request(ingest, &files)?)
 }
 
 /// Give a leased transcription job its session's pinned language, at lease
@@ -437,14 +439,7 @@ pub async fn language_route(
     match tokio::task::spawn_blocking(move || {
         let meaning = work::open_write(&root)?;
         let ingest = crate::store::open(&root)?;
-        set_language(
-            &meaning,
-            &ingest,
-            &root,
-            &source,
-            language,
-            &audiocore::instant::Stamp::now(),
-        )
+        set_language(&meaning, &ingest, &root, &source, language)
     })
     .await
     {
@@ -559,7 +554,7 @@ pub fn delete_session(
             DROP_TURN_EMBEDDING.execute(&tx, [turn_id])?;
         }
         DROP_CORRECTIONS.execute(&tx, [audio_id])?;
-        crate::turn_store::delete_for_audio(&tx, *audio_id)?;
+        DROP_OLD_LINES.execute(&tx, [audio_id])?;
     }
     let clips = serde_json::to_string(clips)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;

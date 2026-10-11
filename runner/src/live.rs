@@ -29,7 +29,7 @@ const TAP_FIFO: usize = 1316 * 64;
 pub const TAP_IDLE_US: u64 = 60_000_000;
 
 /// The `asr_model` every live turn is stored under: the tier's name, not the
-/// model's. recalld matches this exact string (`turn_store::LIVE_MODEL`).
+/// model's. recalld matches this exact string (`line::LIVE_MODEL`).
 pub const LIVE_MODEL: &str = "live";
 
 /// Utterances that may wait for the shim. Small, because when transcription

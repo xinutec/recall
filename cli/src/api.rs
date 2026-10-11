@@ -19,7 +19,6 @@ pub struct Turn {
     pub speaker_confirmed: bool,
     pub speaker_confidence: Option<f64>,
     pub confidence: Option<f64>,
-    pub loudness: Option<f64>,
     pub model: Option<String>,
     pub tier: String,
     pub hidden: Option<String>,

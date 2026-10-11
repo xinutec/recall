@@ -608,15 +608,7 @@ fn pinning_a_language_transcribes_the_session_again_and_the_lease_carries_it() {
     let meaning = recalld::work::open_write(root).expect("meaning");
     let ingest = recalld::store::open(root).expect("ingest");
 
-    let requested = set_language(
-        &meaning,
-        &ingest,
-        root,
-        "meeting-1",
-        Some("nl"),
-        &crate::stamp(NOW),
-    )
-    .expect("pinned");
+    let requested = set_language(&meaning, &ingest, root, "meeting-1", Some("nl")).expect("pinned");
 
     assert_eq!(requested.queued.len(), 2);
     assert_eq!(open_jobs(root, "transcribe-segment"), 2);
@@ -651,25 +643,9 @@ fn unpinning_leaves_the_language_to_the_model_again() {
     let root = dir.path();
     let meaning = recalld::work::open_write(root).expect("meaning");
     let ingest = recalld::store::open(root).expect("ingest");
-    set_language(
-        &meaning,
-        &ingest,
-        root,
-        "meeting-1",
-        Some("en"),
-        &crate::stamp(NOW),
-    )
-    .expect("pin");
+    set_language(&meaning, &ingest, root, "meeting-1", Some("en")).expect("pin");
 
-    set_language(
-        &meaning,
-        &ingest,
-        root,
-        "meeting-1",
-        None,
-        &crate::stamp(NOW),
-    )
-    .expect("unpin");
+    set_language(&meaning, &ingest, root, "meeting-1", None).expect("unpin");
 
     assert_eq!(
         recalld::labels_write::language_of(&meaning, "meeting-1").expect("read"),
@@ -697,15 +673,7 @@ fn pinning_the_household_archive_is_refused() {
     source(&meaning, "usb", "coreaudio");
     let ingest = recalld::store::open(root).expect("ingest");
 
-    let err = set_language(
-        &meaning,
-        &ingest,
-        root,
-        "usb",
-        Some("nl"),
-        &crate::stamp(NOW),
-    )
-    .expect_err("must refuse");
+    let err = set_language(&meaning, &ingest, root, "usb", Some("nl")).expect_err("must refuse");
 
     assert!(matches!(err, SessionError::NotAnUpload), "got {err:?}");
     assert_eq!(open_jobs(root, "transcribe-segment"), 0);

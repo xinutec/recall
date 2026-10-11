@@ -75,7 +75,7 @@ fn naming_a_speaker_is_a_speaker_act_only_and_a_check_is_a_checked_words_act() {
     assert_eq!(named.label.as_deref(), Some("Robin"));
     assert_eq!(
         named.model,
-        recalld::turns::SHIM_MODEL,
+        recalld::view::SHIM_MODEL,
         "the words are still the model's"
     );
 

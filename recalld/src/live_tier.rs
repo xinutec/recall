@@ -8,14 +8,11 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::turn_store::LIVE_MODEL;
-
 crate::statements! {
-    NEWEST_LIVE: Meaning =
-        "SELECT max(start_utc) FROM transcript_segments WHERE asr_model = ?1";
+    NEWEST_LIVE: Meaning = "SELECT max(start_utc) FROM live_lines";
     LIVE_LAGS: Meaning =
-        "SELECT created_utc, end_utc FROM transcript_segments \
-         WHERE asr_model = ?1 AND created_utc IS NOT NULL AND end_utc >= ?2";
+        "SELECT created_utc, end_utc FROM live_lines \
+         WHERE created_utc IS NOT NULL AND end_utc >= ?1";
     WINDOW_CLIPS: Meaning =
         "SELECT path, start_utc, end_utc FROM audio_segments \
          WHERE source_id = ?1 AND path IS NOT NULL \
@@ -59,7 +56,7 @@ pub fn live_health(
     );
     let meaning = crate::reads::open(root)?;
     let lags = live_lags(&meaning, &lag_since)?;
-    let newest_turn_utc = NEWEST_LIVE.query_row(&meaning, [LIVE_MODEL], |row| row.get(0))?;
+    let newest_turn_utc = NEWEST_LIVE.query_row(&meaning, [], |row| row.get(0))?;
     let clips = window_clips(&meaning, &window_since, &window_until)?;
     drop(meaning);
 
@@ -128,7 +125,7 @@ pub fn heard(
 /// Seconds between each recent live turn's end and the moment it was stored.
 fn live_lags(conn: &Connection, since: &str) -> rusqlite::Result<Vec<f64>> {
     let mut stmt = LIVE_LAGS.prepare(conn)?;
-    let rows = stmt.query_map(rusqlite::params![LIVE_MODEL, since], |row| {
+    let rows = stmt.query_map([since], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
     let mut lags = Vec::new();

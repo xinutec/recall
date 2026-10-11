@@ -203,7 +203,7 @@ fn show(api: &Api, ids: &[i64]) -> Result<bool, Error> {
         println!("no turns found for {ids:?}");
         return Ok(false);
     }
-    println!("{}", render::details(ids, &turns));
+    println!("{}", render::details(&turns));
     Ok(true)
 }
 

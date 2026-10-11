@@ -54,34 +54,11 @@ enum Task {
     ClipCensus,
     /// Recover the edit log from today's tables and account for every row (#1912).
     EditCensus,
-    /// Render every clip with a stored result and compare with today's lines (#1916).
-    ShadowDiff,
-    /// How render would name the lines a person named, had nobody.
-    ShadowNaming,
-    /// One clip, today's lines beside rendered ones (holds transcript text).
-    ShadowClip {
-        #[arg(long)]
-        id: i64,
-    },
-    /// Queue a transcription for each shown clip with no stored result,
-    /// leaving its lines as they are (`recalld::backfill`).
-    BackfillResults {
-        /// Queue; without this, only say what would be queued.
-        #[arg(long)]
-        apply: bool,
-    },
     /// Fill an empty edit log from today's tables (`recalld::edit_log`).
     SeedEdits,
     /// Render every clip into the rendered view and say what it did
     /// (`recalld::view`).
     RenderView,
-    /// Move the uploads stored before the ingest plane into it
-    /// (`recalld::old_uploads`).
-    MoveOldUploads {
-        /// Move; without this, only say what would be moved.
-        #[arg(long)]
-        apply: bool,
-    },
     /// Whether every stored file matches the size and hash its row recorded,
     /// and every audio row names a file (`recalld::verify`). Reads every byte.
     Verify,
@@ -143,17 +120,6 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
                 recalld::legacy_edits::census(meaning, ingest, root)
             });
         }
-        Task::ShadowDiff => {
-            return report(root, |meaning, ingest| {
-                recalld::shadow::run(meaning, ingest, root)
-            });
-        }
-        Task::BackfillResults { apply } => {
-            return report(root, |meaning, ingest| {
-                ingest.busy_timeout(std::time::Duration::from_mins(2))?;
-                recalld::backfill::queue(meaning, ingest, root, apply)
-            });
-        }
         Task::SeedEdits => {
             return report(root, |meaning, ingest| {
                 let now = transcript::Instant::from_utc(chrono::Utc::now());
@@ -165,25 +131,9 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
                 recalld::view::refresh(meaning, ingest, root, true)
             });
         }
-        Task::MoveOldUploads { apply } => {
-            return report(root, |meaning, ingest| {
-                ingest.busy_timeout(std::time::Duration::from_mins(2))?;
-                recalld::old_uploads::run(root, meaning, ingest, chrono::Utc::now(), apply)
-            });
-        }
         Task::Verify => {
             return report(root, |meaning, ingest| {
                 recalld::verify::run(meaning, ingest, root)
-            });
-        }
-        Task::ShadowNaming => {
-            return report(root, |meaning, ingest| {
-                recalld::shadow::naming(meaning, ingest, root)
-            });
-        }
-        Task::ShadowClip { id } => {
-            return report(root, |meaning, ingest| {
-                recalld::shadow::detail(meaning, ingest, root, id)
             });
         }
     };
@@ -597,7 +547,7 @@ fn spawn_segment_registrar(root: PathBuf) {
                 let ingest = recalld::store::open(&pass_root)?;
                 let meaning = recalld::work::open_write(&pass_root)?;
                 let now = audiocore::instant::Stamp::now();
-                recalld::turns::register_segments(&meaning, &ingest, &pass_root, &now, BATCH)
+                recalld::registrar::register_segments(&meaning, &ingest, &pass_root, &now, BATCH)
             })
             .await;
             match done {

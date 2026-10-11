@@ -242,13 +242,9 @@ fn a_turn_can_be_fetched_by_id_and_dumped() {
 
     let turns = api.transcripts(&[id]).expect("transcripts");
     assert_eq!(turns.len(), 1);
-    let dump = render::details(&[id], &turns);
+    let dump = render::details(&turns);
     assert!(dump.contains("status   : visible"), "got:\n{dump}");
     assert!(dump.contains("src=usb"), "got:\n{dump}");
-    assert!(
-        dump.contains("(unmeasured)"),
-        "nothing measures loudness:\n{dump}"
-    );
 }
 
 #[test]
@@ -287,7 +283,7 @@ fn a_correction_shows_on_the_line_it_corrected() {
     let turns = api.transcripts(&[id]).expect("transcripts");
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].text, "marmalade on the window sill");
-    let dump = render::details(&[id], &turns);
+    let dump = render::details(&turns);
     assert!(!dump.contains("superseded"), "got:\n{dump}");
 }
 

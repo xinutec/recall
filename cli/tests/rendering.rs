@@ -15,7 +15,6 @@ fn turn() -> Turn {
         speaker_confirmed: false,
         speaker_confidence: None,
         confidence: Some(0.5),
-        loudness: None,
         model: Some("whisper".to_owned()),
         tier: "transcribed".to_owned(),
         hidden: None,
@@ -82,36 +81,13 @@ fn a_confirmed_speaker_placeholder_is_not_reported_as_confirmed() {
         speaker_confirmed: true,
         ..turn()
     };
-    let out = details(&[7], std::slice::from_ref(&t));
+    let out = details(std::slice::from_ref(&t));
     assert!(out.contains("who      : unknown"), "got:\n{out}");
 }
 
 #[test]
-fn the_audibility_bands_are_the_labelling_uis() {
-    for (loudness, band) in [
-        (None, "unmeasured"),
-        (Some(0.05), "clear"),
-        (Some(0.01), "quiet"),
-        (Some(0.009), "faint"),
-    ] {
-        let t = Turn { loudness, ..turn() };
-        let out = details(&[7], std::slice::from_ref(&t));
-        assert!(
-            out.contains(&format!("({band})")),
-            "{loudness:?} → {band}:\n{out}"
-        );
-    }
-}
-
-#[test]
-fn a_dump_says_when_the_id_that_answered_is_not_the_one_asked_for() {
-    let out = details(&[3], &[turn()]);
-    assert!(out.contains("#3 was superseded by this"), "got:\n{out}");
-}
-
-#[test]
 fn a_dump_of_the_id_that_was_asked_for_is_plainly_visible() {
-    let out = details(&[7], &[turn()]);
+    let out = details(&[turn()]);
     assert!(out.contains("status   : visible"), "got:\n{out}");
 }
 

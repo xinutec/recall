@@ -409,7 +409,7 @@ fn segment(id: i64, start: i64, end: i64, text: &str) -> recalld::reads::Segment
         speaker_guess: None,
         speaker_score: None,
         speaker_cluster: None,
-        tier: recalld::turn_store::Stage::Transcribed,
+        tier: recalld::line::Stage::Transcribed,
         hidden_reason: None,
         source_id: Some("usb".to_owned()),
         audio_segment_id: None,

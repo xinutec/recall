@@ -68,12 +68,20 @@ fn clip(root: &Path, source_id: &str, name: &str, minute: u32, speech: Option<f6
     }
 }
 
-/// A turn ending 30 s into `minute`, stored `lag_s` after it ended.
+/// A turn ending 30 s into `minute`, stored `lag_s` after it ended: a live one
+/// in the live feed's table, any other where the old archive kept its lines.
 fn turn(conn: &Connection, model: &str, minute: u32, lag_s: i64) {
     let end = at(&format!("2026-09-21T11:{minute:02}:30+00:00"));
+    let table = if model == "live" {
+        "live_lines"
+    } else {
+        "transcript_segments"
+    };
     conn.execute(
-        "INSERT INTO transcript_segments (asr_model, start_utc, end_utc, created_utc, text)
-         VALUES (?1, ?2, ?3, ?4, 'x')",
+        &format!(
+            "INSERT INTO {table} (asr_model, start_utc, end_utc, created_utc, text)
+             VALUES (?1, ?2, ?3, ?4, 'x')"
+        ),
         [
             model,
             &format!("2026-09-21T11:{minute:02}:00+00:00"),

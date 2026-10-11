@@ -70,7 +70,7 @@ pub fn placement(conn: &Connection, transcript_id: i64) -> rusqlite::Result<Opti
     // put it, so it gets the padding.
     let precise = !matches!(
         asr_model.as_deref(),
-        Some(crate::turn_store::HUMAN_MODEL | crate::turn_store::LIVE_MODEL)
+        Some(crate::line::HUMAN_MODEL | crate::line::LIVE_MODEL)
     );
     Ok(Some(Placement {
         path: PathBuf::from(row.get::<_, String>(0)?),

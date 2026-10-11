@@ -19,7 +19,6 @@ function turn(start: string, end: string): Transcript {
     wordsChecked: false,
     speakerConfidence: null,
     confidence: null,
-    loudness: null,
     model: 'live',
     tier: 'live',
     hidden: null,

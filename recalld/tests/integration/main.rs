@@ -8,16 +8,11 @@
     reason = "tests seed and read rows with SQL of their own; the ban is for the daemon"
 )]
 
-mod align;
-mod align_parity;
-mod assign;
 mod audio;
-mod backfill;
 mod capture;
 mod clips;
 mod conversations;
 mod devices;
-mod diarized;
 mod edit_log;
 mod enrol;
 mod fixture;
@@ -30,12 +25,11 @@ mod labels_write;
 mod legacy_edits;
 mod live_tier;
 mod meaning_schema;
-mod old_uploads;
 mod phone_flac;
 mod queue;
 mod reads;
 mod record_health;
-mod rematch;
+mod registrar;
 mod reports;
 mod results;
 mod retranscribe;
@@ -49,8 +43,6 @@ mod sql;
 mod sync;
 mod sync_reads;
 mod tokens;
-mod turn_store;
-mod turns;
 mod upload;
 mod verify;
 mod view;

@@ -24,8 +24,10 @@ crate::statements! {
     DELETE_TERM: Meaning =
         "DELETE FROM vocabulary WHERE id = ?1";
     LIVE_TURN_EXISTS: Meaning =
-        "SELECT 1 FROM transcript_segments \
-                 WHERE asr_model = 'live' AND start_utc = ?1 AND text = ?2 LIMIT 1";
+        "SELECT 1 FROM live_lines WHERE start_utc = ?1 AND text = ?2 LIMIT 1";
+    ADD_LIVE: Meaning =
+        "INSERT INTO live_lines (start_utc, end_utc, text, language, asr_model, created_utc)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
 }
 
 /// Open `recall.sqlite` for writing (apart from [`reads::open`], so a read
@@ -181,17 +183,17 @@ pub fn ingest_live(
         if present.is_some() {
             continue;
         }
-        let tx = crate::sql::write(conn)?;
-        crate::turn_store::insert(
-            &tx,
-            &crate::turn_store::NewTurn {
-                language: turn.language.as_deref(),
-                asr_model: Some(&turn.asr_model),
-                created_utc: Some(&delivered),
-                ..crate::turn_store::NewTurn::at(&start, &end, &turn.text)
-            },
+        ADD_LIVE.execute(
+            conn,
+            rusqlite::params![
+                start,
+                end,
+                turn.text,
+                turn.language,
+                turn.asr_model,
+                delivered
+            ],
         )?;
-        tx.commit()?;
         stored += 1;
     }
     Ok(stored)

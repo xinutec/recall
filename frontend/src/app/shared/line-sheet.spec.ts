@@ -22,7 +22,6 @@ function turn(o: Partial<Transcript>): Transcript {
     wordsChecked: false,
     speakerConfidence: null,
     confidence: null,
-    loudness: null,
     model: 'diarized',
     tier: 'diarized',
     hidden: null,

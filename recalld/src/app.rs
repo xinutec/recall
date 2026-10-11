@@ -7,7 +7,7 @@
 
 use crate::tokens::Tokens;
 use crate::{
-    assign, audio, capture, conversations, devices, ingest, labels, labels_write, reads, reports,
+    audio, capture, conversations, devices, ingest, labels, labels_write, reads, reports,
     retranscribe, sessions, sources, spa, sync, upload, webauth, work,
 };
 use axum::Router;
@@ -126,7 +126,10 @@ fn browsing(
             delete(devices::outbox_forget_route),
         )
         .merge(labelling())
-        .route("/api/sessions/{source}/assign", post(assign::assign_route))
+        .route(
+            "/api/sessions/{source}/assign",
+            post(labels_write::assign_route),
+        )
         .route(
             "/api/sessions",
             get(sessions::sessions_route).post(upload::create_session_route),

@@ -607,7 +607,7 @@ async fn the_live_tier_numbers_are_reachable_and_gated() {
     let (dir, addr) = serve(Some("sekrit")).await;
     let conn = recalld::work::open_write(dir.path()).expect("db");
     conn.execute_batch(
-        "INSERT INTO transcript_segments
+        "INSERT INTO live_lines
              (asr_model, text, start_utc, end_utc, created_utc)
          VALUES ('live', 'ja dat doen we', '2026-09-21T11:41:00+00:00',
                  '2026-09-21T11:41:30+00:00', '2026-09-21T11:41:34+00:00');",
@@ -633,7 +633,7 @@ async fn the_same_moment_spelled_two_ways_gives_the_same_answer() {
     let (dir, addr) = serve(Some("sekrit")).await;
     let conn = recalld::work::open_write(dir.path()).expect("db");
     conn.execute_batch(
-        "INSERT INTO transcript_segments
+        "INSERT INTO live_lines
              (asr_model, text, start_utc, end_utc, created_utc)
          VALUES ('live', 'ja', '2026-09-21T11:40:00+00:00',
                  '2026-09-21T11:40:00+00:00', '2026-09-21T11:40:04+00:00');",
