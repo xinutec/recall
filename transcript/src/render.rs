@@ -7,9 +7,9 @@
 //!    phrase where no speech was heard is dropped, with the reason.
 //! 2. Each remaining word is spoken by the diarized speaker at its midpoint;
 //!    runs shorter than [`MIN_TURN_US`] are folded into a neighbour.
-//! 3. A person's words, "nobody spoke" or "can't make it out" own their span:
-//!    the model's words under it give way. A later act replaces an earlier one
-//!    whose middle it covers.
+//! 3. A person's words, "nobody spoke", "can't make it out" or "leave it out"
+//!    own their span: the model's words under it give way. A later act
+//!    replaces an earlier one whose middle it covers.
 //! 4. Inside a model segment, a sentence goes to whoever speaks most of it; a
 //!    line breaks where the segment ends or the speaker changes between
 //!    sentences, never inside one, except where a person named part of it.
@@ -171,6 +171,8 @@ pub enum Why {
     NoSpeech(EditId),
     /// A person said the words cannot be made out.
     Unintelligible(EditId),
+    /// A person left this stretch out.
+    Excluded(EditId),
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
@@ -195,6 +197,7 @@ pub fn render(input: &Input<'_>) -> Rendered {
                     Content::Words { .. } => Why::Replaced(*id),
                     Content::NoSpeech => Why::NoSpeech(*id),
                     Content::Unintelligible => Why::Unintelligible(*id),
+                    Content::Excluded => Why::Excluded(*id),
                 },
             }),
             None => kept.push(word),
@@ -247,7 +250,8 @@ fn active<'a>(edits: &'a [Edit], clip: &Clip) -> Vec<&'a Edit> {
             Act::Words { clip: c, .. }
             | Act::Speaker { clip: c, .. }
             | Act::NoSpeech { clip: c, .. }
-            | Act::Unintelligible { clip: c, .. } => *c == clip.id,
+            | Act::Unintelligible { clip: c, .. }
+            | Act::Exclude { clip: c, .. } => *c == clip.id,
             Act::Voice { source, .. } | Act::Language { source, .. } => *source == clip.source,
             Act::Retract { .. } => false,
         })
@@ -343,6 +347,7 @@ enum Content {
     Words { text: String, checked: bool },
     NoSpeech,
     Unintelligible,
+    Excluded,
 }
 
 /// A stretch a person owns: the model's words over `over` give way, and a
@@ -378,6 +383,7 @@ fn person_layer(acts: &[&Edit]) -> Vec<Owned> {
             ),
             Act::NoSpeech { span, .. } => (*span, *span, Content::NoSpeech),
             Act::Unintelligible { span, .. } => (*span, *span, Content::Unintelligible),
+            Act::Exclude { span, .. } => (*span, *span, Content::Excluded),
             _ => continue,
         };
         owned.retain(|o| o.over != over && !over.contains(span_mid(o.over)));

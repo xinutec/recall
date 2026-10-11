@@ -447,6 +447,7 @@ impl Row {
             Why::Replaced(id) => ("replaced by a person's words".to_owned(), Some(id.stored())),
             Why::NoSpeech(id) => (HiddenReason::NobodySpoke.to_string(), Some(id.stored())),
             Why::Unintelligible(id) => ("cannot be made out".to_owned(), Some(id.stored())),
+            Why::Excluded(id) => ("left out".to_owned(), Some(id.stored())),
         };
         Self {
             start: spelled(dropped.span.start()),

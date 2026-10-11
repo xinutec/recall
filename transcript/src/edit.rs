@@ -53,6 +53,9 @@ pub enum Act {
     NoSpeech { clip: ClipId, span: Span },
     /// Someone spoke over `span`, but the words cannot be made out.
     Unintelligible { clip: ClipId, span: Span },
+    /// Leave `span` out of every view, as if recording had paused there. The
+    /// audio is kept.
+    Exclude { clip: ClipId, span: Span },
     /// A diarized voice of a session is this person.
     Voice {
         source: SourceId,

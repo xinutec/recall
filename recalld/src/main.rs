@@ -70,6 +70,8 @@ enum Task {
         #[arg(long)]
         apply: bool,
     },
+    /// Fill an empty edit log from today's tables (`recalld::edit_log`).
+    SeedEdits,
     /// Render every clip into the rendered view and say what it did
     /// (`recalld::view`).
     RenderView,
@@ -150,6 +152,12 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
             return report(root, |meaning, ingest| {
                 ingest.busy_timeout(std::time::Duration::from_mins(2))?;
                 recalld::backfill::queue(meaning, ingest, root, apply)
+            });
+        }
+        Task::SeedEdits => {
+            return report(root, |meaning, ingest| {
+                let now = transcript::Instant::from_utc(chrono::Utc::now());
+                recalld::edit_log::seed(meaning, ingest, root, now)
             });
         }
         Task::RenderView => {

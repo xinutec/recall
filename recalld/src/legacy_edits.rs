@@ -30,10 +30,15 @@ crate::statements! {
          WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL
            AND (t.speaker_label IS NOT NULL OR t.asr_model = 'human')
          ORDER BY t.created_utc, t.id";
+    /// With the recording's own span, and whether it shows any line today.
     HIDES: Meaning =
-        "SELECT t.id, t.created_utc, a.path, t.start_utc, t.end_utc, t.hidden_reason
+        "SELECT t.id, t.created_utc, a.path, t.start_utc, t.end_utc, t.hidden_reason,
+                a.start_utc, a.end_utc,
+                EXISTS (SELECT 1 FROM transcript_segments v
+                        WHERE v.audio_segment_id = a.id
+                          AND v.superseded_by IS NULL AND v.hidden_reason IS NULL)
          FROM transcript_segments t JOIN audio_segments a ON a.id = t.audio_segment_id
-         WHERE t.superseded_by IS NULL AND t.hidden_reason IN (?1, ?2)
+         WHERE t.superseded_by IS NULL AND t.hidden_reason IS NOT NULL
          ORDER BY t.created_utc, t.id";
     PINS: Meaning = "SELECT id, language FROM sources WHERE language IS NOT NULL ORDER BY id";
 }
@@ -81,7 +86,33 @@ pub struct Hide {
     pub at: Instant,
     pub clip: ClipId,
     pub span: Span,
-    pub unintelligible: bool,
+    pub kind: HideKind,
+}
+
+/// What a hide a person decided means. Each bulk hide was approved with its
+/// count: silence is "nobody spoke"; test speech played into the house and a
+/// second copy of a minute are left out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HideKind {
+    NoSpeech,
+    Unintelligible,
+    Exclude,
+}
+
+impl HideKind {
+    /// `None` for a pass's hide of its own lines, which render re-derives.
+    pub fn of(reason: &str) -> Option<Self> {
+        match reason {
+            NOBODY_SPOKE | "silent minute" | "near-silent minute" | "no speech in span" => {
+                Some(Self::NoSpeech)
+            }
+            CANT_MAKE_OUT => Some(Self::Unintelligible),
+            "test speech played into the house" | "a second copy of the same minute" => {
+                Some(Self::Exclude)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Where an act came from, so every one traces back to a row.
@@ -121,16 +152,11 @@ pub fn convert(
         line(l, now, &mut out);
     }
     for h in hides {
-        let act = if h.unintelligible {
-            Act::Unintelligible {
-                clip: h.clip,
-                span: h.span,
-            }
-        } else {
-            Act::NoSpeech {
-                clip: h.clip,
-                span: h.span,
-            }
+        let (clip, span) = (h.clip, h.span);
+        let act = match h.kind {
+            HideKind::NoSpeech => Act::NoSpeech { clip, span },
+            HideKind::Unintelligible => Act::Unintelligible { clip, span },
+            HideKind::Exclude => Act::Exclude { clip, span },
         };
         out.acts.push((h.at, act, Origin::Hide(h.id)));
     }
@@ -421,17 +447,32 @@ fn load_hides(
     out: &mut Loaded,
 ) -> Result<(), LoadError> {
     let mut stmt = HIDES.prepare(meaning)?;
-    let mut rows = stmt.query((NOBODY_SPOKE, CANT_MAKE_OUT))?;
+    let mut rows = stmt.query([])?;
+    // A recording that shows nothing today is hidden whole: a new
+    // transcription's words outside the old lines' spans stay out too. One act
+    // per recording and kind.
+    let mut whole = std::collections::HashSet::new();
     while let Some(r) = rows.next()? {
-        let (id, at, path, start, end) = head(r)?;
+        let (id, at, path, mut start, mut end) = head(r)?;
         let reason: String = r.get(5)?;
+        let Some(kind) = HideKind::of(&reason) else {
+            continue;
+        };
+        let (clip_start, clip_end, shows): (String, Option<String>, bool) =
+            (r.get(6)?, r.get(7)?, r.get(8)?);
+        if let (false, Some(clip_end)) = (shows, clip_end) {
+            if !whole.insert((path.clone(), kind)) {
+                continue;
+            }
+            (start, end) = (clip_start, clip_end);
+        }
         match anchor.place(&path, at.as_deref(), &start, &end)? {
             Ok(Placed { clip, at, span }) => out.hides.push(Hide {
                 id,
                 at,
                 clip,
                 span,
-                unintelligible: reason == CANT_MAKE_OUT,
+                kind,
             }),
             Err(why) => out.unreadable.push((Origin::Hide(id), why)),
         }
@@ -504,6 +545,7 @@ fn kind(act: &Act) -> &'static str {
         Act::Speaker { .. } => "speaker",
         Act::NoSpeech { .. } => "no-speech",
         Act::Unintelligible { .. } => "unintelligible",
+        Act::Exclude { .. } => "exclude",
         Act::Voice { .. } => "voice",
         Act::Language { .. } => "language",
         Act::Retract { .. } => "retract",

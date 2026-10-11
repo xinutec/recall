@@ -701,3 +701,73 @@ fn a_line_keeps_the_voice_diarized_under_it_whoever_it_is_attributed_to() {
         ]
     );
 }
+
+#[test]
+fn an_excluded_stretch_shows_nothing_and_says_why_and_a_later_act_inside_it_stands() {
+    let h = heard(vec![
+        segment(0.0, 2.0, "test test."),
+        segment(2.0, 4.0, "echte woorden"),
+    ]);
+    let words = edit(
+        1,
+        Act::Words {
+            clip: ClipId::from_stored(1),
+            span: span(0.0, 2.0),
+            over: span(0.0, 2.0),
+            text: Text::new("getypt").unwrap(),
+            checked: true,
+        },
+    );
+    let exclude = edit(
+        2,
+        Act::Exclude {
+            clip: ClipId::from_stored(1),
+            span: span(0.0, 2.0),
+        },
+    );
+    let clip = clip();
+    let render_with = |edits: &[Edit]| {
+        render(&Input {
+            clip: &clip,
+            heard: Some(&h),
+            voices: None,
+            speech: &Speech::default(),
+            edits,
+            enrolled: &[],
+        })
+    };
+
+    let out = render_with(&[words.clone(), exclude.clone()]);
+    let texts: Vec<&str> = out
+        .lines
+        .iter()
+        .map(transcript::render::Line::text)
+        .collect();
+    assert_eq!(
+        texts,
+        ["echte woorden"],
+        "excluded over a person's words too"
+    );
+    assert!(
+        out.dropped
+            .iter()
+            .any(|d| d.why == Why::Excluded(EditId::from_stored(2)))
+    );
+
+    let later = edit(
+        3,
+        Act::Words {
+            clip: ClipId::from_stored(1),
+            span: span(0.5, 1.0),
+            over: span(0.5, 1.0),
+            text: Text::new("toch dit").unwrap(),
+            checked: true,
+        },
+    );
+    let texts: Vec<String> = render_with(&[words, exclude, later])
+        .lines
+        .iter()
+        .map(|l| l.text().to_owned())
+        .collect();
+    assert_eq!(texts, ["toch dit", "echte woorden"]);
+}

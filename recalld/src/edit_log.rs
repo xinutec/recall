@@ -73,7 +73,8 @@ pub fn append(
         Act::Words { clip, .. }
         | Act::Speaker { clip, .. }
         | Act::NoSpeech { clip, .. }
-        | Act::Unintelligible { clip, .. } => (Some(clip.stored()), None),
+        | Act::Unintelligible { clip, .. }
+        | Act::Exclude { clip, .. } => (Some(clip.stored()), None),
         Act::Voice { source, .. } | Act::Language { source, .. } => {
             (None, Some(source.as_str().to_owned()))
         }
