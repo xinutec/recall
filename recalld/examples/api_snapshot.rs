@@ -5,11 +5,14 @@
 //! per request. Later requests take their cursors and ids from earlier answers,
 //! so two runs over one copy ask the same questions. `diff A B` prints, per
 //! request, whether the answer is the same, and if not, which JSON paths
-//! differ: never values. The stored answers hold transcript text: keep DIR
-//! beside the copy and delete them together.
+//! differ: never values. `shape A B` compares by contract instead, for a change
+//! that is meant to change the answers: per request kind, the statuses, the
+//! JSON fields and their types, and how many items. The stored answers hold
+//! transcript text: keep DIR beside the copy and delete them together.
 //!
 //! Usage: `cargo run --release --example api_snapshot -- take --root LAB --out DIR`
 //!        `cargo run --release --example api_snapshot -- diff A B`
+//!        `cargo run --release --example api_snapshot -- shape A B`
 
 use axum::body::Body;
 use axum::http::Request;
@@ -45,12 +48,15 @@ enum Command {
     },
     /// Compare two stored runs, by JSON path.
     Diff { a: PathBuf, b: PathBuf },
+    /// Compare two stored runs by contract: statuses, fields and types, counts.
+    Shape { a: PathBuf, b: PathBuf },
 }
 
 fn main() -> Result<()> {
     match <Command as clap::Parser>::parse() {
         Command::Take { root, out } => tokio::runtime::Runtime::new()?.block_on(take(&root, &out)),
         Command::Diff { a, b } => diff(&a, &b),
+        Command::Shape { a, b } => shape(&a, &b),
     }
 }
 
@@ -510,6 +516,80 @@ fn diff(a: &Path, b: &Path) -> Result<()> {
         println!("{kind}");
         for (field, n) in fields {
             println!("  {n:6}  {field}");
+        }
+    }
+    Ok(())
+}
+
+/// Every JSON path in `v` with its value's type, indexes folded to `*`. A null
+/// is left out: an optional field is null in some answers and not others.
+fn types(v: &Value, at: &str, out: &mut std::collections::BTreeSet<String>) {
+    let kind = match v {
+        Value::Null => return,
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(items) => {
+            for item in items {
+                types(item, &format!("{at}/*"), out);
+            }
+            "array"
+        }
+        Value::Object(fields) => {
+            for (key, value) in fields {
+                types(value, &format!("{at}/{key}"), out);
+            }
+            "object"
+        }
+    };
+    out.insert(format!("{at}: {kind}"));
+}
+
+/// How many items an answer holds: its `items`, or its own length.
+fn items(body: &Value) -> usize {
+    body.pointer("/items")
+        .unwrap_or(body)
+        .as_array()
+        .map_or(0, Vec::len)
+}
+
+#[derive(Default)]
+struct Contract {
+    requests: usize,
+    statuses: BTreeMap<u64, usize>,
+    types: std::collections::BTreeSet<String>,
+    items: usize,
+}
+
+fn contracts(runs: &BTreeMap<String, Value>) -> BTreeMap<String, Contract> {
+    let mut by_kind: BTreeMap<String, Contract> = BTreeMap::new();
+    for (request, record) in runs {
+        let c = by_kind.entry(kind_of(request)).or_default();
+        c.requests += 1;
+        *c.statuses
+            .entry(record["status"].as_u64().unwrap_or(0))
+            .or_default() += 1;
+        types(&record["body"], "", &mut c.types);
+        c.items += items(&record["body"]);
+    }
+    by_kind
+}
+
+fn shape(a: &Path, b: &Path) -> Result<()> {
+    let (a, b) = (contracts(&load(a)?), contracts(&load(b)?));
+    let kinds: std::collections::BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+    for kind in kinds {
+        let none = Contract::default();
+        let (x, y) = (a.get(kind).unwrap_or(&none), b.get(kind).unwrap_or(&none));
+        println!(
+            "{kind}: requests {} / {}, items {} / {}, statuses {:?} / {:?}",
+            x.requests, y.requests, x.items, y.items, x.statuses, y.statuses
+        );
+        for only in x.types.difference(&y.types) {
+            println!("  only in A  {only}");
+        }
+        for only in y.types.difference(&x.types) {
+            println!("  only in B  {only}");
         }
     }
     Ok(())

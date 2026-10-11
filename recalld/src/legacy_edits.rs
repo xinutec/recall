@@ -26,7 +26,10 @@ crate::statements! {
         "SELECT t.id, t.created_utc, a.path, t.start_utc, t.end_utc, t.text, t.speaker_label,
                 t.asr_model = 'human', o.start_utc, o.end_utc
          FROM transcript_segments t JOIN audio_segments a ON a.id = t.audio_segment_id
-         LEFT JOIN transcript_segments o ON t.provenance = 'human correction of #' || o.id
+         -- By the id in the provenance, so `o` is found by key, not by scanning.
+         LEFT JOIN transcript_segments o
+                ON t.provenance LIKE 'human correction of #%'
+               AND o.id = CAST(substr(t.provenance, 22) AS INTEGER)
          WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL
            AND (t.speaker_label IS NOT NULL OR t.asr_model = 'human')
          ORDER BY t.created_utc, t.id";
@@ -216,7 +219,7 @@ fn correction(c: &Correction, out: &mut Recovered) {
         }
     }
     if let Some(speaker) = c.speaker.as_deref() {
-        match Name::new(speaker) {
+        match person(speaker) {
             Some(name) => out.acts.push((
                 c.at,
                 Act::Speaker {
@@ -227,16 +230,27 @@ fn correction(c: &Correction, out: &mut Recovered) {
                 },
                 origin,
             )),
-            None => out.none.push((origin, "speaker is blank")),
+            None => out
+                .none
+                .push((origin, "speaker is blank or the diarizer's tag")),
         }
     }
+}
+
+/// A person's name from a stored label; `None` for the diarizer's cluster tag
+/// (`SPEAKER_01`), which the old diarized pass wrote into the same column.
+fn person(label: &str) -> Option<Name> {
+    if label.starts_with("SPEAKER") {
+        return None;
+    }
+    Name::new(label)
 }
 
 /// A named line is a name; a piece of a corrected line also carries words.
 fn line(l: &NamedLine, now: Instant, out: &mut Recovered) {
     let origin = Origin::Line(l.id);
     let words = l.human_text.then(|| Text::new(&l.text)).flatten();
-    let name = l.speaker.as_deref().and_then(Name::new);
+    let name = l.speaker.as_deref().and_then(person);
     if words.is_none() && name.is_none() {
         out.none
             .push((origin, "a person's line with neither words nor a name"));

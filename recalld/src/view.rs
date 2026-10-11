@@ -24,12 +24,14 @@ use transcript::voice::Voiceprint;
 use transcript::{Clip, Instant};
 
 crate::statements! {
-    /// Every recording a person can see lines from; the room's derived blocks
-    /// show none.
+    /// Every recording a person can see lines from, newest first so a full
+    /// render fills the recent timeline first; the room's derived blocks show
+    /// none.
     AUDIO_ROWS: Meaning =
         "SELECT a.id, a.path, a.end_utc FROM audio_segments a
          JOIN sources s ON s.id = a.source_id
-         WHERE s.kind <> 'derived' AND a.path IS NOT NULL";
+         WHERE s.kind <> 'derived' AND a.path IS NOT NULL
+         ORDER BY a.start_utc DESC";
     RESULT_VERSIONS: Ingest =
         "SELECT c.id, j.kind, j.done_utc FROM jobs j JOIN clips c ON c.filename = j.filename
          WHERE j.kind IN (?1, ?2) AND j.done_utc IS NOT NULL AND j.result IS NOT NULL";

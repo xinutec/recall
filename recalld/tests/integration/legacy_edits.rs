@@ -278,3 +278,31 @@ fn a_recording_that_shows_nothing_today_is_hidden_whole_once_and_one_that_shows_
         .collect();
     assert_eq!(spans, [(0, 60), (70, 72)], "whole and once; line by line");
 }
+
+#[test]
+fn a_diarizer_tag_in_the_label_is_no_ones_name() {
+    // The old diarized pass wrote its cluster tags into `speaker_label`: a
+    // person's words under one keep their words act and get no naming.
+    let typed = NamedLine {
+        id: 11,
+        at: at(200),
+        clip: ClipId::from_stored(7),
+        span: span(2, 4),
+        over: span(2, 4),
+        text: "getypt".into(),
+        speaker: Some("SPEAKER_01".into()),
+        human_text: true,
+    };
+    let tagged = NamedLine {
+        id: 12,
+        human_text: false,
+        ..typed.clone()
+    };
+    let mut c = correction(13, "x", "y", Some("SPEAKER_00"), false);
+    c.checked = false;
+
+    let out = convert(&[c], &[typed, tagged], &[], &[]);
+
+    assert_eq!(kinds(&out.acts), ["words", "words"]);
+    assert!(out.none.iter().any(|(o, _)| *o == Origin::Line(12)));
+}
