@@ -70,6 +70,9 @@ enum Task {
         #[arg(long)]
         apply: bool,
     },
+    /// Render every clip into the rendered view and say what it did
+    /// (`recalld::view`).
+    RenderView,
     /// Move the uploads stored before the ingest plane into it
     /// (`recalld::old_uploads`).
     MoveOldUploads {
@@ -147,6 +150,11 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
             return report(root, |meaning, ingest| {
                 ingest.busy_timeout(std::time::Duration::from_mins(2))?;
                 recalld::backfill::queue(meaning, ingest, root, apply)
+            });
+        }
+        Task::RenderView => {
+            return report(root, |meaning, ingest| {
+                recalld::view::refresh(meaning, ingest, root, true)
             });
         }
         Task::MoveOldUploads { apply } => {

@@ -639,3 +639,65 @@ fn a_persons_words_take_the_voice_heard_there_unless_they_named_it() {
         )]
     );
 }
+
+#[test]
+fn a_line_keeps_the_voice_diarized_under_it_whoever_it_is_attributed_to() {
+    // The session page groups lines by voice, named or not.
+    let h = heard(vec![
+        segment(0.0, 2.0, "goede morgen."),
+        segment(2.0, 4.0, "hoe gaat het"),
+    ]);
+    let v = Voices {
+        turns: vec![
+            VoiceTurn {
+                speaker: "SPEAKER_00".into(),
+                start: 0.0,
+                end: 2.0,
+            },
+            VoiceTurn {
+                speaker: "SPEAKER_01".into(),
+                start: 2.0,
+                end: 6.0,
+            },
+        ],
+        prints: vec![],
+    };
+    let named = edit(
+        1,
+        Act::Speaker {
+            clip: ClipId::from_stored(1),
+            span: span(0.0, 2.0),
+            name: Name::new("Robin").unwrap(),
+            enrol: true,
+        },
+    );
+    let words = edit(
+        2,
+        Act::Words {
+            clip: ClipId::from_stored(1),
+            span: span(4.5, 5.5),
+            over: span(4.5, 5.5),
+            text: Text::new("ja hoor").unwrap(),
+            checked: true,
+        },
+    );
+    let clip = clip();
+    let out = render(&Input {
+        clip: &clip,
+        heard: Some(&h),
+        voices: Some(&v),
+        speech: &Speech::default(),
+        edits: &[named, words],
+        enrolled: &[],
+    });
+    let clusters: Vec<(&str, Option<&str>)> =
+        out.lines.iter().map(|l| (l.text(), l.cluster())).collect();
+    assert_eq!(
+        clusters,
+        [
+            ("goede morgen.", Some("SPEAKER_00")),
+            ("hoe gaat het", Some("SPEAKER_01")),
+            ("ja hoor", Some("SPEAKER_01")),
+        ]
+    );
+}

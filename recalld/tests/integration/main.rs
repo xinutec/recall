@@ -52,6 +52,7 @@ mod turn_store;
 mod turns;
 mod upload;
 mod verify;
+mod view;
 mod webauth;
 mod work;
 

@@ -558,6 +558,56 @@ pub const MIGRATIONS: &[&str] = &[
     CREATE TRIGGER edits_append_only BEFORE UPDATE ON edits
     BEGIN SELECT RAISE(ABORT, 'edits: append-only'); END;
 "#,
+    // v54
+    r#"
+    -- The lines recall shows: render's output per clip, rebuilt when what the
+    -- clip is made from changes. Shaped like transcript_segments' read columns.
+    -- hidden_reason: model text render left out, and why. edit_id: the act that
+    -- wrote or dropped the line. live_id: the live turn a live line shows, until
+    -- a transcribed clip covers its time.
+    CREATE TABLE rendered_lines (
+        id               INTEGER PRIMARY KEY,
+        clip_id          INTEGER,
+        audio_segment_id INTEGER,
+        source_id        TEXT,
+        start_utc        TEXT NOT NULL,
+        end_utc          TEXT NOT NULL,
+        text             TEXT NOT NULL,
+        language         TEXT,
+        asr_confidence   REAL,
+        asr_model        TEXT,
+        speaker_label    TEXT,
+        speaker_guess    TEXT,
+        speaker_score    REAL,
+        speaker_cluster  TEXT,
+        tier             TEXT NOT NULL,
+        hidden_reason    TEXT,
+        words_checked    INTEGER,
+        edit_id          INTEGER,
+        live_id          INTEGER
+    );
+    CREATE INDEX rendered_clip ON rendered_lines(clip_id);
+    CREATE INDEX rendered_live ON rendered_lines(live_id) WHERE live_id IS NOT NULL;
+    CREATE INDEX rendered_audio ON rendered_lines(audio_segment_id);
+    CREATE INDEX rendered_start ON rendered_lines(start_utc, id);
+    CREATE INDEX rendered_source_start ON rendered_lines(source_id, start_utc, id);
+    CREATE VIRTUAL TABLE rendered_fts USING fts5(text, content='rendered_lines', content_rowid='id');
+    CREATE TRIGGER rendered_fts_insert AFTER INSERT ON rendered_lines BEGIN
+        INSERT INTO rendered_fts (rowid, text) VALUES (new.id, new.text);
+    END;
+    CREATE TRIGGER rendered_fts_delete AFTER DELETE ON rendered_lines BEGIN
+        INSERT INTO rendered_fts (rendered_fts, rowid, text) VALUES ('delete', old.id, old.text);
+    END;
+    CREATE TRIGGER rendered_fts_update AFTER UPDATE OF text ON rendered_lines BEGIN
+        INSERT INTO rendered_fts (rendered_fts, rowid, text) VALUES ('delete', old.id, old.text);
+        INSERT INTO rendered_fts (rowid, text) VALUES (new.id, new.text);
+    END;
+    -- What each clip's lines were last rendered from.
+    CREATE TABLE rendered_clips (
+        clip_id INTEGER PRIMARY KEY,
+        inputs  TEXT NOT NULL
+    );
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

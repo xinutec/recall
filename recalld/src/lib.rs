@@ -50,5 +50,6 @@ pub mod turn_store;
 pub mod turns;
 pub mod upload;
 pub mod verify;
+pub mod view;
 pub mod webauth;
 pub mod work;

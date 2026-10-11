@@ -209,11 +209,15 @@ fn words_a_person_typed_or_vouched_for_are_marked_on_their_turn() {
     // Rung 50 reads the corrections already filed: a check or a changed text
     // marks the person's turn, a speaker fix (the machine's words) does not.
     // A database at rung 49: the top built, then every rung above 49 taken off
-    // (v50 words_checked, v51 sources.language, v52 idx_ts_audio, v53 edits).
+    // (v50 words_checked, v51 sources.language, v52 idx_ts_audio, v53 edits,
+    // v54 rendered_lines).
     let conn = rusqlite::Connection::open_in_memory().expect("db");
     ensure(&conn).expect("schema");
     conn.execute_batch(
-        "DROP TABLE edits;
+        "DROP TABLE rendered_clips;
+         DROP TABLE rendered_fts;
+         DROP TABLE rendered_lines;
+         DROP TABLE edits;
          DROP INDEX idx_ts_audio;
          ALTER TABLE transcript_segments DROP COLUMN words_checked;
          ALTER TABLE sources DROP COLUMN language;

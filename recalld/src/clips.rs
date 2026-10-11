@@ -14,6 +14,7 @@ crate::statements! {
         "SELECT id, source, start_us, filename, path FROM clips WHERE filename = ?1";
     BY_ID: Ingest =
         "SELECT id, source, start_us, filename, path FROM clips WHERE id = ?1";
+    ALL: Ingest = "SELECT id, source, start_us, filename, path FROM clips";
     BY_PATH: Ingest =
         "SELECT id, source, start_us, filename, path FROM clips WHERE path = ?1";
     RENAME: Ingest =
@@ -85,6 +86,14 @@ pub fn by_id(ingest: &Connection, id: ClipId) -> Result<Option<Clip>, ClipError>
         .optional()?
         .map(clip)
         .transpose()
+}
+
+/// Every clip.
+pub fn all(ingest: &Connection) -> Result<Vec<Clip>, ClipError> {
+    ALL.prepare(ingest)?
+        .query_map([], raw)?
+        .map(|row| clip(row?))
+        .collect()
 }
 
 /// The clip a meaning-plane audio row names, by its absolute `path` under `root`.

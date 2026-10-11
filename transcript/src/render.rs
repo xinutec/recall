@@ -94,6 +94,7 @@ pub struct Line {
     text: String,
     by: Author,
     speaker: Option<Speaker>,
+    cluster: Option<String>,
     language: Option<String>,
     confidence: Option<f64>,
     checked: bool,
@@ -111,6 +112,10 @@ impl Line {
     }
     pub fn speaker(&self) -> Option<&Speaker> {
         self.speaker.as_ref()
+    }
+    /// The diarized voice under the line, whoever it is attributed to.
+    pub fn cluster(&self) -> Option<&str> {
+        self.cluster.as_deref()
     }
     pub fn language(&self) -> Option<&str> {
         self.language.as_deref()
@@ -210,6 +215,7 @@ pub fn render(input: &Input<'_>) -> Rendered {
                 text: text.clone(),
                 by: Author::Person(*id),
                 speaker: speakers.resolve(mid, cluster.as_deref()),
+                cluster,
                 language: input.heard.and_then(|h| h.language.clone()),
                 confidence: None,
                 checked: *checked,
@@ -579,6 +585,7 @@ fn model_lines(words: &[Word], speakers: &Speakers<'_>, heard: Option<&Heard>) -
                 text,
                 by: Author::Model,
                 speaker: speaker[i].clone(),
+                cluster: dominant(run, &clusters[i..j]),
                 language: language.clone(),
                 confidence: if doubted { Some(0.0) } else { mean },
                 checked: false,
@@ -628,6 +635,23 @@ fn by_sentence(words: &[Word], resolved: &[Option<Speaker>]) -> Vec<Option<Speak
         start = end + 1;
     }
     out
+}
+
+/// The diarized label that covers most of `run`'s time.
+fn dominant(run: &[Word], clusters: &[Option<String>]) -> Option<String> {
+    let mut weight: Vec<(&Option<String>, i64)> = Vec::new();
+    for (word, who) in run.iter().zip(clusters) {
+        match weight.iter_mut().find(|(w, _)| *w == who) {
+            Some((_, total)) => *total += word.span.micros().max(1),
+            None => weight.push((who, word.span.micros().max(1))),
+        }
+    }
+    // `max_by_key` keeps the last of equal maxima; reversed, the first.
+    weight
+        .iter()
+        .rev()
+        .max_by_key(|(_, t)| *t)
+        .and_then(|(w, _)| (*w).clone())
 }
 
 fn ends_sentence(word: &str) -> bool {
