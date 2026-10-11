@@ -42,9 +42,15 @@ importers:
       '@angular/service-worker':
         specifier: ^22.2.1
         version: 22.2.1(@angular/core@22.2.1(@angular/compiler@22.2.1)(rxjs@7.8.2))(rxjs@7.8.2)
+      '@fontsource/roboto':
+        specifier: ^5.3.0
+        version: 5.3.0
       '@xinutec/ui-scaffold':
         specifier: github:xinutec/ui-harness#9f88136b74c44fc2673f4d003bccfa8aad9a960c&path:/scaffold
         version: https://codeload.github.com/xinutec/ui-harness/tar.gz/9f88136b74c44fc2673f4d003bccfa8aad9a960c#path:/scaffold(8160c2f28cdd58034296b7a2f2216469)
+      material-icons:
+        specifier: ^1.13.14
+        version: 1.13.14
       rxjs:
         specifier: ~7.8.2
         version: 7.8.2
@@ -645,6 +651,9 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@fontsource/roboto@5.3.0':
+    resolution: {integrity: sha512-BapRJOWYP+LZ21zp+wBQjfpPYKRoxc4LspJ/RLuI+HSMBD5u/X4O+ESDrSvEqDSy0rAl7GwBJ+09mdc16cVQ1Q==}
 
   '@harperfast/extended-iterable@1.0.3':
     resolution: {integrity: sha512-sSAYhQca3rDWtQUHSAPeO7axFIUJOI6hn1gjRC5APVE1a90tuyT8f5WIgRsFhhWA7htNkju2veB9eWL6YHi/Lw==}
@@ -2208,6 +2217,9 @@ packages:
   magic-string@1.4.1:
     resolution: {integrity: sha512-8lyCu36ErXR0J9uaGKlKQoiLZKmtI63YGLE8G2o9jyRPdr4X47LusSOwgOJOzcVtp81fTAAjxR7BwKz682Jhow==}
 
+  material-icons@1.13.14:
+    resolution: {integrity: sha512-kZOfc7xCC0rAT8Q3DQixYAeT+tBqZnxkseQtp2bxBxz7q5pMAC+wmit7vJn1g/l7wRU+HEPq23gER4iPjGs5Cg==}
+
   mathml-tag-names@4.0.0:
     resolution: {integrity: sha512-aa6AU2Pcx0VP/XWnh8IGL0SYSgQHDT6Ucror2j2mXeFAlN3ahaNs8EZtG1YiticMkSLj3Gt6VPFfZogt7G5iFQ==}
 
@@ -3532,6 +3544,8 @@ snapshots:
       levn: 0.4.1
 
   '@exodus/bytes@1.16.0': {}
+
+  '@fontsource/roboto@5.3.0': {}
 
   '@harperfast/extended-iterable@1.0.3':
     optional: true
@@ -4897,6 +4911,8 @@ snapshots:
   magic-string@1.4.1:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  material-icons@1.13.14: {}
 
   mathml-tag-names@4.0.0: {}
 
