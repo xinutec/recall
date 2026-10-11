@@ -62,6 +62,11 @@ Nextcloud sign-in), ingest, sync and the job queue ([k8s](../deploy/k8s/README.m
 Shipping a change: push to `main`, CI builds `xinutec/recall:latest`, then
 `ssh root@10.100.0.2 'kubectl -n recall rollout restart deployment/recall'`.
 
+`recalld --root <root> verify` checks an archive against its own records: every
+stored file present with the size and sha256 its row recorded, every audio row
+naming a file. The weekly restore drill on odin asks it of a restored copy
+(`xinutec-infra/drill/README.md`); it reads every byte.
+
 ```sh
 ./scripts/recall-build-frontend.sh                          # the image's frontend build, locally
 nix develop --command bash -c 'cd frontend && pnpm start'   # dev server, proxies /api

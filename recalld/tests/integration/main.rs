@@ -50,6 +50,7 @@ mod tokens;
 mod turn_store;
 mod turns;
 mod upload;
+mod verify;
 mod webauth;
 mod work;
 

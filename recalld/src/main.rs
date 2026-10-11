@@ -78,6 +78,9 @@ enum Task {
         apply: bool,
     },
     /// Store the phones' WAV copies as FLAC (`recalld::phone_flac`).
+    /// Whether every stored file matches the size and hash its row recorded,
+    /// and every audio row names a file (`recalld::verify`). Reads every byte.
+    Verify,
     PhoneFlac {
         /// Convert; without this, only say what would be converted.
         #[arg(long)]
@@ -150,6 +153,11 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
             return report(root, |meaning, ingest| {
                 ingest.busy_timeout(std::time::Duration::from_mins(2))?;
                 recalld::old_uploads::run(root, meaning, ingest, chrono::Utc::now(), apply)
+            });
+        }
+        Task::Verify => {
+            return report(root, |meaning, ingest| {
+                recalld::verify::run(meaning, ingest, root)
             });
         }
         Task::ShadowNaming => {
