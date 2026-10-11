@@ -12,7 +12,9 @@ pub struct Edit {
 }
 
 /// An edit's place in the log; a later id is a later act.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct EditId(i64);
 
 impl EditId {
@@ -27,7 +29,7 @@ impl EditId {
 }
 
 /// Everything a person can do to the record.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Act {
     /// The words said over `span`, replacing the model's words over `over`:
     /// the line the person corrected, which covers `span` and may be wider.
@@ -67,8 +69,17 @@ pub enum Act {
 }
 
 /// Words a person wrote: never empty, never padded.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String")]
 pub struct Text(String);
+
+impl TryFrom<String> for Text {
+    type Error = &'static str;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        Self::new(&text).ok_or("empty text")
+    }
+}
 
 impl Text {
     /// `None` for text that is empty once trimmed.
@@ -83,8 +94,19 @@ impl Text {
 }
 
 /// A person's name as recall knows them: never empty, never padded.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(try_from = "String")]
 pub struct Name(String);
+
+impl TryFrom<String> for Name {
+    type Error = &'static str;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::new(&name).ok_or("empty name")
+    }
+}
 
 impl Name {
     pub fn new(name: &str) -> Option<Self> {
@@ -98,7 +120,7 @@ impl Name {
 }
 
 /// The languages the household speaks, the only ones a person can pin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Language {
     Dutch,
     English,

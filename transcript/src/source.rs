@@ -2,8 +2,19 @@
 ///
 /// The id is a directory name, so the grammar excludes everything a path could
 /// interpret (`.`, `/`, case). `audiocore::names` defers to this type.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(try_from = "String")]
 pub struct SourceId(String);
+
+impl TryFrom<String> for SourceId {
+    type Error = &'static str;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        Self::parse(&text).ok_or("not a source id")
+    }
+}
 
 impl SourceId {
     pub fn parse(text: &str) -> Option<Self> {

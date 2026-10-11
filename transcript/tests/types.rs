@@ -97,3 +97,71 @@ fn blank_words_and_blank_names_cannot_be_made() {
     );
     assert_eq!(Language::English.code(), "en");
 }
+
+fn stored_acts() -> Vec<transcript::Act> {
+    use transcript::{Act, ClipId, EditId, Language, Name, Text};
+    let clip = ClipId::from_stored(7);
+    let span = Span::new(us(1_000_000), us(2_500_000)).expect("ordered");
+    let source = SourceId::parse("meeting-20260520-1901").expect("source");
+    vec![
+        Act::Words {
+            clip,
+            span,
+            over: Span::new(us(500_000), us(3_000_000)).expect("ordered"),
+            text: Text::new("hallo daar").expect("text"),
+            checked: true,
+        },
+        Act::Speaker {
+            clip,
+            span,
+            name: Name::new("Robin").expect("name"),
+            enrol: false,
+        },
+        Act::NoSpeech { clip, span },
+        Act::Unintelligible { clip, span },
+        Act::Voice {
+            source: source.clone(),
+            cluster: "SPEAKER_01".into(),
+            name: Name::new("Sam").expect("name"),
+        },
+        Act::Language {
+            source,
+            language: Language::Dutch,
+        },
+        Act::Retract {
+            edit: EditId::from_stored(3),
+        },
+    ]
+}
+
+#[test]
+fn every_act_reads_back_as_it_was_stored() {
+    for act in stored_acts() {
+        let json = serde_json::to_string(&act).expect("serialise");
+        let back: transcript::Act = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, act, "{json}");
+    }
+}
+
+#[test]
+fn a_stored_act_that_breaks_a_types_promise_is_refused() {
+    let speaker = serde_json::to_value(&stored_acts()[1]).expect("serialise");
+    let with = |pointer: &str, value: serde_json::Value| {
+        let mut v = speaker.clone();
+        *v.pointer_mut(pointer).expect("path") = value;
+        serde_json::from_value::<transcript::Act>(v)
+    };
+    assert!(with("/Speaker/name", "  ".into()).is_err(), "an empty name");
+    assert!(
+        with("/Speaker/span/start", 9_000_000.into()).is_err(),
+        "a span ending before it starts"
+    );
+    assert!(
+        with("/Speaker/span/end", i64::MAX.into()).is_err(),
+        "an instant out of range"
+    );
+    let voice = serde_json::to_value(&stored_acts()[4]).expect("serialise");
+    let mut bad = voice.clone();
+    *bad.pointer_mut("/Voice/source").expect("path") = "Not A Source".into();
+    assert!(serde_json::from_value::<transcript::Act>(bad).is_err());
+}

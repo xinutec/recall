@@ -537,6 +537,27 @@ pub const MIGRATIONS: &[&str] = &[
     -- visible. The turn writer counts them per candidate, every round.
     CREATE INDEX idx_ts_audio ON transcript_segments(audio_segment_id);
 "#,
+    // v53
+    r#"
+    -- What people did to the record, in order (`transcript::Act` as JSON).
+    -- clip_id / source_id: the clip or session the act touches (a retraction
+    -- carries its target's), so one clip's acts load without parsing them all.
+    -- origin: the row of the old tables an act was recovered from.
+    CREATE TABLE edits (
+        id        INTEGER PRIMARY KEY,
+        at_us     INTEGER NOT NULL,
+        act       TEXT NOT NULL CHECK (json_valid(act)),
+        clip_id   INTEGER,
+        source_id TEXT,
+        origin    TEXT
+    );
+    CREATE INDEX edits_clip ON edits(clip_id) WHERE clip_id IS NOT NULL;
+    CREATE INDEX edits_source ON edits(source_id) WHERE source_id IS NOT NULL;
+    -- Append-only: a change of mind is a new act. Deleting a session deletes
+    -- its acts.
+    CREATE TRIGGER edits_append_only BEFORE UPDATE ON edits
+    BEGIN SELECT RAISE(ABORT, 'edits: append-only'); END;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

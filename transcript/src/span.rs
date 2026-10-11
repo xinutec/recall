@@ -2,10 +2,28 @@ use crate::Instant;
 
 /// A stretch of time, `start <= end`. Built only through [`Span::new`], so a
 /// backwards span cannot exist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(try_from = "Stored")]
 pub struct Span {
     start: Instant,
     end: Instant,
+}
+
+/// A span as stored, before [`Span::new`] checks its order.
+#[derive(serde::Deserialize)]
+struct Stored {
+    start: Instant,
+    end: Instant,
+}
+
+impl TryFrom<Stored> for Span {
+    type Error = &'static str;
+
+    fn try_from(stored: Stored) -> Result<Self, Self::Error> {
+        Self::new(stored.start, stored.end).ok_or("span ends before it starts")
+    }
 }
 
 impl Span {

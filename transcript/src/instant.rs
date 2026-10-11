@@ -5,9 +5,21 @@ use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 /// Microseconds because stored instants carry them (word timings); an integer
 /// because two text spellings of one moment compare unequal. Text exists only
 /// at the edges: [`Instant::parse`] and [`Instant::to_utc`].
-// No derived `Deserialize`: it would build an `Instant` without the range check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+// Read back through `from_micros`, never a derived `Deserialize`: that would
+// build an `Instant` without the range check.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(try_from = "i64")]
 pub struct Instant(i64);
+
+impl TryFrom<i64> for Instant {
+    type Error = &'static str;
+
+    fn try_from(micros: i64) -> Result<Self, Self::Error> {
+        Self::from_micros(micros).ok_or("instant out of range")
+    }
+}
 
 impl Instant {
     /// `None` outside chrono's range (about 262,000 years either side of 1970),

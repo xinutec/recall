@@ -18,6 +18,7 @@ mod clips;
 mod conversations;
 mod devices;
 mod diarized;
+mod edit_log;
 mod enrol;
 mod http;
 mod identify_differential;

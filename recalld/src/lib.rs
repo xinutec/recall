@@ -12,6 +12,7 @@ pub mod clips;
 pub mod conversations;
 pub mod devices;
 pub mod diarized;
+pub mod edit_log;
 pub mod enrol;
 pub mod identify;
 pub mod ingest;

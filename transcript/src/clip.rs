@@ -5,7 +5,9 @@ use crate::{Instant, SourceId};
 /// The file is the identity: a phone's own copy and the Mac's cut of its
 /// stream can share a source and a start second, so `(source, start)` is not a
 /// key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ClipId(i64);
 
 impl ClipId {
