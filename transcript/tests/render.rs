@@ -179,6 +179,58 @@ fn a_speaker_change_inside_a_sentence_does_not_break_it() {
 }
 
 #[test]
+fn a_person_naming_part_of_a_sentence_breaks_it_there() {
+    // Seen in uploaded meetings: one model sentence across a quick exchange
+    // went wholly to the majority, over the name a person gave its start.
+    let h = heard(vec![segment(0.0, 6.0, "ja dat klopt maar wat zei ze")]);
+    let v = Voices {
+        turns: vec![VoiceTurn {
+            speaker: "B".into(),
+            start: 0.0,
+            end: 6.0,
+        }],
+        prints: vec![],
+    };
+    let named = |id: i64, a: f64, b: f64, who: &str| {
+        edit(
+            id,
+            Act::Speaker {
+                clip: ClipId::from_stored(1),
+                span: span(a, b),
+                name: Name::new(who).unwrap(),
+                enrol: false,
+            },
+        )
+    };
+    let shown = |edits: &[Edit]| -> Vec<(String, String)> {
+        lines(&h, Some(&v), &Speech::default(), edits)
+            .into_iter()
+            .map(|(t, s)| {
+                let who = match s {
+                    Some(Speaker::Named { name, .. }) => name.as_str().to_owned(),
+                    Some(Speaker::Cluster(c)) => c,
+                    other => format!("{other:?}"),
+                };
+                (t, who)
+            })
+            .collect()
+    };
+    let pair = |t: &str, w: &str| (t.to_owned(), w.to_owned());
+
+    assert_eq!(
+        shown(&[named(1, 0.0, 2.6, "Robin"), named(2, 2.6, 6.0, "Sam")]),
+        [
+            pair("ja dat klopt", "Robin"),
+            pair("maar wat zei ze", "Sam")
+        ]
+    );
+    assert_eq!(
+        shown(&[named(1, 0.0, 2.6, "Robin")]),
+        [pair("ja dat klopt", "Robin"), pair("maar wat zei ze", "B")]
+    );
+}
+
+#[test]
 fn a_run_shorter_than_half_a_second_goes_to_its_neighbour() {
     let h = heard(vec![segment(0.0, 3.0, "a b c d e f")]);
     let v = Voices {

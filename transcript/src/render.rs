@@ -12,7 +12,7 @@
 //!    whose middle it covers.
 //! 4. Inside a model segment, a sentence goes to whoever speaks most of it; a
 //!    line breaks where the segment ends or the speaker changes between
-//!    sentences, never inside one.
+//!    sentences, never inside one, except where a person named part of it.
 //! 5. A line's speaker is, in order: a person's naming of that stretch, a
 //!    person's naming of that voice, the voiceprint guess, the diarized label.
 //!    A person's words take the voice diarized at their midpoint, like a word.
@@ -591,7 +591,9 @@ fn model_lines(words: &[Word], speakers: &Speakers<'_>, heard: Option<&Heard>) -
 
 /// Each word's speaker, decided per sentence: a sentence goes to whoever
 /// speaks most of it, by time. A diarized boundary is approximate to a word or
-/// so, so a change inside a sentence is jitter, never a reason to break it.
+/// so, so a change inside a sentence is jitter, never a reason to break it. A
+/// person's naming is not jitter: the words they named keep it, and the rest
+/// of the sentence goes to whoever speaks most of that.
 fn by_sentence(words: &[Word], resolved: &[Option<Speaker>]) -> Vec<Option<Speaker>> {
     let mut out = vec![None; words.len()];
     let mut start = 0;
@@ -600,8 +602,9 @@ fn by_sentence(words: &[Word], resolved: &[Option<Speaker>]) -> Vec<Option<Speak
         if !(last || ends_sentence(&words[end].text)) {
             continue;
         }
+        let named = |k: usize| matches!(resolved[k], Some(Speaker::Named { .. }));
         let mut weight: Vec<(Option<&Speaker>, i64)> = Vec::new();
-        for k in start..=end {
+        for k in (start..=end).filter(|&k| !named(k)) {
             let who = resolved[k].as_ref();
             let length = words[k].span.micros().max(1);
             match weight.iter_mut().find(|(w, _)| *w == who) {
@@ -615,8 +618,12 @@ fn by_sentence(words: &[Word], resolved: &[Option<Speaker>]) -> Vec<Option<Speak
             .rev()
             .max_by_key(|(_, t)| *t)
             .and_then(|(w, _)| (*w).cloned());
-        for slot in &mut out[start..=end] {
-            slot.clone_from(&winner);
+        for k in start..=end {
+            out[k] = if named(k) {
+                resolved[k].clone()
+            } else {
+                winner.clone()
+            };
         }
         start = end + 1;
     }

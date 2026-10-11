@@ -7,7 +7,7 @@
 use crate::clips;
 use crate::legacy_edits;
 use crate::rendering;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::BTreeMap;
 use std::path::Path;
 use transcript::render::{Author, Line, Speaker, Why};
@@ -23,6 +23,7 @@ crate::statements! {
          ORDER BY a.id";
     AUDIO_FOR: Meaning = "SELECT id FROM audio_segments WHERE path = ?1";
     /// Every voiceprint, with the clip it was cut from.
+    SOURCE_KIND: Meaning = "SELECT kind FROM sources WHERE id = ?1";
     PRINTS: Meaning =
         "SELECT s.name, e.vector, coalesce(t.audio_segment_id, c.audio_segment_id)
          FROM speaker_embeddings e JOIN speakers s ON s.id = e.speaker_id
@@ -99,6 +100,10 @@ pub struct Report {
     pub person_written_lines: usize,
     pub person_text_missing: usize,
     pub person_examples: Vec<i64>,
+    /// The named lines render shows differently: per clip, and by the kind of
+    /// speaker render shows there instead.
+    pub person_differs_by_clip: BTreeMap<i64, usize>,
+    pub person_differs_shown: BTreeMap<&'static str, usize>,
     /// `RenderEmpty` clips whose every word today is in text render dropped
     /// by a rule; the rest, with ids.
     pub empty_explained: usize,
@@ -336,13 +341,7 @@ fn compare(clip: i64, today: &[Today], rendered: &[Line], report: &mut Report) -
             continue;
         }
         same = false;
-        let kind = match line.speaker() {
-            Some(Speaker::Named { .. } | Speaker::Voice { .. }) => "person",
-            Some(Speaker::Guess { .. }) => "guess",
-            Some(Speaker::Cluster(_)) => "cluster",
-            None => "none",
-        };
-        let change = format!("{} -> {kind}", t.kind);
+        let change = format!("{} -> {}", t.kind, kind(line.speaker()));
         let examples = report
             .speaker_change_examples
             .entry(change.clone())
@@ -382,14 +381,11 @@ fn speaker_seconds(
         }
     }
     for line in rendered {
-        let kind = match line.speaker() {
-            Some(Speaker::Named { .. } | Speaker::Voice { .. }) => "person",
-            Some(Speaker::Guess { .. }) => "guess",
-            Some(Speaker::Cluster(_)) => "cluster",
-            None => "none",
-        };
         let seconds = line.span().micros() as f64 / 1e6;
-        *entry.rendered.entry(kind.to_owned()).or_default() += seconds;
+        *entry
+            .rendered
+            .entry(kind(line.speaker()).to_owned())
+            .or_default() += seconds;
     }
 }
 
@@ -426,6 +422,11 @@ fn person_check(clip: i64, today: &[Today], rendered: &[Line], report: &mut Repo
             });
             if shown.and_then(|l| l.speaker().map(name)) != t.speaker.as_deref() {
                 report.person_name_differs += 1;
+                *report.person_differs_by_clip.entry(clip).or_default() += 1;
+                *report
+                    .person_differs_shown
+                    .entry(kind(shown.and_then(Line::speaker)))
+                    .or_default() += 1;
                 wrong = true;
             }
         }
@@ -443,6 +444,16 @@ fn person_check(clip: i64, today: &[Today], rendered: &[Line], report: &mut Repo
     }
     if wrong && report.person_examples.len() < 40 {
         report.person_examples.push(clip);
+    }
+}
+
+/// A rendered line's speaker as the report names its kinds.
+fn kind(speaker: Option<&Speaker>) -> &'static str {
+    match speaker {
+        Some(Speaker::Named { .. } | Speaker::Voice { .. }) => "person",
+        Some(Speaker::Guess { .. }) => "guess",
+        Some(Speaker::Cluster(_)) => "cluster",
+        None => "none",
     }
 }
 
@@ -485,6 +496,8 @@ pub struct Naming {
     pub clips: usize,
     /// Named lines in clips with no diarization result: render has no voices.
     pub undiarized_lines: usize,
+    /// By where the clip came from (a microphone or an uploaded recording)
+    /// and whether the line has its own embedding.
     pub buckets: BTreeMap<&'static str, NamingCounts>,
 }
 
@@ -565,11 +578,16 @@ pub fn naming(
             .collect();
         let out = rendering::lines(&clip, &facts, &edits, &enrolled);
         report.clips += 1;
+        let upload = SOURCE_KIND
+            .query_row(meaning, [clip.source.as_str()], |r| r.get::<_, String>(0))
+            .optional()?
+            .is_some_and(|kind| kind == "upload");
         for (label, start, end, embedded) in named {
-            let bucket = if embedded {
-                "own embedding"
-            } else {
-                "no own embedding"
+            let bucket = match (upload, embedded) {
+                (false, true) => "mic, own embedding",
+                (false, false) => "mic, no own embedding",
+                (true, true) => "upload, own embedding",
+                (true, false) => "upload, no own embedding",
             };
             let counts = report.buckets.entry(bucket).or_default();
             counts.lines += 1;
@@ -609,7 +627,8 @@ pub fn naming(
 #[derive(Debug, serde::Serialize)]
 pub struct Detail {
     pub today: Vec<Today>,
-    pub rendered: Vec<(String, Option<String>, String)>,
+    /// Seconds into the clip, as for `acts`: start, end, text, speaker, author.
+    pub rendered: Vec<(f64, f64, String, Option<String>, String)>,
     pub dropped: Vec<(String, String)>,
     pub heard_segments: Option<usize>,
     pub voices: Option<usize>,
@@ -632,6 +651,7 @@ pub fn detail(
     let today = today_lines(meaning, audio)?;
     let facts = rendering::facts(ingest, &clip)?;
     let out = rendering::lines(&clip, &facts, &edits, &enrolled);
+    let at = |i: transcript::Instant| (i.micros() - clip.start.micros()) as f64 / 1e6;
     Ok(Detail {
         today,
         rendered: out
@@ -639,6 +659,8 @@ pub fn detail(
             .iter()
             .map(|l| {
                 (
+                    at(l.span().start()),
+                    at(l.span().end()),
                     l.text().to_owned(),
                     l.speaker().map(|s| name(s).to_owned()),
                     format!("{:?}", l.by()),
@@ -671,7 +693,6 @@ pub fn detail(
                     }
                     _ => return None,
                 };
-                let at = |i: transcript::Instant| (i.micros() - clip.start.micros()) as f64 / 1e6;
                 Some((e.id.stored(), at(span.start()), at(span.end()), what))
             })
             .collect(),
