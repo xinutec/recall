@@ -77,10 +77,10 @@ enum Task {
         #[arg(long)]
         apply: bool,
     },
-    /// Store the phones' WAV copies as FLAC (`recalld::phone_flac`).
     /// Whether every stored file matches the size and hash its row recorded,
     /// and every audio row names a file (`recalld::verify`). Reads every byte.
     Verify,
+    /// Store the phones' WAV copies as FLAC (`recalld::phone_flac`).
     PhoneFlac {
         /// Convert; without this, only say what would be converted.
         #[arg(long)]
