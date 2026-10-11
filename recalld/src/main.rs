@@ -89,8 +89,8 @@ enum Task {
     },
 }
 
-/// Open both planes as the server does (which gives every stored file a clip),
-/// run `report` over them, and print what it returns as JSON.
+/// Open both planes as the server does, run `report` over them, and print what
+/// it returns as JSON.
 fn report<T: serde::Serialize, E: std::fmt::Display>(
     root: &std::path::Path,
     report: impl FnOnce(&rusqlite::Connection, &rusqlite::Connection) -> Result<T, E>,
@@ -248,13 +248,7 @@ fn prepare_planes(root: &std::path::Path) -> Result<(), String> {
     let conn = recalld::work::open_write(root)
         .map_err(|err| format!("cannot open {}/recall.sqlite: {err}", root.display()))?;
     recalld::meaning_schema::ensure(&conn)
-        .map_err(|err| format!("cannot migrate {}/recall.sqlite: {err}", root.display()))?;
-    // Uploads stored before the ingest plane existed get their clips (#1911).
-    let ingest = recalld::store::open(root)
-        .map_err(|err| format!("cannot open {}/ingest.sqlite: {err}", root.display()))?;
-    recalld::clips::adopt_outside_ingest(&conn, &ingest, root)
-        .map(|_| ())
-        .map_err(|err| format!("cannot adopt clips outside ingest/: {err}"))
+        .map_err(|err| format!("cannot migrate {}/recall.sqlite: {err}", root.display()))
 }
 
 fn main() -> ExitCode {

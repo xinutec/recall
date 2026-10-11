@@ -164,39 +164,3 @@ fn a_renamed_file_keeps_its_clip() {
         .unwrap();
     assert_eq!(count, 1);
 }
-
-#[test]
-fn uploads_stored_outside_ingest_are_adopted_once() {
-    let (dir, ingest) = ingest();
-    let meaning = recalld::work::open_write(dir.path()).expect("meaning");
-    recalld::meaning_schema::ensure(&meaning).expect("schema");
-    let path = dir
-        .path()
-        .join("meeting-20260520-1901/meeting-20260520-1901-20260520T180121.mp3");
-    meaning
-        .execute_batch(&format!(
-            "INSERT INTO sources (id, name, kind) VALUES ('meeting-20260520-1901', 'm', 'upload');
-             INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels)
-             VALUES ('meeting-20260520-1901', '{}', '2026-05-20T18:01:21+00:00',
-                     '2026-05-20T18:30:00+00:00', 16000, 1);",
-            path.display()
-        ))
-        .expect("legacy upload");
-
-    assert_eq!(
-        recalld::clips::adopt_outside_ingest(&meaning, &ingest, dir.path()).unwrap(),
-        1
-    );
-    assert_eq!(
-        recalld::clips::adopt_outside_ingest(&meaning, &ingest, dir.path()).unwrap(),
-        0
-    );
-    let clip = recalld::clips::for_audio_path(&ingest, dir.path(), &path.to_string_lossy())
-        .unwrap()
-        .expect("found by its audio path");
-    assert_eq!(
-        clip.path,
-        "meeting-20260520-1901/meeting-20260520-1901-20260520T180121.mp3"
-    );
-    assert_eq!(clip.start, Instant::parse("2026-05-20T18:01:21Z").unwrap());
-}

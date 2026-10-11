@@ -3,8 +3,7 @@
 //!
 //! A stored file gets its clip from the database itself (the
 //! `segments_have_clips` trigger, `ingest_schema`). This module adds what a
-//! trigger cannot know: the uploads stored before the ingest plane existed,
-//! and a rename that must keep the id.
+//! trigger cannot know: a rename that must keep the id.
 
 use rusqlite::{Connection, OptionalExtension};
 use std::path::Path;
@@ -17,9 +16,6 @@ crate::statements! {
         "SELECT id, source, start_us, filename, path FROM clips WHERE id = ?1";
     BY_PATH: Ingest =
         "SELECT id, source, start_us, filename, path FROM clips WHERE path = ?1";
-    ADOPT: Ingest =
-        "INSERT INTO clips (source, start_us, filename, path) VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT (filename) DO NOTHING";
     RENAME: Ingest =
         "UPDATE clips SET filename = ?2, path = ?3 WHERE filename = ?1";
     CENSUS_CLIPS: Ingest = "SELECT count(*) FROM clips";
@@ -29,12 +25,6 @@ crate::statements! {
         "SELECT count(*) FROM clips c WHERE EXISTS
              (SELECT 1 FROM clips o WHERE o.source = c.source AND o.start_us = c.start_us AND o.id <> c.id)";
     AUDIO_PATHS: Meaning = "SELECT path FROM audio_segments";
-    /// Upload audio the meaning plane holds outside `ingest/`: sessions stored
-    /// before the ingest plane existed.
-    OUTSIDE_INGEST: Meaning =
-        "SELECT a.source_id, a.path FROM audio_segments a
-         JOIN sources s ON s.id = a.source_id
-         WHERE s.kind = 'upload' AND a.path NOT LIKE ?1 || '/ingest/%'";
 }
 
 /// A stored row that is not a clip the domain can hold.
@@ -115,32 +105,6 @@ pub fn for_audio_path(
 
 fn relative<'a>(root: &Path, path: &'a str) -> Option<&'a str> {
     path.strip_prefix(root.to_str()?)?.strip_prefix('/')
-}
-
-/// Give a clip to every upload stored outside `ingest/`, by the start in its
-/// name. Idempotent. Returns how many it added.
-pub fn adopt_outside_ingest(
-    meaning: &Connection,
-    ingest: &Connection,
-    root: &Path,
-) -> Result<usize, ClipError> {
-    let rows: Vec<(String, String)> = OUTSIDE_INGEST
-        .prepare(meaning)?
-        .query_map([root.to_string_lossy()], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<rusqlite::Result<_>>()?;
-    let mut added = 0;
-    for (source, path) in rows {
-        let Some(relative) = relative(root, &path) else {
-            continue;
-        };
-        let filename = relative.rsplit('/').next().unwrap_or(relative);
-        let Some(start) = audiocore::names::parse_segment_start(filename).map(Instant::from_utc)
-        else {
-            continue;
-        };
-        added += ADOPT.execute(ingest, (&source, start.micros(), filename, relative))?;
-    }
-    Ok(added)
 }
 
 /// A stored file renamed (`.wav` to `.phone.flac`): the clip follows, keeping

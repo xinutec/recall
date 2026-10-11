@@ -193,7 +193,7 @@ fn repeated_hour_marker(started: DateTime<Utc>, local: &DateTime<chrono_tz::Tz>)
 }
 
 /// Where the uploaded file lands: the ingest plane, so it is transcribed like a
-/// microphone clip. Older uploads live in `<root>/<source>/`.
+/// microphone clip.
 pub fn stored_path(root: &Path, source: &str, started: DateTime<Utc>, suffix: &str) -> PathBuf {
     let stamp = format!(
         "{:04}{:02}{:02}T{:02}{:02}{:02}",

@@ -79,7 +79,12 @@ fn fleet() -> Fleet {
             (SOURCE, root.join(SOURCE).join(FILE).to_string_lossy()),
         )
         .expect("audio");
-    recalld::clips::adopt_outside_ingest(&meaning, &ingest, &root).expect("clip");
+    ingest
+        .execute(
+            "INSERT INTO clips (source, start_us, filename, path) VALUES (?1, 1779300081000000, ?2, ?3)",
+            (SOURCE, FILE, format!("{SOURCE}/{FILE}")),
+        )
+        .expect("clip");
     ingest
         .execute(
             "INSERT INTO jobs (kind, filename, created_utc) VALUES (?1, ?2, '2026-10-05T08:41:17Z')",
