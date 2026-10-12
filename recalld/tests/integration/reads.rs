@@ -508,3 +508,44 @@ fn a_line_says_whether_a_person_vouched_for_its_words() {
     assert_eq!(by_text.get("checked"), Some(&true));
     assert_eq!(by_text.get("not"), Some(&false));
 }
+
+#[test]
+fn an_excluded_stretch_stays_on_the_page_so_it_can_be_taken_back_and_out_of_search() {
+    // The app folds it into one row with an undo; other hidden lines stay
+    // out unless asked for.
+    let conn = db();
+    turn(&conn, 1, "2026-09-01T10:00:00+00:00", "current", &[]);
+    turn(
+        &conn,
+        2,
+        "2026-09-01T10:00:01+00:00",
+        "strangers",
+        &[("hidden_reason", "excluded")],
+    );
+    turn(
+        &conn,
+        3,
+        "2026-09-01T10:00:02+00:00",
+        "thanks",
+        &[("hidden_reason", "nobody spoke")],
+    );
+
+    let page = reads::timeline(&conn, 50, None).expect("timeline");
+    let kinds: Vec<(String, Option<recalld::line::HiddenKind>)> = page
+        .items
+        .iter()
+        .map(|t| (t.text.clone(), t.hidden_as))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("current".to_owned(), None),
+            (
+                "strangers".to_owned(),
+                Some(recalld::line::HiddenKind::Excluded)
+            ),
+        ]
+    );
+    let hits = reads::search(&conn, "strangers OR current", 50).expect("search");
+    assert_eq!(hits.items.len(), 1);
+}

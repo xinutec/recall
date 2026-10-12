@@ -15,7 +15,7 @@ import { Sheets } from '@xinutec/ui-scaffold';
 
 import { Moment, Transcript } from '../models';
 import { RecallApi } from '../recall-api';
-import { timeOfDaySeconds } from '../format';
+import { timeOfDay, timeOfDaySeconds } from '../format';
 import { LineSheet, LineSheetData, LineSheetResult } from './line-sheet';
 import { Player } from './player';
 
@@ -59,6 +59,52 @@ export function runsOf(
   return out;
 }
 
+/** What the list shows, in order: speaker paragraphs, and stretches a person
+ * excluded, each folded into one row with its undo. */
+export type Block =
+  | { readonly kind: 'run'; readonly run: Run }
+  | {
+      readonly kind: 'excluded';
+      readonly key: number;
+      readonly from: string;
+      readonly to: string;
+      /** One of its lines: undoing it takes back the whole stretch. */
+      readonly line: Transcript;
+    };
+
+export function blocksOf(
+  turns: readonly Transcript[],
+  voiceNames: ReadonlyMap<string, string> = new Map(),
+): Block[] {
+  const out: Block[] = [];
+  let pending: Transcript[] = [];
+  const flush = (): void => {
+    for (const run of runsOf(pending, voiceNames)) out.push({ kind: 'run', run });
+    pending = [];
+  };
+  for (const t of turns) {
+    if (t.hiddenAs !== 'excluded') {
+      pending.push(t);
+      continue;
+    }
+    const last = out.at(-1);
+    if (!pending.length && last?.kind === 'excluded') {
+      out[out.length - 1] = { ...last, to: t.end };
+    } else {
+      flush();
+      out.push({ kind: 'excluded', key: t.id, from: t.start, to: t.end, line: t });
+    }
+  }
+  flush();
+  return out;
+}
+
+/** Whether `t` can end a stretch that starts at `from`: the same recording,
+ * and not before it. */
+export function canEnd(from: Transcript, t: Transcript): boolean {
+  return t.source === from.source && (t.start > from.start || (t.start === from.start && t.id >= from.id));
+}
+
 const COLOURS = ['#8ab4f8', '#fbbc04', '#81c995', '#f28b82', '#c58af9', '#78d9ec', '#ff8bcb'];
 
 /** A stretch of turns as speaker paragraphs. Tapping a line opens its sheet. */
@@ -84,9 +130,14 @@ export class Turns implements OnDestroy {
   private readonly api = inject(RecallApi);
   protected readonly player = inject(Player);
   protected readonly clock = timeOfDaySeconds;
+  protected readonly minute = timeOfDay;
 
   protected readonly turns = computed(() => this.moments().map((m) => m.primary));
-  protected readonly runs = computed(() => runsOf(this.turns(), this.voiceNames()));
+  protected readonly blocks = computed(() => blocksOf(this.turns(), this.voiceNames()));
+  /** The paragraphs alone, for the speakers' colours. */
+  protected readonly runs = computed(() =>
+    this.blocks().flatMap((b) => (b.kind === 'run' ? [b.run] : [])),
+  );
 
   private readonly momentOf = computed(() => {
     const out = new Map<number, Moment>();
@@ -177,12 +228,74 @@ export class Turns implements OnDestroy {
     if (mine) this.player.stop();
   }
 
+  // --- excluding a stretch
+
+  /** A stretch's times: to the minute, or to the second within one minute. */
+  protected stretch(from: string, to: string): string {
+    const [a, b] = [this.minute(from), this.minute(to)];
+    return a === b ? `${this.clock(from)}–${this.clock(to)}` : `${a}–${b}`;
+  }
+
+  /** A stretch being picked: its first line, then its last once tapped. */
+  protected readonly excluding = signal<{ from: Transcript; to: Transcript | null } | null>(null);
+  protected readonly excludeBusy = signal(false);
+
+  /** Whether `t` falls in the stretch being picked, to mark it. */
+  protected inStretch(t: Transcript): boolean {
+    const x = this.excluding();
+    if (!x) return false;
+    const end = x.to ?? x.from;
+    return canEnd(x.from, t) && canEnd(t, end);
+  }
+
+  private pickEnd(t: Transcript): void {
+    const x = this.excluding();
+    if (!x) return;
+    if (!canEnd(x.from, t)) {
+      this.snack.open('Pick a later line of the same recording', 'OK', { duration: 4000 });
+      return;
+    }
+    this.excluding.set({ from: x.from, to: t });
+  }
+
+  protected confirmExclude(): void {
+    const x = this.excluding();
+    if (!x?.to || this.excludeBusy()) return;
+    this.excludeBusy.set(true);
+    this.api.exclude(x.from.id, x.to.id).subscribe({
+      next: () => {
+        this.excludeBusy.set(false);
+        this.excluding.set(null);
+        this.changed.emit();
+      },
+      error: () => {
+        this.excludeBusy.set(false);
+        this.snack.open('Could not exclude, try again', 'OK', { duration: 4000 });
+      },
+    });
+  }
+
+  protected cancelExclude(): void {
+    this.excluding.set(null);
+  }
+
+  protected undoExclude(line: Transcript): void {
+    this.api.undoExclude(line.id).subscribe({
+      next: () => this.changed.emit(),
+      error: () => this.snack.open('Could not undo', 'OK', { duration: 4000 }),
+    });
+  }
+
   // --- a line
 
   /** The line whose sheet is open, marked in the text. */
   protected readonly selected = signal<number | null>(null);
 
   protected openLine(t: Transcript): void {
+    if (this.excluding()) {
+      this.pickEnd(t);
+      return;
+    }
     const { name, confirmed } = speakerOf(t, this.voiceNames());
     const known = [...new Set([...this.palette(), ...this.roster()])];
     const data: LineSheetData = {
@@ -199,6 +312,10 @@ export class Turns implements OnDestroy {
       .afterDismissed()
       .subscribe((result) => {
         this.selected.set(null);
+        if (result === 'excludeFrom') {
+          this.excluding.set({ from: t, to: null });
+          return;
+        }
         if (result) this.changed.emit();
         if (result === 'hidden') this.offerUndo(t);
       });

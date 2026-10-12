@@ -1,5 +1,30 @@
+@if (excluding(); as x) {
+  <div class="excluding" role="status">
+    @if (x.to; as to) {
+      <span class="ask">Exclude {{ stretch(x.from.start, to.end) }}?</span>
+    } @else {
+      <span class="ask">Tap the last line to exclude</span>
+    }
+    <span class="acts">
+      <button matButton (click)="cancelExclude()">Cancel</button>
+      @if (x.to) {
+        <button matButton="filled" [disabled]="excludeBusy()" (click)="confirmExclude()">
+          Exclude
+        </button>
+      }
+    </span>
+  </div>
+}
 <div class="transcript">
-  @for (run of runs(); track run.key) {
+  @for (block of blocks(); track block.kind + (block.kind === 'run' ? block.run.key : block.key)) {
+    @if (block.kind === 'excluded') {
+      <div class="excluded">
+        <mat-icon>content_cut</mat-icon>
+        <span>Excluded {{ stretch(block.from, block.to) }}</span>
+        <button matButton (click)="undoExclude(block.line)">Undo</button>
+      </div>
+    } @else {
+    @let run = block.run;
     <div class="run" [class.named]="run.confirmed" [style.--c]="colourFor(run.speaker)">
       <div class="who">
         <button
@@ -31,6 +56,7 @@
             [class.provisional]="provisional(t)"
             [class.gone]="t.hidden"
             [class.disputed]="disputed(t)"
+            [class.stretch]="inStretch(t)"
             [attr.title]="disputed(t) ? 'The mics disagree on who said this' : null"
             (click)="openLine(t)"
             (keydown.enter)="openLine(t)"
@@ -42,6 +68,7 @@
         }
       </p>
     </div>
+    }
   }
 </div>
 

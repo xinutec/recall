@@ -74,6 +74,11 @@
         text-decoration: line-through;
       }
 
+      // The stretch being picked for exclusion.
+      &.stretch {
+        background: color-mix(in srgb, var(--mat-sys-error) 18%, transparent);
+      }
+
       &.disputed {
         text-decoration: underline wavy color-mix(in srgb, var(--mat-sys-error) 70%, transparent);
         text-underline-offset: 3px;
@@ -95,4 +100,53 @@
   font: var(--mat-sys-label-small);
   color: var(--mat-sys-on-surface-variant);
   background: var(--mat-sys-surface-container-high);
+}
+
+// Picking a stretch to exclude: stays in view while the person scrolls to its end.
+.excluding {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 12px;
+  background: var(--mat-sys-surface-container-highest);
+
+  .ask {
+    flex: 1 1 auto;
+    font: var(--mat-sys-body-medium);
+  }
+
+  // Cancel and Exclude stay together, wrapping as one to the right.
+  .acts {
+    display: flex;
+    gap: 0.5rem;
+    margin-left: auto;
+  }
+}
+
+// A stretch a person excluded: one row, the words kept but out of view.
+.excluded {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+  padding: 0.25rem 0.65rem;
+  border-left: 2px dashed var(--mat-sys-outline-variant);
+  font: var(--mat-sys-body-small);
+  color: var(--mat-sys-on-surface-variant);
+
+  mat-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+  }
+
+  span {
+    flex: 1 1 auto;
+  }
 }

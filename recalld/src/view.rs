@@ -11,7 +11,7 @@
 
 use crate::clips::{self, ClipError};
 use crate::edit_log::{self, LogError};
-use crate::line::{HUMAN_MODEL, LIVE_MODEL, NOBODY_SPOKE, Stage};
+use crate::line::{EXCLUDED, HUMAN_MODEL, LIVE_MODEL, NOBODY_SPOKE, Stage};
 use crate::rendering;
 use crate::results::ResultError;
 
@@ -21,12 +21,12 @@ pub const SHIM_MODEL: &str = "mlx-community/whisper-large-v3-turbo";
 use audiocore::job::Kind;
 use rusqlite::Connection;
 use rusqlite::types::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use transcript::render::{Author, Dropped, Line, Speaker, Why};
 use transcript::voice::Voiceprint;
-use transcript::{Clip, Instant};
+use transcript::{Clip, EditId, Instant};
 
 crate::statements! {
     /// Every recording a person can see lines from, newest first so a full
@@ -148,6 +148,7 @@ pub fn refresh(
 ) -> Result<Refreshed, ViewError> {
     let shown = shown(meaning, ingest, root)?;
     let prints = crate::identify::enrolled(meaning)?;
+    let recovered = edit_log::recovered(meaning)?;
     let versions = Versions::read(meaning, ingest, &prints)?;
     let stored: HashMap<i64, String> = STORED_INPUTS
         .prepare(meaning)?
@@ -167,7 +168,7 @@ pub fn refresh(
         // Read and render before taking the write lock: a cold result is slow.
         let mut ready = Vec::new();
         for (s, inputs) in batch {
-            match prepare(meaning, ingest, s, &prints) {
+            match prepare(meaning, ingest, s, &prints, &recovered) {
                 Ok(rows) => ready.push((*s, inputs, rows)),
                 Err(Failed::Result(err)) => {
                     done.unreadable.push((s.clip.id.stored(), err.to_string()));
@@ -216,12 +217,13 @@ pub fn render_clips(
     clips: &[transcript::ClipId],
 ) -> Result<(), ViewError> {
     let prints = crate::identify::enrolled(meaning)?;
+    let recovered = edit_log::recovered(meaning)?;
     let versions = Versions::read(meaning, ingest, &prints)?;
     for s in shown(meaning, ingest, root)?
         .iter()
         .filter(|s| clips.contains(&s.clip.id))
     {
-        let rows = match prepare(meaning, ingest, s, &prints) {
+        let rows = match prepare(meaning, ingest, s, &prints, &recovered) {
             Ok(rows) => rows,
             Err(Failed::Result(err)) => return Err(ViewError::Result(err)),
             Err(Failed::View(err)) => return Err(err),
@@ -374,6 +376,7 @@ fn prepare(
     ingest: &Connection,
     s: &Shown,
     prints: &[Voiceprint],
+    recovered: &HashSet<EditId>,
 ) -> Result<Vec<Row>, Failed> {
     let facts = match rendering::facts(ingest, &s.clip) {
         Ok(facts) => facts,
@@ -391,7 +394,11 @@ fn prepare(
     for line in &out.lines {
         rows.push(Row::line(line, tier)?);
     }
-    rows.extend(runs(&out.dropped).iter().map(|d| Row::dropped(d, tier)));
+    rows.extend(
+        runs(&out.dropped)
+            .iter()
+            .map(|d| Row::dropped(d, tier, recovered)),
+    );
     Ok(rows)
 }
 
@@ -591,7 +598,8 @@ impl Row {
         })
     }
 
-    fn dropped(dropped: &Dropped, tier: Stage) -> Self {
+    /// `recovered`: acts from the old tables, whose exclusions read "left out".
+    fn dropped(dropped: &Dropped, tier: Stage, recovered: &HashSet<EditId>) -> Self {
         let (hidden, edit) = match dropped.why {
             Why::RepetitionLoop => ("a repetition loop".to_owned(), None),
             Why::Wordless => ("no words".to_owned(), None),
@@ -599,7 +607,10 @@ impl Row {
             Why::Replaced(id) => ("replaced by a person's words".to_owned(), Some(id.stored())),
             Why::NoSpeech(id) => (NOBODY_SPOKE.to_owned(), Some(id.stored())),
             Why::Unintelligible(id) => ("cannot be made out".to_owned(), Some(id.stored())),
-            Why::Excluded(id) => ("left out".to_owned(), Some(id.stored())),
+            Why::Excluded(id) if recovered.contains(&id) => {
+                ("left out".to_owned(), Some(id.stored()))
+            }
+            Why::Excluded(id) => (EXCLUDED.to_owned(), Some(id.stored())),
         };
         Self {
             start: spelled(dropped.span.start()),

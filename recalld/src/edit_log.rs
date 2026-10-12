@@ -19,6 +19,9 @@ crate::statements! {
     /// A session's own acts and their retractions.
     FOR_SOURCE: Meaning = "SELECT id, at_us, act FROM edits WHERE source_id = ?1 ORDER BY id";
     ONE: Meaning = "SELECT id, at_us, act FROM edits WHERE id = ?1";
+    /// The acts filed in one write: they share its instant.
+    SAME_AT: Meaning = "SELECT id, at_us, act FROM edits WHERE at_us = ?1 ORDER BY id";
+    RECOVERED: Meaning = "SELECT id FROM edits WHERE origin IS NOT NULL";
 }
 
 #[derive(Debug)]
@@ -137,5 +140,27 @@ fn read(
                 act: serde_json::from_str(&json).map_err(|err| unreadable(err.to_string()))?,
             })
         })
+        .collect()
+}
+
+/// The acts filed together with `edit`, itself included: one write's acts
+/// share its instant.
+///
+/// # Errors
+/// If the store refuses, a row does not read, or there is no such edit.
+pub fn filed_with(conn: &Connection, edit: EditId) -> Result<Vec<Edit>, LogError> {
+    let one = get(conn, edit)?.ok_or(LogError::NoTarget(edit))?;
+    read(SAME_AT.prepare(conn)?, [one.at.micros()])
+}
+
+/// The acts recovered from the old tables when the log was seeded, not done
+/// in the app.
+///
+/// # Errors
+/// If the store refuses.
+pub fn recovered(conn: &Connection) -> rusqlite::Result<std::collections::HashSet<EditId>> {
+    RECOVERED
+        .prepare(conn)?
+        .query_map([], |r| Ok(EditId::from_stored(r.get(0)?)))?
         .collect()
 }

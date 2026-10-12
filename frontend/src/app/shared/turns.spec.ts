@@ -1,13 +1,16 @@
 import { TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Sheets } from '@xinutec/ui-scaffold';
 import { Subject } from 'rxjs';
 import { vi } from 'vitest';
 
-import { Turns, runsOf } from './turns';
-import { LineSheetData } from './line-sheet';
+import { Turns, blocksOf, runsOf } from './turns';
+import { LineSheetData, LineSheetResult } from './line-sheet';
 import { Player } from './player';
 import { Moment, Transcript } from '../models';
+import { timeOfDay } from '../format';
 
 function turn(o: Partial<Transcript>): Transcript {
   return {
@@ -47,7 +50,7 @@ const line = (primary: Transcript, alternates: Transcript[] = []): Moment => ({
 const lines = (...shown: Transcript[]): Moment[] => shown.map((t) => line(t));
 
 async function setup(moments: Moment[], roster: string[] = []) {
-  const closed = new Subject<boolean | undefined>();
+  const closed = new Subject<LineSheetResult | boolean | undefined>();
   const sheet = {
     open: vi.fn((_: unknown, config: { data: LineSheetData }) => {
       void config;
@@ -55,7 +58,12 @@ async function setup(moments: Moment[], roster: string[] = []) {
     }),
   };
   TestBed.configureTestingModule({
-    providers: [provideZonelessChangeDetection(), { provide: Sheets, useValue: sheet }],
+    providers: [
+      provideZonelessChangeDetection(),
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      { provide: Sheets, useValue: sheet },
+    ],
   });
   const fixture = TestBed.createComponent(Turns);
   fixture.componentRef.setInput('moments', moments);
@@ -96,6 +104,34 @@ describe('runsOf', () => {
     const voices = new Map([['A', 'Voice 1']]);
     const runs = runsOf([turn({ id: 1, cluster: 'A' }), turn({ id: 2 })], voices);
     expect(runs.map((r) => r.speaker)).toEqual(['Voice 1', 'unknown']);
+  });
+});
+
+describe('blocksOf', () => {
+  const excluded = (id: number, start: string, end: string) =>
+    said(id, null, { start, end, hidden: 'excluded', hiddenAs: 'excluded' });
+
+  it('folds a stretch a person excluded into one row from its first start to its last end', () => {
+    const blocks = blocksOf([
+      said(1, 'P'),
+      excluded(2, '2026-01-15T14:02:00Z', '2026-01-15T14:05:00Z'),
+      excluded(3, '2026-01-15T14:10:00Z', '2026-01-15T14:19:00Z'),
+      said(4, 'P'),
+    ]);
+    expect(blocks.map((b) => b.kind)).toEqual(['run', 'excluded', 'run']);
+    expect(blocks[1]).toMatchObject({
+      from: '2026-01-15T14:02:00Z',
+      to: '2026-01-15T14:19:00Z',
+    });
+  });
+
+  it('keeps one speaker’s lines apart on either side of an excluded stretch', () => {
+    const blocks = blocksOf([
+      said(1, 'P'),
+      excluded(2, '2026-01-15T14:02:00Z', '2026-01-15T14:05:00Z'),
+      said(3, 'P'),
+    ]);
+    expect(blocks.filter((b) => b.kind === 'run')).toHaveLength(2);
   });
 });
 
@@ -219,5 +255,51 @@ describe('Turns', () => {
       [1, 'usb'],
       [3, 'phone'],
     ]);
+  });
+
+  it('excludes a stretch picked from one line to a later one, and undoes it from its row', async () => {
+    const at = (start: string, end: string) => ({ start, end });
+    const first = said(1, 'P', at('2026-01-15T14:02:00Z', '2026-01-15T14:02:05Z'));
+    const before = said(2, 'P', at('2026-01-15T14:01:00Z', '2026-01-15T14:01:05Z'));
+    const last = said(3, 'P', at('2026-01-15T14:19:00Z', '2026-01-15T14:19:05Z'));
+    const { c, changed, closed, fixture } = await setup(lines(before, first, last));
+    const http = TestBed.inject(HttpTestingController);
+
+    c.openLine(first);
+    closed.next('excludeFrom');
+    expect(c.excluding()).toMatchObject({ from: first, to: null });
+    expect(changed).not.toHaveBeenCalled();
+
+    c.openLine(before);
+    expect(c.excluding().to).toBeNull();
+    c.openLine(last);
+    expect(c.excluding().to).toBe(last);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain(
+      `Exclude ${timeOfDay(first.start)}–${timeOfDay(last.end)}?`,
+    );
+
+    c.confirmExclude();
+    const req = http.expectOne('/api/exclude');
+    expect(req.request.body).toEqual({ from: 1, to: 3 });
+    req.flush({ ok: true });
+    expect(c.excluding()).toBeNull();
+    expect(changed).toHaveBeenCalledTimes(1);
+
+    c.undoExclude(first);
+    const undo = http.expectOne('/api/exclude/undo');
+    expect(undo.request.body).toEqual({ id: 1 });
+    undo.flush({ ok: true });
+    expect(changed).toHaveBeenCalledTimes(2);
+    http.verify();
+  });
+
+  it('cancelling a stretch leaves the lines as they were', async () => {
+    const { c, closed } = await setup(lines(said(1, 'P'), said(2, 'P')));
+    c.openLine(c.turns()[0]);
+    closed.next('excludeFrom');
+    c.cancelExclude();
+    expect(c.excluding()).toBeNull();
+    TestBed.inject(HttpTestingController).verify();
   });
 });

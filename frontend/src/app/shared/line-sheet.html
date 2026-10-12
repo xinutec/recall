@@ -51,6 +51,11 @@
           <mat-icon matListItemIcon>voice_over_off</mat-icon>
           <span matListItemTitle>Nobody spoke</span>
         </button>
+        <button mat-list-item [disabled]="busy()" (click)="excludeFrom()">
+          <mat-icon matListItemIcon>content_cut</mat-icon>
+          <span matListItemTitle>Exclude from here…</span>
+          <span matListItemLine>Only other people talking, as if recording had paused</span>
+        </button>
       }
       @if (editable && words.length > 1) {
         <button mat-list-item (click)="open('part')">

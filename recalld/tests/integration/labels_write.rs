@@ -325,3 +325,89 @@ fn a_pinned_language_is_the_sessions_until_it_is_taken_back() {
     w::pin_language(&f.meaning, &f.ingest, f.root(), &usb, None).expect("unpin");
     assert_eq!(w::language_of(&f.meaning, "usb").expect("read"), None);
 }
+
+/// A session of two clips, one line in the first and two in the second, and
+/// a household clip beside them.
+fn two_clips() -> Fleet {
+    let f = Fleet::new();
+    f.clip(
+        "meeting-20261004-1200",
+        "upload",
+        "20261004T120000",
+        &[(50.0, 58.0, "een twee drie vier")],
+        None,
+    );
+    f.clip(
+        "meeting-20261004-1200",
+        "upload",
+        "20261004T120100",
+        &[
+            (1.0, 9.0, "vijf zes zeven acht"),
+            (20.0, 25.0, "negen tien"),
+        ],
+        None,
+    );
+    f.clip(
+        "usb",
+        "coreaudio",
+        "20261004T120100",
+        &[(30.0, 32.0, "elders")],
+        None,
+    );
+    f.refresh();
+    f
+}
+
+#[test]
+fn excluding_a_stretch_hides_its_lines_across_clips_and_one_undo_brings_it_all_back() {
+    // Strangers talking: excluded as if recording had paused, not filed as
+    // invented words.
+    let f = two_clips();
+    let first = line(&f, "een twee drie vier");
+    let last = line(&f, "vijf zes zeven acht");
+
+    let excluded = w::exclude(&f.meaning, &f.ingest, f.root(), first, last).expect("exclude");
+
+    assert_eq!(excluded, 2);
+    assert_eq!(f.texts(), ["negen tien", "elders"]);
+    let hidden = f.hidden();
+    assert_eq!(hidden.len(), 2);
+    assert!(
+        hidden.iter().all(|(_, _, reason)| reason == "excluded"),
+        "{hidden:?}"
+    );
+    let kinds = f.act_kinds();
+    assert_eq!(kinds, ["Exclude", "Exclude"]);
+
+    // Either line of the stretch takes all of it back.
+    w::undo_exclude(&f.meaning, &f.ingest, f.root(), hidden[1].0).expect("undo");
+    assert_eq!(
+        f.texts(),
+        [
+            "een twee drie vier",
+            "vijf zes zeven acht",
+            "negen tien",
+            "elders"
+        ]
+    );
+}
+
+#[test]
+fn an_exclusion_must_run_forward_within_one_recording_and_only_one_can_be_undone() {
+    let f = two_clips();
+    let (first, last) = (line(&f, "een twee drie vier"), line(&f, "negen tien"));
+    let elsewhere = line(&f, "elders");
+
+    assert!(matches!(
+        w::exclude(&f.meaning, &f.ingest, f.root(), last, first),
+        Err(WriteError::BadSpan)
+    ));
+    assert!(matches!(
+        w::exclude(&f.meaning, &f.ingest, f.root(), first, elsewhere),
+        Err(WriteError::BadSpan)
+    ));
+    assert!(matches!(
+        w::undo_exclude(&f.meaning, &f.ingest, f.root(), first),
+        Err(WriteError::NotExcluded(_))
+    ));
+}

@@ -8,11 +8,12 @@ use std::time::Duration;
 
 use crate::line::{HiddenKind, Stage};
 
-/// The shown lines; with `?1`, the model text render left out too.
+/// The shown lines, and the lines of a stretch a person excluded, which the
+/// app folds into one row with its undo; with `?1`, every hidden line too.
 macro_rules! current {
     () => {
         "SELECT t.* FROM rendered_lines t \
-         WHERE (?1 OR t.hidden_reason IS NULL) \
+         WHERE (?1 OR t.hidden_reason IS NULL OR t.hidden_reason = 'excluded') \
            AND t.start_utc < COALESCE(?3, '9999') AND t.start_utc > COALESCE(?4, '')"
     };
 }

@@ -56,8 +56,9 @@ export function wordsOf(text: string): WordSpan[] {
 type Mode = 'main' | 'part' | 'edit' | 'mics';
 
 /** What the sheet did before closing: `hidden` is nobody spoke, which the caller
- * offers to undo. */
-export type LineSheetResult = 'wrote' | 'hidden';
+ * offers to undo; `excludeFrom` asks the caller to let the person pick where an
+ * excluded stretch ends, from this line. */
+export type LineSheetResult = 'wrote' | 'hidden' | 'excludeFrom';
 
 /** Everything to do with one line: hear it, say who said it, give part of it to
  * someone else, confirm or fix its words, say nobody spoke, compare the mics.
@@ -190,6 +191,11 @@ export class LineSheet {
   /** The words are the model's invention: hide the line. */
   protected nobodySpoke(): void {
     this.write(this.api.noSpeech(this.t.id), 'hidden');
+  }
+
+  /** Strangers talking from here: the list asks where it stops. */
+  protected excludeFrom(): void {
+    this.ref.dismiss('excludeFrom');
   }
 
   /** Take back "Nobody spoke": the line shows again. */

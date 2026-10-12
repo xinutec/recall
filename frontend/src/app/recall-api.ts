@@ -9,6 +9,7 @@ import {
   ConversationPage,
   CorrectRequest,
   CorrectResult,
+  ExcludeRequest,
   LineRequest,
   Ok,
   Session,
@@ -87,6 +88,19 @@ export class RecallApi {
   undoNoSpeech(id: number): Observable<Ok> {
     const body: LineRequest = { id };
     return this.http.post<Ok>('/api/no-speech/undo', body);
+  }
+
+  /** Leave out the stretch from line `from` to line `to`, as if recording
+   * had paused: strangers talking. The words are kept. */
+  exclude(from: number, to: number): Observable<Ok> {
+    const body: ExcludeRequest = { from, to };
+    return this.http.post<Ok>('/api/exclude', body);
+  }
+
+  /** Take back an excluded stretch, by any of its lines. */
+  undoExclude(id: number): Observable<Ok> {
+    const body: LineRequest = { id };
+    return this.http.post<Ok>('/api/exclude/undo', body);
   }
 
   /** Enrolled and assigned names. Runtime data, so no name is in the code. */

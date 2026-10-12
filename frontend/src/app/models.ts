@@ -24,4 +24,5 @@ export type { AssignSpanRequest } from './generated/AssignSpanRequest';
 export type { AssignResult } from './generated/AssignResult';
 export type { CorrectRequest } from './generated/CorrectRequest';
 export type { LineRequest } from './generated/LineRequest';
+export type { ExcludeRequest } from './generated/ExcludeRequest';
 export type { TelemetryEvent } from './generated/TelemetryEvent';

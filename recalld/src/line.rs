@@ -10,6 +10,11 @@ pub const LIVE_MODEL: &str = "live";
 /// What `hidden_reason` says when a person marked the words as invented.
 pub const NOBODY_SPOKE: &str = "nobody spoke";
 
+/// What `hidden_reason` says for a stretch a person excluded in the app, as
+/// if recording had paused. The hides recovered from the old tables read
+/// "left out" instead: nobody chose them here, so the app offers no undo.
+pub const EXCLUDED: &str = "excluded";
+
 /// How much processing a line has had: the tier the app shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
@@ -45,22 +50,31 @@ impl Stage {
 }
 
 /// Which kind of hide a stored `hidden_reason` is, for the app: a person can
-/// take back "nobody spoke" from the line; everything else render decided.
+/// take back "nobody spoke" from the line, and an excluded stretch from its
+/// row; everything else render decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum HiddenKind {
     NobodySpoke,
+    Excluded,
     Other,
 }
 
 impl HiddenKind {
+    /// The hide a stored `hidden_reason` is: a person's, or render's.
     #[must_use]
     pub fn of(stored: &str) -> Self {
-        if stored == NOBODY_SPOKE {
-            Self::NobodySpoke
-        } else {
-            Self::Other
+        Self::by_person(stored).unwrap_or(Self::Other)
+    }
+
+    /// The hides a person makes, which are a closed set; render's reasons are
+    /// not, and are all [`Self::Other`].
+    fn by_person(stored: &str) -> Option<Self> {
+        match stored {
+            NOBODY_SPOKE => Some(Self::NobodySpoke),
+            EXCLUDED => Some(Self::Excluded),
+            _ => None,
         }
     }
 }

@@ -2,6 +2,7 @@
 
 /**
  * Which kind of hide a stored `hidden_reason` is, for the app: a person can
- * take back "nobody spoke" from the line; everything else render decided.
+ * take back "nobody spoke" from the line, and an excluded stretch from its
+ * row; everything else render decided.
  */
-export type HiddenKind = "nobodySpoke" | "other";
+export type HiddenKind = "nobodySpoke" | "excluded" | "other";

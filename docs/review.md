@@ -93,19 +93,25 @@ word. Below it, *Other mics heard* lists the same moment on the other mics;
 tap one to start from its words, which helps with names.
 
 *Nobody spoke* is for words the model invented over silence. It hides the line
-and files the correction with empty text, so the span stays protected and a
-later pass cannot write the same words back. The line sheet on a session or the
-timeline has it too, and both offer *Undo* for a mis-tap, which shows the line
-again and drops the correction.
+with an act in the edit log, so a later transcription of the clip cannot bring
+the same words back. The line sheet on a session or the timeline has it too,
+and both offer *Undo* for a mis-tap, which takes the act back and shows the line
+again.
+
+*Exclude from here…*, in the line sheet, is for a stretch where only other
+people talked, the next table or a shop: tap where it starts, then the last line
+of it, and confirm. It is left out as if recording had paused, kept rather than
+deleted, and not filed as invented words, since those people really spoke. The
+stretch shows as one row, *Excluded 14:02–14:19*, whose *Undo* brings all of it
+back, across however many minutes of recording it covered.
 
 Every answer can be taken back: the message after it offers *Undo*, and a line
-already checked shows *Undo check* when you go *Back* to it. Undo deletes the
-correction rather than hiding it, since a mis-tap was never a judgement.
+already checked shows *Undo check* when you go *Back* to it. Undo files a
+retraction of the act; the log keeps both.
 
 The same three answers are in the line sheet on a session or the timeline, and
-they are stored the same way wherever given: each files a correction marked
-`words_checked` (a person heard the words and vouches for them), and the person's
-turn carries `words_checked` too. Check skips a moment once any of its lines has
+they are stored the same way wherever given: each is an act in the edit log, and
+a line a person heard and vouches for carries `words_checked`. Check skips a moment once any of its lines has
 it, so a day can be worked in a session first and finished in Check. A speaker
 fix keeps the machine's words: it leaves the line to be checked, and a referee
 scoring words against corrections must not count it.

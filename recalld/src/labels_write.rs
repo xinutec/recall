@@ -39,6 +39,8 @@ pub enum WriteError {
     Live(i64),
     /// Not hidden as "nobody spoke", so nothing to undo.
     NotNobodySpoke(i64),
+    /// Not in a stretch a person excluded, so nothing to undo.
+    NotExcluded(i64),
     /// No person's words that can still be taken back.
     NotCorrected(i64),
     /// No labelled fragment with this id.
@@ -188,6 +190,84 @@ fn file(
     tx.commit()?;
     view::render_clips(meaning, ingest, root, clips)?;
     Ok(ids)
+}
+
+/// Exclude the stretch from line `first` to line `last` of one recording, as
+/// if recording had paused: only strangers spoke. The words are kept and not
+/// filed as invented. One act per clip the stretch covers, filed together, so
+/// one undo takes back all of it. Returns how many lines it hid.
+///
+/// # Errors
+/// [`WriteError::BadSpan`] unless both lines are shown, of one recording, in
+/// order.
+pub fn exclude(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    first: i64,
+    last: i64,
+) -> Result<usize, WriteError> {
+    let a = shown(meaning, ingest, first)?;
+    let b = shown(meaning, ingest, last)?;
+    if a.clip.source != b.clip.source || (b.span.start(), b.id) < (a.span.start(), a.id) {
+        return Err(WriteError::BadSpan);
+    }
+    let spelled = |l: &Line| audiocore::instant::python_isoformat_utc(l.span.start().to_utc());
+    let ids: Vec<i64> = SESSION_LINES
+        .prepare(meaning)?
+        .query_map(
+            rusqlite::params![a.clip.source.as_str(), spelled(&a), a.id, spelled(&b), b.id],
+            |r| r.get(0),
+        )?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut per_clip: Vec<(ClipId, Instant, Instant)> = Vec::new();
+    for id in &ids {
+        let l = shown(meaning, ingest, *id)?;
+        match per_clip.last_mut() {
+            Some((clip, _, stop)) if *clip == l.clip.id => *stop = (*stop).max(l.span.end()),
+            _ => per_clip.push((l.clip.id, l.span.start(), l.span.end())),
+        }
+    }
+    let acts: Vec<Act> = per_clip
+        .iter()
+        .filter_map(|(clip, from, to)| {
+            Some(Act::Exclude {
+                clip: *clip,
+                span: Span::new(*from, *to)?,
+            })
+        })
+        .collect();
+    let clips: Vec<ClipId> = per_clip.iter().map(|(c, _, _)| *c).collect();
+    file(meaning, ingest, root, &acts, &clips)?;
+    Ok(ids.len())
+}
+
+/// Take back an excluded stretch, by any of its hidden lines: every act filed
+/// with that line's.
+///
+/// # Errors
+/// [`WriteError::NotExcluded`] unless the line is hidden by a person's
+/// exclusion.
+pub fn undo_exclude(
+    meaning: &Connection,
+    ingest: &Connection,
+    root: &FsPath,
+    id: i64,
+) -> Result<(), WriteError> {
+    let line = line(meaning, ingest, id)?;
+    let (Some(crate::line::EXCLUDED), Some(edit)) = (line.hidden.as_deref(), line.edit) else {
+        return Err(WriteError::NotExcluded(id));
+    };
+    let mut acts = Vec::new();
+    let mut clips = Vec::new();
+    for e in edit_log::filed_with(meaning, edit)? {
+        if let Act::Exclude { clip, .. } = e.act {
+            acts.push(Act::Retract { edit: e.id });
+            clips.push(clip);
+        }
+    }
+    file(meaning, ingest, root, &acts, &clips)?;
+    Ok(())
 }
 
 /// What a correction says besides the words.
@@ -727,6 +807,42 @@ pub async fn undo_no_speech_route(
     }
 }
 
+/// A stretch, by its first and last line.
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(export, rename = "ExcludeRequest")]
+pub struct ExcludeIn {
+    from: i64,
+    to: i64,
+}
+
+pub async fn exclude_route(
+    State(st): State<Arc<reads::State>>,
+    Json(body): Json<ExcludeIn>,
+) -> Response {
+    match write(&st, "exclude", move |m, i, root| {
+        exclude(m, i, root, body.from, body.to)
+    })
+    .await
+    {
+        Ok(_) => route::ack(),
+        Err(response) => response,
+    }
+}
+
+pub async fn undo_exclude_route(
+    State(st): State<Arc<reads::State>>,
+    Json(body): Json<LineIn>,
+) -> Response {
+    match write(&st, "undo exclude", move |m, i, root| {
+        undo_exclude(m, i, root, body.id)
+    })
+    .await
+    {
+        Ok(()) => route::ack(),
+        Err(response) => response,
+    }
+}
+
 pub async fn undo_correction_route(
     State(st): State<Arc<reads::State>>,
     Json(body): Json<LineIn>,
@@ -805,6 +921,7 @@ pub fn refused(what: &str, err: WriteError) -> Response {
             "line #{id} is a live guess: wait for its transcription"
         )),
         WriteError::NotNobodySpoke(id) => bad(format!("line #{id} is not hidden as nobody spoke")),
+        WriteError::NotExcluded(id) => bad(format!("line #{id} is not in an excluded stretch")),
         WriteError::NotCorrected(id) => bad(format!(
             "line #{id} is not a person's words that can be taken back"
         )),

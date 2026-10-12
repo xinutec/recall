@@ -51,6 +51,8 @@ fn labelling() -> Router<Arc<reads::State>> {
             post(labels_write::undo_correction_route),
         )
         .route("/api/no-speech", post(labels_write::no_speech_route))
+        .route("/api/exclude", post(labels_write::exclude_route))
+        .route("/api/exclude/undo", post(labels_write::undo_exclude_route))
         .route(
             "/api/no-speech/undo",
             post(labels_write::undo_no_speech_route),

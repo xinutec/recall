@@ -520,3 +520,29 @@ fn two_hidden_lines_with_one_span_keep_their_ids_and_are_not_rewritten() {
     assert_eq!(again.written, 0, "nothing changed");
     assert_eq!(ids(), before, "every line keeps its id");
 }
+
+#[test]
+fn an_exclusion_made_in_the_app_reads_excluded_and_one_recovered_from_the_old_tables_left_out() {
+    // Only the first gets a row with an undo in the app; the recovered ones
+    // (second copies, played test speech) were nobody's choice here.
+    let f = fleet();
+    let clip = f.clip();
+    let exclude = |from: f64, to: f64| Act::Exclude {
+        clip: clip.id,
+        span: Span::new(f.at(from), f.at(to)).expect("ordered"),
+    };
+    recalld::edit_log::append(&f.meaning, f.at(100.0), &exclude(0.5, 3.5), Some("Hide(7)"))
+        .expect("recovered");
+    recalld::edit_log::append(&f.meaning, f.at(200.0), &exclude(9.5, 12.5), None)
+        .expect("in the app");
+
+    f.refresh(false);
+
+    assert_eq!(
+        f.hidden(),
+        [
+            ("goede morgen.".to_owned(), "left out".to_owned()),
+            ("hoe gaat het?".to_owned(), "excluded".to_owned()),
+        ]
+    );
+}
