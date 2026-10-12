@@ -93,7 +93,7 @@ fn a_labelled_fragment_is_offered_as_seconds_into_its_clip() {
     assert_eq!(
         work,
         [(
-            "usb-20260910T100000".to_owned(),
+            "usb-20260910T100000.flac".to_owned(),
             Span {
                 segment_id: act,
                 start_s: 2.0,

@@ -28,11 +28,11 @@ pub struct Facts {
 
 /// Read the clip's current results and speech evidence.
 pub fn facts(ingest: &Connection, clip: &Clip) -> Result<Facts, results::ResultError> {
-    let heard = match results::transcription(ingest, clip.id)? {
+    let heard = match results::transcription(ingest, clip)? {
         Some(Outcome::Answer { answer, .. }) => Some(heard(&answer)),
         Some(Outcome::Refused { .. }) | None => None,
     };
-    let voices = match results::diarization(ingest, clip.id)? {
+    let voices = match results::diarization(ingest, clip)? {
         Some(Outcome::Answer { answer, .. }) => Some(voices_of(&answer)),
         Some(Outcome::Refused { .. }) | None => None,
     };

@@ -16,7 +16,6 @@ crate::statements! {
         "DELETE FROM jobs WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
     FORGET_LEDGER: Ingest =
         "DELETE FROM pass_ledger WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
-    FORGET_CLIPS: Ingest = "DELETE FROM clips WHERE source = ?1";
     FORGET_SEGMENTS: Ingest = "DELETE FROM segments WHERE source = ?1";
     INSERT: Ingest =
         "INSERT INTO segments
@@ -88,16 +87,11 @@ pub fn forget_upload(
 ) -> rusqlite::Result<()> {
     let tx = crate::sql::write(conn)?;
     let source = deleted.source();
-    for statement in [
-        FORGET_SPEECH,
-        FORGET_LEVELS,
-        FORGET_JOBS,
-        FORGET_LEDGER,
-        FORGET_CLIPS,
-        FORGET_SEGMENTS,
-    ] {
+    for statement in [FORGET_SPEECH, FORGET_LEVELS, FORGET_JOBS, FORGET_LEDGER] {
         statement.execute(&tx, [source])?;
     }
+    crate::clips::forget_source(&tx, source)?;
+    FORGET_SEGMENTS.execute(&tx, [source])?;
     tx.commit()
 }
 

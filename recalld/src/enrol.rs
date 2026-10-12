@@ -62,15 +62,6 @@ pub struct Span {
     pub end_s: f64,
 }
 
-/// A clip's identity without its container, the join key between the planes:
-/// the same recording can exist under two extensions.
-fn stem(path: &str) -> String {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    name.rsplit_once('.')
-        .map_or(name, |(base, _)| base)
-        .to_owned()
-}
-
 /// The naming acts that already have a print: by the act, or for an act
 /// recovered from the old tables, by the line or correction it came from.
 fn printed(meaning: &Connection) -> rusqlite::Result<HashSet<i64>> {
@@ -165,7 +156,7 @@ pub fn forget_unwanted(meaning: &Connection) -> rusqlite::Result<usize> {
     Ok(forgotten)
 }
 
-/// Every labelled fragment awaiting a print, by the stem of its clip.
+/// Every labelled fragment awaiting a print, by its clip's ingest filename.
 ///
 /// # Errors
 /// If either plane refuses or the edit log does not read.
@@ -186,7 +177,7 @@ pub fn pending(meaning: &Connection, ingest: &Connection) -> rusqlite::Result<Ve
         };
         let seconds = |at: transcript::Instant| (at.micros() - clip.start.micros()) as f64 / 1e6;
         out.push((
-            stem(&clip.filename),
+            clip.filename.clone(),
             Span {
                 segment_id: l.id.stored(),
                 // A negative seek makes ffmpeg return the whole clip.
@@ -207,10 +198,9 @@ pub fn spans_for(
     ingest: &Connection,
     filename: &str,
 ) -> rusqlite::Result<Vec<Span>> {
-    let want = stem(filename);
     Ok(pending(meaning, ingest)?
         .into_iter()
-        .filter(|(s, _)| *s == want)
+        .filter(|(f, _)| f == filename)
         .map(|(_, span)| span)
         .collect())
 }
@@ -260,7 +250,7 @@ pub fn derive_jobs(
         if inserted >= limit {
             break;
         }
-        if !wanted.contains(&stem(&filename)) {
+        if !wanted.contains(&filename) {
             continue;
         }
         inserted += DERIVE_JOB.execute(

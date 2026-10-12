@@ -1,21 +1,21 @@
-//! A clip's current model output (#1911), read by its [`ClipId`].
+//! A clip's current model output, read for a [`Clip`].
 //!
 //! Model output is re-derivable from the audio, so only the current result is
-//! kept: one per clip and kind, in the job that produced it. A job run again
-//! keeps it until the new one replaces it. This is the one place that reaches a job from a clip, and each
-//! kind has its own reader, so a result can only be read as what it is.
+//! kept: one per clip and kind, in the job that produced it, which names the
+//! clip by its stored filename. A job run again keeps it until the new one
+//! replaces it. Each kind has its own reader, so a result can only be read as
+//! what it is.
 
 use audiocore::job::Kind;
 use audiocore::shim::{Stored, asr, voices};
 use rusqlite::{Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
-use transcript::{ClipId, Instant};
+use transcript::{Clip, Instant};
 
 crate::statements! {
     CURRENT: Ingest =
-        "SELECT j.result, COALESCE(j.done_utc, j.created_utc) FROM jobs j
-         JOIN clips c ON c.filename = j.filename
-         WHERE c.id = ?1 AND j.kind = ?2 AND j.result IS NOT NULL";
+        "SELECT result, COALESCE(done_utc, created_utc) FROM jobs
+         WHERE filename = ?1 AND kind = ?2 AND result IS NOT NULL";
 }
 
 /// What the model made of a clip.
@@ -59,7 +59,7 @@ impl From<rusqlite::Error> for ResultError {
 /// What the model heard in the clip; `None` before it has been transcribed.
 pub fn transcription(
     ingest: &Connection,
-    clip: ClipId,
+    clip: &Clip,
 ) -> Result<Option<Outcome<asr::Reply>>, ResultError> {
     current(ingest, clip, Kind::TranscribeSegment)
 }
@@ -67,18 +67,18 @@ pub fn transcription(
 /// Who spoke when in the clip; `None` before it has been diarized.
 pub fn diarization(
     ingest: &Connection,
-    clip: ClipId,
+    clip: &Clip,
 ) -> Result<Option<Outcome<voices::Diarization>>, ResultError> {
     current(ingest, clip, Kind::DiarizeSegment)
 }
 
 fn current<T: DeserializeOwned>(
     ingest: &Connection,
-    clip: ClipId,
+    clip: &Clip,
     kind: Kind,
 ) -> Result<Option<Outcome<T>>, ResultError> {
     let Some((body, done)) = CURRENT
-        .query_row(ingest, (clip.stored(), kind), |r| {
+        .query_row(ingest, (&clip.filename, kind), |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })
         .optional()?

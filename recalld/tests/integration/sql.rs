@@ -96,3 +96,48 @@ fn reading_a_clips_rendered_rows_does_not_scan_the_view() {
         "{steps:?}"
     );
 }
+
+/// A clip's identity is mapped in one place: only `clips` reads or writes the
+/// table, so no other module can join recordings by a filename or path of its
+/// own.
+#[test]
+fn only_clips_touches_the_clips_table() {
+    let names_clips = |text: &str| {
+        let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        text.match_indices("clips").any(|(at, _)| {
+            !text[..at].ends_with(ident) && !text[at + "clips".len()..].starts_with(ident)
+        })
+    };
+    let offenders: Vec<String> = ALL
+        .iter()
+        .filter(|(module, _)| *module != "clips")
+        .flat_map(|(module, statements)| {
+            statements
+                .iter()
+                .filter(|sql| names_clips(sql.text()))
+                .map(move |sql| format!("{module}: {}", sql.text()))
+        })
+        .collect();
+    assert!(offenders.is_empty(), "{}", offenders.join("\n"));
+}
+
+/// Taking a recording's extension off to match it is `clips::stem`'s job: a
+/// second copy of the rule is a second idea of which files are one recording.
+#[test]
+fn only_clips_strips_an_extension_to_match_a_recording() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut offenders = Vec::new();
+    for entry in std::fs::read_dir(&src).expect("src") {
+        let path = entry.expect("entry").path();
+        if path.file_name().and_then(|n| n.to_str()) == Some("clips.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        for (n, line) in text.lines().enumerate() {
+            if line.contains("rsplit_once('.')") || line.contains("fn stem(") {
+                offenders.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(offenders.is_empty(), "{}", offenders.join("\n"));
+}

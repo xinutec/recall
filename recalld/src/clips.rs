@@ -6,6 +6,7 @@
 //! trigger cannot know: a rename that must keep the id.
 
 use rusqlite::{Connection, OptionalExtension};
+use std::collections::HashMap;
 use std::path::Path;
 use transcript::{Clip, ClipId, Instant, SourceId};
 
@@ -19,6 +20,7 @@ crate::statements! {
         "SELECT id, source, start_us, filename, path FROM clips WHERE source = ?1";
     BY_PATH: Ingest =
         "SELECT id, source, start_us, filename, path FROM clips WHERE path = ?1";
+    FORGET_SOURCE: Ingest = "DELETE FROM clips WHERE source = ?1";
     RENAME: Ingest =
         "UPDATE clips SET filename = ?2, path = ?3 WHERE filename = ?1";
     CENSUS_CLIPS: Ingest = "SELECT count(*) FROM clips";
@@ -123,8 +125,35 @@ pub fn for_audio_path(
         .transpose()
 }
 
+/// Every clip by the absolute path a meaning-plane audio row names it by.
+///
+/// # Errors
+/// If the store refuses or a stored clip does not read.
+pub fn by_audio_path(ingest: &Connection, root: &Path) -> Result<HashMap<String, Clip>, ClipError> {
+    Ok(all(ingest)?
+        .into_iter()
+        .map(|c| (root.join(&c.path).to_string_lossy().into_owned(), c))
+        .collect())
+}
+
+/// A recording's name without its container. Rows from before clips name a
+/// recording by a path whose extension can differ from the stored file's
+/// (`.wav` against `.opus`); this is how they are matched.
+pub fn stem(path: &str) -> &str {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.rsplit_once('.').map_or(name, |(base, _)| base)
+}
+
 fn relative<'a>(root: &Path, path: &'a str) -> Option<&'a str> {
     path.strip_prefix(root.to_str()?)?.strip_prefix('/')
+}
+
+/// Forget a deleted session's clips, in the caller's transaction.
+///
+/// # Errors
+/// If the store refuses.
+pub fn forget_source(ingest: &Connection, source: &str) -> rusqlite::Result<usize> {
+    FORGET_SOURCE.execute(ingest, [source])
 }
 
 /// A stored file renamed (`.wav` to `.phone.flac`): the clip follows, keeping

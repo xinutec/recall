@@ -37,8 +37,8 @@ crate::statements! {
          WHERE s.kind <> 'derived' AND a.path IS NOT NULL
          ORDER BY a.start_utc DESC";
     RESULT_VERSIONS: Ingest =
-        "SELECT c.id, j.kind, j.done_utc FROM jobs j JOIN clips c ON c.filename = j.filename
-         WHERE j.kind IN (?1, ?2) AND j.done_utc IS NOT NULL AND j.result IS NOT NULL";
+        "SELECT filename, kind, done_utc FROM jobs
+         WHERE kind IN (?1, ?2) AND done_utc IS NOT NULL AND result IS NOT NULL";
     SPEECH_VERSIONS: Ingest = "SELECT filename, computed_utc FROM segment_speech";
     CLIP_EDITS: Meaning =
         "SELECT clip_id, max(id) FROM edits WHERE clip_id IS NOT NULL GROUP BY clip_id";
@@ -152,7 +152,7 @@ pub fn refresh(
     }
     let transcribed: Vec<(Instant, Instant)> = shown
         .iter()
-        .filter(|s| versions.transcribed.contains_key(&s.clip.id.stored()))
+        .filter(|s| versions.transcribed.contains_key(&s.clip.filename))
         .filter_map(|s| Some((s.clip.start, s.end?)))
         .collect();
     done.live_shown = live(meaning, &transcribed)?;
@@ -185,19 +185,15 @@ pub fn render_clips(
 }
 
 fn shown(meaning: &Connection, ingest: &Connection, root: &Path) -> Result<Vec<Shown>, ViewError> {
-    let by_path: HashMap<String, Clip> = clips::all(ingest)?
-        .into_iter()
-        .map(|c| (c.path.clone(), c))
-        .collect();
+    let by_path = clips::by_audio_path(ingest, root)?;
     let rows: Vec<(i64, String, Option<String>)> = AUDIO_ROWS
         .prepare(meaning)?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<_>>()?;
-    let prefix = format!("{}/", root.to_string_lossy());
     Ok(rows
         .into_iter()
         .filter_map(|(audio_id, path, end)| {
-            let clip = by_path.get(path.strip_prefix(&prefix)?)?.clone();
+            let clip = by_path.get(&path)?.clone();
             Some(Shown {
                 clip,
                 audio_id,
@@ -208,9 +204,10 @@ fn shown(meaning: &Connection, ingest: &Connection, root: &Path) -> Result<Vec<S
 }
 
 /// The current version of every input, read once per refresh.
+/// Model results and speech by the clip's stored filename, as their jobs name it.
 struct Versions {
-    transcribed: HashMap<i64, String>,
-    diarized: HashMap<i64, String>,
+    transcribed: HashMap<String, String>,
+    diarized: HashMap<String, String>,
     speech: HashMap<String, String>,
     clip_edits: HashMap<i64, i64>,
     source_edits: HashMap<String, i64>,
@@ -228,7 +225,7 @@ impl Versions {
         let mut stmt = RESULT_VERSIONS.prepare(ingest)?;
         let rows = stmt.query_map((Kind::TranscribeSegment, Kind::DiarizeSegment), |r| {
             Ok((
-                r.get::<_, i64>(0)?,
+                r.get::<_, String>(0)?,
                 r.get::<_, Kind>(1)?,
                 r.get::<_, String>(2)?,
             ))
@@ -274,8 +271,12 @@ impl Versions {
         let id = clip.id.stored();
         format!(
             "transcribed={} diarized={} speech={} edit={} session-edit={} prints={:x}",
-            self.transcribed.get(&id).map_or("-", String::as_str),
-            self.diarized.get(&id).map_or("-", String::as_str),
+            self.transcribed
+                .get(&clip.filename)
+                .map_or("-", String::as_str),
+            self.diarized
+                .get(&clip.filename)
+                .map_or("-", String::as_str),
             self.speech.get(&clip.filename).map_or("-", String::as_str),
             self.clip_edits.get(&id).copied().unwrap_or(0),
             self.source_edits

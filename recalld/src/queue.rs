@@ -112,14 +112,6 @@ pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<us
     )
 }
 
-/// A filename without its extension: one recording can exist under two.
-fn stem(path: &str) -> String {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    name.rsplit_once('.')
-        .map_or(name, |(base, _)| base)
-        .to_owned()
-}
-
 /// Derive a transcription job, up to `limit`, for each microphone clip or
 /// upload never transcribed that the speech pass measured as not silent (a silent
 /// minute comes back as "Thank you."). Undecodable (`UNKNOWN_SECONDS`) still
@@ -136,7 +128,7 @@ pub fn derive_segment_jobs(
         let mut stmt = TRANSCRIBED_PATHS.prepare(meaning)?;
         let rows = stmt.query_map([ROOM_SOURCE], |r| r.get::<_, String>(0))?;
         for path in rows {
-            have.insert(stem(&path?));
+            have.insert(crate::clips::stem(&path?).to_owned());
         }
     }
 
@@ -163,7 +155,7 @@ pub fn derive_segment_jobs(
         if inserted >= limit {
             break;
         }
-        if have.contains(&stem(&filename)) || !known.contains(&source) {
+        if have.contains(crate::clips::stem(&filename)) || !known.contains(&source) {
             continue;
         }
         let start = DateTime::parse_from_rfc3339(&start).map(|t| t.with_timezone(&Utc));

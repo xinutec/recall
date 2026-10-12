@@ -22,12 +22,9 @@ fn a_clips_current_transcription_is_read_by_its_id_and_a_retranscription_replace
         },
     )
     .expect("segment");
-    let clip = recalld::clips::by_filename(&conn, name)
-        .unwrap()
-        .unwrap()
-        .id;
+    let clip = recalld::clips::by_filename(&conn, name).unwrap().unwrap();
     assert!(
-        recalld::results::transcription(&conn, clip)
+        recalld::results::transcription(&conn, &clip)
             .unwrap()
             .is_none()
     );
@@ -49,7 +46,7 @@ fn a_clips_current_transcription_is_read_by_its_id_and_a_retranscription_replace
     finish("tweede");
 
     let Some(Outcome::Answer { answer, .. }) =
-        recalld::results::transcription(&conn, clip).unwrap()
+        recalld::results::transcription(&conn, &clip).unwrap()
     else {
         panic!("an answer");
     };
@@ -58,7 +55,7 @@ fn a_clips_current_transcription_is_read_by_its_id_and_a_retranscription_replace
         "only the current result is kept"
     );
     assert!(
-        recalld::results::diarization(&conn, clip)
+        recalld::results::diarization(&conn, &clip)
             .unwrap()
             .is_none(),
         "a transcription is never read as a diarization"
@@ -89,11 +86,8 @@ fn a_refusal_is_told_apart_from_not_yet_done() {
         (Kind::TranscribeSegment, name),
     )
     .expect("refusal");
-    let clip = recalld::clips::by_filename(&conn, name)
-        .unwrap()
-        .unwrap()
-        .id;
+    let clip = recalld::clips::by_filename(&conn, name).unwrap().unwrap();
 
-    let refused = recalld::results::transcription(&conn, clip).unwrap();
+    let refused = recalld::results::transcription(&conn, &clip).unwrap();
     assert!(matches!(refused, Some(Outcome::Refused { ref why, .. }) if why == "decode failed"));
 }
