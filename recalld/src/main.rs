@@ -476,8 +476,8 @@ fn spawn_enroller(root: PathBuf) {
 /// Small batches: a neural network per 32 ms window, on four cores shared with
 /// Nextcloud.
 fn spawn_speech_scanner(root: PathBuf) {
-    // ort's prebuilt runtime needs AVX2, which Ivy Bridge (isis, amun) lacks:
-    // calling it there is a SIGILL. Check once and stay off.
+    // One trial inference first: a runtime that cannot run here leaves the
+    // pass off, reported as such, rather than failing every batch.
     const BATCH: usize = 40;
     const IDLE: std::time::Duration = std::time::Duration::from_mins(2);
     const BACKOFF: std::time::Duration = std::time::Duration::from_mins(5);
