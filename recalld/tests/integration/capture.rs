@@ -46,39 +46,6 @@ fn state(
 }
 
 #[test]
-fn the_token_matches_the_one_the_live_fleet_served() {
-    // The token production served for this state: a change to the fields, key
-    // order or separators fails here, not as busy-polling clients.
-    let live = state(
-        false,
-        Some("2026-09-08T19:11:22.164504+00:00"),
-        false,
-        Some("2026-09-08T19:11:22.164504+00:00"),
-        true,
-        true,
-    );
-    assert_eq!(live.state_token, "951046d8fc3c");
-}
-
-#[test]
-fn the_token_matches_python_for_the_running_and_transitioning_shapes() {
-    // `sha256(json.dumps(payload, sort_keys=True))` for the two other states a
-    // client sees.
-    let running = state(true, None, true, None, true, true);
-    assert_eq!(running.state_token, "e9be2a3b3af3");
-
-    let transitioning = state(
-        true,
-        None,
-        false,
-        Some("2026-09-08T19:11:22+00:00"),
-        false,
-        false,
-    );
-    assert_eq!(transitioning.state_token, "9f6805e7bc32");
-}
-
-#[test]
 fn the_token_changes_when_any_graded_field_does() {
     let base = state(true, None, true, None, true, true);
     for other in [

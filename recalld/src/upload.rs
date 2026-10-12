@@ -5,7 +5,6 @@
 //! puts the blob where the work queue looks. The container is kept as
 //! uploaded; ffprobe validates it.
 
-use crate::pyjson;
 use audiocore::instant;
 use chrono::{DateTime, Datelike, SubsecRound, TimeZone, Timelike, Utc};
 use chrono_tz::Europe::London;
@@ -287,14 +286,15 @@ pub fn started_at(raw: &str) -> Result<DateTime<Utc>, UploadError> {
 /// The session as the list shows it.
 pub fn created_json(source: &str, title: &str, started: DateTime<Utc>, duration_s: f64) -> String {
     let end = started + chrono::Duration::microseconds((duration_s * 1e6).round() as i64);
-    pyjson::dump(&serde_json::json!({
+    serde_json::json!({
         "id": source,
         "title": title,
         "start": instant::python_isoformat_utc(started),
         "end": instant::python_isoformat_utc(end),
         "turnCount": 0,
         "speakers": [],
-    }))
+    })
+    .to_string()
 }
 
 /// For tests to state the zone they assert about.

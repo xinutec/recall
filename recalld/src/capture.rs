@@ -61,27 +61,6 @@ pub struct CaptureState {
     pub state_token: String,
 }
 
-/// The fingerprint a long-poll echoes back as `?known=`: `sha256` of the other
-/// fields, keys sorted, `, ` and `: ` separators. A wrong spelling does not
-/// fail; it turns every long-poll into a busy poll.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "the bools are the wire shape (doc above)"
-)]
-#[derive(Serialize)]
-struct TokenPayload<'a> {
-    #[serde(rename = "desiredPausedUntil")]
-    desired_paused_until: &'a Option<String>,
-    #[serde(rename = "desiredRunning")]
-    desired_running: bool,
-    #[serde(rename = "micReachable")]
-    mic_reachable: bool,
-    #[serde(rename = "pausedUntil")]
-    paused_until: &'a Option<String>,
-    running: bool,
-    settled: bool,
-}
-
 impl CaptureState {
     #[must_use]
     pub fn stamped(mut self) -> Self {
@@ -89,18 +68,19 @@ impl CaptureState {
         self
     }
 
+    /// The fingerprint a long-poll echoes back as `?known=`: the other fields'
+    /// hash. It has to be the same for the same state, or every long-poll
+    /// returns at once.
     fn token(&self) -> String {
-        // The field order is the sorted key order; a test pins a value the
-        // live server produced.
-        let payload = TokenPayload {
-            desired_paused_until: &self.desired_paused_until,
-            desired_running: self.desired_running,
-            mic_reachable: self.mic_reachable,
-            paused_until: &self.paused_until,
-            running: self.running,
-            settled: self.settled,
-        };
-        let json = crate::pyjson::dump(&payload);
+        let json = serde_json::json!({
+            "desiredPausedUntil": self.desired_paused_until,
+            "desiredRunning": self.desired_running,
+            "micReachable": self.mic_reachable,
+            "pausedUntil": self.paused_until,
+            "running": self.running,
+            "settled": self.settled,
+        })
+        .to_string();
         // sha2 0.11's digest is an array with no `LowerHex`; `hex` spells it out.
         let digest = Sha256::digest(json.as_bytes());
         hex::encode(digest).chars().take(12).collect()
@@ -182,7 +162,7 @@ pub fn record_reported(
     set_setting(
         conn,
         REPORTED_LIVENESS_KEY,
-        &crate::pyjson::dump(source_liveness),
+        &serde_json::Value::Object(source_liveness.clone()).to_string(),
     )
 }
 

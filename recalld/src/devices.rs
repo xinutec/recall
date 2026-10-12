@@ -186,11 +186,7 @@ pub fn forget(conn: &Connection, key: &str, device: &str) -> rusqlite::Result<bo
     if map.remove(device).is_none() {
         return Ok(false);
     }
-    set_setting(
-        conn,
-        key,
-        &crate::pyjson::dump(&serde_json::Value::Object(map)),
-    )?;
+    set_setting(conn, key, &serde_json::Value::Object(map).to_string())?;
     Ok(true)
 }
 
@@ -279,7 +275,7 @@ pub fn record_beat(conn: &Connection, beat: &Beat, now: DateTime<Utc>) -> rusqli
     set_setting(
         conn,
         BEATS_KEY,
-        &crate::pyjson::dump(&serde_json::Value::Object(evicted(map, now))),
+        &serde_json::Value::Object(evicted(map, now)).to_string(),
     )
 }
 
@@ -302,7 +298,7 @@ pub fn record_report(
     set_setting(
         conn,
         REPORTS_KEY,
-        &crate::pyjson::dump(&serde_json::Value::Object(evicted(map, now))),
+        &serde_json::Value::Object(evicted(map, now)).to_string(),
     )
 }
 

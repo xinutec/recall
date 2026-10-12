@@ -121,8 +121,8 @@ fn the_report_stamps_the_freshness_clock_python_spells_it_with() {
 }
 
 #[test]
-fn source_liveness_is_stored_as_python_would_dump_it() {
-    // `json.dumps` separators and the Mac's key order (`preserve_order`).
+fn source_liveness_is_stored_in_the_macs_key_order() {
+    // `preserve_order`: not serde's alphabetical one.
     let conn = store();
 
     record_reported(
@@ -139,8 +139,7 @@ fn source_liveness_is_stored_as_python_would_dump_it() {
 
     assert_eq!(
         setting(&conn, "capture_reported_source_liveness").as_deref(),
-        Some(r#"{"usb": "2026-09-08T02:31:00+00:00", "pixel5": "2026-09-08T02:30:00+00:00"}"#),
-        "separators AND the Mac's key order, not serde's alphabetical one"
+        Some(r#"{"usb":"2026-09-08T02:31:00+00:00","pixel5":"2026-09-08T02:30:00+00:00"}"#)
     );
 }
 
@@ -271,7 +270,7 @@ async fn the_report_lands_where_api_capture_reads_it() {
     assert!(!state.running);
     assert_eq!(
         setting(&conn, "capture_reported_source_liveness").as_deref(),
-        Some(r#"{"usb": "2026-09-08T19:11:00+00:00"}"#)
+        Some(r#"{"usb":"2026-09-08T19:11:00+00:00"}"#)
     );
 }
 

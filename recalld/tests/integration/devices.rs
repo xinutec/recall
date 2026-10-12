@@ -324,23 +324,6 @@ fn a_report_round_trips_with_its_reason_and_counts() {
 }
 
 #[test]
-fn the_stored_json_is_spelled_the_way_python_writes_it() {
-    // One spelling per column, `json.dumps`': non-ASCII escaped and a space
-    // after `,` and `:`.
-    let conn = db();
-    let mut r = report("phone", "2026-09-07T09:00:00+00:00");
-    r.reason = Some("kon niet uploaden — geërfde fout".into());
-
-    record_report(&conn, &r, now()).expect("report");
-
-    let raw = stored(&conn, "device_outbox_reports");
-    assert!(raw.contains("\", \""), "a space after the comma: {raw}");
-    assert!(raw.contains("\": "), "a space after the colon");
-    assert!(raw.contains("\\u00eb"), "non-ASCII escaped, got {raw}");
-    assert!(!raw.contains('ë'), "and not written raw");
-}
-
-#[test]
 fn a_beat_with_no_optional_flags_keeps_them_absent_rather_than_false() {
     // None means "an app too old to say", not false.
     let conn = db();
