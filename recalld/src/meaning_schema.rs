@@ -712,6 +712,15 @@ pub const MIGRATIONS: &[&str] = &[
     ALTER TABLE corrections RENAME TO retired_20261012_corrections;
     ALTER TABLE refine_requests RENAME TO retired_20261012_refine_requests;
 "#,
+    // v60
+    r#"
+    -- The retired tables are in the fleet backup; the record no longer keeps them.
+    DROP TABLE retired_20261012_transcript_segments;
+    DROP TABLE retired_20261012_transcript_fts;
+    DROP TABLE retired_20261012_transcript_embeddings;
+    DROP TABLE retired_20261012_corrections;
+    DROP TABLE retired_20261012_refine_requests;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

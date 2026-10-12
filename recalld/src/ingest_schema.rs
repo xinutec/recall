@@ -83,17 +83,20 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
     retire_old_tables(conn)
 }
 
-/// Tables nothing reads any more, dated and kept until a backup cycle has
-/// them: the room stream's blocks and the old retranscribe set-aside.
+/// Tables nothing reads any more, which the fleet backup holds: the room
+/// stream's blocks and the old retranscribe set-aside, under either name.
 fn retire_old_tables(conn: &Connection) -> rusqlite::Result<()> {
-    for table in ["room_blocks", "retranscribe_requests"] {
+    for table in [
+        "room_blocks",
+        "retranscribe_requests",
+        "retired_20261012_room_blocks",
+        "retired_20261012_retranscribe_requests",
+    ] {
         let present: bool = conn
             .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?
             .exists([table])?;
         if present {
-            conn.execute_batch(&format!(
-                "ALTER TABLE {table} RENAME TO retired_20261012_{table}"
-            ))?;
+            conn.execute_batch(&format!("DROP TABLE {table}"))?;
         }
     }
     Ok(())

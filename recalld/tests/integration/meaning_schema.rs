@@ -121,7 +121,8 @@ fn mixed_spellings() -> rusqlite::Connection {
 #[test]
 fn every_stored_instant_is_rewritten_to_the_one_spelling() {
     let conn = mixed_spellings();
-    ensure(&conn).expect("migrate");
+    // The last rung that still holds the old lines.
+    ensure_to(&conn, 59).expect("migrate");
     let column = |sql: &str| -> Vec<String> {
         let mut stmt = conn.prepare(sql).expect("prepare");
         stmt.query_map([], |r| r.get(0))
@@ -232,7 +233,7 @@ fn words_a_person_typed_or_vouched_for_are_marked_on_their_turn() {
                 (3, '2026-09-19T10:00:04+00:00', '2026-09-19T10:00:06+00:00', 'c', 'c', '2026-09-26T12:00:00+00:00', NULL);",
     )
     .expect("rows at rung 49");
-    ensure(&conn).expect("climb");
+    ensure_to(&conn, 59).expect("climb");
     let marked: Vec<(i64, Option<i64>)> = conn
         .prepare(
             "SELECT id, words_checked FROM retired_20261012_transcript_segments
