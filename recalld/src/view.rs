@@ -20,6 +20,7 @@ use crate::results::ResultError;
 pub const SHIM_MODEL: &str = "mlx-community/whisper-large-v3-turbo";
 use audiocore::job::Kind;
 use rusqlite::Connection;
+use rusqlite::types::Value;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
@@ -45,8 +46,12 @@ crate::statements! {
     SOURCE_EDITS: Meaning =
         "SELECT source_id, max(id) FROM edits WHERE source_id IS NOT NULL GROUP BY source_id";
     STORED_INPUTS: Meaning = "SELECT clip_id, inputs FROM rendered_clips";
+    /// Every stored column but the id, in [`INSERT_LINE`]'s order after it.
     OLD_ROWS: Meaning =
-        "SELECT id, start_utc, end_utc, hidden_reason IS NOT NULL FROM rendered_lines WHERE clip_id = ?1";
+        "SELECT id, clip_id, audio_segment_id, source_id, start_utc, end_utc, text, language,
+             asr_confidence, asr_model, speaker_label, speaker_guess, speaker_score,
+             speaker_cluster, tier, hidden_reason, words_checked, edit_id, live_id, word_timings
+         FROM rendered_lines WHERE clip_id = ?1 ORDER BY id";
     DROP_CLIP: Meaning = "DELETE FROM rendered_lines WHERE clip_id = ?1";
     INSERT_LINE: Meaning =
         "INSERT INTO rendered_lines (id, clip_id, audio_segment_id, source_id, start_utc, end_utc,
@@ -58,7 +63,12 @@ crate::statements! {
         "INSERT INTO rendered_clips (clip_id, inputs) VALUES (?1, ?2)
          ON CONFLICT (clip_id) DO UPDATE SET inputs = excluded.inputs";
     LIVE_TURNS: Meaning = "SELECT id, start_utc, end_utc, text, language FROM live_lines";
-    OLD_LIVE: Meaning = "SELECT live_id, id FROM rendered_lines WHERE live_id IS NOT NULL";
+    /// As [`OLD_ROWS`], for the live lines.
+    OLD_LIVE: Meaning =
+        "SELECT id, clip_id, audio_segment_id, source_id, start_utc, end_utc, text, language,
+             asr_confidence, asr_model, speaker_label, speaker_guess, speaker_score,
+             speaker_cluster, tier, hidden_reason, words_checked, edit_id, live_id, word_timings
+         FROM rendered_lines WHERE live_id IS NOT NULL ORDER BY id";
     DROP_LIVE: Meaning = "DELETE FROM rendered_lines WHERE live_id IS NOT NULL";
 }
 
@@ -105,7 +115,10 @@ impl From<LogError> for ViewError {
 /// What a refresh did.
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Refreshed {
+    /// Clips rendered, to compare with what they show.
     pub rendered: usize,
+    /// Of those, the clips whose lines changed and were written.
+    pub written: usize,
     pub unchanged: usize,
     /// Clips whose stored result does not read, with why; their old lines stay.
     pub unreadable: Vec<(i64, String)>,
@@ -141,17 +154,46 @@ pub fn refresh(
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     let mut done = Refreshed::default();
+    let mut due = Vec::new();
     for s in &shown {
         let inputs = versions.of(&s.clip);
         if !all && stored.get(&s.clip.id.stored()) == Some(&inputs) {
             done.unchanged += 1;
-            continue;
+        } else {
+            due.push((s, inputs));
         }
-        match render_one(meaning, ingest, s, &prints, &inputs) {
-            Ok(()) => done.rendered += 1,
-            Err(Failed::Result(err)) => done.unreadable.push((s.clip.id.stored(), err.to_string())),
-            // One clip must not hold up the rest: its transaction rolled back.
-            Err(Failed::View(err)) => done.failed.push((s.clip.id.stored(), err.to_string())),
+    }
+    for batch in due.chunks(BATCH) {
+        // Read and render before taking the write lock: a cold result is slow.
+        let mut ready = Vec::new();
+        for (s, inputs) in batch {
+            match prepare(meaning, ingest, s, &prints) {
+                Ok(rows) => ready.push((*s, inputs, rows)),
+                Err(Failed::Result(err)) => {
+                    done.unreadable.push((s.clip.id.stored(), err.to_string()));
+                }
+                Err(Failed::View(err)) => done.failed.push((s.clip.id.stored(), err.to_string())),
+            }
+        }
+        let mut tx = crate::sql::write_shared(meaning)?;
+        let mut wrote = false;
+        for (s, inputs, rows) in &ready {
+            let known = stored.get(&s.clip.id.stored()).map(String::as_str);
+            match write_clip(&mut tx, s, rows, inputs, known) {
+                Ok(what) => {
+                    done.rendered += 1;
+                    done.written += usize::from(what == Wrote::Lines);
+                    wrote |= what != Wrote::Nothing;
+                }
+                // One clip must not hold up the rest: its savepoint rolled back.
+                Err(err) => done.failed.push((s.clip.id.stored(), err.to_string())),
+            }
+        }
+        // Nothing to keep: no commit, so no fsync.
+        if wrote {
+            tx.commit()?;
+        } else {
+            tx.rollback()?;
         }
     }
     let transcribed: Vec<(Instant, Instant)> = shown
@@ -179,11 +221,14 @@ pub fn render_clips(
         .iter()
         .filter(|s| clips.contains(&s.clip.id))
     {
-        match render_one(meaning, ingest, s, &prints, &versions.of(&s.clip)) {
-            Ok(()) => {}
+        let rows = match prepare(meaning, ingest, s, &prints) {
+            Ok(rows) => rows,
             Err(Failed::Result(err)) => return Err(ViewError::Result(err)),
             Err(Failed::View(err)) => return Err(err),
-        }
+        };
+        let mut tx = crate::sql::write_shared(meaning)?;
+        write_clip(&mut tx, s, &rows, &versions.of(&s.clip), None)?;
+        tx.commit()?;
     }
     Ok(())
 }
@@ -310,16 +355,26 @@ impl From<LogError> for Failed {
     }
 }
 
-/// Replace the clip's rows with what render makes of it now. A line whose
-/// span is unchanged keeps its id, hidden or shown, so an id the app holds
-/// stays good.
-fn render_one(
+/// Clips per transaction. A commit is an fsync: one per clip was 16 minutes
+/// on Isis's disk for a full render, a batch of this many about half a second.
+const BATCH: usize = 200;
+
+/// What [`write_clip`] changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Wrote {
+    Nothing,
+    /// Only what the clip was rendered from.
+    Inputs,
+    Lines,
+}
+
+/// The rows render makes of the clip now, read and rendered without a lock.
+fn prepare(
     meaning: &Connection,
     ingest: &Connection,
     s: &Shown,
     prints: &[Voiceprint],
-    inputs: &str,
-) -> Result<(), Failed> {
+) -> Result<Vec<Row>, Failed> {
     let facts = match rendering::facts(ingest, &s.clip) {
         Ok(facts) => facts,
         Err(ResultError::Db(err)) => return Err(err.into()),
@@ -332,35 +387,112 @@ fn render_one(
     } else {
         Stage::Transcribed
     };
-    let tx = crate::sql::write_shared(meaning)?;
-    let mut old: HashMap<(String, String, bool), i64> = HashMap::new();
+    let mut rows = Vec::new();
+    for line in &out.lines {
+        rows.push(Row::line(line, tier)?);
+    }
+    rows.extend(runs(&out.dropped).iter().map(|d| Row::dropped(d, tier)));
+    Ok(rows)
+}
+
+/// Make the clip's stored rows `rows`, under a savepoint of `tx`: a failure
+/// undoes this clip only. A line whose span is unchanged keeps its id, hidden
+/// or shown, so an id the app holds stays good; rows that would come out the
+/// same are not written at all. `known`: the inputs stored for the clip.
+fn write_clip(
+    tx: &mut rusqlite::Transaction<'_>,
+    s: &Shown,
+    rows: &[Row],
+    inputs: &str,
+    known: Option<&str>,
+) -> rusqlite::Result<Wrote> {
+    let sp = tx.savepoint()?;
+    let mut old: Vec<(i64, Vec<Value>)> = Vec::new();
     {
-        let mut stmt = OLD_ROWS.prepare(&tx)?;
-        let rows = stmt.query_map([s.clip.id.stored()], |r| {
-            Ok(((r.get(1)?, r.get(2)?, r.get(3)?), r.get(0)?))
-        })?;
-        for row in rows {
-            let (key, id) = row?;
-            old.insert(key, id);
+        let mut stmt = OLD_ROWS.prepare(&sp)?;
+        let found = stmt.query_map([s.clip.id.stored()], stored_row)?;
+        for row in found {
+            old.push(row?);
         }
     }
-    DROP_CLIP.execute(&tx, [s.clip.id.stored()])?;
     let source = s.clip.source.as_str();
-    // Same span, same side first; then the same span hidden or shown again.
-    let mut kept = |row: &Row, hidden: bool| {
-        old.remove(&(row.start.clone(), row.end.clone(), hidden))
-            .or_else(|| old.remove(&(row.start.clone(), row.end.clone(), !hidden)))
+    let new = with_ids(rows, &old, Some(s), source);
+    let wrote = if same(&old, &new) {
+        Wrote::Nothing
+    } else {
+        DROP_CLIP.execute(&sp, [s.clip.id.stored()])?;
+        for (id, values) in &new {
+            insert(&sp, *id, values)?;
+        }
+        Wrote::Lines
     };
-    for line in &out.lines {
-        let row = Row::line(line, tier)?;
-        row.insert(&tx, kept(&row, false), Some(s), source)?;
+    let wrote = if wrote == Wrote::Nothing && known == Some(inputs) {
+        Wrote::Nothing
+    } else {
+        SET_INPUTS.execute(&sp, (s.clip.id.stored(), inputs))?;
+        wrote.max(Wrote::Inputs)
+    };
+    sp.commit()?;
+    Ok(wrote)
+}
+
+/// A stored row: its id, and the columns [`Row::values`] gives.
+fn stored_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, Vec<Value>)> {
+    let values = (1..=COLUMNS)
+        .map(|i| r.get::<_, Value>(i))
+        .collect::<rusqlite::Result<_>>()?;
+    Ok((r.get(0)?, values))
+}
+
+/// The new rows with the ids they keep: same span, same side first; then the
+/// same span hidden or shown again. A new span gets none. Lines sharing a span
+/// (two reasons over one instant) take its ids in order, so each gets its own
+/// back.
+fn with_ids(
+    rows: &[Row],
+    old: &[(i64, Vec<Value>)],
+    shown: Option<&Shown>,
+    source: &str,
+) -> Vec<(Option<i64>, Vec<Value>)> {
+    let text = |v: &Value| match v {
+        Value::Text(t) => t.clone(),
+        _ => String::new(),
+    };
+    let key = |v: &[Value]| (text(&v[START]), text(&v[END]), v[HIDDEN] != Value::Null);
+    let mut free: HashMap<(String, String, bool), std::collections::VecDeque<i64>> = HashMap::new();
+    for (id, v) in old {
+        free.entry(key(v)).or_default().push_back(*id);
     }
-    for dropped in runs(&out.dropped) {
-        let row = Row::dropped(&dropped, tier);
-        row.insert(&tx, kept(&row, true), Some(s), source)?;
-    }
-    SET_INPUTS.execute(&tx, (s.clip.id.stored(), inputs))?;
-    tx.commit()?;
+    let mut take = |k: (String, String, bool)| {
+        free.get_mut(&k)
+            .and_then(std::collections::VecDeque::pop_front)
+    };
+    rows.iter()
+        .map(|row| {
+            let values = row.values(shown, source);
+            let (start, end, hidden) = key(&values);
+            let id =
+                take((start.clone(), end.clone(), hidden)).or_else(|| take((start, end, !hidden)));
+            (id, values)
+        })
+        .collect()
+}
+
+/// Whether the new rows are the stored ones, ids and all.
+fn same(old: &[(i64, Vec<Value>)], new: &[(Option<i64>, Vec<Value>)]) -> bool {
+    let by_id: HashMap<i64, &Vec<Value>> = old.iter().map(|(id, v)| (*id, v)).collect();
+    old.len() == new.len()
+        && new
+            .iter()
+            .all(|(id, values)| id.and_then(|id| by_id.get(&id)) == Some(&values))
+}
+
+fn insert(conn: &Connection, id: Option<i64>, values: &[Value]) -> rusqlite::Result<()> {
+    let id = id.map_or(Value::Null, Value::Integer);
+    INSERT_LINE.execute(
+        conn,
+        rusqlite::params_from_iter(std::iter::once(&id).chain(values)),
+    )?;
     Ok(())
 }
 
@@ -489,41 +621,42 @@ impl Row {
         }
     }
 
-    fn insert(
-        &self,
-        conn: &Connection,
-        id: Option<i64>,
-        shown: Option<&Shown>,
-        source: &str,
-    ) -> rusqlite::Result<()> {
-        INSERT_LINE.execute(
-            conn,
-            rusqlite::params![
-                id,
-                shown.map(|s| s.clip.id.stored()),
-                shown.map(|s| s.audio_id),
-                (!source.is_empty()).then_some(source),
-                self.start,
-                self.end,
-                self.text,
-                self.language,
-                self.confidence,
-                self.model,
-                self.label,
-                self.guess,
-                self.score,
-                self.cluster,
-                self.tier.as_str(),
-                self.hidden,
-                self.checked.then_some(1),
-                self.edit,
-                self.live,
-                self.words,
-            ],
-        )?;
-        Ok(())
+    /// The stored columns after the id, in [`INSERT_LINE`]'s order: what is
+    /// written, and what a stored row is compared with.
+    fn values(&self, shown: Option<&Shown>, source: &str) -> Vec<Value> {
+        let text = |t: Option<&str>| t.map_or(Value::Null, |t| Value::Text(t.to_owned()));
+        let int = |i: Option<i64>| i.map_or(Value::Null, Value::Integer);
+        let real = |f: Option<f64>| f.map_or(Value::Null, Value::Real);
+        vec![
+            int(shown.map(|s| s.clip.id.stored())),
+            int(shown.map(|s| s.audio_id)),
+            text((!source.is_empty()).then_some(source)),
+            Value::Text(self.start.clone()),
+            Value::Text(self.end.clone()),
+            Value::Text(self.text.clone()),
+            text(self.language.as_deref()),
+            real(self.confidence),
+            Value::Text(self.model.to_owned()),
+            text(self.label.as_deref()),
+            text(self.guess.as_deref()),
+            real(self.score),
+            text(self.cluster.as_deref()),
+            Value::Text(self.tier.as_str().to_owned()),
+            text(self.hidden.as_deref()),
+            int(self.checked.then_some(1)),
+            int(self.edit),
+            int(self.live),
+            text(self.words.as_deref()),
+        ]
     }
 }
+
+/// How many columns [`Row::values`] gives, and where three of them are.
+const COLUMNS: usize = 19;
+const START: usize = 3;
+const END: usize = 4;
+const HIDDEN: usize = 14;
+const LIVE: usize = 17;
 
 /// Show each live turn no transcribed clip covers; returns how many.
 fn live(meaning: &Connection, transcribed: &[(Instant, Instant)]) -> rusqlite::Result<usize> {
@@ -534,12 +667,18 @@ fn live(meaning: &Connection, transcribed: &[(Instant, Instant)]) -> rusqlite::R
         })?
         .collect::<rusqlite::Result<_>>()?;
     let tx = crate::sql::write_shared(meaning)?;
-    let old: HashMap<i64, i64> = OLD_LIVE
+    let old: Vec<(i64, Vec<Value>)> = OLD_LIVE
         .prepare(&tx)?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map([], stored_row)?
         .collect::<rusqlite::Result<_>>()?;
-    DROP_LIVE.execute(&tx, [])?;
-    let mut shown = 0;
+    let by_turn: HashMap<i64, i64> = old
+        .iter()
+        .filter_map(|(id, v)| match v[LIVE] {
+            Value::Integer(turn) => Some((turn, *id)),
+            _ => None,
+        })
+        .collect();
+    let mut new = Vec::new();
     for (live_id, start, end, text, language) in turns {
         let Some(at) = Instant::parse(&start) else {
             continue;
@@ -547,7 +686,7 @@ fn live(meaning: &Connection, transcribed: &[(Instant, Instant)]) -> rusqlite::R
         if transcribed.iter().any(|(a, b)| *a <= at && at < *b) {
             continue;
         }
-        Row {
+        let row = Row {
             start,
             end,
             text,
@@ -564,10 +703,18 @@ fn live(meaning: &Connection, transcribed: &[(Instant, Instant)]) -> rusqlite::R
             edit: None,
             live: Some(live_id),
             words: None,
-        }
-        .insert(&tx, old.get(&live_id).copied(), None, "")?;
-        shown += 1;
+        };
+        new.push((by_turn.get(&live_id).copied(), row.values(None, "")));
+    }
+    // Unchanged, as on almost every pass: no write, no commit.
+    if same(&old, &new) {
+        tx.rollback()?;
+        return Ok(new.len());
+    }
+    DROP_LIVE.execute(&tx, [])?;
+    for (id, values) in &new {
+        insert(&tx, *id, values)?;
     }
     tx.commit()?;
-    Ok(shown)
+    Ok(new.len())
 }

@@ -373,3 +373,150 @@ fn a_clip_whose_rows_will_not_write_is_reported_and_the_rest_still_render() {
         "retried, now current"
     );
 }
+
+/// Commits on the meaning plane while `f` runs.
+fn commits(f: &Fleet, run: impl FnOnce()) -> usize {
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = count.clone();
+    f.meaning
+        .commit_hook(Some(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            false
+        }))
+        .expect("hook");
+    run();
+    f.meaning.commit_hook(None::<fn() -> bool>).expect("unhook");
+    count.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[test]
+fn a_full_render_with_nothing_changed_writes_nothing() {
+    // Every start renders every clip, in case render's rules changed; almost
+    // always they did not, and rewriting 100k lines took minutes.
+    let f = fleet();
+    f.refresh(false);
+    let before = f.lines();
+    let fts: i64 = f
+        .meaning
+        .query_row("SELECT count(*) FROM rendered_fts", [], |r| r.get(0))
+        .expect("fts");
+
+    let mut done = Refreshed::default();
+    let wrote = commits(&f, || done = f.refresh(true));
+
+    assert_eq!(done.rendered, 1, "rendered, to compare");
+    assert_eq!(done.written, 0, "nothing changed, nothing written");
+    assert_eq!(wrote, 0, "not a single commit");
+    assert_eq!(f.lines(), before);
+    let after: i64 = f
+        .meaning
+        .query_row("SELECT count(*) FROM rendered_fts", [], |r| r.get(0))
+        .expect("fts");
+    assert_eq!(after, fts);
+}
+
+#[test]
+fn a_refresh_writes_its_clips_in_one_commit_not_one_each() {
+    // A commit is an fsync: one per clip was 16 minutes on Isis's disk.
+    let f = fleet();
+    for minute in 1..=3 {
+        let name = format!("usb-20261004T12{minute:02}00.flac");
+        recalld::store::insert(
+            &f.ingest,
+            &recalld::store::Row {
+                source: "usb".into(),
+                filename: name.clone(),
+                start_utc: format!("2026-10-04T12:{minute:02}:00Z"),
+                bytes: 1,
+                sha256: "y".into(),
+                received_utc: "2026-10-04T12:10:00Z".into(),
+                sent_utc: None,
+            },
+        )
+        .expect("segment");
+        f.meaning
+            .execute(
+                "INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels)
+                 VALUES ('usb', ?1, ?2, ?2, 48000, 1)",
+                (
+                    f.dir.path().join("ingest/usb").join(&name).display().to_string(),
+                    format!("2026-10-04T12:{minute:02}:00+00:00"),
+                ),
+            )
+            .expect("audio row");
+        f.ingest
+            .execute(
+                "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+                 VALUES (?1, ?2, 'done', '2026-10-04T12:10:00Z', '2026-10-04T12:10:00Z', ?3)",
+                (
+                    Kind::TranscribeSegment,
+                    &name,
+                    format!(
+                        r#"{{"ok":true,"result":{{"language":"nl","segments":[{}]}}}}"#,
+                        segment(1.0, 3.0, "nog een.")
+                    ),
+                ),
+            )
+            .expect("result");
+    }
+
+    let mut done = Refreshed::default();
+    let wrote = commits(&f, || done = f.refresh(false));
+
+    assert_eq!((done.rendered, done.written), (4, 4));
+    assert_eq!(wrote, 1);
+}
+
+#[test]
+fn two_hidden_lines_with_one_span_keep_their_ids_and_are_not_rewritten() {
+    // As a real clip has it: a segment ending in zero-length words, then an
+    // empty segment at the same instant, all inside "nobody spoke". Hidden
+    // twice over one instant, once for each reason; matched by span alone, one
+    // of the two took a new id at every render.
+    let f = fleet();
+    let word = |start: f64, end: f64, w: &str| {
+        format!(r#"{{"start":{start},"end":{end},"word":" {w}","probability":0.9}}"#)
+    };
+    let result = format!(
+        r#"{{"ok":true,"result":{{"language":"nl","segments":[{{"start":1.0,"end":3.0,"text":" goede morgen dan","words":[{},{},{}]}},{{"start":3.0,"end":3.0,"text":"","words":[]}},{}]}}}}"#,
+        word(1.0, 3.0, "goede"),
+        word(3.0, 3.0, "morgen"),
+        word(3.0, 3.0, "dan"),
+        segment(10.0, 12.0, "hoe gaat het?")
+    );
+    f.ingest
+        .execute("UPDATE jobs SET result = ?1", [result])
+        .expect("result");
+    let clip = f.clip();
+    let act = Act::NoSpeech {
+        clip: clip.id,
+        span: Span::new(f.at(0.5), f.at(3.5)).expect("ordered"),
+    };
+    recalld::edit_log::append(&f.meaning, f.at(100.0), &act, None).expect("append");
+    f.refresh(false);
+    let ids = || -> Vec<i64> {
+        f.meaning
+            .prepare("SELECT id FROM rendered_lines ORDER BY id")
+            .expect("prepare")
+            .query_map([], |r| r.get(0))
+            .expect("query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("rows")
+    };
+    let shared: i64 = f
+        .meaning
+        .query_row(
+            "SELECT count(*) FROM (SELECT 1 FROM rendered_lines GROUP BY start_utc, end_utc
+                 HAVING count(*) > 1)",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(shared, 1, "the case: two lines over one span");
+    let before = ids();
+
+    let again = f.refresh(true);
+
+    assert_eq!(again.written, 0, "nothing changed");
+    assert_eq!(ids(), before, "every line keeps its id");
+}

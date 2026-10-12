@@ -368,10 +368,15 @@ fn spawn_view(root: PathBuf) {
             .await;
             let problem = match done {
                 Ok(Ok(done)) => {
-                    if done.rendered > 0 || !done.unreadable.is_empty() || !done.failed.is_empty() {
+                    if all
+                        || done.written > 0
+                        || !done.unreadable.is_empty()
+                        || !done.failed.is_empty()
+                    {
                         tracing::info!(
                             all,
                             rendered = done.rendered,
+                            written = done.written,
                             unreadable = done.unreadable.len(),
                             failed = done.failed.len(),
                             live = done.live_shown,
