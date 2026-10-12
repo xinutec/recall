@@ -725,6 +725,15 @@ pub const MIGRATIONS: &[&str] = &[
     DROP TABLE retired_20261012_transcript_fts;
     DROP TABLE retired_20261012_refine_requests;
 "#,
+    // v61
+    r#"
+    -- Nothing reads these. language: a session's language is an edit act now.
+    -- port, event_db, noise_shape: the Python capture's per-mic settings.
+    ALTER TABLE sources DROP COLUMN port;
+    ALTER TABLE sources DROP COLUMN event_db;
+    ALTER TABLE sources DROP COLUMN noise_shape;
+    ALTER TABLE sources DROP COLUMN language;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

@@ -15,10 +15,9 @@ use std::process::Command;
 
 crate::statements! {
     UPSERT_SOURCE: Meaning =
-        "INSERT INTO sources (id, name, kind, port) VALUES (?1, ?2, ?3, NULL) \
+        "INSERT INTO sources (id, name, kind) VALUES (?1, ?2, ?3) \
          ON CONFLICT(id) DO UPDATE SET \
              kind = excluded.kind, \
-             port = excluded.port, \
              name = CASE WHEN sources.name = sources.id \
                          THEN excluded.name ELSE sources.name END";
     ADD_AUDIO_SEGMENT: Meaning =
