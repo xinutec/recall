@@ -407,14 +407,9 @@ pub async fn lease_job(
     match handle.await {
         Ok(Ok(Some(job))) => (StatusCode::OK, axum::Json(json!({ "job": job }))).into_response(),
         Ok(Ok(None)) => (StatusCode::OK, axum::Json(json!({ "job": null }))).into_response(),
-        Ok(Err(err)) => {
-            tracing::error!(%err, "lease failed");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "lease failed")
-        }
-        Err(err) => {
-            tracing::error!(%err, "lease task failed");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "lease failed")
-        }
+        // Through the fault log, where the doctor counts them.
+        Ok(Err(err)) => crate::route::faulted("work lease", &err),
+        Err(err) => crate::route::faulted("work lease task", &err),
     }
 }
 
@@ -435,14 +430,8 @@ pub async fn finish_job(
     match handle.await {
         Ok(Ok(true)) => (StatusCode::OK, axum::Json(json!({ "done": true }))).into_response(),
         Ok(Ok(false)) => error(StatusCode::NOT_FOUND, "no such open job"),
-        Ok(Err(err)) => {
-            tracing::error!(%err, "finish failed");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "finish failed")
-        }
-        Err(err) => {
-            tracing::error!(%err, "finish task failed");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "finish failed")
-        }
+        Ok(Err(err)) => crate::route::faulted("work finish", &err),
+        Err(err) => crate::route::faulted("work finish task", &err),
     }
 }
 

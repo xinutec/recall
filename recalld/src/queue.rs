@@ -27,13 +27,23 @@ crate::statements! {
            AND j.kind IN (SELECT value FROM json_each(?2))
          ORDER BY (j.kind = ?3) DESC, s.start_utc DESC, j.filename DESC
          LIMIT 1";
+    /// Finished `?3` jobs with no `?1` job yet, and only then their results:
+    /// reading every result costs 25 s on a cold disk.
     DERIVE_FOLLOW_ON: Ingest =
+        "WITH open AS MATERIALIZED (
+             SELECT j.id FROM jobs j
+             WHERE j.kind = ?3 AND j.done_utc IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM jobs d
+                               WHERE d.kind = ?1 AND d.filename = j.filename))
+         INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
+         SELECT ?1, j.filename, ?2 FROM jobs j JOIN open o ON o.id = j.id
+         WHERE json_valid(j.result) AND json_extract(j.result, '$.ok') = 1";
+    /// The same for one job just finished.
+    FOLLOW_ON_OF: Ingest =
         "INSERT OR IGNORE INTO jobs (kind, filename, created_utc)
-         SELECT ?1, j.filename, ?2 FROM jobs j
-         WHERE j.kind = ?3 AND j.done_utc IS NOT NULL
-           AND json_valid(j.result) AND json_extract(j.result, '$.ok') = 1
-           AND NOT EXISTS (SELECT 1 FROM jobs d
-                           WHERE d.kind = ?1 AND d.filename = j.filename)";
+         SELECT ?1, filename, ?2 FROM jobs
+         WHERE id = ?3 AND kind = ?4
+           AND json_valid(result) AND json_extract(result, '$.ok') = 1";
     /// Clips transcribed before the jobs table, which have no job.
     TRANSCRIBED_PATHS: Meaning =
         "SELECT a.path FROM audio_segments a
@@ -102,10 +112,11 @@ fn iso(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// Derive the diarize job for every clip whose transcription succeeded: without
-/// words to align, diarization attributes nothing. Idempotent and cheap enough
-/// for every lease.
-pub fn derive_jobs(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
+/// Derive the diarize job for every clip whose transcription succeeded and has
+/// none: without words to align, diarization attributes nothing. [`done`]
+/// derives each as its transcription lands; this catches up on any it missed.
+/// Idempotent. Not on the lease path: it reads results.
+pub fn derive_follow_ons(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<usize> {
     DERIVE_FOLLOW_ON.execute(
         conn,
         (Kind::DiarizeSegment, iso(now), Kind::TranscribeSegment),
@@ -176,15 +187,28 @@ pub fn derive_segment_jobs(
 /// Lease the newest queued or lapsed job of a kind in `kinds` (what the runner
 /// can do: it holds one shim's weights). Empty `kinds` leases nothing.
 pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[Kind]) -> rusqlite::Result<Option<Job>> {
-    let conn = store::open(root)?;
-    derive_jobs(&conn, now)?;
-    retire_exhausted(&conn, now)?;
+    lease_on(&mut store::open(root)?, now, kinds)
+}
+
+/// [`lease`] on an open ingest plane.
+///
+/// # Errors
+/// If the store refuses.
+pub fn lease_on(
+    conn: &mut Connection,
+    now: DateTime<Utc>,
+    kinds: &[Kind],
+) -> rusqlite::Result<Option<Job>> {
+    // One short write: two runners must not lease the same job.
+    let tx = crate::sql::write(conn)?;
+    let conn = &*tx;
+    retire_exhausted(conn, now)?;
     // The kinds as a JSON array: SQLite binds no arrays.
     let kinds: Vec<&str> = kinds.iter().map(|k| k.as_str()).collect();
     let kinds = serde_json::to_string(&kinds)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
     let job: Option<Job> = LEASE
-        .query_row(&conn, (iso(now), kinds, Kind::EnrollSpeaker), |r| {
+        .query_row(conn, (iso(now), kinds, Kind::EnrollSpeaker), |r| {
             Ok(Job {
                 id: r.get(0)?,
                 kind: r.get(1)?,
@@ -197,8 +221,9 @@ pub fn lease(root: &Path, now: DateTime<Utc>, kinds: &[Kind]) -> rusqlite::Resul
         })
         .optional()?;
     if let Some(job) = &job {
-        LEASE_JOB.execute(&conn, (iso(now + Duration::seconds(LEASE_TTL_S)), job.id))?;
+        LEASE_JOB.execute(conn, (iso(now + Duration::seconds(LEASE_TTL_S)), job.id))?;
     }
+    tx.commit()?;
     Ok(job)
 }
 
@@ -215,8 +240,17 @@ fn retire_exhausted(conn: &Connection, now: DateTime<Utc>) -> rusqlite::Result<u
 }
 
 /// Retire a job with its result, opaque JSON the passes interpret.
+/// A finished transcription queues its diarization in the same write.
 pub fn done(root: &Path, id: i64, result: &str, now: DateTime<Utc>) -> rusqlite::Result<bool> {
-    let conn = store::open(root)?;
-    let updated = FINISH.execute(&conn, (iso(now), result, id))?;
+    let mut conn = store::open(root)?;
+    let tx = crate::sql::write(&mut conn)?;
+    let updated = FINISH.execute(&tx, (iso(now), result, id))?;
+    if updated == 1 {
+        FOLLOW_ON_OF.execute(
+            &tx,
+            (Kind::DiarizeSegment, iso(now), id, Kind::TranscribeSegment),
+        )?;
+    }
+    tx.commit()?;
     Ok(updated == 1)
 }

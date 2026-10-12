@@ -542,7 +542,12 @@ fn spawn_segment_deriver(root: PathBuf) {
             let done = tokio::task::spawn_blocking(move || {
                 let ingest = recalld::store::open(&pass_root)?;
                 let meaning = recalld::work::open_write(&pass_root)?;
-                recalld::queue::derive_segment_jobs(&ingest, &meaning, chrono::Utc::now(), BATCH)
+                let now = chrono::Utc::now();
+                let followed = recalld::queue::derive_follow_ons(&ingest, now)?;
+                if followed > 0 {
+                    tracing::info!(followed, "segments: diarize jobs caught up");
+                }
+                recalld::queue::derive_segment_jobs(&ingest, &meaning, now, BATCH)
             })
             .await;
             let problem = match done {

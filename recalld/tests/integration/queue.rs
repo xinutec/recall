@@ -699,3 +699,107 @@ fn a_mics_next_minute_is_not_a_copy() {
 
     assert_eq!(queued, 2);
 }
+
+#[test]
+fn a_finished_transcription_queues_its_diarization_at_once() {
+    // No lease has to run first: done derives it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
+    let name = queued(dir.path(), "20260911T100000");
+    let job = lease(dir.path(), now, ASR).expect("lease").expect("job");
+
+    assert!(done(dir.path(), job.id, TRANSCRIBED, now).expect("done"));
+
+    assert!(
+        kinds_queued(dir.path()).contains(&(Kind::DiarizeSegment.as_str().to_owned(), name)),
+        "{:?}",
+        kinds_queued(dir.path())
+    );
+}
+
+#[test]
+fn a_transcription_finished_without_its_diarization_is_caught_up() {
+    // Finished before done derived follow-ons, or by hand: the pass catches up,
+    // and a refused one still gets none.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
+    let ok = mic_row(dir.path(), "usb", "20260911T100000");
+    let refused = mic_row(dir.path(), "usb", "20260911T100100");
+    let conn = store::open(dir.path()).expect("db");
+    for (name, result) in [(&ok, TRANSCRIBED), (&refused, REFUSED)] {
+        conn.execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES (?1, ?2, 'done', '2026-09-11T11:00:00Z', '2026-09-11T11:00:00Z', ?3)",
+            (Kind::TranscribeSegment, name, result),
+        )
+        .expect("finished job");
+    }
+
+    assert_eq!(
+        recalld::queue::derive_follow_ons(&conn, now).expect("derive"),
+        1
+    );
+    assert_eq!(
+        recalld::queue::derive_follow_ons(&conn, now).expect("again"),
+        0
+    );
+    assert!(kinds_queued(dir.path()).contains(&(Kind::DiarizeSegment.as_str().to_owned(), ok)));
+}
+
+/// The SQLite VM steps one lease takes with `finished` transcriptions stored,
+/// each with a 10 kB result.
+fn lease_work(finished: usize) -> u64 {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
+    queued(dir.path(), "20260911T235900");
+    let mut conn = store::open(dir.path()).expect("db");
+    let body = format!(
+        r#"{{"ok":true,"result":{{"text":"{}"}}}}"#,
+        "x".repeat(10_000)
+    );
+    for i in 0..finished {
+        let name = mic_row(
+            dir.path(),
+            "usb",
+            &format!("20260910T{:02}{:02}00", i / 60, i % 60),
+        );
+        conn.execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES (?1, ?2, 'done', '2026-09-11T11:00:00Z', '2026-09-11T11:00:00Z', ?3)",
+            (Kind::TranscribeSegment, &name, &body),
+        )
+        .expect("finished job");
+        conn.execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES (?1, ?2, 'done', '2026-09-11T11:00:00Z', '2026-09-11T11:00:00Z', '{}')",
+            (Kind::DiarizeSegment, &name),
+        )
+        .expect("its diarization");
+    }
+    let steps = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let counted = steps.clone();
+    conn.progress_handler(
+        1,
+        Some(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            false
+        }),
+    )
+    .expect("handler");
+    recalld::queue::lease_on(&mut conn, now, ASR)
+        .expect("lease")
+        .expect("job");
+    steps.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[test]
+fn a_lease_costs_the_same_whatever_the_archive_holds() {
+    // Every lease used to json-parse every finished result under the write
+    // lock: 25 s on a cold disk, and the runners' 500s.
+    let small = lease_work(10);
+    let large = lease_work(1_000);
+    assert!(
+        large < small * 3,
+        "a lease grew with the finished jobs: {small} steps at 10, {large} at 1000"
+    );
+}

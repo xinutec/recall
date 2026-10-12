@@ -59,6 +59,9 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
              result       TEXT,
              UNIQUE (kind, filename)
          );
+         -- The open jobs, the few a lease looks at: a scan of all of them
+         -- reads every result's first page.
+         CREATE INDEX IF NOT EXISTS jobs_open ON jobs (kind) WHERE done_utc IS NULL;
 
          -- Clips a pass decided without writing.
          CREATE TABLE IF NOT EXISTS pass_ledger (

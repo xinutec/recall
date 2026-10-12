@@ -71,3 +71,5 @@ audiocore = { path = "../audiocore" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+# `hooks`: the queue's cost test counts the statements' work.
+rusqlite = { version = "0.40", features = ["bundled", "functions", "hooks"] }
