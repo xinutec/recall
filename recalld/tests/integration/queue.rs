@@ -803,3 +803,24 @@ fn a_lease_costs_the_same_whatever_the_archive_holds() {
         "a lease grew with the finished jobs: {small} steps at 10, {large} at 1000"
     );
 }
+
+#[test]
+fn a_renewed_lease_holds_past_its_first_ten_minutes_and_a_finished_job_is_not_renewed() {
+    // Diarizing a long meeting took 11 min: past a flat 10-min lease.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
+    queued(dir.path(), "20260911T100000");
+    let job = lease(dir.path(), now, ASR).expect("lease").expect("job");
+
+    let later = now + Duration::minutes(8);
+    assert!(recalld::queue::renew(dir.path(), job.id, later).expect("renew"));
+    assert!(
+        lease(dir.path(), now + Duration::minutes(12), ASR)
+            .expect("lease")
+            .is_none(),
+        "still held at 12 min"
+    );
+
+    assert!(done(dir.path(), job.id, TRANSCRIBED, later).expect("done"));
+    assert!(!recalld::queue::renew(dir.path(), job.id, later).expect("renew"));
+}

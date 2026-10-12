@@ -187,8 +187,12 @@ recorders, the Mac and the browser. It owns:
   Rows from before `regions` existed are backfilled with whatever room a batch
   has left after new clips.
 - **The work queue.** Jobs are derived from the blobs, never enqueued, so a
-  missed enqueue cannot strand audio. A lease is time-bounded; a runner that
-  dies lets it lapse; a job nobody finishes is retired after three leases. Kinds:
+  missed enqueue cannot strand audio. A lease lasts ten minutes and the runner
+  renews it while its model works, so a long meeting is not handed out twice;
+  a runner that dies lets it lapse; a job nobody finishes is retired after
+  three leases. A lease reads only the open jobs, in one short write: it holds
+  the lock every upload and finish waits on. A finished transcription queues
+  its diarization as it lands. Kinds:
   `transcribe-segment` and `diarize-segment` for every microphone clip and
   uploaded meeting, `enroll-speaker` for stretches a person has named.
   Enrolment outranks capture time in the lease, or a label would wait

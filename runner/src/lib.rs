@@ -12,4 +12,5 @@
 pub mod client;
 pub mod live;
 pub mod pulse;
+pub mod renew;
 pub mod shim;

@@ -142,6 +142,21 @@ impl Client {
         Ok(())
     }
 
+    /// Hold a job this runner is still working on for another lease's length.
+    /// `false` when the server says it is finished, or has no such route (the
+    /// messages queue): either way there is nothing to hold.
+    ///
+    /// # Errors
+    /// If recalld refuses otherwise or is unreachable.
+    pub fn renew(&self, id: i64) -> Result<bool, Error> {
+        let url = format!("{}/work/v1/jobs/{id}/renew", self.base);
+        match self.auth(self.agent.put(&url)).call() {
+            Ok(_) => Ok(true),
+            Err(ureq::Error::Status(404 | 405, _)) => Ok(false),
+            Err(err) => Err(Error::Http(err.to_string())),
+        }
+    }
+
     /// Push provisional live turns. Lossy on purpose: the archive pass
     /// supersedes them.
     ///

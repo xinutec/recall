@@ -79,11 +79,15 @@ crate::statements! {
         "UPDATE jobs SET state = 'done', done_utc = ?1, result = COALESCE(result, ?2)
          WHERE done_utc IS NULL AND attempts >= ?3
            AND (leased_until IS NULL OR leased_until < ?1)";
+    RENEW: Ingest =
+        "UPDATE jobs SET leased_until = ?1 WHERE id = ?2 AND done_utc IS NULL";
     FINISH: Ingest =
         "UPDATE jobs SET state = 'done', done_utc = ?1, result = ?2
          WHERE id = ?3 AND done_utc IS NULL";
 }
 
+/// A runner renews well inside this while it works (`renew`), so it bounds
+/// only how long a crashed runner's job waits to be offered again.
 const LEASE_TTL_S: i64 = 10 * 60;
 /// Leases a job may take before it is retired as failed; otherwise a clip that
 /// kills the shim would hold the GPU for ever.
@@ -225,6 +229,16 @@ pub fn lease_on(
     }
     tx.commit()?;
     Ok(job)
+}
+
+/// Hold a job that is still being worked on for another lease's length.
+/// Returns whether it was open to hold.
+///
+/// # Errors
+/// If the store refuses.
+pub fn renew(root: &Path, id: i64, now: DateTime<Utc>) -> rusqlite::Result<bool> {
+    let conn = store::open(root)?;
+    Ok(RENEW.execute(&conn, (iso(now + Duration::seconds(LEASE_TTL_S)), id))? == 1)
 }
 
 /// Retire every job whose leases are spent and lapsed, as a failure.

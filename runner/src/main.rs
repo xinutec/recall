@@ -204,14 +204,14 @@ fn one(queue: &Queue, shim: &mut Shim) -> Result<bool, Failed> {
         .fetch_blob(&source, &filename, &clip)
         .map_err(Failed::Server)?;
     // Exhaustive: a new kind does not compile until it is given work here.
-    let outcome = match kind {
+    let outcome = runner::renew::while_renewing(client, id, runner::renew::EVERY, || match kind {
         Kind::TranscribeSegment => shim
             .transcribe_in(&clip, language.as_deref(), prompt)
             .map(|a| (a.raw, a.reply.segments.len())),
         Kind::DiarizeSegment => shim.diarize(&clip).map(|a| (a.raw, a.reply.turns.len())),
         // One model call per named turn.
         Kind::EnrollSpeaker => embed_spans(shim, &clip, &spans),
-    };
+    });
     // The scratch copy is removed whatever the outcome.
     let _ = std::fs::remove_file(&clip);
     match outcome {

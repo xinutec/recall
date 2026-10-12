@@ -205,6 +205,7 @@ pub fn router(config: Arc<Config>) -> Router {
         .route("/ingest/v1/blob/{source}/{filename}", get(ingest::get_blob))
         .route("/work/v1/lease", put(ingest::lease_job))
         .route("/work/v1/jobs/{id}/done", put(ingest::finish_job))
+        .route("/work/v1/jobs/{id}/renew", put(ingest::renew_job))
         .with_state(config);
     let merged = match browsing_plane {
         Some(b) => base.merge(b),

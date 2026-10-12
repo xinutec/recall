@@ -435,6 +435,26 @@ pub async fn finish_job(
     }
 }
 
+/// Hold a job the runner is still working on: a long meeting outlasts one
+/// lease. 404 once the job is finished.
+pub async fn renew_job(
+    State(config): State<Arc<Config>>,
+    Path(id): Path<i64>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(refused) = read_auth(&config, &headers) {
+        return refused.into_response();
+    }
+    let handle =
+        tokio::task::spawn_blocking(move || crate::queue::renew(&config.root, id, Utc::now()));
+    match handle.await {
+        Ok(Ok(true)) => (StatusCode::OK, axum::Json(json!({ "renewed": true }))).into_response(),
+        Ok(Ok(false)) => error(StatusCode::NOT_FOUND, "no such open job"),
+        Ok(Err(err)) => crate::route::faulted("work renew", &err),
+        Err(err) => crate::route::faulted("work renew task", &err),
+    }
+}
+
 pub async fn health() -> Response {
     (StatusCode::OK, axum::Json(json!({ "ok": true }))).into_response()
 }

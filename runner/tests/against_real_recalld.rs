@@ -265,3 +265,48 @@ fn a_reply_outside_the_contract_is_refused_not_stored() {
         other => panic!("expected a refusal, got {other:?}"),
     }
 }
+
+#[test]
+fn a_job_is_renewed_while_its_model_runs_and_not_once_it_is_done() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let base = serve(dir.path());
+    queued_clip(dir.path(), "usb-20260906T100000.flac", b"audio");
+    let client = Client::new(&base, READ_TOKEN);
+    let job = client
+        .lease(&[audiocore::job::Kind::TranscribeSegment])
+        .expect("lease")
+        .expect("job");
+    let leased_until = || -> String {
+        recalld::store::open(dir.path())
+            .expect("db")
+            .query_row(
+                "SELECT leased_until FROM jobs WHERE id = ?1",
+                [job.id],
+                |r| r.get(0),
+            )
+            .expect("row")
+    };
+    let first = leased_until();
+
+    // A model call longer than the renewal interval, whose clock ticks past
+    // the stamp's second.
+    runner::renew::while_renewing(
+        &client,
+        job.id,
+        std::time::Duration::from_millis(1100),
+        || {
+            std::thread::sleep(std::time::Duration::from_millis(2500));
+        },
+    );
+
+    assert!(
+        leased_until() > first,
+        "renewed: {first} -> {}",
+        leased_until()
+    );
+    client.finish(job.id, "{}").expect("finish");
+    assert!(
+        !client.renew(job.id).expect("renew"),
+        "nothing to hold once done"
+    );
+}
