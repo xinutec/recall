@@ -715,10 +715,14 @@ pub const MIGRATIONS: &[&str] = &[
     // v60
     r#"
     -- The retired tables are in the fleet backup; the record no longer keeps them.
-    DROP TABLE retired_20261012_transcript_segments;
-    DROP TABLE retired_20261012_transcript_fts;
+    -- With foreign keys on, a drop deletes row by row and looks up each row's
+    -- referrers: the children go first, and superseded_by, which refers to its
+    -- own table, gets an index, or every row would scan the table.
     DROP TABLE retired_20261012_transcript_embeddings;
     DROP TABLE retired_20261012_corrections;
+    CREATE INDEX retired_superseded_by ON retired_20261012_transcript_segments(superseded_by);
+    DROP TABLE retired_20261012_transcript_segments;
+    DROP TABLE retired_20261012_transcript_fts;
     DROP TABLE retired_20261012_refine_requests;
 "#,
 ];
