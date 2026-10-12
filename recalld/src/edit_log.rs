@@ -5,9 +5,7 @@
 //! names the clip or session its act touches, so one clip's acts load by
 //! index.
 
-use crate::legacy_edits;
 use rusqlite::{Connection, OptionalExtension};
-use std::path::Path;
 use transcript::{Act, Clip, Edit, EditId, Instant};
 
 crate::statements! {
@@ -21,7 +19,6 @@ crate::statements! {
     /// A session's own acts and their retractions.
     FOR_SOURCE: Meaning = "SELECT id, at_us, act FROM edits WHERE source_id = ?1 ORDER BY id";
     ONE: Meaning = "SELECT id, at_us, act FROM edits WHERE id = ?1";
-    COUNT: Meaning = "SELECT count(*) FROM edits";
 }
 
 #[derive(Debug)]
@@ -37,8 +34,6 @@ pub enum LogError {
     Unwritable(String),
     /// A retraction of an edit the log does not hold.
     NoTarget(EditId),
-    /// Today's tables could not be read for the seed.
-    Legacy(String),
 }
 
 impl std::fmt::Display for LogError {
@@ -48,7 +43,6 @@ impl std::fmt::Display for LogError {
             Self::Unreadable { id, why } => write!(f, "edit {id} does not read back: {why}"),
             Self::Unwritable(why) => write!(f, "act does not serialise: {why}"),
             Self::NoTarget(id) => write!(f, "no edit {} to retract", id.stored()),
-            Self::Legacy(why) => write!(f, "cannot recover the edits: {why}"),
         }
     }
 }
@@ -144,36 +138,4 @@ fn read(
             })
         })
         .collect()
-}
-
-/// Fill an empty log from today's tables, dated as `legacy_edits::convert`
-/// dates them, in one transaction. A log with any act is left alone. Returns
-/// how many acts were written.
-///
-/// # Errors
-/// If a store refuses or today's tables cannot be read.
-pub fn seed(
-    meaning: &Connection,
-    ingest: &Connection,
-    root: &Path,
-    now: Instant,
-) -> Result<usize, LogError> {
-    let tx = crate::sql::write_shared(meaning)?;
-    if COUNT.query_row(&tx, [], |r| r.get::<_, i64>(0))? > 0 {
-        return Ok(0);
-    }
-    let loaded =
-        legacy_edits::load(&tx, ingest, root).map_err(|err| LogError::Legacy(err.to_string()))?;
-    let recovered = legacy_edits::convert(
-        &loaded.corrections,
-        &loaded.lines,
-        &loaded.hides,
-        &loaded.pins,
-        now,
-    );
-    for (at, act, origin) in &recovered.acts {
-        append(&tx, *at, act, Some(&format!("{origin:?}")))?;
-    }
-    tx.commit()?;
-    Ok(recovered.acts.len())
 }

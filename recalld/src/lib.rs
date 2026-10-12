@@ -16,7 +16,6 @@ pub mod ingest_schema;
 pub mod labels;
 pub mod labels_write;
 pub mod ledger;
-pub mod legacy_edits;
 pub mod line;
 pub mod live_tier;
 pub mod meaning_schema;

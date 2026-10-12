@@ -47,17 +47,6 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
          CREATE INDEX IF NOT EXISTS segment_levels_source
              ON segment_levels (source, filename);
 
-         CREATE TABLE IF NOT EXISTS room_blocks (
-             start_utc    TEXT PRIMARY KEY,
-             verdict      TEXT NOT NULL,
-             winner       TEXT,
-             filename     TEXT,
-             contributors TEXT NOT NULL,
-             -- NULL means judged before coverage was measured, not fully covered.
-             coverage     REAL,
-             built_utc    TEXT NOT NULL
-         );
-
          CREATE TABLE IF NOT EXISTS jobs (
              id           INTEGER PRIMARY KEY,
              kind         TEXT NOT NULL,
@@ -78,19 +67,11 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
              outcome     TEXT NOT NULL,
              decided_utc TEXT NOT NULL,
              PRIMARY KEY (kind, filename)
-         );
-
-         -- Clips a person asked to transcribe again (`retranscribe`). The row
-         -- holds the speaker pass off the clip until its new lines are written.
-         CREATE TABLE IF NOT EXISTS retranscribe_requests (
-             filename      TEXT PRIMARY KEY REFERENCES segments (filename),
-             requested_utc TEXT NOT NULL
          );",
     )?;
     ensure_clips(conn, had_clips)?;
     add_column(conn, "segment_levels", "gated", "REAL")?;
     add_column(conn, "segment_levels", "quiet_run_s", "REAL")?;
-    add_column(conn, "room_blocks", "coverage", "REAL")?;
     // Where the speech is, as JSON `[[start, end], ...]` in seconds from the
     // blob's start; JSON `null` when it could not be decoded. NULL means not
     // looked for yet (`speech::scan_once` backfills it).
@@ -98,7 +79,24 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
     // A decision's counts, as JSON; `outcome` is one word (`ledger::Outcome`).
     add_column(conn, "pass_ledger", "detail", "TEXT")?;
     split_old_outcomes(conn)?;
-    retire_room_jobs(conn)
+    retire_room_jobs(conn)?;
+    retire_old_tables(conn)
+}
+
+/// Tables nothing reads any more, dated and kept until a backup cycle has
+/// them: the room stream's blocks and the old retranscribe set-aside.
+fn retire_old_tables(conn: &Connection) -> rusqlite::Result<()> {
+    for table in ["room_blocks", "retranscribe_requests"] {
+        let present: bool = conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?
+            .exists([table])?;
+        if present {
+            conn.execute_batch(&format!(
+                "ALTER TABLE {table} RENAME TO retired_20261012_{table}"
+            ))?;
+        }
+    }
+    Ok(())
 }
 
 /// The clips table and its trigger (#1911); on first creation, a clip for

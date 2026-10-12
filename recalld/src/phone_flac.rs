@@ -35,8 +35,6 @@ crate::statements! {
     RENAME_SPEECH: Ingest = "UPDATE segment_speech SET filename = ?2 WHERE filename = ?1";
     RENAME_JOBS: Ingest = "UPDATE jobs SET filename = ?2 WHERE filename = ?1";
     RENAME_LEDGER: Ingest = "UPDATE pass_ledger SET filename = ?2 WHERE filename = ?1";
-    RENAME_REQUESTS: Ingest =
-        "UPDATE retranscribe_requests SET filename = ?2 WHERE filename = ?1";
     DROP_SEGMENT: Ingest = "DELETE FROM segments WHERE filename = ?1";
     REPOINT: Meaning = "UPDATE audio_segments SET path = ?2 WHERE path = ?1";
 }
@@ -162,13 +160,7 @@ fn one(
     })?;
     let bytes = i64::try_from(flac.len()).unwrap_or(i64::MAX);
     COPY_SEGMENT.execute(&tx, (filename, &flac_name, bytes, &sha))?;
-    for rename in [
-        RENAME_LEVELS,
-        RENAME_SPEECH,
-        RENAME_JOBS,
-        RENAME_LEDGER,
-        RENAME_REQUESTS,
-    ] {
+    for rename in [RENAME_LEVELS, RENAME_SPEECH, RENAME_JOBS, RENAME_LEDGER] {
         rename.execute(&tx, (filename, &flac_name))?;
     }
     DROP_SEGMENT.execute(&tx, [filename])?;

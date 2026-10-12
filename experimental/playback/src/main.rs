@@ -237,15 +237,15 @@ fn read_played(dir: &Path) -> Result<Vec<Played>> {
 }
 
 /// The lines the household is shown. A hidden line is not an extra hearing:
-/// diarization hides the line it rewrote, and the rewrite is shown, so counting
-/// both would score the same speech twice.
+/// render hides the model line a person replaced, and the replacement is shown,
+/// so counting both would score the same speech twice.
 fn lines(db: &Path, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<Line>> {
     let conn =
         rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut stmt = conn.prepare(
         "SELECT a.source_id, t.start_utc, t.end_utc, t.text
-           FROM transcript_segments t JOIN audio_segments a ON a.id = t.audio_segment_id
-          WHERE t.superseded_by IS NULL AND t.hidden_reason IS NULL AND t.asr_model != 'human'
+           FROM rendered_lines t JOIN audio_segments a ON a.id = t.audio_segment_id
+          WHERE t.hidden_reason IS NULL AND t.asr_model != 'human'
             AND t.end_utc > ?1 AND t.start_utc < ?2",
     )?;
     let rows = stmt.query_map(

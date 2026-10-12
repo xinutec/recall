@@ -53,11 +53,11 @@ word reference and places every dropped word (#1470; `--help`).
    playback play --dir DIR
    ```
 
-5. Wait until every minute of the window has lines in `recall.sqlite`, not
-   only until its jobs are done: the turn writer adds them in batches, up to
-   an hour after a minute's job finished. Then copy the window's
-   `audio_segments` and their `transcript_segments` into a small file (sqlite
-   `ATTACH` the fleet's file read-only, `CREATE TABLE ... AS SELECT`) and score:
+5. Wait until every minute of the window has lines in `recall.sqlite`: the
+   view renders a clip within a minute of its job finishing. Then copy the
+   window's `audio_segments` and their `rendered_lines` into a small file
+   (sqlite `ATTACH` the fleet's file read-only, `CREATE TABLE ... AS SELECT`)
+   and score:
 
    ```sh
    playback score --dir DIR --db window.sqlite [--json]

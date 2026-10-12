@@ -22,7 +22,9 @@ whose best print is nearest; ported here and checked against the census's
 scored is left out, or with `--leave-out clip` every print from that clip.
 
 Every database is opened read-only (`immutable=1`: point it at a `.backup`
-snapshot, never the live file).
+snapshot, never the live file). It reads the old line tables by their old
+names, which a snapshot at schema v59 or later holds as `retired_*`; names a
+person gave since are edit acts it does not read.
 
 Usage:
   # needs the ML environment, ffmpeg and HF_TOKEN; writes <work>/extract.jsonl

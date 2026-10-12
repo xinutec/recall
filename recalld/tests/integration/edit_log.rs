@@ -86,36 +86,3 @@ fn a_row_that_is_not_an_act_stops_the_read() {
         Err(LogError::Unreadable { .. })
     ));
 }
-
-#[test]
-fn the_seed_fills_an_empty_log_once() {
-    let (dir, conn) = meaning();
-    let ingest = recalld::store::open(dir.path()).expect("ingest");
-    conn.execute(
-        "INSERT INTO sources (id, name, kind, language) VALUES ('meeting-20260520-1901', 'm', 'upload', 'nl')",
-        [],
-    )
-    .expect("pinned session");
-
-    assert_eq!(
-        edit_log::seed(&conn, &ingest, dir.path(), at(100)).expect("seed"),
-        1
-    );
-    assert_eq!(
-        edit_log::seed(&conn, &ingest, dir.path(), at(200)).expect("again"),
-        0
-    );
-    let edits = edit_log::all(&conn).expect("all");
-    assert_eq!(edits.len(), 1);
-    assert!(matches!(
-        edits[0].act,
-        Act::Language {
-            language: Language::Dutch,
-            ..
-        }
-    ));
-    let origin: String = conn
-        .query_row("SELECT origin FROM edits", [], |r| r.get(0))
-        .expect("origin");
-    assert_eq!(origin, "Pin");
-}

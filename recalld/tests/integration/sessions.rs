@@ -448,7 +448,7 @@ fn populate(conn: &Connection, source: &str, kind: &str) -> i64 {
     .expect("segment");
     let audio_id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc, text, asr_model)
+        "INSERT INTO retired_20261012_transcript_segments (audio_segment_id, start_utc, end_utc, text, asr_model)
          VALUES (?1, '2026-07-03T09:51:00+00:00', '2026-07-03T09:51:05+00:00', 'hello',
                  'whisper')",
         [audio_id],
@@ -456,12 +456,12 @@ fn populate(conn: &Connection, source: &str, kind: &str) -> i64 {
     .expect("turn");
     let turn_id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO transcript_embeddings (segment_id, vector) VALUES (?1, '[1.0]')",
+        "INSERT INTO retired_20261012_transcript_embeddings (segment_id, vector) VALUES (?1, '[1.0]')",
         [turn_id],
     )
     .expect("embedding");
     conn.execute(
-        "INSERT INTO corrections
+        "INSERT INTO retired_20261012_corrections
              (audio_segment_id, transcript_segment_id, start_utc, end_utc, original_text,
               corrected_text, created_utc)
          VALUES (?1, ?2, '2026-07-03T09:51:00+00:00', '2026-07-03T09:51:05+00:00', 'hello',
@@ -470,12 +470,17 @@ fn populate(conn: &Connection, source: &str, kind: &str) -> i64 {
     )
     .expect("correction");
     conn.execute(
-        "INSERT INTO refine_requests (source_id, start_utc, end_utc, created_utc)
+        "INSERT INTO retired_20261012_refine_requests (source_id, start_utc, end_utc, created_utc)
          VALUES (?1, '2026-07-03T09:50:00+00:00', '2026-07-03T10:20:00+00:00',
                  '2026-07-03T11:00:00+00:00')",
         [source],
     )
     .expect("refine");
+    conn.execute(
+        "INSERT INTO transcribed_before_jobs (audio_segment_id) VALUES (?1)",
+        [audio_id],
+    )
+    .expect("transcribed");
     audio_id
 }
 
@@ -495,7 +500,7 @@ fn deleting_the_household_archive_is_refused_and_removes_nothing() {
     assert!(matches!(err, SessionError::NotAnUpload), "got {err:?}");
     assert_eq!(count(&conn, "sources"), 1);
     assert_eq!(count(&conn, "audio_segments"), 1);
-    assert_eq!(count(&conn, "transcript_segments"), 1);
+    assert_eq!(count(&conn, "retired_20261012_transcript_segments"), 1);
     assert_eq!(count(&conn, "deleted_segments"), 0, "not even tombstoned");
 }
 
@@ -522,10 +527,11 @@ fn deleting_a_meeting_removes_every_derived_row_and_returns_its_files() {
         "rendered_clips",
         "sources",
         "audio_segments",
-        "transcript_segments",
-        "transcript_embeddings",
-        "corrections",
-        "refine_requests",
+        "retired_20261012_transcript_segments",
+        "retired_20261012_transcript_embeddings",
+        "retired_20261012_corrections",
+        "retired_20261012_refine_requests",
+        "transcribed_before_jobs",
     ] {
         assert_eq!(count(&conn, table), 0, "{table} still has rows");
     }
@@ -559,7 +565,7 @@ fn deleting_one_meeting_leaves_another_untouched() {
     delete_session(&mut conn, "meeting-1", &[], &crate::stamp(NOW)).expect("deleted");
 
     assert_eq!(count(&conn, "sources"), 1);
-    assert_eq!(count(&conn, "transcript_segments"), 1);
+    assert_eq!(count(&conn, "retired_20261012_transcript_segments"), 1);
     let left: String = conn
         .query_row("SELECT id FROM sources", [], |r| r.get(0))
         .expect("row");
@@ -583,14 +589,14 @@ fn a_failed_delete_leaves_the_session_whole() {
     // Atomic: a half-deleted session could not be rendered or cleaned up.
     let mut conn = delete_db();
     populate(&conn, "meeting-1", "upload");
-    conn.execute("DROP TABLE refine_requests", [])
+    conn.execute("DROP TABLE retired_20261012_refine_requests", [])
         .expect("drop");
 
     let failed = delete_session(&mut conn, "meeting-1", &[], &crate::stamp(NOW));
 
     assert!(failed.is_err());
     assert_eq!(count(&conn, "sources"), 1, "rolled back");
-    assert_eq!(count(&conn, "transcript_segments"), 1);
+    assert_eq!(count(&conn, "retired_20261012_transcript_segments"), 1);
     assert_eq!(
         count(&conn, "deleted_segments"),
         0,

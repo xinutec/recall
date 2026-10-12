@@ -30,7 +30,7 @@ fn cases(root: &Path) -> Vec<Case> {
     let names: Vec<String> = conn
         .prepare(
             "SELECT name FROM speakers WHERE name <> '' \
-             UNION SELECT DISTINCT speaker_label FROM transcript_segments \
+             UNION SELECT DISTINCT speaker_label FROM rendered_lines \
              WHERE speaker_label IS NOT NULL AND speaker_label NOT LIKE 'SPEAKER%' \
                AND speaker_label <> ''",
         )

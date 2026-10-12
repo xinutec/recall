@@ -12,8 +12,6 @@ crate::statements! {
         "DELETE FROM segment_speech WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
     FORGET_LEVELS: Ingest =
         "DELETE FROM segment_levels WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
-    FORGET_REQUESTS: Ingest =
-        "DELETE FROM retranscribe_requests WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
     FORGET_JOBS: Ingest =
         "DELETE FROM jobs WHERE filename IN (SELECT filename FROM segments WHERE source = ?1)";
     FORGET_LEDGER: Ingest =
@@ -93,7 +91,6 @@ pub fn forget_upload(
     for statement in [
         FORGET_SPEECH,
         FORGET_LEVELS,
-        FORGET_REQUESTS,
         FORGET_JOBS,
         FORGET_LEDGER,
         FORGET_CLIPS,

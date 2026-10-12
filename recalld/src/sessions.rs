@@ -55,20 +55,23 @@ crate::statements! {
         "INSERT OR IGNORE INTO deleted_segments (source_id, start_utc, deleted_utc) \
              VALUES (?1, ?2, ?3)";
     CLIP_TURNS: Meaning =
-        "SELECT id FROM transcript_segments WHERE audio_segment_id = ?1";
+        "SELECT id FROM retired_20261012_transcript_segments WHERE audio_segment_id = ?1";
     DROP_TURN_EMBEDDING: Meaning =
-        "DELETE FROM transcript_embeddings WHERE segment_id = ?1";
+        "DELETE FROM retired_20261012_transcript_embeddings WHERE segment_id = ?1";
     DROP_CORRECTIONS: Meaning =
-        "DELETE FROM corrections WHERE audio_segment_id = ?1";
+        "DELETE FROM retired_20261012_corrections WHERE audio_segment_id = ?1";
     DROP_REFINE_REQUESTS: Meaning =
-        "DELETE FROM refine_requests WHERE source_id = ?1";
+        "DELETE FROM retired_20261012_refine_requests WHERE source_id = ?1";
+    DROP_TRANSCRIBED_BEFORE_JOBS: Meaning =
+        "DELETE FROM transcribed_before_jobs WHERE audio_segment_id = ?1";
     DROP_AUDIO: Meaning =
         "DELETE FROM audio_segments WHERE source_id = ?1";
     DROP_SOURCE: Meaning =
         "DELETE FROM sources WHERE id = ?1";
-    /// The session's lines in the table the rendered view replaced, which is
-    /// kept until a backup cycle has it.
-    DROP_OLD_LINES: Meaning = "DELETE FROM transcript_segments WHERE audio_segment_id = ?1";
+    /// The session's lines in the tables the rendered view replaced, which
+    /// are kept until a backup cycle has them: a delete reaches them too.
+    DROP_OLD_LINES: Meaning =
+        "DELETE FROM retired_20261012_transcript_segments WHERE audio_segment_id = ?1";
     /// What people did to the session and its clips, retractions included:
     /// each carries its target's clip or session. `?2`: the clip ids as JSON.
     DROP_SESSION_EDITS: Meaning =
@@ -523,10 +526,8 @@ impl DeletedUpload {
 /// irreversible operation (everything else hides, supersedes or re-derives),
 /// so it is guarded to uploads by `require_upload`.
 ///
-/// Each deleted segment is tombstoned in the same transaction, so the turns
-/// pass (`turns::tombstoned_block`) does not rebuild it. `transcript_fts` is
-/// contentless FTS5 with no per-row delete; a rowid whose segment is gone
-/// resolves to nothing.
+/// Each deleted segment is remembered in `deleted_segments`, in the same
+/// transaction.
 /// `clips`: the session's clip ids, from the ingest plane.
 pub fn delete_session(
     conn: &mut Connection,
@@ -555,6 +556,7 @@ pub fn delete_session(
         }
         DROP_CORRECTIONS.execute(&tx, [audio_id])?;
         DROP_OLD_LINES.execute(&tx, [audio_id])?;
+        DROP_TRANSCRIBED_BEFORE_JOBS.execute(&tx, [audio_id])?;
     }
     let clips = serde_json::to_string(clips)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;

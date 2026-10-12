@@ -111,7 +111,7 @@ enum Origin {
 }
 
 /// The naming acts recovered from a line or a correction, by `edits.origin`'s
-/// spelling (`legacy_edits::Origin`'s debug form).
+/// spelling (`Line(id)`, `Correction(id)`).
 fn seeded(meaning: &Connection) -> rusqlite::Result<Vec<(i64, Origin)>> {
     let mut stmt = SEEDED_NAMINGS.prepare(meaning)?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;

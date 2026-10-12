@@ -52,10 +52,6 @@ struct Args {
 enum Task {
     /// Give every stored file a clip and say whether all have one (#1911).
     ClipCensus,
-    /// Recover the edit log from today's tables and account for every row (#1912).
-    EditCensus,
-    /// Fill an empty edit log from today's tables (`recalld::edit_log`).
-    SeedEdits,
     /// Render every clip into the rendered view and say what it did
     /// (`recalld::view`).
     RenderView,
@@ -113,17 +109,6 @@ fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
         Task::ClipCensus => {
             return report(root, |meaning, ingest| {
                 recalld::clips::census(meaning, ingest, root)
-            });
-        }
-        Task::EditCensus => {
-            return report(root, |meaning, ingest| {
-                recalld::legacy_edits::census(meaning, ingest, root)
-            });
-        }
-        Task::SeedEdits => {
-            return report(root, |meaning, ingest| {
-                let now = transcript::Instant::from_utc(chrono::Utc::now());
-                recalld::edit_log::seed(meaning, ingest, root, now)
             });
         }
         Task::RenderView => {
@@ -223,18 +208,7 @@ fn prepare_planes(root: &std::path::Path) -> Result<(), String> {
         .map_err(|err| format!("cannot open {}/recall.sqlite: {err}", root.display()))?;
     recalld::meaning_schema::ensure(&conn)
         .map_err(|err| format!("cannot migrate {}/recall.sqlite: {err}", root.display()))?;
-    // What people did before the edit log existed, recovered once.
-    let ingest = recalld::store::open(root)
-        .map_err(|err| format!("cannot open {}/ingest.sqlite: {err}", root.display()))?;
-    let now = transcript::Instant::from_utc(chrono::Utc::now());
-    match recalld::edit_log::seed(&conn, &ingest, root, now) {
-        Ok(0) => Ok(()),
-        Ok(acts) => {
-            tracing::info!(acts, "edit log: seeded from the old tables");
-            Ok(())
-        }
-        Err(err) => Err(format!("cannot seed the edit log: {err}")),
-    }
+    Ok(())
 }
 
 fn main() -> ExitCode {
@@ -530,13 +504,13 @@ fn spawn_segment_deriver(root: PathBuf) {
 ///
 /// ```sql
 /// DELETE FROM audio_segments WHERE path LIKE '%/ingest/%'
-///   AND id NOT IN (SELECT audio_segment_id FROM transcript_segments
+///   AND id NOT IN (SELECT audio_segment_id FROM rendered_lines
 ///                  WHERE audio_segment_id IS NOT NULL);
 /// -- and in ingest.sqlite:
 /// DELETE FROM pass_ledger WHERE kind = 'register-segment';
 /// ```
 ///
-/// Keep the `NOT IN`: a turn's audio must still resolve.
+/// Keep the `NOT IN`: a line's audio must still resolve.
 fn spawn_segment_registrar(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(5);
     const BATCH: usize = 40;

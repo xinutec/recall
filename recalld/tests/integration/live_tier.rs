@@ -68,22 +68,13 @@ fn clip(root: &Path, source_id: &str, name: &str, minute: u32, speech: Option<f6
     }
 }
 
-/// A turn ending 30 s into `minute`, stored `lag_s` after it ended: a live one
-/// in the live feed's table, any other where the old archive kept its lines.
-fn turn(conn: &Connection, model: &str, minute: u32, lag_s: i64) {
+/// A live turn ending 30 s into `minute`, stored `lag_s` after it ended.
+fn turn(conn: &Connection, minute: u32, lag_s: i64) {
     let end = at(&format!("2026-09-21T11:{minute:02}:30+00:00"));
-    let table = if model == "live" {
-        "live_lines"
-    } else {
-        "transcript_segments"
-    };
     conn.execute(
-        &format!(
-            "INSERT INTO {table} (asr_model, start_utc, end_utc, created_utc, text)
-             VALUES (?1, ?2, ?3, ?4, 'x')"
-        ),
+        "INSERT INTO live_lines (asr_model, start_utc, end_utc, created_utc, text)
+         VALUES ('live', ?1, ?2, ?3, 'x')",
         [
-            model,
             &format!("2026-09-21T11:{minute:02}:00+00:00"),
             &python_isoformat_utc(end),
             &python_isoformat_utc(end + chrono::Duration::seconds(lag_s)),
@@ -103,19 +94,17 @@ fn health(root: &Path) -> recalld::live_tier::LiveHealth {
 }
 
 #[test]
-fn the_lag_is_the_median_and_only_over_the_live_tier() {
+fn the_lag_is_the_median() {
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = meaning(dir.path());
     // The median: one turn delayed by a restart moves a mean by minutes.
     for (minute, lag) in [(41, 3), (42, 4), (43, 5), (44, 6), (45, 200)] {
-        turn(&conn, "live", minute, lag);
+        turn(&conn, minute, lag);
     }
-    // Archive turns are hours behind by design and are not counted.
-    turn(&conn, "large-v3-turbo", 46, 9_000);
     drop(conn);
 
     let out = health(dir.path());
-    assert_eq!(out.lag_samples, 5, "the archive pass is not the live tier");
+    assert_eq!(out.lag_samples, 5);
     assert_eq!(out.lag_median_s, Some(5.0));
 }
 

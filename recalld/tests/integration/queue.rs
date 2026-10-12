@@ -322,7 +322,8 @@ fn meaning_plane() -> rusqlite::Connection {
     conn
 }
 
-/// Register a segment as transcribed, in the meaning plane's own spellings.
+/// Register a segment as transcribed before the jobs table, in the meaning
+/// plane's own spellings.
 fn already_transcribed(meaning: &rusqlite::Connection, source: &str, filename: &str, start: &str) {
     meaning
         .execute(
@@ -334,11 +335,10 @@ fn already_transcribed(meaning: &rusqlite::Connection, source: &str, filename: &
     let id = meaning.last_insert_rowid();
     meaning
         .execute(
-            "INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc, text, asr_model)
-             VALUES (?1, ?2, ?2, 'some words', 'whisper')",
-            (id, start),
+            "INSERT INTO transcribed_before_jobs (audio_segment_id) VALUES (?1)",
+            [id],
         )
-        .expect("turn");
+        .expect("transcribed");
 }
 
 #[test]
@@ -588,14 +588,14 @@ fn a_job_whose_blob_the_ingest_plane_has_forgotten_is_not_leasable() {
 
 #[test]
 fn a_clip_transcribed_under_another_extension_gets_no_second_job() {
-    // One recording can have two extensions across the planes, so "already has
-    // turns" is keyed on the stem.
+    // One recording can have two extensions across the planes, so "already
+    // transcribed" is keyed on the stem.
     let dir = tempfile::tempdir().expect("tempdir");
     let now: DateTime<Utc> = "2026-09-11T12:00:00Z".parse().expect("t");
     let _ = mic_row(dir.path(), "usb", "20260910T203720");
 
     let meaning = meaning_plane();
-    // The ingest row is `.opus` (`mic_row`); the turns hang off a `.wav` path.
+    // The ingest row is `.opus` (`mic_row`); the transcription names a `.wav` path.
     meaning
         .execute(
             "INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels)
@@ -607,12 +607,10 @@ fn a_clip_transcribed_under_another_extension_gets_no_second_job() {
     let id = meaning.last_insert_rowid();
     meaning
         .execute(
-            "INSERT INTO transcript_segments (audio_segment_id, start_utc, end_utc, text, asr_model)
-             VALUES (?1, '2026-09-10T20:37:20+00:00', '2026-09-10T20:37:25+00:00',
-                     'already transcribed', 'whisper')",
+            "INSERT INTO transcribed_before_jobs (audio_segment_id) VALUES (?1)",
             [id],
         )
-        .expect("turn");
+        .expect("transcribed");
 
     let ingest = store::open(dir.path()).expect("db");
     recalld::ingest_schema::ensure(&ingest).expect("schema");

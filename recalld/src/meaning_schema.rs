@@ -688,6 +688,30 @@ pub const MIGRATIONS: &[&str] = &[
         INSERT INTO rendered_fts (rowid, text) VALUES (new.id, new.text);
     END;
 "#,
+    // v59
+    r#"
+    -- Clips transcribed before the jobs table: they have no job, so this is
+    -- what keeps the queue from transcribing them again (`queue`).
+    CREATE TABLE transcribed_before_jobs (
+        audio_segment_id INTEGER PRIMARY KEY
+    );
+    INSERT INTO transcribed_before_jobs
+        SELECT DISTINCT audio_segment_id FROM transcript_segments
+        WHERE audio_segment_id IS NOT NULL;
+    -- The tables the edit log and the rendered view replaced, dated and kept
+    -- until a backup cycle has them. Nothing writes them but a session delete.
+    DROP TRIGGER transcript_segments_instants_insert;
+    DROP TRIGGER transcript_segments_instants_update;
+    DROP TRIGGER corrections_instants_insert;
+    DROP TRIGGER corrections_instants_update;
+    DROP TRIGGER refine_requests_instants_insert;
+    DROP TRIGGER refine_requests_instants_update;
+    ALTER TABLE transcript_segments RENAME TO retired_20261012_transcript_segments;
+    ALTER TABLE transcript_fts RENAME TO retired_20261012_transcript_fts;
+    ALTER TABLE transcript_embeddings RENAME TO retired_20261012_transcript_embeddings;
+    ALTER TABLE corrections RENAME TO retired_20261012_corrections;
+    ALTER TABLE refine_requests RENAME TO retired_20261012_refine_requests;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.
@@ -695,15 +719,24 @@ pub const MIGRATIONS: &[&str] = &[
 /// # Errors
 /// If a migration fails, or the database refuses the version pragma.
 pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
+    ensure_to(conn, MIGRATIONS.len())
+}
+
+/// Bring `conn` up to version `want` and no further: a test's database as an
+/// older release left it.
+///
+/// # Errors
+/// As [`ensure`].
+pub fn ensure_to(conn: &Connection, want: usize) -> rusqlite::Result<()> {
     let have: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    let want = MIGRATIONS.len() as u32;
+    let have = have as usize;
     if have >= want {
         return Ok(());
     }
     register_instant_utc(conn)?;
     // One transaction per step: a half-applied step must not be recorded, and a
     // step that succeeded must not be undone by a later one failing.
-    for (index, statement) in MIGRATIONS.iter().enumerate().skip(have as usize) {
+    for (index, statement) in MIGRATIONS.iter().enumerate().take(want).skip(have) {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(statement)?;
         tx.execute_batch(&format!("PRAGMA user_version = {}", index + 1))?;

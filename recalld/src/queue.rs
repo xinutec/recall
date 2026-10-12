@@ -34,9 +34,10 @@ crate::statements! {
            AND json_valid(j.result) AND json_extract(j.result, '$.ok') = 1
            AND NOT EXISTS (SELECT 1 FROM jobs d
                            WHERE d.kind = ?1 AND d.filename = j.filename)";
+    /// Clips transcribed before the jobs table, which have no job.
     TRANSCRIBED_PATHS: Meaning =
-        "SELECT DISTINCT a.path FROM audio_segments a
-             JOIN transcript_segments t ON t.audio_segment_id = a.id
+        "SELECT a.path FROM audio_segments a
+             JOIN transcribed_before_jobs t ON t.audio_segment_id = a.id
              WHERE a.source_id != ?1";
     NON_ROOM_SOURCES: Meaning =
         "SELECT id FROM sources WHERE kind != ?1";
@@ -120,7 +121,7 @@ fn stem(path: &str) -> String {
 }
 
 /// Derive a transcription job, up to `limit`, for each microphone clip or
-/// upload with no turns that the speech pass measured as not silent (a silent
+/// upload never transcribed that the speech pass measured as not silent (a silent
 /// minute comes back as "Thank you."). Undecodable (`UNKNOWN_SECONDS`) still
 /// queues: the transcriber may read what VAD could not.
 pub fn derive_segment_jobs(

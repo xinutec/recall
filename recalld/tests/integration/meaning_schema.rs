@@ -3,7 +3,7 @@
 //! The reference is a dump of the live `recall.sqlite`, not this code's output:
 //! a ladder compared with itself is only self-consistent.
 
-use recalld::meaning_schema::{MIGRATIONS, ensure};
+use recalld::meaning_schema::{MIGRATIONS, ensure, ensure_to};
 
 /// `type name :: sql`, whitespace-flattened, exactly as the fixture was dumped.
 fn schema_of(conn: &rusqlite::Connection) -> Vec<String> {
@@ -137,7 +137,10 @@ fn every_stored_instant_is_rewritten_to_the_one_spelling() {
         ]
     );
     assert_eq!(
-        column("SELECT start_utc || ' ' || end_utc || ' ' || created_utc FROM transcript_segments"),
+        column(
+            "SELECT start_utc || ' ' || end_utc || ' ' || created_utc
+             FROM retired_20261012_transcript_segments"
+        ),
         [
             "2026-09-03T10:00:05+00:00 2026-09-03T10:00:07.500000+00:00 2026-09-22T20:44:37.187123+00:00"
         ]
@@ -213,20 +216,7 @@ fn words_a_person_typed_or_vouched_for_are_marked_on_their_turn() {
     // v54 rendered_lines, v55 its word timings, v56 a print's naming act,
     // v57 live_lines).
     let conn = rusqlite::Connection::open_in_memory().expect("db");
-    ensure(&conn).expect("schema");
-    conn.execute_batch(
-        "DROP TABLE live_lines;
-         ALTER TABLE speaker_embeddings DROP COLUMN source_edit_id;
-         DROP TABLE rendered_clips;
-         DROP TABLE rendered_fts;
-         DROP TABLE rendered_lines;
-         DROP TABLE edits;
-         DROP INDEX idx_ts_audio;
-         ALTER TABLE transcript_segments DROP COLUMN words_checked;
-         ALTER TABLE sources DROP COLUMN language;
-         PRAGMA user_version = 49;",
-    )
-    .expect("at rung 49");
+    ensure_to(&conn, 49).expect("at rung 49");
     conn.execute_batch(
         "INSERT INTO transcript_segments (id, start_utc, end_utc, text, asr_model, provenance)
          VALUES (11, '2026-09-19T10:00:00+00:00', '2026-09-19T10:00:02+00:00', 'a', 'human', 'human correction of #1'),
@@ -244,7 +234,10 @@ fn words_a_person_typed_or_vouched_for_are_marked_on_their_turn() {
     .expect("rows at rung 49");
     ensure(&conn).expect("climb");
     let marked: Vec<(i64, Option<i64>)> = conn
-        .prepare("SELECT id, words_checked FROM transcript_segments WHERE id > 10 ORDER BY id")
+        .prepare(
+            "SELECT id, words_checked FROM retired_20261012_transcript_segments
+             WHERE id > 10 ORDER BY id",
+        )
         .expect("prep")
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
         .expect("query")
