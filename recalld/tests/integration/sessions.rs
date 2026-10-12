@@ -698,7 +698,8 @@ fn an_ingest_directory_still_holding_audio_is_kept() {
 
 #[test]
 fn deleting_a_session_forgets_its_words_in_the_ingest_plane_too() {
-    // The words in the ingest plane's jobs go too.
+    // The words in the ingest plane's jobs go too, and every row naming the
+    // session's files: one delete once left its speech rows behind.
     let dir = tempfile::tempdir().expect("tmp");
     let mut meaning = delete_db();
     populate(&meaning, "meeting-1", "upload");
@@ -727,6 +728,16 @@ fn deleting_a_session_forgets_its_words_in_the_ingest_plane_too() {
                 [name],
             )
             .expect("job");
+        ingest
+            .execute_batch(&format!(
+                "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc)
+                     VALUES ('{name}', '{source}', 1.0, 'x');
+                 INSERT INTO segment_levels (filename, source, speech_db, floor_db, computed_utc)
+                     VALUES ('{name}', '{source}', -20.0, -60.0, 'x');
+                 INSERT INTO pass_ledger (kind, filename, outcome, decided_utc)
+                     VALUES ('register-segment', '{name}', 'covered', 'x');"
+            ))
+            .expect("measurements");
     }
 
     let deleted =
@@ -746,7 +757,29 @@ fn deleting_a_session_forgets_its_words_in_the_ingest_plane_too() {
         left("SELECT count(*) FROM clips WHERE source = 'meeting-1'"),
         0
     );
-    // Household capture beside it is untouched.
+    for table in ["segment_speech", "segment_levels", "pass_ledger"] {
+        assert_eq!(
+            left(&format!(
+                "SELECT count(*) FROM {table} WHERE filename LIKE 'meeting-1%'"
+            )),
+            0,
+            "{table}"
+        );
+        // Household capture beside it is untouched.
+        assert_eq!(
+            left(&format!(
+                "SELECT count(*) FROM {table} WHERE filename LIKE 'usb%'"
+            )),
+            1,
+            "{table}"
+        );
+    }
+    let orphans: i64 = ingest
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .expect("check");
+    assert_eq!(orphans, 0, "no row names a file that is gone");
     assert_eq!(
         left("SELECT count(*) FROM jobs WHERE filename LIKE 'usb%'"),
         1
