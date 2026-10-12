@@ -306,7 +306,8 @@ impl From<LogError> for Failed {
 }
 
 /// Replace the clip's rows with what render makes of it now. A line whose
-/// span is unchanged keeps its id, so an id the app holds stays good.
+/// span is unchanged keeps its id, hidden or shown, so an id the app holds
+/// stays good.
 fn render_one(
     meaning: &Connection,
     ingest: &Connection,
@@ -340,15 +341,18 @@ fn render_one(
     }
     DROP_CLIP.execute(&tx, [s.clip.id.stored()])?;
     let source = s.clip.source.as_str();
+    // Same span, same side first; then the same span hidden or shown again.
+    let mut kept = |row: &Row, hidden: bool| {
+        old.remove(&(row.start.clone(), row.end.clone(), hidden))
+            .or_else(|| old.remove(&(row.start.clone(), row.end.clone(), !hidden)))
+    };
     for line in &out.lines {
         let row = Row::line(line, tier)?;
-        let id = old.remove(&(row.start.clone(), row.end.clone(), false));
-        row.insert(&tx, id, Some(s), source)?;
+        row.insert(&tx, kept(&row, false), Some(s), source)?;
     }
     for dropped in runs(&out.dropped) {
         let row = Row::dropped(&dropped, tier);
-        let id = old.remove(&(row.start.clone(), row.end.clone(), true));
-        row.insert(&tx, id, Some(s), source)?;
+        row.insert(&tx, kept(&row, true), Some(s), source)?;
     }
     SET_INPUTS.execute(&tx, (s.clip.id.stored(), inputs))?;
     tx.commit()?;

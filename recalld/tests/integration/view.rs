@@ -5,7 +5,7 @@
 use audiocore::job::Kind;
 use recalld::view::{self, Refreshed};
 use rusqlite::Connection;
-use transcript::{Act, Instant, Span, Text};
+use transcript::{Act, Instant, Name, Span, Text};
 
 const FILE: &str = "usb-20261004T120000.flac";
 
@@ -179,9 +179,37 @@ fn a_persons_words_show_and_the_untouched_line_keeps_its_id() {
 }
 
 #[test]
+fn a_line_split_in_two_takes_new_ids_and_never_one_another_line_had() {
+    let f = fleet();
+    f.refresh(false);
+    let before = f.lines();
+    let clip = f.clip();
+    // Naming "goede" alone breaks "goede morgen." in two.
+    let act = Act::Speaker {
+        clip: clip.id,
+        span: Span::new(f.at(1.0), f.at(1.95)).expect("ordered"),
+        name: Name::new("Anna").expect("name"),
+        enrol: false,
+    };
+    recalld::edit_log::append(&f.meaning, f.at(100.0), &act, None).expect("append");
+
+    assert_eq!(f.refresh(false).rendered, 1);
+    let after = f.lines();
+    let texts: Vec<&str> = after.iter().map(|l| l.1.as_str()).collect();
+    assert_eq!(texts, ["goede", "morgen.", "hoe gaat het?"]);
+    assert_eq!(after[2], before[1], "the untouched line keeps its id");
+    let newest = before.iter().map(|l| l.0).max().expect("lines");
+    assert!(
+        after[..2].iter().all(|l| l.0 > newest),
+        "a new line never takes an id that was handed out: {before:?} {after:?}"
+    );
+}
+
+#[test]
 fn render_clips_shows_an_act_at_once() {
     let f = fleet();
     f.refresh(false);
+    let before = f.lines();
     let clip = f.clip();
     let act = Act::NoSpeech {
         clip: clip.id,
@@ -197,6 +225,15 @@ fn render_clips_shows_an_act_at_once() {
         f.hidden(),
         [("goede morgen.".to_owned(), "nobody spoke".to_owned())]
     );
+    let hidden_id: i64 = f
+        .meaning
+        .query_row(
+            "SELECT id FROM rendered_lines WHERE hidden_reason IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .expect("hidden row");
+    assert_eq!(hidden_id, before[0].0, "hidden, the line keeps its id");
     assert_eq!(f.refresh(false).rendered, 0, "already current");
 }
 

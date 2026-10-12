@@ -639,6 +639,55 @@ pub const MIGRATIONS: &[&str] = &[
         FROM transcript_segments
         WHERE asr_model = 'live' AND superseded_by IS NULL AND hidden_reason IS NULL;
 "#,
+    // v58
+    r#"
+    -- AUTOINCREMENT: an id the app holds never comes back as another line.
+    CREATE TABLE rendered_lines_v58 (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        clip_id          INTEGER,
+        audio_segment_id INTEGER,
+        source_id        TEXT,
+        start_utc        TEXT NOT NULL,
+        end_utc          TEXT NOT NULL,
+        text             TEXT NOT NULL,
+        language         TEXT,
+        asr_confidence   REAL,
+        asr_model        TEXT,
+        speaker_label    TEXT,
+        speaker_guess    TEXT,
+        speaker_score    REAL,
+        speaker_cluster  TEXT,
+        tier             TEXT NOT NULL,
+        hidden_reason    TEXT,
+        words_checked    INTEGER,
+        edit_id          INTEGER,
+        live_id          INTEGER,
+        word_timings     TEXT
+    );
+    INSERT INTO rendered_lines_v58
+        SELECT id, clip_id, audio_segment_id, source_id, start_utc, end_utc, text,
+               language, asr_confidence, asr_model, speaker_label, speaker_guess,
+               speaker_score, speaker_cluster, tier, hidden_reason, words_checked,
+               edit_id, live_id, word_timings
+        FROM rendered_lines;
+    DROP TABLE rendered_lines;
+    ALTER TABLE rendered_lines_v58 RENAME TO rendered_lines;
+    CREATE INDEX rendered_clip ON rendered_lines(clip_id);
+    CREATE INDEX rendered_live ON rendered_lines(live_id) WHERE live_id IS NOT NULL;
+    CREATE INDEX rendered_audio ON rendered_lines(audio_segment_id);
+    CREATE INDEX rendered_start ON rendered_lines(start_utc, id);
+    CREATE INDEX rendered_source_start ON rendered_lines(source_id, start_utc, id);
+    CREATE TRIGGER rendered_fts_insert AFTER INSERT ON rendered_lines BEGIN
+        INSERT INTO rendered_fts (rowid, text) VALUES (new.id, new.text);
+    END;
+    CREATE TRIGGER rendered_fts_delete AFTER DELETE ON rendered_lines BEGIN
+        INSERT INTO rendered_fts (rendered_fts, rowid, text) VALUES ('delete', old.id, old.text);
+    END;
+    CREATE TRIGGER rendered_fts_update AFTER UPDATE OF text ON rendered_lines BEGIN
+        INSERT INTO rendered_fts (rendered_fts, rowid, text) VALUES ('delete', old.id, old.text);
+        INSERT INTO rendered_fts (rowid, text) VALUES (new.id, new.text);
+    END;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.
