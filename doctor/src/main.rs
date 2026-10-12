@@ -8,7 +8,7 @@
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use doctor::check::{Check, Verdict};
-use doctor::{agents, archive, bounded, capture, deaf, fleetwatch, live, record};
+use doctor::{agents, archive, bounded, capture, deaf, fleetwatch, live, passes, reach, record};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -118,8 +118,9 @@ fn read_archive_checks(out: &Path) -> FromArchive {
 }
 
 /// The checks whose evidence is on the server: the live tier's two, the deaf
-/// microphone and the record's faults. In the parent, since behind the child's
-/// bound a slow server would read as a stalled disk.
+/// microphone, the record's faults, its background passes and whether it
+/// answers at all. In the parent, since behind the child's bound a slow server
+/// would read as a stalled disk.
 fn live_checks(
     config: &Config,
     now: DateTime<Utc>,
@@ -139,7 +140,15 @@ fn live_checks(
         now,
         deaf::window(),
     )));
-    checks.extend(record::record_checks(&record::fetch(&fleet, now)));
+    let record = record::fetch(&fleet, now);
+    checks.extend(record::record_checks(&record));
+    checks.extend(passes::pass_checks(&record, now));
+    let answer = record.as_ref().map(|_| ()).map_err(Clone::clone);
+    checks.push(reach::reach_check(
+        &reach::state_file(&home()),
+        now,
+        &answer,
+    ));
     checks
 }
 

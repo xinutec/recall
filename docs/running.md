@@ -44,6 +44,16 @@ and reported as `archive answers: no answer`, with its pid and state on stderr;
 in `U` state it cannot be killed and exits when the volume answers. The stalls
 come from other writers on the volume (#1412).
 
+### The doctor asks Isis how it is
+
+`GET /sync/record/health` answers with failed requests, minutes shown twice and
+each background pass: when it last ended, and since when it has been failing.
+A pass failing or quiet past three of its intervals (at least 10 min), or one
+run past an hour, fails. Every other server check skips when Isis does not
+answer, and with capture paused nothing else goes red, so the doctor keeps
+when Isis last answered in `~/.local/state/recall-doctor/fleet-reached`: one
+miss warns, 15 min of them fail.
+
 ### The runner leaves a pulse
 
 `<data root>/worker-heartbeat.json` is stamped after every job and the doctor

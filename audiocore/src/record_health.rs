@@ -4,12 +4,42 @@
 use serde::{Deserialize, Serialize};
 
 /// Since the window start: requests that failed on the server's side, and
-/// minutes a microphone shows twice.
+/// minutes a microphone shows twice. And how each background pass is doing
+/// now; `None` from a server too old to say.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordHealth {
     pub faults: Faults,
     pub doubled: Doubled,
+    #[serde(default)]
+    pub passes: Option<Vec<Pass>>,
+}
+
+/// One background pass of the server, as it last went. Instants are RFC 3339.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pass {
+    pub name: String,
+    /// The pause between passes, in seconds.
+    pub every_s: u64,
+    /// When the server began running it.
+    pub since_utc: String,
+    /// Switched off in this server, and why.
+    pub off: Option<String>,
+    /// A pass under way, since when.
+    pub running_since_utc: Option<String>,
+    /// When the last pass ended, failed or not.
+    pub last_end_utc: Option<String>,
+    /// Since when every pass has failed, or left items it could not do; with
+    /// the newest error. `None` once a pass goes clean.
+    pub failing: Option<Failing>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Failing {
+    pub since_utc: String,
+    pub error: String,
 }
 
 /// Requests answered 500: a save that did not happen, a page that did not load.

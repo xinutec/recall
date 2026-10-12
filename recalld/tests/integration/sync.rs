@@ -668,6 +668,13 @@ async fn the_record_health_answers_the_doctor_and_nobody_else() {
     assert_eq!(status, 200, "{body}");
     let health: audiocore::record_health::RecordHealth =
         serde_json::from_str(&body).expect("the doctor's shape");
-    assert_eq!(health, audiocore::record_health::RecordHealth::default());
+    // No pass runs in a test server, and it says so: an empty list, not none.
+    assert_eq!(
+        health,
+        audiocore::record_health::RecordHealth {
+            passes: Some(Vec::new()),
+            ..audiocore::record_health::RecordHealth::default()
+        }
+    );
     assert_eq!(refused, 401);
 }

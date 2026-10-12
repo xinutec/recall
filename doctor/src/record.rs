@@ -35,9 +35,13 @@ pub fn fetch(fleet: &crate::live::Fleet, now: DateTime<Utc>) -> Result<RecordHea
             .into_json::<RecordHealth>()
             .map_err(|e| format!("the fleet's answer did not parse ({e})"))
     };
-    let faults = ask(now - fault_window())?.faults;
+    let recent = ask(now - fault_window())?;
     let doubled = ask(now - doubled_window())?.doubled;
-    Ok(RecordHealth { faults, doubled })
+    Ok(RecordHealth {
+        faults: recent.faults,
+        doubled,
+        passes: recent.passes,
+    })
 }
 
 #[must_use]

@@ -109,6 +109,9 @@ pub struct Refreshed {
     pub unchanged: usize,
     /// Clips whose stored result does not read, with why; their old lines stay.
     pub unreadable: Vec<(i64, String)>,
+    /// Clips whose rows would not write, with why: their old lines stay, and
+    /// the next pass tries them again.
+    pub failed: Vec<(i64, String)>,
     pub live_shown: usize,
 }
 
@@ -147,7 +150,8 @@ pub fn refresh(
         match render_one(meaning, ingest, s, &prints, &inputs) {
             Ok(()) => done.rendered += 1,
             Err(Failed::Result(err)) => done.unreadable.push((s.clip.id.stored(), err.to_string())),
-            Err(Failed::View(err)) => return Err(err),
+            // One clip must not hold up the rest: its transaction rolled back.
+            Err(Failed::View(err)) => done.failed.push((s.clip.id.stored(), err.to_string())),
         }
     }
     let transcribed: Vec<(Instant, Instant)> = shown

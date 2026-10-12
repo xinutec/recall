@@ -18,6 +18,7 @@
 
 use clap::Parser;
 use recalld::app::{Config, DEFAULT_MAX_BODY, router};
+use recalld::passes::PASSES;
 use recalld::tokens::Tokens;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -351,9 +352,11 @@ fn spawn_background_passes(root: &std::path::Path) {
 /// may have changed with this binary), then each clip whose inputs moved.
 fn spawn_view(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+    PASSES.register("view", EVERY, chrono::Utc::now());
     tokio::spawn(async move {
         let mut all = true;
         loop {
+            PASSES.begin("view", chrono::Utc::now());
             let pass_root = root.clone();
             let done = tokio::task::spawn_blocking(move || {
                 let meaning = recalld::work::open_write(&pass_root)?;
@@ -363,25 +366,47 @@ fn spawn_view(root: PathBuf) {
                     .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))
             })
             .await;
-            match done {
+            let problem = match done {
                 Ok(Ok(done)) => {
-                    if done.rendered > 0 || !done.unreadable.is_empty() {
+                    if done.rendered > 0 || !done.unreadable.is_empty() || !done.failed.is_empty() {
                         tracing::info!(
                             all,
                             rendered = done.rendered,
                             unreadable = done.unreadable.len(),
+                            failed = done.failed.len(),
                             live = done.live_shown,
                             "view: refreshed"
                         );
                     }
                     all = false;
+                    view_problem(&done)
                 }
-                Ok(Err(err)) => tracing::warn!(%err, "view: refresh failed"),
-                Err(err) => tracing::error!(%err, "view: task failed"),
-            }
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, "view: refresh failed");
+                    Some(err.to_string())
+                }
+                Err(err) => {
+                    tracing::error!(%err, "view: task failed");
+                    Some(err.to_string())
+                }
+            };
+            PASSES.ended("view", chrono::Utc::now(), problem);
             tokio::time::sleep(EVERY).await;
         }
     });
+}
+
+/// What the doctor should hear about a refresh that ran: clips it could not
+/// render or whose result does not read. Their old lines stay meanwhile.
+fn view_problem(done: &recalld::view::Refreshed) -> Option<String> {
+    let first = done.failed.first().or_else(|| done.unreadable.first())?;
+    Some(format!(
+        "{} clip(s) would not render and {} do not read; clip {}: {}",
+        done.failed.len(),
+        done.unreadable.len(),
+        first.0,
+        first.1
+    ))
 }
 
 /// Turn human-named turns into voiceprints. Slow on purpose: it only has to
@@ -391,8 +416,10 @@ fn spawn_enroller(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(10);
     const DERIVE: usize = 5;
     const WRITE: usize = 20;
+    PASSES.register("enrol", EVERY, chrono::Utc::now());
     tokio::spawn(async move {
         loop {
+            PASSES.begin("enrol", chrono::Utc::now());
             let pass_root = root.clone();
             let done = tokio::task::spawn_blocking(move || {
                 let ingest = recalld::store::open(&pass_root)?;
@@ -412,7 +439,7 @@ fn spawn_enroller(root: PathBuf) {
                 Ok::<_, rusqlite::Error>((queued, pass))
             })
             .await;
-            match done {
+            let problem = match done {
                 // A pass that only finds stale spans must still log.
                 Ok(Ok((queued, pass))) if queued + pass.prints + pass.stale > 0 => {
                     tracing::info!(
@@ -422,11 +449,19 @@ fn spawn_enroller(root: PathBuf) {
                         stale = pass.stale,
                         "enrol: pass"
                     );
+                    None
                 }
-                Ok(Ok(_)) => {}
-                Ok(Err(err)) => tracing::warn!(%err, "enrol: pass failed"),
-                Err(err) => tracing::error!(%err, "enrol: task failed"),
-            }
+                Ok(Ok(_)) => None,
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, "enrol: pass failed");
+                    Some(err.to_string())
+                }
+                Err(err) => {
+                    tracing::error!(%err, "enrol: task failed");
+                    Some(err.to_string())
+                }
+            };
+            PASSES.ended("enrol", chrono::Utc::now(), problem);
             tokio::time::sleep(EVERY).await;
         }
     });
@@ -441,31 +476,53 @@ fn spawn_speech_scanner(root: PathBuf) {
     const BATCH: usize = 40;
     const IDLE: std::time::Duration = std::time::Duration::from_mins(2);
     const BACKOFF: std::time::Duration = std::time::Duration::from_mins(5);
-    if let Err(err) = audiocore::vad::self_test() {
+    // ort panics, rather than erring, when its library will not load: caught,
+    // or one missing file would keep the whole server from starting.
+    let tried = std::panic::catch_unwind(audiocore::vad::self_test).unwrap_or_else(|_| {
+        Err(audiocore::vad::Error::Model(
+            "the ONNX runtime would not load".to_owned(),
+        ))
+    });
+    if let Err(err) = tried {
         tracing::warn!(
             %err,
             "speech: DISABLED — the ONNX runtime could not run a trial inference. \
              Segments stay unmeasured until it can; the ingest plane is unaffected."
         );
+        PASSES.off(
+            "speech",
+            IDLE,
+            chrono::Utc::now(),
+            format!("the ONNX runtime could not run a trial inference: {err}"),
+        );
         return;
     }
+    PASSES.register("speech", IDLE, chrono::Utc::now());
     tokio::spawn(async move {
         loop {
+            PASSES.begin("speech", chrono::Utc::now());
             let batch_root = root.clone();
             let wrote =
                 tokio::task::spawn_blocking(move || recalld::speech::scan_once(&batch_root, BATCH))
                     .await;
-            match wrote {
-                Ok(Ok(0)) => tokio::time::sleep(IDLE).await,
-                Ok(Ok(n)) => tracing::info!(measured = n, "speech: batch complete"),
+            let (problem, pause) = match wrote {
+                Ok(Ok(0)) => (None, Some(IDLE)),
+                Ok(Ok(n)) => {
+                    tracing::info!(measured = n, "speech: batch complete");
+                    (None, None)
+                }
                 Ok(Err(err)) => {
                     tracing::warn!(%err, "speech: scan failed; backing off");
-                    tokio::time::sleep(BACKOFF).await;
+                    (Some(err.to_string()), Some(BACKOFF))
                 }
                 Err(err) => {
                     tracing::error!(%err, "speech: task failed; backing off");
-                    tokio::time::sleep(BACKOFF).await;
+                    (Some(err.to_string()), Some(BACKOFF))
                 }
+            };
+            PASSES.ended("speech", chrono::Utc::now(), problem);
+            if let Some(pause) = pause {
+                tokio::time::sleep(pause).await;
             }
         }
     });
@@ -477,8 +534,10 @@ fn spawn_speech_scanner(root: PathBuf) {
 fn spawn_segment_deriver(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(10);
     const BATCH: usize = 50;
+    PASSES.register("segment-derive", EVERY, chrono::Utc::now());
     tokio::spawn(async move {
         loop {
+            PASSES.begin("segment-derive", chrono::Utc::now());
             let pass_root = root.clone();
             let done = tokio::task::spawn_blocking(move || {
                 let ingest = recalld::store::open(&pass_root)?;
@@ -486,12 +545,22 @@ fn spawn_segment_deriver(root: PathBuf) {
                 recalld::queue::derive_segment_jobs(&ingest, &meaning, chrono::Utc::now(), BATCH)
             })
             .await;
-            match done {
-                Ok(Ok(0)) => {}
-                Ok(Ok(queued)) => tracing::info!(queued, "segments: transcribe jobs derived"),
-                Ok(Err(err)) => tracing::warn!(%err, "segment derive: pass failed"),
-                Err(err) => tracing::error!(%err, "segment derive: task failed"),
-            }
+            let problem = match done {
+                Ok(Ok(0)) => None,
+                Ok(Ok(queued)) => {
+                    tracing::info!(queued, "segments: transcribe jobs derived");
+                    None
+                }
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, "segment derive: pass failed");
+                    Some(err.to_string())
+                }
+                Err(err) => {
+                    tracing::error!(%err, "segment derive: task failed");
+                    Some(err.to_string())
+                }
+            };
+            PASSES.ended("segment-derive", chrono::Utc::now(), problem);
             tokio::time::sleep(EVERY).await;
         }
     });
@@ -514,8 +583,10 @@ fn spawn_segment_deriver(root: PathBuf) {
 fn spawn_segment_registrar(root: PathBuf) {
     const EVERY: std::time::Duration = std::time::Duration::from_mins(5);
     const BATCH: usize = 40;
+    PASSES.register("segment-register", EVERY, chrono::Utc::now());
     tokio::spawn(async move {
         loop {
+            PASSES.begin("segment-register", chrono::Utc::now());
             let pass_root = root.clone();
             let done = tokio::task::spawn_blocking(move || {
                 let ingest = recalld::store::open(&pass_root)?;
@@ -524,6 +595,7 @@ fn spawn_segment_registrar(root: PathBuf) {
                 recalld::registrar::register_segments(&meaning, &ingest, &pass_root, &now, BATCH)
             })
             .await;
+            let mut problem = None;
             match done {
                 // Not `waiting` (an unknown recorder keeps it high) or `retired`
                 // (a hash lookup); `covered` cost a full decode, so a rising
@@ -540,9 +612,16 @@ fn spawn_segment_registrar(root: PathBuf) {
                     );
                 }
                 Ok(Ok(_)) => {}
-                Ok(Err(err)) => tracing::warn!(%err, "segment register: pass failed"),
-                Err(err) => tracing::error!(%err, "segment register: task failed"),
+                Ok(Err(err)) => {
+                    tracing::warn!(%err, "segment register: pass failed");
+                    problem = Some(err.to_string());
+                }
+                Err(err) => {
+                    tracing::error!(%err, "segment register: task failed");
+                    problem = Some(err.to_string());
+                }
             }
+            PASSES.ended("segment-register", chrono::Utc::now(), problem);
             tokio::time::sleep(EVERY).await;
         }
     });

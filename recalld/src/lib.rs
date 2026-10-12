@@ -19,6 +19,7 @@ pub mod ledger;
 pub mod line;
 pub mod live_tier;
 pub mod meaning_schema;
+pub mod passes;
 pub mod phone_flac;
 pub mod quality;
 pub mod queue;

@@ -305,3 +305,71 @@ fn a_clip_run_again_shows_its_words_until_the_new_ones_land_and_a_cancel_keeps_t
     f.refresh();
     assert_eq!(f.texts(), ["nieuwe woorden"]);
 }
+
+#[test]
+fn a_clip_whose_rows_will_not_write_is_reported_and_the_rest_still_render() {
+    // A second recording, a minute later.
+    const SECOND: &str = "usb-20261004T120100.flac";
+    let f = fleet();
+    recalld::store::insert(
+        &f.ingest,
+        &recalld::store::Row {
+            source: "usb".into(),
+            filename: SECOND.into(),
+            start_utc: "2026-10-04T12:01:00Z".into(),
+            bytes: 1,
+            sha256: "y".into(),
+            received_utc: "2026-10-04T12:01:00Z".into(),
+            sent_utc: None,
+        },
+    )
+    .expect("segment");
+    f.meaning
+        .execute(
+            "INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels)
+             VALUES ('usb', ?1, '2026-10-04T12:01:00+00:00', '2026-10-04T12:02:00+00:00', 48000, 1)",
+            [f.dir.path().join("ingest/usb").join(SECOND).display().to_string()],
+        )
+        .expect("audio row");
+    f.ingest
+        .execute(
+            "INSERT INTO jobs (kind, filename, state, created_utc, done_utc, result)
+             VALUES (?1, ?2, 'done', '2026-10-04T12:03:00Z', '2026-10-04T12:03:00Z', ?3)",
+            (
+                Kind::TranscribeSegment,
+                SECOND,
+                format!(
+                    r#"{{"ok":true,"result":{{"language":"nl","segments":[{}]}}}}"#,
+                    segment(1.0, 3.0, "tot straks.")
+                ),
+            ),
+        )
+        .expect("result");
+    // The first recording's rows refuse to write, as this morning's did.
+    let broken = f.clip().id.stored();
+    f.meaning
+        .execute_batch(&format!(
+            "CREATE TRIGGER refuse BEFORE INSERT ON rendered_lines WHEN NEW.clip_id = {broken}
+             BEGIN SELECT RAISE(ABORT, 'refused'); END;"
+        ))
+        .expect("trigger");
+
+    let done = f.refresh(false);
+
+    assert_eq!(done.rendered, 1, "the other recording rendered");
+    assert_eq!(done.failed.len(), 1);
+    assert_eq!(done.failed[0].0, broken);
+    assert!(done.failed[0].1.contains("refused"), "{:?}", done.failed);
+    let texts: Vec<String> = f.lines().into_iter().map(|l| l.1).collect();
+    assert_eq!(texts, ["tot straks."]);
+
+    f.meaning
+        .execute_batch("DROP TRIGGER refuse")
+        .expect("drop");
+    let again = f.refresh(false);
+    assert_eq!(
+        (again.rendered, again.failed.len()),
+        (1, 0),
+        "retried, now current"
+    );
+}

@@ -201,7 +201,10 @@ recorders, the Mac and the browser. It owns:
   naming was taken back or renamed. `registrar` gives a microphone clip the
   audio row its lines hang from. Every terminal decision that writes nothing
   leaves a ledger row, or the clip sits at the head of the queue for ever. Job
-  kinds are one enum (`audiocore::job::Kind`) shared with the runner.
+  kinds are one enum (`audiocore::job::Kind`) shared with the runner. A clip
+  that will not render is set aside and the pass goes on; each pass reports
+  how it last went (`recalld::passes`) to `GET /sync/record/health`, where the
+  doctor grades it, since a pass that only logs its failure fails unseen.
 - **The browsing API and the app.** Timeline, search, playback, corrections,
   sessions, labels, the capture control, behind the Nextcloud sign-in. The
   frontend's types are generated from the route structs (`ts-rs`); the gate

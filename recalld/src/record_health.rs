@@ -1,5 +1,6 @@
 //! The record's own faults, for the doctor: requests that failed on our side
-//! ([`crate::route`] keeps them), and minutes a microphone shows twice.
+//! ([`crate::route`] keeps them), minutes a microphone shows twice, and how
+//! each background pass is doing ([`crate::passes`]).
 //!
 //! The fleet measures, the doctor grades (`doctor/src/record.rs`), as for the
 //! live tier.
@@ -122,5 +123,6 @@ pub fn measure(root: &Path, since: DateTime<Utc>) -> rusqlite::Result<RecordHeal
     Ok(RecordHealth {
         faults,
         doubled: doubled_minutes(&meaning, since)?,
+        passes: Some(crate::passes::PASSES.report()),
     })
 }

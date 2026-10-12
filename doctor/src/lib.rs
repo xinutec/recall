@@ -5,7 +5,8 @@
 //! [`archive`], in a child process the parent abandons if it hangs
 //! ([`bounded`]): launchd starts no new run while one is stuck, so one doctor
 //! wedged in disk wait would silence all later ones. The parent reads only the
-//! boot disk and, with timeouts, the server ([`live`], [`deaf`]).
+//! boot disk and, with timeouts, the server ([`live`], [`deaf`], [`record`],
+//! [`passes`], [`reach`]).
 
 pub mod agents;
 pub mod archive;
@@ -17,5 +18,7 @@ pub mod delivery;
 pub mod fleetwatch;
 pub mod live;
 pub mod loss;
+pub mod passes;
+pub mod reach;
 pub mod record;
 pub mod source;
