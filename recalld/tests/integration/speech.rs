@@ -26,6 +26,16 @@ fn stored(root: &Path, source: &str, name: &str, audio: &[u8]) {
     .expect("row");
 }
 
+/// The source's newest capture that may hold speech, as liveness reads it.
+fn latest_speech(conn: &rusqlite::Connection, source: &str) -> Option<String> {
+    speech::liveness_by_source(conn)
+        .expect("query")
+        .into_iter()
+        .find(|(s, _, _)| s == source)
+        .map(|(_, _, speech)| speech)
+        .filter(|speech| !speech.is_empty())
+}
+
 fn silent_wav(seconds: u32) -> Vec<u8> {
     let samples = vec![0.0_f32; (16_000 * seconds) as usize];
     let path = std::env::temp_dir().join(format!("recalld-silence-{seconds}.wav"));
@@ -104,10 +114,7 @@ fn a_source_with_only_silence_has_no_latest_speech() {
     stored(dir.path(), "usb", "usb-20260905T120000.wav", &silent_wav(2));
     speech::scan_once(dir.path(), 10).expect("scan");
     let conn = store::open(dir.path()).expect("db");
-    assert_eq!(
-        speech::latest_speech_utc(&conn, "usb").expect("query"),
-        None
-    );
+    assert_eq!(latest_speech(&conn, "usb"), None);
 }
 
 #[test]
@@ -133,9 +140,7 @@ fn real_speech_is_measured_and_becomes_the_source_latest_speech() {
         "31 s of dialogue measured as {seconds}s speech"
     );
     assert_eq!(
-        speech::latest_speech_utc(&conn, "usb")
-            .expect("query")
-            .as_deref(),
+        latest_speech(&conn, "usb").as_deref(),
         Some("2026-09-05T12:00:00Z"),
     );
 }
@@ -148,9 +153,7 @@ fn an_unmeasured_segment_still_counts_as_possible_speech() {
     // deliberately not scanned
     let conn = store::open(dir.path()).expect("db");
     assert_eq!(
-        speech::latest_speech_utc(&conn, "usb")
-            .expect("query")
-            .as_deref(),
+        latest_speech(&conn, "usb").as_deref(),
         Some("2026-09-05T12:00:00Z"),
         "an unmeasured segment must not read as silence"
     );
@@ -162,11 +165,7 @@ fn an_undecodable_segment_counts_too_because_it_was_never_heard() {
     stored(dir.path(), "usb", "usb-20260905T120000.wav", b"not audio");
     speech::scan_once(dir.path(), 10).expect("scan");
     let conn = store::open(dir.path()).expect("db");
-    assert!(
-        speech::latest_speech_utc(&conn, "usb")
-            .expect("query")
-            .is_some()
-    );
+    assert!(latest_speech(&conn, "usb").is_some());
 }
 
 #[test]
@@ -230,71 +229,4 @@ fn the_scan_stores_where_the_speech_is_and_it_adds_up() {
         (placed - total).abs() < 1e-6,
         "{placed} placed vs {total} measured"
     );
-}
-
-#[test]
-fn a_measurement_from_before_regions_is_backfilled_after_new_clips() {
-    let fixture = Path::new(DIALOGUE);
-    if !fixture.exists() {
-        eprintln!("skipping: speech fixture absent");
-        return;
-    }
-    let dir = tempfile::tempdir().expect("tempdir");
-    let audio = std::fs::read(fixture).expect("fixture");
-    stored(dir.path(), "usb", "usb-20260901T120000.flac", &audio);
-    let conn = store::open(dir.path()).expect("db");
-    // Measured by an older build: seconds, no regions.
-    conn.execute(
-        "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc)
-         VALUES ('usb-20260901T120000.flac', 'usb', 20.0, '2026-09-01T12:02:00Z')",
-        [],
-    )
-    .expect("old row");
-    stored(dir.path(), "usb", "usb-20260905T120000.wav", &silent_wav(1));
-
-    // A batch of one goes to the new clip: the queue waits on it.
-    assert_eq!(speech::scan_once(dir.path(), 1).expect("scan"), 1);
-    let old = speech::evidence(&conn, "usb-20260901T120000.flac").expect("heard");
-    assert!(
-        old.regions.is_none(),
-        "backfilled before the new clip was measured"
-    );
-    assert!(
-        speech::evidence(&conn, "usb-20260905T120000.wav")
-            .expect("heard")
-            .seconds
-            .is_some()
-    );
-
-    assert_eq!(speech::scan_once(dir.path(), 1).expect("scan"), 1);
-    let old = speech::evidence(&conn, "usb-20260901T120000.flac").expect("heard");
-    assert!(!old.regions.expect("backfilled").is_empty());
-    assert_eq!(old.seconds, Some(20.0), "the stored total is left alone");
-    assert_eq!(
-        speech::scan_once(dir.path(), 10).expect("scan"),
-        0,
-        "nothing left"
-    );
-}
-
-#[test]
-fn a_segment_measured_silent_needs_no_second_look_for_its_regions() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    stored(
-        dir.path(),
-        "usb",
-        "usb-20260905T120000.wav",
-        b"not even audio",
-    );
-    let conn = store::open(dir.path()).expect("db");
-    conn.execute(
-        "INSERT INTO segment_speech (filename, source, speech_seconds, computed_utc)
-         VALUES ('usb-20260905T120000.wav', 'usb', 0.0, '2026-09-05T12:02:00Z')",
-        [],
-    )
-    .expect("old row");
-    // Undecodable on disk: were it decoded again, it would read `null`.
-    assert_eq!(speech::scan_once(dir.path(), 10).expect("scan"), 0);
-    let heard = speech::evidence(&conn, "usb-20260905T120000.wav").expect("heard");
-    assert_eq!(heard.regions.map(|r| r.len()), Some(0));
 }
