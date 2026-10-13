@@ -47,7 +47,7 @@ crate::statements! {
              ORDER BY j.filename ASC";
 }
 
-/// A turn shorter than this enrols a useless print.
+/// A naming shorter than this enrols a useless print.
 const MIN_SECONDS: f64 = 1.0;
 
 /// One stretch to embed. No name on the wire: the naming is read at write
@@ -222,8 +222,8 @@ pub fn attach_spans(root: &std::path::Path, job: &mut crate::queue::Job) -> rusq
     Ok(())
 }
 
-/// Derive one enrolment job per delivered clip holding turns that still need a
-/// voiceprint; the spans travel with the lease.
+/// Derive one enrolment job per delivered clip with a naming awaiting a print,
+/// up to `limit`; the spans travel with the lease.
 ///
 /// # Errors
 /// If either database refuses.
@@ -274,8 +274,8 @@ use audiocore::shim::{Stored, voices::Prints};
 pub struct Enrolled {
     pub clips: usize,
     pub prints: usize,
-    /// Spans whose turn was renamed, hidden or enrolled meanwhile, or that came
-    /// back empty.
+    /// Spans whose naming was taken back, renamed or printed meanwhile, or
+    /// that came back empty.
     pub stale: usize,
 }
 

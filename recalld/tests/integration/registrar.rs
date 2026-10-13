@@ -330,7 +330,7 @@ fn a_clip_whose_minute_a_sibling_already_holds_is_retired_not_reconsidered() {
     let second =
         register_segments(&meaning, &ingest, dir.path(), &crate::stamp(NOW), 10).expect("second");
     assert_eq!(
-        (second.added, second.covered, second.retired, second.probed),
+        (second.added, second.covered, second.known, second.probed),
         (0, 0, 0, 0),
         "a decided clip is never looked at again, and nothing is decoded"
     );

@@ -58,8 +58,8 @@ impl From<rusqlite::Error> for LogError {
     }
 }
 
-/// Append `act`, done at `at`. `origin` names the old row it was recovered
-/// from, for the seed only.
+/// Append `act`, done at `at`. `origin` names the old row an act was
+/// recovered from; the app's own acts have none.
 ///
 /// # Errors
 /// If the store refuses, or a retraction names no stored edit.
@@ -153,8 +153,7 @@ pub fn filed_with(conn: &Connection, edit: EditId) -> Result<Vec<Edit>, LogError
     read(SAME_AT.prepare(conn)?, [one.at.micros()])
 }
 
-/// The acts recovered from the old tables when the log was seeded, not done
-/// in the app.
+/// The acts recovered from the old tables, not done in the app.
 ///
 /// # Errors
 /// If the store refuses.

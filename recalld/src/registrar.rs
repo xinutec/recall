@@ -40,7 +40,7 @@ pub struct Registered {
     /// start_utc)`): common, counted apart so the duplicates stay visible.
     pub covered: usize,
     /// Already registered by name.
-    pub retired: usize,
+    pub known: usize,
     /// Files decoded: the pass's whole cost.
     pub probed: usize,
 }
@@ -62,7 +62,7 @@ pub fn register_segments(
     now: &Stamp,
     limit: usize,
 ) -> rusqlite::Result<Registered> {
-    // Uploads register themselves (`upload::register`).
+    // Not uploads, which register themselves, nor the room's blocks.
     let mics: std::collections::HashSet<String> = {
         let mut stmt = CAPTURE_SOURCES.prepare(meaning)?;
         let rows = stmt.query_map([crate::store::ROOM_KIND], |r| r.get::<_, String>(0))?;
@@ -89,7 +89,7 @@ pub fn register_segments(
         let decided = |outcome| record(ingest, PassKind::Register, &filename, outcome, None, now);
         if have.contains(&filename) {
             decided(Outcome::AlreadyRegistered)?;
-            out.retired += 1;
+            out.known += 1;
             continue;
         }
         // Not ledgered: the source may be registered later.

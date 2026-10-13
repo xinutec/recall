@@ -46,7 +46,7 @@ crate::statements! {
     SOURCE_EDITS: Meaning =
         "SELECT source_id, max(id) FROM edits WHERE source_id IS NOT NULL GROUP BY source_id";
     STORED_INPUTS: Meaning = "SELECT clip_id, inputs FROM rendered_clips";
-    /// Every stored column but the id, in [`INSERT_LINE`]'s order after it.
+    /// The id, then every stored column in [`INSERT_LINE`]'s order.
     OLD_ROWS: Meaning =
         "SELECT id, clip_id, audio_segment_id, source_id, start_utc, end_utc, text, language,
              asr_confidence, asr_model, speaker_label, speaker_guess, speaker_score,
@@ -115,7 +115,7 @@ impl From<LogError> for ViewError {
 /// What a refresh did.
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Refreshed {
-    /// Clips rendered, to compare with what they show.
+    /// Clips rendered and compared with their stored lines.
     pub rendered: usize,
     /// Of those, the clips whose lines changed and were written.
     pub written: usize,
@@ -451,8 +451,8 @@ fn stored_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, Vec<Value>)> {
     Ok((r.get(0)?, values))
 }
 
-/// The new rows with the ids they keep: same span, same side first; then the
-/// same span hidden or shown again. A new span gets none. Lines sharing a span
+/// The new rows with the ids they keep: same span and still hidden or still
+/// shown first; then the same span hidden or shown again. A new span gets none. Lines sharing a span
 /// (two reasons over one instant) take its ids in order, so each gets its own
 /// back.
 fn with_ids(
@@ -598,7 +598,8 @@ impl Row {
         })
     }
 
-    /// `recovered`: acts from the old tables, whose exclusions read "left out".
+    /// `recovered`: acts recovered from the old tables; their exclusions read
+    /// "left out".
     fn dropped(dropped: &Dropped, tier: Stage, recovered: &HashSet<EditId>) -> Self {
         let (hidden, edit) = match dropped.why {
             Why::RepetitionLoop => ("a repetition loop".to_owned(), None),
@@ -662,7 +663,7 @@ impl Row {
     }
 }
 
-/// How many columns [`Row::values`] gives, and where three of them are.
+/// How many columns [`Row::values`] gives, and where four of them are.
 const COLUMNS: usize = 19;
 const START: usize = 3;
 const END: usize = 4;

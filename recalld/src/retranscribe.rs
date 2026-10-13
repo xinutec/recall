@@ -51,12 +51,13 @@ pub fn request(ingest: &Connection, filenames: &[String]) -> rusqlite::Result<Re
 #[derive(Debug, PartialEq, serde::Serialize)]
 pub struct Candidate {
     pub filename: String,
-    /// Seconds of measured speech under the segments the passes drop as loops.
+    /// Seconds of measured speech under segments that read as repetition loops
+    /// (`quality::is_repetition_loop`).
     pub looped_speech_s: f64,
 }
 
 /// Every clip not already waiting with more than `min_speech_s` of measured
-/// speech under segments dropped as loops, most lost first.
+/// speech under looping segments, most lost first.
 ///
 /// # Errors
 /// If the ingest plane refuses.

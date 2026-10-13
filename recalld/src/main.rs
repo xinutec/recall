@@ -51,7 +51,8 @@ struct Args {
 
 #[derive(Clone, Copy, clap::Subcommand)]
 enum Task {
-    /// Give every stored file a clip and say whether all have one (#1911).
+    /// Give every stored file a clip and say whether all have one
+    /// (`recalld::clips`).
     ClipCensus,
     /// Render every clip into the rendered view and say what it did
     /// (`recalld::view`).
@@ -341,7 +342,7 @@ fn spawn_background_passes(root: &std::path::Path) {
     let root = root.to_path_buf();
     let root = &root;
     spawn_speech_scanner(root.clone());
-    // The one loop that writes shown lines: render's, from results and acts.
+    // Keeps shown lines current; a person's write renders its own clips.
     spawn_view(root.clone());
     spawn_segment_registrar(root.clone());
     spawn_segment_deriver(root.clone());
@@ -397,7 +398,7 @@ fn view_problem(done: &recalld::view::Refreshed) -> Option<String> {
     ))
 }
 
-/// Turn human-named turns into voiceprints. Slow on purpose: it only has to
+/// Turn people's namings into voiceprints. Slow on purpose: it only has to
 /// keep up with a handful of labels a week, and must not outbid diarization
 /// for the GPU.
 fn spawn_enroller(root: PathBuf) {
@@ -492,7 +493,7 @@ fn spawn_speech_scanner(root: PathBuf) {
     });
 }
 
-/// Derive transcription jobs for microphone clips with no turns. A timer, not
+/// Derive transcription jobs for microphone clips not yet transcribed. A timer, not
 /// part of `queue::lease`: it spans both planes and scans one. The batch bound
 /// keeps a runner from being handed days of backlog at once.
 fn spawn_segment_deriver(root: PathBuf) {
@@ -522,7 +523,7 @@ fn spawn_segment_deriver(root: PathBuf) {
     });
 }
 
-/// Register microphone clips in the meaning plane, so their turns have audio.
+/// Register microphone clips in the meaning plane, so their lines have audio.
 /// Bounded: `upload::probe` decodes the whole file.
 ///
 /// To reverse it, both planes:
@@ -549,16 +550,15 @@ fn spawn_segment_registrar(root: PathBuf) {
                 let now = audiocore::instant::Stamp::now();
                 recalld::registrar::register_segments(&meaning, &ingest, &pass_root, &now, BATCH)
             };
-            // Not `waiting` (an unknown recorder keeps it high) or `retired`
-            // (a hash lookup); `covered` cost a full decode, so a rising
-            // count shows repeated decoding.
+            // Logged when the pass decided a clip; `waiting` (an unknown
+            // recorder keeps it high) and `known` alone are not news.
             if let Some(pass) = PASSES.run("segment-register", job, |_| None).await
                 && pass.added + pass.unreadable + pass.covered > 0
             {
                 tracing::info!(
                     added = pass.added,
                     covered = pass.covered,
-                    retired = pass.retired,
+                    known = pass.known,
                     probed = pass.probed,
                     unreadable = pass.unreadable,
                     waiting = pass.waiting,

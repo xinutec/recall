@@ -89,7 +89,7 @@ impl From<clips::ClipError> for WriteError {
     }
 }
 
-/// A shown line, as the writes need it.
+/// A rendered line, shown or hidden, as the writes need it.
 struct Line {
     id: i64,
     clip: Clip,
@@ -192,14 +192,14 @@ fn file(
     Ok(ids)
 }
 
-/// Exclude the stretch from line `first` to line `last` of one recording, as
-/// if recording had paused: only strangers spoke. The words are kept and not
+/// Exclude the stretch from line `first` to line `last` of one session, as if
+/// recording had paused: only strangers spoke. The words are kept and not
 /// filed as invented. One act per clip the stretch covers, filed together, so
 /// one undo takes back all of it. Returns how many lines it hid.
 ///
 /// # Errors
-/// [`WriteError::BadSpan`] unless both lines are shown, of one recording, in
-/// order.
+/// [`WriteError::BadSpan`] unless both lines are of one session, in order;
+/// [`WriteError::Hidden`] for a hidden one.
 pub fn exclude(
     meaning: &Connection,
     ingest: &Connection,
@@ -278,8 +278,8 @@ pub struct Correction<'a> {
     pub words_checked: bool,
 }
 
-/// A person's words for a line, and who said them. Unchanged words that were
-/// not vouched for are no words act: renaming a speaker vouches nothing.
+/// A person's words for a line, and who said them. Unchanged words file a
+/// words act only when vouched for: renaming a speaker vouches for nothing.
 /// Returns the line that shows the result.
 ///
 /// # Errors
@@ -398,7 +398,7 @@ pub fn undo_no_speech(
     Ok(())
 }
 
-/// A labelled fragment: a person's naming of a stretch, still in force.
+/// A labelled fragment: a person's naming of a stretch, by its edit id.
 fn label(meaning: &Connection, id: i64) -> Result<(ClipId, Span, Name), WriteError> {
     match edit_log::get(meaning, EditId::from_stored(id))? {
         Some(transcript::Edit {
@@ -772,7 +772,7 @@ pub async fn correct_route(
     }
 }
 
-/// One line, by id: nobody spoke, and taking back a check.
+/// One line, by id: nobody spoke, and the undos.
 #[derive(Deserialize, ts_rs::TS)]
 #[ts(export, rename = "LineRequest")]
 pub struct LineIn {
