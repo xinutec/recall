@@ -218,8 +218,8 @@ fn a_caller_padding_widens_a_tight_turn_for_checking_its_words() {
     );
 }
 
-/// A turn's bounds move when it is realigned, so the same URL can render
-/// different audio: the client revalidates rather than replaying a stale clip.
+/// What a URL cuts is read from its line's row on every request, so the client
+/// revalidates rather than replaying a clip from its cache.
 #[test]
 fn a_rendered_clip_says_how_it_may_be_cached() {
     let dir = tempfile::tempdir().expect("tempdir");

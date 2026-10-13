@@ -345,7 +345,7 @@ fn a_clip_whose_rows_will_not_write_is_reported_and_the_rest_still_render() {
             ),
         )
         .expect("result");
-    // The first recording's rows refuse to write, as this morning's did.
+    // The first recording's rows refuse to write.
     let broken = f.clip().id.stored();
     f.meaning
         .execute_batch(&format!(

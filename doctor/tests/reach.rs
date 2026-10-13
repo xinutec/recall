@@ -23,7 +23,7 @@ fn an_answer_passes_and_is_remembered() {
 
 #[test]
 fn a_miss_shortly_after_an_answer_warns_and_a_long_silence_fails() {
-    // Today's outage: answered at 13:50, then 502 until 14:19.
+    // An outage: answered at 13:50, then 502 until 14:19.
     let dir = tempfile::tempdir().expect("tmp");
     let state = dir.path().join("fleet-reached");
     let _ = reach_check(&state, at(0), &Ok(()));

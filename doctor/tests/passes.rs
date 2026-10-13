@@ -52,7 +52,7 @@ fn a_pass_that_ends_clean_passes() {
 
 #[test]
 fn a_pass_failing_past_its_allowance_fails_with_the_error() {
-    // This morning: every refresh refused for hours.
+    // Every refresh refused, for hours.
     let (verdict, observed) = one(Pass {
         failing: Some(Failing {
             since_utc: ago(30),

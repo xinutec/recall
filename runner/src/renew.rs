@@ -9,7 +9,7 @@ use std::time::Duration;
 pub const EVERY: Duration = Duration::from_mins(2);
 
 /// Run `work` while renewing job `id` every `every`. A failed renewal is
-/// logged and the work goes on: at worst the lease lapses as it did before.
+/// logged and the work goes on: at worst the lease lapses and the job is offered again.
 pub fn while_renewing<T>(client: &Client, id: i64, every: Duration, work: impl FnOnce() -> T) -> T {
     let (stop, stopped) = mpsc::channel::<()>();
     std::thread::scope(|scope| {

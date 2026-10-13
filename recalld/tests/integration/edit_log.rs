@@ -1,6 +1,5 @@
 //! The edit log keeps what people did, in order, and reads back exactly that:
-//! per clip with its session's acts and their retractions, append-only, seeded
-//! once from today's tables.
+//! per clip with its session's acts and their retractions, append-only.
 
 use recalld::edit_log::{self, LogError};
 use rusqlite::Connection;

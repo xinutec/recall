@@ -8,8 +8,8 @@ use chrono::{DateTime, Duration, Utc};
 
 /// Silence or failure tolerated: three passes, and never under this.
 const MIN_ALLOWANCE_MIN: i64 = 10;
-/// One pass running longer than this is stuck. The view's first pass renders
-/// every clip and has taken over half an hour.
+/// One pass running longer than this is stuck. The longest is the view's
+/// first, which renders every clip: about a minute on Isis.
 const RUNNING_MAX_MIN: i64 = 60;
 
 const EXPECTED: &str = "passes end, and end clean, within three intervals (at least 10 min); \
