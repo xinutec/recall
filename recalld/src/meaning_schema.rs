@@ -734,6 +734,27 @@ pub const MIGRATIONS: &[&str] = &[
     ALTER TABLE sources DROP COLUMN noise_shape;
     ALTER TABLE sources DROP COLUMN language;
 "#,
+    // v62
+    r#"
+    -- Nothing reads these: the Python capture's per-clip measurements. The
+    -- instant triggers guard two of them, so they are rebuilt without.
+    DROP TRIGGER audio_segments_instants_insert;
+    DROP TRIGGER audio_segments_instants_update;
+    ALTER TABLE audio_segments DROP COLUMN transcribed_utc;
+    ALTER TABLE audio_segments DROP COLUMN mean_volume;
+    ALTER TABLE audio_segments DROP COLUMN envelope;
+    ALTER TABLE audio_segments DROP COLUMN structure;
+    ALTER TABLE audio_segments DROP COLUMN pushed_utc;
+    ALTER TABLE audio_segments DROP COLUMN speech_s;
+    CREATE TRIGGER audio_segments_instants_insert BEFORE INSERT ON audio_segments
+    WHEN NOT ((NEW.start_utc IS NULL OR NEW.start_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.start_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00') AND
+            (NEW.end_utc IS NULL OR NEW.end_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.end_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'))
+    BEGIN SELECT RAISE(ABORT, 'audio_segments: an instant not in the stored spelling'); END;
+    CREATE TRIGGER audio_segments_instants_update BEFORE UPDATE OF start_utc, end_utc ON audio_segments
+    WHEN NOT ((NEW.start_utc IS NULL OR NEW.start_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.start_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00') AND
+            (NEW.end_utc IS NULL OR NEW.end_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]+00:00' OR NEW.end_utc GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+00:00'))
+    BEGIN SELECT RAISE(ABORT, 'audio_segments: an instant not in the stored spelling'); END;
+"#,
 ];
 
 /// Bring `conn` up to the latest version, running only the steps it has not had.

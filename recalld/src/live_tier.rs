@@ -41,8 +41,7 @@ pub struct LiveHealth {
 /// What the doctor's live checks need, from both planes.
 ///
 /// The bounds are re-spelled as stored, since timestamps compare as text (`Z`
-/// sorts after `+00:00`). Speech comes from `segment_speech`:
-/// `audio_segments.speech_s` is not filled on this server.
+/// sorts after `+00:00`). Speech comes from `segment_speech`.
 pub fn live_health(
     root: &Path,
     lag_since: DateTime<Utc>,

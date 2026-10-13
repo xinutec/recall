@@ -246,3 +246,55 @@ fn words_a_person_typed_or_vouched_for_are_marked_on_their_turn() {
         .expect("rows");
     assert_eq!(marked, vec![(11, Some(1)), (12, Some(1)), (13, None)]);
 }
+
+#[test]
+fn the_python_capture_columns_go_and_an_audio_row_keeps_its_instant_guard() {
+    let conn = rusqlite::Connection::open_in_memory().expect("db");
+    ensure_to(&conn, 61).expect("at rung 61");
+    conn.execute_batch(
+        "INSERT INTO sources (id, name, kind) VALUES ('usb', 'usb', 'coreaudio');
+         INSERT INTO audio_segments
+             (source_id, path, start_utc, end_utc, sample_rate, channels, envelope, speech_s)
+         VALUES ('usb', '/data/a.flac', '2026-09-19T10:00:00+00:00',
+                 '2026-09-19T10:01:00+00:00', 16000, 1, '[0.1]', 3.5);",
+    )
+    .expect("a row at rung 61");
+    ensure(&conn).expect("climb");
+
+    let columns: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('audio_segments')")
+        .expect("prep")
+        .query_map([], |r| r.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("columns");
+    for gone in [
+        "transcribed_utc",
+        "mean_volume",
+        "envelope",
+        "structure",
+        "pushed_utc",
+        "speech_s",
+    ] {
+        assert!(!columns.iter().any(|c| c == gone), "{gone} is still there");
+    }
+    let kept: String = conn
+        .query_row("SELECT path FROM audio_segments", [], |r| r.get(0))
+        .expect("the row");
+    assert_eq!(kept, "/data/a.flac");
+
+    let insert = |start: &str| {
+        conn.execute(
+            "INSERT INTO audio_segments (source_id, path, start_utc, end_utc, sample_rate, channels)
+             VALUES ('usb', ?1, ?2, '2026-09-19T10:05:00+00:00', 16000, 1)",
+            (format!("/data/{start}.flac"), start),
+        )
+    };
+    assert!(insert("2026-09-19T10:02:00Z").is_err(), "another spelling");
+    insert("2026-09-19T10:02:00+00:00").expect("the stored spelling");
+    let moved = conn.execute(
+        "UPDATE audio_segments SET end_utc = '2026-09-19T10:03:00Z'",
+        [],
+    );
+    assert!(moved.is_err(), "an update is held to it too");
+}
