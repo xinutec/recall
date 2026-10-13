@@ -75,17 +75,6 @@ fn with_neither_a_name_nor_a_voice_it_is_unknown() {
 }
 
 #[test]
-fn a_confirmed_speaker_placeholder_is_not_reported_as_confirmed() {
-    let t = Turn {
-        speaker: Some("SPEAKER_02".to_owned()),
-        speaker_confirmed: true,
-        ..turn()
-    };
-    let out = details(std::slice::from_ref(&t));
-    assert!(out.contains("who      : unknown"), "got:\n{out}");
-}
-
-#[test]
 fn a_dump_of_the_id_that_was_asked_for_is_plainly_visible() {
     let out = details(&[turn()]);
     assert!(out.contains("status   : visible"), "got:\n{out}");

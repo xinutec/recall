@@ -422,11 +422,11 @@ impl Api {
         self.get(&format!("/api/retranscribe?min_speech_s={min_speech_s}"))
     }
 
-    /// Take back [`Api::retranscribe`] for one clip: `cancelled` if it was
-    /// still waiting, `restored` if its old lines show again.
+    /// Take back [`Api::retranscribe`] for one clip still waiting: `cancelled`.
     ///
     /// # Errors
-    /// As [`Api::correct`]; a clip with nothing set aside is a 400.
+    /// As [`Api::correct`]; a finished one is a 410, since a clip keeps only its
+    /// current result.
     pub fn undo_retranscribe(&self, filename: &str) -> Result<String, Error> {
         let response = self
             .signed(

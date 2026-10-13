@@ -66,11 +66,10 @@ pub fn hit(turn: &Turn) -> String {
     )
 }
 
-/// Attribution for the diagnostic view, tagged confirmed or guess. A confirmed
-/// `SPEAKER_*` is a diarization placeholder, not a name.
+/// Attribution for the diagnostic view, tagged confirmed or guess.
 fn who_detail(turn: &Turn) -> String {
     match &turn.speaker {
-        Some(name) if turn.speaker_confirmed && !name.starts_with("SPEAKER_") => {
+        Some(name) if turn.speaker_confirmed => {
             format!("{name} (confirmed)")
         }
         Some(guess) if !turn.speaker_confirmed => {
