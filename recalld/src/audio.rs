@@ -207,7 +207,7 @@ impl From<rusqlite::Error> for ClipError {
 /// stall every other request.
 fn clip(path: &Path, start: f64, end: f64, enhance: bool) -> Response {
     match render(path, start, end, enhance) {
-        // A turn's bounds move when it is realigned: revalidate, never replay.
+        // Cut from the line's row on every request: revalidate, never replay.
         Ok(bytes) => (
             [
                 (header::CONTENT_TYPE, "audio/wav"),
