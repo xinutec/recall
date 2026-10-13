@@ -30,6 +30,15 @@ pub fn bearer(header: Option<&str>) -> Option<&str> {
     header?.strip_prefix(BEARER)
 }
 
+/// The sync token on `headers`, checked, or the answer to give.
+#[expect(clippy::result_large_err, reason = "the Err is the HTTP response")]
+fn authorised(gate: &Gate, headers: &axum::http::HeaderMap) -> Result<(), Response> {
+    let presented = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    check(bearer(presented), &gate.expected).map_err(IntoResponse::into_response)
+}
+
 /// Authorise a sync request in constant time, or say what to answer.
 pub fn check(presented: Option<&str>, expected: &str) -> Result<(), (StatusCode, &'static str)> {
     let ok = presented.is_some_and(|p| {
@@ -69,9 +78,7 @@ pub struct IntentOut {
     pub paused_until: Option<String>,
 }
 
-/// As `GET /api/capture`.
-const WAIT_CAP: std::time::Duration = std::time::Duration::from_secs(25);
-const WAIT_SLICE: std::time::Duration = std::time::Duration::from_secs(2);
+use crate::capture::{WAIT_CAP, WAIT_SLICE};
 
 /// `source_liveness` carries instants as strings; the reader drops anything
 /// else.
@@ -87,11 +94,8 @@ pub async fn capture_route(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let presented = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
-    if let Err(refusal) = check(bearer(presented), &st.expected) {
-        return refusal.into_response();
+    if let Err(refusal) = authorised(&st, &headers) {
+        return refusal;
     }
     let Ok(body) = serde_json::from_slice::<Applied>(&body) else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "bad capture report").into_response();
@@ -164,11 +168,8 @@ where
     F: FnOnce(&rusqlite::Connection) -> rusqlite::Result<T> + Send + 'static,
     T: serde::Serialize + Send + 'static,
 {
-    let presented = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
-    if let Err(refusal) = check(bearer(presented), &st.expected) {
-        return refusal.into_response();
+    if let Err(refusal) = authorised(st, headers) {
+        return refusal;
     }
     let root = st.root.clone();
     crate::route::json(what, move || read(&crate::reads::open(&root)?)).await
@@ -217,11 +218,8 @@ pub async fn live_health_route(
     headers: axum::http::HeaderMap,
     Query(q): Query<LiveHealthQuery>,
 ) -> Response {
-    let presented = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
-    if let Err(refusal) = check(bearer(presented), &st.expected) {
-        return refusal.into_response();
+    if let Err(refusal) = authorised(&st, &headers) {
+        return refusal;
     }
     // Parsed here, so a bad bound is a 400 rather than a text comparison
     // against something that only looks like a timestamp.
@@ -256,11 +254,8 @@ pub async fn record_health_route(
     headers: axum::http::HeaderMap,
     Query(q): Query<RecordHealthQuery>,
 ) -> Response {
-    let presented = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
-    if let Err(refusal) = check(bearer(presented), &st.expected) {
-        return refusal.into_response();
+    if let Err(refusal) = authorised(&st, &headers) {
+        return refusal;
     }
     let Some(since) = audiocore::instant::parse(&q.since) else {
         return (StatusCode::BAD_REQUEST, "unparseable window bound").into_response();
@@ -286,11 +281,8 @@ pub async fn heard_route(
     headers: axum::http::HeaderMap,
     Query(q): Query<HeardQuery>,
 ) -> Response {
-    let presented = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
-    if let Err(refusal) = check(bearer(presented), &st.expected) {
-        return refusal.into_response();
+    if let Err(refusal) = authorised(&st, &headers) {
+        return refusal;
     }
     let (Some(since), Some(until)) = (
         audiocore::instant::parse_utc(&q.since),
@@ -323,11 +315,8 @@ pub async fn live_route(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let presented = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
-    if let Err(refusal) = check(bearer(presented), &st.expected) {
-        return refusal.into_response();
+    if let Err(refusal) = authorised(&st, &headers) {
+        return refusal;
     }
     let Ok(body) = serde_json::from_slice::<LiveTurnsIn>(&body) else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "bad live turns").into_response();
@@ -344,7 +333,7 @@ pub async fn live_route(
     }
 }
 
-/// `null` when nothing is enrolled.
+/// `null` when the glossary is empty.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct PromptOut {
     pub prompt: Option<String>,

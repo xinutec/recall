@@ -346,9 +346,9 @@ pub async fn wait_intent_changed(
 }
 
 /// The longest a request is held.
-const WAIT_CAP: std::time::Duration = std::time::Duration::from_secs(25);
+pub const WAIT_CAP: std::time::Duration = std::time::Duration::from_secs(25);
 /// How often a held request re-derives the state, for changes nothing signals.
-const WAIT_SLICE: std::time::Duration = std::time::Duration::from_secs(2);
+pub const WAIT_SLICE: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Deserialize)]
 pub struct StatusQuery {
