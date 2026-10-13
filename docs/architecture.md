@@ -167,9 +167,8 @@ recorded against one.
 
 Segments are FLAC, lossless, kept forever. Opus was the default once and
 destroys phase, which is why the older archive cannot be combined coherently.
-The phone apps wrote their own copy as WAV until October 2026;
-`recalld phone-flac` converts those, keeping a FLAC only if it decodes to the
-WAV's exact samples.
+The phone apps wrote their own copy as WAV until October 2026; every stored one
+was converted to FLAC, kept only where it decoded to the WAV's exact samples.
 
 ## recalld
 

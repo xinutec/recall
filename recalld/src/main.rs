@@ -60,16 +60,6 @@ enum Task {
     /// Whether every stored file matches the size and hash its row recorded,
     /// and every audio row names a file (`recalld::verify`). Reads every byte.
     Verify,
-    /// Store the phones' WAV copies as FLAC (`recalld::phone_flac`).
-    PhoneFlac {
-        /// Convert; without this, only say what would be converted.
-        #[arg(long)]
-        apply: bool,
-        /// Leave copies received within this many hours, which a phone may
-        /// still be sending again.
-        #[arg(long, default_value_t = 24)]
-        settled_hours: i64,
-    },
 }
 
 /// Open both planes as the server does, run `report` over them, and print what
@@ -103,50 +93,16 @@ fn report<T: serde::Serialize, E: std::fmt::Display>(
 
 /// Run `task` against the planes under `root`, printing what it did as JSON.
 fn run_task(root: &std::path::Path, task: Task) -> ExitCode {
-    let (apply, settled_hours) = match task {
-        Task::PhoneFlac {
-            apply,
-            settled_hours,
-        } => (apply, settled_hours),
-        Task::ClipCensus => {
-            return report(root, |meaning, ingest| {
-                recalld::clips::census(meaning, ingest, root)
-            });
-        }
-        Task::RenderView => {
-            return report(root, |meaning, ingest| {
-                recalld::view::refresh(meaning, ingest, root, true)
-            });
-        }
-        Task::Verify => {
-            return report(root, |meaning, ingest| {
-                recalld::verify::run(meaning, ingest, root)
-            });
-        }
-    };
-    let before = (chrono::Utc::now() - chrono::Duration::hours(settled_hours))
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
-    let done = recalld::work::open_write(root).and_then(|meaning| {
-        let mut ingest = recalld::store::open(root)?;
-        // The daemon's passes hold the ingest lock past the 5 s default; a task
-        // that gives up stops halfway.
-        ingest.busy_timeout(std::time::Duration::from_mins(2))?;
-        recalld::phone_flac::convert(root, &meaning, &mut ingest, &before, apply)
-    });
-    match done.map(|done| serde_json::to_string_pretty(&done)) {
-        Ok(Ok(json)) => {
-            println!("{json}");
-            ExitCode::SUCCESS
-        }
-        Ok(Err(err)) => {
-            eprintln!("recalld: {err}");
-            ExitCode::FAILURE
-        }
-        Err(err) => {
-            eprintln!("recalld: {err}");
-            ExitCode::FAILURE
-        }
+    match task {
+        Task::ClipCensus => report(root, |meaning, ingest| {
+            recalld::clips::census(meaning, ingest, root)
+        }),
+        Task::RenderView => report(root, |meaning, ingest| {
+            recalld::view::refresh(meaning, ingest, root, true)
+        }),
+        Task::Verify => report(root, |meaning, ingest| {
+            recalld::verify::run(meaning, ingest, root)
+        }),
     }
 }
 

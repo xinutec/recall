@@ -2,8 +2,7 @@
 //! `ingest.sqlite`, and the only constructor of a [`ClipId`] from storage.
 //!
 //! A stored file gets its clip from the database itself (the
-//! `segments_have_clips` trigger, `ingest_schema`). This module adds what a
-//! trigger cannot know: a rename that must keep the id.
+//! `segments_have_clips` trigger, `ingest_schema`).
 
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashMap;
@@ -21,8 +20,6 @@ crate::statements! {
     BY_PATH: Ingest =
         "SELECT id, source, start_us, filename, path FROM clips WHERE path = ?1";
     FORGET_SOURCE: Ingest = "DELETE FROM clips WHERE source = ?1";
-    RENAME: Ingest =
-        "UPDATE clips SET filename = ?2, path = ?3 WHERE filename = ?1";
     CENSUS_CLIPS: Ingest = "SELECT count(*) FROM clips";
     CENSUS_SEGMENTS_WITHOUT: Ingest =
         "SELECT count(*) FROM segments s WHERE NOT EXISTS (SELECT 1 FROM clips c WHERE c.filename = s.filename)";
@@ -154,22 +151,6 @@ fn relative<'a>(root: &Path, path: &'a str) -> Option<&'a str> {
 /// If the store refuses.
 pub fn forget_source(ingest: &Connection, source: &str) -> rusqlite::Result<usize> {
     FORGET_SOURCE.execute(ingest, [source])
-}
-
-/// A stored file renamed (`.wav` to `.phone.flac`): the clip follows, keeping
-/// its id. Run before the new name's `segments` row is inserted, so the
-/// trigger finds the clip there and adds none.
-pub fn rename(ingest: &Connection, old: &str, new: &str) -> Result<usize, ClipError> {
-    let Some(existing) = by_filename(ingest, old)? else {
-        return Ok(0);
-    };
-    let dir = existing.path.rsplit_once('/').map_or("", |(dir, _)| dir);
-    let path = if dir.is_empty() {
-        new.to_owned()
-    } else {
-        format!("{dir}/{new}")
-    };
-    Ok(RENAME.execute(ingest, (old, new, path))?)
 }
 
 /// Whether every stored file and every meaning-plane audio row has a clip.
