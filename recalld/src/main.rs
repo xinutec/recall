@@ -356,46 +356,29 @@ fn spawn_view(root: PathBuf) {
     tokio::spawn(async move {
         let mut all = true;
         loop {
-            PASSES.begin("view", chrono::Utc::now());
             let pass_root = root.clone();
-            let done = tokio::task::spawn_blocking(move || {
+            let job = move || {
                 let meaning = recalld::work::open_write(&pass_root)?;
                 let ingest = recalld::store::open(&pass_root)?;
                 ingest.busy_timeout(std::time::Duration::from_mins(2))?;
                 recalld::view::refresh(&meaning, &ingest, &pass_root, all)
                     .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))
-            })
-            .await;
-            let problem = match done {
-                Ok(Ok(done)) => {
-                    if all
-                        || done.written > 0
-                        || !done.unreadable.is_empty()
-                        || !done.failed.is_empty()
-                    {
-                        tracing::info!(
-                            all,
-                            rendered = done.rendered,
-                            written = done.written,
-                            unreadable = done.unreadable.len(),
-                            failed = done.failed.len(),
-                            live = done.live_shown,
-                            "view: refreshed"
-                        );
-                    }
-                    all = false;
-                    view_problem(&done)
-                }
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "view: refresh failed");
-                    Some(err.to_string())
-                }
-                Err(err) => {
-                    tracing::error!(%err, "view: task failed");
-                    Some(err.to_string())
-                }
             };
-            PASSES.ended("view", chrono::Utc::now(), problem);
+            if let Some(done) = PASSES.run("view", job, view_problem).await {
+                if all || done.written > 0 || !done.unreadable.is_empty() || !done.failed.is_empty()
+                {
+                    tracing::info!(
+                        all,
+                        rendered = done.rendered,
+                        written = done.written,
+                        unreadable = done.unreadable.len(),
+                        failed = done.failed.len(),
+                        live = done.live_shown,
+                        "view: refreshed"
+                    );
+                }
+                all = false;
+            }
             tokio::time::sleep(EVERY).await;
         }
     });
@@ -424,9 +407,8 @@ fn spawn_enroller(root: PathBuf) {
     PASSES.register("enrol", EVERY, chrono::Utc::now());
     tokio::spawn(async move {
         loop {
-            PASSES.begin("enrol", chrono::Utc::now());
             let pass_root = root.clone();
-            let done = tokio::task::spawn_blocking(move || {
+            let job = move || {
                 let ingest = recalld::store::open(&pass_root)?;
                 let meaning = recalld::work::open_write(&pass_root)?;
                 let now = chrono::Utc::now();
@@ -442,31 +424,19 @@ fn spawn_enroller(root: PathBuf) {
                     WRITE,
                 )?;
                 Ok::<_, rusqlite::Error>((queued, pass))
-            })
-            .await;
-            let problem = match done {
-                // A pass that only finds stale spans must still log.
-                Ok(Ok((queued, pass))) if queued + pass.prints + pass.stale > 0 => {
-                    tracing::info!(
-                        queued,
-                        clips = pass.clips,
-                        prints = pass.prints,
-                        stale = pass.stale,
-                        "enrol: pass"
-                    );
-                    None
-                }
-                Ok(Ok(_)) => None,
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "enrol: pass failed");
-                    Some(err.to_string())
-                }
-                Err(err) => {
-                    tracing::error!(%err, "enrol: task failed");
-                    Some(err.to_string())
-                }
             };
-            PASSES.ended("enrol", chrono::Utc::now(), problem);
+            // A pass that only finds stale spans must still log.
+            if let Some((queued, pass)) = PASSES.run("enrol", job, |_| None).await
+                && queued + pass.prints + pass.stale > 0
+            {
+                tracing::info!(
+                    queued,
+                    clips = pass.clips,
+                    prints = pass.prints,
+                    stale = pass.stale,
+                    "enrol: pass"
+                );
+            }
             tokio::time::sleep(EVERY).await;
         }
     });
@@ -505,27 +475,16 @@ fn spawn_speech_scanner(root: PathBuf) {
     PASSES.register("speech", IDLE, chrono::Utc::now());
     tokio::spawn(async move {
         loop {
-            PASSES.begin("speech", chrono::Utc::now());
             let batch_root = root.clone();
-            let wrote =
-                tokio::task::spawn_blocking(move || recalld::speech::scan_once(&batch_root, BATCH))
-                    .await;
-            let (problem, pause) = match wrote {
-                Ok(Ok(0)) => (None, Some(IDLE)),
-                Ok(Ok(n)) => {
+            let job = move || recalld::speech::scan_once(&batch_root, BATCH);
+            let pause = match PASSES.run("speech", job, |_| None).await {
+                Some(0) => Some(IDLE),
+                Some(n) => {
                     tracing::info!(measured = n, "speech: batch complete");
-                    (None, None)
+                    None
                 }
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "speech: scan failed; backing off");
-                    (Some(err.to_string()), Some(BACKOFF))
-                }
-                Err(err) => {
-                    tracing::error!(%err, "speech: task failed; backing off");
-                    (Some(err.to_string()), Some(BACKOFF))
-                }
+                None => Some(BACKOFF),
             };
-            PASSES.ended("speech", chrono::Utc::now(), problem);
             if let Some(pause) = pause {
                 tokio::time::sleep(pause).await;
             }
@@ -542,9 +501,8 @@ fn spawn_segment_deriver(root: PathBuf) {
     PASSES.register("segment-derive", EVERY, chrono::Utc::now());
     tokio::spawn(async move {
         loop {
-            PASSES.begin("segment-derive", chrono::Utc::now());
             let pass_root = root.clone();
-            let done = tokio::task::spawn_blocking(move || {
+            let job = move || {
                 let ingest = recalld::store::open(&pass_root)?;
                 let meaning = recalld::work::open_write(&pass_root)?;
                 let now = chrono::Utc::now();
@@ -553,24 +511,12 @@ fn spawn_segment_deriver(root: PathBuf) {
                     tracing::info!(followed, "segments: diarize jobs caught up");
                 }
                 recalld::queue::derive_segment_jobs(&ingest, &meaning, now, BATCH)
-            })
-            .await;
-            let problem = match done {
-                Ok(Ok(0)) => None,
-                Ok(Ok(queued)) => {
-                    tracing::info!(queued, "segments: transcribe jobs derived");
-                    None
-                }
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "segment derive: pass failed");
-                    Some(err.to_string())
-                }
-                Err(err) => {
-                    tracing::error!(%err, "segment derive: task failed");
-                    Some(err.to_string())
-                }
             };
-            PASSES.ended("segment-derive", chrono::Utc::now(), problem);
+            if let Some(queued) = PASSES.run("segment-derive", job, |_| None).await
+                && queued > 0
+            {
+                tracing::info!(queued, "segments: transcribe jobs derived");
+            }
             tokio::time::sleep(EVERY).await;
         }
     });
@@ -596,42 +542,29 @@ fn spawn_segment_registrar(root: PathBuf) {
     PASSES.register("segment-register", EVERY, chrono::Utc::now());
     tokio::spawn(async move {
         loop {
-            PASSES.begin("segment-register", chrono::Utc::now());
             let pass_root = root.clone();
-            let done = tokio::task::spawn_blocking(move || {
+            let job = move || {
                 let ingest = recalld::store::open(&pass_root)?;
                 let meaning = recalld::work::open_write(&pass_root)?;
                 let now = audiocore::instant::Stamp::now();
                 recalld::registrar::register_segments(&meaning, &ingest, &pass_root, &now, BATCH)
-            })
-            .await;
-            let mut problem = None;
-            match done {
-                // Not `waiting` (an unknown recorder keeps it high) or `retired`
-                // (a hash lookup); `covered` cost a full decode, so a rising
-                // count shows repeated decoding.
-                Ok(Ok(pass)) if pass.added + pass.unreadable + pass.covered > 0 => {
-                    tracing::info!(
-                        added = pass.added,
-                        covered = pass.covered,
-                        retired = pass.retired,
-                        probed = pass.probed,
-                        unreadable = pass.unreadable,
-                        waiting = pass.waiting,
-                        "segments: registered for playback"
-                    );
-                }
-                Ok(Ok(_)) => {}
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "segment register: pass failed");
-                    problem = Some(err.to_string());
-                }
-                Err(err) => {
-                    tracing::error!(%err, "segment register: task failed");
-                    problem = Some(err.to_string());
-                }
+            };
+            // Not `waiting` (an unknown recorder keeps it high) or `retired`
+            // (a hash lookup); `covered` cost a full decode, so a rising
+            // count shows repeated decoding.
+            if let Some(pass) = PASSES.run("segment-register", job, |_| None).await
+                && pass.added + pass.unreadable + pass.covered > 0
+            {
+                tracing::info!(
+                    added = pass.added,
+                    covered = pass.covered,
+                    retired = pass.retired,
+                    probed = pass.probed,
+                    unreadable = pass.unreadable,
+                    waiting = pass.waiting,
+                    "segments: registered for playback"
+                );
             }
-            PASSES.ended("segment-register", chrono::Utc::now(), problem);
             tokio::time::sleep(EVERY).await;
         }
     });

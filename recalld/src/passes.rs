@@ -73,6 +73,38 @@ impl Passes {
         });
     }
 
+    /// One run of pass `name`: `job` off the async threads, its end reported
+    /// here and a failure or panic logged. `problem` names what a run that
+    /// finished still got wrong. `None` when it did not finish.
+    pub async fn run<T, E>(
+        &self,
+        name: &'static str,
+        job: impl FnOnce() -> Result<T, E> + Send + 'static,
+        problem: impl FnOnce(&T) -> Option<String>,
+    ) -> Option<T>
+    where
+        T: Send + 'static,
+        E: std::fmt::Display + Send + 'static,
+    {
+        self.begin(name, Utc::now());
+        let (done, error) = match tokio::task::spawn_blocking(job).await {
+            Ok(Ok(done)) => {
+                let error = problem(&done);
+                (Some(done), error)
+            }
+            Ok(Err(err)) => {
+                tracing::warn!(pass = name, %err, "pass failed");
+                (None, Some(err.to_string()))
+            }
+            Err(err) => {
+                tracing::error!(pass = name, %err, "pass panicked");
+                (None, Some(err.to_string()))
+            }
+        };
+        self.ended(name, Utc::now(), error);
+        done
+    }
+
     #[must_use]
     pub fn report(&self) -> Vec<Pass> {
         let stamp = |t: DateTime<Utc>| t.to_rfc3339_opts(SecondsFormat::Secs, true);
