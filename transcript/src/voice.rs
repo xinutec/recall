@@ -34,9 +34,10 @@ fn cosine(a: &[f64], b: &[f64]) -> f64 {
 
 /// Name the voice in `embedding`, or `None` when nobody is enrolled.
 ///
-/// No threshold: a stranger can score 0.95 against an enrolled voice, so no
-/// cutoff separates true from false. The score is reported and the reader
-/// decides.
+/// No threshold here: the score is reported, and the read side decides what
+/// to show (recalld's `reads::SHOWN_GUESS_MIN`). It is a softmax over the
+/// people enrolled, so a stranger resembling exactly one of them can still
+/// score high.
 #[must_use]
 pub fn match_one(embedding: &[f64], voiceprints: &[Voiceprint]) -> Option<Guess> {
     // A NaN ties every person, so the name would be row order: no guess.

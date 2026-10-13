@@ -120,21 +120,21 @@ fn asked_for_hidden_lines_a_page_shows_them_with_their_reason() {
 
 #[test]
 fn a_human_label_wins_and_drops_the_score_a_guess_keeps_it() {
-    // A guess carries its score ("Alice 31%"); a person's name carries none.
+    // A guess carries its score ("Alice 62%"); a person's name carries none.
     let conn = db();
     turn(
         &conn,
         1,
         "2026-09-01T10:00:00+00:00",
         "confirmed",
-        &[("speaker_label", "Alex"), ("speaker_score", "0.9")],
+        &[("speaker_label", "Alex"), ("speaker_score", "0.1")],
     );
     turn(
         &conn,
         2,
         "2026-09-01T10:00:01+00:00",
         "guessed",
-        &[("speaker_guess", "Sam"), ("speaker_score", "0.31")],
+        &[("speaker_guess", "Sam"), ("speaker_score", "0.62")],
     );
 
     let page = reads::timeline(&conn, 50, None).expect("timeline");
@@ -150,7 +150,74 @@ fn a_human_label_wins_and_drops_the_score_a_guess_keeps_it() {
 
     assert_eq!(guessed.speaker.as_deref(), Some("Sam"));
     assert!(!guessed.speaker_confirmed);
-    assert_eq!(guessed.speaker_confidence, Some(0.31));
+    assert_eq!(guessed.speaker_confidence, Some(0.62));
+}
+
+#[test]
+fn a_weak_guess_is_shown_as_nobody_known_and_stays_stored() {
+    // A visitor scores low against everyone enrolled; under the bar the line
+    // shows no name rather than a household member's.
+    let conn = db();
+    for (id, score) in [(1, "0.31"), (2, "0.4"), (3, "0.39")] {
+        turn(
+            &conn,
+            id,
+            &format!("2026-09-01T10:00:0{id}+00:00"),
+            "words",
+            &[("speaker_guess", "Sam"), ("speaker_score", score)],
+        );
+    }
+
+    let page = reads::timeline(&conn, 50, None).expect("timeline");
+    let shown: Vec<(Option<&str>, Option<f64>)> = page
+        .items
+        .iter()
+        .map(|t| (t.speaker.as_deref(), t.speaker_confidence))
+        .collect();
+    assert_eq!(
+        shown,
+        [(None, None), (Some("Sam"), Some(0.4)), (None, None)],
+        "the bar itself still shows"
+    );
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT speaker_guess FROM rendered_lines WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .expect("row");
+    assert_eq!(
+        stored.as_deref(),
+        Some("Sam"),
+        "the guess is kept, only not shown"
+    );
+}
+
+#[test]
+fn a_weak_guess_from_another_mic_is_not_shown_either() {
+    // A folded moment's strongest match may come from another mic's version.
+    let row = reads::Segment {
+        id: 1,
+        start_utc: "2026-09-01T10:00:00+00:00".to_owned(),
+        end_utc: "2026-09-01T10:00:02+00:00".to_owned(),
+        text: "words".to_owned(),
+        language: None,
+        asr_confidence: None,
+        asr_model: None,
+        speaker_label: None,
+        speaker_guess: None,
+        speaker_score: None,
+        speaker_cluster: None,
+        tier: recalld::line::Stage::Diarized,
+        hidden_reason: None,
+        source_id: None,
+        audio_segment_id: None,
+        words_checked: false,
+    };
+    let out = reads::to_out_with(&row, Some((Some("Sam".to_owned()), Some(0.2))));
+    assert_eq!((out.speaker, out.speaker_confidence), (None, None));
+    let out = reads::to_out_with(&row, Some((Some("Sam".to_owned()), Some(0.7))));
+    assert_eq!(out.speaker.as_deref(), Some("Sam"));
 }
 
 #[test]

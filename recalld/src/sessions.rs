@@ -96,7 +96,7 @@ pub struct SessionsOut {
 }
 
 /// Every uploaded session, newest first. Only names a person gave are listed
-/// as speakers; guesses have no trustworthy threshold.
+/// as speakers; a guess, however strong, is not a confirmation.
 pub fn sessions(conn: &Connection) -> rusqlite::Result<SessionsOut> {
     let mut stmt = SESSIONS.prepare(conn)?;
     let rows = stmt.query_map([UPLOAD_KIND], |r| {

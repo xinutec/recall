@@ -243,12 +243,18 @@ result is kept.
 ### Speaker attribution: identification, not diarization
 
 For the household, the question per stretch of speech is which of a few known
-people it is, not how many voices there are. Whisper's own segment boundaries
-fall at speaker changes nearly every time; pyannote's spans cover about a fifth
-of the speech in a busy clip. So the direction (#1711) is to embed each Whisper
-segment, match it to the enrolled prints, and use cross-mic energy as a
-position prior, with a small model fitted on the household's labelled turns.
-Pyannote's clustering stays for meetings: unknown speakers, one microphone.
+people it is, not how many voices there are. Pyannote separates the voices in a
+clip; each voice's embedding is matched to the enrolled prints, best cosine per
+person, softmax across people (`transcript::voice`). Words outside every turn go
+to the nearest one, so uncovered speech still reaches a voice. A person's naming
+wins over its span, and naming a voice names it for the session.
+
+A guess under `reads::SHOWN_GUESS_MIN` (0.40) is shown as no name: requirement
+3's "unknown" for visitors. Scored on what people named, leaving each clip's own
+prints out (`examples/naming_census.rs`), household microphones are named right
+about nine times in ten. In meetings the misses are mostly short replies spoken
+over the other person, which pyannote's exclusive turns give to one voice; that
+is accepted (#1711).
 
 ## runner and the model shims
 
