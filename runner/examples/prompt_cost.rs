@@ -1,5 +1,5 @@
 //! What the vocabulary prompt costs on short clips: names put into audio that
-//! has none (#1665). `prompt_spelling` measures what it buys.
+//! has none. `prompt_names` measures what it buys.
 //!
 //! The prompt lists household names so Whisper spells them right, and on audio
 //! it cannot place, Whisper reaches for them: over the archive, the live tier

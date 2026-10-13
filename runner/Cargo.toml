@@ -30,6 +30,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 
 [dev-dependencies]
 recalld = { path = "../recalld" }
+transcript = { path = "../transcript" }
 # The end-to-end test reads back the row recalld wrote: a 200 says stored,
 # not correct.
 rusqlite = { version = "0.40", features = ["bundled"] }

@@ -228,10 +228,13 @@ const MAX_PROMPT_CHARS: usize = 600;
 /// the vocabulary, cut at the length cap.
 ///
 /// Kept for short clips too. On audio it cannot place, the model may emit a
-/// prompt name (about 1% of clips under two seconds), but names are spelled
-/// right about 4x as often with it (few samples). `quality::is_bare_name`
-/// refuses a live turn that is only a name. Re-measure with the runner's
-/// `prompt_cost` and `prompt_spelling` examples.
+/// prompt name (about 1% of clips under two seconds), but on short fragments
+/// names were spelled right about 4x as often with it (few samples).
+/// `quality::is_bare_name` refuses a live turn that is only a name. On whole
+/// minutes, as the archive pass decodes them, it buys little: of 54 glossary
+/// words in people's corrections it found 17, against 14 without and 15 with
+/// the words as a sentence. Re-measure with the runner's `prompt_cost` and
+/// `prompt_names` examples.
 pub fn initial_prompt(conn: &Connection) -> rusqlite::Result<Option<String>> {
     let mut ordered: Vec<String> = known_speaker_names(conn)?.names;
     ordered.extend(
