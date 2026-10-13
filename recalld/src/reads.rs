@@ -158,18 +158,10 @@ fn to_out(segment: &Segment) -> TranscriptOut {
     to_out_with(segment, None)
 }
 
-/// The weakest voiceprint guess shown as a name. Below it the line names
-/// nobody, so a visitor is not given a household member's name: scored on
-/// what people named, a guest scored about 0.35 and household voices a
-/// median 0.60; this bar keeps 85% of right household guesses and hides
-/// about half the wrong ones (`examples/naming_census.rs`).
-pub const SHOWN_GUESS_MIN: f64 = 0.40;
-
 /// The display rules: a person's label wins and carries no score; otherwise
-/// the guess with its strength ("Alice 62%"), if at least
-/// [`SHOWN_GUESS_MIN`], else no name. The stored guess is kept either way.
-/// `guess` overrides the turn's own for a folded moment, whose strongest
-/// match may sit on another mic's version; a person's label still wins.
+/// the guess with its strength ("Alice 31%", not "unknown"). `guess` overrides
+/// the turn's own for a folded moment, whose strongest match may sit on
+/// another mic's version; a person's label still wins.
 pub fn to_out_with(
     segment: &Segment,
     guess: Option<(Option<String>, Option<f64>)>,
@@ -177,14 +169,10 @@ pub fn to_out_with(
     let confirmed = segment.speaker_label.is_some();
     let (speaker, speaker_confidence) = if confirmed {
         (segment.speaker_label.clone(), None)
+    } else if let Some((name, score)) = guess {
+        (name, score)
     } else {
-        let (name, score) =
-            guess.unwrap_or_else(|| (segment.speaker_guess.clone(), segment.speaker_score));
-        if score.is_some_and(|s| s >= SHOWN_GUESS_MIN) {
-            (name, score)
-        } else {
-            (None, None)
-        }
+        (segment.speaker_guess.clone(), segment.speaker_score)
     };
     TranscriptOut {
         id: segment.id,

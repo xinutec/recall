@@ -64,9 +64,8 @@ cookie, as in `cli/src/api.rs`.
 ## Editing in the app
 
 Fixing is in the web UI. The timeline (`/`) and a session (`/sessions/<id>`) show
-turns the same way: paragraphs per speaker, a guess in italics with its strength
-(a guess under 40% shows as unknown, so a visitor is not given a household
-name), grey lines not yet speaker-separated. Every edit supersedes the old turn; nothing is
+turns the same way: paragraphs per speaker, a guess in italics with its strength,
+grey lines not yet speaker-separated. Every edit supersedes the old turn; nothing is
 deleted, and a later pass never overwrites it.
 
 Tapping a line opens its sheet at the bottom of the screen:
