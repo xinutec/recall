@@ -37,26 +37,21 @@ fn label(conn: &Connection, second: i64, speaker: &str, enrol: bool) -> i64 {
 }
 
 #[test]
-fn the_roster_never_offers_a_diarization_cluster_tag_as_a_name() {
-    // A diarization tag is not a person to offer.
+fn the_roster_is_the_enrolled_names_and_the_names_on_lines() {
     let conn = db();
     conn.execute("INSERT INTO speakers (id, name) VALUES (1, 'Oskar')", ())
         .expect("speaker");
     conn.execute(
         "INSERT INTO rendered_lines (id, start_utc, end_utc, text, asr_model, speaker_label, tier)
-         VALUES (1, '2026-06-14T18:00:00+00:00', '2026-06-14T18:00:01+00:00', 'x', 'whisper', 'SPEAKER_01', 'diarized'),
+         VALUES (1, '2026-06-14T18:00:00+00:00', '2026-06-14T18:00:01+00:00', 'x', 'whisper', 'Oskar', 'diarized'),
                 (2, '2026-06-14T18:00:01+00:00', '2026-06-14T18:00:02+00:00', 'y', 'whisper', 'Dr Lee', 'diarized')",
         (),
     )
-    .expect("turns");
+    .expect("lines");
 
-    let names = known_speaker_names(&conn).expect("roster").names;
-
-    assert!(names.contains(&"Oskar".to_string()));
-    assert!(names.contains(&"Dr Lee".to_string()));
-    assert!(
-        !names.iter().any(|n| n.starts_with("SPEAKER")),
-        "got {names:?}"
+    assert_eq!(
+        known_speaker_names(&conn).expect("roster").names,
+        vec!["Dr Lee", "Oskar"]
     );
 }
 

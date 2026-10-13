@@ -4,9 +4,9 @@
 //! ffmpeg, sox and (for `enhance`) `deep-filter` are runtime dependencies the
 //! Dockerfile installs; a missing one fails only on play.
 //!
-//! A rough turn (a whole phrase) gets a wide window for lead-in; a precise one
-//! (diarized, or with word timings) a tight one, so it does not pull in the
-//! neighbouring speaker.
+//! A person's line, placed where they put it, gets a wide window for lead-in;
+//! a model line, whose span is its words' timings, a tight one, so it does not
+//! pull in the neighbouring speaker.
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -23,11 +23,11 @@ crate::statements! {
          WHERE t.id = ?1";
 }
 
-/// Lead-in/-out for a rough turn.
+/// Lead-in/-out for a person's line.
 const PAD_S: f64 = 1.5;
-/// Minimum length for a rough turn.
+/// Minimum length for a person's line.
 const MIN_S: f64 = 5.0;
-/// Pad for a precise cutout, whose boundaries are still approximate.
+/// Pad for a model line, whose word timings are still approximate.
 const TIGHT_PAD_S: f64 = 0.2;
 
 /// `pad` on each side of a span (seconds into its file), then widened
@@ -66,12 +66,8 @@ pub fn placement(conn: &Connection, transcript_id: i64) -> rusqlite::Result<Opti
         return Ok(None);
     };
     let asr_model: Option<String> = row.get(4)?;
-    // A model line's span is its words' timings; a person's span is where they
-    // put it, so it gets the padding.
-    let precise = !matches!(
-        asr_model.as_deref(),
-        Some(crate::line::HUMAN_MODEL | crate::line::LIVE_MODEL)
-    );
+    // A live line has no audio row, so the join leaves only these two.
+    let precise = asr_model.as_deref() != Some(crate::line::HUMAN_MODEL);
     Ok(Some(Placement {
         path: PathBuf::from(row.get::<_, String>(0)?),
         audio_segment_id: row.get(1)?,

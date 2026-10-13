@@ -20,7 +20,7 @@ crate::statements! {
         "SELECT name FROM speakers \
          UNION \
          SELECT DISTINCT speaker_label FROM rendered_lines \
-         WHERE speaker_label IS NOT NULL AND speaker_label NOT LIKE 'SPEAKER%' \
+         WHERE speaker_label IS NOT NULL \
          ORDER BY name COLLATE NOCASE";
 }
 
@@ -34,8 +34,7 @@ pub struct SpeakerNames {
     pub names: Vec<String>,
 }
 
-/// Every name in use: enrolled voices and human labels. Cluster tags
-/// (`SPEAKER_00`) are not people, so they are not offered.
+/// Every name in use: enrolled voices and the names people gave lines.
 pub fn known_speaker_names(conn: &Connection) -> rusqlite::Result<SpeakerNames> {
     let mut stmt = SPEAKER_NAMES.prepare(conn)?;
     let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
