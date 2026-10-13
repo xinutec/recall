@@ -9,6 +9,7 @@ use crate::store;
 use audiocore::vad::{Detector, Region};
 use rusqlite::Connection;
 use std::path::Path;
+use transcript::render::Speech;
 
 crate::statements! {
     SILENT_REGIONS: Ingest =
@@ -123,42 +124,31 @@ fn regions_json(regions: Option<&[Region]>) -> rusqlite::Result<String> {
     serde_json::to_string(&spans).map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))
 }
 
-/// Stored regions, or `None` for JSON `null` (could not look) or garbage.
-pub fn parse_regions(json: &str) -> Option<Vec<Region>> {
-    let spans: Option<Vec<[f64; 2]>> = serde_json::from_str(json).ok()?;
-    Some(
-        spans?
-            .into_iter()
-            .map(|[start, end]| Region { start, end })
-            .collect(),
-    )
-}
-
-/// What the speech pass found in a clip.
-#[derive(Debug, Clone, Default)]
-pub struct Heard {
-    /// Seconds of speech in the whole clip; negative when it could not look.
-    pub seconds: Option<f64>,
-    /// Where that speech is, seconds from the clip's start. `None` until the
-    /// pass has placed it.
-    pub regions: Option<Vec<Region>>,
-}
-
-/// What the pass found in one blob; each part `None` until measured.
+/// What the pass found in one clip, as render reads it: each part `None`
+/// until measured, and seconds `None` too where it could not decode.
+/// Regions are stored as JSON `[[start, end], ...]`, or `null` when the clip
+/// could not be decoded.
 ///
 /// # Errors
 /// On database failure.
-pub fn heard(ingest: &Connection, filename: &str) -> rusqlite::Result<Heard> {
+pub fn evidence(ingest: &Connection, filename: &str) -> rusqlite::Result<Speech> {
     use rusqlite::OptionalExtension as _;
-    let row: Option<(f64, Option<String>)> = HEARD
-        .query_row(ingest, [filename], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?;
-    let Some((seconds, regions)) = row else {
-        return Ok(Heard::default());
+    let Some((seconds, regions)) = HEARD
+        .query_row(ingest, [filename], |r| {
+            Ok((r.get::<_, f64>(0)?, r.get::<_, Option<String>>(1)?))
+        })
+        .optional()?
+    else {
+        return Ok(Speech::default());
     };
-    Ok(Heard {
-        seconds: Some(seconds),
-        regions: regions.as_deref().and_then(parse_regions),
+    let regions = regions.and_then(|raw| {
+        serde_json::from_str::<Option<Vec<(f64, f64)>>>(&raw)
+            .ok()
+            .flatten()
+    });
+    Ok(Speech {
+        seconds: (seconds >= 0.0).then_some(seconds),
+        regions,
     })
 }
 

@@ -117,7 +117,6 @@ pub const ALL: &[(&str, &[Sql])] = &[
     ("reads", crate::reads::STATEMENTS),
     ("registrar", crate::registrar::STATEMENTS),
     ("record_health", crate::record_health::STATEMENTS),
-    ("rendering", crate::rendering::STATEMENTS),
     ("results", crate::results::STATEMENTS),
     ("retranscribe", crate::retranscribe::STATEMENTS),
     ("sessions", crate::sessions::STATEMENTS),

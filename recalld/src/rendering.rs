@@ -6,16 +6,12 @@
 
 use crate::results::{self, Outcome};
 use audiocore::shim::{asr, voices};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use transcript::render::{
     self, Heard, HeardSegment, HeardWord, Rendered, Speech, VoiceTurn, Voices,
 };
 use transcript::voice::Voiceprint;
 use transcript::{Clip, Edit};
-
-crate::statements! {
-    SPEECH: Ingest = "SELECT speech_seconds, regions FROM segment_speech WHERE filename = ?1";
-}
 
 /// What a clip's lines are made from, apart from the edit log and the prints,
 /// which are shared by every clip and loaded once.
@@ -39,7 +35,7 @@ pub fn facts(ingest: &Connection, clip: &Clip) -> Result<Facts, results::ResultE
     Ok(Facts {
         heard,
         voices,
-        speech: speech(ingest, &clip.filename)?,
+        speech: crate::speech::evidence(ingest, &clip.filename)?,
     })
 }
 
@@ -101,26 +97,4 @@ fn voices_of(diarization: &voices::Diarization) -> Voices {
             .map(|s| (s.speaker.clone(), s.vector.clone()))
             .collect(),
     }
-}
-
-/// The detector's evidence. Regions are stored as JSON `[[start, end], ...]`,
-/// or JSON `null` when the clip could not be decoded; NULL when not yet looked.
-fn speech(ingest: &Connection, filename: &str) -> rusqlite::Result<Speech> {
-    let Some((seconds, regions)) = SPEECH
-        .query_row(ingest, [filename], |r| {
-            Ok((r.get::<_, f64>(0)?, r.get::<_, Option<String>>(1)?))
-        })
-        .optional()?
-    else {
-        return Ok(Speech::default());
-    };
-    let regions = regions.and_then(|raw| {
-        serde_json::from_str::<Option<Vec<(f64, f64)>>>(&raw)
-            .ok()
-            .flatten()
-    });
-    Ok(Speech {
-        seconds: (seconds >= 0.0).then_some(seconds),
-        regions,
-    })
 }

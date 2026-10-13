@@ -14,12 +14,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 crate::statements! {
-    UPSERT_SOURCE: Meaning =
-        "INSERT INTO sources (id, name, kind) VALUES (?1, ?2, ?3) \
-         ON CONFLICT(id) DO UPDATE SET \
-             kind = excluded.kind, \
-             name = CASE WHEN sources.name = sources.id \
-                         THEN excluded.name ELSE sources.name END";
+    ADD_SOURCE: Meaning =
+        "INSERT INTO sources (id, name, kind) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO NOTHING";
     ADD_AUDIO_SEGMENT: Meaning =
         "INSERT OR IGNORE INTO audio_segments \
              (source_id, path, start_utc, end_utc, sample_rate, channels) \
@@ -42,7 +38,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[derive(Debug)]
 pub enum UploadError {
-    UnsupportedType(String),
     /// ffprobe or ffmpeg could not read it.
     Unreadable,
     /// The client's `start` is not an ISO-8601 instant.
@@ -237,9 +232,8 @@ pub fn deliver(
     )
 }
 
-/// Register the source and its one audio segment. An upsert: the source may
-/// exist as `discovered` with its id as a placeholder name; a chosen title is
-/// kept.
+/// Register the source and its one audio segment. A re-upload keeps the title
+/// the session already has.
 pub fn register(
     conn: &Connection,
     source: &str,
@@ -248,7 +242,7 @@ pub fn register(
     started: DateTime<Utc>,
     media: Media,
 ) -> Result<(), UploadError> {
-    UPSERT_SOURCE.execute(conn, (source, name, UPLOAD_KIND))?;
+    ADD_SOURCE.execute(conn, (source, name, UPLOAD_KIND))?;
     let end = started + chrono::Duration::microseconds((media.duration_s * 1e6).round() as i64);
     ADD_AUDIO_SEGMENT.execute(
         conn,
@@ -445,11 +439,6 @@ pub async fn create_session_route(
         Ok(Err(UploadError::Unreadable)) => {
             (StatusCode::BAD_REQUEST, "could not read audio").into_response()
         }
-        Ok(Err(UploadError::UnsupportedType(suffix))) => (
-            StatusCode::BAD_REQUEST,
-            format!("unsupported audio type {suffix:?}"),
-        )
-            .into_response(),
         Ok(Err(UploadError::BadStart)) => {
             (StatusCode::BAD_REQUEST, "a valid ISO 8601 time is required").into_response()
         }

@@ -143,38 +143,6 @@ const MEDIA: Media = Media {
 };
 
 #[test]
-fn an_upload_corrects_a_kind_the_worker_already_guessed() {
-    // The source may exist as `discovered`; the list shows only uploads.
-    let conn = db();
-    conn.execute(
-        "INSERT INTO sources (id, name, kind) VALUES ('meeting-20260703-0950',
-             'meeting-20260703-0950', 'discovered')",
-        [],
-    )
-    .expect("the worker got there first");
-
-    register(
-        &conn,
-        "meeting-20260703-0950",
-        "Dr Lee RT",
-        std::path::Path::new("/data/x.mp3"),
-        at("2026-07-03T08:50:00+00:00"),
-        MEDIA,
-    )
-    .expect("registered");
-
-    let (kind, name): (String, String) = conn
-        .query_row(
-            "SELECT kind, name FROM sources WHERE id='meeting-20260703-0950'",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .expect("read back");
-    assert_eq!(kind, "upload");
-    assert_eq!(name, "Dr Lee RT", "the placeholder name is replaced");
-}
-
-#[test]
 fn a_title_the_user_chose_survives_a_re_registration() {
     // A name the user typed survives re-registration.
     let conn = db();

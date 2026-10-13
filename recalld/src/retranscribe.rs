@@ -84,7 +84,7 @@ pub fn candidates(ingest: &Connection, min_speech_s: f64) -> rusqlite::Result<Ve
         if looped.is_empty() {
             continue;
         }
-        let Some(regions) = crate::speech::heard(ingest, &filename)?.regions else {
+        let Some(regions) = crate::speech::evidence(ingest, &filename)?.regions else {
             continue;
         };
         let looped_speech_s: f64 = looped
@@ -92,7 +92,7 @@ pub fn candidates(ingest: &Connection, min_speech_s: f64) -> rusqlite::Result<Ve
             .flat_map(|&(a, b)| {
                 regions
                     .iter()
-                    .map(move |r| (b.min(r.end) - a.max(r.start)).max(0.0))
+                    .map(move |&(start, end)| (b.min(end) - a.max(start)).max(0.0))
             })
             .sum();
         if looped_speech_s > min_speech_s {

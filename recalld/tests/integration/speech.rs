@@ -221,10 +221,10 @@ fn the_scan_stores_where_the_speech_is_and_it_adds_up() {
     speech::scan_once(dir.path(), 10).expect("scan");
 
     let conn = store::open(dir.path()).expect("db");
-    let heard = speech::heard(&conn, "usb-20260905T120000.flac").expect("heard");
+    let heard = speech::evidence(&conn, "usb-20260905T120000.flac").expect("heard");
     let regions = heard.regions.expect("placed");
     assert!(!regions.is_empty());
-    let placed: f64 = regions.iter().map(|r| r.end - r.start).sum();
+    let placed: f64 = regions.iter().map(|(start, end)| end - start).sum();
     let total = heard.seconds.expect("measured");
     assert!(
         (placed - total).abs() < 1e-6,
@@ -254,20 +254,20 @@ fn a_measurement_from_before_regions_is_backfilled_after_new_clips() {
 
     // A batch of one goes to the new clip: the queue waits on it.
     assert_eq!(speech::scan_once(dir.path(), 1).expect("scan"), 1);
-    let old = speech::heard(&conn, "usb-20260901T120000.flac").expect("heard");
+    let old = speech::evidence(&conn, "usb-20260901T120000.flac").expect("heard");
     assert!(
         old.regions.is_none(),
         "backfilled before the new clip was measured"
     );
     assert!(
-        speech::heard(&conn, "usb-20260905T120000.wav")
+        speech::evidence(&conn, "usb-20260905T120000.wav")
             .expect("heard")
             .seconds
             .is_some()
     );
 
     assert_eq!(speech::scan_once(dir.path(), 1).expect("scan"), 1);
-    let old = speech::heard(&conn, "usb-20260901T120000.flac").expect("heard");
+    let old = speech::evidence(&conn, "usb-20260901T120000.flac").expect("heard");
     assert!(!old.regions.expect("backfilled").is_empty());
     assert_eq!(old.seconds, Some(20.0), "the stored total is left alone");
     assert_eq!(
@@ -295,6 +295,6 @@ fn a_segment_measured_silent_needs_no_second_look_for_its_regions() {
     .expect("old row");
     // Undecodable on disk: were it decoded again, it would read `null`.
     assert_eq!(speech::scan_once(dir.path(), 10).expect("scan"), 0);
-    let heard = speech::heard(&conn, "usb-20260905T120000.wav").expect("heard");
+    let heard = speech::evidence(&conn, "usb-20260905T120000.wav").expect("heard");
     assert_eq!(heard.regions.map(|r| r.len()), Some(0));
 }
