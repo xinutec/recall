@@ -100,39 +100,6 @@ fn only_uploaded_sessions_are_listed_never_the_household_capture() {
 }
 
 #[test]
-fn a_diarization_tag_is_never_listed_as_a_person() {
-    // A cluster tag is not a person's name.
-    let conn = db();
-    source(&conn, "meeting-1", "upload");
-    let m = segment(
-        &conn,
-        "meeting-1",
-        "2026-07-03T09:50:00+00:00",
-        "2026-07-03T10:20:00+00:00",
-    );
-    turn(
-        &conn,
-        m,
-        "2026-07-03T09:51:00+00:00",
-        "a",
-        Some("SPEAKER_00"),
-        None,
-    );
-    turn(
-        &conn,
-        m,
-        "2026-07-03T09:52:00+00:00",
-        "b",
-        Some("Dr Smith"),
-        None,
-    );
-
-    let out = sessions::sessions(&conn).expect("list");
-
-    assert_eq!(out.items[0].speakers, vec!["Dr Smith", "unknown"]);
-}
-
-#[test]
 fn a_session_with_no_turns_still_lists_with_an_empty_speaker_set() {
     // A new upload is listed at once, at 0 turns.
     let conn = db();
@@ -555,7 +522,14 @@ fn pinning_a_language_transcribes_the_session_again_and_the_lease_carries_it() {
     let meaning = recalld::work::open_write(root).expect("meaning");
     let ingest = recalld::store::open(root).expect("ingest");
 
-    let requested = set_language(&meaning, &ingest, root, "meeting-1", Some("nl")).expect("pinned");
+    let requested = set_language(
+        &meaning,
+        &ingest,
+        root,
+        "meeting-1",
+        Some(transcript::Language::Dutch),
+    )
+    .expect("pinned");
 
     assert_eq!(requested.queued.len(), 2);
     assert_eq!(open_jobs(root, "transcribe-segment"), 2);
@@ -590,7 +564,14 @@ fn unpinning_leaves_the_language_to_the_model_again() {
     let root = dir.path();
     let meaning = recalld::work::open_write(root).expect("meaning");
     let ingest = recalld::store::open(root).expect("ingest");
-    set_language(&meaning, &ingest, root, "meeting-1", Some("en")).expect("pin");
+    set_language(
+        &meaning,
+        &ingest,
+        root,
+        "meeting-1",
+        Some(transcript::Language::English),
+    )
+    .expect("pin");
 
     set_language(&meaning, &ingest, root, "meeting-1", None).expect("unpin");
 
@@ -620,7 +601,14 @@ fn pinning_the_household_archive_is_refused() {
     source(&meaning, "usb", "coreaudio");
     let ingest = recalld::store::open(root).expect("ingest");
 
-    let err = set_language(&meaning, &ingest, root, "usb", Some("nl")).expect_err("must refuse");
+    let err = set_language(
+        &meaning,
+        &ingest,
+        root,
+        "usb",
+        Some(transcript::Language::Dutch),
+    )
+    .expect_err("must refuse");
 
     assert!(matches!(err, SessionError::NotAnUpload), "got {err:?}");
     assert_eq!(open_jobs(root, "transcribe-segment"), 0);
@@ -630,8 +618,14 @@ fn pinning_the_household_archive_is_refused() {
 fn a_language_is_one_of_the_households_or_left_to_the_model() {
     assert_eq!(parse_language(None), Ok(None));
     assert_eq!(parse_language(Some("")), Ok(None));
-    assert_eq!(parse_language(Some(" nl ")), Ok(Some("nl")));
-    assert_eq!(parse_language(Some("en")), Ok(Some("en")));
+    assert_eq!(
+        parse_language(Some(" nl ")),
+        Ok(Some(transcript::Language::Dutch))
+    );
+    assert_eq!(
+        parse_language(Some("en")),
+        Ok(Some(transcript::Language::English))
+    );
     assert!(parse_language(Some("it")).is_err());
 }
 

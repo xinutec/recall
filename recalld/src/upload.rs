@@ -321,7 +321,7 @@ struct Form {
     bytes: Vec<u8>,
     title: String,
     start: String,
-    /// `nl`, `en`, or empty for the model's guess (`sessions::LANGUAGES`).
+    /// `nl`, `en`, or empty for the model's guess (`sessions::parse_language`).
     language: String,
 }
 
@@ -422,10 +422,7 @@ pub async fn create_session_route(
         let ingest = crate::store::open(&root)?;
         register(&meaning, &source, &name, &path, started, media)?;
         // Before the ingest row, so the first transcription leases with it.
-        if let (Some(language), Some(id)) = (
-            language.and_then(transcript::Language::from_code),
-            transcript::SourceId::parse(&source),
-        ) {
+        if let (Some(language), Some(id)) = (language, transcript::SourceId::parse(&source)) {
             crate::labels_write::pin_language(&meaning, &ingest, &root, &id, Some(language))
                 .map_err(|err| {
                     UploadError::Db(rusqlite::Error::ToSqlConversionFailure(err.into()))

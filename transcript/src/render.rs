@@ -16,6 +16,8 @@
 //! 5. A line's speaker is, in order: a person's naming of that stretch, a
 //!    person's naming of that voice, the voiceprint guess, the diarized label.
 //!    A person's words take the voice diarized at their midpoint, like a word.
+//! 6. A model line is doubted, its confidence zero, when it is mostly in a
+//!    foreign script, implausibly slow, or in a language not the household's.
 
 use crate::quality::{NEAR_SILENT_S, is_implausibly_slow, is_silence_phrase, speech_inside};
 use crate::text::{is_repetition_loop, is_wordless};
@@ -616,21 +618,13 @@ fn by_sentence(words: &[Word], resolved: &[Option<Speaker>]) -> Vec<Option<Speak
             continue;
         }
         let named = |k: usize| matches!(resolved[k], Some(Speaker::Named { .. }));
-        let mut weight: Vec<(Option<&Speaker>, i64)> = Vec::new();
-        for k in (start..=end).filter(|&k| !named(k)) {
-            let who = resolved[k].as_ref();
-            let length = words[k].span.micros().max(1);
-            match weight.iter_mut().find(|(w, _)| *w == who) {
-                Some((_, total)) => *total += length,
-                None => weight.push((who, length)),
-            }
-        }
-        // `max_by_key` keeps the last of equal maxima; reversed, the first.
-        let winner = weight
-            .iter()
-            .rev()
-            .max_by_key(|(_, t)| *t)
-            .and_then(|(w, _)| (*w).cloned());
+        let winner = heaviest(
+            (start..=end)
+                .filter(|&k| !named(k))
+                .map(|k| (resolved[k].as_ref(), words[k].span.micros().max(1))),
+        )
+        .flatten()
+        .cloned();
         for k in start..=end {
             out[k] = if named(k) {
                 resolved[k].clone()
@@ -645,19 +639,30 @@ fn by_sentence(words: &[Word], resolved: &[Option<Speaker>]) -> Vec<Option<Speak
 
 /// The diarized label that covers most of `run`'s time.
 fn dominant(run: &[Word], clusters: &[Option<String>]) -> Option<String> {
-    let mut weight: Vec<(&Option<String>, i64)> = Vec::new();
-    for (word, who) in run.iter().zip(clusters) {
-        match weight.iter_mut().find(|(w, _)| *w == who) {
-            Some((_, total)) => *total += word.span.micros().max(1),
-            None => weight.push((who, word.span.micros().max(1))),
+    heaviest(
+        run.iter()
+            .zip(clusters)
+            .map(|(word, who)| (who, word.span.micros().max(1))),
+    )
+    .and_then(Clone::clone)
+}
+
+/// The value with the most weight summed over its entries; the first seen on a
+/// tie.
+fn heaviest<T: PartialEq>(weighted: impl IntoIterator<Item = (T, i64)>) -> Option<T> {
+    let mut totals: Vec<(T, i64)> = Vec::new();
+    for (value, weight) in weighted {
+        match totals.iter_mut().find(|(v, _)| *v == value) {
+            Some((_, total)) => *total += weight,
+            None => totals.push((value, weight)),
         }
     }
     // `max_by_key` keeps the last of equal maxima; reversed, the first.
-    weight
-        .iter()
+    totals
+        .into_iter()
         .rev()
         .max_by_key(|(_, t)| *t)
-        .and_then(|(w, _)| (*w).clone())
+        .map(|(v, _)| v)
 }
 
 fn ends_sentence(word: &str) -> bool {

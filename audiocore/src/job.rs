@@ -14,7 +14,7 @@ pub enum Kind {
     TranscribeSegment,
     /// Who spoke when over one microphone's clip.
     DiarizeSegment,
-    /// A person-named turn made into a reference voiceprint.
+    /// A person's naming of a stretch made into a reference voiceprint.
     EnrollSpeaker,
 }
 

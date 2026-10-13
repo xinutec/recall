@@ -212,17 +212,9 @@ pub fn exclude(
     if a.clip.source != b.clip.source || (b.span.start(), b.id) < (a.span.start(), a.id) {
         return Err(WriteError::BadSpan);
     }
-    let spelled = |l: &Line| audiocore::instant::python_isoformat_utc(l.span.start().to_utc());
-    let ids: Vec<i64> = SESSION_LINES
-        .prepare(meaning)?
-        .query_map(
-            rusqlite::params![a.clip.source.as_str(), spelled(&a), a.id, spelled(&b), b.id],
-            |r| r.get(0),
-        )?
-        .collect::<rusqlite::Result<_>>()?;
+    let lines = between(meaning, ingest, &a, &b)?;
     let mut per_clip: Vec<(ClipId, Instant, Instant)> = Vec::new();
-    for id in &ids {
-        let l = shown(meaning, ingest, *id)?;
+    for l in &lines {
         match per_clip.last_mut() {
             Some((clip, _, stop)) if *clip == l.clip.id => *stop = (*stop).max(l.span.end()),
             _ => per_clip.push((l.clip.id, l.span.start(), l.span.end())),
@@ -239,7 +231,28 @@ pub fn exclude(
         .collect();
     let clips: Vec<ClipId> = per_clip.iter().map(|(c, _, _)| *c).collect();
     file(meaning, ingest, root, &acts, &clips)?;
-    Ok(ids.len())
+    Ok(lines.len())
+}
+
+/// The shown lines of `a`'s session from `a` to `b`, inclusive, in reading
+/// order.
+fn between(
+    meaning: &Connection,
+    ingest: &Connection,
+    a: &Line,
+    b: &Line,
+) -> Result<Vec<Line>, WriteError> {
+    let spelled = |l: &Line| audiocore::instant::python_isoformat_utc(l.span.start().to_utc());
+    let ids: Vec<i64> = SESSION_LINES
+        .prepare(meaning)?
+        .query_map(
+            rusqlite::params![a.clip.source.as_str(), spelled(a), a.id, spelled(b), b.id],
+            |r| r.get(0),
+        )?
+        .collect::<rusqlite::Result<_>>()?;
+    ids.into_iter()
+        .map(|id| shown(meaning, ingest, id))
+        .collect()
 }
 
 /// Take back an excluded stretch, by any of its hidden lines: every act filed
@@ -518,17 +531,9 @@ pub fn assign_span(
     }
     let start = instant_at(&a, first_char, false);
     let end = instant_at(&b, last_char, true);
-    let spelled = |l: &Line| audiocore::instant::python_isoformat_utc(l.span.start().to_utc());
-    let ids: Vec<i64> = SESSION_LINES
-        .prepare(meaning)?
-        .query_map(
-            rusqlite::params![source, spelled(&a), a.id, spelled(&b), b.id],
-            |r| r.get(0),
-        )?
-        .collect::<rusqlite::Result<_>>()?;
+    let lines = between(meaning, ingest, &a, &b)?;
     let mut per_clip: Vec<(ClipId, Instant, Instant)> = Vec::new();
-    for id in &ids {
-        let l = shown(meaning, ingest, *id)?;
+    for l in &lines {
         let from = if l.id == a.id { start } else { l.span.start() };
         let to = if l.id == b.id { end } else { l.span.end() };
         match per_clip.last_mut() {
@@ -549,7 +554,7 @@ pub fn assign_span(
         .collect();
     let clips: Vec<ClipId> = per_clip.iter().map(|(c, _, _)| *c).collect();
     file(meaning, ingest, root, &acts, &clips)?;
-    Ok(ids.len())
+    Ok(lines.len())
 }
 
 /// The session acts of `source` still in force.

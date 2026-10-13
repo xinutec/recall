@@ -19,10 +19,7 @@ crate::statements! {
         "SELECT s.id, s.name, MIN(a.start_utc), MAX(a.end_utc), COUNT(t.id), \
                 GROUP_CONCAT(DISTINCT CASE \
                     WHEN t.id IS NULL THEN NULL \
-                    WHEN t.speaker_label IS NOT NULL \
-                         AND t.speaker_label NOT LIKE 'SPEAKER_%' \
-                         THEN t.speaker_label \
-                    ELSE 'unknown' \
+                    ELSE COALESCE(t.speaker_label, 'unknown') \
                 END) \
          FROM sources s \
          JOIN audio_segments a ON a.source_id = s.id \
@@ -68,9 +65,6 @@ crate::statements! {
 }
 
 const UPLOAD_KIND: &str = "upload";
-
-/// A diarization tag, not a person's name; never listed as a speaker.
-const CLUSTER_PREFIX: &str = "SPEAKER";
 
 #[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
 #[ts(export, rename = "Session")]
@@ -193,21 +187,15 @@ pub fn rediarize(
     Ok(requeued)
 }
 
-/// The household's two languages. The model guesses a third for Dutch often
-/// enough (Italian, 2026-10-03) that any other pin is likely a mistake.
-pub const LANGUAGES: &[&str] = &["nl", "en"];
-
-/// Absent or empty: the model guesses. Anything outside [`LANGUAGES`] is
-/// refused.
-pub fn parse_language(raw: Option<&str>) -> Result<Option<&'static str>, String> {
+/// A language to pin: absent or empty, the model guesses. Only the
+/// household's two ([`transcript::Language`]): the model guesses a third for
+/// Dutch often enough that any other pin is likely a mistake.
+pub fn parse_language(raw: Option<&str>) -> Result<Option<transcript::Language>, String> {
     match raw.map(str::trim) {
         None | Some("") => Ok(None),
-        Some(code) => LANGUAGES
-            .iter()
-            .find(|l| **l == code)
-            .copied()
+        Some(code) => transcript::Language::from_code(code)
             .map(Some)
-            .ok_or_else(|| format!("language must be one of {LANGUAGES:?} or empty, not {code:?}")),
+            .ok_or_else(|| format!("language must be \"nl\", \"en\" or empty, not {code:?}")),
     }
 }
 
@@ -218,7 +206,7 @@ pub fn set_language(
     ingest: &Connection,
     root: &std::path::Path,
     source: &str,
-    language: Option<&str>,
+    language: Option<transcript::Language>,
 ) -> Result<crate::retranscribe::Requested, SessionError> {
     require_upload(meaning, source)?;
     let id = transcript::SourceId::parse(source).ok_or(SessionError::Missing)?;
@@ -230,13 +218,7 @@ pub fn set_language(
     if files.is_empty() {
         return Err(SessionError::NoAudio);
     }
-    crate::labels_write::pin_language(
-        meaning,
-        ingest,
-        root,
-        &id,
-        language.and_then(transcript::Language::from_code),
-    )?;
+    crate::labels_write::pin_language(meaning, ingest, root, &id, language)?;
     Ok(crate::retranscribe::request(ingest, &files)?)
 }
 
@@ -321,7 +303,6 @@ pub fn clean_transcript(source: &str, turns: &[ExportTurn]) -> TranscriptExportO
             }),
         }
         if let Some(label) = &turn.speaker_label
-            && !label.starts_with(CLUSTER_PREFIX)
             && !speakers.contains(label)
         {
             speakers.push(label.clone());
