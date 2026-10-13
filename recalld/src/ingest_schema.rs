@@ -1,5 +1,6 @@
-//! The ingest plane's schema (`ingest.sqlite`). Every open runs it; columns
-//! added later reach existing databases through `add_column`.
+//! The ingest plane's schema (`ingest.sqlite`). Every open runs it. It only
+//! creates what is missing: a change to an existing table needs a migration
+//! of its own.
 
 #![expect(
     clippy::disallowed_methods,
@@ -9,9 +10,6 @@
 use rusqlite::Connection;
 
 pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
-    let had_clips: bool = conn
-        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'clips'")?
-        .exists([])?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS segments (
              filename     TEXT PRIMARY KEY,
@@ -29,7 +27,11 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
              filename       TEXT PRIMARY KEY REFERENCES segments (filename),
              source         TEXT NOT NULL,
              speech_seconds REAL NOT NULL,
-             computed_utc   TEXT NOT NULL
+             computed_utc   TEXT NOT NULL,
+             -- Where the speech is, as JSON [[start, end], ...] in seconds from
+             -- the blob's start; JSON null when it could not be decoded. NULL:
+             -- not looked for yet (speech::scan_once fills it).
+             regions        TEXT
          );
          CREATE INDEX IF NOT EXISTS segment_speech_source
              ON segment_speech (source, filename);
@@ -39,10 +41,10 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
              source       TEXT NOT NULL,
              speech_db    REAL NOT NULL,
              floor_db     REAL NOT NULL,
+             computed_utc TEXT NOT NULL,
              -- NULL means measured before the column existed: unknown, never zero.
              gated        REAL,
-             quiet_run_s  REAL,
-             computed_utc TEXT NOT NULL
+             quiet_run_s  REAL
          );
          CREATE INDEX IF NOT EXISTS segment_levels_source
              ON segment_levels (source, filename);
@@ -63,54 +65,19 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
          -- reads every result's first page.
          CREATE INDEX IF NOT EXISTS jobs_open ON jobs (kind) WHERE done_utc IS NULL;
 
-         -- Clips a pass decided without writing.
+         -- A pass's terminal decision per clip (ledger). detail: older
+         -- decisions' counts, as JSON.
          CREATE TABLE IF NOT EXISTS pass_ledger (
              kind        TEXT NOT NULL,
              filename    TEXT NOT NULL,
              outcome     TEXT NOT NULL,
              decided_utc TEXT NOT NULL,
+             detail      TEXT,
              PRIMARY KEY (kind, filename)
-         );",
-    )?;
-    ensure_clips(conn, had_clips)?;
-    add_column(conn, "segment_levels", "gated", "REAL")?;
-    add_column(conn, "segment_levels", "quiet_run_s", "REAL")?;
-    // Where the speech is, as JSON `[[start, end], ...]` in seconds from the
-    // blob's start; JSON `null` when it could not be decoded. NULL means not
-    // looked for yet (`speech::scan_once` backfills it).
-    add_column(conn, "segment_speech", "regions", "TEXT")?;
-    // A decision's counts, as JSON; `outcome` is one word (`ledger::Outcome`).
-    add_column(conn, "pass_ledger", "detail", "TEXT")?;
-    split_old_outcomes(conn)?;
-    retire_room_jobs(conn)?;
-    retire_old_tables(conn)
-}
+         );
 
-/// Tables nothing reads any more, which the fleet backup holds: the room
-/// stream's blocks and the old retranscribe set-aside, under either name.
-fn retire_old_tables(conn: &Connection) -> rusqlite::Result<()> {
-    for table in [
-        "room_blocks",
-        "retranscribe_requests",
-        "retired_20261012_room_blocks",
-        "retired_20261012_retranscribe_requests",
-    ] {
-        let present: bool = conn
-            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?
-            .exists([table])?;
-        if present {
-            conn.execute_batch(&format!("DROP TABLE {table}"))?;
-        }
-    }
-    Ok(())
-}
-
-/// The clips table and its trigger (#1911); on first creation, a clip for
-/// every file stored before.
-fn ensure_clips(conn: &Connection, had_clips: bool) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "-- One row per stored recording, keyed by file (`transcript::Clip`).
-         -- `path` is relative to the data root.
+         -- One row per stored recording, keyed by file (transcript::Clip).
+         -- path is relative to the data root.
          CREATE TABLE IF NOT EXISTS clips (
              id       INTEGER PRIMARY KEY,
              source   TEXT NOT NULL,
@@ -133,68 +100,5 @@ fn ensure_clips(conn: &Connection, had_clips: bool) -> rusqlite::Result<()> {
                      'ingest/' || NEW.source || '/' || NEW.filename)
              ON CONFLICT (filename) DO NOTHING;
          END;",
-    )?;
-    if !had_clips {
-        conn.execute_batch(
-            "INSERT INTO clips (source, start_us, filename, path)
-             SELECT * FROM (
-                 SELECT source, CAST(strftime('%s', start_utc) AS INTEGER) * 1000000,
-                        filename, 'ingest/' || source || '/' || filename
-                 FROM segments ORDER BY start_utc, filename)
-             WHERE true
-             ON CONFLICT (filename) DO NOTHING",
-        )?;
-    }
-    Ok(())
-}
-
-/// Older rows put their counts in the outcome as a sentence ("attributed: 10
-/// turn(s) ..."): the word stays, the sentence moves to `detail`. Reads
-/// first, since an UPDATE takes the write lock even when it matches nothing.
-fn split_old_outcomes(conn: &Connection) -> rusqlite::Result<()> {
-    let old: bool = conn
-        .prepare("SELECT 1 FROM pass_ledger WHERE instr(outcome, ':') > 0")?
-        .exists([])?;
-    if old {
-        conn.execute(
-            "UPDATE pass_ledger
-                SET detail = json_object('was', outcome),
-                    outcome = substr(outcome, 1, instr(outcome, ':') - 1)
-              WHERE instr(outcome, ':') > 0",
-            [],
-        )?;
-    }
-    Ok(())
-}
-
-/// The room stream is retired: its unfinished jobs are closed as failures, not
-/// deleted. Reads first, like [`split_old_outcomes`].
-fn retire_room_jobs(conn: &Connection) -> rusqlite::Result<()> {
-    let kinds = ("transcribe-room", "diarize-room");
-    let open: bool = conn
-        .prepare("SELECT 1 FROM jobs WHERE kind IN (?1, ?2) AND done_utc IS NULL")?
-        .exists(kinds)?;
-    if open {
-        conn.execute(
-            r#"UPDATE jobs SET state = 'done',
-                   done_utc = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-                   result = '{"ok":false,"error":"room stream retired"}'
-               WHERE kind IN (?1, ?2) AND done_utc IS NULL"#,
-            kinds,
-        )?;
-    }
-    Ok(())
-}
-
-/// Every argument is a literal from this file, never input.
-fn add_column(conn: &Connection, table: &str, name: &str, ty: &str) -> rusqlite::Result<()> {
-    let present: bool = conn
-        .prepare(&format!(
-            "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"
-        ))?
-        .exists([name])?;
-    if present {
-        return Ok(());
-    }
-    conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {name} {ty}"))
+    )
 }

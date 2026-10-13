@@ -225,33 +225,6 @@ fn a_runner_is_never_handed_a_kind_it_cannot_do() {
     assert_eq!(both.kind, Kind::DiarizeSegment);
 }
 
-#[test]
-fn the_retired_room_streams_open_jobs_are_closed_not_deleted() {
-    // Production queued a room job every minute; nothing takes them now.
-    let dir = tempfile::tempdir().expect("tempdir");
-    room_row(dir.path(), "20260905T100000");
-    let conn = store::open(dir.path()).expect("db");
-    conn.execute_batch(
-        "INSERT INTO jobs (kind, filename, created_utc) VALUES
-             ('transcribe-room', 'room-20260905T100000.flac', '2026-09-05T10:01:00Z'),
-             ('diarize-room', 'room-20260905T100000.flac', '2026-09-05T10:02:00Z');",
-    )
-    .expect("jobs");
-    recalld::ingest_schema::ensure(&conn).expect("reopen");
-    let rows: Vec<(String, String)> = conn
-        .prepare("SELECT state, result FROM jobs ORDER BY kind")
-        .expect("prep")
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .expect("query")
-        .collect::<Result<_, _>>()
-        .expect("rows");
-    assert_eq!(rows.len(), 2, "kept as history");
-    for (state, result) in rows {
-        assert_eq!(state, "done");
-        assert!(result.contains("room stream retired"), "{result}");
-    }
-}
-
 // ---- per-mic transcribe jobs ----
 
 use recalld::queue::{self, derive_segment_jobs};
@@ -618,37 +591,6 @@ fn a_clip_transcribed_under_another_extension_gets_no_second_job() {
         derive_segment_jobs(&ingest, &meaning, now, 100).expect("derive"),
         0,
         "the container differs; the recording does not"
-    );
-}
-
-#[test]
-fn an_old_outcome_sentence_is_split_into_its_word_and_its_detail() {
-    // Before `detail`, counts were written into the outcome as prose.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let conn = store::open(dir.path()).expect("db");
-    conn.execute_batch(
-        "INSERT INTO pass_ledger (kind, filename, outcome, decided_utc) VALUES
-             ('diarize-segment', 'a.flac', 'attributed: 2 turn(s) named in place', 'then'),
-             ('diarize-segment', 'b.flac', 'aligned', 'then');",
-    )
-    .expect("old rows");
-    recalld::ingest_schema::ensure(&conn).expect("reopen");
-    let rows: Vec<(String, Option<String>)> = conn
-        .prepare("SELECT outcome, detail FROM pass_ledger ORDER BY filename")
-        .expect("prep")
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .expect("query")
-        .collect::<Result<_, _>>()
-        .expect("rows");
-    assert_eq!(
-        rows,
-        vec![
-            (
-                "attributed".to_owned(),
-                Some(r#"{"was":"attributed: 2 turn(s) named in place"}"#.to_owned())
-            ),
-            ("aligned".to_owned(), None),
-        ]
     );
 }
 

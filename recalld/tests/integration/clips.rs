@@ -90,36 +90,6 @@ fn a_start_that_will_not_convert_fails_the_files_own_insert() {
 }
 
 #[test]
-fn files_stored_before_the_clips_table_get_clips_when_it_appears() {
-    let dir = tempfile::tempdir().expect("tmp");
-    {
-        let old = Connection::open(dir.path().join("ingest.sqlite")).expect("old db");
-        old.execute_batch(
-            "CREATE TABLE segments (filename TEXT PRIMARY KEY, source TEXT NOT NULL,
-                 start_utc TEXT NOT NULL, bytes INTEGER NOT NULL, sha256 TEXT NOT NULL,
-                 received_utc TEXT NOT NULL, sent_utc TEXT);
-             INSERT INTO segments VALUES
-                 ('usb-20260905T120100.flac', 'usb', '2026-09-05T12:01:00Z', 1, 'x', 'r', NULL),
-                 ('usb-20260905T120000.flac', 'usb', '2026-09-05T12:00:00Z', 1, 'x', 'r', NULL);",
-        )
-        .expect("old rows");
-    }
-    let conn = store::open(dir.path()).expect("open");
-
-    let first = recalld::clips::by_filename(&conn, "usb-20260905T120000.flac")
-        .unwrap()
-        .unwrap();
-    let second = recalld::clips::by_filename(&conn, "usb-20260905T120100.flac")
-        .unwrap()
-        .unwrap();
-    assert!(first.id < second.id, "backfilled in start order");
-    let count: i64 = conn
-        .query_row("SELECT count(*) FROM clips", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(count, 2);
-}
-
-#[test]
 fn a_renamed_file_keeps_its_clip() {
     let (_dir, conn) = ingest();
     store::insert(
